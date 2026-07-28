@@ -21,6 +21,8 @@ data class PromotionRuleCartItem(
     val currency: String,
     val effectiveType: MenuSemanticType,
     val menuCategoryId: Long? = null,
+    val requiredOptionsSatisfied: Boolean = true,
+    val hasIncompatibleManualDiscount: Boolean = false,
 )
 
 data class PromotionRulePreviewAdjustment(
@@ -55,10 +57,65 @@ data class PromotionRulePreviewGiftChoice(
     val options: List<PromotionRuleRewardOption>,
 )
 
+enum class PromotionGiftOfferStatus {
+    NO_GIFT,
+    FIXED_GIFT_AVAILABLE,
+    GIFT_CHOICE_REQUIRED,
+    GIFT_UNAVAILABLE,
+    GIFT_SKIPPED,
+    GIFT_SELECTED,
+}
+
+enum class PromotionGiftDecisionAction {
+    ACCEPT_FIXED,
+    SELECT_ITEM,
+    SKIP,
+}
+
+enum class PromotionGiftUnavailableReason {
+    REWARD_UNAVAILABLE,
+    NO_AVAILABLE_REWARD_ITEMS,
+    REQUIRED_OPTION_UNSUPPORTED,
+    INVALID_REWARD_CONFIGURATION,
+}
+
+data class PromotionGiftDecision(
+    val action: PromotionGiftDecisionAction,
+    val promotionId: Long?,
+    val ruleId: Long,
+    val ruleVersion: Int,
+    val selectedMenuItemId: Long? = null,
+)
+
+data class PromotionGiftRewardItem(
+    val menuItemId: Long,
+    val name: String,
+    val originalUnitPriceMinor: Long,
+    val currency: String,
+)
+
+data class PromotionGiftOffer(
+    val status: PromotionGiftOfferStatus,
+    val promotionId: Long? = null,
+    val promotionTitle: String? = null,
+    val ruleId: Long? = null,
+    val ruleVersion: Int? = null,
+    val triggerLineId: Long? = null,
+    val triggerMenuItemId: Long? = null,
+    val triggerItemName: String? = null,
+    val fixedRewardItem: PromotionGiftRewardItem? = null,
+    val selectableRewardItems: List<PromotionGiftRewardItem> = emptyList(),
+    val selectedRewardItem: PromotionGiftRewardItem? = null,
+    val unavailableReason: PromotionGiftUnavailableReason? = null,
+)
+
 data class PromotionRulePreviewResult(
     val adjustments: List<PromotionRulePreviewAdjustment>,
     val gifts: List<PromotionRulePreviewGift> = emptyList(),
     val giftChoices: List<PromotionRulePreviewGiftChoice> = emptyList(),
+    val appliedGifts: List<PromotionRulePreviewGift> = emptyList(),
+    val giftOffer: PromotionGiftOffer = PromotionGiftOffer(PromotionGiftOfferStatus.NO_GIFT),
+    val giftDecisionResolved: Boolean = true,
 ) {
     val totalPreviewDiscountMinor: Long = adjustments.sumOf { it.discountMinor }
 }
@@ -72,6 +129,7 @@ object PromotionRuleEngine {
         activeRules: List<VenuePromotionRule>,
         selectedGiftChoices: Map<Long, Long> = emptyMap(),
         skippedGiftRuleIds: Set<Long> = emptySet(),
+        giftDecision: PromotionGiftDecision? = null,
     ): PromotionRulePreviewResult {
         val eligibleRules =
             activeRules
@@ -83,7 +141,10 @@ object PromotionRuleEngine {
                 .filter { isScheduleActive(it, now, venueZoneId) }
                 .toList()
         if (eligibleRules.isEmpty() || cartItems.isEmpty()) {
-            return PromotionRulePreviewResult(emptyList())
+            return PromotionRulePreviewResult(
+                adjustments = emptyList(),
+                giftDecisionResolved = giftDecision == null,
+            )
         }
 
         val percentCandidates =
@@ -101,14 +162,61 @@ object PromotionRuleEngine {
             eligibleRules
                 .asSequence()
                 .filter { it.ruleType == PromotionRuleType.GIFT_WITH_ITEM }
-                .filter { it.id !in skippedGiftRuleIds }
-                .mapNotNull { rule -> rule.giftCandidate(cartItems, selectedGiftChoices[rule.id]) }
+                .mapNotNull { rule -> rule.giftCandidate(cartItems) }
                 .toList()
         val selectedCandidates = resolveCandidates(percentCandidates + giftCandidates)
+        val winningGiftCandidate = selectedCandidates.singleOrNull { it.giftCandidate != null }
+        val effectiveGiftDecision =
+            giftDecision
+                ?: winningGiftCandidate?.let { candidate ->
+                    val gift = requireNotNull(candidate.giftCandidate)
+                    when {
+                        candidate.ruleId in skippedGiftRuleIds ->
+                            gift.toDecision(PromotionGiftDecisionAction.SKIP)
+                        selectedGiftChoices[candidate.ruleId] != null ->
+                            gift.toDecision(
+                                action = PromotionGiftDecisionAction.SELECT_ITEM,
+                                selectedMenuItemId = selectedGiftChoices[candidate.ruleId],
+                            )
+                        else -> null
+                    }
+                }
+        val giftResolution = winningGiftCandidate?.giftCandidate?.resolve(effectiveGiftDecision)
+        val appliedGifts = listOfNotNull(giftResolution?.appliedGift)
+        val legacyVisibleGifts =
+            when {
+                appliedGifts.isNotEmpty() -> appliedGifts
+                giftResolution?.offer?.status == PromotionGiftOfferStatus.FIXED_GIFT_AVAILABLE ->
+                    listOfNotNull(winningGiftCandidate?.giftCandidate?.fixedPreviewGift())
+                else -> emptyList()
+            }
+        val giftChoices =
+            if (giftResolution?.offer?.status == PromotionGiftOfferStatus.GIFT_CHOICE_REQUIRED) {
+                listOfNotNull(winningGiftCandidate?.giftCandidate?.previewChoice())
+            } else {
+                emptyList()
+            }
+        val giftOffer =
+            giftResolution?.offer
+                ?: PromotionGiftOffer(PromotionGiftOfferStatus.NO_GIFT)
+        val decisionResolved =
+            when (giftOffer.status) {
+                PromotionGiftOfferStatus.GIFT_SELECTED,
+                PromotionGiftOfferStatus.GIFT_SKIPPED,
+                -> true
+                PromotionGiftOfferStatus.NO_GIFT -> effectiveGiftDecision == null
+                PromotionGiftOfferStatus.GIFT_UNAVAILABLE -> effectiveGiftDecision == null
+                PromotionGiftOfferStatus.FIXED_GIFT_AVAILABLE,
+                PromotionGiftOfferStatus.GIFT_CHOICE_REQUIRED,
+                -> false
+            }
         return PromotionRulePreviewResult(
             adjustments = selectedCandidates.mapNotNull { it.adjustment },
-            gifts = selectedCandidates.mapNotNull { it.gift },
-            giftChoices = selectedCandidates.mapNotNull { it.giftChoice },
+            gifts = legacyVisibleGifts,
+            giftChoices = giftChoices,
+            appliedGifts = appliedGifts,
+            giftOffer = giftOffer,
+            giftDecisionResolved = decisionResolved,
         )
     }
 
@@ -150,62 +258,84 @@ object PromotionRuleEngine {
         )
     }
 
-    private fun VenuePromotionRule.giftCandidate(
-        cartItems: List<PromotionRuleCartItem>,
-        selectedRewardMenuItemId: Long? = null,
-    ): PromotionRuleCandidate? {
-        val gift = previewGift(cartItems, selectedRewardMenuItemId)
-        if (gift != null) {
-            return PromotionRuleCandidate(
-                ruleId = id,
-                ruleType = ruleType,
-                conflictKey = resolveConflictKey(gift.triggerLineId, gift.triggerMenuItemId),
-                monetaryBenefit = gift.rewardPriceMinor * gift.rewardQty.toLong(),
-                stackable = stackable,
-                priority = priority,
-                maxApplicationsPerItem = maxApplicationsPerItem,
-                gift = gift,
-            )
-        }
-        val giftChoice = previewGiftChoice(cartItems, selectedRewardMenuItemId) ?: return null
-        val reward = reward ?: return null
-        val benefit =
-            giftChoice.options
-                .maxOfOrNull { it.priceMinor * reward.rewardQty.toLong() }
+    private fun VenuePromotionRule.giftCandidate(cartItems: List<PromotionRuleCartItem>): PromotionRuleCandidate? {
+        val trigger =
+            cartItems
+                .asSequence()
+                .filter {
+                    it.qty > 0 &&
+                        it.requiredOptionsSatisfied &&
+                        !it.hasIncompatibleManualDiscount
+                }
+                .filter { matchesItem(it) }
+                .sortedWith(
+                    compareBy<PromotionRuleCartItem> { it.lineId ?: Long.MAX_VALUE }
+                        .thenBy { it.menuItemId },
+                )
+                .firstOrNull()
                 ?: return null
-        if (benefit <= 0L) return null
+        val reward = reward
+        val giftCandidate =
+            PromotionGiftCandidate(
+                promotionId = promotionId,
+                promotionTitle = promotionTitle?.takeIf { it.isNotBlank() } ?: "Подарок при покупке",
+                ruleId = id,
+                ruleVersion = version,
+                triggerLineId = trigger.lineId,
+                triggerMenuItemId = trigger.menuItemId,
+                triggerItemName = trigger.itemName,
+                reward = reward,
+            )
         return PromotionRuleCandidate(
             ruleId = id,
             ruleType = ruleType,
-            conflictKey = resolveConflictKey(giftChoice.triggerLineId, giftChoice.triggerMenuItemId),
-            monetaryBenefit = benefit,
-            stackable = stackable,
+            conflictKey = resolveConflictKey(trigger.lineId, trigger.menuItemId),
+            monetaryBenefit = giftCandidate.monetaryBenefit(),
+            stackable = false,
             priority = priority,
             maxApplicationsPerItem = maxApplicationsPerItem,
-            giftChoice = giftChoice,
+            giftCandidate = giftCandidate,
         )
     }
 
-    private fun resolveCandidates(candidates: List<PromotionRuleCandidate>): List<PromotionRuleCandidate> =
-        candidates
-            .groupBy { it.conflictKey }
-            .values
-            .flatMap { candidatesForGroup ->
-                if (candidatesForGroup.any { !it.stackable }) {
-                    listOfNotNull(candidatesForGroup.maxWithOrNull(::compareCandidateBenefit))
-                } else {
-                    capStackableAdjustments(
-                        candidatesForGroup
-                            .groupBy { it.ruleId }
-                            .values
-                            .flatMap { ruleCandidates ->
-                                ruleCandidates
-                                    .sortedWith(candidateDisplayOrder)
-                                    .take(ruleCandidates.first().maxApplicationsPerItem.coerceAtLeast(1))
-                            },
-                    )
-                }
+    private fun resolveCandidates(candidates: List<PromotionRuleCandidate>): List<PromotionRuleCandidate> {
+        val candidatesByConflict = candidates.groupBy { it.conflictKey }
+        val firstPass =
+            candidatesByConflict.mapValues { (_, candidatesForGroup) ->
+                resolveConflictGroup(candidatesForGroup)
             }
+        val giftWinners = firstPass.values.flatten().filter { it.giftCandidate != null }
+        if (giftWinners.size <= 1) {
+            return firstPass.values.flatten()
+        }
+        val winningGift = giftWinners.maxWithOrNull(::compareCandidateBenefit)
+        return candidatesByConflict.flatMap { (conflictKey, candidatesForGroup) ->
+            val current = firstPass[conflictKey].orEmpty()
+            if (current.any { it.giftCandidate != null && it !== winningGift }) {
+                resolveConflictGroup(candidatesForGroup.filter { it.giftCandidate == null })
+            } else {
+                current
+            }
+        }
+    }
+
+    private fun resolveConflictGroup(candidatesForGroup: List<PromotionRuleCandidate>): List<PromotionRuleCandidate> {
+        if (candidatesForGroup.isEmpty()) return emptyList()
+        return if (candidatesForGroup.any { !it.stackable }) {
+            listOfNotNull(candidatesForGroup.maxWithOrNull(::compareCandidateBenefit))
+        } else {
+            capStackableAdjustments(
+                candidatesForGroup
+                    .groupBy { it.ruleId }
+                    .values
+                    .flatMap { ruleCandidates ->
+                        ruleCandidates
+                            .sortedWith(candidateDisplayOrder)
+                            .take(ruleCandidates.first().maxApplicationsPerItem.coerceAtLeast(1))
+                    },
+            )
+        }
+    }
 
     private fun capStackableAdjustments(candidates: List<PromotionRuleCandidate>): List<PromotionRuleCandidate> {
         val remainingGrossByConflictKey =
@@ -266,8 +396,7 @@ object PromotionRuleEngine {
         val priority: Int,
         val maxApplicationsPerItem: Int,
         val adjustment: PromotionRulePreviewAdjustment? = null,
-        val gift: PromotionRulePreviewGift? = null,
-        val giftChoice: PromotionRulePreviewGiftChoice? = null,
+        val giftCandidate: PromotionGiftCandidate? = null,
     )
 
     private fun VenuePromotionRule.matchesNow(
@@ -315,12 +444,8 @@ object PromotionRuleEngine {
             (promotionEndsAt == null || !now.isAfter(promotionEndsAt))
 
     private fun VenuePromotionRule.hasValidExecutableConfiguration(): Boolean {
-        if (ruleType != PromotionRuleType.HAPPY_HOURS_PERCENT) {
-            return true
-        }
         val targetType = executableTargetType ?: return true
         if (
-            discountPercent !in 1..100 ||
             stackable ||
             conflictGroup != null ||
             maxApplicationsPerItem != 1 ||
@@ -328,16 +453,30 @@ object PromotionRuleEngine {
         ) {
             return false
         }
-        return when (targetType) {
-            PromotionRuleTargetType.MENU_ITEM ->
-                targets.singleOrNull()?.let { target ->
-                    target.targetType == PromotionRuleTargetType.MENU_ITEM && target.menuItemId != null
-                } == true
-            PromotionRuleTargetType.MENU_CATEGORY ->
-                targets.singleOrNull()?.let { target ->
-                    target.targetType == PromotionRuleTargetType.MENU_CATEGORY && target.menuCategoryId != null
-                } == true
-            PromotionRuleTargetType.CATEGORY_TYPE -> false
+        val validTarget =
+            when (targetType) {
+                PromotionRuleTargetType.MENU_ITEM ->
+                    targets.singleOrNull()?.let { target ->
+                        target.targetType == PromotionRuleTargetType.MENU_ITEM && target.menuItemId != null
+                    } == true
+                PromotionRuleTargetType.MENU_CATEGORY ->
+                    targets.singleOrNull()?.let { target ->
+                        target.targetType == PromotionRuleTargetType.MENU_CATEGORY && target.menuCategoryId != null
+                    } == true
+                PromotionRuleTargetType.CATEGORY_TYPE -> false
+            }
+        if (!validTarget) return false
+        return when (ruleType) {
+            PromotionRuleType.HAPPY_HOURS_PERCENT -> discountPercent in 1..100
+            PromotionRuleType.GIFT_WITH_ITEM -> {
+                val reward = reward ?: return false
+                reward.rewardQty == 1 &&
+                    reward.maxRewardsPerBatch == 1 &&
+                    (
+                        reward.rewardMode == PromotionRewardMode.FIXED_ITEM ||
+                            reward.options.isNotEmpty()
+                    )
+            }
         }
     }
 
@@ -364,83 +503,6 @@ object PromotionRuleEngine {
     private fun VenuePromotionRule.previewLabel(): String =
         promotionTitle?.takeIf { it.isNotBlank() }
             ?: "Счастливые часы"
-
-    private fun VenuePromotionRule.previewGift(
-        cartItems: List<PromotionRuleCartItem>,
-        selectedRewardMenuItemId: Long? = null,
-    ): PromotionRulePreviewGift? {
-        val reward = reward ?: return null
-        if (reward.rewardQty <= 0 || reward.maxRewardsPerBatch <= 0) {
-            return null
-        }
-        val trigger =
-            cartItems
-                .filter { it.qty > 0 }
-                .firstOrNull { matchesItem(it) }
-                ?: return null
-        val rewardItem =
-            when (reward.rewardMode) {
-                PromotionRewardMode.FIXED_ITEM ->
-                    PromotionRuleRewardOption(
-                        id = null,
-                        rewardId = reward.id,
-                        menuItemId = reward.rewardMenuItemId,
-                        menuItemName = reward.rewardMenuItemName,
-                        priceMinor = reward.priceMinor,
-                        currency = reward.currency,
-                        isAvailable = reward.isAvailable,
-                    )
-                PromotionRewardMode.CHOICE_ITEMS ->
-                    reward.options.firstOrNull { option ->
-                        option.menuItemId == selectedRewardMenuItemId
-                    } ?: return null
-            }
-        if (!rewardItem.isAvailable || rewardItem.priceMinor <= 0L) {
-            return null
-        }
-        return PromotionRulePreviewGift(
-            ruleId = id,
-            triggerLineId = trigger.lineId,
-            triggerMenuItemId = trigger.menuItemId,
-            triggerItemName = trigger.itemName,
-            rewardMenuItemId = rewardItem.menuItemId,
-            rewardItemName = rewardItem.menuItemName,
-            rewardQty = reward.rewardQty,
-            rewardPriceMinor = rewardItem.priceMinor,
-            currency = rewardItem.currency,
-            label = "${rewardItem.menuItemName} в подарок",
-        )
-    }
-
-    private fun VenuePromotionRule.previewGiftChoice(
-        cartItems: List<PromotionRuleCartItem>,
-        selectedRewardMenuItemId: Long?,
-    ): PromotionRulePreviewGiftChoice? {
-        val reward = reward ?: return null
-        if (reward.rewardMode != PromotionRewardMode.CHOICE_ITEMS) return null
-        val trigger =
-            cartItems
-                .filter { it.qty > 0 }
-                .firstOrNull { matchesItem(it) }
-                ?: return null
-        val availableOptions =
-            reward.options
-                .filter { it.isAvailable && it.priceMinor > 0L }
-                .distinctBy { it.menuItemId }
-        if (availableOptions.isEmpty()) return null
-        val selectedAvailable =
-            selectedRewardMenuItemId?.let { selected ->
-                availableOptions.any { it.menuItemId == selected }
-            } ?: false
-        if (selectedAvailable) return null
-        return PromotionRulePreviewGiftChoice(
-            ruleId = id,
-            triggerLineId = trigger.lineId,
-            triggerMenuItemId = trigger.menuItemId,
-            triggerItemName = trigger.itemName,
-            options = availableOptions,
-        )
-    }
 
     private fun VenuePromotionRule.matchesItem(item: PromotionRuleCartItem): Boolean {
         val effectiveTargets =
@@ -475,4 +537,236 @@ object PromotionRuleEngine {
         conflictGroup?.takeIf { it.isNotBlank() }?.let { "GROUP:$it" }
             ?: lineId?.let { "ITEM:$it" }
             ?: "MENU_ITEM:$menuItemId"
+
+    private data class PromotionGiftCandidate(
+        val promotionId: Long?,
+        val promotionTitle: String,
+        val ruleId: Long,
+        val ruleVersion: Int,
+        val triggerLineId: Long?,
+        val triggerMenuItemId: Long,
+        val triggerItemName: String,
+        val reward: com.hookah.platform.backend.telegram.db.PromotionRuleReward?,
+    ) {
+        private fun fixedRewardOption(): PromotionRuleRewardOption? =
+            reward?.takeIf { it.rewardMode == PromotionRewardMode.FIXED_ITEM }?.let {
+                PromotionRuleRewardOption(
+                    id = null,
+                    rewardId = it.id,
+                    menuItemId = it.rewardMenuItemId,
+                    menuItemName = it.rewardMenuItemName,
+                    priceMinor = it.priceMinor,
+                    currency = it.currency,
+                    isAvailable = it.isAvailable,
+                    requiresOptionSelection = it.requiresOptionSelection,
+                )
+            }
+
+        private fun availableChoiceOptions(): List<PromotionRuleRewardOption> =
+            reward
+                ?.takeIf { it.rewardMode == PromotionRewardMode.CHOICE_ITEMS }
+                ?.options
+                .orEmpty()
+                .filter { it.isEligibleReward() }
+                .distinctBy { it.menuItemId }
+                .sortedBy { it.menuItemId }
+
+        fun monetaryBenefit(): Long {
+            val rewardQty = reward?.rewardQty?.coerceAtMost(1)?.coerceAtLeast(1) ?: 1
+            return when (reward?.rewardMode) {
+                PromotionRewardMode.FIXED_ITEM ->
+                    fixedRewardOption()
+                        ?.takeIf { it.isEligibleReward() }
+                        ?.priceMinor
+                        ?.times(rewardQty.toLong())
+                        ?: 0L
+                PromotionRewardMode.CHOICE_ITEMS ->
+                    availableChoiceOptions().maxOfOrNull { it.priceMinor * rewardQty.toLong() } ?: 0L
+                null -> 0L
+            }
+        }
+
+        fun toDecision(
+            action: PromotionGiftDecisionAction,
+            selectedMenuItemId: Long? = null,
+        ): PromotionGiftDecision =
+            PromotionGiftDecision(
+                action = action,
+                promotionId = promotionId,
+                ruleId = ruleId,
+                ruleVersion = ruleVersion,
+                selectedMenuItemId = selectedMenuItemId,
+            )
+
+        fun resolve(decision: PromotionGiftDecision?): PromotionGiftResolution {
+            val identityMatches =
+                decision != null &&
+                    decision.promotionId == promotionId &&
+                    decision.ruleId == ruleId &&
+                    decision.ruleVersion == ruleVersion
+            val fixed = fixedRewardOption()
+            val availableChoices = availableChoiceOptions()
+            val fixedOfferItem = fixed?.toOfferItem()
+            val selectableOfferItems = availableChoices.map { it.toOfferItem() }
+            val baseOffer =
+                PromotionGiftOffer(
+                    status = PromotionGiftOfferStatus.GIFT_UNAVAILABLE,
+                    promotionId = promotionId,
+                    promotionTitle = promotionTitle,
+                    ruleId = ruleId,
+                    ruleVersion = ruleVersion,
+                    triggerLineId = triggerLineId,
+                    triggerMenuItemId = triggerMenuItemId,
+                    triggerItemName = triggerItemName,
+                    fixedRewardItem = fixedOfferItem,
+                    selectableRewardItems = selectableOfferItems,
+                )
+            if (identityMatches && decision?.action == PromotionGiftDecisionAction.SKIP) {
+                return PromotionGiftResolution(
+                    offer = baseOffer.copy(status = PromotionGiftOfferStatus.GIFT_SKIPPED),
+                )
+            }
+            return when (reward?.rewardMode) {
+                PromotionRewardMode.FIXED_ITEM -> {
+                    val unavailableReason = fixed?.unavailableReason()
+                    if (fixed == null || unavailableReason != null) {
+                        PromotionGiftResolution(
+                            offer =
+                                baseOffer.copy(
+                                    status = PromotionGiftOfferStatus.GIFT_UNAVAILABLE,
+                                    unavailableReason =
+                                        unavailableReason
+                                            ?: PromotionGiftUnavailableReason.INVALID_REWARD_CONFIGURATION,
+                                ),
+                        )
+                    } else if (
+                        identityMatches &&
+                        decision?.action == PromotionGiftDecisionAction.ACCEPT_FIXED
+                    ) {
+                        val gift = requireNotNull(fixedPreviewGift())
+                        PromotionGiftResolution(
+                            offer =
+                                baseOffer.copy(
+                                    status = PromotionGiftOfferStatus.GIFT_SELECTED,
+                                    selectedRewardItem = fixed.toOfferItem(),
+                                ),
+                            appliedGift = gift,
+                        )
+                    } else {
+                        PromotionGiftResolution(
+                            offer = baseOffer.copy(status = PromotionGiftOfferStatus.FIXED_GIFT_AVAILABLE),
+                        )
+                    }
+                }
+                PromotionRewardMode.CHOICE_ITEMS -> {
+                    if (availableChoices.isEmpty()) {
+                        val unavailableReason =
+                            if (reward.options.any { it.requiresOptionSelection }) {
+                                PromotionGiftUnavailableReason.REQUIRED_OPTION_UNSUPPORTED
+                            } else {
+                                PromotionGiftUnavailableReason.NO_AVAILABLE_REWARD_ITEMS
+                            }
+                        PromotionGiftResolution(
+                            offer =
+                                baseOffer.copy(
+                                    status = PromotionGiftOfferStatus.GIFT_UNAVAILABLE,
+                                    unavailableReason = unavailableReason,
+                                ),
+                        )
+                    } else {
+                        val selected =
+                            if (
+                                identityMatches &&
+                                decision?.action == PromotionGiftDecisionAction.SELECT_ITEM
+                            ) {
+                                availableChoices.firstOrNull {
+                                    it.menuItemId == decision.selectedMenuItemId
+                                }
+                            } else {
+                                null
+                            }
+                        if (selected == null) {
+                            PromotionGiftResolution(
+                                offer = baseOffer.copy(status = PromotionGiftOfferStatus.GIFT_CHOICE_REQUIRED),
+                            )
+                        } else {
+                            val gift = requireNotNull(previewGift(selected))
+                            PromotionGiftResolution(
+                                offer =
+                                    baseOffer.copy(
+                                        status = PromotionGiftOfferStatus.GIFT_SELECTED,
+                                        selectedRewardItem = selected.toOfferItem(),
+                                    ),
+                                appliedGift = gift,
+                            )
+                        }
+                    }
+                }
+                null ->
+                    PromotionGiftResolution(
+                        offer =
+                            baseOffer.copy(
+                                unavailableReason = PromotionGiftUnavailableReason.INVALID_REWARD_CONFIGURATION,
+                            ),
+                    )
+            }
+        }
+
+        fun fixedPreviewGift(): PromotionRulePreviewGift? =
+            fixedRewardOption()
+                ?.takeIf { it.isEligibleReward() }
+                ?.let { previewGift(it) }
+
+        private fun previewGift(option: PromotionRuleRewardOption): PromotionRulePreviewGift? {
+            val configuredReward = reward ?: return null
+            return PromotionRulePreviewGift(
+                ruleId = ruleId,
+                triggerLineId = triggerLineId,
+                triggerMenuItemId = triggerMenuItemId,
+                triggerItemName = triggerItemName,
+                rewardMenuItemId = option.menuItemId,
+                rewardItemName = option.menuItemName,
+                rewardQty = configuredReward.rewardQty.coerceAtMost(1).coerceAtLeast(1),
+                rewardPriceMinor = option.priceMinor,
+                currency = option.currency,
+                label = "${option.menuItemName} в подарок",
+            )
+        }
+
+        fun previewChoice(): PromotionRulePreviewGiftChoice? {
+            if (reward?.rewardMode != PromotionRewardMode.CHOICE_ITEMS) return null
+            val options = availableChoiceOptions()
+            if (options.isEmpty()) return null
+            return PromotionRulePreviewGiftChoice(
+                ruleId = ruleId,
+                triggerLineId = triggerLineId,
+                triggerMenuItemId = triggerMenuItemId,
+                triggerItemName = triggerItemName,
+                options = options,
+            )
+        }
+    }
+
+    private data class PromotionGiftResolution(
+        val offer: PromotionGiftOffer,
+        val appliedGift: PromotionRulePreviewGift? = null,
+    )
+
+    private fun PromotionRuleRewardOption.isEligibleReward(): Boolean =
+        isAvailable && !requiresOptionSelection && priceMinor > 0L
+
+    private fun PromotionRuleRewardOption.unavailableReason(): PromotionGiftUnavailableReason? =
+        when {
+            requiresOptionSelection -> PromotionGiftUnavailableReason.REQUIRED_OPTION_UNSUPPORTED
+            !isAvailable || priceMinor <= 0L -> PromotionGiftUnavailableReason.REWARD_UNAVAILABLE
+            else -> null
+        }
+
+    private fun PromotionRuleRewardOption.toOfferItem(): PromotionGiftRewardItem =
+        PromotionGiftRewardItem(
+            menuItemId = menuItemId,
+            name = menuItemName,
+            originalUnitPriceMinor = priceMinor.coerceAtLeast(0L),
+            currency = currency,
+        )
 }

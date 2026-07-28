@@ -92,6 +92,7 @@ data class GuestVisitPromotionDiscountDto(
     val ruleType: String? = null,
     val originalAmountMinor: Long? = null,
     val finalAmountMinor: Long? = null,
+    val isActive: Boolean = true,
 )
 
 @Serializable
@@ -110,6 +111,14 @@ data class GuestVisitOrderItemDto(
     val priceMinor: Long? = null,
     val currency: String? = null,
     val discountPercent: Int? = null,
+    val promoDiscountMinor: Long = 0L,
+    val isPromotionReward: Boolean = false,
+    val isExcluded: Boolean = false,
+    val excludedReasonText: String? = null,
+    val itemStatus: String = "ACTIVE",
+    val canceledReasonText: String? = null,
+    val promotionLinkRole: String? = null,
+    val promotionLabel: String? = null,
     val totalMinor: Long? = null,
 )
 

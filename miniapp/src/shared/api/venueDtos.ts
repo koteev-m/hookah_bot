@@ -16,7 +16,7 @@ export type VenueMeResponse = {
 
 export type VenuePromotionStatus = 'DRAFT' | 'ACTIVE' | 'PAUSED' | 'ARCHIVED'
 
-export type VenuePromotionTemplateType = 'TEXT_ONLY' | 'HAPPY_HOURS_PERCENT'
+export type VenuePromotionTemplateType = 'TEXT_ONLY' | 'HAPPY_HOURS_PERCENT' | 'GIFT_WITH_ITEM'
 
 export type VenuePromotionWeekdayWindowDto = {
   weekday: number
@@ -31,12 +31,40 @@ export type VenuePromotionTargetDto = {
   label?: string | null
 }
 
+export type VenuePromotionRewardMode = 'FIXED_ITEM' | 'CHOICE_ITEMS'
+
+export type VenuePromotionRewardItemDto = {
+  menuItemId: number
+  name: string
+  priceMinor?: number | null
+  currency?: string | null
+  isAvailable?: boolean
+  requiresOptionSelection?: boolean
+}
+
+export type VenuePromotionRewardDto = {
+  mode: VenuePromotionRewardMode
+  fixedItem?: VenuePromotionRewardItemDto | null
+  allowlist: VenuePromotionRewardItemDto[]
+  maxRewardsPerBatch?: number
+}
+
+export type VenuePromotionRuleSummaryDto = {
+  schedule: string
+  trigger: string
+  reward: string
+  maximum?: string
+  explanation?: string
+}
+
 export type VenuePromotionRuleDto = {
   id: number
   version: number
   windows: VenuePromotionWeekdayWindowDto[]
   target?: VenuePromotionTargetDto | null
   discountPercent?: number | null
+  reward?: VenuePromotionRewardDto | null
+  summary?: VenuePromotionRuleSummaryDto | null
   readyForActivation: boolean
   validationIssues: string[]
 }
@@ -89,7 +117,14 @@ export type VenuePromotionMutationRequest = {
 export type VenuePromotionRuleMutationRequest = {
   windows: VenuePromotionWeekdayWindowDto[]
   target: VenuePromotionTargetDto
-  discountPercent: number
+  discountPercent?: number | null
+  reward?: VenuePromotionRewardMutationRequest | null
+}
+
+export type VenuePromotionRewardMutationRequest = {
+  mode: VenuePromotionRewardMode
+  fixedMenuItemId?: number | null
+  allowlistMenuItemIds: number[]
 }
 
 export type VenuePromotionStatusRequest = {
@@ -682,6 +717,8 @@ export type OrderBatchItemDto = {
   manualDiscountMinor: number
   promoDiscountMinor: number
   linePayableMinor: number
+  isPromotionReward?: boolean
+  hasActivePromotionReward?: boolean
   isExcluded: boolean
   excludedReasonText?: string | null
   discountPercent?: number | null

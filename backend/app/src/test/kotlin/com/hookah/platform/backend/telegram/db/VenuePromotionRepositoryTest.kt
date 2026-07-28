@@ -1025,6 +1025,154 @@ class VenuePromotionRepositoryTest {
         }
 
     @Test
+    fun `gift draft persists fixed and selectable rewards with safe availability hydration`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("promotion-rules-gift-draft")
+            val fixture = seedFixture(jdbcUrl)
+            val promotionRepository = VenuePromotionRepository(dataSource(jdbcUrl))
+            val ruleRepository = VenuePromotionRuleRepository(dataSource(jdbcUrl))
+            val triggerCategoryId =
+                insertMenuCategory(jdbcUrl, fixture.visibleVenueId, "Кальяны", MenuSemanticType.HOOKAH)
+            val triggerItemId =
+                insertMenuItem(jdbcUrl, fixture.visibleVenueId, triggerCategoryId, "Кальян")
+            val rewardCategoryId =
+                insertMenuCategory(jdbcUrl, fixture.visibleVenueId, "Чай", MenuSemanticType.TEA)
+            val teaId =
+                insertMenuItem(jdbcUrl, fixture.visibleVenueId, rewardCategoryId, "Чай")
+            val lemonadeId =
+                insertMenuItem(jdbcUrl, fixture.visibleVenueId, rewardCategoryId, "Лимонад")
+            val promotion =
+                promotionRepository.createPromotion(
+                    venueId = fixture.visibleVenueId,
+                    title = "Подарок при покупке",
+                    description = "Чай к кальяну",
+                    terms = "Один подарок",
+                    startsAt = Instant.parse("2030-01-01T00:00:00Z"),
+                    endsAt = Instant.parse("2030-12-31T23:59:59Z"),
+                    templateType = VenuePromotionTemplateType.GIFT_WITH_ITEM,
+                    createdByUserId = OWNER_ID,
+                )
+            val windows =
+                listOf(
+                    PromotionWeekdayWindow(weekday = 1, startsMinute = 12 * 60, endsMinute = 18 * 60),
+                    PromotionWeekdayWindow(weekday = 5, startsMinute = 12 * 60, endsMinute = 18 * 60),
+                )
+
+            val created =
+                ruleRepository.createGiftWithItemDraftRule(
+                    venueId = fixture.visibleVenueId,
+                    promotionId = promotion.id,
+                    target =
+                        HappyHoursRuleTargetInput(
+                            targetType = PromotionRuleTargetType.MENU_ITEM,
+                            menuItemId = triggerItemId,
+                        ),
+                    reward =
+                        GiftWithItemRewardInput(
+                            mode = PromotionRewardMode.FIXED_ITEM,
+                            fixedMenuItemId = teaId,
+                        ),
+                    weekdayWindows = windows,
+                    createdByUserId = OWNER_ID,
+                )
+
+            assertEquals(VenuePromotionStatus.DRAFT, created.status)
+            assertEquals(PromotionRuleTargetType.MENU_ITEM, created.executableTargetType)
+            assertEquals(triggerItemId, created.targets.single().menuItemId)
+            assertEquals(windows, created.weekdayWindows)
+            assertEquals(PromotionRewardMode.FIXED_ITEM, created.reward?.rewardMode)
+            assertEquals(teaId, created.reward?.rewardMenuItemId)
+            assertEquals(1, created.reward?.rewardQty)
+            assertEquals(1, created.reward?.maxRewardsPerBatch)
+            assertTrue(created.reward?.isAvailable == true)
+            assertFalse(created.reward?.requiresOptionSelection == true)
+
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                connection.prepareStatement(
+                    """
+                    INSERT INTO menu_item_options (
+                        venue_id, item_id, name, price_delta_minor, is_available, sort_order
+                    )
+                    VALUES (?, ?, 'Обязательный выбор', 0, TRUE, 0)
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setLong(1, fixture.visibleVenueId)
+                    statement.setLong(2, teaId)
+                    statement.executeUpdate()
+                }
+                connection.prepareStatement(
+                    "UPDATE menu_categories SET is_active = FALSE WHERE id = ?",
+                ).use { statement ->
+                    statement.setLong(1, rewardCategoryId)
+                    statement.executeUpdate()
+                }
+            }
+            val unavailableFixed =
+                assertNotNull(ruleRepository.getRuleForManagement(fixture.visibleVenueId, created.id))
+            assertFalse(unavailableFixed.reward?.isAvailable == true)
+            assertTrue(unavailableFixed.reward?.requiresOptionSelection == true)
+
+            val updated =
+                assertNotNull(
+                    ruleRepository.updateGiftWithItemDraftRule(
+                        venueId = fixture.visibleVenueId,
+                        promotionId = promotion.id,
+                        ruleId = created.id,
+                        target =
+                            HappyHoursRuleTargetInput(
+                                targetType = PromotionRuleTargetType.MENU_CATEGORY,
+                                menuCategoryId = triggerCategoryId,
+                            ),
+                        reward =
+                            GiftWithItemRewardInput(
+                                mode = PromotionRewardMode.CHOICE_ITEMS,
+                                allowlistMenuItemIds = listOf(teaId, lemonadeId),
+                            ),
+                        weekdayWindows = windows,
+                    ),
+                )
+
+            assertEquals(2, updated.version)
+            assertEquals(PromotionRuleTargetType.MENU_CATEGORY, updated.executableTargetType)
+            assertEquals(triggerCategoryId, updated.targets.single().menuCategoryId)
+            assertEquals(PromotionRewardMode.CHOICE_ITEMS, updated.reward?.rewardMode)
+            assertEquals(listOf(teaId, lemonadeId), updated.reward?.options?.map { it.menuItemId })
+            assertTrue(updated.reward?.options?.all { !it.isAvailable } == true)
+            assertEquals(
+                listOf(true, false),
+                updated.reward?.options?.map { it.requiresOptionSelection },
+            )
+            val readiness =
+                ruleRepository.validateGiftWithItemActivationReadiness(
+                    venueId = fixture.visibleVenueId,
+                    promotionId = promotion.id,
+                )
+            assertTrue(readiness.isReady, readiness.errors.joinToString())
+
+            val active =
+                assertNotNull(
+                    promotionRepository.setPromotionStatus(
+                        venueId = fixture.visibleVenueId,
+                        promotionId = promotion.id,
+                        status = VenuePromotionStatus.ACTIVE,
+                        afterUpdate = { connection, _ ->
+                            ruleRepository.synchronizeGiftWithItemPromotionStatus(
+                                connection = connection,
+                                venueId = fixture.visibleVenueId,
+                                promotionId = promotion.id,
+                                status = VenuePromotionStatus.ACTIVE,
+                            )
+                        },
+                    ),
+                )
+            assertEquals(VenuePromotionStatus.ACTIVE, active.status)
+            assertEquals(
+                VenuePromotionStatus.ACTIVE,
+                ruleRepository.getRuleForManagement(fixture.visibleVenueId, created.id)?.status,
+            )
+        }
+
+    @Test
     fun `legacy single and multi rule happy hours can pause and reactivate without conversion`() =
         runBlocking {
             val jdbcUrl = migratedJdbcUrl("promotion-phase-two-legacy-reactivation")

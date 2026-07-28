@@ -89,6 +89,7 @@ data class AddBatchRequest(
     val items: List<AddBatchItemDto>,
     val comment: String? = null,
     val previewFingerprint: String? = null,
+    val giftDecision: GiftDecisionDto? = null,
 )
 
 @Serializable
@@ -105,6 +106,14 @@ data class AddBatchResponse(
     val batchId: Long,
     val pricing: CartPreviewDto,
     val recalculated: Boolean,
+    val submitted: Boolean = true,
+)
+
+@Serializable
+data class AddBatchRecalculationResponse(
+    val submitted: Boolean,
+    val pricing: CartPreviewDto,
+    val recalculated: Boolean = true,
 )
 
 @Serializable
@@ -133,6 +142,8 @@ data class CartPreviewRequest(
     val tableSessionId: Long,
     val tabId: Long,
     val items: List<AddBatchItemDto>,
+    val comment: String? = null,
+    val giftDecision: GiftDecisionDto? = null,
 )
 
 @Serializable
@@ -150,6 +161,49 @@ data class CartPreviewDto(
     val discounts: List<CartPreviewDiscountDto>,
     val items: List<CartPreviewItemDto>,
     val pricingFingerprint: String,
+    val giftOffer: GiftOfferDto,
+    val cartFingerprint: String = "",
+    val decisionScopeToken: String? = null,
+    val decisionScopeExpiresAtEpochSeconds: Long? = null,
+    val giftDecisionStale: Boolean = false,
+    val giftDecisionMessage: String? = null,
+)
+
+@Serializable
+data class GiftDecisionDto(
+    val action: String,
+    val selectedMenuItemId: Long? = null,
+    val decisionScopeToken: String? = null,
+    @Deprecated("Promotion identity is server-owned and ignored")
+    val promotionId: Long? = null,
+    @Deprecated("Promotion identity is server-owned and ignored")
+    val ruleId: Long? = null,
+    @Deprecated("Promotion identity is server-owned and ignored")
+    val ruleVersion: Int? = null,
+)
+
+@Serializable
+data class GiftRewardItemDto(
+    val menuItemId: Long,
+    val name: String,
+    val originalUnitPriceMinor: Long,
+    val currency: String,
+)
+
+@Serializable
+data class GiftOfferDto(
+    val status: String,
+    val promotionId: Long? = null,
+    val promotionTitle: String? = null,
+    val ruleId: Long? = null,
+    val ruleVersion: Int? = null,
+    val triggerLineId: Long? = null,
+    val triggerMenuItemId: Long? = null,
+    val triggerItemName: String? = null,
+    val fixedRewardItem: GiftRewardItemDto? = null,
+    val selectableRewardItems: List<GiftRewardItemDto> = emptyList(),
+    val selectedRewardItem: GiftRewardItemDto? = null,
+    val unavailableReason: String? = null,
 )
 
 @Serializable

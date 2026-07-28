@@ -100,7 +100,11 @@ import com.hookah.platform.backend.platform.VenueOwnerQuotaCheckResult
 import com.hookah.platform.backend.platform.VenueOwnerVenueCreationResult
 import com.hookah.platform.backend.platform.VenueStatusAction
 import com.hookah.platform.backend.platform.VenueStatusChangeResult
-import com.hookah.platform.backend.promotions.PromotionRulePreviewGiftChoice
+import com.hookah.platform.backend.promotions.GiftDecisionCommand
+import com.hookah.platform.backend.promotions.PromotionGiftDecisionAction
+import com.hookah.platform.backend.promotions.PromotionGiftOffer
+import com.hookah.platform.backend.promotions.PromotionGiftOfferStatus
+import com.hookah.platform.backend.promotions.TelegramGiftDecisionAdapter
 import com.hookah.platform.backend.support.SupportAssigneeScope
 import com.hookah.platform.backend.support.SupportMessageAuthorRole
 import com.hookah.platform.backend.support.SupportMessageSource
@@ -115,6 +119,7 @@ import com.hookah.platform.backend.telegram.db.ChatContextRepository
 import com.hookah.platform.backend.telegram.db.CreatedOrderBatch
 import com.hookah.platform.backend.telegram.db.CreatedOrderPromotionDiscount
 import com.hookah.platform.backend.telegram.db.DialogStateRepository
+import com.hookah.platform.backend.telegram.db.GiftDecisionRequiredException
 import com.hookah.platform.backend.telegram.db.GuestLoyaltyProgress
 import com.hookah.platform.backend.telegram.db.GuestOrderCartPreview
 import com.hookah.platform.backend.telegram.db.GuestOrderCartPreviewItem
@@ -203,9 +208,17 @@ import java.time.LocalTime
 import java.time.MonthDay
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.util.Base64
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
+
+private val botGiftCallbackRandom = SecureRandom()
+
+private fun newBotGiftCallbackTag(): String =
+    ByteArray(9)
+        .also(botGiftCallbackRandom::nextBytes)
+        .let { Base64.getUrlEncoder().withoutPadding().encodeToString(it) }
 
 class TelegramBotRouter(
     private val config: TelegramBotConfig,
@@ -277,6 +290,7 @@ class TelegramBotRouter(
             guestMenuRepository = guestMenuRepository,
             guestTabsRepository = guestTabsRepository,
         ),
+    private val botGiftCallbackTagFactory: () -> String = ::newBotGiftCallbackTag,
 ) {
     private val logger = LoggerFactory.getLogger(TelegramBotRouter::class.java)
     private val aiTelegramHandler =
@@ -306,8 +320,8 @@ class TelegramBotRouter(
     private val botSelectedTabIds = ConcurrentHashMap<BotDraftCartKey, Long>()
     private val botDraftCartSessionIds = ConcurrentHashMap<BotDraftCartKey, Long>()
     private val botDraftCartScopes = ConcurrentHashMap<BotDraftCartKey, BotDraftCartScope>()
-    private val botGiftChoices = ConcurrentHashMap<BotDraftCartKey, ConcurrentHashMap<Long, Long>>()
-    private val botSkippedGiftRules = ConcurrentHashMap<BotDraftCartKey, MutableSet<Long>>()
+    private val botGiftDecisions = ConcurrentHashMap<BotDraftCartKey, GiftDecisionCommand>()
+    private val botGiftCallbackBindings = ConcurrentHashMap<BotDraftCartKey, BotGiftCallbackBinding>()
     private val replacementBeforeAcceptBatches = ConcurrentHashMap.newKeySet<ReplacementBeforeAcceptBatchKey>()
     private val botJoinSharedAwaitingChats = ConcurrentHashMap.newKeySet<Long>()
     private val promotionRuleScheduleDrafts = ConcurrentHashMap<PromotionRuleScheduleKey, PromotionRuleScheduleDraft>()
@@ -404,9 +418,163 @@ class TelegramBotRouter(
         val discountsByCurrency: Map<String, Long>,
         val pricingItems: List<GuestOrderCartPreviewItem>,
         val pricingFingerprint: String,
-        val giftChoices: List<PromotionRulePreviewGiftChoice> = emptyList(),
+        val cartFingerprint: String,
+        val giftOffer: PromotionGiftOffer,
+        val decisionScopeToken: String? = null,
         val loyaltyRedemption: LoyaltyRedemptionPreview? = null,
     )
+
+    private fun PromotionGiftOffer.toBotDecision(
+        action: PromotionGiftDecisionAction,
+        decisionScopeToken: String?,
+        selectedMenuItemId: Long? = null,
+    ): GiftDecisionCommand? =
+        TelegramGiftDecisionAdapter.toCommand(
+            offer = this,
+            action = action,
+            selectedMenuItemId = selectedMenuItemId,
+            decisionScopeToken = decisionScopeToken,
+        )
+
+    private fun clearBotGiftState(key: BotDraftCartKey) {
+        botGiftDecisions.remove(key)
+        botGiftCallbackBindings.remove(key)
+    }
+
+    private fun botGiftCallbackCartItems(key: BotDraftCartKey): List<BotGiftCallbackCartItem> =
+        getBotDraftCartItems(key.chatId, key.tableToken)
+            .map { item ->
+                BotGiftCallbackCartItem(
+                    menuItemId = item.itemId,
+                    quantity = item.qty,
+                    selectedOptionId = item.optionId,
+                    note = item.preferenceNote,
+                )
+            }
+            .sortedWith(
+                compareBy<BotGiftCallbackCartItem> { it.menuItemId }
+                    .thenBy { it.selectedOptionId }
+                    .thenBy { it.note.orEmpty() }
+                    .thenBy { it.quantity },
+            )
+
+    private fun botGiftCallbackIdentity(
+        key: BotDraftCartKey,
+        preview: BotCartPromotionPreview,
+    ): BotGiftCallbackIdentity? {
+        val scope = botDraftCartScopes[key] ?: return null
+        val offer = preview.giftOffer
+        if (
+            offer.status == PromotionGiftOfferStatus.NO_GIFT ||
+            offer.status == PromotionGiftOfferStatus.GIFT_UNAVAILABLE
+        ) {
+            return null
+        }
+        val promotionId = offer.promotionId ?: return null
+        val ruleId = offer.ruleId ?: return null
+        val ruleVersion = offer.ruleVersion ?: return null
+        if (preview.cartFingerprint.isBlank() || preview.decisionScopeToken.isNullOrBlank()) {
+            return null
+        }
+        val cartItems = botGiftCallbackCartItems(key)
+        if (cartItems.isEmpty()) {
+            return null
+        }
+        return BotGiftCallbackIdentity(
+            cartScope = scope,
+            cartItems = cartItems,
+            comment =
+                buildBotDraftCartSubmitComment(
+                    getBotDraftCartItems(key.chatId, key.tableToken),
+                    botDraftCartComments[key],
+                ),
+            cartFingerprint = preview.cartFingerprint,
+            promotionId = promotionId,
+            ruleId = ruleId,
+            ruleVersion = ruleVersion,
+            triggerMenuItemId = offer.triggerMenuItemId,
+            fixedRewardMenuItemId = offer.fixedRewardItem?.menuItemId,
+            selectableRewardMenuItemIds =
+                offer.selectableRewardItems
+                    .map { it.menuItemId }
+                    .sorted(),
+        )
+    }
+
+    private fun currentBotGiftCallbackBinding(
+        key: BotDraftCartKey,
+        preview: BotCartPromotionPreview,
+    ): BotGiftCallbackBinding? {
+        val identity =
+            botGiftCallbackIdentity(key, preview) ?: run {
+                botGiftCallbackBindings.remove(key)
+                return null
+            }
+        val current = botGiftCallbackBindings[key]
+        if (current?.identity == identity) {
+            return current
+        }
+        val tag = botGiftCallbackTagFactory()
+        require(
+            tag.length in 8..24 &&
+                tag.all { character ->
+                    character.isLetterOrDigit() || character == '-' || character == '_'
+                },
+        ) {
+            "Bot gift callback tag must be 8-24 URL-safe characters"
+        }
+        return BotGiftCallbackBinding(tag = tag, identity = identity)
+            .also { botGiftCallbackBindings[key] = it }
+    }
+
+    private fun botGiftCallbackMatchesCurrentCart(
+        key: BotDraftCartKey,
+        currentTab: com.hookah.platform.backend.miniapp.guest.db.GuestTabModel,
+        binding: BotGiftCallbackBinding,
+    ): Boolean {
+        val currentScope = botDraftCartScopes[key] ?: return false
+        if (
+            currentScope != binding.identity.cartScope ||
+            currentScope.tableSessionId != currentTab.tableSessionId ||
+            currentScope.tabId != currentTab.id
+        ) {
+            return false
+        }
+        val currentItems = botGiftCallbackCartItems(key)
+        val currentComment =
+            buildBotDraftCartSubmitComment(
+                getBotDraftCartItems(key.chatId, key.tableToken),
+                botDraftCartComments[key],
+            )
+        return currentItems == binding.identity.cartItems &&
+            currentComment == binding.identity.comment
+    }
+
+    private fun botGiftCallbackMatchesPreview(
+        key: BotDraftCartKey,
+        binding: BotGiftCallbackBinding,
+        preview: BotCartPromotionPreview,
+    ): Boolean = botGiftCallbackIdentity(key, preview) == binding.identity
+
+    private fun GiftDecisionCommand.matches(offer: PromotionGiftOffer): Boolean =
+        offer.status == PromotionGiftOfferStatus.GIFT_SELECTED ||
+            offer.status == PromotionGiftOfferStatus.GIFT_SKIPPED
+
+    private fun reconcileBotGiftDecision(
+        key: BotDraftCartKey,
+        offer: PromotionGiftOffer,
+    ): Boolean {
+        val currentDecision = botGiftDecisions[key] ?: return false
+        val decisionStillResolved =
+            offer.status == PromotionGiftOfferStatus.GIFT_SELECTED ||
+                offer.status == PromotionGiftOfferStatus.GIFT_SKIPPED
+        if (!currentDecision.matches(offer) || !decisionStillResolved) {
+            botGiftDecisions.remove(key, currentDecision)
+            botGiftCallbackBindings.remove(key)
+            return true
+        }
+        return false
+    }
 
     private val inviteCodeRandom = SecureRandom()
     private val inviteCodeLength = 4
@@ -433,6 +601,46 @@ class TelegramBotRouter(
     private data class BotDraftCartScope(
         val tableSessionId: Long,
         val tabId: Long,
+    )
+
+    private data class BotGiftCallbackCartItem(
+        val menuItemId: Long,
+        val quantity: Int,
+        val selectedOptionId: Long?,
+        val note: String?,
+    )
+
+    private data class BotGiftCallbackIdentity(
+        val cartScope: BotDraftCartScope,
+        val cartItems: List<BotGiftCallbackCartItem>,
+        val comment: String?,
+        val cartFingerprint: String,
+        val promotionId: Long,
+        val ruleId: Long,
+        val ruleVersion: Int,
+        val triggerMenuItemId: Long?,
+        val fixedRewardMenuItemId: Long?,
+        val selectableRewardMenuItemIds: List<Long>,
+    )
+
+    private data class BotGiftCallbackBinding(
+        val tag: String,
+        val identity: BotGiftCallbackIdentity,
+    )
+
+    private enum class BotGiftCallbackAction {
+        OPEN_CHOICE,
+        SELECT_ITEM,
+        CONFIRM_ITEM,
+        ACCEPT_FIXED,
+        SKIP,
+        DONE,
+    }
+
+    private data class BotGiftCallback(
+        val action: BotGiftCallbackAction,
+        val tag: String,
+        val rewardMenuItemId: Long? = null,
     )
 
     private data class StaffChatLinkCommands(
@@ -1887,10 +2095,7 @@ class TelegramBotRouter(
                 removeBotMenuCartItem(chatId, data, sourceMessageId = sourceMessageId)
             data == "bot_menu_cart_back_menu" -> showBotMenu(chatId, sourceMessageId = sourceMessageId)
             data == "bot_menu_cart_comment" -> promptBotMenuCartComment(chatId)
-            data == "bot_menu_gift_choice" -> showBotGiftChoice(chatId)
-            data?.startsWith("bot_gift_opt:") == true -> selectBotGiftChoice(chatId, data)
-            data == "bot_gift_done" -> showBotMenuCart(chatId)
-            data == "bot_gift_skip" -> checkoutBotMenuCart(chatId, callbackQuery.id, skipPendingGiftChoice = true)
+            data?.isBotGiftCallback() == true -> handleBotGiftCallback(chatId, data)
             data == "bot_menu_cart_clear" -> clearBotMenuCart(chatId, sourceMessageId)
             data == "bot_menu_cart_checkout" -> checkoutBotMenuCart(chatId, callbackQuery.id)
             data == "bot_tabs_create_shared" -> createBotSharedTab(chatId)
@@ -10349,8 +10554,8 @@ class TelegramBotRouter(
             buildString {
                 append("🎁 Подарок\n\n")
                 append("Выберите, как гость получит подарок.\n")
-                append("Конкретная позиция добавляется автоматически. ")
-                append("Вариант на выбор попросит гостя выбрать один подарок в корзине перед оформлением заказа.")
+                append("Конкретную позицию гость подтверждает сам. ")
+                append("Для варианта на выбор гость выбирает и подтверждает один подарок перед оформлением заказа.")
             },
             TelegramKeyboards.inlineVenueGiftRewardModeActions(venueId, promotionId),
         )
@@ -11238,7 +11443,7 @@ class TelegramBotRouter(
                 if (rule.ruleType == PromotionRuleType.GIFT_WITH_ITEM) {
                     append(
                         "\nЕсли расписание не задано, акция действует всегда. Если задать дни и время, " +
-                            "подарок будет добавляться только в этот период.\n",
+                            "предложение подарка будет доступно только в этот период.\n",
                     )
                 }
                 if (rule.hasMultipleWeekdayWindowRanges()) {
@@ -11807,8 +12012,8 @@ class TelegramBotRouter(
                     append("Это правило применяется, когда акция включена.")
                 PromotionRuleType.GIFT_WITH_ITEM ->
                     append(
-                        "Подарок добавляется к заказу автоматически, если гость выбрал позицию из условия " +
-                            "акции, а правило активно в выбранные дни и часы.",
+                        "Гость сам подтверждает фиксированный подарок или выбирает подарок из списка. " +
+                            "Без явного подтверждения подарок в заказ не добавляется.",
                     )
             }
         }
@@ -21014,7 +21219,7 @@ class TelegramBotRouter(
         userId: Long,
         venueId: Long,
     ) {
-        resolveVenueRoleForVenue(chatId, userId, venueId) ?: return
+        val role = resolveVenueRoleForVenue(chatId, userId, venueId) ?: return
         val queueItems = loadVenueStaffOrderQueue(chatId, venueId) ?: return
         if (queueItems.isEmpty()) {
             enqueueMessage(
@@ -21799,6 +22004,21 @@ class TelegramBotRouter(
         )
     }
 
+    private suspend fun refreshStaffChatOrderActivityCardBestEffort(
+        venueId: Long,
+        orderId: Long,
+    ) {
+        runCatching {
+            staffChatNotifier?.refreshOrderActivityCardNow(
+                venueId = venueId,
+                orderId = orderId,
+                includeStaffCallId = null,
+            )
+        }.onFailure { error ->
+            logBestEffort("refresh staff-chat order activity card", error)
+        }
+    }
+
     private suspend fun editStaffChatOrderBatchMessage(
         chatId: Long,
         messageId: Long?,
@@ -22362,7 +22582,7 @@ class TelegramBotRouter(
             return
         }
         val (venueId, orderId, batchItemId) = parsed
-        resolveVenueRoleForVenue(chatId, userId, venueId) ?: return
+        val role = resolveVenueRoleForVenue(chatId, userId, venueId) ?: return
         val detail = loadVenueStaffOrderDetailForEdit(chatId, userId, venueId, orderId) ?: return
         val item =
             activeVenueOrderBillItems(detail)
@@ -22380,17 +22600,24 @@ class TelegramBotRouter(
                 orderId = orderId,
                 statusButtons = emptyList(),
                 actionButtons =
-                    listOf(
-                        "🚫 Позиция закончилась" to
-                            compactStaffVenueOrderItemCallback(
-                                "obi_unav_ask",
-                                venueId,
-                                orderId,
-                                batchItemId,
-                            ),
-                        "❌ Убрать из счёта" to "staff_order_bill_exclude:$venueId:$orderId:$batchItemId",
-                        "🏷 Применить скидку" to "staff_order_bill_discount:$venueId:$orderId:$batchItemId",
-                    ),
+                    buildList {
+                        add(
+                            "🚫 Позиция закончилась" to
+                                compactStaffVenueOrderItemCallback(
+                                    "obi_unav_ask",
+                                    venueId,
+                                    orderId,
+                                    batchItemId,
+                                ),
+                        )
+                        add("❌ Убрать из счёта" to "staff_order_bill_exclude:$venueId:$orderId:$batchItemId")
+                        if (role != VenueBotRole.STAFF) {
+                            add(
+                                "🏷 Применить скидку" to
+                                    "staff_order_bill_discount:$venueId:$orderId:$batchItemId",
+                            )
+                        }
+                    },
                 backButton = "⬅️ Назад" to "staff_venue_orders_edit_bill:$venueId:$orderId",
             ),
         )
@@ -22480,6 +22707,7 @@ class TelegramBotRouter(
             showVenueStaffOrderFullDetailsByIds(chatId, userId, venueId, orderId)
             return
         }
+        refreshStaffChatOrderActivityCardBestEffort(venueId = venueId, orderId = orderId)
         result.guestUserId?.let { guestUserId ->
             enqueueMessage(
                 guestUserId,
@@ -22719,7 +22947,11 @@ class TelegramBotRouter(
             return
         }
         val (venueId, orderId, batchItemId) = parsed
-        resolveVenueRoleForVenue(chatId, userId, venueId) ?: return
+        val role = resolveVenueRoleForVenue(chatId, userId, venueId) ?: return
+        if (role == VenueBotRole.STAFF) {
+            enqueueMessage(chatId, "Недостаточно прав.")
+            return
+        }
         dialogStateRepository.set(
             chatId,
             DialogState(
@@ -22759,21 +22991,20 @@ class TelegramBotRouter(
             return
         }
         val discountPercent = text.trim().toIntOrNull()
-        if (discountPercent == null || discountPercent !in 1..100) {
-            enqueueMessage(chatId, "Введите число от 1 до 100.\nНапример: 20")
-            return
-        }
         val role =
             resolveVenueRoleForVenue(chatId, userId, venueId) ?: run {
                 dialogStateRepository.clear(chatId)
                 return
             }
-        val actorRole =
-            when (role) {
-                VenueBotRole.OWNER -> VenueRole.OWNER
-                VenueBotRole.MANAGER -> VenueRole.MANAGER
-                VenueBotRole.STAFF -> VenueRole.STAFF
-            }
+        if (role == VenueBotRole.STAFF) {
+            dialogStateRepository.clear(chatId)
+            enqueueMessage(chatId, "Недостаточно прав.")
+            return
+        }
+        if (discountPercent == null || discountPercent !in 1..100) {
+            enqueueMessage(chatId, "Введите число от 1 до 100.\nНапример: 20")
+            return
+        }
         val applied =
             try {
                 venueOrdersRepository.setBatchItemDiscountPercent(
@@ -22781,7 +23012,7 @@ class TelegramBotRouter(
                     orderId = orderId,
                     batchItemId = batchItemId,
                     discountPercent = discountPercent,
-                    actor = OrderActionActor(userId = userId, role = actorRole),
+                    actor = OrderActionActor(userId = userId, role = role.toVenueRole()),
                 )
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
@@ -22860,6 +23091,7 @@ class TelegramBotRouter(
             showVenueStaffOrderFullDetailsByIds(chatId, userId, venueId, orderId)
             return
         }
+        refreshStaffChatOrderActivityCardBestEffort(venueId = venueId, orderId = orderId)
         enqueueMessage(chatId, "✅ Позиция исключена из счёта.")
         showVenueStaffOrderFullDetailsByIds(chatId, userId, venueId, orderId)
     }
@@ -27410,6 +27642,55 @@ class TelegramBotRouter(
             )
             return
         }
+        val reorderItems =
+            listOf(
+                OrderBatchItemInput(
+                    itemId = item.id,
+                    qty = 1,
+                ),
+            )
+        val reorderPreview =
+            try {
+                ordersRepository.previewGuestOrderBatch(
+                    venueId = context.table.venueId,
+                    userId = context.userId,
+                    items = reorderItems,
+                    venueZoneId = resolvePromotionVenueZoneId(context.table.venueId),
+                    giftDecision = null,
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: DatabaseUnavailableException) {
+                enqueueMessage(chatId, "База недоступна, попробуйте позже.")
+                return
+            } catch (e: InvalidInputException) {
+                enqueueMessage(chatId, "Позиция сейчас недоступна. Обновите меню и попробуйте снова.")
+                return
+            }
+        if (
+            reorderPreview?.giftOffer?.status == PromotionGiftOfferStatus.FIXED_GIFT_AVAILABLE ||
+            reorderPreview?.giftOffer?.status == PromotionGiftOfferStatus.GIFT_CHOICE_REQUIRED
+        ) {
+            if (
+                !addItemToBotDraftCart(
+                    chatId = chatId,
+                    tableToken = context.table.tableToken,
+                    tableSessionId = currentTab.tableSessionId,
+                    tabId = currentTab.id,
+                    item = item,
+                )
+            ) {
+                warnBotDraftCartScopeMismatch(chatId)
+                return
+            }
+            enqueueMessage(
+                chatId,
+                "Для дозаказа доступен подарок. " +
+                    "Подтвердите или пропустите его в корзине, затем оформите заказ.",
+            )
+            showBotMenuCart(chatId)
+            return
+        }
         val createdBatch =
             createGuestBatchFromBotItems(
                 chatId = chatId,
@@ -27417,13 +27698,8 @@ class TelegramBotRouter(
                 idempotencyKey = "bot-reorder:$callbackId",
                 tableSessionId = currentTab.tableSessionId,
                 tabId = currentTab.id,
-                items =
-                    listOf(
-                        OrderBatchItemInput(
-                            itemId = item.id,
-                            qty = 1,
-                        ),
-                    ),
+                items = reorderItems,
+                giftFallbackItem = item,
             ) ?: return
         enqueueMessage(
             chatId,
@@ -27458,6 +27734,7 @@ class TelegramBotRouter(
         val items = getBotDraftCartItems(chatId, context.table.tableToken)
         val guestComment = botDraftCartComments[key]?.trim()?.takeIf { it.isNotBlank() }
         if (items.isNotEmpty() && isBotDraftCartScopeMismatch(key, currentTab)) {
+            clearBotGiftState(key)
             sendBotCartScreenMessage(
                 chatId,
                 key,
@@ -27531,6 +27808,29 @@ class TelegramBotRouter(
                 ?.takeIf { it.isNotEmpty() }
                 ?: grossTotalsByCurrency
         val visiblePromotionPreview = promotionPreview?.takeIf { it.text.isNotBlank() }
+        val giftOffer = promotionPreview?.giftOffer
+        val giftStatus = giftOffer?.status
+        val giftCallbackTag =
+            promotionPreview
+                ?.let { currentBotGiftCallbackBinding(key, it) }
+                ?.tag
+        val fixedGiftCanBeAccepted =
+            giftOffer?.fixedRewardItem != null &&
+                (
+                    giftStatus == PromotionGiftOfferStatus.FIXED_GIFT_AVAILABLE ||
+                        giftStatus == PromotionGiftOfferStatus.GIFT_SKIPPED
+                )
+        val selectableGiftCanBeOpened =
+            giftOffer?.selectableRewardItems?.isNotEmpty() == true &&
+                (
+                    giftStatus == PromotionGiftOfferStatus.GIFT_CHOICE_REQUIRED ||
+                        giftStatus == PromotionGiftOfferStatus.GIFT_SELECTED ||
+                        giftStatus == PromotionGiftOfferStatus.GIFT_SKIPPED
+                )
+        val giftCanBeSkipped =
+            giftStatus == PromotionGiftOfferStatus.FIXED_GIFT_AVAILABLE ||
+                giftStatus == PromotionGiftOfferStatus.GIFT_CHOICE_REQUIRED ||
+                giftStatus == PromotionGiftOfferStatus.GIFT_SELECTED
         val loyaltyProgressText =
             buildBotCartLoyaltyProgressText(
                 venueId = context.table.venueId,
@@ -27592,7 +27892,13 @@ class TelegramBotRouter(
             TelegramKeyboards.inlineBotMenuCartSummaryActions(
                 showSplitBillActions = showSplitBillActions,
                 hasComment = guestComment != null,
-                hasGiftChoice = visiblePromotionPreview?.giftChoices?.isNotEmpty() == true,
+                showAcceptFixedGift = fixedGiftCanBeAccepted,
+                showGiftChoice = selectableGiftCanBeOpened,
+                giftChoiceSelected =
+                    giftStatus == PromotionGiftOfferStatus.GIFT_SELECTED &&
+                        giftOffer?.selectableRewardItems?.isNotEmpty() == true,
+                showSkipGift = giftCanBeSkipped,
+                giftCallbackTag = giftCallbackTag,
             ),
         )
     }
@@ -27677,28 +27983,49 @@ class TelegramBotRouter(
         userId: Long,
         items: List<BotDraftCartItem>,
         key: BotDraftCartKey,
+        includeGiftDecision: Boolean = true,
     ): BotCartPromotionPreview {
         if (items.isEmpty()) {
             throw InvalidInputException("Cart must not be empty")
         }
+        val cartScope =
+            botDraftCartScopes[key]
+                ?: throw InvalidInputException("Cart scope is unavailable")
+        val submitComment = buildBotDraftCartSubmitComment(items, botDraftCartComments[key])
         val loyaltyPreview = buildBotCartLoyaltyRedemptionPreview(venueId, userId, items)
-        val preview =
+        val orderItems =
+            items.map { item ->
+                OrderBatchItemInput(
+                    itemId = item.itemId,
+                    qty = item.qty,
+                    selectedOptionId = item.optionId,
+                    preferenceNote = item.preferenceNote,
+                )
+            }
+        var preview =
             ordersRepository.previewGuestOrderBatch(
                 venueId = venueId,
                 userId = userId,
-                items =
-                    items.map { item ->
-                        OrderBatchItemInput(
-                            itemId = item.itemId,
-                            qty = item.qty,
-                            selectedOptionId = item.optionId,
-                            preferenceNote = item.preferenceNote,
-                        )
-                    },
+                items = orderItems,
                 venueZoneId = resolvePromotionVenueZoneId(venueId),
-                selectedGiftChoices = botGiftChoices[key].orEmpty(),
-                skippedGiftRuleIds = botSkippedGiftRules[key].orEmpty(),
+                tableSessionId = cartScope.tableSessionId,
+                tabId = cartScope.tabId,
+                comment = submitComment,
+                giftDecisionCommand = botGiftDecisions[key].takeIf { includeGiftDecision },
             ) ?: throw InvalidInputException("Some items or options are unavailable")
+        if (includeGiftDecision && reconcileBotGiftDecision(key, preview.giftOffer)) {
+            preview =
+                ordersRepository.previewGuestOrderBatch(
+                    venueId = venueId,
+                    userId = userId,
+                    items = orderItems,
+                    venueZoneId = resolvePromotionVenueZoneId(venueId),
+                    tableSessionId = cartScope.tableSessionId,
+                    tabId = cartScope.tabId,
+                    comment = submitComment,
+                    giftDecisionCommand = null,
+                ) ?: throw InvalidInputException("Some items or options are unavailable")
+        }
         return formatBotCartPromotionPreview(preview, loyaltyPreview)
     }
 
@@ -27708,9 +28035,16 @@ class TelegramBotRouter(
         userId: Long,
         items: List<BotDraftCartItem>,
         key: BotDraftCartKey,
+        includeGiftDecision: Boolean = true,
     ): BotCartPromotionPreview? =
         try {
-            buildBotCartPromotionPreview(venueId, userId, items, key)
+            buildBotCartPromotionPreview(
+                venueId = venueId,
+                userId = userId,
+                items = items,
+                key = key,
+                includeGiftDecision = includeGiftDecision,
+            )
         } catch (e: DatabaseUnavailableException) {
             enqueueMessage(chatId, "Не удалось пересчитать корзину по актуальным ценам. Попробуйте ещё раз.")
             null
@@ -27758,7 +28092,8 @@ class TelegramBotRouter(
         val discountLines =
             preview.discounts
                 .filterNot { discount ->
-                    discount.ruleType.equals("LOYALTY_NTH_HOOKAH", ignoreCase = true)
+                    discount.ruleType.equals("LOYALTY_NTH_HOOKAH", ignoreCase = true) ||
+                        discount.ruleType.equals("GIFT_WITH_ITEM", ignoreCase = true)
                 }
                 .map { discount ->
                     "🎁 ${discount.label}: −${formatCompactMoney(discount.discountMinor, discount.currency)}"
@@ -27773,33 +28108,177 @@ class TelegramBotRouter(
                 }
         val giftLines =
             preview.items.filter { it.isPromotionReward }.map { gift ->
-                "🎁 ${gift.itemName} в подарок"
+                buildString {
+                    append("🎁 ${gift.itemName}\n")
+                    append("Обычная стоимость: ${formatCompactMoney(gift.lineGrossMinor, gift.currency)}\n")
+                    append(
+                        "Скидка по акции: 100% " +
+                            "(−${formatCompactMoney(gift.discountMinor, gift.currency)})\n",
+                    )
+                    append("Итого: ${formatCompactMoney(gift.linePayableMinor, gift.currency)}")
+                }
             }
-        val giftChoiceLines =
-            preview.giftChoices.map {
-                "🎁 Доступен подарок: выберите один вариант."
+        val giftOfferLines =
+            when (preview.giftOffer.status) {
+                PromotionGiftOfferStatus.NO_GIFT -> emptyList()
+                PromotionGiftOfferStatus.FIXED_GIFT_AVAILABLE -> {
+                    val reward = preview.giftOffer.fixedRewardItem
+                    listOfNotNull(
+                        reward?.let {
+                            "🎁 Вам доступен подарок: ${it.name} " +
+                                "(${formatCompactMoney(it.originalUnitPriceMinor, it.currency)})."
+                        },
+                    )
+                }
+                PromotionGiftOfferStatus.GIFT_CHOICE_REQUIRED ->
+                    listOf("🎁 Вам доступен подарок на выбор.")
+                PromotionGiftOfferStatus.GIFT_UNAVAILABLE ->
+                    listOf("Подарок по акции сейчас недоступен.")
+                PromotionGiftOfferStatus.GIFT_SKIPPED ->
+                    listOf("Подарок по акции пропущен.")
+                PromotionGiftOfferStatus.GIFT_SELECTED -> {
+                    if (giftLines.isNotEmpty()) {
+                        emptyList()
+                    } else {
+                        listOfNotNull(
+                            preview.giftOffer.selectedRewardItem?.let {
+                                "🎁 Выбран подарок: ${it.name} " +
+                                    "(${formatCompactMoney(it.originalUnitPriceMinor, it.currency)} → 0)."
+                            },
+                        )
+                    }
+                }
             }
         val lines =
             buildList {
                 addAll(discountLines)
                 addAll(loyaltyLines)
                 addAll(giftLines)
-                addAll(giftChoiceLines)
-                if (giftLines.isNotEmpty()) {
-                    add("Подарок будет добавлен при оформлении, если акция ещё активна.")
-                }
+                addAll(giftOfferLines)
             }
         return BotCartPromotionPreview(
             text = lines.joinToString("\n"),
             discountsByCurrency = discountsByCurrency,
             pricingItems = preview.items,
             pricingFingerprint = preview.pricingFingerprint,
-            giftChoices = preview.giftChoices,
+            cartFingerprint = preview.cartFingerprint,
+            giftOffer = preview.giftOffer,
+            decisionScopeToken = preview.decisionScopeToken,
             loyaltyRedemption = loyaltyPreview.takeIf { loyaltyLines.isNotEmpty() },
         )
     }
 
-    private suspend fun showBotGiftChoice(chatId: Long) {
+    private fun String.isBotGiftCallback(): Boolean =
+        listOf(
+            "bot_menu_gift_choice",
+            "bot_gift_opt",
+            "bot_gift_confirm",
+            "bot_gift_accept_fixed",
+            "bot_gift_skip",
+            "bot_gift_done",
+        ).any { prefix -> this == prefix || startsWith("$prefix:") }
+
+    private fun isValidBotGiftCallbackTag(tag: String): Boolean =
+        tag.length in 8..24 &&
+            tag.all { character ->
+                character.isLetterOrDigit() || character == '-' || character == '_'
+            }
+
+    private fun parseBotGiftCallback(data: String): BotGiftCallback? {
+        fun taggedAction(
+            prefix: String,
+            action: BotGiftCallbackAction,
+        ): BotGiftCallback? {
+            val tag = data.removePrefix("$prefix:").takeIf(::isValidBotGiftCallbackTag) ?: return null
+            return BotGiftCallback(action = action, tag = tag)
+        }
+
+        fun taggedItemAction(
+            prefix: String,
+            action: BotGiftCallbackAction,
+        ): BotGiftCallback? {
+            val parts = data.removePrefix("$prefix:").split(":", limit = 2)
+            val rewardMenuItemId = parts.getOrNull(0)?.toLongOrNull()?.takeIf { it > 0L } ?: return null
+            val tag = parts.getOrNull(1)?.takeIf(::isValidBotGiftCallbackTag) ?: return null
+            return BotGiftCallback(
+                action = action,
+                tag = tag,
+                rewardMenuItemId = rewardMenuItemId,
+            )
+        }
+
+        return when {
+            data.startsWith("bot_menu_gift_choice:") ->
+                taggedAction("bot_menu_gift_choice", BotGiftCallbackAction.OPEN_CHOICE)
+            data.startsWith("bot_gift_opt:") ->
+                taggedItemAction("bot_gift_opt", BotGiftCallbackAction.SELECT_ITEM)
+            data.startsWith("bot_gift_confirm:") ->
+                taggedItemAction("bot_gift_confirm", BotGiftCallbackAction.CONFIRM_ITEM)
+            data.startsWith("bot_gift_accept_fixed:") ->
+                taggedAction("bot_gift_accept_fixed", BotGiftCallbackAction.ACCEPT_FIXED)
+            data.startsWith("bot_gift_skip:") ->
+                taggedAction("bot_gift_skip", BotGiftCallbackAction.SKIP)
+            data.startsWith("bot_gift_done:") ->
+                taggedAction("bot_gift_done", BotGiftCallbackAction.DONE)
+            else -> null
+        }
+    }
+
+    private suspend fun rejectStaleBotGiftCallback(chatId: Long) {
+        enqueueMessage(chatId, "Корзина изменилась. Проверьте подарок ещё раз.")
+        showBotMenuCart(chatId)
+    }
+
+    private suspend fun handleBotGiftCallback(
+        chatId: Long,
+        data: String,
+    ) {
+        val callback =
+            parseBotGiftCallback(data) ?: run {
+                rejectStaleBotGiftCallback(chatId)
+                return
+            }
+        val context = resolveGuestContext(chatId) ?: return
+        val currentTab = resolveCurrentBotTab(chatId, context) ?: return
+        val key = BotDraftCartKey(chatId = chatId, tableToken = context.table.tableToken)
+        val binding = botGiftCallbackBindings[key]
+        val bindingMatchesCurrentCart =
+            binding?.let { botGiftCallbackMatchesCurrentCart(key, currentTab, it) } == true
+        if (
+            binding == null ||
+            binding.tag != callback.tag ||
+            !bindingMatchesCurrentCart
+        ) {
+            if (binding?.tag == callback.tag && !bindingMatchesCurrentCart) {
+                clearBotGiftState(key)
+            }
+            rejectStaleBotGiftCallback(chatId)
+            return
+        }
+        when (callback.action) {
+            BotGiftCallbackAction.OPEN_CHOICE -> showBotGiftChoice(chatId, binding)
+            BotGiftCallbackAction.SELECT_ITEM ->
+                selectBotGiftChoice(
+                    chatId = chatId,
+                    rewardMenuItemId = requireNotNull(callback.rewardMenuItemId),
+                    binding = binding,
+                )
+            BotGiftCallbackAction.CONFIRM_ITEM ->
+                confirmBotGiftChoice(
+                    chatId = chatId,
+                    rewardMenuItemId = requireNotNull(callback.rewardMenuItemId),
+                    binding = binding,
+                )
+            BotGiftCallbackAction.ACCEPT_FIXED -> acceptBotFixedGift(chatId, binding)
+            BotGiftCallbackAction.SKIP -> skipBotGift(chatId, binding)
+            BotGiftCallbackAction.DONE -> showBotMenuCart(chatId)
+        }
+    }
+
+    private suspend fun showBotGiftChoice(
+        chatId: Long,
+        binding: BotGiftCallbackBinding,
+    ) {
         val context = resolveGuestContext(chatId) ?: return
         val currentTab = resolveCurrentBotTab(chatId, context) ?: return
         val key = BotDraftCartKey(chatId = chatId, tableToken = context.table.tableToken)
@@ -27819,39 +28298,64 @@ class TelegramBotRouter(
                 userId = context.userId,
                 items = items,
                 key = key,
+                includeGiftDecision = false,
             ) ?: return
-        val choice = preview.giftChoices.firstOrNull()
-        if (choice == null) {
-            enqueueMessage(chatId, "Сейчас нет подарка для выбора.")
+        if (!botGiftCallbackMatchesPreview(key, binding, preview)) {
+            botGiftCallbackBindings.remove(key, binding)
+            botGiftDecisions.remove(key)
+            rejectStaleBotGiftCallback(chatId)
+            return
+        }
+        val offer = preview.giftOffer
+        if (offer.selectableRewardItems.isEmpty()) {
+            enqueueMessage(
+                chatId,
+                if (offer.status == PromotionGiftOfferStatus.GIFT_UNAVAILABLE) {
+                    "Подарок по акции сейчас недоступен."
+                } else {
+                    "Сейчас нет подарка для выбора."
+                },
+            )
             showBotMenuCart(chatId)
             return
         }
-        val selected = botGiftChoices[key]?.get(choice.ruleId)
+        val currentDecision = botGiftDecisions[key]?.takeIf { it.matches(offer) }
+        val selectedMenuItemId =
+            currentDecision
+                ?.takeIf { it.action == PromotionGiftDecisionAction.SELECT_ITEM }
+                ?.selectedMenuItemId
+                ?: offer.selectedRewardItem?.menuItemId
         enqueueMessage(
             chatId,
             buildString {
-                append("🎁 Вам доступен подарок.\n\n")
-                append("Выберите один вариант к позиции «")
-                append(choice.triggerItemName)
-                append("».")
+                append("🎁 Вам доступен подарок на выбор")
+                offer.promotionTitle?.takeIf { it.isNotBlank() }?.let { append(" по акции «$it»") }
+                append(".\n")
+                offer.triggerItemName?.let { append("При заказе позиции «$it».\n") }
+                append("\nВыберите один вариант:\n")
+                append(
+                    offer.selectableRewardItems.joinToString("\n") { reward ->
+                        "• ${reward.name} — " +
+                            formatCompactMoney(reward.originalUnitPriceMinor, reward.currency)
+                    },
+                )
+                append("\n\nПосле выбора подтвердите добавление подарка.")
             },
             TelegramKeyboards.inlineBotGiftChoiceOptionsActions(
-                choice.options.map { option ->
-                    Triple(option.menuItemId, option.menuItemName, option.menuItemId == selected)
-                },
+                options =
+                    offer.selectableRewardItems.map { reward ->
+                        Triple(reward.menuItemId, reward.name, reward.menuItemId == selectedMenuItemId)
+                    },
+                giftCallbackTag = binding.tag,
             ),
         )
     }
 
     private suspend fun selectBotGiftChoice(
         chatId: Long,
-        data: String,
+        rewardMenuItemId: Long,
+        binding: BotGiftCallbackBinding,
     ) {
-        val rewardMenuItemId =
-            data.removePrefix("bot_gift_opt:").toLongOrNull() ?: run {
-                enqueueMessage(chatId, "Не удалось выбрать подарок. Попробуйте ещё раз.")
-                return
-            }
         val context = resolveGuestContext(chatId) ?: return
         val currentTab = resolveCurrentBotTab(chatId, context) ?: return
         val key = BotDraftCartKey(chatId = chatId, tableToken = context.table.tableToken)
@@ -27871,22 +28375,219 @@ class TelegramBotRouter(
                 userId = context.userId,
                 items = items,
                 key = key,
+                includeGiftDecision = false,
             ) ?: return
-        val choice = preview.giftChoices.firstOrNull()
-        if (choice == null) {
-            enqueueMessage(chatId, "Сейчас нет подарка для выбора.")
+        if (!botGiftCallbackMatchesPreview(key, binding, preview)) {
+            botGiftCallbackBindings.remove(key, binding)
+            botGiftDecisions.remove(key)
+            rejectStaleBotGiftCallback(chatId)
+            return
+        }
+        val offer = preview.giftOffer
+        val selectedReward =
+            offer.selectableRewardItems.firstOrNull { it.menuItemId == rewardMenuItemId }
+        if (selectedReward == null) {
+            enqueueMessage(
+                chatId,
+                if (offer.status == PromotionGiftOfferStatus.GIFT_UNAVAILABLE) {
+                    "Подарок по акции сейчас недоступен."
+                } else {
+                    "Этот подарок сейчас недоступен. Выберите другой вариант."
+                },
+            )
             showBotMenuCart(chatId)
             return
         }
-        val selectedOption =
-            choice.options.firstOrNull { it.menuItemId == rewardMenuItemId } ?: run {
-                enqueueMessage(chatId, "Этот подарок сейчас недоступен. Выберите другой вариант.")
-                showBotGiftChoice(chatId)
-                return
+        enqueueMessage(
+            chatId,
+            buildString {
+                append("Выбран вариант: ${selectedReward.name}.\n")
+                append("Обычная стоимость: ")
+                append(formatCompactMoney(selectedReward.originalUnitPriceMinor, selectedReward.currency))
+                append(".\n\nПодтвердите добавление подарка.")
+            },
+            TelegramKeyboards.inlineBotGiftChoiceOptionsActions(
+                options =
+                    offer.selectableRewardItems.map { reward ->
+                        Triple(reward.menuItemId, reward.name, reward.menuItemId == selectedReward.menuItemId)
+                    },
+                giftCallbackTag = binding.tag,
+            ),
+        )
+    }
+
+    private suspend fun confirmBotGiftChoice(
+        chatId: Long,
+        rewardMenuItemId: Long,
+        binding: BotGiftCallbackBinding,
+    ) {
+        val context = resolveGuestContext(chatId) ?: return
+        val currentTab = resolveCurrentBotTab(chatId, context) ?: return
+        val key = BotDraftCartKey(chatId = chatId, tableToken = context.table.tableToken)
+        val items = getBotDraftCartItems(chatId, context.table.tableToken)
+        if (items.isEmpty()) {
+            showBotMenuCart(chatId)
+            return
+        }
+        if (isBotDraftCartScopeMismatch(key, currentTab)) {
+            warnBotDraftCartScopeMismatch(chatId)
+            return
+        }
+        val preview =
+            buildBotCartPromotionPreviewOrNotify(
+                chatId = chatId,
+                venueId = context.table.venueId,
+                userId = context.userId,
+                items = items,
+                key = key,
+                includeGiftDecision = false,
+            ) ?: return
+        if (!botGiftCallbackMatchesPreview(key, binding, preview)) {
+            botGiftCallbackBindings.remove(key, binding)
+            botGiftDecisions.remove(key)
+            rejectStaleBotGiftCallback(chatId)
+            return
+        }
+        val offer = preview.giftOffer
+        val selectedReward =
+            offer.selectableRewardItems.firstOrNull { it.menuItemId == rewardMenuItemId }
+        val decision =
+            selectedReward?.let {
+                offer.toBotDecision(
+                    action = PromotionGiftDecisionAction.SELECT_ITEM,
+                    decisionScopeToken = preview.decisionScopeToken,
+                    selectedMenuItemId = it.menuItemId,
+                )
             }
-        botGiftChoices.computeIfAbsent(key) { ConcurrentHashMap() }[choice.ruleId] = selectedOption.menuItemId
-        botSkippedGiftRules[key]?.remove(choice.ruleId)
-        enqueueMessage(chatId, "Подарок выбран: ${selectedOption.menuItemName}.")
+        if (selectedReward == null || decision == null) {
+            clearBotGiftState(key)
+            enqueueMessage(chatId, "Этот подарок сейчас недоступен. Выберите другой вариант.")
+            showBotMenuCart(chatId)
+            return
+        }
+        botGiftDecisions[key] = decision
+        enqueueMessage(chatId, "Подарок добавлен в корзину: ${selectedReward.name}.")
+        showBotMenuCart(chatId)
+    }
+
+    private suspend fun acceptBotFixedGift(
+        chatId: Long,
+        binding: BotGiftCallbackBinding,
+    ) {
+        val context = resolveGuestContext(chatId) ?: return
+        val currentTab = resolveCurrentBotTab(chatId, context) ?: return
+        val key = BotDraftCartKey(chatId = chatId, tableToken = context.table.tableToken)
+        val items = getBotDraftCartItems(chatId, context.table.tableToken)
+        if (items.isEmpty()) {
+            showBotMenuCart(chatId)
+            return
+        }
+        if (isBotDraftCartScopeMismatch(key, currentTab)) {
+            warnBotDraftCartScopeMismatch(chatId)
+            return
+        }
+        val preview =
+            buildBotCartPromotionPreviewOrNotify(
+                chatId = chatId,
+                venueId = context.table.venueId,
+                userId = context.userId,
+                items = items,
+                key = key,
+                includeGiftDecision = false,
+            ) ?: return
+        if (!botGiftCallbackMatchesPreview(key, binding, preview)) {
+            botGiftCallbackBindings.remove(key, binding)
+            botGiftDecisions.remove(key)
+            rejectStaleBotGiftCallback(chatId)
+            return
+        }
+        val offer = preview.giftOffer
+        val fixedReward = offer.fixedRewardItem
+        val decision =
+            offer.toBotDecision(
+                action = PromotionGiftDecisionAction.ACCEPT_FIXED,
+                decisionScopeToken = preview.decisionScopeToken,
+            )
+        if (
+            offer.status != PromotionGiftOfferStatus.FIXED_GIFT_AVAILABLE ||
+            fixedReward == null ||
+            decision == null
+        ) {
+            clearBotGiftState(key)
+            enqueueMessage(
+                chatId,
+                if (offer.status == PromotionGiftOfferStatus.GIFT_UNAVAILABLE) {
+                    "Подарок по акции сейчас недоступен."
+                } else {
+                    "Корзина изменилась. Проверьте подарок ещё раз."
+                },
+            )
+            showBotMenuCart(chatId)
+            return
+        }
+        botGiftDecisions[key] = decision
+        enqueueMessage(chatId, "Подарок добавлен в корзину: ${fixedReward.name}.")
+        showBotMenuCart(chatId)
+    }
+
+    private suspend fun skipBotGift(
+        chatId: Long,
+        binding: BotGiftCallbackBinding,
+    ) {
+        val context = resolveGuestContext(chatId) ?: return
+        val currentTab = resolveCurrentBotTab(chatId, context) ?: return
+        val key = BotDraftCartKey(chatId = chatId, tableToken = context.table.tableToken)
+        val items = getBotDraftCartItems(chatId, context.table.tableToken)
+        if (items.isEmpty()) {
+            showBotMenuCart(chatId)
+            return
+        }
+        if (isBotDraftCartScopeMismatch(key, currentTab)) {
+            warnBotDraftCartScopeMismatch(chatId)
+            return
+        }
+        val preview =
+            buildBotCartPromotionPreviewOrNotify(
+                chatId = chatId,
+                venueId = context.table.venueId,
+                userId = context.userId,
+                items = items,
+                key = key,
+                includeGiftDecision = false,
+            ) ?: return
+        if (!botGiftCallbackMatchesPreview(key, binding, preview)) {
+            botGiftCallbackBindings.remove(key, binding)
+            botGiftDecisions.remove(key)
+            rejectStaleBotGiftCallback(chatId)
+            return
+        }
+        val offer = preview.giftOffer
+        val decision =
+            offer.toBotDecision(
+                action = PromotionGiftDecisionAction.SKIP,
+                decisionScopeToken = preview.decisionScopeToken,
+            )
+        if (
+            decision == null ||
+            (
+                offer.status != PromotionGiftOfferStatus.FIXED_GIFT_AVAILABLE &&
+                    offer.status != PromotionGiftOfferStatus.GIFT_CHOICE_REQUIRED
+            )
+        ) {
+            clearBotGiftState(key)
+            enqueueMessage(
+                chatId,
+                if (offer.status == PromotionGiftOfferStatus.GIFT_UNAVAILABLE) {
+                    "Подарок по акции сейчас недоступен. Обычный заказ можно оформить без подарка."
+                } else {
+                    "Корзина изменилась. Проверьте подарок ещё раз."
+                },
+            )
+            showBotMenuCart(chatId)
+            return
+        }
+        botGiftDecisions[key] = decision
+        enqueueMessage(chatId, "Подарок пропущен. Заказ ещё не оформлен.")
         showBotMenuCart(chatId)
     }
 
@@ -27921,7 +28622,7 @@ class TelegramBotRouter(
         if (cart.isEmpty()) {
             botDraftCarts.remove(key)
         }
-        botSkippedGiftRules.remove(key)
+        clearBotGiftState(key)
         showBotMenuCart(chatId)
     }
 
@@ -27942,14 +28643,13 @@ class TelegramBotRouter(
         if (cart.isEmpty()) {
             botDraftCarts.remove(key)
         }
-        botSkippedGiftRules.remove(key)
+        clearBotGiftState(key)
         showBotMenuCart(chatId)
     }
 
     private suspend fun checkoutBotMenuCart(
         chatId: Long,
         callbackId: String,
-        skipPendingGiftChoice: Boolean = false,
     ) {
         val context = resolveGuestContext(chatId) ?: return
         val currentTab = resolveCurrentBotTab(chatId, context) ?: return
@@ -27960,6 +28660,7 @@ class TelegramBotRouter(
         }
         val key = BotDraftCartKey(chatId = chatId, tableToken = context.table.tableToken)
         if (isBotDraftCartScopeMismatch(key, currentTab)) {
+            clearBotGiftState(key)
             warnBotDraftCartScopeMismatch(chatId)
             return
         }
@@ -27971,23 +28672,64 @@ class TelegramBotRouter(
                 items = draftItems,
                 key = key,
             ) ?: return
-        val pendingGiftChoice = promotionPreview.giftChoices.firstOrNull()
-        if (pendingGiftChoice != null && !skipPendingGiftChoice) {
-            val selectedGift = botGiftChoices[key]?.get(pendingGiftChoice.ruleId)
-            enqueueMessage(
-                chatId,
-                if (selectedGift == null) {
-                    "Вы ещё не выбрали подарок по акции."
-                } else {
-                    "Выбранный подарок сейчас недоступен. Выберите другой подарок или оформите заказ без подарка."
-                },
-                TelegramKeyboards.inlineBotGiftChoiceRequiredActions(),
-            )
-            return
-        }
-        if (skipPendingGiftChoice && pendingGiftChoice != null) {
-            botSkippedGiftRules.computeIfAbsent(key) { ConcurrentHashMap.newKeySet() }.add(pendingGiftChoice.ruleId)
-        }
+        val giftOffer = promotionPreview.giftOffer
+        val giftCallbackTag =
+            currentBotGiftCallbackBinding(key, promotionPreview)?.tag
+        val giftDecision =
+            when (giftOffer.status) {
+                PromotionGiftOfferStatus.FIXED_GIFT_AVAILABLE -> {
+                    if (giftCallbackTag == null) {
+                        rejectStaleBotGiftCallback(chatId)
+                        return
+                    }
+                    enqueueMessage(
+                        chatId,
+                        "Подтвердите подарок по акции или нажмите «Пропустить подарок».",
+                        TelegramKeyboards.inlineBotGiftDecisionRequiredActions(
+                            fixedGift = true,
+                            giftCallbackTag = giftCallbackTag,
+                        ),
+                    )
+                    return
+                }
+                PromotionGiftOfferStatus.GIFT_CHOICE_REQUIRED -> {
+                    if (giftCallbackTag == null) {
+                        rejectStaleBotGiftCallback(chatId)
+                        return
+                    }
+                    enqueueMessage(
+                        chatId,
+                        "Выберите и подтвердите подарок по акции или нажмите «Пропустить подарок».",
+                        TelegramKeyboards.inlineBotGiftDecisionRequiredActions(
+                            fixedGift = false,
+                            giftCallbackTag = giftCallbackTag,
+                        ),
+                    )
+                    return
+                }
+                PromotionGiftOfferStatus.GIFT_SELECTED,
+                PromotionGiftOfferStatus.GIFT_SKIPPED,
+                -> {
+                    val currentDecision = botGiftDecisions[key]
+                    if (currentDecision == null || !currentDecision.matches(giftOffer)) {
+                        enqueueMessage(
+                            chatId,
+                            "Корзина изменилась. Проверьте подарок ещё раз.",
+                        )
+                        showBotMenuCart(chatId)
+                        return
+                    }
+                    currentDecision
+                }
+                PromotionGiftOfferStatus.GIFT_UNAVAILABLE -> {
+                    clearBotGiftState(key)
+                    null
+                }
+                PromotionGiftOfferStatus.NO_GIFT -> {
+                    clearBotGiftState(key)
+                    null
+                }
+            }
         val cartComment = botDraftCartComments[key]
         val createdBatch =
             createGuestBatchFromBotItems(
@@ -28006,8 +28748,7 @@ class TelegramBotRouter(
                             preferenceNote = item.preferenceNote,
                         )
                     },
-                selectedGiftChoices = botGiftChoices[key].orEmpty(),
-                skippedGiftRuleIds = botSkippedGiftRules[key].orEmpty(),
+                giftDecisionCommand = giftDecision,
                 expectedPreviewFingerprint = promotionPreview.pricingFingerprint,
             )
                 ?: return
@@ -28066,6 +28807,7 @@ class TelegramBotRouter(
         val trimmed = rawText.trim()
         if (trimmed == "-" || trimmed == "—") {
             botDraftCartComments.remove(key)
+            clearBotGiftState(key)
             dialogStateRepository.clear(chatId)
             enqueueMessage(chatId, "✅ Комментарий удалён.")
             showBotMenuCart(chatId)
@@ -28080,6 +28822,7 @@ class TelegramBotRouter(
             return
         }
         botDraftCartComments[key] = trimmed
+        clearBotGiftState(key)
         dialogStateRepository.clear(chatId)
         enqueueMessage(chatId, "✅ Комментарий сохранён.")
         showBotMenuCart(chatId)
@@ -28244,9 +28987,9 @@ class TelegramBotRouter(
         tabId: Long? = null,
         comment: String? = null,
         items: List<OrderBatchItemInput>,
-        selectedGiftChoices: Map<Long, Long> = emptyMap(),
-        skippedGiftRuleIds: Set<Long> = emptySet(),
+        giftDecisionCommand: GiftDecisionCommand? = null,
         expectedPreviewFingerprint: String? = null,
+        giftFallbackItem: com.hookah.platform.backend.miniapp.guest.db.MenuItemModel? = null,
     ): com.hookah.platform.backend.telegram.db.CreatedOrderBatch? {
         val tableSession =
             try {
@@ -28331,8 +29074,7 @@ class TelegramBotRouter(
                     comment = comment,
                     items = items,
                     venueZoneId = resolvePromotionVenueZoneId(context.table.venueId),
-                    selectedGiftChoices = selectedGiftChoices,
-                    skippedGiftRuleIds = skippedGiftRuleIds,
+                    giftDecisionCommand = giftDecisionCommand,
                     expectedPreviewFingerprint = expectedPreviewFingerprint,
                 )
             if (createdBatch == null) {
@@ -28349,10 +29091,48 @@ class TelegramBotRouter(
             }
         } catch (e: CancellationException) {
             throw e
-        } catch (e: InvalidInputException) {
+        } catch (e: GiftDecisionRequiredException) {
+            if (
+                giftFallbackItem != null &&
+                addItemToBotDraftCart(
+                    chatId = chatId,
+                    tableToken = context.table.tableToken,
+                    tableSessionId = tableSession.id,
+                    tabId = effectiveTabId,
+                    item = giftFallbackItem,
+                )
+            ) {
+                enqueueMessage(
+                    chatId,
+                    "Условия акции обновились. Позиция перенесена в корзину — " +
+                        "подтвердите или пропустите актуальный подарок.",
+                )
+                showBotMenuCart(chatId)
+                return null
+            }
+            clearBotGiftState(
+                BotDraftCartKey(
+                    chatId = chatId,
+                    tableToken = context.table.tableToken,
+                ),
+            )
             enqueueMessage(
                 chatId,
-                "Позиция или выбранный вкус сейчас недоступны. Обновите меню и соберите корзину заново.",
+                "Корзина изменилась. Проверьте подарок ещё раз.",
+            )
+            showBotMenuCart(chatId)
+            null
+        } catch (e: InvalidInputException) {
+            clearBotGiftState(
+                BotDraftCartKey(
+                    chatId = chatId,
+                    tableToken = context.table.tableToken,
+                ),
+            )
+            enqueueMessage(
+                chatId,
+                "Позиция, выбранный вариант или подарок сейчас недоступны. " +
+                    "Обновите корзину и подтвердите выбор снова.",
             )
             null
         } catch (e: DatabaseUnavailableException) {
@@ -28718,12 +29498,13 @@ class TelegramBotRouter(
         val targetScope = BotDraftCartScope(tableSessionId = tableSessionId, tabId = tabId)
         val existingScope = botDraftCartScopes[key]
         if (existingScope != null && existingScope != targetScope) {
+            clearBotGiftState(key)
             return false
         }
         val cart = botDraftCarts.computeIfAbsent(key) { ConcurrentHashMap() }
         botDraftCartScopes[key] = targetScope
         botDraftCartSessionIds[key] = tableSessionId
-        botSkippedGiftRules.remove(key)
+        clearBotGiftState(key)
         val existingEntry =
             cart.entries.firstOrNull { (_, existing) ->
                 existing.itemId == item.id &&
@@ -28769,7 +29550,7 @@ class TelegramBotRouter(
     private suspend fun warnBotDraftCartScopeMismatch(chatId: Long) {
         enqueueMessage(
             chatId,
-            "Корзина собрана для другого счёта. Очистите её и соберите заново для текущего счёта.",
+            "Корзина изменилась. Проверьте подарок ещё раз.",
         )
     }
 
@@ -28853,8 +29634,7 @@ class TelegramBotRouter(
         botSelectedTabIds.remove(key)
         botDraftCartSessionIds.remove(key)
         botDraftCartScopes.remove(key)
-        botGiftChoices.remove(key)
-        botSkippedGiftRules.remove(key)
+        clearBotGiftState(key)
     }
 
     private fun clearAllBotDraftCartsForChat(chatId: Long) {
@@ -28868,8 +29648,8 @@ class TelegramBotRouter(
         botSelectedTabIds.keys.removeIf { it.chatId == chatId }
         botDraftCartSessionIds.keys.removeIf { it.chatId == chatId }
         botDraftCartScopes.keys.removeIf { it.chatId == chatId }
-        botGiftChoices.keys.removeIf { it.chatId == chatId }
-        botSkippedGiftRules.keys.removeIf { it.chatId == chatId }
+        botGiftDecisions.keys.removeIf { it.chatId == chatId }
+        botGiftCallbackBindings.keys.removeIf { it.chatId == chatId }
         botJoinSharedAwaitingChats.remove(chatId)
     }
 
@@ -28887,8 +29667,8 @@ class TelegramBotRouter(
                 addAll(botSelectedTabIds.keys)
                 addAll(botDraftCartSessionIds.keys)
                 addAll(botDraftCartScopes.keys)
-                addAll(botGiftChoices.keys)
-                addAll(botSkippedGiftRules.keys)
+                addAll(botGiftDecisions.keys)
+                addAll(botGiftCallbackBindings.keys)
             }
                 .filter { key ->
                     key.chatId == chatId && key.tableToken != tableToken

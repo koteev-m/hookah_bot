@@ -1,5 +1,6 @@
 import { getItemMeta, type ItemMeta, updateItemCache } from './itemCache'
 import { getTelegramContext } from '../telegram'
+import type { GiftDecisionDto } from '../api/guestDtos'
 
 export type CartLineOptionInput = {
   selectedOptionId?: number | null
@@ -28,7 +29,28 @@ export type CartSnapshot = {
   totalQty: number
   distinctCount: number
   commentDraft: string
+  giftDecision: GiftDecisionDto | null
 }
+
+export type CartGiftDecisionContext = {
+  userId: number
+  venueId: number
+  tableSessionId: number
+  tabId: number
+  cartFingerprint: string
+}
+
+export type CartGiftDecisionOwnerContext = Omit<CartGiftDecisionContext, 'cartFingerprint'>
+
+export type CartGiftDecisionScope = CartGiftDecisionContext & {
+  expiresAtEpochSeconds: number
+}
+
+type ScopedGiftDecisionDraft = CartGiftDecisionScope & {
+  decision: GiftDecisionDto
+}
+
+export type CartGiftDecisionReconcileResult = 'none' | 'active' | 'restored' | 'cleared'
 
 type CartListener = (snapshot: CartSnapshot) => void
 
@@ -52,18 +74,25 @@ type PersistedDraft = {
   items: Array<LegacyPersistedCartEntry | PersistedCartLine>
   itemMeta?: ItemMeta[]
   commentDraft?: string
+  giftDecisionDraft?: ScopedGiftDecisionDraft | null
+  giftDecision?: unknown
 }
 
 const MAX_QTY = 50
 const MAX_DISTINCT = 50
 const MAX_PREFERENCE_NOTE_LENGTH = 200
 const cartDraftLocalStoragePrefix = 'hookah_guest_cart_draft:'
+const cartDraftLastUserStorageKey = 'hookah_guest_cart_draft:last_user'
 const listeners = new Set<CartListener>()
 let items = new Map<string, CartLine>()
 let totalQty = 0
 let commentDraft = ''
+let giftDecision: GiftDecisionDto | null = null
+let giftDecisionDraft: ScopedGiftDecisionDraft | null = null
+let pendingGiftDecisionDraft: ScopedGiftDecisionDraft | null = null
 let activeTableToken: string | null = null
 let activeDraftStorageKey: string | null = null
+let activeDraftUserPart: string | null = null
 
 function clampQty(qty: number): number {
   return Math.max(0, Math.min(MAX_QTY, qty))
@@ -94,6 +123,71 @@ function normalizePreferenceNote(preferenceNote: string | null | undefined): str
     return null
   }
   return normalized.slice(0, MAX_PREFERENCE_NOTE_LENGTH)
+}
+
+function normalizeGiftDecision(value: GiftDecisionDto | null | undefined): GiftDecisionDto | null {
+  if (!value || !['ACCEPT_FIXED', 'SELECT_ITEM', 'SKIP'].includes(value.action)) {
+    return null
+  }
+  const decisionScopeToken = value.decisionScopeToken?.trim()
+  const selectedMenuItemId = value.selectedMenuItemId == null ? null : Number(value.selectedMenuItemId)
+  if (
+    !decisionScopeToken ||
+    (value.action === 'SELECT_ITEM' &&
+      (selectedMenuItemId == null || !Number.isInteger(selectedMenuItemId) || selectedMenuItemId <= 0))
+  ) {
+    return null
+  }
+  return {
+    action: value.action,
+    decisionScopeToken,
+    ...(value.action === 'SELECT_ITEM' ? { selectedMenuItemId } : {})
+  }
+}
+
+function normalizePositiveId(value: unknown): number | null {
+  const normalized = Number(value)
+  return Number.isSafeInteger(normalized) && normalized > 0 ? normalized : null
+}
+
+function normalizeScopedGiftDecisionDraft(value: unknown): ScopedGiftDecisionDraft | null {
+  if (!value || typeof value !== 'object') {
+    return null
+  }
+  const draft = value as Partial<ScopedGiftDecisionDraft>
+  const decision = normalizeGiftDecision(draft.decision)
+  const userId = normalizePositiveId(draft.userId)
+  const venueId = normalizePositiveId(draft.venueId)
+  const tableSessionId = normalizePositiveId(draft.tableSessionId)
+  const tabId = normalizePositiveId(draft.tabId)
+  const cartFingerprint = typeof draft.cartFingerprint === 'string' ? draft.cartFingerprint.trim() : ''
+  const expiresAtEpochSeconds = normalizePositiveId(draft.expiresAtEpochSeconds)
+  if (
+    !decision ||
+    !userId ||
+    !venueId ||
+    !tableSessionId ||
+    !tabId ||
+    !cartFingerprint ||
+    !expiresAtEpochSeconds
+  ) {
+    return null
+  }
+  return {
+    decision,
+    userId,
+    venueId,
+    tableSessionId,
+    tabId,
+    cartFingerprint,
+    expiresAtEpochSeconds
+  }
+}
+
+function clearGiftDecisionDraft(): void {
+  giftDecision = null
+  giftDecisionDraft = null
+  pendingGiftDecisionDraft = null
 }
 
 export function buildCartLineKey(itemId: number, selectedOptionId?: number | null, preferenceNote?: string | null): string {
@@ -150,9 +244,12 @@ function buildLine(itemId: number, qty: number, input?: CartLineOptionInput | nu
   }
 }
 
-function getDraftStorageKey(tableToken: string): string {
+function getCurrentUserPart(): string {
   const userId = getTelegramContext().telegramUserId
-  const userPart = userId ? `user:${userId}` : 'user:unknown'
+  return userId ? `user:${userId}` : 'user:unknown'
+}
+
+function getDraftStorageKey(tableToken: string, userPart: string): string {
   return `${cartDraftLocalStoragePrefix}${userPart}:${tableToken}`
 }
 
@@ -187,6 +284,40 @@ function getLocalStorageItem(key: string): string | null {
     return value ? value : null
   } catch {
     return null
+  }
+}
+
+function clearPersistedGiftDecisionsForAccountSwitch(nextUserPart: string): void {
+  if (typeof window === 'undefined') {
+    return
+  }
+  try {
+    const previousUserPart = window.localStorage.getItem(cartDraftLastUserStorageKey)
+    if (previousUserPart && previousUserPart !== nextUserPart) {
+      const draftKeys: string[] = []
+      for (let index = 0; index < window.localStorage.length; index += 1) {
+        const key = window.localStorage.key(index)
+        if (key?.startsWith(cartDraftLocalStoragePrefix) && key !== cartDraftLastUserStorageKey) {
+          draftKeys.push(key)
+        }
+      }
+      draftKeys.forEach((key) => {
+        const raw = window.localStorage.getItem(key)
+        if (!raw) return
+        try {
+          const parsed = JSON.parse(raw) as PersistedDraft
+          if (!parsed || typeof parsed !== 'object') return
+          delete parsed.giftDecision
+          delete parsed.giftDecisionDraft
+          window.localStorage.setItem(key, JSON.stringify(parsed))
+        } catch {
+          // Invalid cart drafts are ignored by the normal restore path.
+        }
+      })
+    }
+    window.localStorage.setItem(cartDraftLastUserStorageKey, nextUserPart)
+  } catch {
+    // LocalStorage is UX cache only.
   }
 }
 
@@ -226,6 +357,13 @@ function persistActiveDraft(): void {
   if (commentDraft) {
     payload.commentDraft = commentDraft
   }
+  const scopedGiftDecision = giftDecisionDraft ?? pendingGiftDecisionDraft
+  if (scopedGiftDecision) {
+    payload.giftDecisionDraft = {
+      ...scopedGiftDecision,
+      decision: { ...scopedGiftDecision.decision }
+    }
+  }
   const serialized = JSON.stringify(payload)
   setLocalStorageItem(activeDraftStorageKey, serialized)
 }
@@ -256,15 +394,20 @@ function normalizePersistedLine(entry: LegacyPersistedCartEntry | PersistedCartL
   }
 }
 
-function loadDraftFromStorage(storageKey: string): { items: Map<string, CartLine>; itemMeta: ItemMeta[]; commentDraft: string } {
+function loadDraftFromStorage(storageKey: string): {
+  items: Map<string, CartLine>
+  itemMeta: ItemMeta[]
+  commentDraft: string
+  pendingGiftDecisionDraft: ScopedGiftDecisionDraft | null
+} {
   const raw = getLocalStorageItem(storageKey)
   if (!raw) {
-    return { items: new Map(), itemMeta: [], commentDraft: '' }
+    return { items: new Map(), itemMeta: [], commentDraft: '', pendingGiftDecisionDraft: null }
   }
   try {
     const parsed = JSON.parse(raw) as PersistedDraft
     if (!Array.isArray(parsed.items)) {
-      return { items: new Map(), itemMeta: [], commentDraft: '' }
+      return { items: new Map(), itemMeta: [], commentDraft: '', pendingGiftDecisionDraft: null }
     }
     const restored = new Map<string, CartLine>()
     for (const entry of parsed.items) {
@@ -300,9 +443,14 @@ function loadDraftFromStorage(storageKey: string): { items: Map<string, CartLine
     }
     const restoredMeta = Array.isArray(parsed.itemMeta) ? parsed.itemMeta : []
     const restoredComment = typeof parsed.commentDraft === 'string' ? parsed.commentDraft : ''
-    return { items: restored, itemMeta: restoredMeta, commentDraft: restoredComment }
+    return {
+      items: restored,
+      itemMeta: restoredMeta,
+      commentDraft: restoredComment,
+      pendingGiftDecisionDraft: normalizeScopedGiftDecisionDraft(parsed.giftDecisionDraft)
+    }
   } catch {
-    return { items: new Map(), itemMeta: [], commentDraft: '' }
+    return { items: new Map(), itemMeta: [], commentDraft: '', pendingGiftDecisionDraft: null }
   }
 }
 
@@ -312,7 +460,8 @@ function buildSnapshot(): CartSnapshot {
     items: new Map(snapshotItems),
     totalQty,
     distinctCount: items.size,
-    commentDraft
+    commentDraft,
+    giftDecision: giftDecision ? { ...giftDecision } : null
   }
 }
 
@@ -336,25 +485,33 @@ function updateTotals() {
 
 export function setCartTableToken(tableToken: string | null): void {
   const normalizedToken = tableToken?.trim() || null
-  if (normalizedToken === activeTableToken) {
+  const nextUserPart = getCurrentUserPart()
+  clearPersistedGiftDecisionsForAccountSwitch(nextUserPart)
+  if (normalizedToken === activeTableToken && nextUserPart === activeDraftUserPart) {
     return
   }
   activeTableToken = normalizedToken
-  activeDraftStorageKey = normalizedToken ? getDraftStorageKey(normalizedToken) : null
+  activeDraftUserPart = nextUserPart
+  activeDraftStorageKey = normalizedToken ? getDraftStorageKey(normalizedToken, nextUserPart) : null
   if (!activeDraftStorageKey) {
     items = new Map()
     totalQty = 0
     commentDraft = ''
+    clearGiftDecisionDraft()
     notify()
     return
   }
   const restoredDraft = loadDraftFromStorage(activeDraftStorageKey)
   items = restoredDraft.items
   commentDraft = restoredDraft.commentDraft
+  giftDecision = null
+  giftDecisionDraft = null
+  pendingGiftDecisionDraft = restoredDraft.pendingGiftDecisionDraft
   if (restoredDraft.itemMeta.length > 0) {
     updateItemCache(restoredDraft.itemMeta)
   }
   updateTotals()
+  persistActiveDraft()
   notify()
 }
 
@@ -386,6 +543,7 @@ export function addToCart(itemId: number, option?: CartLineOptionInput | null): 
   } else {
     items.set(key, buildLine(itemId, nextQty, option, currentLine))
   }
+  clearGiftDecisionDraft()
   updateTotals()
   persistActiveDraft()
   notify()
@@ -417,6 +575,7 @@ export function addLinesToCart(additions: CartLineAddition[]): SetQtyResult {
     nextItems.set(key, buildLine(addition.itemId, nextQty, addition, currentLine))
   }
   items = nextItems
+  clearGiftDecisionDraft()
   updateTotals()
   persistActiveDraft()
   notify()
@@ -441,6 +600,7 @@ export function removeCartLine(lineKey: string): void {
   } else {
     items.set(lineKey, { ...currentLine, qty: nextQty })
   }
+  clearGiftDecisionDraft()
   updateTotals()
   persistActiveDraft()
   notify()
@@ -492,6 +652,7 @@ export function setCartLineQty(
       )
     )
   }
+  clearGiftDecisionDraft()
   updateTotals()
   persistActiveDraft()
   notify()
@@ -499,15 +660,128 @@ export function setCartLineQty(
 }
 
 export function setCartCommentDraft(value: string): void {
+  if (commentDraft.trim() !== value.trim()) {
+    clearGiftDecisionDraft()
+  }
   commentDraft = value
   persistActiveDraft()
   notify()
+}
+
+export function setCartGiftDecision(
+  value: GiftDecisionDto | null,
+  scope?: CartGiftDecisionScope | null
+): void {
+  if (!value) {
+    clearGiftDecisionDraft()
+    persistActiveDraft()
+    notify()
+    return
+  }
+  const normalizedDecision = normalizeGiftDecision(value)
+  const normalizedDraft = normalizeScopedGiftDecisionDraft(
+    normalizedDecision && scope
+      ? {
+          ...scope,
+          decision: normalizedDecision
+        }
+      : null
+  )
+  if (!normalizedDraft || normalizedDraft.expiresAtEpochSeconds <= Math.floor(Date.now() / 1000)) {
+    clearGiftDecisionDraft()
+  } else {
+    giftDecision = normalizedDraft.decision
+    giftDecisionDraft = normalizedDraft
+    pendingGiftDecisionDraft = null
+  }
+  persistActiveDraft()
+  notify()
+}
+
+function giftDecisionScopeMatches(
+  draft: ScopedGiftDecisionDraft,
+  context: CartGiftDecisionContext
+): boolean {
+  return (
+    draft.userId === context.userId &&
+    draft.venueId === context.venueId &&
+    draft.tableSessionId === context.tableSessionId &&
+    draft.tabId === context.tabId &&
+    draft.cartFingerprint === context.cartFingerprint
+  )
+}
+
+export function clearMismatchedCartGiftDecisionOwner(
+  context: CartGiftDecisionOwnerContext
+): boolean {
+  const draft = giftDecisionDraft ?? pendingGiftDecisionDraft
+  if (
+    !draft ||
+    (draft.userId === context.userId &&
+      draft.venueId === context.venueId &&
+      draft.tableSessionId === context.tableSessionId &&
+      draft.tabId === context.tabId)
+  ) {
+    return false
+  }
+  const hadActiveDecision = giftDecision != null
+  clearGiftDecisionDraft()
+  persistActiveDraft()
+  if (hadActiveDecision) {
+    notify()
+  }
+  return true
+}
+
+export function reconcileCartGiftDecisionScope(
+  context: CartGiftDecisionContext,
+  nowEpochSeconds = Math.floor(Date.now() / 1000)
+): CartGiftDecisionReconcileResult {
+  const draft = giftDecisionDraft ?? pendingGiftDecisionDraft
+  if (!draft) {
+    return 'none'
+  }
+  if (draft.expiresAtEpochSeconds <= nowEpochSeconds || !giftDecisionScopeMatches(draft, context)) {
+    const hadActiveDecision = giftDecision != null
+    clearGiftDecisionDraft()
+    persistActiveDraft()
+    if (hadActiveDecision) {
+      notify()
+    }
+    return 'cleared'
+  }
+  if (giftDecisionDraft) {
+    return 'active'
+  }
+  giftDecision = draft.decision
+  giftDecisionDraft = draft
+  pendingGiftDecisionDraft = null
+  persistActiveDraft()
+  notify()
+  return 'restored'
+}
+
+export function clearExpiredCartGiftDecision(
+  nowEpochSeconds = Math.floor(Date.now() / 1000)
+): boolean {
+  const draft = giftDecisionDraft ?? pendingGiftDecisionDraft
+  if (!draft || draft.expiresAtEpochSeconds > nowEpochSeconds) {
+    return false
+  }
+  const hadActiveDecision = giftDecision != null
+  clearGiftDecisionDraft()
+  persistActiveDraft()
+  if (hadActiveDecision) {
+    notify()
+  }
+  return true
 }
 
 export function clearCart(): void {
   items = new Map()
   totalQty = 0
   commentDraft = ''
+  clearGiftDecisionDraft()
   persistActiveDraft()
   notify()
 }

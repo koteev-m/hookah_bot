@@ -38,6 +38,7 @@ import java.time.Instant
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -597,6 +598,7 @@ class VenueOrderRoutesTest {
             val tableId = seedTable(jdbcUrl, venueId, 9)
             val normalItemId = seedMenu(jdbcUrl, venueId, "Кальян обычный", 110_000)
             val loyaltyItemId = seedMenu(jdbcUrl, venueId, "Кальян бонусный", 50_000)
+            val giftItemId = seedMenu(jdbcUrl, venueId, "Чай в подарок", 20_000)
             val excludedItemId = seedMenu(jdbcUrl, venueId, "Чай", 30_000)
             val canceledItemId = seedMenu(jdbcUrl, venueId, "Лимонад", 40_000)
             val rejectedItemId = seedMenu(jdbcUrl, venueId, "Закуска", 70_000)
@@ -616,6 +618,12 @@ class VenueOrderRoutesTest {
                     jdbcUrl = jdbcUrl,
                     batchId = activeBatchId,
                     menuItemId = loyaltyItemId,
+                )
+            val giftBatchItemId =
+                seedBatchItem(
+                    jdbcUrl = jdbcUrl,
+                    batchId = activeBatchId,
+                    menuItemId = giftItemId,
                 )
             seedBatchItem(
                 jdbcUrl = jdbcUrl,
@@ -665,6 +673,21 @@ class VenueOrderRoutesTest {
                 discountPercent = null,
                 originalPriceMinor = 50_000,
             )
+            seedPromotionAdjustment(
+                jdbcUrl = jdbcUrl,
+                venueId = venueId,
+                orderId = orderId,
+                batchId = activeBatchId,
+                batchItemId = giftBatchItemId,
+                menuItemId = giftItemId,
+                title = "Подарок к кальяну",
+                ruleType = "GIFT_WITH_ITEM",
+                discountMinor = 20_000,
+                discountPercent = null,
+                originalPriceMinor = 20_000,
+                rewardLabel = "Чай в подарок",
+                triggerBatchItemId = normalBatchItemId,
+            )
             val token = issueToken(config)
 
             val response =
@@ -684,15 +707,18 @@ class VenueOrderRoutesTest {
             assertEquals("SHARED", rejectedBatch.tabType)
             assertEquals("Общий счёт", rejectedBatch.tabDisplayLabel)
             val bill = payload.order.bill
-            assertEquals(160_000, bill.grossTotalMinor)
+            assertEquals(180_000, bill.grossTotalMinor)
             assertEquals(11_000, bill.manualDiscountTotalMinor)
-            assertEquals(11_000, bill.promoDiscountTotalMinor)
+            assertEquals(31_000, bill.promoDiscountTotalMinor)
             assertEquals(50_000, bill.loyaltyDiscountTotalMinor)
             assertEquals(30_000, bill.excludedTotalMinor)
             assertEquals(40_000, bill.canceledTotalMinor)
             assertEquals(70_000, bill.rejectedTotalMinor)
             assertEquals(88_000, bill.finalPayableTotalMinor)
-            assertEquals(listOf("Счастливые часы"), bill.promoDiscounts.map { it.label })
+            assertEquals(
+                setOf("Счастливые часы", "Чай в подарок"),
+                bill.promoDiscounts.map { it.label }.toSet(),
+            )
             assertEquals(listOf("Лояльность: бесплатный кальян"), bill.loyaltyDiscounts.map { it.label })
             assertEquals(setOf("excluded", "canceled", "rejected_batch"), bill.excludedItems.map { it.status }.toSet())
             val excludedByStatus = bill.excludedItems.associateBy { it.status }
@@ -720,12 +746,20 @@ class VenueOrderRoutesTest {
             assertEquals(11_000, normalItem.promoDiscountMinor)
             assertEquals(88_000, normalItem.linePayableMinor)
             assertEquals(10, normalItem.discountPercent)
+            assertTrue(normalItem.hasActivePromotionReward)
             val loyaltyItem =
                 activeBatch.items.first { it.itemId == loyaltyItemId }
             assertEquals(50_000, loyaltyItem.lineGrossMinor)
             assertEquals(0, loyaltyItem.manualDiscountMinor)
             assertEquals(50_000, loyaltyItem.promoDiscountMinor)
             assertEquals(0, loyaltyItem.linePayableMinor)
+            val giftItem =
+                activeBatch.items.first { it.itemId == giftItemId }
+            assertEquals(20_000, giftItem.lineGrossMinor)
+            assertEquals(20_000, giftItem.promoDiscountMinor)
+            assertEquals(0, giftItem.linePayableMinor)
+            assertTrue(giftItem.isPromotionReward)
+            assertFalse(giftItem.hasActivePromotionReward)
         }
 
     @Test
@@ -1737,6 +1771,8 @@ class VenueOrderRoutesTest {
         discountMinor: Long,
         discountPercent: Int?,
         originalPriceMinor: Long,
+        rewardLabel: String? = null,
+        triggerBatchItemId: Long? = null,
     ) {
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             val promotionId =
@@ -1832,6 +1868,32 @@ class VenueOrderRoutesTest {
                 statement.setInt(5, discountPercent ?: 100)
                 statement.setLong(6, originalPriceMinor)
                 statement.executeUpdate()
+            }
+            if (rewardLabel != null) {
+                connection.prepareStatement(
+                    """
+                    INSERT INTO order_promotion_reward_items (
+                        application_id,
+                        trigger_order_batch_item_id,
+                        reward_order_batch_item_id,
+                        reward_menu_item_id,
+                        reward_qty,
+                        label_snapshot
+                    )
+                    VALUES (?, ?, ?, ?, 1, ?)
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setLong(1, applicationId)
+                    if (triggerBatchItemId == null) {
+                        statement.setNull(2, java.sql.Types.BIGINT)
+                    } else {
+                        statement.setLong(2, triggerBatchItemId)
+                    }
+                    statement.setLong(3, batchItemId)
+                    statement.setLong(4, menuItemId)
+                    statement.setString(5, rewardLabel)
+                    statement.executeUpdate()
+                }
             }
         }
     }
@@ -2056,6 +2118,8 @@ class VenueOrderRoutesTest {
         val lineGrossMinor: Long = 0,
         val manualDiscountMinor: Long = 0,
         val promoDiscountMinor: Long = 0,
+        val isPromotionReward: Boolean = false,
+        val hasActivePromotionReward: Boolean = false,
         val linePayableMinor: Long = 0,
         val isExcluded: Boolean = false,
         val excludedReasonText: String? = null,

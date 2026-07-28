@@ -1,17 +1,28 @@
 package com.hookah.platform.backend.miniapp.venue.orders
 
+import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.api.InvalidInputException
+import com.hookah.platform.backend.miniapp.guest.db.VisitRepository
 import com.hookah.platform.backend.miniapp.venue.VenueRole
 import com.hookah.platform.backend.telegram.db.LoyaltyProgramStatus
 import com.hookah.platform.backend.telegram.db.LoyaltyRepository
+import com.hookah.platform.backend.telegram.db.OrdersRepository
 import kotlinx.coroutines.runBlocking
 import org.flywaydb.core.Flyway
 import org.h2.jdbcx.JdbcDataSource
+import java.lang.reflect.InvocationTargetException
+import java.lang.reflect.Method
+import java.lang.reflect.Proxy
+import java.sql.Connection
 import java.sql.DriverManager
+import java.sql.PreparedStatement
+import java.sql.SQLException
 import java.sql.Statement
 import java.sql.Timestamp
 import java.time.Instant
 import java.util.UUID
+import javax.sql.DataSource
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -204,6 +215,11 @@ class VenueOrdersRepositoryTest {
                 detail.promotionDiscounts.map { it.label to it.discountMinor },
             )
             assertEquals(detail.promotionDiscounts, detail.batches.single().promotionDiscounts)
+            val items = detail.batches.single().items.associateBy { it.batchItemId }
+            assertFalse(assertNotNull(items[hookahBatchItemId]).isPromotionReward)
+            assertTrue(assertNotNull(items[hookahBatchItemId]).hasActivePromotionReward)
+            assertTrue(assertNotNull(items[juiceBatchItemId]).isPromotionReward)
+            assertFalse(assertNotNull(items[juiceBatchItemId]).hasActivePromotionReward)
         }
 
     @Test
@@ -233,7 +249,7 @@ class VenueOrdersRepositoryTest {
                         orderId = fixture.orderId,
                         batchItemId = batchItemId,
                         discountPercent = 10,
-                        actor = OrderActionActor(userId = STAFF_USER_ID, role = VenueRole.STAFF),
+                        actor = OrderActionActor(userId = STAFF_USER_ID, role = VenueRole.MANAGER),
                     )
                 }
 
@@ -242,6 +258,175 @@ class VenueOrdersRepositoryTest {
                 error.message,
             )
             assertEquals(100_000L to 50, fetchPromotionAdjustment(jdbcUrl, batchItemId))
+        }
+
+    @Test
+    fun `staff cannot apply manual discount through repository`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("manual-discount-staff-forbidden")
+            val fixture = seedActiveOrder(jdbcUrl)
+            val gift = seedGiftFixture(jdbcUrl, fixture)
+            val repository = VenueOrdersRepository(dataSource(jdbcUrl))
+            val beforeBill =
+                assertNotNull(repository.loadOrderDetail(fixture.venueId, fixture.orderId))
+                    .toOrderBillSnapshot()
+            val beforeCounts = fetchPromotionLedgerCounts(jdbcUrl, fixture.orderId)
+
+            assertFailsWith<ForbiddenException> {
+                repository.setBatchItemDiscountPercent(
+                    venueId = fixture.venueId,
+                    orderId = fixture.orderId,
+                    batchItemId = gift.triggerBatchItemId,
+                    discountPercent = 15,
+                    actor = OrderActionActor(userId = STAFF_USER_ID, role = VenueRole.STAFF),
+                )
+            }
+
+            assertNull(fetchBatchItemDiscountPercent(jdbcUrl, gift.triggerBatchItemId))
+            assertEquals(beforeCounts, fetchPromotionLedgerCounts(jdbcUrl, fixture.orderId))
+            assertEquals(
+                beforeBill.finalPayableTotalMinor,
+                assertNotNull(repository.loadOrderDetail(fixture.venueId, fixture.orderId))
+                    .toOrderBillSnapshot()
+                    .finalPayableTotalMinor,
+            )
+        }
+
+    @Test
+    fun `manual item discount is rejected for active gift reward and linked trigger`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("gift-link-manual-discount-conflict")
+            val fixture = seedActiveOrder(jdbcUrl)
+            val gift = seedGiftFixture(jdbcUrl, fixture)
+            val repository = VenueOrdersRepository(dataSource(jdbcUrl))
+            val beforeBill =
+                assertNotNull(repository.loadOrderDetail(fixture.venueId, fixture.orderId))
+                    .toOrderBillSnapshot()
+            val beforeCounts = fetchPromotionLedgerCounts(jdbcUrl, fixture.orderId)
+
+            val triggerError =
+                assertFailsWith<InvalidInputException> {
+                    repository.setBatchItemDiscountPercent(
+                        venueId = fixture.venueId,
+                        orderId = fixture.orderId,
+                        batchItemId = gift.triggerBatchItemId,
+                        discountPercent = 15,
+                        actor = OrderActionActor(userId = STAFF_USER_ID, role = VenueRole.MANAGER),
+                    )
+                }
+            val rewardError =
+                assertFailsWith<InvalidInputException> {
+                    repository.setBatchItemDiscountPercent(
+                        venueId = fixture.venueId,
+                        orderId = fixture.orderId,
+                        batchItemId = gift.rewardBatchItemId,
+                        discountPercent = 15,
+                        actor = OrderActionActor(userId = STAFF_USER_ID, role = VenueRole.MANAGER),
+                    )
+                }
+
+            val expectedMessage = "На эту позицию уже действует акция. Ручную скидку применить нельзя."
+            assertEquals(expectedMessage, triggerError.message)
+            assertEquals(expectedMessage, rewardError.message)
+            assertNull(fetchBatchItemDiscountPercent(jdbcUrl, gift.triggerBatchItemId))
+            assertNull(fetchBatchItemDiscountPercent(jdbcUrl, gift.rewardBatchItemId))
+            assertEquals(beforeCounts, fetchPromotionLedgerCounts(jdbcUrl, fixture.orderId))
+            assertEquals(
+                beforeBill.finalPayableTotalMinor,
+                assertNotNull(repository.loadOrderDetail(fixture.venueId, fixture.orderId))
+                    .toOrderBillSnapshot()
+                    .finalPayableTotalMinor,
+            )
+        }
+
+    @Test
+    fun `promotion reward linkage blocks manual discount without relying on adjustment row`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("gift-link-manual-discount-no-adjustment")
+            val fixture = seedActiveOrder(jdbcUrl)
+            val gift = seedGiftFixture(jdbcUrl, fixture)
+            deletePromotionAdjustment(jdbcUrl, gift.rewardBatchItemId)
+            val repository = VenueOrdersRepository(dataSource(jdbcUrl))
+
+            val error =
+                assertFailsWith<InvalidInputException> {
+                    repository.setBatchItemDiscountPercent(
+                        venueId = fixture.venueId,
+                        orderId = fixture.orderId,
+                        batchItemId = gift.rewardBatchItemId,
+                        discountPercent = 10,
+                        actor = OrderActionActor(userId = STAFF_USER_ID, role = VenueRole.MANAGER),
+                    )
+                }
+
+            assertEquals(
+                "На эту позицию уже действует акция. Ручную скидку применить нельзя.",
+                error.message,
+            )
+            assertNull(fetchBatchItemDiscountPercent(jdbcUrl, gift.rewardBatchItemId))
+            assertEquals(
+                PromotionLedgerCounts(
+                    applications = 1,
+                    adjustments = 0,
+                    rewardLinks = 1,
+                ),
+                fetchPromotionLedgerCounts(jdbcUrl, fixture.orderId),
+            )
+        }
+
+    @Test
+    fun `manual trigger discount follows normal policy after reward-only cancellation or exclusion`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("gift-trigger-discount-after-reward-inactive")
+            val canceledFixture = seedActiveOrder(jdbcUrl)
+            val canceledGift = seedGiftFixture(jdbcUrl, canceledFixture)
+            val excludedFixture = seedActiveOrder(jdbcUrl)
+            val excludedGift = seedGiftFixture(jdbcUrl, excludedFixture)
+            val repository = VenueOrdersRepository(dataSource(jdbcUrl))
+
+            val canceledReward =
+                repository.cancelBatchItemAsUnavailable(
+                    venueId = canceledFixture.venueId,
+                    orderId = canceledFixture.orderId,
+                    batchItemId = canceledGift.rewardBatchItemId,
+                    actor = OrderActionActor(userId = STAFF_USER_ID, role = VenueRole.STAFF),
+                )
+            assertTrue(assertNotNull(canceledReward).applied)
+            assertEquals("ACTIVE", fetchBatchItemStatus(jdbcUrl, canceledGift.triggerBatchItemId))
+            assertTrue(
+                repository.setBatchItemDiscountPercent(
+                    venueId = canceledFixture.venueId,
+                    orderId = canceledFixture.orderId,
+                    batchItemId = canceledGift.triggerBatchItemId,
+                    discountPercent = 10,
+                    actor = OrderActionActor(userId = STAFF_USER_ID, role = VenueRole.MANAGER),
+                ),
+            )
+
+            assertTrue(
+                repository.excludeBatchItemFromBill(
+                    venueId = excludedFixture.venueId,
+                    orderId = excludedFixture.orderId,
+                    batchItemId = excludedGift.rewardBatchItemId,
+                    reasonText = "Подарок не выдан",
+                    actor = OrderActionActor(userId = STAFF_USER_ID, role = VenueRole.STAFF),
+                ),
+            )
+            assertEquals("ACTIVE", fetchBatchItemStatus(jdbcUrl, excludedGift.triggerBatchItemId))
+            assertTrue(
+                repository.setBatchItemDiscountPercent(
+                    venueId = excludedFixture.venueId,
+                    orderId = excludedFixture.orderId,
+                    batchItemId = excludedGift.triggerBatchItemId,
+                    discountPercent = 20,
+                    actor = OrderActionActor(userId = STAFF_USER_ID, role = VenueRole.MANAGER),
+                ),
+            )
+
+            assertEquals(10, fetchBatchItemDiscountPercent(jdbcUrl, canceledGift.triggerBatchItemId))
+            assertEquals(20, fetchBatchItemDiscountPercent(jdbcUrl, excludedGift.triggerBatchItemId))
+            assertEquals("CANCELED", fetchBatchItemStatus(jdbcUrl, canceledGift.rewardBatchItemId))
+            assertTrue(fetchBatchItemLifecycle(jdbcUrl, excludedGift.rewardBatchItemId).isExcluded)
         }
 
     @Test
@@ -278,7 +463,7 @@ class VenueOrdersRepositoryTest {
                     orderId = ownFixture.orderId,
                     batchItemId = foreignBatchItemId,
                     discountPercent = 10,
-                    actor = OrderActionActor(userId = STAFF_USER_ID, role = VenueRole.STAFF),
+                    actor = OrderActionActor(userId = STAFF_USER_ID, role = VenueRole.MANAGER),
                 )
 
             assertFalse(result)
@@ -658,6 +843,510 @@ class VenueOrdersRepositoryTest {
             assertNull(closedResult)
         }
 
+    @Test
+    fun `canceling promotion trigger atomically cancels linked reward and preserves ledger`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("gift-trigger-cancel")
+            val fixture = seedActiveOrder(jdbcUrl)
+            val gift = seedGiftFixture(jdbcUrl, fixture)
+            val remainingItemId =
+                seedBatchItem(
+                    jdbcUrl = jdbcUrl,
+                    venueId = fixture.venueId,
+                    batchId = gift.batchId,
+                    name = "Вода",
+                    priceMinor = 40_000,
+                )
+            val repository = VenueOrdersRepository(dataSource(jdbcUrl))
+            val ledgerBefore = fetchPromotionLedgerCounts(jdbcUrl, fixture.orderId)
+            val ledgerSnapshotBefore = fetchGiftPromotionLedgerSnapshot(jdbcUrl, fixture.orderId)
+            assertEquals(gift.triggerBatchItemId, ledgerSnapshotBefore.triggerBatchItemId)
+            assertEquals(gift.rewardBatchItemId, ledgerSnapshotBefore.rewardBatchItemId)
+            val initialItems =
+                assertNotNull(repository.loadOrderDetail(fixture.venueId, fixture.orderId))
+                    .batches
+                    .single()
+                    .items
+                    .associateBy { it.batchItemId }
+            assertTrue(assertNotNull(initialItems[gift.triggerBatchItemId]).hasActivePromotionReward)
+
+            val first =
+                repository.cancelBatchItemAsUnavailable(
+                    venueId = fixture.venueId,
+                    orderId = fixture.orderId,
+                    batchItemId = gift.triggerBatchItemId,
+                    actor = OrderActionActor(userId = STAFF_USER_ID, role = VenueRole.STAFF),
+                )
+            val ledgerSnapshotAfterFirst = fetchGiftPromotionLedgerSnapshot(jdbcUrl, fixture.orderId)
+            val second =
+                repository.cancelBatchItemAsUnavailable(
+                    venueId = fixture.venueId,
+                    orderId = fixture.orderId,
+                    batchItemId = gift.triggerBatchItemId,
+                    actor = OrderActionActor(userId = STAFF_USER_ID, role = VenueRole.STAFF),
+                )
+
+            assertTrue(assertNotNull(first).applied)
+            assertFalse(assertNotNull(second).applied)
+            val trigger = fetchBatchItemLifecycle(jdbcUrl, gift.triggerBatchItemId)
+            val reward = fetchBatchItemLifecycle(jdbcUrl, gift.rewardBatchItemId)
+            assertEquals("CANCELED", trigger.itemStatus)
+            assertEquals("ITEM_UNAVAILABLE", trigger.canceledReasonCode)
+            assertEquals("CANCELED", reward.itemStatus)
+            assertEquals("PROMOTION_TRIGGER_CANCELED", reward.canceledReasonCode)
+            assertEquals("Связанный подарок отменён вместе с условием акции.", reward.canceledReasonText)
+            assertEquals(ledgerBefore, fetchPromotionLedgerCounts(jdbcUrl, fixture.orderId))
+            assertEquals(ledgerSnapshotBefore, ledgerSnapshotAfterFirst)
+            assertEquals(ledgerSnapshotBefore, fetchGiftPromotionLedgerSnapshot(jdbcUrl, fixture.orderId))
+            assertEquals(1, fetchOrderAuditCount(jdbcUrl, fixture.orderId, "CANCEL_ITEM_UNAVAILABLE"))
+            assertEquals(0, countOrphanActiveRewards(jdbcUrl, fixture.orderId))
+
+            val detail = assertNotNull(repository.loadOrderDetail(fixture.venueId, fixture.orderId))
+            val items = detail.batches.single().items.associateBy { it.batchItemId }
+            assertFalse(assertNotNull(items[gift.triggerBatchItemId]).hasActivePromotionReward)
+            assertTrue(assertNotNull(items[gift.rewardBatchItemId]).isPromotionReward)
+            val bill = detail.toOrderBillSnapshot()
+            assertEquals(listOf(remainingItemId), bill.activeItems.map { it.batchItemId })
+            assertEquals(
+                setOf(gift.triggerBatchItemId, gift.rewardBatchItemId),
+                bill.excludedItems.filter { it.status == "canceled" }.map { it.batchItemId }.toSet(),
+            )
+            assertEquals(40_000L, bill.finalPayableTotalMinor)
+            assertTrue(bill.promoDiscounts.isEmpty())
+        }
+
+    @Test
+    fun `excluding promotion trigger atomically excludes linked reward and is idempotent`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("gift-trigger-exclude")
+            val fixture = seedActiveOrder(jdbcUrl)
+            val gift = seedGiftFixture(jdbcUrl, fixture)
+            val remainingItemId =
+                seedBatchItem(
+                    jdbcUrl = jdbcUrl,
+                    venueId = fixture.venueId,
+                    batchId = gift.batchId,
+                    name = "Чай",
+                    priceMinor = 30_000,
+                )
+            val repository = VenueOrdersRepository(dataSource(jdbcUrl))
+            val ledgerBefore = fetchPromotionLedgerCounts(jdbcUrl, fixture.orderId)
+            val ledgerSnapshotBefore = fetchGiftPromotionLedgerSnapshot(jdbcUrl, fixture.orderId)
+            assertEquals(gift.triggerBatchItemId, ledgerSnapshotBefore.triggerBatchItemId)
+            assertEquals(gift.rewardBatchItemId, ledgerSnapshotBefore.rewardBatchItemId)
+
+            val first =
+                repository.excludeBatchItemFromBill(
+                    venueId = fixture.venueId,
+                    orderId = fixture.orderId,
+                    batchItemId = gift.triggerBatchItemId,
+                    reasonText = "Позицию не готовим",
+                    actor = OrderActionActor(userId = STAFF_USER_ID, role = VenueRole.STAFF),
+                )
+            val ledgerSnapshotAfterFirst = fetchGiftPromotionLedgerSnapshot(jdbcUrl, fixture.orderId)
+            val second =
+                repository.excludeBatchItemFromBill(
+                    venueId = fixture.venueId,
+                    orderId = fixture.orderId,
+                    batchItemId = gift.triggerBatchItemId,
+                    reasonText = "Повтор",
+                    actor = OrderActionActor(userId = STAFF_USER_ID, role = VenueRole.STAFF),
+                )
+
+            assertTrue(first)
+            assertTrue(second)
+            val trigger = fetchBatchItemLifecycle(jdbcUrl, gift.triggerBatchItemId)
+            val reward = fetchBatchItemLifecycle(jdbcUrl, gift.rewardBatchItemId)
+            assertTrue(trigger.isExcluded)
+            assertEquals("Позицию не готовим", trigger.excludedReasonText)
+            assertTrue(reward.isExcluded)
+            assertEquals("Связанный подарок исключён вместе с условием акции.", reward.excludedReasonText)
+            assertEquals(ledgerBefore, fetchPromotionLedgerCounts(jdbcUrl, fixture.orderId))
+            assertEquals(ledgerSnapshotBefore, ledgerSnapshotAfterFirst)
+            assertEquals(ledgerSnapshotBefore, fetchGiftPromotionLedgerSnapshot(jdbcUrl, fixture.orderId))
+            assertEquals(1, fetchOrderAuditCount(jdbcUrl, fixture.orderId, "EXCLUDE_ITEM_FROM_BILL"))
+            assertEquals(0, countOrphanActiveRewards(jdbcUrl, fixture.orderId))
+
+            val bill =
+                assertNotNull(repository.loadOrderDetail(fixture.venueId, fixture.orderId))
+                    .toOrderBillSnapshot()
+            assertEquals(listOf(remainingItemId), bill.activeItems.map { it.batchItemId })
+            assertEquals(
+                setOf(gift.triggerBatchItemId, gift.rewardBatchItemId),
+                bill.excludedItems.filter { it.status == "excluded" }.map { it.batchItemId }.toSet(),
+            )
+            assertEquals(30_000L, bill.finalPayableTotalMinor)
+            assertTrue(bill.promoDiscounts.isEmpty())
+        }
+
+    @Test
+    fun `coupled gift lifecycle keeps guest venue history and staff persisted facts aligned`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("gift-coupled-presentation-parity")
+            val sharedDataSource = dataSource(jdbcUrl)
+            val repository = VenueOrdersRepository(sharedDataSource)
+            val guestOrdersRepository = OrdersRepository(sharedDataSource)
+
+            val canceledFixture = seedActiveOrder(jdbcUrl)
+            val canceledGift = seedGiftFixture(jdbcUrl, canceledFixture)
+            val remainingCanceledItemId =
+                seedBatchItem(
+                    jdbcUrl = jdbcUrl,
+                    venueId = canceledFixture.venueId,
+                    batchId = canceledGift.batchId,
+                    name = "Вода",
+                    priceMinor = 40_000,
+                )
+            val canceledLedgerBefore = fetchPromotionLedgerCounts(jdbcUrl, canceledFixture.orderId)
+
+            assertTrue(
+                assertNotNull(
+                    repository.cancelBatchItemAsUnavailable(
+                        venueId = canceledFixture.venueId,
+                        orderId = canceledFixture.orderId,
+                        batchItemId = canceledGift.triggerBatchItemId,
+                        actor = OrderActionActor(userId = STAFF_USER_ID, role = VenueRole.STAFF),
+                    ),
+                ).applied,
+            )
+
+            val guestCanceledOrder =
+                assertNotNull(guestOrdersRepository.findActiveOrderDetails(canceledFixture.tableSessionId))
+            val guestCanceledItems = guestCanceledOrder.batches.flatMap { batch -> batch.items }
+            assertEquals(listOf("Вода"), guestCanceledItems.map { item -> item.itemName })
+            assertTrue(guestCanceledOrder.promotionDiscounts.isEmpty())
+            assertEquals(
+                40_000L,
+                guestCanceledItems.sumOf { item ->
+                    (item.priceMinor ?: 0L) * item.qty - item.promoDiscountMinor
+                },
+            )
+            assertTrue(guestCanceledItems.none { item -> item.isPromotionReward })
+
+            val venueCanceledDetail =
+                assertNotNull(repository.loadOrderDetail(canceledFixture.venueId, canceledFixture.orderId))
+            val venueCanceledBill = venueCanceledDetail.toOrderBillSnapshot()
+            val staffChatPersistedSourceBill =
+                assertNotNull(
+                    VenueOrdersRepository(sharedDataSource)
+                        .loadOrderDetail(canceledFixture.venueId, canceledFixture.orderId),
+                ).toOrderBillSnapshot()
+            assertEquals(venueCanceledBill, staffChatPersistedSourceBill)
+            assertEquals(listOf(remainingCanceledItemId), venueCanceledBill.activeItems.map { it.batchItemId })
+            assertEquals(
+                setOf(canceledGift.triggerBatchItemId, canceledGift.rewardBatchItemId),
+                venueCanceledBill.excludedItems
+                    .filter { item -> item.status == "canceled" }
+                    .map { item -> item.batchItemId }
+                    .toSet(),
+            )
+            assertEquals(40_000L, venueCanceledBill.finalPayableTotalMinor)
+            assertTrue(venueCanceledBill.promoDiscounts.isEmpty())
+            assertEquals(canceledLedgerBefore, fetchPromotionLedgerCounts(jdbcUrl, canceledFixture.orderId))
+            assertEquals(0, countOrphanActiveRewards(jdbcUrl, canceledFixture.orderId))
+
+            val canceledItemsById =
+                venueCanceledDetail.batches.single().items.associateBy { item -> item.batchItemId }
+            val canceledTrigger = assertNotNull(canceledItemsById[canceledGift.triggerBatchItemId])
+            val canceledReward = assertNotNull(canceledItemsById[canceledGift.rewardBatchItemId])
+            assertFalse(canceledTrigger.hasActivePromotionReward)
+            assertTrue(canceledReward.isPromotionReward)
+            assertEquals("PROMOTION_TRIGGER_CANCELED", canceledReward.canceledReasonCode)
+            assertEquals(
+                "Связанный подарок отменён вместе с условием акции.",
+                canceledReward.canceledReasonText,
+            )
+
+            markOrderClosed(jdbcUrl, canceledFixture.orderId)
+            val visitId = seedOrderClosedVisit(jdbcUrl, canceledFixture)
+            val history =
+                assertNotNull(
+                    VisitRepository(sharedDataSource).getGuestVisitDetail(
+                        userId = GUEST_USER_ID,
+                        visitId = visitId,
+                    ),
+                )
+            val historyOrder = history.orders.single()
+            val historyItems = historyOrder.items.associateBy { item -> item.itemName }
+            val historyTrigger = assertNotNull(historyItems["Кальян"])
+            val historyReward = assertNotNull(historyItems["Чай"])
+            assertEquals("CANCELED", historyTrigger.itemStatus)
+            assertEquals("TRIGGER", historyTrigger.promotionLinkRole)
+            assertEquals("Чай в подарок", historyTrigger.promotionLabel)
+            assertEquals(0L, historyTrigger.totalMinor)
+            assertEquals("CANCELED", historyReward.itemStatus)
+            assertEquals("REWARD", historyReward.promotionLinkRole)
+            assertEquals("Чай в подарок", historyReward.promotionLabel)
+            assertEquals(
+                "Связанный подарок отменён вместе с условием акции.",
+                historyReward.canceledReasonText,
+            )
+            assertEquals(0L, historyReward.totalMinor)
+            assertEquals(40_000L, historyOrder.totalMinor)
+            assertFalse(historyOrder.promotionDiscounts.single().isActive)
+            assertEquals(canceledLedgerBefore, fetchPromotionLedgerCounts(jdbcUrl, canceledFixture.orderId))
+
+            val excludedFixture = seedActiveOrder(jdbcUrl)
+            val excludedGift = seedGiftFixture(jdbcUrl, excludedFixture)
+            val remainingExcludedItemId =
+                seedBatchItem(
+                    jdbcUrl = jdbcUrl,
+                    venueId = excludedFixture.venueId,
+                    batchId = excludedGift.batchId,
+                    name = "Сок",
+                    priceMinor = 30_000,
+                )
+            val excludedLedgerBefore = fetchPromotionLedgerCounts(jdbcUrl, excludedFixture.orderId)
+
+            assertTrue(
+                repository.excludeBatchItemFromBill(
+                    venueId = excludedFixture.venueId,
+                    orderId = excludedFixture.orderId,
+                    batchItemId = excludedGift.triggerBatchItemId,
+                    reasonText = "Условие акции исключено",
+                    actor = OrderActionActor(userId = STAFF_USER_ID, role = VenueRole.STAFF),
+                ),
+            )
+
+            val guestExcludedOrder =
+                assertNotNull(guestOrdersRepository.findActiveOrderDetails(excludedFixture.tableSessionId))
+            val guestExcludedItems = guestExcludedOrder.batches.flatMap { batch -> batch.items }
+            assertEquals(listOf("Сок"), guestExcludedItems.map { item -> item.itemName })
+            assertTrue(guestExcludedOrder.promotionDiscounts.isEmpty())
+            assertEquals(
+                30_000L,
+                guestExcludedItems.sumOf { item ->
+                    (item.priceMinor ?: 0L) * item.qty - item.promoDiscountMinor
+                },
+            )
+            assertTrue(guestExcludedItems.none { item -> item.isPromotionReward })
+
+            val venueExcludedDetail =
+                assertNotNull(repository.loadOrderDetail(excludedFixture.venueId, excludedFixture.orderId))
+            val venueExcludedBill = venueExcludedDetail.toOrderBillSnapshot()
+            val staffChatExcludedPersistedSourceBill =
+                assertNotNull(
+                    VenueOrdersRepository(sharedDataSource)
+                        .loadOrderDetail(excludedFixture.venueId, excludedFixture.orderId),
+                ).toOrderBillSnapshot()
+            assertEquals(venueExcludedBill, staffChatExcludedPersistedSourceBill)
+            assertEquals(listOf(remainingExcludedItemId), venueExcludedBill.activeItems.map { it.batchItemId })
+            assertEquals(
+                setOf(excludedGift.triggerBatchItemId, excludedGift.rewardBatchItemId),
+                venueExcludedBill.excludedItems
+                    .filter { item -> item.status == "excluded" }
+                    .map { item -> item.batchItemId }
+                    .toSet(),
+            )
+            assertEquals(30_000L, venueExcludedBill.finalPayableTotalMinor)
+            assertTrue(venueExcludedBill.promoDiscounts.isEmpty())
+            assertEquals(excludedLedgerBefore, fetchPromotionLedgerCounts(jdbcUrl, excludedFixture.orderId))
+            assertEquals(0, countOrphanActiveRewards(jdbcUrl, excludedFixture.orderId))
+            assertEquals(
+                "Связанный подарок исключён вместе с условием акции.",
+                fetchBatchItemLifecycle(jdbcUrl, excludedGift.rewardBatchItemId).excludedReasonText,
+            )
+        }
+
+    @Test
+    fun `linked reward restore requires active trigger and remains one-way`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("gift-reward-restore-requires-trigger")
+            val fixture = seedActiveOrder(jdbcUrl)
+            val gift = seedGiftFixture(jdbcUrl, fixture)
+            val repository = VenueOrdersRepository(dataSource(jdbcUrl))
+            val ledgerBefore = fetchPromotionLedgerCounts(jdbcUrl, fixture.orderId)
+
+            assertTrue(
+                repository.excludeBatchItemFromBill(
+                    venueId = fixture.venueId,
+                    orderId = fixture.orderId,
+                    batchItemId = gift.triggerBatchItemId,
+                    reasonText = "Условие исключено",
+                    actor = OrderActionActor(userId = STAFF_USER_ID, role = VenueRole.STAFF),
+                ),
+            )
+
+            assertFalse(
+                repository.restoreBatchItemToBill(
+                    venueId = fixture.venueId,
+                    orderId = fixture.orderId,
+                    batchItemId = gift.rewardBatchItemId,
+                    actor = OrderActionActor(userId = STAFF_USER_ID, role = VenueRole.STAFF),
+                ),
+            )
+            assertTrue(fetchBatchItemLifecycle(jdbcUrl, gift.triggerBatchItemId).isExcluded)
+            assertTrue(fetchBatchItemLifecycle(jdbcUrl, gift.rewardBatchItemId).isExcluded)
+
+            assertTrue(
+                repository.restoreBatchItemToBill(
+                    venueId = fixture.venueId,
+                    orderId = fixture.orderId,
+                    batchItemId = gift.triggerBatchItemId,
+                    actor = OrderActionActor(userId = STAFF_USER_ID, role = VenueRole.STAFF),
+                ),
+            )
+            assertFalse(fetchBatchItemLifecycle(jdbcUrl, gift.triggerBatchItemId).isExcluded)
+            assertTrue(fetchBatchItemLifecycle(jdbcUrl, gift.rewardBatchItemId).isExcluded)
+            val triggerOnlyBill =
+                assertNotNull(repository.loadOrderDetail(fixture.venueId, fixture.orderId))
+                    .toOrderBillSnapshot()
+            assertEquals(listOf(gift.triggerBatchItemId), triggerOnlyBill.activeItems.map { it.batchItemId })
+            assertEquals(200_000L, triggerOnlyBill.finalPayableTotalMinor)
+            assertTrue(triggerOnlyBill.promoDiscounts.isEmpty())
+
+            assertTrue(
+                repository.restoreBatchItemToBill(
+                    venueId = fixture.venueId,
+                    orderId = fixture.orderId,
+                    batchItemId = gift.rewardBatchItemId,
+                    actor = OrderActionActor(userId = STAFF_USER_ID, role = VenueRole.STAFF),
+                ),
+            )
+            assertFalse(fetchBatchItemLifecycle(jdbcUrl, gift.rewardBatchItemId).isExcluded)
+            val restoredBill =
+                assertNotNull(repository.loadOrderDetail(fixture.venueId, fixture.orderId))
+                    .toOrderBillSnapshot()
+            assertEquals(
+                setOf(gift.triggerBatchItemId, gift.rewardBatchItemId),
+                restoredBill.activeItems.map { it.batchItemId }.toSet(),
+            )
+            assertEquals(200_000L, restoredBill.finalPayableTotalMinor)
+            assertEquals(50_000L, restoredBill.promoDiscountTotalMinor)
+            assertEquals(ledgerBefore, fetchPromotionLedgerCounts(jdbcUrl, fixture.orderId))
+            assertEquals(2, fetchOrderAuditCount(jdbcUrl, fixture.orderId, "RESTORE_ITEM_TO_BILL"))
+            assertEquals(0, countOrphanActiveRewards(jdbcUrl, fixture.orderId))
+        }
+
+    @Test
+    fun `inactive reward stays one-way when linked trigger later mutates`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("gift-reward-one-way")
+            val canceledFixture = seedActiveOrder(jdbcUrl)
+            val canceledGift = seedGiftFixture(jdbcUrl, canceledFixture)
+            val excludedFixture = seedActiveOrder(jdbcUrl)
+            val excludedGift = seedGiftFixture(jdbcUrl, excludedFixture)
+            val repository = VenueOrdersRepository(dataSource(jdbcUrl))
+
+            assertTrue(
+                assertNotNull(
+                    repository.cancelBatchItemAsUnavailable(
+                        venueId = canceledFixture.venueId,
+                        orderId = canceledFixture.orderId,
+                        batchItemId = canceledGift.rewardBatchItemId,
+                        actor = OrderActionActor(userId = STAFF_USER_ID, role = VenueRole.STAFF),
+                    ),
+                ).applied,
+            )
+            val rewardCancelBefore = fetchBatchItemLifecycle(jdbcUrl, canceledGift.rewardBatchItemId)
+            assertEquals("ACTIVE", fetchBatchItemStatus(jdbcUrl, canceledGift.triggerBatchItemId))
+            assertTrue(
+                assertNotNull(
+                    repository.cancelBatchItemAsUnavailable(
+                        venueId = canceledFixture.venueId,
+                        orderId = canceledFixture.orderId,
+                        batchItemId = canceledGift.triggerBatchItemId,
+                        actor = OrderActionActor(userId = STAFF_USER_ID, role = VenueRole.STAFF),
+                    ),
+                ).applied,
+            )
+            assertEquals(rewardCancelBefore, fetchBatchItemLifecycle(jdbcUrl, canceledGift.rewardBatchItemId))
+
+            assertTrue(
+                repository.excludeBatchItemFromBill(
+                    venueId = excludedFixture.venueId,
+                    orderId = excludedFixture.orderId,
+                    batchItemId = excludedGift.rewardBatchItemId,
+                    reasonText = "Подарок отдельно исключён",
+                    actor = OrderActionActor(userId = STAFF_USER_ID, role = VenueRole.STAFF),
+                ),
+            )
+            val rewardExcludeBefore = fetchBatchItemLifecycle(jdbcUrl, excludedGift.rewardBatchItemId)
+            assertFalse(fetchBatchItemLifecycle(jdbcUrl, excludedGift.triggerBatchItemId).isExcluded)
+            assertTrue(
+                repository.excludeBatchItemFromBill(
+                    venueId = excludedFixture.venueId,
+                    orderId = excludedFixture.orderId,
+                    batchItemId = excludedGift.triggerBatchItemId,
+                    reasonText = "Условие отдельно исключено",
+                    actor = OrderActionActor(userId = STAFF_USER_ID, role = VenueRole.STAFF),
+                ),
+            )
+            assertEquals(rewardExcludeBefore, fetchBatchItemLifecycle(jdbcUrl, excludedGift.rewardBatchItemId))
+            assertEquals(0, countOrphanActiveRewards(jdbcUrl, canceledFixture.orderId))
+            assertEquals(0, countOrphanActiveRewards(jdbcUrl, excludedFixture.orderId))
+        }
+
+    @Test
+    fun `linked reward update failure rolls back trigger reward bill and audit`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("gift-trigger-cancel-rollback")
+            val fixture = seedActiveOrder(jdbcUrl)
+            val gift = seedGiftFixture(jdbcUrl, fixture)
+            val delegate = dataSource(jdbcUrl)
+            val repository = VenueOrdersRepository(failingOnLinkedRewardCancelDataSource(delegate))
+            val beforeLedger = fetchPromotionLedgerCounts(jdbcUrl, fixture.orderId)
+            val beforeBill =
+                assertNotNull(
+                    VenueOrdersRepository(delegate).loadOrderDetail(fixture.venueId, fixture.orderId),
+                ).toOrderBillSnapshot()
+
+            assertFailsWith<DatabaseUnavailableException> {
+                repository.cancelBatchItemAsUnavailable(
+                    venueId = fixture.venueId,
+                    orderId = fixture.orderId,
+                    batchItemId = gift.triggerBatchItemId,
+                    actor = OrderActionActor(userId = STAFF_USER_ID, role = VenueRole.STAFF),
+                )
+            }
+
+            assertEquals("ACTIVE", fetchBatchItemStatus(jdbcUrl, gift.triggerBatchItemId))
+            assertEquals("ACTIVE", fetchBatchItemStatus(jdbcUrl, gift.rewardBatchItemId))
+            assertEquals(beforeLedger, fetchPromotionLedgerCounts(jdbcUrl, fixture.orderId))
+            assertEquals(0, fetchOrderAuditCount(jdbcUrl, fixture.orderId, "CANCEL_ITEM_UNAVAILABLE"))
+            assertEquals(0, countOrphanActiveRewards(jdbcUrl, fixture.orderId))
+            assertEquals(
+                beforeBill,
+                assertNotNull(
+                    VenueOrdersRepository(delegate).loadOrderDetail(fixture.venueId, fixture.orderId),
+                ).toOrderBillSnapshot(),
+            )
+        }
+
+    @Test
+    fun `whole batch reject keeps linked gift ledger and makes trigger and reward nonpayable`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("gift-whole-batch-reject")
+            val fixture = seedActiveOrder(jdbcUrl)
+            val gift = seedGiftFixture(jdbcUrl, fixture)
+            val repository = VenueOrdersRepository(dataSource(jdbcUrl))
+            val ledgerBefore = fetchPromotionLedgerCounts(jdbcUrl, fixture.orderId)
+
+            val result =
+                repository.rejectLatestBatch(
+                    venueId = fixture.venueId,
+                    orderId = fixture.orderId,
+                    reasonCode = "VENUE_REJECTED",
+                    reasonText = "Заказ отклонён",
+                    actor = OrderActionActor(userId = STAFF_USER_ID, role = VenueRole.STAFF),
+                )
+
+            assertTrue(assertNotNull(result).applied)
+            assertEquals("REJECTED", fetchBatchStatus(jdbcUrl, gift.batchId))
+            assertEquals("ACTIVE", fetchBatchItemStatus(jdbcUrl, gift.triggerBatchItemId))
+            assertEquals("ACTIVE", fetchBatchItemStatus(jdbcUrl, gift.rewardBatchItemId))
+            assertEquals(ledgerBefore, fetchPromotionLedgerCounts(jdbcUrl, fixture.orderId))
+            val bill =
+                assertNotNull(repository.loadOrderDetail(fixture.venueId, fixture.orderId))
+                    .toOrderBillSnapshot()
+            assertTrue(bill.activeItems.isEmpty())
+            assertEquals(0L, bill.finalPayableTotalMinor)
+            assertEquals(
+                setOf(gift.triggerBatchItemId, gift.rewardBatchItemId),
+                bill.excludedItems.filter { it.status == "rejected_batch" }.map { it.batchItemId }.toSet(),
+            )
+        }
+
     private fun migratedJdbcUrl(prefix: String): String {
         val jdbcUrl =
             "jdbc:h2:mem:$prefix-${UUID.randomUUID()};MODE=PostgreSQL;" +
@@ -675,6 +1364,65 @@ class VenueOrdersRepositoryTest {
             setURL(jdbcUrl)
             user = "sa"
             password = ""
+        }
+
+    private fun failingOnLinkedRewardCancelDataSource(delegate: DataSource): DataSource =
+        object : DataSource by delegate {
+            override fun getConnection(): Connection = failingOnLinkedRewardCancelConnection(delegate.connection)
+
+            override fun getConnection(
+                username: String?,
+                password: String?,
+            ): Connection = failingOnLinkedRewardCancelConnection(delegate.getConnection(username, password))
+        }
+
+    private fun failingOnLinkedRewardCancelConnection(delegate: Connection): Connection =
+        Proxy.newProxyInstance(
+            Connection::class.java.classLoader,
+            arrayOf(Connection::class.java),
+        ) { _, method, arguments ->
+            val result = invokeDelegate(method, delegate, arguments)
+            val sql = arguments?.firstOrNull() as? String
+            if (
+                method.name == "prepareStatement" &&
+                sql?.contains("SET item_status = 'CANCELED'") == true &&
+                result is PreparedStatement
+            ) {
+                failingOnLinkedRewardCancelStatement(result)
+            } else {
+                result
+            }
+        } as Connection
+
+    private fun failingOnLinkedRewardCancelStatement(delegate: PreparedStatement): PreparedStatement {
+        var reasonCode: String? = null
+        return Proxy.newProxyInstance(
+            PreparedStatement::class.java.classLoader,
+            arrayOf(PreparedStatement::class.java),
+        ) { _, method, arguments ->
+            if (
+                method.name == "setString" &&
+                arguments?.getOrNull(0) == 1 &&
+                arguments.getOrNull(1) is String
+            ) {
+                reasonCode = arguments[1] as String
+            }
+            if (method.name == "executeUpdate" && reasonCode == "PROMOTION_TRIGGER_CANCELED") {
+                throw SQLException("Injected linked reward cancellation failure")
+            }
+            invokeDelegate(method, delegate, arguments)
+        } as PreparedStatement
+    }
+
+    private fun invokeDelegate(
+        method: Method,
+        delegate: Any,
+        arguments: Array<out Any?>?,
+    ): Any? =
+        try {
+            method.invoke(delegate, *(arguments ?: emptyArray()))
+        } catch (error: InvocationTargetException) {
+            throw error.targetException
         }
 
     private fun seedActiveOrder(
@@ -890,6 +1638,48 @@ class VenueOrdersRepositoryTest {
         }
     }
 
+    private fun seedGiftFixture(
+        jdbcUrl: String,
+        fixture: OrderFixture,
+    ): GiftFixture {
+        val batchId = seedBatch(jdbcUrl, fixture.orderId, "ACCEPTED", Instant.now())
+        val triggerBatchItemId =
+            seedBatchItem(
+                jdbcUrl = jdbcUrl,
+                venueId = fixture.venueId,
+                batchId = batchId,
+                name = "Кальян",
+                priceMinor = 200_000,
+                categoryType = "HOOKAH",
+            )
+        val rewardBatchItemId =
+            seedBatchItem(
+                jdbcUrl = jdbcUrl,
+                venueId = fixture.venueId,
+                batchId = batchId,
+                name = "Чай",
+                priceMinor = 50_000,
+                categoryType = "TEA",
+            )
+        seedPromotionAdjustment(
+            jdbcUrl = jdbcUrl,
+            fixture = fixture,
+            batchId = batchId,
+            batchItemId = rewardBatchItemId,
+            title = "Чай к кальяну",
+            ruleType = "GIFT_WITH_ITEM",
+            discountMinor = 50_000,
+            discountPercent = 100,
+            rewardLabel = "Чай в подарок",
+            triggerBatchItemId = triggerBatchItemId,
+        )
+        return GiftFixture(
+            batchId = batchId,
+            triggerBatchItemId = triggerBatchItemId,
+            rewardBatchItemId = rewardBatchItemId,
+        )
+    }
+
     private fun seedPromotionAdjustment(
         jdbcUrl: String,
         fixture: OrderFixture,
@@ -1028,6 +1818,214 @@ class VenueOrdersRepositoryTest {
             }
         }
     }
+
+    private fun deletePromotionAdjustment(
+        jdbcUrl: String,
+        batchItemId: Long,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                "DELETE FROM order_batch_item_promotion_adjustments WHERE order_batch_item_id = ?",
+            ).use { statement ->
+                statement.setLong(1, batchItemId)
+                assertEquals(1, statement.executeUpdate())
+            }
+        }
+    }
+
+    private fun fetchPromotionLedgerCounts(
+        jdbcUrl: String,
+        orderId: Long,
+    ): PromotionLedgerCounts =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT
+                    COUNT(DISTINCT application.id) AS applications,
+                    COUNT(DISTINCT adjustment.id) AS adjustments,
+                    COUNT(DISTINCT reward_link.id) AS reward_links
+                FROM order_promotion_applications application
+                LEFT JOIN order_batch_item_promotion_adjustments adjustment
+                  ON adjustment.application_id = application.id
+                LEFT JOIN order_promotion_reward_items reward_link
+                  ON reward_link.application_id = application.id
+                WHERE application.order_id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, orderId)
+                statement.executeQuery().use { rs ->
+                    check(rs.next())
+                    PromotionLedgerCounts(
+                        applications = rs.getInt("applications"),
+                        adjustments = rs.getInt("adjustments"),
+                        rewardLinks = rs.getInt("reward_links"),
+                    )
+                }
+            }
+        }
+
+    private fun fetchGiftPromotionLedgerSnapshot(
+        jdbcUrl: String,
+        orderId: Long,
+    ): GiftPromotionLedgerSnapshot =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT
+                    application.id AS application_id,
+                    reward_link.id AS reward_link_id,
+                    reward_link.trigger_order_batch_item_id,
+                    reward_link.reward_order_batch_item_id,
+                    application.rule_id,
+                    application.title_snapshot,
+                    application.rule_type,
+                    application.target_type,
+                    application.target_value,
+                    application.discount_total_minor,
+                    application.rule_version,
+                    application.schedule_snapshot_json,
+                    application.target_snapshot_json,
+                    application.original_total_minor,
+                    application.final_total_minor,
+                    application.venue_timezone_snapshot,
+                    reward_link.reward_menu_item_id,
+                    reward_link.reward_qty,
+                    reward_link.label_snapshot
+                FROM order_promotion_applications application
+                JOIN order_promotion_reward_items reward_link
+                  ON reward_link.application_id = application.id
+                WHERE application.order_id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, orderId)
+                statement.executeQuery().use { rs ->
+                    assertTrue(rs.next(), "Expected gift promotion ledger for order $orderId")
+                    val snapshot =
+                        GiftPromotionLedgerSnapshot(
+                            applicationId = rs.getLong("application_id"),
+                            rewardLinkId = rs.getLong("reward_link_id"),
+                            triggerBatchItemId = rs.getLong("trigger_order_batch_item_id"),
+                            rewardBatchItemId = rs.getLong("reward_order_batch_item_id"),
+                            ruleId = rs.getLong("rule_id"),
+                            titleSnapshot = rs.getString("title_snapshot"),
+                            ruleType = rs.getString("rule_type"),
+                            targetType = rs.getString("target_type"),
+                            targetValue = rs.getString("target_value"),
+                            discountTotalMinor = rs.getLong("discount_total_minor"),
+                            ruleVersion = rs.getInt("rule_version"),
+                            scheduleSnapshotJson = rs.getString("schedule_snapshot_json"),
+                            targetSnapshotJson = rs.getString("target_snapshot_json"),
+                            originalTotalMinor = rs.getLong("original_total_minor"),
+                            finalTotalMinor = rs.getLong("final_total_minor"),
+                            venueTimezoneSnapshot = rs.getString("venue_timezone_snapshot"),
+                            rewardMenuItemId = rs.getLong("reward_menu_item_id"),
+                            rewardQty = rs.getInt("reward_qty"),
+                            labelSnapshot = rs.getString("label_snapshot"),
+                        )
+                    assertFalse(rs.next(), "Expected exactly one gift promotion ledger for order $orderId")
+                    snapshot
+                }
+            }
+        }
+
+    private fun fetchBatchItemDiscountPercent(
+        jdbcUrl: String,
+        batchItemId: Long,
+    ): Int? =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection
+                .prepareStatement("SELECT discount_percent FROM order_batch_items WHERE id = ?")
+                .use { statement ->
+                    statement.setLong(1, batchItemId)
+                    statement.executeQuery().use { rs ->
+                        check(rs.next())
+                        rs.getInt("discount_percent").let { value -> if (rs.wasNull()) null else value }
+                    }
+                }
+        }
+
+    private fun fetchBatchItemLifecycle(
+        jdbcUrl: String,
+        batchItemId: Long,
+    ): BatchItemLifecycle =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT COALESCE(item_status, 'ACTIVE') AS item_status,
+                       is_excluded,
+                       canceled_reason_code,
+                       canceled_reason_text,
+                       excluded_reason_text
+                FROM order_batch_items
+                WHERE id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, batchItemId)
+                statement.executeQuery().use { rs ->
+                    check(rs.next())
+                    BatchItemLifecycle(
+                        itemStatus = rs.getString("item_status"),
+                        isExcluded = rs.getBoolean("is_excluded"),
+                        canceledReasonCode = rs.getString("canceled_reason_code"),
+                        canceledReasonText = rs.getString("canceled_reason_text"),
+                        excludedReasonText = rs.getString("excluded_reason_text"),
+                    )
+                }
+            }
+        }
+
+    private fun fetchOrderAuditCount(
+        jdbcUrl: String,
+        orderId: Long,
+        action: String,
+    ): Int =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                "SELECT COUNT(*) FROM order_audit_log WHERE order_id = ? AND action = ?",
+            ).use { statement ->
+                statement.setLong(1, orderId)
+                statement.setString(2, action)
+                statement.executeQuery().use { rs ->
+                    check(rs.next())
+                    rs.getInt(1)
+                }
+            }
+        }
+
+    private fun countOrphanActiveRewards(
+        jdbcUrl: String,
+        orderId: Long,
+    ): Int =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT COUNT(*)
+                FROM order_promotion_reward_items reward_link
+                JOIN order_promotion_applications application
+                  ON application.id = reward_link.application_id
+                JOIN order_batch_items trigger_item
+                  ON trigger_item.id = reward_link.trigger_order_batch_item_id
+                JOIN order_batches trigger_batch
+                  ON trigger_batch.id = trigger_item.order_batch_id
+                JOIN order_batch_items reward_item
+                  ON reward_item.id = reward_link.reward_order_batch_item_id
+                WHERE application.order_id = ?
+                  AND reward_item.is_excluded = FALSE
+                  AND COALESCE(reward_item.item_status, 'ACTIVE') = 'ACTIVE'
+                  AND (
+                      trigger_item.is_excluded = TRUE
+                      OR COALESCE(trigger_item.item_status, 'ACTIVE') <> 'ACTIVE'
+                      OR trigger_batch.status = 'REJECTED'
+                  )
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, orderId)
+                statement.executeQuery().use { rs ->
+                    check(rs.next())
+                    rs.getInt(1)
+                }
+            }
+        }
 
     private fun fetchMenuItemIdForBatchItem(
         connection: java.sql.Connection,
@@ -1291,6 +2289,38 @@ class VenueOrdersRepositoryTest {
         }
     }
 
+    private fun seedOrderClosedVisit(
+        jdbcUrl: String,
+        fixture: OrderFixture,
+    ): Long =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                INSERT INTO visits (
+                    venue_id,
+                    user_id,
+                    table_session_id,
+                    order_id,
+                    source,
+                    occurred_at,
+                    service_date
+                )
+                VALUES (?, ?, ?, ?, 'ORDER_CLOSED', CURRENT_TIMESTAMP, CURRENT_DATE)
+                """.trimIndent(),
+                Statement.RETURN_GENERATED_KEYS,
+            ).use { statement ->
+                statement.setLong(1, fixture.venueId)
+                statement.setLong(2, GUEST_USER_ID)
+                statement.setLong(3, fixture.tableSessionId)
+                statement.setLong(4, fixture.orderId)
+                statement.executeUpdate()
+                statement.generatedKeys.use { keys ->
+                    check(keys.next())
+                    keys.getLong(1)
+                }
+            }
+        }
+
     private fun fetchBatchStatus(
         jdbcUrl: String,
         batchId: Long,
@@ -1305,6 +2335,48 @@ class VenueOrdersRepositoryTest {
         }
         error("Missing batch $batchId")
     }
+
+    private data class GiftFixture(
+        val batchId: Long,
+        val triggerBatchItemId: Long,
+        val rewardBatchItemId: Long,
+    )
+
+    private data class PromotionLedgerCounts(
+        val applications: Int,
+        val adjustments: Int,
+        val rewardLinks: Int,
+    )
+
+    private data class GiftPromotionLedgerSnapshot(
+        val applicationId: Long,
+        val rewardLinkId: Long,
+        val triggerBatchItemId: Long,
+        val rewardBatchItemId: Long,
+        val ruleId: Long,
+        val titleSnapshot: String,
+        val ruleType: String,
+        val targetType: String,
+        val targetValue: String,
+        val discountTotalMinor: Long,
+        val ruleVersion: Int,
+        val scheduleSnapshotJson: String?,
+        val targetSnapshotJson: String?,
+        val originalTotalMinor: Long,
+        val finalTotalMinor: Long,
+        val venueTimezoneSnapshot: String?,
+        val rewardMenuItemId: Long,
+        val rewardQty: Int,
+        val labelSnapshot: String,
+    )
+
+    private data class BatchItemLifecycle(
+        val itemStatus: String,
+        val isExcluded: Boolean,
+        val canceledReasonCode: String?,
+        val canceledReasonText: String?,
+        val excludedReasonText: String?,
+    )
 
     private data class OrderFixture(
         val venueId: Long,

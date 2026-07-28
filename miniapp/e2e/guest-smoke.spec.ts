@@ -1,6 +1,7 @@
 import { expect, type Page, test } from '@playwright/test'
 
 const sessionExpiresAt = Math.floor(Date.now() / 1000) + 3600
+const giftDecisionExpiresAtEpochSeconds = 4_102_444_800
 const tableToken = 'TABLE-SMOKE-1'
 const mockInitData = 'query_id=e2e-smoke&user=%7B%22id%22%3A123456789%7D&hash=test'
 const otherMockInitData = 'query_id=e2e-smoke-other&user=%7B%22id%22%3A987654321%7D&hash=test'
@@ -93,6 +94,12 @@ type ActiveOrderFixtureOptions = {
   batchStatus?: string
   itemManualDiscountMinor?: number
   itemPromoDiscountMinor?: number
+  giftReward?: {
+    itemId: number
+    name: string
+    priceMinor: number
+    currency: string
+  }
 }
 
 type GuestVisitHistoryFixture = {
@@ -248,7 +255,7 @@ type VenuePromotionFixture = {
   startsAt: string
   endsAt: string
   status: 'DRAFT' | 'ACTIVE' | 'PAUSED' | 'ARCHIVED'
-  templateType?: 'TEXT_ONLY' | 'HAPPY_HOURS_PERCENT'
+  templateType?: 'TEXT_ONLY' | 'HAPPY_HOURS_PERCENT' | 'GIFT_WITH_ITEM'
   rule?: VenuePromotionRuleFixture | null
 }
 
@@ -265,6 +272,11 @@ type VenuePromotionRuleFixture = {
     label?: string | null
   } | null
   discountPercent?: number | null
+  reward?: {
+    mode: 'FIXED_ITEM' | 'CHOICE_ITEMS'
+    fixedItem?: VenuePromotionRewardItemFixture | null
+    allowlist: VenuePromotionRewardItemFixture[]
+  } | null
   readyForActivation: boolean
   validationIssues: string[]
 }
@@ -275,7 +287,7 @@ type VenuePromotionMutationFixture = {
   terms?: string | null
   startsAt: string
   endsAt: string
-  templateType: 'TEXT_ONLY' | 'HAPPY_HOURS_PERCENT'
+  templateType: 'TEXT_ONLY' | 'HAPPY_HOURS_PERCENT' | 'GIFT_WITH_ITEM'
   rule?: {
     windows: Array<{ weekday: number; startLocal: string; endLocal: string }>
     target: {
@@ -283,8 +295,56 @@ type VenuePromotionMutationFixture = {
       menuCategoryId?: number | null
       menuItemId?: number | null
     }
-    discountPercent: number
+    discountPercent?: number | null
+    reward?: {
+      mode: 'FIXED_ITEM' | 'CHOICE_ITEMS'
+      fixedMenuItemId?: number | null
+      allowlistMenuItemIds: number[]
+    } | null
   } | null
+}
+
+type VenuePromotionRewardItemFixture = {
+  menuItemId: number
+  name: string
+  priceMinor?: number | null
+  currency?: string | null
+  isAvailable?: boolean
+  requiresOptionSelection?: boolean
+}
+
+type GiftDecisionFixture = {
+  action: 'ACCEPT_FIXED' | 'SELECT_ITEM' | 'SKIP'
+  selectedMenuItemId?: number | null
+  decisionScopeToken: string
+}
+
+type GiftRewardItemFixture = {
+  menuItemId: number
+  name: string
+  originalUnitPriceMinor: number
+  currency: string
+}
+
+type GiftOfferFixture = {
+  status:
+    | 'NO_GIFT'
+    | 'FIXED_GIFT_AVAILABLE'
+    | 'GIFT_CHOICE_REQUIRED'
+    | 'GIFT_UNAVAILABLE'
+    | 'GIFT_SKIPPED'
+    | 'GIFT_SELECTED'
+  promotionId?: number | null
+  promotionTitle?: string | null
+  ruleId?: number | null
+  ruleVersion?: number | null
+  triggerLineId?: number | null
+  triggerMenuItemId?: number | null
+  triggerItemName?: string | null
+  fixedRewardItem?: GiftRewardItemFixture | null
+  selectableRewardItems?: GiftRewardItemFixture[]
+  selectedRewardItem?: GiftRewardItemFixture | null
+  unavailableReason?: string | null
 }
 
 type CartPreviewFixture = {
@@ -296,11 +356,18 @@ type CartPreviewFixture = {
   discounts: Array<Record<string, unknown>>
   items: Array<Record<string, unknown>>
   pricingFingerprint: string
+  cartFingerprint: string
+  decisionScopeToken?: string | null
+  decisionScopeExpiresAtEpochSeconds?: number | null
+  giftDecisionStale?: boolean
+  giftDecisionMessage?: string | null
+  giftOffer?: GiftOfferFixture | null
 }
 
 type AddBatchResponseFixture = {
-  orderId: number
-  batchId: number
+  submitted?: boolean
+  orderId?: number | null
+  batchId?: number | null
   pricing: CartPreviewFixture
   recalculated: boolean
 }
@@ -421,12 +488,96 @@ type AddBatchItemPayload = {
   preferenceNote?: string | null
 }
 
+type CartPreviewRequestFixture = {
+  tableToken: string
+  tableSessionId: number
+  tabId: number
+  giftDecision?: GiftDecisionFixture | null
+  items: AddBatchItemPayload[]
+  comment?: string | null
+}
+
+type GuestTableScopeFixture = {
+  venueId: number
+  tableSessionId: number
+  tabId: number
+  ownerUserId: number
+}
+
+type GuestTabFixture = {
+  id: number
+  tableSessionId: number
+  type: 'PERSONAL' | 'SHARED'
+  ownerUserId: number
+  status: 'ACTIVE' | 'CLOSED'
+}
+
+function buildScopedFixedGiftPreview(request: CartPreviewRequestFixture): CartPreviewFixture {
+  const triggerQty = request.items.find((item) => item.itemId === 200)?.qty ?? 0
+  const triggerGross = triggerQty * 150000
+  const normalizedComment = request.comment?.trim() ?? ''
+  const cartFingerprint = [
+    'scoped-fixed-cart',
+    request.tableSessionId,
+    request.tabId,
+    triggerQty,
+    normalizedComment
+  ].join(':')
+  const decisionScopeToken = `scoped-fixed-token:${cartFingerprint}`
+  const selected = request.giftDecision?.action === 'ACCEPT_FIXED'
+  const skipped = request.giftDecision?.action === 'SKIP'
+  const reward: GiftRewardItemFixture = {
+    menuItemId: 210,
+    name: 'Чай',
+    originalUnitPriceMinor: 45000,
+    currency: 'RUB'
+  }
+  return {
+    grossTotalMinor: triggerGross + (selected ? reward.originalUnitPriceMinor : 0),
+    promoDiscountTotalMinor: selected ? reward.originalUnitPriceMinor : 0,
+    loyaltyDiscountTotalMinor: 0,
+    finalPayableTotalMinor: triggerGross,
+    currency: 'RUB',
+    discounts: [],
+    items: [
+      {
+        itemId: 200,
+        name: 'Double Apple',
+        qty: triggerQty,
+        priceMinor: 150000,
+        currency: 'RUB',
+        lineGrossMinor: triggerGross,
+        discountMinor: 0,
+        linePayableMinor: triggerGross,
+        isPromotionReward: false
+      }
+    ],
+    pricingFingerprint: `scoped-fixed-pricing:${selected ? 'selected' : skipped ? 'skipped' : 'offer'}`,
+    cartFingerprint,
+    decisionScopeToken,
+    decisionScopeExpiresAtEpochSeconds: giftDecisionExpiresAtEpochSeconds,
+    giftOffer: {
+      status: selected ? 'GIFT_SELECTED' : skipped ? 'GIFT_SKIPPED' : 'FIXED_GIFT_AVAILABLE',
+      promotionId: 705,
+      promotionTitle: 'Чай к кальяну',
+      ruleId: 805,
+      ruleVersion: 1,
+      triggerMenuItemId: 200,
+      triggerItemName: 'Double Apple',
+      fixedRewardItem: reward,
+      selectableRewardItems: [],
+      selectedRewardItem: selected ? reward : null
+    }
+  }
+}
+
 type AddBatchPayload = {
   tableToken: string
   tableSessionId: number
   tabId: number
   idempotencyKey?: string
   previewFingerprint?: string | null
+  giftDecision?: GiftDecisionFixture | null
   items: AddBatchItemPayload[]
   comment?: string | null
 }
@@ -776,7 +927,11 @@ async function mockGuestApi(
     isolateFavoriteUsers?: boolean
     venueAvailable?: boolean
     cartPreview?: CartPreviewFixture
+    cartPreviewResolver?: (request: CartPreviewRequestFixture) => CartPreviewFixture
     addBatchResponse?: AddBatchResponseFixture
+    addBatchResponseResolver?: (request: AddBatchPayload) => AddBatchResponseFixture
+    tableScope?: GuestTableScopeFixture
+    tabs?: GuestTabFixture[]
   } = {}
 ) {
   let structuredMenuCalls = 0
@@ -805,10 +960,18 @@ async function mockGuestApi(
   ])
   let favoriteMutationFailureOnce = options.favoriteMutationFailureOnce === true
   let venueAvailable = options.venueAvailable !== false
+  let tableScope: GuestTableScopeFixture =
+    options.tableScope ?? {
+      venueId: 1,
+      tableSessionId: 77,
+      tabId: 88,
+      ownerUserId: 123456789
+    }
+  let guestTabs = options.tabs ?? null
   let createExtensionRequestCalls = 0
   let nextBookingId = 9000
   let activeOrderServiceCharges: ServiceCharge[] = []
-  const previewRequests: Array<{ items: AddBatchItemPayload[] }> = []
+  const previewRequests: CartPreviewRequestFixture[] = []
   const addBatchRequests: AddBatchPayload[] = []
   const billRequestRequests: BillRequestCapture[] = []
   const tableSessionEndRequests: Array<{
@@ -872,7 +1035,26 @@ async function mockGuestApi(
 
   const buildActiveOrderItems = () => {
     const lines = submittedOrderItems.length > 0 ? submittedOrderItems : [{ itemId: 200, qty: 1 }]
-    return lines.map(buildOrderItem)
+    const orderItems = lines.map(buildOrderItem)
+    if (activeOrderOptions?.giftReward) {
+      const reward = activeOrderOptions.giftReward
+      orderItems.push({
+        itemId: reward.itemId,
+        qty: 1,
+        name: reward.name,
+        selectedOption: null,
+        preferenceNote: null,
+        priceMinor: reward.priceMinor,
+        currency: reward.currency,
+        lineGrossMinor: reward.priceMinor,
+        manualDiscountMinor: 0,
+        promoDiscountMinor: reward.priceMinor,
+        discountMinor: reward.priceMinor,
+        linePayableMinor: 0,
+        isPromotionReward: true
+      })
+    }
+    return orderItems
   }
 
   await page.route('**/api/auth/telegram', async (route) => {
@@ -1252,10 +1434,10 @@ async function mockGuestApi(
   await page.route('**/api/guest/table/resolve?**', async (route) => {
     await route.fulfill(
       jsonResponse({
-        venueId: 1,
+        venueId: tableScope.venueId,
         venueName: 'Микс',
         tableId: 7,
-        tableSessionId: 77,
+        tableSessionId: tableScope.tableSessionId,
         tableSessionStatus: 'ACTIVE',
         tableSessionActive: true,
         tableNumber: '4',
@@ -1299,15 +1481,17 @@ async function mockGuestApi(
   await page.route('**/api/guest/tabs?**', async (route) => {
     await route.fulfill(
       jsonResponse({
-        tabs: [
-          {
-            id: 88,
-            tableSessionId: 77,
-            type: 'PERSONAL',
-            ownerUserId: 123456789,
-            status: 'ACTIVE'
-          }
-        ]
+        tabs:
+          guestTabs ??
+          [
+            {
+              id: tableScope.tabId,
+              tableSessionId: tableScope.tableSessionId,
+              type: 'PERSONAL',
+              ownerUserId: tableScope.ownerUserId,
+              status: 'ACTIVE'
+            }
+          ]
       })
     )
   })
@@ -1380,8 +1564,12 @@ async function mockGuestApi(
   })
 
   await page.route('**/api/guest/order/preview', async (route) => {
-    const body = (await route.request().postDataJSON()) as { items: AddBatchItemPayload[] }
-    previewRequests.push({ items: body.items })
+    const body = (await route.request().postDataJSON()) as CartPreviewRequestFixture
+    previewRequests.push(body)
+    if (options.cartPreviewResolver) {
+      await route.fulfill(jsonResponse({ preview: options.cartPreviewResolver(body) }))
+      return
+    }
     if (cartPreview) {
       await route.fulfill(jsonResponse({ preview: cartPreview }))
       return
@@ -1398,7 +1586,9 @@ async function mockGuestApi(
           currency: 'RUB',
           discounts: [],
           items: previewItems,
-          pricingFingerprint: 'e2e-preview-default'
+          pricingFingerprint: 'e2e-preview-default',
+          cartFingerprint: `e2e-cart-${body.tableSessionId}-${body.tabId}-${JSON.stringify(body.items)}-${body.comment ?? ''}`,
+          giftOffer: { status: 'NO_GIFT' }
         }
       })
     )
@@ -1408,6 +1598,10 @@ async function mockGuestApi(
     const body = (await route.request().postDataJSON()) as AddBatchPayload
     addBatchRequests.push(body)
     submittedOrderItems = body.items
+    if (options.addBatchResponseResolver) {
+      await route.fulfill(jsonResponse(options.addBatchResponseResolver(body)))
+      return
+    }
     if (options.addBatchResponse) {
       await route.fulfill(jsonResponse(options.addBatchResponse))
       return
@@ -1571,6 +1765,12 @@ async function mockGuestApi(
     setCartPreview: (preview: CartPreviewFixture | null) => {
       cartPreview = preview
     },
+    setTableScope: (scope: GuestTableScopeFixture) => {
+      tableScope = scope
+    },
+    setTabs: (tabs: GuestTabFixture[] | null) => {
+      guestTabs = tabs
+    },
     setFavoriteVenueIds: (userId: number, venueIds: number[]) => {
       const token = options.isolateFavoriteUsers ? `favorite-user-${userId}` : defaultFavoriteToken
       favoriteVenueIdsByToken.set(token, new Set(venueIds))
@@ -1594,6 +1794,7 @@ async function mockVenueShiftExtensionApi(
     publicReviewUrl?: string | null
     failPublicCardUpdateOnce?: boolean
     promotionFacts?: boolean
+    activePromotionReward?: boolean
   } = {}
 ) {
   const role = options.role ?? 'STAFF'
@@ -1613,6 +1814,7 @@ async function mockVenueShiftExtensionApi(
   let locationProviderCalls = 0
   let failPublicCardUpdateOnce = options.failPublicCardUpdateOnce === true
   const promotionFacts = options.promotionFacts === true
+  const activePromotionReward = options.activePromotionReward === true
   let orderServiceCharges: ServiceCharge[] = []
   const rejectedReasons: string[] = []
 
@@ -1689,7 +1891,7 @@ async function mockVenueShiftExtensionApi(
 
   const orderBill = () => {
     const serviceChargeTotal = orderServiceCharges.reduce((sum, charge) => sum + charge.totalMinor, 0)
-    const manualDiscountMinor = promotionFacts ? 0 : 12000
+    const manualDiscountMinor = promotionFacts || activePromotionReward ? 0 : 12000
     const promoDiscountMinor = promotionFacts ? 60000 : 0
     return {
       grossTotalMinor: 120000,
@@ -1801,11 +2003,12 @@ async function mockVenueShiftExtensionApi(
                   priceMinor: 120000,
                   currency: 'RUB',
                   lineGrossMinor: 120000,
-                  manualDiscountMinor: promotionFacts ? 0 : 12000,
+                  manualDiscountMinor: promotionFacts || activePromotionReward ? 0 : 12000,
                   promoDiscountMinor: promotionFacts ? 60000 : 0,
-                  linePayableMinor: promotionFacts ? 60000 : 108000,
+                  linePayableMinor: promotionFacts ? 60000 : activePromotionReward ? 120000 : 108000,
+                  hasActivePromotionReward: activePromotionReward,
                   isExcluded: false,
-                  discountPercent: promotionFacts ? null : 10,
+                  discountPercent: promotionFacts || activePromotionReward ? null : 10,
                   itemStatus: 'active'
                 },
                 {
@@ -2402,7 +2605,7 @@ async function mockVenuePromotionsApi(
     mutation: VenuePromotionMutationFixture,
     previousRule?: VenuePromotionRuleFixture | null
   ): VenuePromotionRuleFixture | null => {
-    if (mutation.templateType !== 'HAPPY_HOURS_PERCENT' || !mutation.rule) return null
+    if (mutation.templateType === 'TEXT_ONLY' || !mutation.rule) return null
     const target = mutation.rule.target
     const label =
       target.type === 'MENU_ITEM'
@@ -2413,7 +2616,26 @@ async function mockVenuePromotionsApi(
       version: previousRule ? previousRule.version + 1 : 1,
       windows: mutation.rule.windows,
       target: { ...target, label: label ?? null },
-      discountPercent: mutation.rule.discountPercent,
+      discountPercent: mutation.templateType === 'HAPPY_HOURS_PERCENT' ? mutation.rule.discountPercent : null,
+      reward:
+        mutation.templateType === 'GIFT_WITH_ITEM' && mutation.rule.reward
+          ? {
+              mode: mutation.rule.reward.mode,
+              fixedItem:
+                mutation.rule.reward.fixedMenuItemId == null
+                  ? null
+                  : (() => {
+                      const item = menuItems.find(
+                        (candidate) => candidate.id === mutation.rule?.reward?.fixedMenuItemId
+                      )
+                      return item ? { menuItemId: item.id, name: item.name } : null
+                    })(),
+              allowlist: mutation.rule.reward.allowlistMenuItemIds.flatMap((itemId) => {
+                const item = menuItems.find((candidate) => candidate.id === itemId)
+                return item ? [{ menuItemId: item.id, name: item.name }] : []
+              })
+            }
+          : null,
       readyForActivation: true,
       validationIssues: []
     }
@@ -2528,7 +2750,7 @@ async function mockVenuePromotionsApi(
       const current = promotions.find((item) => item.id === promotionId)
       if (
         body.status === 'ACTIVE' &&
-        current?.templateType === 'HAPPY_HOURS_PERCENT' &&
+        (current?.templateType === 'HAPPY_HOURS_PERCENT' || current?.templateType === 'GIFT_WITH_ITEM') &&
         current.rule?.readyForActivation !== true
       ) {
         await route.fulfill(
@@ -5040,6 +5262,7 @@ test('guest cart uses current item and option prices and drops a paused promotio
     finalPayableTotalMinor: 80000,
     currency: 'RUB',
     pricingFingerprint: 'happy-hours-preview-v3',
+    cartFingerprint: 'happy-hours-cart-v3',
     discounts: [
       {
         label: 'Счастливые часы',
@@ -5089,6 +5312,7 @@ test('guest cart uses current item and option prices and drops a paused promotio
     promoDiscountTotalMinor: 0,
     finalPayableTotalMinor: 160000,
     pricingFingerprint: 'happy-hours-submit-paused',
+    cartFingerprint: 'happy-hours-cart-v3',
     discounts: [],
     items: [
       {
@@ -5186,6 +5410,888 @@ test('guest cart uses current item and option prices and drops a paused promotio
   await expect(page.locator('.toast')).toHaveText('Условия акции изменились. Итог корзины пересчитан.')
   expect(api.getAddBatchRequests()).toHaveLength(1)
   expect(api.getAddBatchRequests()[0].previewFingerprint).toBe('happy-hours-preview-v3')
+})
+
+test('guest cart requires explicit fixed gift accept and clears the decision after a cart mutation', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const rewardItem: GiftRewardItemFixture = {
+    menuItemId: 210,
+    name: 'Чай',
+    originalUnitPriceMinor: 45000,
+    currency: 'RUB'
+  }
+  const giftOfferBase = {
+    promotionId: 701,
+    promotionTitle: 'Чай к кальяну',
+    ruleId: 801,
+    ruleVersion: 3,
+    triggerLineId: 1,
+    triggerMenuItemId: 200,
+    triggerItemName: 'Double Apple',
+    fixedRewardItem: rewardItem,
+    selectableRewardItems: []
+  }
+  const api = await mockGuestApi(page, {
+    cartPreviewResolver: (request) => {
+      const triggerQty = request.items.find((item) => item.itemId === 200)?.qty ?? 0
+      const triggerGross = triggerQty * 150000
+      const accepted = request.giftDecision?.action === 'ACCEPT_FIXED'
+      const skipped = request.giftDecision?.action === 'SKIP'
+      const cartFingerprint = `fixed-gift-cart-${request.tableSessionId}-${request.tabId}-${triggerQty}-${request.comment ?? ''}`
+      const decisionScopeToken = `fixed-gift-scope-${cartFingerprint}`
+      return {
+        grossTotalMinor: triggerGross + (accepted ? rewardItem.originalUnitPriceMinor : 0),
+        promoDiscountTotalMinor: accepted ? rewardItem.originalUnitPriceMinor : 0,
+        loyaltyDiscountTotalMinor: 0,
+        finalPayableTotalMinor: triggerGross,
+        currency: 'RUB',
+        discounts: accepted
+          ? [
+              {
+                label: 'Чай к кальяну',
+                discountMinor: rewardItem.originalUnitPriceMinor,
+                currency: 'RUB',
+                ruleType: 'GIFT_WITH_ITEM',
+                promotionId: 701,
+                ruleId: 801,
+                ruleVersion: 3,
+                originalAmountMinor: rewardItem.originalUnitPriceMinor,
+                finalAmountMinor: 0,
+                eligibleLineIds: [1]
+              }
+            ]
+          : [],
+        items: [
+          {
+            itemId: 200,
+            name: 'Double Apple',
+            qty: triggerQty,
+            priceMinor: 150000,
+            currency: 'RUB',
+            lineGrossMinor: triggerGross,
+            discountMinor: 0,
+            linePayableMinor: triggerGross,
+            isPromotionReward: false,
+            promotionAdjustment: null
+          },
+          ...(accepted
+            ? [
+                {
+                  itemId: rewardItem.menuItemId,
+                  name: rewardItem.name,
+                  qty: 1,
+                  priceMinor: rewardItem.originalUnitPriceMinor,
+                  currency: rewardItem.currency,
+                  lineGrossMinor: rewardItem.originalUnitPriceMinor,
+                  discountMinor: rewardItem.originalUnitPriceMinor,
+                  linePayableMinor: 0,
+                  isPromotionReward: true,
+                  promotionAdjustment: {
+                    promotionId: 701,
+                    promotionTitle: 'Чай к кальяну',
+                    ruleId: 801,
+                    ruleVersion: 3,
+                    ruleType: 'GIFT_WITH_ITEM',
+                    originalAmountMinor: rewardItem.originalUnitPriceMinor,
+                    discountMinor: rewardItem.originalUnitPriceMinor,
+                    finalAmountMinor: 0
+                  }
+                }
+              ]
+            : [])
+        ],
+        pricingFingerprint: `fixed-gift-${triggerQty}-${request.giftDecision?.action ?? 'offer'}`,
+        cartFingerprint,
+        decisionScopeToken,
+        decisionScopeExpiresAtEpochSeconds: giftDecisionExpiresAtEpochSeconds,
+        giftOffer: {
+          ...giftOfferBase,
+          status: accepted ? 'GIFT_SELECTED' : skipped ? 'GIFT_SKIPPED' : 'FIXED_GIFT_AVAILABLE',
+          selectedRewardItem: accepted ? rewardItem : null
+        }
+      }
+    }
+  })
+
+  await page.goto(
+    `?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`
+  )
+  await page.getByRole('button', { name: /Кальянное меню/ }).click()
+  await page.getByRole('button', { name: 'Добавить' }).click()
+  await page.getByRole('button', { name: 'Корзина (1)' }).click()
+
+  const giftCard = page.locator('.cart-gift-offer')
+  await expect(giftCard).toContainText('Вам доступен подарок: Чай')
+  await expect(page.locator('.cart-preview-gift-line')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Отправить', exact: true })).toBeDisabled()
+  await expect(page.getByText('Добавьте подарок или выберите «Пропустить подарок».')).toBeVisible()
+  await giftCard.getByRole('button', { name: 'Добавить подарок' }).click()
+  await expect(giftCard).toContainText('Подарок добавлен: Чай')
+  await expect(page.getByRole('button', { name: 'Отправить', exact: true })).toBeEnabled()
+  const giftLine = page.locator('.cart-preview-gift-line')
+  await expect(giftLine).toContainText(/Обычная стоимость.*450,00\s*₽/)
+  await expect(giftLine).toContainText('скидка 100%')
+  await expect(giftLine).toContainText(/К оплате.*0,00\s*₽/)
+  expect(api.getPreviewRequests().at(-1)?.giftDecision).toMatchObject({
+    action: 'ACCEPT_FIXED',
+    decisionScopeToken: 'fixed-gift-scope-fixed-gift-cart-77-88-1-'
+  })
+
+  await page.locator('.cart-item').getByRole('button', { name: '+' }).click()
+  await expect(giftCard).toContainText('Вам доступен подарок: Чай')
+  await expect(page.locator('.cart-preview-gift-line')).toHaveCount(0)
+  expect(api.getPreviewRequests().at(-1)?.giftDecision ?? null).toBeNull()
+
+  await giftCard.getByRole('button', { name: 'Пропустить подарок' }).click()
+  await expect(giftCard).toContainText('Вы пропустили подарок.')
+  await expect(page.getByRole('button', { name: 'Отправить', exact: true })).toBeEnabled()
+  expect(api.getPreviewRequests().at(-1)?.giftDecision).toMatchObject({
+    action: 'SKIP',
+    decisionScopeToken: 'fixed-gift-scope-fixed-gift-cart-77-88-2-'
+  })
+
+  await page.getByPlaceholder('Комментарий к заказу').fill('без сахара')
+  await expect.poll(() => api.getPreviewRequests().at(-1)?.comment).toBe('без сахара')
+  expect(api.getPreviewRequests().at(-1)?.giftDecision ?? null).toBeNull()
+
+  const minusButton = page.locator('.cart-item').getByRole('button', { name: '−' })
+  await minusButton.click()
+  await minusButton.click()
+  await expect(page.locator('.cart-item')).toHaveCount(0)
+  const persistedAfterTriggerRemoval = await page.evaluate((key) => {
+    const raw = window.localStorage.getItem(key)
+    return raw ? JSON.parse(raw) as Record<string, unknown> : null
+  }, `hookah_guest_cart_draft:user:123456789:${tableToken}`)
+  expect(persistedAfterTriggerRemoval?.giftDecisionDraft).toBeUndefined()
+})
+
+test('initial tab restore rejects a gift draft from a replaced table session on the same QR', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockGuestApi(page, {
+    cartPreviewResolver: buildScopedFixedGiftPreview
+  })
+
+  await page.goto(
+    `?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`
+  )
+  await page.getByRole('button', { name: /Кальянное меню/ }).click()
+  await page.getByRole('button', { name: 'Добавить' }).click()
+  await page.getByRole('button', { name: 'Корзина (1)' }).click()
+  await page.getByRole('button', { name: 'Добавить подарок' }).click()
+  await expect(page.getByText('Подарок добавлен: Чай')).toBeVisible()
+  expect(api.getPreviewRequests().at(-1)?.giftDecision?.decisionScopeToken).toContain(
+    'scoped-fixed-cart:77:88'
+  )
+
+  api.setTableScope({
+    venueId: 1,
+    tableSessionId: 177,
+    tabId: 188,
+    ownerUserId: 123456789
+  })
+  const requestsBeforeReload = api.getPreviewRequests().length
+  await page.reload()
+
+  await expect
+    .poll(() =>
+      api
+        .getPreviewRequests()
+        .slice(requestsBeforeReload)
+        .filter((request) => request.tableSessionId === 177 && request.tabId === 188).length
+    )
+    .toBeGreaterThan(0)
+  const replacementRequests = api
+    .getPreviewRequests()
+    .slice(requestsBeforeReload)
+    .filter((request) => request.tableSessionId === 177 && request.tabId === 188)
+  expect(replacementRequests.every((request) => request.giftDecision == null)).toBe(true)
+  await expect(page.locator('.cart-gift-offer')).toContainText('Вам доступен подарок: Чай')
+  await expect(page.getByText('Подарок добавлен: Чай')).toHaveCount(0)
+  const persistedDraft = await page.evaluate((key) => {
+    const raw = window.localStorage.getItem(key)
+    return raw ? JSON.parse(raw) as Record<string, unknown> : null
+  }, `hookah_guest_cart_draft:user:123456789:${tableToken}`)
+  expect(persistedDraft?.giftDecisionDraft).toBeUndefined()
+})
+
+test('switching tab in the same table session clears the gift decision', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockGuestApi(page, {
+    cartPreviewResolver: buildScopedFixedGiftPreview,
+    tabs: [
+      {
+        id: 88,
+        tableSessionId: 77,
+        type: 'PERSONAL',
+        ownerUserId: 123456789,
+        status: 'ACTIVE'
+      },
+      {
+        id: 89,
+        tableSessionId: 77,
+        type: 'SHARED',
+        ownerUserId: 987654321,
+        status: 'ACTIVE'
+      }
+    ]
+  })
+
+  await page.goto(
+    `?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`
+  )
+  await page.getByRole('button', { name: /Кальянное меню/ }).click()
+  await page.getByRole('button', { name: 'Добавить' }).click()
+  await page.getByRole('button', { name: 'Корзина (1)' }).click()
+  await page.getByRole('button', { name: 'Добавить подарок' }).click()
+  await expect(page.getByText('Подарок добавлен: Чай')).toBeVisible()
+  expect(api.getPreviewRequests().at(-1)?.tabId).toBe(88)
+  expect(api.getPreviewRequests().at(-1)?.giftDecision?.action).toBe('ACCEPT_FIXED')
+
+  await page.getByRole('button', { name: 'Переключить на Общий счёт' }).click()
+
+  await expect.poll(() => api.getPreviewRequests().at(-1)?.tabId).toBe(89)
+  expect(api.getPreviewRequests().at(-1)?.tableSessionId).toBe(77)
+  expect(api.getPreviewRequests().at(-1)?.giftDecision ?? null).toBeNull()
+  await expect(page.locator('.cart-gift-offer')).toContainText('Вам доступен подарок: Чай')
+})
+
+test('expired gift scope is not restored from LocalStorage', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockGuestApi(page, {
+    cartPreviewResolver: buildScopedFixedGiftPreview
+  })
+  const draftKey = `hookah_guest_cart_draft:user:123456789:${tableToken}`
+
+  await page.goto(
+    `?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`
+  )
+  await page.getByRole('button', { name: /Кальянное меню/ }).click()
+  await page.getByRole('button', { name: 'Добавить' }).click()
+  await page.getByRole('button', { name: 'Корзина (1)' }).click()
+  await page.getByRole('button', { name: 'Добавить подарок' }).click()
+  await expect(page.getByText('Подарок добавлен: Чай')).toBeVisible()
+
+  await page.evaluate((key) => {
+    const raw = window.localStorage.getItem(key)
+    if (!raw) throw new Error('Expected persisted cart draft')
+    const draft = JSON.parse(raw) as {
+      giftDecisionDraft?: { expiresAtEpochSeconds?: number }
+    }
+    if (!draft.giftDecisionDraft) throw new Error('Expected persisted gift decision')
+    draft.giftDecisionDraft.expiresAtEpochSeconds = 1
+    window.localStorage.setItem(key, JSON.stringify(draft))
+  }, draftKey)
+  const requestsBeforeReload = api.getPreviewRequests().length
+  await page.reload()
+
+  await expect.poll(() => api.getPreviewRequests().length).toBeGreaterThan(requestsBeforeReload)
+  expect(api.getPreviewRequests().slice(requestsBeforeReload).every((request) => request.giftDecision == null)).toBe(true)
+  await expect(page.locator('.cart-gift-offer')).toContainText('Вам доступен подарок: Чай')
+  const persistedDraft = await page.evaluate((key) => {
+    const raw = window.localStorage.getItem(key)
+    return raw ? JSON.parse(raw) as Record<string, unknown> : null
+  }, draftKey)
+  expect(persistedDraft?.giftDecisionDraft).toBeUndefined()
+})
+
+test('account switch clears the prior user gift decision cache', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page, {
+    isolateFavoriteUsers: true,
+    cartPreviewResolver: buildScopedFixedGiftPreview
+  })
+  const firstUserDraftKey = `hookah_guest_cart_draft:user:123456789:${tableToken}`
+
+  await page.goto(
+    `?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`
+  )
+  await page.getByRole('button', { name: /Кальянное меню/ }).click()
+  await page.getByRole('button', { name: 'Добавить' }).click()
+  await page.getByRole('button', { name: 'Корзина (1)' }).click()
+  await page.getByRole('button', { name: 'Добавить подарок' }).click()
+  await expect(page.getByText('Подарок добавлен: Чай')).toBeVisible()
+
+  await page.evaluate(
+    ({ userId, initData }) => {
+      window.localStorage.setItem('__e2e_telegram_user_id', String(userId))
+      window.localStorage.setItem('__e2e_telegram_init_data', initData)
+    },
+    { userId: 987654321, initData: otherMockInitData }
+  )
+  await page.reload()
+
+  await expect(page.locator('.cart-item')).toHaveCount(0)
+  const priorUserDraft = await page.evaluate((key) => {
+    const raw = window.localStorage.getItem(key)
+    return raw ? JSON.parse(raw) as Record<string, unknown> : null
+  }, firstUserDraftKey)
+  expect(priorUserDraft?.giftDecisionDraft).toBeUndefined()
+})
+
+test('guest selects one allowlisted gift and duplicate submit sends one authoritative decision', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const rewardItems: GiftRewardItemFixture[] = [
+    { menuItemId: 210, name: 'Чай', originalUnitPriceMinor: 45000, currency: 'RUB' },
+    { menuItemId: 211, name: 'Лимонад', originalUnitPriceMinor: 55000, currency: 'RUB' }
+  ]
+  let lastPricing: CartPreviewFixture | null = null
+  const api = await mockGuestApi(page, {
+    cartPreviewResolver: (request) => {
+      const selectedItem =
+        request.giftDecision?.action === 'SELECT_ITEM'
+          ? rewardItems.find((item) => item.menuItemId === request.giftDecision?.selectedMenuItemId) ?? null
+          : null
+      lastPricing = {
+        grossTotalMinor: 150000 + (selectedItem?.originalUnitPriceMinor ?? 0),
+        promoDiscountTotalMinor: selectedItem?.originalUnitPriceMinor ?? 0,
+        loyaltyDiscountTotalMinor: 0,
+        finalPayableTotalMinor: 150000,
+        currency: 'RUB',
+        discounts: [],
+        items: [
+          {
+            itemId: 200,
+            name: 'Double Apple',
+            qty: 1,
+            priceMinor: 150000,
+            currency: 'RUB',
+            lineGrossMinor: 150000,
+            discountMinor: 0,
+            linePayableMinor: 150000,
+            isPromotionReward: false
+          },
+          ...(selectedItem
+            ? [
+                {
+                  itemId: selectedItem.menuItemId,
+                  name: selectedItem.name,
+                  qty: 1,
+                  priceMinor: selectedItem.originalUnitPriceMinor,
+                  currency: selectedItem.currency,
+                  lineGrossMinor: selectedItem.originalUnitPriceMinor,
+                  discountMinor: selectedItem.originalUnitPriceMinor,
+                  linePayableMinor: 0,
+                  isPromotionReward: true,
+                  promotionAdjustment: {
+                    promotionId: 702,
+                    promotionTitle: 'Напиток в подарок',
+                    ruleId: 802,
+                    ruleVersion: 4,
+                    ruleType: 'GIFT_WITH_ITEM',
+                    originalAmountMinor: selectedItem.originalUnitPriceMinor,
+                    discountMinor: selectedItem.originalUnitPriceMinor,
+                    finalAmountMinor: 0
+                  }
+                }
+              ]
+            : [])
+        ],
+        pricingFingerprint: `choice-gift-${selectedItem?.menuItemId ?? 'offer'}`,
+        cartFingerprint: 'choice-gift-cart-77-88-1',
+        decisionScopeToken: 'choice-gift-scope-77-88-1',
+        decisionScopeExpiresAtEpochSeconds: giftDecisionExpiresAtEpochSeconds,
+        giftOffer: {
+          status: selectedItem ? 'GIFT_SELECTED' : 'GIFT_CHOICE_REQUIRED',
+          promotionId: 702,
+          promotionTitle: 'Напиток в подарок',
+          ruleId: 802,
+          ruleVersion: 4,
+          triggerLineId: 1,
+          triggerMenuItemId: 200,
+          triggerItemName: 'Double Apple',
+          selectableRewardItems: rewardItems,
+          selectedRewardItem: selectedItem
+        }
+      }
+      return lastPricing
+    },
+    addBatchResponseResolver: () => {
+      if (!lastPricing) {
+        throw new Error('Expected a cart preview before submit')
+      }
+      return {
+        submitted: true,
+        orderId: 900,
+        batchId: 444,
+        pricing: lastPricing,
+        recalculated: false
+      }
+    }
+  })
+
+  await page.goto(
+    `?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`
+  )
+  await page.getByRole('button', { name: /Кальянное меню/ }).click()
+  await page.getByRole('button', { name: 'Добавить' }).click()
+  await page.getByRole('button', { name: 'Корзина (1)' }).click()
+
+  const giftCard = page.locator('.cart-gift-offer')
+  const lemonadeChoice = giftCard.getByRole('button', { name: /Лимонад/ })
+  await lemonadeChoice.click()
+  await expect(lemonadeChoice).toHaveAttribute('aria-pressed', 'true')
+  await giftCard.getByRole('button', { name: 'Добавить выбранный подарок' }).click()
+  await expect(giftCard).toContainText('Подарок добавлен: Лимонад')
+  await page.getByRole('button', { name: 'Отправить', exact: true }).dblclick()
+  await expect.poll(() => api.getAddBatchRequests()).toHaveLength(1)
+  expect(api.getAddBatchRequests()[0].giftDecision).toEqual({
+    action: 'SELECT_ITEM',
+    selectedMenuItemId: 211,
+    decisionScopeToken: 'choice-gift-scope-77-88-1'
+  })
+})
+
+test('guest can submit an ordinary order while the gift is unavailable', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const unavailablePreview: CartPreviewFixture = {
+    grossTotalMinor: 150000,
+    promoDiscountTotalMinor: 0,
+    loyaltyDiscountTotalMinor: 0,
+    finalPayableTotalMinor: 150000,
+    currency: 'RUB',
+    discounts: [],
+    items: [
+      {
+        itemId: 200,
+        name: 'Double Apple',
+        qty: 1,
+        priceMinor: 150000,
+        currency: 'RUB',
+        lineGrossMinor: 150000,
+        discountMinor: 0,
+        linePayableMinor: 150000,
+        isPromotionReward: false
+      }
+    ],
+    pricingFingerprint: 'gift-unavailable',
+    cartFingerprint: 'gift-unavailable-cart',
+    giftOffer: {
+      status: 'GIFT_UNAVAILABLE',
+      promotionId: 703,
+      promotionTitle: 'Подарок к кальяну',
+      ruleId: 803,
+      ruleVersion: 1,
+      triggerMenuItemId: 200,
+      triggerItemName: 'Double Apple',
+      selectableRewardItems: [],
+      unavailableReason: 'NO_AVAILABLE_REWARD_ITEMS'
+    }
+  }
+  const api = await mockGuestApi(page, {
+    cartPreview: unavailablePreview,
+    addBatchResponse: {
+      submitted: true,
+      orderId: 900,
+      batchId: 444,
+      pricing: unavailablePreview,
+      recalculated: false
+    }
+  })
+
+  await page.goto(
+    `?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`
+  )
+  await page.getByRole('button', { name: /Кальянное меню/ }).click()
+  await page.getByRole('button', { name: 'Добавить' }).click()
+  await page.getByRole('button', { name: 'Корзина (1)' }).click()
+
+  await expect(page.getByText('Подарок по акции сейчас недоступен.')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Отправить', exact: true })).toBeEnabled()
+  await page.getByRole('button', { name: 'Отправить', exact: true }).click()
+  await expect.poll(() => api.getAddBatchRequests()).toHaveLength(1)
+  expect(api.getAddBatchRequests()[0].giftDecision ?? null).toBeNull()
+})
+
+test('submitted false keeps the cart, clears a stale gift decision and allows an ordinary retry', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const rewardItem: GiftRewardItemFixture = {
+    menuItemId: 210,
+    name: 'Чай',
+    originalUnitPriceMinor: 45000,
+    currency: 'RUB'
+  }
+  let rewardUnavailable = false
+  let submitCount = 0
+  const buildPricing = (decision?: GiftDecisionFixture | null): CartPreviewFixture => {
+    const selected = !rewardUnavailable && decision?.action === 'ACCEPT_FIXED'
+    return {
+      grossTotalMinor: 150000 + (selected ? rewardItem.originalUnitPriceMinor : 0),
+      promoDiscountTotalMinor: selected ? rewardItem.originalUnitPriceMinor : 0,
+      loyaltyDiscountTotalMinor: 0,
+      finalPayableTotalMinor: 150000,
+      currency: 'RUB',
+      discounts: [],
+      items: [
+        {
+          itemId: 200,
+          name: 'Double Apple',
+          qty: 1,
+          priceMinor: 150000,
+          currency: 'RUB',
+          lineGrossMinor: 150000,
+          discountMinor: 0,
+          linePayableMinor: 150000,
+          isPromotionReward: false
+        }
+      ],
+      pricingFingerprint: rewardUnavailable ? 'fixed-stale-unavailable' : `fixed-stale-${selected ? 'selected' : 'offer'}`,
+      cartFingerprint: 'fixed-stale-cart-77-88-1',
+      decisionScopeToken: 'fixed-stale-scope-77-88-1',
+      decisionScopeExpiresAtEpochSeconds: giftDecisionExpiresAtEpochSeconds,
+      giftDecisionStale: rewardUnavailable && decision != null,
+      giftDecisionMessage:
+        rewardUnavailable && decision != null
+          ? 'Корзина изменилась. Проверьте подарок ещё раз.'
+          : null,
+      giftOffer: {
+        status: rewardUnavailable ? 'GIFT_UNAVAILABLE' : selected ? 'GIFT_SELECTED' : 'FIXED_GIFT_AVAILABLE',
+        promotionId: 704,
+        promotionTitle: 'Чай к кальяну',
+        ruleId: 804,
+        ruleVersion: 2,
+        triggerMenuItemId: 200,
+        triggerItemName: 'Double Apple',
+        fixedRewardItem: rewardItem,
+        selectableRewardItems: [],
+        selectedRewardItem: selected ? rewardItem : null,
+        unavailableReason: rewardUnavailable ? 'REWARD_UNAVAILABLE' : null
+      }
+    }
+  }
+  const api = await mockGuestApi(page, {
+    cartPreviewResolver: (request) => buildPricing(request.giftDecision),
+    addBatchResponseResolver: () => {
+      submitCount += 1
+      if (submitCount === 1) {
+        rewardUnavailable = true
+        return {
+          submitted: false,
+          pricing: buildPricing(null),
+          recalculated: true
+        }
+      }
+      return {
+        submitted: true,
+        orderId: 900,
+        batchId: 444,
+        pricing: buildPricing(null),
+        recalculated: false
+      }
+    }
+  })
+
+  await page.goto(
+    `?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`
+  )
+  await page.getByRole('button', { name: /Кальянное меню/ }).click()
+  await page.getByRole('button', { name: 'Добавить' }).click()
+  await page.getByRole('button', { name: 'Корзина (1)' }).click()
+  await page.getByRole('button', { name: 'Добавить подарок' }).click()
+  await expect(page.getByText('Подарок добавлен: Чай')).toBeVisible()
+
+  await page.getByRole('button', { name: 'Отправить', exact: true }).click()
+  await expect(page.getByText('Корзина изменилась. Проверьте подарок ещё раз.')).toBeVisible()
+  await expect(page.locator('.cart-item')).toContainText('Double Apple')
+  await expect(page.getByText('Подарок по акции сейчас недоступен.')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Отправить', exact: true })).toBeEnabled()
+  expect(api.getAddBatchRequests()[0].giftDecision?.action).toBe('ACCEPT_FIXED')
+
+  await page.getByRole('button', { name: 'Отправить', exact: true }).click()
+  await expect.poll(() => api.getAddBatchRequests()).toHaveLength(2)
+  expect(api.getAddBatchRequests()[1].giftDecision ?? null).toBeNull()
+})
+
+test('persisted gift facts are visible in the active order and guest history', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page, {
+    activeOrder: {
+      batchStatus: 'ACCEPTED',
+      giftReward: {
+        itemId: 210,
+        name: 'Чай',
+        priceMinor: 45000,
+        currency: 'RUB'
+      }
+    },
+    visitHistory: {
+      items: [
+        {
+          visitId: 31,
+          venueId: 1,
+          venueName: 'Микс',
+          venueCity: 'Москва',
+          occurredAt: '2030-01-11T18:30:00Z',
+          serviceDate: '2030-01-11',
+          source: 'order_closed',
+          totalMinor: 150000,
+          currency: 'RUB',
+          hasBooking: false,
+          orderLabels: ['№77']
+        }
+      ],
+      details: {
+        31: {
+          visitId: 31,
+          venueId: 1,
+          venueName: 'Микс',
+          venueCity: 'Москва',
+          occurredAt: '2030-01-11T18:30:00Z',
+          serviceDate: '2030-01-11',
+          source: 'order_closed',
+          booking: null,
+          orders: [
+            {
+              orderId: 931,
+              displayNumber: 77,
+              displayDate: '2030-01-11',
+              totalMinor: 150000,
+              currency: 'RUB',
+              promotionDiscounts: [
+                {
+                  label: 'Чай к кальяну',
+                  discountMinor: 45000,
+                  currency: 'RUB',
+                  originalAmountMinor: 45000,
+                  finalAmountMinor: 0
+                }
+              ],
+              items: [
+                {
+                  itemId: 200,
+                  itemName: 'Double Apple',
+                  qty: 1,
+                  priceMinor: 150000,
+                  currency: 'RUB',
+                  totalMinor: 150000,
+                  promoDiscountMinor: 0,
+                  isPromotionReward: false
+                },
+                {
+                  itemId: 210,
+                  itemName: 'Чай',
+                  qty: 1,
+                  priceMinor: 45000,
+                  currency: 'RUB',
+                  totalMinor: 0,
+                  promoDiscountMinor: 45000,
+                  isPromotionReward: true
+                }
+              ]
+            }
+          ],
+          totalMinor: 150000,
+          currency: 'RUB',
+          feedback: {
+            eligible: false,
+            submitted: false,
+            rating: null,
+            tags: [],
+            comment: null
+          }
+        }
+      }
+    }
+  })
+
+  await page.goto(
+    `?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`
+  )
+  await page.getByRole('button', { name: 'Мой заказ', exact: true }).click()
+  const activeGiftLine = page.locator('.order-item-promotion-reward').filter({ hasText: 'Чай' })
+  await expect(activeGiftLine).toContainText('Подарок по акции')
+  await expect(activeGiftLine).toContainText(/450,00\s*₽/)
+  await expect(activeGiftLine).toContainText(/акция 100% −450,00\s*₽/)
+  await expect(activeGiftLine).toContainText(/к оплате 0,00\s*₽/)
+
+  await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Профиль' }).click()
+  await page.getByRole('button', { name: '🕘 История' }).click()
+  await page.getByRole('button', { name: 'Подробнее' }).click()
+  const historyGiftLine = page.getByText(/Подарок по акции · Чай/)
+  await expect(historyGiftLine).toContainText(/обычная стоимость 450,00\s*₽/)
+  await expect(historyGiftLine).toContainText(/акция −450,00\s*₽/)
+  await expect(historyGiftLine).toContainText(/итого 0,00\s*₽/)
+})
+
+test('coupled gift trigger cancel and exclude stay out of the active bill and remain explained in history', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page, {
+    activeOrder: {
+      batchStatus: 'ACCEPTED'
+    },
+    visitHistory: {
+      items: [
+        {
+          visitId: 32,
+          venueId: 1,
+          venueName: 'Микс',
+          venueCity: 'Москва',
+          occurredAt: '2030-01-12T18:30:00Z',
+          serviceDate: '2030-01-12',
+          source: 'order_closed',
+          totalMinor: 0,
+          currency: 'RUB',
+          hasBooking: false,
+          orderLabels: ['№71', '№72']
+        }
+      ],
+      details: {
+        32: {
+          visitId: 32,
+          venueId: 1,
+          venueName: 'Микс',
+          venueCity: 'Москва',
+          occurredAt: '2030-01-12T18:30:00Z',
+          serviceDate: '2030-01-12',
+          source: 'order_closed',
+          booking: null,
+          orders: [
+            {
+              orderId: 932,
+              displayNumber: 71,
+              displayDate: '2030-01-12',
+              totalMinor: 0,
+              currency: 'RUB',
+              promotionDiscounts: [
+                {
+                  label: 'Чай к кальяну — отмена',
+                  discountMinor: 45000,
+                  currency: 'RUB',
+                  originalAmountMinor: 45000,
+                  finalAmountMinor: 0,
+                  isActive: false
+                }
+              ],
+              items: [
+                {
+                  itemId: 220,
+                  itemName: 'Кальян отменённый',
+                  qty: 1,
+                  priceMinor: 150000,
+                  currency: 'RUB',
+                  totalMinor: 0,
+                  promoDiscountMinor: 0,
+                  isPromotionReward: false,
+                  isExcluded: false,
+                  itemStatus: 'CANCELED',
+                  canceledReasonText: 'Позиция недоступна.',
+                  promotionLinkRole: 'TRIGGER',
+                  promotionLabel: 'Чай к кальяну — отмена'
+                },
+                {
+                  itemId: 221,
+                  itemName: 'Чай отменённый',
+                  qty: 1,
+                  priceMinor: 45000,
+                  currency: 'RUB',
+                  totalMinor: 0,
+                  promoDiscountMinor: 45000,
+                  isPromotionReward: true,
+                  isExcluded: false,
+                  itemStatus: 'CANCELED',
+                  canceledReasonText: 'Связанный подарок отменён вместе с условием акции.',
+                  promotionLinkRole: 'REWARD',
+                  promotionLabel: 'Чай к кальяну — отмена'
+                }
+              ]
+            },
+            {
+              orderId: 933,
+              displayNumber: 72,
+              displayDate: '2030-01-12',
+              totalMinor: 0,
+              currency: 'RUB',
+              promotionDiscounts: [
+                {
+                  label: 'Лимонад к кальяну — исключение',
+                  discountMinor: 30000,
+                  currency: 'RUB',
+                  originalAmountMinor: 30000,
+                  finalAmountMinor: 0,
+                  isActive: false
+                }
+              ],
+              items: [
+                {
+                  itemId: 222,
+                  itemName: 'Кальян исключённый',
+                  qty: 1,
+                  priceMinor: 140000,
+                  currency: 'RUB',
+                  totalMinor: 0,
+                  promoDiscountMinor: 0,
+                  isPromotionReward: false,
+                  isExcluded: true,
+                  excludedReasonText: 'Исключено заведением.',
+                  itemStatus: 'ACTIVE',
+                  promotionLinkRole: 'TRIGGER',
+                  promotionLabel: 'Лимонад к кальяну — исключение'
+                },
+                {
+                  itemId: 223,
+                  itemName: 'Лимонад исключённый',
+                  qty: 1,
+                  priceMinor: 30000,
+                  currency: 'RUB',
+                  totalMinor: 0,
+                  promoDiscountMinor: 30000,
+                  isPromotionReward: true,
+                  isExcluded: true,
+                  excludedReasonText: 'Связанный подарок исключён вместе с условием акции.',
+                  itemStatus: 'ACTIVE',
+                  promotionLinkRole: 'REWARD',
+                  promotionLabel: 'Лимонад к кальяну — исключение'
+                }
+              ]
+            }
+          ],
+          totalMinor: 0,
+          currency: 'RUB',
+          feedback: {
+            eligible: false,
+            submitted: false,
+            rating: null,
+            tags: [],
+            comment: null
+          }
+        }
+      }
+    }
+  })
+
+  await page.goto(
+    `?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`
+  )
+  await page.getByRole('button', { name: 'Мой заказ', exact: true }).click()
+  const activeBill = page.locator('.order-screen')
+  await expect(activeBill.getByText('Double Apple', { exact: true })).toBeVisible()
+  await expect(activeBill.locator('.order-item-promotion-reward')).toHaveCount(0)
+  await expect(activeBill.getByText('Кальян отменённый', { exact: true })).toHaveCount(0)
+  await expect(activeBill.getByText('Чай отменённый', { exact: true })).toHaveCount(0)
+  await expect(activeBill.getByText('Кальян исключённый', { exact: true })).toHaveCount(0)
+  await expect(activeBill.getByText('Лимонад исключённый', { exact: true })).toHaveCount(0)
+  await expect(activeBill.locator('.venue-order-bill')).toContainText(/К оплате\s*1\s*500,00\s*₽/)
+
+  await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Профиль' }).click()
+  await page.getByRole('button', { name: '🕘 История' }).click()
+  await page.getByRole('button', { name: 'Подробнее' }).click()
+
+  const canceledOrder = page.locator('.card').filter({ hasText: 'Заказ №71' })
+  await expect(canceledOrder).toContainText('Кальян отменённый')
+  await expect(canceledOrder).toContainText('Условие акции «Чай к кальяну — отмена»')
+  await expect(canceledOrder).toContainText('Отменено: Позиция недоступна.')
+  await expect(canceledOrder).toContainText('Подарок по акции · Чай отменённый')
+  await expect(canceledOrder).toContainText('Отменено: Связанный подарок отменён вместе с условием акции.')
+  await expect(canceledOrder).toContainText(/Чай к кальяну — отмена: 450,00\s*₽ − 450,00\s*₽ = 0,00\s*₽ · больше не действует/)
+
+  const excludedOrder = page.locator('.card').filter({ hasText: 'Заказ №72' })
+  await expect(excludedOrder).toContainText('Кальян исключённый')
+  await expect(excludedOrder).toContainText('Условие акции «Лимонад к кальяну — исключение»')
+  await expect(excludedOrder).toContainText('Исключено из счёта: Исключено заведением.')
+  await expect(excludedOrder).toContainText('Подарок по акции · Лимонад исключённый')
+  await expect(excludedOrder).toContainText('Исключено из счёта: Связанный подарок исключён вместе с условием акции.')
+  await expect(excludedOrder).toContainText(/Лимонад к кальяну — исключение: 300,00\s*₽ − 300,00\s*₽ = 0,00\s*₽ · больше не действует/)
 })
 
 test('table context without active order hides pre-visit actions and extension entry', async ({ page }) => {
@@ -5645,6 +6751,24 @@ test('venue bill renders persisted happy hours amounts without recalculating the
   await expect(batch).toContainText('Скидки по заявке')
   await expect(batch).toContainText(/Счастливые часы.*−600,00\s*₽/)
   await expect(batch).toContainText(/Акции.*−600,00\s*₽.*к оплате.*600,00\s*₽/)
+})
+
+test('venue bill hides manual discount action for a trigger with an active linked gift', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockVenueShiftExtensionApi(page, {
+    role: 'OWNER',
+    activePromotionReward: true
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Заказы' }).click()
+  await page.getByRole('button', { name: 'Открыть' }).click()
+
+  const triggerRow = page.locator('.order-item').filter({ hasText: 'Double Apple' })
+  await expect(triggerRow).toContainText(
+    'На эту позицию уже действует акция. Ручную скидку применить нельзя.'
+  )
+  await expect(triggerRow.getByRole('button', { name: /^Скидка/ })).toHaveCount(0)
 })
 
 test('venue staff accepts and closes staff calls queue', async ({ page }) => {
@@ -7598,6 +8722,93 @@ test('venue owner configures happy hours windows and targets while invalid activ
   await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await page.getByRole('button', { name: 'Открыть карточку' }).click()
   await expect(page.locator('.guest-venue-promotions')).toHaveCount(0)
+})
+
+test('venue owner creates a fixed gift promotion and edits it to an allowlisted choice', async ({ page }) => {
+  const referenceInstant = '2030-01-10T12:00:00.000Z'
+  await page.clock.setFixedTime(referenceInstant)
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenuePromotionsApi(page, {
+    role: 'OWNER',
+    nowEpochMs: Date.parse(referenceInstant),
+    menuCategories: [
+      { id: 20, name: 'Кальяны' },
+      { id: 21, name: 'Напитки' }
+    ],
+    menuItems: [
+      { id: 200, name: 'Double Apple', categoryId: 20 },
+      { id: 210, name: 'Чай', categoryId: 21 },
+      { id: 211, name: 'Лимонад', categoryId: 21 }
+    ]
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Акции', exact: true }).click()
+  await page.getByRole('button', { name: 'Создать акцию' }).click()
+  const form = page.locator('.venue-promotion-form')
+  await form.getByLabel('Тип акции').selectOption('GIFT_WITH_ITEM')
+  await form.getByLabel('Название акции', { exact: true }).fill('Подарок к кальяну')
+  await form.getByLabel('Описание', { exact: true }).fill('Чай в подарок при заказе кальяна.')
+  await form.getByLabel(/^Условия/).fill('Один подарок на заказ.')
+  await form.getByLabel('Начало', { exact: true }).fill('2030-01-10T12:00')
+  await form.getByLabel('Окончание', { exact: true }).fill('2030-01-20T12:00')
+  await form.getByLabel('Категория или позиция').selectOption('20')
+  await form.getByLabel('Подарок', { exact: true }).selectOption('210')
+
+  const summary = form.locator('.venue-promotion-rule-summary')
+  await expect(summary).toContainText('При заказе: Категория «Кальяны»')
+  await expect(summary).toContainText('Подарок: Чай')
+  await expect(summary).toContainText('Максимум: 1 подарок на заказ')
+  await expect(form).toContainText(
+    'Гость сам выбирает или подтверждает подарок. Подарок автоматически в заказ не добавляется.'
+  )
+  await form.getByRole('button', { name: 'Сохранить черновик' }).click()
+  await expect(page.getByText('Черновик акции создан.')).toBeVisible()
+
+  const fixedPromotion = api.getPromotions().find((promotion) => promotion.title === 'Подарок к кальяну')
+  expect(fixedPromotion).toMatchObject({
+    status: 'DRAFT',
+    templateType: 'GIFT_WITH_ITEM',
+    rule: {
+      target: { type: 'MENU_CATEGORY', menuCategoryId: 20, label: 'Кальяны' },
+      discountPercent: null,
+      reward: {
+        mode: 'FIXED_ITEM',
+        fixedItem: { menuItemId: 210, name: 'Чай' },
+        allowlist: []
+      },
+      readyForActivation: true
+    }
+  })
+
+  const promotionCard = page.locator('.venue-promotion-card').filter({ hasText: 'Подарок к кальяну' })
+  await expect(promotionCard).toContainText('Подарок при покупке')
+  await expect(promotionCard).toContainText('Подарок: Чай')
+  await promotionCard.getByRole('button', { name: 'Редактировать' }).click()
+  await form.getByLabel('Тип подарка').selectOption('CHOICE_ITEMS')
+  await form.locator('.venue-promotion-reward-option').filter({ hasText: 'Чай' }).locator('input').check()
+  await form.locator('.venue-promotion-reward-option').filter({ hasText: 'Лимонад' }).locator('input').check()
+  await expect(form.locator('.venue-promotion-rule-summary')).toContainText('Подарок: на выбор — Чай, Лимонад')
+  await form.getByRole('button', { name: 'Сохранить изменения' }).click()
+  await expect(page.getByText('Изменения сохранены.')).toBeVisible()
+
+  const selectablePromotion = api.getPromotions().find((promotion) => promotion.title === 'Подарок к кальяну')
+  expect(selectablePromotion).toMatchObject({
+    rule: {
+      version: 2,
+      reward: {
+        mode: 'CHOICE_ITEMS',
+        fixedItem: null,
+        allowlist: [
+          { menuItemId: 210, name: 'Чай' },
+          { menuItemId: 211, name: 'Лимонад' }
+        ]
+      }
+    }
+  })
+  await expect(page.locator('.venue-promotion-card').filter({ hasText: 'Подарок к кальяну' })).toContainText(
+    'Подарок: на выбор — Чай, Лимонад'
+  )
 })
 
 test('venue owner sees feedback section and staff does not', async ({ page }) => {

@@ -543,6 +543,127 @@ class VenuePromotionRoutesTest {
         }
 
     @Test
+    fun `owner creates updates and activates gift promotion`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("venue-promotion-gift")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venueId = seedVenueMembership(jdbcUrl, OWNER_ID, "OWNER")
+            val triggerCategoryId = insertMenuCategory(jdbcUrl, venueId, "Кальяны")
+            val triggerItemId =
+                insertMenuItem(jdbcUrl, venueId, triggerCategoryId, "Кальян классический")
+            val rewardCategoryId = insertMenuCategory(jdbcUrl, venueId, "Напитки")
+            val teaId = insertMenuItem(jdbcUrl, venueId, rewardCategoryId, "Чай")
+            val lemonadeId = insertMenuItem(jdbcUrl, venueId, rewardCategoryId, "Лимонад")
+            val token = issueToken(config, OWNER_ID)
+
+            val createResponse =
+                client.post("/api/venue/$venueId/promotions") {
+                    authenticated(token)
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        giftBody(
+                            title = "Чай в подарок",
+                            menuItemId = triggerItemId,
+                            fixedMenuItemId = teaId,
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, createResponse.status)
+            val created =
+                json.decodeFromString(
+                    VenuePromotionResponse.serializer(),
+                    createResponse.bodyAsText(),
+                ).promotion
+            assertEquals("DRAFT", created.status)
+            assertEquals("GIFT_WITH_ITEM", created.templateType)
+            val createdRule = assertNotNull(created.rule)
+            assertEquals(1, createdRule.version)
+            assertEquals("MENU_ITEM", createdRule.target?.type)
+            assertEquals(triggerItemId, createdRule.target?.menuItemId)
+            assertNull(createdRule.discountPercent)
+            assertEquals("FIXED_ITEM", createdRule.reward?.mode)
+            assertEquals(teaId, createdRule.reward?.fixedItem?.menuItemId)
+            assertEquals("Чай", createdRule.reward?.fixedItem?.name)
+            assertEquals(1, createdRule.reward?.maxRewardsPerBatch)
+            assertTrue(createdRule.readyForActivation, createdRule.validationIssues.joinToString())
+            val createdSummary = assertNotNull(createdRule.summary)
+            assertEquals("Пн, Пт, 12:00–18:00", createdSummary.schedule)
+            assertTrue(createdSummary.trigger.contains("Кальян классический"))
+            assertTrue(createdSummary.reward.contains("Чай"))
+            assertEquals("Максимум: 1 подарок на заказ", createdSummary.maximum)
+            assertTrue(createdSummary.explanation.contains("автоматически"))
+
+            val updateResponse =
+                client.put("/api/venue/$venueId/promotions/${created.id}") {
+                    authenticated(token)
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        giftBody(
+                            title = "Напиток в подарок",
+                            menuCategoryId = triggerCategoryId,
+                            allowlistMenuItemIds = listOf(teaId, lemonadeId),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, updateResponse.status)
+            val updated =
+                json.decodeFromString(
+                    VenuePromotionResponse.serializer(),
+                    updateResponse.bodyAsText(),
+                ).promotion
+            val updatedRule = assertNotNull(updated.rule)
+            assertEquals(2, updatedRule.version)
+            assertEquals("MENU_CATEGORY", updatedRule.target?.type)
+            assertEquals(triggerCategoryId, updatedRule.target?.menuCategoryId)
+            assertEquals("CHOICE_ITEMS", updatedRule.reward?.mode)
+            assertNull(updatedRule.reward?.fixedItem)
+            assertEquals(
+                listOf(teaId, lemonadeId),
+                updatedRule.reward?.allowlist?.map { it.menuItemId },
+            )
+            assertTrue(assertNotNull(updatedRule.summary).reward.contains("на выбор"))
+
+            val activateResponse =
+                client.post("/api/venue/$venueId/promotions/${created.id}/status") {
+                    authenticated(token)
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"status":"ACTIVE"}""")
+                }
+            assertEquals(HttpStatusCode.OK, activateResponse.status)
+            val activated =
+                json.decodeFromString(
+                    VenuePromotionResponse.serializer(),
+                    activateResponse.bodyAsText(),
+                ).promotion
+            assertEquals("ACTIVE", activated.status)
+            assertTrue(assertNotNull(activated.rule).readyForActivation)
+
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                connection.prepareStatement(
+                    """
+                    SELECT r.status, prr.reward_mode, prr.reward_qty, prr.max_rewards_per_batch
+                    FROM promotion_rules r
+                    JOIN promotion_rule_rewards prr ON prr.rule_id = r.id
+                    WHERE r.promotion_id = ?
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setLong(1, created.id)
+                    statement.executeQuery().use { rs ->
+                        assertTrue(rs.next())
+                        assertEquals("ACTIVE", rs.getString("status"))
+                        assertEquals("CHOICE_ITEMS", rs.getString("reward_mode"))
+                        assertEquals(1, rs.getInt("reward_qty"))
+                        assertEquals(1, rs.getInt("max_rewards_per_batch"))
+                    }
+                }
+            }
+        }
+
+    @Test
     fun `incomplete happy hours promotion cannot activate and remains draft`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("venue-promotion-incomplete-happy-hours")
@@ -925,6 +1046,66 @@ class VenuePromotionRoutesTest {
                 "windows": $windows,
                 "target": $target,
                 "discountPercent": $discountPercent
+              }
+            }
+            """.trimIndent()
+    }
+
+    private fun giftBody(
+        title: String = "Подарок при покупке",
+        description: String = "Описание",
+        startsAt: String = "2030-05-10T18:00:00Z",
+        endsAt: String = "2030-05-10T22:00:00Z",
+        menuItemId: Long? = null,
+        menuCategoryId: Long? = null,
+        fixedMenuItemId: Long? = null,
+        allowlistMenuItemIds: List<Long> = emptyList(),
+        windows: String =
+            """
+            [
+              {"weekday":1,"startLocal":"12:00","endLocal":"18:00"},
+              {"weekday":5,"startLocal":"12:00","endLocal":"18:00"}
+            ]
+            """.trimIndent(),
+    ): String {
+        require((menuItemId == null) != (menuCategoryId == null))
+        require((fixedMenuItemId == null) != allowlistMenuItemIds.isEmpty())
+        val target =
+            if (menuItemId != null) {
+                """{"type":"MENU_ITEM","menuItemId":$menuItemId}"""
+            } else {
+                """{"type":"MENU_CATEGORY","menuCategoryId":$menuCategoryId}"""
+            }
+        val reward =
+            if (fixedMenuItemId != null) {
+                """
+                {
+                  "mode": "FIXED_ITEM",
+                  "fixedMenuItemId": $fixedMenuItemId,
+                  "allowlistMenuItemIds": []
+                }
+                """.trimIndent()
+            } else {
+                """
+                {
+                  "mode": "CHOICE_ITEMS",
+                  "fixedMenuItemId": null,
+                  "allowlistMenuItemIds": ${allowlistMenuItemIds.joinToString(prefix = "[", postfix = "]")}
+                }
+                """.trimIndent()
+            }
+        return """
+            {
+              "title": ${json.encodeToString(title)},
+              "description": ${json.encodeToString(description)},
+              "terms": "Только в указанные часы",
+              "startsAt": ${json.encodeToString(startsAt)},
+              "endsAt": ${json.encodeToString(endsAt)},
+              "templateType": "GIFT_WITH_ITEM",
+              "rule": {
+                "windows": $windows,
+                "target": $target,
+                "reward": $reward
               }
             }
             """.trimIndent()

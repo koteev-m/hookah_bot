@@ -149,7 +149,11 @@ class RepeatOrderResolver(
         val skipped = mutableListOf<RepeatOrderSkippedLine>()
         val rawEligible = mutableListOf<RepeatOrderEligibleLine>()
         order.items
-            .filterNot { item -> item.isPromotionReward }
+            .filter { item ->
+                !item.isExcluded &&
+                    item.itemStatus.equals("ACTIVE", ignoreCase = true) &&
+                    !item.isPromotionReward
+            }
             .forEach { historical ->
                 val currentItem = currentItemsById[historical.itemId]
                 if (currentItem == null) {

@@ -251,6 +251,16 @@ class GuestVisitRoutesTest {
             val sharedMember = 2003L
             val venueId = seedVenueAndUsers(jdbcUrl, guestOne, guestTwo, sharedMember)
             val fixture = seedClosedOrderVisitDetails(jdbcUrl, venueId, guestOne, guestTwo, sharedMember)
+            seedGiftPromotionForVisitItem(
+                jdbcUrl = jdbcUrl,
+                venueId = venueId,
+                userId = guestOne,
+                orderId = fixture.orderId,
+                batchId = fixture.guestOneBatchId,
+                batchItemId = fixture.guestOneBatchItemId,
+                menuItemId = fixture.ownedMenuItemId,
+                discountMinor = 1_250L,
+            )
             val guestOneToken = issueToken(config, guestOne)
 
             val detailResponse =
@@ -270,8 +280,65 @@ class GuestVisitRoutesTest {
             assertEquals(250L, selectedOption.getValue("priceDeltaMinor").jsonPrimitive.content.toLong())
             assertEquals("покрепче", item.getValue("preferenceNote").jsonPrimitive.content)
             assertEquals(1250L, item.getValue("priceMinor").jsonPrimitive.content.toLong())
-            assertEquals(1250L, order.getValue("totalMinor").jsonPrimitive.content.toLong())
-            assertEquals(0, promotionDiscounts.size)
+            assertEquals(1250L, item.getValue("promoDiscountMinor").jsonPrimitive.content.toLong())
+            assertTrue(item.getValue("isPromotionReward").jsonPrimitive.content.toBoolean())
+            assertEquals(0L, item.getValue("totalMinor").jsonPrimitive.content.toLong())
+            assertEquals(1, promotionDiscounts.size)
+            assertEquals(
+                "Подарок к заказу",
+                promotionDiscounts.single().jsonObject.getValue("label").jsonPrimitive.content,
+            )
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                connection.prepareStatement(
+                    """
+                    UPDATE order_batch_items
+                    SET item_status = 'CANCELED',
+                        canceled_reason_code = 'PROMOTION_TRIGGER_CANCELED',
+                        canceled_reason_text = 'Связанный подарок отменён вместе с условием акции.',
+                        canceled_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setLong(1, fixture.guestOneBatchItemId)
+                    assertEquals(1, statement.executeUpdate())
+                }
+            }
+            val canceledDetailResponse =
+                client.get("/api/guest/visits/${fixture.guestOneVisitId}") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $guestOneToken") }
+                }
+            assertEquals(HttpStatusCode.OK, canceledDetailResponse.status)
+            val canceledOrder =
+                json
+                    .parseToJsonElement(canceledDetailResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("visit")
+                    .jsonObject
+                    .getValue("orders")
+                    .jsonArray
+                    .single()
+                    .jsonObject
+            val canceledItem = canceledOrder.getValue("items").jsonArray.single().jsonObject
+            assertEquals("CANCELED", canceledItem.getValue("itemStatus").jsonPrimitive.content)
+            assertEquals("REWARD", canceledItem.getValue("promotionLinkRole").jsonPrimitive.content)
+            assertEquals("Подарок к заказу", canceledItem.getValue("promotionLabel").jsonPrimitive.content)
+            assertEquals(
+                "Связанный подарок отменён вместе с условием акции.",
+                canceledItem.getValue("canceledReasonText").jsonPrimitive.content,
+            )
+            assertEquals(0L, canceledItem.getValue("totalMinor").jsonPrimitive.content.toLong())
+            assertEquals(
+                false,
+                canceledOrder
+                    .getValue("promotionDiscounts")
+                    .jsonArray
+                    .single()
+                    .jsonObject
+                    .getValue("isActive")
+                    .jsonPrimitive
+                    .content
+                    .toBoolean(),
+            )
             assertEquals(false, body.contains("Foreign Hookah"))
             assertEquals(false, body.contains("Shared Hookah"))
 
@@ -774,8 +841,129 @@ class GuestVisitRoutesTest {
                         tableSessionId = tableSessionId,
                         orderId = orderId,
                     ),
+                orderId = orderId,
+                guestOneBatchId = guestOneBatch,
+                guestOneBatchItemId = guestOneBatchItem,
+                ownedMenuItemId = ownedItem,
             )
         }
+
+    private fun seedGiftPromotionForVisitItem(
+        jdbcUrl: String,
+        venueId: Long,
+        userId: Long,
+        orderId: Long,
+        batchId: Long,
+        batchItemId: Long,
+        menuItemId: Long,
+        discountMinor: Long,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            val ruleId =
+                connection.prepareStatement(
+                    """
+                    INSERT INTO promotion_rules (
+                        promotion_id,
+                        venue_id,
+                        rule_type,
+                        target_type,
+                        target_value,
+                        discount_percent,
+                        status,
+                        priority,
+                        created_by_user_id
+                    )
+                    VALUES (NULL, ?, 'GIFT_WITH_ITEM', 'CATEGORY_TYPE', 'HOOKAH', NULL, 'ACTIVE', 100, ?)
+                    """.trimIndent(),
+                    Statement.RETURN_GENERATED_KEYS,
+                ).use { statement ->
+                    statement.setLong(1, venueId)
+                    statement.setLong(2, userId)
+                    statement.executeUpdate()
+                    statement.generatedKeys.use { keys ->
+                        keys.next()
+                        keys.getLong(1)
+                    }
+                }
+            val applicationId =
+                connection.prepareStatement(
+                    """
+                    INSERT INTO order_promotion_applications (
+                        order_id,
+                        batch_id,
+                        venue_id,
+                        user_id,
+                        promotion_id,
+                        rule_id,
+                        title_snapshot,
+                        rule_type,
+                        target_type,
+                        target_value,
+                        discount_percent,
+                        discount_total_minor,
+                        currency,
+                        dedupe_key
+                    )
+                    VALUES (?, ?, ?, ?, NULL, ?, 'Подарок к заказу', 'GIFT_WITH_ITEM',
+                        'CATEGORY_TYPE', 'HOOKAH', NULL, ?, 'RUB', ?)
+                    """.trimIndent(),
+                    Statement.RETURN_GENERATED_KEYS,
+                ).use { statement ->
+                    statement.setLong(1, orderId)
+                    statement.setLong(2, batchId)
+                    statement.setLong(3, venueId)
+                    statement.setLong(4, userId)
+                    statement.setLong(5, ruleId)
+                    statement.setLong(6, discountMinor)
+                    statement.setString(7, "guest-visit-gift:$orderId:$batchItemId")
+                    statement.executeUpdate()
+                    statement.generatedKeys.use { keys ->
+                        keys.next()
+                        keys.getLong(1)
+                    }
+                }
+            connection.prepareStatement(
+                """
+                INSERT INTO order_batch_item_promotion_adjustments (
+                    application_id,
+                    order_batch_item_id,
+                    menu_item_id,
+                    discount_minor,
+                    discount_percent,
+                    original_price_minor,
+                    quantity,
+                    currency
+                )
+                VALUES (?, ?, ?, ?, 100, ?, 1, 'RUB')
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, applicationId)
+                statement.setLong(2, batchItemId)
+                statement.setLong(3, menuItemId)
+                statement.setLong(4, discountMinor)
+                statement.setLong(5, discountMinor)
+                statement.executeUpdate()
+            }
+            connection.prepareStatement(
+                """
+                INSERT INTO order_promotion_reward_items (
+                    application_id,
+                    trigger_order_batch_item_id,
+                    reward_order_batch_item_id,
+                    reward_menu_item_id,
+                    reward_qty,
+                    label_snapshot
+                )
+                VALUES (?, NULL, ?, ?, 1, 'Подарок к заказу')
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, applicationId)
+                statement.setLong(2, batchItemId)
+                statement.setLong(3, menuItemId)
+                statement.executeUpdate()
+            }
+        }
+    }
 
     private fun insertMenuItem(
         connection: java.sql.Connection,
@@ -1356,6 +1544,10 @@ class GuestVisitRoutesTest {
     private data class ClosedOrderVisitFixture(
         val guestOneVisitId: Long,
         val guestTwoVisitId: Long,
+        val orderId: Long,
+        val guestOneBatchId: Long,
+        val guestOneBatchItemId: Long,
+        val ownedMenuItemId: Long,
     )
 
     private fun issueToken(

@@ -2,15 +2,29 @@ import { clearSession, getAccessToken } from '../shared/api/auth'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
 import { guestAddBatch, guestCreateSharedTab, guestCreateTabInvite, guestGetTabs, guestJoinTab, guestPreviewCart } from '../shared/api/guestApi'
 import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
-import type { CartPreviewDto, CreateTabInviteResponse, GuestTabDto } from '../shared/api/guestDtos'
+import type {
+  CartPreviewDto,
+  CreateTabInviteResponse,
+  GiftDecisionAction,
+  GiftDecisionDto,
+  GiftOfferDto,
+  GiftRewardItemDto,
+  GuestTabDto
+} from '../shared/api/guestDtos'
 import {
   addToCart,
+  clearMismatchedCartGiftDecisionOwner,
+  clearExpiredCartGiftDecision,
   clearCart,
   getCartSnapshot,
+  reconcileCartGiftDecisionScope,
   removeCartLine,
   setCartCommentDraft,
+  setCartGiftDecision,
   setCartLineQty,
   subscribeCart,
+  type CartGiftDecisionContext,
+  type CartGiftDecisionScope,
   type CartLine
 } from '../shared/state/cartStore'
 import { getSelectedGuestTabId, setSelectedGuestTabId } from '../shared/state/guestTabSelection'
@@ -29,6 +43,7 @@ const MAX_ITEMS = 50
 const MAX_ITEM_QTY = 50
 const MAX_COMMENT_LENGTH = 500
 const MAX_TAB_TOKEN_LENGTH = 128
+const GIFT_DECISION_STALE_MESSAGE = 'Корзина изменилась. Проверьте подарок ещё раз.'
 
 type CartScreenOptions = {
   root: HTMLDivElement | null
@@ -290,6 +305,70 @@ function formatPromotionLabel(label: string | null | undefined) {
   return `Акция «${value}»`
 }
 
+function giftOfferKey(preview: CartPreviewDto, offer: GiftOfferDto | null | undefined): string {
+  if (!offer || offer.status === 'NO_GIFT') return 'NO_GIFT'
+  return [
+    offer.promotionId ?? 'none',
+    offer.ruleId ?? 'none',
+    offer.ruleVersion ?? 'none',
+    preview.cartFingerprint
+  ].join(':')
+}
+
+function giftDecisionKey(decision: GiftDecisionDto | null | undefined): Array<string | number | null> | null {
+  if (!decision) return null
+  return [decision.action, decision.selectedMenuItemId ?? null, decision.decisionScopeToken]
+}
+
+function giftDecisionResolvedByOffer(decision: GiftDecisionDto, offer: GiftOfferDto | null | undefined): boolean {
+  if (!offer) return false
+  if (decision.action === 'SKIP') return offer.status === 'GIFT_SKIPPED'
+  if (offer.status !== 'GIFT_SELECTED') return false
+  if (decision.action === 'ACCEPT_FIXED') {
+    return offer.selectedRewardItem?.menuItemId === offer.fixedRewardItem?.menuItemId
+  }
+  return offer.selectedRewardItem?.menuItemId === decision.selectedMenuItemId
+}
+
+function giftDecisionForPreview(
+  preview: CartPreviewDto,
+  action: GiftDecisionAction,
+  selectedMenuItemId?: number
+): GiftDecisionDto | null {
+  const decisionScopeToken = preview.decisionScopeToken?.trim()
+  const expiresAtEpochSeconds = preview.decisionScopeExpiresAtEpochSeconds
+  if (
+    !decisionScopeToken ||
+    expiresAtEpochSeconds == null ||
+    !Number.isSafeInteger(expiresAtEpochSeconds) ||
+    expiresAtEpochSeconds <= Math.floor(Date.now() / 1000)
+  ) {
+    return null
+  }
+  if (
+    action === 'SELECT_ITEM' &&
+    (selectedMenuItemId == null || !Number.isInteger(selectedMenuItemId) || selectedMenuItemId <= 0)
+  ) {
+    return null
+  }
+  return {
+    action,
+    decisionScopeToken,
+    ...(action === 'SELECT_ITEM' ? { selectedMenuItemId } : {})
+  }
+}
+
+function giftUnavailableCopy(_reason: string | null | undefined): string {
+  return 'Подарок по акции сейчас недоступен.'
+}
+
+function giftDecisionRequired(preview: CartPreviewDto | null): boolean {
+  return (
+    preview?.giftOffer?.status === 'FIXED_GIFT_AVAILABLE' ||
+    preview?.giftOffer?.status === 'GIFT_CHOICE_REQUIRED'
+  )
+}
+
 function compareCartRequestItems(
   left: { itemId: number; selectedOptionId?: number | null; preferenceNote?: string | null },
   right: { itemId: number; selectedOptionId?: number | null; preferenceNote?: string | null }
@@ -346,8 +425,12 @@ export function renderCartScreen(options: CartScreenOptions) {
   let previewFingerprint: string | null = null
   let previewData: CartPreviewDto | null = null
   let previewLoading = false
+  let previewFailed = false
   let previewMessage = ''
+  let pendingGiftOfferKey: string | null = null
+  let pendingGiftSelectionId: number | null = null
   let itemDisposables: Array<() => void> = []
+  let giftDisposables: Array<() => void> = []
   const disposables: Array<() => void> = []
 
   const parseJoinTokenFromLocation = () => {
@@ -448,8 +531,27 @@ export function renderCartScreen(options: CartScreenOptions) {
   const findPersonalTab = () => tabState.tabs.find((tab) => tab.type === 'PERSONAL' && tab.status === 'ACTIVE') ?? null
 
   const setSelectedTabId = (tabId: number | null) => {
+    const previousTabId = tabState.selectedTabId
     tabState.selectedTabId = tabId
     setSelectedGuestTabId(tableSnapshot.tableSessionId, tabId)
+    if (previousTabId != null && previousTabId !== tabId) {
+      setCartGiftDecision(null)
+      return
+    }
+    if (
+      previousTabId == null &&
+      tabId != null &&
+      currentTelegramUserId != null &&
+      tableSnapshot.venueId != null &&
+      tableSnapshot.tableSessionId != null
+    ) {
+      clearMismatchedCartGiftDecisionOwner({
+        userId: currentTelegramUserId,
+        venueId: tableSnapshot.venueId,
+        tableSessionId: tableSnapshot.tableSessionId,
+        tabId
+      })
+    }
   }
 
   const getSelectedTab = () =>
@@ -680,13 +782,56 @@ export function renderCartScreen(options: CartScreenOptions) {
       tableToken,
       tableSessionId,
       tabId,
+      comment: cartSnapshot.commentDraft.trim() || null,
       items: buildPreviewItems().map((item) => [
         item.itemId,
         item.selectedOptionId ?? null,
         item.preferenceNote ?? null,
         item.qty
-      ])
+      ]),
+      giftDecision: giftDecisionKey(cartSnapshot.giftDecision)
     })
+
+  const getGiftDecisionContext = (preview: CartPreviewDto): CartGiftDecisionContext | null => {
+    const venueId = tableSnapshot.venueId
+    const tableSessionId = tableSnapshot.tableSessionId
+    const tabId = getSelectedTab()?.id
+    const cartFingerprint = preview.cartFingerprint?.trim()
+    if (
+      currentTelegramUserId == null ||
+      currentTelegramUserId <= 0 ||
+      venueId == null ||
+      venueId <= 0 ||
+      tableSessionId == null ||
+      tableSessionId <= 0 ||
+      tabId == null ||
+      tabId <= 0 ||
+      !cartFingerprint
+    ) {
+      return null
+    }
+    return {
+      userId: currentTelegramUserId,
+      venueId,
+      tableSessionId,
+      tabId,
+      cartFingerprint
+    }
+  }
+
+  const getGiftDecisionScope = (preview: CartPreviewDto): CartGiftDecisionScope | null => {
+    const context = getGiftDecisionContext(preview)
+    const expiresAtEpochSeconds = preview.decisionScopeExpiresAtEpochSeconds
+    if (
+      !context ||
+      expiresAtEpochSeconds == null ||
+      !Number.isSafeInteger(expiresAtEpochSeconds) ||
+      expiresAtEpochSeconds <= Math.floor(Date.now() / 1000)
+    ) {
+      return null
+    }
+    return { ...context, expiresAtEpochSeconds }
+  }
 
   const resetCartPreview = (message = '') => {
     previewAbort?.abort()
@@ -698,22 +843,211 @@ export function renderCartScreen(options: CartScreenOptions) {
     previewFingerprint = null
     previewData = null
     previewLoading = false
+    previewFailed = false
     previewMessage = message
+    pendingGiftOfferKey = null
+    pendingGiftSelectionId = null
     renderCartPreview()
   }
 
+  const appendGiftReward = (container: HTMLElement, item: GiftRewardItemDto, prefix: string) => {
+    const summary = el('div', { className: 'cart-gift-reward' })
+    append(
+      summary,
+      el('strong', { text: `${prefix}: ${item.name}` }),
+      el('span', {
+        className: 'cart-gift-price',
+        text: `Обычная цена: ${formatMoney(item.originalUnitPriceMinor, item.currency)}`
+      })
+    )
+    container.appendChild(summary)
+  }
+
+  const applyGiftDecision = (decision: GiftDecisionDto | null) => {
+    if (previewLoading || isSubmitting) return
+    pendingGiftSelectionId = null
+    if (!decision) {
+      setCartGiftDecision(null)
+      return
+    }
+    const scope = previewData ? getGiftDecisionScope(previewData) : null
+    if (!scope) {
+      setCartGiftDecision(null)
+      setMessage(GIFT_DECISION_STALE_MESSAGE)
+      return
+    }
+    setCartGiftDecision(decision, scope)
+  }
+
+  const renderGiftOffer = (container: HTMLElement, preview: CartPreviewDto) => {
+    const offer = preview.giftOffer
+    if (!offer || offer.status === 'NO_GIFT') {
+      pendingGiftOfferKey = null
+      pendingGiftSelectionId = null
+      return
+    }
+    const currentOfferKey = giftOfferKey(preview, offer)
+    if (pendingGiftOfferKey !== currentOfferKey) {
+      pendingGiftOfferKey = currentOfferKey
+      pendingGiftSelectionId = null
+    }
+    const card = el('section', { className: 'cart-gift-offer' })
+    card.dataset.status = offer.status
+    card.appendChild(el('h4', { text: offer.promotionTitle?.trim() || 'Подарок при покупке' }))
+    if (offer.triggerItemName?.trim()) {
+      card.appendChild(
+        el('p', {
+          className: 'cart-gift-trigger',
+          text: `Условие выполнено: ${offer.triggerItemName.trim()}`
+        })
+      )
+    }
+    const actions = el('div', { className: 'cart-gift-actions' })
+    const skipButton = () => {
+      const button = el('button', {
+        className: 'button-secondary button-small',
+        text: 'Пропустить подарок'
+      }) as HTMLButtonElement
+      button.disabled = previewLoading || isSubmitting
+      const decision = giftDecisionForPreview(preview, 'SKIP')
+      if (!decision) {
+        button.disabled = true
+      } else {
+        giftDisposables.push(on(button, 'click', () => applyGiftDecision(decision)))
+      }
+      return button
+    }
+
+    if (offer.status === 'GIFT_UNAVAILABLE') {
+      card.appendChild(
+        el('p', {
+          className: 'cart-gift-unavailable',
+          text: giftUnavailableCopy(offer.unavailableReason)
+        })
+      )
+      container.appendChild(card)
+      return
+    }
+
+    if (offer.status === 'GIFT_SKIPPED') {
+      card.appendChild(el('p', { className: 'cart-gift-state', text: 'Вы пропустили подарок.' }))
+      const restoreButton = el('button', {
+        className: 'button-secondary button-small',
+        text: 'Вернуться к подарку'
+      }) as HTMLButtonElement
+      restoreButton.disabled = previewLoading || isSubmitting
+      giftDisposables.push(on(restoreButton, 'click', () => applyGiftDecision(null)))
+      actions.appendChild(restoreButton)
+      card.appendChild(actions)
+      container.appendChild(card)
+      return
+    }
+
+    if (offer.status === 'GIFT_SELECTED') {
+      const selectedReward = offer.selectedRewardItem ?? offer.fixedRewardItem
+      if (selectedReward) {
+        appendGiftReward(card, selectedReward, 'Подарок добавлен')
+      } else {
+        card.appendChild(el('p', { className: 'cart-gift-state', text: 'Подарок добавлен.' }))
+      }
+      actions.appendChild(skipButton())
+      card.appendChild(actions)
+      container.appendChild(card)
+      return
+    }
+
+    if (offer.status === 'FIXED_GIFT_AVAILABLE') {
+      const fixedReward = offer.fixedRewardItem
+      if (!fixedReward) {
+        card.appendChild(
+          el('p', {
+            className: 'cart-gift-unavailable',
+            text: giftUnavailableCopy(offer.unavailableReason)
+          })
+        )
+        container.appendChild(card)
+        return
+      }
+      appendGiftReward(card, fixedReward, 'Вам доступен подарок')
+      const acceptButton = el('button', {
+        className: 'button-small',
+        text: 'Добавить подарок'
+      }) as HTMLButtonElement
+      const decision = giftDecisionForPreview(preview, 'ACCEPT_FIXED')
+      acceptButton.disabled = previewLoading || isSubmitting || !decision
+      if (decision) {
+        giftDisposables.push(on(acceptButton, 'click', () => applyGiftDecision(decision)))
+      }
+      append(actions, acceptButton, skipButton())
+      card.appendChild(actions)
+      container.appendChild(card)
+      return
+    }
+
+    const rewardItems = offer.selectableRewardItems ?? []
+    if (!rewardItems.length) {
+      card.appendChild(
+        el('p', {
+          className: 'cart-gift-unavailable',
+          text: giftUnavailableCopy(offer.unavailableReason)
+        })
+      )
+      container.appendChild(card)
+      return
+    }
+    card.appendChild(el('p', { className: 'cart-gift-state', text: 'Выберите один подарок:' }))
+    const choices = el('div', { className: 'cart-gift-choices' })
+    rewardItems.forEach((item) => {
+      const selected = pendingGiftSelectionId === item.menuItemId
+      const button = el('button', {
+        className: selected ? 'cart-gift-choice is-selected' : 'cart-gift-choice'
+      }) as HTMLButtonElement
+      button.type = 'button'
+      button.setAttribute('aria-pressed', selected ? 'true' : 'false')
+      button.disabled = previewLoading || isSubmitting
+      append(
+        button,
+        el('strong', { text: item.name }),
+        el('span', { text: formatMoney(item.originalUnitPriceMinor, item.currency) })
+      )
+      giftDisposables.push(
+        on(button, 'click', () => {
+          pendingGiftSelectionId = item.menuItemId
+          renderCartPreview()
+        })
+      )
+      choices.appendChild(button)
+    })
+    const confirmButton = el('button', {
+      className: 'button-small',
+      text: 'Добавить выбранный подарок'
+    }) as HTMLButtonElement
+    confirmButton.disabled = previewLoading || isSubmitting || pendingGiftSelectionId == null
+    giftDisposables.push(
+      on(confirmButton, 'click', () => {
+        if (pendingGiftSelectionId == null) return
+        applyGiftDecision(giftDecisionForPreview(preview, 'SELECT_ITEM', pendingGiftSelectionId))
+      })
+    )
+    append(actions, confirmButton, skipButton())
+    append(card, choices, actions)
+    container.appendChild(card)
+  }
+
   const renderCartPreview = () => {
+    giftDisposables.splice(0).forEach((dispose) => dispose())
     const hasItems = cartSnapshot.items.size > 0
     refs.previewCard.hidden = !hasItems
     refs.previewContent.replaceChildren()
     if (!hasItems) {
       return
     }
-    if (previewLoading) {
+    if (previewLoading || previewTimer !== null) {
       refs.previewContent.appendChild(el('p', { className: 'cart-summary', text: 'Считаем итог…' }))
       return
     }
     if (previewData) {
+      renderGiftOffer(refs.previewContent, previewData)
       const promoDiscounts = previewData.discounts.filter((discount) => !isLoyaltyDiscount(discount.ruleType, discount.label))
       const loyaltyDiscounts = previewData.discounts.filter((discount) => isLoyaltyDiscount(discount.ruleType, discount.label))
       if (promoDiscounts.length || loyaltyDiscounts.length) {
@@ -734,38 +1068,46 @@ export function renderCartScreen(options: CartScreenOptions) {
         })
       }
       const promotedItems = previewData.items.filter(
-        (item) => item.promotionAdjustment != null && item.promotionAdjustment.discountMinor > 0
+        (item) => item.isPromotionReward || (item.promotionAdjustment != null && item.promotionAdjustment.discountMinor > 0)
       )
       if (promotedItems.length) {
         const lineBreakdown = el('section', { className: 'cart-preview-lines' })
-        lineBreakdown.appendChild(el('h4', { text: 'Скидка по позициям' }))
+        lineBreakdown.appendChild(
+          el('h4', {
+            text: promotedItems.some((item) => item.isPromotionReward) ? 'Скидки и подарки' : 'Скидка по позициям'
+          })
+        )
         promotedItems.forEach((item) => {
           const adjustment = item.promotionAdjustment
-          if (!adjustment) return
           const matchingDiscount = promoDiscounts.find(
             (discount) =>
-              (discount.promotionId != null && discount.promotionId === adjustment.promotionId) ||
-              (discount.ruleId != null && discount.ruleId === adjustment.ruleId)
+              (discount.promotionId != null && discount.promotionId === adjustment?.promotionId) ||
+              (discount.ruleId != null && discount.ruleId === adjustment?.ruleId)
           )
           const line = el('article', { className: 'cart-preview-line' })
+          if (item.isPromotionReward) {
+            line.classList.add('cart-preview-gift-line')
+          }
           const itemTitle = item.selectedOption?.name
             ? `${item.name} · ${item.selectedOption.name} × ${item.qty}`
             : `${item.name} × ${item.qty}`
-          line.appendChild(el('h5', { text: itemTitle }))
+          line.appendChild(el('h5', { text: item.isPromotionReward ? `Подарок · ${itemTitle}` : itemTitle }))
           appendPreviewRow(
             line,
             'Обычная стоимость',
-            formatMoney(adjustment.originalAmountMinor, item.currency)
+            formatMoney(adjustment?.originalAmountMinor ?? item.lineGrossMinor, item.currency)
           )
           appendPreviewRow(
             line,
-            formatPromotionLabel(adjustment.promotionTitle || matchingDiscount?.label),
-            formatDiscount(adjustment.discountMinor, item.currency)
+            item.isPromotionReward
+              ? `${formatPromotionLabel(adjustment?.promotionTitle || matchingDiscount?.label)} · скидка 100%`
+              : formatPromotionLabel(adjustment?.promotionTitle || matchingDiscount?.label),
+            formatDiscount(adjustment?.discountMinor ?? item.discountMinor, item.currency)
           )
           appendPreviewRow(
             line,
             'К оплате',
-            formatMoney(adjustment.finalAmountMinor, item.currency),
+            formatMoney(adjustment?.finalAmountMinor ?? item.linePayableMinor, item.currency),
             true
           )
           lineBreakdown.appendChild(line)
@@ -786,6 +1128,20 @@ export function renderCartScreen(options: CartScreenOptions) {
         text: previewMessage || 'Итог будет рассчитан при отправке заказа.'
       })
     )
+    if (previewFailed) {
+      const retryButton = el('button', {
+        className: 'button-secondary button-small',
+        text: 'Повторить расчёт'
+      }) as HTMLButtonElement
+      giftDisposables.push(
+        on(retryButton, 'click', () => {
+          previewFingerprint = null
+          previewFailed = false
+          updateSubmitState()
+        })
+      )
+      refs.previewContent.appendChild(retryButton)
+    }
   }
 
   const loadCartPreview = async (fingerprint: string, tableToken: string, tableSessionId: number, tabId: number) => {
@@ -793,6 +1149,7 @@ export function renderCartScreen(options: CartScreenOptions) {
     const controller = new AbortController()
     previewAbort = controller
     previewLoading = true
+    previewFailed = false
     previewMessage = ''
     renderCartPreview()
     const deps = buildApiDeps(isDebug)
@@ -802,7 +1159,9 @@ export function renderCartScreen(options: CartScreenOptions) {
         tableToken,
         tableSessionId,
         tabId,
-        items: buildPreviewItems()
+        giftDecision: cartSnapshot.giftDecision,
+        items: buildPreviewItems(),
+        comment: cartSnapshot.commentDraft.trim() || null
       },
       deps,
       controller.signal
@@ -822,17 +1181,51 @@ export function renderCartScreen(options: CartScreenOptions) {
         return
       }
       previewData = null
-      previewMessage = 'Итог будет рассчитан при отправке заказа.'
-      renderCartPreview()
+      previewFailed = true
+      previewMessage = 'Не удалось рассчитать корзину. Повторите попытку.'
+      updateSubmitState()
       return
     }
-    previewData = result.data.preview
+    const preview = result.data.preview
+    const decisionContext = getGiftDecisionContext(preview)
+    const hadActiveGiftDecision = cartSnapshot.giftDecision != null
+    const scopeResult = decisionContext
+      ? reconcileCartGiftDecisionScope(decisionContext)
+      : 'none'
+    if (scopeResult === 'restored') {
+      return
+    }
+    if (scopeResult === 'cleared') {
+      setMessage(GIFT_DECISION_STALE_MESSAGE)
+      if (hadActiveGiftDecision) {
+        return
+      }
+    }
+    if (preview.giftDecisionStale === true) {
+      setCartGiftDecision(null)
+      setMessage(preview.giftDecisionMessage?.trim() || GIFT_DECISION_STALE_MESSAGE)
+      return
+    }
+    if (
+      cartSnapshot.giftDecision &&
+      !giftDecisionResolvedByOffer(cartSnapshot.giftDecision, preview.giftOffer)
+    ) {
+      setCartGiftDecision(null)
+      setMessage(GIFT_DECISION_STALE_MESSAGE)
+      return
+    }
+    previewData = preview
     previewMessage = ''
-    renderCartPreview()
+    updateSubmitState()
   }
 
   const scheduleCartPreview = () => {
     if (disposed) return
+    const hadActiveGiftDecision = cartSnapshot.giftDecision != null
+    if (clearExpiredCartGiftDecision() && hadActiveGiftDecision) {
+      setMessage(GIFT_DECISION_STALE_MESSAGE)
+      return
+    }
     if (!cartSnapshot.items.size) {
       resetCartPreview()
       return
@@ -845,12 +1238,16 @@ export function renderCartScreen(options: CartScreenOptions) {
       return
     }
     const fingerprint = buildPreviewFingerprint(tableToken, tableSessionId, selectedTab.id)
-    if (fingerprint === previewFingerprint && (previewLoading || previewData)) {
+    if (
+      fingerprint === previewFingerprint &&
+      (previewLoading || previewTimer !== null || previewData != null || previewFailed)
+    ) {
       renderCartPreview()
       return
     }
     previewFingerprint = fingerprint
     previewData = null
+    previewFailed = false
     previewMessage = ''
     if (previewTimer !== null) {
       window.clearTimeout(previewTimer)
@@ -866,18 +1263,37 @@ export function renderCartScreen(options: CartScreenOptions) {
     const hasItems = cartSnapshot.items.size > 0
     const tableReady = isTableReady()
     const selectedTab = getSelectedTab()
+    scheduleCartPreview()
     const tableHint = tableReady ? null : resolveTableHint(tableSnapshot)
     refs.tableHint.textContent = tableHint ?? ''
     refs.tableHint.hidden = !tableHint
+    let previewDisabledReason: string | null = null
+    if (hasItems && tableReady && selectedTab) {
+      if (previewLoading || previewTimer !== null) {
+        previewDisabledReason = 'Дождитесь расчёта корзины.'
+      } else if (!previewData) {
+        previewDisabledReason = 'Повторите расчёт корзины перед отправкой.'
+      } else if (giftDecisionRequired(previewData)) {
+        previewDisabledReason = 'Добавьте подарок или выберите «Пропустить подарок».'
+      }
+    }
     const submitDisabledReason = !hasItems
       ? 'Добавьте позиции в корзину.'
-      : tableHint ?? (!selectedTab ? 'Выберите счёт (tab) для заказа.' : null)
+      : tableHint ?? (!selectedTab ? 'Выберите счёт (tab) для заказа.' : previewDisabledReason)
     refs.disabledReason.textContent = submitDisabledReason ?? ''
     refs.disabledReason.hidden = !submitDisabledReason
-    refs.sendButton.disabled = isSubmitting || isChatSending || !hasItems || !tableReady || !selectedTab
+    refs.sendButton.disabled =
+      isSubmitting ||
+      isChatSending ||
+      !hasItems ||
+      !tableReady ||
+      !selectedTab ||
+      previewData == null ||
+      previewLoading ||
+      previewTimer !== null ||
+      giftDecisionRequired(previewData)
     refs.chatButton.disabled = isSubmitting || isChatSending || !hasItems || !tableReady
     updateTabsUi()
-    scheduleCartPreview()
   }
 
   const renderItems = () => {
@@ -967,7 +1383,8 @@ export function renderCartScreen(options: CartScreenOptions) {
   }
 
   const validateBeforeSubmit =
-    (): | { ok: true; comment: string | null; tabId: number; tableSessionId: number }
+    (requireAuthoritativePreview = true):
+      | { ok: true; comment: string | null; tabId: number; tableSessionId: number }
       | { ok: false; reason: string } => {
     if (cartSnapshot.items.size === 0 || cartSnapshot.items.size > MAX_ITEMS) {
       return { ok: false, reason: 'Выберите от 1 до 50 позиций.' }
@@ -995,6 +1412,17 @@ export function renderCartScreen(options: CartScreenOptions) {
     if (!selectedTab) {
       return { ok: false, reason: 'Выберите счёт (tab) для заказа.' }
     }
+    if (requireAuthoritativePreview) {
+      if (previewLoading || previewTimer !== null) {
+        return { ok: false, reason: 'Дождитесь расчёта корзины.' }
+      }
+      if (!previewData) {
+        return { ok: false, reason: 'Повторите расчёт корзины перед отправкой.' }
+      }
+      if (giftDecisionRequired(previewData)) {
+        return { ok: false, reason: 'Добавьте подарок или выберите «Пропустить подарок».' }
+      }
+    }
     return { ok: true, comment: commentValue ? commentValue : null, tabId: selectedTab.id, tableSessionId }
   }
 
@@ -1013,14 +1441,16 @@ export function renderCartScreen(options: CartScreenOptions) {
     tableSessionId: number,
     tabId: number,
     comment: string | null,
-    items: Array<{ itemId: number; qty: number; selectedOptionId?: number | null; preferenceNote?: string | null }>
+    items: Array<{ itemId: number; qty: number; selectedOptionId?: number | null; preferenceNote?: string | null }>,
+    giftDecision: GiftDecisionDto | null
   ) =>
     JSON.stringify({
       tableToken,
       tableSessionId,
       tabId,
       comment,
-      items: items.map((item) => [item.itemId, item.selectedOptionId ?? null, item.preferenceNote ?? null, item.qty])
+      items: items.map((item) => [item.itemId, item.selectedOptionId ?? null, item.preferenceNote ?? null, item.qty]),
+      giftDecision: giftDecisionKey(giftDecision)
     })
 
   const generateIdempotencyKey = () =>
@@ -1065,12 +1495,14 @@ export function renderCartScreen(options: CartScreenOptions) {
     submitAbort = controller
     const deps = buildApiDeps(isDebug)
     const items = buildSubmitItems()
+    const giftDecision = cartSnapshot.giftDecision
     const fingerprint = buildSubmitFingerprint(
       tableToken,
       validation.tableSessionId,
       validation.tabId,
       validation.comment,
-      items
+      items,
+      giftDecision
     )
     const payload = {
       tableToken,
@@ -1078,6 +1510,7 @@ export function renderCartScreen(options: CartScreenOptions) {
       tabId: validation.tabId,
       idempotencyKey: resolveSubmitIdempotencyKey(fingerprint),
       previewFingerprint: previewData?.pricingFingerprint ?? null,
+      giftDecision,
       comment: validation.comment,
       items
     }
@@ -1109,6 +1542,30 @@ export function renderCartScreen(options: CartScreenOptions) {
       return
     }
     resetSubmitIdempotency()
+    const submitted =
+      result.data.submitted ??
+      (result.data.orderId != null && result.data.batchId != null)
+    if (!submitted) {
+      previewLoading = false
+      previewFailed = false
+      previewMessage = ''
+      if (
+        result.data.pricing.giftDecisionStale === true ||
+        (giftDecision && !giftDecisionResolvedByOffer(giftDecision, result.data.pricing.giftOffer))
+      ) {
+        setCartGiftDecision(null)
+      } else {
+        previewData = result.data.pricing
+        previewFingerprint = buildPreviewFingerprint(
+          tableToken,
+          validation.tableSessionId,
+          validation.tabId
+        )
+        updateSubmitState()
+      }
+      setMessage(result.data.pricing.giftDecisionMessage?.trim() || GIFT_DECISION_STALE_MESSAGE)
+      return
+    }
     const wasRecalculated = result.data.recalculated === true
     clearCart()
     refs.commentInput.value = ''
@@ -1123,7 +1580,7 @@ export function renderCartScreen(options: CartScreenOptions) {
     setMessage('')
     setChatMessage('')
     hideSubmitError()
-    const validation = validateBeforeSubmit()
+    const validation = validateBeforeSubmit(false)
     if (!validation.ok) {
       setChatMessage(validation.reason, 'error')
       return
@@ -1389,7 +1846,14 @@ export function renderCartScreen(options: CartScreenOptions) {
 
   const tableSubscription = subscribeTable((snapshot) => {
     const previousTableSessionId = tableSnapshot.tableSessionId
+    const previousVenueId = tableSnapshot.venueId
     tableSnapshot = snapshot
+    if (
+      (previousTableSessionId != null && snapshot.tableSessionId !== previousTableSessionId) ||
+      (previousVenueId != null && snapshot.venueId !== previousVenueId)
+    ) {
+      setCartGiftDecision(null)
+    }
     if (snapshot.tableSessionId !== previousTableSessionId) {
       tabActionAbort?.abort()
       tabActionAbort = null
@@ -1443,6 +1907,7 @@ export function renderCartScreen(options: CartScreenOptions) {
     cartSubscription()
     tableSubscription()
     itemDisposables.forEach((dispose) => dispose())
+    giftDisposables.forEach((dispose) => dispose())
     disposables.forEach((dispose) => dispose())
   }
 }

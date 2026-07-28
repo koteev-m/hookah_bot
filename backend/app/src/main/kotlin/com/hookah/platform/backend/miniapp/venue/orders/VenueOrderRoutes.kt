@@ -712,6 +712,8 @@ private fun OrderBatchItemDetail.toDto(batch: OrderBatchDetail): OrderBatchItemD
         lineGrossMinor = lineGrossMinor,
         manualDiscountMinor = if (activePayableItem) manualDiscountMinor() else 0,
         promoDiscountMinor = if (activePayableItem) promoDiscountMinor.coerceAtLeast(0L) else 0,
+        isPromotionReward = isPromotionReward,
+        hasActivePromotionReward = hasActivePromotionReward,
         linePayableMinor = if (activePayableItem) payableMinor() else 0,
         isExcluded = isExcluded,
         excludedReasonText = excludedReasonText,

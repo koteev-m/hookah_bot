@@ -6,12 +6,26 @@ import com.hookah.platform.backend.analytics.analyticsCorrelationPayload
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.miniapp.venue.menu.MenuSemanticType
+import com.hookah.platform.backend.promotions.GiftDecisionCartItem
+import com.hookah.platform.backend.promotions.GiftDecisionCartScope
+import com.hookah.platform.backend.promotions.GiftDecisionCommand
+import com.hookah.platform.backend.promotions.GiftDecisionScopeClaims
+import com.hookah.platform.backend.promotions.GiftDecisionScopeTokenService
+import com.hookah.platform.backend.promotions.InvalidGiftDecisionScopeException
+import com.hookah.platform.backend.promotions.PromotionGiftDecision
+import com.hookah.platform.backend.promotions.PromotionGiftOffer
+import com.hookah.platform.backend.promotions.PromotionGiftOfferStatus
+import com.hookah.platform.backend.promotions.PromotionGiftRewardItem
 import com.hookah.platform.backend.promotions.PromotionRuleCartItem
 import com.hookah.platform.backend.promotions.PromotionRuleEngine
 import com.hookah.platform.backend.promotions.PromotionRulePreviewGiftChoice
+import com.hookah.platform.backend.promotions.decisionOfferIdentityOrNull
+import com.hookah.platform.backend.promotions.matchesAuthoritativeScope
+import com.hookah.platform.backend.promotions.toPromotionGiftDecision
 import com.hookah.platform.backend.telegram.ActiveOrderSummary
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -34,6 +48,12 @@ data class OrderBatchItemInput(
     val selectedOptionId: Long? = null,
     val preferenceNote: String? = null,
 )
+
+class GiftDecisionRequiredException(
+    val offer: PromotionGiftOffer,
+) : RuntimeException("Gift decision is stale or incomplete")
+
+const val GIFT_DECISION_STALE_MESSAGE = "Корзина изменилась. Проверьте подарок ещё раз."
 
 data class OrderItemSelectedOptionDetails(
     val optionId: Long? = null,
@@ -131,6 +151,12 @@ data class GuestOrderCartPreview(
     val discounts: List<CreatedOrderPromotionDiscount>,
     val pricingFingerprint: String,
     val giftChoices: List<PromotionRulePreviewGiftChoice> = emptyList(),
+    val giftOffer: PromotionGiftOffer = PromotionGiftOffer(PromotionGiftOfferStatus.NO_GIFT),
+    val cartFingerprint: String = "",
+    val decisionScopeToken: String? = null,
+    val decisionScopeExpiresAtEpochSeconds: Long? = null,
+    val giftDecisionStale: Boolean = false,
+    val giftDecisionMessage: String? = null,
 )
 
 data class GuestOrderPromotionLineAdjustment(
@@ -202,12 +228,67 @@ private fun GuestOrderCartPreview.calculatePricingFingerprint(): String {
                 append(':')
                 append(item.promotionAdjustment?.ruleId)
             }
+            append("|g:")
+            append(giftOffer.status.name)
+            append(':')
+            append(giftOffer.promotionId)
+            append(':')
+            append(giftOffer.ruleId)
+            append(':')
+            append(giftOffer.ruleVersion)
+            append(':')
+            append(giftOffer.triggerLineId)
+            append(':')
+            append(giftOffer.triggerMenuItemId)
+            append(':')
+            append(giftOffer.selectedRewardItem?.menuItemId)
+            giftOffer.fixedRewardItem?.let { reward ->
+                append("|gf:")
+                append(reward.menuItemId)
+                append(':')
+                append(reward.originalUnitPriceMinor)
+                append(':')
+                append(reward.currency)
+            }
+            giftOffer.selectableRewardItems.forEach { reward ->
+                append("|gc:")
+                append(reward.menuItemId)
+                append(':')
+                append(reward.originalUnitPriceMinor)
+                append(':')
+                append(reward.currency)
+            }
         }
     return MessageDigest
         .getInstance("SHA-256")
         .digest(canonical.toByteArray(Charsets.UTF_8))
         .joinToString("") { byte -> "%02x".format(byte) }
 }
+
+private fun giftDecisionCartScope(
+    userId: Long,
+    venueId: Long,
+    tableSessionId: Long,
+    tabId: Long,
+    items: List<OrderBatchItemInput>,
+    comment: String?,
+): GiftDecisionCartScope =
+    GiftDecisionCartScope(
+        userId = userId,
+        venueId = venueId,
+        tableSessionId = tableSessionId,
+        tabId = tabId,
+        comment = comment,
+        items =
+            items.map { item ->
+                GiftDecisionCartItem(
+                    menuItemId = item.itemId,
+                    quantity = item.qty,
+                    selectedOptionIds = listOfNotNull(item.selectedOptionId),
+                    note = item.preferenceNote,
+                )
+            },
+    )
 
 data class UserActiveOrderSummary(
     val orderId: Long,
@@ -259,6 +340,7 @@ class OrdersRepository(
     private val venuePromotionRuleRepository: VenuePromotionRuleRepository? = null,
     private val loyaltyRepository: LoyaltyRepository? = null,
     private val clock: Clock = Clock.systemUTC(),
+    private val giftDecisionScopeTokenService: GiftDecisionScopeTokenService? = null,
 ) {
     suspend fun findActiveOrderId(tableSessionId: Long): Long? {
         val ds = dataSource ?: return null
@@ -934,8 +1016,51 @@ class OrdersRepository(
         venueZoneId: ZoneId = defaultVenueZoneId(),
         selectedGiftChoices: Map<Long, Long> = emptyMap(),
         skippedGiftRuleIds: Set<Long> = emptySet(),
+        giftDecision: PromotionGiftDecision? = null,
         expectedPreviewFingerprint: String? = null,
+        giftDecisionCommand: GiftDecisionCommand? = null,
     ): CreatedOrderBatch? {
+        if (
+            giftDecisionScopeTokenService != null &&
+            (
+                giftDecision != null ||
+                    selectedGiftChoices.isNotEmpty() ||
+                    skippedGiftRuleIds.isNotEmpty()
+            )
+        ) {
+            throw GiftDecisionRequiredException(PromotionGiftOffer(PromotionGiftOfferStatus.NO_GIFT))
+        }
+        val decisionScopeClaims =
+            giftDecisionScopeTokenService?.let { service ->
+                giftDecisionCommand?.let { command ->
+                    try {
+                        service.verify(
+                            token = command.decisionScopeToken,
+                            expectedScope =
+                                giftDecisionCartScope(
+                                    userId = userId,
+                                    venueId = venueId,
+                                    tableSessionId = tableSessionId,
+                                    tabId = tabId,
+                                    items = items,
+                                    comment = comment,
+                                ),
+                        )
+                    } catch (_: InvalidGiftDecisionScopeException) {
+                        throw GiftDecisionRequiredException(PromotionGiftOffer(PromotionGiftOfferStatus.NO_GIFT))
+                    }
+                }
+            }
+        val authoritativeGiftDecision =
+            if (giftDecisionScopeTokenService != null) {
+                if (decisionScopeClaims != null && giftDecisionCommand != null) {
+                    decisionScopeClaims.toPromotionGiftDecision(giftDecisionCommand)
+                } else {
+                    null
+                }
+            } else {
+                giftDecision
+            }
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
@@ -955,10 +1080,16 @@ class OrdersRepository(
                                 idempotencyKey = idempotencyKey,
                             )
                         if (existing != null) {
+                            existing.requireScope(tableId = tableId, tabId = tabId)
                             val orderDisplay = loadOrderDisplay(connection, existing.orderId)
                             val promotionDiscounts = loadPromotionDiscountsForBatch(connection, existing.batchId)
                             val createdItems = loadCreatedOrderBatchItems(connection, existing.batchId)
-                            val pricing = buildPersistedBatchPricing(createdItems, promotionDiscounts)
+                            val pricing =
+                                buildPersistedBatchPricing(
+                                    items = createdItems,
+                                    discounts = promotionDiscounts,
+                                    giftOffer = loadPersistedGiftOffer(connection, existing.batchId),
+                                )
                             connection.commit()
                             return@use CreatedOrderBatch(
                                 orderId = existing.orderId,
@@ -1031,6 +1162,9 @@ class OrdersRepository(
                                 venueZoneId = venueZoneId,
                                 selectedGiftChoices = selectedGiftChoices,
                                 skippedGiftRuleIds = skippedGiftRuleIds,
+                                giftDecision = authoritativeGiftDecision,
+                                giftDecisionCommand = giftDecisionCommand,
+                                giftDecisionScopeClaims = decisionScopeClaims,
                                 excludedBatchItemIds = setOfNotNull(loyaltyRedemption?.redeemedOrderBatchItemId),
                             )
                         val createdItems = loadCreatedOrderBatchItems(connection, batchId)
@@ -1068,7 +1202,12 @@ class OrdersRepository(
                         )
                         connection.commit()
                         val discounts = promotionResult.discounts + listOfNotNull(loyaltyRedemption?.discount)
-                        val pricing = buildPersistedBatchPricing(createdItems, discounts)
+                        val pricing =
+                            buildPersistedBatchPricing(
+                                items = createdItems,
+                                discounts = discounts,
+                                giftOffer = promotionResult.giftOffer,
+                            )
                         CreatedOrderBatch(
                             orderId = orderId,
                             batchId = batchId,
@@ -1093,10 +1232,16 @@ class OrdersRepository(
                                 userId = userId,
                                 idempotencyKey = idempotencyKey,
                             )?.let { existing ->
+                                existing.requireScope(tableId = tableId, tabId = tabId)
                                 val promotionDiscounts =
                                     loadPromotionDiscountsForBatch(connection, existing.batchId)
                                 val createdItems = loadCreatedOrderBatchItems(connection, existing.batchId)
-                                val pricing = buildPersistedBatchPricing(createdItems, promotionDiscounts)
+                                val pricing =
+                                    buildPersistedBatchPricing(
+                                        items = createdItems,
+                                        discounts = promotionDiscounts,
+                                        giftOffer = loadPersistedGiftOffer(connection, existing.batchId),
+                                    )
                                 return@use CreatedOrderBatch(
                                     orderId = existing.orderId,
                                     batchId = existing.batchId,
@@ -1504,7 +1649,14 @@ class OrdersRepository(
                    mi.price_minor,
                    mi.currency,
                    mi.category_id,
-                   COALESCE(mi.item_type, mc.category_type, 'OTHER') AS effective_type
+                   COALESCE(mi.item_type, mc.category_type, 'OTHER') AS effective_type,
+                   EXISTS (
+                       SELECT 1
+                       FROM menu_item_options mio
+                       WHERE mio.item_id = mi.id
+                         AND mio.venue_id = mi.venue_id
+                         AND mio.is_available = TRUE
+                   ) AS requires_option_selection
             FROM menu_items mi
             JOIN menu_categories mc ON mc.id = mi.category_id
             WHERE mi.venue_id = ?
@@ -1530,6 +1682,7 @@ class OrdersRepository(
                                 currency = rs.getString("currency")?.takeIf { it.isNotBlank() } ?: "RUB",
                                 menuCategoryId = rs.getLong("category_id"),
                                 effectiveType = MenuSemanticType.fromDb(rs.getString("effective_type")),
+                                requiresOptionSelection = rs.getBoolean("requires_option_selection"),
                             ),
                         )
                     }
@@ -1545,10 +1698,75 @@ class OrdersRepository(
         venueZoneId: ZoneId = defaultVenueZoneId(),
         selectedGiftChoices: Map<Long, Long> = emptyMap(),
         skippedGiftRuleIds: Set<Long> = emptySet(),
+        giftDecision: PromotionGiftDecision? = null,
+        tableSessionId: Long? = null,
+        tabId: Long? = null,
+        comment: String? = null,
+        giftDecisionCommand: GiftDecisionCommand? = null,
     ): GuestOrderCartPreview? {
         if (items.isEmpty()) {
             return null
         }
+        val legacyGiftDecisionRejected =
+            giftDecisionScopeTokenService != null &&
+                (
+                    giftDecision != null ||
+                        selectedGiftChoices.isNotEmpty() ||
+                        skippedGiftRuleIds.isNotEmpty()
+                )
+        val effectiveSelectedGiftChoices =
+            selectedGiftChoices.takeIf { giftDecisionScopeTokenService == null }.orEmpty()
+        val effectiveSkippedGiftRuleIds =
+            skippedGiftRuleIds.takeIf { giftDecisionScopeTokenService == null }.orEmpty()
+        val decisionCartScope =
+            if (
+                giftDecisionScopeTokenService != null &&
+                tableSessionId != null &&
+                tabId != null
+            ) {
+                giftDecisionCartScope(
+                    userId = userId,
+                    venueId = venueId,
+                    tableSessionId = tableSessionId,
+                    tabId = tabId,
+                    items = items,
+                    comment = comment,
+                )
+            } else {
+                null
+            }
+        var decisionScopeClaims: GiftDecisionScopeClaims? = null
+        var giftDecisionStale =
+            legacyGiftDecisionRejected ||
+                (
+                    giftDecisionScopeTokenService != null &&
+                        giftDecisionCommand != null &&
+                        decisionCartScope == null
+                )
+        if (
+            giftDecisionScopeTokenService != null &&
+            giftDecisionCommand != null &&
+            decisionCartScope != null
+        ) {
+            decisionScopeClaims =
+                try {
+                    giftDecisionScopeTokenService.verify(
+                        token = giftDecisionCommand.decisionScopeToken,
+                        expectedScope = decisionCartScope,
+                    )
+                } catch (_: InvalidGiftDecisionScopeException) {
+                    giftDecisionStale = true
+                    null
+                }
+        }
+        val verifiedGiftDecision =
+            if (giftDecisionScopeTokenService == null) {
+                giftDecision
+            } else if (decisionScopeClaims != null && giftDecisionCommand != null) {
+                decisionScopeClaims.toPromotionGiftDecision(giftDecisionCommand)
+            } else {
+                null
+            }
         val ds = dataSource ?: throw DatabaseUnavailableException()
         val itemIds = items.map { it.itemId }.toSet()
         val now = clock.instant()
@@ -1604,6 +1822,8 @@ class OrdersRepository(
                     currency = menuItem.currency,
                     effectiveType = menuItem.effectiveType,
                     menuCategoryId = menuItem.menuCategoryId,
+                    requiredOptionsSatisfied =
+                        !menuItem.requiresOptionSelection || selectedOption != null,
                 )
             }
         if (baseItems.size != items.size) {
@@ -1627,30 +1847,64 @@ class OrdersRepository(
                     },
             )
         val loyaltyLineIds = setOfNotNull(loyaltyPreview?.lineId)
-        val promotionPreview =
+        val promotionCartItems =
+            baseItems
+                .filterNot { item -> item.lineId in loyaltyLineIds }
+                .map { item ->
+                    PromotionRuleCartItem(
+                        lineId = item.lineId,
+                        menuItemId = item.itemId,
+                        itemName = item.itemName,
+                        qty = item.qty,
+                        priceMinor = item.priceMinor,
+                        currency = item.currency,
+                        effectiveType = item.effectiveType,
+                        menuCategoryId = item.menuCategoryId,
+                        requiredOptionsSatisfied = item.requiredOptionsSatisfied,
+                    )
+                }
+        val basePromotionPreview =
             PromotionRuleEngine.preview(
                 venueId = venueId,
                 now = now,
                 venueZoneId = venueZoneId,
-                cartItems =
-                    baseItems
-                        .filterNot { item -> item.lineId in loyaltyLineIds }
-                        .map { item ->
-                            PromotionRuleCartItem(
-                                lineId = item.lineId,
-                                menuItemId = item.itemId,
-                                itemName = item.itemName,
-                                qty = item.qty,
-                                priceMinor = item.priceMinor,
-                                currency = item.currency,
-                                effectiveType = item.effectiveType,
-                                menuCategoryId = item.menuCategoryId,
-                            )
-                        },
+                cartItems = promotionCartItems,
                 activeRules = inputs.activeRules,
-                selectedGiftChoices = selectedGiftChoices,
-                skippedGiftRuleIds = skippedGiftRuleIds,
+                selectedGiftChoices = effectiveSelectedGiftChoices,
+                skippedGiftRuleIds = effectiveSkippedGiftRuleIds,
+                giftDecision = null,
             )
+        val scopeMatchesCurrentOffer =
+            decisionScopeClaims == null ||
+                (
+                    giftDecisionCommand != null &&
+                        basePromotionPreview.giftOffer.matchesAuthoritativeScope(
+                            claims = decisionScopeClaims,
+                            command = giftDecisionCommand,
+                        )
+                )
+        if (decisionScopeClaims != null && !scopeMatchesCurrentOffer) {
+            giftDecisionStale = true
+        }
+        val promotionPreview =
+            if (verifiedGiftDecision != null && scopeMatchesCurrentOffer) {
+                PromotionRuleEngine.preview(
+                    venueId = venueId,
+                    now = now,
+                    venueZoneId = venueZoneId,
+                    cartItems = promotionCartItems,
+                    activeRules = inputs.activeRules,
+                    selectedGiftChoices = effectiveSelectedGiftChoices,
+                    skippedGiftRuleIds = effectiveSkippedGiftRuleIds,
+                    giftDecision = verifiedGiftDecision,
+                ).also { resolved ->
+                    if (!resolved.giftDecisionResolved) {
+                        giftDecisionStale = true
+                    }
+                }
+            } else {
+                basePromotionPreview
+            }
         val rulesById = inputs.activeRules.associateBy { it.id }
         val promoDiscounts =
             promotionPreview.adjustments
@@ -1685,7 +1939,7 @@ class OrdersRepository(
                     )
                 }
         val giftDiscounts =
-            promotionPreview.gifts.map { gift ->
+            promotionPreview.appliedGifts.map { gift ->
                 val rule = rulesById[gift.ruleId]
                 CreatedOrderPromotionDiscount(
                     label = gift.label.takeIf { it.isNotBlank() } ?: "${gift.rewardItemName} в подарок",
@@ -1695,6 +1949,8 @@ class OrdersRepository(
                     promotionId = rule?.promotionId,
                     ruleId = rule?.id,
                     ruleVersion = rule?.version,
+                    originalAmountMinor = gift.rewardPriceMinor * gift.rewardQty.toLong(),
+                    finalAmountMinor = 0L,
                 )
             }
         val loyaltyDiscount =
@@ -1756,8 +2012,9 @@ class OrdersRepository(
                         },
                 )
             } +
-                promotionPreview.gifts.map { gift ->
+                promotionPreview.appliedGifts.map { gift ->
                     val gross = gift.rewardPriceMinor * gift.rewardQty.toLong()
+                    val promotionRule = rulesById[gift.ruleId]
                     GuestOrderCartPreviewItem(
                         itemId = gift.rewardMenuItemId,
                         itemName = gift.rewardItemName,
@@ -1768,6 +2025,21 @@ class OrdersRepository(
                         discountMinor = gross,
                         linePayableMinor = 0L,
                         isPromotionReward = true,
+                        promotionAdjustment =
+                            promotionRule?.let { rule ->
+                                GuestOrderPromotionLineAdjustment(
+                                    promotionId = rule.promotionId,
+                                    promotionTitle =
+                                        rule.promotionTitle?.takeIf { it.isNotBlank() }
+                                            ?: "Подарок при покупке",
+                                    ruleId = rule.id,
+                                    ruleVersion = rule.version,
+                                    ruleType = rule.ruleType.dbValue,
+                                    originalAmountMinor = gross,
+                                    discountMinor = gross,
+                                    finalAmountMinor = 0L,
+                                )
+                            },
                     )
                 }
         val allDiscounts = promoDiscounts + giftDiscounts + listOfNotNull(loyaltyDiscount)
@@ -1786,13 +2058,47 @@ class OrdersRepository(
                 discounts = allDiscounts,
                 pricingFingerprint = "",
                 giftChoices = promotionPreview.giftChoices,
+                giftOffer = promotionPreview.giftOffer,
             )
-        return result.copy(pricingFingerprint = result.calculatePricingFingerprint())
+        val pricedResult = result.copy(pricingFingerprint = result.calculatePricingFingerprint())
+        if (giftDecisionScopeTokenService == null || decisionCartScope == null) {
+            return pricedResult
+        }
+        val resolvedExistingScope =
+            giftDecisionCommand != null &&
+                decisionScopeClaims != null &&
+                !giftDecisionStale &&
+                promotionPreview.giftDecisionResolved
+        if (resolvedExistingScope) {
+            return pricedResult.copy(
+                cartFingerprint = decisionScopeClaims.cartFingerprint,
+                decisionScopeToken = giftDecisionCommand.decisionScopeToken,
+                decisionScopeExpiresAtEpochSeconds = decisionScopeClaims.expiresAtEpochSeconds,
+            )
+        }
+        val offerIdentity = pricedResult.giftOffer.decisionOfferIdentityOrNull()
+        val issuedScope =
+            offerIdentity?.let { identity ->
+                giftDecisionScopeTokenService.issue(
+                    scope = decisionCartScope,
+                    offer = identity,
+                )
+            }
+        return pricedResult.copy(
+            cartFingerprint =
+                issuedScope?.cartFingerprint
+                    ?: giftDecisionScopeTokenService.cartFingerprint(decisionCartScope, offerIdentity),
+            decisionScopeToken = issuedScope?.token,
+            decisionScopeExpiresAtEpochSeconds = issuedScope?.expiresAtEpochSeconds,
+            giftDecisionStale = giftDecisionStale,
+            giftDecisionMessage = GIFT_DECISION_STALE_MESSAGE.takeIf { giftDecisionStale },
+        )
     }
 
     private fun buildPersistedBatchPricing(
         items: List<CreatedOrderBatchItem>,
         discounts: List<CreatedOrderPromotionDiscount>,
+        giftOffer: PromotionGiftOffer = PromotionGiftOffer(PromotionGiftOfferStatus.NO_GIFT),
     ): GuestOrderCartPreview {
         val promotionDiscounts =
             discounts.filterNot { discount ->
@@ -1827,7 +2133,13 @@ class OrdersRepository(
                         linePromotion?.ruleId?.let { ruleId ->
                             GuestOrderPromotionLineAdjustment(
                                 promotionId = linePromotion.promotionId,
-                                promotionTitle = linePromotion.label,
+                                promotionTitle =
+                                    if (item.isPromotionReward) {
+                                        giftOffer.promotionTitle?.takeIf { it.isNotBlank() }
+                                            ?: linePromotion.label
+                                    } else {
+                                        linePromotion.label
+                                    },
                                 ruleId = ruleId,
                                 ruleVersion = linePromotion.ruleVersion ?: 1,
                                 ruleType = linePromotion.ruleType ?: PromotionRuleType.HAPPY_HOURS_PERCENT.dbValue,
@@ -1854,6 +2166,7 @@ class OrdersRepository(
                         ?: "RUB",
                 discounts = discounts,
                 pricingFingerprint = "",
+                giftOffer = giftOffer,
             )
         return result.copy(pricingFingerprint = result.calculatePricingFingerprint())
     }
@@ -1869,14 +2182,39 @@ class OrdersRepository(
         venueZoneId: ZoneId,
         selectedGiftChoices: Map<Long, Long> = emptyMap(),
         skippedGiftRuleIds: Set<Long> = emptySet(),
+        giftDecision: PromotionGiftDecision? = null,
+        giftDecisionCommand: GiftDecisionCommand? = null,
+        giftDecisionScopeClaims: GiftDecisionScopeClaims? = null,
         excludedBatchItemIds: Set<Long> = emptySet(),
     ): PromotionRulesApplicationResult {
-        val applicationRepository = promotionApplicationRepository ?: return PromotionRulesApplicationResult()
-        val ruleRepository = venuePromotionRuleRepository ?: return PromotionRulesApplicationResult()
-        if (insertedItems.isEmpty()) return PromotionRulesApplicationResult()
+        val applicationRepository =
+            promotionApplicationRepository
+                ?: if (giftDecision == null) {
+                    return PromotionRulesApplicationResult()
+                } else {
+                    throw GiftDecisionRequiredException(
+                        PromotionGiftOffer(PromotionGiftOfferStatus.NO_GIFT),
+                    )
+                }
+        val ruleRepository =
+            venuePromotionRuleRepository
+                ?: if (giftDecision == null) {
+                    return PromotionRulesApplicationResult()
+                } else {
+                    throw GiftDecisionRequiredException(
+                        PromotionGiftOffer(PromotionGiftOfferStatus.NO_GIFT),
+                    )
+                }
+        if (insertedItems.isEmpty()) {
+            if (giftDecision != null) {
+                throw GiftDecisionRequiredException(
+                    PromotionGiftOffer(PromotionGiftOfferStatus.NO_GIFT),
+                )
+            }
+            return PromotionRulesApplicationResult()
+        }
         val now = clock.instant()
         val rules = ruleRepository.listActiveRulesForVenueAt(connection, venueId, now)
-        if (rules.isEmpty()) return PromotionRulesApplicationResult()
         val cartItems =
             insertedItems.mapNotNull { inserted ->
                 if (inserted.batchItemId in excludedBatchItemIds) return@mapNotNull null
@@ -1890,8 +2228,31 @@ class OrdersRepository(
                     currency = menuItem.currency,
                     effectiveType = menuItem.effectiveType,
                     menuCategoryId = menuItem.menuCategoryId,
+                    requiredOptionsSatisfied =
+                        !menuItem.requiresOptionSelection || inserted.selectedOption != null,
                 )
             }
+        if (giftDecisionScopeClaims != null) {
+            val command =
+                giftDecisionCommand
+                    ?: throw GiftDecisionRequiredException(
+                        PromotionGiftOffer(PromotionGiftOfferStatus.NO_GIFT),
+                    )
+            val currentOffer =
+                PromotionRuleEngine.preview(
+                    venueId = venueId,
+                    now = now,
+                    venueZoneId = venueZoneId,
+                    cartItems = cartItems,
+                    activeRules = rules,
+                    selectedGiftChoices = selectedGiftChoices,
+                    skippedGiftRuleIds = skippedGiftRuleIds,
+                    giftDecision = null,
+                ).giftOffer
+            if (!currentOffer.matchesAuthoritativeScope(giftDecisionScopeClaims, command)) {
+                throw GiftDecisionRequiredException(currentOffer)
+            }
+        }
         val preview =
             PromotionRuleEngine.preview(
                 venueId = venueId,
@@ -1901,16 +2262,25 @@ class OrdersRepository(
                 activeRules = rules,
                 selectedGiftChoices = selectedGiftChoices,
                 skippedGiftRuleIds = skippedGiftRuleIds,
+                giftDecision = giftDecision,
             )
+        if (!preview.giftDecisionResolved) {
+            throw GiftDecisionRequiredException(preview.giftOffer)
+        }
         val freshRewardItems =
             loadCheckoutMenuItems(
                 connection = connection,
                 venueId = venueId,
-                itemIds = preview.gifts.map { it.rewardMenuItemId }.toSet(),
+                itemIds = preview.appliedGifts.map { it.rewardMenuItemId }.toSet(),
             )
         val eligibleGifts =
-            preview.gifts.filter { gift -> freshRewardItems.containsKey(gift.rewardMenuItemId) }
-        if (preview.adjustments.isEmpty() && eligibleGifts.isEmpty()) return PromotionRulesApplicationResult()
+            preview.appliedGifts.filter { gift -> freshRewardItems.containsKey(gift.rewardMenuItemId) }
+        if (eligibleGifts.size != preview.appliedGifts.size) {
+            throw GiftDecisionRequiredException(preview.giftOffer)
+        }
+        if (preview.adjustments.isEmpty() && eligibleGifts.isEmpty()) {
+            return PromotionRulesApplicationResult(giftOffer = preview.giftOffer)
+        }
         val rulesById = rules.associateBy { it.id }
         val insertedByBatchItemId = insertedItems.associateBy { it.batchItemId }
         val percentApplications =
@@ -1996,7 +2366,9 @@ class OrdersRepository(
                     userId = userId,
                     promotionId = rule.promotionId,
                     ruleId = rule.id,
-                    titleSnapshot = label,
+                    titleSnapshot =
+                        rule.promotionTitle?.takeIf { it.isNotBlank() }
+                            ?: "Подарок при покупке",
                     ruleType = rule.ruleType.dbValue,
                     targetType = rule.targetType.dbValue,
                     targetValue = rule.targetValue.dbValue,
@@ -2073,7 +2445,9 @@ class OrdersRepository(
             discounts =
                 applications.map { application ->
                     CreatedOrderPromotionDiscount(
-                        label = application.titleSnapshot,
+                        label =
+                            application.rewardItems.singleOrNull()?.labelSnapshot
+                                ?: application.titleSnapshot,
                         discountMinor = application.discountTotalMinor,
                         currency = application.currency,
                         ruleType = application.ruleType,
@@ -2085,6 +2459,7 @@ class OrdersRepository(
                         eligibleLineIds = application.adjustments.map { it.orderBatchItemId },
                     )
                 },
+            giftOffer = preview.giftOffer,
         )
     }
 
@@ -2205,6 +2580,83 @@ class OrdersRepository(
                         )
                 }
                 discounts.values.filter { it.discountMinor > 0L }
+            }
+        }
+
+    private fun loadPersistedGiftOffer(
+        connection: Connection,
+        batchId: Long,
+    ): PromotionGiftOffer =
+        connection.prepareStatement(
+            """
+            SELECT opa.promotion_id,
+                   opa.title_snapshot,
+                   opa.rule_id,
+                   opa.rule_version,
+                   opri.trigger_order_batch_item_id,
+                   trigger_item.menu_item_id AS trigger_menu_item_id,
+                   COALESCE(
+                       trigger_item.item_name_snapshot,
+                       trigger_menu.name,
+                       'Позиция #' || trigger_item.menu_item_id
+                   ) AS trigger_item_name,
+                   opri.reward_menu_item_id,
+                   COALESCE(
+                       reward_adjustment.item_name_snapshot,
+                       reward_item.item_name_snapshot,
+                       reward_menu.name,
+                       'Позиция #' || opri.reward_menu_item_id
+                   ) AS reward_item_name,
+                   reward_adjustment.original_price_minor,
+                   reward_adjustment.currency
+            FROM order_promotion_applications opa
+            JOIN order_promotion_reward_items opri ON opri.application_id = opa.id
+            JOIN order_batch_items reward_item ON reward_item.id = opri.reward_order_batch_item_id
+            JOIN order_batch_item_promotion_adjustments reward_adjustment
+              ON reward_adjustment.application_id = opa.id
+             AND reward_adjustment.order_batch_item_id = reward_item.id
+            LEFT JOIN order_batch_items trigger_item ON trigger_item.id = opri.trigger_order_batch_item_id
+            LEFT JOIN menu_items trigger_menu ON trigger_menu.id = trigger_item.menu_item_id
+            LEFT JOIN menu_items reward_menu ON reward_menu.id = opri.reward_menu_item_id
+            WHERE opa.batch_id = ?
+              AND opa.rule_type = 'GIFT_WITH_ITEM'
+            ORDER BY opa.id
+            LIMIT 1
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, batchId)
+            statement.executeQuery().use { rs ->
+                if (!rs.next()) {
+                    PromotionGiftOffer(PromotionGiftOfferStatus.NO_GIFT)
+                } else {
+                    val reward =
+                        PromotionGiftRewardItem(
+                            menuItemId = rs.getLong("reward_menu_item_id"),
+                            name = rs.getString("reward_item_name"),
+                            originalUnitPriceMinor = rs.getLong("original_price_minor").coerceAtLeast(0L),
+                            currency = rs.getString("currency")?.takeIf { it.isNotBlank() } ?: "RUB",
+                        )
+                    PromotionGiftOffer(
+                        status = PromotionGiftOfferStatus.GIFT_SELECTED,
+                        promotionId =
+                            rs.getLong("promotion_id").let { value ->
+                                if (rs.wasNull()) null else value
+                            },
+                        promotionTitle = rs.getString("title_snapshot"),
+                        ruleId = rs.getLong("rule_id"),
+                        ruleVersion = rs.getInt("rule_version"),
+                        triggerLineId =
+                            rs.getLong("trigger_order_batch_item_id").let { value ->
+                                if (rs.wasNull()) null else value
+                            },
+                        triggerMenuItemId =
+                            rs.getLong("trigger_menu_item_id").let { value ->
+                                if (rs.wasNull()) null else value
+                            },
+                        triggerItemName = rs.getString("trigger_item_name"),
+                        selectedRewardItem = reward,
+                    )
+                }
             }
         }
 
@@ -2469,9 +2921,20 @@ class OrdersRepository(
     private data class StoredBatchIdempotency(
         val orderId: Long,
         val batchId: Long,
+        val tableId: Long,
+        val tabId: Long,
         val displayNumber: Int?,
         val displayDate: LocalDate?,
-    )
+    ) {
+        fun requireScope(
+            tableId: Long,
+            tabId: Long,
+        ) {
+            if (this.tableId != tableId || this.tabId != tabId) {
+                throw InvalidInputException("Idempotency key belongs to another order scope")
+            }
+        }
+    }
 
     private data class InsertedOrderBatchItem(
         val batchItemId: Long,
@@ -2483,6 +2946,7 @@ class OrdersRepository(
 
     private data class PromotionRulesApplicationResult(
         val discounts: List<CreatedOrderPromotionDiscount> = emptyList(),
+        val giftOffer: PromotionGiftOffer = PromotionGiftOffer(PromotionGiftOfferStatus.NO_GIFT),
     )
 
     private data class ReplayPromotionDiscountKey(
@@ -2511,6 +2975,7 @@ class OrdersRepository(
         val currency: String,
         val effectiveType: MenuSemanticType,
         val menuCategoryId: Long,
+        val requiredOptionsSatisfied: Boolean,
     ) {
         fun lineGrossMinor(): Long = priceMinor * qty.toLong()
     }
@@ -2531,6 +2996,7 @@ class OrdersRepository(
         val currency: String,
         val menuCategoryId: Long,
         val effectiveType: MenuSemanticType,
+        val requiresOptionSelection: Boolean,
     )
 
     private data class OrderBatchItemInputKey(
@@ -2562,9 +3028,15 @@ class OrdersRepository(
     ): StoredBatchIdempotency? {
         return connection.prepareStatement(
             """
-            SELECT gbi.order_id, gbi.batch_id, o.display_number, o.display_date
+            SELECT gbi.order_id,
+                   gbi.batch_id,
+                   o.table_id,
+                   ob.tab_id,
+                   o.display_number,
+                   o.display_date
             FROM guest_batch_idempotency gbi
             JOIN orders o ON o.id = gbi.order_id
+            JOIN order_batches ob ON ob.id = gbi.batch_id
             WHERE gbi.venue_id = ? AND gbi.table_session_id = ? AND gbi.user_id = ? AND gbi.idempotency_key = ?
             FOR UPDATE
             """.trimIndent(),
@@ -2578,6 +3050,8 @@ class OrdersRepository(
                     StoredBatchIdempotency(
                         orderId = rs.getLong("order_id"),
                         batchId = rs.getLong("batch_id"),
+                        tableId = rs.getLong("table_id"),
+                        tabId = rs.getLong("tab_id"),
                         displayNumber = rs.getInt("display_number").let { value -> if (rs.wasNull()) null else value },
                         displayDate = rs.getDate("display_date")?.toLocalDate(),
                     )
@@ -2775,6 +3249,29 @@ class OrdersRepository(
                     }
                 },
             )
+            reward?.let { configuredReward ->
+                put(
+                    "reward",
+                    buildJsonObject {
+                        put("mode", configuredReward.rewardMode.dbValue)
+                        put("quantity", configuredReward.rewardQty)
+                        put("maxRewardsPerBatch", configuredReward.maxRewardsPerBatch)
+                        if (configuredReward.rewardMode == PromotionRewardMode.FIXED_ITEM) {
+                            put("fixedMenuItemId", configuredReward.rewardMenuItemId)
+                        }
+                        put(
+                            "allowlistMenuItemIds",
+                            buildJsonArray {
+                                configuredReward.options
+                                    .map { it.menuItemId }
+                                    .distinct()
+                                    .sorted()
+                                    .forEach { add(it) }
+                            },
+                        )
+                    },
+                )
+            }
         }.toString()
 
     private companion object {

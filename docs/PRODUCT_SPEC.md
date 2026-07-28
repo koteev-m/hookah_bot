@@ -444,10 +444,26 @@ MUST:
   `EXECUTABLE PROMOTIONS PHASE 2 / HAPPY HOURS PERCENT SLICE / DONE / STAGING-SMOKE-PASSED`:
   Owner/Manager configure item/category targets, venue-timezone weekday windows, lifecycle and
   percentage through the existing promotion repositories; Bot and Mini App use one server-owned
-  preview/submit calculation and immutable application ledger. The next bounded slice is
-  `GIFT_WITH_ITEM BOT/MINIAPP PARITY / READ-ONLY AUDIT AND IMPLEMENTATION PLAN`; it must reuse the
-  same engine while keeping gift UX separate from the Happy Hours preset. BOGO, free option/refill,
-  promo codes, notifications and payments remain out of scope.
+  preview/submit calculation and immutable application ledger.
+- `GIFT_WITH_ITEM` status is
+  `GIFT_WITH_ITEM BOT/MINIAPP PARITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`.
+  It reuses the same promotion engine and current schema; no second engine or migration was added.
+  Preview issues a domain-separated, server-signed 10-minute `gift_decision` scope for the
+  authenticated user, venue, table session, tab, canonical cart fingerprint and promotion
+  rule/version/offer. The scope carries no trusted financial amount. Submit verifies that scope,
+  rejects legacy unsigned choice/skip state, then recalculates current lifecycle, venue-timezone
+  schedule, trigger/options, allowlist, availability, prices, membership, winner and idempotency.
+  A stale scope fails without partial persistence and returns
+  `Корзина изменилась. Проверьте подарок ещё раз.`
+- An active linked gift requires an active trigger. Canceling an unavailable trigger atomically
+  cancels its active linked reward; excluding a trigger atomically excludes its active linked
+  reward. Reward-only cancellation/exclusion remains one-way and never cancels the paid trigger.
+  Promotion applications, trigger/reward links and immutable pricing/config snapshots are
+  preserved for audit and History. Active trigger/reward linkage blocks manual discount on either
+  line with the common no-stacking policy. STAFF cannot apply manual discounts: Telegram hides the
+  action and rejects direct or stale-dialog attempts, while the shared repository enforces the same
+  role boundary before opening a transaction.
+- BOGO, free option/refill, promo codes, notifications and payments remain out of scope.
 - `OPT_IN_NOTIFICATION`: retention/promo notifications require explicit guest opt-in, frequency limits and unsubscribe.
 SHOULD:
 - `PROMO_CODE` with limits/accounting, `LOYALTY_STAMP` / `LOYALTY_POINTS`, `REFERRAL`, segmentation/campaigns, paid placement/promotion boosting, flavor quiz and advanced recommendations remain future work.

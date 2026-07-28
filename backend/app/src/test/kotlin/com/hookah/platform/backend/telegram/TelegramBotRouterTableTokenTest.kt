@@ -110,7 +110,12 @@ import com.hookah.platform.backend.platform.VenueOwnerQuotaSummary
 import com.hookah.platform.backend.platform.VenueOwnerVenueCreationResult
 import com.hookah.platform.backend.platform.VenueStatusAction
 import com.hookah.platform.backend.platform.VenueStatusChangeResult
-import com.hookah.platform.backend.promotions.PromotionRulePreviewGiftChoice
+import com.hookah.platform.backend.promotions.GiftDecisionCommand
+import com.hookah.platform.backend.promotions.PromotionGiftDecisionAction
+import com.hookah.platform.backend.promotions.PromotionGiftOffer
+import com.hookah.platform.backend.promotions.PromotionGiftOfferStatus
+import com.hookah.platform.backend.promotions.PromotionGiftRewardItem
+import com.hookah.platform.backend.promotions.PromotionGiftUnavailableReason
 import com.hookah.platform.backend.support.SupportAssigneeScope
 import com.hookah.platform.backend.support.SupportMessageAuthorRole
 import com.hookah.platform.backend.support.SupportMessageRecord
@@ -130,6 +135,7 @@ import com.hookah.platform.backend.telegram.db.CompletedStaffCallStatusUpdate
 import com.hookah.platform.backend.telegram.db.CreatedOrderBatch
 import com.hookah.platform.backend.telegram.db.CreatedOrderPromotionDiscount
 import com.hookah.platform.backend.telegram.db.DialogStateRepository
+import com.hookah.platform.backend.telegram.db.GiftDecisionRequiredException
 import com.hookah.platform.backend.telegram.db.GuestLoyaltyProgress
 import com.hookah.platform.backend.telegram.db.GuestOrderCartPreview
 import com.hookah.platform.backend.telegram.db.GuestOrderCartPreviewItem
@@ -213,6 +219,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import java.sql.Connection
@@ -222,6 +229,7 @@ import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.ZoneId
+import java.util.concurrent.atomic.AtomicLong
 import com.hookah.platform.backend.telegram.db.OrderServiceChargeDetails as TelegramOrderServiceChargeDetails
 
 class TelegramBotRouterTableTokenTest {
@@ -272,6 +280,9 @@ class TelegramBotRouterTableTokenTest {
     private val staffInviteRepositoryForRouter: StaffInviteRepository = mockk(relaxed = true)
     private val supportThreadRepository: SupportThreadRepository = mockk()
     private val auditLogRepository: AuditLogRepository = mockk(relaxed = true)
+    private val botGiftCallbackTagSequence = AtomicLong()
+    private val firstBotGiftCallbackTag = "gift00000001"
+    private val secondBotGiftCallbackTag = "gift00000002"
     private val router = routerWithWebAppPublicUrl(null)
 
     private fun routerWithWebAppPublicUrl(
@@ -344,6 +355,9 @@ class TelegramBotRouterTableTokenTest {
             staffInviteRepository = staffInviteRepositoryForRouter,
             shiftExtensionRepository = shiftExtensionRepository,
             supportThreadRepository = supportThreadRepository,
+            botGiftCallbackTagFactory = {
+                "gift${botGiftCallbackTagSequence.incrementAndGet().toString().padStart(8, '0')}"
+            },
         )
 
     @BeforeEach
@@ -359,7 +373,19 @@ class TelegramBotRouterTableTokenTest {
         coEvery { staffChatNotifier.rememberOrderMessageNow(any(), any(), any(), any()) } returns false
         coEvery { staffChatNotifier.refreshOrderActivityCardNow(any(), any(), any()) } returns null
         coEvery {
-            ordersRepository.previewGuestOrderBatch(any(), any(), any(), any(), any(), any())
+            ordersRepository.previewGuestOrderBatch(
+                any(),
+                any(),
+                any(),
+                any(),
+                any(),
+                any(),
+                any(),
+                any(),
+                any(),
+                any(),
+                any(),
+            )
         } returns
             GuestOrderCartPreview(
                 items = emptyList(),
@@ -19733,7 +19759,7 @@ class TelegramBotRouterTableTokenTest {
                     match {
                         it.contains("🕒 Время проведения акции") &&
                             it.contains("Если расписание не задано, акция действует всегда") &&
-                            it.contains("подарок будет добавляться только в этот период")
+                            it.contains("предложение подарка будет доступно только в этот период")
                     },
                     match { markup ->
                         val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
@@ -19841,7 +19867,7 @@ class TelegramBotRouterTableTokenTest {
                         it.contains("Тип: Подарок к позиции") &&
                             it.contains("Подарок: Чай") &&
                             it.contains("Расписание: Пн–Пт, 15:00–18:00") &&
-                            it.contains("Подарок добавляется к заказу автоматически")
+                            it.contains("Без явного подтверждения подарок в заказ не добавляется")
                     },
                     match { markup ->
                         val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
@@ -21671,6 +21697,25 @@ class TelegramBotRouterTableTokenTest {
                     status = "ACTIVE",
                 )
             coEvery {
+                ordersRepository.previewGuestOrderBatch(
+                    venueId = 10L,
+                    userId = 200L,
+                    items = match { it.size == 1 && it[0].itemId == 1000L && it[0].qty == 1 },
+                    venueZoneId = any(),
+                    giftDecision = null,
+                )
+            } returns
+                GuestOrderCartPreview(
+                    items = emptyList(),
+                    grossTotalMinor = 25_000L,
+                    promoDiscountTotalMinor = 0L,
+                    loyaltyDiscountTotalMinor = 0L,
+                    finalPayableTotalMinor = 25_000L,
+                    currency = "RUB",
+                    discounts = emptyList(),
+                    pricingFingerprint = "reorder-no-gift",
+                )
+            coEvery {
                 ordersRepository.createGuestOrderBatch(
                     tableId = 11L,
                     venueId = 10L,
@@ -21707,7 +21752,7 @@ class TelegramBotRouterTableTokenTest {
 
             router.process(update)
 
-            coVerify {
+            coVerify(exactly = 1) {
                 ordersRepository.createGuestOrderBatch(
                     tableId = 11L,
                     venueId = 10L,
@@ -22036,6 +22081,11 @@ class TelegramBotRouterTableTokenTest {
                     venueZoneId = ZoneId.of("Europe/Moscow"),
                     selectedGiftChoices = emptyMap(),
                     skippedGiftRuleIds = emptySet(),
+                    giftDecision = null,
+                    tableSessionId = 55L,
+                    tabId = 1L,
+                    comment = null,
+                    giftDecisionCommand = null,
                 )
             } returns
                 GuestOrderCartPreview(
@@ -22174,6 +22224,11 @@ class TelegramBotRouterTableTokenTest {
                     venueZoneId = ZoneId.of("Europe/Moscow"),
                     selectedGiftChoices = emptyMap(),
                     skippedGiftRuleIds = emptySet(),
+                    giftDecision = null,
+                    tableSessionId = 55L,
+                    tabId = 1L,
+                    comment = null,
+                    giftDecisionCommand = null,
                 )
             } returns null
             coEvery { guestMenuRepository.getMenu(10L) } returns
@@ -22265,6 +22320,11 @@ class TelegramBotRouterTableTokenTest {
                     venueZoneId = ZoneId.of("Europe/Moscow"),
                     selectedGiftChoices = emptyMap(),
                     skippedGiftRuleIds = emptySet(),
+                    giftDecision = null,
+                    tableSessionId = 55L,
+                    tabId = 1L,
+                    comment = null,
+                    giftDecisionCommand = null,
                 )
             } returns
                 GuestOrderCartPreview(
@@ -22431,6 +22491,48 @@ class TelegramBotRouterTableTokenTest {
                                 ),
                         ),
                 )
+            val selectableRewards =
+                requireNotNull(giftRule.reward).options.map { option ->
+                    PromotionGiftRewardItem(
+                        menuItemId = option.menuItemId,
+                        name = option.menuItemName,
+                        originalUnitPriceMinor = option.priceMinor,
+                        currency = option.currency,
+                    )
+                }
+            val choiceOffer =
+                PromotionGiftOffer(
+                    status = PromotionGiftOfferStatus.GIFT_CHOICE_REQUIRED,
+                    promotionId = 509L,
+                    promotionTitle = "Чай к кальяну",
+                    ruleId = 604L,
+                    ruleVersion = giftRule.version,
+                    triggerMenuItemId = 1000L,
+                    triggerItemName = "Кальян классический",
+                    selectableRewardItems = selectableRewards,
+                )
+            val selectedDecision =
+                GiftDecisionCommand(
+                    action = PromotionGiftDecisionAction.SELECT_ITEM,
+                    selectedMenuItemId = 2001L,
+                    decisionScopeToken = "signed-scope-test-gift-choice",
+                )
+            val selectedOffer =
+                choiceOffer.copy(
+                    status = PromotionGiftOfferStatus.GIFT_SELECTED,
+                    selectedRewardItem = selectableRewards.single { it.menuItemId == 2001L },
+                )
+            val basePreviewItem =
+                GuestOrderCartPreviewItem(
+                    itemId = 1000L,
+                    itemName = "Кальян классический",
+                    qty = 1,
+                    priceMinor = 25_000L,
+                    currency = "RUB",
+                    lineGrossMinor = 25_000L,
+                    discountMinor = 0L,
+                    linePayableMinor = 25_000L,
+                )
             coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
@@ -22442,27 +22544,15 @@ class TelegramBotRouterTableTokenTest {
                     userId = 200L,
                     items = any(),
                     venueZoneId = ZoneId.of("Europe/Moscow"),
-                    selectedGiftChoices = any(),
-                    skippedGiftRuleIds = emptySet(),
+                    giftDecision = null,
+                    tableSessionId = 55L,
+                    tabId = 77L,
+                    comment = null,
+                    giftDecisionCommand = null,
                 )
-            } answers {
-                val selectedGiftChoices = invocation.args[4] as Map<*, *>
-                val giftChoices =
-                    if (selectedGiftChoices[604L] == 2001L) {
-                        emptyList()
-                    } else {
-                        listOf(
-                            PromotionRulePreviewGiftChoice(
-                                ruleId = 604L,
-                                triggerLineId = null,
-                                triggerMenuItemId = 1000L,
-                                triggerItemName = "Кальян классический",
-                                options = requireNotNull(giftRule.reward).options,
-                            ),
-                        )
-                    }
+            } returns
                 GuestOrderCartPreview(
-                    items = emptyList(),
+                    items = listOf(basePreviewItem),
                     grossTotalMinor = 25_000L,
                     promoDiscountTotalMinor = 0L,
                     loyaltyDiscountTotalMinor = 0L,
@@ -22470,9 +22560,52 @@ class TelegramBotRouterTableTokenTest {
                     currency = "RUB",
                     discounts = emptyList(),
                     pricingFingerprint = "test-gift-choice",
-                    giftChoices = giftChoices,
+                    giftOffer = choiceOffer,
+                    cartFingerprint = "cart-test-gift-choice",
+                    decisionScopeToken = selectedDecision.decisionScopeToken,
+                    decisionScopeExpiresAtEpochSeconds = 1_900_000_000L,
                 )
-            }
+            coEvery {
+                ordersRepository.previewGuestOrderBatch(
+                    venueId = 10L,
+                    userId = 200L,
+                    items = any(),
+                    venueZoneId = ZoneId.of("Europe/Moscow"),
+                    giftDecision = null,
+                    tableSessionId = 55L,
+                    tabId = 77L,
+                    comment = null,
+                    giftDecisionCommand = selectedDecision,
+                )
+            } returns
+                GuestOrderCartPreview(
+                    items =
+                        listOf(
+                            basePreviewItem,
+                            GuestOrderCartPreviewItem(
+                                itemId = 2001L,
+                                itemName = "Лимонад",
+                                qty = 1,
+                                priceMinor = 40_000L,
+                                currency = "RUB",
+                                lineGrossMinor = 40_000L,
+                                discountMinor = 40_000L,
+                                linePayableMinor = 0L,
+                                isPromotionReward = true,
+                            ),
+                        ),
+                    grossTotalMinor = 65_000L,
+                    promoDiscountTotalMinor = 40_000L,
+                    loyaltyDiscountTotalMinor = 0L,
+                    finalPayableTotalMinor = 25_000L,
+                    currency = "RUB",
+                    discounts = emptyList(),
+                    pricingFingerprint = "test-gift-choice-selected",
+                    giftOffer = selectedOffer,
+                    cartFingerprint = "cart-test-gift-choice",
+                    decisionScopeToken = selectedDecision.decisionScopeToken,
+                    decisionScopeExpiresAtEpochSeconds = 1_900_000_000L,
+                )
             coEvery { guestMenuRepository.getMenu(10L) } returns
                 MenuModel(
                     venueId = 10L,
@@ -22541,9 +22674,8 @@ class TelegramBotRouterTableTokenTest {
                     tabId = 77L,
                     comment = null,
                     items = match { it.size == 1 && it[0].itemId == 1000L },
-                    selectedGiftChoices = match { it == mapOf(604L to 2001L) },
-                    skippedGiftRuleIds = emptySet(),
-                    expectedPreviewFingerprint = "test-gift-choice",
+                    expectedPreviewFingerprint = "test-gift-choice-selected",
+                    giftDecisionCommand = selectedDecision,
                 )
             } returns CreatedOrderBatch(orderId = 900L, batchId = 901L, idempotencyReplay = false)
 
@@ -22591,7 +22723,7 @@ class TelegramBotRouterTableTokenTest {
                             id = "cb-choice-open-options",
                             from = User(id = 200),
                             message = Message(messageId = 30_104, chat = Chat(id = 100, type = "private"), text = null),
-                            data = "bot_menu_gift_choice",
+                            data = "bot_menu_gift_choice:$firstBotGiftCallbackTag",
                         ),
                 ),
             )
@@ -22603,7 +22735,7 @@ class TelegramBotRouterTableTokenTest {
                             id = "cb-choice-select",
                             from = User(id = 200),
                             message = Message(messageId = 30_105, chat = Chat(id = 100, type = "private"), text = null),
-                            data = "bot_gift_opt:2001",
+                            data = "bot_gift_opt:2001:$firstBotGiftCallbackTag",
                         ),
                 ),
             )
@@ -22612,9 +22744,33 @@ class TelegramBotRouterTableTokenTest {
                     updateId = 30_006,
                     callbackQuery =
                         CallbackQuery(
-                            id = "cb-choice-checkout-selected",
+                            id = "cb-choice-checkout-before-confirm",
                             from = User(id = 200),
                             message = Message(messageId = 30_106, chat = Chat(id = 100, type = "private"), text = null),
+                            data = "bot_menu_cart_checkout",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 30_007,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-choice-confirm",
+                            from = User(id = 200),
+                            message = Message(messageId = 30_107, chat = Chat(id = 100, type = "private"), text = null),
+                            data = "bot_gift_confirm:2001:$firstBotGiftCallbackTag",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 30_008,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-choice-checkout-selected",
+                            from = User(id = 200),
+                            message = Message(messageId = 30_108, chat = Chat(id = 100, type = "private"), text = null),
                             data = "bot_menu_cart_checkout",
                         ),
                 ),
@@ -22624,7 +22780,7 @@ class TelegramBotRouterTableTokenTest {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
                     match {
-                        it.contains("🎁 Доступен подарок: выберите один вариант.") &&
+                        it.contains("🎁 Вам доступен подарок на выбор.") &&
                             it.contains("Итого к оплате после акции: 250 ₽")
                     },
                     match { markup ->
@@ -22633,7 +22789,7 @@ class TelegramBotRouterTableTokenTest {
                             ?.flatten()
                             ?.any {
                                 it.text == "🎁 Выбрать подарок" &&
-                                    it.callbackData == "bot_menu_gift_choice"
+                                    it.callbackData == "bot_menu_gift_choice:$firstBotGiftCallbackTag"
                             } == true
                     },
                 )
@@ -22641,11 +22797,17 @@ class TelegramBotRouterTableTokenTest {
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
-                    "Вы ещё не выбрали подарок по акции.",
+                    "Выберите и подтвердите подарок по акции или нажмите «Пропустить подарок».",
                     match { markup ->
                         val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
-                        buttons.any { it.text == "🎁 Выбрать подарок" && it.callbackData == "bot_menu_gift_choice" } &&
-                            buttons.any { it.text == "Оформить без подарка" && it.callbackData == "bot_gift_skip" }
+                        buttons.any {
+                            it.text == "🎁 Выбрать подарок" &&
+                                it.callbackData == "bot_menu_gift_choice:$firstBotGiftCallbackTag"
+                        } &&
+                            buttons.any {
+                                it.text == "Пропустить подарок" &&
+                                    it.callbackData == "bot_gift_skip:$firstBotGiftCallbackTag"
+                            }
                     },
                 )
             }
@@ -22655,12 +22817,33 @@ class TelegramBotRouterTableTokenTest {
                     match { it.contains("Выберите один вариант") },
                     match { markup ->
                         val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
-                        buttons.any { it.text == "Чай" && it.callbackData == "bot_gift_opt:2000" } &&
-                            buttons.any { it.text == "Лимонад" && it.callbackData == "bot_gift_opt:2001" }
+                        buttons.any {
+                            it.text == "Чай" &&
+                                it.callbackData == "bot_gift_opt:2000:$firstBotGiftCallbackTag"
+                        } &&
+                            buttons.any {
+                                it.text == "Лимонад" &&
+                                    it.callbackData == "bot_gift_opt:2001:$firstBotGiftCallbackTag"
+                            }
                     },
                 )
             }
             coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Выбран вариант: Лимонад") && it.contains("Подтвердите добавление подарка") },
+                    match { markup ->
+                        (markup as? InlineKeyboardMarkup)
+                            ?.inlineKeyboard
+                            ?.flatten()
+                            ?.any {
+                                it.text == "🎁 Добавить выбранный подарок" &&
+                                    it.callbackData == "bot_gift_confirm:2001:$firstBotGiftCallbackTag"
+                            } == true
+                    },
+                )
+            }
+            coVerify(exactly = 1) {
                 ordersRepository.createGuestOrderBatch(
                     tableId = 11L,
                     venueId = 10L,
@@ -22670,9 +22853,726 @@ class TelegramBotRouterTableTokenTest {
                     tabId = 77L,
                     comment = null,
                     items = match { it.size == 1 && it[0].itemId == 1000L },
-                    selectedGiftChoices = match { it == mapOf(604L to 2001L) },
-                    skippedGiftRuleIds = emptySet(),
-                    expectedPreviewFingerprint = "test-gift-choice",
+                    expectedPreviewFingerprint = "test-gift-choice-selected",
+                    giftDecisionCommand =
+                        match {
+                            it == selectedDecision &&
+                                !it.decisionScopeToken.contains("30000") &&
+                                !it.decisionScopeToken.contains("40000")
+                        },
+                )
+            }
+        }
+
+    @Test
+    fun `fixed gift requires explicit accept and submits full server decision`() =
+        runBlocking {
+            stubBotGiftCartContext(Instant.parse("2026-03-30T10:00:00Z"))
+            val reward =
+                PromotionGiftRewardItem(
+                    menuItemId = 2000L,
+                    name = "Чай",
+                    originalUnitPriceMinor = 30_000L,
+                    currency = "RUB",
+                )
+            val availableOffer =
+                PromotionGiftOffer(
+                    status = PromotionGiftOfferStatus.FIXED_GIFT_AVAILABLE,
+                    promotionId = 509L,
+                    promotionTitle = "Чай к кальяну",
+                    ruleId = 604L,
+                    ruleVersion = 3,
+                    triggerMenuItemId = 1000L,
+                    triggerItemName = "Кальян классический",
+                    fixedRewardItem = reward,
+                )
+            val acceptDecision =
+                GiftDecisionCommand(
+                    action = PromotionGiftDecisionAction.ACCEPT_FIXED,
+                    decisionScopeToken = "signed-scope-fixed-available",
+                )
+            val selectedOffer =
+                availableOffer.copy(
+                    status = PromotionGiftOfferStatus.GIFT_SELECTED,
+                    selectedRewardItem = reward,
+                )
+            coEvery {
+                ordersRepository.previewGuestOrderBatch(
+                    venueId = 10L,
+                    userId = 200L,
+                    items = any(),
+                    venueZoneId = ZoneId.of("Europe/Moscow"),
+                    giftDecision = null,
+                    tableSessionId = 55L,
+                    tabId = 77L,
+                    comment = null,
+                    giftDecisionCommand = null,
+                )
+            } returns giftCartPreview(availableOffer, "fixed-available")
+            coEvery {
+                ordersRepository.previewGuestOrderBatch(
+                    venueId = 10L,
+                    userId = 200L,
+                    items = any(),
+                    venueZoneId = ZoneId.of("Europe/Moscow"),
+                    giftDecision = null,
+                    tableSessionId = 55L,
+                    tabId = 77L,
+                    comment = null,
+                    giftDecisionCommand = acceptDecision,
+                )
+            } returns
+                giftCartPreview(
+                    selectedOffer,
+                    "fixed-selected",
+                    decisionScopeToken = acceptDecision.decisionScopeToken,
+                )
+            coEvery {
+                ordersRepository.createGuestOrderBatch(
+                    tableId = 11L,
+                    venueId = 10L,
+                    tableSessionId = 55L,
+                    userId = 200L,
+                    idempotencyKey = "bot-cart-checkout:cb-fixed-checkout",
+                    tabId = 77L,
+                    comment = null,
+                    items = match { it.size == 1 && it.single().itemId == 1000L },
+                    expectedPreviewFingerprint = "fixed-selected",
+                    giftDecisionCommand = acceptDecision,
+                )
+            } returns CreatedOrderBatch(orderId = 900L, batchId = 901L, idempotencyReplay = false)
+
+            processBotCallback(31_001, "cb-fixed-add", "bot_menu_item:500:1000")
+            processBotCallback(31_002, "cb-fixed-cart", "bot_menu_item_cart")
+            processBotCallback(31_003, "cb-fixed-blocked", "bot_menu_cart_checkout")
+            processBotCallback(
+                31_004,
+                "cb-fixed-accept",
+                "bot_gift_accept_fixed:$firstBotGiftCallbackTag",
+            )
+            processBotCallback(31_005, "cb-fixed-checkout", "bot_menu_cart_checkout")
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Вам доступен подарок: Чай") },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any {
+                            it.text == "🎁 Добавить подарок" &&
+                                it.callbackData == "bot_gift_accept_fixed:$firstBotGiftCallbackTag"
+                        } &&
+                            buttons.any {
+                                it.text == "Пропустить подарок" &&
+                                    it.callbackData == "bot_gift_skip:$firstBotGiftCallbackTag"
+                            }
+                    },
+                )
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Подтвердите подарок по акции или нажмите «Пропустить подарок».",
+                    any(),
+                )
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match {
+                        it.contains("🎁 Чай") &&
+                            it.contains("Обычная стоимость: 300 ₽") &&
+                            it.contains("Скидка по акции: 100%") &&
+                            it.contains("Итого: 0 ₽")
+                    },
+                    any(),
+                )
+            }
+            coVerify(exactly = 1) {
+                ordersRepository.createGuestOrderBatch(
+                    tableId = 11L,
+                    venueId = 10L,
+                    tableSessionId = 55L,
+                    userId = 200L,
+                    idempotencyKey = "bot-cart-checkout:cb-fixed-checkout",
+                    tabId = 77L,
+                    comment = null,
+                    items = match { it.size == 1 && it.single().itemId == 1000L },
+                    expectedPreviewFingerprint = "fixed-selected",
+                    giftDecisionCommand =
+                        match {
+                            it == acceptDecision &&
+                                !it.decisionScopeToken.contains("30000")
+                        },
+                )
+            }
+        }
+
+    @Test
+    fun `skip gift is only a draft until ordinary checkout`() =
+        runBlocking {
+            stubBotGiftCartContext(Instant.parse("2026-03-30T10:00:00Z"))
+            val reward =
+                PromotionGiftRewardItem(
+                    menuItemId = 2000L,
+                    name = "Чай",
+                    originalUnitPriceMinor = 30_000L,
+                    currency = "RUB",
+                )
+            val availableOffer =
+                PromotionGiftOffer(
+                    status = PromotionGiftOfferStatus.FIXED_GIFT_AVAILABLE,
+                    promotionId = 509L,
+                    promotionTitle = "Чай к кальяну",
+                    ruleId = 604L,
+                    ruleVersion = 3,
+                    triggerMenuItemId = 1000L,
+                    triggerItemName = "Кальян классический",
+                    fixedRewardItem = reward,
+                )
+            val skipDecision =
+                GiftDecisionCommand(
+                    action = PromotionGiftDecisionAction.SKIP,
+                    decisionScopeToken = "signed-scope-fixed-available",
+                )
+            val skippedOffer = availableOffer.copy(status = PromotionGiftOfferStatus.GIFT_SKIPPED)
+            coEvery {
+                ordersRepository.previewGuestOrderBatch(
+                    venueId = 10L,
+                    userId = 200L,
+                    items = any(),
+                    venueZoneId = ZoneId.of("Europe/Moscow"),
+                    giftDecision = null,
+                    tableSessionId = 55L,
+                    tabId = 77L,
+                    comment = null,
+                    giftDecisionCommand = null,
+                )
+            } returns giftCartPreview(availableOffer, "fixed-available")
+            coEvery {
+                ordersRepository.previewGuestOrderBatch(
+                    venueId = 10L,
+                    userId = 200L,
+                    items = any(),
+                    venueZoneId = ZoneId.of("Europe/Moscow"),
+                    giftDecision = null,
+                    tableSessionId = 55L,
+                    tabId = 77L,
+                    comment = null,
+                    giftDecisionCommand = skipDecision,
+                )
+            } returns
+                giftCartPreview(
+                    skippedOffer,
+                    "fixed-skipped",
+                    decisionScopeToken = skipDecision.decisionScopeToken,
+                )
+            coEvery {
+                ordersRepository.createGuestOrderBatch(
+                    tableId = 11L,
+                    venueId = 10L,
+                    tableSessionId = 55L,
+                    userId = 200L,
+                    idempotencyKey = "bot-cart-checkout:cb-skip-checkout",
+                    tabId = 77L,
+                    comment = null,
+                    items = match { it.size == 1 && it.single().itemId == 1000L },
+                    expectedPreviewFingerprint = "fixed-skipped",
+                    giftDecisionCommand = skipDecision,
+                )
+            } returns CreatedOrderBatch(orderId = 900L, batchId = 901L, idempotencyReplay = false)
+
+            processBotCallback(32_001, "cb-skip-add", "bot_menu_item:500:1000")
+            processBotCallback(32_002, "cb-skip-cart", "bot_menu_item_cart")
+            processBotCallback(
+                32_003,
+                "cb-skip",
+                "bot_gift_skip:$firstBotGiftCallbackTag",
+            )
+
+            coVerify(exactly = 0) {
+                ordersRepository.createGuestOrderBatch(
+                    tableId = 11L,
+                    venueId = 10L,
+                    tableSessionId = 55L,
+                    userId = 200L,
+                    idempotencyKey = "bot-cart-checkout:cb-skip-checkout",
+                    tabId = 77L,
+                    comment = null,
+                    items = any(),
+                    expectedPreviewFingerprint = "fixed-skipped",
+                    giftDecisionCommand = skipDecision,
+                )
+            }
+
+            processBotCallback(32_004, "cb-skip-checkout", "bot_menu_cart_checkout")
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(100, "Подарок пропущен. Заказ ещё не оформлен.", null)
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Подарок по акции пропущен.") },
+                    any(),
+                )
+            }
+            coVerify(exactly = 1) {
+                ordersRepository.createGuestOrderBatch(
+                    tableId = 11L,
+                    venueId = 10L,
+                    tableSessionId = 55L,
+                    userId = 200L,
+                    idempotencyKey = "bot-cart-checkout:cb-skip-checkout",
+                    tabId = 77L,
+                    comment = null,
+                    items = match { it.size == 1 && it.single().itemId == 1000L },
+                    expectedPreviewFingerprint = "fixed-skipped",
+                    giftDecisionCommand = skipDecision,
+                )
+            }
+        }
+
+    @Test
+    fun `unavailable gift keeps ordinary checkout available`() =
+        runBlocking {
+            stubBotGiftCartContext(Instant.parse("2026-03-30T10:00:00Z"))
+            val unavailableOffer =
+                PromotionGiftOffer(
+                    status = PromotionGiftOfferStatus.GIFT_UNAVAILABLE,
+                    promotionId = 509L,
+                    promotionTitle = "Чай к кальяну",
+                    ruleId = 604L,
+                    ruleVersion = 3,
+                    triggerMenuItemId = 1000L,
+                    triggerItemName = "Кальян классический",
+                    unavailableReason = PromotionGiftUnavailableReason.NO_AVAILABLE_REWARD_ITEMS,
+                )
+            coEvery {
+                ordersRepository.previewGuestOrderBatch(
+                    venueId = 10L,
+                    userId = 200L,
+                    items = any(),
+                    venueZoneId = ZoneId.of("Europe/Moscow"),
+                    giftDecision = null,
+                    tableSessionId = 55L,
+                    tabId = 77L,
+                    comment = null,
+                    giftDecisionCommand = null,
+                )
+            } returns giftCartPreview(unavailableOffer, "gift-unavailable")
+            coEvery {
+                ordersRepository.createGuestOrderBatch(
+                    tableId = 11L,
+                    venueId = 10L,
+                    tableSessionId = 55L,
+                    userId = 200L,
+                    idempotencyKey = "bot-cart-checkout:cb-unavailable-checkout",
+                    tabId = 77L,
+                    comment = null,
+                    items = match { it.size == 1 && it.single().itemId == 1000L },
+                    giftDecision = null,
+                    expectedPreviewFingerprint = "gift-unavailable",
+                    giftDecisionCommand = null,
+                )
+            } returns CreatedOrderBatch(orderId = 900L, batchId = 901L, idempotencyReplay = false)
+
+            processBotCallback(33_001, "cb-unavailable-add", "bot_menu_item:500:1000")
+            processBotCallback(33_002, "cb-unavailable-cart", "bot_menu_item_cart")
+            processBotCallback(33_003, "cb-unavailable-checkout", "bot_menu_cart_checkout")
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Подарок по акции сейчас недоступен.") },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.callbackData == "bot_menu_cart_checkout" } &&
+                            buttons.none {
+                                it.callbackData?.startsWith("bot_gift_accept_fixed:") == true ||
+                                    it.callbackData?.startsWith("bot_menu_gift_choice:") == true ||
+                                    it.callbackData?.startsWith("bot_gift_skip:") == true
+                            }
+                    },
+                )
+            }
+            coVerify(exactly = 1) {
+                ordersRepository.createGuestOrderBatch(
+                    tableId = 11L,
+                    venueId = 10L,
+                    tableSessionId = 55L,
+                    userId = 200L,
+                    idempotencyKey = "bot-cart-checkout:cb-unavailable-checkout",
+                    tabId = 77L,
+                    comment = null,
+                    items = match { it.size == 1 && it.single().itemId == 1000L },
+                    giftDecision = null,
+                    expectedPreviewFingerprint = "gift-unavailable",
+                    giftDecisionCommand = null,
+                )
+            }
+        }
+
+    @Test
+    fun `stale gift decision rolls back and reopens authoritative offer`() =
+        runBlocking {
+            stubBotGiftCartContext(Instant.parse("2026-03-30T10:00:00Z"))
+            val oldReward =
+                PromotionGiftRewardItem(
+                    menuItemId = 2000L,
+                    name = "Чай",
+                    originalUnitPriceMinor = 30_000L,
+                    currency = "RUB",
+                )
+            val currentReward =
+                PromotionGiftRewardItem(
+                    menuItemId = 2001L,
+                    name = "Лимонад",
+                    originalUnitPriceMinor = 40_000L,
+                    currency = "RUB",
+                )
+            val oldOffer =
+                PromotionGiftOffer(
+                    status = PromotionGiftOfferStatus.FIXED_GIFT_AVAILABLE,
+                    promotionId = 509L,
+                    promotionTitle = "Чай к кальяну",
+                    ruleId = 604L,
+                    ruleVersion = 3,
+                    triggerMenuItemId = 1000L,
+                    triggerItemName = "Кальян классический",
+                    fixedRewardItem = oldReward,
+                )
+            val currentOffer =
+                oldOffer.copy(
+                    promotionTitle = "Лимонад к кальяну",
+                    ruleVersion = 4,
+                    fixedRewardItem = currentReward,
+                )
+            val staleDecision =
+                GiftDecisionCommand(
+                    action = PromotionGiftDecisionAction.ACCEPT_FIXED,
+                    decisionScopeToken = "signed-scope-old-offer",
+                )
+            coEvery {
+                ordersRepository.previewGuestOrderBatch(
+                    venueId = 10L,
+                    userId = 200L,
+                    items = any(),
+                    venueZoneId = ZoneId.of("Europe/Moscow"),
+                    giftDecision = null,
+                    tableSessionId = 55L,
+                    tabId = 77L,
+                    comment = null,
+                    giftDecisionCommand = null,
+                )
+            } returnsMany
+                listOf(
+                    giftCartPreview(oldOffer, "old-offer"),
+                    giftCartPreview(currentOffer, "current-offer"),
+                )
+            coEvery {
+                ordersRepository.previewGuestOrderBatch(
+                    venueId = 10L,
+                    userId = 200L,
+                    items = any(),
+                    venueZoneId = ZoneId.of("Europe/Moscow"),
+                    giftDecision = null,
+                    tableSessionId = 55L,
+                    tabId = 77L,
+                    comment = null,
+                    giftDecisionCommand = staleDecision,
+                )
+            } returns
+                giftCartPreview(
+                    oldOffer.copy(
+                        status = PromotionGiftOfferStatus.GIFT_SELECTED,
+                        selectedRewardItem = oldReward,
+                    ),
+                    "old-selected",
+                    decisionScopeToken = staleDecision.decisionScopeToken,
+                )
+            coEvery {
+                ordersRepository.createGuestOrderBatch(
+                    tableId = 11L,
+                    venueId = 10L,
+                    tableSessionId = 55L,
+                    userId = 200L,
+                    idempotencyKey = "bot-cart-checkout:cb-stale-checkout",
+                    tabId = 77L,
+                    comment = null,
+                    items = match { it.size == 1 && it.single().itemId == 1000L },
+                    expectedPreviewFingerprint = "old-selected",
+                    giftDecisionCommand = staleDecision,
+                )
+            } throws GiftDecisionRequiredException(currentOffer)
+
+            processBotCallback(35_001, "cb-stale-add", "bot_menu_item:500:1000")
+            processBotCallback(35_002, "cb-stale-cart", "bot_menu_item_cart")
+            processBotCallback(
+                35_003,
+                "cb-stale-accept",
+                "bot_gift_accept_fixed:$firstBotGiftCallbackTag",
+            )
+            processBotCallback(35_004, "cb-stale-checkout", "bot_menu_cart_checkout")
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Корзина изменилась. Проверьте подарок ещё раз.",
+                    null,
+                )
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Вам доступен подарок: Лимонад") },
+                    match { markup ->
+                        (markup as? InlineKeyboardMarkup)
+                            ?.inlineKeyboard
+                            ?.flatten()
+                            ?.any { it.callbackData?.startsWith("bot_gift_accept_fixed:") == true } == true
+                    },
+                )
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("✅ Заказ отправлен") },
+                    any(),
+                )
+            }
+        }
+
+    @Test
+    fun `old gift callbacks cannot target fresh router session tab or cleared cart`() =
+        runBlocking {
+            val now = Instant.parse("2026-03-30T10:00:00Z")
+            stubBotGiftCartContext(now)
+            val reward =
+                PromotionGiftRewardItem(
+                    menuItemId = 2000L,
+                    name = "Чай",
+                    originalUnitPriceMinor = 30_000L,
+                    currency = "RUB",
+                )
+            val offer =
+                PromotionGiftOffer(
+                    status = PromotionGiftOfferStatus.FIXED_GIFT_AVAILABLE,
+                    promotionId = 509L,
+                    promotionTitle = "Чай к кальяну",
+                    ruleId = 604L,
+                    ruleVersion = 3,
+                    triggerMenuItemId = 1000L,
+                    triggerItemName = "Кальян классический",
+                    fixedRewardItem = reward,
+                )
+            coEvery {
+                ordersRepository.previewGuestOrderBatch(
+                    venueId = 10L,
+                    userId = 200L,
+                    items = any(),
+                    venueZoneId = ZoneId.of("Europe/Moscow"),
+                    giftDecision = null,
+                    tableSessionId = 55L,
+                    tabId = 77L,
+                    comment = null,
+                    giftDecisionCommand = null,
+                )
+            } returns giftCartPreview(offer, "restart-old")
+
+            processBotCallback(36_000L, "cb-old-add", "bot_menu_item:500:1000")
+            processBotCallback(36_001L, "cb-old-cart", "bot_menu_item_cart")
+
+            coEvery {
+                tableSessionRepository.resolveActiveSession(
+                    venueId = 10L,
+                    tableId = 11L,
+                    ttl = any(),
+                    now = any(),
+                )
+            } returns
+                TableSessionRecord(
+                    id = 56L,
+                    venueId = 10L,
+                    tableId = 11L,
+                    startedAt = now.minusSeconds(30),
+                    lastActivityAt = now,
+                    expiresAt = now.plusSeconds(7200),
+                    endedAt = null,
+                    status = TableSessionStatus.ACTIVE,
+                )
+            coEvery {
+                guestTabsRepository.ensurePersonalTab(
+                    venueId = 10L,
+                    tableSessionId = 56L,
+                    userId = 200L,
+                )
+            } returns
+                GuestTabModel(
+                    id = 78L,
+                    venueId = 10L,
+                    tableSessionId = 56L,
+                    type = "PERSONAL",
+                    ownerUserId = 200L,
+                    status = "ACTIVE",
+                )
+            coEvery {
+                ordersRepository.previewGuestOrderBatch(
+                    venueId = 10L,
+                    userId = 200L,
+                    items = any(),
+                    venueZoneId = ZoneId.of("Europe/Moscow"),
+                    giftDecision = null,
+                    tableSessionId = 56L,
+                    tabId = 78L,
+                    comment = null,
+                    giftDecisionCommand = null,
+                )
+            } returns giftCartPreview(offer, "restart-current")
+
+            val oldCallbacks =
+                listOf(
+                    "bot_gift_accept_fixed:$firstBotGiftCallbackTag",
+                    "bot_gift_confirm:2001:$firstBotGiftCallbackTag",
+                    "bot_gift_skip:$firstBotGiftCallbackTag",
+                    "bot_gift_skip",
+                )
+            val restartedRouter = routerWithWebAppPublicUrl(null)
+
+            suspend fun processRestarted(
+                updateId: Long,
+                callbackData: String,
+            ) {
+                restartedRouter.process(
+                    TelegramUpdate(
+                        updateId = updateId,
+                        callbackQuery =
+                            CallbackQuery(
+                                id = "cb-restarted-gift-$updateId",
+                                from = User(id = 200L),
+                                message =
+                                    Message(
+                                        messageId = updateId + 10_000L,
+                                        chat = Chat(id = 100L, type = "private"),
+                                        text = null,
+                                    ),
+                                data = callbackData,
+                            ),
+                    ),
+                )
+            }
+
+            processRestarted(36_002L, "bot_menu_item:500:1000")
+            processRestarted(36_003L, "bot_menu_item_cart")
+            oldCallbacks.forEachIndexed { index, callbackData ->
+                processRestarted(36_010L + index, callbackData)
+            }
+            processRestarted(36_020L, "bot_menu_cart_clear")
+            val clearedCartCallback = "bot_gift_accept_fixed:$secondBotGiftCallbackTag"
+            processRestarted(36_021L, clearedCartCallback)
+
+            (oldCallbacks + clearedCartCallback).forEach { callbackData ->
+                assertFalse(callbackData.contains("30000"))
+                assertFalse(callbackData.contains("40000"))
+                assertFalse(callbackData.length > 64)
+            }
+            coVerify(exactly = oldCallbacks.size + 1) {
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    "Корзина изменилась. Проверьте подарок ещё раз.",
+                    null,
+                )
+            }
+            coVerify(exactly = 0) {
+                ordersRepository.createGuestOrderBatch(
+                    any(),
+                    any(),
+                    any(),
+                    any(),
+                    any(),
+                    any(),
+                    any(),
+                    any(),
+                    any(),
+                    any(),
+                    any(),
+                    any(),
+                    any(),
+                    any(),
+                )
+            }
+        }
+
+    @Test
+    fun `direct reorder with gift offer moves item to cart before batch submit`() =
+        runBlocking {
+            stubBotGiftCartContext(Instant.parse("2026-03-30T10:00:00Z"))
+            val reward =
+                PromotionGiftRewardItem(
+                    menuItemId = 2000L,
+                    name = "Чай",
+                    originalUnitPriceMinor = 30_000L,
+                    currency = "RUB",
+                )
+            val availableOffer =
+                PromotionGiftOffer(
+                    status = PromotionGiftOfferStatus.FIXED_GIFT_AVAILABLE,
+                    promotionId = 509L,
+                    promotionTitle = "Чай к кальяну",
+                    ruleId = 604L,
+                    ruleVersion = 3,
+                    triggerMenuItemId = 1000L,
+                    triggerItemName = "Кальян классический",
+                    fixedRewardItem = reward,
+                )
+            coEvery { ordersRepository.findActiveOrderSummaryForTab(55L, 77L) } returns
+                ActiveOrderSummary(id = 900L, status = "ACTIVE")
+            coEvery {
+                ordersRepository.previewGuestOrderBatch(
+                    venueId = 10L,
+                    userId = 200L,
+                    items = any(),
+                    venueZoneId = ZoneId.of("Europe/Moscow"),
+                    giftDecision = null,
+                )
+            } returns giftCartPreview(availableOffer, "reorder-gift")
+            coEvery {
+                ordersRepository.previewGuestOrderBatch(
+                    venueId = 10L,
+                    userId = 200L,
+                    items = any(),
+                    venueZoneId = ZoneId.of("Europe/Moscow"),
+                    giftDecision = null,
+                    tableSessionId = 55L,
+                    tabId = 77L,
+                    comment = null,
+                    giftDecisionCommand = null,
+                )
+            } returns giftCartPreview(availableOffer, "reorder-gift")
+
+            processBotCallback(34_001, "cb-reorder-gift", "bot_menu_item_reorder:500:1000")
+
+            coVerify(exactly = 0) {
+                ordersRepository.createGuestOrderBatch(
+                    tableId = 11L,
+                    venueId = 10L,
+                    tableSessionId = 55L,
+                    userId = 200L,
+                    idempotencyKey = "bot-reorder:cb-reorder-gift",
+                    tabId = 77L,
+                    comment = null,
+                    items = any(),
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Для дозаказа доступен подарок") },
+                    null,
+                )
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Вам доступен подарок: Чай") },
+                    match { markup ->
+                        (markup as? InlineKeyboardMarkup)
+                            ?.inlineKeyboard
+                            ?.flatten()
+                            ?.any {
+                                it.callbackData == "bot_gift_accept_fixed:$firstBotGiftCallbackTag"
+                            } == true
+                    },
                 )
             }
         }
@@ -23430,6 +24330,11 @@ class TelegramBotRouterTableTokenTest {
                     venueZoneId = ZoneId.of("Europe/Moscow"),
                     selectedGiftChoices = emptyMap(),
                     skippedGiftRuleIds = emptySet(),
+                    giftDecision = null,
+                    tableSessionId = 55L,
+                    tabId = 9L,
+                    comment = null,
+                    giftDecisionCommand = null,
                 )
             } returns
                 GuestOrderCartPreview(
@@ -27368,6 +28273,104 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
+    fun `staff order item action hides manual discount`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+            coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
+                staffChatOrderDetail(batchId = 57L, status = OrderWorkflowStatus.ACCEPTED)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_409_11,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-staff-item-action",
+                            from = User(id = 501L),
+                            message = Message(messageId = 93L, chat = Chat(id = 501L, type = "private")),
+                            data = "staff_order_bill_item:10:19:500",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    501L,
+                    any(),
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.callbackData == "obi_unav_ask:a:j:dw" } &&
+                            buttons.any { it.callbackData == "staff_order_bill_exclude:10:19:500" } &&
+                            buttons.none { it.callbackData?.startsWith("staff_order_bill_discount:") == true }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `staff cannot start or submit manual discount from stale dialog`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_409_12,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-staff-item-discount",
+                            from = User(id = 501L),
+                            message = Message(messageId = 94L, chat = Chat(id = 501L, type = "private")),
+                            data = "staff_order_bill_discount:10:19:500",
+                        ),
+                ),
+            )
+
+            coEvery { dialogStateRepository.get(501L) } returns
+                DialogState(
+                    state = DialogStateType.VENUE_STAFF_ORDERS_WAIT_ITEM_DISCOUNT_PERCENT,
+                    payload =
+                        mapOf(
+                            "venue_id" to "10",
+                            "order_id" to "19",
+                            "batch_item_id" to "500",
+                        ),
+                )
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_409_13,
+                    message =
+                        Message(
+                            messageId = 95L,
+                            chat = Chat(id = 501L, type = "private"),
+                            fromUser = User(id = 501L),
+                            text = "15",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 2) {
+                outboxEnqueuer.enqueueSendMessage(501L, "Недостаточно прав.", null)
+            }
+            coVerify(exactly = 0) {
+                dialogStateRepository.set(
+                    501L,
+                    match { it.state == DialogStateType.VENUE_STAFF_ORDERS_WAIT_ITEM_DISCOUNT_PERCENT },
+                )
+            }
+            coVerify(exactly = 1) { dialogStateRepository.clear(501L) }
+            coVerify(exactly = 0) {
+                venueOrdersRepository.setBatchItemDiscountPercent(
+                    venueId = any(),
+                    orderId = any(),
+                    batchItemId = any(),
+                    discountPercent = any(),
+                    actor = any(),
+                )
+            }
+        }
+
+    @Test
     fun `staff confirms item unavailable and guest is notified`() =
         runBlocking {
             coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
@@ -27427,6 +28430,13 @@ class TelegramBotRouterTableTokenTest {
                             text.contains("добавьте её в стоп-лист")
                     },
                     null,
+                )
+            }
+            coVerify(exactly = 1) {
+                staffChatNotifier.refreshOrderActivityCardNow(
+                    venueId = 10L,
+                    orderId = 19L,
+                    includeStaffCallId = null,
                 )
             }
         }
@@ -27568,6 +28578,158 @@ class TelegramBotRouterTableTokenTest {
                 outboxEnqueuer.enqueueSendMessage(
                     501L,
                     match { text -> text.contains("База недоступна") },
+                    any(),
+                )
+            }
+            coVerify(exactly = 0) {
+                staffChatNotifier.refreshOrderActivityCardNow(any(), any(), any())
+            }
+        }
+
+    @Test
+    fun `already canceled staff item does not refresh staff chat card`() =
+        runBlocking {
+            coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
+                staffChatOrderDetail(batchId = 57L, status = OrderWorkflowStatus.ACCEPTED)
+            coEvery {
+                venueOrdersRepository.cancelBatchItemAsUnavailable(
+                    venueId = 10L,
+                    orderId = 19L,
+                    batchItemId = 500L,
+                    actor = any(),
+                )
+            } returns
+                CancelBatchItemResult(
+                    orderId = 19L,
+                    batchId = 57L,
+                    batchItemId = 500L,
+                    itemName = "Darkside",
+                    guestUserId = 200L,
+                    applied = false,
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_409_30,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-item-unavailable-already-canceled",
+                            from = User(id = 501L),
+                            message = Message(messageId = 95L, chat = Chat(id = 501L, type = "private")),
+                            data = "obi_unav_ok:a:j:dw",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) {
+                staffChatNotifier.refreshOrderActivityCardNow(any(), any(), any())
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    501L,
+                    match { text -> text.contains("Позиция уже убрана из заказа") },
+                    any(),
+                )
+            }
+        }
+
+    @Test
+    fun `staff bill item exclusion refreshes persisted staff chat card once`() =
+        runBlocking {
+            coEvery { dialogStateRepository.get(501L) } returns
+                DialogState(
+                    state = DialogStateType.VENUE_STAFF_ORDERS_WAIT_ITEM_EXCLUDE_REASON,
+                    payload =
+                        mapOf(
+                            "venue_id" to "10",
+                            "order_id" to "19",
+                            "batch_item_id" to "500",
+                        ),
+                )
+            coEvery {
+                venueOrdersRepository.excludeBatchItemFromBill(
+                    venueId = 10L,
+                    orderId = 19L,
+                    batchItemId = 500L,
+                    reasonText = "Не выдаём позицию",
+                    actor = any(),
+                )
+            } returns true
+            coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
+                staffChatOrderDetail(batchId = 57L, status = OrderWorkflowStatus.ACCEPTED)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_409_31,
+                    message =
+                        Message(
+                            messageId = 96L,
+                            chat = Chat(id = 501L, type = "private"),
+                            fromUser = User(id = 501L),
+                            text = "Не выдаём позицию",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 1) {
+                staffChatNotifier.refreshOrderActivityCardNow(
+                    venueId = 10L,
+                    orderId = 19L,
+                    includeStaffCallId = null,
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    501L,
+                    "✅ Позиция исключена из счёта.",
+                    null,
+                )
+            }
+        }
+
+    @Test
+    fun `failed staff bill item exclusion does not refresh staff chat card`() =
+        runBlocking {
+            coEvery { dialogStateRepository.get(501L) } returns
+                DialogState(
+                    state = DialogStateType.VENUE_STAFF_ORDERS_WAIT_ITEM_EXCLUDE_REASON,
+                    payload =
+                        mapOf(
+                            "venue_id" to "10",
+                            "order_id" to "19",
+                            "batch_item_id" to "500",
+                        ),
+                )
+            coEvery {
+                venueOrdersRepository.excludeBatchItemFromBill(
+                    venueId = 10L,
+                    orderId = 19L,
+                    batchItemId = 500L,
+                    reasonText = "Повтор",
+                    actor = any(),
+                )
+            } returns false
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 20_409_32,
+                    message =
+                        Message(
+                            messageId = 97L,
+                            chat = Chat(id = 501L, type = "private"),
+                            fromUser = User(id = 501L),
+                            text = "Повтор",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) {
+                staffChatNotifier.refreshOrderActivityCardNow(any(), any(), any())
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    501L,
+                    match { text -> text.contains("Позиция не найдена или уже исключена") },
                     any(),
                 )
             }
@@ -28224,6 +29386,157 @@ class TelegramBotRouterTableTokenTest {
             weekdayWindows = weekdayWindows,
             executableTargetType = executableTargetType,
         )
+
+    private fun stubBotGiftCartContext(now: Instant): TableContext {
+        val context =
+            TableContext(
+                venueId = 10L,
+                venueName = "Venue",
+                tableId = 11L,
+                tableNumber = 5,
+                tableToken = "TOKEN",
+                staffChatId = null,
+            )
+        coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+        coEvery { tableTokenRepository.resolve("TOKEN") } returns context
+        coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+        coEvery { ordersRepository.findActiveOrderSummary(11L) } returns null
+        coEvery { venueSettingsRepository.resolveZoneId(10L, any()) } returns ZoneId.of("Europe/Moscow")
+        coEvery { guestMenuRepository.getMenu(10L) } returns
+            MenuModel(
+                venueId = 10L,
+                categories =
+                    listOf(
+                        MenuCategoryModel(
+                            id = 500L,
+                            name = "Кальянное меню",
+                            sortOrder = 0,
+                            categoryType = MenuSemanticType.HOOKAH,
+                            items =
+                                listOf(
+                                    MenuItemModel(
+                                        id = 1000L,
+                                        name = "Кальян классический",
+                                        priceMinor = 25_000L,
+                                        currency = "RUB",
+                                        isAvailable = true,
+                                        sortOrder = 0,
+                                    ),
+                                ),
+                        ),
+                    ),
+            )
+        coEvery {
+            tableSessionRepository.resolveActiveSession(
+                venueId = 10L,
+                tableId = 11L,
+                ttl = any(),
+                now = any(),
+            )
+        } returns
+            TableSessionRecord(
+                id = 55L,
+                venueId = 10L,
+                tableId = 11L,
+                startedAt = now.minusSeconds(60),
+                lastActivityAt = now,
+                expiresAt = now.plusSeconds(7200),
+                endedAt = null,
+                status = TableSessionStatus.ACTIVE,
+            )
+        coEvery {
+            guestTabsRepository.ensurePersonalTab(
+                venueId = 10L,
+                tableSessionId = 55L,
+                userId = 200L,
+            )
+        } returns
+            GuestTabModel(
+                id = 77L,
+                venueId = 10L,
+                tableSessionId = 55L,
+                type = "PERSONAL",
+                ownerUserId = 200L,
+                status = "ACTIVE",
+            )
+        return context
+    }
+
+    private fun giftCartPreview(
+        offer: PromotionGiftOffer,
+        pricingFingerprint: String,
+        decisionScopeToken: String? = "signed-scope-$pricingFingerprint",
+    ): GuestOrderCartPreview {
+        val selectedReward = offer.selectedRewardItem
+        val rewardPriceMinor = selectedReward?.originalUnitPriceMinor ?: 0L
+        return GuestOrderCartPreview(
+            items =
+                buildList {
+                    add(
+                        GuestOrderCartPreviewItem(
+                            itemId = 1000L,
+                            itemName = "Кальян классический",
+                            qty = 1,
+                            priceMinor = 25_000L,
+                            currency = "RUB",
+                            lineGrossMinor = 25_000L,
+                            discountMinor = 0L,
+                            linePayableMinor = 25_000L,
+                        ),
+                    )
+                    selectedReward?.let { reward ->
+                        add(
+                            GuestOrderCartPreviewItem(
+                                itemId = reward.menuItemId,
+                                itemName = reward.name,
+                                qty = 1,
+                                priceMinor = reward.originalUnitPriceMinor,
+                                currency = reward.currency,
+                                lineGrossMinor = reward.originalUnitPriceMinor,
+                                discountMinor = reward.originalUnitPriceMinor,
+                                linePayableMinor = 0L,
+                                isPromotionReward = true,
+                            ),
+                        )
+                    }
+                },
+            grossTotalMinor = 25_000L + rewardPriceMinor,
+            promoDiscountTotalMinor = rewardPriceMinor,
+            loyaltyDiscountTotalMinor = 0L,
+            finalPayableTotalMinor = 25_000L,
+            currency = "RUB",
+            discounts = emptyList(),
+            pricingFingerprint = pricingFingerprint,
+            giftOffer = offer,
+            cartFingerprint = "cart-$pricingFingerprint",
+            decisionScopeToken = decisionScopeToken,
+            decisionScopeExpiresAtEpochSeconds = 1_900_000_000L,
+        )
+    }
+
+    private suspend fun processBotCallback(
+        updateId: Long,
+        callbackId: String,
+        data: String,
+    ) {
+        router.process(
+            TelegramUpdate(
+                updateId = updateId,
+                callbackQuery =
+                    CallbackQuery(
+                        id = callbackId,
+                        from = User(id = 200),
+                        message =
+                            Message(
+                                messageId = updateId + 100_000L,
+                                chat = Chat(id = 100, type = "private"),
+                                text = null,
+                            ),
+                        data = data,
+                    ),
+            ),
+        )
+    }
 
     private fun staffChatOrderDetail(
         batchId: Long,

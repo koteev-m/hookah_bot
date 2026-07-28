@@ -98,6 +98,7 @@ import com.hookah.platform.backend.platform.PlatformVenueMemberRepository
 import com.hookah.platform.backend.platform.PlatformVenueRepository
 import com.hookah.platform.backend.platform.VenueOwnerAccountRepository
 import com.hookah.platform.backend.platform.platformRoutes
+import com.hookah.platform.backend.promotions.GiftDecisionScopeTokenService
 import com.hookah.platform.backend.security.constantTimeEquals
 import com.hookah.platform.backend.support.SupportThreadRepository
 import com.hookah.platform.backend.support.guestSupportRoutes
@@ -310,6 +311,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
     val miniAppStaticDir = appConfig.optionalString("miniapp.staticDir")?.takeIf { it.isNotBlank() }
     val sessionTokenConfig = SessionTokenConfig.from(appConfig, appEnv)
     val sessionTokenService = SessionTokenService(sessionTokenConfig)
+    val giftDecisionScopeTokenService = GiftDecisionScopeTokenService(sessionTokenConfig.jwtSecret)
     val billingConfig = BillingConfig.from(appConfig, appEnv)
     val genericBillingConfig = GenericHmacBillingProviderConfig.from(appConfig)
     val subscriptionBillingConfig = SubscriptionBillingConfig.from(appConfig)
@@ -371,6 +373,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
             promotionApplicationRepository = promotionApplicationRepository,
             venuePromotionRuleRepository = venuePromotionRuleRepository,
             loyaltyRepository = loyaltyRepository,
+            giftDecisionScopeTokenService = giftDecisionScopeTokenService,
         )
     val venueOrdersRepository =
         VenueOrdersRepository(

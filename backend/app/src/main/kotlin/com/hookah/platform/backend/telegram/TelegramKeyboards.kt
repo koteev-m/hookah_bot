@@ -6892,7 +6892,11 @@ object TelegramKeyboards {
     fun inlineBotMenuCartSummaryActions(
         showSplitBillActions: Boolean = false,
         hasComment: Boolean = false,
-        hasGiftChoice: Boolean = false,
+        showAcceptFixedGift: Boolean = false,
+        showGiftChoice: Boolean = false,
+        giftChoiceSelected: Boolean = false,
+        showSkipGift: Boolean = false,
+        giftCallbackTag: String? = null,
     ): InlineKeyboardMarkup =
         InlineKeyboardMarkup(
             inlineKeyboard =
@@ -6905,12 +6909,32 @@ object TelegramKeyboards {
                             ),
                         ),
                     )
-                    if (hasGiftChoice) {
+                    if (showAcceptFixedGift && giftCallbackTag != null) {
                         add(
                             listOf(
                                 InlineKeyboardButton(
-                                    text = "🎁 Выбрать подарок",
-                                    callbackData = "bot_menu_gift_choice",
+                                    text = "🎁 Добавить подарок",
+                                    callbackData = "bot_gift_accept_fixed:$giftCallbackTag",
+                                ),
+                            ),
+                        )
+                    }
+                    if (showGiftChoice && giftCallbackTag != null) {
+                        add(
+                            listOf(
+                                InlineKeyboardButton(
+                                    text = if (giftChoiceSelected) "🎁 Изменить подарок" else "🎁 Выбрать подарок",
+                                    callbackData = "bot_menu_gift_choice:$giftCallbackTag",
+                                ),
+                            ),
+                        )
+                    }
+                    if (showSkipGift && giftCallbackTag != null) {
+                        add(
+                            listOf(
+                                InlineKeyboardButton(
+                                    text = "Пропустить подарок",
+                                    callbackData = "bot_gift_skip:$giftCallbackTag",
                                 ),
                             ),
                         )
@@ -6952,26 +6976,37 @@ object TelegramKeyboards {
                 },
         )
 
-    fun inlineBotGiftChoiceRequiredActions(): InlineKeyboardMarkup =
+    fun inlineBotGiftDecisionRequiredActions(
+        fixedGift: Boolean,
+        giftCallbackTag: String,
+    ): InlineKeyboardMarkup =
         InlineKeyboardMarkup(
             inlineKeyboard =
                 listOf(
                     listOf(
                         InlineKeyboardButton(
-                            text = "🎁 Выбрать подарок",
-                            callbackData = "bot_menu_gift_choice",
+                            text = if (fixedGift) "🎁 Добавить подарок" else "🎁 Выбрать подарок",
+                            callbackData =
+                                if (fixedGift) {
+                                    "bot_gift_accept_fixed:$giftCallbackTag"
+                                } else {
+                                    "bot_menu_gift_choice:$giftCallbackTag"
+                                },
                         ),
                     ),
                     listOf(
                         InlineKeyboardButton(
-                            text = "Оформить без подарка",
-                            callbackData = "bot_gift_skip",
+                            text = "Пропустить подарок",
+                            callbackData = "bot_gift_skip:$giftCallbackTag",
                         ),
                     ),
                 ),
         )
 
-    fun inlineBotGiftChoiceOptionsActions(options: List<Triple<Long, String, Boolean>>): InlineKeyboardMarkup =
+    fun inlineBotGiftChoiceOptionsActions(
+        options: List<Triple<Long, String, Boolean>>,
+        giftCallbackTag: String,
+    ): InlineKeyboardMarkup =
         InlineKeyboardMarkup(
             inlineKeyboard =
                 buildList {
@@ -6980,7 +7015,17 @@ object TelegramKeyboards {
                             listOf(
                                 InlineKeyboardButton(
                                     text = if (selected) "✅ $name" else name,
-                                    callbackData = "bot_gift_opt:$itemId",
+                                    callbackData = "bot_gift_opt:$itemId:$giftCallbackTag",
+                                ),
+                            ),
+                        )
+                    }
+                    options.firstOrNull { it.third }?.let { (itemId, _, _) ->
+                        add(
+                            listOf(
+                                InlineKeyboardButton(
+                                    text = "🎁 Добавить выбранный подарок",
+                                    callbackData = "bot_gift_confirm:$itemId:$giftCallbackTag",
                                 ),
                             ),
                         )
@@ -6988,8 +7033,8 @@ object TelegramKeyboards {
                     add(
                         listOf(
                             InlineKeyboardButton(
-                                text = "✅ Готово",
-                                callbackData = "bot_gift_done",
+                                text = "Пропустить подарок",
+                                callbackData = "bot_gift_skip:$giftCallbackTag",
                             ),
                         ),
                     )

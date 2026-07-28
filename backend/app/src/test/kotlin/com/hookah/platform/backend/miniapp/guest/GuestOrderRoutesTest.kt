@@ -4,10 +4,13 @@ import com.hookah.platform.backend.ModuleOverrides
 import com.hookah.platform.backend.api.ApiErrorCodes
 import com.hookah.platform.backend.miniapp.guest.api.ActiveOrderResponse
 import com.hookah.platform.backend.miniapp.guest.api.AddBatchItemDto
+import com.hookah.platform.backend.miniapp.guest.api.AddBatchRecalculationResponse
 import com.hookah.platform.backend.miniapp.guest.api.AddBatchRequest
 import com.hookah.platform.backend.miniapp.guest.api.AddBatchResponse
+import com.hookah.platform.backend.miniapp.guest.api.CartPreviewDto
 import com.hookah.platform.backend.miniapp.guest.api.CartPreviewRequest
 import com.hookah.platform.backend.miniapp.guest.api.CartPreviewResponse
+import com.hookah.platform.backend.miniapp.guest.api.GiftDecisionDto
 import com.hookah.platform.backend.miniapp.guest.api.GuestBillRequestRequest
 import com.hookah.platform.backend.miniapp.guest.api.GuestBillRequestResponse
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
@@ -18,10 +21,21 @@ import com.hookah.platform.backend.miniapp.venue.orders.VenueOrdersRepository
 import com.hookah.platform.backend.module
 import com.hookah.platform.backend.moduleWithOverrides
 import com.hookah.platform.backend.platform.PlatformMarkInvoicePaidRequest
+import com.hookah.platform.backend.promotions.GiftDecisionCartItem
+import com.hookah.platform.backend.promotions.GiftDecisionCartScope
+import com.hookah.platform.backend.promotions.GiftDecisionCommand
+import com.hookah.platform.backend.promotions.GiftDecisionOfferIdentity
+import com.hookah.platform.backend.promotions.GiftDecisionOfferType
+import com.hookah.platform.backend.promotions.GiftDecisionScopeTokenService
+import com.hookah.platform.backend.promotions.MiniAppGiftDecisionAdapter
+import com.hookah.platform.backend.promotions.PromotionGiftDecisionAction
+import com.hookah.platform.backend.promotions.PromotionGiftOfferStatus
+import com.hookah.platform.backend.promotions.TelegramGiftDecisionAdapter
 import com.hookah.platform.backend.telegram.NewBatchNotification
 import com.hookah.platform.backend.telegram.StaffBillRequestNotification
 import com.hookah.platform.backend.telegram.StaffChatNotificationResult
 import com.hookah.platform.backend.telegram.StaffChatNotifier
+import com.hookah.platform.backend.telegram.db.GiftDecisionRequiredException
 import com.hookah.platform.backend.telegram.db.OrderBatchItemInput
 import com.hookah.platform.backend.telegram.db.OrdersRepository
 import com.hookah.platform.backend.telegram.db.PromotionApplicationRepository
@@ -2493,23 +2507,35 @@ class GuestOrderRoutesTest {
             setMenuCategoryType(jdbcUrl, teaCategoryId, "TEA")
             val teaItemId = seedMenuItem(jdbcUrl, venueId, teaCategoryId, "Чай")
             val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
-            seedGiftWithItemRule(
-                jdbcUrl = jdbcUrl,
-                venueId = venueId,
-                userId = TELEGRAM_USER_ID,
-                rewardMenuItemId = teaItemId,
-                status = "ACTIVE",
-            )
+            val giftRule =
+                seedGiftWithItemRule(
+                    jdbcUrl = jdbcUrl,
+                    venueId = venueId,
+                    userId = TELEGRAM_USER_ID,
+                    rewardMenuItemId = teaItemId,
+                    status = "ACTIVE",
+                )
 
             val token = issueToken(config)
+            val requestItems = listOf(AddBatchItemDto(itemId = hookahItemId, qty = 1))
             val request =
                 AddBatchRequest(
                     tableToken = "gift-ledger-token",
                     tableSessionId = tableSessionId,
                     tabId = personalTabId,
                     idempotencyKey = "idem-gift-ledger",
-                    items = listOf(AddBatchItemDto(itemId = hookahItemId, qty = 1)),
+                    items = requestItems,
                     comment = null,
+                    giftDecision =
+                        giftRule.acceptFixedDecision(
+                            giftRule.issueFixedDecisionScope(
+                                config = config,
+                                venueId = venueId,
+                                tableSessionId = tableSessionId,
+                                tabId = personalTabId,
+                                items = requestItems,
+                            ),
+                        ),
                 )
             val response =
                 client.post("/api/guest/order/add-batch") {
@@ -2542,6 +2568,876 @@ class GuestOrderRoutesTest {
             assertEquals(1, countPromotionApplications(jdbcUrl))
             assertEquals(1, countPromotionAdjustments(jdbcUrl))
             assertEquals(1, countRows(jdbcUrl, "order_promotion_reward_items"))
+        }
+
+    @Test
+    fun `signed gift scope fails closed on legacy choice and skip inputs`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-order-gift-legacy-decision-rejected")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 51)
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val hookahCategoryId = seedMenuCategory(jdbcUrl, venueId)
+            setMenuCategoryType(jdbcUrl, hookahCategoryId, "HOOKAH")
+            val hookahItemId =
+                seedMenuItem(jdbcUrl, venueId, hookahCategoryId, "Кальян", priceMinor = 2_000L)
+            val drinkCategoryId = seedMenuCategory(jdbcUrl, venueId)
+            setMenuCategoryType(jdbcUrl, drinkCategoryId, "DRINK")
+            val teaItemId = seedMenuItem(jdbcUrl, venueId, drinkCategoryId, "Чай", priceMinor = 300L)
+            val juiceItemId = seedMenuItem(jdbcUrl, venueId, drinkCategoryId, "Сок", priceMinor = 500L)
+            val tabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
+            val giftRule =
+                seedGiftWithItemRule(
+                    jdbcUrl = jdbcUrl,
+                    venueId = venueId,
+                    userId = TELEGRAM_USER_ID,
+                    rewardMenuItemId = teaItemId,
+                    status = "ACTIVE",
+                    rewardMode = "CHOICE_ITEMS",
+                    rewardOptionMenuItemIds = listOf(teaItemId, juiceItemId),
+                )
+            val dataSource = h2DataSource(jdbcUrl)
+            val repository =
+                OrdersRepository(
+                    dataSource = dataSource,
+                    promotionApplicationRepository = PromotionApplicationRepository(dataSource),
+                    venuePromotionRuleRepository = VenuePromotionRuleRepository(dataSource),
+                    giftDecisionScopeTokenService =
+                        GiftDecisionScopeTokenService(
+                            SessionTokenConfig.from(config, appEnv).jwtSecret,
+                        ),
+                )
+            val items = listOf(OrderBatchItemInput(itemId = hookahItemId, qty = 1))
+
+            val preview =
+                assertNotNull(
+                    repository.previewGuestOrderBatch(
+                        venueId = venueId,
+                        userId = TELEGRAM_USER_ID,
+                        items = items,
+                        tableSessionId = tableSessionId,
+                        tabId = tabId,
+                        selectedGiftChoices = mapOf(giftRule.ruleId to juiceItemId),
+                    ),
+                )
+            assertEquals(PromotionGiftOfferStatus.GIFT_CHOICE_REQUIRED, preview.giftOffer.status)
+            assertTrue(preview.giftDecisionStale)
+            assertEquals(
+                "Корзина изменилась. Проверьте подарок ещё раз.",
+                preview.giftDecisionMessage,
+            )
+            assertNotNull(preview.decisionScopeToken)
+
+            suspend fun rejectedLegacySubmit(
+                idempotencyKey: String,
+                selectedGiftChoices: Map<Long, Long> = emptyMap(),
+                skippedGiftRuleIds: Set<Long> = emptySet(),
+            ): GiftDecisionRequiredException? =
+                try {
+                    repository.createGuestOrderBatch(
+                        tableId = tableId,
+                        venueId = venueId,
+                        tableSessionId = tableSessionId,
+                        userId = TELEGRAM_USER_ID,
+                        idempotencyKey = idempotencyKey,
+                        tabId = tabId,
+                        comment = null,
+                        items = items,
+                        selectedGiftChoices = selectedGiftChoices,
+                        skippedGiftRuleIds = skippedGiftRuleIds,
+                    )
+                    null
+                } catch (exception: GiftDecisionRequiredException) {
+                    exception
+                }
+
+            assertNotNull(
+                rejectedLegacySubmit(
+                    idempotencyKey = "legacy-select-rejected",
+                    selectedGiftChoices = mapOf(giftRule.ruleId to juiceItemId),
+                ),
+            )
+            assertNotNull(
+                rejectedLegacySubmit(
+                    idempotencyKey = "legacy-skip-rejected",
+                    skippedGiftRuleIds = setOf(giftRule.ruleId),
+                ),
+            )
+            assertEquals(0, countRows(jdbcUrl, "orders"))
+            assertEquals(0, countRows(jdbcUrl, "order_batches"))
+            assertEquals(0, countRows(jdbcUrl, "order_batch_items"))
+            assertEquals(0, countRows(jdbcUrl, "order_promotion_applications"))
+            assertEquals(0, countRows(jdbcUrl, "order_batch_item_promotion_adjustments"))
+            assertEquals(0, countRows(jdbcUrl, "order_promotion_reward_items"))
+            assertEquals(0, countRows(jdbcUrl, "guest_batch_idempotency"))
+        }
+
+    @Test
+    fun `gift trigger requires current selected option and stale option persists nothing`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-order-gift-trigger-required-option")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 52)
+            seedTableToken(jdbcUrl, tableId, "gift-trigger-required-option-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val hookahCategoryId = seedMenuCategory(jdbcUrl, venueId)
+            setMenuCategoryType(jdbcUrl, hookahCategoryId, "HOOKAH")
+            val hookahItemId =
+                seedMenuItem(jdbcUrl, venueId, hookahCategoryId, "Кальян с выбором", priceMinor = 2_000L)
+            val optionId =
+                seedMenuOption(
+                    jdbcUrl = jdbcUrl,
+                    venueId = venueId,
+                    itemId = hookahItemId,
+                    name = "Средняя крепость",
+                )
+            val drinkCategoryId = seedMenuCategory(jdbcUrl, venueId)
+            setMenuCategoryType(jdbcUrl, drinkCategoryId, "DRINK")
+            val teaItemId = seedMenuItem(jdbcUrl, venueId, drinkCategoryId, "Чай", priceMinor = 300L)
+            val tabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
+            val giftRule =
+                seedGiftWithItemRule(
+                    jdbcUrl = jdbcUrl,
+                    venueId = venueId,
+                    userId = TELEGRAM_USER_ID,
+                    rewardMenuItemId = teaItemId,
+                    status = "ACTIVE",
+                )
+            val authToken = issueToken(config)
+
+            suspend fun preview(items: List<AddBatchItemDto>): CartPreviewDto {
+                val response =
+                    client.post("/api/guest/order/preview") {
+                        contentType(ContentType.Application.Json)
+                        headers { append(HttpHeaders.Authorization, "Bearer $authToken") }
+                        setBody(
+                            json.encodeToString(
+                                CartPreviewRequest.serializer(),
+                                CartPreviewRequest(
+                                    tableToken = "gift-trigger-required-option-token",
+                                    tableSessionId = tableSessionId,
+                                    tabId = tabId,
+                                    items = items,
+                                ),
+                            ),
+                        )
+                    }
+                assertEquals(HttpStatusCode.OK, response.status)
+                return json.decodeFromString(CartPreviewResponse.serializer(), response.bodyAsText()).preview
+            }
+
+            val missingOptionItems = listOf(AddBatchItemDto(itemId = hookahItemId, qty = 1))
+            val missingOptionPreview = preview(missingOptionItems)
+            assertEquals("NO_GIFT", missingOptionPreview.giftOffer.status)
+            assertNull(missingOptionPreview.decisionScopeToken)
+
+            val selectedOptionItems =
+                listOf(
+                    AddBatchItemDto(
+                        itemId = hookahItemId,
+                        qty = 1,
+                        selectedOptionId = optionId,
+                    ),
+                )
+            val offered = preview(selectedOptionItems)
+            assertEquals("FIXED_GIFT_AVAILABLE", offered.giftOffer.status)
+            val decision = giftRule.acceptFixedDecision(assertNotNull(offered.decisionScopeToken))
+
+            val removedOptionResponse =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $authToken") }
+                    setBody(
+                        json.encodeToString(
+                            AddBatchRequest.serializer(),
+                            AddBatchRequest(
+                                tableToken = "gift-trigger-required-option-token",
+                                tableSessionId = tableSessionId,
+                                tabId = tabId,
+                                idempotencyKey = "gift-trigger-option-removed",
+                                items = missingOptionItems,
+                                giftDecision = decision,
+                            ),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, removedOptionResponse.status)
+            val removedOption =
+                json.decodeFromString(
+                    AddBatchRecalculationResponse.serializer(),
+                    removedOptionResponse.bodyAsText(),
+                )
+            assertFalse(removedOption.submitted)
+            assertEquals("NO_GIFT", removedOption.pricing.giftOffer.status)
+            assertTrue(removedOption.pricing.giftDecisionStale)
+            assertEquals(
+                "Корзина изменилась. Проверьте подарок ещё раз.",
+                removedOption.pricing.giftDecisionMessage,
+            )
+
+            setMenuOptionAvailability(jdbcUrl, optionId, isAvailable = false)
+            val staleOptionResponse =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $authToken") }
+                    setBody(
+                        json.encodeToString(
+                            AddBatchRequest.serializer(),
+                            AddBatchRequest(
+                                tableToken = "gift-trigger-required-option-token",
+                                tableSessionId = tableSessionId,
+                                tabId = tabId,
+                                idempotencyKey = "gift-trigger-option-stale",
+                                items = selectedOptionItems,
+                                giftDecision = decision,
+                            ),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.BadRequest, staleOptionResponse.status)
+            assertApiErrorEnvelope(staleOptionResponse, ApiErrorCodes.INVALID_INPUT)
+            assertEquals(0, countRows(jdbcUrl, "orders"))
+            assertEquals(0, countRows(jdbcUrl, "order_batches"))
+            assertEquals(0, countRows(jdbcUrl, "order_batch_items"))
+            assertEquals(0, countRows(jdbcUrl, "order_promotion_applications"))
+            assertEquals(0, countRows(jdbcUrl, "order_batch_item_promotion_adjustments"))
+            assertEquals(0, countRows(jdbcUrl, "order_promotion_reward_items"))
+            assertEquals(0, countRows(jdbcUrl, "guest_batch_idempotency"))
+        }
+
+    @Test
+    fun `fixed gift preview is mutation free and submit requires stateless accept with current price`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-order-fixed-gift-decision")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 41)
+            seedTableToken(jdbcUrl, tableId, "fixed-gift-decision-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val hookahCategoryId = seedMenuCategory(jdbcUrl, venueId)
+            setMenuCategoryType(jdbcUrl, hookahCategoryId, "HOOKAH")
+            val hookahItemId =
+                seedMenuItem(jdbcUrl, venueId, hookahCategoryId, "Кальян", priceMinor = 2_000L)
+            val teaCategoryId = seedMenuCategory(jdbcUrl, venueId)
+            setMenuCategoryType(jdbcUrl, teaCategoryId, "TEA")
+            val teaItemId =
+                seedMenuItem(jdbcUrl, venueId, teaCategoryId, "Чай", priceMinor = 300L)
+            val tabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
+            val giftRule =
+                seedGiftWithItemRule(
+                    jdbcUrl = jdbcUrl,
+                    venueId = venueId,
+                    userId = TELEGRAM_USER_ID,
+                    rewardMenuItemId = teaItemId,
+                    status = "ACTIVE",
+                )
+            val token = issueToken(config)
+            val previewRequest =
+                CartPreviewRequest(
+                    tableToken = "fixed-gift-decision-token",
+                    tableSessionId = tableSessionId,
+                    tabId = tabId,
+                    items = listOf(AddBatchItemDto(itemId = hookahItemId, qty = 2)),
+                )
+
+            suspend fun preview(request: CartPreviewRequest): CartPreviewResponse {
+                val response =
+                    client.post("/api/guest/order/preview") {
+                        contentType(ContentType.Application.Json)
+                        headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                        setBody(json.encodeToString(CartPreviewRequest.serializer(), request))
+                    }
+                assertEquals(HttpStatusCode.OK, response.status)
+                return json.decodeFromString(CartPreviewResponse.serializer(), response.bodyAsText())
+            }
+
+            val offered = preview(previewRequest).preview
+            assertEquals("FIXED_GIFT_AVAILABLE", offered.giftOffer.status)
+            assertEquals(teaItemId, offered.giftOffer.fixedRewardItem?.menuItemId)
+            assertTrue(offered.cartFingerprint.isNotBlank())
+            assertNotNull(offered.decisionScopeExpiresAtEpochSeconds)
+            assertEquals(listOf(hookahItemId), offered.items.map { it.itemId })
+            assertEquals(0, countRows(jdbcUrl, "orders"))
+            assertEquals(0, countRows(jdbcUrl, "order_promotion_applications"))
+
+            val unresolvedSubmit =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(
+                        json.encodeToString(
+                            AddBatchRequest.serializer(),
+                            AddBatchRequest(
+                                tableToken = "fixed-gift-decision-token",
+                                tableSessionId = tableSessionId,
+                                tabId = tabId,
+                                idempotencyKey = "fixed-gift-decision",
+                                items = previewRequest.items,
+                                previewFingerprint = offered.pricingFingerprint,
+                            ),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, unresolvedSubmit.status)
+            val recalculation =
+                json.decodeFromString(
+                    AddBatchRecalculationResponse.serializer(),
+                    unresolvedSubmit.bodyAsText(),
+                )
+            assertFalse(recalculation.submitted)
+            assertEquals("FIXED_GIFT_AVAILABLE", recalculation.pricing.giftOffer.status)
+            assertEquals(0, countRows(jdbcUrl, "orders"))
+            assertEquals(0, countRows(jdbcUrl, "order_batches"))
+            assertEquals(0, countRows(jdbcUrl, "guest_batch_idempotency"))
+
+            val decision = giftRule.acceptFixedDecision(assertNotNull(offered.decisionScopeToken))
+            val acceptedPreview = preview(previewRequest.copy(giftDecision = decision)).preview
+            assertEquals("GIFT_SELECTED", acceptedPreview.giftOffer.status)
+            val previewGift = acceptedPreview.items.single { it.isPromotionReward }
+            assertEquals(300L, previewGift.priceMinor)
+            assertEquals(300L, previewGift.discountMinor)
+            assertEquals(0L, previewGift.linePayableMinor)
+            updateMenuItemPrice(jdbcUrl, teaItemId, 450L)
+
+            val acceptedRequest =
+                AddBatchRequest(
+                    tableToken = "fixed-gift-decision-token",
+                    tableSessionId = tableSessionId,
+                    tabId = tabId,
+                    idempotencyKey = "fixed-gift-decision",
+                    items = previewRequest.items,
+                    previewFingerprint = acceptedPreview.pricingFingerprint,
+                    giftDecision = decision,
+                )
+
+            suspend fun submit(): AddBatchResponse {
+                val response =
+                    client.post("/api/guest/order/add-batch") {
+                        contentType(ContentType.Application.Json)
+                        headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                        setBody(json.encodeToString(AddBatchRequest.serializer(), acceptedRequest))
+                    }
+                assertEquals(HttpStatusCode.OK, response.status)
+                return json.decodeFromString(AddBatchResponse.serializer(), response.bodyAsText())
+            }
+
+            val restoredDecision =
+                json.decodeFromString(
+                    GiftDecisionDto.serializer(),
+                    json.encodeToString(GiftDecisionDto.serializer(), decision),
+                )
+            val restartedRepositoryDataSource = h2DataSource(jdbcUrl)
+            val restartedRepository =
+                OrdersRepository(
+                    dataSource = restartedRepositoryDataSource,
+                    promotionApplicationRepository = PromotionApplicationRepository(restartedRepositoryDataSource),
+                    venuePromotionRuleRepository = VenuePromotionRuleRepository(restartedRepositoryDataSource),
+                    giftDecisionScopeTokenService =
+                        GiftDecisionScopeTokenService(
+                            SessionTokenConfig.from(config, appEnv).jwtSecret,
+                        ),
+                )
+            val submitted =
+                assertNotNull(
+                    restartedRepository.createGuestOrderBatch(
+                        tableId = tableId,
+                        venueId = venueId,
+                        tableSessionId = tableSessionId,
+                        userId = TELEGRAM_USER_ID,
+                        idempotencyKey = acceptedRequest.idempotencyKey,
+                        tabId = tabId,
+                        comment = null,
+                        items = listOf(OrderBatchItemInput(itemId = hookahItemId, qty = 2)),
+                        giftDecisionCommand =
+                            GiftDecisionCommand(
+                                action = PromotionGiftDecisionAction.ACCEPT_FIXED,
+                                decisionScopeToken = assertNotNull(restoredDecision.decisionScopeToken),
+                            ),
+                        expectedPreviewFingerprint = acceptedPreview.pricingFingerprint,
+                    ),
+                )
+            val replay = submit()
+            assertFalse(submitted.idempotencyReplay)
+            assertTrue(submitted.recalculated)
+            assertEquals(submitted.batchId, replay.batchId)
+            val submittedPricing = assertNotNull(submitted.pricing)
+            val persistedGift = submittedPricing.items.single { it.isPromotionReward }
+            assertEquals(450L, persistedGift.priceMinor)
+            assertEquals(450L, persistedGift.discountMinor)
+            assertEquals(0L, persistedGift.linePayableMinor)
+            assertEquals(PromotionGiftOfferStatus.GIFT_SELECTED, submittedPricing.giftOffer.status)
+            assertEquals(2, countBatchItems(jdbcUrl, submitted.batchId))
+            assertEquals(1, countPromotionApplications(jdbcUrl))
+            assertEquals(1, countPromotionAdjustments(jdbcUrl))
+            assertEquals(1, countRows(jdbcUrl, "order_promotion_reward_items"))
+            assertEquals(1, countRows(jdbcUrl, "guest_batch_idempotency"))
+
+            editGiftRuleAndMenuAfterApplication(
+                jdbcUrl = jdbcUrl,
+                promotionId = giftRule.promotionId,
+                ruleId = giftRule.ruleId,
+                rewardItemId = teaItemId,
+            )
+            val immutableReplay = submit()
+            val replayedGift = immutableReplay.pricing.items.single { it.isPromotionReward }
+            assertEquals("Чай", replayedGift.name)
+            assertEquals(450L, replayedGift.priceMinor)
+            assertEquals("Чай к кальяну", immutableReplay.pricing.giftOffer.promotionTitle)
+            assertEquals(1, immutableReplay.pricing.giftOffer.ruleVersion)
+
+            val staleAfterPauseResponse =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(
+                        json.encodeToString(
+                            AddBatchRequest.serializer(),
+                            acceptedRequest.copy(idempotencyKey = "fixed-gift-after-pause"),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, staleAfterPauseResponse.status)
+            val staleAfterPause =
+                json.decodeFromString(
+                    AddBatchRecalculationResponse.serializer(),
+                    staleAfterPauseResponse.bodyAsText(),
+                )
+            assertFalse(staleAfterPause.submitted)
+            assertEquals("NO_GIFT", staleAfterPause.pricing.giftOffer.status)
+            assertEquals(1, countRows(jdbcUrl, "order_batches"))
+            assertEquals(2, countBatchItems(jdbcUrl, submitted.batchId))
+            assertEquals(1, countPromotionApplications(jdbcUrl))
+            assertEquals(1, countRows(jdbcUrl, "order_promotion_reward_items"))
+            assertEquals(1, countRows(jdbcUrl, "guest_batch_idempotency"))
+        }
+
+    @Test
+    fun `bot and mini app share one selectable gift scope and fresh repository submit path`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-order-gift-cross-surface")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 48)
+            seedTableToken(jdbcUrl, tableId, "gift-cross-surface-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val hookahCategoryId = seedMenuCategory(jdbcUrl, venueId)
+            setMenuCategoryType(jdbcUrl, hookahCategoryId, "HOOKAH")
+            val hookahItemId =
+                seedMenuItem(jdbcUrl, venueId, hookahCategoryId, "Кальян для паритета", priceMinor = 2_000L)
+            val drinkCategoryId = seedMenuCategory(jdbcUrl, venueId)
+            setMenuCategoryType(jdbcUrl, drinkCategoryId, "DRINK")
+            val teaItemId = seedMenuItem(jdbcUrl, venueId, drinkCategoryId, "Чай", priceMinor = 300L)
+            val juiceItemId = seedMenuItem(jdbcUrl, venueId, drinkCategoryId, "Сок", priceMinor = 500L)
+            val tabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
+            val giftRule =
+                seedGiftWithItemRule(
+                    jdbcUrl = jdbcUrl,
+                    venueId = venueId,
+                    userId = TELEGRAM_USER_ID,
+                    rewardMenuItemId = teaItemId,
+                    status = "ACTIVE",
+                    rewardMode = "CHOICE_ITEMS",
+                    rewardOptionMenuItemIds = listOf(teaItemId, juiceItemId),
+                )
+            val sessionConfig = SessionTokenConfig.from(config, appEnv)
+            val dataSource = h2DataSource(jdbcUrl)
+
+            fun repository() =
+                OrdersRepository(
+                    dataSource = dataSource,
+                    promotionApplicationRepository = PromotionApplicationRepository(dataSource),
+                    venuePromotionRuleRepository = VenuePromotionRuleRepository(dataSource),
+                    giftDecisionScopeTokenService =
+                        GiftDecisionScopeTokenService(sessionConfig.jwtSecret),
+                )
+
+            val comment = "  У окна\n без льда "
+            val normalizedComment = "У окна\n без льда"
+            val repositoryItems =
+                listOf(
+                    OrderBatchItemInput(
+                        itemId = hookahItemId,
+                        qty = 1,
+                        preferenceNote = "средняя крепость",
+                    ),
+                )
+            val apiItems =
+                listOf(
+                    AddBatchItemDto(
+                        itemId = hookahItemId,
+                        qty = 1,
+                        preferenceNote = "средняя крепость",
+                    ),
+                )
+            val botPreview =
+                assertNotNull(
+                    repository().previewGuestOrderBatch(
+                        venueId = venueId,
+                        userId = TELEGRAM_USER_ID,
+                        items = repositoryItems,
+                        venueZoneId = ZoneId.of(VenueSettingsRepository.DEFAULT_AUTO_TIMEZONE),
+                        tableSessionId = tableSessionId,
+                        tabId = tabId,
+                        comment = normalizedComment,
+                    ),
+                )
+            val authToken = issueToken(config)
+            val miniOfferResponse =
+                client.post("/api/guest/order/preview") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $authToken") }
+                    setBody(
+                        json.encodeToString(
+                            CartPreviewRequest.serializer(),
+                            CartPreviewRequest(
+                                tableToken = "gift-cross-surface-token",
+                                tableSessionId = tableSessionId,
+                                tabId = tabId,
+                                items = apiItems,
+                                comment = comment,
+                            ),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, miniOfferResponse.status)
+            val miniOffer =
+                json.decodeFromString(
+                    CartPreviewResponse.serializer(),
+                    miniOfferResponse.bodyAsText(),
+                ).preview
+
+            assertEquals("GIFT_CHOICE_REQUIRED", miniOffer.giftOffer.status)
+            assertEquals(botPreview.giftOffer.status.name, miniOffer.giftOffer.status)
+            assertEquals(hookahItemId, botPreview.giftOffer.triggerMenuItemId)
+            assertEquals(hookahItemId, miniOffer.giftOffer.triggerMenuItemId)
+            assertEquals(
+                listOf(teaItemId, juiceItemId),
+                botPreview.giftOffer.selectableRewardItems.map { it.menuItemId },
+            )
+            assertEquals(
+                botPreview.giftOffer.selectableRewardItems.map { it.menuItemId },
+                miniOffer.giftOffer.selectableRewardItems.map { it.menuItemId },
+            )
+            assertEquals(botPreview.cartFingerprint, miniOffer.cartFingerprint)
+            val miniScopeToken = assertNotNull(miniOffer.decisionScopeToken)
+            val verifiedMiniScope =
+                GiftDecisionScopeTokenService(sessionConfig.jwtSecret).verify(
+                    token = miniScopeToken,
+                    expectedScope =
+                        GiftDecisionCartScope(
+                            userId = TELEGRAM_USER_ID,
+                            venueId = venueId,
+                            tableSessionId = tableSessionId,
+                            tabId = tabId,
+                            comment = normalizedComment,
+                            items =
+                                listOf(
+                                    GiftDecisionCartItem(
+                                        menuItemId = hookahItemId,
+                                        quantity = 1,
+                                        note = "средняя крепость",
+                                    ),
+                                ),
+                        ),
+                )
+            assertEquals(giftRule.promotionId, verifiedMiniScope.promotionId)
+            assertEquals(giftRule.ruleId, verifiedMiniScope.ruleId)
+            assertEquals(1, verifiedMiniScope.ruleVersion)
+            assertEquals(GiftDecisionOfferType.SELECTABLE_ITEM.name, verifiedMiniScope.offerType)
+            val botCommand =
+                assertNotNull(
+                    TelegramGiftDecisionAdapter.toCommand(
+                        offer = botPreview.giftOffer,
+                        action = PromotionGiftDecisionAction.SELECT_ITEM,
+                        selectedMenuItemId = teaItemId,
+                        decisionScopeToken = botPreview.decisionScopeToken,
+                    ),
+                )
+            val verifiedBotScope =
+                GiftDecisionScopeTokenService(sessionConfig.jwtSecret).verify(
+                    token = botCommand.decisionScopeToken,
+                    expectedScope =
+                        GiftDecisionCartScope(
+                            userId = TELEGRAM_USER_ID,
+                            venueId = venueId,
+                            tableSessionId = tableSessionId,
+                            tabId = tabId,
+                            comment = normalizedComment,
+                            items =
+                                listOf(
+                                    GiftDecisionCartItem(
+                                        menuItemId = hookahItemId,
+                                        quantity = 1,
+                                        note = "средняя крепость",
+                                    ),
+                                ),
+                        ),
+                )
+            assertEquals(verifiedBotScope.cartFingerprint, verifiedMiniScope.cartFingerprint)
+            assertEquals(verifiedBotScope.ruleId, verifiedMiniScope.ruleId)
+            assertEquals(verifiedBotScope.ruleVersion, verifiedMiniScope.ruleVersion)
+
+            val miniDecision =
+                GiftDecisionDto(
+                    action = "SELECT_ITEM",
+                    selectedMenuItemId = teaItemId,
+                    decisionScopeToken = miniScopeToken,
+                )
+            val serializedDecision = json.encodeToString(GiftDecisionDto.serializer(), miniDecision)
+            val restoredDecision = json.decodeFromString(GiftDecisionDto.serializer(), serializedDecision)
+            val command =
+                MiniAppGiftDecisionAdapter.toCommand(
+                    action = PromotionGiftDecisionAction.SELECT_ITEM,
+                    selectedMenuItemId = restoredDecision.selectedMenuItemId,
+                    decisionScopeToken = assertNotNull(restoredDecision.decisionScopeToken),
+                )
+            assertEquals(botCommand.action, command.action)
+            assertEquals(botCommand.selectedMenuItemId, command.selectedMenuItemId)
+            val botSelected =
+                assertNotNull(
+                    repository().previewGuestOrderBatch(
+                        venueId = venueId,
+                        userId = TELEGRAM_USER_ID,
+                        items = repositoryItems,
+                        venueZoneId = ZoneId.of(VenueSettingsRepository.DEFAULT_AUTO_TIMEZONE),
+                        tableSessionId = tableSessionId,
+                        tabId = tabId,
+                        comment = normalizedComment,
+                        giftDecisionCommand = botCommand,
+                    ),
+                )
+            val miniSelectedResponse =
+                client.post("/api/guest/order/preview") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $authToken") }
+                    setBody(
+                        json.encodeToString(
+                            CartPreviewRequest.serializer(),
+                            CartPreviewRequest(
+                                tableToken = "gift-cross-surface-token",
+                                tableSessionId = tableSessionId,
+                                tabId = tabId,
+                                items = apiItems,
+                                comment = comment,
+                                giftDecision = miniDecision,
+                            ),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, miniSelectedResponse.status)
+            val miniSelected =
+                json.decodeFromString(
+                    CartPreviewResponse.serializer(),
+                    miniSelectedResponse.bodyAsText(),
+                ).preview
+            assertEquals("GIFT_SELECTED", miniSelected.giftOffer.status)
+            assertEquals(botSelected.giftOffer.status.name, miniSelected.giftOffer.status)
+            assertEquals(teaItemId, botSelected.giftOffer.selectedRewardItem?.menuItemId)
+            assertEquals(teaItemId, miniSelected.giftOffer.selectedRewardItem?.menuItemId)
+            val botGiftLine = botSelected.items.single { it.isPromotionReward }
+            val miniGiftLine = miniSelected.items.single { it.isPromotionReward }
+            assertEquals(300L, botGiftLine.lineGrossMinor)
+            assertEquals(botGiftLine.lineGrossMinor, miniGiftLine.lineGrossMinor)
+            assertEquals(300L, botGiftLine.discountMinor)
+            assertEquals(botGiftLine.discountMinor, miniGiftLine.discountMinor)
+            assertEquals(0L, botGiftLine.linePayableMinor)
+            assertEquals(botGiftLine.linePayableMinor, miniGiftLine.linePayableMinor)
+
+            val submitted =
+                assertNotNull(
+                    repository().createGuestOrderBatch(
+                        tableId = tableId,
+                        venueId = venueId,
+                        tableSessionId = tableSessionId,
+                        userId = TELEGRAM_USER_ID,
+                        idempotencyKey = "gift-cross-surface-submit",
+                        tabId = tabId,
+                        comment = normalizedComment,
+                        items = repositoryItems,
+                        venueZoneId = ZoneId.of(VenueSettingsRepository.DEFAULT_AUTO_TIMEZONE),
+                        giftDecisionCommand = command,
+                        expectedPreviewFingerprint = botSelected.pricingFingerprint,
+                    ),
+                )
+            val submittedGift = submitted.items.single { it.isPromotionReward }
+            val submittedTrigger = submitted.items.single { !it.isPromotionReward }
+            assertEquals(teaItemId, submittedGift.itemId)
+            assertEquals(300L, submittedGift.priceMinor)
+            assertEquals(300L, submittedGift.promoDiscountMinor)
+            assertEquals(1, countPromotionApplications(jdbcUrl))
+            assertEquals(1, countPromotionAdjustments(jdbcUrl))
+            assertEquals(1, countRows(jdbcUrl, "order_promotion_reward_items"))
+            val application = fetchPromotionApplicationSnapshot(jdbcUrl, submitted.batchId)
+            assertEquals(giftRule.promotionId, application.promotionId)
+            assertEquals(giftRule.ruleId, application.ruleId)
+            assertEquals(300L, application.originalTotalMinor)
+            assertEquals(0L, application.finalTotalMinor)
+            val rewardLink = fetchPromotionRewardLinkSnapshot(jdbcUrl, submitted.batchId)
+            assertTrue(rewardLink.rewardLinkId > 0)
+            assertTrue(rewardLink.adjustmentId > 0)
+            assertEquals(application.applicationId, rewardLink.applicationId)
+            assertEquals(assertNotNull(submittedTrigger.lineId), rewardLink.triggerBatchItemId)
+            assertEquals(assertNotNull(submittedGift.lineId), rewardLink.rewardBatchItemId)
+            assertEquals(teaItemId, rewardLink.rewardMenuItemId)
+            assertEquals(1, rewardLink.rewardQty)
+            assertEquals(application.applicationId, rewardLink.adjustmentApplicationId)
+            assertEquals(rewardLink.rewardBatchItemId, rewardLink.adjustedBatchItemId)
+
+            val skipTableId = seedTable(jdbcUrl, venueId, 49)
+            val skipSessionId = seedTableSession(jdbcUrl, venueId, skipTableId)
+            val skipTabId = seedPersonalTab(jdbcUrl, venueId, skipSessionId, TELEGRAM_USER_ID)
+            val skipOffer =
+                assertNotNull(
+                    repository().previewGuestOrderBatch(
+                        venueId = venueId,
+                        userId = TELEGRAM_USER_ID,
+                        items = repositoryItems,
+                        venueZoneId = ZoneId.of(VenueSettingsRepository.DEFAULT_AUTO_TIMEZONE),
+                        tableSessionId = skipSessionId,
+                        tabId = skipTabId,
+                        comment = normalizedComment,
+                    ),
+                )
+            val serializedSkip =
+                json.encodeToString(
+                    GiftDecisionDto.serializer(),
+                    GiftDecisionDto(
+                        action = "SKIP",
+                        decisionScopeToken = assertNotNull(skipOffer.decisionScopeToken),
+                    ),
+                )
+            val restoredSkip = json.decodeFromString(GiftDecisionDto.serializer(), serializedSkip)
+            val skipped =
+                assertNotNull(
+                    repository().createGuestOrderBatch(
+                        tableId = skipTableId,
+                        venueId = venueId,
+                        tableSessionId = skipSessionId,
+                        userId = TELEGRAM_USER_ID,
+                        idempotencyKey = "gift-cross-surface-skip",
+                        tabId = skipTabId,
+                        comment = normalizedComment,
+                        items = repositoryItems,
+                        venueZoneId = ZoneId.of(VenueSettingsRepository.DEFAULT_AUTO_TIMEZONE),
+                        giftDecisionCommand =
+                            GiftDecisionCommand(
+                                action = PromotionGiftDecisionAction.SKIP,
+                                decisionScopeToken = assertNotNull(restoredSkip.decisionScopeToken),
+                            ),
+                    ),
+                )
+            assertEquals(PromotionGiftOfferStatus.GIFT_SKIPPED, skipped.pricing?.giftOffer?.status)
+            assertEquals(listOf(hookahItemId), skipped.items.map { it.itemId })
+            assertTrue(skipped.promotionDiscounts.isEmpty())
+            assertEquals(1, countPromotionApplications(jdbcUrl))
+            assertEquals(1, countPromotionAdjustments(jdbcUrl))
+            assertEquals(1, countRows(jdbcUrl, "order_promotion_reward_items"))
+        }
+
+    @Test
+    fun `removed gift trigger returns authoritative no-gift preview and rolls back submit`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-order-stale-gift-trigger")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 42)
+            seedTableToken(jdbcUrl, tableId, "stale-gift-trigger-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val hookahCategoryId = seedMenuCategory(jdbcUrl, venueId)
+            setMenuCategoryType(jdbcUrl, hookahCategoryId, "HOOKAH")
+            seedMenuItem(jdbcUrl, venueId, hookahCategoryId, "Кальян", priceMinor = 2_000L)
+            val drinkCategoryId = seedMenuCategory(jdbcUrl, venueId)
+            setMenuCategoryType(jdbcUrl, drinkCategoryId, "DRINK")
+            val lemonadeItemId =
+                seedMenuItem(jdbcUrl, venueId, drinkCategoryId, "Лимонад", priceMinor = 500L)
+            val teaItemId =
+                seedMenuItem(jdbcUrl, venueId, drinkCategoryId, "Чай", priceMinor = 300L)
+            val tabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
+            val giftRule =
+                seedGiftWithItemRule(
+                    jdbcUrl = jdbcUrl,
+                    venueId = venueId,
+                    userId = TELEGRAM_USER_ID,
+                    rewardMenuItemId = teaItemId,
+                    status = "ACTIVE",
+                )
+            val token = issueToken(config)
+            val requestItems = listOf(AddBatchItemDto(itemId = lemonadeItemId, qty = 1))
+            val request =
+                AddBatchRequest(
+                    tableToken = "stale-gift-trigger-token",
+                    tableSessionId = tableSessionId,
+                    tabId = tabId,
+                    idempotencyKey = "stale-gift-trigger",
+                    items = requestItems,
+                    giftDecision =
+                        giftRule.acceptFixedDecision(
+                            giftRule.issueFixedDecisionScope(
+                                config = config,
+                                venueId = venueId,
+                                tableSessionId = tableSessionId,
+                                tabId = tabId,
+                                items = requestItems,
+                            ),
+                        ),
+                )
+            val response =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(json.encodeToString(AddBatchRequest.serializer(), request))
+                }
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            val recalculation =
+                json.decodeFromString(
+                    AddBatchRecalculationResponse.serializer(),
+                    response.bodyAsText(),
+                )
+            assertFalse(recalculation.submitted)
+            assertEquals("NO_GIFT", recalculation.pricing.giftOffer.status)
+            assertTrue(recalculation.pricing.giftDecisionStale)
+            assertEquals(
+                "Корзина изменилась. Проверьте подарок ещё раз.",
+                recalculation.pricing.giftDecisionMessage,
+            )
+            assertEquals(listOf(lemonadeItemId), recalculation.pricing.items.map { it.itemId })
+            assertEquals(0, countRows(jdbcUrl, "orders"))
+            assertEquals(0, countRows(jdbcUrl, "order_batches"))
+            assertEquals(0, countRows(jdbcUrl, "order_batch_items"))
+            assertEquals(0, countRows(jdbcUrl, "order_promotion_applications"))
+            assertEquals(0, countRows(jdbcUrl, "guest_batch_idempotency"))
         }
 
     @Test
@@ -2833,23 +3729,35 @@ class GuestOrderRoutesTest {
             val juiceItemId = seedMenuItem(jdbcUrl, venueId, drinkCategoryId, "Сок", priceMinor = 500)
             val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
             seedHappyHoursRule(jdbcUrl, venueId, TELEGRAM_USER_ID, discountPercent = 10, status = "ACTIVE")
-            seedGiftWithItemRule(
-                jdbcUrl = jdbcUrl,
-                venueId = venueId,
-                userId = TELEGRAM_USER_ID,
-                rewardMenuItemId = juiceItemId,
-                status = "ACTIVE",
-            )
+            val giftRule =
+                seedGiftWithItemRule(
+                    jdbcUrl = jdbcUrl,
+                    venueId = venueId,
+                    userId = TELEGRAM_USER_ID,
+                    rewardMenuItemId = juiceItemId,
+                    status = "ACTIVE",
+                )
 
             val token = issueToken(config)
+            val giftItems = listOf(AddBatchItemDto(itemId = hookahItemId, qty = 1))
             val request =
                 AddBatchRequest(
                     tableToken = "stackability-token",
                     tableSessionId = tableSessionId,
                     tabId = personalTabId,
                     idempotencyKey = "idem-stackability-best",
-                    items = listOf(AddBatchItemDto(itemId = hookahItemId, qty = 1)),
+                    items = giftItems,
                     comment = null,
+                    giftDecision =
+                        giftRule.acceptFixedDecision(
+                            giftRule.issueFixedDecisionScope(
+                                config = config,
+                                venueId = venueId,
+                                tableSessionId = tableSessionId,
+                                tabId = personalTabId,
+                                items = giftItems,
+                            ),
+                        ),
                 )
             val response =
                 client.post("/api/guest/order/add-batch") {
@@ -2882,8 +3790,18 @@ class GuestOrderRoutesTest {
                     tableSessionId = giftOnlyStackableSessionId,
                     tabId = giftOnlyStackableTabId,
                     idempotencyKey = "idem-stackability-gift-only",
-                    items = listOf(AddBatchItemDto(itemId = hookahItemId, qty = 1)),
+                    items = giftItems,
                     comment = null,
+                    giftDecision =
+                        giftRule.acceptFixedDecision(
+                            giftRule.issueFixedDecisionScope(
+                                config = config,
+                                venueId = venueId,
+                                tableSessionId = giftOnlyStackableSessionId,
+                                tabId = giftOnlyStackableTabId,
+                                items = giftItems,
+                            ),
+                        ),
                 )
             val giftOnlyStackableResponse =
                 client.post("/api/guest/order/add-batch") {
@@ -2915,8 +3833,18 @@ class GuestOrderRoutesTest {
                     tableSessionId = stackableSessionId,
                     tabId = stackableTabId,
                     idempotencyKey = "idem-stackability-both",
-                    items = listOf(AddBatchItemDto(itemId = hookahItemId, qty = 1)),
+                    items = giftItems,
                     comment = null,
+                    giftDecision =
+                        giftRule.acceptFixedDecision(
+                            giftRule.issueFixedDecisionScope(
+                                config = config,
+                                venueId = venueId,
+                                tableSessionId = stackableSessionId,
+                                tabId = stackableTabId,
+                                items = giftItems,
+                            ),
+                        ),
                 )
             val stackableResponse =
                 client.post("/api/guest/order/add-batch") {
@@ -4615,6 +5543,34 @@ class GuestOrderRoutesTest {
         }
     }
 
+    private fun editGiftRuleAndMenuAfterApplication(
+        jdbcUrl: String,
+        promotionId: Long,
+        ruleId: Long,
+        rewardItemId: Long,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                "UPDATE venue_promotions SET title = 'Изменённый подарок', status = 'PAUSED' WHERE id = ?",
+            ).use { statement ->
+                statement.setLong(1, promotionId)
+                statement.executeUpdate()
+            }
+            connection.prepareStatement(
+                "UPDATE promotion_rules SET version = version + 1, status = 'PAUSED' WHERE id = ?",
+            ).use { statement ->
+                statement.setLong(1, ruleId)
+                statement.executeUpdate()
+            }
+            connection.prepareStatement(
+                "UPDATE menu_items SET name = 'Переименованный чай', price_minor = 900 WHERE id = ?",
+            ).use { statement ->
+                statement.setLong(1, rewardItemId)
+                statement.executeUpdate()
+            }
+        }
+    }
+
     private fun fetchPromotionApplicationSnapshot(
         jdbcUrl: String,
         batchId: Long,
@@ -4623,6 +5579,7 @@ class GuestOrderRoutesTest {
             connection.prepareStatement(
                 """
                 SELECT
+                    id,
                     promotion_id,
                     rule_id,
                     title_snapshot,
@@ -4647,6 +5604,7 @@ class GuestOrderRoutesTest {
                 statement.executeQuery().use { rs ->
                     assertTrue(rs.next(), "Expected promotion application for batch $batchId")
                     PromotionApplicationSnapshot(
+                        applicationId = rs.getLong("id"),
                         promotionId = rs.getLong("promotion_id"),
                         ruleId = rs.getLong("rule_id"),
                         title = rs.getString("title_snapshot"),
@@ -4668,6 +5626,53 @@ class GuestOrderRoutesTest {
             }
         }
 
+    private fun fetchPromotionRewardLinkSnapshot(
+        jdbcUrl: String,
+        batchId: Long,
+    ): PromotionRewardLinkSnapshot =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT
+                    reward_link.id AS reward_link_id,
+                    reward_link.application_id,
+                    reward_link.trigger_order_batch_item_id,
+                    reward_link.reward_order_batch_item_id,
+                    reward_link.reward_menu_item_id,
+                    reward_link.reward_qty,
+                    adjustment.id AS adjustment_id,
+                    adjustment.application_id AS adjustment_application_id,
+                    adjustment.order_batch_item_id AS adjusted_batch_item_id
+                FROM order_promotion_reward_items reward_link
+                JOIN order_promotion_applications application
+                  ON application.id = reward_link.application_id
+                JOIN order_batch_item_promotion_adjustments adjustment
+                  ON adjustment.application_id = reward_link.application_id
+                 AND adjustment.order_batch_item_id = reward_link.reward_order_batch_item_id
+                WHERE application.batch_id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, batchId)
+                statement.executeQuery().use { rs ->
+                    assertTrue(rs.next(), "Expected promotion reward link for batch $batchId")
+                    val snapshot =
+                        PromotionRewardLinkSnapshot(
+                            rewardLinkId = rs.getLong("reward_link_id"),
+                            applicationId = rs.getLong("application_id"),
+                            triggerBatchItemId = rs.getLong("trigger_order_batch_item_id"),
+                            rewardBatchItemId = rs.getLong("reward_order_batch_item_id"),
+                            rewardMenuItemId = rs.getLong("reward_menu_item_id"),
+                            rewardQty = rs.getInt("reward_qty"),
+                            adjustmentId = rs.getLong("adjustment_id"),
+                            adjustmentApplicationId = rs.getLong("adjustment_application_id"),
+                            adjustedBatchItemId = rs.getLong("adjusted_batch_item_id"),
+                        )
+                    assertFalse(rs.next(), "Expected exactly one promotion reward link for batch $batchId")
+                    snapshot
+                }
+            }
+        }
+
     private fun seedGiftWithItemRule(
         jdbcUrl: String,
         venueId: Long,
@@ -4675,7 +5680,9 @@ class GuestOrderRoutesTest {
         rewardMenuItemId: Long,
         status: String,
         promotionStatus: String = "ACTIVE",
-    ): Long {
+        rewardMode: String = "FIXED_ITEM",
+        rewardOptionMenuItemIds: List<Long> = emptyList(),
+    ): SeededGiftRule {
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             ensureUser(connection, userId)
             val promotionId =
@@ -4741,18 +5748,95 @@ class GuestOrderRoutesTest {
                 statement.setLong(1, ruleId)
                 statement.executeUpdate()
             }
-            connection.prepareStatement(
-                """
-                INSERT INTO promotion_rule_rewards (rule_id, reward_menu_item_id, reward_qty, max_rewards_per_batch)
-                VALUES (?, ?, 1, 1)
-                """.trimIndent(),
-            ).use { statement ->
-                statement.setLong(1, ruleId)
-                statement.setLong(2, rewardMenuItemId)
-                statement.executeUpdate()
+            val rewardId =
+                connection.prepareStatement(
+                    """
+                    INSERT INTO promotion_rule_rewards (
+                        rule_id,
+                        reward_menu_item_id,
+                        reward_qty,
+                        max_rewards_per_batch,
+                        reward_mode
+                    )
+                    VALUES (?, ?, 1, 1, ?)
+                    """.trimIndent(),
+                    Statement.RETURN_GENERATED_KEYS,
+                ).use { statement ->
+                    statement.setLong(1, ruleId)
+                    statement.setLong(2, rewardMenuItemId)
+                    statement.setString(3, rewardMode)
+                    statement.executeUpdate()
+                    statement.generatedKeys.use { rs ->
+                        if (rs.next()) rs.getLong(1) else error("Failed to insert promotion reward")
+                    }
+                }
+            rewardOptionMenuItemIds.forEach { optionMenuItemId ->
+                connection.prepareStatement(
+                    """
+                    INSERT INTO promotion_rule_reward_options (reward_id, menu_item_id)
+                    VALUES (?, ?)
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setLong(1, rewardId)
+                    statement.setLong(2, optionMenuItemId)
+                    statement.executeUpdate()
+                }
             }
-            return ruleId
+            return SeededGiftRule(
+                promotionId = promotionId,
+                ruleId = ruleId,
+            )
         }
+    }
+
+    private data class SeededGiftRule(
+        val promotionId: Long,
+        val ruleId: Long,
+    ) {
+        fun acceptFixedDecision(decisionScopeToken: String): GiftDecisionDto =
+            GiftDecisionDto(
+                action = "ACCEPT_FIXED",
+                decisionScopeToken = decisionScopeToken,
+            )
+    }
+
+    private fun SeededGiftRule.issueFixedDecisionScope(
+        config: MapApplicationConfig,
+        venueId: Long,
+        tableSessionId: Long,
+        tabId: Long,
+        items: List<AddBatchItemDto>,
+        comment: String? = null,
+        userId: Long = TELEGRAM_USER_ID,
+    ): String {
+        val sessionConfig = SessionTokenConfig.from(config, appEnv)
+        return GiftDecisionScopeTokenService(sessionConfig.jwtSecret)
+            .issue(
+                scope =
+                    GiftDecisionCartScope(
+                        userId = userId,
+                        venueId = venueId,
+                        tableSessionId = tableSessionId,
+                        tabId = tabId,
+                        comment = comment,
+                        items =
+                            items.map { item ->
+                                GiftDecisionCartItem(
+                                    menuItemId = item.itemId,
+                                    quantity = item.qty,
+                                    selectedOptionIds = listOfNotNull(item.selectedOptionId),
+                                    note = item.preferenceNote,
+                                )
+                            },
+                    ),
+                offer =
+                    GiftDecisionOfferIdentity(
+                        promotionId = promotionId,
+                        ruleId = ruleId,
+                        ruleVersion = 1,
+                        offerType = GiftDecisionOfferType.FIXED_ITEM,
+                    ),
+            ).token
     }
 
     private fun setGiftRulesStackableOnly(jdbcUrl: String) {
@@ -5081,6 +6165,7 @@ class GuestOrderRoutesTest {
     )
 
     private data class PromotionApplicationSnapshot(
+        val applicationId: Long,
         val promotionId: Long,
         val ruleId: Long,
         val title: String,
@@ -5097,6 +6182,18 @@ class GuestOrderRoutesTest {
         val venueTimezone: String,
         val appliedAt: Instant,
         val dedupeKey: String,
+    )
+
+    private data class PromotionRewardLinkSnapshot(
+        val rewardLinkId: Long,
+        val applicationId: Long,
+        val triggerBatchItemId: Long,
+        val rewardBatchItemId: Long,
+        val rewardMenuItemId: Long,
+        val rewardQty: Int,
+        val adjustmentId: Long,
+        val adjustmentApplicationId: Long,
+        val adjustedBatchItemId: Long,
     )
 
     private class MutableClock(

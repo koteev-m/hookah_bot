@@ -61,13 +61,20 @@ type PromotionRefs = {
   startsAtInput: HTMLInputElement
   endsAtInput: HTMLInputElement
   templateTypeSelect: HTMLSelectElement
-  happyHoursFields: HTMLElement
+  ruleFields: HTMLElement
   timezoneHint: HTMLParagraphElement
   windowsList: HTMLDivElement
   addWindowButton: HTMLButtonElement
   targetTypeSelect: HTMLSelectElement
   targetValueSelect: HTMLSelectElement
+  discountField: HTMLElement
   discountPercentInput: HTMLInputElement
+  giftFields: HTMLElement
+  rewardModeSelect: HTMLSelectElement
+  fixedRewardField: HTMLElement
+  fixedRewardSelect: HTMLSelectElement
+  allowlistField: HTMLElement
+  rewardAllowlist: HTMLDivElement
   ruleSummary: HTMLDivElement
   formError: HTMLParagraphElement
   saveButton: HTMLButtonElement
@@ -110,7 +117,7 @@ function buildPromotionsDom(root: HTMLDivElement): PromotionRefs {
   const title = el('h2', { text: 'Акции' })
   const subtitle = el('p', {
     className: 'venue-dashboard-subtitle',
-    text: 'Создавайте информационные акции и автоматические скидки по расписанию.'
+    text: 'Создавайте информационные акции, скидки по расписанию и подарки при покупке.'
   })
   const notice = el('p', {
     className: 'venue-promotion-notice',
@@ -120,8 +127,12 @@ function buildPromotionsDom(root: HTMLDivElement): PromotionRefs {
     className: 'venue-promotion-notice',
     text: 'Для «Счастливых часов» скидка рассчитывается сервером по актуальным ценам при оформлении заказа.'
   })
+  const giftNotice = el('p', {
+    className: 'venue-promotion-notice',
+    text: 'Гость сам выбирает или подтверждает подарок. Подарок автоматически в заказ не добавляется.'
+  })
   const createButton = el('button', { text: 'Создать акцию' }) as HTMLButtonElement
-  append(header, title, subtitle, notice, happyHoursNotice, createButton)
+  append(header, title, subtitle, notice, happyHoursNotice, giftNotice, createButton)
 
   const status = el('p', { className: 'status', text: '' })
   const error = el('div', { className: 'error-card' }) as HTMLDivElement
@@ -138,6 +149,7 @@ function buildPromotionsDom(root: HTMLDivElement): PromotionRefs {
   const templateTypeSelect = document.createElement('select')
   appendSelectOption(templateTypeSelect, 'TEXT_ONLY', 'Информационная акция')
   appendSelectOption(templateTypeSelect, 'HAPPY_HOURS_PERCENT', 'Счастливые часы — скидка %')
+  appendSelectOption(templateTypeSelect, 'GIFT_WITH_ITEM', 'Подарок при покупке')
   const titleInput = document.createElement('input')
   titleInput.type = 'text'
   titleInput.maxLength = TITLE_MAX_LENGTH
@@ -154,8 +166,8 @@ function buildPromotionsDom(root: HTMLDivElement): PromotionRefs {
   startsAtInput.type = 'datetime-local'
   const endsAtInput = document.createElement('input')
   endsAtInput.type = 'datetime-local'
-  const happyHoursFields = el('section', { className: 'venue-promotion-rule-fields' })
-  happyHoursFields.hidden = true
+  const ruleFields = el('section', { className: 'venue-promotion-rule-fields' })
+  ruleFields.hidden = true
   const timezoneHint = el('p', {
     className: 'venue-promotion-timezone',
     text: ''
@@ -178,18 +190,50 @@ function buildPromotionsDom(root: HTMLDivElement): PromotionRefs {
   discountPercentInput.step = '1'
   discountPercentInput.inputMode = 'numeric'
   discountPercentInput.placeholder = 'Например, 50'
+  const discountField = buildField('Скидка, %', discountPercentInput)
+  discountField.appendChild(
+    el('small', {
+      text: 'Скидка рассчитывается автоматически по актуальным ценам при оформлении заказа.'
+    })
+  )
+  const giftFields = el('section', { className: 'venue-promotion-gift-fields' })
+  giftFields.hidden = true
+  const rewardModeSelect = document.createElement('select')
+  appendSelectOption(rewardModeSelect, 'FIXED_ITEM', 'Конкретный подарок')
+  appendSelectOption(rewardModeSelect, 'CHOICE_ITEMS', 'Подарок на выбор')
+  rewardModeSelect.setAttribute('aria-label', 'Тип подарка')
+  const fixedRewardSelect = document.createElement('select')
+  fixedRewardSelect.setAttribute('aria-label', 'Подарок')
+  const fixedRewardField = buildField('Подарок', fixedRewardSelect)
+  const rewardAllowlist = el('div', {
+    className: 'venue-promotion-reward-allowlist'
+  }) as HTMLDivElement
+  rewardAllowlist.setAttribute('role', 'group')
+  rewardAllowlist.setAttribute('aria-label', 'Разрешённые подарки')
+  const allowlistField = buildField('Разрешённые подарки', rewardAllowlist, 'Выберите одну или несколько позиций.')
+  append(
+    giftFields,
+    buildField('Тип подарка', rewardModeSelect),
+    fixedRewardField,
+    allowlistField,
+    el('p', {
+      className: 'venue-promotion-rule-helper',
+      text: 'Гость сам выбирает или подтверждает подарок. Подарок автоматически в заказ не добавляется.'
+    })
+  )
   const ruleSummary = el('div', { className: 'venue-promotion-rule-summary' }) as HTMLDivElement
   append(
-    happyHoursFields,
+    ruleFields,
     timezoneHint,
     windowsHeading,
     windowsList,
     buildField('Скидка действует на', targetTypeSelect),
     buildField('Категория или позиция', targetValueSelect),
-    buildField('Скидка, %', discountPercentInput),
+    discountField,
+    giftFields,
     el('p', {
       className: 'venue-promotion-rule-helper',
-      text: 'Скидка рассчитывается автоматически по актуальным ценам при оформлении заказа.'
+      text: 'Расписание применяется в часовом поясе заведения.'
     }),
     ruleSummary
   )
@@ -208,7 +252,7 @@ function buildPromotionsDom(root: HTMLDivElement): PromotionRefs {
     buildField('Условия', termsInput, 'Необязательно'),
     buildField('Начало', startsAtInput),
     buildField('Окончание', endsAtInput),
-    happyHoursFields,
+    ruleFields,
     formError,
     actions
   )
@@ -229,13 +273,20 @@ function buildPromotionsDom(root: HTMLDivElement): PromotionRefs {
     startsAtInput,
     endsAtInput,
     templateTypeSelect,
-    happyHoursFields,
+    ruleFields,
     timezoneHint,
     windowsList,
     addWindowButton,
     targetTypeSelect,
     targetValueSelect,
+    discountField,
     discountPercentInput,
+    giftFields,
+    rewardModeSelect,
+    fixedRewardField,
+    fixedRewardSelect,
+    allowlistField,
+    rewardAllowlist,
     ruleSummary,
     formError,
     saveButton,
@@ -269,10 +320,21 @@ function buildField(label: string, control: HTMLElement, helper?: string) {
 
 function promotionTemplateType(promotion: VenuePromotionDto): VenuePromotionTemplateType | null {
   const templateType = (promotion as VenuePromotionDto & { templateType?: string }).templateType
-  if (templateType === 'TEXT_ONLY' || templateType === 'HAPPY_HOURS_PERCENT') {
+  if (templateType === 'TEXT_ONLY' || templateType === 'HAPPY_HOURS_PERCENT' || templateType === 'GIFT_WITH_ITEM') {
     return templateType
   }
   return templateType == null ? 'TEXT_ONLY' : null
+}
+
+function promotionTemplateLabel(templateType: VenuePromotionTemplateType): string {
+  switch (templateType) {
+    case 'HAPPY_HOURS_PERCENT':
+      return 'Счастливые часы — скидка %'
+    case 'GIFT_WITH_ITEM':
+      return 'Подарок при покупке'
+    case 'TEXT_ONLY':
+      return 'Информационная акция'
+  }
 }
 
 function weekdayTitle(weekday: number): string {
@@ -454,7 +516,14 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
     refs.error.hidden = false
   }
 
+  const selectedRewardAllowlistIds = (): number[] =>
+    Array.from(refs.rewardAllowlist.querySelectorAll<HTMLInputElement>('input[type="checkbox"]:checked'))
+      .map((input) => Number(input.value))
+      .filter((value) => Number.isInteger(value) && value > 0)
+      .sort((left, right) => left - right)
+
   const renderRuleSummary = () => {
+    const templateType = refs.templateTypeSelect.value as VenuePromotionTemplateType
     refs.ruleSummary.replaceChildren(el('h4', { text: 'Краткое описание' }))
     const windowSummaries = formatWindowSummary(weekdayWindows)
     if (windowSummaries.length) {
@@ -468,20 +537,56 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
     const targetId = Number(refs.targetValueSelect.value)
     if (refs.targetTypeSelect.value === 'MENU_ITEM') {
       const item = menuItems.find((candidate) => candidate.id === targetId)
-      refs.ruleSummary.appendChild(el('p', { text: `Позиция: ${item?.name ?? 'не выбрана'}` }))
+      refs.ruleSummary.appendChild(
+        el('p', {
+          text:
+            templateType === 'GIFT_WITH_ITEM'
+              ? `При заказе: Позиция «${item?.name ?? 'не выбрана'}»`
+              : `Позиция: ${item?.name ?? 'не выбрана'}`
+        })
+      )
     } else {
       const category = menuCategories.find((candidate) => candidate.id === targetId)
-      refs.ruleSummary.appendChild(el('p', { text: `Категория: ${category?.name ?? 'не выбрана'}` }))
+      refs.ruleSummary.appendChild(
+        el('p', {
+          text:
+            templateType === 'GIFT_WITH_ITEM'
+              ? `При заказе: Категория «${category?.name ?? 'не выбрана'}»`
+              : `Категория: ${category?.name ?? 'не выбрана'}`
+        })
+      )
     }
-    const discountPercent = Number(refs.discountPercentInput.value)
-    refs.ruleSummary.appendChild(
-      el('p', {
-        text:
-          Number.isInteger(discountPercent) && discountPercent >= 1 && discountPercent <= 100
-            ? `Скидка: ${discountPercent}%`
-            : 'Скидка: не указана'
-      })
-    )
+    if (templateType === 'GIFT_WITH_ITEM') {
+      if (refs.rewardModeSelect.value === 'FIXED_ITEM') {
+        const item = menuItems.find((candidate) => candidate.id === Number(refs.fixedRewardSelect.value))
+        refs.ruleSummary.appendChild(el('p', { text: `Подарок: ${item?.name ?? 'не выбран'}` }))
+      } else {
+        const selectedNames = selectedRewardAllowlistIds()
+          .map((itemId) => menuItems.find((candidate) => candidate.id === itemId)?.name)
+          .filter((name): name is string => Boolean(name))
+        refs.ruleSummary.appendChild(
+          el('p', {
+            text: selectedNames.length ? `Подарок: на выбор — ${selectedNames.join(', ')}` : 'Подарок: не выбран'
+          })
+        )
+      }
+      refs.ruleSummary.appendChild(el('p', { text: 'Максимум: 1 подарок на заказ' }))
+      refs.ruleSummary.appendChild(
+        el('small', {
+          text: 'Гость сам выбирает или подтверждает подарок. Подарок автоматически в заказ не добавляется.'
+        })
+      )
+    } else {
+      const discountPercent = Number(refs.discountPercentInput.value)
+      refs.ruleSummary.appendChild(
+        el('p', {
+          text:
+            Number.isInteger(discountPercent) && discountPercent >= 1 && discountPercent <= 100
+              ? `Скидка: ${discountPercent}%`
+              : 'Скидка: не указана'
+        })
+      )
+    }
   }
 
   const renderTargetOptions = (selectedId?: number | null) => {
@@ -511,6 +616,42 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
     if (Array.from(refs.targetValueSelect.options).some((option) => option.value === previousValue)) {
       refs.targetValueSelect.value = previousValue
     }
+    renderRuleSummary()
+  }
+
+  const renderRewardOptions = (fixedItemId?: number | null, allowlistIds?: number[]) => {
+    const previousFixedItemId =
+      fixedItemId === undefined ? Number(refs.fixedRewardSelect.value) || null : fixedItemId
+    const previousAllowlistIds =
+      allowlistIds === undefined ? new Set(selectedRewardAllowlistIds()) : new Set(allowlistIds)
+    refs.fixedRewardSelect.replaceChildren()
+    appendSelectOption(refs.fixedRewardSelect, '', 'Выберите подарок')
+    refs.rewardAllowlist.replaceChildren()
+    menuItems.forEach((item) => {
+      const category = menuCategories.find((candidate) => candidate.id === item.categoryId)
+      const label = category ? `${item.name} · ${category.name}` : item.name
+      appendSelectOption(refs.fixedRewardSelect, String(item.id), label)
+      const checkboxLabel = el('label', { className: 'venue-promotion-reward-option' })
+      const checkbox = document.createElement('input')
+      checkbox.type = 'checkbox'
+      checkbox.value = String(item.id)
+      checkbox.checked = previousAllowlistIds.has(item.id)
+      append(checkboxLabel, checkbox, el('span', { text: label }))
+      refs.rewardAllowlist.appendChild(checkboxLabel)
+    })
+    if (
+      previousFixedItemId != null &&
+      Array.from(refs.fixedRewardSelect.options).some((option) => option.value === String(previousFixedItemId))
+    ) {
+      refs.fixedRewardSelect.value = String(previousFixedItemId)
+    }
+    renderRuleSummary()
+  }
+
+  const syncRewardFields = () => {
+    const isFixed = refs.rewardModeSelect.value === 'FIXED_ITEM'
+    refs.fixedRewardField.hidden = !isFixed
+    refs.allowlistField.hidden = isFixed
     renderRuleSummary()
   }
 
@@ -577,9 +718,17 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
 
   const syncTemplateFields = () => {
     const isHappyHours = refs.templateTypeSelect.value === 'HAPPY_HOURS_PERCENT'
-    refs.happyHoursFields.hidden = !isHappyHours
+    const isGift = refs.templateTypeSelect.value === 'GIFT_WITH_ITEM'
+    refs.ruleFields.hidden = !isHappyHours && !isGift
+    refs.discountField.hidden = !isHappyHours
+    refs.giftFields.hidden = !isGift
+    const targetTypeLabel = refs.targetTypeSelect.closest('label')?.querySelector<HTMLElement>('.field-label')
+    if (targetTypeLabel) {
+      targetTypeLabel.textContent = isGift ? 'При заказе' : 'Скидка действует на'
+    }
     refs.timezoneHint.textContent = `Часовой пояс заведения: ${timezone}`
-    if (isHappyHours) {
+    if (isHappyHours || isGift) {
+      syncRewardFields()
       renderRuleSummary()
     }
   }
@@ -597,7 +746,9 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
     weekdayWindows = [{ ...DEFAULT_WEEKDAY_WINDOW }]
     refs.targetTypeSelect.value = 'MENU_CATEGORY'
     refs.discountPercentInput.value = ''
+    refs.rewardModeSelect.value = 'FIXED_ITEM'
     renderTargetOptions()
+    renderRewardOptions(null, [])
     renderWeekdayWindows()
     syncTemplateFields()
     refs.formError.textContent = ''
@@ -630,6 +781,11 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
       rule?.target?.type === 'MENU_ITEM' ? rule.target.menuItemId : rule?.target?.menuCategoryId
     renderTargetOptions(selectedTargetId)
     refs.discountPercentInput.value = rule?.discountPercent == null ? '' : String(rule.discountPercent)
+    refs.rewardModeSelect.value = rule?.reward?.mode ?? 'FIXED_ITEM'
+    renderRewardOptions(
+      rule?.reward?.fixedItem?.menuItemId ?? null,
+      rule?.reward?.allowlist?.map((item) => item.menuItemId) ?? []
+    )
     renderWeekdayWindows()
     syncTemplateFields()
     refs.formError.textContent = ''
@@ -654,7 +810,7 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
       error = 'Укажите начало и окончание акции.'
     } else if (startsAt >= endsAt) {
       error = 'Начало акции должно быть раньше окончания.'
-    } else if (templateType === 'HAPPY_HOURS_PERCENT') {
+    } else if (templateType === 'HAPPY_HOURS_PERCENT' || templateType === 'GIFT_WITH_ITEM') {
       const discountPercent = Number(refs.discountPercentInput.value)
       const targetId = Number(refs.targetValueSelect.value)
       const targetExists =
@@ -695,8 +851,21 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
           refs.targetTypeSelect.value === 'MENU_ITEM'
             ? 'Выберите позицию меню.'
             : 'Выберите категорию меню.'
-      } else if (!Number.isInteger(discountPercent) || discountPercent < 1 || discountPercent > 100) {
+      } else if (
+        templateType === 'HAPPY_HOURS_PERCENT' &&
+        (!Number.isInteger(discountPercent) || discountPercent < 1 || discountPercent > 100)
+      ) {
         error = 'Укажите целый процент скидки от 1 до 100.'
+      } else if (templateType === 'GIFT_WITH_ITEM' && refs.rewardModeSelect.value === 'FIXED_ITEM') {
+        const fixedRewardItemId = Number(refs.fixedRewardSelect.value)
+        if (!menuItems.some((item) => item.id === fixedRewardItemId)) {
+          error = 'Выберите позицию подарка.'
+        }
+      } else if (templateType === 'GIFT_WITH_ITEM') {
+        const allowlistIds = selectedRewardAllowlistIds()
+        if (!allowlistIds.length || allowlistIds.some((itemId) => !menuItems.some((item) => item.id === itemId))) {
+          error = 'Выберите хотя бы одну разрешённую позицию подарка.'
+        }
       }
     }
     refs.formError.textContent = error
@@ -710,6 +879,20 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
       refs.targetTypeSelect.value === 'MENU_ITEM'
         ? { type: 'MENU_ITEM', menuItemId: targetId }
         : { type: 'MENU_CATEGORY', menuCategoryId: targetId }
+    const reward =
+      templateType === 'GIFT_WITH_ITEM'
+        ? refs.rewardModeSelect.value === 'FIXED_ITEM'
+          ? {
+              mode: 'FIXED_ITEM' as const,
+              fixedMenuItemId: Number(refs.fixedRewardSelect.value),
+              allowlistMenuItemIds: []
+            }
+          : {
+              mode: 'CHOICE_ITEMS' as const,
+              fixedMenuItemId: null,
+              allowlistMenuItemIds: selectedRewardAllowlistIds()
+            }
+        : null
     return {
       title,
       description,
@@ -727,7 +910,8 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
               left.endLocal.localeCompare(right.endLocal)
           ),
         target,
-        discountPercent: Number(refs.discountPercentInput.value)
+        discountPercent: templateType === 'HAPPY_HOURS_PERCENT' ? Number(refs.discountPercentInput.value) : null,
+        reward
       }
     }
   }
@@ -760,13 +944,13 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
     card.appendChild(
       el('p', {
         className: 'venue-promotion-template-label',
-        text: templateType === 'HAPPY_HOURS_PERCENT' ? 'Счастливые часы — скидка %' : 'Информационная акция'
+        text: promotionTemplateLabel(templateType ?? 'TEXT_ONLY')
       })
     )
     if (promotion.terms?.trim()) {
       card.appendChild(el('p', { className: 'venue-promotion-terms', text: `Условия: ${promotion.terms.trim()}` }))
     }
-    if (templateType === 'HAPPY_HOURS_PERCENT') {
+    if (templateType === 'HAPPY_HOURS_PERCENT' || templateType === 'GIFT_WITH_ITEM') {
       const rule = promotion.rule
       const ruleSummary = el('div', { className: 'venue-promotion-card-rule' })
       const windowSummaries = formatWindowSummary(rule?.windows ?? [])
@@ -774,33 +958,71 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
       const target = rule?.target
       if (target?.type === 'MENU_ITEM') {
         const itemName = target.label ?? menuItems.find((item) => item.id === target.menuItemId)?.name
-        ruleSummary.appendChild(el('p', { text: `Позиция: ${itemName ?? 'не настроена'}` }))
+        ruleSummary.appendChild(
+          el('p', {
+            text:
+              templateType === 'GIFT_WITH_ITEM'
+                ? `При заказе: Позиция «${itemName ?? 'не настроена'}»`
+                : `Позиция: ${itemName ?? 'не настроена'}`
+          })
+        )
       } else if (target?.type === 'MENU_CATEGORY') {
         const categoryName =
           target.label ?? menuCategories.find((category) => category.id === target.menuCategoryId)?.name
-        ruleSummary.appendChild(el('p', { text: `Категория: ${categoryName ?? 'не настроена'}` }))
+        ruleSummary.appendChild(
+          el('p', {
+            text:
+              templateType === 'GIFT_WITH_ITEM'
+                ? `При заказе: Категория «${categoryName ?? 'не настроена'}»`
+                : `Категория: ${categoryName ?? 'не настроена'}`
+          })
+        )
       } else {
         ruleSummary.appendChild(el('p', { text: 'Категория или позиция: не настроена' }))
       }
-      ruleSummary.appendChild(
-        el('p', {
-          text: rule?.discountPercent == null ? 'Скидка: не настроена' : `Скидка: ${rule.discountPercent}%`
-        })
-      )
-      ruleSummary.appendChild(
-        el('small', {
-          text: 'Скидка рассчитывается автоматически по актуальным ценам при оформлении заказа.'
-        })
-      )
+      if (templateType === 'GIFT_WITH_ITEM') {
+        const reward = rule?.reward
+        if (reward?.mode === 'FIXED_ITEM') {
+          ruleSummary.appendChild(
+            el('p', { text: `Подарок: ${reward.fixedItem?.name ?? 'не настроен'}` })
+          )
+        } else {
+          const rewardNames = reward?.allowlist?.map((item) => item.name).filter(Boolean) ?? []
+          ruleSummary.appendChild(
+            el('p', {
+              text: rewardNames.length ? `Подарок: на выбор — ${rewardNames.join(', ')}` : 'Подарок: не настроен'
+            })
+          )
+        }
+        ruleSummary.appendChild(el('p', { text: 'Максимум: 1 подарок на заказ' }))
+        ruleSummary.appendChild(
+          el('small', {
+            text: 'Гость сам выбирает или подтверждает подарок. Подарок автоматически в заказ не добавляется.'
+          })
+        )
+      } else {
+        ruleSummary.appendChild(
+          el('p', {
+            text: rule?.discountPercent == null ? 'Скидка: не настроена' : `Скидка: ${rule.discountPercent}%`
+          })
+        )
+        ruleSummary.appendChild(
+          el('small', {
+            text: 'Скидка рассчитывается автоматически по актуальным ценам при оформлении заказа.'
+          })
+        )
+      }
       const issues = rule?.validationIssues?.filter(Boolean) ?? []
       if (!rule?.readyForActivation || issues.length) {
         ruleSummary.appendChild(
           el('p', {
             className: 'venue-promotion-validation',
             text: !rule?.readyForActivation
-              ? issues.length
-                ? `Нужно исправить перед публикацией: ${issues.join('; ')}`
-                : 'Заполните расписание, категорию или позицию и процент перед публикацией.'
+                ? issues.length
+                  ? `Нужно исправить перед публикацией: ${issues.join('; ')}`
+                  : templateType === 'GIFT_WITH_ITEM'
+                    ? 'Заполните расписание, условие покупки и подарок перед публикацией.'
+                    : 'Заполните расписание, категорию или позицию и процент перед публикацией.'
               : issues.join('; ')
           })
         )
@@ -886,6 +1108,7 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
     refs.timezoneHint.textContent = `Часовой пояс заведения: ${timezone}`
     if (!refs.formCard.hidden) {
       renderTargetOptions()
+      renderRewardOptions()
       renderRuleSummary()
     }
     refs.status.textContent = ''
@@ -995,7 +1218,10 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
     }),
     on(refs.targetTypeSelect, 'change', () => renderTargetOptions(null)),
     on(refs.targetValueSelect, 'change', renderRuleSummary),
-    on(refs.discountPercentInput, 'input', renderRuleSummary)
+    on(refs.discountPercentInput, 'input', renderRuleSummary),
+    on(refs.rewardModeSelect, 'change', syncRewardFields),
+    on(refs.fixedRewardSelect, 'change', renderRuleSummary),
+    on(refs.rewardAllowlist, 'change', renderRuleSummary)
   ]
 
   void load()

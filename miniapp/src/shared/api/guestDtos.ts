@@ -242,12 +242,51 @@ export type OrderBatchItemDto = {
   isPromotionReward: boolean
 }
 
+export type GiftOfferStatus =
+  | 'NO_GIFT'
+  | 'FIXED_GIFT_AVAILABLE'
+  | 'GIFT_CHOICE_REQUIRED'
+  | 'GIFT_UNAVAILABLE'
+  | 'GIFT_SKIPPED'
+  | 'GIFT_SELECTED'
+
+export type GiftDecisionAction = 'ACCEPT_FIXED' | 'SELECT_ITEM' | 'SKIP'
+
+export type GiftRewardItemDto = {
+  menuItemId: number
+  name: string
+  originalUnitPriceMinor: number
+  currency: string
+}
+
+export type GiftOfferDto = {
+  status: GiftOfferStatus
+  promotionId?: number | null
+  promotionTitle?: string | null
+  ruleId?: number | null
+  ruleVersion?: number | null
+  triggerLineId?: number | null
+  triggerMenuItemId?: number | null
+  triggerItemName?: string | null
+  fixedRewardItem?: GiftRewardItemDto | null
+  selectableRewardItems?: GiftRewardItemDto[]
+  selectedRewardItem?: GiftRewardItemDto | null
+  unavailableReason?: string | null
+}
+
+export type GiftDecisionDto = {
+  action: GiftDecisionAction
+  selectedMenuItemId?: number | null
+  decisionScopeToken: string
+}
+
 export type AddBatchRequest = {
   tableToken: string
   tableSessionId: number
   tabId: number
   idempotencyKey: string
   previewFingerprint?: string | null
+  giftDecision?: GiftDecisionDto | null
   items: AddBatchItemDto[]
   comment?: string | null
 }
@@ -297,8 +336,9 @@ export type AddBatchItemDto = {
 }
 
 export type AddBatchResponse = {
-  orderId: number
-  batchId: number
+  submitted?: boolean
+  orderId?: number | null
+  batchId?: number | null
   pricing: CartPreviewDto
   recalculated: boolean
 }
@@ -307,7 +347,9 @@ export type CartPreviewRequest = {
   tableToken: string
   tableSessionId: number
   tabId: number
+  giftDecision?: GiftDecisionDto | null
   items: AddBatchItemDto[]
+  comment?: string | null
 }
 
 export type CartPreviewResponse = {
@@ -323,6 +365,12 @@ export type CartPreviewDto = {
   discounts: CartPreviewDiscountDto[]
   items: CartPreviewItemDto[]
   pricingFingerprint: string
+  cartFingerprint: string
+  decisionScopeToken?: string | null
+  decisionScopeExpiresAtEpochSeconds?: number | null
+  giftDecisionStale?: boolean
+  giftDecisionMessage?: string | null
+  giftOffer?: GiftOfferDto | null
 }
 
 export type CartPreviewDiscountDto = {
@@ -600,6 +648,14 @@ export type GuestVisitOrderItemDto = {
   currency?: string | null
   discountPercent?: number | null
   totalMinor?: number | null
+  promoDiscountMinor?: number | null
+  isPromotionReward?: boolean | null
+  isExcluded?: boolean | null
+  excludedReasonText?: string | null
+  itemStatus?: string | null
+  canceledReasonText?: string | null
+  promotionLinkRole?: 'TRIGGER' | 'REWARD' | string | null
+  promotionLabel?: string | null
 }
 
 export type GuestVisitOrderItemOptionDto = {
@@ -657,6 +713,7 @@ export type GuestVisitPromotionDiscountDto = {
   currency: string
   originalAmountMinor?: number | null
   finalAmountMinor?: number | null
+  isActive?: boolean | null
 }
 
 export type GuestFavoriteVenuesResponse = {

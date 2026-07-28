@@ -91,6 +91,8 @@ data class OrderBatchItemDto(
     val lineGrossMinor: Long,
     val manualDiscountMinor: Long,
     val promoDiscountMinor: Long,
+    val isPromotionReward: Boolean = false,
+    val hasActivePromotionReward: Boolean = false,
     val linePayableMinor: Long,
     val isExcluded: Boolean,
     val excludedReasonText: String? = null,

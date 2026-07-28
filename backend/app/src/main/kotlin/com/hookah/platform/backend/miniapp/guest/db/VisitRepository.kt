@@ -82,6 +82,7 @@ data class GuestVisitPromotionDiscount(
     val ruleType: String? = null,
     val originalAmountMinor: Long? = null,
     val finalAmountMinor: Long? = null,
+    val isActive: Boolean = true,
 )
 
 data class GuestVisitOrderItemOption(
@@ -101,6 +102,12 @@ data class GuestVisitOrderItem(
     val discountPercent: Int?,
     val promoDiscountMinor: Long = 0L,
     val isPromotionReward: Boolean = false,
+    val isExcluded: Boolean = false,
+    val excludedReasonText: String? = null,
+    val itemStatus: String = "ACTIVE",
+    val canceledReasonText: String? = null,
+    val promotionLinkRole: String? = null,
+    val promotionLabel: String? = null,
     val totalMinor: Long?,
 )
 
@@ -567,7 +574,21 @@ class VisitRepository(private val dataSource: DataSource?) {
                    COALESCE(promo.currency, obi.currency_snapshot, mi.currency) AS currency,
                    obi.discount_percent,
                    COALESCE(SUM(promo.discount_minor), 0) AS promo_discount_minor,
-                   CASE WHEN opri.reward_order_batch_item_id IS NULL THEN FALSE ELSE TRUE END AS is_promotion_reward
+                   CASE WHEN COUNT(reward_link.id) = 0 THEN FALSE ELSE TRUE END AS is_promotion_reward,
+                   obi.is_excluded,
+                   obi.excluded_reason_text,
+                   COALESCE(obi.item_status, 'ACTIVE') AS item_status,
+                   obi.canceled_reason_text,
+                   CASE
+                       WHEN COUNT(reward_link.id) > 0 THEN 'REWARD'
+                       WHEN COUNT(trigger_link.id) > 0 THEN 'TRIGGER'
+                       ELSE NULL
+                   END AS promotion_link_role,
+                   COALESCE(
+                       MAX(reward_link.label_snapshot),
+                       MAX(trigger_link.label_snapshot),
+                       MAX(linked_application.title_snapshot)
+                   ) AS promotion_label
             FROM order_batches ob
             JOIN order_batch_items obi ON obi.order_batch_id = ob.id
             LEFT JOIN menu_items mi ON mi.id = obi.menu_item_id
@@ -582,10 +603,13 @@ class VisitRepository(private val dataSource: DataSource?) {
                 FROM order_batch_item_promotion_adjustments
                 GROUP BY order_batch_item_id
             ) promo ON promo.order_batch_item_id = obi.id
-            LEFT JOIN order_promotion_reward_items opri ON opri.reward_order_batch_item_id = obi.id
+            LEFT JOIN order_promotion_reward_items reward_link
+              ON reward_link.reward_order_batch_item_id = obi.id
+            LEFT JOIN order_promotion_reward_items trigger_link
+              ON trigger_link.trigger_order_batch_item_id = obi.id
+            LEFT JOIN order_promotion_applications linked_application
+              ON linked_application.id = COALESCE(reward_link.application_id, trigger_link.application_id)
             WHERE ob.order_id = ?
-              AND obi.is_excluded = FALSE
-              AND COALESCE(obi.item_status, 'ACTIVE') = 'ACTIVE'
               AND ${validGuestBatchPredicate("ob")}
             GROUP BY obi.menu_item_id,
                      mi.name,
@@ -603,7 +627,10 @@ class VisitRepository(private val dataSource: DataSource?) {
                      obiop.price_delta_minor_snapshot,
                      obi.preference_note,
                      obi.discount_percent,
-                     opri.reward_order_batch_item_id
+                     obi.is_excluded,
+                     obi.excluded_reason_text,
+                     obi.item_status,
+                     obi.canceled_reason_text
             ORDER BY MIN(obi.id) ASC
             """.trimIndent(),
         ).use { statement ->
@@ -616,6 +643,9 @@ class VisitRepository(private val dataSource: DataSource?) {
                         val priceMinor = rs.getLong("price_minor").let { if (rs.wasNull()) null else it }
                         val discountPercent = rs.getInt("discount_percent").let { if (rs.wasNull()) null else it }
                         val promoDiscountMinor = rs.getLong("promo_discount_minor")
+                        val isExcluded = rs.getBoolean("is_excluded")
+                        val itemStatus = rs.getString("item_status") ?: "ACTIVE"
+                        val isActive = !isExcluded && itemStatus.equals("ACTIVE", ignoreCase = true)
                         add(
                             GuestVisitOrderItem(
                                 itemId = rs.getLong("menu_item_id"),
@@ -628,7 +658,18 @@ class VisitRepository(private val dataSource: DataSource?) {
                                 discountPercent = discountPercent,
                                 promoDiscountMinor = promoDiscountMinor,
                                 isPromotionReward = rs.getBoolean("is_promotion_reward"),
-                                totalMinor = calculateLineTotal(priceMinor, qty, discountPercent, promoDiscountMinor),
+                                isExcluded = isExcluded,
+                                excludedReasonText = rs.getString("excluded_reason_text"),
+                                itemStatus = itemStatus,
+                                canceledReasonText = rs.getString("canceled_reason_text"),
+                                promotionLinkRole = rs.getString("promotion_link_role"),
+                                promotionLabel = rs.getString("promotion_label"),
+                                totalMinor =
+                                    if (isActive) {
+                                        calculateLineTotal(priceMinor, qty, discountPercent, promoDiscountMinor)
+                                    } else {
+                                        0L
+                                    },
                             ),
                         )
                     }
@@ -662,26 +703,63 @@ class VisitRepository(private val dataSource: DataSource?) {
                     opa.currency,
                     COALESCE(
                         SUM(
-                            COALESCE(
-                                NULLIF(obipa.original_amount_minor, 0),
-                                obipa.original_price_minor * obipa.quantity
-                            )
+                            CASE
+                                WHEN opa.rule_type = 'GIFT_WITH_ITEM'
+                                  OR (
+                                      obi.is_excluded = FALSE
+                                      AND COALESCE(obi.item_status, 'ACTIVE') = 'ACTIVE'
+                                  )
+                                    THEN COALESCE(
+                                        NULLIF(obipa.original_amount_minor, 0),
+                                        obipa.original_price_minor * obipa.quantity
+                                    )
+                                ELSE 0
+                            END
                         ),
                         0
                     ) AS original_total_minor,
                     COALESCE(
                         SUM(
-                            COALESCE(
-                                NULLIF(obipa.final_amount_minor, 0),
-                                GREATEST(
-                                    obipa.original_price_minor * obipa.quantity - obipa.discount_minor,
-                                    0
-                                )
-                            )
+                            CASE
+                                WHEN opa.rule_type = 'GIFT_WITH_ITEM'
+                                  OR (
+                                      obi.is_excluded = FALSE
+                                      AND COALESCE(obi.item_status, 'ACTIVE') = 'ACTIVE'
+                                  )
+                                    THEN COALESCE(
+                                        NULLIF(obipa.final_amount_minor, 0),
+                                        GREATEST(
+                                            obipa.original_price_minor * obipa.quantity - obipa.discount_minor,
+                                            0
+                                        )
+                                    )
+                                ELSE 0
+                            END
                         ),
                         0
                     ) AS final_total_minor,
-                    COALESCE(SUM(obipa.discount_minor), 0) AS discount_minor,
+                    COALESCE(
+                        SUM(
+                            CASE
+                                WHEN opa.rule_type = 'GIFT_WITH_ITEM'
+                                  OR (
+                                      obi.is_excluded = FALSE
+                                      AND COALESCE(obi.item_status, 'ACTIVE') = 'ACTIVE'
+                                  )
+                                    THEN obipa.discount_minor
+                                ELSE 0
+                            END
+                        ),
+                        0
+                    ) AS discount_minor,
+                    MAX(
+                        CASE
+                            WHEN obi.is_excluded = FALSE
+                             AND COALESCE(obi.item_status, 'ACTIVE') = 'ACTIVE'
+                                THEN 1
+                            ELSE 0
+                        END
+                    ) AS is_active,
                     MIN(opa.id) AS first_application_id
                 FROM order_promotion_applications opa
                 JOIN order_batch_item_promotion_adjustments obipa ON obipa.application_id = opa.id
@@ -689,8 +767,6 @@ class VisitRepository(private val dataSource: DataSource?) {
                 JOIN order_batches ob ON ob.id = obi.order_batch_id
                 LEFT JOIN order_promotion_reward_items opri ON opri.application_id = opa.id
                 WHERE opa.order_id = ?
-                  AND obi.is_excluded = FALSE
-                  AND COALESCE(obi.item_status, 'ACTIVE') = 'ACTIVE'
                   AND ${validGuestBatchPredicate("ob")}
                 GROUP BY opa.id,
                          opa.title_snapshot,
@@ -703,6 +779,7 @@ class VisitRepository(private val dataSource: DataSource?) {
                    NULLIF(SUM(original_total_minor), 0) AS original_total_minor,
                    COALESCE(SUM(final_total_minor), 0) AS final_total_minor,
                    COALESCE(SUM(discount_minor), 0) AS discount_minor,
+                   MAX(is_active) AS is_active,
                    MIN(first_application_id) AS first_application_id
             FROM application_discounts
             GROUP BY promo_label, rule_type, currency
@@ -730,6 +807,7 @@ class VisitRepository(private val dataSource: DataSource?) {
                                         rs.getLong("final_total_minor").let { value ->
                                             if (rs.wasNull()) null else value
                                         },
+                                    isActive = rs.getInt("is_active") > 0,
                                 ),
                             )
                         }
@@ -741,13 +819,6 @@ class VisitRepository(private val dataSource: DataSource?) {
     private fun validGuestBatchPredicate(batchAlias: String): String =
         """
         $batchAlias.status NOT IN ('REJECTED', 'CANCELED', 'CANCELLED')
-        AND EXISTS (
-            SELECT 1
-            FROM order_batch_items obi_valid
-            WHERE obi_valid.order_batch_id = $batchAlias.id
-              AND obi_valid.is_excluded = FALSE
-              AND COALESCE(obi_valid.item_status, 'ACTIVE') = 'ACTIVE'
-        )
         AND (
             EXISTS (
                 SELECT 1

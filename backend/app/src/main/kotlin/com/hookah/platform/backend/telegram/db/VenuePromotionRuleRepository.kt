@@ -117,6 +117,20 @@ data class HappyHoursActivationReadiness(
     val ruleCount: Int = if (rule == null) 0 else 1,
 )
 
+data class GiftWithItemRewardInput(
+    val mode: PromotionRewardMode,
+    val fixedMenuItemId: Long? = null,
+    val allowlistMenuItemIds: List<Long> = emptyList(),
+)
+
+data class GiftWithItemActivationReadiness(
+    val isReady: Boolean,
+    val errors: List<String>,
+    val rule: VenuePromotionRule?,
+    val venueTimezone: String,
+    val ruleCount: Int = if (rule == null) 0 else 1,
+)
+
 data class PromotionRuleTargetMenuItem(
     val id: Long,
     val name: String,
@@ -134,6 +148,7 @@ data class PromotionRuleReward(
     val priceMinor: Long,
     val currency: String,
     val isAvailable: Boolean,
+    val requiresOptionSelection: Boolean = false,
     val options: List<PromotionRuleRewardOption> = emptyList(),
 )
 
@@ -145,6 +160,7 @@ data class PromotionRuleRewardOption(
     val priceMinor: Long,
     val currency: String,
     val isAvailable: Boolean,
+    val requiresOptionSelection: Boolean = false,
 )
 
 class VenuePromotionRuleRepository(private val dataSource: DataSource?) {
@@ -461,6 +477,347 @@ class VenuePromotionRuleRepository(private val dataSource: DataSource?) {
         rules.forEach { rule ->
             setRuleStatus(connection, venueId, rule.id, status)
                 ?: throw InvalidInputException("Правило Happy Hours не найдено.")
+        }
+    }
+
+    suspend fun createGiftWithItemDraftRule(
+        venueId: Long,
+        promotionId: Long,
+        target: HappyHoursRuleTargetInput,
+        reward: GiftWithItemRewardInput,
+        weekdayWindows: List<PromotionWeekdayWindow>,
+        createdByUserId: Long,
+        priority: Int = 100,
+    ): VenuePromotionRule {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    connection.autoCommit = false
+                    try {
+                        val created =
+                            createGiftWithItemDraftRule(
+                                connection = connection,
+                                venueId = venueId,
+                                promotionId = promotionId,
+                                target = target,
+                                reward = reward,
+                                weekdayWindows = weekdayWindows,
+                                createdByUserId = createdByUserId,
+                                priority = priority,
+                            )
+                        connection.commit()
+                        created
+                    } catch (e: Exception) {
+                        connection.rollback()
+                        throw e
+                    } finally {
+                        connection.autoCommit = true
+                    }
+                }
+            } catch (e: IllegalArgumentException) {
+                throw e
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    fun createGiftWithItemDraftRule(
+        connection: Connection,
+        venueId: Long,
+        promotionId: Long,
+        target: HappyHoursRuleTargetInput,
+        reward: GiftWithItemRewardInput,
+        weekdayWindows: List<PromotionWeekdayWindow>,
+        createdByUserId: Long,
+        priority: Int = 100,
+    ): VenuePromotionRule {
+        val normalizedWindows = normalizeWeekdayWindows(weekdayWindows)
+        validateHappyHoursTargetInput(target)
+        val normalizedReward = normalizeGiftWithItemReward(reward)
+        val promotion =
+            selectPromotionRuleContext(
+                connection = connection,
+                venueId = venueId,
+                promotionId = promotionId,
+                forUpdate = true,
+            ) ?: throw IllegalArgumentException("promotion must belong to venue")
+        requireGiftWithItemPromotionCanBeConfigured(promotion)
+        require(!hasNonArchivedRule(connection, venueId, promotionId, PromotionRuleType.GIFT_WITH_ITEM)) {
+            "promotion already has a gift rule"
+        }
+        val resolvedTarget = resolveHappyHoursTarget(connection, venueId, target)
+        requireRewardMenuItemsBelongToVenue(
+            connection = connection,
+            venueId = venueId,
+            rewardMenuItemIds = normalizedReward.allMenuItemIds,
+        )
+        val legacySchedule = normalizedWindows.toLegacyScheduleProjection()
+        val ruleId =
+            connection.prepareStatement(
+                """
+                INSERT INTO promotion_rules (
+                    promotion_id,
+                    venue_id,
+                    rule_type,
+                    target_type,
+                    target_value,
+                    executable_target_type,
+                    discount_percent,
+                    starts_time,
+                    ends_time,
+                    days_of_week,
+                    status,
+                    priority,
+                    stackable,
+                    conflict_group,
+                    max_applications_per_item,
+                    version,
+                    created_by_user_id
+                )
+                VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, FALSE, NULL, 1, 1, ?)
+                """.trimIndent(),
+                Statement.RETURN_GENERATED_KEYS,
+            ).use { statement ->
+                statement.setLong(1, promotionId)
+                statement.setLong(2, venueId)
+                statement.setString(3, PromotionRuleType.GIFT_WITH_ITEM.dbValue)
+                statement.setString(4, PromotionRuleTargetType.CATEGORY_TYPE.dbValue)
+                statement.setString(5, resolvedTarget.semanticType.dbValue)
+                statement.setString(6, resolvedTarget.input.targetType.dbValue)
+                setNullableTime(statement, 7, legacySchedule?.startsTime)
+                setNullableTime(statement, 8, legacySchedule?.endsTime)
+                statement.setString(9, legacySchedule?.daysOfWeek?.joinToString(","))
+                statement.setString(10, VenuePromotionStatus.DRAFT.dbValue)
+                statement.setInt(11, priority)
+                statement.setLong(12, createdByUserId)
+                statement.executeUpdate()
+                statement.generatedKeys.use { keys ->
+                    if (!keys.next()) throw SQLException("No generated key for gift promotion rule")
+                    keys.getLong(1)
+                }
+            }
+        replaceExecutableHappyHoursTarget(connection, ruleId, resolvedTarget)
+        replaceWeekdayWindows(connection, ruleId, normalizedWindows)
+        upsertRuleReward(
+            connection = connection,
+            ruleId = ruleId,
+            rewardMenuItemId = normalizedReward.primaryMenuItemId,
+            rewardQty = 1,
+            maxRewardsPerBatch = 1,
+            rewardMode = normalizedReward.mode,
+            rewardOptionMenuItemIds = normalizedReward.allowlistMenuItemIds,
+        )
+        return selectRule(connection, venueId, ruleId)
+            ?: throw SQLException("Created gift promotion rule not found")
+    }
+
+    suspend fun updateGiftWithItemDraftRule(
+        venueId: Long,
+        promotionId: Long,
+        ruleId: Long,
+        target: HappyHoursRuleTargetInput,
+        reward: GiftWithItemRewardInput,
+        weekdayWindows: List<PromotionWeekdayWindow>,
+    ): VenuePromotionRule? {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    connection.autoCommit = false
+                    try {
+                        val result =
+                            updateGiftWithItemDraftRule(
+                                connection = connection,
+                                venueId = venueId,
+                                promotionId = promotionId,
+                                ruleId = ruleId,
+                                target = target,
+                                reward = reward,
+                                weekdayWindows = weekdayWindows,
+                            )
+                        connection.commit()
+                        result
+                    } catch (e: Exception) {
+                        connection.rollback()
+                        throw e
+                    } finally {
+                        connection.autoCommit = true
+                    }
+                }
+            } catch (e: IllegalArgumentException) {
+                throw e
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    fun updateGiftWithItemDraftRule(
+        connection: Connection,
+        venueId: Long,
+        promotionId: Long,
+        ruleId: Long,
+        target: HappyHoursRuleTargetInput,
+        reward: GiftWithItemRewardInput,
+        weekdayWindows: List<PromotionWeekdayWindow>,
+    ): VenuePromotionRule? {
+        val normalizedWindows = normalizeWeekdayWindows(weekdayWindows)
+        validateHappyHoursTargetInput(target)
+        val normalizedReward = normalizeGiftWithItemReward(reward)
+        val promotion =
+            selectPromotionRuleContext(
+                connection = connection,
+                venueId = venueId,
+                promotionId = promotionId,
+                forUpdate = true,
+            ) ?: return null
+        requireGiftWithItemPromotionCanBeConfigured(promotion)
+        val current =
+            selectGiftWithItemRuleForUpdate(
+                connection = connection,
+                venueId = venueId,
+                promotionId = promotionId,
+                ruleId = ruleId,
+            ) ?: return null
+        require(current.status != VenuePromotionStatus.ARCHIVED) {
+            "archived gift rule cannot be edited"
+        }
+        val resolvedTarget = resolveHappyHoursTarget(connection, venueId, target)
+        requireRewardMenuItemsBelongToVenue(
+            connection = connection,
+            venueId = venueId,
+            rewardMenuItemIds = normalizedReward.allMenuItemIds,
+        )
+        val legacySchedule = normalizedWindows.toLegacyScheduleProjection()
+        val updated =
+            connection.prepareStatement(
+                """
+                UPDATE promotion_rules
+                SET target_type = ?,
+                    target_value = ?,
+                    executable_target_type = ?,
+                    discount_percent = NULL,
+                    starts_time = ?,
+                    ends_time = ?,
+                    days_of_week = ?,
+                    stackable = FALSE,
+                    conflict_group = NULL,
+                    max_applications_per_item = 1,
+                    version = version + 1,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE venue_id = ?
+                  AND promotion_id = ?
+                  AND id = ?
+                  AND rule_type = ?
+                  AND status <> ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setString(1, PromotionRuleTargetType.CATEGORY_TYPE.dbValue)
+                statement.setString(2, resolvedTarget.semanticType.dbValue)
+                statement.setString(3, resolvedTarget.input.targetType.dbValue)
+                setNullableTime(statement, 4, legacySchedule?.startsTime)
+                setNullableTime(statement, 5, legacySchedule?.endsTime)
+                statement.setString(6, legacySchedule?.daysOfWeek?.joinToString(","))
+                statement.setLong(7, venueId)
+                statement.setLong(8, promotionId)
+                statement.setLong(9, ruleId)
+                statement.setString(10, PromotionRuleType.GIFT_WITH_ITEM.dbValue)
+                statement.setString(11, VenuePromotionStatus.ARCHIVED.dbValue)
+                statement.executeUpdate()
+            }
+        if (updated != 1) {
+            return null
+        }
+        replaceExecutableHappyHoursTarget(connection, ruleId, resolvedTarget)
+        replaceWeekdayWindows(connection, ruleId, normalizedWindows)
+        upsertRuleReward(
+            connection = connection,
+            ruleId = ruleId,
+            rewardMenuItemId = normalizedReward.primaryMenuItemId,
+            rewardQty = 1,
+            maxRewardsPerBatch = 1,
+            rewardMode = normalizedReward.mode,
+            rewardOptionMenuItemIds = normalizedReward.allowlistMenuItemIds,
+        )
+        return selectRule(connection, venueId, ruleId)
+    }
+
+    suspend fun validateGiftWithItemActivationReadiness(
+        venueId: Long,
+        promotionId: Long,
+    ): GiftWithItemActivationReadiness {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    validateGiftWithItemActivationReadiness(connection, venueId, promotionId)
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    fun validateGiftWithItemActivationReadiness(
+        connection: Connection,
+        venueId: Long,
+        promotionId: Long,
+    ): GiftWithItemActivationReadiness =
+        validateGiftWithItemActivationReadinessOnConnection(connection, venueId, promotionId)
+
+    fun listGiftWithItemRulesForPromotionManagement(
+        connection: Connection,
+        venueId: Long,
+        promotionId: Long,
+    ): List<VenuePromotionRule> =
+        loadNonArchivedRules(connection, venueId, promotionId, PromotionRuleType.GIFT_WITH_ITEM)
+
+    fun synchronizeGiftWithItemPromotionStatus(
+        connection: Connection,
+        venueId: Long,
+        promotionId: Long,
+        status: VenuePromotionStatus,
+    ) {
+        check(!connection.autoCommit) {
+            "Gift promotion status synchronization must run inside the caller transaction"
+        }
+        if (
+            selectPromotionRuleContext(
+                connection = connection,
+                venueId = venueId,
+                promotionId = promotionId,
+                forUpdate = true,
+            ) == null
+        ) {
+            throw InvalidInputException("Акция не найдена.")
+        }
+        lockPromotionRulesForMutation(connection, venueId, promotionId)
+        val rules =
+            when (status) {
+                VenuePromotionStatus.ACTIVE -> {
+                    val readiness =
+                        validateGiftWithItemActivationReadiness(connection, venueId, promotionId)
+                    if (!readiness.isReady) {
+                        throw InvalidInputException(readiness.errors.joinToString(" "))
+                    }
+                    listGiftWithItemRulesForPromotionManagement(connection, venueId, promotionId)
+                        .takeIf { it.isNotEmpty() }
+                        ?: throw InvalidInputException("Правило подарка не настроено.")
+                }
+                VenuePromotionStatus.PAUSED ->
+                    listGiftWithItemRulesForPromotionManagement(connection, venueId, promotionId)
+                        .takeIf { it.isNotEmpty() }
+                        ?: throw InvalidInputException("Правило подарка не настроено.")
+                else ->
+                    throw InvalidInputException(
+                        "Для подарочной акции поддерживается только включение или приостановка.",
+                    )
+            }
+        rules.forEach { rule ->
+            setRuleStatus(connection, venueId, rule.id, status)
+                ?: throw InvalidInputException("Правило подарка не найдено.")
         }
     }
 
@@ -1867,9 +2224,28 @@ class VenuePromotionRuleRepository(private val dataSource: DataSource?) {
                     COALESCE(mi.name, 'Позиция #' || prr.reward_menu_item_id) AS reward_menu_item_name,
                     mi.price_minor,
                     COALESCE(mi.currency, 'RUB') AS currency,
-                    COALESCE(mi.is_available, FALSE) AS is_available
+                    CASE
+                        WHEN mi.id IS NOT NULL
+                         AND mi.is_available = TRUE
+                         AND mc.is_active = TRUE
+                        THEN TRUE
+                        ELSE FALSE
+                    END AS is_available,
+                    EXISTS (
+                        SELECT 1
+                        FROM menu_item_options mio
+                        WHERE mio.item_id = mi.id
+                          AND mio.venue_id = r.venue_id
+                          AND mio.is_available = TRUE
+                    ) AS requires_option_selection
                 FROM promotion_rule_rewards prr
-                LEFT JOIN menu_items mi ON mi.id = prr.reward_menu_item_id
+                JOIN promotion_rules r ON r.id = prr.rule_id
+                LEFT JOIN menu_items mi
+                  ON mi.id = prr.reward_menu_item_id
+                 AND mi.venue_id = r.venue_id
+                LEFT JOIN menu_categories mc
+                  ON mc.id = mi.category_id
+                 AND mc.venue_id = r.venue_id
                 WHERE prr.rule_id IN ($placeholders)
                 ORDER BY prr.id ASC
                 """.trimIndent(),
@@ -1897,6 +2273,8 @@ class VenuePromotionRuleRepository(private val dataSource: DataSource?) {
                                             },
                                         currency = rs.getString("currency")?.takeIf { it.isNotBlank() } ?: "RUB",
                                         isAvailable = rs.getBoolean("is_available"),
+                                        requiresOptionSelection =
+                                            rs.getBoolean("requires_option_selection"),
                                     ),
                                 )
                             }
@@ -1970,9 +2348,29 @@ class VenuePromotionRuleRepository(private val dataSource: DataSource?) {
                 COALESCE(mi.name, 'Позиция #' || pro.menu_item_id) AS menu_item_name,
                 mi.price_minor,
                 COALESCE(mi.currency, 'RUB') AS currency,
-                COALESCE(mi.is_available, FALSE) AS is_available
+                CASE
+                    WHEN mi.id IS NOT NULL
+                     AND mi.is_available = TRUE
+                     AND mc.is_active = TRUE
+                    THEN TRUE
+                    ELSE FALSE
+                END AS is_available,
+                EXISTS (
+                    SELECT 1
+                    FROM menu_item_options mio
+                    WHERE mio.item_id = mi.id
+                      AND mio.venue_id = r.venue_id
+                      AND mio.is_available = TRUE
+                ) AS requires_option_selection
             FROM promotion_rule_reward_options pro
-            LEFT JOIN menu_items mi ON mi.id = pro.menu_item_id
+            JOIN promotion_rule_rewards prr ON prr.id = pro.reward_id
+            JOIN promotion_rules r ON r.id = prr.rule_id
+            LEFT JOIN menu_items mi
+              ON mi.id = pro.menu_item_id
+             AND mi.venue_id = r.venue_id
+            LEFT JOIN menu_categories mc
+              ON mc.id = mi.category_id
+             AND mc.venue_id = r.venue_id
             WHERE pro.reward_id IN ($placeholders)
             ORDER BY pro.id ASC
             """.trimIndent(),
@@ -1990,6 +2388,8 @@ class VenuePromotionRuleRepository(private val dataSource: DataSource?) {
                                 priceMinor = rs.getLong("price_minor").let { value -> if (rs.wasNull()) 0L else value },
                                 currency = rs.getString("currency")?.takeIf { it.isNotBlank() } ?: "RUB",
                                 isAvailable = rs.getBoolean("is_available"),
+                                requiresOptionSelection =
+                                    rs.getBoolean("requires_option_selection"),
                             ),
                         )
                     }
@@ -2064,9 +2464,12 @@ class VenuePromotionRuleRepository(private val dataSource: DataSource?) {
             connection.prepareStatement(
                 """
                 SELECT COUNT(*)
-                FROM menu_items
-                WHERE venue_id = ?
-                  AND id IN ($placeholders)
+                FROM menu_items mi
+                JOIN menu_categories mc
+                  ON mc.id = mi.category_id
+                 AND mc.venue_id = mi.venue_id
+                WHERE mi.venue_id = ?
+                  AND mi.id IN ($placeholders)
                 """.trimIndent(),
             ).use { statement ->
                 statement.setLong(1, venueId)
@@ -2468,10 +2871,32 @@ class VenuePromotionRuleRepository(private val dataSource: DataSource?) {
         }
     }
 
+    private fun requireGiftWithItemPromotionCanBeConfigured(context: PromotionRuleContext) {
+        require(context.templateType == VenuePromotionTemplateType.GIFT_WITH_ITEM) {
+            "promotion template must be GIFT_WITH_ITEM"
+        }
+        require(context.status != VenuePromotionStatus.ARCHIVED) {
+            "archived promotion cannot be configured"
+        }
+    }
+
     private fun hasNonArchivedHappyHoursRule(
         connection: Connection,
         venueId: Long,
         promotionId: Long,
+    ): Boolean =
+        hasNonArchivedRule(
+            connection = connection,
+            venueId = venueId,
+            promotionId = promotionId,
+            ruleType = PromotionRuleType.HAPPY_HOURS_PERCENT,
+        )
+
+    private fun hasNonArchivedRule(
+        connection: Connection,
+        venueId: Long,
+        promotionId: Long,
+        ruleType: PromotionRuleType,
     ): Boolean =
         connection.prepareStatement(
             """
@@ -2485,7 +2910,7 @@ class VenuePromotionRuleRepository(private val dataSource: DataSource?) {
         ).use { statement ->
             statement.setLong(1, venueId)
             statement.setLong(2, promotionId)
-            statement.setString(3, PromotionRuleType.HAPPY_HOURS_PERCENT.dbValue)
+            statement.setString(3, ruleType.dbValue)
             statement.setString(4, VenuePromotionStatus.ARCHIVED.dbValue)
             statement.executeQuery().use { rs -> rs.next() }
         }
@@ -2511,6 +2936,40 @@ class VenuePromotionRuleRepository(private val dataSource: DataSource?) {
             statement.setLong(2, promotionId)
             statement.setLong(3, ruleId)
             statement.setString(4, PromotionRuleType.HAPPY_HOURS_PERCENT.dbValue)
+            statement.executeQuery().use { rs ->
+                if (!rs.next()) {
+                    null
+                } else {
+                    HappyHoursRuleForUpdate(
+                        status =
+                            VenuePromotionStatus.fromDb(rs.getString("status"))
+                                ?: throw SQLException("Unknown promotion rule status"),
+                    )
+                }
+            }
+        }
+
+    private fun selectGiftWithItemRuleForUpdate(
+        connection: Connection,
+        venueId: Long,
+        promotionId: Long,
+        ruleId: Long,
+    ): HappyHoursRuleForUpdate? =
+        connection.prepareStatement(
+            """
+            SELECT status
+            FROM promotion_rules
+            WHERE venue_id = ?
+              AND promotion_id = ?
+              AND id = ?
+              AND rule_type = ?
+            FOR UPDATE
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, promotionId)
+            statement.setLong(3, ruleId)
+            statement.setString(4, PromotionRuleType.GIFT_WITH_ITEM.dbValue)
             statement.executeQuery().use { rs ->
                 if (!rs.next()) {
                     null
@@ -2624,10 +3083,155 @@ class VenuePromotionRuleRepository(private val dataSource: DataSource?) {
         )
     }
 
+    private fun validateGiftWithItemActivationReadinessOnConnection(
+        connection: Connection,
+        venueId: Long,
+        promotionId: Long,
+    ): GiftWithItemActivationReadiness {
+        val fallbackTimezone = VenueSettingsRepository.DEFAULT_AUTO_TIMEZONE
+        val context = selectPromotionRuleContext(connection, venueId, promotionId)
+        if (context == null) {
+            return GiftWithItemActivationReadiness(
+                isReady = false,
+                errors = listOf("Акция не найдена."),
+                rule = null,
+                venueTimezone = fallbackTimezone,
+                ruleCount = 0,
+            )
+        }
+
+        val errors = mutableListOf<String>()
+        if (context.templateType != VenuePromotionTemplateType.GIFT_WITH_ITEM) {
+            errors += "Для подарка выберите тип «Подарок при покупке»."
+        }
+        if (context.status == VenuePromotionStatus.ARCHIVED) {
+            errors += "Архивную акцию нельзя активировать."
+        }
+        if (context.startsAt == null || context.endsAt == null || !context.startsAt.isBefore(context.endsAt)) {
+            errors += "Укажите корректный общий период действия акции."
+        }
+
+        val rawTimezone = selectVenueTimezone(connection, venueId)
+        val venueTimezone =
+            rawTimezone?.trim()?.takeIf { it.isNotEmpty() }
+                ?: fallbackTimezone
+        if (runCatching { ZoneId.of(venueTimezone) }.isFailure) {
+            errors += "Часовой пояс заведения указан некорректно."
+        }
+
+        val rules =
+            loadNonArchivedRules(
+                connection = connection,
+                venueId = venueId,
+                promotionId = promotionId,
+                ruleType = PromotionRuleType.GIFT_WITH_ITEM,
+            )
+        val rule = rules.firstOrNull()
+        if (rules.isEmpty()) {
+            errors += "Для акции должно быть настроено правило «Подарок при покупке»."
+        }
+        rules.forEach { candidate ->
+            if (candidate.stackable || candidate.conflictGroup != null || candidate.maxApplicationsPerItem != 1) {
+                errors += "Для подарочной акции нельзя включать суммирование."
+            }
+            if (candidate.version < 1) {
+                errors += "Версия правила указана некорректно."
+            }
+            val normalizedWindows =
+                runCatching { normalizeWeekdayWindows(candidate.weekdayWindows) }
+                    .onFailure {
+                        errors +=
+                            when {
+                                candidate.weekdayWindows.isEmpty() ->
+                                    "Добавьте хотя бы одно временное окно."
+                                else ->
+                                    "Временные окна должны быть корректными и не пересекаться."
+                            }
+                    }.getOrNull()
+            if (normalizedWindows != null && normalizedWindows.isEmpty()) {
+                errors += "Добавьте хотя бы одно временное окно."
+            }
+            val executableTargetType = candidate.executableTargetType
+            if (executableTargetType == null) {
+                if (candidate.targets.isEmpty()) {
+                    errors += "Выберите условие получения подарка."
+                } else if (!targetsBelongToVenue(connection, venueId, candidate.targets)) {
+                    errors += "Условие акции должно принадлежать заведению."
+                }
+            } else if (
+                executableTargetType !in
+                setOf(
+                    PromotionRuleTargetType.MENU_ITEM,
+                    PromotionRuleTargetType.MENU_CATEGORY,
+                )
+            ) {
+                errors += "Выберите категорию или позицию меню."
+            } else if (
+                candidate.targets.size != 1 ||
+                candidate.targets.single().targetType != executableTargetType
+            ) {
+                errors += "Для правила должна быть выбрана ровно одна категория или позиция меню."
+            } else if (!targetsBelongToVenue(connection, venueId, candidate.targets)) {
+                errors += "Условие акции должно принадлежать заведению."
+            }
+
+            val reward = candidate.reward
+            if (reward == null) {
+                errors += "Настройте подарок."
+            } else {
+                if (reward.rewardQty != 1 || reward.maxRewardsPerBatch != 1) {
+                    errors += "Можно выдать только один подарок на заказ."
+                }
+                when (reward.rewardMode) {
+                    PromotionRewardMode.FIXED_ITEM -> {
+                        if (!menuItemBelongsToVenue(connection, venueId, reward.rewardMenuItemId)) {
+                            errors += "Подарок должен принадлежать заведению."
+                        }
+                    }
+                    PromotionRewardMode.CHOICE_ITEMS -> {
+                        val optionIds = reward.options.map { it.menuItemId }
+                        if (optionIds.isEmpty()) {
+                            errors += "Добавьте хотя бы одну позицию в список подарков."
+                        }
+                        if (optionIds.distinct().size != optionIds.size) {
+                            errors += "Список подарков не должен содержать дубликаты."
+                        }
+                        if (
+                            reward.rewardMenuItemId !in optionIds ||
+                            optionIds.any { !menuItemBelongsToVenue(connection, venueId, it) }
+                        ) {
+                            errors += "Все подарки должны принадлежать заведению."
+                        }
+                    }
+                }
+            }
+        }
+        return GiftWithItemActivationReadiness(
+            isReady = errors.isEmpty(),
+            errors = errors.distinct(),
+            rule = rule,
+            venueTimezone = venueTimezone,
+            ruleCount = rules.size,
+        )
+    }
+
     private fun loadNonArchivedHappyHoursRules(
         connection: Connection,
         venueId: Long,
         promotionId: Long,
+    ): List<VenuePromotionRule> =
+        loadNonArchivedRules(
+            connection = connection,
+            venueId = venueId,
+            promotionId = promotionId,
+            ruleType = PromotionRuleType.HAPPY_HOURS_PERCENT,
+        )
+
+    private fun loadNonArchivedRules(
+        connection: Connection,
+        venueId: Long,
+        promotionId: Long,
+        ruleType: PromotionRuleType,
     ): List<VenuePromotionRule> =
         connection.prepareStatement(
             """
@@ -2643,7 +3247,7 @@ class VenuePromotionRuleRepository(private val dataSource: DataSource?) {
         ).use { statement ->
             statement.setLong(1, venueId)
             statement.setLong(2, promotionId)
-            statement.setString(3, PromotionRuleType.HAPPY_HOURS_PERCENT.dbValue)
+            statement.setString(3, ruleType.dbValue)
             statement.setString(4, VenuePromotionStatus.ARCHIVED.dbValue)
             statement.executeQuery().use { rs -> attachTargets(connection, rs.toRules()) }
         }
@@ -2979,6 +3583,40 @@ class VenuePromotionRuleRepository(private val dataSource: DataSource?) {
         require(percent in 1..100) { "discount_percent must be between 1 and 100" }
     }
 
+    private fun normalizeGiftWithItemReward(reward: GiftWithItemRewardInput): NormalizedGiftWithItemReward =
+        when (reward.mode) {
+            PromotionRewardMode.FIXED_ITEM -> {
+                val fixedMenuItemId =
+                    reward.fixedMenuItemId?.takeIf { it > 0L }
+                        ?: throw IllegalArgumentException("fixed reward menu item is required")
+                require(reward.allowlistMenuItemIds.isEmpty()) {
+                    "fixed reward must not contain an allowlist"
+                }
+                NormalizedGiftWithItemReward(
+                    mode = reward.mode,
+                    primaryMenuItemId = fixedMenuItemId,
+                    allowlistMenuItemIds = emptyList(),
+                )
+            }
+            PromotionRewardMode.CHOICE_ITEMS -> {
+                require(reward.fixedMenuItemId == null) {
+                    "choice reward must not contain a fixed menu item"
+                }
+                val allowlistMenuItemIds = reward.allowlistMenuItemIds.distinct()
+                require(allowlistMenuItemIds.isNotEmpty()) {
+                    "choice reward allowlist must not be empty"
+                }
+                require(allowlistMenuItemIds.all { it > 0L }) {
+                    "choice reward menu item ids must be positive"
+                }
+                NormalizedGiftWithItemReward(
+                    mode = reward.mode,
+                    primaryMenuItemId = allowlistMenuItemIds.first(),
+                    allowlistMenuItemIds = allowlistMenuItemIds,
+                )
+            }
+        }
+
     private fun validateRewardConfig(
         rewardQty: Int,
         maxRewardsPerBatch: Int,
@@ -3088,6 +3726,19 @@ class VenuePromotionRuleRepository(private val dataSource: DataSource?) {
         val input: HappyHoursRuleTargetInput,
         val semanticType: MenuSemanticType,
     )
+
+    private data class NormalizedGiftWithItemReward(
+        val mode: PromotionRewardMode,
+        val primaryMenuItemId: Long,
+        val allowlistMenuItemIds: List<Long>,
+    ) {
+        val allMenuItemIds: List<Long>
+            get() =
+                when (mode) {
+                    PromotionRewardMode.FIXED_ITEM -> listOf(primaryMenuItemId)
+                    PromotionRewardMode.CHOICE_ITEMS -> allowlistMenuItemIds
+                }
+    }
 
     private data class LegacyScheduleProjection(
         val startsTime: LocalTime,

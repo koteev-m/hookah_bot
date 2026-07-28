@@ -1,6 +1,6 @@
 # Testing / QA Smoke Strategy
 
-Дата актуализации: 2026-07-27.
+Дата актуализации: 2026-07-28.
 
 Статус: **current product reference / UPDATED**. This document is the canonical QA/smoke strategy for the Telegram bot + Mini App platform. It consolidates local validation, GitHub Actions expectations, area-specific smoke suites, staging policy, failure reporting and Codex handoff rules. Deployment and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
 
@@ -19,8 +19,9 @@ Current practice:
   visibility, unavailable-venue filtering, informational-only totals and Telegram/Mini App state.
 - Executable Promotions Phase 2 is
   `EXECUTABLE PROMOTIONS PHASE 2 / HAPPY HOURS PERCENT SLICE / DONE / STAGING-SMOKE-PASSED`.
-  The next bounded slice is
-  `GIFT_WITH_ITEM BOT/MINIAPP PARITY / READ-ONLY AUDIT AND IMPLEMENTATION PLAN`.
+- Gift parity is
+  `GIFT_WITH_ITEM BOT/MINIAPP PARITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`.
+  GitHub Actions and staging cross-surface smoke remain required.
 
 Target QA model:
 - Every task ends with changed files, behavior summary, tests run, validation result, manual smoke checklist, `git status --short`, whether `scripts/dev/` was touched and whether staging deploy is needed.
@@ -82,19 +83,42 @@ Final result for the Happy Hours percentage slice:
   bill/History, no stacking, manual-discount rejection, Owner/Manager/Staff RBAC, Bot/Mini App
   parity and `TEXT_ONLY` regression.
 
-### GIFT_WITH_ITEM Bot/Mini App parity next gate
+### GIFT_WITH_ITEM Bot/Mini App parity local validation gate
 
-Status: `READ-ONLY AUDIT AND IMPLEMENTATION PLAN`. Verdict: `IMPLEMENT_GIFT_PARITY_NOW`.
+Status:
+`GIFT_WITH_ITEM BOT/MINIAPP PARITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`.
 
 Required backend coverage:
 
 - fixed gift and selectable allowlist gift use the same schedule/date/weekday/time and item/category
   target resolver as preview and submit;
-- preview emits explicit fixed/selectable/unavailable offer state without writes;
-- submit requires explicit accept/select or skip, ignores client prices/discounts and revalidates
-  rule/version, trigger, allowlist membership, current availability and current reward price;
-- trigger removed, rejected, canceled or excluded cannot create or retain an authoritative gift
-  adjustment; batch rejection and reward-line cancellation stay financially consistent;
+- preview emits explicit fixed/selectable/unavailable offer state without writes and issues a
+  server-signed decision scope;
+- the opaque HMAC-SHA-256 token uses the existing server-secret pattern with
+  `gift_decision/v1` domain separation, purpose `gift_decision`, audience
+  `hookah-order-submit` and a 10-minute TTL. It binds authenticated user, venue, table session, tab,
+  canonical cart fingerprint, promotion/rule/version and offer type, and contains no trusted
+  original, discount or final amount;
+- the deterministic server-side fingerprint covers venue/session/tab, menu item IDs, quantities,
+  sorted selected option IDs, normalized note/comment and promotion context without depending on
+  DB row order, client timezone/prices or unsorted JSON;
+- submit requires explicit accept/select or scope-bound skip, verifies signature/purpose/audience,
+  expiry and complete identity/cart/rule scope, then revalidates current venue time, lifecycle,
+  schedule, trigger, required trigger options, allowlist membership, availability/current price,
+  session/tab membership, one-gift winner and idempotency;
+- legacy unsigned selected-choice/skip inputs fail closed. A stale/tampered/wrong-user,
+  venue/session/tab/cart/rule scope creates no partial state and returns
+  `Корзина изменилась. Проверьте подарок ещё раз.`;
+- trigger removed, rejected, canceled or excluded before authoritative persistence cannot create a
+  gift adjustment;
+- post-submit cancel-as-unavailable on a trigger atomically cancels its active linked reward;
+  trigger exclusion atomically excludes it. Repeat operations and already inactive rewards are
+  idempotent, reward-only mutation does not change the trigger, and application/link/config/pricing
+  snapshots remain in the audit trail;
+- coupled mutations lock deterministically in order/batch → trigger → linked reward →
+  link/application order and recalculate the bill inside the same transaction. Injected failure
+  rolls back both item states, bill and History; Guest bill, Venue bill, History and staff-chat
+  expose the same committed persisted facts;
 - unavailable fixed reward, stale selected reward, all-unavailable allowlist and unsupported
   required reward option fail closed without silent substitution;
 - changed reward price recalculates through one current snapshot and preserves winner/conflict
@@ -103,40 +127,81 @@ Required backend coverage:
   and multiple eligible gift rules do not multiply rewards;
 - reward line snapshots original amount, 100% adjustment and final zero; trigger/reward linkage,
   selected reward item, rule/version and label remain immutable in active order, bill and History;
-- reward line receives neither percentage nor manual discount;
+- reward line receives neither percentage nor manual discount. Its linked trigger also rejects
+  manual discount while the reward remains active, using the exact safe copy
+  `На эту позицию уже действует акция. Ручную скидку применить нельзя.`; roles do not bypass the
+  check, and normal trigger discount policy resumes only after the linked reward is inactive;
 - repeated idempotent submit changes no order, batch, application, adjustment or reward-link count;
 - gift offer identity, rule version and accept/select/skip decision participate in pricing
-  fingerprint/recalculation coverage.
+  fingerprint/recalculation coverage;
+- real PostgreSQL concurrency uses two independent connections and a deterministic barrier, without
+  arbitrary sleeps. Two simultaneous submits with one idempotency key persist exactly one batch,
+  reward line, application, adjustment, trigger/reward link and idempotency result.
 
 Required Bot/Mini App parity coverage:
 
-- the same preview fixture exposes the same offer/rule/version/trigger/allowlist through both
-  adapters;
+- one repository-backed common fixture uses a real rule, real cart, one server offer/resolver and
+  one submit path; Bot and Mini App adapters expose the same scope, trigger, allowlist, selection,
+  original/adjustment/final facts and persisted application/reward link;
 - fixed reward requires visible confirmation; selectable reward requires one explicit choice;
 - both clients support `Пропустить подарок`;
 - cart changes invalidate stale decisions and cause a new server preview;
-- restart/process-memory loss cannot create a gift from an unconfirmed decision: submit carries a
-  complete stateless decision and the server revalidates it;
+- Mini App LocalStorage is UX-only and scoped by authenticated user, venue, table session, tab,
+  canonical cart fingerprint and token expiry. Initial restore with no previous tab, account or
+  venue switch, session replacement including the same physical QR, tab change and cart
+  item/quantity/option/note change clear stale state;
+- Telegram callback payloads use amount-free per-offer tags. The process map remains UX-only;
+  missing, old-session/tab or mismatched bindings fail safely;
+- restart/process-memory loss cannot create a gift from an unconfirmed decision. Fresh
+  resolver/router regression serializes fixed accept, selectable choice and skip, clears process
+  draft state and submits through the production repository/service path for server revalidation;
 - both clients render gift original amount, named 100% adjustment and final zero, then show the same
   persisted bill/History facts;
 - all-unavailable reward state uses explicit human copy instead of silently hiding or substituting
   the gift.
 
-Required focused selectors for implementation:
+Required focused selectors for local regression:
 
 ```bash
 ./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*PromotionRuleEngine*' --console=plain
 ./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VenuePromotionRepository*' --console=plain
 ./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VenuePromotionRoutes*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*GiftDecisionScopeTokenService*' --console=plain
 ./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*GuestOrderRoutes*' --console=plain
-./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VenueOrdersRepository*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VenueOrderRoutes*' --tests '*VenueOrdersRepository*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*GuestVisitRoutes*' --console=plain
 ./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VisitRepository*' --console=plain
 ./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*TelegramBotRouter*' --console=plain
+JAVA_TOOL_OPTIONS=-Dapi.version=1.44 ./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*Promotion*Concurrency*' --console=plain
 ./gradlew --no-daemon --max-workers=1 :backend:app:ktlintCheck --console=plain
 ./gradlew --no-daemon --max-workers=1 :backend:app:compileKotlin --console=plain
 npm --prefix miniapp run build
 CI=1 TZ=UTC MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke
 ```
+
+Final local result:
+
+| Validation | Executed / skipped |
+| --- | --- |
+| `PromotionRuleEngine` | 37 / 0 |
+| `VenuePromotionRepository` | 27 / 0 |
+| `VenuePromotionRoutes` | 9 / 0 |
+| `GiftDecisionScopeTokenService` | 6 / 0 |
+| `GuestOrderRoutes` | 51 / 0 |
+| `VenueOrderRoutes` + `VenueOrdersRepository` | 54 / 0 |
+| `GuestVisitRoutes` | 6 / 0 |
+| `VisitRepository` final rerun | 16 / 0 |
+| `TelegramBotRouter` | 503 / 0 |
+| real PostgreSQL `*Promotion*Concurrency*` with `api.version=1.44` | 6 / 0 |
+| deterministic Playwright smoke | 83/83 passed |
+
+The first `VisitRepository` run detected a presentation regression; it was fixed and the final
+selector passed 16/0. `git diff --check`, `ktlintCheck`, `compileKotlin` and the Mini App production
+build also passed. Preview-no-mutation, transaction rollback, duplicate/concurrent submit,
+persisted linkage/history, coupled lifecycle, manual-discount guards including Telegram direct/stale
+STAFF denial and repository defense-in-depth, cross-surface parity and fresh-instance
+fixed/selectable/skip behavior are covered. This is local evidence only; independent
+review, GitHub Actions and staging remain open.
 
 ## GitHub Actions Expectations
 

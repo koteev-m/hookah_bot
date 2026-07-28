@@ -7,6 +7,7 @@ import com.hookah.platform.backend.miniapp.guest.api.ActiveOrderDto
 import com.hookah.platform.backend.miniapp.guest.api.ActiveOrderResponse
 import com.hookah.platform.backend.miniapp.guest.api.ActiveOrderServiceChargeDto
 import com.hookah.platform.backend.miniapp.guest.api.AddBatchItemDto
+import com.hookah.platform.backend.miniapp.guest.api.AddBatchRecalculationResponse
 import com.hookah.platform.backend.miniapp.guest.api.AddBatchRequest
 import com.hookah.platform.backend.miniapp.guest.api.AddBatchResponse
 import com.hookah.platform.backend.miniapp.guest.api.CartPreviewDiscountDto
@@ -15,6 +16,9 @@ import com.hookah.platform.backend.miniapp.guest.api.CartPreviewItemDto
 import com.hookah.platform.backend.miniapp.guest.api.CartPreviewPromotionAdjustmentDto
 import com.hookah.platform.backend.miniapp.guest.api.CartPreviewRequest
 import com.hookah.platform.backend.miniapp.guest.api.CartPreviewResponse
+import com.hookah.platform.backend.miniapp.guest.api.GiftDecisionDto
+import com.hookah.platform.backend.miniapp.guest.api.GiftOfferDto
+import com.hookah.platform.backend.miniapp.guest.api.GiftRewardItemDto
 import com.hookah.platform.backend.miniapp.guest.api.GuestBillRequestRequest
 import com.hookah.platform.backend.miniapp.guest.api.GuestBillRequestResponse
 import com.hookah.platform.backend.miniapp.guest.api.OrderBatchDto
@@ -30,6 +34,11 @@ import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepositor
 import com.hookah.platform.backend.miniapp.venue.orders.VenueOrdersRepository
 import com.hookah.platform.backend.miniapp.venue.orders.toOrderBillSnapshot
 import com.hookah.platform.backend.miniapp.venue.requireUserId
+import com.hookah.platform.backend.promotions.GiftDecisionCommand
+import com.hookah.platform.backend.promotions.MiniAppGiftDecisionAdapter
+import com.hookah.platform.backend.promotions.PromotionGiftDecisionAction
+import com.hookah.platform.backend.promotions.PromotionGiftOffer
+import com.hookah.platform.backend.promotions.PromotionGiftRewardItem
 import com.hookah.platform.backend.telegram.BillPaymentMethod
 import com.hookah.platform.backend.telegram.NewBatchNotification
 import com.hookah.platform.backend.telegram.NewBatchPromotionDiscount
@@ -39,6 +48,7 @@ import com.hookah.platform.backend.telegram.TableContext
 import com.hookah.platform.backend.telegram.billPaymentMethodLabel
 import com.hookah.platform.backend.telegram.db.CreatedOrderBatch
 import com.hookah.platform.backend.telegram.db.CreatedOrderPromotionDiscount
+import com.hookah.platform.backend.telegram.db.GiftDecisionRequiredException
 import com.hookah.platform.backend.telegram.db.GuestOrderCartPreview
 import com.hookah.platform.backend.telegram.db.OrderBatchItemInput
 import com.hookah.platform.backend.telegram.db.OrderItemSelectedOptionDetails
@@ -155,6 +165,8 @@ fun Route.guestOrderRoutes(
         val token = validateTableToken(request.tableToken)
         val tabId = normalizeTabId(request.tabId)
         val normalizedItems = normalizeItems(request.items)
+        val giftDecision = request.giftDecision?.toCommand()
+        val comment = normalizeComment(request.comment)
         val table = tableTokenResolver(token) ?: throw NotFoundException()
         val tableSession =
             tableSessionRepository.findSessionForTable(
@@ -200,6 +212,10 @@ fun Route.guestOrderRoutes(
                         table.venueId,
                         ZoneId.of(VenueSettingsRepository.DEFAULT_AUTO_TIMEZONE),
                     ),
+                tableSessionId = tableSession.id,
+                tabId = tabId,
+                comment = comment,
+                giftDecisionCommand = giftDecision,
             ) ?: throw NotFoundException()
         call.respond(CartPreviewResponse(preview = preview.toDto()))
     }
@@ -311,6 +327,7 @@ fun Route.guestOrderRoutes(
             val idempotencyKey = normalizeIdempotencyKey(request.idempotencyKey)
             val normalizedItems = normalizeItems(request.items)
             val comment = normalizeComment(request.comment)
+            val giftDecision = request.giftDecision?.toCommand()
             val table =
                 call.rateLimitResolvedTableOrNull(addBatchResolvedTableAttribute)
                     ?: (tableTokenResolver(token) ?: throw NotFoundException())
@@ -339,23 +356,46 @@ fun Route.guestOrderRoutes(
                 throw ForbiddenException("Tab access denied")
             }
 
+            val venueZoneId =
+                venueSettingsRepository.resolvePromotionZoneId(
+                    table.venueId,
+                    ZoneId.of(VenueSettingsRepository.DEFAULT_AUTO_TIMEZONE),
+                )
             val batch =
-                ordersRepository.createGuestOrderBatch(
-                    tableId = table.tableId,
-                    venueId = table.venueId,
-                    tableSessionId = tableSession.id,
-                    userId = userId,
-                    idempotencyKey = idempotencyKey,
-                    tabId = tabId,
-                    comment = comment,
-                    items = normalizedItems,
-                    venueZoneId =
-                        venueSettingsRepository.resolvePromotionZoneId(
-                            table.venueId,
-                            ZoneId.of(VenueSettingsRepository.DEFAULT_AUTO_TIMEZONE),
+                try {
+                    ordersRepository.createGuestOrderBatch(
+                        tableId = table.tableId,
+                        venueId = table.venueId,
+                        tableSessionId = tableSession.id,
+                        userId = userId,
+                        idempotencyKey = idempotencyKey,
+                        tabId = tabId,
+                        comment = comment,
+                        items = normalizedItems,
+                        venueZoneId = venueZoneId,
+                        giftDecisionCommand = giftDecision,
+                        expectedPreviewFingerprint = request.previewFingerprint?.trim()?.takeIf { it.isNotEmpty() },
+                    ) ?: throw NotFoundException()
+                } catch (_: GiftDecisionRequiredException) {
+                    val authoritativePreview =
+                        ordersRepository.previewGuestOrderBatch(
+                            venueId = table.venueId,
+                            userId = userId,
+                            items = normalizedItems,
+                            venueZoneId = venueZoneId,
+                            tableSessionId = tableSession.id,
+                            tabId = tabId,
+                            comment = comment,
+                            giftDecisionCommand = giftDecision,
+                        ) ?: throw NotFoundException()
+                    call.respond(
+                        AddBatchRecalculationResponse(
+                            submitted = false,
+                            pricing = authoritativePreview.toDto(),
                         ),
-                    expectedPreviewFingerprint = request.previewFingerprint?.trim()?.takeIf { it.isNotEmpty() },
-                ) ?: throw NotFoundException()
+                    )
+                    return@post
+                }
 
             notifyStaffChat(
                 notifier = staffChatNotifier,
@@ -621,6 +661,12 @@ private fun GuestOrderCartPreview.toDto(): CartPreviewDto =
         currency = currency,
         discounts = discounts.map { it.toPreviewDto() },
         pricingFingerprint = pricingFingerprint,
+        giftOffer = giftOffer.toDto(),
+        cartFingerprint = cartFingerprint,
+        decisionScopeToken = decisionScopeToken,
+        decisionScopeExpiresAtEpochSeconds = decisionScopeExpiresAtEpochSeconds,
+        giftDecisionStale = giftDecisionStale,
+        giftDecisionMessage = giftDecisionMessage,
         items =
             items.map { item ->
                 CartPreviewItemDto(
@@ -653,6 +699,60 @@ private fun GuestOrderCartPreview.toDto(): CartPreviewDto =
                         },
                 )
             },
+    )
+
+private fun GiftDecisionDto.toCommand(): GiftDecisionCommand {
+    val normalizedAction =
+        runCatching { PromotionGiftDecisionAction.valueOf(action.trim().uppercase(Locale.ROOT)) }
+            .getOrElse {
+                throw InvalidInputException("giftDecision.action is invalid")
+            }
+    val normalizedScopeToken =
+        decisionScopeToken?.trim()?.takeIf { it.isNotEmpty() }
+            ?: throw InvalidInputException("giftDecision.decisionScopeToken is required")
+    when (normalizedAction) {
+        PromotionGiftDecisionAction.SELECT_ITEM -> {
+            if (selectedMenuItemId == null || selectedMenuItemId <= 0L) {
+                throw InvalidInputException("giftDecision.selectedMenuItemId must be positive")
+            }
+        }
+        PromotionGiftDecisionAction.ACCEPT_FIXED,
+        PromotionGiftDecisionAction.SKIP,
+        -> {
+            if (selectedMenuItemId != null) {
+                throw InvalidInputException("giftDecision.selectedMenuItemId is not allowed")
+            }
+        }
+    }
+    return MiniAppGiftDecisionAdapter.toCommand(
+        action = normalizedAction,
+        selectedMenuItemId = selectedMenuItemId,
+        decisionScopeToken = normalizedScopeToken,
+    )
+}
+
+private fun PromotionGiftOffer.toDto(): GiftOfferDto =
+    GiftOfferDto(
+        status = status.name,
+        promotionId = promotionId,
+        promotionTitle = promotionTitle,
+        ruleId = ruleId,
+        ruleVersion = ruleVersion,
+        triggerLineId = triggerLineId,
+        triggerMenuItemId = triggerMenuItemId,
+        triggerItemName = triggerItemName,
+        fixedRewardItem = fixedRewardItem?.toDto(),
+        selectableRewardItems = selectableRewardItems.map { it.toDto() },
+        selectedRewardItem = selectedRewardItem?.toDto(),
+        unavailableReason = unavailableReason?.name,
+    )
+
+private fun PromotionGiftRewardItem.toDto(): GiftRewardItemDto =
+    GiftRewardItemDto(
+        menuItemId = menuItemId,
+        name = name,
+        originalUnitPriceMinor = originalUnitPriceMinor,
+        currency = currency,
     )
 
 private fun CreatedOrderPromotionDiscount.toPreviewDto(): CartPreviewDiscountDto =

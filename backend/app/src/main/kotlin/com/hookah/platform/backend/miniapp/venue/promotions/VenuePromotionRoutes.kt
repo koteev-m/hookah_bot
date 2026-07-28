@@ -8,7 +8,10 @@ import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepository
 import com.hookah.platform.backend.miniapp.venue.requireUserId
 import com.hookah.platform.backend.miniapp.venue.requireVenueId
 import com.hookah.platform.backend.miniapp.venue.resolveVenueRole
+import com.hookah.platform.backend.telegram.db.GiftWithItemRewardInput
 import com.hookah.platform.backend.telegram.db.HappyHoursRuleTargetInput
+import com.hookah.platform.backend.telegram.db.PromotionRewardMode
+import com.hookah.platform.backend.telegram.db.PromotionRuleReward
 import com.hookah.platform.backend.telegram.db.PromotionRuleTargetType
 import com.hookah.platform.backend.telegram.db.PromotionWeekdayWindow
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
@@ -66,6 +69,7 @@ fun Route.venuePromotionRoutes(
                         setOf(
                             VenuePromotionTemplateType.TEXT_ONLY,
                             VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
+                            VenuePromotionTemplateType.GIFT_WITH_ITEM,
                         )
                 }
                     .sortedWith(compareByDescending<VenuePromotion> { it.updatedAt }.thenByDescending { it.id })
@@ -103,7 +107,13 @@ fun Route.venuePromotionRoutes(
             val request = call.receive<VenuePromotionCreateRequest>()
             val templateType = parseEditableTemplateType(request.templateType)
             val zoneId =
-                if (templateType == VenuePromotionTemplateType.HAPPY_HOURS_PERCENT) {
+                if (
+                    templateType in
+                    setOf(
+                        VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
+                        VenuePromotionTemplateType.GIFT_WITH_ITEM,
+                    )
+                ) {
                     venueSettingsRepository.resolvePromotionZoneId(
                         venueId = venueId,
                         fallback = ZoneId.of(VenueSettingsRepository.DEFAULT_AUTO_TIMEZONE),
@@ -121,23 +131,71 @@ fun Route.venuePromotionRoutes(
                 } else {
                     null
                 }
-            val created =
-                if (happyHoursInput == null) {
-                    venuePromotionRepository.createPromotion(
-                        venueId = venueId,
-                        title = input.title,
-                        description = input.description,
-                        terms = input.terms,
-                        startsAt = input.startsAt,
-                        endsAt = input.endsAt,
-                        templateType = templateType,
-                        createdByUserId = userId,
-                    )
+            val giftInput =
+                if (templateType == VenuePromotionTemplateType.GIFT_WITH_ITEM) {
+                    request.rule.normalizeGiftWithItemRule()
                 } else {
-                    val ruleRepository =
-                        venuePromotionRuleRepository
-                            ?: throw InvalidInputException("Настройка Happy Hours временно недоступна.")
-                    runRuleMutation {
+                    null
+                }
+            val created =
+                when {
+                    happyHoursInput != null -> {
+                        val ruleRepository =
+                            venuePromotionRuleRepository
+                                ?: throw InvalidInputException("Настройка Happy Hours временно недоступна.")
+                        runRuleMutation {
+                            venuePromotionRepository.createPromotion(
+                                venueId = venueId,
+                                title = input.title,
+                                description = input.description,
+                                terms = input.terms,
+                                startsAt = input.startsAt,
+                                endsAt = input.endsAt,
+                                templateType = templateType,
+                                createdByUserId = userId,
+                                afterInsert = { connection, promotionId ->
+                                    ruleRepository.createHappyHoursDraftRule(
+                                        connection = connection,
+                                        venueId = venueId,
+                                        promotionId = promotionId,
+                                        target = happyHoursInput.target,
+                                        discountPercent = happyHoursInput.discountPercent,
+                                        weekdayWindows = happyHoursInput.windows,
+                                        createdByUserId = userId,
+                                    )
+                                },
+                            )
+                        }
+                    }
+                    giftInput != null -> {
+                        val ruleRepository =
+                            venuePromotionRuleRepository
+                                ?: throw InvalidInputException("Настройка подарочной акции временно недоступна.")
+                        runRuleMutation {
+                            venuePromotionRepository.createPromotion(
+                                venueId = venueId,
+                                title = input.title,
+                                description = input.description,
+                                terms = input.terms,
+                                startsAt = input.startsAt,
+                                endsAt = input.endsAt,
+                                templateType = templateType,
+                                createdByUserId = userId,
+                                afterInsert = { connection, promotionId ->
+                                    ruleRepository.createGiftWithItemDraftRule(
+                                        connection = connection,
+                                        venueId = venueId,
+                                        promotionId = promotionId,
+                                        target = giftInput.target,
+                                        reward = giftInput.reward,
+                                        weekdayWindows = giftInput.windows,
+                                        createdByUserId = userId,
+                                    )
+                                },
+                            )
+                        }
+                    }
+                    else ->
                         venuePromotionRepository.createPromotion(
                             venueId = venueId,
                             title = input.title,
@@ -147,19 +205,7 @@ fun Route.venuePromotionRoutes(
                             endsAt = input.endsAt,
                             templateType = templateType,
                             createdByUserId = userId,
-                            afterInsert = { connection, promotionId ->
-                                ruleRepository.createHappyHoursDraftRule(
-                                    connection = connection,
-                                    venueId = venueId,
-                                    promotionId = promotionId,
-                                    target = happyHoursInput.target,
-                                    discountPercent = happyHoursInput.discountPercent,
-                                    weekdayWindows = happyHoursInput.windows,
-                                    createdByUserId = userId,
-                                )
-                            },
                         )
-                    }
                 }
             call.respond(VenuePromotionResponse(created.toDto(venuePromotionRuleRepository)))
         }
@@ -176,7 +222,13 @@ fun Route.venuePromotionRoutes(
                 throw InvalidInputException("Архивную акцию нельзя редактировать.")
             }
             val zoneId =
-                if (current.templateType == VenuePromotionTemplateType.HAPPY_HOURS_PERCENT) {
+                if (
+                    current.templateType in
+                    setOf(
+                        VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
+                        VenuePromotionTemplateType.GIFT_WITH_ITEM,
+                    )
+                ) {
                     venueSettingsRepository.resolvePromotionZoneId(
                         venueId = venueId,
                         fallback = ZoneId.of(VenueSettingsRepository.DEFAULT_AUTO_TIMEZONE),
@@ -194,12 +246,88 @@ fun Route.venuePromotionRoutes(
             }
             val input = request.normalize(zoneId)
             val updated =
-                if (current.templateType == VenuePromotionTemplateType.HAPPY_HOURS_PERCENT) {
-                    val ruleRepository =
-                        venuePromotionRuleRepository
-                            ?: throw InvalidInputException("Настройка Happy Hours временно недоступна.")
-                    val happyHoursInput = request.rule.normalizeHappyHoursRule()
-                    runRuleMutation {
+                when (current.templateType) {
+                    VenuePromotionTemplateType.HAPPY_HOURS_PERCENT -> {
+                        val ruleRepository =
+                            venuePromotionRuleRepository
+                                ?: throw InvalidInputException("Настройка Happy Hours временно недоступна.")
+                        val happyHoursInput = request.rule.normalizeHappyHoursRule()
+                        runRuleMutation {
+                            venuePromotionRepository.updatePromotion(
+                                venueId = venueId,
+                                promotionId = promotionId,
+                                title = input.title,
+                                description = input.description,
+                                terms = input.terms,
+                                clearTerms = input.terms == null,
+                                startsAt = input.startsAt,
+                                endsAt = input.endsAt,
+                                afterUpdate = { connection, _ ->
+                                    val currentRule =
+                                        ruleRepository
+                                            .listHappyHoursRulesForPromotionManagement(
+                                                connection = connection,
+                                                venueId = venueId,
+                                                promotionId = promotionId,
+                                            ).requireSingleEditableRule(
+                                                multipleMessage =
+                                                    "Несколько legacy-правил можно редактировать только в Telegram.",
+                                                missingMessage = "Правило Happy Hours не настроено.",
+                                            )
+                                    ruleRepository.updateHappyHoursDraftRule(
+                                        connection = connection,
+                                        venueId = venueId,
+                                        promotionId = promotionId,
+                                        ruleId = currentRule.id,
+                                        target = happyHoursInput.target,
+                                        discountPercent = happyHoursInput.discountPercent,
+                                        weekdayWindows = happyHoursInput.windows,
+                                    ) ?: throw NotFoundException()
+                                },
+                            ) ?: throw NotFoundException()
+                        }
+                    }
+                    VenuePromotionTemplateType.GIFT_WITH_ITEM -> {
+                        val ruleRepository =
+                            venuePromotionRuleRepository
+                                ?: throw InvalidInputException("Настройка подарочной акции временно недоступна.")
+                        val giftInput = request.rule.normalizeGiftWithItemRule()
+                        runRuleMutation {
+                            venuePromotionRepository.updatePromotion(
+                                venueId = venueId,
+                                promotionId = promotionId,
+                                title = input.title,
+                                description = input.description,
+                                terms = input.terms,
+                                clearTerms = input.terms == null,
+                                startsAt = input.startsAt,
+                                endsAt = input.endsAt,
+                                afterUpdate = { connection, _ ->
+                                    val currentRule =
+                                        ruleRepository
+                                            .listGiftWithItemRulesForPromotionManagement(
+                                                connection = connection,
+                                                venueId = venueId,
+                                                promotionId = promotionId,
+                                            ).requireSingleEditableRule(
+                                                multipleMessage =
+                                                    "Несколько legacy-правил можно редактировать только в Telegram.",
+                                                missingMessage = "Правило подарка не настроено.",
+                                            )
+                                    ruleRepository.updateGiftWithItemDraftRule(
+                                        connection = connection,
+                                        venueId = venueId,
+                                        promotionId = promotionId,
+                                        ruleId = currentRule.id,
+                                        target = giftInput.target,
+                                        reward = giftInput.reward,
+                                        weekdayWindows = giftInput.windows,
+                                    ) ?: throw NotFoundException()
+                                },
+                            ) ?: throw NotFoundException()
+                        }
+                    }
+                    else ->
                         venuePromotionRepository.updatePromotion(
                             venueId = venueId,
                             promotionId = promotionId,
@@ -209,49 +337,7 @@ fun Route.venuePromotionRoutes(
                             clearTerms = input.terms == null,
                             startsAt = input.startsAt,
                             endsAt = input.endsAt,
-                            afterUpdate = { connection, _ ->
-                                val currentRule =
-                                    ruleRepository
-                                        .listHappyHoursRulesForPromotionManagement(
-                                            connection = connection,
-                                            venueId = venueId,
-                                            promotionId = promotionId,
-                                        ).let { rules ->
-                                            rules.singleOrNull()
-                                                ?: if (rules.size > 1) {
-                                                    throw InvalidInputException(
-                                                        "Несколько legacy-правил можно редактировать " +
-                                                            "только в Telegram.",
-                                                    )
-                                                } else {
-                                                    throw InvalidInputException(
-                                                        "Правило Happy Hours не настроено.",
-                                                    )
-                                                }
-                                        }
-                                ruleRepository.updateHappyHoursDraftRule(
-                                    connection = connection,
-                                    venueId = venueId,
-                                    promotionId = promotionId,
-                                    ruleId = currentRule.id,
-                                    target = happyHoursInput.target,
-                                    discountPercent = happyHoursInput.discountPercent,
-                                    weekdayWindows = happyHoursInput.windows,
-                                ) ?: throw NotFoundException()
-                            },
                         ) ?: throw NotFoundException()
-                    }
-                } else {
-                    venuePromotionRepository.updatePromotion(
-                        venueId = venueId,
-                        promotionId = promotionId,
-                        title = input.title,
-                        description = input.description,
-                        terms = input.terms,
-                        clearTerms = input.terms == null,
-                        startsAt = input.startsAt,
-                        endsAt = input.endsAt,
-                    ) ?: throw NotFoundException()
                 }
             call.respond(VenuePromotionResponse(updated.toDto(venuePromotionRuleRepository)))
         }
@@ -272,26 +358,46 @@ fun Route.venuePromotionRoutes(
                 validatePromotionPeriod(current.startsAt, current.endsAt)
             }
             val updated =
-                if (current.templateType == VenuePromotionTemplateType.HAPPY_HOURS_PERCENT) {
-                    val ruleRepository =
-                        venuePromotionRuleRepository
-                            ?: throw InvalidInputException("Настройка Happy Hours временно недоступна.")
-                    venuePromotionRepository.setPromotionStatus(
-                        venueId = venueId,
-                        promotionId = promotionId,
-                        status = status,
-                        afterUpdate = { connection, _ ->
-                            ruleRepository.synchronizeHappyHoursPromotionStatus(
-                                connection = connection,
-                                venueId = venueId,
-                                promotionId = promotionId,
-                                status = status,
-                            )
-                        },
-                    ) ?: throw NotFoundException()
-                } else {
-                    venuePromotionRepository.setPromotionStatus(venueId, promotionId, status)
-                        ?: throw NotFoundException()
+                when (current.templateType) {
+                    VenuePromotionTemplateType.HAPPY_HOURS_PERCENT -> {
+                        val ruleRepository =
+                            venuePromotionRuleRepository
+                                ?: throw InvalidInputException("Настройка Happy Hours временно недоступна.")
+                        venuePromotionRepository.setPromotionStatus(
+                            venueId = venueId,
+                            promotionId = promotionId,
+                            status = status,
+                            afterUpdate = { connection, _ ->
+                                ruleRepository.synchronizeHappyHoursPromotionStatus(
+                                    connection = connection,
+                                    venueId = venueId,
+                                    promotionId = promotionId,
+                                    status = status,
+                                )
+                            },
+                        ) ?: throw NotFoundException()
+                    }
+                    VenuePromotionTemplateType.GIFT_WITH_ITEM -> {
+                        val ruleRepository =
+                            venuePromotionRuleRepository
+                                ?: throw InvalidInputException("Настройка подарочной акции временно недоступна.")
+                        venuePromotionRepository.setPromotionStatus(
+                            venueId = venueId,
+                            promotionId = promotionId,
+                            status = status,
+                            afterUpdate = { connection, _ ->
+                                ruleRepository.synchronizeGiftWithItemPromotionStatus(
+                                    connection = connection,
+                                    venueId = venueId,
+                                    promotionId = promotionId,
+                                    status = status,
+                                )
+                            },
+                        ) ?: throw NotFoundException()
+                    }
+                    else ->
+                        venuePromotionRepository.setPromotionStatus(venueId, promotionId, status)
+                            ?: throw NotFoundException()
                 }
             call.respond(VenuePromotionResponse(updated.toDto(venuePromotionRuleRepository)))
         }
@@ -339,6 +445,12 @@ private data class NormalizedHappyHoursRuleInput(
     val windows: List<PromotionWeekdayWindow>,
     val target: HappyHoursRuleTargetInput,
     val discountPercent: Int,
+)
+
+private data class NormalizedGiftWithItemRuleInput(
+    val windows: List<PromotionWeekdayWindow>,
+    val target: HappyHoursRuleTargetInput,
+    val reward: GiftWithItemRewardInput,
 )
 
 private fun VenuePromotionCreateRequest.normalize(zoneId: ZoneId): NormalizedPromotionInput =
@@ -434,55 +546,113 @@ private fun parseEditableTemplateType(rawTemplateType: String): VenuePromotionTe
         VenuePromotionTemplateType.TEXT_ONLY.dbValue -> VenuePromotionTemplateType.TEXT_ONLY
         VenuePromotionTemplateType.HAPPY_HOURS_PERCENT.dbValue ->
             VenuePromotionTemplateType.HAPPY_HOURS_PERCENT
+        VenuePromotionTemplateType.GIFT_WITH_ITEM.dbValue ->
+            VenuePromotionTemplateType.GIFT_WITH_ITEM
         else -> throw InvalidInputException("Выберите поддерживаемый тип акции.")
     }
 
 private fun VenuePromotionRuleMutationRequest?.normalizeHappyHoursRule(): NormalizedHappyHoursRuleInput {
     val request = this ?: throw InvalidInputException("Настройте условия Happy Hours.")
-    if (request.discountPercent !in 1..100) {
+    val discountPercent =
+        request.discountPercent
+            ?: throw InvalidInputException("Укажите процент скидки.")
+    if (discountPercent !in 1..100) {
         throw InvalidInputException("Процент скидки должен быть от 1 до 100.")
     }
-    if (request.windows.isEmpty()) {
+    if (request.reward != null) {
+        throw InvalidInputException("Для Happy Hours подарок не настраивается.")
+    }
+    return NormalizedHappyHoursRuleInput(
+        windows = request.windows.normalizeRuleWindows(),
+        target = request.target.normalizeRuleTarget(),
+        discountPercent = discountPercent,
+    )
+}
+
+private fun VenuePromotionRuleMutationRequest?.normalizeGiftWithItemRule(): NormalizedGiftWithItemRuleInput {
+    val request = this ?: throw InvalidInputException("Настройте условия подарочной акции.")
+    if (request.discountPercent != null) {
+        throw InvalidInputException("Для подарочной акции процент скидки не настраивается.")
+    }
+    val rewardRequest = request.reward ?: throw InvalidInputException("Настройте подарок.")
+    val rewardMode =
+        when (rewardRequest.mode.trim().uppercase(Locale.ROOT)) {
+            PromotionRewardMode.FIXED_ITEM.dbValue -> PromotionRewardMode.FIXED_ITEM
+            PromotionRewardMode.CHOICE_ITEMS.dbValue -> PromotionRewardMode.CHOICE_ITEMS
+            else -> throw InvalidInputException("Выберите фиксированный подарок или подарок на выбор.")
+        }
+    val reward =
+        when (rewardMode) {
+            PromotionRewardMode.FIXED_ITEM -> {
+                if (rewardRequest.allowlistMenuItemIds.isNotEmpty()) {
+                    throw InvalidInputException("Для фиксированного подарка список выбора должен быть пуст.")
+                }
+                GiftWithItemRewardInput(
+                    mode = rewardMode,
+                    fixedMenuItemId =
+                        rewardRequest.fixedMenuItemId?.takeIf { it > 0L }
+                            ?: throw InvalidInputException("Выберите подарок."),
+                )
+            }
+            PromotionRewardMode.CHOICE_ITEMS -> {
+                if (rewardRequest.fixedMenuItemId != null) {
+                    throw InvalidInputException("Для подарка на выбор фиксированная позиция не указывается.")
+                }
+                val allowlistMenuItemIds = rewardRequest.allowlistMenuItemIds.distinct()
+                if (allowlistMenuItemIds.isEmpty() || allowlistMenuItemIds.any { it <= 0L }) {
+                    throw InvalidInputException("Добавьте хотя бы одну позицию в список подарков.")
+                }
+                GiftWithItemRewardInput(
+                    mode = rewardMode,
+                    allowlistMenuItemIds = allowlistMenuItemIds,
+                )
+            }
+        }
+    return NormalizedGiftWithItemRuleInput(
+        windows = request.windows.normalizeRuleWindows(),
+        target = request.target.normalizeRuleTarget(),
+        reward = reward,
+    )
+}
+
+private fun List<VenuePromotionWeekdayWindowDto>.normalizeRuleWindows(): List<PromotionWeekdayWindow> {
+    if (isEmpty()) {
         throw InvalidInputException("Добавьте хотя бы одно временное окно.")
     }
-    val windows =
-        request.windows.map { window ->
-            PromotionWeekdayWindow(
-                weekday = window.weekday,
-                startsMinute = parseLocalMinute(window.startLocal, allowEndOfDay = false),
-                endsMinute = parseLocalMinute(window.endLocal, allowEndOfDay = true),
-            )
-        }
+    return map { window ->
+        PromotionWeekdayWindow(
+            weekday = window.weekday,
+            startsMinute = parseLocalMinute(window.startLocal, allowEndOfDay = false),
+            endsMinute = parseLocalMinute(window.endLocal, allowEndOfDay = true),
+        )
+    }
+}
+
+private fun VenuePromotionTargetDto.normalizeRuleTarget(): HappyHoursRuleTargetInput {
     val targetType =
-        when (request.target.type.trim().uppercase(Locale.ROOT)) {
+        when (type.trim().uppercase(Locale.ROOT)) {
             PromotionRuleTargetType.MENU_ITEM.dbValue -> PromotionRuleTargetType.MENU_ITEM
             PromotionRuleTargetType.MENU_CATEGORY.dbValue -> PromotionRuleTargetType.MENU_CATEGORY
             else -> throw InvalidInputException("Выберите категорию или позицию меню.")
         }
-    val target =
-        when (targetType) {
-            PromotionRuleTargetType.MENU_ITEM ->
-                HappyHoursRuleTargetInput(
-                    targetType = targetType,
-                    menuItemId =
-                        request.target.menuItemId?.takeIf { it > 0L }
-                            ?: throw InvalidInputException("Выберите позицию меню."),
-                )
-            PromotionRuleTargetType.MENU_CATEGORY ->
-                HappyHoursRuleTargetInput(
-                    targetType = targetType,
-                    menuCategoryId =
-                        request.target.menuCategoryId?.takeIf { it > 0L }
-                            ?: throw InvalidInputException("Выберите категорию меню."),
-                )
-            PromotionRuleTargetType.CATEGORY_TYPE ->
-                throw InvalidInputException("Выберите категорию или позицию меню.")
-        }
-    return NormalizedHappyHoursRuleInput(
-        windows = windows,
-        target = target,
-        discountPercent = request.discountPercent,
-    )
+    return when (targetType) {
+        PromotionRuleTargetType.MENU_ITEM ->
+            HappyHoursRuleTargetInput(
+                targetType = targetType,
+                menuItemId =
+                    menuItemId?.takeIf { it > 0L }
+                        ?: throw InvalidInputException("Выберите позицию меню."),
+            )
+        PromotionRuleTargetType.MENU_CATEGORY ->
+            HappyHoursRuleTargetInput(
+                targetType = targetType,
+                menuCategoryId =
+                    menuCategoryId?.takeIf { it > 0L }
+                        ?: throw InvalidInputException("Выберите категорию меню."),
+            )
+        PromotionRuleTargetType.CATEGORY_TYPE ->
+            throw InvalidInputException("Выберите категорию или позицию меню.")
+    }
 }
 
 private fun parseLocalMinute(
@@ -515,10 +685,24 @@ private suspend fun <T> runRuleMutation(block: suspend () -> T): T =
                     "Временные окна одного дня не должны пересекаться."
                 e.message?.contains("target", ignoreCase = true) == true ->
                     "Выбранная категория или позиция недоступна для этого заведения."
-                else -> "Проверьте настройки Happy Hours."
+                e.message?.contains("reward", ignoreCase = true) == true ||
+                    e.message?.contains("allowlist", ignoreCase = true) == true ->
+                    "Выбранный подарок недоступен для этого заведения."
+                else -> "Проверьте настройки акции."
             },
         )
     }
+
+private fun List<VenuePromotionRule>.requireSingleEditableRule(
+    multipleMessage: String,
+    missingMessage: String,
+): VenuePromotionRule =
+    singleOrNull()
+        ?: if (size > 1) {
+            throw InvalidInputException(multipleMessage)
+        } else {
+            throw InvalidInputException(missingMessage)
+        }
 
 private fun VenuePromotion?.requireEditablePromotion(): VenuePromotion =
     this?.takeIf {
@@ -526,6 +710,7 @@ private fun VenuePromotion?.requireEditablePromotion(): VenuePromotion =
             setOf(
                 VenuePromotionTemplateType.TEXT_ONLY,
                 VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
+                VenuePromotionTemplateType.GIFT_WITH_ITEM,
             )
     } ?: throw NotFoundException()
 
@@ -535,15 +720,44 @@ private fun io.ktor.server.application.ApplicationCall.requirePromotionId(): Lon
         ?: throw InvalidInputException("promotionId must be a positive number")
 }
 
+private data class PromotionRuleReadinessView(
+    val isReady: Boolean,
+    val errors: List<String>,
+    val rule: VenuePromotionRule?,
+    val ruleCount: Int,
+)
+
 private suspend fun VenuePromotion.toDto(ruleRepository: VenuePromotionRuleRepository?): VenuePromotionDto {
     val readiness =
-        if (templateType == VenuePromotionTemplateType.HAPPY_HOURS_PERCENT && ruleRepository != null) {
-            ruleRepository.validateHappyHoursActivationReadiness(venueId, id)
-        } else {
-            null
+        when {
+            ruleRepository == null -> null
+            templateType == VenuePromotionTemplateType.HAPPY_HOURS_PERCENT ->
+                ruleRepository.validateHappyHoursActivationReadiness(venueId, id).let {
+                    PromotionRuleReadinessView(
+                        isReady = it.isReady,
+                        errors = it.errors,
+                        rule = it.rule,
+                        ruleCount = it.ruleCount,
+                    )
+                }
+            templateType == VenuePromotionTemplateType.GIFT_WITH_ITEM ->
+                ruleRepository.validateGiftWithItemActivationReadiness(venueId, id).let {
+                    PromotionRuleReadinessView(
+                        isReady = it.isReady,
+                        errors = it.errors,
+                        rule = it.rule,
+                        ruleCount = it.ruleCount,
+                    )
+                }
+            else -> null
         }
     val rule = readiness?.rule
     val target = rule?.toEditableTargetDto()
+    val reward =
+        rule
+            ?.reward
+            ?.takeIf { templateType == VenuePromotionTemplateType.GIFT_WITH_ITEM }
+            ?.toDto()
     val extraIssues =
         when {
             readiness?.ruleCount?.let { it > 1 } == true ->
@@ -587,7 +801,21 @@ private suspend fun VenuePromotion.toDto(ruleRepository: VenuePromotionRuleRepos
                                 )
                             },
                     target = target,
-                    discountPercent = it.discountPercent,
+                    discountPercent =
+                        it.discountPercent.takeIf {
+                            templateType == VenuePromotionTemplateType.HAPPY_HOURS_PERCENT
+                        },
+                    reward = reward,
+                    summary =
+                        if (
+                            templateType == VenuePromotionTemplateType.GIFT_WITH_ITEM &&
+                            target != null &&
+                            reward != null
+                        ) {
+                            it.toGiftSummary(target, reward)
+                        } else {
+                            null
+                        },
                     readyForActivation = readiness?.isReady == true,
                     validationIssues = (readiness?.errors.orEmpty() + extraIssues).distinct(),
                 )
@@ -611,6 +839,107 @@ private fun VenuePromotionRule.toEditableTargetDto(): VenuePromotionTargetDto? {
                 label = target.menuCategoryName,
             )
         PromotionRuleTargetType.CATEGORY_TYPE -> null
+    }
+}
+
+private fun PromotionRuleReward.toDto(): VenuePromotionRewardDto =
+    when (rewardMode) {
+        PromotionRewardMode.FIXED_ITEM ->
+            VenuePromotionRewardDto(
+                mode = rewardMode.dbValue,
+                fixedItem =
+                    VenuePromotionRewardItemDto(
+                        menuItemId = rewardMenuItemId,
+                        name = rewardMenuItemName,
+                    ),
+                maxRewardsPerBatch = maxRewardsPerBatch,
+            )
+        PromotionRewardMode.CHOICE_ITEMS ->
+            VenuePromotionRewardDto(
+                mode = rewardMode.dbValue,
+                allowlist =
+                    options.map { option ->
+                        VenuePromotionRewardItemDto(
+                            menuItemId = option.menuItemId,
+                            name = option.menuItemName,
+                        )
+                    },
+                maxRewardsPerBatch = maxRewardsPerBatch,
+            )
+    }
+
+private fun VenuePromotionRule.toGiftSummary(
+    target: VenuePromotionTargetDto,
+    reward: VenuePromotionRewardDto,
+): VenuePromotionRuleSummaryDto {
+    val triggerLabel = target.label?.takeIf { it.isNotBlank() } ?: "Без названия"
+    val trigger =
+        when (target.type) {
+            PromotionRuleTargetType.MENU_CATEGORY.dbValue ->
+                "При заказе: Категория «$triggerLabel»"
+            else -> "При заказе: Позиция «$triggerLabel»"
+        }
+    val rewardText =
+        when (reward.mode) {
+            PromotionRewardMode.FIXED_ITEM.dbValue ->
+                "Подарок: «${reward.fixedItem?.name ?: "Без названия"}»"
+            else -> {
+                val names = reward.allowlist.map { it.name }
+                val visibleNames =
+                    names
+                        .take(3)
+                        .joinToString(", ")
+                        .let { if (names.size > 3) "$it…" else it }
+                        .ifBlank { "не настроен" }
+                "Подарок: $visibleNames на выбор"
+            }
+        }
+    return VenuePromotionRuleSummaryDto(
+        schedule = summarizeWeekdayWindows(weekdayWindows),
+        trigger = trigger,
+        reward = rewardText,
+    )
+}
+
+private fun summarizeWeekdayWindows(windows: List<PromotionWeekdayWindow>): String {
+    if (windows.isEmpty()) return "Расписание не настроено"
+    return windows
+        .groupBy { it.startsMinute to it.endsMinute }
+        .entries
+        .sortedWith(
+            compareBy<Map.Entry<Pair<Int, Int>, List<PromotionWeekdayWindow>>> {
+                it.value.minOfOrNull { window -> window.weekday } ?: Int.MAX_VALUE
+            }.thenBy { it.key.first },
+        )
+        .joinToString("; ") { (timeRange, groupedWindows) ->
+            val weekdays = summarizeWeekdays(groupedWindows.map { it.weekday })
+            "$weekdays, ${formatLocalMinute(timeRange.first)}–${formatLocalMinute(timeRange.second)}"
+        }
+}
+
+private fun summarizeWeekdays(weekdays: List<Int>): String {
+    val labels = listOf("", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс")
+    val sorted = weekdays.filter { it in 1..7 }.distinct().sorted()
+    if (sorted.isEmpty()) return "Дни не выбраны"
+    val ranges = mutableListOf<IntRange>()
+    var rangeStart = sorted.first()
+    var previous = rangeStart
+    sorted.drop(1).forEach { weekday ->
+        if (weekday == previous + 1) {
+            previous = weekday
+        } else {
+            ranges += rangeStart..previous
+            rangeStart = weekday
+            previous = weekday
+        }
+    }
+    ranges += rangeStart..previous
+    return ranges.joinToString(", ") { range ->
+        if (range.first == range.last) {
+            labels[range.first]
+        } else {
+            "${labels[range.first]}–${labels[range.last]}"
+        }
     }
 }
 

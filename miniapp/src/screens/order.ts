@@ -294,7 +294,11 @@ function renderItemPriceMeta(item: OrderBatchDto['items'][number]) {
     parts.push(`скидка заведения ${formatDiscount(item.manualDiscountMinor, item.currency)}`)
   }
   if (hasPromoDiscount) {
-    parts.push(`скидка ${formatDiscount(item.promoDiscountMinor, item.currency)}`)
+    parts.push(
+      item.isPromotionReward
+        ? `акция 100% ${formatDiscount(item.promoDiscountMinor, item.currency)}`
+        : `скидка ${formatDiscount(item.promoDiscountMinor, item.currency)}`
+    )
   }
   if (hasDiscount && item.linePayableMinor >= 0) {
     parts.push(`к оплате ${formatMoney(item.linePayableMinor, item.currency)}`)
@@ -325,10 +329,15 @@ function renderBatches(container: HTMLElement, batches: OrderBatchDto[]) {
 
     const items = el('div', { className: 'order-items' })
     batch.items.forEach((item) => {
-      const row = el('div', { className: 'order-item' })
+      const row = el('div', {
+        className: item.isPromotionReward ? 'order-item order-item-promotion-reward' : 'order-item'
+      })
       const info = el('div', { className: 'order-item-main' })
       const name = el('span', { className: 'order-item-name', text: item.name || formatItemTitle(item.itemId) })
       info.appendChild(name)
+      if (item.isPromotionReward) {
+        info.appendChild(el('span', { className: 'promotion-reward-badge', text: 'Подарок по акции' }))
+      }
       if (item.selectedOption?.name) {
         info.appendChild(el('span', { className: 'order-item-details', text: `Вкус: ${item.selectedOption.name}` }))
       }

@@ -3,6 +3,9 @@ package com.hookah.platform.backend.telegram.db
 import com.hookah.platform.backend.analytics.AnalyticsEventRepository
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
+import com.hookah.platform.backend.promotions.GiftDecisionCommand
+import com.hookah.platform.backend.promotions.GiftDecisionScopeTokenService
+import com.hookah.platform.backend.promotions.PromotionGiftDecisionAction
 import com.hookah.platform.backend.test.PostgresTestEnv
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
@@ -20,7 +23,9 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.ZoneOffset
 import java.util.concurrent.Callable
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.CyclicBarrier
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
@@ -335,6 +340,105 @@ class PromotionConfigurationConcurrencyPostgresTest {
             }
         }
 
+    @Test
+    fun `simultaneous fixed gift submits with one idempotency key persist one complete result`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedGiftConcurrencyFixture(dataSource)
+                val scopeService =
+                    GiftDecisionScopeTokenService(
+                        signingSecret = GIFT_SCOPE_SECRET,
+                        clock = Clock.fixed(OLD_ACTIVE_INSTANT, ZoneOffset.UTC),
+                    )
+                val preview =
+                    assertNotNull(
+                        ordersRepository(
+                            dataSource = dataSource,
+                            now = OLD_ACTIVE_INSTANT,
+                            giftDecisionScopeTokenService = scopeService,
+                        ).previewGuestOrderBatch(
+                            venueId = fixture.venueId,
+                            userId = USER_ID,
+                            items = fixture.cartItems,
+                            venueZoneId = UTC,
+                            tableSessionId = fixture.tableSessionId,
+                            tabId = fixture.tabId,
+                            comment = null,
+                        ),
+                    )
+                assertEquals(
+                    com.hookah.platform.backend.promotions.PromotionGiftOfferStatus.FIXED_GIFT_AVAILABLE,
+                    preview.giftOffer.status,
+                )
+                val command =
+                    GiftDecisionCommand(
+                        action = PromotionGiftDecisionAction.ACCEPT_FIXED,
+                        decisionScopeToken = assertNotNull(preview.decisionScopeToken),
+                    )
+                val submitDataSource = SubmitTransactionBarrierDataSource(dataSource)
+                val repository =
+                    ordersRepository(
+                        dataSource = submitDataSource,
+                        now = OLD_ACTIVE_INSTANT,
+                        giftDecisionScopeTokenService =
+                            GiftDecisionScopeTokenService(
+                                signingSecret = GIFT_SCOPE_SECRET,
+                                clock = Clock.fixed(OLD_ACTIVE_INSTANT, ZoneOffset.UTC),
+                            ),
+                    )
+                val executor = Executors.newFixedThreadPool(2)
+                try {
+                    val futures =
+                        (1..2).map {
+                            executor.submit(
+                                Callable {
+                                    runBlocking {
+                                        repository.createGuestOrderBatch(
+                                            tableId = fixture.tableId,
+                                            venueId = fixture.venueId,
+                                            tableSessionId = fixture.tableSessionId,
+                                            userId = USER_ID,
+                                            idempotencyKey = "gift-same-idempotency-key",
+                                            tabId = fixture.tabId,
+                                            comment = null,
+                                            items = fixture.cartItems,
+                                            venueZoneId = UTC,
+                                            giftDecisionCommand = command,
+                                            expectedPreviewFingerprint = preview.pricingFingerprint,
+                                        )
+                                    }
+                                },
+                            )
+                        }
+                    val results =
+                        futures.map { future ->
+                            assertNotNull(future.get(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS))
+                        }
+
+                    assertEquals(2, submitDataSource.backendPids.size)
+                    assertEquals(1, results.map { it.batchId }.distinct().size)
+                    assertEquals(listOf(false, true), results.map { it.idempotencyReplay }.sorted())
+                    assertEquals(1, countRows(dataSource, "order_batches"))
+                    assertEquals(
+                        1,
+                        countWhere(
+                            dataSource,
+                            "order_batch_items",
+                            "id IN (SELECT reward_order_batch_item_id FROM order_promotion_reward_items)",
+                        ),
+                    )
+                    assertEquals(1, countRows(dataSource, "order_promotion_applications"))
+                    assertEquals(1, countRows(dataSource, "order_batch_item_promotion_adjustments"))
+                    assertEquals(1, countRows(dataSource, "order_promotion_reward_items"))
+                    assertEquals(1, countRows(dataSource, "guest_batch_idempotency"))
+                } finally {
+                    executor.shutdownNow()
+                    executor.awaitTermination(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                }
+            }
+        }
+
     private suspend fun seedFixture(dataSource: DataSource): PromotionFixture {
         val base =
             dataSource.connection.use { connection ->
@@ -516,6 +620,180 @@ class PromotionConfigurationConcurrencyPostgresTest {
         )
     }
 
+    private suspend fun seedGiftConcurrencyFixture(dataSource: DataSource): GiftConcurrencyFixture {
+        val base =
+            dataSource.connection.use { connection ->
+                val originalAutoCommit = connection.autoCommit
+                connection.autoCommit = false
+                try {
+                    connection.prepareStatement(
+                        """
+                        INSERT INTO users (telegram_user_id, first_name)
+                        VALUES (?, 'Gift concurrency guest')
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setLong(1, USER_ID)
+                        statement.executeUpdate()
+                    }
+                    val venueId =
+                        insertReturningId(
+                            connection,
+                            """
+                            INSERT INTO venues (name, city, address, status)
+                            VALUES ('Gift concurrency venue', 'Moscow', 'Address', ?)
+                            """.trimIndent(),
+                        ) { statement ->
+                            statement.setString(1, VenueStatus.PUBLISHED.dbValue)
+                        }
+                    val categoryId =
+                        insertReturningId(
+                            connection,
+                            """
+                            INSERT INTO menu_categories (venue_id, name, category_type)
+                            VALUES (?, 'Gift fixture', 'HOOKAH')
+                            """.trimIndent(),
+                        ) { statement ->
+                            statement.setLong(1, venueId)
+                        }
+                    val triggerItemId =
+                        insertMenuItem(
+                            connection = connection,
+                            venueId = venueId,
+                            categoryId = categoryId,
+                            name = "Gift trigger",
+                            priceMinor = 10_000L,
+                        )
+                    val rewardItemId =
+                        insertMenuItem(
+                            connection = connection,
+                            venueId = venueId,
+                            categoryId = categoryId,
+                            name = "Gift reward",
+                            priceMinor = 2_000L,
+                        )
+                    val tableId =
+                        insertReturningId(
+                            connection,
+                            """
+                            INSERT INTO venue_tables (venue_id, table_number, is_active)
+                            VALUES (?, 2, TRUE)
+                            """.trimIndent(),
+                        ) { statement ->
+                            statement.setLong(1, venueId)
+                        }
+                    val tableSessionId =
+                        insertReturningId(
+                            connection,
+                            """
+                            INSERT INTO table_sessions (
+                                venue_id,
+                                table_id,
+                                started_at,
+                                last_activity_at,
+                                expires_at,
+                                status
+                            )
+                            VALUES (?, ?, ?, ?, ?, 'ACTIVE')
+                            """.trimIndent(),
+                        ) { statement ->
+                            statement.setLong(1, venueId)
+                            statement.setLong(2, tableId)
+                            statement.setTimestamp(3, Timestamp.from(PROMOTION_START))
+                            statement.setTimestamp(4, Timestamp.from(PROMOTION_START))
+                            statement.setTimestamp(5, Timestamp.from(PROMOTION_END))
+                        }
+                    val tabId =
+                        insertReturningId(
+                            connection,
+                            """
+                            INSERT INTO tab (venue_id, table_session_id, type, owner_user_id, status)
+                            VALUES (?, ?, 'PERSONAL', ?, 'ACTIVE')
+                            """.trimIndent(),
+                        ) { statement ->
+                            statement.setLong(1, venueId)
+                            statement.setLong(2, tableSessionId)
+                            statement.setLong(3, USER_ID)
+                        }
+                    connection.prepareStatement(
+                        """
+                        INSERT INTO tab_member (tab_id, user_id, role)
+                        VALUES (?, ?, 'OWNER')
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setLong(1, tabId)
+                        statement.setLong(2, USER_ID)
+                        statement.executeUpdate()
+                    }
+                    connection.commit()
+                    GiftConcurrencyFixture(
+                        venueId = venueId,
+                        tableId = tableId,
+                        tableSessionId = tableSessionId,
+                        tabId = tabId,
+                        triggerItemId = triggerItemId,
+                        rewardItemId = rewardItemId,
+                    )
+                } catch (e: Exception) {
+                    connection.rollback()
+                    throw e
+                } finally {
+                    connection.autoCommit = originalAutoCommit
+                }
+            }
+        val promotionRepository = VenuePromotionRepository(dataSource)
+        val ruleRepository = VenuePromotionRuleRepository(dataSource)
+        val promotion =
+            promotionRepository.createPromotion(
+                venueId = base.venueId,
+                title = "Gift concurrency",
+                description = "One fixed gift",
+                terms = null,
+                startsAt = PROMOTION_START,
+                endsAt = PROMOTION_END,
+                templateType = VenuePromotionTemplateType.GIFT_WITH_ITEM,
+                createdByUserId = USER_ID,
+            )
+        ruleRepository.createGiftWithItemDraftRule(
+            venueId = base.venueId,
+            promotionId = promotion.id,
+            target =
+                HappyHoursRuleTargetInput(
+                    targetType = PromotionRuleTargetType.MENU_ITEM,
+                    menuItemId = base.triggerItemId,
+                ),
+            reward =
+                GiftWithItemRewardInput(
+                    mode = PromotionRewardMode.FIXED_ITEM,
+                    fixedMenuItemId = base.rewardItemId,
+                ),
+            weekdayWindows =
+                listOf(
+                    PromotionWeekdayWindow(
+                        weekday = MONDAY,
+                        startsMinute = 0,
+                        endsMinute = 24 * 60,
+                    ),
+                ),
+            createdByUserId = USER_ID,
+        )
+        assertNotNull(
+            promotionRepository.setPromotionStatus(
+                venueId = base.venueId,
+                promotionId = promotion.id,
+                status = VenuePromotionStatus.ACTIVE,
+                afterUpdate = { connection, _ ->
+                    ruleRepository.synchronizeGiftWithItemPromotionStatus(
+                        connection = connection,
+                        venueId = base.venueId,
+                        promotionId = promotion.id,
+                        status = VenuePromotionStatus.ACTIVE,
+                    )
+                },
+            ),
+        )
+        return base
+    }
+
     private suspend fun editToVersionTwo(
         dataSource: DataSource,
         fixture: PromotionFixture,
@@ -577,6 +855,7 @@ class PromotionConfigurationConcurrencyPostgresTest {
     private fun ordersRepository(
         dataSource: DataSource,
         now: Instant,
+        giftDecisionScopeTokenService: GiftDecisionScopeTokenService? = null,
     ): OrdersRepository =
         OrdersRepository(
             dataSource = dataSource,
@@ -584,6 +863,7 @@ class PromotionConfigurationConcurrencyPostgresTest {
             promotionApplicationRepository = PromotionApplicationRepository(dataSource),
             venuePromotionRuleRepository = VenuePromotionRuleRepository(dataSource),
             clock = Clock.fixed(now, ZoneOffset.UTC),
+            giftDecisionScopeTokenService = giftDecisionScopeTokenService,
         )
 
     private fun assertSubmittedOldPricing(
@@ -761,6 +1041,26 @@ class PromotionConfigurationConcurrencyPostgresTest {
         dataSource: DataSource,
         table: String,
     ): Int = dataSource.connection.use { connection -> countRows(connection, table) }
+
+    private fun countWhere(
+        dataSource: DataSource,
+        table: String,
+        predicate: String,
+    ): Int {
+        require(table in FINANCIAL_TABLES)
+        require(
+            predicate ==
+                "id IN (SELECT reward_order_batch_item_id FROM order_promotion_reward_items)",
+        )
+        return dataSource.connection.use { connection ->
+            connection.prepareStatement("SELECT COUNT(*) FROM $table WHERE $predicate").use { statement ->
+                statement.executeQuery().use { rs ->
+                    rs.next()
+                    rs.getInt(1)
+                }
+            }
+        }
+    }
 
     private fun countRows(
         connection: Connection,
@@ -1083,6 +1383,40 @@ class PromotionConfigurationConcurrencyPostgresTest {
             }
     }
 
+    private inner class SubmitTransactionBarrierDataSource(
+        private val delegate: DataSource,
+    ) : DataSource by delegate {
+        private val barrier = CyclicBarrier(2)
+        val backendPids = ConcurrentHashMap.newKeySet<Int>()
+
+        override fun getConnection(): Connection = wrap(delegate.connection)
+
+        override fun getConnection(
+            username: String?,
+            password: String?,
+        ): Connection = wrap(delegate.getConnection(username, password))
+
+        private fun wrap(connection: Connection): Connection {
+            var joinedBarrier = false
+            return object : Connection by connection {
+                override fun setAutoCommit(autoCommit: Boolean) {
+                    connection.autoCommit = autoCommit
+                    if (!autoCommit && !joinedBarrier) {
+                        joinedBarrier = true
+                        backendPids.add(
+                            this@PromotionConfigurationConcurrencyPostgresTest.backendPid(connection),
+                        )
+                        try {
+                            barrier.await(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                        } catch (e: Exception) {
+                            throw SQLException("Timed out waiting for both submit transactions", e)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private data class BaseFixture(
         val venueId: Long,
         val tableId: Long,
@@ -1108,6 +1442,18 @@ class PromotionConfigurationConcurrencyPostgresTest {
                     OrderBatchItemInput(itemId = itemAId, qty = 1),
                     OrderBatchItemInput(itemId = itemBId, qty = 1),
                 )
+    }
+
+    private data class GiftConcurrencyFixture(
+        val venueId: Long,
+        val tableId: Long,
+        val tableSessionId: Long,
+        val tabId: Long,
+        val triggerItemId: Long,
+        val rewardItemId: Long,
+    ) {
+        val cartItems: List<OrderBatchItemInput>
+            get() = listOf(OrderBatchItemInput(itemId = triggerItemId, qty = 1))
     }
 
     private data class LedgerSnapshot(
@@ -1154,6 +1500,7 @@ class PromotionConfigurationConcurrencyPostgresTest {
         const val WAIT_TIMEOUT_SECONDS = 30L
         const val OLD_TITLE = "Promotion V1"
         const val NEW_TITLE = "Promotion V2"
+        const val GIFT_SCOPE_SECRET = "promotion-concurrency-gift-scope-secret"
 
         val UTC: ZoneId = ZoneId.of("UTC")
         val PROMOTION_START: Instant = Instant.parse("2024-01-01T00:00:00Z")

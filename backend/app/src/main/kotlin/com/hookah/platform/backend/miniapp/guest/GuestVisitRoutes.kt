@@ -243,6 +243,7 @@ private fun GuestVisitPromotionDiscount.toDto(): GuestVisitPromotionDiscountDto 
         ruleType = ruleType,
         originalAmountMinor = originalAmountMinor,
         finalAmountMinor = finalAmountMinor,
+        isActive = isActive,
     )
 
 private fun GuestVisitOrderItem.toDto(): GuestVisitOrderItemDto =
@@ -255,6 +256,14 @@ private fun GuestVisitOrderItem.toDto(): GuestVisitOrderItemDto =
         priceMinor = priceMinor,
         currency = currency,
         discountPercent = discountPercent,
+        promoDiscountMinor = promoDiscountMinor.coerceAtLeast(0L),
+        isPromotionReward = isPromotionReward,
+        isExcluded = isExcluded,
+        excludedReasonText = excludedReasonText,
+        itemStatus = itemStatus,
+        canceledReasonText = canceledReasonText,
+        promotionLinkRole = promotionLinkRole,
+        promotionLabel = promotionLabel,
         totalMinor = totalMinor,
     )
 

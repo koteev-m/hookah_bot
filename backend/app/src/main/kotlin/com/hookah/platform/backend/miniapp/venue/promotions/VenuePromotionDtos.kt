@@ -36,6 +36,8 @@ data class VenuePromotionRuleDto(
     val windows: List<VenuePromotionWeekdayWindowDto>,
     val target: VenuePromotionTargetDto? = null,
     val discountPercent: Int? = null,
+    val reward: VenuePromotionRewardDto? = null,
+    val summary: VenuePromotionRuleSummaryDto? = null,
     val readyForActivation: Boolean,
     val validationIssues: List<String> = emptyList(),
 )
@@ -59,7 +61,39 @@ data class VenuePromotionTargetDto(
 data class VenuePromotionRuleMutationRequest(
     val windows: List<VenuePromotionWeekdayWindowDto>,
     val target: VenuePromotionTargetDto,
-    val discountPercent: Int,
+    val discountPercent: Int? = null,
+    val reward: VenuePromotionRewardMutationRequest? = null,
+)
+
+@Serializable
+data class VenuePromotionRewardMutationRequest(
+    val mode: String,
+    val fixedMenuItemId: Long? = null,
+    val allowlistMenuItemIds: List<Long> = emptyList(),
+)
+
+@Serializable
+data class VenuePromotionRewardDto(
+    val mode: String,
+    val fixedItem: VenuePromotionRewardItemDto? = null,
+    val allowlist: List<VenuePromotionRewardItemDto> = emptyList(),
+    val maxRewardsPerBatch: Int = 1,
+)
+
+@Serializable
+data class VenuePromotionRewardItemDto(
+    val menuItemId: Long,
+    val name: String,
+)
+
+@Serializable
+data class VenuePromotionRuleSummaryDto(
+    val schedule: String,
+    val trigger: String,
+    val reward: String,
+    val maximum: String = "Максимум: 1 подарок на заказ",
+    val explanation: String =
+        "Гость сам выбирает или подтверждает подарок. Подарок автоматически в заказ не добавляется.",
 )
 
 @Serializable

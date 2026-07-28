@@ -394,13 +394,23 @@ function renderBillItemControls(
     controls.appendChild(restore)
   } else {
     const exclude = el('button', { className: 'button-small button-secondary', text: 'Исключить' }) as HTMLButtonElement
-    const discount = el('button', {
-      className: 'button-small button-secondary',
-      text: item.discountPercent ? `Скидка ${item.discountPercent}%` : 'Скидка'
-    }) as HTMLButtonElement
     exclude.addEventListener('click', () => handlers.onExclude(item))
-    discount.addEventListener('click', () => handlers.onDiscount(item))
-    append(controls, exclude, discount)
+    controls.appendChild(exclude)
+    if (item.isPromotionReward || item.hasActivePromotionReward) {
+      controls.appendChild(
+        el('span', {
+          className: 'promotion-reward-manual-discount-note',
+          text: 'На эту позицию уже действует акция. Ручную скидку применить нельзя.'
+        })
+      )
+    } else {
+      const discount = el('button', {
+        className: 'button-small button-secondary',
+        text: item.discountPercent ? `Скидка ${item.discountPercent}%` : 'Скидка'
+      }) as HTMLButtonElement
+      discount.addEventListener('click', () => handlers.onDiscount(item))
+      controls.appendChild(discount)
+    }
   }
   container.appendChild(controls)
 }
@@ -436,9 +446,14 @@ function renderBatches(
     const comment = el('p', { className: 'order-batch-comment', text: batch.comment ?? 'Комментарий: —' })
     const list = el('div', { className: 'order-items' })
     batch.items.forEach((item) => {
-      const row = el('div', { className: 'order-item' })
+      const row = el('div', {
+        className: item.isPromotionReward ? 'order-item order-item-promotion-reward' : 'order-item'
+      })
       const info = el('div', { className: 'order-item-main' })
       info.appendChild(el('span', { className: 'order-item-name', text: item.name }))
+      if (item.isPromotionReward) {
+        info.appendChild(el('span', { className: 'promotion-reward-badge', text: 'Подарок по акции' }))
+      }
       if (item.selectedOption?.name) {
         info.appendChild(el('span', { className: 'order-item-details', text: `Вкус: ${item.selectedOption.name}` }))
       }

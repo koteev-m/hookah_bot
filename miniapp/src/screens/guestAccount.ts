@@ -228,15 +228,33 @@ function renderVisitOrder(order: GuestVisitOrderDto) {
     const itemName = item.itemName?.trim() || (item.itemId ? `Позиция #${item.itemId}` : 'Позиция')
     const qty = item.qty ?? 0
     const itemDetails = [
-      itemName,
+      item.isPromotionReward ? `Подарок по акции · ${itemName}` : itemName,
       item.selectedOption?.name ?? null,
-      item.preferenceNote ? `Пожелание: ${item.preferenceNote}` : null
+      item.preferenceNote ? `Пожелание: ${item.preferenceNote}` : null,
+      item.promotionLinkRole === 'TRIGGER' && item.promotionLabel
+        ? `Условие акции «${item.promotionLabel}»`
+        : null
     ].filter((value): value is string => Boolean(value))
+    const inactiveState = item.isExcluded
+      ? `Исключено из счёта${item.excludedReasonText ? `: ${item.excludedReasonText}` : ''}`
+      : item.itemStatus?.toUpperCase() === 'CANCELED'
+        ? `Отменено${item.canceledReasonText ? `: ${item.canceledReasonText}` : ''}`
+        : null
+    const regularTotal = formatMoney(item.totalMinor, item.currency)
+    const giftOriginalMinor =
+      item.isPromotionReward && item.priceMinor != null && qty > 0 ? item.priceMinor * qty : null
+    const giftPriceSummary =
+      item.isPromotionReward && giftOriginalMinor != null && item.currency
+        ? ` — обычная стоимость ${formatMoney(giftOriginalMinor, item.currency)} · акция −${formatMoney(
+            item.promoDiscountMinor ?? giftOriginalMinor,
+            item.currency
+          )} · итого ${regularTotal ?? formatMoney(0, item.currency)}`
+        : regularTotal
+          ? ` — ${regularTotal}`
+          : ''
     const line = el('p', {
       className: 'venue-order-sub',
-      text: `${itemDetails.join(' · ')} ×${qty}${
-        formatMoney(item.totalMinor, item.currency) ? ` — ${formatMoney(item.totalMinor, item.currency)}` : ''
-      }`
+      text: `${itemDetails.join(' · ')} ×${qty}${giftPriceSummary}${inactiveState ? ` · ${inactiveState}` : ''}`
     })
     append(itemList, line)
   })
@@ -249,8 +267,8 @@ function renderVisitOrder(order: GuestVisitOrderDto) {
         className: 'venue-order-sub',
         text:
           discount.originalAmountMinor != null && discount.finalAmountMinor != null
-            ? `${discount.label}: ${formatPrice(discount.originalAmountMinor, discount.currency)} − ${formatPrice(discount.discountMinor, discount.currency)} = ${formatPrice(discount.finalAmountMinor, discount.currency)}`
-            : `${discount.label}: −${formatPrice(discount.discountMinor, discount.currency)}`
+            ? `${discount.label}: ${formatPrice(discount.originalAmountMinor, discount.currency)} − ${formatPrice(discount.discountMinor, discount.currency)} = ${formatPrice(discount.finalAmountMinor, discount.currency)}${discount.isActive === false ? ' · больше не действует' : ''}`
+            : `${discount.label}: −${formatPrice(discount.discountMinor, discount.currency)}${discount.isActive === false ? ' · больше не действует' : ''}`
       })
     )
   })

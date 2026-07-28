@@ -1041,6 +1041,248 @@ class PromotionRuleEngineTest {
         assertTrue(outsideDay.gifts.isEmpty())
     }
 
+    @Test
+    fun `fixed gift requires explicit accept and preserves skip as a server decision`() {
+        val rule = giftRule(401L, target = MenuSemanticType.HOOKAH)
+        val cart = listOf(cartItem(1L, "Кальян", 1, 100_000L, MenuSemanticType.HOOKAH))
+
+        val offered =
+            PromotionRuleEngine.preview(
+                venueId = 10L,
+                now = Instant.parse("2026-05-14T12:00:00Z"),
+                venueZoneId = ZoneId.of("Europe/Moscow"),
+                cartItems = cart,
+                activeRules = listOf(rule),
+            )
+        val accepted =
+            PromotionRuleEngine.preview(
+                venueId = 10L,
+                now = Instant.parse("2026-05-14T12:00:00Z"),
+                venueZoneId = ZoneId.of("Europe/Moscow"),
+                cartItems = cart,
+                activeRules = listOf(rule),
+                giftDecision =
+                    PromotionGiftDecision(
+                        action = PromotionGiftDecisionAction.ACCEPT_FIXED,
+                        promotionId = 601L,
+                        ruleId = 401L,
+                        ruleVersion = 1,
+                    ),
+            )
+        val skipped =
+            PromotionRuleEngine.preview(
+                venueId = 10L,
+                now = Instant.parse("2026-05-14T12:00:00Z"),
+                venueZoneId = ZoneId.of("Europe/Moscow"),
+                cartItems = cart,
+                activeRules = listOf(rule),
+                giftDecision =
+                    PromotionGiftDecision(
+                        action = PromotionGiftDecisionAction.SKIP,
+                        promotionId = 601L,
+                        ruleId = 401L,
+                        ruleVersion = 1,
+                    ),
+            )
+
+        assertEquals(PromotionGiftOfferStatus.FIXED_GIFT_AVAILABLE, offered.giftOffer.status)
+        assertTrue(offered.appliedGifts.isEmpty())
+        assertTrue(!offered.giftDecisionResolved)
+        assertEquals(PromotionGiftOfferStatus.GIFT_SELECTED, accepted.giftOffer.status)
+        assertEquals("Чай", accepted.giftOffer.selectedRewardItem?.name)
+        assertEquals(1, accepted.appliedGifts.size)
+        assertTrue(accepted.giftDecisionResolved)
+        assertEquals(PromotionGiftOfferStatus.GIFT_SKIPPED, skipped.giftOffer.status)
+        assertTrue(skipped.appliedGifts.isEmpty())
+        assertTrue(skipped.giftDecisionResolved)
+    }
+
+    @Test
+    fun `gift does not use a trigger with incompatible manual discount`() {
+        val rule = giftRule(407L, target = MenuSemanticType.HOOKAH)
+        val discountedTrigger =
+            cartItem(1L, "Кальян", 1, 100_000L, MenuSemanticType.HOOKAH)
+                .copy(hasIncompatibleManualDiscount = true)
+
+        val preview =
+            PromotionRuleEngine.preview(
+                venueId = 10L,
+                now = Instant.parse("2026-05-14T12:00:00Z"),
+                venueZoneId = ZoneId.of("Europe/Moscow"),
+                cartItems = listOf(discountedTrigger),
+                activeRules = listOf(rule),
+            )
+
+        assertEquals(PromotionGiftOfferStatus.NO_GIFT, preview.giftOffer.status)
+        assertTrue(preview.appliedGifts.isEmpty())
+        assertTrue(preview.gifts.isEmpty())
+    }
+
+    @Test
+    fun `selectable gift exposes only eligible allowlist and rejects stale selection`() {
+        val rule =
+            giftRule(
+                402L,
+                target = MenuSemanticType.HOOKAH,
+                rewardMode = PromotionRewardMode.CHOICE_ITEMS,
+                rewardOptions =
+                    listOf(
+                        rewardOption(4L, "Чай"),
+                        rewardOption(5L, "Лимонад", available = false),
+                        rewardOption(6L, "Морс", requiresOptionSelection = true),
+                    ),
+            )
+        val cart = listOf(cartItem(1L, "Кальян", 1, 100_000L, MenuSemanticType.HOOKAH))
+
+        val offered =
+            PromotionRuleEngine.preview(
+                venueId = 10L,
+                now = Instant.parse("2026-05-14T12:00:00Z"),
+                venueZoneId = ZoneId.of("Europe/Moscow"),
+                cartItems = cart,
+                activeRules = listOf(rule),
+            )
+        val stale =
+            PromotionRuleEngine.preview(
+                venueId = 10L,
+                now = Instant.parse("2026-05-14T12:00:00Z"),
+                venueZoneId = ZoneId.of("Europe/Moscow"),
+                cartItems = cart,
+                activeRules = listOf(rule),
+                giftDecision =
+                    PromotionGiftDecision(
+                        action = PromotionGiftDecisionAction.SELECT_ITEM,
+                        promotionId = 601L,
+                        ruleId = 402L,
+                        ruleVersion = 1,
+                        selectedMenuItemId = 5L,
+                    ),
+            )
+
+        assertEquals(PromotionGiftOfferStatus.GIFT_CHOICE_REQUIRED, offered.giftOffer.status)
+        assertEquals(listOf(4L), offered.giftOffer.selectableRewardItems.map { it.menuItemId })
+        assertEquals(PromotionGiftOfferStatus.GIFT_CHOICE_REQUIRED, stale.giftOffer.status)
+        assertTrue(stale.appliedGifts.isEmpty())
+        assertTrue(!stale.giftDecisionResolved)
+    }
+
+    @Test
+    fun `unsupported required reward option and all unavailable allowlist are safe unavailable states`() {
+        val cart = listOf(cartItem(1L, "Кальян", 1, 100_000L, MenuSemanticType.HOOKAH))
+        val fixed =
+            PromotionRuleEngine.preview(
+                venueId = 10L,
+                now = Instant.parse("2026-05-14T12:00:00Z"),
+                venueZoneId = ZoneId.of("Europe/Moscow"),
+                cartItems = cart,
+                activeRules =
+                    listOf(
+                        giftRule(
+                            id = 403L,
+                            target = MenuSemanticType.HOOKAH,
+                            rewardRequiresOptionSelection = true,
+                        ),
+                    ),
+            )
+        val choice =
+            PromotionRuleEngine.preview(
+                venueId = 10L,
+                now = Instant.parse("2026-05-14T12:00:00Z"),
+                venueZoneId = ZoneId.of("Europe/Moscow"),
+                cartItems = cart,
+                activeRules =
+                    listOf(
+                        giftRule(
+                            id = 404L,
+                            target = MenuSemanticType.HOOKAH,
+                            rewardMode = PromotionRewardMode.CHOICE_ITEMS,
+                            rewardOptions =
+                                listOf(
+                                    rewardOption(4L, "Чай", available = false),
+                                    rewardOption(5L, "Морс", available = false),
+                                ),
+                        ),
+                    ),
+            )
+
+        assertEquals(PromotionGiftOfferStatus.GIFT_UNAVAILABLE, fixed.giftOffer.status)
+        assertEquals(PromotionGiftUnavailableReason.REQUIRED_OPTION_UNSUPPORTED, fixed.giftOffer.unavailableReason)
+        assertTrue(fixed.giftDecisionResolved)
+        assertEquals(PromotionGiftOfferStatus.GIFT_UNAVAILABLE, choice.giftOffer.status)
+        assertEquals(PromotionGiftUnavailableReason.NO_AVAILABLE_REWARD_ITEMS, choice.giftOffer.unavailableReason)
+        assertTrue(choice.giftDecisionResolved)
+    }
+
+    @Test
+    fun `removed trigger invalidates serialized decision and multiple triggers still yield one gift`() {
+        val firstRule =
+            giftRule(
+                id = 405L,
+                target = MenuSemanticType.HOOKAH,
+                rewardPriceMinor = 30_000L,
+                targets =
+                    listOf(
+                        PromotionRuleTarget(
+                            id = 1L,
+                            ruleId = 405L,
+                            targetType = PromotionRuleTargetType.MENU_ITEM,
+                            semanticType = null,
+                            menuItemId = 1L,
+                        ),
+                    ),
+            )
+        val secondRule =
+            giftRule(
+                id = 406L,
+                target = MenuSemanticType.HOOKAH,
+                rewardItemName = "Лимонад",
+                rewardPriceMinor = 40_000L,
+                targets =
+                    listOf(
+                        PromotionRuleTarget(
+                            id = 2L,
+                            ruleId = 406L,
+                            targetType = PromotionRuleTargetType.MENU_ITEM,
+                            semanticType = null,
+                            menuItemId = 2L,
+                        ),
+                    ),
+            )
+        val both =
+            PromotionRuleEngine.preview(
+                venueId = 10L,
+                now = Instant.parse("2026-05-14T12:00:00Z"),
+                venueZoneId = ZoneId.of("Europe/Moscow"),
+                cartItems =
+                    listOf(
+                        cartItem(1L, "Кальян", 2, 100_000L, MenuSemanticType.HOOKAH),
+                        cartItem(2L, "Премиум кальян", 1, 200_000L, MenuSemanticType.HOOKAH),
+                    ),
+                activeRules = listOf(firstRule, secondRule),
+            )
+        val removed =
+            PromotionRuleEngine.preview(
+                venueId = 10L,
+                now = Instant.parse("2026-05-14T12:00:00Z"),
+                venueZoneId = ZoneId.of("Europe/Moscow"),
+                cartItems = listOf(cartItem(2L, "Премиум кальян", 1, 200_000L, MenuSemanticType.HOOKAH)),
+                activeRules = listOf(firstRule),
+                giftDecision =
+                    PromotionGiftDecision(
+                        action = PromotionGiftDecisionAction.ACCEPT_FIXED,
+                        promotionId = 601L,
+                        ruleId = 405L,
+                        ruleVersion = 1,
+                    ),
+            )
+
+        assertEquals(406L, both.giftOffer.ruleId)
+        assertEquals(1, both.gifts.size)
+        assertEquals(PromotionGiftOfferStatus.NO_GIFT, removed.giftOffer.status)
+        assertTrue(removed.appliedGifts.isEmpty())
+        assertTrue(!removed.giftDecisionResolved)
+    }
+
     private fun cartItem(
         id: Long,
         name: String,
@@ -1113,6 +1355,7 @@ class PromotionRuleEngineTest {
         daysOfWeek: Set<Int>? = null,
         rewardItemName: String = "Чай",
         rewardPriceMinor: Long = 30_000L,
+        rewardRequiresOptionSelection: Boolean = false,
         priority: Int = 100,
         stackable: Boolean = false,
     ): VenuePromotionRule =
@@ -1143,6 +1386,7 @@ class PromotionRuleEngineTest {
                     priceMinor = rewardPriceMinor,
                     currency = "RUB",
                     isAvailable = rewardAvailable,
+                    requiresOptionSelection = rewardRequiresOptionSelection,
                     rewardMode = rewardMode,
                     options = rewardOptions,
                 ),
@@ -1155,6 +1399,7 @@ class PromotionRuleEngineTest {
         itemId: Long,
         name: String,
         available: Boolean = true,
+        requiresOptionSelection: Boolean = false,
     ): PromotionRuleRewardOption =
         PromotionRuleRewardOption(
             id = itemId,
@@ -1164,5 +1409,6 @@ class PromotionRuleEngineTest {
             priceMinor = 30_000L,
             currency = "RUB",
             isAvailable = available,
+            requiresOptionSelection = requiresOptionSelection,
         )
 }

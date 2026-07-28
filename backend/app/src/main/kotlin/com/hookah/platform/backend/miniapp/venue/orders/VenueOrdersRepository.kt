@@ -4,6 +4,7 @@ import com.hookah.platform.backend.analytics.AnalyticsEventRecord
 import com.hookah.platform.backend.analytics.AnalyticsEventRepository
 import com.hookah.platform.backend.analytics.analyticsCorrelationPayload
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackRepository
 import com.hookah.platform.backend.miniapp.guest.db.VisitRepository
@@ -160,6 +161,8 @@ data class OrderBatchItemDetail(
     val excludedReasonText: String? = null,
     val discountPercent: Int? = null,
     val promoDiscountMinor: Long = 0L,
+    val isPromotionReward: Boolean = false,
+    val hasActivePromotionReward: Boolean = false,
     val itemStatus: OrderBatchItemStatus = OrderBatchItemStatus.ACTIVE,
     val canceledReasonCode: String? = null,
     val canceledReasonText: String? = null,
@@ -1632,39 +1635,58 @@ class VenueOrdersRepository(
                             runCatching { connection.rollback() }
                             return@use false
                         }
-                        val now = OffsetDateTime.now(ZoneOffset.UTC)
-                        val updated =
-                            connection.prepareStatement(
-                                """
-                                UPDATE order_batch_items obi
-                                SET is_excluded = TRUE,
-                                    excluded_reason_text = ?,
-                                    excluded_at = ?
-                                WHERE obi.id = ?
-                                  AND obi.is_excluded = FALSE
-                                  AND COALESCE(obi.item_status, 'ACTIVE') = 'ACTIVE'
-                                  AND EXISTS (
-                                      SELECT 1
-                                      FROM order_batches ob
-                                      JOIN orders o ON o.id = ob.order_id
-                                      WHERE ob.id = obi.order_batch_id
-                                        AND ob.order_id = ?
-                                        AND o.venue_id = ?
-                                        AND o.status = 'ACTIVE'
-                                        AND ob.status <> 'REJECTED'
-                                  )
-                                """.trimIndent(),
-                            ).use { statement ->
-                                statement.setString(1, reasonText)
-                                statement.setObject(2, now)
-                                statement.setLong(3, batchItemId)
-                                statement.setLong(4, orderId)
-                                statement.setLong(5, venueId)
-                                statement.executeUpdate()
-                            }
-                        if (updated != 1) {
+                        val item =
+                            loadCancelableBatchItem(connection, venueId, orderId, batchItemId)
+                                ?: run {
+                                    runCatching { connection.rollback() }
+                                    return@use false
+                                }
+                        if (
+                            item.itemStatus != OrderBatchItemStatus.ACTIVE ||
+                            item.batchStatus == OrderBatchStatus.REJECTED
+                        ) {
                             runCatching { connection.rollback() }
                             return@use false
+                        }
+                        val linkedRewards =
+                            loadLinkedPromotionRewardsForUpdate(
+                                connection = connection,
+                                venueId = venueId,
+                                orderId = orderId,
+                                triggerBatchItemId = batchItemId,
+                            )
+                        val now = OffsetDateTime.now(ZoneOffset.UTC)
+                        val triggerUpdated =
+                            if (item.isExcluded) {
+                                0
+                            } else {
+                                excludeBatchItem(
+                                    connection = connection,
+                                    batchItemId = batchItemId,
+                                    reasonText = reasonText,
+                                    now = now,
+                                ).also { updated ->
+                                    check(updated == 1) { "Locked trigger item was not excluded" }
+                                }
+                            }
+                        val linkedRewardUpdates =
+                            linkedRewards.sumOf { reward ->
+                                if (!reward.isActive) {
+                                    0
+                                } else {
+                                    excludeBatchItem(
+                                        connection = connection,
+                                        batchItemId = reward.rewardBatchItemId,
+                                        reasonText = LINKED_REWARD_EXCLUDED_REASON,
+                                        now = now,
+                                    ).also { updated ->
+                                        check(updated == 1) { "Locked linked reward item was not excluded" }
+                                    }
+                                }
+                            }
+                        if (triggerUpdated + linkedRewardUpdates == 0) {
+                            runCatching { connection.rollback() }
+                            return@use true
                         }
                         updateOrderTimestamp(connection, orderId, now)
                         insertAudit(
@@ -1738,11 +1760,38 @@ class VenueOrdersRepository(
                                         AND o.status = 'ACTIVE'
                                         AND ob.status <> 'REJECTED'
                                   )
+                                  AND (
+                                      NOT EXISTS (
+                                          SELECT 1
+                                          FROM order_promotion_reward_items reward_link
+                                          WHERE reward_link.reward_order_batch_item_id = obi.id
+                                      )
+                                      OR EXISTS (
+                                          SELECT 1
+                                          FROM order_promotion_reward_items reward_link
+                                          JOIN order_promotion_applications application
+                                            ON application.id = reward_link.application_id
+                                          JOIN order_batch_items trigger_item
+                                            ON trigger_item.id = reward_link.trigger_order_batch_item_id
+                                          JOIN order_batches trigger_batch
+                                            ON trigger_batch.id = trigger_item.order_batch_id
+                                          WHERE reward_link.reward_order_batch_item_id = obi.id
+                                            AND application.order_id = ?
+                                            AND application.venue_id = ?
+                                            AND trigger_batch.order_id = ?
+                                            AND trigger_batch.status <> 'REJECTED'
+                                            AND trigger_item.is_excluded = FALSE
+                                            AND COALESCE(trigger_item.item_status, 'ACTIVE') = 'ACTIVE'
+                                      )
+                                  )
                                 """.trimIndent(),
                             ).use { statement ->
                                 statement.setLong(1, batchItemId)
                                 statement.setLong(2, orderId)
                                 statement.setLong(3, venueId)
+                                statement.setLong(4, orderId)
+                                statement.setLong(5, venueId)
+                                statement.setLong(6, orderId)
                                 statement.executeUpdate()
                             }
                         if (updated != 1) {
@@ -1807,51 +1856,56 @@ class VenueOrdersRepository(
                                     runCatching { connection.rollback() }
                                     return@use null
                                 }
-                        if (item.itemStatus == OrderBatchItemStatus.CANCELED) {
+                        val triggerAlreadyCanceled = item.itemStatus == OrderBatchItemStatus.CANCELED
+                        if (!triggerAlreadyCanceled && item.isExcluded) {
                             runCatching { connection.rollback() }
-                            return@use CancelBatchItemResult(
+                            return@use null
+                        }
+                        if (!triggerAlreadyCanceled && item.batchStatus !in cancelableItemBatchStatuses) {
+                            runCatching { connection.rollback() }
+                            return@use null
+                        }
+                        val linkedRewards =
+                            loadLinkedPromotionRewardsForUpdate(
+                                connection = connection,
+                                venueId = venueId,
                                 orderId = orderId,
-                                batchId = item.batchId,
-                                batchItemId = batchItemId,
-                                itemName = item.itemName,
-                                guestUserId = item.guestUserId,
-                                applied = false,
+                                triggerBatchItemId = batchItemId,
                             )
-                        }
-                        if (item.isExcluded) {
-                            runCatching { connection.rollback() }
-                            return@use null
-                        }
-                        if (item.batchStatus !in cancelableItemBatchStatuses) {
-                            runCatching { connection.rollback() }
-                            return@use null
-                        }
                         val now = OffsetDateTime.now(ZoneOffset.UTC)
-                        val updated =
-                            connection.prepareStatement(
-                                """
-                                UPDATE order_batch_items
-                                SET item_status = 'CANCELED',
-                                    canceled_reason_code = 'ITEM_UNAVAILABLE',
-                                    canceled_reason_text = ?,
-                                    canceled_at = ?,
-                                    canceled_by_user_id = (
-                                        SELECT telegram_user_id
-                                        FROM users
-                                        WHERE telegram_user_id = ?
-                                    )
-                                WHERE id = ?
-                                  AND item_status = 'ACTIVE'
-                                  AND is_excluded = FALSE
-                                """.trimIndent(),
-                            ).use { statement ->
-                                statement.setString(1, reasonText)
-                                statement.setObject(2, now)
-                                statement.setLong(3, actor.userId)
-                                statement.setLong(4, batchItemId)
-                                statement.executeUpdate()
+                        val triggerUpdated =
+                            if (triggerAlreadyCanceled) {
+                                0
+                            } else {
+                                cancelBatchItem(
+                                    connection = connection,
+                                    batchItemId = batchItemId,
+                                    actorUserId = actor.userId,
+                                    reasonCode = "ITEM_UNAVAILABLE",
+                                    reasonText = reasonText,
+                                    now = now,
+                                ).also { updated ->
+                                    check(updated == 1) { "Locked trigger item was not canceled" }
+                                }
                             }
-                        if (updated != 1) {
+                        val linkedRewardUpdates =
+                            linkedRewards.sumOf { reward ->
+                                if (!reward.isActive) {
+                                    0
+                                } else {
+                                    cancelBatchItem(
+                                        connection = connection,
+                                        batchItemId = reward.rewardBatchItemId,
+                                        actorUserId = actor.userId,
+                                        reasonCode = "PROMOTION_TRIGGER_CANCELED",
+                                        reasonText = LINKED_REWARD_CANCELED_REASON,
+                                        now = now,
+                                    ).also { updated ->
+                                        check(updated == 1) { "Locked linked reward item was not canceled" }
+                                    }
+                                }
+                            }
+                        if (triggerUpdated + linkedRewardUpdates == 0) {
                             runCatching { connection.rollback() }
                             return@use CancelBatchItemResult(
                                 orderId = orderId,
@@ -1909,6 +1963,9 @@ class VenueOrdersRepository(
         discountPercent: Int,
         actor: OrderActionActor,
     ): Boolean {
+        if (actor.role == VenueRole.STAFF) {
+            throw ForbiddenException()
+        }
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
@@ -1927,7 +1984,7 @@ class VenueOrdersRepository(
                         }
                         if (
                             discountPercent > 0 &&
-                            hasPromotionAdjustment(
+                            hasPromotionConflict(
                                 connection = connection,
                                 venueId = venueId,
                                 orderId = orderId,
@@ -1998,7 +2055,7 @@ class VenueOrdersRepository(
         }
     }
 
-    private fun hasPromotionAdjustment(
+    private fun hasPromotionConflict(
         connection: Connection,
         venueId: Long,
         orderId: Long,
@@ -2007,13 +2064,44 @@ class VenueOrdersRepository(
         connection.prepareStatement(
             """
             SELECT 1
-            FROM order_batch_item_promotion_adjustments adjustment
-            JOIN order_batch_items item ON item.id = adjustment.order_batch_item_id
+            FROM order_batch_items item
             JOIN order_batches batch ON batch.id = item.order_batch_id
             JOIN orders order_record ON order_record.id = batch.order_id
-            WHERE adjustment.order_batch_item_id = ?
+            WHERE item.id = ?
               AND order_record.id = ?
               AND order_record.venue_id = ?
+              AND (
+                  EXISTS (
+                      SELECT 1
+                      FROM order_batch_item_promotion_adjustments adjustment
+                      WHERE adjustment.order_batch_item_id = item.id
+                  )
+                  OR EXISTS (
+                      SELECT 1
+                      FROM order_promotion_reward_items direct_reward_link
+                      JOIN order_promotion_applications direct_application
+                        ON direct_application.id = direct_reward_link.application_id
+                      WHERE direct_reward_link.reward_order_batch_item_id = item.id
+                        AND direct_application.order_id = order_record.id
+                        AND direct_application.venue_id = order_record.venue_id
+                  )
+                  OR EXISTS (
+                      SELECT 1
+                      FROM order_promotion_reward_items reward_link
+                      JOIN order_promotion_applications application
+                        ON application.id = reward_link.application_id
+                      JOIN order_batch_items linked_reward
+                        ON linked_reward.id = reward_link.reward_order_batch_item_id
+                      JOIN order_batches linked_reward_batch
+                        ON linked_reward_batch.id = linked_reward.order_batch_id
+                      WHERE reward_link.trigger_order_batch_item_id = item.id
+                        AND application.order_id = order_record.id
+                        AND application.venue_id = order_record.venue_id
+                        AND linked_reward_batch.order_id = order_record.id
+                        AND linked_reward.is_excluded = FALSE
+                        AND COALESCE(linked_reward.item_status, 'ACTIVE') = 'ACTIVE'
+                  )
+              )
             """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, batchItemId)
@@ -2021,6 +2109,197 @@ class VenueOrdersRepository(
             statement.setLong(3, venueId)
             statement.executeQuery().use { rs -> rs.next() }
         }
+
+    private fun cancelBatchItem(
+        connection: Connection,
+        batchItemId: Long,
+        actorUserId: Long,
+        reasonCode: String,
+        reasonText: String,
+        now: OffsetDateTime,
+    ): Int =
+        connection.prepareStatement(
+            """
+            UPDATE order_batch_items
+            SET item_status = 'CANCELED',
+                canceled_reason_code = ?,
+                canceled_reason_text = ?,
+                canceled_at = ?,
+                canceled_by_user_id = (
+                    SELECT telegram_user_id
+                    FROM users
+                    WHERE telegram_user_id = ?
+                )
+            WHERE id = ?
+              AND COALESCE(item_status, 'ACTIVE') = 'ACTIVE'
+              AND is_excluded = FALSE
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setString(1, reasonCode)
+            statement.setString(2, reasonText)
+            statement.setObject(3, now)
+            statement.setLong(4, actorUserId)
+            statement.setLong(5, batchItemId)
+            statement.executeUpdate()
+        }
+
+    private fun excludeBatchItem(
+        connection: Connection,
+        batchItemId: Long,
+        reasonText: String,
+        now: OffsetDateTime,
+    ): Int =
+        connection.prepareStatement(
+            """
+            UPDATE order_batch_items
+            SET is_excluded = TRUE,
+                excluded_reason_text = ?,
+                excluded_at = ?
+            WHERE id = ?
+              AND is_excluded = FALSE
+              AND COALESCE(item_status, 'ACTIVE') = 'ACTIVE'
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setString(1, reasonText)
+            statement.setObject(2, now)
+            statement.setLong(3, batchItemId)
+            statement.executeUpdate()
+        }
+
+    private fun loadLinkedPromotionRewardsForUpdate(
+        connection: Connection,
+        venueId: Long,
+        orderId: Long,
+        triggerBatchItemId: Long,
+    ): List<LinkedPromotionReward> {
+        val references =
+            connection.prepareStatement(
+                """
+                SELECT reward_link.id AS reward_link_id,
+                       reward_link.application_id,
+                       reward_link.reward_order_batch_item_id
+                FROM order_promotion_reward_items reward_link
+                JOIN order_promotion_applications application
+                  ON application.id = reward_link.application_id
+                JOIN order_batch_items linked_reward
+                  ON linked_reward.id = reward_link.reward_order_batch_item_id
+                JOIN order_batches linked_reward_batch
+                  ON linked_reward_batch.id = linked_reward.order_batch_id
+                WHERE reward_link.trigger_order_batch_item_id = ?
+                  AND application.order_id = ?
+                  AND application.venue_id = ?
+                  AND linked_reward_batch.order_id = ?
+                ORDER BY reward_link.reward_order_batch_item_id, reward_link.id
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, triggerBatchItemId)
+                statement.setLong(2, orderId)
+                statement.setLong(3, venueId)
+                statement.setLong(4, orderId)
+                statement.executeQuery().use { rs ->
+                    buildList {
+                        while (rs.next()) {
+                            add(
+                                LinkedPromotionRewardReference(
+                                    rewardLinkId = rs.getLong("reward_link_id"),
+                                    applicationId = rs.getLong("application_id"),
+                                    rewardBatchItemId = rs.getLong("reward_order_batch_item_id"),
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+        if (references.isEmpty()) {
+            return emptyList()
+        }
+
+        val rewardBatchItemIds = references.map { it.rewardBatchItemId }.distinct().sorted()
+        lockRowsForUpdate(
+            connection = connection,
+            table = "order_batch_items",
+            ids = rewardBatchItemIds,
+        )
+        lockRowsForUpdate(
+            connection = connection,
+            table = "order_promotion_reward_items",
+            ids = references.map { it.rewardLinkId }.distinct().sorted(),
+        )
+        lockRowsForUpdate(
+            connection = connection,
+            table = "order_promotion_applications",
+            ids = references.map { it.applicationId }.distinct().sorted(),
+        )
+
+        val placeholders = rewardBatchItemIds.joinToString(",") { "?" }
+        val states =
+            connection.prepareStatement(
+                """
+                SELECT id,
+                       is_excluded,
+                       COALESCE(item_status, 'ACTIVE') AS item_status
+                FROM order_batch_items
+                WHERE id IN ($placeholders)
+                ORDER BY id
+                """.trimIndent(),
+            ).use { statement ->
+                rewardBatchItemIds.forEachIndexed { index, id ->
+                    statement.setLong(index + 1, id)
+                }
+                statement.executeQuery().use { rs ->
+                    buildMap {
+                        while (rs.next()) {
+                            put(
+                                rs.getLong("id"),
+                                LinkedPromotionRewardState(
+                                    isExcluded = rs.getBoolean("is_excluded"),
+                                    itemStatus = OrderBatchItemStatus.fromDb(rs.getString("item_status")),
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+        return references.map { reference ->
+            val state =
+                checkNotNull(states[reference.rewardBatchItemId]) {
+                    "Locked linked reward item is missing"
+                }
+            LinkedPromotionReward(
+                rewardBatchItemId = reference.rewardBatchItemId,
+                isExcluded = state.isExcluded,
+                itemStatus = state.itemStatus,
+            )
+        }
+    }
+
+    private fun lockRowsForUpdate(
+        connection: Connection,
+        table: String,
+        ids: List<Long>,
+    ) {
+        if (ids.isEmpty()) {
+            return
+        }
+        check(table in lockablePromotionTables) { "Unsupported promotion lock table" }
+        val placeholders = ids.joinToString(",") { "?" }
+        val lockedIds =
+            connection.prepareStatement(
+                "SELECT id FROM $table WHERE id IN ($placeholders) ORDER BY id FOR UPDATE",
+            ).use { statement ->
+                ids.forEachIndexed { index, id ->
+                    statement.setLong(index + 1, id)
+                }
+                statement.executeQuery().use { rs ->
+                    buildList {
+                        while (rs.next()) {
+                            add(rs.getLong("id"))
+                        }
+                    }
+                }
+            }
+        check(lockedIds == ids) { "Promotion lifecycle lock target is missing" }
+    }
 
     private fun resolveOrderWorkflowStatus(
         orderStatusRaw: String?,
@@ -2157,6 +2436,20 @@ class VenueOrdersRepository(
                    obi.excluded_reason_text,
                    obi.discount_percent,
                    COALESCE(promo.discount_minor, 0) AS promo_discount_minor,
+                   EXISTS (
+                       SELECT 1
+                       FROM order_promotion_reward_items reward_link
+                       WHERE reward_link.reward_order_batch_item_id = obi.id
+                   ) AS is_promotion_reward,
+                   EXISTS (
+                       SELECT 1
+                       FROM order_promotion_reward_items trigger_link
+                       JOIN order_batch_items linked_reward
+                         ON linked_reward.id = trigger_link.reward_order_batch_item_id
+                       WHERE trigger_link.trigger_order_batch_item_id = obi.id
+                         AND linked_reward.is_excluded = FALSE
+                         AND COALESCE(linked_reward.item_status, 'ACTIVE') = 'ACTIVE'
+                   ) AS has_active_promotion_reward,
                    obi.item_status,
                    obi.canceled_reason_code,
                    obi.canceled_reason_text,
@@ -2220,6 +2513,8 @@ class VenueOrdersRepository(
                                     if (rs.wasNull()) null else value
                                 },
                             promoDiscountMinor = rs.getLong("promo_discount_minor"),
+                            isPromotionReward = rs.getBoolean("is_promotion_reward"),
+                            hasActivePromotionReward = rs.getBoolean("has_active_promotion_reward"),
                             itemStatus = OrderBatchItemStatus.fromDb(rs.getString("item_status")),
                             canceledReasonCode = rs.getString("canceled_reason_code"),
                             canceledReasonText = rs.getString("canceled_reason_text"),
@@ -2561,12 +2856,42 @@ class VenueOrdersRepository(
         val guestUserId: Long?,
     )
 
+    private data class LinkedPromotionRewardReference(
+        val rewardLinkId: Long,
+        val applicationId: Long,
+        val rewardBatchItemId: Long,
+    )
+
+    private data class LinkedPromotionRewardState(
+        val isExcluded: Boolean,
+        val itemStatus: OrderBatchItemStatus,
+    )
+
+    private data class LinkedPromotionReward(
+        val rewardBatchItemId: Long,
+        val isExcluded: Boolean,
+        val itemStatus: OrderBatchItemStatus,
+    ) {
+        val isActive: Boolean
+            get() = !isExcluded && itemStatus == OrderBatchItemStatus.ACTIVE
+    }
+
     private companion object {
+        const val LINKED_REWARD_CANCELED_REASON = "Связанный подарок отменён вместе с условием акции."
+        const val LINKED_REWARD_EXCLUDED_REASON = "Связанный подарок исключён вместе с условием акции."
+
         val cancelableItemBatchStatuses =
             setOf(
                 OrderBatchStatus.NEW,
                 OrderBatchStatus.ACCEPTED,
                 OrderBatchStatus.PREPARING,
+            )
+
+        val lockablePromotionTables =
+            setOf(
+                "order_batch_items",
+                "order_promotion_reward_items",
+                "order_promotion_applications",
             )
     }
 
