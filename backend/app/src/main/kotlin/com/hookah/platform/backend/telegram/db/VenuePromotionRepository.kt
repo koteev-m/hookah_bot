@@ -764,6 +764,50 @@ class VenuePromotionRepository(private val dataSource: DataSource?) {
         }
     }
 
+    suspend fun listActivePromotionsForDraftPreview(
+        venueId: Long,
+        limit: Int = 20,
+        now: Instant = Instant.now(),
+    ): List<VenuePromotion> {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        val blockedStatuses = SubscriptionStatus.blockedDbValues
+        val blockedPlaceholders = blockedStatuses.joinToString(",") { "?" }
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    connection.prepareStatement(
+                        """
+                        SELECT ${promotionColumns()}
+                        FROM venue_promotions p
+                        JOIN venues v ON v.id = p.venue_id
+                        LEFT JOIN venue_subscriptions vs ON vs.venue_id = v.id
+                        WHERE p.venue_id = ?
+                          AND p.status = ?
+                          AND (p.starts_at IS NULL OR p.starts_at <= ?)
+                          AND (p.ends_at IS NULL OR p.ends_at >= ?)
+                          AND v.status = ?
+                          AND (vs.status IS NULL OR LOWER(vs.status) NOT IN ($blockedPlaceholders))
+                        ORDER BY COALESCE(p.starts_at, p.created_at) DESC, p.updated_at DESC, p.id DESC
+                        LIMIT ?
+                        """.trimIndent(),
+                    ).use { statement ->
+                        var index = 1
+                        statement.setLong(index++, venueId)
+                        statement.setString(index++, VenuePromotionStatus.ACTIVE.dbValue)
+                        statement.setTimestamp(index++, Timestamp.from(now))
+                        statement.setTimestamp(index++, Timestamp.from(now))
+                        statement.setString(index++, VenueStatus.DRAFT.dbValue)
+                        blockedStatuses.forEach { status -> statement.setString(index++, status) }
+                        statement.setInt(index, limit.coerceIn(1, 50))
+                        statement.executeQuery().use { rs -> rs.toPromotions() }
+                    }
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
     suspend fun getPromotionForGuest(
         promotionId: Long,
         now: Instant = Instant.now(),

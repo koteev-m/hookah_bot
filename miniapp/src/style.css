@@ -451,6 +451,29 @@ input[type="number"] {
   margin: 0;
 }
 
+.venue-preview-banner {
+  margin: 0;
+  padding: 0.75rem 0.875rem;
+  border: 1px solid #bfdbfe;
+  border-radius: 10px;
+  background: #eff6ff;
+  color: #1e3a8a;
+  font-weight: 700;
+}
+
+.venue-preview-banner[data-mode='draft'] {
+  border-color: #f59e0b;
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.venue-preview-media-hint {
+  margin: 0;
+  padding: 0.75rem;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
 .guest-venue-schedule-exception {
   display: grid;
   gap: 0.25rem;

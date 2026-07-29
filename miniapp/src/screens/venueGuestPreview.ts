@@ -7,7 +7,7 @@ type VenueGuestPreviewScreenOptions = {
   backendUrl: string
   isDebug: boolean
   venueId: number
-  access: Pick<VenueAccessDto, 'role'>
+  access: Pick<VenueAccessDto, 'role' | 'venueStatus'>
 }
 
 export function renderVenueGuestPreviewScreen(options: VenueGuestPreviewScreenOptions) {
@@ -25,14 +25,42 @@ export function renderVenueGuestPreviewScreen(options: VenueGuestPreviewScreenOp
     return () => undefined
   }
 
+  const venueStatus = access.venueStatus?.trim().toUpperCase()
   const screen = el('section', { className: 'venue-guest-preview' })
-  const heading = el('h2', { text: 'Предпросмотр для гостя' })
+  const heading = el('h2', { text: 'Предпросмотр карточки' })
   const helper = el('p', {
     className: 'app-subtitle',
-    text: 'Только текущее опубликованное состояние. Предпросмотр доступен без действий гостя.'
+    text: 'Только сохранённые данные. Предпросмотр доступен без действий гостя.'
   })
+  if (venueStatus !== 'PUBLISHED' && venueStatus !== 'DRAFT') {
+    const unavailable = el('section', { className: 'card venue-preview-unavailable' })
+    append(
+      unavailable,
+      el('h3', { text: 'Предпросмотр недоступен' }),
+      el('p', {
+        text:
+          venueStatus === 'DELETED'
+            ? 'Заведение не найдено.'
+            : 'Предпросмотр карточки для этого статуса пока недоступен.'
+      })
+    )
+    append(screen, heading, helper, unavailable)
+    root.replaceChildren(screen)
+    return () => undefined
+  }
+
+  const previewMode = venueStatus
+  const banner = el('p', {
+    className: 'venue-preview-banner',
+    text:
+      previewMode === 'PUBLISHED'
+        ? 'Опубликовано — так карточку видит гость сейчас'
+        : 'Черновик. Гости пока не видят эту карточку'
+  })
+  banner.dataset.mode = previewMode.toLowerCase()
+  banner.hidden = true
   const previewRoot = el('div', { className: 'venue-guest-preview-content' }) as HTMLDivElement
-  append(screen, heading, helper, previewRoot)
+  append(screen, heading, helper, banner, previewRoot)
   root.replaceChildren(screen)
 
   return renderGuestVenueScreen({
@@ -40,6 +68,11 @@ export function renderVenueGuestPreviewScreen(options: VenueGuestPreviewScreenOp
     backendUrl,
     isDebug,
     venueId,
-    readOnlyPreview: true
+    previewMode,
+    onPreviewLoaded: (loadedMode) => {
+      if (loadedMode === previewMode) {
+        banner.hidden = false
+      }
+    }
   })
 }

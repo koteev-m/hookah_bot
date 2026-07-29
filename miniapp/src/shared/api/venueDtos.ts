@@ -1,4 +1,10 @@
 import type { SupportMessageDto, SupportThreadDto } from './supportDtos'
+import type {
+  GuestVenueDateExceptionDto,
+  GuestVenuePromotionDto,
+  GuestVenueScheduleDayDto,
+  VenueTodayScheduleDto
+} from './guestDtos'
 
 export type VenueAccessDto = {
   venueId: number
@@ -12,6 +18,54 @@ export type VenueAccessDto = {
 export type VenueMeResponse = {
   userId: number
   venues: VenueAccessDto[]
+}
+
+export type VenueDraftPreviewResponse = {
+  previewMode: 'DRAFT'
+  venueStatus: 'DRAFT'
+  guestAvailable: false
+  unavailableReason: string
+  publicCandidate: VenueDraftPreviewVenueDto
+  infoSections: VenueDraftPreviewInfoSectionDto[]
+  mediaAvailableAfterPublication: boolean
+}
+
+export type VenueDraftPreviewVenueDto = {
+  id: number
+  name: string
+  city?: string | null
+  address?: string | null
+  countryCode?: string | null
+  formattedAddress?: string | null
+  displayAddress?: string | null
+  latitude?: number | null
+  longitude?: number | null
+  routeUrl?: string | null
+  guestContact?: string | null
+  cardDescription?: string | null
+  todaySchedule?: VenueTodayScheduleDto | null
+  weeklyHours: GuestVenueScheduleDayDto[]
+  dateExceptions: GuestVenueDateExceptionDto[]
+  todayStaff: VenueDraftPreviewStaffDto[]
+  timezone: string
+  promotions: GuestVenuePromotionDto[]
+}
+
+export type VenueDraftPreviewStaffDto = {
+  displayName: string
+  roleLabel?: string | null
+  subtype: string
+  bio?: string | null
+  tags: string[]
+  shiftDate: string
+  startsAt?: string | null
+  endsAt?: string | null
+  shiftStatus: string
+}
+
+export type VenueDraftPreviewInfoSectionDto = {
+  displayTitle: string
+  text: string
 }
 
 export type VenuePromotionStatus = 'DRAFT' | 'ACTIVE' | 'PAUSED' | 'ARCHIVED'

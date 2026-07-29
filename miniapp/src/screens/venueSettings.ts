@@ -39,6 +39,7 @@ export type VenueSettingsOptions = {
   isDebug: boolean
   venueId: number
   access: VenueAccessDto
+  onOpenPreview?: () => void
 }
 
 type VenueSettingsRefs = {
@@ -56,6 +57,7 @@ type VenueSettingsRefs = {
   guestContactInput: HTMLInputElement
   cardDescriptionInput: HTMLTextAreaElement
   publicCardSaveButton: HTMLButtonElement
+  publicCardPreviewButton: HTMLButtonElement
   publicCardForm: HTMLDivElement
   reviewLinkCard: HTMLElement
   reviewLinkCurrent: HTMLParagraphElement
@@ -202,6 +204,16 @@ function buildDom(root: HTMLDivElement): VenueSettingsRefs {
 
   const publicCardSaveButton = el('button', { text: 'Сохранить' }) as HTMLButtonElement
   publicCardSaveButton.disabled = true
+  const publicCardPreviewButton = el('button', {
+    className: 'button-secondary',
+    text: 'Предпросмотр карточки'
+  }) as HTMLButtonElement
+  const publicCardActions = el('div', { className: 'button-row' })
+  append(publicCardActions, publicCardSaveButton, publicCardPreviewButton)
+  const publicCardPreviewHint = el('p', {
+    className: 'venue-order-sub',
+    text: 'В предпросмотре отображаются только сохранённые данные.'
+  })
   append(
     publicCardForm,
     countryLabel,
@@ -216,7 +228,8 @@ function buildDom(root: HTMLDivElement): VenueSettingsRefs {
     guestContactInput,
     cardDescriptionLabel,
     cardDescriptionInput,
-    publicCardSaveButton
+    publicCardActions,
+    publicCardPreviewHint
   )
   append(publicCard, publicTitle, publicDescription, publicNameLabel, publicName, publicCardForm)
 
@@ -424,6 +437,7 @@ function buildDom(root: HTMLDivElement): VenueSettingsRefs {
     guestContactInput,
     cardDescriptionInput,
     publicCardSaveButton,
+    publicCardPreviewButton,
     publicCardForm,
     reviewLinkCard,
     reviewLinkCurrent,
@@ -799,6 +813,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   if (!root) return () => undefined
 
   const refs = buildDom(root)
+  refs.publicCardPreviewButton.hidden = !options.onOpenPreview
   const deps = buildApiDeps(isDebug)
   const canManagePublicCard = access.role === 'OWNER' || access.role === 'MANAGER'
   const canManageReviewLink = access.permissions.includes('VENUE_SETTINGS')
@@ -1606,6 +1621,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   }
 
   disposables.push(on(refs.publicCardSaveButton, 'click', () => void savePublicCardSettings()))
+  disposables.push(on(refs.publicCardPreviewButton, 'click', () => options.onOpenPreview?.()))
   disposables.push(on(refs.reviewLinkInput, 'input', updateReviewLinkButtons))
   disposables.push(on(refs.reviewLinkSaveButton, 'click', () => void saveReviewLinkSettings()))
   disposables.push(on(refs.reviewLinkClearButton, 'click', () => void clearReviewLinkSettings()))

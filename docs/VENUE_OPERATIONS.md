@@ -1,6 +1,6 @@
 # Venue Mode Operations Model
 
-Дата актуализации: 2026-07-21.
+Дата актуализации: 2026-07-29.
 
 Статус: **current product reference / SPEC UPDATED**. Core Venue operations are partly smoke-closed across orders, bill display, staff calls, bookings, confirmed-only booking arrival actions, state-aware staff-chat booking shortcuts, staff-chat, menu options and settings slices. The full Venue Mode implementation is still **PARTIAL / needs verification** for broad dashboard completeness, shift check, arbitrary stats, all dangerous-action audit coverage, broader settings parity and deep cross-surface e2e.
 
@@ -34,10 +34,10 @@ Canonical dependencies:
 | Stop-list | Fast operational availability toggles. | Item/option availability parity is documented for current Staff/Manager/Owner paths. | Per-venue `staff_stoplist_enabled`, mass stop-list and audit completeness are future/partial. |
 | Tables / QR | Physical table inventory and QR context. | Tables/QR basics exist; table-session runtime behavior is documented separately. | Single table CRUD/diagnostics/QR rotate audit need verification. |
 | Staff / invites | Membership, roles and invite links. | Staff/Manager invite sharing and acceptance are staging-smoked; Platform Owner OWNER invite/revoke is smoke-closed. | Role parity still needs regression after new routes. |
-| Staff profiles / today shift | Guest-visible opt-in staff profiles and manual "today on shift". | Phase 1 backend + Mini App implementation exists and local smoke passed. | Needs staging UX acceptance before production readiness; catalog preview remains future. |
+| Staff profiles / today shift | Guest-visible opt-in staff profiles and manual "today on shift". | Phase 1 backend + Mini App implementation exists and local smoke passed; Published/Draft card preview preserves the public-profile/visible-shift filters. | Needs staging UX acceptance before production readiness; tips and photo upload remain future. |
 | Staff-chat | Linked group diagnostics and operational notifications. | Link/test/unlink, live order activity-card behavior and state-aware booking shortcuts are smoke-closed. | Personal staff notifications and unified event policy remain future. |
 | Feedback | Internal post-visit feedback from completed Guest History. | DONE / MVP / staging-smoke-passed: Owner/Manager read own-venue aggregate/list and can manually open exact `VENUE_CHAT` follow-up for ratings `1..3`; Staff denied. | Platform feedback analytics dashboard and automated prompts remain future. |
-| Settings | Venue profile, schedule, booking hold, extension, staff-chat and operational settings. | Booking hold, shift extension, public profile/card, schedule/date exceptions and Owner-only public review link are smoke-closed. | Broader settings/media/promotions/preview remain partial/future. |
+| Settings / card preview | Venue profile, schedule, booking hold, extension, staff-chat and read-only public-card preview. | Booking hold, shift extension, public profile/card, schedule/date exceptions and Owner-only public review link are smoke-closed. Published Guest Preview Phase 1 and saved-DRAFT Preview Phase 2.1 are MVP implemented/local-validated for Owner/Manager through one `Предпросмотр карточки` screen. | Broader settings/media authoring and preview for HIDDEN/PAUSED/SUSPENDED/ARCHIVED, unsaved changes, versioned snapshots and publish workflow remain future. |
 | Stats | Role-specific operational summaries. | Venue Mini App read-only stats passed staging smoke for Owner/Manager. | Custom ranges, arbitrary stats, AI summaries and advanced analytics remain future. |
 
 ## Dashboard
@@ -348,8 +348,15 @@ Closed feedback operations:
 
 Current vs target:
 - Venue Mini App settings are no longer a broad dead placeholder for the closed slices: booking hold, shift extension settings, public profile/card, schedule/date exceptions and staff-chat management are backend-backed in current docs.
-- Remaining settings such as media sections, promotions, guest preview, broader module toggles and some Bot parity are partial/future.
+- Remaining settings such as media-section authoring, broader module toggles and some Bot parity are partial/future; Published Guest Preview and saved-DRAFT Preview Phase 2.1 are backend-backed.
 - If a future settings screen is not backend-backed, hide it or mark it clearly as future.
+
+Closed card-preview slices:
+- Published Guest Preview Phase 1 is **MVP IMPLEMENTED / LOCAL VALIDATION PASSED**. OWNER/MANAGER see the exact guest-visible published read model through the unchanged Guest lifecycle/subscription guards.
+- Draft Preview Phase 2.1 is **MVP IMPLEMENTED / LOCAL VALIDATION PASSED**. A separate OWNER/MANAGER-only Venue read model exposes only saved `DRAFT` public-candidate data; STAFF and foreign venue access are denied. CI and staging smoke remain pending for both slices.
+- One global Venue Mode entry and one contextual entry in public-card settings open the same read-only `Предпросмотр карточки` screen. `PUBLISHED` shows `Опубликовано — так карточку видит гость сейчас`; `DRAFT` shows `Черновик. Гости пока не видят эту карточку`.
+- HIDDEN/PAUSED/SUSPENDED/ARCHIVED expose only `Предпросмотр карточки для этого статуса пока недоступен`; DELETED/missing venues fail safely. No preview action publishes, mutates, shares or previews unsaved form state.
+- Draft projection is allowlisted to guest-safe public card/address, schedule and public exceptions, visible text info sections, visible published Today Staff and current `ACTIVE` promotions. Draft media is not returned: visible media sections are represented by one compact post-publication hint with no raw refs or new route. Published media remains unchanged.
 
 ## Stats
 
@@ -392,7 +399,7 @@ Current vs target:
 | Tables/QR | Bot table flows exist. | Basics exist. | No. | QR rotate audit/diagnostics need verification. | P2 |
 | Staff invites | Bot invite acceptance exists. | Copy/share invite result smoke-closed. | No. | Keep role denial/last-owner protection in regression. | Regression |
 | Staff-chat link/test | Bot link command exists. | M6 link/test/unlink smoke-closed. | Target group. | Personal notifications future. | Regression |
-| Settings | Bot and Mini App share the public review URL source; Bot remains richer in some other areas. | Backend-backed slices include Owner-only `Ссылка для отзывов`; broader settings partial. | No. | Keep shared-source parity and hide non-backed placeholders. | Regression/P2 |
+| Settings / card preview | Bot and Mini App share the public review URL source; Bot remains richer in some other areas. | Backend-backed slices include Owner-only `Ссылка для отзывов` and one read-only Published/Draft `Предпросмотр карточки` screen; broader settings remain partial. | No. | Keep shared-source parity, preview RBAC/privacy and unsupported-status boundaries in regression; hide non-backed placeholders. | Regression/P2 |
 | Stats | Bot stats exist. | Read-only stats smoke-closed. | No. | Custom ranges/advanced analytics future. | P2 |
 
 ## Current Known Gaps
@@ -400,7 +407,7 @@ Current vs target:
 - Staff-call ACK/DONE and guest-visible `CANCELLED` are smoke-closed; manual cancel UI, row-level actor/timestamps and quick replies remain future.
 - Booking queue/lifecycle is smoke-closed for MVP; automatic expiry/no-show policy, preorder and broad reminder rollout remain future.
 - Full bill/display/order snapshots are smoke-closed for current paths; tab reopen, force-close reason/audit and all modifier variants need verification.
-- Settings are `PARTIAL`: closed slices are backend-backed, including Owner-only public review URL shared by Bot/Mini App, but broader settings/media/promotions/preview remain future/partial.
+- Settings are `PARTIAL`: closed slices are backend-backed, including Owner-only public review URL and Published/Draft card preview, while broader settings/media authoring and unsupported-status/versioned preview remain future/partial.
 - Staff stop-list parity is documented as aligned for current item/option availability; per-venue `staff_stoplist_enabled` remains future.
 - Manager broad `MENU_MANAGE` remains a product-policy decision: keep and test it, or narrow to stop-list/shift check/basic availability.
 - Staff-chat notification policy is documented for orders/calls/bookings and explicitly excludes support, venue chats and post-visit feedback/follow-up context; personal staff notifications remain future.
@@ -414,6 +421,8 @@ Current vs target:
 - Booking queue: `CLOSED for MVP`, `PARTIAL` for automation/preorder/reminder rollout.
 - Post-Visit Feedback: `DONE / MVP / STAGING-SMOKE-PASSED`, including manual `5/5` public review CTA and low-rating `VENUE_CHAT` follow-up.
 - Settings: `PARTIAL`, with several backend-backed slices closed, including Owner-only `Ссылка для отзывов` shared by Bot/Mini App.
+- Published Guest Preview Phase 1: **MVP IMPLEMENTED / LOCAL VALIDATION PASSED**; CI and staging smoke pending.
+- Draft Preview Phase 2.1: **MVP IMPLEMENTED / LOCAL VALIDATION PASSED**; saved `DRAFT` only, text-only info sections plus one media hint, CI and staging smoke pending.
 - Full bill/display/order snapshots: `CLOSED for current smoke paths`, `PARTIAL` for force-close/reopen/all modifier variants.
 - Stop-list parity: current item/option parity documented; per-venue Staff policy and mass/shift-check remain future.
 - Staff-chat source-of-truth policy: `DOCUMENTED`.

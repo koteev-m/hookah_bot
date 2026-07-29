@@ -167,7 +167,7 @@ function buildVenueShell(root: HTMLDivElement): VenueShellRefs {
     messages: el('button', { className: 'nav-button', text: 'Сообщения' }) as HTMLButtonElement,
     'guest-preview': el('button', {
       className: 'nav-button',
-      text: 'Предпросмотр для гостя'
+      text: 'Предпросмотр карточки'
     }) as HTMLButtonElement,
     promotions: el('button', { className: 'nav-button', text: 'Акции' }) as HTMLButtonElement,
     menu: el('button', { className: 'nav-button', text: 'Заказное меню' }) as HTMLButtonElement,
@@ -481,9 +481,10 @@ export function mountVenueApp(options: VenueAppOptions) {
     screenRoot.className = 'screen-root'
     refs.content.replaceChildren(screenRoot)
     const venueId = selectedVenueId
-    const access = currentRole
-      ? { venueId: selectedVenueId ?? 0, role: currentRole, permissions: currentPermissions }
-      : null
+    const access =
+      currentRole && venueId
+        ? accessList.find((item) => item.venueId === venueId) ?? null
+        : null
     if (!venueId || !access) {
       const placeholder = el('section', { className: 'card' })
       const text = venueId ? 'Недостаточно прав.' : 'Выберите заведение.'
@@ -564,7 +565,14 @@ export function mountVenueApp(options: VenueAppOptions) {
       case 'feedback':
         return renderVenueFeedbackScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
       case 'settings':
-        return renderVenueSettingsScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
+        return renderVenueSettingsScreen({
+          root: screenRoot,
+          backendUrl,
+          isDebug,
+          venueId,
+          access,
+          onOpenPreview: () => navigate('#/guest-preview')
+        })
       case 'subscription':
         return renderVenueSubscriptionScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
       case 'chat':

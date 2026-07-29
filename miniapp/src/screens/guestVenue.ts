@@ -26,9 +26,15 @@ import type {
   VenueTodayScheduleDto
 } from '../shared/api/guestDtos'
 import {
+  venueGetDraftPreview,
   venueGetGuestPreview,
   venueGetGuestPreviewInfoSections
 } from '../shared/api/venueApi'
+import type {
+  VenueDraftPreviewInfoSectionDto,
+  VenueDraftPreviewResponse,
+  VenueDraftPreviewVenueDto
+} from '../shared/api/venueDtos'
 import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
 import { updateItemCache } from '../shared/state/itemCache'
 import { addToCart, getCartSnapshot, removeFromCart, subscribeCart } from '../shared/state/cartStore'
@@ -59,7 +65,8 @@ type VenueScreenOptions = {
   openStaffCall?: boolean
   onBookVenue?: (venueId: number) => void
   onAskVenue?: (venueId: number) => void
-  readOnlyPreview?: boolean
+  previewMode?: 'PUBLISHED' | 'DRAFT'
+  onPreviewLoaded?: (mode: 'PUBLISHED' | 'DRAFT') => void
 }
 
 type MenuItemRefs = {
@@ -138,6 +145,7 @@ const EMPTY_PREVIEW_TABLE_CONTEXT: TableContextSnapshot = {
 }
 
 const GUEST_PREVIEW_UNAVAILABLE_MESSAGE = 'Заведение недоступно для гостевого просмотра.'
+const DRAFT_PREVIEW_MEDIA_MESSAGE = 'Медиа будет доступно в гостевой карточке после публикации'
 
 function buildApiDeps(isDebug: boolean) {
   return { isDebug, getAccessToken, clearSession }
@@ -755,6 +763,69 @@ function renderInfoSection(section: VenueInfoSectionDto, backendUrl: string) {
   return sectionCard
 }
 
+function isValidDraftPreviewEnvelope(
+  data: VenueDraftPreviewResponse,
+  venueId: number
+): boolean {
+  return (
+    data.previewMode === 'DRAFT' &&
+    data.venueStatus === 'DRAFT' &&
+    data.guestAvailable === false &&
+    data.publicCandidate?.id === venueId &&
+    Array.isArray(data.infoSections)
+  )
+}
+
+function draftCandidateToVenue(candidate: VenueDraftPreviewVenueDto): VenueDto {
+  return {
+    id: candidate.id,
+    name: candidate.name,
+    city: candidate.city,
+    address: candidate.address,
+    countryCode: candidate.countryCode,
+    formattedAddress: candidate.formattedAddress,
+    displayAddress: candidate.displayAddress,
+    latitude: candidate.latitude,
+    longitude: candidate.longitude,
+    routeUrl: candidate.routeUrl,
+    guestContact: candidate.guestContact,
+    cardDescription: candidate.cardDescription,
+    todaySchedule: candidate.todaySchedule,
+    weeklyHours: candidate.weeklyHours,
+    dateExceptions: candidate.dateExceptions,
+    todayStaff: candidate.todayStaff.map((person, index) => ({
+      id: -(index + 1),
+      displayName: person.displayName,
+      roleLabel: person.roleLabel,
+      subtype: person.subtype,
+      bio: person.bio,
+      tags: person.tags,
+      shiftDate: person.shiftDate,
+      startsAt: person.startsAt,
+      endsAt: person.endsAt,
+      shiftStatus: person.shiftStatus
+    })),
+    timezone: candidate.timezone,
+    promotions: candidate.promotions,
+    status: 'DRAFT',
+    isFavorite: false
+  }
+}
+
+function draftInfoSectionsToGuestSections(
+  sections: VenueDraftPreviewInfoSectionDto[]
+): VenueInfoSectionDto[] {
+  return sections.map((section, index) => ({
+    id: -(index + 1),
+    type: 'draft-preview',
+    title: section.displayTitle,
+    displayTitle: section.displayTitle,
+    text: section.text,
+    mediaCount: 0,
+    media: []
+  }))
+}
+
 function updateItemControls(refs: MenuItemRefs, qty: number, canOrder: boolean) {
   refs.qtyLabel.textContent = String(qty)
   if (!canOrder) {
@@ -785,7 +856,8 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
   const { root, backendUrl, isDebug, venueId, onBookVenue, onAskVenue } = options
   if (!root) return () => undefined
 
-  const readOnlyPreview = options.readOnlyPreview === true
+  const previewMode = options.previewMode
+  const readOnlyPreview = previewMode === 'PUBLISHED' || previewMode === 'DRAFT'
   const refs = buildVenueDom(root)
   refs.bookingButton.disabled = !venueId
   refs.questionButton.disabled = !venueId
@@ -922,7 +994,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     if (normalizedCode === ApiErrorCodes.UNAUTHORIZED || normalizedCode === ApiErrorCodes.INITDATA_INVALID) {
       clearSession()
     }
-    if (readOnlyPreview && normalizedCode === ApiErrorCodes.NOT_FOUND) {
+    if (previewMode === 'PUBLISHED' && normalizedCode === ApiErrorCodes.NOT_FOUND) {
       refs.errorTitle.textContent = 'Предпросмотр недоступен'
       refs.errorMessage.textContent = GUEST_PREVIEW_UNAVAILABLE_MESSAGE
       refs.error.dataset.severity = 'warn'
@@ -1239,7 +1311,11 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     updateQuestionAction()
   }
 
-  const renderPreQrInfo = (venue: VenueDto, sections: VenueInfoSectionDto[]) => {
+  const renderPreQrInfo = (
+    venue: VenueDto,
+    sections: VenueInfoSectionDto[],
+    mediaAvailableAfterPublication = false
+  ) => {
     refs.menuBody.replaceChildren()
     itemRefs.clear()
     itemDisposables.forEach((dispose) => dispose())
@@ -1274,12 +1350,20 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
 
     if (!sections.length) {
       refs.menuBody.appendChild(el('p', { text: 'Информация пока не заполнена.' }))
-      return
+    } else {
+      sections.forEach((section) => {
+        refs.menuBody.appendChild(renderInfoSection(section, backendUrl))
+      })
     }
 
-    sections.forEach((section) => {
-      refs.menuBody.appendChild(renderInfoSection(section, backendUrl))
-    })
+    if (mediaAvailableAfterPublication) {
+      refs.menuBody.appendChild(
+        el('p', {
+          className: 'status venue-preview-media-hint',
+          text: DRAFT_PREVIEW_MEDIA_MESSAGE
+        })
+      )
+    }
   }
 
   const renderMenuCategoryList = (categories: MenuCategoryDto[]) => {
@@ -1690,6 +1774,64 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
       didTimeout = true
       controller.abort()
     }, 15000)
+    if (previewMode === 'DRAFT') {
+      const draftResult = await venueGetDraftPreview(
+        backendUrl,
+        venueId,
+        deps,
+        controller.signal
+      )
+      window.clearTimeout(timeoutId)
+      if (disposed || menuAbort !== controller) return
+      if (!draftResult.ok && draftResult.error.code === REQUEST_ABORTED_CODE) {
+        if (didTimeout && menuAbort === controller) {
+          setStatus('')
+          refs.retryButton.hidden = false
+          refs.menuBody.replaceChildren(
+            el('p', {
+              className: 'status',
+              text: 'Не удалось загрузить предпросмотр. Нажмите «Повторить».'
+            })
+          )
+        }
+        return
+      }
+      if (!draftResult.ok) {
+        setStatus('')
+        showError(draftResult.error)
+        return
+      }
+      if (!isValidDraftPreviewEnvelope(draftResult.data, venueId)) {
+        setStatus('')
+        showError({
+          status: 404,
+          code: ApiErrorCodes.NOT_FOUND,
+          message: 'Предпросмотр черновика недоступен.'
+        })
+        return
+      }
+      setStatus('')
+      try {
+        const venue = draftCandidateToVenue(draftResult.data.publicCandidate)
+        renderVenueInfo(venue)
+        updateBookingButtonVisibility()
+        renderedOrderMenuMode = false
+        renderPreQrInfo(
+          venue,
+          draftInfoSectionsToGuestSections(draftResult.data.infoSections),
+          draftResult.data.mediaAvailableAfterPublication === true
+        )
+        options.onPreviewLoaded?.('DRAFT')
+      } catch {
+        refs.menuBody.appendChild(
+          el('p', {
+            className: 'status',
+            text: 'Не удалось показать часть информации. Нажмите «Повторить».'
+          })
+        )
+      }
+      return
+    }
     const [venueResult, detailsResult] = await Promise.all([
       readOnlyPreview
         ? venueGetGuestPreview(backendUrl, venueId, deps, controller.signal)
@@ -1779,6 +1921,9 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
       } else {
         const infoData = detailsResult.data as VenueInfoSectionsResponse
         renderPreQrInfo(venueResult.data.venue, Array.isArray(infoData.sections) ? infoData.sections : [])
+      }
+      if (previewMode === 'PUBLISHED') {
+        options.onPreviewLoaded?.('PUBLISHED')
       }
     } catch {
       refs.menuBody.appendChild(

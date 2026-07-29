@@ -22,7 +22,8 @@ Current practice:
 - Gift parity is
   `GIFT_WITH_ITEM BOT/MINIAPP PARITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`.
   GitHub Actions and staging cross-surface smoke remain required.
-- Venue Mini App Guest Preview Phase 1 is `IMPLEMENTED / LOCAL VALIDATION PASSED / CI AND STAGING SMOKE PENDING`: focused backend parity/RBAC/availability tests and six browser scenarios cover the published read-only slice without claiming release readiness.
+- Venue Mini App Published Guest Preview Phase 1 is **MVP IMPLEMENTED / LOCAL VALIDATION PASSED**: focused backend parity/RBAC/availability tests preserve the exact Guest read contract. CI and staging smoke remain pending.
+- Venue Mini App Draft Preview Phase 2.1 is **MVP IMPLEMENTED / LOCAL VALIDATION PASSED**: focused Draft/RBAC/Guest regression selectors, promotion repository regression, backend lint/compile, Mini App build and deterministic full e2e `92/92` passed locally. CI and staging smoke remain pending.
 
 Target QA model:
 - Every task ends with changed files, behavior summary, tests run, validation result, manual smoke checklist, `git status --short`, whether `scripts/dev/` was touched and whether staging deploy is needed.
@@ -42,8 +43,10 @@ Target QA model:
 
 ## Venue Mini App Guest Preview Phase 1 Quality Gate
 
-The preview must reuse the Guest DTO/read assembly and its availability guards. A private Venue
-settings DTO, draft preview path or client-side merge of public/private state is a release blocker.
+Published Preview must continue to reuse the exact Guest DTO/read assembly and its availability
+guards. A draft/bypass parameter in `GuestVenueReadService`, a private Venue settings DTO, or a
+client-side merge of public/private state inside Published Preview is a release blocker. Draft
+Preview Phase 2.1 uses a separate Venue API/read model and must not weaken this contract.
 
 Required local coverage:
 
@@ -63,6 +66,40 @@ Acceptance:
 - venue switching clears and aborts stale preview state;
 - booking, favorites, venue chat, support, staff call, extension, cart, order and table context are absent and generate no mutation traffic;
 - after green Actions, staging smoke must repeat OWNER/MANAGER/STAFF roles, unavailable venue copy, venue switching and visual parity with the real Guest card.
+
+## Venue Mini App Draft Preview Phase 2.1 Quality Gate
+
+Draft Preview is a separate OWNER/MANAGER-only Venue read path for already saved `DRAFT` state.
+It must not use Guest API bypass flags, private settings DTOs or client-side public/private merges.
+
+Required local coverage:
+
+```bash
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VenueDraftPreview*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VenueGuestPreviewRoutesTest*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*GuestVenueRoutesTest*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VenueRbacRoutesTest*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VenuePromotionRepositoryTest*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:ktlintCheck --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:compileKotlin --console=plain
+npm --prefix miniapp run build
+CI=1 TZ=UTC MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke
+```
+
+Acceptance:
+
+- OWNER and MANAGER receive the saved public-candidate projection only for their own `DRAFT` venue;
+- STAFF and foreign venue users are forbidden; Platform Owner receives no automatic Venue-route access;
+- missing/DELETED venues fail safely, and direct non-DRAFT requests return no private projection;
+- response is read-only with `Cache-Control: no-store` and contains no mutation/action contract;
+- public card/address, schedule, public exceptions, visible text info sections, guest-visible Today Staff and current `ACTIVE` promotions are allowlisted server-side;
+- hidden info sections, private fields/markers, unpublished staff, inactive/non-current promotions and raw media refs are absent;
+- Draft media uses one compact post-publication hint with no new media route; Published media remains unchanged and Guest media routes remain guarded;
+- one global entry and one contextual public-card-settings entry open the same read-only renderer;
+- PUBLISHED and DRAFT banners are explicit; HIDDEN/PAUSED/SUSPENDED/ARCHIVED expose only safe unavailable copy;
+- venue switching clears old state immediately, aborts the previous request and ignores late responses;
+- booking, favorites, chats, support, staff calls, extension, cart, order and table context neither appear nor mutate;
+- after green Actions, staging smoke must repeat role/status isolation, both entrypoints, both banners, Draft allowlist/media hint, Published Guest parity and stale-response protection.
 
 ## Executable Promotions Phase 2 Quality Gate
 
@@ -608,6 +645,8 @@ Telegram/staff-chat:
 ## Roadmap Status
 
 - Testing/QA smoke strategy: `UPDATED`.
+- Published Guest Preview Phase 1: **MVP IMPLEMENTED / LOCAL VALIDATION PASSED**; CI and staging smoke pending.
+- Draft Preview Phase 2.1: **MVP IMPLEMENTED / LOCAL VALIDATION PASSED**; CI and staging smoke pending.
 - Manual smoke checklist: `CONSOLIDATED`.
 - CI coverage: `PARTIAL / release-critical split jobs current`.
 - Frontend e2e: `PARTIAL`, with smoke coverage documented.

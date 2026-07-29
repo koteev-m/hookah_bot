@@ -715,6 +715,90 @@ class VenuePromotionRepositoryTest {
         }
 
     @Test
+    fun `draft preview list bypasses only venue draft status and keeps guest eligibility`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("venue-promotions-draft-preview")
+            val fixture = seedFixture(jdbcUrl)
+            val repository = VenuePromotionRepository(dataSource(jdbcUrl))
+            val now = Instant.parse("2026-05-14T12:00:00Z")
+            val (draftVenueId, blockedDraftVenueId) =
+                DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                    val draft = insertVenue(connection, "Draft preview", VenueStatus.DRAFT.dbValue)
+                    val blockedDraft = insertVenue(connection, "Blocked draft", VenueStatus.DRAFT.dbValue)
+                    insertSubscription(connection, draft, "ACTIVE")
+                    insertSubscription(connection, blockedDraft, "SUSPENDED_BY_PLATFORM")
+                    draft to blockedDraft
+                }
+
+            val current =
+                insertPromotion(
+                    jdbcUrl,
+                    draftVenueId,
+                    "Активная",
+                    VenuePromotionStatus.ACTIVE,
+                    now.minusSeconds(3_600),
+                    now.plusSeconds(3_600),
+                )
+            insertPromotion(jdbcUrl, draftVenueId, "Черновик", VenuePromotionStatus.DRAFT, null, null)
+            insertPromotion(jdbcUrl, draftVenueId, "Пауза", VenuePromotionStatus.PAUSED, null, null)
+            insertPromotion(jdbcUrl, draftVenueId, "Архив", VenuePromotionStatus.ARCHIVED, null, null)
+            insertPromotion(
+                jdbcUrl,
+                draftVenueId,
+                "Будущая",
+                VenuePromotionStatus.ACTIVE,
+                now.plusSeconds(3_600),
+                null,
+            )
+            insertPromotion(
+                jdbcUrl,
+                draftVenueId,
+                "Истекшая",
+                VenuePromotionStatus.ACTIVE,
+                null,
+                now.minusSeconds(3_600),
+            )
+            insertPromotion(
+                jdbcUrl,
+                blockedDraftVenueId,
+                "Блок подписки",
+                VenuePromotionStatus.ACTIVE,
+                null,
+                null,
+            )
+            insertPromotion(
+                jdbcUrl,
+                fixture.visibleVenueId,
+                "Опубликованное заведение",
+                VenuePromotionStatus.ACTIVE,
+                null,
+                null,
+            )
+
+            val promotions =
+                repository.listActivePromotionsForDraftPreview(
+                    venueId = draftVenueId,
+                    now = now,
+                )
+
+            assertEquals(listOf(current), promotions.map { it.id })
+            assertTrue(
+                repository
+                    .listActivePromotionsForDraftPreview(
+                        venueId = blockedDraftVenueId,
+                        now = now,
+                    ).isEmpty(),
+            )
+            assertTrue(
+                repository
+                    .listActivePromotionsForDraftPreview(
+                        venueId = fixture.visibleVenueId,
+                        now = now,
+                    ).isEmpty(),
+            )
+        }
+
+    @Test
     fun `promotion rule repository lists empty rules for draft promotion`() =
         runBlocking {
             val jdbcUrl = migratedJdbcUrl("promotion-rules-empty")

@@ -82,7 +82,8 @@ import type {
   VenueStaffProfileUpdateRequest,
   VenueStaffShiftResponse,
   VenueStaffShiftUpsertRequest,
-  VenueStaffUpdateRoleRequest
+  VenueStaffUpdateRoleRequest,
+  VenueDraftPreviewResponse
 } from './venueDtos'
 import type {
   SupportMessageCreateRequest,
@@ -124,6 +125,20 @@ export async function venueGetGuestPreviewInfoSections(
   return requestApi<VenueInfoSectionsResponse>(
     backendUrl,
     `/api/venue/${venueId}/guest-preview/info-sections`,
+    { signal },
+    deps
+  )
+}
+
+export async function venueGetDraftPreview(
+  backendUrl: string,
+  venueId: number,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenueDraftPreviewResponse>(
+    backendUrl,
+    `/api/venue/${venueId}/draft-preview`,
     { signal },
     deps
   )
