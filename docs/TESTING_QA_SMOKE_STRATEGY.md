@@ -1,6 +1,6 @@
 # Testing / QA Smoke Strategy
 
-Дата актуализации: 2026-07-28.
+Дата актуализации: 2026-07-29.
 
 Статус: **current product reference / UPDATED**. This document is the canonical QA/smoke strategy for the Telegram bot + Mini App platform. It consolidates local validation, GitHub Actions expectations, area-specific smoke suites, staging policy, failure reporting and Codex handoff rules. Deployment and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
 
@@ -22,6 +22,7 @@ Current practice:
 - Gift parity is
   `GIFT_WITH_ITEM BOT/MINIAPP PARITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`.
   GitHub Actions and staging cross-surface smoke remain required.
+- Venue Mini App Guest Preview Phase 1 is `IMPLEMENTED / LOCAL VALIDATION PASSED / CI AND STAGING SMOKE PENDING`: focused backend parity/RBAC/availability tests and six browser scenarios cover the published read-only slice without claiming release readiness.
 
 Target QA model:
 - Every task ends with changed files, behavior summary, tests run, validation result, manual smoke checklist, `git status --short`, whether `scripts/dev/` was touched and whether staging deploy is needed.
@@ -38,6 +39,30 @@ Target QA model:
 | D. Mini App checks | Prove production bundle and browser smoke. | `npm --prefix miniapp run build` and e2e smoke for frontend/user-flow changes. |
 | E. Manual staging smoke | Prove real environment, Telegram WebView, staff-chat and deploy behavior. | Required after runtime/frontend/backend/Telegram/deploy changes; not required for docs-only. |
 | F. GitHub Actions | Release gate and source of CI truth. | Must be green before considering a task merged/released. If red, report failing test/assertion first, not Gradle tail. |
+
+## Venue Mini App Guest Preview Phase 1 Quality Gate
+
+The preview must reuse the Guest DTO/read assembly and its availability guards. A private Venue
+settings DTO, draft preview path or client-side merge of public/private state is a release blocker.
+
+Required local coverage:
+
+```bash
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VenueGuestPreviewRoutesTest*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*GuestVenueRoutesTest*' --console=plain
+npm --prefix miniapp run build
+CI=1 TZ=UTC MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke
+```
+
+Acceptance:
+
+- OWNER and MANAGER receive the same guest-visible venue/info DTOs as Guest;
+- STAFF and foreign venue access are forbidden, including direct route/hash;
+- non-published or guest-blocked venues expose only the safe unavailable state;
+- weekly hours, future date exceptions, public info/media, Today Staff and current active promotions match Guest;
+- venue switching clears and aborts stale preview state;
+- booking, favorites, venue chat, support, staff call, extension, cart, order and table context are absent and generate no mutation traffic;
+- after green Actions, staging smoke must repeat OWNER/MANAGER/STAFF roles, unavailable venue copy, venue switching and visual parity with the real Guest card.
 
 ## Executable Promotions Phase 2 Quality Gate
 

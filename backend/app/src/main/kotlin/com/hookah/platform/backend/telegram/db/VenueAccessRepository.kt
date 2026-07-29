@@ -147,10 +147,22 @@ class VenueAccessRepository(private val dataSource: DataSource?) {
     suspend fun findVenueMembership(
         userId: Long,
         venueId: Long,
+    ): VenueMembership? = findVenueMembership(userId, venueId, includeDeleted = false)
+
+    suspend fun findVenueMembershipIncludingDeleted(
+        userId: Long,
+        venueId: Long,
+    ): VenueMembership? = findVenueMembership(userId, venueId, includeDeleted = true)
+
+    private suspend fun findVenueMembership(
+        userId: Long,
+        venueId: Long,
+        includeDeleted: Boolean,
     ): VenueMembership? {
         val ds = dataSource ?: return null
         return withContext(Dispatchers.IO) {
             ds.connection.use { connection ->
+                val deletedFilter = if (includeDeleted) "" else "AND COALESCE(v.status, 'DRAFT') <> 'DELETED'"
                 connection.prepareStatement(
                     """
                     SELECT vm.venue_id,
@@ -161,7 +173,7 @@ class VenueAccessRepository(private val dataSource: DataSource?) {
                     FROM venue_members vm
                     JOIN venues v ON v.id = vm.venue_id
                     WHERE vm.user_id = ? AND vm.venue_id = ?
-                      AND COALESCE(v.status, 'DRAFT') <> 'DELETED'
+                      $deletedFilter
                     LIMIT 1
                     """.trimIndent(),
                 ).use { statement ->

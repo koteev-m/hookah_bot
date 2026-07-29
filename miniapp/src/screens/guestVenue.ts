@@ -12,6 +12,8 @@ import {
 } from '../shared/api/guestApi'
 import type {
   GuestVenuePromotionDto,
+  GuestVenueDateExceptionDto,
+  GuestVenueScheduleDayDto,
   GuestTodayStaffDto,
   MenuCategoryDto,
   MenuItemDto,
@@ -23,10 +25,18 @@ import type {
   VenueInfoSectionsResponse,
   VenueTodayScheduleDto
 } from '../shared/api/guestDtos'
+import {
+  venueGetGuestPreview,
+  venueGetGuestPreviewInfoSections
+} from '../shared/api/venueApi'
 import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
 import { updateItemCache } from '../shared/state/itemCache'
 import { addToCart, getCartSnapshot, removeFromCart, subscribeCart } from '../shared/state/cartStore'
-import { getTableContext, subscribe as subscribeTable } from '../shared/state/tableContext'
+import {
+  getTableContext,
+  subscribe as subscribeTable,
+  type TableContextSnapshot
+} from '../shared/state/tableContext'
 import { append, el, on } from '../shared/ui/dom'
 import { presentApiError, type ApiErrorAction } from '../shared/ui/apiErrorPresenter'
 import { renderErrorDetails } from '../shared/ui/errorDetails'
@@ -49,6 +59,7 @@ type VenueScreenOptions = {
   openStaffCall?: boolean
   onBookVenue?: (venueId: number) => void
   onAskVenue?: (venueId: number) => void
+  readOnlyPreview?: boolean
 }
 
 type MenuItemRefs = {
@@ -106,6 +117,27 @@ type VenueRefs = {
 }
 
 type StaffCallTone = 'pending' | 'success' | 'done' | 'error'
+
+const EMPTY_PREVIEW_TABLE_CONTEXT: TableContextSnapshot = {
+  status: 'missing',
+  tableToken: null,
+  tableId: null,
+  tableSessionId: null,
+  tableSessionStatus: null,
+  tableSessionActive: false,
+  tableSessionInactiveReason: null,
+  tableNumber: null,
+  venueName: null,
+  venueId: null,
+  available: null,
+  unavailableReason: null,
+  tableLabel: null,
+  orderAllowed: false,
+  blockReasonText: null,
+  error: null
+}
+
+const GUEST_PREVIEW_UNAVAILABLE_MESSAGE = 'Заведение недоступно для гостевого просмотра.'
 
 function buildApiDeps(isDebug: boolean) {
   return { isDebug, getAccessToken, clearSession }
@@ -519,6 +551,64 @@ function formatTodaySchedule(schedule: VenueTodayScheduleDto | null | undefined)
   return timeLabel ? `${schedule.statusLabel} · ${timeLabel}` : schedule.statusLabel
 }
 
+function formatGuestScheduleDate(value: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value)
+  return match ? `${match[3]}.${match[2]}.${match[1]}` : value
+}
+
+function guestScheduleDayLabel(weekday: number): string {
+  return ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'][weekday - 1] ?? String(weekday)
+}
+
+function guestScheduleHoursLabel(
+  hours: Pick<GuestVenueScheduleDayDto, 'opensAt' | 'closesAt' | 'isClosed'>
+): string {
+  return hours.isClosed ? 'Закрыто' : `${hours.opensAt}–${hours.closesAt}`
+}
+
+function renderGuestSchedule(
+  weeklyHours: GuestVenueScheduleDayDto[],
+  dateExceptions: GuestVenueDateExceptionDto[]
+): HTMLElement | null {
+  if (!weeklyHours.length && !dateExceptions.length) return null
+
+  const section = el('section', { className: 'card venue-info-section guest-venue-schedule' })
+  section.appendChild(el('h4', { text: 'График работы' }))
+
+  if (weeklyHours.length) {
+    const weeklyList = el('div', { className: 'guest-venue-schedule-list' })
+    weeklyHours.forEach((day) => {
+      weeklyList.appendChild(
+        el('p', {
+          text: `${guestScheduleDayLabel(day.weekday)} · ${guestScheduleHoursLabel(day)}`
+        })
+      )
+    })
+    section.appendChild(weeklyList)
+  }
+
+  if (dateExceptions.length) {
+    section.appendChild(el('h5', { text: 'Исключения по датам' }))
+    const exceptionList = el('div', { className: 'guest-venue-schedule-list' })
+    dateExceptions.forEach((exception) => {
+      const item = el('div', { className: 'guest-venue-schedule-exception' })
+      item.appendChild(
+        el('p', {
+          text: `${formatGuestScheduleDate(exception.serviceDate)} · ${guestScheduleHoursLabel(exception)}`
+        })
+      )
+      const guestNote = exception.guestNote?.trim()
+      if (guestNote) {
+        item.appendChild(el('p', { className: 'status', text: guestNote }))
+      }
+      exceptionList.appendChild(item)
+    })
+    section.appendChild(exceptionList)
+  }
+
+  return section
+}
+
 function formatStaffSubtype(subtype: string): string {
   switch (subtype) {
     case 'hookah_master':
@@ -695,10 +785,20 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
   const { root, backendUrl, isDebug, venueId, onBookVenue, onAskVenue } = options
   if (!root) return () => undefined
 
+  const readOnlyPreview = options.readOnlyPreview === true
   const refs = buildVenueDom(root)
   refs.bookingButton.disabled = !venueId
   refs.questionButton.disabled = !venueId
   refs.staffCounter.textContent = `${refs.staffComment.value.length}/${MAX_STAFF_COMMENT_LENGTH}`
+  if (readOnlyPreview) {
+    refs.favoriteButton.remove()
+    refs.bookingButton.remove()
+    refs.questionButton.remove()
+    refs.staffSlot.remove()
+    refs.staffModalOverlay.remove()
+    refs.retryButton.textContent = 'Повторить'
+    refs.retryButton.hidden = true
+  }
   let disposed = false
   let menuAbort: AbortController | null = null
   let favoriteAbort: AbortController | null = null
@@ -710,12 +810,12 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
   let isFavoriteMutationPending = false
   let currentIsFavorite = false
   let staffComposeOpen = false
-  let staffOpenRequested = options.openStaffCall === true
+  let staffOpenRequested = !readOnlyPreview && options.openStaffCall === true
   let latestStaffCall: StaffCallStatusDto | null = null
   let messageTimer: number | null = null
   const itemRefs = new Map<number, MenuItemRefs>()
   let itemDisposables: Array<() => void> = []
-  let tableSnapshot = getTableContext()
+  let tableSnapshot = readOnlyPreview ? EMPTY_PREVIEW_TABLE_CONTEXT : getTableContext()
   let renderedOrderMenuMode: boolean | null = null
   let selectedCategoryId: number | null = null
   let selectedService: 'shift-extension' | null = null
@@ -730,23 +830,25 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
   }
   let menuRendererReady = false
   const disposables: Array<() => void> = []
-  const extensionDispose = renderGuestShiftExtensionCard({
-    root: refs.extensionSlot,
-    backendUrl,
-    isDebug,
-    venueId,
-    mode: 'menuDetail',
-    onAvailabilityChange: (availability) => {
-      shiftExtensionAvailability = availability
-      if (!availability.visible && selectedService === 'shift-extension') {
-        selectedService = null
-      }
-      if (menuRendererReady && renderedOrderMenuMode === true) {
-        renderMenu(latestCategories)
-        bindItemActions()
-      }
-    }
-  })
+  const extensionDispose = readOnlyPreview
+    ? () => undefined
+    : renderGuestShiftExtensionCard({
+        root: refs.extensionSlot,
+        backendUrl,
+        isDebug,
+        venueId,
+        mode: 'menuDetail',
+        onAvailabilityChange: (availability) => {
+          shiftExtensionAvailability = availability
+          if (!availability.visible && selectedService === 'shift-extension') {
+            selectedService = null
+          }
+          if (menuRendererReady && renderedOrderMenuMode === true) {
+            renderMenu(latestCategories)
+            bindItemActions()
+          }
+        }
+      })
 
   const setStatus = (text: string) => {
     refs.status.textContent = text
@@ -771,6 +873,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
   }
 
   const updateFavoriteButton = () => {
+    if (readOnlyPreview) return
     refs.favoriteButton.textContent = currentIsFavorite ? 'В избранном' : 'В избранное'
     refs.favoriteButton.dataset.favorite = String(currentIsFavorite)
     refs.favoriteButton.setAttribute('aria-pressed', String(currentIsFavorite))
@@ -819,6 +922,17 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     if (normalizedCode === ApiErrorCodes.UNAUTHORIZED || normalizedCode === ApiErrorCodes.INITDATA_INVALID) {
       clearSession()
     }
+    if (readOnlyPreview && normalizedCode === ApiErrorCodes.NOT_FOUND) {
+      refs.errorTitle.textContent = 'Предпросмотр недоступен'
+      refs.errorMessage.textContent = GUEST_PREVIEW_UNAVAILABLE_MESSAGE
+      refs.error.dataset.severity = 'warn'
+      renderErrorActions(refs.errorActions, [
+        { label: 'Повторить', onClick: () => void loadVenue() }
+      ])
+      refs.errorDetails.replaceChildren()
+      refs.error.hidden = false
+      return
+    }
     const presentation = presentApiError(error, { isDebug, scope: 'venue' })
     refs.errorTitle.textContent = presentation.title
     refs.errorMessage.textContent = presentation.message
@@ -830,7 +944,10 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
       return action
     })
     if (!actions.length) {
-      actions.push({ label: 'Обновить', onClick: () => void loadVenue() })
+      actions.push({
+        label: readOnlyPreview ? 'Повторить' : 'Обновить',
+        onClick: () => void loadVenue()
+      })
     }
 
     renderErrorActions(refs.errorActions, actions)
@@ -842,17 +959,20 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
   }
 
   const canCallStaff = () =>
+    !readOnlyPreview &&
     tableSnapshot.status === 'resolved' &&
     Boolean(tableSnapshot.tableToken) &&
     tableSnapshot.venueId === venueId &&
     tableSnapshot.tableSessionActive &&
     tableSnapshot.available === true
   const canPlaceOrders = () =>
+    !readOnlyPreview &&
     tableSnapshot.status === 'resolved' &&
     Boolean(tableSnapshot.tableToken) &&
     tableSnapshot.venueId === venueId &&
     tableSnapshot.orderAllowed
   const isTableVenueContext = () =>
+    !readOnlyPreview &&
     tableSnapshot.status === 'resolved' &&
     tableSnapshot.venueId === venueId &&
     Boolean(tableSnapshot.tableToken) &&
@@ -863,7 +983,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     refs.questionButton.hidden = !venueId || !onAskVenue || isTableVenueContext()
     refs.questionButton.disabled = !venueId || isTableVenueContext()
   }
-  const shouldShowOrderMenu = () => canPlaceOrders()
+  const shouldShowOrderMenu = () => !readOnlyPreview && canPlaceOrders()
 
   const currentStaffStatusParams = () => {
     if (!canCallStaff()) return null
@@ -887,7 +1007,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
   }
 
   const dispatchStaffActionState = () => {
-    if (typeof window === 'undefined') return
+    if (readOnlyPreview || typeof window === 'undefined') return
     window.dispatchEvent(
       new CustomEvent('hookah:guest-staff-call-state', {
         detail: {
@@ -1013,6 +1133,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
   }
 
   const updateBookingButtonVisibility = () => {
+    if (readOnlyPreview) return
     const inTableContext = isTableVenueContext()
     refs.bookingButton.hidden = inTableContext || !onBookVenue
     refs.bookingButton.disabled = !venueId || inTableContext
@@ -1020,6 +1141,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
   }
 
   const updateStaffState = () => {
+    if (readOnlyPreview) return
     updateBookingButtonVisibility()
     const canStaff = canCallStaff()
     if (!canStaff) {
@@ -1123,23 +1245,32 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     itemDisposables.forEach((dispose) => dispose())
     itemDisposables = []
 
-    const intro = el('section', { className: 'card venue-info-section' })
-    intro.appendChild(el('h4', { text: 'ℹ️ Информация' }))
     const description = venue.cardDescription?.trim()
-    if (description) {
-      intro.appendChild(el('p', { text: description }))
-    }
     const contact = venue.guestContact?.trim()
-    if (contact) {
-      intro.appendChild(el('p', { className: 'status', text: `Контакт: ${contact}` }))
+    const schedule = renderGuestSchedule(venue.weeklyHours ?? [], venue.dateExceptions ?? [])
+    if (schedule) {
+      refs.menuBody.appendChild(schedule)
     }
-    intro.appendChild(
-      el('p', {
-        className: 'status',
-        text: 'Заказное меню и корзина доступны после сканирования QR-кода на столе.'
-      })
-    )
-    refs.menuBody.appendChild(intro)
+
+    if (description || contact || !readOnlyPreview) {
+      const intro = el('section', { className: 'card venue-info-section' })
+      intro.appendChild(el('h4', { text: 'ℹ️ Информация' }))
+      if (description) {
+        intro.appendChild(el('p', { text: description }))
+      }
+      if (contact) {
+        intro.appendChild(el('p', { className: 'status', text: `Контакт: ${contact}` }))
+      }
+      if (!readOnlyPreview) {
+        intro.appendChild(
+          el('p', {
+            className: 'status',
+            text: 'Заказное меню и корзина доступны после сканирования QR-кода на столе.'
+          })
+        )
+      }
+      refs.menuBody.appendChild(intro)
+    }
 
     if (!sections.length) {
       refs.menuBody.appendChild(el('p', { text: 'Информация пока не заполнена.' }))
@@ -1515,19 +1646,37 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
 
   async function loadVenue() {
     if (disposed) return
+    refs.venueTitle.textContent = ''
+    refs.venueLocation.textContent = ''
+    refs.venueSchedule.textContent = ''
+    refs.routeLink.hidden = true
+    refs.routeLink.removeAttribute('href')
+    refs.copyAddressButton.hidden = true
+    refs.promotionsSlot.replaceChildren()
+    refs.promotionsSlot.hidden = true
+    refs.todayStaffSlot.replaceChildren()
+    refs.todayStaffSlot.hidden = true
+    refs.menuBody.replaceChildren()
+    if (readOnlyPreview) {
+      refs.retryButton.hidden = true
+    }
     if (!venueId) {
       setStatus('')
-      refs.menuBody.replaceChildren()
       showError({ status: 404, code: ApiErrorCodes.NOT_FOUND, message: 'Venue not found' })
       return
     }
 
     const orderMenuMode = shouldShowOrderMenu()
     updateBookingButtonVisibility()
-    setStatus(orderMenuMode ? 'Загрузка меню...' : 'Загрузка информации...')
+    setStatus(
+      readOnlyPreview
+        ? 'Загрузка предпросмотра...'
+        : orderMenuMode
+          ? 'Загрузка меню...'
+          : 'Загрузка информации...'
+    )
     hideError()
     setMessage('')
-    refs.menuBody.replaceChildren()
 
     if (menuAbort) {
       menuAbort.abort()
@@ -1542,10 +1691,14 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
       controller.abort()
     }, 15000)
     const [venueResult, detailsResult] = await Promise.all([
-      guestGetVenue(backendUrl, venueId, deps, controller.signal),
+      readOnlyPreview
+        ? venueGetGuestPreview(backendUrl, venueId, deps, controller.signal)
+        : guestGetVenue(backendUrl, venueId, deps, controller.signal),
       orderMenuMode
         ? guestGetVenueMenu(backendUrl, venueId, deps, controller.signal)
-        : guestGetVenueInfoSections(backendUrl, venueId, deps, controller.signal)
+        : readOnlyPreview
+          ? venueGetGuestPreviewInfoSections(backendUrl, venueId, deps, controller.signal)
+          : guestGetVenueInfoSections(backendUrl, venueId, deps, controller.signal)
     ])
     window.clearTimeout(timeoutId)
 
@@ -1558,10 +1711,15 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     ) {
       if (didTimeout && menuAbort === controller) {
         setStatus('')
+        if (readOnlyPreview) {
+          refs.retryButton.hidden = false
+        }
         refs.menuBody.replaceChildren(
           el('p', {
             className: 'status',
-            text: orderMenuMode
+            text: readOnlyPreview
+              ? 'Не удалось загрузить предпросмотр. Нажмите «Повторить».'
+              : orderMenuMode
               ? 'Не удалось загрузить меню. Нажмите «Обновить».'
               : 'Не удалось загрузить информацию. Нажмите «Обновить».'
           })
@@ -1634,54 +1792,62 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     }
   }
 
-  const cartSubscription = subscribeCart((snapshot) => {
-    updateMenuOrderState(snapshot)
-  })
+  const cartSubscription = readOnlyPreview
+    ? () => undefined
+    : subscribeCart((snapshot) => {
+        updateMenuOrderState(snapshot)
+      })
 
-  const tableSubscription = subscribeTable((snapshot) => {
-    tableSnapshot = snapshot
-    updateStaffState()
-    updateMenuOrderState()
-    const nextOrderMenuMode = shouldShowOrderMenu()
-    if (renderedOrderMenuMode !== null && nextOrderMenuMode !== renderedOrderMenuMode) {
-      void loadVenue()
-    }
-  })
+  const tableSubscription = readOnlyPreview
+    ? () => undefined
+    : subscribeTable((snapshot) => {
+        tableSnapshot = snapshot
+        updateStaffState()
+        updateMenuOrderState()
+        const nextOrderMenuMode = shouldShowOrderMenu()
+        if (renderedOrderMenuMode !== null && nextOrderMenuMode !== renderedOrderMenuMode) {
+          void loadVenue()
+        }
+      })
 
   disposables.push(
-    on(refs.favoriteButton, 'click', () => void handleFavoriteToggle()),
-    on(refs.bookingButton, 'click', () => {
-      if (venueId) {
-        onBookVenue?.(venueId)
-      }
-    }),
-    on(refs.questionButton, 'click', () => {
-      if (venueId) {
-        onAskVenue?.(venueId)
-      }
-    }),
     on(refs.retryButton, 'click', () => {
       refs.extensionSlot.dispatchEvent(new Event('hookah:guest-venue-refresh'))
       void loadVenue()
-    }),
-    on(refs.staffButton, 'click', () => void handleStaffCall()),
-    on(refs.staffCloseButton, 'click', () => {
-      closeStaffCompose(false)
-      updateStaffState()
-    }),
-    on(refs.staffModalOverlay, 'click', (event) => {
-      if (event.target === refs.staffModalOverlay) {
-        closeStaffCompose(false)
-        updateStaffState()
-      }
-    }),
-    on(refs.staffComment, 'input', () => {
-      if (refs.staffComment.value.length > MAX_STAFF_COMMENT_LENGTH) {
-        refs.staffComment.value = refs.staffComment.value.slice(0, MAX_STAFF_COMMENT_LENGTH)
-      }
-      refs.staffCounter.textContent = `${refs.staffComment.value.length}/${MAX_STAFF_COMMENT_LENGTH}`
     })
   )
+  if (!readOnlyPreview) {
+    disposables.push(
+      on(refs.favoriteButton, 'click', () => void handleFavoriteToggle()),
+      on(refs.bookingButton, 'click', () => {
+        if (venueId) {
+          onBookVenue?.(venueId)
+        }
+      }),
+      on(refs.questionButton, 'click', () => {
+        if (venueId) {
+          onAskVenue?.(venueId)
+        }
+      }),
+      on(refs.staffButton, 'click', () => void handleStaffCall()),
+      on(refs.staffCloseButton, 'click', () => {
+        closeStaffCompose(false)
+        updateStaffState()
+      }),
+      on(refs.staffModalOverlay, 'click', (event) => {
+        if (event.target === refs.staffModalOverlay) {
+          closeStaffCompose(false)
+          updateStaffState()
+        }
+      }),
+      on(refs.staffComment, 'input', () => {
+        if (refs.staffComment.value.length > MAX_STAFF_COMMENT_LENGTH) {
+          refs.staffComment.value = refs.staffComment.value.slice(0, MAX_STAFF_COMMENT_LENGTH)
+        }
+        refs.staffCounter.textContent = `${refs.staffComment.value.length}/${MAX_STAFF_COMMENT_LENGTH}`
+      })
+    )
+  }
 
   updateStaffState()
   void getAccessToken()

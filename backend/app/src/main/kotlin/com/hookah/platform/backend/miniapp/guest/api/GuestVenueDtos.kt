@@ -41,6 +41,8 @@ data class VenueDto(
     val guestContact: String? = null,
     val cardDescription: String? = null,
     val todaySchedule: VenueTodayScheduleDto? = null,
+    val weeklyHours: List<GuestVenueScheduleDayDto> = emptyList(),
+    val dateExceptions: List<GuestVenueDateExceptionDto> = emptyList(),
     val todayStaff: List<GuestTodayStaffDto> = emptyList(),
     val timezone: String? = null,
     val promotions: List<GuestVenuePromotionDto> = emptyList(),
@@ -90,6 +92,23 @@ data class VenueTodayScheduleDto(
     val isOpenNow: Boolean,
     val statusLabel: String,
     val timeLabel: String? = null,
+)
+
+@Serializable
+data class GuestVenueScheduleDayDto(
+    val weekday: Int,
+    val opensAt: String,
+    val closesAt: String,
+    val isClosed: Boolean,
+)
+
+@Serializable
+data class GuestVenueDateExceptionDto(
+    val serviceDate: String,
+    val opensAt: String,
+    val closesAt: String,
+    val isClosed: Boolean,
+    val guestNote: String? = null,
 )
 
 @Serializable

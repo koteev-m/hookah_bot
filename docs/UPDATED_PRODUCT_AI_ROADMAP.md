@@ -1,6 +1,6 @@
 # Product + Telegram AI Bots Roadmap
 
-Дата обновления: 2026-07-28.
+Дата обновления: 2026-07-29.
 
 Статус документа: canonical roadmap. Этот файл объединяет актуальный product roadmap, Mini App launch roadmap и Telegram-native AI Bots roadmap. Старые audit-файлы в `docs/audit/` остаются evidence/history, но не являются текущим backlog без сверки с этим roadmap и текущим кодом.
 
@@ -203,11 +203,12 @@ Done:
 - guest table session persistence/restore passed staging smoke: reopening Mini App without repeat QR restores the active table context, internal guest navigation keeps that context, and Telegram BackButton exits from root instead of looping;
 - broad venue settings are not exposed as a dead-end placeholder; Venue Mini App `Настройки` now contains backend-backed booking hold, paid shift-extension settings, M8b public card basics with structured location (`countryCode`, `city`, `address`, `formattedAddress`, optional coordinates, `guestContact`, `cardDescription`) and M9b weekly hours/date exceptions;
 - Venue Mini App read-only `Статистика` CLOSED after staging smoke for OWNER/MANAGER on existing `VenueStatsRepository` semantics;
+- Venue Mini App `Предпросмотр для гостя` Phase 1 is implemented and locally validated for OWNER/MANAGER on the shared Guest DTO/read assembler; STAFF/foreign access is denied, unavailable venues fail closed, and the screen has no guest mutations or table/cart/order dependency. CI and staging smoke remain open.
 
 Remaining P1:
 
 - final staging smoke after each release batch;
-- continue bounded venue settings slices where backend-backed; media sections and guest preview remain bot/platform-canonical until implemented explicitly, while informational promotions now have focused Owner/Manager and Guest Mini App surfaces with local validation; venue subscription state is covered by the staging-smoked billing MVP, while real acquiring and Telegram Stars remain separate future work;
+- continue bounded venue settings slices where backend-backed; media-section authoring remains bot/platform-canonical, while the published-state guest preview and informational promotions now have backend-backed Venue Mini App surfaces; venue subscription state is covered by the staging-smoked billing MVP, while real acquiring and Telegram Stars remain separate future work;
 - Venue Mini App normalize/reset helper only if still needed after pilots; base flavor profile apply, item-level stop-list and flavor-level stop-list parity are smoke-passed. Preserve STAFF no-settings/no-menu-content-management boundaries while keeping operational stop-list allowed;
 - custom date range picker, arbitrary period stats, AI-generated summaries, advanced analytics/platform dashboards/network stats remain later; read-only venue stats is covered by closed M2;
 - M4B/M4C Unified Messages Inbox UX and lifecycle are CLOSED after staging smoke; keep multi-venue/thread scoping, unread clearing and resolve/reopen in regression;
@@ -367,7 +368,7 @@ Milestones:
 12. M8a/M8b-Free: Venue Mini App structured public profile/card settings; Status: CLOSED / staging smoke passed. OWNER/MANAGER can edit guest-facing country/city/address, public contact and card description; venue name is read-only; STAFF is hidden/forbidden; country/city suggestions are local and provider-free, address entry is manual, and guest public read models/routes prefer existing saved coordinates while falling back to encoded text address search. M8b V110 structured-location migrations keep `countryCode`, `formattedAddress`, `latitude` and `longitude` nullable/backward-compatible. Yandex Geosuggest/Geocoder remain optional disabled adapters with separate keys for a later approved commercial setup, not the production default.
 13. M9b: Venue Working Hours and Date Exceptions Mini App Parity; Status: CLOSED / staging smoke passed. Existing backend/Bot weekly hours and concrete-date overrides now have Venue Mini App owner/manager settings, inclusive date-exception ranges with optional guest-facing reason/comment, M9b.2 post-save exception UX, M9b.3 date-range editing for existing exceptions, guest-visible open/closed read models and direct Mini App booking validation with human schedule rejection copy, without broad settings redesign. M9b.1 Schedule Exception Ranges and Guest Copy, M9b.2 Schedule Exception Save UX and M9b.3 Schedule Exception Range Editing are also CLOSED / staging smoke passed; keep schedule validation and Bot closed-date copy in regression.
 14. Simple Venue Promotions Phase 1: `DONE / MVP / STAGING-SMOKE-PASSED`; focused Owner/Manager builder/status management and current-active Guest venue-detail reads share the existing Bot repository. GitHub Actions, staging deploy and manual parity smoke passed.
-15. Future: guest preview entry using guest-visible read models only.
+15. Venue Mini App Guest Preview Entry — Published Public State / Read-only Phase 1: `IMPLEMENTED / LOCAL VALIDATION PASSED / CI AND STAGING SMOKE PENDING`. OWNER/MANAGER use the same guest-visible `VenueResponse` and info-section read assembly as Guest, including weekly hours, future date exceptions, public media/info, Today Staff and current active promotions. STAFF and foreign venue access are denied; unavailable venues return safe copy; booking/favorites/chat/support/staff-call/extension/cart/order/table context, mutations and unpublished content are excluded.
 16. Future: menu semantic type/media polish after current options/flavors regression remains green.
 
 | Priority | Block | Current evidence | Product target | Recommended action |

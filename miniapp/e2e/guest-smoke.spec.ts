@@ -261,6 +261,99 @@ type VenuePromotionFixture = {
 
 type GuestVenuePromotionFixture = Omit<VenuePromotionFixture, 'status'>
 
+type VenueGuestPreviewScheduleDayFixture = {
+  weekday: number
+  opensAt: string
+  closesAt: string
+  isClosed: boolean
+}
+
+type VenueGuestPreviewDateExceptionFixture = {
+  serviceDate: string
+  opensAt: string
+  closesAt: string
+  isClosed: boolean
+  guestNote?: string | null
+}
+
+type VenueGuestPreviewStaffFixture = {
+  id: number
+  displayName: string
+  roleLabel?: string | null
+  subtype: string
+  photoRef?: string | null
+  bio?: string | null
+  tags?: string[]
+  shiftDate: string
+  startsAt?: string | null
+  endsAt?: string | null
+  shiftStatus: string
+}
+
+type VenueGuestPreviewVenueFixture = {
+  id: number
+  name: string
+  city?: string | null
+  address?: string | null
+  countryCode?: string | null
+  formattedAddress?: string | null
+  displayAddress?: string | null
+  latitude?: number | null
+  longitude?: number | null
+  routeUrl?: string | null
+  guestContact?: string | null
+  cardDescription?: string | null
+  todaySchedule?: {
+    date: string
+    opensAt?: string | null
+    closesAt?: string | null
+    isConfigured?: boolean
+    isClosed: boolean
+    isOpenNow: boolean
+    statusLabel: string
+    timeLabel?: string | null
+  } | null
+  weeklyHours: VenueGuestPreviewScheduleDayFixture[]
+  dateExceptions: VenueGuestPreviewDateExceptionFixture[]
+  todayStaff: VenueGuestPreviewStaffFixture[]
+  timezone?: string | null
+  promotions: GuestVenuePromotionFixture[]
+  status: string
+  isFavorite: boolean
+}
+
+type VenueGuestPreviewInfoSectionFixture = {
+  id: number
+  type: string
+  title: string
+  displayTitle: string
+  text?: string | null
+  mediaCount?: number | null
+  media?: Array<{
+    id: number
+    mediaType: string
+    sortOrder: number
+    url?: string | null
+  }> | null
+}
+
+type VenueGuestPreviewFixture = {
+  venue: VenueGuestPreviewVenueFixture
+  sections: VenueGuestPreviewInfoSectionFixture[]
+  delayMs?: number
+  previewError?: ApiErrorFixture | null
+  infoError?: ApiErrorFixture | null
+}
+
+type VenueGuestPreviewAccessFixture = {
+  venueId: number
+  venueName: string
+  venueCity: string | null
+  venueStatus: string
+  role: 'OWNER' | 'MANAGER' | 'STAFF'
+  permissions: string[]
+}
+
 type VenuePromotionRuleFixture = {
   id: number
   version: number
@@ -779,6 +872,120 @@ function buildPublicCardSettings(overrides: Partial<PublicCardSettings> = {}): P
     guestContact: null,
     cardDescription: null,
     ...overrides
+  }
+}
+
+function buildVenueGuestPreviewFixture(
+  venueId = 1,
+  overrides: Omit<Partial<VenueGuestPreviewFixture>, 'venue'> & {
+    venue?: Partial<VenueGuestPreviewVenueFixture>
+  } = {}
+): VenueGuestPreviewFixture {
+  const name = venueId === 1 ? 'Микс' : `Микс ${venueId}`
+  const venueOverrides = overrides.venue ?? {}
+  const { venue: _venue, ...fixtureOverrides } = overrides
+  return {
+    venue: {
+      id: venueId,
+      name,
+      city: 'Москва',
+      address: `Пилотная, ${venueId}`,
+      countryCode: 'RU',
+      formattedAddress: null,
+      displayAddress: `Москва, Пилотная, ${venueId}`,
+      latitude: null,
+      longitude: null,
+      routeUrl: buildTextRouteUrl(name, 'RU', 'Москва', `Пилотная, ${venueId}`),
+      guestContact: '+7 900 100-20-30',
+      cardDescription: 'Опубликованное описание лаунжа.',
+      todaySchedule: {
+        date: '2030-01-10',
+        opensAt: '18:00',
+        closesAt: '02:00',
+        isConfigured: true,
+        isClosed: false,
+        isOpenNow: true,
+        statusLabel: 'Открыто',
+        timeLabel: '18:00–02:00'
+      },
+      weeklyHours: [
+        { weekday: 1, opensAt: '18:00', closesAt: '02:00', isClosed: false },
+        { weekday: 2, opensAt: '18:00', closesAt: '02:00', isClosed: false },
+        { weekday: 3, opensAt: '18:00', closesAt: '02:00', isClosed: false },
+        { weekday: 4, opensAt: '18:00', closesAt: '02:00', isClosed: false },
+        { weekday: 5, opensAt: '18:00', closesAt: '03:00', isClosed: false },
+        { weekday: 6, opensAt: '16:00', closesAt: '03:00', isClosed: false },
+        { weekday: 7, opensAt: '00:00', closesAt: '00:00', isClosed: true }
+      ],
+      dateExceptions: [
+        {
+          serviceDate: '2030-01-12',
+          opensAt: '00:00',
+          closesAt: '00:00',
+          isClosed: true,
+          guestNote: 'Санитарный день'
+        },
+        {
+          serviceDate: '2030-01-13',
+          opensAt: '20:00',
+          closesAt: '01:00',
+          isClosed: false,
+          guestNote: 'Специальный график'
+        }
+      ],
+      todayStaff: [
+        {
+          id: 501,
+          displayName: 'Анна',
+          roleLabel: 'Мастер авторских миксов',
+          subtype: 'hookah_master',
+          photoRef: null,
+          bio: 'Поможет подобрать крепость.',
+          tags: ['цитрусовые', 'крепкие'],
+          shiftDate: '2030-01-10',
+          startsAt: '2030-01-10T15:00:00Z',
+          endsAt: null,
+          shiftStatus: 'active'
+        }
+      ],
+      timezone: 'Europe/Moscow',
+      promotions: [
+        {
+          id: 701,
+          title: 'Чай в подарок',
+          description: 'К каждому авторскому миксу.',
+          terms: 'До закрытия заведения.',
+          startsAt: '2030-01-01T00:00:00Z',
+          endsAt: '2030-01-31T20:59:59Z',
+          templateType: 'TEXT_ONLY'
+        }
+      ],
+      status: 'PUBLISHED',
+      isFavorite: false,
+      ...venueOverrides
+    },
+    sections: [
+      {
+        id: 10,
+        type: 'menu',
+        title: 'Меню',
+        displayTitle: '📖 Фото-меню',
+        text: 'Ознакомительное меню в опубликованной карточке.',
+        mediaCount: 1,
+        media: [
+          {
+            id: 100,
+            mediaType: 'image',
+            sortOrder: 0,
+            url: `/preview-media-${venueId}.png`
+          }
+        ]
+      }
+    ],
+    delayMs: 0,
+    previewError: null,
+    infoError: null,
+    ...fixtureOverrides
   }
 }
 
@@ -2399,6 +2606,145 @@ async function mockVenueShiftExtensionApi(
     getRejectedReasons: () => rejectedReasons,
     setRequests: (nextRequests: ShiftExtensionRequest[]) => {
       requests = nextRequests
+    }
+  }
+}
+
+async function mockVenueGuestPreviewApi(
+  page: Page,
+  options: {
+    role?: 'OWNER' | 'MANAGER' | 'STAFF'
+    permissions?: string[]
+    venues?: VenueGuestPreviewAccessFixture[]
+    previews?: Record<number, VenueGuestPreviewFixture>
+  } = {}
+) {
+  const role = options.role ?? 'OWNER'
+  const accesses =
+    options.venues ??
+    [
+      {
+        venueId: 1,
+        venueName: 'Микс',
+        venueCity: 'Москва',
+        venueStatus: 'PUBLISHED',
+        role,
+        permissions: options.permissions ?? []
+      }
+    ]
+  const previews = new Map(
+    accesses.map((access) => [
+      access.venueId,
+      options.previews?.[access.venueId] ?? buildVenueGuestPreviewFixture(access.venueId)
+    ])
+  )
+  const traffic: Array<{ method: string; path: string }> = []
+  const previewRequests: Array<{ venueId: number; method: string }> = []
+  const infoRequests: Array<{ venueId: number; method: string }> = []
+
+  page.on('request', (request) => {
+    const url = new URL(request.url())
+    if (url.pathname.startsWith('/api/')) {
+      traffic.push({ method: request.method(), path: url.pathname })
+    }
+  })
+
+  await page.route('**/api/auth/telegram', async (route) => {
+    await route.fulfill(jsonResponse({ token: 'e2e-session-token', expiresAtEpochSeconds: sessionExpiresAt }))
+  })
+
+  await page.route('**/api/venue/me', async (route) => {
+    await route.fulfill(jsonResponse({ userId: 123456789, venues: accesses }))
+  })
+
+  await page.route('**/api/guest/venue/*', async (route) => {
+    const path = new URL(route.request().url()).pathname
+    const venueId = Number(path.match(/^\/api\/guest\/venue\/(\d+)$/)?.[1])
+    const preview = previews.get(venueId)
+    if (!preview) {
+      await route.fulfill(jsonResponse({ error: { code: 'NOT_FOUND', message: 'Not found' } }, 404))
+      return
+    }
+    await route.fulfill(
+      jsonResponse({
+        venue: {
+          id: venueId,
+          name: preview.venue.name,
+          city: preview.venue.city,
+          address: preview.venue.address,
+          status: 'PUBLISHED',
+          isFavorite: false
+        }
+      })
+    )
+  })
+
+  await page.route('**/api/venue/*/staff-calls**', async (route) => {
+    await route.fulfill(jsonResponse({ items: [] }))
+  })
+
+  await page.route('**/api/venue/*/guest-preview**', async (route) => {
+    const request = route.request()
+    const path = new URL(request.url()).pathname
+    const infoMatch = path.match(/^\/api\/venue\/(\d+)\/guest-preview\/info-sections$/)
+    const previewMatch = path.match(/^\/api\/venue\/(\d+)\/guest-preview$/)
+    const venueId = Number(infoMatch?.[1] ?? previewMatch?.[1])
+    const fixture = previews.get(venueId)
+
+    if (!fixture || (!infoMatch && !previewMatch)) {
+      await route.fulfill(jsonResponse({ error: { code: 'NOT_FOUND', message: 'Not found' } }, 404))
+      return
+    }
+    if (infoMatch) {
+      infoRequests.push({ venueId, method: request.method() })
+    } else {
+      previewRequests.push({ venueId, method: request.method() })
+    }
+    if (request.method() !== 'GET') {
+      await route.fulfill(jsonResponse({ error: { code: 'METHOD_NOT_ALLOWED', message: 'GET only' } }, 405))
+      return
+    }
+    if (fixture.delayMs) {
+      await new Promise((resolve) => setTimeout(resolve, fixture.delayMs))
+    }
+    const error = infoMatch ? fixture.infoError : fixture.previewError
+    if (error) {
+      await route.fulfill(
+        jsonResponse(
+          {
+            error: {
+              code: error.code ?? (error.status === 404 ? 'NOT_FOUND' : 'INTERNAL_ERROR'),
+              message: error.message ?? 'Preview failed'
+            }
+          },
+          error.status
+        )
+      )
+      return
+    }
+    await route.fulfill(
+      jsonResponse(
+        infoMatch
+          ? { venueId, sections: fixture.sections }
+          : { venue: fixture.venue }
+      )
+    )
+  })
+
+  await page.route('**/preview-media-*.png', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'image/png',
+      body: transparentPng
+    })
+  })
+
+  return {
+    getPreviewRequests: () => [...previewRequests],
+    getInfoRequests: () => [...infoRequests],
+    getTraffic: () => [...traffic],
+    clearTraffic: () => {
+      traffic.splice(0, traffic.length)
     }
   }
 }
@@ -7134,6 +7480,310 @@ test('venue staff does not see staff chat management', async ({ page }) => {
     window.location.hash = '#/chat'
   })
   await expect(page.getByRole('heading', { name: 'Недостаточно прав' })).toBeVisible()
+})
+
+test('venue owner opens the published guest preview with public read-only content', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueGuestPreviewApi(page, { role: 'OWNER' })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  const previewNav = page.getByRole('button', { name: 'Предпросмотр для гостя', exact: true })
+  await expect(previewNav).toBeVisible()
+  await previewNav.click()
+
+  const preview = page.locator('.screen-root')
+  await expect(preview.getByRole('heading', { name: 'Предпросмотр для гостя', exact: true })).toBeVisible()
+  await expect(preview.getByRole('heading', { name: 'Микс', exact: true })).toBeVisible()
+  await expect(preview).toContainText('Москва, Пилотная, 1')
+  await expect(preview).toContainText('Опубликованное описание лаунжа.')
+  await expect(preview).toContainText('Контакт: +7 900 100-20-30')
+  await expect(preview).toContainText('Открыто · 18:00–02:00')
+
+  await expect(preview).toContainText('График работы')
+  await expect(preview).toContainText('Пн')
+  await expect(preview).toContainText('18:00')
+  await expect(preview).toContainText('Вс')
+  await expect(preview).toContainText('Закрыто')
+  await expect(preview).toContainText('Исключения по датам')
+  await expect(preview).toContainText('12.01.2030')
+  await expect(preview).toContainText('Санитарный день')
+  await expect(preview).toContainText('13.01.2030')
+  await expect(preview).toContainText('Специальный график')
+
+  await expect(preview.getByRole('heading', { name: '📖 Фото-меню', exact: true })).toBeVisible()
+  await expect(preview).toContainText('Ознакомительное меню в опубликованной карточке.')
+  await expect(preview.getByRole('img', { name: '📖 Фото-меню 1' })).toBeVisible()
+
+  await expect(preview.getByRole('heading', { name: 'Сегодня работают', exact: true })).toBeVisible()
+  await expect(preview).toContainText('Анна')
+  await expect(preview).toContainText('Мастер авторских миксов')
+  await expect(preview).toContainText('цитрусовые, крепкие')
+  await expect(preview).toContainText('Поможет подобрать крепость.')
+
+  await expect(preview.getByRole('heading', { name: 'Акции', exact: true })).toBeVisible()
+  await expect(preview).toContainText('Чай в подарок')
+  await expect(preview).toContainText('К каждому авторскому миксу.')
+  await expect(preview).toContainText('Условия: До закрытия заведения.')
+
+  await expect(preview.getByRole('button', { name: 'В избранное', exact: true })).toHaveCount(0)
+  await expect(preview.getByRole('button', { name: 'Забронировать', exact: true })).toHaveCount(0)
+  await expect(preview.getByRole('button', { name: /Задать вопрос/ })).toHaveCount(0)
+  await expect(preview.getByRole('button', { name: 'Вызвать персонал', exact: true })).toHaveCount(0)
+  await expect(preview.getByRole('button', { name: /Чат|Поддержка|Обращение/ })).toHaveCount(0)
+  await expect(preview.getByRole('button', { name: /Корзина|Оформить заказ|Мой заказ|Продлить/ })).toHaveCount(0)
+  await expect(preview.getByRole('button', { name: /Настройки/ })).toHaveCount(0)
+  await expect(preview.getByText(/продлить смену/i)).toHaveCount(0)
+  await expect(preview.getByText(/заказное меню и корзина доступны/i)).toHaveCount(0)
+  await expect(preview.getByText(/вы за столом/i)).toHaveCount(0)
+  await expect(preview.locator('input:visible, textarea:visible, select:visible')).toHaveCount(0)
+  await expect(preview.getByRole('button', { name: /Сохранить|Опубликовать|Удалить|Архивировать/ })).toHaveCount(0)
+
+  expect(api.getPreviewRequests()).toEqual([{ venueId: 1, method: 'GET' }])
+  expect(api.getInfoRequests()).toEqual([{ venueId: 1, method: 'GET' }])
+})
+
+test('venue manager can open the published guest preview', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockVenueGuestPreviewApi(page, {
+    role: 'MANAGER',
+    previews: {
+      1: buildVenueGuestPreviewFixture(1, {
+        venue: {
+          name: 'Опубликованный лаунж менеджера',
+          displayAddress: 'Казань, Кремлёвская, 10'
+        }
+      })
+    }
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  await page.getByRole('button', { name: 'Предпросмотр для гостя', exact: true }).click()
+  const preview = page.locator('.screen-root')
+  await expect(preview.getByRole('heading', { name: 'Предпросмотр для гостя', exact: true })).toBeVisible()
+  await expect(preview.getByRole('heading', { name: 'Опубликованный лаунж менеджера', exact: true })).toBeVisible()
+  await expect(preview).toContainText('Казань, Кремлёвская, 10')
+})
+
+test('venue staff cannot see or open the guest preview', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueGuestPreviewApi(page, {
+    role: 'STAFF',
+    permissions: ['ORDER_QUEUE_VIEW']
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  await expect(page.getByRole('button', { name: 'Предпросмотр для гостя', exact: true })).toHaveCount(0)
+  await page.evaluate(() => {
+    window.location.hash = '#/guest-preview'
+  })
+  await expect(page.getByRole('heading', { name: 'Недостаточно прав', exact: true })).toBeVisible()
+  await expect(page.getByText('У вас нет доступа к этому разделу.')).toBeVisible()
+  expect(api.getPreviewRequests()).toEqual([])
+  expect(api.getInfoRequests()).toEqual([])
+})
+
+test('venue guest preview clears stale data while switching venues', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const venues: VenueGuestPreviewAccessFixture[] = [
+    {
+      venueId: 1,
+      venueName: 'Медленный лаунж',
+      venueCity: 'Москва',
+      venueStatus: 'PUBLISHED',
+      role: 'OWNER',
+      permissions: []
+    },
+    {
+      venueId: 2,
+      venueName: 'Быстрый лаунж',
+      venueCity: 'Казань',
+      venueStatus: 'PUBLISHED',
+      role: 'MANAGER',
+      permissions: []
+    }
+  ]
+  const api = await mockVenueGuestPreviewApi(page, {
+    venues,
+    previews: {
+      1: buildVenueGuestPreviewFixture(1, {
+        venue: {
+          name: 'Медленный опубликованный лаунж',
+          displayAddress: 'Москва, Медленная, 1'
+        },
+        delayMs: 400
+      }),
+      2: buildVenueGuestPreviewFixture(2, {
+        venue: {
+          name: 'Быстрый опубликованный лаунж',
+          displayAddress: 'Казань, Быстрая, 2'
+        }
+      })
+    }
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Предпросмотр для гостя', exact: true }).click()
+
+  const preview = page.locator('.screen-root')
+  await expect(preview.getByText('Загрузка предпросмотра...', { exact: true })).toBeVisible()
+  await expect.poll(() => api.getPreviewRequests().map((request) => request.venueId)).toContain(1)
+
+  await page.locator('select.venue-select').selectOption('2')
+  await expect(preview.getByRole('heading', { name: 'Быстрый опубликованный лаунж', exact: true })).toBeVisible()
+  await expect(preview).toContainText('Казань, Быстрая, 2')
+  await expect(preview.getByText('Медленный опубликованный лаунж', { exact: true })).toHaveCount(0)
+
+  await page.waitForTimeout(450)
+  await expect(preview.getByRole('heading', { name: 'Быстрый опубликованный лаунж', exact: true })).toBeVisible()
+  await expect(preview.getByText('Медленный опубликованный лаунж', { exact: true })).toHaveCount(0)
+
+  await page.locator('select.venue-select').selectOption('1')
+  await expect(preview.getByText('Загрузка предпросмотра...', { exact: true })).toBeVisible()
+  await expect(preview.getByText('Быстрый опубликованный лаунж', { exact: true })).toHaveCount(0)
+  await expect(preview.getByRole('heading', { name: 'Медленный опубликованный лаунж', exact: true })).toBeVisible()
+  await expect(preview).toContainText('Москва, Медленная, 1')
+})
+
+test('venue guest preview ignores table cart and order context and uses GET-only preview traffic', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await page.addInitScript((token) => {
+    window.localStorage.setItem('hookah_guest_table_token', token)
+    window.sessionStorage.setItem('hookah_guest_table_token', token)
+    window.sessionStorage.setItem(
+      'hookah_guest_table_session_context:user:123456789',
+      JSON.stringify({ tableToken: token, tableSessionId: 77 })
+    )
+    window.sessionStorage.setItem(
+      'hookahMiniAppGuestTabSelection',
+      JSON.stringify({ 'user:123456789:session:77': 88 })
+    )
+    window.localStorage.setItem(
+      `hookah_guest_cart_draft:user:123456789:${token}`,
+      JSON.stringify({
+        items: [{ itemId: 200, qty: 3 }],
+        commentDraft: 'Этот гостевой заказ не относится к preview.'
+      })
+    )
+  }, tableToken)
+  const api = await mockVenueGuestPreviewApi(page, { role: 'OWNER' })
+
+  await page.goto(
+    `?mode=venue&table_token=${encodeURIComponent(tableToken)}#tgWebAppData=${encodeURIComponent(mockInitData)}`
+  )
+
+  const previewNav = page.getByRole('button', { name: 'Предпросмотр для гостя', exact: true })
+  await expect(previewNav).toBeVisible()
+  api.clearTraffic()
+  await previewNav.click()
+
+  const preview = page.locator('.screen-root')
+  await expect(preview.getByRole('heading', { name: 'Микс', exact: true })).toBeVisible()
+  await expect(preview).toContainText('Москва, Пилотная, 1')
+  await expect(preview.getByText(/вы за столом/i)).toHaveCount(0)
+  await expect(preview.getByText(/корзин/i)).toHaveCount(0)
+  await expect(preview.getByText(/этот гостевой заказ/i)).toHaveCount(0)
+
+  await expect.poll(() => api.getInfoRequests().length).toBe(1)
+  const previewTraffic = api
+    .getTraffic()
+    .filter((request) => request.path.includes('/guest-preview'))
+    .sort((left, right) => left.path.localeCompare(right.path))
+  expect(previewTraffic).toEqual([
+    { method: 'GET', path: '/api/venue/1/guest-preview' },
+    { method: 'GET', path: '/api/venue/1/guest-preview/info-sections' }
+  ])
+  expect(
+    api.getTraffic().filter((request) =>
+      /\/api\/guest\/(?:table|cart|order|tabs|staff-call|shift-extension)/.test(request.path)
+    )
+  ).toEqual([])
+})
+
+test('venue guest preview has safe loading empty error and unavailable states', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const venues: VenueGuestPreviewAccessFixture[] = [
+    {
+      venueId: 1,
+      venueName: 'Пустая карточка',
+      venueCity: 'Москва',
+      venueStatus: 'PUBLISHED',
+      role: 'OWNER',
+      permissions: []
+    },
+    {
+      venueId: 2,
+      venueName: 'Ошибка карточки',
+      venueCity: 'Москва',
+      venueStatus: 'PUBLISHED',
+      role: 'OWNER',
+      permissions: []
+    },
+    {
+      venueId: 3,
+      venueName: 'Черновик',
+      venueCity: 'Москва',
+      venueStatus: 'DRAFT',
+      role: 'OWNER',
+      permissions: []
+    }
+  ]
+  const api = await mockVenueGuestPreviewApi(page, {
+    venues,
+    previews: {
+      1: buildVenueGuestPreviewFixture(1, {
+        venue: {
+          guestContact: null,
+          cardDescription: null,
+          todaySchedule: null,
+          weeklyHours: [],
+          dateExceptions: [],
+          todayStaff: [],
+          promotions: []
+        },
+        sections: [],
+        delayMs: 300
+      }),
+      2: buildVenueGuestPreviewFixture(2, {
+        previewError: {
+          status: 500,
+          code: 'INTERNAL_ERROR',
+          message: 'Preview failed'
+        }
+      }),
+      3: buildVenueGuestPreviewFixture(3, {
+        venue: {
+          cardDescription: 'Приватный текст черновика не должен раскрываться.',
+          status: 'DRAFT'
+        },
+        previewError: {
+          status: 404,
+          code: 'NOT_FOUND',
+          message: 'Not found'
+        }
+      })
+    }
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Предпросмотр для гостя', exact: true }).click()
+
+  const preview = page.locator('.screen-root')
+  await expect(preview.getByText('Загрузка предпросмотра...', { exact: true })).toBeVisible()
+  await expect(preview.getByText('Информация пока не заполнена.', { exact: true })).toBeVisible()
+
+  await page.locator('select.venue-select').selectOption('2')
+  await expect(preview.getByRole('button', { name: 'Повторить', exact: true })).toBeVisible()
+  await expect(preview.getByText('Информация пока не заполнена.', { exact: true })).toHaveCount(0)
+
+  await page.locator('select.venue-select').selectOption('3')
+  await expect(
+    preview.getByText('Заведение недоступно для гостевого просмотра.', { exact: true })
+  ).toBeVisible()
+  await expect(preview.getByText('Приватный текст черновика не должен раскрываться.', { exact: true })).toHaveCount(0)
+  expect(api.getPreviewRequests().map((request) => request.venueId)).toEqual([1, 2, 3])
 })
 
 test('venue manager configures public profile card settings', async ({ page }) => {

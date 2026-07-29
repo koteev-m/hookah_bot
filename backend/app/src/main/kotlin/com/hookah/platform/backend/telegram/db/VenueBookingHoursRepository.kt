@@ -265,22 +265,29 @@ class VenueBookingHoursRepository(private val dataSource: DataSource?) {
     suspend fun listDateOverrides(
         venueId: Long,
         limit: Int = 30,
+        fromDate: LocalDate? = null,
     ): List<VenueBookingDateOverride> {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
+                    val fromDateClause = if (fromDate == null) "" else "AND service_date >= ?"
                     connection.prepareStatement(
                         """
                         SELECT venue_id, service_date, opens_at, closes_at, is_closed, guest_note
                         FROM venue_booking_hours_overrides
                         WHERE venue_id = ?
+                          $fromDateClause
                         ORDER BY service_date
                         LIMIT ?
                         """.trimIndent(),
                     ).use { statement ->
                         statement.setLong(1, venueId)
-                        statement.setInt(2, limit.coerceIn(1, 200))
+                        var parameterIndex = 2
+                        if (fromDate != null) {
+                            statement.setDate(parameterIndex++, SqlDate.valueOf(fromDate))
+                        }
+                        statement.setInt(parameterIndex, limit.coerceIn(1, 200))
                         statement.executeQuery().use { rs ->
                             val result = mutableListOf<VenueBookingDateOverride>()
                             while (rs.next()) {

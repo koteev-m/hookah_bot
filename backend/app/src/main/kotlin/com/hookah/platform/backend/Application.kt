@@ -43,6 +43,7 @@ import com.hookah.platform.backend.miniapp.guest.BookingExpiryWorkerConfig
 import com.hookah.platform.backend.miniapp.guest.BookingReminderWorker
 import com.hookah.platform.backend.miniapp.guest.BookingReminderWorkerConfig
 import com.hookah.platform.backend.miniapp.guest.GuestRateLimitConfig
+import com.hookah.platform.backend.miniapp.guest.GuestVenueReadService
 import com.hookah.platform.backend.miniapp.guest.InMemoryRateLimiter
 import com.hookah.platform.backend.miniapp.guest.RepeatOrderResolver
 import com.hookah.platform.backend.miniapp.guest.TableSessionCleanupWorker
@@ -88,6 +89,7 @@ import com.hookah.platform.backend.miniapp.venue.stats.venueStatsRoutes
 import com.hookah.platform.backend.miniapp.venue.tables.VenueTableRepository
 import com.hookah.platform.backend.miniapp.venue.tables.venueTableRoutes
 import com.hookah.platform.backend.miniapp.venue.venueBillingRoutes
+import com.hookah.platform.backend.miniapp.venue.venueGuestPreviewRoutes
 import com.hookah.platform.backend.miniapp.venue.venueRoutes
 import com.hookah.platform.backend.miniapp.venue.venueStaffCallRoutes
 import com.hookah.platform.backend.miniapp.venue.venueStaffRoutes
@@ -557,6 +559,18 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
     val telegramVenueContextRepository = TelegramVenueContextRepository(dataSource)
     val venueStaffRepository = VenueStaffRepository(dataSource)
     val venueStaffProfileRepository = VenueStaffProfileRepository(dataSource, json)
+    val guestVenueReadService =
+        GuestVenueReadService(
+            guestVenueRepository = guestVenueRepository,
+            guestFavoritesRepository = guestFavoritesRepository,
+            venueStaffProfileRepository = venueStaffProfileRepository,
+            venueInfoSectionsRepository = venueInfoSectionsRepository,
+            venueInfoSectionMediaRepository = venueInfoSectionMediaRepository,
+            subscriptionRepository = subscriptionRepository,
+            venueBookingHoursRepository = venueBookingHoursRepository,
+            venueSettingsRepository = venueSettingsRepository,
+            venuePromotionRepository = venuePromotionRepository,
+        )
     val bookingReminderWorker =
         BookingReminderWorker(
             repository = guestBookingRepository,
@@ -1075,13 +1089,8 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                         guestVenueRepository = guestVenueRepository,
                         guestFavoritesRepository = guestFavoritesRepository,
                         guestMenuRepository = guestMenuRepository,
-                        venueStaffProfileRepository = venueStaffProfileRepository,
-                        venueInfoSectionsRepository = venueInfoSectionsRepository,
-                        venueInfoSectionMediaRepository = venueInfoSectionMediaRepository,
                         subscriptionRepository = subscriptionRepository,
-                        venueBookingHoursRepository = venueBookingHoursRepository,
-                        venueSettingsRepository = venueSettingsRepository,
-                        venuePromotionRepository = venuePromotionRepository,
+                        guestVenueReadService = guestVenueReadService,
                     )
                     guestFavoritesRoutes(
                         guestFavoritesRepository = guestFavoritesRepository,
@@ -1176,6 +1185,10 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                         call.respond(mapOf("ok" to true))
                     }
                 }
+                venueGuestPreviewRoutes(
+                    venueAccessRepository = venueAccessRepository,
+                    guestVenueReadService = guestVenueReadService,
+                )
                 venueRoutes(
                     venueAccessRepository = venueAccessRepository,
                     staffChatLinkCodeRepository = staffChatLinkCodeRepository,

@@ -1,6 +1,6 @@
 # Mini App Launch Smoke Checklist
 
-Дата: 2026-07-28.
+Дата: 2026-07-29.
 
 Цель: зафиксировать launch smoke/e2e coverage для core Mini App сценариев без изменения бизнес-логики. В `miniapp/package.json` есть `dev`, `build`, `preview` и минимальный browser smoke `e2e:smoke`. Поэтому стратегия на этот шаг гибридная:
 
@@ -28,6 +28,7 @@
 - M8a/M8b-Free Venue Mini App structured public profile/card settings is CLOSED after provider-free staging smoke: OWNER/MANAGER can edit guest-facing country/city/address, public contact and short card description without a runtime geodata provider; country/city suggestions are local, missing cities and addresses remain manually enterable, STAFF is hidden/forbidden, and guest public venue card/catalog read models plus route links reflect saved fields. Existing coordinates remain supported for coordinate-first route links, but manually entered addresses are not verified coordinates. Yandex adapters remain optional/commercial-only and disabled by default.
 - M9a Deployment SSH Reliability Hardening is CLOSED / staging smoke passed: the committed opt-in ControlMaster helper opened one authenticated persistent connection after a bounded retry, reused that connection for rsync/plain SSH through the existing deployment script, completed image build/upload and backend recreate, and passed local/public health, DB health and Mini App static checks. The normal `./scripts/deploy-staging.sh hookah-staging` path remains supported and unchanged. The exact fresh SSH connection failure cause remains unconfirmed.
 - M9b Venue Working Hours and Date Exceptions Mini App Parity plus M9b.1 date-exception ranges/rejection copy, M9b.2 exception save/list UX and M9b.3 date-range editing is CLOSED / staging smoke passed: OWNER/MANAGER can manage weekly hours, inclusive closed/special-hours exception ranges and optional guest-facing reasons/comments in Venue Mini App; successful exception saves close/reset the form and reveal the saved row in the compact list; existing closed and changed-hours exceptions can be edited to a new inclusive date range; STAFF is hidden/forbidden; guest catalog/card read models expose safe today schedule/open state; and direct Guest Mini App booking create/update validates configured venue hours with human schedule errors. Missing schedule setup shows `График не указан` / `Заведение пока не настроило график бронирования.`, not `Закрыто`.
+- Venue Mini App Guest Preview Entry — Published Public State / Read-only Phase 1 is `IMPLEMENTED / LOCAL VALIDATION PASSED / CI AND STAGING SMOKE PENDING`: OWNER/MANAGER can open `Предпросмотр для гостя`; the screen uses the shared Guest venue/info DTO assembly, shows only published public state, and has no guest mutations or table/cart/order dependency. STAFF is hidden/denied.
 - Mini App mutation / operational verification closure pack is CLOSED / code-test verification passed: actual Mini App PUT/PATCH/DELETE CORS preflights allow `Content-Type` and `Authorization`, Guest Mini App staff-call payload/backend row/staff-chat event include `tableSessionId`, linked staff-chat staff-call notification enqueue is covered, and fallback quick order emits `Telegram.WebApp.sendData` with `{ "cmd": "start_quick_order", "table_token": "<tableToken>" }`. No staging smoke is claimed by this item.
 - Staff Call Lifecycle ACK/DONE audit hardening and guest-visible CANCELLED finishing patch: CLOSED / staging smoke passed. Real Telegram Mini App smoke confirmed Guest call creation, staff-chat notification, Venue Mode NEW/ACK/DONE, Venue Mini App `STAFF_CALL_ACK` / `STAFF_CALL_DONE` audit with top-level actor evidence and `source=venue_miniapp`, Telegram staff-chat ACK/DONE message edits plus audit with `source=telegram_staff_chat`, Guest ability to create a new call after DONE, and guest-visible terminal `CANCELLED` as `Вызов отменён` for the current guest/tableSession. Audit remains best-effort; row-level ACK/DONE actor/timestamp columns, manual cancel UI and staff-call UX polish remain separate follow-ups.
 - Guest Table Context UX Cleanup / Feature-gated Extension Module: CLOSED / staging smoke passed. Real Telegram Mini App QR smoke confirmed correct venue/table context, route/copy address/booking actions hidden in table context, pre-visit venue card still showing address/route/copy/booking, `Продление работы заведения` hidden without active order/bill or unavailable extension state, visible only when active order state makes it available, and hidden again after bill/order close.
@@ -199,6 +200,13 @@ Manual runtime coverage for each release batch:
 - `VenueBookingRoutesTest`
   - OWNER/MANAGER can configure weekly hours and date exceptions;
   - STAFF and foreign-venue access are denied for private schedule settings.
+- `VenueGuestPreviewRoutesTest`
+  - OWNER/MANAGER preview payloads equal the Guest venue/info payloads;
+  - weekly hours, future date exceptions, visible info/media, Today Staff and active promotions are covered;
+  - STAFF/foreign access is forbidden and unavailable venues fail closed without private markers.
+- Mini App Playwright guest-preview scenarios cover OWNER/MANAGER access, STAFF hidden/direct denial,
+  stale-free venue switching, GET-only traffic independent of table/cart/order state, no mutation
+  controls, and loading/empty/error/unavailable states.
 
 Manual runtime coverage for each release batch:
 
@@ -208,6 +216,10 @@ Manual runtime coverage for each release batch:
 - UI displays backend totals directly and does not invent frontend-calculated money.
 - STAFF close bill/order works while bill edit controls stay hidden;
 - venue `Сообщения` handles `BOOKING_CHAT` / `VENUE_CHAT`; venue `Помощь` / `Обращения` handles own-venue `SUPPORT_TICKET` and transfer to Platform.
+- OWNER and MANAGER open `Предпросмотр для гостя` and compare name, description, address, schedule/date exceptions, info/media, Today Staff and active promotions with the real Guest card.
+- Switching venue while preview is loading clears the old venue immediately and cannot restore a stale response.
+- STAFF has no preview entry, direct `#/guest-preview` is denied, and an unavailable venue shows only `Заведение недоступно для гостевого просмотра.`
+- Preview exposes no booking/favorite/chat/support/staff-call/extension/cart/order controls and sends no mutation requests.
 
 ### Platform Mini App
 

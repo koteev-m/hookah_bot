@@ -16,6 +16,7 @@ import { renderVenueCallsScreen } from './venueCalls'
 import { renderVenueBookingsScreen } from './venueBookings'
 import { renderVenueDashboardScreen } from './venueDashboard'
 import { renderVenueFeedbackScreen } from './venueFeedback'
+import { renderVenueGuestPreviewScreen } from './venueGuestPreview'
 import { renderVenueMenuScreen } from './venueMenu'
 import { renderVenueMessagesScreen } from './venueMessages'
 import { renderVenueOrderDetailScreen } from './venueOrderDetail'
@@ -40,6 +41,7 @@ type RouteName =
   | 'calls'
   | 'extensions'
   | 'messages'
+  | 'guest-preview'
   | 'promotions'
   | 'menu'
   | 'tables'
@@ -103,6 +105,7 @@ function resolveRoute(): Route {
       'calls',
       'extensions',
       'messages',
+      'guest-preview',
       'promotions',
       'menu',
       'tables',
@@ -162,6 +165,10 @@ function buildVenueShell(root: HTMLDivElement): VenueShellRefs {
     calls: el('button', { className: 'nav-button', text: 'Вызовы' }) as HTMLButtonElement,
     extensions: el('button', { className: 'nav-button', text: 'Запросы продления' }) as HTMLButtonElement,
     messages: el('button', { className: 'nav-button', text: 'Сообщения' }) as HTMLButtonElement,
+    'guest-preview': el('button', {
+      className: 'nav-button',
+      text: 'Предпросмотр для гостя'
+    }) as HTMLButtonElement,
     promotions: el('button', { className: 'nav-button', text: 'Акции' }) as HTMLButtonElement,
     menu: el('button', { className: 'nav-button', text: 'Заказное меню' }) as HTMLButtonElement,
     tables: el('button', { className: 'nav-button', text: 'Столы и QR' }) as HTMLButtonElement,
@@ -189,6 +196,7 @@ function buildVenueShell(root: HTMLDivElement): VenueShellRefs {
     {
       title: 'Настройки',
       buttons: [
+        navButtons['guest-preview'],
         navButtons.menu,
         navButtons.promotions,
         navButtons.tables,
@@ -415,6 +423,7 @@ export function mountVenueApp(options: VenueAppOptions) {
     refs.navButtons.calls.hidden = !hasPermission('ORDER_QUEUE_VIEW')
     refs.navButtons.extensions.hidden = !hasPermission('SHIFT_EXTENSION_VIEW')
     refs.navButtons.menu.hidden = !hasPermission('MENU_VIEW')
+    refs.navButtons['guest-preview'].hidden = currentRole !== 'OWNER' && currentRole !== 'MANAGER'
     refs.navButtons.promotions.hidden = currentRole !== 'OWNER' && currentRole !== 'MANAGER'
     refs.navButtons.tables.hidden = !hasPermission('TABLE_VIEW')
     refs.navButtons.staff.hidden = currentRole === 'STAFF'
@@ -445,6 +454,7 @@ export function mountVenueApp(options: VenueAppOptions) {
         return hasPermission('SUPPORT_MANAGE')
       case 'menu':
         return hasPermission('MENU_VIEW')
+      case 'guest-preview':
       case 'promotions':
         return currentRole === 'OWNER' || currentRole === 'MANAGER'
       case 'tables':
@@ -532,6 +542,8 @@ export function mountVenueApp(options: VenueAppOptions) {
           screenMode: 'bookingMessages',
           initialThreadId: route.threadId
         })
+      case 'guest-preview':
+        return renderVenueGuestPreviewScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
       case 'menu':
         return renderVenueMenuScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
       case 'promotions':
@@ -584,6 +596,7 @@ export function mountVenueApp(options: VenueAppOptions) {
   disposables.push(on(refs.navButtons.messages, 'click', () => navigate('#/messages')))
   disposables.push(on(refs.navButtons.calls, 'click', () => navigate('#/calls')))
   disposables.push(on(refs.navButtons.extensions, 'click', () => navigate('#/extensions')))
+  disposables.push(on(refs.navButtons['guest-preview'], 'click', () => navigate('#/guest-preview')))
   disposables.push(on(refs.navButtons.menu, 'click', () => navigate('#/menu')))
   disposables.push(on(refs.navButtons.promotions, 'click', () => navigate('#/promotions')))
   disposables.push(on(refs.navButtons.tables, 'click', () => navigate('#/tables')))

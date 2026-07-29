@@ -38,6 +38,8 @@ export type VenueDto = {
   guestContact?: string | null
   cardDescription?: string | null
   todaySchedule?: VenueTodayScheduleDto | null
+  weeklyHours?: GuestVenueScheduleDayDto[]
+  dateExceptions?: GuestVenueDateExceptionDto[]
   todayStaff?: GuestTodayStaffDto[]
   timezone?: string | null
   promotions?: GuestVenuePromotionDto[]
@@ -83,6 +85,21 @@ export type VenueTodayScheduleDto = {
   isOpenNow: boolean
   statusLabel: string
   timeLabel?: string | null
+}
+
+export type GuestVenueScheduleDayDto = {
+  weekday: number
+  opensAt: string
+  closesAt: string
+  isClosed: boolean
+}
+
+export type GuestVenueDateExceptionDto = {
+  serviceDate: string
+  opensAt: string
+  closesAt: string
+  isClosed: boolean
+  guestNote?: string | null
 }
 
 export type VenueInfoSectionsResponse = {

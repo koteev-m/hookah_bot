@@ -436,6 +436,33 @@ input[type="number"] {
   gap: 1rem;
 }
 
+.venue-guest-preview,
+.venue-guest-preview-content,
+.guest-venue-schedule-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.venue-guest-preview > h2,
+.venue-guest-preview > .app-subtitle,
+.guest-venue-schedule h4,
+.guest-venue-schedule h5,
+.guest-venue-schedule-list p {
+  margin: 0;
+}
+
+.guest-venue-schedule-exception {
+  display: grid;
+  gap: 0.25rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid #e5e7f2;
+}
+
+.guest-venue-schedule-exception:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
 .venue-info-media-list {
   display: grid;
   gap: 0.75rem;

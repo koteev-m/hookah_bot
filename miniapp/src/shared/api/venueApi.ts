@@ -1,5 +1,6 @@
 import { requestApi, requestBinary, type RequestDependencies } from './request'
 import type { OwnerBillingOverviewResponse } from './billingDtos'
+import type { VenueInfoSectionsResponse, VenueResponse } from './guestDtos'
 import type {
   VenueApplyBaseFlavorProfilesResponse,
   VenueAvailabilityRequest,
@@ -98,6 +99,34 @@ export async function venueGetMe(
   signal?: AbortSignal
 ) {
   return requestApi<VenueMeResponse>(backendUrl, '/api/venue/me', { signal }, deps)
+}
+
+export async function venueGetGuestPreview(
+  backendUrl: string,
+  venueId: number,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenueResponse>(
+    backendUrl,
+    `/api/venue/${venueId}/guest-preview`,
+    { signal },
+    deps
+  )
+}
+
+export async function venueGetGuestPreviewInfoSections(
+  backendUrl: string,
+  venueId: number,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenueInfoSectionsResponse>(
+    backendUrl,
+    `/api/venue/${venueId}/guest-preview/info-sections`,
+    { signal },
+    deps
+  )
 }
 
 export async function venueGetPromotions(
