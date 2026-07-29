@@ -1,6 +1,6 @@
 # Venue Owner
 
-Дата актуализации: 2026-07-21.
+Дата актуализации: 2026-07-29.
 
 Статус: **current role reference**. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. Этот файл разделяет Telegram bot owner setup flow и Venue Mini App owner panel.
 
@@ -30,7 +30,9 @@ Owner может работать в двух поверхностях:
 - public review URL setting shared with Venue Mini App; it does not enable Telegram feedback prompts or auto-redirects;
 - booking settings, включая custom hold input;
 - future `Акции и удержание`: simple venue promotions/banners with title, description, active period, terms and visibility/status; no automatic discount promise unless a real promo engine/accounting path is implemented;
-- media upload для owner info sections без fallback spam;
+- image/PDF upload for info sections through Bot, with individual attachment delete and
+  whole-section hide/show; storage uses Telegram `file_id`, and there is no direct replace or
+  per-attachment hide action;
 - явная back-navigation по setup sections.
 
 Важное naming rule:
@@ -61,6 +63,8 @@ Venue Owner открывает Venue Mini App через inline `web_app` entry,
 - subscription/payment state screen with adjusted paid-through and next-payment dates;
 - future/partial `Акции и удержание` only when backend-backed; Staff must not manage campaigns;
 - read-only stats;
+- read-only `Предпросмотр карточки`: Published Guest Preview Phase 1 and saved-DRAFT Preview
+  Phase 2.1 are **DONE / MVP / STAGING-SMOKE-PASSED**;
 - settings where implemented.
 
 `Ссылка для отзывов` is Owner-only and shared by Bot/Mini App. Venue Settings shows:
@@ -71,9 +75,10 @@ Mini App остаётся backend-RBAC enforced: кнопки в UI не явл�
 
 ## Allowed actions
 
-- Управлять venue profile/card/info sections.
-- Загружать и удалять media для info sections.
-- Управлять `📖 Фото-меню` как info section.
+- Управлять venue profile/card; info-section authoring/media management is currently Bot-first.
+- Через Bot загружать image/PDF и удалять attachments для info sections, а также скрывать/показывать
+  весь section. Venue Mini App media upload/manage is not implemented.
+- Управлять `📖 Фото-меню` через Bot как flat view-only info section.
 - Управлять `🍽 Заказным меню`, категориями, позициями, ценами и availability.
 - Управлять stop-list item/option availability.
 - Управлять option groups/values, item media, featured/top-list and unavailable-display policy where implemented.
@@ -125,6 +130,12 @@ Mini App остаётся backend-RBAC enforced: кнопки в UI не явл�
 - Staff-call lifecycle, linked staff-chat notification delivery and ACK/DONE audit hardening are CLOSED / staging smoke passed for Venue Mini App and Telegram staff-chat surfaces. Applied ACK/DONE transitions leave audit evidence with actor user id and source; audit is best-effort.
 - Guest-visible `CANCELLED` terminal status is CLOSED / staging smoke passed for the current guest/tableSession. Venue active queue remains `NEW` / `ACK`; manual cancel UI, row-level `acked_by` / `done_by` / ACK-DONE timestamp columns and staff-call UX polish remain future. Guest table-context cleanup/exit is CLOSED / staging smoke passed and belongs to the Guest role regression checklist.
 - Menu options/photos/descriptions/top-list richness may still be partial depending on guest surface.
+- Venue/public-card media management is `PARTIAL / BOT-FIRST`: Guest and Published Preview can
+  already render guarded media, but Venue Mini App has no file picker, upload endpoint, replace,
+  hide/show or delete UI. Draft Preview intentionally shows a safe media placeholder with no raw
+  refs/routes.
+- Structured menu item photos/descriptions/thumbnails and option/flavor media are
+  `MISSING / FUTURE`; do not confuse them with the working view-only `📖 Фото-меню`.
 - Menu/options/stop-list spec is `UPDATED` in `docs/MENU_OPTIONS_STOPLIST.md`: selected-option parity is smoke-closed, while broader media/top-list/shift-check/audit coverage remains partial/future.
 - Multi-venue owner selector/entry should be smoke-tested if owner has several memberships.
 - Platform owner invite, owner revoke and ownership access management belong to Platform Owner flow, not this role doc.
@@ -148,24 +159,29 @@ Mini App остаётся backend-RBAC enforced: кнопки в UI не явл�
 1. Owner bot setup shows separate `🍽 Заказное меню` and `📖 Фото-меню`.
 2. Upload multiple media files in info section; state remains stable until `Готово`/`Назад`.
 3. Guest sees filled `📖 Фото-меню` through `ℹ️ Информация`.
-4. Owner opens Venue Mini App through inline `web_app`; auth succeeds with initData.
-5. Owner can view queue/detail/full bill and close bill.
-6. Owner can apply/remove manual discount and exclude/restore bill item.
-7. Owner can manage bookings/menu/tables/staff according to current UI and backend permissions.
-8. Owner can open `Сообщения`, reply to `BOOKING_CHAT` / `VENUE_CHAT` and use resolve/reopen without changing booking lifecycle.
-9. Owner can open `Помощь` / `Обращения`, reply to own-venue support tickets and use `Передать платформе` only for support tickets.
-10. Owner can open `Статистика`.
-11. Owner can manage staff chat link/status/test flow, copy or regenerate an active link code, and safely unlink an incorrect staff chat binding.
-12. Owner can accept/close active `NEW` / `ACK` staff calls; linked Telegram staff group receives Mini App-created staff-call notification and staff-call ACK/DONE audit rows include actor evidence during regression smoke. Terminal `CANCELLED` is not active work.
-13. Owner opens subscription screen and sees adjusted `Оплачено до ... включительно` / next-payment state when billing/courtesy exists.
-14. Owner sees visible open invoice/payment state where allowed, but cannot mark invoice paid or add courtesy/free days.
-15. Owner order queue can group by table, while detail shows separate batches and tabs; closing/force-closing order/session does not allow new batches into the old active order and requires reason/audit where implemented.
-16. Owner menu smoke follows `docs/MENU_OPTIONS_STOPLIST.md`: create category/item/options, change availability, verify guest stale-submit rejection, and verify price/name/options snapshots in old orders.
-17. Phase 1 staff profile smoke: Owner creates display-only and linked profiles, publishes/hides public visibility, marks `Сегодня на смене`, and guest sees only public visible profiles/shifts without `linked_user_id` or private contact data.
-18. Owner opens `Ссылка для отзывов`, sees the Yandex Maps/Yandex Business helper plus ethical hint, and saves/clears the same URL used by Bot and Mini App.
-19. Owner sees only own-venue feedback and `Связаться с гостем` only for ratings `1..3`.
-20. Follow-up opens exact `VENUE_CHAT` with `Отзыв после визита` context; active chat is reused and a closed/resolved old chat leads to a new active chat.
-21. No personal message is sent until Owner writes; feedback follow-up creates no support ticket or staff-chat notification.
+4. Owner opens Published Preview and confirms exact real-Guest parity, no guest mutations and no
+   stale data after venue switching.
+5. Owner opens saved DRAFT Preview and confirms permanent
+   `Черновик. Гости пока не видят эту карточку`, guest-safe saved fields, private-field absence and
+   safe media hint/no raw refs.
+6. Owner opens Venue Mini App through inline `web_app`; auth succeeds with initData.
+7. Owner can view queue/detail/full bill and close bill.
+8. Owner can apply/remove manual discount and exclude/restore bill item.
+9. Owner can manage bookings/menu/tables/staff according to current UI and backend permissions.
+10. Owner can open `Сообщения`, reply to `BOOKING_CHAT` / `VENUE_CHAT` and use resolve/reopen without changing booking lifecycle.
+11. Owner can open `Помощь` / `Обращения`, reply to own-venue support tickets and use `Передать платформе` only for support tickets.
+12. Owner can open `Статистика`.
+13. Owner can manage staff chat link/status/test flow, copy or regenerate an active link code, and safely unlink an incorrect staff chat binding.
+14. Owner can accept/close active `NEW` / `ACK` staff calls; linked Telegram staff group receives Mini App-created staff-call notification and staff-call ACK/DONE audit rows include actor evidence during regression smoke. Terminal `CANCELLED` is not active work.
+15. Owner opens subscription screen and sees adjusted `Оплачено до ... включительно` / next-payment state when billing/courtesy exists.
+16. Owner sees visible open invoice/payment state where allowed, but cannot mark invoice paid or add courtesy/free days.
+17. Owner order queue can group by table, while detail shows separate batches and tabs; closing/force-closing order/session does not allow new batches into the old active order and requires reason/audit where implemented.
+18. Owner menu smoke follows `docs/MENU_OPTIONS_STOPLIST.md`: create category/item/options, change availability, verify guest stale-submit rejection, and verify price/name/options snapshots in old orders.
+19. Phase 1 staff profile smoke: Owner creates display-only and linked profiles, publishes/hides public visibility, marks `Сегодня на смене`, and guest sees only public visible profiles/shifts without `linked_user_id` or private contact data.
+20. Owner opens `Ссылка для отзывов`, sees the Yandex Maps/Yandex Business helper plus ethical hint, and saves/clears the same URL used by Bot and Mini App.
+21. Owner sees only own-venue feedback and `Связаться с гостем` only for ratings `1..3`.
+22. Follow-up opens exact `VENUE_CHAT` with `Отзыв после визита` context; active chat is reused and a closed/resolved old chat leads to a new active chat.
+23. No personal message is sent until Owner writes; feedback follow-up creates no support ticket or staff-chat notification.
 
 Future Growth/retention checks:
 

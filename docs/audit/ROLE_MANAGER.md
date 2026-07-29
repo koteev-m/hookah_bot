@@ -1,6 +1,6 @@
 # Manager
 
-Дата актуализации: 2026-07-21.
+Дата актуализации: 2026-07-29.
 
 Статус: **current role reference**. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. `ADMIN` в runtime сейчас является legacy alias для `MANAGER`.
 
@@ -26,6 +26,8 @@ Manager bot flow покрывает:
 - structured menu operations;
 - venue card/info through role-aware paths;
 - tables/QR operations;
+- image/PDF info-section media through the same Bot admin/owner path: add attachments, delete one
+  and hide/show the whole section; no direct replace or per-attachment hide;
 - staff chat operations where allowed;
 - stats where implemented.
 - future `Акции и удержание` only if the backend-backed MVP grants Manager access; Staff must not manage campaigns.
@@ -54,6 +56,8 @@ Manager Mini App areas:
 - tables management and QR export where backend permission allows;
 - staff chat link/status;
 - stats;
+- read-only `Предпросмотр карточки`: Published Guest Preview Phase 1 and saved-DRAFT Preview
+  Phase 2.1 are **DONE / MVP / STAGING-SMOKE-PASSED**;
 - staff list/invite only where current conservative route policy allows; invite result uses a valid Telegram deep link, copy/share actions and a secondary fallback command.
 
 ## Allowed actions
@@ -105,7 +109,11 @@ Manager Mini App areas:
 - Manager staff management scope is conservative and should be smoke-tested before pilot.
 - Staff invite deep-link sharing polish is CLOSED / staging smoke passed for the allowed manager invite path: link is selectable/copyable/shareable and accepted payload grants the intended role.
 - Some Telegram manager flows may still be richer than Mini App equivalents.
-- Menu options/photos/descriptions/top-list parity may still be partial.
+- Venue/public-card image/PDF management is `PARTIAL / BOT-FIRST`: Manager can manage attachments
+  through Bot, while Venue Mini App has no upload/manage flow. Guest and Published Preview already
+  render guarded media; Draft Preview uses a safe hint/no raw refs.
+- Structured menu item photo/description/thumbnail and option/flavor media are
+  `MISSING / FUTURE`, separately from the working view-only Photo/PDF menu.
 - Staff chat diagnostics/test flow is implemented in Mini App; manager must stay denied for owner-only unlink.
 - Staff-call lifecycle, linked staff-chat notification delivery and ACK/DONE audit hardening are CLOSED / staging smoke passed for Venue Mini App and Telegram staff-chat surfaces. Applied ACK/DONE transitions leave audit evidence with actor user id and source; audit is best-effort.
 - Guest-visible `CANCELLED` terminal status is CLOSED / staging smoke passed for the current guest/tableSession. Venue active queue remains `NEW` / `ACK`; manual cancel UI, row-level `acked_by` / `done_by` / ACK-DONE timestamp columns and staff-call UX polish remain future. Guest table-context cleanup/exit is CLOSED / staging smoke passed and belongs to the Guest role regression checklist.
@@ -124,23 +132,26 @@ Manager Mini App areas:
 ## Smoke-critical checks
 
 1. Manager opens Venue Mini App through inline `web_app`; auth succeeds.
-2. Manager can accept/deliver/close orders.
-3. Manager can use bill controls and final total reloads from backend.
-4. Manager can confirm/cancel/propose booking where supported.
-5. Manager can open `Сообщения`, reply to `BOOKING_CHAT` / `VENUE_CHAT` and use active/resolved filters where backend allows.
-6. Manager can open `Помощь` / `Обращения`, reply to own-venue support tickets and transfer support tickets to Platform.
-7. Manager can open `Статистика`.
-8. Manager can manage menu/availability and tables according to permissions.
-9. Manager cannot enter platform owner mode.
-10. Manager cannot perform owner/platform-only role escalation or owner-only staff-chat unlink.
-11. Manager can manage active `NEW` / `ACK` staff calls; linked Telegram staff group receives Mini App-created staff-call notification and staff-call ACK/DONE audit rows include actor evidence during regression smoke. Terminal `CANCELLED` is not active work.
-12. If manager can create STAFF invite under current policy, invite result shows valid Telegram deep link, copy/share actions and fallback command; accepted invite grants STAFF.
-13. Manager cannot access billing payment controls, mark-paid or courtesy/free-days actions.
-14. Manager order queue can group by table, while detail shows separate batches and tabs; closing/force-closing order/session does not allow new batches into the old active order and requires reason/audit where implemented.
-15. Manager menu permissions match the product policy from `docs/MENU_OPTIONS_STOPLIST.md`: stop-list/shift check/basic availability are allowed, while price/media/structure/schema edits are allowed only if broad Manager `MENU_MANAGE` is intentionally retained and tested.
-16. Manager can mark a public staff profile `Сегодня на смене` only inside own venue and cannot publish/hide profiles or approve tip methods.
-17. Manager sees only own-venue feedback, can open exact `VENUE_CHAT` follow-up only for rating `1..3`, and sees the feedback context without an auto-sent personal message.
-18. Manager cannot edit the Owner-only public review URL; feedback follow-up creates no support ticket or staff-chat notification.
+2. Manager opens Published Preview and confirms exact real-Guest parity, no mutations and
+   venue-switch isolation; saved DRAFT Preview shows the permanent banner, guest-safe projection
+   and safe media hint/no raw refs.
+3. Manager can accept/deliver/close orders.
+4. Manager can use bill controls and final total reloads from backend.
+5. Manager can confirm/cancel/propose booking where supported.
+6. Manager can open `Сообщения`, reply to `BOOKING_CHAT` / `VENUE_CHAT` and use active/resolved filters where backend allows.
+7. Manager can open `Помощь` / `Обращения`, reply to own-venue support tickets and transfer support tickets to Platform.
+8. Manager can open `Статистика`.
+9. Manager can manage menu/availability and tables according to permissions.
+10. Manager cannot enter platform owner mode.
+11. Manager cannot perform owner/platform-only role escalation or owner-only staff-chat unlink.
+12. Manager can manage active `NEW` / `ACK` staff calls; linked Telegram staff group receives Mini App-created staff-call notification and staff-call ACK/DONE audit rows include actor evidence during regression smoke. Terminal `CANCELLED` is not active work.
+13. If manager can create STAFF invite under current policy, invite result shows valid Telegram deep link, copy/share actions and fallback command; accepted invite grants STAFF.
+14. Manager cannot access billing payment controls, mark-paid or courtesy/free-days actions.
+15. Manager order queue can group by table, while detail shows separate batches and tabs; closing/force-closing order/session does not allow new batches into the old active order and requires reason/audit where implemented.
+16. Manager menu permissions match the product policy from `docs/MENU_OPTIONS_STOPLIST.md`: stop-list/shift check/basic availability are allowed, while price/media/structure/schema edits are allowed only if broad Manager `MENU_MANAGE` is intentionally retained and tested.
+17. Manager can mark a public staff profile `Сегодня на смене` only inside own venue and cannot publish/hide profiles or approve tip methods.
+18. Manager sees only own-venue feedback, can open exact `VENUE_CHAT` follow-up only for rating `1..3`, and sees the feedback context without an auto-sent personal message.
+19. Manager cannot edit the Owner-only public review URL; feedback follow-up creates no support ticket or staff-chat notification.
 
 Future Growth/retention checks:
 

@@ -19,6 +19,18 @@
 > Additional correction as of 2026-07-06: Guest Communication UX / Support Tickets MVP is CLOSED / smoke passed. Current source of truth is `docs/COMMUNICATION_MODEL.md`: Guest nav is `Чаты` / `Помощь`; `BOOKING_CHAT`, `VENUE_CHAT`, `SUPPORT_TICKET` and `STAFF_CALL` are separate flows; catalog/venue detail `Задать вопрос` opens or reuses `VENUE_CHAT`; Platform Support Center sees support tickets but not ordinary venue chats; Staff sees neither support tickets nor ordinary venue chats; support and venue chat create/reply paths do not post to staff-chat. Older rows that say general tickets or Platform Support Center are future-only are superseded for the MVP; SLA automation, macros, attachments, CSAT, diagnostics and support analytics remain future work.
 > Additional docs correction as of 2026-07-06: Platform cockpit source of truth is `docs/PLATFORM_COCKPIT.md`. Current Platform Mini App covers venue/subscription/billing baseline, owner invite/revoke, manual billing and support-ticket center; onboarding request cockpit, placements, analytics, real acquiring/Stars, recurring payments and lifecycle state normalization remain future/partial.
 > Additional correction as of 2026-07-23: Guest Favorites Phase 1 is DONE / MVP / STAGING-SMOKE-PASSED for venue favorites only. Mini App catalog/detail mutations and Account venue-only list/actions/empty state share `GuestFavoritesRepository` and `guest_favorite_venues` with Telegram. Current-user isolation, unavailable filtering with row preservation/republish restoration, Bot ↔ Mini App synchronization, Telegram Catalog/Profile entrypoints and source-aware Back navigation passed staging smoke. Older rows claiming missing account/favorites actions or favorite-menu-item parity are superseded for venue favorites only; favorite menu items/options, repeat, recommendations, notification opt-in, favorites-based promotions and loyalty remain future.
+>
+> Current correction as of 2026-07-29: Published Guest Preview Phase 1 and Venue Mini App Draft
+> Preview Phase 2.1 are **DONE / MVP / STAGING-SMOKE-PASSED** after green Actions, staging deploy
+> and manual role/parity/privacy/stale-state smoke. The result does not include media upload parity.
+> Current media audit: public-card info-section image/PDF management is **PARTIAL / BOT-FIRST**;
+> Bot OWNER/MANAGER can add attachments backed by Telegram `file_id`, delete an attachment and
+> hide/show the whole section, while Venue Mini App has no file picker, upload endpoint or authoring
+> flow. Guest/Published rendering already works through the guarded backend proxy; Draft uses a
+> safe media-after-publication hint with no refs/routes. Structured menu item
+> photo/description/thumbnail and option/flavor media are **MISSING / FUTURE**. Staff profile photo
+> upload remains separate and **FUTURE**. Next-media verdict:
+> **NEEDS_MEDIA_STORAGE_SPEC_FIRST**.
 
 Режим: read-only аудит. Backend, frontend business logic, миграции, checkout, ledger, promotions, loyalty и AI flows не менялись.
 
@@ -55,6 +67,8 @@ Known fixed/outdated rows in this document:
 - Old `general tickets/platform support later` claims are outdated for the MVP: Support Tickets / Platform Support Center is smoke-passed for `SUPPORT_TICKET`, while ordinary `VENUE_CHAT` remains intentionally hidden from Platform.
 - Pre-QR guest `🍽 Menu` behavior changed: order menu is available only after QR/table context; `📖 Фото-меню` is an info section.
 - Info-section media parity changed: Mini App uses a backend media proxy instead of Telegram file IDs/raw file URLs.
+- Venue Mini App media upload/manage parity is still absent: working Guest/Published proxy
+  rendering must not be confused with an owner file picker or media CRUD screen.
 
 ## 2. Sources Used
 

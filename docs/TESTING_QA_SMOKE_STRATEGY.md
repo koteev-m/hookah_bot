@@ -22,8 +22,8 @@ Current practice:
 - Gift parity is
   `GIFT_WITH_ITEM BOT/MINIAPP PARITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`.
   GitHub Actions and staging cross-surface smoke remain required.
-- Venue Mini App Published Guest Preview Phase 1 is **MVP IMPLEMENTED / LOCAL VALIDATION PASSED**: focused backend parity/RBAC/availability tests preserve the exact Guest read contract. CI and staging smoke remain pending.
-- Venue Mini App Draft Preview Phase 2.1 is **MVP IMPLEMENTED / LOCAL VALIDATION PASSED**: focused Draft/RBAC/Guest regression selectors, promotion repository regression, backend lint/compile, Mini App build and deterministic full e2e `92/92` passed locally. CI and staging smoke remain pending.
+- Venue Mini App Published Guest Preview Phase 1 is **DONE / MVP / STAGING-SMOKE-PASSED**: focused backend parity/RBAC/availability coverage preserves the exact Guest read contract; GitHub Actions were green, staging deploy completed and the role/parity/isolation smoke passed.
+- Venue Mini App Draft Preview Phase 2.1 is **DONE / MVP / STAGING-SMOKE-PASSED**: focused Draft/RBAC/Guest regression coverage, GitHub Actions, staging deploy and the saved-DRAFT privacy/lifecycle/media-placeholder smoke passed.
 
 Target QA model:
 - Every task ends with changed files, behavior summary, tests run, validation result, manual smoke checklist, `git status --short`, whether `scripts/dev/` was touched and whether staging deploy is needed.
@@ -65,7 +65,7 @@ Acceptance:
 - weekly hours, future date exceptions, public info/media, Today Staff and current active promotions match Guest;
 - venue switching clears and aborts stale preview state;
 - booking, favorites, venue chat, support, staff call, extension, cart, order and table context are absent and generate no mutation traffic;
-- after green Actions, staging smoke must repeat OWNER/MANAGER/STAFF roles, unavailable venue copy, venue switching and visual parity with the real Guest card.
+- staging evidence passed: OWNER/MANAGER opened PUBLISHED preview, exact real-Guest parity was confirmed, STAFF/foreign access was denied, venue switching did not restore stale data and no guest mutation actions were present.
 
 ## Venue Mini App Draft Preview Phase 2.1 Quality Gate
 
@@ -99,7 +99,10 @@ Acceptance:
 - PUBLISHED and DRAFT banners are explicit; HIDDEN/PAUSED/SUSPENDED/ARCHIVED expose only safe unavailable copy;
 - venue switching clears old state immediately, aborts the previous request and ignores late responses;
 - booking, favorites, chats, support, staff calls, extension, cart, order and table context neither appear nor mutate;
-- after green Actions, staging smoke must repeat role/status isolation, both entrypoints, both banners, Draft allowlist/media hint, Published Guest parity and stale-response protection.
+- staging evidence passed: OWNER/MANAGER opened saved `DRAFT`; the permanent draft banner, guest-safe candidate projection, private-field absence, safe unsupported lifecycle states, both entrypoints, media placeholder/no raw refs, Guest-route closure and stale-response protection were confirmed.
+
+The Preview smoke does **not** validate Venue Mini App media upload or management. No file picker,
+upload endpoint, replace/hide/delete flow or new storage path is part of either Preview phase.
 
 ## Executable Promotions Phase 2 Quality Gate
 
@@ -645,8 +648,8 @@ Telegram/staff-chat:
 ## Roadmap Status
 
 - Testing/QA smoke strategy: `UPDATED`.
-- Published Guest Preview Phase 1: **MVP IMPLEMENTED / LOCAL VALIDATION PASSED**; CI and staging smoke pending.
-- Draft Preview Phase 2.1: **MVP IMPLEMENTED / LOCAL VALIDATION PASSED**; CI and staging smoke pending.
+- Published Guest Preview Phase 1: **DONE / MVP / STAGING-SMOKE-PASSED**.
+- Draft Preview Phase 2.1: **DONE / MVP / STAGING-SMOKE-PASSED**.
 - Manual smoke checklist: `CONSOLIDATED`.
 - CI coverage: `PARTIAL / release-critical split jobs current`.
 - Frontend e2e: `PARTIAL`, with smoke coverage documented.

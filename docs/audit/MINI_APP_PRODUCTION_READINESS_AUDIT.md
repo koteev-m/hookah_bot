@@ -43,6 +43,22 @@
 > Current docs correction as of 2026-07-07: Testing/QA smoke strategy source of truth is `docs/TESTING_QA_SMOKE_STRATEGY.md`. Local validation, GitHub Actions expectations, change-type decision matrix, staging policy, manual smoke suites, failure reporting and Codex handoff are `UPDATED`; docs-only changes do not require staging deploy.
 >
 > Current docs correction as of 2026-07-07: Deployment/runbook source of truth is `docs/DEPLOYMENT_RUNBOOK.md`. Release model, staging deploy command, environment inventory, migration runbook, rollback policy, troubleshooting, incident response and Codex/ChatGPT handoff are `UPDATED`; production deploy/rollback/backup commands remain partial/needs verification.
+>
+> Current correction as of 2026-07-29: Published Guest Preview Phase 1 and Venue Mini App Draft
+> Preview Phase 2.1 are **DONE / MVP / STAGING-SMOKE-PASSED**. OWNER/MANAGER, exact Published
+> Guest parity, DRAFT banner/allowlist, STAFF/foreign denial, unsupported lifecycle safety, private
+> field absence, both entrypoints, no mutations and venue-switch isolation passed after green
+> Actions and staging deploy. Draft media remains a safe placeholder/no-raw-ref state; this is not
+> media upload parity.
+>
+> Current media correction as of 2026-07-29: venue/public-card image/PDF management is
+> **PARTIAL / BOT-FIRST**. Bot OWNER/MANAGER can add/delete Telegram-`file_id` attachments and
+> hide/show their whole info section; Guest and Published Preview render guarded proxy URLs. Venue
+> Mini App media upload/manage is **MISSING / FUTURE**. Structured menu-item
+> photo/description/thumbnail and option/flavor media are separately **MISSING / FUTURE**; the
+> view-only Photo/PDF menu still works as an info section. Staff photo upload is separate and
+> **FUTURE**. A cross-layer upload slice should wait for a storage/bridge and safe
+> delivery/deletion specification: **NEEDS_MEDIA_STORAGE_SPEC_FIRST**.
 
 Режим: read-only аудит. Код, миграции, тесты, backend/frontend business logic не менялись.
 

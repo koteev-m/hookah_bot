@@ -1,6 +1,6 @@
 # Menu / Options / Stop-List Model
 
-Дата актуализации: 2026-07-27.
+Дата актуализации: 2026-07-29.
 
 Статус: **current product reference / SPEC UPDATED**. Menu/options/flavors parity is documented as smoke-closed for the structured selected-option flow, but the broader menu constructor, media/top-list governance, shift check, audit coverage and permission parity remain **PARTIAL** unless a specific implementation task proves them.
 
@@ -34,9 +34,9 @@ Menu permissions are governed by `docs/SECURITY_RBAC_MATRIX.md`; Venue Mode oper
 | Option/value availability | Item option/flavor stop-list is documented and smoked. | Guest sees only available choices or disabled copy by venue policy; stale submit is rejected. | Keep option ownership and stale availability tests in regression. |
 | Guest menu DTO | Guest Bot and Guest Mini App expose option picker where configured. | DTO includes item visibility/availability, option groups, values, price deltas and human copy without leaking internal media/provider data. | Needs verification before broad modifier expansion. |
 | Order item modifiers/options snapshot | Current docs say selected option id/name/price delta and line preference notes are preserved where implemented. | Snapshot item and selected option names/prices at submit time; later edits never rewrite old bills/history. | Keep cross-channel bill snapshots in regression; multi-option quantities/counts need future design if introduced. |
-| Photos/descriptions | Item/media support exists in parts; guest media proxy is used for info sections. | Item photos can be shown in structured menu; descriptions are guest-safe. | Deep menu media/photo governance remains partial. |
+| Photos/descriptions | Current structured menu item repositories/DTOs/rendering do not expose item photos, thumbnails or descriptions. The DB has a legacy `menu_items.description` column, but current Bot/Venue/Guest menu paths do not read or write it. | Item photos can be shown in structured menu; descriptions are guest-safe. | Structured menu-item media/description is `MISSING / FUTURE`; do not infer support from working info-section media. |
 | Featured/top-list | Product spec requires featured/top list; implementation evidence is partial. | Venue manually pins items; not paid placement. | Paid placement/boosting belongs to Growth/Platform, not menu featured. |
-| PDF/media | `Фото-меню` exists as info/media section and is separate from structured order menu. | PDF/photo menu is view-only; no direct order unless item exists in structured menu. | Optional owner-defined subsections and richer media policy remain future. |
+| PDF/media | `Фото-меню` exists as a flat info/media section and is separate from structured order menu. Bot OWNER/MANAGER can add image/PDF attachments, delete one and hide/show the whole section. | PDF/photo menu is view-only; no direct order unless item exists in structured menu. | Venue Mini App authoring/upload is missing; direct replace, per-attachment hide and optional subsections remain future. |
 | Shift check | Operational readiness is a target concept; no complete shift-check flow is proven here. | Venue Mode has readiness cards, availability counts, mass enable and `shift_check_completed` evidence. | `FUTURE/PARTIAL`; do not call DONE without implementation evidence. |
 | Audit logs | Some role/menu/stop-list audit gaps remain in audit docs. | Price changes, archive/delete, mass stop-list, media removal, option schema change and Staff stop-list toggles write safe audit. | Dangerous-action audit remains `PARTIAL`. |
 | Telegram vs Mini App parity | Options/flavors parity is smoke-closed; some Telegram owner flows remain richer. | Required menu/stop-list operations are aligned across Bot and Mini App or documented as exceptions. | Keep cross-surface parity smoke for Staff stop-list and selected options. |
@@ -160,8 +160,10 @@ Current implementation from docs: Staff has `MENU_VIEW` and `MENU_AVAILABILITY_M
 | Item availability | Owner/Manager/Staff where permission allows. | Hides/disables unavailable by policy. | Owner/Manager/Staff where permission allows. | No. | No source-of-truth edits. |
 | Option group/value manage | Owner/Manager where implemented. | No management. | Owner/Manager where implemented. | No. | No. |
 | Option/value availability | Owner/Manager/Staff where permission allows. | Hides/disables/rejects unavailable. | Owner/Manager/Staff where permission allows. | No. | No. |
-| Media/photos | Owner where implemented. | View safe proxied media where exposed. | Owner/Manager where implemented. | No. | No. |
-| PDF/view-only menu | Owner info/media flow where implemented. | View-only `Фото-меню`. | Owner/Manager info/media where implemented. | No. | No. |
+| Structured item media/photos/descriptions | No current item photo/thumbnail/description management. | Current structured menu shows no item photo/thumbnail/description. | No current item photo/thumbnail/description management. | No. | No. |
+| Public info-section image/PDF | OWNER/MANAGER add and delete attachments and hide/show the whole section; storage uses Telegram `file_id`. | View through guarded backend proxy before QR and in Published Preview. | No author/upload/manage flow; Published Preview is view-only. | No. | No. |
+| PDF/view-only menu | OWNER/MANAGER use the flat info-section image/PDF flow. | View-only `📖 Фото-меню`. | No management; Published view only, Draft hint/no refs. | No. | No. |
+| Option/flavor media | No media fields/actions; name, price delta and availability only. | No option/flavor media. | No media fields/actions. | No. | No. |
 | Featured/top-list | Needs verification. | Guest display where implemented. | Needs verification. | Paid placement is separate. | No. |
 | Shift check | Future/partial. | No. | Future/partial. | No. | No. |
 | Mass stop-list | Future/partial; role-checked. | No. | Future/partial; role-checked. | No. | No. |
@@ -209,10 +211,27 @@ Guest behavior:
 - Structured menu is the only source of truth for orders.
 - PDF/photo menu is view-only.
 - Guest cannot order from PDF directly unless the item is represented in structured menu.
+- Current public-card/Photo-PDF-menu attachments are Bot-first: images/PDFs are stored by Telegram
+  `file_id`, Guest Mini App/Published Preview receive only guarded proxy URLs, and Draft Preview
+  returns no refs/routes.
+- Current Bot can add/delete attachments and hide/show their whole info section; it has no direct
+  replace or per-attachment hide action.
+- Current Venue Mini App has no file picker, upload endpoint or media-management UI.
+- Current structured menu has no item photo/thumbnail/description contract in active
+  Bot/Venue/Guest paths; option/flavor media is absent.
+- `menu_category_images` is currently test/seed-oriented with no owner CRUD or active Guest/Venue
+  Mini App consumer; it is not structured menu-item photo support.
 - Media upload requires a safe storage/proxy strategy.
 - Do not expose raw Telegram `file_id`, raw Telegram file URL, bot token, storage secret or provider data as public URL.
 - Backend media proxy or safe object storage is required before public display.
 - Media moderation is future/optional.
+
+Future **Venue Mini App Media Upload & Management Foundation** must cover OWNER/MANAGER image
+upload, PDF only on allowed surfaces, server-side MIME/type/size and venue-scope checks, safe
+storage abstraction, replace/hide/show/delete, audit and guest-safe delivery. Bot and Mini App must
+share one media source or a compatible bridge. Object storage is not selected here; verdict is
+**NEEDS_MEDIA_STORAGE_SPEC_FIRST** because the current implementation is Telegram-`file_id`
+dependent and browser-upload/deletion/delivery semantics are not specified.
 
 ## Analytics And Audit
 
@@ -246,7 +265,10 @@ Audit payloads must use safe ids and old/new safe fields only. Do not include ra
 - Menu constructor implementation: `PARTIAL` unless route/screen/test evidence proves full coverage.
 - Option modifiers in orders: structured selected-option parity is documented as `CLOSED / staging smoke passed`; broader multi-group modifier model remains `PARTIAL / needs verification`.
 - Staff stop-list parity: current docs say item/option availability is aligned between Bot and Mini App; per-venue `staff_stoplist_enabled` remains `FUTURE`.
-- Photos/media/top-list: `PARTIAL/FUTURE` unless implementation evidence proves a given slice.
+- Public info-section / Photo-PDF-menu media: `PARTIAL / BOT-FIRST`; Guest rendering and Published
+  Preview work through the proxy, while Venue Mini App upload/manage is `MISSING / FUTURE`.
+- Structured menu-item media/description/thumbnail and option/flavor media: `MISSING / FUTURE`.
+- Featured/top-list: `PARTIAL/FUTURE` unless implementation evidence proves a given slice.
 - Shift check: `FUTURE/PARTIAL`.
 - Guest server-side availability validation: `REQUIRED`; current stale/unavailable option rejection is documented as covered for the smoked options/flavors flow, but broader availability validation should stay in regression.
 - Promotions/paid placement remain separate from featured/top-list and follow `docs/GROWTH_RETENTION.md` plus `docs/PLATFORM_COCKPIT.md`.
