@@ -11,6 +11,8 @@ Venue Mode is the source of truth for day-to-day venue operations. Staff-chat is
 Canonical dependencies:
 - `docs/ORDER_SESSION_TAB_CORE.md` for table sessions, active orders, batches, tabs and bill lifecycle.
 - `docs/MENU_OPTIONS_STOPLIST.md` for menu, option/modifier, stop-list, media and shift-check policy.
+- `docs/MEDIA_STORAGE_UPLOAD.md` for info-section media storage, upload, delivery, lifecycle and the
+  Bot/Mini App bridge.
 - `docs/COMMUNICATION_MODEL.md` for `BOOKING_CHAT`, `VENUE_CHAT`, `SUPPORT_TICKET` and `STAFF_CALL` separation.
 - `docs/BOOKING_LIFECYCLE.md` for booking statuses, hold/deadline, reminders, booking chat and no-show/seated policy.
 - `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md` for Telegram bot entrypoints, fallback order, staff-call callbacks, staff-chat link/test/unlink, notification policy and callback security.
@@ -390,10 +392,11 @@ Minimum scope:
 - Bot and Mini App use one media source of truth or a compatible bridge;
 - employee consent for staff photos remains a separate mandatory rule.
 
-No object-storage product is selected by this document. The next decision is
-**NEEDS_MEDIA_STORAGE_SPEC_FIRST** because current venue media depends on Telegram `file_id`,
-browser upload has no endpoint/bridge, public delivery/deletion semantics are security-sensitive
-and the expected runtime diff crosses storage, API, RBAC, DTO, UI and audit boundaries.
+The canonical analysis is now `docs/MEDIA_STORAGE_UPLOAD.md`. Its verdict is
+**STOP_FOR_MEDIA_STORAGE_DECISION**: the recommendation is a hybrid ledger with legacy
+`TELEGRAM_FILE` reads and private S3-compatible storage for new uploads, but provider, cost,
+backup/versioning, deletion and production operations are not approved. Telegram technical
+storage chat remains a lower-cost alternative. Do not implement upload until one option is recorded.
 
 ## Stats
 

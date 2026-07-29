@@ -169,6 +169,8 @@ Mode source of truth when `STAFF_SCHEDULE` is specified.
 
 ## Photo Upload Future
 
+- `docs/MEDIA_STORAGE_UPLOAD.md` defines the venue info-section foundation only. It must not bypass
+  the employee consent, moderation, visibility and deletion decisions required here.
 - Current status: **FUTURE**. No supported Bot or Venue Mini App file picker/upload/manage flow
   exists. Venue Mini App shows `Фото сотрудника — позже`; raw manual Photo ref input is hidden.
 - The nullable `photo_ref` data/API field is not a safe upload pipeline. Current Guest UI renders
@@ -238,6 +240,8 @@ Analytics events are not the source of truth. Domain tables and audit logs remai
 - Today on shift: `MVP DONE / SMOKE-PASSED`.
 - Staff profile UX polish: `DONE / SMOKE-PASSED`.
 - Photo upload/media picker: `FUTURE`.
+- Venue info-section media decision does not close staff-photo scope; see
+  `docs/MEDIA_STORAGE_UPLOAD.md`.
 - Staff schedule: `FUTURE / SPEC NEEDED`.
 - Staff shift Telegram notifications/sign-up/swaps: `FUTURE`.
 - Separate staff communication chat/forum topics: `OPEN DECISION / FUTURE`.

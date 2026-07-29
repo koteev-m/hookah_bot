@@ -2,7 +2,7 @@
 
 Дата актуализации: 2026-07-29.
 
-Статус: **current product reference / UPDATED**. Runtime permission parity is **PARTIAL** unless a specific route, test or smoke result is cited by the relevant implementation task. Venue Mode operational surfaces are detailed in `docs/VENUE_OPERATIONS.md`; staff profile/today-shift/tips permissions are detailed in `docs/STAFF_PROFILES_SHIFTS_TIPS.md`; booking lifecycle permissions are detailed in `docs/BOOKING_LIFECYCLE.md`; Telegram fallback/staff-chat permissions are detailed in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`; menu/stop-list role policy is detailed in `docs/MENU_OPTIONS_STOPLIST.md`; validation strategy is detailed in `docs/TESTING_QA_SMOKE_STRATEGY.md`; release/deploy operations are detailed in `docs/DEPLOYMENT_RUNBOOK.md`.
+Статус: **current product reference / UPDATED**. Runtime permission parity is **PARTIAL** unless a specific route, test or smoke result is cited by the relevant implementation task. Venue Mode operational surfaces are detailed in `docs/VENUE_OPERATIONS.md`; staff profile/today-shift/tips permissions are detailed in `docs/STAFF_PROFILES_SHIFTS_TIPS.md`; booking lifecycle permissions are detailed in `docs/BOOKING_LIFECYCLE.md`; Telegram fallback/staff-chat permissions are detailed in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`; menu/stop-list role policy is detailed in `docs/MENU_OPTIONS_STOPLIST.md`; venue media upload/storage security is detailed in `docs/MEDIA_STORAGE_UPLOAD.md`; validation strategy is detailed in `docs/TESTING_QA_SMOKE_STRATEGY.md`; release/deploy operations are detailed in `docs/DEPLOYMENT_RUNBOOK.md`.
 
 ## Core Rule
 
@@ -136,6 +136,7 @@ These actions require server-side authorization and should require confirmation,
 | Table QR token rotated/exported | Confirmation and audit; old/revoked token must not resolve. |
 | Staff chat linked/unlinked/tested | Confirmation for unlink; audit/link evidence without raw secrets. |
 | Menu price changed; item archived; option schema changed; media removed; Staff stop-list toggled; stop-list mass update | Audit safe old/new fields; no raw media/provider payloads. |
+| Venue media uploaded/replaced/hidden/shown/deleted | OWNER/MANAGER own venue only; strict content validation; audit safe asset/status metadata; never expose source ref, object/path key, Telegram file id or storage credentials. |
 | Promotion schedule, eligibility, reward, status, compatibility mode/matrix or priority changed | Owner/Manager own venue only; audit safe old/new rule/version, policy/version, priority and actor. |
 | Order force closed; tab reopened | Reason and audit; preserve session/tab boundaries. |
 | Invoice manually marked paid; subscription override changed; billing provider config changed | Platform Owner only, explicit action, reason where needed and safe audit. |
@@ -202,6 +203,12 @@ These actions require server-side authorization and should require confirmation,
     sections, unpublished staff, inactive promotions, raw media refs, mutation actions, public links
     or share tokens. Draft media is text-only with one post-publication hint; Published media is
     unchanged.
+30. Venue media upload/manage allows OWNER/MANAGER for the own venue only; STAFF, Guest,
+    Platform-only and foreign venue direct requests are denied before storage access.
+31. MIME spoofing, over-limit files/dimensions, WebP/SVG/archive/executable and PDF on a disallowed
+    surface are rejected server-side; filename and browser `Content-Type` are never authority.
+32. Guest/Published media DTOs, responses, errors, logs and audit contain no raw Telegram `file_id`,
+    object key, filesystem path, storage credential or provider payload; Draft remains ref-free.
 
 ## Roadmap Status
 
@@ -219,3 +226,6 @@ These actions require server-side authorization and should require confirmation,
   financial conflict policy has implementation or verification evidence yet.
 - Security smoke checklist: `UPDATED`.
 - Post-Visit Feedback RBAC/privacy: `DONE / MVP / STAGING-SMOKE-PASSED`; Platform feedback dashboard remains `FUTURE`.
+- Venue Mini App media foundation: security contract is canonical in
+  `docs/MEDIA_STORAGE_UPLOAD.md`; runtime is `MISSING` and storage selection is
+  `STOP_FOR_MEDIA_STORAGE_DECISION`.

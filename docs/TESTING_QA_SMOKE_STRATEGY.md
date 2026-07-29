@@ -104,6 +104,27 @@ Acceptance:
 The Preview smoke does **not** validate Venue Mini App media upload or management. No file picker,
 upload endpoint, replace/hide/delete flow or new storage path is part of either Preview phase.
 
+## Venue Mini App Media Foundation Future Quality Gate
+
+The canonical future contract is `docs/MEDIA_STORAGE_UPLOAD.md`. Its current verdict is
+`STOP_FOR_MEDIA_STORAGE_DECISION`; this gate applies only after one durable storage option,
+backup/deletion policy and operations owner are approved.
+
+Required future coverage:
+
+- PostgreSQL/H2 legacy-row migration and one source-neutral asset ledger;
+- OWNER/MANAGER own-venue allow plus STAFF/Guest/Platform-only/foreign denial;
+- server MIME sniffing, malformed/spoofed file, size, dimensions, cap and rate limits;
+- no raw Telegram/object/filesystem ref in DTO, URL, DOM, error, log or audit;
+- upload/replace/hide/show/delete lifecycle, safe audit, orphan/failed cleanup and
+  reference-protected physical deletion;
+- legacy Telegram plus selected-target delivery in Guest and Bot;
+- exact Published Preview parity and ref-free Draft behavior;
+- Mini App build/e2e plus real Telegram and selected-storage staging smoke;
+- container recreate and backup/restore evidence for PostgreSQL metadata and selected byte storage.
+
+Do not claim the media foundation release-ready from upload UI/API tests alone.
+
 ## Executable Promotions Phase 2 Quality Gate
 
 The first runtime slice must prove one shared Bot/Mini App calculation path; parallel client-side
@@ -454,6 +475,7 @@ If Gradle OOM occurs:
 | Order/session/tab | `docs/ORDER_SESSION_TAB_CORE.md` |
 | Venue operations | `docs/VENUE_OPERATIONS.md` |
 | Menu/stop-list | `docs/MENU_OPTIONS_STOPLIST.md` |
+| Venue media storage/upload | `docs/MEDIA_STORAGE_UPLOAD.md` |
 | Booking lifecycle | `docs/BOOKING_LIFECYCLE.md` |
 | Telegram fallback/staff-chat | `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md` |
 | Platform cockpit | `docs/PLATFORM_COCKPIT.md` |
@@ -655,6 +677,7 @@ Telegram/staff-chat:
 - Frontend e2e: `PARTIAL`, with smoke coverage documented.
 - Real Telegram smoke: `REQUIRED` for bot/staff-chat changes.
 - Staging deploy smoke policy: `DOCUMENTED`.
+- Venue media foundation quality gate: `DOCUMENTED / STORAGE DECISION REQUIRED`.
 
 ## Codex Workflow Guidance
 

@@ -18,6 +18,12 @@ Menu/options/stop-list source of truth:
 - Canonical `MENU_CATEGORY`, `MENU_ITEM`, `OPTION_GROUP`, `OPTION_VALUE`, `STOP_LIST`, `SHIFT_CHECK`, media, featured/top-list, availability validation and menu permissions are tracked in `docs/MENU_OPTIONS_STOPLIST.md`.
 - Structured menu is the source of truth for orders; `Фото-меню` / PDF media is view-only.
 
+Venue media storage/upload source of truth:
+- Canonical info-section media storage, upload, delivery, lifecycle, Bot/Mini App bridge and first
+  bounded runtime slice are tracked in `docs/MEDIA_STORAGE_UPLOAD.md`.
+- Storage selection is `STOP_FOR_MEDIA_STORAGE_DECISION`; do not add a browser upload endpoint or
+  durable container-filesystem storage before that decision.
+
 Security/RBAC source of truth:
 - Canonical roles, scopes, permissions, surface parity, dangerous actions and current-vs-target gaps are tracked in `docs/SECURITY_RBAC_MATRIX.md`.
 - Server-side RBAC is the source of truth. UI hiding, Telegram keyboards, QR/table tokens and tab invite tokens are never authority by themselves.

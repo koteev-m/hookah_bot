@@ -8,6 +8,10 @@
 
 The structured menu is the source of truth for orders. PDF/photo menu is view-only. Guest order preview and submit must validate item availability, option validity and prices server-side; the cart must never trust client-side prices or stale option state.
 
+Info-section/Photo-PDF-menu storage, upload, delivery and Bot/Mini App compatibility are canonical
+in `docs/MEDIA_STORAGE_UPLOAD.md`. Structured menu-item and option/flavor media remain outside its
+first slice.
+
 Menu permissions are governed by `docs/SECURITY_RBAC_MATRIX.md`; Venue Mode operational surfaces are governed by `docs/VENUE_OPERATIONS.md`; order/session/tab and snapshot rules are governed by `docs/ORDER_SESSION_TAB_CORE.md`; Telegram callback/staff-chat rules are governed by `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`; analytics/audit event names are governed by `docs/ANALYTICS_EVENTS.md`; validation strategy is governed by `docs/TESTING_QA_SMOKE_STRATEGY.md`; release/deploy operations are governed by `docs/DEPLOYMENT_RUNBOOK.md`.
 
 ## Terms
@@ -229,9 +233,10 @@ Guest behavior:
 Future **Venue Mini App Media Upload & Management Foundation** must cover OWNER/MANAGER image
 upload, PDF only on allowed surfaces, server-side MIME/type/size and venue-scope checks, safe
 storage abstraction, replace/hide/show/delete, audit and guest-safe delivery. Bot and Mini App must
-share one media source or a compatible bridge. Object storage is not selected here; verdict is
-**NEEDS_MEDIA_STORAGE_SPEC_FIRST** because the current implementation is Telegram-`file_id`
-dependent and browser-upload/deletion/delivery semantics are not specified.
+share one media source or compatible bridge. `docs/MEDIA_STORAGE_UPLOAD.md` now specifies that
+contract; verdict is **STOP_FOR_MEDIA_STORAGE_DECISION** until Telegram technical storage chat
+versus hybrid private S3-compatible target (or an operations-qualified filesystem volume) is
+approved. No object-storage provider is selected.
 
 ## Analytics And Audit
 
