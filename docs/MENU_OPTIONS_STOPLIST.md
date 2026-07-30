@@ -1,6 +1,6 @@
 # Menu / Options / Stop-List Model
 
-Дата актуализации: 2026-07-29.
+Дата актуализации: 2026-07-30.
 
 Статус: **current product reference / SPEC UPDATED**. Menu/options/flavors parity is documented as smoke-closed for the structured selected-option flow, but the broader menu constructor, media/top-list governance, shift check, audit coverage and permission parity remain **PARTIAL** unless a specific implementation task proves them.
 
@@ -165,8 +165,8 @@ Current implementation from docs: Staff has `MENU_VIEW` and `MENU_AVAILABILITY_M
 | Option group/value manage | Owner/Manager where implemented. | No management. | Owner/Manager where implemented. | No. | No. |
 | Option/value availability | Owner/Manager/Staff where permission allows. | Hides/disables/rejects unavailable. | Owner/Manager/Staff where permission allows. | No. | No. |
 | Structured item media/photos/descriptions | No current item photo/thumbnail/description management. | Current structured menu shows no item photo/thumbnail/description. | No current item photo/thumbnail/description management. | No. | No. |
-| Public info-section image/PDF | OWNER/MANAGER add and delete attachments and hide/show the whole section; storage uses Telegram `file_id`. | View through guarded backend proxy before QR and in Published Preview. | No author/upload/manage flow; Published Preview is view-only. | No. | No. |
-| PDF/view-only menu | OWNER/MANAGER use the flat info-section image/PDF flow. | View-only `📖 Фото-меню`. | No management; Published view only, Draft hint/no refs. | No. | No. |
+| Public info-section image/PDF | OWNER/MANAGER add and delete attachments and hide/show the whole section; storage uses Telegram `file_id`. | View through guarded backend proxy before QR and in `PUBLISHED_PUBLIC`. | No author/upload/manage flow; both Preview modes are view-only, and `PRIVATE_DRAFT` uses authenticated venue/section/media-scoped delivery without raw refs. | No. | No. |
+| PDF/view-only menu | OWNER/MANAGER use the flat info-section image/PDF flow. | View-only `📖 Фото-меню`. | No management; both Preview modes are view-only through their guarded/scoped routes. | No. | No. |
 | Option/flavor media | No media fields/actions; name, price delta and availability only. | No option/flavor media. | No media fields/actions. | No. | No. |
 | Featured/top-list | Needs verification. | Guest display where implemented. | Needs verification. | Paid placement is separate. | No. |
 | Shift check | Future/partial. | No. | Future/partial. | No. | No. |
@@ -216,8 +216,9 @@ Guest behavior:
 - PDF/photo menu is view-only.
 - Guest cannot order from PDF directly unless the item is represented in structured menu.
 - Current public-card/Photo-PDF-menu attachments are Bot-first: images/PDFs are stored by Telegram
-  `file_id`, Guest Mini App/Published Preview receive only guarded proxy URLs, and Draft Preview
-  returns no refs/routes.
+  `file_id`; Guest Mini App and `PUBLISHED_PUBLIC` receive guarded Guest proxy URLs, while
+  `PRIVATE_DRAFT` receives authenticated venue/section/media-scoped proxy URLs. Neither preview
+  DTO exposes raw refs.
 - Current Bot can add/delete attachments and hide/show their whole info section; it has no direct
   replace or per-attachment hide action.
 - Current Venue Mini App has no file picker, upload endpoint or media-management UI.
@@ -270,8 +271,9 @@ Audit payloads must use safe ids and old/new safe fields only. Do not include ra
 - Menu constructor implementation: `PARTIAL` unless route/screen/test evidence proves full coverage.
 - Option modifiers in orders: structured selected-option parity is documented as `CLOSED / staging smoke passed`; broader multi-group modifier model remains `PARTIAL / needs verification`.
 - Staff stop-list parity: current docs say item/option availability is aligned between Bot and Mini App; per-venue `staff_stoplist_enabled` remains `FUTURE`.
-- Public info-section / Photo-PDF-menu media: `PARTIAL / BOT-FIRST`; Guest rendering and Published
-  Preview work through the proxy, while Venue Mini App upload/manage is `MISSING / FUTURE`.
+- Public info-section / Photo-PDF-menu media: `PARTIAL / BOT-FIRST`; Guest rendering and both
+  Preview modes work through guarded/scoped proxies, while Venue Mini App upload/manage is
+  `MISSING / FUTURE`.
 - Structured menu-item media/description/thumbnail and option/flavor media: `MISSING / FUTURE`.
 - Featured/top-list: `PARTIAL/FUTURE` unless implementation evidence proves a given slice.
 - Shift check: `FUTURE/PARTIAL`.

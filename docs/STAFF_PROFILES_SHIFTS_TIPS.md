@@ -1,6 +1,6 @@
 # Staff Profiles, Today Shifts And Staff Tips
 
-Дата актуализации: 2026-07-29.
+Дата актуализации: 2026-07-30.
 
 Статус: **canonical staff visibility/tips spec / PHASE 1 DONE / SMOKE-PASSED**.
 `STAFF_PROFILE`, `SHIFT_TODAY`, guest-visible `Сегодня работают` and Venue staff-profile UX
@@ -174,7 +174,7 @@ Mode source of truth when `STAFF_SCHEDULE` is specified.
 - Current status: **FUTURE**. No supported Bot or Venue Mini App file picker/upload/manage flow
   exists. Venue Mini App shows `Фото сотрудника — позже`; raw manual Photo ref input is hidden.
 - The nullable `photo_ref` data/API field is not a safe upload pipeline. Current Guest UI renders
-  an initials placeholder instead of using it, and Draft Preview omits the photo ref.
+  an initials placeholder instead of using it, and both Guest Preview modes omit the raw photo ref.
 - Future profile photos need safe media upload/photo picker, not manual raw `photo_ref` entry.
 - Employee consent is required before showing a public profile photo.
 - Storage, moderation, replacement and deletion rules must be specified before broad rollout.

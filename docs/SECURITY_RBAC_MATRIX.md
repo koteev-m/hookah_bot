@@ -158,7 +158,7 @@ These actions require server-side authorization and should require confirmation,
 | Promotion configuration/status mutation audit | `PARTIAL / P2 FOLLOW-UP`. Promotion management is server-authorized, but there is not yet complete actor plus safe old/new rule/config/status evidence for every mutation. | Record actor, venue/promotion/rule identity, version and safe old/new schedule, target, reward and status evidence. | Do not treat promotion mutation audit as `DONE` until a separate implementation and verification slice closes this gap. |
 | Promotion financial compatibility | Current slices have bounded percentage/manual-discount and gift reward guards, but no documented common cross-promotion conflict policy. Gift smoke observed Happy Hours Percentage and Gift With Item together; this is not a confirmed runtime bug. | One server-owned, reward-type-aware policy uses `STACKABLE`, `EXCLUSIVE` or `OVERRIDE`, explicit priority and deterministic winner/tie-break rules for all executable promotions and manual discounts. | `AUDIT / FUTURE IMPLEMENTATION`. Fail closed against accidental discount addition; later loyalty, promo codes and cashback must reuse the same mechanism. |
 | Staff profiles / today shift | Phase 1 backend + Mini App implementation exists and local smoke passed; canonical model is `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. | Guest sees only public visible profile/shift data; Owner controls publish/hide; Staff may edit own linked draft only; Manager may mark active/completed/canceled today shifts. | Keep role/privacy smoke in regression; staging UX acceptance is still required before production readiness. |
-| Venue card preview | **VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**. | One OWNER/MANAGER own-venue endpoint selects exact guarded Guest state or a saved, server-allowlisted private projection. | Keep direct role/foreign/lifecycle denial, dirty-form no-auto-save, private-marker absence, `no-store`, authenticated media scoping and stale-state isolation in regression; CI/staging smoke remain pending. |
+| Venue card preview | **VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY / DONE / MVP / STAGING-SMOKE-PASSED**. | One OWNER/MANAGER own-venue endpoint selects exact guarded Guest state or a saved, server-allowlisted private projection through the shared public-facing assembly. | Keep direct role/foreign/lifecycle denial, dirty-form no-auto-save, private-marker absence, `no-store`, authenticated media scoping and stale-state isolation in regression. |
 | Post-visit feedback | History-only submit, own-venue Owner/Manager read, Owner-only public review URL and low-rating exact `VENUE_CHAT` follow-up are DONE / MVP / staging-smoke-passed. | Preserve own-visit/own-venue isolation, Staff denial and manual-only external/follow-up actions. | Platform feedback dashboard, automated prompts and public review automation remain future/disabled. |
 | Staff tips | No runtime implementation yet; canonical future boundaries are `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. | Phase 2 external staff tip link + intent only; money does not touch platform in MVP; intent is not proof of payment. | Provider/direct payout needs legal/product decision; Telegram Stars and crypto are not MVP. |
 | Surface parity | Bot and Mini App parity is closed for several slices; some Telegram flows are still richer. | Required product surfaces are aligned or explicitly documented as exceptions. | Keep parity roadmap current before adding new management functions. |
@@ -195,9 +195,10 @@ These actions require server-side authorization and should require confirmation,
 26. Manual discount policy and every executable reward use one compatibility decision that fails
     closed against accidental discount addition; future loyalty, promo codes and cashback cannot
     bypass it.
-27. One Venue Guest Preview endpoint selects mode server-side. `PUBLISHED_PUBLIC` continues to
-    require the exact Guest lifecycle/subscription availability guards and exposes the same
-    venue/info DTO state as Guest; no query or client mode can bypass those guards.
+27. One Venue Guest Preview endpoint, `GET /api/venue/{venueId}/guest-preview`, selects mode
+    server-side. `PUBLISHED_PUBLIC` continues to require the exact Guest lifecycle/subscription
+    availability guards and exposes the same venue/info DTO state as Guest; no query or client
+    mode can bypass those guards.
 28. `PRIVATE_DRAFT` allows only OWNER/MANAGER of the own venue when public Guest assembly is
     unavailable but a private saved projection is permitted. STAFF, foreign venue users,
     Platform-only access and missing/ARCHIVED/DELETED venues are denied safely; Guest routes cannot
@@ -219,7 +220,7 @@ These actions require server-side authorization and should require confirmation,
 - Security/RBAC matrix: `UPDATED`.
 - Permission parity: `PARTIAL`; keep route-level denial tests and role smoke in regression.
 - Staff profiles / today shift: Phase 1 backend + Mini App implementation is done/local-smoke-passed; staging UX acceptance is still required before production readiness.
-- Guest Preview Phase 2.1: **VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**; focused preview/Guest/RBAC/promotion tests, compile/lint, Mini App build and deterministic smoke `95/95` passed. CI and staging smoke remain pending.
+- Guest Preview Phase 2.1: **VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY / DONE / MVP / STAGING-SMOKE-PASSED**; focused preview/Guest/RBAC/promotion tests, compile/lint, Mini App build and deterministic smoke `95/95` passed, GitHub Actions were green, staging deploy completed and manual staging smoke passed.
 - Staff tips: `SPEC DRAFT / FUTURE`; payment provider/direct payout requires legal/product decision, and external tip intent is not proof of payment.
 - `ADMIN` decision: target is removal from product model / compatibility alias only; implementation cleanup remains a migration/copy hygiene follow-up.
 - Staff stop-list parity: current docs say operational item/option availability is aligned; per-venue `staff_stoplist_enabled` is target/future in `docs/MENU_OPTIONS_STOPLIST.md`.

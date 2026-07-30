@@ -247,7 +247,15 @@ E. Smoke/docs closure: bot vs Mini App option parity, staff chat/order detail di
 Remaining follow-ups after parity closure:
 - Mini App normalize/reset base flavor profiles only if still needed after venue pilots.
 - DB-level duplicate/race protection for base flavor profile apply only if concurrent apply becomes a real operational issue.
-- Broad Venue Mini App IA parity with bot sections remains separate. `Работа смены`, `Настройки` and read-only `Статистика` now have real screens; M2 read-only `Статистика` passed staging smoke for OWNER/MANAGER with STAFF hidden. `Продвижение` and `Предпросмотр для гостя` must stay hidden until backend-backed screens exist. Custom date range stats and AI-generated summaries are later follow-ups, not current launch scope.
+- Broad Venue Mini App IA parity with bot sections remains separate. `Работа смены`, `Настройки`,
+  read-only `Статистика` and read-only `Предпросмотр для гостя` now have backend-backed screens.
+  Guest Preview is **VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY / DONE /
+  MVP / STAGING-SMOKE-PASSED**: OWNER/MANAGER use one
+  `GET /api/venue/{venueId}/guest-preview`, the backend selects `PUBLISHED_PUBLIC` or
+  `PRIVATE_DRAFT`, and both modes use the shared public-facing assembly without exposing draft
+  through the public Guest API. Preview reads saved backend state and never unsaved form values.
+  `Продвижение` remains governed by its own bounded roadmap status. Custom date range stats and
+  AI-generated summaries are later follow-ups, not current launch scope.
 
 ## Block 9 — Tables & QR
 MUST:

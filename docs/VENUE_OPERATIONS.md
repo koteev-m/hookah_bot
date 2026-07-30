@@ -39,7 +39,7 @@ Canonical dependencies:
 | Staff profiles / today shift | Guest-visible opt-in staff profiles and manual "today on shift". | Phase 1 backend + Mini App implementation exists and smoke passed; both server-selected Guest Preview modes preserve the public-profile/visible-shift filters. | Tips and safe consent-based photo upload remain future. |
 | Staff-chat | Linked group diagnostics and operational notifications. | Link/test/unlink, live order activity-card behavior and state-aware booking shortcuts are smoke-closed. | Personal staff notifications and unified event policy remain future. |
 | Feedback | Internal post-visit feedback from completed Guest History. | DONE / MVP / staging-smoke-passed: Owner/Manager read own-venue aggregate/list and can manually open exact `VENUE_CHAT` follow-up for ratings `1..3`; Staff denied. | Platform feedback analytics dashboard and automated prompts remain future. |
-| Settings / card preview | Venue profile, schedule, booking hold, extension, staff-chat and read-only public-card preview. | Booking hold, shift extension, public profile/card, schedule/date exceptions and Owner-only public review link are smoke-closed. One `Предпросмотр для гостя` entry now uses server-selected `PUBLISHED_PUBLIC` or own-venue `PRIVATE_DRAFT`; local validation passed. Unsaved public-card, weekly-schedule and date-exception changes block preview without auto-save. | Broader settings/media authoring, versioned snapshots and publish workflow remain future; archived/deleted/missing venues continue to fail closed. |
+| Settings / card preview | Venue profile, schedule, booking hold, extension, staff-chat and read-only public-card preview. | Booking hold, shift extension, public profile/card, schedule/date exceptions and Owner-only public review link are smoke-closed. One `Предпросмотр для гостя` entry uses one backend-selected `PUBLISHED_PUBLIC` / own-venue `PRIVATE_DRAFT` endpoint and is **DONE / MVP / STAGING-SMOKE-PASSED**. Unsaved public-card, weekly-schedule and date-exception changes block preview without auto-save. | Broader settings/media authoring, versioned snapshots and publish workflow remain future; archived/deleted/missing venues continue to fail closed. |
 | Stats | Role-specific operational summaries. | Venue Mini App read-only stats passed staging smoke for Owner/Manager. | Custom ranges, arbitrary stats, AI summaries and advanced analytics remain future. |
 
 ## Dashboard
@@ -354,8 +354,13 @@ Current vs target:
 - If a future settings screen is not backend-backed, hide it or mark it clearly as future.
 
 Closed card-preview slice:
-- Current status is **VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**. Historical Published/Draft staging evidence remains useful regression evidence, but this unified delta still requires green CI and staging smoke.
-- OWNER/MANAGER see one own-venue entry `Предпросмотр для гостя` and one read-only renderer. The server selects `PUBLISHED_PUBLIC` only when the unchanged Guest lifecycle/subscription guards pass; its venue/info payload is the exact Guest-visible state. Otherwise `PRIVATE_DRAFT` exposes an allowlisted projection of saved public-facing state without weakening any Guest route.
+- Current status is **VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY / DONE /
+  MVP / STAGING-SMOKE-PASSED** after green GitHub Actions, staging deploy and manual staging smoke.
+- OWNER/MANAGER see one own-venue entry `Предпросмотр для гостя` and one read-only renderer backed by
+  `GET /api/venue/{venueId}/guest-preview`. The server selects `PUBLISHED_PUBLIC` only when the
+  unchanged Guest lifecycle/subscription guards pass; its venue/info payload is the exact
+  Guest-visible state. Otherwise `PRIVATE_DRAFT` uses the same public-facing assembly for an
+  allowlisted projection of saved state without weakening any public Guest route.
 - `PUBLISHED_PUBLIC` shows badge `Опубликовано` and `Так карточку сейчас видит гость.`. `PRIVATE_DRAFT` shows badge `Черновик`, `Гости пока не видят эту карточку. Это закрытый предпросмотр сохранённой версии.` and only a safe reason: `Заведение ещё не опубликовано.`, `Заведение временно скрыто.` or `Заведение приостановлено.`. Technical subscription state is not exposed.
 - The Settings entry returns through `Вернуться к настройкам`; the venue-navigation entry returns through `Вернуться в кабинет`.
 - `PRIVATE_DRAFT` is allowlisted to saved guest-facing card/location/contact/description, weekly schedule and date exceptions, visible info sections and authenticated scoped representations of existing guest-visible media, published Today Staff and current `ACTIVE` promotions. Hidden sections/media, unpublished staff, `DRAFT`/`PAUSED`/`ARCHIVED` or non-current promotions, private fields and raw provider/storage refs are absent.
@@ -442,7 +447,7 @@ Current vs target:
 | Tables/QR | Bot table flows exist. | Basics exist. | No. | QR rotate audit/diagnostics need verification. | P2 |
 | Staff invites | Bot invite acceptance exists. | Copy/share invite result smoke-closed. | No. | Keep role denial/last-owner protection in regression. | Regression |
 | Staff-chat link/test | Bot link command exists. | M6 link/test/unlink smoke-closed. | Target group. | Personal notifications future. | Regression |
-| Settings / card preview | Bot and Mini App share the public review URL source; Bot remains richer in info-section/media authoring. | Backend-backed slices include Owner-only `Ссылка для отзывов` and one read-only `Предпросмотр для гостя` screen with server-selected `PUBLISHED_PUBLIC` / `PRIVATE_DRAFT`; local validation passed. | No. | Keep exact Guest parity, saved-private allowlist, dirty-state guard, RBAC/privacy/media scope and lifecycle/stale-state boundaries in regression; media upload remains a separate future block. | Regression/P2 |
+| Settings / card preview | Bot and Mini App share the public review URL source; Bot remains richer in info-section/media authoring. | Backend-backed slices include Owner-only `Ссылка для отзывов` and one read-only `Предпросмотр для гостя` screen with server-selected `PUBLISHED_PUBLIC` / `PRIVATE_DRAFT`; preview is **DONE / MVP / STAGING-SMOKE-PASSED**. | No. | Keep exact Guest parity, saved-private allowlist, dirty-state guard, RBAC/privacy/media scope and lifecycle/stale-state boundaries in regression; media upload remains a separate future block. | Regression/P2 |
 | Stats | Bot stats exist. | Read-only stats smoke-closed. | No. | Custom ranges/advanced analytics future. | P2 |
 
 ## Current Known Gaps
@@ -467,7 +472,7 @@ Current vs target:
 - Booking queue: `CLOSED for MVP`, `PARTIAL` for automation/preorder/reminder rollout.
 - Post-Visit Feedback: `DONE / MVP / STAGING-SMOKE-PASSED`, including manual `5/5` public review CTA and low-rating `VENUE_CHAT` follow-up.
 - Settings: `PARTIAL`, with several backend-backed slices closed, including Owner-only `Ссылка для отзывов` shared by Bot/Mini App.
-- Guest Preview Phase 2.1: **VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**; focused backend preview/Guest/RBAC/promotion tests, compile/lint, Mini App build and deterministic smoke `95/95` are green. CI and staging smoke remain required.
+- Guest Preview Phase 2.1: **VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY / DONE / MVP / STAGING-SMOKE-PASSED**; focused backend preview/Guest/RBAC/promotion tests, compile/lint, Mini App build and deterministic smoke `95/95` are green, GitHub Actions were green, staging deploy completed and manual staging smoke passed.
 - Full bill/display/order snapshots: `CLOSED for current smoke paths`, `PARTIAL` for force-close/reopen/all modifier variants.
 - Stop-list parity: current item/option parity documented; per-venue Staff policy and mass/shift-check remain future.
 - Staff-chat source-of-truth policy: `DOCUMENTED`.

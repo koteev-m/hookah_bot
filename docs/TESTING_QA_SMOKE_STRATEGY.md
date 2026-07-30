@@ -22,7 +22,7 @@ Current practice:
 - Gift parity is
   `GIFT_WITH_ITEM BOT/MINIAPP PARITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`.
   GitHub Actions and staging cross-surface smoke remain required.
-- Venue Mini App Guest Preview Phase 2.1 is **VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**. Focused preview/Guest/RBAC/promotion backend tests, compile/lint, Mini App build and deterministic browser smoke `95/95` are green. GitHub Actions and staging smoke remain required for the unified delta; historical Published/Draft staging evidence does not promote the new contract automatically.
+- Venue Mini App Guest Preview Phase 2.1 is **VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY / DONE / MVP / STAGING-SMOKE-PASSED**. Focused preview/Guest/RBAC/promotion backend tests, compile/lint, Mini App build and deterministic browser smoke `95/95` are green; GitHub Actions were green, staging deploy completed and manual staging smoke passed for the unified contract.
 
 Target QA model:
 - Every task ends with changed files, behavior summary, tests run, validation result, manual smoke checklist, `git status --short`, whether `scripts/dev/` was touched and whether staging deploy is needed.
@@ -65,6 +65,11 @@ CI=1 TZ=UTC MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke
 
 Local result on 2026-07-30: all four focused backend test selectors passed, Kotlin compile and lint
 passed, the Mini App production build passed, and deterministic Playwright smoke passed `95/95`.
+
+Staging result on 2026-07-30: green GitHub Actions and the staging deploy were followed by manual
+smoke for published/private server-selected modes, saved-state/dirty-form behavior, OWNER/MANAGER
+allow plus STAFF/foreign denial, privacy/child visibility, read-only action absence, origin-aware
+navigation, two-venue stale-response isolation and unchanged real Guest/Venue Mode behavior.
 
 Acceptance:
 
@@ -664,7 +669,7 @@ Telegram/staff-chat:
 ## Roadmap Status
 
 - Testing/QA smoke strategy: `UPDATED`.
-- Guest Preview Phase 2.1: **VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**; CI and staging smoke remain required.
+- Guest Preview Phase 2.1: **VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY / DONE / MVP / STAGING-SMOKE-PASSED**.
 - Manual smoke checklist: `CONSOLIDATED`.
 - CI coverage: `PARTIAL / release-critical split jobs current`.
 - Frontend e2e: `PARTIAL`, with smoke coverage documented.

@@ -1,6 +1,6 @@
 # Venue Owner
 
-Дата актуализации: 2026-07-29.
+Дата актуализации: 2026-07-30.
 
 Статус: **current role reference**. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. Этот файл разделяет Telegram bot owner setup flow и Venue Mini App owner panel.
 
@@ -63,8 +63,8 @@ Venue Owner открывает Venue Mini App через inline `web_app` entry,
 - subscription/payment state screen with adjusted paid-through and next-payment dates;
 - future/partial `Акции и удержание` only when backend-backed; Staff must not manage campaigns;
 - read-only stats;
-- read-only `Предпросмотр карточки`: Published Guest Preview Phase 1 and saved-DRAFT Preview
-  Phase 2.1 are **DONE / MVP / STAGING-SMOKE-PASSED**;
+- read-only `Предпросмотр для гостя`: one backend-selected `PUBLISHED_PUBLIC` /
+  `PRIVATE_DRAFT` endpoint is **DONE / MVP / STAGING-SMOKE-PASSED**;
 - settings where implemented.
 
 `Ссылка для отзывов` is Owner-only and shared by Bot/Mini App. Venue Settings shows:
@@ -130,10 +130,9 @@ Mini App остаётся backend-RBAC enforced: кнопки в UI не явл�
 - Staff-call lifecycle, linked staff-chat notification delivery and ACK/DONE audit hardening are CLOSED / staging smoke passed for Venue Mini App and Telegram staff-chat surfaces. Applied ACK/DONE transitions leave audit evidence with actor user id and source; audit is best-effort.
 - Guest-visible `CANCELLED` terminal status is CLOSED / staging smoke passed for the current guest/tableSession. Venue active queue remains `NEW` / `ACK`; manual cancel UI, row-level `acked_by` / `done_by` / ACK-DONE timestamp columns and staff-call UX polish remain future. Guest table-context cleanup/exit is CLOSED / staging smoke passed and belongs to the Guest role regression checklist.
 - Menu options/photos/descriptions/top-list richness may still be partial depending on guest surface.
-- Venue/public-card media management is `PARTIAL / BOT-FIRST`: Guest and Published Preview can
-  already render guarded media, but Venue Mini App has no file picker, upload endpoint, replace,
-  hide/show or delete UI. Draft Preview intentionally shows a safe media placeholder with no raw
-  refs/routes.
+- Venue/public-card media management is `PARTIAL / BOT-FIRST`: Guest and `PUBLISHED_PUBLIC` render
+  guarded media, while `PRIVATE_DRAFT` uses authenticated scoped delivery without raw refs. Venue
+  Mini App still has no file picker, upload endpoint, replace, hide/show or delete UI.
 - Structured menu item photos/descriptions/thumbnails and option/flavor media are
   `MISSING / FUTURE`; do not confuse them with the working view-only `📖 Фото-меню`.
 - Menu/options/stop-list spec is `UPDATED` in `docs/MENU_OPTIONS_STOPLIST.md`: selected-option parity is smoke-closed, while broader media/top-list/shift-check/audit coverage remains partial/future.
@@ -159,11 +158,10 @@ Mini App остаётся backend-RBAC enforced: кнопки в UI не явл�
 1. Owner bot setup shows separate `🍽 Заказное меню` and `📖 Фото-меню`.
 2. Upload multiple media files in info section; state remains stable until `Готово`/`Назад`.
 3. Guest sees filled `📖 Фото-меню` through `ℹ️ Информация`.
-4. Owner opens Published Preview and confirms exact real-Guest parity, no guest mutations and no
-   stale data after venue switching.
-5. Owner opens saved DRAFT Preview and confirms permanent
-   `Черновик. Гости пока не видят эту карточку`, guest-safe saved fields, private-field absence and
-   safe media hint/no raw refs.
+4. Owner opens unified Guest Preview in `PUBLISHED_PUBLIC` and confirms exact real-Guest parity, no
+   guest mutations and no stale data after venue switching.
+5. Owner opens `PRIVATE_DRAFT` and confirms the saved-state banner/copy, guest-safe fields,
+   authenticated scoped visible media, private-field absence and no raw refs.
 6. Owner opens Venue Mini App through inline `web_app`; auth succeeds with initData.
 7. Owner can view queue/detail/full bill and close bill.
 8. Owner can apply/remove manual discount and exclude/restore bill item.

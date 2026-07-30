@@ -51,6 +51,17 @@
 > Actions and staging deploy. Draft media remains a safe placeholder/no-raw-ref state; this is not
 > media upload parity.
 >
+> Current correction as of 2026-07-30: the unified contract supersedes the old split and draft
+> placeholder model. One `Предпросмотр для гостя` calls
+> `GET /api/venue/{venueId}/guest-preview`; the backend selects `PUBLISHED_PUBLIC` or
+> `PRIVATE_DRAFT` through the shared public-facing assembly. Published keeps unchanged public Guest
+> guards; Private Draft exposes only saved public-facing state to own-venue OWNER/MANAGER and uses
+> authenticated venue/section/media-scoped delivery for visible existing media. The public Guest
+> API cannot reach draft, dirty settings never auto-save, and ARCHIVED/DELETED remain denied. The
+> unified result is **VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY / DONE /
+> MVP / STAGING-SMOKE-PASSED** after green Actions, staging deploy and manual smoke. This does not
+> implement media upload/manage parity.
+>
 > Current media correction as of 2026-07-29: venue/public-card image/PDF management is
 > **PARTIAL / BOT-FIRST**. Bot OWNER/MANAGER can add/delete Telegram-`file_id` attachments and
 > hide/show their whole info section; Guest and Published Preview render guarded proxy URLs. Venue

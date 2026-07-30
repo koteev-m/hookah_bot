@@ -1,6 +1,6 @@
 # Manager
 
-Дата актуализации: 2026-07-29.
+Дата актуализации: 2026-07-30.
 
 Статус: **current role reference**. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. `ADMIN` в runtime сейчас является legacy alias для `MANAGER`.
 
@@ -56,8 +56,8 @@ Manager Mini App areas:
 - tables management and QR export where backend permission allows;
 - staff chat link/status;
 - stats;
-- read-only `Предпросмотр карточки`: Published Guest Preview Phase 1 and saved-DRAFT Preview
-  Phase 2.1 are **DONE / MVP / STAGING-SMOKE-PASSED**;
+- read-only `Предпросмотр для гостя`: one backend-selected `PUBLISHED_PUBLIC` /
+  `PRIVATE_DRAFT` endpoint is **DONE / MVP / STAGING-SMOKE-PASSED**;
 - staff list/invite only where current conservative route policy allows; invite result uses a valid Telegram deep link, copy/share actions and a secondary fallback command.
 
 ## Allowed actions
@@ -110,8 +110,8 @@ Manager Mini App areas:
 - Staff invite deep-link sharing polish is CLOSED / staging smoke passed for the allowed manager invite path: link is selectable/copyable/shareable and accepted payload grants the intended role.
 - Some Telegram manager flows may still be richer than Mini App equivalents.
 - Venue/public-card image/PDF management is `PARTIAL / BOT-FIRST`: Manager can manage attachments
-  through Bot, while Venue Mini App has no upload/manage flow. Guest and Published Preview already
-  render guarded media; Draft Preview uses a safe hint/no raw refs.
+  through Bot, while Venue Mini App has no upload/manage flow. Guest and `PUBLISHED_PUBLIC` render
+  guarded media; `PRIVATE_DRAFT` uses authenticated scoped delivery without raw refs.
 - Structured menu item photo/description/thumbnail and option/flavor media are
   `MISSING / FUTURE`, separately from the working view-only Photo/PDF menu.
 - Staff chat diagnostics/test flow is implemented in Mini App; manager must stay denied for owner-only unlink.
@@ -132,9 +132,8 @@ Manager Mini App areas:
 ## Smoke-critical checks
 
 1. Manager opens Venue Mini App through inline `web_app`; auth succeeds.
-2. Manager opens Published Preview and confirms exact real-Guest parity, no mutations and
-   venue-switch isolation; saved DRAFT Preview shows the permanent banner, guest-safe projection
-   and safe media hint/no raw refs.
+2. Manager opens the unified Guest Preview and confirms exact `PUBLISHED_PUBLIC` real-Guest parity
+   or saved `PRIVATE_DRAFT` guest-safe projection, no mutations/raw refs and venue-switch isolation.
 3. Manager can accept/deliver/close orders.
 4. Manager can use bill controls and final total reloads from backend.
 5. Manager can confirm/cancel/propose booking where supported.
