@@ -7,6 +7,8 @@ const mockInitData = 'query_id=e2e-smoke&user=%7B%22id%22%3A123456789%7D&hash=te
 const otherMockInitData = 'query_id=e2e-smoke-other&user=%7B%22id%22%3A987654321%7D&hash=test'
 const promotionVenueTimezone = 'Europe/Moscow'
 const promotionVenueUtcOffset = '+03:00'
+const unsavedPreviewMessage =
+  'Есть несохранённые изменения. Сначала сохраните их, затем откройте предпросмотр.'
 const transparentPng = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/luzRygAAAABJRU5ErkJggg==',
   'base64'
@@ -338,30 +340,11 @@ type VenueGuestPreviewInfoSectionFixture = {
 }
 
 type VenueGuestPreviewFixture = {
+  mode: 'PUBLISHED_PUBLIC' | 'PRIVATE_DRAFT'
+  venueAvailabilityLabel: string | null
   venue: VenueGuestPreviewVenueFixture
-  sections: VenueGuestPreviewInfoSectionFixture[]
-  previewError?: ApiErrorFixture | null
-  infoError?: ApiErrorFixture | null
-}
-
-type VenueDraftPreviewStaffFixture = Omit<VenueGuestPreviewStaffFixture, 'id' | 'photoRef'>
-
-type VenueDraftPreviewCandidateFixture = Omit<
-  VenueGuestPreviewVenueFixture,
-  'status' | 'isFavorite' | 'todayStaff'
-> & {
-  todayStaff: VenueDraftPreviewStaffFixture[]
-  timezone: string
-}
-
-type VenueDraftPreviewFixture = {
-  previewMode: 'DRAFT'
-  venueStatus: 'DRAFT'
-  guestAvailable: false
-  unavailableReason: string
-  publicCandidate: VenueDraftPreviewCandidateFixture
-  infoSections: Array<{ displayTitle: string; text: string }>
-  mediaAvailableAfterPublication: boolean
+  infoSections: VenueGuestPreviewInfoSectionFixture[]
+  source: 'SAVED_STATE'
   previewError?: ApiErrorFixture | null
 }
 
@@ -905,6 +888,8 @@ function buildVenueGuestPreviewFixture(
   const venueOverrides = overrides.venue ?? {}
   const { venue: _venue, ...fixtureOverrides } = overrides
   return {
+    mode: 'PUBLISHED_PUBLIC',
+    venueAvailabilityLabel: null,
     venue: {
       id: venueId,
       name,
@@ -984,7 +969,7 @@ function buildVenueGuestPreviewFixture(
       isFavorite: false,
       ...venueOverrides
     },
-    sections: [
+    infoSections: [
       {
         id: 10,
         type: 'menu',
@@ -997,46 +982,55 @@ function buildVenueGuestPreviewFixture(
             id: 100,
             mediaType: 'image',
             sortOrder: 0,
-            url: `/preview-media-${venueId}.png`
+            url: `/api/guest/venue/${venueId}/info-sections/10/media/100`
           }
         ]
       }
     ],
+    source: 'SAVED_STATE',
     previewError: null,
-    infoError: null,
     ...fixtureOverrides
   }
 }
 
-function buildVenueDraftPreviewFixture(
+function buildVenuePrivatePreviewFixture(
   venueId = 1,
-  overrides: Omit<Partial<VenueDraftPreviewFixture>, 'publicCandidate'> & {
-    publicCandidate?: Partial<VenueDraftPreviewCandidateFixture>
+  overrides: Omit<Partial<VenueGuestPreviewFixture>, 'venue'> & {
+    venue?: Partial<VenueGuestPreviewVenueFixture>
   } = {}
-): VenueDraftPreviewFixture {
+): VenueGuestPreviewFixture {
   const published = buildVenueGuestPreviewFixture(venueId)
-  const { status: _status, isFavorite: _isFavorite, todayStaff, ...candidate } = published.venue
-  const candidateOverrides = overrides.publicCandidate ?? {}
-  const { publicCandidate: _publicCandidate, ...fixtureOverrides } = overrides
+  const venueOverrides = overrides.venue ?? {}
+  const { venue: _venue, ...fixtureOverrides } = overrides
   return {
-    previewMode: 'DRAFT',
-    venueStatus: 'DRAFT',
-    guestAvailable: false,
-    unavailableReason: 'VENUE_NOT_PUBLISHED',
-    publicCandidate: {
-      ...candidate,
+    mode: 'PRIVATE_DRAFT',
+    venueAvailabilityLabel: 'Заведение ещё не опубликовано.',
+    venue: {
+      ...published.venue,
       cardDescription: 'Сохранённое описание черновика.',
-      todayStaff: todayStaff.map(({ id: _id, photoRef: _photoRef, ...person }) => person),
-      timezone: published.venue.timezone ?? 'Europe/Moscow',
-      ...candidateOverrides
+      status: 'DRAFT',
+      isFavorite: false,
+      ...venueOverrides
     },
     infoSections: [
       {
+        id: 10,
+        type: 'menu',
+        title: 'Меню',
         displayTitle: '📖 Фото-меню',
-        text: 'Сохранённый публичный текст черновика.'
+        text: 'Сохранённый публичный текст черновика.',
+        mediaCount: 1,
+        media: [
+          {
+            id: 100,
+            mediaType: 'image',
+            sortOrder: 0,
+            url: `/api/venue/${venueId}/guest-preview/info-sections/10/media/100`
+          }
+        ]
       }
     ],
-    mediaAvailableAfterPublication: true,
+    source: 'SAVED_STATE',
     previewError: null,
     ...fixtureOverrides
   }
@@ -2670,7 +2664,6 @@ async function mockVenueGuestPreviewApi(
     permissions?: string[]
     venues?: VenueGuestPreviewAccessFixture[]
     previews?: Record<number, VenueGuestPreviewFixture>
-    draftPreviews?: Record<number, VenueDraftPreviewFixture>
     deferredVenueIds?: number[]
   } = {}
 ) {
@@ -2690,21 +2683,28 @@ async function mockVenueGuestPreviewApi(
   const previews = new Map(
     accesses.map((access) => [
       access.venueId,
-      options.previews?.[access.venueId] ?? buildVenueGuestPreviewFixture(access.venueId)
+      options.previews?.[access.venueId] ??
+        (access.venueStatus === 'PUBLISHED'
+          ? buildVenueGuestPreviewFixture(access.venueId)
+          : buildVenuePrivatePreviewFixture(access.venueId, {
+              venueAvailabilityLabel:
+                access.venueStatus === 'DRAFT'
+                  ? 'Заведение ещё не опубликовано.'
+                  : access.venueStatus === 'HIDDEN'
+                    ? 'Заведение временно скрыто.'
+                    : 'Заведение приостановлено.',
+              venue: { status: access.venueStatus }
+            }))
     ])
-  )
-  const draftPreviews = new Map(
-    accesses
-      .filter((access) => access.venueStatus === 'DRAFT')
-      .map((access) => [
-        access.venueId,
-        options.draftPreviews?.[access.venueId] ?? buildVenueDraftPreviewFixture(access.venueId)
-      ])
   )
   const traffic: Array<{ method: string; path: string }> = []
   const previewRequests: Array<{ venueId: number; method: string }> = []
-  const infoRequests: Array<{ venueId: number; method: string }> = []
-  const draftRequests: Array<{ venueId: number; method: string }> = []
+  const previewMediaRequests: Array<{
+    venueId: number
+    path: string
+    method: string
+    authorization: string | undefined
+  }> = []
   const deferred = new Map<number, { promise: Promise<void>; release: () => void }>()
   ;(options.deferredVenueIds ?? []).forEach((venueId) => {
     let release = () => undefined
@@ -2732,6 +2732,10 @@ async function mockVenueGuestPreviewApi(
   await page.route('**/api/guest/venue/*', async (route) => {
     const path = new URL(route.request().url()).pathname
     const venueId = Number(path.match(/^\/api\/guest\/venue\/(\d+)$/)?.[1])
+    if (!Number.isSafeInteger(venueId)) {
+      await route.fallback()
+      return
+    }
     const preview = previews.get(venueId)
     if (!preview) {
       await route.fulfill(jsonResponse({ error: { code: 'NOT_FOUND', message: 'Not found' } }, 404))
@@ -2751,67 +2755,69 @@ async function mockVenueGuestPreviewApi(
     )
   })
 
-  await page.route('**/api/venue/*/staff-calls**', async (route) => {
-    await route.fulfill(jsonResponse({ items: [] }))
-  })
-
-  await page.route('**/api/venue/*/draft-preview', async (route) => {
+  await page.route('**/api/guest/venue/*/info-sections/*/media/*', async (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname
-    const venueId = Number(path.match(/^\/api\/venue\/(\d+)\/draft-preview$/)?.[1])
-    const fixture = draftPreviews.get(venueId)
-    draftRequests.push({ venueId, method: request.method() })
-    if (!fixture) {
+    const mediaMatch = path.match(
+      /^\/api\/guest\/venue\/(\d+)\/info-sections\/\d+\/media\/\d+$/
+    )
+    const venueId = Number(mediaMatch?.[1])
+    if (!mediaMatch || !previews.has(venueId) || request.method() !== 'GET') {
       await route.fulfill(jsonResponse({ error: { code: 'NOT_FOUND', message: 'Not found' } }, 404))
       return
     }
-    if (request.method() !== 'GET') {
-      await route.fulfill(jsonResponse({ error: { code: 'METHOD_NOT_ALLOWED', message: 'GET only' } }, 405))
-      return
-    }
-    await deferred.get(venueId)?.promise
-    if (fixture.previewError) {
-      await route.fulfill(
-        jsonResponse(
-          {
-            error: {
-              code:
-                fixture.previewError.code ??
-                (fixture.previewError.status === 404 ? 'NOT_FOUND' : 'INTERNAL_ERROR'),
-              message: fixture.previewError.message ?? 'Preview failed'
-            }
-          },
-          fixture.previewError.status
-        )
-      )
-      return
-    }
-    await route.fulfill(jsonResponse(fixture))
+    previewMediaRequests.push({
+      venueId,
+      path,
+      method: request.method(),
+      authorization: request.headers().authorization
+    })
+    await route.fulfill({
+      status: 200,
+      contentType: 'image/png',
+      body: transparentPng
+    })
+  })
+
+  await page.route('**/api/venue/*/staff-calls**', async (route) => {
+    await route.fulfill(jsonResponse({ items: [] }))
   })
 
   await page.route('**/api/venue/*/guest-preview**', async (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname
-    const infoMatch = path.match(/^\/api\/venue\/(\d+)\/guest-preview\/info-sections$/)
+    const mediaMatch = path.match(
+      /^\/api\/venue\/(\d+)\/guest-preview\/info-sections\/\d+\/media\/\d+$/
+    )
     const previewMatch = path.match(/^\/api\/venue\/(\d+)\/guest-preview$/)
-    const venueId = Number(infoMatch?.[1] ?? previewMatch?.[1])
+    const venueId = Number(mediaMatch?.[1] ?? previewMatch?.[1])
     const fixture = previews.get(venueId)
 
-    if (!fixture || (!infoMatch && !previewMatch)) {
+    if (!fixture || (!mediaMatch && !previewMatch)) {
       await route.fulfill(jsonResponse({ error: { code: 'NOT_FOUND', message: 'Not found' } }, 404))
       return
-    }
-    if (infoMatch) {
-      infoRequests.push({ venueId, method: request.method() })
-    } else {
-      previewRequests.push({ venueId, method: request.method() })
     }
     if (request.method() !== 'GET') {
       await route.fulfill(jsonResponse({ error: { code: 'METHOD_NOT_ALLOWED', message: 'GET only' } }, 405))
       return
     }
+    if (mediaMatch) {
+      previewMediaRequests.push({
+        venueId,
+        path,
+        method: request.method(),
+        authorization: request.headers().authorization
+      })
+      await route.fulfill({
+        status: 200,
+        contentType: 'image/png',
+        body: transparentPng
+      })
+      return
+    }
+    previewRequests.push({ venueId, method: request.method() })
     await deferred.get(venueId)?.promise
-    const error = infoMatch ? fixture.infoError : fixture.previewError
+    const error = fixture.previewError
     if (error) {
       await route.fulfill(
         jsonResponse(
@@ -2826,13 +2832,7 @@ async function mockVenueGuestPreviewApi(
       )
       return
     }
-    await route.fulfill(
-      jsonResponse(
-        infoMatch
-          ? { venueId, sections: fixture.sections }
-          : { venue: fixture.venue }
-      )
-    )
+    await route.fulfill(jsonResponse(fixture))
   })
 
   await page.route('**/preview-media-*.png', async (route) => {
@@ -2844,13 +2844,36 @@ async function mockVenueGuestPreviewApi(
   })
 
   await page.route('**/api/venue/*/public-card', async (route) => {
-    const venueId = Number(new URL(route.request().url()).pathname.match(/^\/api\/venue\/(\d+)\/public-card$/)?.[1])
-    const published = previews.get(venueId)?.venue
-    const draft = draftPreviews.get(venueId)?.publicCandidate
-    const card = draft ?? published
-    if (!card || route.request().method() !== 'GET') {
+    const request = route.request()
+    const venueId = Number(new URL(request.url()).pathname.match(/^\/api\/venue\/(\d+)\/public-card$/)?.[1])
+    const card = previews.get(venueId)?.venue
+    if (!card || (request.method() !== 'GET' && request.method() !== 'PUT')) {
       await route.fulfill(jsonResponse({ error: { code: 'NOT_FOUND', message: 'Not found' } }, 404))
       return
+    }
+    if (request.method() === 'PUT') {
+      const body = (await request.postDataJSON()) as {
+        city?: string | null
+        address?: string | null
+        countryCode?: string | null
+        formattedAddress?: string | null
+        latitude?: number | null
+        longitude?: number | null
+        guestContact?: string | null
+        cardDescription?: string | null
+      }
+      card.city = body.city
+      card.address = body.address
+      card.countryCode = body.countryCode
+      card.formattedAddress = body.formattedAddress
+      card.displayAddress =
+        body.formattedAddress?.trim() ||
+        [body.city?.trim(), body.address?.trim()].filter(Boolean).join(', ') ||
+        null
+      card.latitude = body.latitude
+      card.longitude = body.longitude
+      card.guestContact = body.guestContact
+      card.cardDescription = body.cardDescription
     }
     await route.fulfill(
       jsonResponse({
@@ -2870,24 +2893,83 @@ async function mockVenueGuestPreviewApi(
     )
   })
 
+  const scheduleResponse = (venueId: number) => {
+    const venue = previews.get(venueId)?.venue
+    return {
+      venueId,
+      weeklyHours: (venue?.weeklyHours ?? []).map((day) => ({ ...day, configured: true })),
+      dateOverrides: venue?.dateExceptions ?? []
+    }
+  }
+
+  await page.route('**/api/venue/*/schedule/weekly/*', async (route) => {
+    const request = route.request()
+    const match = new URL(request.url()).pathname.match(/^\/api\/venue\/(\d+)\/schedule\/weekly\/(\d+)$/)
+    const venueId = Number(match?.[1])
+    const weekday = Number(match?.[2])
+    const venue = previews.get(venueId)?.venue
+    if (!venue || request.method() !== 'PUT') {
+      await route.fulfill(jsonResponse({ error: { code: 'NOT_FOUND', message: 'Not found' } }, 404))
+      return
+    }
+    const body = (await request.postDataJSON()) as {
+      opensAt?: string | null
+      closesAt?: string | null
+      isClosed?: boolean
+    }
+    venue.weeklyHours = venue.weeklyHours.map((day) =>
+      day.weekday === weekday
+        ? {
+            ...day,
+            opensAt: body.isClosed ? '00:00' : body.opensAt ?? day.opensAt,
+            closesAt: body.isClosed ? '00:00' : body.closesAt ?? day.closesAt,
+            isClosed: body.isClosed === true
+          }
+        : day
+    )
+    await route.fulfill(jsonResponse(scheduleResponse(venueId)))
+  })
+
+  await page.route('**/api/venue/*/schedule/override-ranges', async (route) => {
+    const request = route.request()
+    const venueId = Number(
+      new URL(request.url()).pathname.match(/^\/api\/venue\/(\d+)\/schedule\/override-ranges$/)?.[1]
+    )
+    const venue = previews.get(venueId)?.venue
+    if (!venue || request.method() !== 'POST') {
+      await route.fulfill(jsonResponse({ error: { code: 'NOT_FOUND', message: 'Not found' } }, 404))
+      return
+    }
+    const body = (await request.postDataJSON()) as {
+      fromDate: string
+      toDate: string
+      opensAt?: string | null
+      closesAt?: string | null
+      isClosed?: boolean
+      guestNote?: string | null
+    }
+    const dates = eachIsoDate(body.fromDate, body.toDate)
+    venue.dateExceptions = [
+      ...venue.dateExceptions.filter((exception) => !dates.includes(exception.serviceDate)),
+      ...dates.map((serviceDate) => ({
+        serviceDate,
+        opensAt: body.isClosed ? '00:00' : body.opensAt ?? '18:00',
+        closesAt: body.isClosed ? '00:00' : body.closesAt ?? '00:00',
+        isClosed: body.isClosed === true,
+        guestNote: body.guestNote?.trim() || null
+      }))
+    ].sort((left, right) => left.serviceDate.localeCompare(right.serviceDate))
+    await route.fulfill(jsonResponse(scheduleResponse(venueId)))
+  })
+
   await page.route('**/api/venue/*/schedule', async (route) => {
     const venueId = Number(new URL(route.request().url()).pathname.match(/^\/api\/venue\/(\d+)\/schedule$/)?.[1])
-    const published = previews.get(venueId)?.venue
-    const draft = draftPreviews.get(venueId)?.publicCandidate
-    const card = draft ?? published
-    await route.fulfill(
-      jsonResponse({
-        venueId,
-        weeklyHours: (card?.weeklyHours ?? []).map((day) => ({ ...day, configured: true })),
-        dateOverrides: card?.dateExceptions ?? []
-      })
-    )
+    await route.fulfill(jsonResponse(scheduleResponse(venueId)))
   })
 
   return {
     getPreviewRequests: () => [...previewRequests],
-    getInfoRequests: () => [...infoRequests],
-    getDraftRequests: () => [...draftRequests],
+    getPreviewMediaRequests: () => [...previewMediaRequests],
     getTraffic: () => [...traffic],
     releaseVenue: (venueId: number) => deferred.get(venueId)?.release(),
     clearTraffic: () => {
@@ -7641,8 +7723,8 @@ test('venue owner opens the published guest preview with public read-only conten
 
   const preview = page.locator('.screen-root')
   await expect(preview.getByRole('heading', { name: 'Предпросмотр для гостя', exact: true })).toBeVisible()
-  await expect(preview.getByText('Так опубликованная карточка выглядит для гостя.', { exact: true })).toBeVisible()
-  await expect(preview.getByText('Опубликовано — так карточку видит гость сейчас', { exact: true })).toBeVisible()
+  await expect(preview.getByText('Так карточку сейчас видит гость.', { exact: true })).toBeVisible()
+  await expect(preview.getByText('Опубликовано', { exact: true })).toBeVisible()
   await expect(preview.getByRole('heading', { name: 'Микс', exact: true })).toBeVisible()
   await expect(preview).toContainText('Москва, Пилотная, 1')
   await expect(preview).toContainText('Опубликованное описание лаунжа.')
@@ -7691,7 +7773,14 @@ test('venue owner opens the published guest preview with public read-only conten
   await expect(returnButton).toBeVisible()
 
   expect(api.getPreviewRequests()).toEqual([{ venueId: 1, method: 'GET' }])
-  expect(api.getInfoRequests()).toEqual([{ venueId: 1, method: 'GET' }])
+  expect(api.getPreviewMediaRequests()).toEqual([
+    {
+      venueId: 1,
+      path: '/api/guest/venue/1/info-sections/10/media/100',
+      method: 'GET',
+      authorization: 'Bearer e2e-session-token'
+    }
+  ])
 
   await returnButton.click()
   await expect(page).toHaveURL(/#\/dashboard$/)
@@ -7720,6 +7809,45 @@ test('venue manager can open the published guest preview', async ({ page }) => {
   await expect(preview).toContainText('Казань, Кремлёвская, 10')
 })
 
+test('guest preview uses the server mode when a published venue is temporarily unavailable', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockVenueGuestPreviewApi(page, {
+    venues: [
+      {
+        venueId: 1,
+        venueName: 'Временно недоступный лаунж',
+        venueCity: 'Москва',
+        venueStatus: 'PUBLISHED',
+        role: 'OWNER',
+        permissions: []
+      }
+    ],
+    previews: {
+      1: buildVenuePrivatePreviewFixture(1, {
+        venueAvailabilityLabel: 'Заведение приостановлено.',
+        venue: {
+          name: 'Сохранённая карточка приостановленного лаунжа',
+          status: 'PUBLISHED'
+        }
+      })
+    }
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Предпросмотр для гостя', exact: true }).click()
+
+  const preview = page.locator('.screen-root')
+  await expect(preview.getByText('Черновик', { exact: true })).toBeVisible()
+  await expect(preview.getByText('Заведение приостановлено.', { exact: true })).toBeVisible()
+  await expect(
+    preview.getByRole('heading', {
+      name: 'Сохранённая карточка приостановленного лаунжа',
+      exact: true
+    })
+  ).toBeVisible()
+  await expect(preview.getByText('Опубликовано', { exact: true })).toHaveCount(0)
+})
+
 test('venue owner and manager open saved draft previews through the shared read-only card', async ({ page }) => {
   await installTelegramWebApp(page, 123456789)
   const venues: VenueGuestPreviewAccessFixture[] = [
@@ -7742,9 +7870,9 @@ test('venue owner and manager open saved draft previews through the shared read-
   ]
   const api = await mockVenueGuestPreviewApi(page, {
     venues,
-    draftPreviews: {
-      1: buildVenueDraftPreviewFixture(1, {
-        publicCandidate: {
+    previews: {
+      1: buildVenuePrivatePreviewFixture(1, {
+        venue: {
           name: 'Карточка до первой публикации',
           displayAddress: 'Москва, Черновая, 1',
           cardDescription: 'Сохранённое публичное описание.',
@@ -7752,27 +7880,50 @@ test('venue owner and manager open saved draft previews through the shared read-
         },
         infoSections: [
           {
+            id: 10,
+            type: 'about',
+            title: 'О заведении',
             displayTitle: 'О заведении',
-            text: 'Только видимый сохранённый раздел.'
+            text: 'Только видимый сохранённый раздел.',
+            mediaCount: 2,
+            media: [
+              {
+                id: 100,
+                mediaType: 'image',
+                sortOrder: 0,
+                url: '/api/venue/1/guest-preview/info-sections/10/media/100'
+              },
+              {
+                id: 101,
+                mediaType: 'image',
+                sortOrder: 1,
+                url: '/api/venue/2/guest-preview/info-sections/10/media/101'
+              }
+            ]
           }
-        ],
-        mediaAvailableAfterPublication: true
+        ]
       }),
-      2: buildVenueDraftPreviewFixture(2, {
-        publicCandidate: {
+      2: buildVenuePrivatePreviewFixture(2, {
+        venue: {
           name: 'Черновая карточка менеджера',
           displayAddress: 'Казань, Черновая, 2'
-        },
-        mediaAvailableAfterPublication: false
+        }
       })
     }
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Предпросмотр карточки', exact: true }).click()
+  await page.getByRole('button', { name: 'Предпросмотр для гостя', exact: true }).click()
 
   const preview = page.locator('.screen-root')
-  await expect(preview.getByText('Черновик. Гости пока не видят эту карточку', { exact: true })).toBeVisible()
+  await expect(preview.getByText('Черновик', { exact: true })).toBeVisible()
+  await expect(
+    preview.getByText(
+      'Гости пока не видят эту карточку. Это закрытый предпросмотр сохранённой версии.',
+      { exact: true }
+    )
+  ).toBeVisible()
+  await expect(preview.getByText('Заведение ещё не опубликовано.', { exact: true })).toBeVisible()
   await expect(preview.getByRole('heading', { name: 'Карточка до первой публикации', exact: true })).toBeVisible()
   await expect(preview).toContainText('Москва, Черновая, 1')
   await expect(preview).toContainText('Сохранённое публичное описание.')
@@ -7782,29 +7933,30 @@ test('venue owner and manager open saved draft previews through the shared read-
   await expect(preview).toContainText('Анна')
   await expect(preview.getByRole('heading', { name: 'Акции', exact: true })).toBeVisible()
   await expect(preview).toContainText('Чай в подарок')
-  await expect(
-    preview.getByText('Медиа будет доступно в гостевой карточке после публикации', { exact: true })
-  ).toHaveCount(1)
-  await expect(preview.locator('.venue-info-media-list, img')).toHaveCount(0)
+  await expect(preview.getByRole('img', { name: 'О заведении 1' })).toBeVisible()
   await expect(preview.getByRole('button', { name: /Забронировать|В избранное|Задать вопрос|Вызвать персонал/ })).toHaveCount(0)
   await expect(preview.getByRole('button', { name: /Сохранить|Опубликовать|Удалить/ })).toHaveCount(0)
-  expect(api.getPreviewRequests()).toEqual([])
-  expect(api.getInfoRequests()).toEqual([])
-  expect(api.getDraftRequests()).toEqual([{ venueId: 1, method: 'GET' }])
+  expect(api.getPreviewRequests()).toEqual([{ venueId: 1, method: 'GET' }])
+  expect(api.getPreviewMediaRequests()).toEqual([
+    {
+      venueId: 1,
+      path: '/api/venue/1/guest-preview/info-sections/10/media/100',
+      method: 'GET',
+      authorization: 'Bearer e2e-session-token'
+    }
+  ])
 
   await page.locator('select.venue-select').selectOption('2')
   await expect(preview.getByRole('heading', { name: 'Черновая карточка менеджера', exact: true })).toBeVisible()
   await expect(preview).toContainText('Казань, Черновая, 2')
-  await expect(
-    preview.getByText('Медиа будет доступно в гостевой карточке после публикации', { exact: true })
-  ).toHaveCount(0)
-  expect(api.getDraftRequests()).toEqual([
+  await expect(preview.getByText('Черновик', { exact: true })).toBeVisible()
+  expect(api.getPreviewRequests()).toEqual([
     { venueId: 1, method: 'GET' },
     { venueId: 2, method: 'GET' }
   ])
 })
 
-test('public card contextual entry opens the same saved draft preview without unsaved form data', async ({ page }) => {
+test('settings preview blocks unsaved public card and schedule changes, then shows saved updates', async ({ page }) => {
   await installTelegramWebApp(page, 123456789)
   const api = await mockVenueGuestPreviewApi(page, {
     venues: [
@@ -7817,9 +7969,9 @@ test('public card contextual entry opens the same saved draft preview without un
         permissions: []
       }
     ],
-    draftPreviews: {
-      1: buildVenueDraftPreviewFixture(1, {
-        publicCandidate: {
+    previews: {
+      1: buildVenuePrivatePreviewFixture(1, {
+        venue: {
           name: 'Сохранённая карточка',
           cardDescription: 'Описание уже сохранено на сервере.'
         }
@@ -7834,19 +7986,82 @@ test('public card contextual entry opens the same saved draft preview without un
   })
   await expect(publicCard.getByText('В предпросмотре отображаются только сохранённые данные.')).toBeVisible()
   await publicCard.getByPlaceholder(/авторские чаши/).fill('Несохранённое описание формы.')
-  await publicCard.getByRole('button', { name: 'Предпросмотр карточки', exact: true }).click()
+  await publicCard.getByRole('button', { name: 'Предпросмотр для гостя', exact: true }).click()
 
-  await expect(page).toHaveURL(/#\/guest-preview$/)
+  await expect(page).toHaveURL(/#\/settings$/)
+  await expect(
+    page.getByText(
+      'Есть несохранённые изменения. Сначала сохраните их, затем откройте предпросмотр.',
+      { exact: true }
+    ).first()
+  ).toBeVisible()
+  expect(api.getPreviewRequests()).toEqual([])
+
+  await publicCard.getByRole('button', { name: 'Сохранить', exact: true }).click()
+  await expect(publicCard.getByRole('button', { name: '✓ Сохранено', exact: true })).toBeVisible()
+  await publicCard.getByRole('button', { name: 'Предпросмотр для гостя', exact: true }).click()
+
+  await expect(page).toHaveURL(/#\/guest-preview\?from=settings$/)
   const preview = page.locator('.screen-root')
   await expect(preview.getByRole('heading', { name: 'Сохранённая карточка', exact: true })).toBeVisible()
-  await expect(preview).toContainText('Описание уже сохранено на сервере.')
-  await expect(preview.getByText('Несохранённое описание формы.', { exact: true })).toHaveCount(0)
-  expect(api.getDraftRequests()).toEqual([{ venueId: 1, method: 'GET' }])
+  await expect(preview).toContainText('Несохранённое описание формы.')
+  expect(api.getPreviewRequests()).toEqual([{ venueId: 1, method: 'GET' }])
+
+  await preview.getByRole('button', { name: 'Вернуться к настройкам', exact: true }).click()
+  await expect(page).toHaveURL(/#\/settings$/)
+
+  const scheduleCard = page.locator('.card').filter({
+    has: page.getByRole('heading', { name: 'Часы работы', exact: true })
+  })
+  let mondayRow = scheduleCard.getByText('Пн · 18:00-02:00', { exact: true }).locator('xpath=..')
+  await mondayRow.locator('input[type="time"]').nth(1).fill('03:30')
+  await publicCard.getByRole('button', { name: 'Предпросмотр для гостя', exact: true }).click()
+
+  await expect(page).toHaveURL(/#\/settings$/)
+  await expect(page.getByText(unsavedPreviewMessage, { exact: true }).first()).toBeVisible()
+  expect(api.getPreviewRequests()).toHaveLength(1)
+
+  await mondayRow.getByRole('button', { name: 'Сохранить день', exact: true }).click()
+  await expect(page.locator('p.status')).toHaveText('Часы работы сохранены.')
+  mondayRow = scheduleCard.getByText('Пн · 18:00-03:30', { exact: true }).locator('xpath=..')
+  await expect(mondayRow).toBeVisible()
+  await publicCard.getByRole('button', { name: 'Предпросмотр для гостя', exact: true }).click()
+  await expect(page).toHaveURL(/#\/guest-preview\?from=settings$/)
+  await expect(page.locator('.screen-root').getByText('Пн · 18:00–03:30', { exact: true })).toBeVisible()
+  expect(api.getPreviewRequests()).toHaveLength(2)
+
+  await page
+    .locator('.screen-root')
+    .getByRole('button', { name: 'Вернуться к настройкам', exact: true })
+    .click()
+  await expect(page).toHaveURL(/#\/settings$/)
+
+  await scheduleCard.getByRole('button', { name: 'Закрыть период', exact: true }).click()
+  const exceptionForm = scheduleCard.getByTestId('schedule-exception-form')
+  await exceptionForm.locator('input[type="date"]').nth(0).fill('2030-02-10')
+  await exceptionForm.locator('input[type="date"]').nth(1).fill('2030-02-10')
+  await exceptionForm.locator('textarea').fill('Закрыто для уборки')
+  await publicCard.getByRole('button', { name: 'Предпросмотр для гостя', exact: true }).click()
+
+  await expect(page).toHaveURL(/#\/settings$/)
+  await expect(page.getByText(unsavedPreviewMessage, { exact: true }).first()).toBeVisible()
+  expect(api.getPreviewRequests()).toHaveLength(2)
+
+  await exceptionForm.getByRole('button', { name: 'Сохранить', exact: true }).click()
+  await expect(page.locator('p.status')).toHaveText('Исключение сохранено.')
+  await publicCard.getByRole('button', { name: 'Предпросмотр для гостя', exact: true }).click()
+  await expect(page).toHaveURL(/#\/guest-preview\?from=settings$/)
+  await expect(page.locator('.screen-root').getByText('10.02.2030 · Закрыто', { exact: true })).toBeVisible()
+  await expect(page.locator('.screen-root').getByText('Закрыто для уборки', { exact: true })).toBeVisible()
+  expect(api.getPreviewRequests()).toHaveLength(3)
+
+  await clickTelegramBackButton(page)
+  await expect(page).toHaveURL(/#\/settings$/)
 })
 
-test('venue card preview exposes no private projection for unsupported lifecycle statuses', async ({ page }) => {
+test('temporarily unavailable venues use safe private-preview reasons while deleted stays denied', async ({ page }) => {
   await installTelegramWebApp(page, 123456789)
-  const statuses = ['HIDDEN', 'PAUSED', 'SUSPENDED', 'ARCHIVED', 'DELETED'] as const
+  const statuses = ['HIDDEN', 'PAUSED', 'SUSPENDED', 'DELETED'] as const
   const api = await mockVenueGuestPreviewApi(page, {
     venues: statuses.map((status, index) => ({
       venueId: index + 1,
@@ -7855,27 +8070,42 @@ test('venue card preview exposes no private projection for unsupported lifecycle
       venueStatus: status,
       role: 'OWNER',
       permissions: []
-    }))
+    })),
+    previews: {
+      4: buildVenuePrivatePreviewFixture(4, {
+        previewError: {
+          status: 404,
+          code: 'NOT_FOUND',
+          message: 'Not found'
+        }
+      })
+    }
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await page.getByRole('button', { name: 'Предпросмотр для гостя', exact: true }).click()
   const preview = page.locator('.screen-root')
 
-  for (let index = 0; index < statuses.length; index += 1) {
+  const safeReasons = [
+    'Заведение временно скрыто.',
+    'Заведение приостановлено.',
+    'Заведение приостановлено.'
+  ]
+  for (let index = 0; index < safeReasons.length; index += 1) {
     if (index > 0) {
       await page.locator('select.venue-select').selectOption(String(index + 1))
     }
-    await expect(
-      preview.getByText('Заведение сейчас недоступно для гостевого просмотра.', { exact: true })
-    ).toBeVisible()
+    await expect(preview.getByText('Черновик', { exact: true })).toBeVisible()
+    await expect(preview.getByText(safeReasons[index], { exact: true })).toBeVisible()
     await expect(preview.getByRole('button', { name: 'Вернуться в кабинет', exact: true })).toBeVisible()
-    await expect(preview.locator('.venue-screen')).toHaveCount(0)
   }
 
-  expect(api.getPreviewRequests()).toEqual([])
-  expect(api.getInfoRequests()).toEqual([])
-  expect(api.getDraftRequests()).toEqual([])
+  await page.locator('select.venue-select').selectOption('4')
+  await expect(
+    preview.getByText('Заведение сейчас недоступно для гостевого просмотра.', { exact: true })
+  ).toBeVisible()
+  await expect(preview.getByText('Черновик', { exact: true })).toHaveCount(0)
+  expect(api.getPreviewRequests().map((request) => request.venueId)).toEqual([1, 2, 3, 4])
 })
 
 test('venue staff cannot see or open the guest preview', async ({ page }) => {
@@ -7895,15 +8125,14 @@ test('venue staff cannot see or open the guest preview', async ({ page }) => {
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
-  await expect(page.getByRole('button', { name: 'Предпросмотр карточки', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Предпросмотр для гостя', exact: true })).toHaveCount(0)
   await page.evaluate(() => {
     window.location.hash = '#/guest-preview'
   })
   await expect(page.getByRole('heading', { name: 'Недостаточно прав', exact: true })).toBeVisible()
   await expect(page.getByText('У вас нет доступа к этому разделу.')).toBeVisible()
   expect(api.getPreviewRequests()).toEqual([])
-  expect(api.getInfoRequests()).toEqual([])
-  expect(api.getDraftRequests()).toEqual([])
+  expect(api.getPreviewMediaRequests()).toEqual([])
 })
 
 test('venue guest preview clears stale data while switching venues', async ({ page }) => {
@@ -7935,11 +8164,9 @@ test('venue guest preview clears stale data while switching venues', async ({ pa
           name: 'Медленный опубликованный лаунж',
           displayAddress: 'Москва, Медленная, 1'
         }
-      })
-    },
-    draftPreviews: {
-      2: buildVenueDraftPreviewFixture(2, {
-        publicCandidate: {
+      }),
+      2: buildVenuePrivatePreviewFixture(2, {
+        venue: {
           name: 'Быстрый черновой лаунж',
           displayAddress: 'Казань, Быстрая, 2'
         }
@@ -7956,7 +8183,7 @@ test('venue guest preview clears stale data while switching venues', async ({ pa
 
   await page.locator('select.venue-select').selectOption('2')
   await expect(preview.getByRole('heading', { name: 'Быстрый черновой лаунж', exact: true })).toBeVisible()
-  await expect(preview.getByText('Черновик. Гости пока не видят эту карточку', { exact: true })).toBeVisible()
+  await expect(preview.getByText('Черновик', { exact: true })).toBeVisible()
   await expect(preview).toContainText('Казань, Быстрая, 2')
   await expect(preview.getByText('Медленный опубликованный лаунж', { exact: true })).toHaveCount(0)
 
@@ -7965,7 +8192,7 @@ test('venue guest preview clears stale data while switching venues', async ({ pa
     preview.getByText('Медленный опубликованный лаунж', { exact: true }).count()
   ).toBe(0)
   await expect(preview.getByRole('heading', { name: 'Быстрый черновой лаунж', exact: true })).toBeVisible()
-  expect(api.getDraftRequests()).toEqual([{ venueId: 2, method: 'GET' }])
+  expect(api.getPreviewRequests().map((request) => request.venueId)).toEqual([1, 2])
 })
 
 test('published guest preview clears a slow published venue before loading the next one', async ({ page }) => {
@@ -8027,7 +8254,6 @@ test('published guest preview clears a slow published venue before loading the n
   ).toBe(0)
   await expect(preview.getByRole('heading', { name: 'Новая опубликованная карточка', exact: true })).toBeVisible()
   expect(api.getPreviewRequests().map((request) => request.venueId)).toEqual([1, 2])
-  expect(api.getInfoRequests().map((request) => request.venueId)).toEqual([1, 2])
 })
 
 test('venue guest preview ignores table cart and order context and uses GET-only preview traffic', async ({ page }) => {
@@ -8069,14 +8295,13 @@ test('venue guest preview ignores table cart and order context and uses GET-only
   await expect(preview.getByText(/корзин/i)).toHaveCount(0)
   await expect(preview.getByText(/этот гостевой заказ/i)).toHaveCount(0)
 
-  await expect.poll(() => api.getInfoRequests().length).toBe(1)
+  await expect.poll(() => api.getPreviewRequests().length).toBe(1)
   const previewTraffic = api
     .getTraffic()
     .filter((request) => request.path.includes('/guest-preview'))
     .sort((left, right) => left.path.localeCompare(right.path))
   expect(previewTraffic).toEqual([
-    { method: 'GET', path: '/api/venue/1/guest-preview' },
-    { method: 'GET', path: '/api/venue/1/guest-preview/info-sections' }
+    { method: 'GET', path: '/api/venue/1/guest-preview' }
   ])
   expect(
     api.getTraffic().filter((request) =>
@@ -8106,9 +8331,9 @@ test('venue guest preview has safe loading empty error and unavailable states', 
     },
     {
       venueId: 3,
-      venueName: 'Скрытое заведение',
+      venueName: 'Удалённое заведение',
       venueCity: 'Москва',
-      venueStatus: 'HIDDEN',
+      venueStatus: 'DELETED',
       role: 'OWNER',
       permissions: []
     }
@@ -8127,13 +8352,20 @@ test('venue guest preview has safe loading empty error and unavailable states', 
           todayStaff: [],
           promotions: []
         },
-        sections: []
+        infoSections: []
       }),
       2: buildVenueGuestPreviewFixture(2, {
         previewError: {
           status: 500,
           code: 'INTERNAL_ERROR',
           message: 'Preview failed'
+        }
+      }),
+      3: buildVenuePrivatePreviewFixture(3, {
+        previewError: {
+          status: 404,
+          code: 'NOT_FOUND',
+          message: 'Not found'
         }
       })
     }
@@ -8155,8 +8387,27 @@ test('venue guest preview has safe loading empty error and unavailable states', 
   await expect(
     preview.getByText('Заведение сейчас недоступно для гостевого просмотра.', { exact: true })
   ).toBeVisible()
-  expect(api.getPreviewRequests().map((request) => request.venueId)).toEqual([1, 2])
-  expect(api.getDraftRequests()).toEqual([])
+  expect(api.getPreviewRequests().map((request) => request.venueId)).toEqual([1, 2, 3])
+})
+
+test('guest direct venue route cannot read an unavailable draft card', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page, { venueAvailable: false })
+  const apiPaths: string[] = []
+  page.on('request', (request) => {
+    const path = new URL(request.url()).pathname
+    if (path.startsWith('/api/')) apiPaths.push(path)
+  })
+
+  await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.evaluate(() => {
+    window.location.hash = '#/venue/1'
+  })
+
+  await expect(page.locator('.screen-root .error-card:visible')).toBeVisible()
+  await expect(page.getByText('Сохранённое описание черновика.', { exact: true })).toHaveCount(0)
+  await expect.poll(() => apiPaths.includes('/api/guest/venue/1')).toBe(true)
+  expect(apiPaths).not.toContain('/api/venue/1/guest-preview')
 })
 
 test('venue manager configures public profile card settings', async ({ page }) => {

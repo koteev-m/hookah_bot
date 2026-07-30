@@ -1,5 +1,6 @@
 package com.hookah.platform.backend.miniapp.guest
 
+import com.hookah.platform.backend.api.NotFoundException
 import com.hookah.platform.backend.location.VenueLocationDisplay
 import com.hookah.platform.backend.location.buildYandexVenueRouteUrl
 import com.hookah.platform.backend.location.formatVenueDisplayAddress
@@ -17,6 +18,7 @@ import com.hookah.platform.backend.miniapp.guest.db.GuestFavoritesRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
 import com.hookah.platform.backend.miniapp.guest.db.VenueShort
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
+import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import com.hookah.platform.backend.miniapp.venue.containsOpenInstant
 import com.hookah.platform.backend.miniapp.venue.formatScheduleRange
 import com.hookah.platform.backend.miniapp.venue.formatScheduleTime
@@ -37,6 +39,11 @@ import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
 
+internal enum class GuestVenueReadVisibility {
+    PUBLISHED_PUBLIC,
+    PRIVATE_DRAFT,
+}
+
 class GuestVenueReadService(
     private val guestVenueRepository: GuestVenueRepository,
     private val guestFavoritesRepository: GuestFavoritesRepository,
@@ -53,7 +60,36 @@ class GuestVenueReadService(
         venueId: Long,
     ): VenueResponse {
         val venue = ensureGuestBrowseAvailable(venueId, guestVenueRepository, subscriptionRepository)
-        val isFavorite = guestFavoritesRepository.isVenueFavorite(userId = userId, venueId = venueId)
+        return assembleVenue(
+            venue = venue,
+            userId = userId,
+            visibility = GuestVenueReadVisibility.PUBLISHED_PUBLIC,
+        )
+    }
+
+    internal suspend fun getVenueForPrivatePreview(venueId: Long): VenueResponse {
+        val venue = guestVenueRepository.findVenueByIdForGuest(venueId) ?: throw NotFoundException()
+        if (venue.status !in PRIVATE_PREVIEW_VENUE_STATUSES) {
+            throw NotFoundException()
+        }
+        return assembleVenue(
+            venue = venue,
+            userId = null,
+            visibility = GuestVenueReadVisibility.PRIVATE_DRAFT,
+        )
+    }
+
+    private suspend fun assembleVenue(
+        venue: VenueShort,
+        userId: Long?,
+        visibility: GuestVenueReadVisibility,
+    ): VenueResponse {
+        val isFavorite =
+            if (visibility == GuestVenueReadVisibility.PUBLISHED_PUBLIC && userId != null) {
+                guestFavoritesRepository.isVenueFavorite(userId = userId, venueId = venue.id)
+            } else {
+                false
+            }
         val zoneId =
             venueSettingsRepository.resolveZoneId(
                 venueId = venue.id,
@@ -68,7 +104,13 @@ class GuestVenueReadService(
                 fromDate = today,
             )
         val todayStaff = buildTodayStaff(venue.id, today)
-        val promotions = venuePromotionRepository.listActivePromotionsForVenue(venue.id)
+        val promotions =
+            when (visibility) {
+                GuestVenueReadVisibility.PUBLISHED_PUBLIC ->
+                    venuePromotionRepository.listActivePromotionsForVenue(venue.id)
+                GuestVenueReadVisibility.PRIVATE_DRAFT ->
+                    venuePromotionRepository.listActivePromotionsForPrivatePreview(venue.id)
+            }
         return VenueResponse(
             venue =
                 venue.toVenueDto(
@@ -85,6 +127,16 @@ class GuestVenueReadService(
 
     suspend fun getInfoSections(venueId: Long): VenueInfoSectionsResponse {
         ensureGuestBrowseAvailable(venueId, guestVenueRepository, subscriptionRepository)
+        return assembleInfoSections(venueId, GuestVenueReadVisibility.PUBLISHED_PUBLIC)
+    }
+
+    internal suspend fun getInfoSectionsForPrivatePreview(venueId: Long): VenueInfoSectionsResponse =
+        assembleInfoSections(venueId, GuestVenueReadVisibility.PRIVATE_DRAFT)
+
+    private suspend fun assembleInfoSections(
+        venueId: Long,
+        visibility: GuestVenueReadVisibility,
+    ): VenueInfoSectionsResponse {
         val visibleSections = venueInfoSectionsRepository.listSections(venueId).filter { it.isVisible }
         val mediaCounts = venueInfoSectionMediaRepository.countBySectionIds(visibleSections.map { it.id })
         val filledSections =
@@ -96,7 +148,7 @@ class GuestVenueReadService(
                 val media =
                     if ((mediaCounts[section.id] ?: 0) > 0) {
                         venueInfoSectionMediaRepository.listBySectionId(section.id).map {
-                            it.toDto(venueId, section.id)
+                            it.toDto(venueId, section.id, visibility)
                         }
                     } else {
                         emptyList()
@@ -171,6 +223,14 @@ class GuestVenueReadService(
 
     private companion object {
         const val MAX_GUEST_DATE_EXCEPTIONS = 100
+        val PRIVATE_PREVIEW_VENUE_STATUSES =
+            setOf(
+                VenueStatus.DRAFT,
+                VenueStatus.PUBLISHED,
+                VenueStatus.HIDDEN,
+                VenueStatus.PAUSED,
+                VenueStatus.SUSPENDED,
+            )
     }
 }
 
@@ -251,7 +311,7 @@ private fun PublicVenueStaffToday.toGuestDto(): GuestTodayStaffDto =
         displayName = displayName,
         roleLabel = roleLabel,
         subtype = subtype,
-        photoRef = photoRef,
+        photoRef = null,
         bio = bio,
         tags = tags,
         shiftDate = shiftDate.toString(),
@@ -278,10 +338,17 @@ private fun VenueInfoSection.toGuestInfoDto(media: List<VenueInfoSectionMediaDto
 private fun VenueInfoSectionMediaAttachment.toDto(
     venueId: Long,
     sectionId: Long,
+    visibility: GuestVenueReadVisibility,
 ): VenueInfoSectionMediaDto =
     VenueInfoSectionMediaDto(
         id = id,
         mediaType = mediaType,
         sortOrder = sortOrder,
-        url = "/api/guest/venue/$venueId/info-sections/$sectionId/media/$id",
+        url =
+            when (visibility) {
+                GuestVenueReadVisibility.PUBLISHED_PUBLIC ->
+                    "/api/guest/venue/$venueId/info-sections/$sectionId/media/$id"
+                GuestVenueReadVisibility.PRIVATE_DRAFT ->
+                    "/api/venue/$venueId/guest-preview/info-sections/$sectionId/media/$id"
+            },
     )

@@ -72,7 +72,6 @@ import com.hookah.platform.backend.miniapp.shift.guestShiftExtensionRoutes
 import com.hookah.platform.backend.miniapp.shift.venueShiftExtensionRoutes
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
 import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
-import com.hookah.platform.backend.miniapp.venue.VenueDraftPreviewReadService
 import com.hookah.platform.backend.miniapp.venue.bookings.venueBookingRoutes
 import com.hookah.platform.backend.miniapp.venue.feedback.venueFeedbackRoutes
 import com.hookah.platform.backend.miniapp.venue.location.VenueLocationProvider
@@ -90,7 +89,6 @@ import com.hookah.platform.backend.miniapp.venue.stats.venueStatsRoutes
 import com.hookah.platform.backend.miniapp.venue.tables.VenueTableRepository
 import com.hookah.platform.backend.miniapp.venue.tables.venueTableRoutes
 import com.hookah.platform.backend.miniapp.venue.venueBillingRoutes
-import com.hookah.platform.backend.miniapp.venue.venueDraftPreviewRoutes
 import com.hookah.platform.backend.miniapp.venue.venueGuestPreviewRoutes
 import com.hookah.platform.backend.miniapp.venue.venueRoutes
 import com.hookah.platform.backend.miniapp.venue.venueStaffCallRoutes
@@ -572,18 +570,6 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
             venueBookingHoursRepository = venueBookingHoursRepository,
             venueSettingsRepository = venueSettingsRepository,
             venuePromotionRepository = venuePromotionRepository,
-        )
-    val venueDraftPreviewReadService =
-        VenueDraftPreviewReadService(
-            venueAccessRepository = venueAccessRepository,
-            venueRepository = venueRepository,
-            venueBookingHoursRepository = venueBookingHoursRepository,
-            venueSettingsRepository = venueSettingsRepository,
-            venueStaffProfileRepository = venueStaffProfileRepository,
-            venueInfoSectionsRepository = venueInfoSectionsRepository,
-            venueInfoSectionMediaRepository = venueInfoSectionMediaRepository,
-            venuePromotionRepository = venuePromotionRepository,
-            guestVenueReadService = guestVenueReadService,
         )
     val bookingReminderWorker =
         BookingReminderWorker(
@@ -1202,8 +1188,10 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                 venueGuestPreviewRoutes(
                     venueAccessRepository = venueAccessRepository,
                     guestVenueReadService = guestVenueReadService,
+                    venueInfoSectionsRepository = venueInfoSectionsRepository,
+                    venueInfoSectionMediaRepository = venueInfoSectionMediaRepository,
+                    telegramFileDownloader = guestInfoMediaDownloader,
                 )
-                venueDraftPreviewRoutes(venueDraftPreviewReadService)
                 venueRoutes(
                     venueAccessRepository = venueAccessRepository,
                     staffChatLinkCodeRepository = staffChatLinkCodeRepository,

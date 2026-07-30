@@ -1,17 +1,21 @@
 package com.hookah.platform.backend.miniapp.venue
 
+import com.hookah.platform.backend.ModuleOverrides
 import com.hookah.platform.backend.api.ApiErrorCodes
 import com.hookah.platform.backend.miniapp.guest.api.VenueInfoSectionsResponse
 import com.hookah.platform.backend.miniapp.guest.api.VenueResponse
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.module
+import com.hookah.platform.backend.moduleWithOverrides
+import com.hookah.platform.backend.telegram.TelegramDownloadedFile
 import com.hookah.platform.backend.test.assertApiErrorEnvelope
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
+import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.config.MapApplicationConfig
@@ -29,6 +33,7 @@ import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class VenueGuestPreviewRoutesTest {
@@ -63,24 +68,18 @@ class VenueGuestPreviewRoutesTest {
 
             val ownerPreviewResponse =
                 client.getAuthenticated("/api/venue/${fixture.venueId}/guest-preview", token)
-            val ownerSectionsResponse =
-                client.getAuthenticated(
-                    "/api/venue/${fixture.venueId}/guest-preview/info-sections",
-                    token,
-                )
             assertEquals(HttpStatusCode.OK, ownerPreviewResponse.status)
-            assertEquals(HttpStatusCode.OK, ownerSectionsResponse.status)
             assertEquals("no-store", ownerPreviewResponse.headers[HttpHeaders.CacheControl])
-            assertEquals("no-store", ownerSectionsResponse.headers[HttpHeaders.CacheControl])
             val ownerPreviewBody = ownerPreviewResponse.bodyAsText()
-            val ownerSectionsBody = ownerSectionsResponse.bodyAsText()
+            val ownerPreview =
+                json.decodeFromString(VenueGuestPreviewResponse.serializer(), ownerPreviewBody)
+            assertEquals(VenueGuestPreviewMode.PUBLISHED_PUBLIC, ownerPreview.mode)
+            assertNull(ownerPreview.venueAvailabilityLabel)
+            assertEquals(VenueGuestPreviewSource.SAVED_STATE, ownerPreview.source)
+            assertEquals(guestVenue.venue, ownerPreview.venue)
             assertEquals(
-                guestVenue,
-                json.decodeFromString(VenueResponse.serializer(), ownerPreviewBody),
-            )
-            assertEquals(
-                guestSections,
-                json.decodeFromString(VenueInfoSectionsResponse.serializer(), ownerSectionsBody),
+                guestSections.sections,
+                ownerPreview.infoSections,
             )
 
             val venue = guestVenue.venue
@@ -101,31 +100,20 @@ class VenueGuestPreviewRoutesTest {
             assertEquals(1, guestSections.sections.single().media.size)
             assertTrue(guestSections.sections.single().media.single().url.startsWith("/api/guest/venue/"))
             assertPublicOnly(ownerPreviewBody)
-            assertPublicOnly(ownerSectionsBody)
 
             updateMembershipRole(jdbcUrl, fixture.venueId, ACTOR_USER_ID, "MANAGER")
             val managerPreviewResponse =
                 client.getAuthenticated("/api/venue/${fixture.venueId}/guest-preview", token)
-            val managerSectionsResponse =
-                client.getAuthenticated(
-                    "/api/venue/${fixture.venueId}/guest-preview/info-sections",
-                    token,
-                )
             assertEquals(HttpStatusCode.OK, managerPreviewResponse.status)
-            assertEquals(HttpStatusCode.OK, managerSectionsResponse.status)
             assertEquals("no-store", managerPreviewResponse.headers[HttpHeaders.CacheControl])
-            assertEquals("no-store", managerSectionsResponse.headers[HttpHeaders.CacheControl])
-            assertEquals(
-                guestVenue,
-                json.decodeFromString(VenueResponse.serializer(), managerPreviewResponse.bodyAsText()),
-            )
-            assertEquals(
-                guestSections,
+            val managerPreview =
                 json.decodeFromString(
-                    VenueInfoSectionsResponse.serializer(),
-                    managerSectionsResponse.bodyAsText(),
-                ),
-            )
+                    VenueGuestPreviewResponse.serializer(),
+                    managerPreviewResponse.bodyAsText(),
+                )
+            assertEquals(VenueGuestPreviewMode.PUBLISHED_PUBLIC, managerPreview.mode)
+            assertEquals(guestVenue.venue, managerPreview.venue)
+            assertEquals(guestSections.sections, managerPreview.infoSections)
         }
 
     @Test
@@ -167,7 +155,7 @@ class VenueGuestPreviewRoutesTest {
         }
 
     @Test
-    fun `unavailable venues return the exact safe message without private state`() =
+    fun `owner and manager receive private saved state for supported unavailable venues`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("venue-guest-preview-unavailable")
             val config = buildConfig(jdbcUrl)
@@ -176,13 +164,12 @@ class VenueGuestPreviewRoutesTest {
             application { module() }
             client.get("/health")
 
-            val unavailableVenues =
+            val privateVenues =
                 listOf(
                     VenueStatus.DRAFT,
                     VenueStatus.HIDDEN,
                     VenueStatus.PAUSED,
                     VenueStatus.SUSPENDED,
-                    VenueStatus.ARCHIVED,
                 ).associateWith { status ->
                     seedVenueWithMembership(
                         jdbcUrl = jdbcUrl,
@@ -203,22 +190,51 @@ class VenueGuestPreviewRoutesTest {
                 )
             val token = issueToken(config, ACTOR_USER_ID)
 
-            (unavailableVenues.values + blockedVenueId).forEach { venueId ->
-                previewPaths(venueId).forEach { path ->
-                    val response = client.getAuthenticated(path, token)
-                    assertEquals(HttpStatusCode.NotFound, response.status)
-                    assertEquals("no-store", response.headers[HttpHeaders.CacheControl])
-                    val error = assertApiErrorEnvelope(response, ApiErrorCodes.NOT_FOUND)
-                    assertEquals(UNAVAILABLE_MESSAGE, error.error.message)
-                    val body = response.bodyAsText()
-                    assertFalse(body.contains("private-", ignoreCase = true))
-                    assertFalse(body.contains("draft", ignoreCase = true))
-                }
+            privateVenues.forEach { (status, venueId) ->
+                val response = client.getAuthenticated(previewPath(venueId), token)
+                assertEquals(HttpStatusCode.OK, response.status)
+                assertEquals("no-store", response.headers[HttpHeaders.CacheControl])
+                val preview =
+                    json.decodeFromString(
+                        VenueGuestPreviewResponse.serializer(),
+                        response.bodyAsText(),
+                    )
+                assertEquals(VenueGuestPreviewMode.PRIVATE_DRAFT, preview.mode)
+                assertEquals(expectedPrivateLabel(status), preview.venueAvailabilityLabel)
+                assertEquals(status.dbValue, preview.venue.status)
+                assertEquals(VenueGuestPreviewSource.SAVED_STATE, preview.source)
+                assertEquals(
+                    listOf("private-${status.name.lowercase()}"),
+                    preview.infoSections.map { it.title },
+                )
             }
+
+            val blockedResponse = client.getAuthenticated(previewPath(blockedVenueId), token)
+            assertEquals(HttpStatusCode.OK, blockedResponse.status)
+            val blockedPreview =
+                json.decodeFromString(
+                    VenueGuestPreviewResponse.serializer(),
+                    blockedResponse.bodyAsText(),
+                )
+            assertEquals(VenueGuestPreviewMode.PRIVATE_DRAFT, blockedPreview.mode)
+            assertEquals("Заведение приостановлено.", blockedPreview.venueAvailabilityLabel)
+            assertEquals(VenueStatus.PUBLISHED.dbValue, blockedPreview.venue.status)
+
+            val draftVenueId = privateVenues.getValue(VenueStatus.DRAFT)
+            updateMembershipRole(jdbcUrl, draftVenueId, ACTOR_USER_ID, "MANAGER")
+            val managerResponse = client.getAuthenticated(previewPath(draftVenueId), token)
+            assertEquals(HttpStatusCode.OK, managerResponse.status)
+            assertEquals(
+                VenueGuestPreviewMode.PRIVATE_DRAFT,
+                json.decodeFromString(
+                    VenueGuestPreviewResponse.serializer(),
+                    managerResponse.bodyAsText(),
+                ).mode,
+            )
         }
 
     @Test
-    fun `deleted venue returns safe unavailable preview without private state`() =
+    fun `archived and deleted venues return safe unavailable preview without private state`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("venue-guest-preview-deleted")
             val config = buildConfig(jdbcUrl)
@@ -227,33 +243,112 @@ class VenueGuestPreviewRoutesTest {
             application { module() }
             client.get("/health")
 
-            val deletedVenueId =
-                seedVenueWithMembership(
-                    jdbcUrl = jdbcUrl,
-                    userId = ACTOR_USER_ID,
-                    role = "OWNER",
-                    status = VenueStatus.DELETED,
-                    marker = "private-deleted",
-                )
+            val unavailableVenueIds =
+                listOf(VenueStatus.ARCHIVED, VenueStatus.DELETED).map { status ->
+                    seedVenueWithMembership(
+                        jdbcUrl = jdbcUrl,
+                        userId = ACTOR_USER_ID,
+                        role = "OWNER",
+                        status = status,
+                        marker = "private-${status.name.lowercase()}",
+                    )
+                }
             val token = issueToken(config, ACTOR_USER_ID)
 
-            previewPaths(deletedVenueId).forEach { path ->
-                val response = client.getAuthenticated(path, token)
-                assertEquals(HttpStatusCode.NotFound, response.status)
-                assertEquals("no-store", response.headers[HttpHeaders.CacheControl])
-                val error = assertApiErrorEnvelope(response, ApiErrorCodes.NOT_FOUND)
-                assertEquals(UNAVAILABLE_MESSAGE, error.error.message)
-                assertFalse(response.bodyAsText().contains("private-deleted"))
+            unavailableVenueIds.forEach { venueId ->
+                previewPaths(venueId).forEach { path ->
+                    val response = client.getAuthenticated(path, token)
+                    assertEquals(HttpStatusCode.NotFound, response.status)
+                    assertEquals("no-store", response.headers[HttpHeaders.CacheControl])
+                    val error = assertApiErrorEnvelope(response, ApiErrorCodes.NOT_FOUND)
+                    assertEquals(UNAVAILABLE_MESSAGE, error.error.message)
+                    assertFalse(response.bodyAsText().contains("private-"))
+                }
             }
         }
 
-    private fun seedPublishedPreview(jdbcUrl: String): PublishedPreviewFixture =
+    @Test
+    fun `private preview preserves child visibility and serves media only through authenticated proxy`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("venue-guest-preview-private-projection")
+            val config = buildConfig(jdbcUrl)
+            val downloadedFileIds = mutableListOf<String>()
+
+            environment { this.config = config }
+            application {
+                moduleWithOverrides(
+                    ModuleOverrides(
+                        telegramFileDownloader = { fileId ->
+                            downloadedFileIds += fileId
+                            TelegramDownloadedFile(
+                                bytes = "preview-image".toByteArray(),
+                                contentType = ContentType.Image.PNG,
+                            )
+                        },
+                    ),
+                )
+            }
+            client.get("/health")
+
+            val fixture = seedPublishedPreview(jdbcUrl, status = VenueStatus.DRAFT)
+            val ownerToken = issueToken(config, ACTOR_USER_ID)
+            val previewResponse = client.getAuthenticated(previewPath(fixture.venueId), ownerToken)
+
+            assertEquals(HttpStatusCode.OK, previewResponse.status)
+            assertEquals("no-store", previewResponse.headers[HttpHeaders.CacheControl])
+            val body = previewResponse.bodyAsText()
+            val preview =
+                json.decodeFromString(
+                    VenueGuestPreviewResponse.serializer(),
+                    body,
+                )
+            assertEquals(VenueGuestPreviewMode.PRIVATE_DRAFT, preview.mode)
+            assertEquals("Заведение ещё не опубликовано.", preview.venueAvailabilityLabel)
+            assertEquals(listOf(PUBLIC_STAFF_NAME), preview.venue.todayStaff.map { it.displayName })
+            assertNull(preview.venue.todayStaff.single().photoRef)
+            assertEquals(listOf(ACTIVE_PROMOTION_TITLE), preview.venue.promotions.map { it.title })
+            assertEquals(listOf(PUBLIC_SECTION_TITLE), preview.infoSections.map { it.title })
+            val media = preview.infoSections.single().media.single()
+            assertEquals(
+                "/api/venue/${fixture.venueId}/guest-preview/info-sections/" +
+                    "${fixture.publicSectionId}/media/${fixture.publicMediaId}",
+                media.url,
+            )
+            assertPublicOnly(body)
+
+            val mediaResponse = client.getAuthenticated(media.url, ownerToken)
+            assertEquals(HttpStatusCode.OK, mediaResponse.status)
+            assertEquals("no-store", mediaResponse.headers[HttpHeaders.CacheControl])
+            assertEquals("preview-image", mediaResponse.bodyAsText())
+            assertEquals(listOf("public-telegram-file"), downloadedFileIds)
+
+            val hiddenMediaResponse =
+                client.getAuthenticated(
+                    "/api/venue/${fixture.venueId}/guest-preview/info-sections/" +
+                        "${fixture.privateSectionId}/media/${fixture.privateMediaId}",
+                    ownerToken,
+                )
+            assertEquals(HttpStatusCode.NotFound, hiddenMediaResponse.status)
+            assertEquals("no-store", hiddenMediaResponse.headers[HttpHeaders.CacheControl])
+            assertEquals(listOf("public-telegram-file"), downloadedFileIds)
+
+            val foreignResponse =
+                client.getAuthenticated(media.url, issueToken(config, FOREIGN_USER_ID))
+            assertEquals(HttpStatusCode.Forbidden, foreignResponse.status)
+            assertEquals("no-store", foreignResponse.headers[HttpHeaders.CacheControl])
+            assertEquals(listOf("public-telegram-file"), downloadedFileIds)
+        }
+
+    private fun seedPublishedPreview(
+        jdbcUrl: String,
+        status: VenueStatus = VenueStatus.PUBLISHED,
+    ): PublishedPreviewFixture =
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             seedUser(connection, ACTOR_USER_ID)
             val venueId =
                 insertVenue(
                     connection = connection,
-                    status = VenueStatus.PUBLISHED,
+                    status = status,
                     marker = "published",
                     name = "Опубликованная карточка",
                 )
@@ -318,8 +413,24 @@ class VenueGuestPreviewRoutesTest {
             insertPromotion(
                 connection = connection,
                 venueId = venueId,
-                title = PRIVATE_PROMOTION_MARKER,
+                title = DRAFT_PROMOTION_MARKER,
                 status = "DRAFT",
+                startsAt = Instant.now().minusSeconds(86_400),
+                endsAt = Instant.now().plusSeconds(86_400),
+            )
+            insertPromotion(
+                connection = connection,
+                venueId = venueId,
+                title = PAUSED_PROMOTION_MARKER,
+                status = "PAUSED",
+                startsAt = Instant.now().minusSeconds(86_400),
+                endsAt = Instant.now().plusSeconds(86_400),
+            )
+            insertPromotion(
+                connection = connection,
+                venueId = venueId,
+                title = ARCHIVED_PROMOTION_MARKER,
+                status = "ARCHIVED",
                 startsAt = Instant.now().minusSeconds(86_400),
                 endsAt = Instant.now().plusSeconds(86_400),
             )
@@ -332,7 +443,7 @@ class VenueGuestPreviewRoutesTest {
                     text = "Только опубликованная информация.",
                     isVisible = true,
                 )
-            insertInfoMedia(connection, publicSectionId, "public-telegram-file")
+            val publicMediaId = insertInfoMedia(connection, publicSectionId, "public-telegram-file")
             val privateSectionId =
                 insertInfoSection(
                     connection = connection,
@@ -341,9 +452,16 @@ class VenueGuestPreviewRoutesTest {
                     text = PRIVATE_SECTION_MARKER,
                     isVisible = false,
                 )
-            insertInfoMedia(connection, privateSectionId, PRIVATE_MEDIA_MARKER)
+            val privateMediaId = insertInfoMedia(connection, privateSectionId, PRIVATE_MEDIA_MARKER)
 
-            PublishedPreviewFixture(venueId = venueId, exceptionDates = exceptionDates)
+            PublishedPreviewFixture(
+                venueId = venueId,
+                exceptionDates = exceptionDates,
+                publicSectionId = publicSectionId,
+                publicMediaId = publicMediaId,
+                privateSectionId = privateSectionId,
+                privateMediaId = privateMediaId,
+            )
         }
 
     private fun seedVenueWithMembership(
@@ -652,18 +770,21 @@ class VenueGuestPreviewRoutesTest {
         connection: Connection,
         sectionId: Long,
         telegramFileId: String,
-    ) {
+    ): Long =
         connection.prepareStatement(
             """
             INSERT INTO venue_info_section_media (section_id, media_type, telegram_file_id, sort_order)
             VALUES (?, 'image', ?, 0)
             """.trimIndent(),
+            Statement.RETURN_GENERATED_KEYS,
         ).use { statement ->
             statement.setLong(1, sectionId)
             statement.setString(2, telegramFileId)
             statement.executeUpdate()
+            statement.generatedKeys.use { keys ->
+                if (keys.next()) keys.getLong(1) else error("Failed to insert info media")
+            }
         }
-    }
 
     private fun updateMembershipRole(
         jdbcUrl: String,
@@ -712,13 +833,30 @@ class VenueGuestPreviewRoutesTest {
 
     private fun previewPaths(venueId: Long): List<String> =
         listOf(
-            "/api/venue/$venueId/guest-preview",
-            "/api/venue/$venueId/guest-preview/info-sections",
+            previewPath(venueId),
+            "/api/venue/$venueId/guest-preview/info-sections/1/media/1",
         )
+
+    private fun previewPath(venueId: Long): String = "/api/venue/$venueId/guest-preview"
+
+    private fun expectedPrivateLabel(status: VenueStatus): String =
+        when (status) {
+            VenueStatus.DRAFT -> "Заведение ещё не опубликовано."
+            VenueStatus.HIDDEN -> "Заведение временно скрыто."
+            VenueStatus.PUBLISHED,
+            VenueStatus.PAUSED,
+            VenueStatus.SUSPENDED,
+            -> "Заведение приостановлено."
+            VenueStatus.ARCHIVED,
+            VenueStatus.DELETED,
+            -> error("Status is not privately previewable: $status")
+        }
 
     private fun assertPublicOnly(body: String) {
         assertFalse(body.contains(PRIVATE_STAFF_MARKER))
-        assertFalse(body.contains(PRIVATE_PROMOTION_MARKER))
+        assertFalse(body.contains(DRAFT_PROMOTION_MARKER))
+        assertFalse(body.contains(PAUSED_PROMOTION_MARKER))
+        assertFalse(body.contains(ARCHIVED_PROMOTION_MARKER))
         assertFalse(body.contains(PRIVATE_SECTION_MARKER))
         assertFalse(body.contains(PRIVATE_MEDIA_MARKER))
         assertFalse(body.contains("public-telegram-file"))
@@ -726,11 +864,16 @@ class VenueGuestPreviewRoutesTest {
         assertFalse(body.contains("telegramFileId"))
         assertFalse(body.contains("created_by_user_id"))
         assertFalse(body.contains("createdByUserId"))
+        assertFalse(body.contains("photo-ref"))
     }
 
     private data class PublishedPreviewFixture(
         val venueId: Long,
         val exceptionDates: List<LocalDate>,
+        val publicSectionId: Long,
+        val publicMediaId: Long,
+        val privateSectionId: Long,
+        val privateMediaId: Long,
     )
 
     private companion object {
@@ -741,7 +884,9 @@ class VenueGuestPreviewRoutesTest {
         const val ACTIVE_PROMOTION_TITLE = "Опубликованная акция"
         const val PUBLIC_SECTION_TITLE = "О заведении"
         const val PRIVATE_STAFF_MARKER = "private-staff-marker"
-        const val PRIVATE_PROMOTION_MARKER = "private-promotion-marker"
+        const val DRAFT_PROMOTION_MARKER = "draft-promotion-marker"
+        const val PAUSED_PROMOTION_MARKER = "paused-promotion-marker"
+        const val ARCHIVED_PROMOTION_MARKER = "archived-promotion-marker"
         const val PRIVATE_SECTION_MARKER = "private-section-marker"
         const val PRIVATE_MEDIA_MARKER = "private-media-marker"
     }

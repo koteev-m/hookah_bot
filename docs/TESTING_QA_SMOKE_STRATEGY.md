@@ -22,8 +22,7 @@ Current practice:
 - Gift parity is
   `GIFT_WITH_ITEM BOT/MINIAPP PARITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`.
   GitHub Actions and staging cross-surface smoke remain required.
-- Venue Mini App Published Guest Preview Phase 1 has a **DONE / MVP / STAGING-SMOKE-PASSED** historical baseline. Its 2026-07-30 hardening status is **VENUE MINI APP GUEST PREVIEW / PUBLISHED READ-ONLY PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**; focused backend, build and full browser smoke are green, while GitHub Actions and staging re-smoke remain required for this delta.
-- Venue Mini App Draft Preview Phase 2.1 is **DONE / MVP / STAGING-SMOKE-PASSED**: focused Draft/RBAC/Guest regression coverage, GitHub Actions, staging deploy and the saved-DRAFT privacy/lifecycle/media-placeholder smoke passed.
+- Venue Mini App Guest Preview Phase 2.1 is **VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**. Focused preview/Guest/RBAC/promotion backend tests, compile/lint, Mini App build and deterministic browser smoke `95/95` are green. GitHub Actions and staging smoke remain required for the unified delta; historical Published/Draft staging evidence does not promote the new contract automatically.
 
 Target QA model:
 - Every task ends with changed files, behavior summary, tests run, validation result, manual smoke checklist, `git status --short`, whether `scripts/dev/` was touched and whether staging deploy is needed.
@@ -41,73 +40,63 @@ Target QA model:
 | E. Manual staging smoke | Prove real environment, Telegram WebView, staff-chat and deploy behavior. | Required after runtime/frontend/backend/Telegram/deploy changes; not required for docs-only. |
 | F. GitHub Actions | Release gate and source of CI truth. | Must be green before considering a task merged/released. If red, report failing test/assertion first, not Gradle tail. |
 
-## Venue Mini App Guest Preview Phase 1 Quality Gate
+## Venue Mini App Guest Preview Phase 2.1 Quality Gate
 
-Published Preview must continue to reuse the exact Guest DTO/read assembly and its availability
-guards. A draft/bypass parameter in `GuestVenueReadService`, a private Venue settings DTO, or a
-client-side merge of public/private state inside Published Preview is a release blocker. Draft
-Preview Phase 2.1 uses a separate Venue API/read model and must not weaken this contract.
-
-Required local coverage:
-
-```bash
-./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VenueGuestPreviewRoutesTest*' --console=plain
-./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*GuestVenueRoutesTest*' --tests '*VenueRbacRoutesTest*' --console=plain
-./gradlew --no-daemon --max-workers=1 :backend:app:compileKotlin :backend:app:ktlintCheck --console=plain
-npm --prefix miniapp run build
-CI=1 TZ=UTC MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke
-```
-
-Acceptance:
-
-- OWNER and MANAGER receive the same guest-visible venue/info DTOs as Guest;
-- STAFF and foreign venue access are forbidden, including direct route/hash;
-- both Published adapter reads emit `Cache-Control: no-store`, including denial and unavailable responses;
-- non-published or guest-blocked venues expose only `Заведение сейчас недоступно для гостевого просмотра.`;
-- weekly hours, future date exceptions, public info/media, Today Staff and current active promotions match Guest;
-- public responses expose no raw Telegram/storage refs or private creator identifiers;
-- PUBLISHED uses `Предпросмотр для гостя`, helper `Так опубликованная карточка выглядит для гостя.` and `Вернуться в кабинет`; DRAFT copy remains unchanged;
-- venue switching, including PUBLISHED-to-PUBLISHED, clears and aborts stale preview state;
-- booking, favorites, venue chat, support, staff call, extension, cart, order and table context are absent and generate no mutation traffic;
-- historical staging evidence passed for OWNER/MANAGER parity, STAFF/foreign denial, stale isolation and no guest mutations;
-- the 2026-07-30 hardening delta is local-validation-passed only until green Actions and staging re-smoke.
-
-## Venue Mini App Draft Preview Phase 2.1 Quality Gate
-
-Draft Preview is a separate OWNER/MANAGER-only Venue read path for already saved `DRAFT` state.
-It must not use Guest API bypass flags, private settings DTOs or client-side public/private merges.
+The Venue Mini App has one `Предпросмотр для гостя` entry and one read-only Venue endpoint. The
+server, never cached client membership state, selects `PUBLISHED_PUBLIC` or `PRIVATE_DRAFT`.
+`PUBLISHED_PUBLIC` must reuse the exact Guest venue/info DTO assembly and unchanged
+availability/subscription guards. `PRIVATE_DRAFT` must be an OWNER/MANAGER own-venue,
+server-allowlisted projection of saved guest-facing state. A query bypass on a Guest route, a
+private settings DTO, client-side public/private merge or client-selected visibility mode is a
+release blocker.
 
 Required local coverage:
 
 ```bash
-./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VenueDraftPreview*' --console=plain
 ./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VenueGuestPreviewRoutesTest*' --console=plain
 ./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*GuestVenueRoutesTest*' --console=plain
 ./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VenueRbacRoutesTest*' --console=plain
 ./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VenuePromotionRepositoryTest*' --console=plain
-./gradlew --no-daemon --max-workers=1 :backend:app:ktlintCheck --console=plain
 ./gradlew --no-daemon --max-workers=1 :backend:app:compileKotlin --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:ktlintCheck --console=plain
 npm --prefix miniapp run build
 CI=1 TZ=UTC MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke
 ```
 
+Local result on 2026-07-30: all four focused backend test selectors passed, Kotlin compile and lint
+passed, the Mini App production build passed, and deterministic Playwright smoke passed `95/95`.
+
 Acceptance:
 
-- OWNER and MANAGER receive the saved public-candidate projection only for their own `DRAFT` venue;
-- STAFF and foreign venue users are forbidden; Platform Owner receives no automatic Venue-route access;
-- missing/DELETED venues fail safely, and direct non-DRAFT requests return no private projection;
-- response is read-only with `Cache-Control: no-store` and contains no mutation/action contract;
-- public card/address, schedule, public exceptions, visible text info sections, guest-visible Today Staff and current `ACTIVE` promotions are allowlisted server-side;
-- hidden info sections, private fields/markers, unpublished staff, inactive/non-current promotions and raw media refs are absent;
-- Draft media uses one compact post-publication hint with no new media route; Published media remains unchanged and Guest media routes remain guarded;
-- one global entry and one contextual public-card-settings entry open the same read-only renderer;
-- PUBLISHED and DRAFT banners are explicit; HIDDEN/PAUSED/SUSPENDED/ARCHIVED expose only safe unavailable copy;
-- venue switching clears old state immediately, aborts the previous request and ignores late responses;
-- booking, favorites, chats, support, staff calls, extension, cart, order and table context neither appear nor mutate;
-- staging evidence passed: OWNER/MANAGER opened saved `DRAFT`; the permanent draft banner, guest-safe candidate projection, private-field absence, safe unsupported lifecycle states, both entrypoints, media placeholder/no raw refs, Guest-route closure and stale-response protection were confirmed.
+- OWNER and MANAGER receive only their own venue preview; STAFF has no entry/direct access, foreign
+  venue users are forbidden, and Platform Owner receives no automatic Venue-route authority;
+- `PUBLISHED_PUBLIC` venue/info payloads equal Guest payloads, including weekly hours, future date
+  exceptions, visible info/media, Today Staff and current active promotions;
+- `PRIVATE_DRAFT` includes saved guest-facing card/location/contact/description, schedule and public
+  exceptions, visible info sections, guest-visible Today Staff and only current `ACTIVE`
+  promotions. Hidden sections/media, unpublished staff, inactive/non-current promotions, private
+  markers and raw Telegram/storage refs are absent;
+- private preview media uses an authenticated, venue/section/media-scoped Venue proxy. Public Guest
+  media routes and their availability guards remain unchanged;
+- every preview response is read-only and `Cache-Control: no-store`; missing/archived/deleted venues
+  fail safely and Guest routes still expose no unpublished/private projection;
+- `PUBLISHED_PUBLIC` shows `Опубликовано` and `Так карточку сейчас видит гость.`;
+  `PRIVATE_DRAFT` shows `Черновик`,
+  `Гости пока не видят эту карточку. Это закрытый предпросмотр сохранённой версии.` and only the
+  safe reason `Заведение ещё не опубликовано.`, `Заведение временно скрыто.` or
+  `Заведение приостановлено.`, never technical subscription state;
+- the Settings origin shows `Вернуться к настройкам`; venue navigation shows
+  `Вернуться в кабинет`;
+- public-card, weekly-schedule and date-exception dirty state blocks preview with
+  `Есть несохранённые изменения. Сначала сохраните их, затем откройте предпросмотр.`;
+  no auto-save/request occurs, and an explicit save makes the new saved state visible;
+- venue switching clears old state immediately, aborts the previous request and ignores late
+  responses across both modes, including same-mode switches;
+- booking, favorites, venue chat, support, staff call, extension, cart, order and table context are
+  absent and generate no mutation traffic.
 
 The Preview smoke does **not** validate Venue Mini App media upload or management. No file picker,
-upload endpoint, replace/hide/delete flow or new storage path is part of either Preview phase.
+upload endpoint, replace/hide/delete flow or new storage path is part of Guest Preview Phase 2.1.
 
 ## Venue Mini App Media Foundation Future Quality Gate
 
@@ -124,7 +113,7 @@ Required future coverage:
 - upload/replace/hide/show/delete lifecycle, safe audit, orphan/failed cleanup and
   reference-protected physical deletion;
 - legacy Telegram plus selected-target delivery in Guest and Bot;
-- exact Published Preview parity and ref-free Draft behavior;
+- exact `PUBLISHED_PUBLIC` Guest parity and authenticated/ref-free `PRIVATE_DRAFT` delivery;
 - Mini App build/e2e plus real Telegram and selected-storage staging smoke;
 - container recreate and backup/restore evidence for PostgreSQL metadata and selected byte storage.
 
@@ -675,8 +664,7 @@ Telegram/staff-chat:
 ## Roadmap Status
 
 - Testing/QA smoke strategy: `UPDATED`.
-- Published Guest Preview Phase 1 hardening: **VENUE MINI APP GUEST PREVIEW / PUBLISHED READ-ONLY PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**; historical baseline was staging-smoke-passed, current delta still requires CI and staging re-smoke.
-- Draft Preview Phase 2.1: **DONE / MVP / STAGING-SMOKE-PASSED**.
+- Guest Preview Phase 2.1: **VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**; CI and staging smoke remain required.
 - Manual smoke checklist: `CONSOLIDATED`.
 - CI coverage: `PARTIAL / release-critical split jobs current`.
 - Frontend e2e: `PARTIAL`, with smoke coverage documented.

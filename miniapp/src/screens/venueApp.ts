@@ -58,6 +58,7 @@ type Route = {
   name: RouteName
   orderId: number | null
   threadId: number | null
+  previewOrigin?: 'settings' | 'venue'
 }
 
 type NavRouteName = Exclude<RouteName, 'order'>
@@ -126,7 +127,17 @@ function resolveRoute(): Route {
     const orderId = parsePositiveInt(segments[1])
     return { name: 'order', orderId: orderId ?? null, threadId: null }
   }
-  return { name: route, orderId: null, threadId: parsePositiveInt(query.get('threadId')) ?? null }
+  return {
+    name: route,
+    orderId: null,
+    threadId: parsePositiveInt(query.get('threadId')) ?? null,
+    previewOrigin:
+      route === 'guest-preview' && query.get('from') === 'settings'
+        ? 'settings'
+        : route === 'guest-preview'
+          ? 'venue'
+          : undefined
+  }
 }
 
 function renderErrorActions(container: HTMLElement, actions: ApiErrorAction[]) {
@@ -408,10 +419,6 @@ export function mountVenueApp(options: VenueAppOptions) {
     const access = selection ? accessList.find((venue) => venue.venueId === selection) ?? null : null
     currentRole = access?.role ?? null
     currentPermissions = access?.permissions ?? []
-    refs.navButtons['guest-preview'].textContent =
-      access?.venueStatus?.trim().toUpperCase() === 'DRAFT'
-        ? 'Предпросмотр карточки'
-        : 'Предпросмотр для гостя'
     updateAccessState()
     updateNavVisibility()
   }
@@ -554,7 +561,9 @@ export function mountVenueApp(options: VenueAppOptions) {
           isDebug,
           venueId,
           access,
-          onBack: () => navigate('#/dashboard')
+          origin: route.previewOrigin ?? 'venue',
+          onBack: () =>
+            navigate(route.previewOrigin === 'settings' ? '#/settings' : '#/dashboard')
         })
       case 'menu':
         return renderVenueMenuScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
@@ -582,7 +591,7 @@ export function mountVenueApp(options: VenueAppOptions) {
           isDebug,
           venueId,
           access,
-          onOpenPreview: () => navigate('#/guest-preview')
+          onOpenPreview: () => navigate('#/guest-preview?from=settings')
         })
       case 'subscription':
         return renderVenueSubscriptionScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
@@ -647,6 +656,10 @@ export function mountVenueApp(options: VenueAppOptions) {
     back: () => {
       if (currentRoute.name === 'order') {
         navigate('#/orders')
+        return
+      }
+      if (currentRoute.name === 'guest-preview' && currentRoute.previewOrigin === 'settings') {
+        navigate('#/settings')
         return
       }
       navigate('#/dashboard')

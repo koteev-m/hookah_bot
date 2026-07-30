@@ -1,6 +1,5 @@
 import { requestApi, requestBinary, type RequestDependencies } from './request'
 import type { OwnerBillingOverviewResponse } from './billingDtos'
-import type { VenueInfoSectionsResponse, VenueResponse } from './guestDtos'
 import type {
   VenueApplyBaseFlavorProfilesResponse,
   VenueAvailabilityRequest,
@@ -83,7 +82,7 @@ import type {
   VenueStaffShiftResponse,
   VenueStaffShiftUpsertRequest,
   VenueStaffUpdateRoleRequest,
-  VenueDraftPreviewResponse
+  VenueGuestPreviewResponse
 } from './venueDtos'
 import type {
   SupportMessageCreateRequest,
@@ -108,7 +107,7 @@ export async function venueGetGuestPreview(
   deps: RequestDependencies,
   signal?: AbortSignal
 ) {
-  return requestApi<VenueResponse>(
+  return requestApi<VenueGuestPreviewResponse>(
     backendUrl,
     `/api/venue/${venueId}/guest-preview`,
     { signal },
@@ -116,29 +115,15 @@ export async function venueGetGuestPreview(
   )
 }
 
-export async function venueGetGuestPreviewInfoSections(
+export async function venueGetGuestPreviewMedia(
   backendUrl: string,
-  venueId: number,
+  path: string,
   deps: RequestDependencies,
   signal?: AbortSignal
 ) {
-  return requestApi<VenueInfoSectionsResponse>(
+  return requestBinary(
     backendUrl,
-    `/api/venue/${venueId}/guest-preview/info-sections`,
-    { signal },
-    deps
-  )
-}
-
-export async function venueGetDraftPreview(
-  backendUrl: string,
-  venueId: number,
-  deps: RequestDependencies,
-  signal?: AbortSignal
-) {
-  return requestApi<VenueDraftPreviewResponse>(
-    backendUrl,
-    `/api/venue/${venueId}/draft-preview`,
+    path,
     { signal },
     deps
   )

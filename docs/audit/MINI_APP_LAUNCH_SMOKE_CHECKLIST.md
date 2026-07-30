@@ -28,8 +28,7 @@
 - M8a/M8b-Free Venue Mini App structured public profile/card settings is CLOSED after provider-free staging smoke: OWNER/MANAGER can edit guest-facing country/city/address, public contact and short card description without a runtime geodata provider; country/city suggestions are local, missing cities and addresses remain manually enterable, STAFF is hidden/forbidden, and guest public venue card/catalog read models plus route links reflect saved fields. Existing coordinates remain supported for coordinate-first route links, but manually entered addresses are not verified coordinates. Yandex adapters remain optional/commercial-only and disabled by default.
 - M9a Deployment SSH Reliability Hardening is CLOSED / staging smoke passed: the committed opt-in ControlMaster helper opened one authenticated persistent connection after a bounded retry, reused that connection for rsync/plain SSH through the existing deployment script, completed image build/upload and backend recreate, and passed local/public health, DB health and Mini App static checks. The normal `./scripts/deploy-staging.sh hookah-staging` path remains supported and unchanged. The exact fresh SSH connection failure cause remains unconfirmed.
 - M9b Venue Working Hours and Date Exceptions Mini App Parity plus M9b.1 date-exception ranges/rejection copy, M9b.2 exception save/list UX and M9b.3 date-range editing is CLOSED / staging smoke passed: OWNER/MANAGER can manage weekly hours, inclusive closed/special-hours exception ranges and optional guest-facing reasons/comments in Venue Mini App; successful exception saves close/reset the form and reveal the saved row in the compact list; existing closed and changed-hours exceptions can be edited to a new inclusive date range; STAFF is hidden/forbidden; guest catalog/card read models expose safe today schedule/open state; and direct Guest Mini App booking create/update validates configured venue hours with human schedule errors. Missing schedule setup shows `График не указан` / `Заведение пока не настроило график бронирования.`, not `Закрыто`.
-- Venue Mini App Published Guest Preview Phase 1 has a **DONE / MVP / STAGING-SMOKE-PASSED** historical baseline. The 2026-07-30 hardening is **VENUE MINI APP GUEST PREVIEW / PUBLISHED READ-ONLY PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**: PUBLISHED uses `Предпросмотр для гостя`, both adapter reads are `no-store`, exact safe-unavailable/return UX is covered, and PUBLISHED-to-PUBLISHED stale isolation passes locally. GitHub Actions and staging re-smoke remain required for this delta.
-- Venue Mini App Draft Preview Phase 2.1 is **DONE / MVP / STAGING-SMOKE-PASSED**: the same read-only screen uses a separate OWNER/MANAGER-only Venue endpoint/read model for saved `DRAFT` public-candidate state. The permanent draft banner, guest-safe fields, private-field absence, Guest-route closure, safe unsupported statuses, both entrypoints, stale-free switching and media placeholder/no raw refs passed staging smoke. This phase did not add or validate media upload.
+- Venue Mini App Guest Preview Phase 2.1 is **VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**. One `Предпросмотр для гостя` entry uses server-selected `PUBLISHED_PUBLIC` exact Guest state or OWNER/MANAGER own-venue `PRIVATE_DRAFT` saved public projection. Focused backend preview/Guest/RBAC/promotion tests, Kotlin compile/lint, Mini App build and deterministic smoke `95/95` passed; GitHub Actions and staging smoke remain required. Historical phase staging evidence does not promote the unified delta, and this slice did not add or validate media upload.
 - Mini App mutation / operational verification closure pack is CLOSED / code-test verification passed: actual Mini App PUT/PATCH/DELETE CORS preflights allow `Content-Type` and `Authorization`, Guest Mini App staff-call payload/backend row/staff-chat event include `tableSessionId`, linked staff-chat staff-call notification enqueue is covered, and fallback quick order emits `Telegram.WebApp.sendData` with `{ "cmd": "start_quick_order", "table_token": "<tableToken>" }`. No staging smoke is claimed by this item.
 - Staff Call Lifecycle ACK/DONE audit hardening and guest-visible CANCELLED finishing patch: CLOSED / staging smoke passed. Real Telegram Mini App smoke confirmed Guest call creation, staff-chat notification, Venue Mode NEW/ACK/DONE, Venue Mini App `STAFF_CALL_ACK` / `STAFF_CALL_DONE` audit with top-level actor evidence and `source=venue_miniapp`, Telegram staff-chat ACK/DONE message edits plus audit with `source=telegram_staff_chat`, Guest ability to create a new call after DONE, and guest-visible terminal `CANCELLED` as `Вызов отменён` for the current guest/tableSession. Audit remains best-effort; row-level ACK/DONE actor/timestamp columns, manual cancel UI and staff-call UX polish remain separate follow-ups.
 - Guest Table Context UX Cleanup / Feature-gated Extension Module: CLOSED / staging smoke passed. Real Telegram Mini App QR smoke confirmed correct venue/table context, route/copy address/booking actions hidden in table context, pre-visit venue card still showing address/route/copy/booking, `Продление работы заведения` hidden without active order/bill or unavailable extension state, visible only when active order state makes it available, and hidden again after bill/order close.
@@ -202,20 +201,22 @@ Manual runtime coverage for each release batch:
   - OWNER/MANAGER can configure weekly hours and date exceptions;
   - STAFF and foreign-venue access are denied for private schedule settings.
 - `VenueGuestPreviewRoutesTest`
-  - OWNER/MANAGER Published preview payloads equal the Guest venue/info payloads;
-  - weekly hours, future date exceptions, visible info/media, Today Staff and active promotions are covered;
-  - STAFF/foreign access is forbidden and unavailable venues fail closed with exact safe copy;
-  - venue and info responses are `no-store` and contain no raw Telegram refs or private creator identifiers.
-- `VenueDraftPreviewRoutesTest`
-  - OWNER/MANAGER receive only their own saved `DRAFT` allowlisted candidate projection;
-  - STAFF/foreign/non-DRAFT/DELETED/missing access is denied safely and the response is `no-store`;
-  - hidden info sections, private markers, unpublished staff, inactive/non-current promotions and raw media refs are absent;
-  - Guest availability/media routes and Published parity remain unchanged.
-- Mini App Playwright preview scenarios cover the Published-only entry/helper/return action, exact
-  safe unavailable copy, unchanged Draft copy/banners, OWNER/MANAGER access, STAFF hidden/direct
-  denial, stale-free PUBLISHED-to-PUBLISHED and Published/Draft switching including late responses,
-  GET-only traffic independent of table/cart/order state, no mutation controls, Draft media hint
-  and loading/empty/error/unavailable states.
+  - OWNER/MANAGER `PUBLISHED_PUBLIC` payloads equal the guarded Guest venue/info payloads;
+  - `PRIVATE_DRAFT` is selected server-side and includes only own-venue saved guest-facing card,
+    schedule/date exceptions, visible info/media, Today Staff and current `ACTIVE` promotions;
+  - STAFF/foreign access is forbidden; archived/deleted/missing venues fail safely; Guest routes
+    remain closed to unpublished state;
+  - hidden sections/media, private markers, unpublished staff, inactive/non-current promotions and
+    raw refs are absent;
+  - responses and authenticated venue/section/media-scoped delivery are `no-store`.
+- `GuestVenueRoutesTest`, `VenueRbacRoutesTest` and `VenuePromotionRepositoryTest` keep unchanged
+  Guest availability/RBAC boundaries and prove private preview does not leak inactive or
+  non-current promotions.
+- Mini App Playwright preview scenarios cover the one entry, server-selected modes, exact
+  badges/copy/safe reasons, origin-aware returns, OWNER/MANAGER access, STAFF hidden/direct denial,
+  public-card/weekly-schedule/date-exception dirty guards, authenticated private media, stale-free
+  cross-mode and same-mode switching including late responses, GET-only traffic independent of
+  table/cart/order state, no mutation controls and loading/empty/error/unavailable states.
 
 Manual runtime coverage for each release batch:
 
@@ -225,25 +226,40 @@ Manual runtime coverage for each release batch:
 - UI displays backend totals directly and does not invent frontend-calculated money.
 - STAFF close bill/order works while bill edit controls stay hidden;
 - venue `Сообщения` handles `BOOKING_CHAT` / `VENUE_CHAT`; venue `Помощь` / `Обращения` handles own-venue `SUPPORT_TICKET` and transfer to Platform.
-- OWNER and MANAGER open global `Предпросмотр для гостя` for PUBLISHED, see `Так опубликованная карточка выглядит для гостя.` and compare name, description, address, schedule/date exceptions, info/media, Today Staff and active promotions with the real Guest card; the published banner and `Вернуться в кабинет` are visible.
-- OWNER and MANAGER open the contextual public-card-settings entry and confirm it opens the same preview screen.
-- For DRAFT, confirm the draft banner, saved guest-safe candidate fields, visible text sections, Today Staff/current `ACTIVE` promotion filters and one media-after-publication hint with no raw refs.
-- HIDDEN/PAUSED/SUSPENDED/ARCHIVED and missing/DELETED venues show only `Заведение сейчас недоступно для гостевого просмотра.`.
-- Switching venue while preview is loading, including PUBLISHED-to-PUBLISHED, clears the old venue immediately and cannot restore a stale response.
+- OWNER and MANAGER open the one `Предпросмотр для гостя` entry. For `PUBLISHED_PUBLIC`, compare
+  card/location/contact/description, schedule/date exceptions, info/media, Today Staff and active
+  promotions with the real Guest card; confirm `Опубликовано`,
+  `Так карточку сейчас видит гость.` and `Вернуться в кабинет`.
+- Open from public-card Settings and confirm the same renderer returns through
+  `Вернуться к настройкам`.
+- For `PRIVATE_DRAFT`, confirm `Черновик`,
+  `Гости пока не видят эту карточку. Это закрытый предпросмотр сохранённой версии.`, the saved
+  guest-safe projection, authenticated visible media, published Today Staff/current `ACTIVE`
+  promotion filters and no raw refs.
+- Confirm the private reason is only `Заведение ещё не опубликовано.`,
+  `Заведение временно скрыто.` or `Заведение приостановлено.`, with no technical subscription
+  status. Archived/deleted/missing venues fail safely.
+- Change public-card, weekly-schedule and date-exception values without saving. Each case must stay
+  in Settings, send no preview/save request and show
+  `Есть несохранённые изменения. Сначала сохраните их, затем откройте предпросмотр.`. Explicitly
+  save and confirm preview reads the new values.
+- Switching venue while preview is loading across `PUBLISHED_PUBLIC`/`PRIVATE_DRAFT`, including
+  same-mode switches, clears the old venue immediately and cannot restore a stale response.
 - STAFF has no preview entry and direct preview hash/API access is denied; foreign venue access is denied.
 - Preview exposes no booking/favorite/chat/support/staff-call/extension/cart/order controls and sends no mutation requests.
 
-Published/Draft Preview staging result:
+Guest Preview Phase 2.1 result:
 
-- Historical Published Guest Preview Phase 1 baseline: **DONE / MVP / STAGING-SMOKE-PASSED**.
-- Current hardening: **VENUE MINI APP GUEST PREVIEW / PUBLISHED READ-ONLY PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**; CI and staging re-smoke remain open.
-- **Venue Mini App Draft Preview Phase 2.1: DONE / MVP / STAGING-SMOKE-PASSED**.
-- Published OWNER/MANAGER parity, real Guest card equality, STAFF/foreign denial, no mutation
-  actions and venue-switch isolation passed.
-- DRAFT OWNER/MANAGER access, permanent draft banner, saved guest-safe projection, private-field
-  absence, closed Guest route, safe HIDDEN/PAUSED/SUSPENDED/ARCHIVED behavior and media
-  placeholder/no raw refs passed.
-- Venue Mini App media upload/manage was not exercised and must not inherit either Preview status.
+- **VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**.
+- Focused `VenueGuestPreviewRoutesTest`, `GuestVenueRoutesTest`, `VenueRbacRoutesTest` and
+  `VenuePromotionRepositoryTest` selectors passed; Kotlin compile/lint and Mini App production
+  build passed; deterministic browser smoke passed `95/95`.
+- Exact Guest parity, saved-private allowlist, OWNER/MANAGER own-venue RBAC, STAFF/foreign denial,
+  dirty-state/no-auto-save handling, scoped authenticated media, private-field/raw-ref absence,
+  closed Guest routes, no Guest actions and stale-response isolation passed locally.
+- Historical preview staging results remain regression evidence only. CI and staging smoke are
+  required for this unified delta.
+- Venue Mini App media upload/manage was not exercised and must not inherit the Preview status.
 
 ### Platform Mini App
 

@@ -7,7 +7,8 @@ type VenueGuestPreviewScreenOptions = {
   backendUrl: string
   isDebug: boolean
   venueId: number
-  access: Pick<VenueAccessDto, 'role' | 'venueStatus'>
+  access: Pick<VenueAccessDto, 'role'>
+  origin: 'settings' | 'venue'
   onBack: () => void
 }
 
@@ -26,57 +27,30 @@ export function renderVenueGuestPreviewScreen(options: VenueGuestPreviewScreenOp
     return () => undefined
   }
 
-  const venueStatus = access.venueStatus?.trim().toUpperCase()
-  const isDraftPreview = venueStatus === 'DRAFT'
   const screen = el('section', { className: 'venue-guest-preview' })
-  const heading = el('h2', {
-    text: isDraftPreview ? 'Предпросмотр карточки' : 'Предпросмотр для гостя'
-  })
+  const heading = el('h2', { text: 'Предпросмотр для гостя' })
   const helper = el('p', {
     className: 'app-subtitle',
-    text: isDraftPreview
-      ? 'Только сохранённые данные. Предпросмотр доступен без действий гостя.'
-      : 'Так опубликованная карточка выглядит для гостя.'
+    text: ''
   })
-  const returnButton = isDraftPreview
-    ? null
-    : (el('button', {
-        className: 'button-secondary venue-preview-return',
-        text: 'Вернуться в кабинет'
-      }) as HTMLButtonElement)
-  const disposeReturn = returnButton
-    ? on(returnButton, 'click', () => options.onBack())
-    : () => undefined
-  if (venueStatus !== 'PUBLISHED' && venueStatus !== 'DRAFT') {
-    const unavailable = el('section', { className: 'card venue-preview-unavailable' })
-    append(
-      unavailable,
-      el('h3', { text: 'Предпросмотр недоступен' }),
-      el('p', { text: 'Заведение сейчас недоступно для гостевого просмотра.' })
-    )
-    append(screen, heading, helper, unavailable)
-    if (returnButton) {
-      screen.appendChild(returnButton)
-    }
-    root.replaceChildren(screen)
-    return disposeReturn
-  }
-
-  const previewMode = venueStatus
+  helper.hidden = true
   const banner = el('p', {
     className: 'venue-preview-banner',
-    text:
-      previewMode === 'PUBLISHED'
-        ? 'Опубликовано — так карточку видит гость сейчас'
-        : 'Черновик. Гости пока не видят эту карточку'
+    text: ''
   })
-  banner.dataset.mode = previewMode.toLowerCase()
   banner.hidden = true
+  const availability = el('p', {
+    className: 'status venue-preview-availability',
+    text: ''
+  })
+  availability.hidden = true
   const previewRoot = el('div', { className: 'venue-guest-preview-content' }) as HTMLDivElement
-  append(screen, heading, helper, banner, previewRoot)
-  if (returnButton) {
-    screen.appendChild(returnButton)
-  }
+  const returnButton = el('button', {
+    className: 'button-secondary venue-preview-return',
+    text: options.origin === 'settings' ? 'Вернуться к настройкам' : 'Вернуться в кабинет'
+  }) as HTMLButtonElement
+  const disposeReturn = on(returnButton, 'click', () => options.onBack())
+  append(screen, heading, helper, banner, availability, previewRoot, returnButton)
   root.replaceChildren(screen)
 
   const disposePreview = renderGuestVenueScreen({
@@ -84,10 +58,23 @@ export function renderVenueGuestPreviewScreen(options: VenueGuestPreviewScreenOp
     backendUrl,
     isDebug,
     venueId,
-    previewMode,
-    onPreviewLoaded: (loadedMode) => {
-      if (loadedMode === previewMode) {
-        banner.hidden = false
+    readOnlyPreview: true,
+    onPreviewLoaded: (preview) => {
+      const isPublished = preview.mode === 'PUBLISHED_PUBLIC'
+      banner.textContent = isPublished ? 'Опубликовано' : 'Черновик'
+      banner.dataset.mode = isPublished ? 'published' : 'draft'
+      banner.hidden = false
+      helper.textContent = isPublished
+        ? 'Так карточку сейчас видит гость.'
+        : 'Гости пока не видят эту карточку. Это закрытый предпросмотр сохранённой версии.'
+      helper.hidden = false
+      const safeAvailabilityLabel = preview.venueAvailabilityLabel?.trim()
+      if (!isPublished && safeAvailabilityLabel) {
+        availability.textContent = safeAvailabilityLabel
+        availability.hidden = false
+      } else {
+        availability.textContent = ''
+        availability.hidden = true
       }
     }
   })

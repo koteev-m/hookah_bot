@@ -88,12 +88,12 @@ Target decision: remove `ADMIN` from the product model and keep it only as a com
 | Venue Manager | `promotion.manage` | Own venue only | Current for informational Phase 1 and the Happy Hours percentage schedule/target/reward/status slice through server-validated routes. |
 | Venue Manager | `staff_invite.create_staff_only` | Own venue | Current conservative policy where route allows; cannot create Owner/Platform access. |
 | Venue Manager | `staff_shift.manage_today` | Own venue | Current conservative Phase 1. Manager marks today shift state, but does not approve public profiles or future tip methods by default. |
-| Venue Manager | `venue_preview.view_published`, `venue_preview.view_saved_draft` | Own venue only | Current. Published preview preserves exact Guest availability guards; draft preview uses a separate Venue read model and supports saved `DRAFT` only. |
+| Venue Manager | `venue_preview.view` | Own venue only | Current. One endpoint selects `PUBLISHED_PUBLIC` through exact Guest guards or `PRIVATE_DRAFT` through the saved public-facing allowlist. |
 | Venue Manager | `billing.none`, dangerous lifecycle none | Billing/platform/lifecycle | Current product rule. |
 | Venue Owner | All venue operations inside own venue | Own venue | Current via active `venue_members(role=OWNER)`. |
 | Venue Owner | `staff.manage`, `staff_invite.create`, `menu.manage`, `stop_list.manage`, `table_qr.manage/rotate/export`, `settings.manage`, `staff_chat.link/unlink/test` | Own venue | Current where implemented; dangerous actions need confirmation/audit. |
 | Venue Owner | `staff_profile.manage`, `staff_profile.publish`, `staff_shift.manage_today`, `staff_tip_method.approve` | Own venue | Current for Phase 1 profiles + today shift; future for tip method approval. |
-| Venue Owner | `venue_preview.view_published`, `venue_preview.view_saved_draft` | Own venue only | Current. Preview is read-only and grants no lifecycle mutation, publication, share-link or unsaved-form authority. |
+| Venue Owner | `venue_preview.view` | Own venue only | Current. Server-selected preview is read-only and grants no lifecycle mutation, publication, share-link, auto-save or unsaved-form authority. |
 | Venue Owner | `billing.view/pay` | Own venue subscription/payment state | Current manual billing MVP for view/pay surfaces; Platform-only mark-paid/courtesy remain denied. |
 | Venue Owner | `support_ticket.manage_own_venue`, `venue_chat.manage_own_venue` | Own venue only | Current. Can transfer support tickets to Platform. |
 | Venue Owner | `feedback.view_own_venue`, `feedback.follow_up_low`, `public_review_url.manage` | Own venue only | Current MVP. Public review URL setting is Owner-only and shared by Bot/Mini App. |
@@ -102,7 +102,7 @@ Target decision: remove `ADMIN` from the product model and keep it only as a com
 | Platform Owner | `platform.venues.manage`, `platform.lifecycle.manage`, `platform.owner_access.manage` | Platform | Current for implemented cockpit/lifecycle/owner access. |
 | Platform Owner | `platform.billing.manage`, `platform.support.manage_all`, `platform.analytics.view`, `platform.audit.view`, `platform.settings.manage` | Platform | Billing/support MVP current; analytics/audit explorer partial/future. |
 | Platform Owner | Ordinary `VENUE_CHAT` access | Venue chats | Denied by current target unless a future product policy explicitly changes it. |
-| Platform Owner | Ordinary Published/Draft venue preview access | Venue scope | Not granted automatically by platform scope. The Venue preview routes require an allowed OWNER/MANAGER membership in that venue. |
+| Platform Owner | Ordinary venue Guest Preview access | Venue scope | Not granted automatically by platform scope. The Venue preview route requires an allowed OWNER/MANAGER membership in that venue. |
 
 ## Surface Parity Matrix
 
@@ -117,7 +117,7 @@ Target decision: remove `ADMIN` from the product model and keep it only as a com
 | Booking chats | Booking action `Открыть переписку`. | Guest `Чаты`. | Owner/Manager `Сообщения`. | No by default. | Notification mirror only where existing policy allows. | Must not become support queue. |
 | Menu/stop-list | Bot owner/manager/staff paths where implemented. | Guest read/order only after QR. | Owner/Manager manage; Staff availability only. | No ordinary menu management. | No source-of-truth edits. | Price/content edits are dangerous and audited where implemented. |
 | Promotions | Existing Telegram templates and shared server-owned Happy Hours preview/submit. | Informational read plus current server-owned Happy Hours cart breakdown/submit. | Owner/Manager manage informational and bounded Happy Hours rules; Staff denied. | No ordinary venue promotion management. | Persisted order facts only. | One backend engine; Bot/Mini App clients never calculate trusted discounts. |
-| Venue card preview | Existing owner/manager guest-preview callbacks. | The real published public card. | One read-only renderer: Published uses the exact Guest read model; Draft uses a separate saved-`DRAFT` allowlist. Staff has no entry. | No automatic access. | No. | No Guest bypass, mutations, public URL, share token or cache. Draft media refs/routes are excluded; Published media is unchanged. |
+| Venue card preview | Existing owner/manager guest-preview callbacks. | The real published public card. | One `Предпросмотр для гостя` renderer: server-selected `PUBLISHED_PUBLIC` uses the exact Guest read model; `PRIVATE_DRAFT` uses an own-venue saved public allowlist. Staff has no entry. | No automatic access. | No. | No Guest bypass, mutations, public URL, share token or cache. Private media delivery is authenticated and venue/section/media-scoped; raw refs are excluded. |
 | Tables/QR | Bot management where implemented. | QR context only. | Owner/Manager table/QR where allowed; Staff read-only. | No ordinary venue table management unless platform support policy says so. | No. | QR token is context pointer. |
 | Staff invites | Bot invite acceptance. | No. | Owner/Manager invite where allowed. | OWNER invite/revoke. | No. | Last-owner protection server-side. |
 | Settings | Bot owner/manager setup where implemented. | No management. | Owner/Manager settings where allowed; Staff none. | Platform settings for platform scope. | No. | UI hiding is not enough. |
@@ -158,7 +158,7 @@ These actions require server-side authorization and should require confirmation,
 | Promotion configuration/status mutation audit | `PARTIAL / P2 FOLLOW-UP`. Promotion management is server-authorized, but there is not yet complete actor plus safe old/new rule/config/status evidence for every mutation. | Record actor, venue/promotion/rule identity, version and safe old/new schedule, target, reward and status evidence. | Do not treat promotion mutation audit as `DONE` until a separate implementation and verification slice closes this gap. |
 | Promotion financial compatibility | Current slices have bounded percentage/manual-discount and gift reward guards, but no documented common cross-promotion conflict policy. Gift smoke observed Happy Hours Percentage and Gift With Item together; this is not a confirmed runtime bug. | One server-owned, reward-type-aware policy uses `STACKABLE`, `EXCLUSIVE` or `OVERRIDE`, explicit priority and deterministic winner/tie-break rules for all executable promotions and manual discounts. | `AUDIT / FUTURE IMPLEMENTATION`. Fail closed against accidental discount addition; later loyalty, promo codes and cashback must reuse the same mechanism. |
 | Staff profiles / today shift | Phase 1 backend + Mini App implementation exists and local smoke passed; canonical model is `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. | Guest sees only public visible profile/shift data; Owner controls publish/hide; Staff may edit own linked draft only; Manager may mark active/completed/canceled today shifts. | Keep role/privacy smoke in regression; staging UX acceptance is still required before production readiness. |
-| Venue card preview | Published Phase 1 and Draft Phase 2.1 are MVP implemented/local-validated. | Published stays exact Guest-visible state. Draft is OWNER/MANAGER own-venue, saved `DRAFT` only, server-allowlisted and read-only. | Keep direct role/foreign/status denial, private-marker absence, `no-store`, media-ref absence and stale-state isolation in regression; CI/staging smoke remain pending. |
+| Venue card preview | **VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**. | One OWNER/MANAGER own-venue endpoint selects exact guarded Guest state or a saved, server-allowlisted private projection. | Keep direct role/foreign/lifecycle denial, dirty-form no-auto-save, private-marker absence, `no-store`, authenticated media scoping and stale-state isolation in regression; CI/staging smoke remain pending. |
 | Post-visit feedback | History-only submit, own-venue Owner/Manager read, Owner-only public review URL and low-rating exact `VENUE_CHAT` follow-up are DONE / MVP / staging-smoke-passed. | Preserve own-visit/own-venue isolation, Staff denial and manual-only external/follow-up actions. | Platform feedback dashboard, automated prompts and public review automation remain future/disabled. |
 | Staff tips | No runtime implementation yet; canonical future boundaries are `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. | Phase 2 external staff tip link + intent only; money does not touch platform in MVP; intent is not proof of payment. | Provider/direct payout needs legal/product decision; Telegram Stars and crypto are not MVP. |
 | Surface parity | Bot and Mini App parity is closed for several slices; some Telegram flows are still richer. | Required product surfaces are aligned or explicitly documented as exceptions. | Keep parity roadmap current before adding new management functions. |
@@ -195,28 +195,31 @@ These actions require server-side authorization and should require confirmation,
 26. Manual discount policy and every executable reward use one compatibility decision that fails
     closed against accidental discount addition; future loyalty, promo codes and cashback cannot
     bypass it.
-27. Published Guest Preview continues to require the exact Guest lifecycle/subscription availability
-    guards and exposes neither `DRAFT` nor private settings fields.
-28. Draft Preview allows only OWNER/MANAGER of the own `DRAFT` venue. STAFF, foreign venue users,
-    Platform-only access, non-DRAFT statuses and missing/DELETED venues are denied safely.
-29. Preview responses are read-only and non-cacheable. They expose no private settings DTO, hidden
-    sections, unpublished staff, inactive promotions, raw media refs, mutation actions, public links
-    or share tokens. Draft media is text-only with one post-publication hint; Published media is
-    unchanged.
+27. One Venue Guest Preview endpoint selects mode server-side. `PUBLISHED_PUBLIC` continues to
+    require the exact Guest lifecycle/subscription availability guards and exposes the same
+    venue/info DTO state as Guest; no query or client mode can bypass those guards.
+28. `PRIVATE_DRAFT` allows only OWNER/MANAGER of the own venue when public Guest assembly is
+    unavailable but a private saved projection is permitted. STAFF, foreign venue users,
+    Platform-only access and missing/ARCHIVED/DELETED venues are denied safely; Guest routes cannot
+    reach the projection.
+29. Preview responses are read-only, `no-store` and allowlisted. They expose no private settings
+    DTO, hidden sections/media, unpublished staff, inactive/non-current promotions, raw media refs,
+    mutation actions, public links or share tokens. Existing private-preview media is delivered
+    only through an authenticated venue/section/media-scoped route. Unsaved public-card,
+    weekly-schedule or date-exception state blocks navigation and is never auto-saved.
 30. Venue media upload/manage allows OWNER/MANAGER for the own venue only; STAFF, Guest,
     Platform-only and foreign venue direct requests are denied before storage access.
 31. MIME spoofing, over-limit files/dimensions, WebP/SVG/archive/executable and PDF on a disallowed
     surface are rejected server-side; filename and browser `Content-Type` are never authority.
-32. Guest/Published media DTOs, responses, errors, logs and audit contain no raw Telegram `file_id`,
-    object key, filesystem path, storage credential or provider payload; Draft remains ref-free.
+32. Guest and both preview-mode DTOs, responses, errors, logs and audit contain no raw Telegram
+    `file_id`, object key, filesystem path, storage credential or provider payload.
 
 ## Roadmap Status
 
 - Security/RBAC matrix: `UPDATED`.
 - Permission parity: `PARTIAL`; keep route-level denial tests and role smoke in regression.
 - Staff profiles / today shift: Phase 1 backend + Mini App implementation is done/local-smoke-passed; staging UX acceptance is still required before production readiness.
-- Published Guest Preview Phase 1: **MVP IMPLEMENTED / LOCAL VALIDATION PASSED**; CI and staging smoke pending.
-- Draft Preview Phase 2.1: **MVP IMPLEMENTED / LOCAL VALIDATION PASSED**; separate own-venue saved-`DRAFT` projection, CI and staging smoke pending.
+- Guest Preview Phase 2.1: **VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**; focused preview/Guest/RBAC/promotion tests, compile/lint, Mini App build and deterministic smoke `95/95` passed. CI and staging smoke remain pending.
 - Staff tips: `SPEC DRAFT / FUTURE`; payment provider/direct payout requires legal/product decision, and external tip intent is not proof of payment.
 - `ADMIN` decision: target is removal from product model / compatibility alias only; implementation cleanup remains a migration/copy hygiene follow-up.
 - Staff stop-list parity: current docs say operational item/option availability is aligned; per-venue `staff_stoplist_enabled` is target/future in `docs/MENU_OPTIONS_STOPLIST.md`.

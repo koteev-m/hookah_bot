@@ -111,6 +111,8 @@ const PUBLIC_CARD_DESCRIPTION_MAX_LENGTH = 500
 const PUBLIC_REVIEW_URL_MAX_LENGTH = 2048
 const DEFAULT_COUNTRY_CODE = 'RU'
 const WEEKDAY_LABELS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
+const UNSAVED_PREVIEW_MESSAGE =
+  'Есть несохранённые изменения. Сначала сохраните их, затем откройте предпросмотр.'
 
 type PublicCardDraft = {
   city: string | null
@@ -206,7 +208,7 @@ function buildDom(root: HTMLDivElement): VenueSettingsRefs {
   publicCardSaveButton.disabled = true
   const publicCardPreviewButton = el('button', {
     className: 'button-secondary',
-    text: 'Предпросмотр карточки'
+    text: 'Предпросмотр для гостя'
   }) as HTMLButtonElement
   const publicCardActions = el('div', { className: 'button-row' })
   append(publicCardActions, publicCardSaveButton, publicCardPreviewButton)
@@ -588,6 +590,7 @@ function renderBookingSettings(refs: VenueSettingsRefs, settings: VenueBookingSe
 
 type ScheduleCallbacks = {
   onSaveDay: (weekday: number, isClosed: boolean, opensAt: string, closesAt: string) => void
+  onDayDirtyChange: (weekday: number, isDirty: boolean) => void
   onEditOverride: (group: ScheduleOverrideGroup) => void
   onDeleteOverrideRange: (fromDate: string, toDate: string) => void
 }
@@ -706,7 +709,19 @@ function renderScheduleDay(
     opensInput.disabled = closedInput.checked
     closesInput.disabled = closedInput.checked
   }
-  closedInput.addEventListener('change', syncClosedState)
+  const notifyDirtyState = () => {
+    callbacks.onDayDirtyChange(
+      day.weekday,
+      closedInput.checked !== day.isClosed ||
+        (!closedInput.checked && (opensInput.value !== day.opensAt || closesInput.value !== day.closesAt))
+    )
+  }
+  closedInput.addEventListener('change', () => {
+    syncClosedState()
+    notifyDirtyState()
+  })
+  opensInput.addEventListener('input', notifyDirtyState)
+  closesInput.addEventListener('input', notifyDirtyState)
   saveButton.addEventListener('click', () => {
     callbacks.onSaveDay(day.weekday, closedInput.checked, opensInput.value, closesInput.value)
   })
@@ -814,10 +829,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
 
   const refs = buildDom(root)
   refs.publicCardPreviewButton.hidden = !options.onOpenPreview
-  refs.publicCardPreviewButton.textContent =
-    access.venueStatus?.trim().toUpperCase() === 'DRAFT'
-      ? 'Предпросмотр карточки'
-      : 'Предпросмотр для гостя'
+  refs.publicCardPreviewButton.disabled = true
   const deps = buildApiDeps(isDebug)
   const canManagePublicCard = access.role === 'OWNER' || access.role === 'MANAGER'
   const canManageReviewLink = access.permissions.includes('VENUE_SETTINGS')
@@ -844,8 +856,11 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   let currentReviewLinkSettings: VenuePublicReviewUrlResponse | null = null
   let reviewLinkSaving = false
   let currentScheduleSettings: VenueScheduleSettingsResponse | null = null
+  let settingsLoaded = false
+  const dirtyScheduleWeekdays = new Set<number>()
   let overrideFormMode: OverrideFormMode | null = null
   let editingOverrideRange: EditingOverrideRange | null = null
+  let overrideFormDirty = false
   let scheduleSaving = false
   let currentBookingSettings: VenueBookingSettingsResponse | null = null
   let currentShiftExtensionSettings: ShiftExtensionSettingsDto | null = null
@@ -894,6 +909,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   const openOverrideForm = (mode: OverrideFormMode, group: ScheduleOverrideGroup | null = null) => {
     overrideFormMode = mode
     editingOverrideRange = group ? { fromDate: group.fromDate, toDate: group.toDate } : null
+    overrideFormDirty = false
     refs.overrideForm.hidden = false
     refs.overrideFormTitle.textContent = mode === 'closed' ? 'Закрыть период' : 'Изменить часы на период'
     refs.overrideFromDateInput.disabled = false
@@ -913,6 +929,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   const closeOverrideForm = () => {
     overrideFormMode = null
     editingOverrideRange = null
+    overrideFormDirty = false
     refs.overrideForm.hidden = true
     refs.overrideFromDateInput.disabled = false
     refs.overrideToDateInput.disabled = false
@@ -966,6 +983,26 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     return !sameDraft(currentPublicCardDraft(), publicCardSnapshot)
   }
 
+  const scheduleIsDirty = () => dirtyScheduleWeekdays.size > 0 || overrideFormDirty
+
+  const updatePreviewButton = () => {
+    refs.publicCardPreviewButton.disabled = !settingsLoaded || publicCardSaving || scheduleSaving
+  }
+
+  const updateScheduleControls = () => {
+    const disabled = scheduleSaving || !settingsLoaded
+    refs.overrideCancelButton.disabled = disabled
+    refs.closePeriodButton.disabled = disabled
+    refs.changeHoursPeriodButton.disabled = disabled
+    refs.showOverridesButton.disabled = disabled
+    refs.weeklyScheduleList.querySelectorAll<HTMLButtonElement>('button').forEach((button) => {
+      button.disabled = disabled
+    })
+    refs.overrideList.querySelectorAll<HTMLButtonElement>('button').forEach((button) => {
+      button.disabled = disabled
+    })
+  }
+
   const currentReviewLinkValue = () => normalizeNullableText(refs.reviewLinkInput.value)
 
   const reviewLinkIsDirty = () => {
@@ -1016,6 +1053,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   const setPublicCardBusy = (busy: boolean) => {
     publicCardSaving = busy
     updatePublicCardSaveButton()
+    updatePreviewButton()
   }
 
   const setReviewLinkBusy = (busy: boolean) => {
@@ -1030,17 +1068,9 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
 
   const setScheduleBusy = (busy: boolean) => {
     scheduleSaving = busy
+    updatePreviewButton()
     updateOverrideSaveButton()
-    refs.overrideCancelButton.disabled = busy
-    refs.closePeriodButton.disabled = busy
-    refs.changeHoursPeriodButton.disabled = busy
-    refs.showOverridesButton.disabled = busy
-    refs.weeklyScheduleList.querySelectorAll<HTMLButtonElement>('button').forEach((button) => {
-      button.disabled = busy
-    })
-    refs.overrideList.querySelectorAll<HTMLButtonElement>('button').forEach((button) => {
-      button.disabled = busy
-    })
+    updateScheduleControls()
   }
 
   const setExtensionBusy = (busy: boolean) => {
@@ -1056,6 +1086,9 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
       !canManageBookingSettings &&
       !canManageShiftExtension
     ) return
+    settingsLoaded = false
+    updatePreviewButton()
+    updateScheduleControls()
     refs.status.textContent = 'Загрузка…'
     loadAbort?.abort()
     const controller = new AbortController()
@@ -1101,7 +1134,10 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
         return
       }
       currentScheduleSettings = result.data
+      dirtyScheduleWeekdays.clear()
+      overrideFormDirty = false
       renderScheduleSettings(refs, currentScheduleSettings, scheduleCallbacks)
+      updateScheduleControls()
     }
     if (canManageBookingSettings) {
       const result = await venueGetBookingSettings(backendUrl, { venueId }, deps, controller.signal)
@@ -1128,6 +1164,9 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
       renderShiftExtensionSettings(refs, currentShiftExtensionSettings)
     }
     loadAbort = null
+    settingsLoaded = true
+    updatePreviewButton()
+    updateScheduleControls()
     refs.status.textContent = 'Настройки загружены.'
   }
 
@@ -1301,6 +1340,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
       return
     }
     currentScheduleSettings = result.data
+    dirtyScheduleWeekdays.clear()
     renderScheduleSettings(refs, currentScheduleSettings, scheduleCallbacks)
     refs.status.textContent = 'Часы работы сохранены.'
     showToast('Часы работы сохранены.')
@@ -1415,6 +1455,13 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   const scheduleCallbacks: ScheduleCallbacks = {
     onSaveDay: (weekday, isClosed, opensAt, closesAt) =>
       void saveScheduleDay(weekday, isClosed, opensAt, closesAt),
+    onDayDirtyChange: (weekday, isDirty) => {
+      if (isDirty) {
+        dirtyScheduleWeekdays.add(weekday)
+      } else {
+        dirtyScheduleWeekdays.delete(weekday)
+      }
+    },
     onEditOverride: (group) => {
       openOverrideForm(group.isClosed ? 'closed' : 'hours', group)
       refs.overrideList.hidden = false
@@ -1525,6 +1572,19 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     updatePublicCardSaveButton()
   }
 
+  const openPublicCardPreview = () => {
+    if (!settingsLoaded || publicCardSaving || scheduleSaving) {
+      refs.status.textContent = 'Дождитесь загрузки настроек.'
+      return
+    }
+    if (publicCardIsDirty() || scheduleIsDirty()) {
+      refs.status.textContent = UNSAVED_PREVIEW_MESSAGE
+      showToast(UNSAVED_PREVIEW_MESSAGE)
+      return
+    }
+    options.onOpenPreview?.()
+  }
+
   const closeSuggestions = (container: HTMLDivElement) => {
     container.hidden = true
     container.replaceChildren()
@@ -1625,7 +1685,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   }
 
   disposables.push(on(refs.publicCardSaveButton, 'click', () => void savePublicCardSettings()))
-  disposables.push(on(refs.publicCardPreviewButton, 'click', () => options.onOpenPreview?.()))
+  disposables.push(on(refs.publicCardPreviewButton, 'click', openPublicCardPreview))
   disposables.push(on(refs.reviewLinkInput, 'input', updateReviewLinkButtons))
   disposables.push(on(refs.reviewLinkSaveButton, 'click', () => void saveReviewLinkSettings()))
   disposables.push(on(refs.reviewLinkClearButton, 'click', () => void clearReviewLinkSettings()))
@@ -1694,7 +1754,10 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     refs.overrideClosesInput,
     refs.overrideNoteInput
   ].forEach((input) => {
-    disposables.push(on(input, 'input', updateOverrideSaveButton))
+    disposables.push(on(input, 'input', () => {
+      overrideFormDirty = true
+      updateOverrideSaveButton()
+    }))
   })
   disposables.push(on(refs.overrideSaveButton, 'click', () => void saveScheduleOverride()))
   disposables.push(on(refs.overrideCancelButton, 'click', closeOverrideForm))

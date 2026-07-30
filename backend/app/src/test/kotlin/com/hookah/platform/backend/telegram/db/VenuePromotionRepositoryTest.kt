@@ -715,9 +715,9 @@ class VenuePromotionRepositoryTest {
         }
 
     @Test
-    fun `draft preview list bypasses only venue draft status and keeps guest eligibility`() =
+    fun `private preview list ignores parent availability and keeps child eligibility`() =
         runBlocking {
-            val jdbcUrl = migratedJdbcUrl("venue-promotions-draft-preview")
+            val jdbcUrl = migratedJdbcUrl("venue-promotions-private-preview")
             val fixture = seedFixture(jdbcUrl)
             val repository = VenuePromotionRepository(dataSource(jdbcUrl))
             val now = Instant.parse("2026-05-14T12:00:00Z")
@@ -727,6 +727,13 @@ class VenuePromotionRepositoryTest {
                     val blockedDraft = insertVenue(connection, "Blocked draft", VenueStatus.DRAFT.dbValue)
                     insertSubscription(connection, draft, "ACTIVE")
                     insertSubscription(connection, blockedDraft, "SUSPENDED_BY_PLATFORM")
+                    connection.prepareStatement(
+                        "UPDATE venue_subscriptions SET status = ? WHERE venue_id = ?",
+                    ).use { statement ->
+                        statement.setString(1, "SUSPENDED_BY_PLATFORM")
+                        statement.setLong(2, fixture.visibleVenueId)
+                        statement.executeUpdate()
+                    }
                     draft to blockedDraft
                 }
 
@@ -758,43 +765,47 @@ class VenuePromotionRepositoryTest {
                 null,
                 now.minusSeconds(3_600),
             )
-            insertPromotion(
-                jdbcUrl,
-                blockedDraftVenueId,
-                "Блок подписки",
-                VenuePromotionStatus.ACTIVE,
-                null,
-                null,
-            )
-            insertPromotion(
-                jdbcUrl,
-                fixture.visibleVenueId,
-                "Опубликованное заведение",
-                VenuePromotionStatus.ACTIVE,
-                null,
-                null,
-            )
+            val blocked =
+                insertPromotion(
+                    jdbcUrl,
+                    blockedDraftVenueId,
+                    "Блок подписки",
+                    VenuePromotionStatus.ACTIVE,
+                    null,
+                    null,
+                )
+            val published =
+                insertPromotion(
+                    jdbcUrl,
+                    fixture.visibleVenueId,
+                    "Заблокированное опубликованное заведение",
+                    VenuePromotionStatus.ACTIVE,
+                    null,
+                    null,
+                )
 
             val promotions =
-                repository.listActivePromotionsForDraftPreview(
+                repository.listActivePromotionsForPrivatePreview(
                     venueId = draftVenueId,
                     now = now,
                 )
 
             assertEquals(listOf(current), promotions.map { it.id })
-            assertTrue(
+            assertEquals(
+                listOf(blocked),
                 repository
-                    .listActivePromotionsForDraftPreview(
+                    .listActivePromotionsForPrivatePreview(
                         venueId = blockedDraftVenueId,
                         now = now,
-                    ).isEmpty(),
+                    ).map { it.id },
             )
-            assertTrue(
+            assertEquals(
+                listOf(published),
                 repository
-                    .listActivePromotionsForDraftPreview(
+                    .listActivePromotionsForPrivatePreview(
                         venueId = fixture.visibleVenueId,
                         now = now,
-                    ).isEmpty(),
+                    ).map { it.id },
             )
         }
 

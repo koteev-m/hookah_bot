@@ -31,6 +31,7 @@ import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class GuestVenueRoutesTest {
@@ -80,6 +81,7 @@ class GuestVenueRoutesTest {
             val payload = json.decodeFromString(CatalogResponse.serializer(), response.bodyAsText())
             assertEquals(1, payload.venues.size)
             assertEquals(venues.publishedId, payload.venues.first().id)
+            assertEquals(false, payload.venues.any { it.id == venues.draftId })
             assertEquals(false, payload.venues.any { it.id == venues.deletedId })
         }
 
@@ -225,6 +227,14 @@ class GuestVenueRoutesTest {
             assertEquals(HttpStatusCode.OK, publishedResponse.status)
             val publishedPayload = json.decodeFromString(VenueResponse.serializer(), publishedResponse.bodyAsText())
             assertEquals(VenueStatus.PUBLISHED.dbValue, publishedPayload.venue.status)
+
+            val draftResponse =
+                client.get("/api/guest/venue/${venues.draftId}") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.NotFound, draftResponse.status)
+            assertApiErrorEnvelope(draftResponse, ApiErrorCodes.NOT_FOUND)
 
             val hiddenResponse =
                 client.get("/api/guest/venue/${venues.hiddenId}") {
@@ -526,6 +536,7 @@ class GuestVenueRoutesTest {
                             published = true,
                             disabled = false,
                             tags = """["крепко"]""",
+                            photoRef = RAW_STAFF_PHOTO_REF,
                         )
                     val hiddenProfile =
                         insertStaffProfile(
@@ -585,10 +596,12 @@ class GuestVenueRoutesTest {
             val responseBody = response.bodyAsText()
             assertFalse(responseBody.contains("linkedUserId"))
             assertFalse(responseBody.contains("telegram", ignoreCase = true))
+            assertFalse(responseBody.contains(RAW_STAFF_PHOTO_REF))
             val payload = json.decodeFromString(VenueResponse.serializer(), responseBody)
             assertEquals(listOf("Иван"), payload.venue.todayStaff.map { it.displayName })
             assertEquals("hookah_master", payload.venue.todayStaff.single().subtype)
             assertEquals(listOf("крепко"), payload.venue.todayStaff.single().tags)
+            assertNull(payload.venue.todayStaff.single().photoRef)
 
             val endpointResponse =
                 client.get("/api/guest/venue/${seeded.venueId}/today-staff") {
@@ -945,10 +958,17 @@ class GuestVenueRoutesTest {
     private fun seedVenues(jdbcUrl: String): SeededVenues {
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             val publishedId = insertVenue(connection, "Published", "City", "Address", VenueStatus.PUBLISHED.dbValue)
+            val draftId = insertVenue(connection, "Draft", "City", "Address", VenueStatus.DRAFT.dbValue)
             val hiddenId = insertVenue(connection, "Hidden", "City", "Address", VenueStatus.HIDDEN.dbValue)
             val suspendedId = insertVenue(connection, "Suspended", "City", "Address", VenueStatus.SUSPENDED.dbValue)
             val deletedId = insertVenue(connection, "Deleted", "City", "Address", VenueStatus.DELETED.dbValue)
-            return SeededVenues(publishedId, hiddenId, suspendedId, deletedId)
+            return SeededVenues(
+                publishedId = publishedId,
+                draftId = draftId,
+                hiddenId = hiddenId,
+                suspendedId = suspendedId,
+                deletedId = deletedId,
+            )
         }
     }
 
@@ -1125,6 +1145,7 @@ class GuestVenueRoutesTest {
         disabled: Boolean,
         linkedUserId: Long? = null,
         tags: String? = null,
+        photoRef: String? = null,
     ): Long {
         connection.prepareStatement(
             """
@@ -1134,12 +1155,13 @@ class GuestVenueRoutesTest {
                 display_name,
                 subtype,
                 tags,
+                photo_ref,
                 is_guest_visible,
                 created_by_user_id,
                 published_at,
                 disabled_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """.trimIndent(),
             Statement.RETURN_GENERATED_KEYS,
         ).use { statement ->
@@ -1152,17 +1174,18 @@ class GuestVenueRoutesTest {
             statement.setString(3, displayName)
             statement.setString(4, subtype)
             statement.setString(5, tags)
-            statement.setBoolean(6, isGuestVisible)
-            statement.setLong(7, 9101L)
+            statement.setString(6, photoRef)
+            statement.setBoolean(7, isGuestVisible)
+            statement.setLong(8, 9101L)
             if (published) {
-                statement.setTimestamp(8, java.sql.Timestamp.from(java.time.Instant.now()))
-            } else {
-                statement.setNull(8, java.sql.Types.TIMESTAMP)
-            }
-            if (disabled) {
                 statement.setTimestamp(9, java.sql.Timestamp.from(java.time.Instant.now()))
             } else {
                 statement.setNull(9, java.sql.Types.TIMESTAMP)
+            }
+            if (disabled) {
+                statement.setTimestamp(10, java.sql.Timestamp.from(java.time.Instant.now()))
+            } else {
+                statement.setNull(10, java.sql.Types.TIMESTAMP)
             }
             statement.executeUpdate()
             statement.generatedKeys.use { rs ->
@@ -1226,6 +1249,7 @@ class GuestVenueRoutesTest {
 
     private data class SeededVenues(
         val publishedId: Long,
+        val draftId: Long,
         val hiddenId: Long,
         val suspendedId: Long,
         val deletedId: Long,
@@ -1258,5 +1282,6 @@ class GuestVenueRoutesTest {
     private companion object {
         const val TELEGRAM_USER_ID: Long = 777L
         const val OTHER_TELEGRAM_USER_ID: Long = 778L
+        const val RAW_STAFF_PHOTO_REF = "raw-private-staff-photo-ref"
     }
 }
