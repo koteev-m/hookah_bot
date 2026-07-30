@@ -144,7 +144,7 @@ const EMPTY_PREVIEW_TABLE_CONTEXT: TableContextSnapshot = {
   error: null
 }
 
-const GUEST_PREVIEW_UNAVAILABLE_MESSAGE = 'Заведение недоступно для гостевого просмотра.'
+const GUEST_PREVIEW_UNAVAILABLE_MESSAGE = 'Заведение сейчас недоступно для гостевого просмотра.'
 const DRAFT_PREVIEW_MEDIA_MESSAGE = 'Медиа будет доступно в гостевой карточке после публикации'
 
 function buildApiDeps(isDebug: boolean) {

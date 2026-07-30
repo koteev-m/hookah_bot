@@ -1,6 +1,6 @@
 # Venue Mode Operations Model
 
-Дата актуализации: 2026-07-29.
+Дата актуализации: 2026-07-30.
 
 Статус: **current product reference / SPEC UPDATED**. Core Venue operations are partly smoke-closed across orders, bill display, staff calls, bookings, confirmed-only booking arrival actions, state-aware staff-chat booking shortcuts, staff-chat, menu options and settings slices. The full Venue Mode implementation is still **PARTIAL / needs verification** for broad dashboard completeness, shift check, arbitrary stats, all dangerous-action audit coverage, broader settings parity and deep cross-surface e2e.
 
@@ -39,7 +39,7 @@ Canonical dependencies:
 | Staff profiles / today shift | Guest-visible opt-in staff profiles and manual "today on shift". | Phase 1 backend + Mini App implementation exists and smoke passed; Published/Draft card preview preserves the public-profile/visible-shift filters. | Tips and safe consent-based photo upload remain future. |
 | Staff-chat | Linked group diagnostics and operational notifications. | Link/test/unlink, live order activity-card behavior and state-aware booking shortcuts are smoke-closed. | Personal staff notifications and unified event policy remain future. |
 | Feedback | Internal post-visit feedback from completed Guest History. | DONE / MVP / staging-smoke-passed: Owner/Manager read own-venue aggregate/list and can manually open exact `VENUE_CHAT` follow-up for ratings `1..3`; Staff denied. | Platform feedback analytics dashboard and automated prompts remain future. |
-| Settings / card preview | Venue profile, schedule, booking hold, extension, staff-chat and read-only public-card preview. | Booking hold, shift extension, public profile/card, schedule/date exceptions and Owner-only public review link are smoke-closed. Published Guest Preview Phase 1 and saved-DRAFT Preview Phase 2.1 are **DONE / MVP / STAGING-SMOKE-PASSED** for Owner/Manager through one `Предпросмотр карточки` screen. | Broader settings/media authoring, unsaved changes, versioned snapshots and publish workflow remain future; unsupported lifecycle statuses continue to fail closed. |
+| Settings / card preview | Venue profile, schedule, booking hold, extension, staff-chat and read-only public-card preview. | Booking hold, shift extension, public profile/card, schedule/date exceptions and Owner-only public review link are smoke-closed. Published Guest Preview Phase 1 has a staging-smoked baseline and a locally validated 2026-07-30 hardening delta under `Предпросмотр для гостя`; saved-DRAFT Preview Phase 2.1 remains **DONE / MVP / STAGING-SMOKE-PASSED** under `Предпросмотр карточки`. | Broader settings/media authoring, unsaved changes, versioned snapshots and publish workflow remain future; unsupported lifecycle statuses continue to fail closed. |
 | Stats | Role-specific operational summaries. | Venue Mini App read-only stats passed staging smoke for Owner/Manager. | Custom ranges, arbitrary stats, AI summaries and advanced analytics remain future. |
 
 ## Dashboard
@@ -354,10 +354,11 @@ Current vs target:
 - If a future settings screen is not backend-backed, hide it or mark it clearly as future.
 
 Closed card-preview slices:
-- Published Guest Preview Phase 1 is **DONE / MVP / STAGING-SMOKE-PASSED**. OWNER/MANAGER see the exact guest-visible published read model through the unchanged Guest lifecycle/subscription guards.
+- Published Guest Preview Phase 1 has a **DONE / MVP / STAGING-SMOKE-PASSED** historical baseline. Its 2026-07-30 hardening is **VENUE MINI APP GUEST PREVIEW / PUBLISHED READ-ONLY PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**; CI and staging re-smoke remain required.
 - Draft Preview Phase 2.1 is **DONE / MVP / STAGING-SMOKE-PASSED**. A separate OWNER/MANAGER-only Venue read model exposes only saved `DRAFT` public-candidate data; STAFF and foreign venue access are denied.
-- One global Venue Mode entry and one contextual entry in public-card settings open the same read-only `Предпросмотр карточки` screen. `PUBLISHED` shows `Опубликовано — так карточку видит гость сейчас`; `DRAFT` shows `Черновик. Гости пока не видят эту карточку`.
-- HIDDEN/PAUSED/SUSPENDED/ARCHIVED expose only `Предпросмотр карточки для этого статуса пока недоступен`; DELETED/missing venues fail safely. No preview action publishes, mutates, shares or previews unsaved form state.
+- OWNER/MANAGER see the exact guest-visible PUBLISHED read model through the unchanged Guest lifecycle/subscription guards; both adapter reads are `no-store`.
+- Global and contextual entries use `Предпросмотр для гостя` for PUBLISHED and the unchanged `Предпросмотр карточки` for DRAFT. PUBLISHED shows `Так опубликованная карточка выглядит для гостя.`, the banner `Опубликовано — так карточку видит гость сейчас` and `Вернуться в кабинет`; DRAFT keeps `Черновик. Гости пока не видят эту карточку`.
+- HIDDEN/PAUSED/SUSPENDED/ARCHIVED/DELETED/missing venues expose only `Заведение сейчас недоступно для гостевого просмотра.`. No preview action publishes, mutates, shares or previews unsaved form state.
 - Draft projection is allowlisted to guest-safe public card/address, schedule and public exceptions, visible text info sections, visible published Today Staff and current `ACTIVE` promotions. Draft media is not returned: visible media sections are represented by one compact post-publication hint with no raw refs or new route. Published media remains unchanged.
 
 ## Venue / Menu Media Status
@@ -464,7 +465,7 @@ Current vs target:
 - Booking queue: `CLOSED for MVP`, `PARTIAL` for automation/preorder/reminder rollout.
 - Post-Visit Feedback: `DONE / MVP / STAGING-SMOKE-PASSED`, including manual `5/5` public review CTA and low-rating `VENUE_CHAT` follow-up.
 - Settings: `PARTIAL`, with several backend-backed slices closed, including Owner-only `Ссылка для отзывов` shared by Bot/Mini App.
-- Published Guest Preview Phase 1: **DONE / MVP / STAGING-SMOKE-PASSED**.
+- Published Guest Preview Phase 1 hardening: **VENUE MINI APP GUEST PREVIEW / PUBLISHED READ-ONLY PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**; historical baseline was staging-smoke-passed, current delta still requires CI and staging re-smoke.
 - Draft Preview Phase 2.1: **DONE / MVP / STAGING-SMOKE-PASSED**; saved `DRAFT` only, text-only info sections plus one media hint/no raw refs.
 - Full bill/display/order snapshots: `CLOSED for current smoke paths`, `PARTIAL` for force-close/reopen/all modifier variants.
 - Stop-list parity: current item/option parity documented; per-venue Staff policy and mass/shift-check remain future.

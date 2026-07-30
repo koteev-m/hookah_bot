@@ -1,5 +1,5 @@
 import type { VenueAccessDto } from '../shared/api/venueDtos'
-import { append, el } from '../shared/ui/dom'
+import { append, el, on } from '../shared/ui/dom'
 import { renderGuestVenueScreen } from './guestVenue'
 
 type VenueGuestPreviewScreenOptions = {
@@ -8,6 +8,7 @@ type VenueGuestPreviewScreenOptions = {
   isDebug: boolean
   venueId: number
   access: Pick<VenueAccessDto, 'role' | 'venueStatus'>
+  onBack: () => void
 }
 
 export function renderVenueGuestPreviewScreen(options: VenueGuestPreviewScreenOptions) {
@@ -26,27 +27,39 @@ export function renderVenueGuestPreviewScreen(options: VenueGuestPreviewScreenOp
   }
 
   const venueStatus = access.venueStatus?.trim().toUpperCase()
+  const isDraftPreview = venueStatus === 'DRAFT'
   const screen = el('section', { className: 'venue-guest-preview' })
-  const heading = el('h2', { text: 'Предпросмотр карточки' })
+  const heading = el('h2', {
+    text: isDraftPreview ? 'Предпросмотр карточки' : 'Предпросмотр для гостя'
+  })
   const helper = el('p', {
     className: 'app-subtitle',
-    text: 'Только сохранённые данные. Предпросмотр доступен без действий гостя.'
+    text: isDraftPreview
+      ? 'Только сохранённые данные. Предпросмотр доступен без действий гостя.'
+      : 'Так опубликованная карточка выглядит для гостя.'
   })
+  const returnButton = isDraftPreview
+    ? null
+    : (el('button', {
+        className: 'button-secondary venue-preview-return',
+        text: 'Вернуться в кабинет'
+      }) as HTMLButtonElement)
+  const disposeReturn = returnButton
+    ? on(returnButton, 'click', () => options.onBack())
+    : () => undefined
   if (venueStatus !== 'PUBLISHED' && venueStatus !== 'DRAFT') {
     const unavailable = el('section', { className: 'card venue-preview-unavailable' })
     append(
       unavailable,
       el('h3', { text: 'Предпросмотр недоступен' }),
-      el('p', {
-        text:
-          venueStatus === 'DELETED'
-            ? 'Заведение не найдено.'
-            : 'Предпросмотр карточки для этого статуса пока недоступен.'
-      })
+      el('p', { text: 'Заведение сейчас недоступно для гостевого просмотра.' })
     )
     append(screen, heading, helper, unavailable)
+    if (returnButton) {
+      screen.appendChild(returnButton)
+    }
     root.replaceChildren(screen)
-    return () => undefined
+    return disposeReturn
   }
 
   const previewMode = venueStatus
@@ -61,9 +74,12 @@ export function renderVenueGuestPreviewScreen(options: VenueGuestPreviewScreenOp
   banner.hidden = true
   const previewRoot = el('div', { className: 'venue-guest-preview-content' }) as HTMLDivElement
   append(screen, heading, helper, banner, previewRoot)
+  if (returnButton) {
+    screen.appendChild(returnButton)
+  }
   root.replaceChildren(screen)
 
-  return renderGuestVenueScreen({
+  const disposePreview = renderGuestVenueScreen({
     root: previewRoot,
     backendUrl,
     isDebug,
@@ -75,4 +91,8 @@ export function renderVenueGuestPreviewScreen(options: VenueGuestPreviewScreenOp
       }
     }
   })
+  return () => {
+    disposePreview()
+    disposeReturn()
+  }
 }

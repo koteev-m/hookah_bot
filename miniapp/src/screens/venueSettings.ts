@@ -814,6 +814,10 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
 
   const refs = buildDom(root)
   refs.publicCardPreviewButton.hidden = !options.onOpenPreview
+  refs.publicCardPreviewButton.textContent =
+    access.venueStatus?.trim().toUpperCase() === 'DRAFT'
+      ? 'Предпросмотр карточки'
+      : 'Предпросмотр для гостя'
   const deps = buildApiDeps(isDebug)
   const canManagePublicCard = access.role === 'OWNER' || access.role === 'MANAGER'
   const canManageReviewLink = access.permissions.includes('VENUE_SETTINGS')

@@ -1,6 +1,6 @@
 # Testing / QA Smoke Strategy
 
-Дата актуализации: 2026-07-29.
+Дата актуализации: 2026-07-30.
 
 Статус: **current product reference / UPDATED**. This document is the canonical QA/smoke strategy for the Telegram bot + Mini App platform. It consolidates local validation, GitHub Actions expectations, area-specific smoke suites, staging policy, failure reporting and Codex handoff rules. Deployment and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
 
@@ -22,7 +22,7 @@ Current practice:
 - Gift parity is
   `GIFT_WITH_ITEM BOT/MINIAPP PARITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`.
   GitHub Actions and staging cross-surface smoke remain required.
-- Venue Mini App Published Guest Preview Phase 1 is **DONE / MVP / STAGING-SMOKE-PASSED**: focused backend parity/RBAC/availability coverage preserves the exact Guest read contract; GitHub Actions were green, staging deploy completed and the role/parity/isolation smoke passed.
+- Venue Mini App Published Guest Preview Phase 1 has a **DONE / MVP / STAGING-SMOKE-PASSED** historical baseline. Its 2026-07-30 hardening status is **VENUE MINI APP GUEST PREVIEW / PUBLISHED READ-ONLY PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**; focused backend, build and full browser smoke are green, while GitHub Actions and staging re-smoke remain required for this delta.
 - Venue Mini App Draft Preview Phase 2.1 is **DONE / MVP / STAGING-SMOKE-PASSED**: focused Draft/RBAC/Guest regression coverage, GitHub Actions, staging deploy and the saved-DRAFT privacy/lifecycle/media-placeholder smoke passed.
 
 Target QA model:
@@ -52,7 +52,8 @@ Required local coverage:
 
 ```bash
 ./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VenueGuestPreviewRoutesTest*' --console=plain
-./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*GuestVenueRoutesTest*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*GuestVenueRoutesTest*' --tests '*VenueRbacRoutesTest*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:compileKotlin :backend:app:ktlintCheck --console=plain
 npm --prefix miniapp run build
 CI=1 TZ=UTC MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke
 ```
@@ -61,11 +62,15 @@ Acceptance:
 
 - OWNER and MANAGER receive the same guest-visible venue/info DTOs as Guest;
 - STAFF and foreign venue access are forbidden, including direct route/hash;
-- non-published or guest-blocked venues expose only the safe unavailable state;
+- both Published adapter reads emit `Cache-Control: no-store`, including denial and unavailable responses;
+- non-published or guest-blocked venues expose only `Заведение сейчас недоступно для гостевого просмотра.`;
 - weekly hours, future date exceptions, public info/media, Today Staff and current active promotions match Guest;
-- venue switching clears and aborts stale preview state;
+- public responses expose no raw Telegram/storage refs or private creator identifiers;
+- PUBLISHED uses `Предпросмотр для гостя`, helper `Так опубликованная карточка выглядит для гостя.` and `Вернуться в кабинет`; DRAFT copy remains unchanged;
+- venue switching, including PUBLISHED-to-PUBLISHED, clears and aborts stale preview state;
 - booking, favorites, venue chat, support, staff call, extension, cart, order and table context are absent and generate no mutation traffic;
-- staging evidence passed: OWNER/MANAGER opened PUBLISHED preview, exact real-Guest parity was confirmed, STAFF/foreign access was denied, venue switching did not restore stale data and no guest mutation actions were present.
+- historical staging evidence passed for OWNER/MANAGER parity, STAFF/foreign denial, stale isolation and no guest mutations;
+- the 2026-07-30 hardening delta is local-validation-passed only until green Actions and staging re-smoke.
 
 ## Venue Mini App Draft Preview Phase 2.1 Quality Gate
 
@@ -670,7 +675,7 @@ Telegram/staff-chat:
 ## Roadmap Status
 
 - Testing/QA smoke strategy: `UPDATED`.
-- Published Guest Preview Phase 1: **DONE / MVP / STAGING-SMOKE-PASSED**.
+- Published Guest Preview Phase 1 hardening: **VENUE MINI APP GUEST PREVIEW / PUBLISHED READ-ONLY PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**; historical baseline was staging-smoke-passed, current delta still requires CI and staging re-smoke.
 - Draft Preview Phase 2.1: **DONE / MVP / STAGING-SMOKE-PASSED**.
 - Manual smoke checklist: `CONSOLIDATED`.
 - CI coverage: `PARTIAL / release-critical split jobs current`.

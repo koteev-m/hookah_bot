@@ -4,13 +4,15 @@ import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.api.NotFoundException
 import com.hookah.platform.backend.miniapp.guest.GuestVenueReadService
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
+import io.ktor.http.HttpHeaders
 import io.ktor.server.application.call
+import io.ktor.server.response.header
 import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 import io.ktor.server.routing.route
 
-const val GUEST_PREVIEW_UNAVAILABLE_MESSAGE = "Заведение недоступно для гостевого просмотра."
+const val GUEST_PREVIEW_UNAVAILABLE_MESSAGE = "Заведение сейчас недоступно для гостевого просмотра."
 
 fun Route.venueGuestPreviewRoutes(
     venueAccessRepository: VenueAccessRepository,
@@ -18,6 +20,7 @@ fun Route.venueGuestPreviewRoutes(
 ) {
     route("/venue/{venueId}/guest-preview") {
         get {
+            call.response.header(HttpHeaders.CacheControl, "no-store")
             val userId = call.requireUserId()
             val venueId = call.requireVenueId()
             requireGuestPreviewAccess(venueAccessRepository, userId, venueId)
@@ -29,6 +32,7 @@ fun Route.venueGuestPreviewRoutes(
         }
 
         get("/info-sections") {
+            call.response.header(HttpHeaders.CacheControl, "no-store")
             val userId = call.requireUserId()
             val venueId = call.requireVenueId()
             requireGuestPreviewAccess(venueAccessRepository, userId, venueId)

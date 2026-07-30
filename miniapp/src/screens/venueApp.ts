@@ -167,7 +167,7 @@ function buildVenueShell(root: HTMLDivElement): VenueShellRefs {
     messages: el('button', { className: 'nav-button', text: 'Сообщения' }) as HTMLButtonElement,
     'guest-preview': el('button', {
       className: 'nav-button',
-      text: 'Предпросмотр карточки'
+      text: 'Предпросмотр для гостя'
     }) as HTMLButtonElement,
     promotions: el('button', { className: 'nav-button', text: 'Акции' }) as HTMLButtonElement,
     menu: el('button', { className: 'nav-button', text: 'Заказное меню' }) as HTMLButtonElement,
@@ -408,6 +408,10 @@ export function mountVenueApp(options: VenueAppOptions) {
     const access = selection ? accessList.find((venue) => venue.venueId === selection) ?? null : null
     currentRole = access?.role ?? null
     currentPermissions = access?.permissions ?? []
+    refs.navButtons['guest-preview'].textContent =
+      access?.venueStatus?.trim().toUpperCase() === 'DRAFT'
+        ? 'Предпросмотр карточки'
+        : 'Предпросмотр для гостя'
     updateAccessState()
     updateNavVisibility()
   }
@@ -544,7 +548,14 @@ export function mountVenueApp(options: VenueAppOptions) {
           initialThreadId: route.threadId
         })
       case 'guest-preview':
-        return renderVenueGuestPreviewScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
+        return renderVenueGuestPreviewScreen({
+          root: screenRoot,
+          backendUrl,
+          isDebug,
+          venueId,
+          access,
+          onBack: () => navigate('#/dashboard')
+        })
       case 'menu':
         return renderVenueMenuScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
       case 'promotions':

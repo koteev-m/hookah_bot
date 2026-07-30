@@ -70,6 +70,8 @@ class VenueGuestPreviewRoutesTest {
                 )
             assertEquals(HttpStatusCode.OK, ownerPreviewResponse.status)
             assertEquals(HttpStatusCode.OK, ownerSectionsResponse.status)
+            assertEquals("no-store", ownerPreviewResponse.headers[HttpHeaders.CacheControl])
+            assertEquals("no-store", ownerSectionsResponse.headers[HttpHeaders.CacheControl])
             val ownerPreviewBody = ownerPreviewResponse.bodyAsText()
             val ownerSectionsBody = ownerSectionsResponse.bodyAsText()
             assertEquals(
@@ -111,6 +113,8 @@ class VenueGuestPreviewRoutesTest {
                 )
             assertEquals(HttpStatusCode.OK, managerPreviewResponse.status)
             assertEquals(HttpStatusCode.OK, managerSectionsResponse.status)
+            assertEquals("no-store", managerPreviewResponse.headers[HttpHeaders.CacheControl])
+            assertEquals("no-store", managerSectionsResponse.headers[HttpHeaders.CacheControl])
             assertEquals(
                 guestVenue,
                 json.decodeFromString(VenueResponse.serializer(), managerPreviewResponse.bodyAsText()),
@@ -156,6 +160,7 @@ class VenueGuestPreviewRoutesTest {
                 previewPaths(venueId).forEach { path ->
                     val response = client.getAuthenticated(path, token)
                     assertEquals(HttpStatusCode.Forbidden, response.status)
+                    assertEquals("no-store", response.headers[HttpHeaders.CacheControl])
                     assertApiErrorEnvelope(response, ApiErrorCodes.FORBIDDEN)
                 }
             }
@@ -202,6 +207,7 @@ class VenueGuestPreviewRoutesTest {
                 previewPaths(venueId).forEach { path ->
                     val response = client.getAuthenticated(path, token)
                     assertEquals(HttpStatusCode.NotFound, response.status)
+                    assertEquals("no-store", response.headers[HttpHeaders.CacheControl])
                     val error = assertApiErrorEnvelope(response, ApiErrorCodes.NOT_FOUND)
                     assertEquals(UNAVAILABLE_MESSAGE, error.error.message)
                     val body = response.bodyAsText()
@@ -234,6 +240,7 @@ class VenueGuestPreviewRoutesTest {
             previewPaths(deletedVenueId).forEach { path ->
                 val response = client.getAuthenticated(path, token)
                 assertEquals(HttpStatusCode.NotFound, response.status)
+                assertEquals("no-store", response.headers[HttpHeaders.CacheControl])
                 val error = assertApiErrorEnvelope(response, ApiErrorCodes.NOT_FOUND)
                 assertEquals(UNAVAILABLE_MESSAGE, error.error.message)
                 assertFalse(response.bodyAsText().contains("private-deleted"))
@@ -714,8 +721,11 @@ class VenueGuestPreviewRoutesTest {
         assertFalse(body.contains(PRIVATE_PROMOTION_MARKER))
         assertFalse(body.contains(PRIVATE_SECTION_MARKER))
         assertFalse(body.contains(PRIVATE_MEDIA_MARKER))
+        assertFalse(body.contains("public-telegram-file"))
         assertFalse(body.contains("telegram_file_id"))
+        assertFalse(body.contains("telegramFileId"))
         assertFalse(body.contains("created_by_user_id"))
+        assertFalse(body.contains("createdByUserId"))
     }
 
     private data class PublishedPreviewFixture(
@@ -726,7 +736,7 @@ class VenueGuestPreviewRoutesTest {
     private companion object {
         const val ACTOR_USER_ID = 80_101L
         const val FOREIGN_USER_ID = 80_102L
-        const val UNAVAILABLE_MESSAGE = "Заведение недоступно для гостевого просмотра."
+        const val UNAVAILABLE_MESSAGE = "Заведение сейчас недоступно для гостевого просмотра."
         const val PUBLIC_STAFF_NAME = "Алексей"
         const val ACTIVE_PROMOTION_TITLE = "Опубликованная акция"
         const val PUBLIC_SECTION_TITLE = "О заведении"
