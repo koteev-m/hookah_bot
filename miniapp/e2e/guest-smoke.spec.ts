@@ -10565,7 +10565,10 @@ test('venue manager drafts cancels and atomically confirms one menu shift check 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
 
-  const shiftCheck = page.locator('.venue-menu-shift-check')
+  const editing = page.locator('details.venue-menu-editing')
+  const shiftCheck = page.locator('details.venue-menu-shift-check')
+  const editingCategory = (categoryId: number) =>
+    editing.locator(`details.venue-menu-category[data-category-id="${categoryId}"]`)
   const search = shiftCheck.getByRole('searchbox', { name: 'Поиск по позициям и опциям' })
   const itemRow = (itemId: number) =>
     shiftCheck.locator(`.venue-shift-check-item[data-item-id="${itemId}"]`)
@@ -10574,30 +10577,115 @@ test('venue manager drafts cancels and atomically confirms one menu shift check 
   const category = (categoryId: number) =>
     shiftCheck.locator(`.venue-shift-check-category[data-category-id="${categoryId}"]`)
   const itemGroup = (itemId: number) => itemRow(itemId).locator('..')
+  const itemAvailability = (itemId: number, name: string) =>
+    itemRow(itemId).getByRole('switch', { name: new RegExp(`Позиция ${name}:`) })
+  const optionAvailability = (optionId: number, name: string) =>
+    optionRow(optionId).getByRole('switch', { name: new RegExp(`Опция ${name}:`) })
   const confirmationGroups = shiftCheck.locator('.venue-shift-check-confirmation-grid > div')
   const prepareDraft = async () => {
-    await shiftCheck.getByLabel('Позиция доступна: Кальян Ягодный').uncheck()
-    await shiftCheck.getByLabel('Опция доступна: Яблоко').uncheck()
-    await category(31).getByRole('button', { name: 'Позиции категории недоступны' }).click()
-    await itemGroup(320).getByRole('button', { name: 'Опции позиции доступны' }).click()
+    await itemAvailability(310, 'Кальян Ягодный').click()
+    await optionAvailability(401, 'Яблоко').click()
+    await category(31).getByRole('button', { name: 'Все позиции недоступны' }).click()
+    await itemGroup(320).getByRole('button', { name: 'Все опции позиции в наличии' }).click()
+    await shiftCheck.getByRole('button', { name: 'Массовое изменение' }).click()
     await search.fill('Кальян Классический')
     await shiftCheck.getByRole('button', { name: 'Выбрать все отфильтрованные' }).click()
-    await expect(shiftCheck.getByLabel('Выбрать позицию: Кальян Классический')).toBeChecked()
-    await shiftCheck.getByRole('button', { name: 'Выбранные доступны' }).click()
+    await expect(itemRow(311).getByRole('checkbox', { name: 'Выбрать Кальян Классический' })).toBeChecked()
+    await expect(shiftCheck.getByText('Выбрано: 2', { exact: true })).toBeVisible()
+    await shiftCheck.getByRole('button', { name: 'Сделать доступными' }).click()
     await search.fill('')
   }
 
+  await expect(editing).toBeVisible()
   await expect(shiftCheck).toBeVisible()
+  await expect(editing).not.toHaveAttribute('open', '')
   await expect(shiftCheck).not.toHaveAttribute('open', '')
-  await shiftCheck.locator('summary').click()
+  await expect(editing.locator(':scope > summary')).toContainText('Редактирование меню')
+  await expect(shiftCheck.locator(':scope > summary')).toContainText('Проверка меню перед сменой')
+  await expect(editing.locator(':scope > summary')).toContainText('Категории: 2')
+  await expect(editing.locator(':scope > summary')).toContainText('Позиции: 4')
+  await expect(shiftCheck.locator(':scope > summary')).toContainText('Позиции: 3/4')
+  await expect(shiftCheck.locator(':scope > summary')).toContainText('Опции: 2/4')
+  await expect(
+    editing.getByText('Категории, позиции, цены, опции и топ-лист.', { exact: true })
+  ).toBeVisible()
   await expect(
     shiftCheck.getByText(
-      'Проверьте наличие позиций и вариантов перед началом смены. Изменения применятся только после подтверждения.',
+      'Проверьте наличие позиций и вариантов. Изменения применятся только после подтверждения.',
       { exact: true }
     )
   ).toBeVisible()
+
+  await editing.locator(':scope > summary').click()
+  await expect(editing).toHaveAttribute('open', '')
+  await expect(shiftCheck).not.toHaveAttribute('open', '')
+  await expect(editing.locator('.venue-menu-create-category')).toBeHidden()
+  await expect(editingCategory(30)).toBeVisible()
+  await expect(editingCategory(30)).not.toHaveAttribute('open', '')
+  await editingCategory(30).locator(':scope > summary').click()
+  await expect(editingCategory(30)).toHaveAttribute('open', '')
+  await expect(editingCategory(30).locator('.venue-menu-item')).toHaveCount(2)
+  await editing.getByRole('button', { name: 'Добавить категорию' }).click()
+  await expect(editing.locator('.venue-menu-create-category')).toBeVisible()
+  await editing.getByRole('button', { name: 'Добавить категорию' }).click()
+  await expect(editing.locator('.venue-menu-create-category')).toBeHidden()
+
+  await shiftCheck.locator(':scope > summary').click()
+  await expect(shiftCheck).toHaveAttribute('open', '')
+  await expect(editing).not.toHaveAttribute('open', '')
   await expect(category(30)).toContainText('Позиции: 1/2 · Опции: 2/3')
   await expect(category(31)).toContainText('Позиции: 2/2 · Опции: 0/1')
+  await expect(category(30).getByRole('button', { name: 'Все позиции в наличии' })).toBeVisible()
+  await expect(category(30).getByRole('button', { name: 'Все позиции недоступны' })).toBeVisible()
+  await expect(category(30).getByRole('button', { name: 'Все опции в наличии' })).toBeVisible()
+  await expect(category(30).getByRole('button', { name: 'Все опции недоступны' })).toBeVisible()
+  await expect(shiftCheck.getByRole('checkbox', { name: /^Выбрать / })).toHaveCount(0)
+  await expect(
+    shiftCheck.getByRole('switch', { name: 'Позиция Кальян Ягодный: В наличии' })
+  ).toBeVisible()
+  await expect(
+    shiftCheck.getByRole('switch', { name: 'Опция Яблоко: В наличии' })
+  ).toBeVisible()
+  await expect(itemAvailability(310, 'Кальян Ягодный')).toHaveText('В наличии')
+  await expect(optionAvailability(401, 'Яблоко')).toHaveText('В наличии')
+  await expect(itemGroup(310).locator('.venue-shift-check-options')).toContainText('Яблоко')
+  const itemBox = await itemRow(310).boundingBox()
+  const optionBox = await optionRow(401).boundingBox()
+  expect(itemBox).not.toBeNull()
+  expect(optionBox).not.toBeNull()
+  expect(optionBox!.x).toBeGreaterThan(itemBox!.x)
+
+  await category(30).getByRole('button', { name: 'Все опции недоступны' }).click()
+  await expect(
+    shiftCheck.getByRole('switch', { name: 'Опция Яблоко: Нет в наличии' })
+  ).toBeVisible()
+  await expect(optionRow(401).getByText('Изменено', { exact: true })).toBeVisible()
+  await expect(category(30).getByRole('button', { name: 'Все опции недоступны' })).toBeFocused()
+  expect(api.getShiftCheckRequests()).toHaveLength(0)
+  expect(api.getOptionAvailabilityCalls()).toBe(0)
+  await shiftCheck.getByRole('button', { name: 'Отменить изменения' }).click()
+  await expect(
+    shiftCheck.getByRole('switch', { name: 'Опция Яблоко: В наличии' })
+  ).toBeVisible()
+
+  await itemAvailability(310, 'Кальян Ягодный').click()
+  expect(api.getShiftCheckRequests()).toHaveLength(0)
+  expect(api.getItemAvailabilityCalls()).toBe(0)
+  await expect(itemRow(310).getByText('Изменено', { exact: true })).toBeVisible()
+  await expect(
+    shiftCheck.getByRole('switch', { name: 'Позиция Кальян Ягодный: Нет в наличии' })
+  ).toBeFocused()
+  await expect(shiftCheck.getByText('Несохранённые изменения: 1', { exact: true })).toBeVisible()
+  await editing.locator(':scope > summary').click()
+  await expect(editing).toHaveAttribute('open', '')
+  await expect(shiftCheck).not.toHaveAttribute('open', '')
+  await expect(shiftCheck.getByText('Несохранённые изменения: 1', { exact: true })).toBeVisible()
+  await shiftCheck.locator(':scope > summary').click()
+  await expect(editing).not.toHaveAttribute('open', '')
+  await expect(itemAvailability(310, 'Кальян Ягодный')).toHaveAttribute('aria-checked', 'false')
+  await expect(itemRow(310).getByText('Изменено', { exact: true })).toBeVisible()
+  await itemAvailability(310, 'Кальян Ягодный').click()
+  await expect(itemRow(310).getByText('Изменено', { exact: true })).toHaveCount(0)
 
   await search.fill('Мята')
   await expect(optionRow(402)).toBeVisible()
@@ -10612,9 +10700,22 @@ test('venue manager drafts cancels and atomically confirms one menu shift check 
   await shiftCheck.getByRole('button', { name: 'Все', exact: true }).click()
 
   await prepareDraft()
+  await expect(itemRow(311).getByRole('checkbox', { name: 'Выбрать Кальян Классический' })).toBeVisible()
+  await expect(itemAvailability(311, 'Кальян Классический')).toBeVisible()
+  await expect(itemRow(311)).toHaveAttribute('data-selected', 'true')
+  await expect
+    .poll(() => itemRow(311).evaluate((node) => getComputedStyle(node).outlineStyle))
+    .toBe('solid')
+  await expect(shiftCheck.getByRole('button', { name: 'Снять выбор' })).toBeVisible()
+  await expect(shiftCheck.getByRole('button', { name: 'Выйти из массового режима' })).toBeVisible()
   expect(api.getShiftCheckRequests()).toHaveLength(0)
   expect(api.getItemAvailabilityCalls()).toBe(0)
   expect(api.getOptionAvailabilityCalls()).toBe(0)
+  await shiftCheck.getByRole('button', { name: 'Снять выбор' }).click()
+  await expect(shiftCheck.getByText('Выбрано: 0', { exact: true })).toBeVisible()
+  await shiftCheck.getByRole('button', { name: 'Выйти из массового режима' }).click()
+  await expect(shiftCheck.getByRole('checkbox', { name: /^Выбрать / })).toHaveCount(0)
+  await expect(shiftCheck.getByRole('button', { name: 'Массовое изменение' })).toBeVisible()
   await expect(category(30)).toContainText('Позиции: 1/2 · Опции: 1/3')
   await expect(category(31)).toContainText('Позиции: 0/2 · Опции: 1/1')
   await expect(confirmationGroups.nth(0)).toContainText('Доступны: 1')
@@ -10635,10 +10736,11 @@ test('venue manager drafts cancels and atomically confirms one menu shift check 
   expect(api.getShiftCheckRequests()).toHaveLength(0)
   await expect(shiftCheck.getByText('Несохранённые изменения отменены.', { exact: true })).toBeVisible()
   await shiftCheck.getByRole('button', { name: 'Все', exact: true }).click()
-  await expect(shiftCheck.getByLabel('Позиция доступна: Кальян Ягодный')).toBeChecked()
-  await expect(shiftCheck.getByLabel('Позиция доступна: Кальян Классический')).not.toBeChecked()
-  await expect(shiftCheck.getByLabel('Опция доступна: Яблоко')).toBeChecked()
-  await expect(shiftCheck.getByLabel('Опция доступна: Большой чайник')).not.toBeChecked()
+  await expect(shiftCheck.getByRole('checkbox', { name: /^Выбрать / })).toHaveCount(0)
+  await expect(itemAvailability(310, 'Кальян Ягодный')).toHaveAttribute('aria-checked', 'true')
+  await expect(itemAvailability(311, 'Кальян Классический')).toHaveAttribute('aria-checked', 'false')
+  await expect(optionAvailability(401, 'Яблоко')).toHaveAttribute('aria-checked', 'true')
+  await expect(optionAvailability(410, 'Большой чайник')).toHaveAttribute('aria-checked', 'false')
   await expect(confirmationGroups.nth(0)).toContainText('Доступны: 0')
   await expect(confirmationGroups.nth(0)).toContainText('Недоступны: 0')
   await expect(confirmationGroups.nth(1)).toContainText('Доступны: 0')
@@ -10667,10 +10769,10 @@ test('venue manager drafts cancels and atomically confirms one menu shift check 
   await expect(
     shiftCheck.getByText('Проверка меню завершена. Изменено позиций: 4, опций: 2.', { exact: true })
   ).toBeVisible()
-  await expect(shiftCheck.getByLabel('Позиция доступна: Кальян Ягодный')).not.toBeChecked()
-  await expect(shiftCheck.getByLabel('Позиция доступна: Кальян Классический')).toBeChecked()
-  await expect(shiftCheck.getByLabel('Опция доступна: Яблоко')).not.toBeChecked()
-  await expect(shiftCheck.getByLabel('Опция доступна: Большой чайник')).toBeChecked()
+  await expect(itemAvailability(310, 'Кальян Ягодный')).toHaveAttribute('aria-checked', 'false')
+  await expect(itemAvailability(311, 'Кальян Классический')).toHaveAttribute('aria-checked', 'true')
+  await expect(optionAvailability(401, 'Яблоко')).toHaveAttribute('aria-checked', 'false')
+  await expect(optionAvailability(410, 'Большой чайник')).toHaveAttribute('aria-checked', 'true')
   expect(api.getShiftCheckRequests()).toHaveLength(1)
   expect(api.getItemAvailabilityCalls()).toBe(0)
   expect(api.getOptionAvailabilityCalls()).toBe(0)
@@ -10694,8 +10796,8 @@ test('venue owner can complete a no-op menu shift check with one empty batch', a
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
-  const shiftCheck = page.locator('.venue-menu-shift-check')
-  await shiftCheck.locator('summary').click()
+  const shiftCheck = page.locator('details.venue-menu-shift-check')
+  await shiftCheck.locator(':scope > summary').click()
   await shiftCheck.getByRole('button', { name: 'Подтвердить проверку' }).click()
 
   await expect.poll(() => api.getShiftCheckRequests()).toHaveLength(1)
@@ -10731,10 +10833,12 @@ test('menu shift check rebases a stale draft and keeps a failed confirmation ret
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
-  const shiftCheck = page.locator('.venue-menu-shift-check')
+  const shiftCheck = page.locator('details.venue-menu-shift-check')
   const errorCard = page.locator('.venue-menu-builder > .error-card')
-  await shiftCheck.locator('summary').click()
-  await shiftCheck.getByLabel('Позиция доступна: Кальян Ягодный').uncheck()
+  const berrySwitch = () =>
+    shiftCheck.getByRole('switch', { name: /Позиция Кальян Ягодный:/ })
+  await shiftCheck.locator(':scope > summary').click()
+  await berrySwitch().click()
 
   api.queueShiftCheckError({
     status: 409,
@@ -10746,17 +10850,20 @@ test('menu shift check rebases a stale draft and keeps a failed confirmation ret
   await expect(
     errorCard.getByText('Меню изменилось. Обновите проверку и повторите подтверждение.', { exact: true })
   ).toBeVisible()
-  await expect(shiftCheck.getByLabel('Позиция доступна: Кальян Ягодный')).not.toBeChecked()
-  await expect(shiftCheck.getByLabel('Позиция доступна: Кальян Ягодный')).toBeDisabled()
+  await expect(berrySwitch()).toHaveAttribute('aria-checked', 'false')
+  await expect(berrySwitch()).toBeDisabled()
 
   api.setOptionAvailability(1, 402, true)
   await errorCard.getByRole('button', { name: 'Обновить проверку' }).click()
   await expect(
     shiftCheck.getByText('Проверка обновлена. Проверьте изменения и подтвердите ещё раз.', { exact: true })
   ).toBeVisible()
-  await expect(shiftCheck.getByLabel('Позиция доступна: Кальян Ягодный')).not.toBeChecked()
-  await expect(shiftCheck.getByLabel('Позиция доступна: Кальян Ягодный')).toBeEnabled()
-  await expect(shiftCheck.getByLabel('Опция доступна: Мята')).toBeChecked()
+  await expect(berrySwitch()).toHaveAttribute('aria-checked', 'false')
+  await expect(berrySwitch()).toBeEnabled()
+  await expect(shiftCheck.getByRole('switch', { name: /Опция Мята:/ })).toHaveAttribute(
+    'aria-checked',
+    'true'
+  )
 
   api.queueShiftCheckError({
     status: 500,
@@ -10767,7 +10874,7 @@ test('menu shift check rebases a stale draft and keeps a failed confirmation ret
   await expect.poll(() => api.getShiftCheckRequests()).toHaveLength(2)
   await expect(errorCard.getByText('Не удалось завершить проверку меню.', { exact: true })).toBeVisible()
   await expect(errorCard).not.toContainText('database details must stay private')
-  await expect(shiftCheck.getByLabel('Позиция доступна: Кальян Ягодный')).not.toBeChecked()
+  await expect(berrySwitch()).toHaveAttribute('aria-checked', 'false')
   await expect(shiftCheck.getByRole('button', { name: 'Подтвердить проверку' })).toBeEnabled()
 
   await errorCard.getByRole('button', { name: 'Повторить' }).click()
@@ -10820,20 +10927,31 @@ test('menu shift check clears venue drafts and ignores a disposed late menu resp
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
-  let shiftCheck = page.locator('.venue-menu-shift-check')
+  let editing = page.locator('details.venue-menu-editing')
+  let shiftCheck = page.locator('details.venue-menu-shift-check')
   const venueSelect = page.locator('.venue-controls select.venue-select')
-  await shiftCheck.locator('summary').click()
-  await shiftCheck.getByLabel('Позиция доступна: Кальян Ягодный').uncheck()
-  await shiftCheck.getByLabel('Выбрать позицию: Кальян Ягодный').check()
-  await expect(shiftCheck.locator('.menu-item-badge').filter({ hasText: 'Несохранено' })).toHaveCount(1)
-  await expect(shiftCheck.getByLabel('Выбрать позицию: Кальян Ягодный')).toBeChecked()
+  await shiftCheck.locator(':scope > summary').click()
+  await shiftCheck.getByRole('switch', { name: /Позиция Кальян Ягодный:/ }).click()
+  await shiftCheck.getByRole('button', { name: 'Массовое изменение' }).click()
+  await shiftCheck.getByRole('checkbox', { name: 'Выбрать Кальян Ягодный' }).check()
+  await expect(shiftCheck.locator('.menu-item-badge').filter({ hasText: 'Изменено' })).toHaveCount(1)
+  await expect(shiftCheck.getByRole('checkbox', { name: 'Выбрать Кальян Ягодный' })).toBeChecked()
 
   await venueSelect.selectOption('2')
-  shiftCheck = page.locator('.venue-menu-shift-check')
-  await shiftCheck.locator('summary').click()
-  await expect(shiftCheck.getByLabel('Позиция доступна: Кальян Ягодный Второй')).toBeChecked()
-  await expect(shiftCheck.getByLabel('Выбрать позицию: Кальян Ягодный Второй')).not.toBeChecked()
-  await expect(shiftCheck.locator('.menu-item-badge').filter({ hasText: 'Несохранено' })).toHaveCount(0)
+  editing = page.locator('details.venue-menu-editing')
+  shiftCheck = page.locator('details.venue-menu-shift-check')
+  await expect(editing).not.toHaveAttribute('open', '')
+  await expect(shiftCheck).not.toHaveAttribute('open', '')
+  await shiftCheck.locator(':scope > summary').click()
+  await expect(shiftCheck.getByRole('switch', { name: /Позиция Кальян Ягодный Второй:/ })).toHaveAttribute(
+    'aria-checked',
+    'true'
+  )
+  await expect(shiftCheck.locator('.menu-item-badge').filter({ hasText: 'Изменено' })).toHaveCount(0)
+  await shiftCheck.getByRole('button', { name: 'Массовое изменение' }).click()
+  await expect(
+    shiftCheck.getByRole('checkbox', { name: 'Выбрать Кальян Ягодный Второй' })
+  ).not.toBeChecked()
   await shiftCheck.getByRole('button', { name: 'Подтвердить проверку' }).click()
   await expect.poll(() => api.getShiftCheckRequests()).toHaveLength(1)
   expect(api.getShiftCheckRequests()[0]).toEqual({
@@ -10848,6 +10966,13 @@ test('menu shift check clears venue drafts and ignores a disposed late menu resp
     .poll(() => api.getMenuRequests().filter((venueId) => venueId === 1).length)
     .toBe(venueOneRequestsBefore + 1)
   await venueSelect.selectOption('2')
+  editing = page.locator('details.venue-menu-editing')
+  shiftCheck = page.locator('details.venue-menu-shift-check')
+  await expect(editing).not.toHaveAttribute('open', '')
+  await expect(shiftCheck).not.toHaveAttribute('open', '')
+  await editing.locator(':scope > summary').click()
+  const secondCategory = editing.locator('details.venue-menu-category[data-category-id="1030"]')
+  await secondCategory.locator(':scope > summary').click()
   const secondVenueItem = page.locator('.venue-menu-item').filter({ hasText: 'Кальян Ягодный Второй' })
   await expect(secondVenueItem).toBeVisible()
   releaseVenueOne()
@@ -10879,6 +11004,13 @@ test('venue staff has no menu shift check but keeps individual stop-list access'
   await expect(page.locator('.venue-menu-shift-check')).toHaveCount(0)
   await expect(page.getByText('Проверка меню перед сменой', { exact: true })).toHaveCount(0)
 
+  const editing = page.locator('details.venue-menu-editing')
+  await expect(editing).not.toHaveAttribute('open', '')
+  await expect(editing.getByRole('button', { name: 'Добавить категорию' })).toHaveCount(0)
+  await editing.locator(':scope > summary').click()
+  await editing
+    .locator('details.venue-menu-category[data-category-id="30"] > summary')
+    .click()
   const item = page.locator('.venue-menu-item').filter({ hasText: 'Кальян Ягодный' })
   await item.getByLabel('Доступно гостям', { exact: true }).uncheck()
   await expect.poll(() => api.getItemAvailabilityCalls()).toBe(1)
@@ -11001,6 +11133,13 @@ test('venue manager manages menu item flavors from mini app', async ({ page }) =
 
   await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
   await expect(page.getByRole('heading', { level: 2, name: 'Меню', exact: true })).toBeVisible()
+  const editing = page.locator('details.venue-menu-editing')
+  await editing.locator(':scope > summary').click()
+  for (const categoryId of [30, 31, 32]) {
+    await editing
+      .locator(`details.venue-menu-category[data-category-id="${categoryId}"] > summary`)
+      .click()
+  }
   await expect(hookahItem().getByLabel('Доступно гостям')).toBeChecked()
   await hookahItem().getByLabel('Доступно гостям').uncheck()
   await expect(hookahItem().getByLabel('В стоп-листе')).not.toBeChecked()
@@ -11124,6 +11263,11 @@ test('venue staff sees menu flavors without edit controls', async ({ page }) => 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
   await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+  const editing = page.locator('details.venue-menu-editing')
+  await editing.locator(':scope > summary').click()
+  await editing
+    .locator('details.venue-menu-category[data-category-id="30"] > summary')
+    .click()
   const hookahItem = page.locator('.venue-menu-item').filter({ hasText: 'Кальян' })
   const appleOption = hookahItem.locator('.venue-menu-option').filter({ hasText: 'Яблоко' })
   await expect(hookahItem.getByText('Вкусы / опции')).toBeVisible()

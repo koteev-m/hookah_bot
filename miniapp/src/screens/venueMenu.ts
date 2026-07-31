@@ -44,7 +44,12 @@ type MenuRefs = {
   errorMessage: HTMLParagraphElement
   errorActions: HTMLDivElement
   errorDetails: HTMLDivElement
+  editingDetails: HTMLDetailsElement
+  editingCategoryCount: HTMLSpanElement
+  editingItemCount: HTMLSpanElement
   categories: HTMLDivElement
+  createCategoryAction: HTMLButtonElement
+  createCategoryForm: HTMLDivElement
   createCategoryInput: HTMLInputElement
   createCategoryButton: HTMLButtonElement
   shiftCheck: ShiftCheckRefs | null
@@ -54,11 +59,22 @@ type ShiftCheckFilter = 'all' | 'unavailable' | 'dirty'
 
 type ShiftCheckRefs = {
   details: HTMLDetailsElement
+  availableItemCount: HTMLSpanElement
+  totalItemCount: HTMLSpanElement
+  availableOptionCount: HTMLSpanElement
+  totalOptionCount: HTMLSpanElement
+  dirtyCount: HTMLSpanElement
+  dirtySummary: HTMLSpanElement
   searchInput: HTMLInputElement
   filterButtons: Record<ShiftCheckFilter, HTMLButtonElement>
+  massModeButton: HTMLButtonElement
+  bulkToolbar: HTMLDivElement
+  selectedCount: HTMLElement
   selectFilteredButton: HTMLButtonElement
   selectedAvailableButton: HTMLButtonElement
   selectedUnavailableButton: HTMLButtonElement
+  clearSelectionButton: HTMLButtonElement
+  exitMassModeButton: HTMLButtonElement
   categories: HTMLDivElement
   itemMadeAvailable: HTMLSpanElement
   itemMadeUnavailable: HTMLSpanElement
@@ -88,13 +104,33 @@ function renderErrorActions(container: HTMLElement, actions: ApiErrorAction[]) {
 
 function buildShiftCheckDom(): ShiftCheckRefs {
   const details = el('details', { className: 'card venue-menu-shift-check' })
-  const summary = el('summary', { text: 'Проверка меню перед сменой' })
-  const helper = el('p', {
-    className: 'venue-help',
-    text:
-      'Проверьте наличие позиций и вариантов перед началом смены. Изменения применятся ' +
-      'только после подтверждения.'
+  const summary = el('summary', { className: 'venue-menu-section-summary' })
+  const summaryTitle = el('span', {
+    className: 'venue-menu-section-title',
+    text: 'Проверка меню перед сменой'
   })
+  const summaryDescription = el('span', {
+    className: 'venue-menu-section-description',
+    text: 'Проверьте наличие позиций и вариантов. Изменения применятся только после подтверждения.'
+  })
+  const summaryMetrics = el('span', { className: 'venue-menu-section-metrics' })
+  const availableItemCount = el('span', { text: '0' })
+  const totalItemCount = el('span', { text: '0' })
+  const availableOptionCount = el('span', { text: '0' })
+  const totalOptionCount = el('span', { text: '0' })
+  const dirtyCount = el('span', { text: '0' })
+  const itemMetric = el('span', { text: 'Позиции: ' })
+  append(itemMetric, availableItemCount, document.createTextNode('/'), totalItemCount)
+  const optionMetric = el('span', { text: 'Опции: ' })
+  append(optionMetric, availableOptionCount, document.createTextNode('/'), totalOptionCount)
+  const dirtySummary = el('span', {
+    className: 'venue-menu-section-dirty-summary',
+    text: 'Несохранённые изменения: '
+  })
+  dirtySummary.hidden = true
+  dirtySummary.appendChild(dirtyCount)
+  append(summaryMetrics, itemMetric, optionMetric, dirtySummary)
+  append(summary, summaryTitle, summaryDescription, summaryMetrics)
 
   const controls = el('div', { className: 'venue-shift-check-controls' })
   const searchInput = document.createElement('input')
@@ -117,21 +153,49 @@ function buildShiftCheckDom(): ShiftCheckRefs {
   }
   append(filters, filterButtons.all, filterButtons.unavailable, filterButtons.dirty)
 
-  const selectionActions = el('div', { className: 'venue-shift-check-selection-actions' })
+  const massModeButton = el('button', {
+    className: 'button-small button-secondary venue-shift-check-mass-mode',
+    text: 'Массовое изменение'
+  }) as HTMLButtonElement
+  massModeButton.type = 'button'
+
+  const bulkToolbar = el('div', {
+    className: 'venue-shift-check-selection-actions venue-shift-check-bulk-toolbar'
+  })
+  bulkToolbar.hidden = true
+  const selectedCount = el('strong', { text: 'Выбрано: 0' })
+  selectedCount.setAttribute('role', 'status')
+  selectedCount.setAttribute('aria-live', 'polite')
   const selectFilteredButton = el('button', {
     className: 'button-small button-secondary',
     text: 'Выбрать все отфильтрованные'
   }) as HTMLButtonElement
   const selectedAvailableButton = el('button', {
     className: 'button-small',
-    text: 'Выбранные доступны'
+    text: 'Сделать доступными'
   }) as HTMLButtonElement
   const selectedUnavailableButton = el('button', {
     className: 'button-small button-secondary',
-    text: 'Выбранные недоступны'
+    text: 'Сделать недоступными'
   }) as HTMLButtonElement
-  append(selectionActions, selectFilteredButton, selectedAvailableButton, selectedUnavailableButton)
-  append(controls, searchInput, filters, selectionActions)
+  const clearSelectionButton = el('button', {
+    className: 'button-small button-secondary',
+    text: 'Снять выбор'
+  }) as HTMLButtonElement
+  const exitMassModeButton = el('button', {
+    className: 'button-small button-secondary',
+    text: 'Выйти из массового режима'
+  }) as HTMLButtonElement
+  append(
+    bulkToolbar,
+    selectedCount,
+    selectFilteredButton,
+    selectedAvailableButton,
+    selectedUnavailableButton,
+    clearSelectionButton,
+    exitMassModeButton
+  )
+  append(controls, searchInput, filters, massModeButton, bulkToolbar)
 
   const categories = el('div', { className: 'venue-shift-check-categories' })
 
@@ -173,15 +237,26 @@ function buildShiftCheckDom(): ShiftCheckRefs {
   const status = el('p', { className: 'status', text: '' })
   append(confirmation, confirmationTitle, confirmationGrid, confirmationActions, status)
 
-  append(details, summary, helper, controls, categories, confirmation)
+  append(details, summary, controls, categories, confirmation)
 
   return {
     details,
+    availableItemCount,
+    totalItemCount,
+    availableOptionCount,
+    totalOptionCount,
+    dirtyCount,
+    dirtySummary,
     searchInput,
     filterButtons,
+    massModeButton,
+    bulkToolbar,
+    selectedCount,
     selectFilteredButton,
     selectedAvailableButton,
     selectedUnavailableButton,
+    clearSelectionButton,
+    exitMassModeButton,
     categories,
     itemMadeAvailable,
     itemMadeUnavailable,
@@ -195,15 +270,49 @@ function buildShiftCheckDom(): ShiftCheckRefs {
 
 function buildMenuDom(root: HTMLDivElement, canShiftCheck: boolean): MenuRefs {
   const wrapper = el('div', { className: 'venue-menu-builder' })
-  const header = el('div', { className: 'card' })
   const title = el('h2', { text: 'Меню' })
-  const createRow = el('div', { className: 'venue-form-row' })
+
+  const editingDetails = el('details', { className: 'card venue-menu-editing' })
+  const editingSummary = el('summary', { className: 'venue-menu-section-summary' })
+  const editingTitle = el('span', {
+    className: 'venue-menu-section-title',
+    text: 'Редактирование меню'
+  })
+  const editingDescription = el('span', {
+    className: 'venue-menu-section-description',
+    text: 'Категории, позиции, цены, опции и топ-лист.'
+  })
+  const editingMetrics = el('span', { className: 'venue-menu-section-metrics' })
+  const editingCategoryCount = el('span', { text: '0' })
+  const editingItemCount = el('span', { text: '0' })
+  const categoryMetric = el('span', { text: 'Категории: ' })
+  append(categoryMetric, editingCategoryCount)
+  const itemMetric = el('span', { text: 'Позиции: ' })
+  append(itemMetric, editingItemCount)
+  append(editingMetrics, categoryMetric, itemMetric)
+  append(editingSummary, editingTitle, editingDescription, editingMetrics)
+
+  const editingBody = el('div', { className: 'venue-menu-editing-body' })
+  const createCategoryAction = el('button', {
+    className: 'button-secondary',
+    text: 'Добавить категорию'
+  }) as HTMLButtonElement
+  createCategoryAction.type = 'button'
+  createCategoryAction.setAttribute('aria-expanded', 'false')
+  const createCategoryForm = el('div', { className: 'venue-form-row venue-menu-create-category' })
+  createCategoryForm.id = 'venue-menu-create-category-form'
+  createCategoryForm.hidden = true
+  createCategoryAction.setAttribute('aria-controls', createCategoryForm.id)
   const createCategoryInput = document.createElement('input')
   createCategoryInput.className = 'venue-input'
   createCategoryInput.placeholder = 'Новая категория'
+  createCategoryInput.setAttribute('aria-label', 'Название новой категории')
   const createCategoryButton = el('button', { text: 'Добавить' }) as HTMLButtonElement
-  append(createRow, createCategoryInput, createCategoryButton)
-  append(header, title, createRow)
+  append(createCategoryForm, createCategoryInput, createCategoryButton)
+
+  const categories = el('div', { className: 'venue-menu-categories' })
+  append(editingBody, createCategoryAction, createCategoryForm, categories)
+  append(editingDetails, editingSummary, editingBody)
 
   const status = el('p', { className: 'status', text: '' })
 
@@ -215,10 +324,9 @@ function buildMenuDom(root: HTMLDivElement, canShiftCheck: boolean): MenuRefs {
   const errorDetails = el('div')
   append(error, errorTitle, errorMessage, errorActions, errorDetails)
 
-  const categories = el('div', { className: 'venue-menu-categories' })
   const shiftCheck = canShiftCheck ? buildShiftCheckDom() : null
 
-  append(wrapper, header, status, error, shiftCheck?.details, categories)
+  append(wrapper, title, status, error, editingDetails, shiftCheck?.details)
   root.replaceChildren(wrapper)
 
   return {
@@ -228,7 +336,12 @@ function buildMenuDom(root: HTMLDivElement, canShiftCheck: boolean): MenuRefs {
     errorMessage,
     errorActions,
     errorDetails,
+    editingDetails,
+    editingCategoryCount,
+    editingItemCount,
     categories,
+    createCategoryAction,
+    createCategoryForm,
     createCategoryInput,
     createCategoryButton,
     shiftCheck
@@ -478,7 +591,9 @@ function renderCategoryCard(
   category: VenueMenuCategoryDto,
   canManage: boolean,
   canManageAvailability: boolean,
+  expanded: boolean,
   handlers: {
+    onExpandedChange: (categoryId: number, expanded: boolean) => void
     onRename: (category: VenueMenuCategoryDto) => void
     onDelete: (category: VenueMenuCategoryDto) => void
     onMoveCategory: (category: VenueMenuCategoryDto, direction: 'up' | 'down') => void
@@ -494,9 +609,22 @@ function renderCategoryCard(
     onSetOptionAvailability: (option: VenueMenuOptionDto, isAvailable: boolean) => void
   }
 ) {
-  const card = el('div', { className: 'card venue-menu-category' })
-  const header = el('div', { className: 'card-header' })
-  const title = el('h3', { text: category.name })
+  const card = el('details', { className: 'venue-menu-category' })
+  card.dataset.categoryId = String(category.id)
+  card.open = expanded
+  card.addEventListener('toggle', () => handlers.onExpandedChange(category.id, card.open))
+  const summary = el('summary', { className: 'venue-menu-category-summary' })
+  const title = el('span', { className: 'venue-menu-category-title', text: category.name })
+  title.setAttribute('role', 'heading')
+  title.setAttribute('aria-level', '3')
+  const itemCount = el('span', {
+    className: 'venue-menu-category-count',
+    text: `Позиции: ${category.items.length}`
+  })
+  append(summary, title, itemCount)
+
+  const body = el('div', { className: 'venue-menu-category-body' })
+  const header = el('div', { className: 'venue-menu-category-toolbar' })
   const controls = el('div', { className: 'venue-inline-actions' })
   const renameButton = el('button', { className: 'button-small', text: 'Переименовать' }) as HTMLButtonElement
   const deleteButton = el('button', { className: 'button-small button-secondary', text: 'Удалить' }) as HTMLButtonElement
@@ -510,9 +638,7 @@ function renderCategoryCard(
 
   if (canManage) {
     append(controls, renameButton, upButton, downButton, deleteButton)
-    append(header, title, controls)
-  } else {
-    append(header, title)
+    header.appendChild(controls)
   }
 
   const list = el('div', { className: 'venue-menu-items' })
@@ -563,10 +689,14 @@ function renderCategoryCard(
   })
   append(createRow, nameInput, priceInput, currencySelect, createButton)
 
-  append(card, header, list)
   if (canManage) {
-    card.appendChild(createRow)
+    body.appendChild(header)
   }
+  body.appendChild(list)
+  if (canManage) {
+    body.appendChild(createRow)
+  }
+  append(card, summary, body)
   return card
 }
 
@@ -588,8 +718,10 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
   let menu: VenueMenuCategoryDto[] = []
   let shiftFilter: ShiftCheckFilter = 'all'
   let shiftSearch = ''
+  let shiftMassMode = false
   let shiftConfirming = false
   let shiftNeedsRefresh = false
+  const expandedCategoryIds = new Set<number>()
   const draftItemAvailability = new Map<number, boolean>()
   const draftOptionAvailability = new Map<number, { itemId: number; isAvailable: boolean }>()
   const selectedItemIds = new Set<number>()
@@ -597,7 +729,8 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
   let filteredItemIds: number[] = []
   let filteredOptionIds: number[] = []
   if (!canManage) {
-    refs.createCategoryInput.closest('.venue-form-row')?.remove()
+    refs.createCategoryAction.remove()
+    refs.createCategoryForm.remove()
   }
 
   const setStatus = (text: string) => {
@@ -674,6 +807,7 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
     selectedOptionIds.clear()
     filteredItemIds = []
     filteredOptionIds = []
+    shiftMassMode = false
     shiftFilter = 'all'
     shiftSearch = ''
     if (refs.shiftCheck) {
@@ -746,23 +880,27 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
     isAvailable: boolean,
     onChange: (checked: boolean) => void
   ) => {
-    const label = el('label', { className: 'venue-shift-check-availability' })
-    const input = document.createElement('input')
-    input.type = 'checkbox'
-    input.checked = isAvailable
-    input.setAttribute('aria-label', labelText)
-    input.addEventListener('change', () => onChange(input.checked))
-    const text = el('span', { text: isAvailable ? 'Есть в наличии' : 'Нет в наличии' })
-    append(label, input, text)
-    return label
+    const stateText = isAvailable ? 'В наличии' : 'Нет в наличии'
+    const button = el('button', {
+      className: 'venue-shift-check-availability-switch',
+      text: stateText
+    }) as HTMLButtonElement
+    button.type = 'button'
+    button.setAttribute('role', 'switch')
+    button.setAttribute('aria-checked', String(isAvailable))
+    button.setAttribute('aria-label', `${labelText}: ${stateText}`)
+    button.addEventListener('click', () => onChange(!isAvailable))
+    return button
   }
 
-  const renderShiftCheck = () => {
+  const renderShiftCheck = (focusSelector?: string) => {
     const shiftRefs = refs.shiftCheck
     if (!shiftRefs) return
 
     Object.entries(shiftRefs.filterButtons).forEach(([filter, button]) => {
-      button.dataset.active = String(filter === shiftFilter)
+      const isActive = filter === shiftFilter
+      button.dataset.active = String(isActive)
+      button.setAttribute('aria-pressed', String(isActive))
     })
 
     let itemMadeAvailable = 0
@@ -781,6 +919,18 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
     shiftRefs.itemMadeUnavailable.textContent = String(itemMadeUnavailable)
     shiftRefs.optionMadeAvailable.textContent = String(optionMadeAvailable)
     shiftRefs.optionMadeUnavailable.textContent = String(optionMadeUnavailable)
+
+    const allItems = menu.flatMap((category) => category.items)
+    const allOptions = allItems.flatMap((item) => getScopedOptions(item))
+    const dirtyCount = draftItemAvailability.size + draftOptionAvailability.size
+    shiftRefs.availableItemCount.textContent = String(allItems.filter(effectiveItemAvailability).length)
+    shiftRefs.totalItemCount.textContent = String(allItems.length)
+    shiftRefs.availableOptionCount.textContent = String(allOptions.filter(effectiveOptionAvailability).length)
+    shiftRefs.totalOptionCount.textContent = String(allOptions.length)
+    shiftRefs.dirtyCount.textContent = String(dirtyCount)
+    shiftRefs.dirtySummary.hidden = dirtyCount === 0
+    shiftRefs.massModeButton.hidden = shiftMassMode
+    shiftRefs.bulkToolbar.hidden = !shiftMassMode
 
     const normalizedQuery = shiftSearch.trim().toLocaleLowerCase('ru-RU')
     const visibleItemIds: number[] = []
@@ -810,25 +960,69 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
       const categoryActions = el('div', { className: 'venue-inline-actions' })
       const categoryAvailable = el('button', {
         className: 'button-small',
-        text: 'Позиции категории доступны'
+        text: 'Все позиции в наличии'
       }) as HTMLButtonElement
       const categoryUnavailable = el('button', {
         className: 'button-small button-secondary',
-        text: 'Позиции категории недоступны'
+        text: 'Все позиции недоступны'
       }) as HTMLButtonElement
+      const categoryOptionsAvailable = el('button', {
+        className: 'button-small',
+        text: 'Все опции в наличии'
+      }) as HTMLButtonElement
+      const categoryOptionsUnavailable = el('button', {
+        className: 'button-small button-secondary',
+        text: 'Все опции недоступны'
+      }) as HTMLButtonElement
+      categoryAvailable.dataset.shiftAction = 'items-available'
+      categoryUnavailable.dataset.shiftAction = 'items-unavailable'
+      categoryOptionsAvailable.dataset.shiftAction = 'options-available'
+      categoryOptionsUnavailable.dataset.shiftAction = 'options-unavailable'
       categoryAvailable.disabled = shiftConfirming || shiftNeedsRefresh || totalItems === 0
       categoryUnavailable.disabled = shiftConfirming || shiftNeedsRefresh || totalItems === 0
+      categoryOptionsAvailable.disabled =
+        shiftConfirming || shiftNeedsRefresh || allCategoryOptions.length === 0
+      categoryOptionsUnavailable.disabled =
+        shiftConfirming || shiftNeedsRefresh || allCategoryOptions.length === 0
       categoryAvailable.addEventListener('click', () => {
         category.items.forEach((item) => setItemDraft(item, true))
         shiftRefs.status.textContent = ''
-        renderShiftCheck()
+        renderShiftCheck(
+          `.venue-shift-check-category[data-category-id="${category.id}"] ` +
+            '[data-shift-action="items-available"]'
+        )
       })
       categoryUnavailable.addEventListener('click', () => {
         category.items.forEach((item) => setItemDraft(item, false))
         shiftRefs.status.textContent = ''
-        renderShiftCheck()
+        renderShiftCheck(
+          `.venue-shift-check-category[data-category-id="${category.id}"] ` +
+            '[data-shift-action="items-unavailable"]'
+        )
       })
-      append(categoryActions, categoryAvailable, categoryUnavailable)
+      categoryOptionsAvailable.addEventListener('click', () => {
+        allCategoryOptions.forEach((option) => setOptionDraft(option, true))
+        shiftRefs.status.textContent = ''
+        renderShiftCheck(
+          `.venue-shift-check-category[data-category-id="${category.id}"] ` +
+            '[data-shift-action="options-available"]'
+        )
+      })
+      categoryOptionsUnavailable.addEventListener('click', () => {
+        allCategoryOptions.forEach((option) => setOptionDraft(option, false))
+        shiftRefs.status.textContent = ''
+        renderShiftCheck(
+          `.venue-shift-check-category[data-category-id="${category.id}"] ` +
+            '[data-shift-action="options-unavailable"]'
+        )
+      })
+      append(
+        categoryActions,
+        categoryAvailable,
+        categoryUnavailable,
+        categoryOptionsAvailable,
+        categoryOptionsUnavailable
+      )
       append(categoryHeader, categoryHeading, categoryActions)
 
       const categoryItems = el('div', { className: 'venue-shift-check-items' })
@@ -856,35 +1050,47 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
         if (!itemVisible && visibleOptions.length === 0) return
 
         const itemGroup = el('div', { className: 'venue-shift-check-item-group' })
+        itemGroup.dataset.itemId = String(item.id)
         if (itemVisible) {
           visibleItemIds.push(item.id)
           const itemRow = el('div', { className: 'venue-shift-check-item' })
           itemRow.dataset.itemId = String(item.id)
-          const selection = buildShiftSelection(
-            `Выбрать позицию: ${item.name}`,
-            selectedItemIds.has(item.id),
-            (checked) => {
-              if (checked) selectedItemIds.add(item.id)
-              else selectedItemIds.delete(item.id)
-              renderShiftCheck()
-            }
-          )
-          selection.querySelector('input')!.disabled = shiftConfirming
+          itemRow.dataset.massMode = String(shiftMassMode)
+          itemRow.dataset.selected = String(shiftMassMode && selectedItemIds.has(item.id))
+          itemRow.dataset.dirty = String(itemIsDirty)
+          const selection = shiftMassMode
+            ? buildShiftSelection(
+                `Выбрать ${item.name}`,
+                selectedItemIds.has(item.id),
+                (checked) => {
+                  if (checked) selectedItemIds.add(item.id)
+                  else selectedItemIds.delete(item.id)
+                  renderShiftCheck(
+                    `.venue-shift-check-item[data-item-id="${item.id}"] ` +
+                      '.venue-shift-check-select input'
+                  )
+                }
+              )
+            : null
+          const selectionInput = selection?.querySelector('input')
+          if (selectionInput) selectionInput.disabled = shiftConfirming
           const itemInfo = el('div', { className: 'venue-shift-check-row-info' })
           itemInfo.appendChild(el('strong', { text: item.name }))
           if (itemIsDirty) {
-            itemInfo.appendChild(el('span', { className: 'menu-item-badge', text: 'Несохранено' }))
+            itemInfo.appendChild(el('span', { className: 'menu-item-badge', text: 'Изменено' }))
           }
           const availability = buildShiftAvailabilityToggle(
-            `Позиция доступна: ${item.name}`,
+            `Позиция ${item.name}`,
             itemIsAvailable,
             (checked) => {
               setItemDraft(item, checked)
               shiftRefs.status.textContent = ''
-              renderShiftCheck()
+              renderShiftCheck(
+                `.venue-shift-check-item[data-item-id="${item.id}"] [role="switch"]`
+              )
             }
           )
-          availability.querySelector('input')!.disabled = shiftConfirming || shiftNeedsRefresh
+          availability.disabled = shiftConfirming || shiftNeedsRefresh
           append(itemRow, selection, itemInfo, availability)
           itemGroup.appendChild(itemRow)
         } else {
@@ -899,24 +1105,32 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
           const optionsActions = el('div', { className: 'venue-inline-actions' })
           const optionsAvailable = el('button', {
             className: 'button-small',
-            text: 'Опции позиции доступны'
+            text: 'Все опции позиции в наличии'
           }) as HTMLButtonElement
           const optionsUnavailable = el('button', {
             className: 'button-small button-secondary',
-            text: 'Опции позиции недоступны'
+            text: 'Все опции позиции недоступны'
           }) as HTMLButtonElement
+          optionsAvailable.dataset.shiftAction = 'item-options-available'
+          optionsUnavailable.dataset.shiftAction = 'item-options-unavailable'
           const scopedOptions = getScopedOptions(item)
           optionsAvailable.disabled = shiftConfirming || shiftNeedsRefresh || scopedOptions.length === 0
           optionsUnavailable.disabled = shiftConfirming || shiftNeedsRefresh || scopedOptions.length === 0
           optionsAvailable.addEventListener('click', () => {
             scopedOptions.forEach((option) => setOptionDraft(option, true))
             shiftRefs.status.textContent = ''
-            renderShiftCheck()
+            renderShiftCheck(
+              `.venue-shift-check-item-group[data-item-id="${item.id}"] ` +
+                '[data-shift-action="item-options-available"]'
+            )
           })
           optionsUnavailable.addEventListener('click', () => {
             scopedOptions.forEach((option) => setOptionDraft(option, false))
             shiftRefs.status.textContent = ''
-            renderShiftCheck()
+            renderShiftCheck(
+              `.venue-shift-check-item-group[data-item-id="${item.id}"] ` +
+                '[data-shift-action="item-options-unavailable"]'
+            )
           })
           append(optionsActions, optionsAvailable, optionsUnavailable)
           append(optionsHeader, optionsTitle, optionsActions)
@@ -926,31 +1140,42 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
             visibleOptionIds.push(option.id)
             const optionRow = el('div', { className: 'venue-shift-check-option' })
             optionRow.dataset.optionId = String(option.id)
-            const selection = buildShiftSelection(
-              `Выбрать опцию: ${option.name}`,
-              selectedOptionIds.has(option.id),
-              (checked) => {
-                if (checked) selectedOptionIds.add(option.id)
-                else selectedOptionIds.delete(option.id)
-                renderShiftCheck()
-              }
-            )
-            selection.querySelector('input')!.disabled = shiftConfirming
+            optionRow.dataset.massMode = String(shiftMassMode)
+            optionRow.dataset.selected = String(shiftMassMode && selectedOptionIds.has(option.id))
+            optionRow.dataset.dirty = String(draftOptionAvailability.has(option.id))
+            const selection = shiftMassMode
+              ? buildShiftSelection(
+                  `Выбрать ${option.name}`,
+                  selectedOptionIds.has(option.id),
+                  (checked) => {
+                    if (checked) selectedOptionIds.add(option.id)
+                    else selectedOptionIds.delete(option.id)
+                    renderShiftCheck(
+                      `.venue-shift-check-option[data-option-id="${option.id}"] ` +
+                        '.venue-shift-check-select input'
+                    )
+                  }
+                )
+              : null
+            const selectionInput = selection?.querySelector('input')
+            if (selectionInput) selectionInput.disabled = shiftConfirming
             const optionInfo = el('div', { className: 'venue-shift-check-row-info' })
             optionInfo.appendChild(el('span', { text: option.name }))
             if (draftOptionAvailability.has(option.id)) {
-              optionInfo.appendChild(el('span', { className: 'menu-item-badge', text: 'Несохранено' }))
+              optionInfo.appendChild(el('span', { className: 'menu-item-badge', text: 'Изменено' }))
             }
             const availability = buildShiftAvailabilityToggle(
-              `Опция доступна: ${option.name}`,
+              `Опция ${option.name}`,
               effectiveOptionAvailability(option),
               (checked) => {
                 setOptionDraft(option, checked)
                 shiftRefs.status.textContent = ''
-                renderShiftCheck()
+                renderShiftCheck(
+                  `.venue-shift-check-option[data-option-id="${option.id}"] [role="switch"]`
+                )
               }
             )
-            availability.querySelector('input')!.disabled = shiftConfirming || shiftNeedsRefresh
+            availability.disabled = shiftConfirming || shiftNeedsRefresh
             append(optionRow, selection, optionInfo, availability)
             optionsList.appendChild(optionRow)
           })
@@ -982,18 +1207,37 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
       : 'Выбрать все отфильтрованные'
     shiftRefs.selectFilteredButton.disabled =
       shiftConfirming || shiftNeedsRefresh || visibleItemIds.length + visibleOptionIds.length === 0
-    const hasSelection = selectedItemIds.size + selectedOptionIds.size > 0
+    const selectionCount = selectedItemIds.size + selectedOptionIds.size
+    const hasSelection = selectionCount > 0
+    shiftRefs.selectedCount.textContent = `Выбрано: ${selectionCount}`
+    shiftRefs.massModeButton.disabled = shiftConfirming || shiftNeedsRefresh
     shiftRefs.selectedAvailableButton.disabled = shiftConfirming || shiftNeedsRefresh || !hasSelection
     shiftRefs.selectedUnavailableButton.disabled = shiftConfirming || shiftNeedsRefresh || !hasSelection
+    shiftRefs.clearSelectionButton.disabled = shiftConfirming || !hasSelection
+    shiftRefs.exitMassModeButton.disabled = shiftConfirming
     shiftRefs.confirmButton.disabled = shiftConfirming || shiftNeedsRefresh
     shiftRefs.cancelButton.disabled = shiftConfirming
     shiftRefs.confirmButton.textContent = shiftConfirming
       ? 'Подтверждаем…'
       : 'Подтвердить проверку'
+
+    if (focusSelector) {
+      const focusTarget = shiftRefs.details.querySelector<HTMLElement>(focusSelector)
+      if (focusTarget) focusTarget.focus()
+      else shiftRefs.searchInput.focus()
+    }
   }
 
   const renderMenu = () => {
     refs.categories.replaceChildren()
+    refs.editingCategoryCount.textContent = String(menu.length)
+    refs.editingItemCount.textContent = String(
+      menu.reduce((total, category) => total + category.items.length, 0)
+    )
+    const categoryIds = new Set(menu.map((category) => category.id))
+    for (const categoryId of expandedCategoryIds) {
+      if (!categoryIds.has(categoryId)) expandedCategoryIds.delete(categoryId)
+    }
     if (!menu.length) {
       refs.categories.appendChild(el('p', { className: 'venue-empty', text: 'Категории не найдены.' }))
       renderShiftCheck()
@@ -1001,7 +1245,16 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
     }
     menu.forEach((category) => {
       refs.categories.appendChild(
-        renderCategoryCard(category, canManage, canManageAvailability, {
+        renderCategoryCard(
+          category,
+          canManage,
+          canManageAvailability,
+          expandedCategoryIds.has(category.id),
+          {
+          onExpandedChange: (categoryId, expanded) => {
+            if (expanded) expandedCategoryIds.add(categoryId)
+            else expandedCategoryIds.delete(categoryId)
+          },
           onRename: async (target) => {
             const nextName = window.prompt('Новое имя категории', target.name)
             if (!nextName) return
@@ -1203,7 +1456,8 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
             showToast(isAvailable ? copy.enabledToast : copy.disabledToast)
             void loadMenu()
           }
-        })
+          }
+        )
       )
     })
     renderShiftCheck()
@@ -1422,14 +1676,44 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
       return
     }
     refs.createCategoryInput.value = ''
+    refs.createCategoryForm.hidden = true
+    refs.createCategoryAction.setAttribute('aria-expanded', 'false')
     showToast('Категория добавлена')
     void loadMenu()
   }
 
   const disposables: Array<() => void> = []
-  disposables.push(on(refs.createCategoryButton, 'click', () => void createCategory()))
+  if (canManage) {
+    disposables.push(
+      on(refs.createCategoryAction, 'click', () => {
+        refs.createCategoryForm.hidden = !refs.createCategoryForm.hidden
+        refs.createCategoryAction.setAttribute(
+          'aria-expanded',
+          String(!refs.createCategoryForm.hidden)
+        )
+        if (!refs.createCategoryForm.hidden) refs.createCategoryInput.focus()
+      })
+    )
+    disposables.push(on(refs.createCategoryButton, 'click', () => void createCategory()))
+  }
   if (refs.shiftCheck) {
     const shiftRefs = refs.shiftCheck
+    const editingSummary = refs.editingDetails.querySelector<HTMLElement>(':scope > summary')
+    const shiftSummary = shiftRefs.details.querySelector<HTMLElement>(':scope > summary')
+    if (editingSummary) {
+      disposables.push(
+        on(editingSummary, 'click', () => {
+          if (!refs.editingDetails.open) shiftRefs.details.open = false
+        })
+      )
+    }
+    if (shiftSummary) {
+      disposables.push(
+        on(shiftSummary, 'click', () => {
+          if (!shiftRefs.details.open) refs.editingDetails.open = false
+        })
+      )
+    }
     disposables.push(
       on(shiftRefs.searchInput, 'input', () => {
         shiftSearch = shiftRefs.searchInput.value
@@ -1445,6 +1729,13 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
       )
     })
     disposables.push(
+      on(shiftRefs.massModeButton, 'click', () => {
+        shiftMassMode = true
+        renderShiftCheck()
+        shiftRefs.exitMassModeButton.focus()
+      })
+    )
+    disposables.push(
       on(shiftRefs.selectFilteredButton, 'click', () => {
         const allSelected =
           filteredItemIds.length + filteredOptionIds.length > 0 &&
@@ -1459,6 +1750,23 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
           else selectedOptionIds.add(optionId)
         })
         renderShiftCheck()
+      })
+    )
+    disposables.push(
+      on(shiftRefs.clearSelectionButton, 'click', () => {
+        selectedItemIds.clear()
+        selectedOptionIds.clear()
+        renderShiftCheck()
+        shiftRefs.exitMassModeButton.focus()
+      })
+    )
+    disposables.push(
+      on(shiftRefs.exitMassModeButton, 'click', () => {
+        selectedItemIds.clear()
+        selectedOptionIds.clear()
+        shiftMassMode = false
+        renderShiftCheck()
+        shiftRefs.massModeButton.focus()
       })
     )
     disposables.push(
