@@ -936,6 +936,75 @@ class GuestOrderRoutesTest {
         }
 
     @Test
+    fun `cart preview rejects item and selected option that became unavailable without writes`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-order-stale-availability-preview")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 33)
+            seedTableToken(jdbcUrl, tableId, "stale-availability-preview-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val categoryId = seedMenuCategory(jdbcUrl, venueId)
+            val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Кальян", priceMinor = 100_000)
+            val optionId =
+                seedMenuOption(
+                    jdbcUrl = jdbcUrl,
+                    venueId = venueId,
+                    itemId = itemId,
+                    name = "Ягодный микс",
+                )
+            val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
+            val token = issueToken(config)
+            val request =
+                CartPreviewRequest(
+                    tableToken = "stale-availability-preview-token",
+                    tableSessionId = tableSessionId,
+                    tabId = personalTabId,
+                    items =
+                        listOf(
+                            AddBatchItemDto(
+                                itemId = itemId,
+                                qty = 1,
+                                selectedOptionId = optionId,
+                            ),
+                        ),
+                )
+
+            suspend fun postPreview() =
+                client.post("/api/guest/order/preview") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(json.encodeToString(CartPreviewRequest.serializer(), request))
+                }
+
+            val availableResponse = postPreview()
+            assertEquals(HttpStatusCode.OK, availableResponse.status)
+
+            setMenuItemAvailability(jdbcUrl, itemId, isAvailable = false)
+            val unavailableItemResponse = postPreview()
+            assertEquals(HttpStatusCode.BadRequest, unavailableItemResponse.status)
+            assertApiErrorEnvelope(unavailableItemResponse, ApiErrorCodes.INVALID_INPUT)
+
+            setMenuItemAvailability(jdbcUrl, itemId, isAvailable = true)
+            setMenuOptionAvailability(jdbcUrl, optionId, isAvailable = false)
+            val unavailableOptionResponse = postPreview()
+            assertEquals(HttpStatusCode.BadRequest, unavailableOptionResponse.status)
+            assertApiErrorEnvelope(unavailableOptionResponse, ApiErrorCodes.INVALID_INPUT)
+
+            assertEquals(0, countRows(jdbcUrl, "orders"))
+            assertEquals(0, countRows(jdbcUrl, "order_batches"))
+            assertEquals(0, countRows(jdbcUrl, "order_batch_items"))
+            assertEquals(0, countRows(jdbcUrl, "order_batch_item_options"))
+        }
+
+    @Test
     fun `cart preview keeps same item with different selected options as separate lines`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("guest-order-option-preview")

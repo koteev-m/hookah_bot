@@ -3,6 +3,7 @@ package com.hookah.platform.backend.miniapp.venue.menu
 import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.NotFoundException
+import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
 import com.hookah.platform.backend.miniapp.venue.VenuePermission
 import com.hookah.platform.backend.miniapp.venue.VenuePermissions
 import com.hookah.platform.backend.miniapp.venue.requireUserId
@@ -18,14 +19,26 @@ import io.ktor.server.routing.get
 import io.ktor.server.routing.patch
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import java.util.Locale
 
 private const val NAME_MAX_LENGTH = 120
 private val allowedCurrencies = setOf("RUB")
+private val strictShiftCheckJson = Json { ignoreUnknownKeys = false }
+private val shiftCheckRequestFields = setOf("items", "options")
+private val shiftCheckItemFields =
+    setOf("itemId", "expectedIsAvailable", "desiredIsAvailable")
+private val shiftCheckOptionFields =
+    setOf("optionId", "itemId", "expectedIsAvailable", "desiredIsAvailable")
 
 fun Route.venueMenuRoutes(
     venueAccessRepository: VenueAccessRepository,
     venueMenuRepository: VenueMenuRepository,
+    auditLogRepository: AuditLogRepository,
 ) {
     route("/venue") {
         get("/menu") {
@@ -206,6 +219,33 @@ fun Route.venueMenuRoutes(
             call.respond(updated.toDto())
         }
 
+        post("/menu/shift-check") {
+            val userId = call.requireUserId()
+            val venueId = call.requireVenueId()
+            ensureMenuShiftCheck(venueAccessRepository, userId, venueId)
+            val payload = parseShiftCheckRequest(call.receive<JsonObject>())
+            val result =
+                venueMenuRepository.completeShiftCheck(
+                    venueId = venueId,
+                    actorUserId = userId,
+                    itemChanges = payload.items,
+                    optionChanges = payload.options,
+                    auditLogRepository = auditLogRepository,
+                )
+            call.respond(
+                MenuShiftCheckResponse(
+                    venueId = venueId,
+                    categories = result.categories.map { it.toDto() },
+                    changedItemCount = result.changedItemCount,
+                    changedOptionCount = result.changedOptionCount,
+                    reviewedItemCount = result.reviewedItemCount,
+                    reviewedOptionCount = result.reviewedOptionCount,
+                    availableItemCount = result.availableItemCount,
+                    availableOptionCount = result.availableOptionCount,
+                ),
+            )
+        }
+
         post("/menu/items/{id}/base-flavor-profiles") {
             val userId = call.requireUserId()
             val venueId = call.requireVenueId()
@@ -352,6 +392,56 @@ private suspend fun ensureMenuAvailabilityManage(
     val permissions = VenuePermissions.forRole(role)
     if (!permissions.contains(VenuePermission.MENU_AVAILABILITY_MANAGE)) {
         throw ForbiddenException()
+    }
+}
+
+private suspend fun ensureMenuShiftCheck(
+    venueAccessRepository: VenueAccessRepository,
+    userId: Long,
+    venueId: Long,
+) {
+    val role = resolveVenueRole(venueAccessRepository, userId, venueId)
+    val permissions = VenuePermissions.forRole(role)
+    if (!permissions.contains(VenuePermission.MENU_SHIFT_CHECK)) {
+        throw ForbiddenException()
+    }
+}
+
+private fun parseShiftCheckRequest(payload: JsonObject): MenuShiftCheckRequest {
+    rejectUnknownShiftCheckFields(payload, shiftCheckRequestFields)
+    validateShiftCheckRows(payload["items"], shiftCheckItemFields)
+    validateShiftCheckRows(payload["options"], shiftCheckOptionFields)
+    return try {
+        strictShiftCheckJson.decodeFromJsonElement(MenuShiftCheckRequest.serializer(), payload)
+    } catch (_: SerializationException) {
+        throw InvalidInputException("Некорректный запрос проверки меню.")
+    }
+}
+
+private fun validateShiftCheckRows(
+    element: JsonElement?,
+    allowedFields: Set<String>,
+) {
+    if (element == null) {
+        return
+    }
+    val rows =
+        element as? JsonArray
+            ?: throw InvalidInputException("Некорректный запрос проверки меню.")
+    rows.forEach { row ->
+        val objectRow =
+            row as? JsonObject
+                ?: throw InvalidInputException("Некорректный запрос проверки меню.")
+        rejectUnknownShiftCheckFields(objectRow, allowedFields)
+    }
+}
+
+private fun rejectUnknownShiftCheckFields(
+    payload: JsonObject,
+    allowedFields: Set<String>,
+) {
+    if (payload.keys.any { it !in allowedFields }) {
+        throw InvalidInputException("Некорректный запрос проверки меню.")
     }
 }
 

@@ -4,14 +4,21 @@ import com.hookah.platform.backend.api.ApiErrorCodes
 import com.hookah.platform.backend.miniapp.guest.api.MenuResponse
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
+import com.hookah.platform.backend.miniapp.venue.menu.MENU_SHIFT_CHECK_COMPLETED_AUDIT_ACTION
+import com.hookah.platform.backend.miniapp.venue.menu.MenuShiftCheckResponse
+import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuItem
+import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuOption
+import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepository
 import com.hookah.platform.backend.module
 import com.hookah.platform.backend.test.assertApiErrorEnvelope
+import io.ktor.client.HttpClient
 import io.ktor.client.request.delete
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
 import io.ktor.client.request.patch
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
+import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
@@ -20,6 +27,11 @@ import io.ktor.server.config.MapApplicationConfig
 import io.ktor.server.testing.testApplication
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonPrimitive
+import org.h2.jdbcx.JdbcDataSource
 import java.sql.DriverManager
 import java.sql.Statement
 import java.util.UUID
@@ -1072,6 +1084,398 @@ class VenueMenuRoutesTest {
             assertApiErrorEnvelope(deleteOptionResponse, ApiErrorCodes.FORBIDDEN)
         }
 
+    @Test
+    fun `owner and manager can complete shift check while staff and foreign users are denied`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("menu-shift-check-rbac")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenueWithRole(jdbcUrl, OWNER_USER_ID, "OWNER")
+            seedVenueWithRole(jdbcUrl, MANAGER_USER_ID, "MANAGER", venueId)
+            seedVenueWithRole(jdbcUrl, STAFF_USER_ID, "STAFF", venueId)
+            seedVenueWithRole(jdbcUrl, FOREIGN_USER_ID, "OWNER")
+
+            val ownerResponse =
+                postShiftCheck(
+                    client = client,
+                    token = issueToken(config, OWNER_USER_ID),
+                    venueId = venueId,
+                    body = """{"items":[],"options":[]}""",
+                )
+            assertEquals(HttpStatusCode.OK, ownerResponse.status)
+            val ownerResult =
+                json.decodeFromString(MenuShiftCheckResponse.serializer(), ownerResponse.bodyAsText())
+            assertEquals(0, ownerResult.changedItemCount)
+            assertEquals(0, ownerResult.changedOptionCount)
+
+            val managerResponse =
+                postShiftCheck(
+                    client = client,
+                    token = issueToken(config, MANAGER_USER_ID),
+                    venueId = venueId,
+                    body = """{"items":[],"options":[]}""",
+                )
+            assertEquals(HttpStatusCode.OK, managerResponse.status)
+
+            val staffResponse =
+                postShiftCheck(
+                    client = client,
+                    token = issueToken(config, STAFF_USER_ID),
+                    venueId = venueId,
+                    body = """{"items":[],"options":[]}""",
+                )
+            assertEquals(HttpStatusCode.Forbidden, staffResponse.status)
+            assertApiErrorEnvelope(staffResponse, ApiErrorCodes.FORBIDDEN)
+
+            val foreignResponse =
+                postShiftCheck(
+                    client = client,
+                    token = issueToken(config, FOREIGN_USER_ID),
+                    venueId = venueId,
+                    body = """{"items":[],"options":[]}""",
+                )
+            assertEquals(HttpStatusCode.Forbidden, foreignResponse.status)
+            assertApiErrorEnvelope(foreignResponse, ApiErrorCodes.FORBIDDEN)
+
+            val audits = shiftCheckAuditPayloads(jdbcUrl)
+            assertEquals(2, audits.size)
+            assertTrue(audits.all { it.getValue("changedItemCount").jsonPrimitive.int == 0 })
+            assertTrue(audits.all { it.getValue("changedOptionCount").jsonPrimitive.int == 0 })
+        }
+
+    @Test
+    fun `mixed shift check uses one batch updates guest menu and writes one safe audit`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("menu-shift-check-success")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenueWithRole(jdbcUrl, MANAGER_USER_ID, "MANAGER")
+            val token = issueToken(config, MANAGER_USER_ID)
+            val fixture = createShiftCheckFixture(jdbcUrl, venueId)
+            val response =
+                postShiftCheck(
+                    client = client,
+                    token = token,
+                    venueId = venueId,
+                    body =
+                        """
+                        {
+                          "items": [{
+                            "itemId": ${fixture.firstItem.id},
+                            "expectedIsAvailable": true,
+                            "desiredIsAvailable": false
+                          }],
+                          "options": [{
+                            "optionId": ${fixture.secondOption.id},
+                            "itemId": ${fixture.secondItem.id},
+                            "expectedIsAvailable": true,
+                            "desiredIsAvailable": false
+                          }]
+                        }
+                        """.trimIndent(),
+                )
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            val result = json.decodeFromString(MenuShiftCheckResponse.serializer(), response.bodyAsText())
+            assertEquals(venueId, result.venueId)
+            assertEquals(1, result.changedItemCount)
+            assertEquals(1, result.changedOptionCount)
+            assertEquals(2, result.reviewedItemCount)
+            assertEquals(2, result.reviewedOptionCount)
+            assertEquals(1, result.availableItemCount)
+            assertEquals(1, result.availableOptionCount)
+            val savedItems = result.categories.flatMap { it.items }.associateBy { it.id }
+            assertFalse(savedItems.getValue(fixture.firstItem.id).isAvailable)
+            assertFalse(
+                savedItems
+                    .getValue(fixture.secondItem.id)
+                    .options
+                    .single { it.id == fixture.secondOption.id }
+                    .isAvailable,
+            )
+
+            val guestResponse =
+                client.get("/api/guest/venue/$venueId/menu") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.OK, guestResponse.status)
+            val guestMenu = json.decodeFromString(MenuResponse.serializer(), guestResponse.bodyAsText())
+            val guestItems = guestMenu.categories.flatMap { it.items }
+            assertTrue(guestItems.none { it.id == fixture.firstItem.id })
+            val remainingGuestItem = guestItems.single { it.id == fixture.secondItem.id }
+            assertTrue(remainingGuestItem.options.none { it.id == fixture.secondOption.id })
+
+            val audit = shiftCheckAuditPayloads(jdbcUrl).single()
+            assertEquals(
+                setOf(
+                    "actorUserId",
+                    "venueId",
+                    "changedItemCount",
+                    "changedOptionCount",
+                    "itemsMadeAvailable",
+                    "itemsMadeUnavailable",
+                    "optionsMadeAvailable",
+                    "optionsMadeUnavailable",
+                    "reviewedItemCount",
+                    "reviewedOptionCount",
+                ),
+                audit.keys,
+            )
+            assertEquals(1, audit.getValue("changedItemCount").jsonPrimitive.int)
+            assertEquals(1, audit.getValue("changedOptionCount").jsonPrimitive.int)
+            assertEquals(
+                listOf(fixture.firstItem.id),
+                audit.getValue("itemsMadeUnavailable").jsonArray.map { it.jsonPrimitive.content.toLong() },
+            )
+            assertEquals(
+                listOf(fixture.secondOption.id),
+                audit.getValue("optionsMadeUnavailable").jsonArray.map { it.jsonPrimitive.content.toLong() },
+            )
+            assertFalse(audit.toString().contains(fixture.firstItem.name))
+            assertFalse(audit.toString().contains(fixture.secondOption.name))
+            assertFalse(audit.toString().contains("price", ignoreCase = true))
+            assertFalse(audit.toString().contains("telegram", ignoreCase = true))
+        }
+
+    @Test
+    fun `invalid shift check batches reject duplicates missing foreign mismatch oversize and stale atomically`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("menu-shift-check-invalid")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenueWithRole(jdbcUrl, MANAGER_USER_ID, "MANAGER")
+            val foreignVenueId = seedVenueWithRole(jdbcUrl, FOREIGN_USER_ID, "OWNER")
+            val token = issueToken(config, MANAGER_USER_ID)
+            val own = createShiftCheckFixture(jdbcUrl, venueId)
+            val foreign = createShiftCheckFixture(jdbcUrl, foreignVenueId)
+
+            suspend fun assertRejected(
+                body: String,
+                status: HttpStatusCode,
+                code: String,
+            ) {
+                val response = postShiftCheck(client, token, venueId, body)
+                assertEquals(status, response.status)
+                assertApiErrorEnvelope(response, code)
+                val savedResponse =
+                    client.get("/api/venue/menu?venueId=$venueId") {
+                        headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    }
+                assertEquals(HttpStatusCode.OK, savedResponse.status)
+                val saved = json.decodeFromString(VenueMenuResponse.serializer(), savedResponse.bodyAsText())
+                assertTrue(saved.categories.flatMap { it.items }.all { it.isAvailable })
+                assertTrue(
+                    saved.categories
+                        .flatMap { it.items }
+                        .flatMap { it.options }
+                        .all { it.isAvailable },
+                )
+                assertEquals(0, shiftCheckAuditPayloads(jdbcUrl).size)
+            }
+
+            assertRejected(
+                body =
+                    """
+                    {
+                      "items": [
+                        {
+                          "itemId": ${own.firstItem.id},
+                          "expectedIsAvailable": true,
+                          "desiredIsAvailable": false
+                        },
+                        {
+                          "itemId": ${own.firstItem.id},
+                          "expectedIsAvailable": true,
+                          "desiredIsAvailable": false
+                        }
+                      ],
+                      "options": []
+                    }
+                    """.trimIndent(),
+                status = HttpStatusCode.BadRequest,
+                code = ApiErrorCodes.INVALID_INPUT,
+            )
+
+            assertRejected(
+                body =
+                    """
+                    {
+                      "items": [],
+                      "options": [
+                        {
+                          "optionId": ${own.firstOption.id},
+                          "itemId": ${own.firstItem.id},
+                          "expectedIsAvailable": true,
+                          "desiredIsAvailable": false
+                        },
+                        {
+                          "optionId": ${own.firstOption.id},
+                          "itemId": ${own.firstItem.id},
+                          "expectedIsAvailable": true,
+                          "desiredIsAvailable": false
+                        }
+                      ]
+                    }
+                    """.trimIndent(),
+                status = HttpStatusCode.BadRequest,
+                code = ApiErrorCodes.INVALID_INPUT,
+            )
+
+            assertRejected(
+                body = """{"items":[],"options":[],"actorUserId":$MANAGER_USER_ID}""",
+                status = HttpStatusCode.BadRequest,
+                code = ApiErrorCodes.INVALID_INPUT,
+            )
+
+            assertRejected(
+                body =
+                    """
+                    {
+                      "items": [{
+                        "itemId": ${own.firstItem.id},
+                        "expectedIsAvailable": true,
+                        "desiredIsAvailable": false,
+                        "name": "Подмена названия"
+                      }],
+                      "options": []
+                    }
+                    """.trimIndent(),
+                status = HttpStatusCode.BadRequest,
+                code = ApiErrorCodes.INVALID_INPUT,
+            )
+
+            assertRejected(
+                body =
+                    """
+                    {
+                      "items": [],
+                      "options": [{
+                        "optionId": ${own.firstOption.id},
+                        "itemId": ${own.firstItem.id},
+                        "expectedIsAvailable": true,
+                        "desiredIsAvailable": false,
+                        "priceDeltaMinor": 1
+                      }]
+                    }
+                    """.trimIndent(),
+                status = HttpStatusCode.BadRequest,
+                code = ApiErrorCodes.INVALID_INPUT,
+            )
+
+            assertRejected(
+                body =
+                    shiftCheckBody(
+                        itemChanges =
+                            listOf(
+                                Triple(own.firstItem.id, true, false),
+                                Triple(Long.MAX_VALUE, true, false),
+                            ),
+                    ),
+                status = HttpStatusCode.NotFound,
+                code = ApiErrorCodes.NOT_FOUND,
+            )
+
+            assertRejected(
+                body =
+                    shiftCheckBody(
+                        itemChanges = listOf(Triple(own.firstItem.id, true, false)),
+                        optionChanges =
+                            listOf(
+                                ShiftCheckOptionJson(
+                                    optionId = Long.MAX_VALUE,
+                                    itemId = own.secondItem.id,
+                                ),
+                            ),
+                    ),
+                status = HttpStatusCode.NotFound,
+                code = ApiErrorCodes.NOT_FOUND,
+            )
+
+            assertRejected(
+                body =
+                    shiftCheckBody(
+                        itemChanges =
+                            listOf(
+                                Triple(own.firstItem.id, true, false),
+                                Triple(foreign.firstItem.id, true, false),
+                            ),
+                    ),
+                status = HttpStatusCode.NotFound,
+                code = ApiErrorCodes.NOT_FOUND,
+            )
+
+            assertRejected(
+                body =
+                    shiftCheckBody(
+                        itemChanges = listOf(Triple(own.firstItem.id, true, false)),
+                        optionChanges =
+                            listOf(
+                                ShiftCheckOptionJson(
+                                    optionId = foreign.firstOption.id,
+                                    itemId = own.secondItem.id,
+                                ),
+                            ),
+                    ),
+                status = HttpStatusCode.NotFound,
+                code = ApiErrorCodes.NOT_FOUND,
+            )
+
+            assertRejected(
+                body =
+                    shiftCheckBody(
+                        optionChanges =
+                            listOf(
+                                ShiftCheckOptionJson(
+                                    optionId = own.firstOption.id,
+                                    itemId = own.secondItem.id,
+                                ),
+                            ),
+                    ),
+                status = HttpStatusCode.BadRequest,
+                code = ApiErrorCodes.INVALID_INPUT,
+            )
+
+            assertRejected(
+                body =
+                    shiftCheckBody(
+                        itemChanges =
+                            (1L..501L).map { id ->
+                                Triple(100_000L + id, true, false)
+                            },
+                    ),
+                status = HttpStatusCode.BadRequest,
+                code = ApiErrorCodes.INVALID_INPUT,
+            )
+
+            assertRejected(
+                body =
+                    shiftCheckBody(
+                        itemChanges =
+                            listOf(
+                                Triple(own.firstItem.id, false, true),
+                                Triple(own.secondItem.id, true, false),
+                            ),
+                    ),
+                status = HttpStatusCode.Conflict,
+                code = ApiErrorCodes.MENU_SHIFT_CHECK_STALE,
+            )
+        }
+
     private fun buildJdbcUrl(prefix: String): String {
         val dbName = "$prefix-${UUID.randomUUID()}"
         return "jdbc:h2:mem:$dbName;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1"
@@ -1141,6 +1545,140 @@ class VenueMenuRoutesTest {
         }
     }
 
+    private suspend fun postShiftCheck(
+        client: HttpClient,
+        token: String,
+        venueId: Long,
+        body: String,
+    ): HttpResponse =
+        client.post("/api/venue/menu/shift-check?venueId=$venueId") {
+            headers {
+                append(HttpHeaders.Authorization, "Bearer $token")
+                append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+            }
+            setBody(body)
+        }
+
+    private suspend fun createShiftCheckFixture(
+        jdbcUrl: String,
+        venueId: Long,
+    ): ShiftCheckFixture {
+        val dataSource =
+            JdbcDataSource().apply {
+                setURL(jdbcUrl)
+                user = "sa"
+                password = ""
+            }
+        val repository = VenueMenuRepository(dataSource)
+        val category = repository.createCategory(venueId, "Shift check")
+        val firstItem =
+            requireNotNull(
+                repository.createItem(
+                    venueId = venueId,
+                    categoryId = category.id,
+                    name = "First private item name",
+                    priceMinor = 100,
+                    currency = "RUB",
+                    isAvailable = true,
+                ),
+            )
+        val secondItem =
+            requireNotNull(
+                repository.createItem(
+                    venueId = venueId,
+                    categoryId = category.id,
+                    name = "Second item",
+                    priceMinor = 200,
+                    currency = "RUB",
+                    isAvailable = true,
+                ),
+            )
+        val firstOption =
+            requireNotNull(
+                repository.createOption(
+                    venueId = venueId,
+                    itemId = firstItem.id,
+                    name = "First option",
+                    priceDeltaMinor = 10,
+                    isAvailable = true,
+                ),
+            )
+        val secondOption =
+            requireNotNull(
+                repository.createOption(
+                    venueId = venueId,
+                    itemId = secondItem.id,
+                    name = "Second private option name",
+                    priceDeltaMinor = 20,
+                    isAvailable = true,
+                ),
+            )
+        return ShiftCheckFixture(firstItem, secondItem, firstOption, secondOption)
+    }
+
+    private fun shiftCheckAuditPayloads(jdbcUrl: String): List<JsonObject> =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT payload_json
+                FROM audit_log
+                WHERE action = ?
+                ORDER BY id
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setString(1, MENU_SHIFT_CHECK_COMPLETED_AUDIT_ACTION)
+                statement.executeQuery().use { rs ->
+                    buildList {
+                        while (rs.next()) {
+                            add(json.parseToJsonElement(rs.getString("payload_json")) as JsonObject)
+                        }
+                    }
+                }
+            }
+        }
+
+    private fun shiftCheckBody(
+        itemChanges: List<Triple<Long, Boolean, Boolean>> = emptyList(),
+        optionChanges: List<ShiftCheckOptionJson> = emptyList(),
+    ): String {
+        val itemsJson =
+            itemChanges.joinToString(",") { (itemId, expected, desired) ->
+                """
+                {
+                  "itemId": $itemId,
+                  "expectedIsAvailable": $expected,
+                  "desiredIsAvailable": $desired
+                }
+                """.trimIndent()
+            }
+        val optionsJson =
+            optionChanges.joinToString(",") { option ->
+                """
+                {
+                  "optionId": ${option.optionId},
+                  "itemId": ${option.itemId},
+                  "expectedIsAvailable": ${option.expectedIsAvailable},
+                  "desiredIsAvailable": ${option.desiredIsAvailable}
+                }
+                """.trimIndent()
+            }
+        return """{"items":[$itemsJson],"options":[$optionsJson]}"""
+    }
+
+    private data class ShiftCheckFixture(
+        val firstItem: VenueMenuItem,
+        val secondItem: VenueMenuItem,
+        val firstOption: VenueMenuOption,
+        val secondOption: VenueMenuOption,
+    )
+
+    private data class ShiftCheckOptionJson(
+        val optionId: Long,
+        val itemId: Long,
+        val expectedIsAvailable: Boolean = true,
+        val desiredIsAvailable: Boolean = false,
+    )
+
     @Serializable
     private data class VenueMenuResponse(
         val venueId: Long,
@@ -1192,5 +1730,9 @@ class VenueMenuRoutesTest {
 
     companion object {
         private const val TELEGRAM_USER_ID = 100500L
+        private const val OWNER_USER_ID = 100501L
+        private const val MANAGER_USER_ID = 100502L
+        private const val STAFF_USER_ID = 100503L
+        private const val FOREIGN_USER_ID = 100504L
     }
 }

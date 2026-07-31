@@ -139,3 +139,10 @@ class VenueBookingOutsideHoursException(
         message = "На выбранное время бронь недоступна. В этот день заведение работает с $opensAt до $closesAt.",
         details = details,
     )
+
+class MenuShiftCheckStaleException :
+    ApiException(
+        code = ApiErrorCodes.MENU_SHIFT_CHECK_STALE,
+        httpStatus = HttpStatusCode.Conflict,
+        message = "Меню изменилось. Обновите проверку и повторите подтверждение.",
+    )

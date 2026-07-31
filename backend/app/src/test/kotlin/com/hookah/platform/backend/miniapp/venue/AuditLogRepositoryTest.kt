@@ -4,6 +4,8 @@ import com.zaxxer.hikari.HikariConfig
 import com.zaxxer.hikari.HikariDataSource
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.flywaydb.core.Flyway
 import org.junit.jupiter.api.Test
 import java.util.UUID
@@ -63,4 +65,53 @@ class AuditLogRepositoryTest {
                 dataSource.close()
             }
         }
+
+    @Test
+    fun `connection append participates in caller transaction rollback`() {
+        val dbName = "audit_log_transaction_${UUID.randomUUID()}"
+        val dataSource =
+            HikariDataSource(
+                HikariConfig().apply {
+                    driverClassName = "org.h2.Driver"
+                    jdbcUrl =
+                        "jdbc:h2:mem:$dbName;MODE=PostgreSQL;" +
+                        "DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1"
+                    maximumPoolSize = 2
+                },
+            )
+        try {
+            Flyway.configure()
+                .dataSource(dataSource)
+                .locations("classpath:db/migration/h2")
+                .load()
+                .migrate()
+
+            val repository = AuditLogRepository(dataSource, Json)
+            dataSource.connection.use { connection ->
+                connection.autoCommit = false
+                repository.appendJson(
+                    connection = connection,
+                    actorUserId = 10,
+                    action = "TRANSACTION_ACTION",
+                    entityType = "venue",
+                    entityId = 42,
+                    payload = buildJsonObject { put("changedItemCount", 1) },
+                )
+                connection.rollback()
+            }
+
+            dataSource.connection.use { connection ->
+                connection.prepareStatement(
+                    "SELECT COUNT(*) FROM audit_log WHERE action = 'TRANSACTION_ACTION'",
+                ).use { statement ->
+                    statement.executeQuery().use { rs ->
+                        rs.next()
+                        assertEquals(0, rs.getInt(1))
+                    }
+                }
+            }
+        } finally {
+            dataSource.close()
+        }
+    }
 }

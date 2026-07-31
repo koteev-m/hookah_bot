@@ -9,6 +9,7 @@ import {
   venueDeleteCategory,
   venueDeleteItem,
   venueDeleteOption,
+  venueCompleteMenuShiftCheck,
   venueGetMenu,
   venueReorderCategories,
   venueReorderItems,
@@ -46,6 +47,26 @@ type MenuRefs = {
   categories: HTMLDivElement
   createCategoryInput: HTMLInputElement
   createCategoryButton: HTMLButtonElement
+  shiftCheck: ShiftCheckRefs | null
+}
+
+type ShiftCheckFilter = 'all' | 'unavailable' | 'dirty'
+
+type ShiftCheckRefs = {
+  details: HTMLDetailsElement
+  searchInput: HTMLInputElement
+  filterButtons: Record<ShiftCheckFilter, HTMLButtonElement>
+  selectFilteredButton: HTMLButtonElement
+  selectedAvailableButton: HTMLButtonElement
+  selectedUnavailableButton: HTMLButtonElement
+  categories: HTMLDivElement
+  itemMadeAvailable: HTMLSpanElement
+  itemMadeUnavailable: HTMLSpanElement
+  optionMadeAvailable: HTMLSpanElement
+  optionMadeUnavailable: HTMLSpanElement
+  confirmButton: HTMLButtonElement
+  cancelButton: HTMLButtonElement
+  status: HTMLParagraphElement
 }
 
 function buildApiDeps(isDebug: boolean) {
@@ -65,7 +86,114 @@ function renderErrorActions(container: HTMLElement, actions: ApiErrorAction[]) {
   })
 }
 
-function buildMenuDom(root: HTMLDivElement): MenuRefs {
+function buildShiftCheckDom(): ShiftCheckRefs {
+  const details = el('details', { className: 'card venue-menu-shift-check' })
+  const summary = el('summary', { text: 'Проверка меню перед сменой' })
+  const helper = el('p', {
+    className: 'venue-help',
+    text:
+      'Проверьте наличие позиций и вариантов перед началом смены. Изменения применятся ' +
+      'только после подтверждения.'
+  })
+
+  const controls = el('div', { className: 'venue-shift-check-controls' })
+  const searchInput = document.createElement('input')
+  searchInput.className = 'venue-input'
+  searchInput.type = 'search'
+  searchInput.placeholder = 'Поиск по позициям и опциям'
+  searchInput.setAttribute('aria-label', 'Поиск по позициям и опциям')
+
+  const filters = el('div', { className: 'venue-shift-check-filters' })
+  const filterButtons = {
+    all: el('button', { className: 'button-small button-secondary', text: 'Все' }) as HTMLButtonElement,
+    unavailable: el('button', {
+      className: 'button-small button-secondary',
+      text: 'Нет в наличии'
+    }) as HTMLButtonElement,
+    dirty: el('button', {
+      className: 'button-small button-secondary',
+      text: 'Есть несохранённые изменения'
+    }) as HTMLButtonElement
+  }
+  append(filters, filterButtons.all, filterButtons.unavailable, filterButtons.dirty)
+
+  const selectionActions = el('div', { className: 'venue-shift-check-selection-actions' })
+  const selectFilteredButton = el('button', {
+    className: 'button-small button-secondary',
+    text: 'Выбрать все отфильтрованные'
+  }) as HTMLButtonElement
+  const selectedAvailableButton = el('button', {
+    className: 'button-small',
+    text: 'Выбранные доступны'
+  }) as HTMLButtonElement
+  const selectedUnavailableButton = el('button', {
+    className: 'button-small button-secondary',
+    text: 'Выбранные недоступны'
+  }) as HTMLButtonElement
+  append(selectionActions, selectFilteredButton, selectedAvailableButton, selectedUnavailableButton)
+  append(controls, searchInput, filters, selectionActions)
+
+  const categories = el('div', { className: 'venue-shift-check-categories' })
+
+  const confirmation = el('section', { className: 'venue-shift-check-confirmation' })
+  const confirmationTitle = el('h4', { text: 'Будет изменено:' })
+  const confirmationGrid = el('div', { className: 'venue-shift-check-confirmation-grid' })
+  const itemSummary = el('div')
+  const itemMadeAvailable = el('span', { text: '0' })
+  const itemMadeUnavailable = el('span', { text: '0' })
+  append(
+    itemSummary,
+    el('strong', { text: 'Позиции:' }),
+    el('p', { text: 'Доступны: ' }),
+    el('p', { text: 'Недоступны: ' })
+  )
+  itemSummary.children[1].appendChild(itemMadeAvailable)
+  itemSummary.children[2].appendChild(itemMadeUnavailable)
+
+  const optionSummary = el('div')
+  const optionMadeAvailable = el('span', { text: '0' })
+  const optionMadeUnavailable = el('span', { text: '0' })
+  append(
+    optionSummary,
+    el('strong', { text: 'Опции:' }),
+    el('p', { text: 'Доступны: ' }),
+    el('p', { text: 'Недоступны: ' })
+  )
+  optionSummary.children[1].appendChild(optionMadeAvailable)
+  optionSummary.children[2].appendChild(optionMadeUnavailable)
+  append(confirmationGrid, itemSummary, optionSummary)
+
+  const confirmationActions = el('div', { className: 'venue-shift-check-confirmation-actions' })
+  const confirmButton = el('button', { text: 'Подтвердить проверку' }) as HTMLButtonElement
+  const cancelButton = el('button', {
+    className: 'button-secondary',
+    text: 'Отменить изменения'
+  }) as HTMLButtonElement
+  append(confirmationActions, confirmButton, cancelButton)
+  const status = el('p', { className: 'status', text: '' })
+  append(confirmation, confirmationTitle, confirmationGrid, confirmationActions, status)
+
+  append(details, summary, helper, controls, categories, confirmation)
+
+  return {
+    details,
+    searchInput,
+    filterButtons,
+    selectFilteredButton,
+    selectedAvailableButton,
+    selectedUnavailableButton,
+    categories,
+    itemMadeAvailable,
+    itemMadeUnavailable,
+    optionMadeAvailable,
+    optionMadeUnavailable,
+    confirmButton,
+    cancelButton,
+    status
+  }
+}
+
+function buildMenuDom(root: HTMLDivElement, canShiftCheck: boolean): MenuRefs {
   const wrapper = el('div', { className: 'venue-menu-builder' })
   const header = el('div', { className: 'card' })
   const title = el('h2', { text: 'Меню' })
@@ -88,8 +216,9 @@ function buildMenuDom(root: HTMLDivElement): MenuRefs {
   append(error, errorTitle, errorMessage, errorActions, errorDetails)
 
   const categories = el('div', { className: 'venue-menu-categories' })
+  const shiftCheck = canShiftCheck ? buildShiftCheckDom() : null
 
-  append(wrapper, header, status, error, categories)
+  append(wrapper, header, status, error, shiftCheck?.details, categories)
   root.replaceChildren(wrapper)
 
   return {
@@ -101,7 +230,8 @@ function buildMenuDom(root: HTMLDivElement): MenuRefs {
     errorDetails,
     categories,
     createCategoryInput,
-    createCategoryButton
+    createCategoryButton,
+    shiftCheck
   }
 }
 
@@ -443,17 +573,29 @@ function renderCategoryCard(
 export function renderVenueMenuScreen(options: VenueMenuOptions) {
   const { root, backendUrl, isDebug, venueId, access } = options
   if (!root) return () => undefined
-  const refs = buildMenuDom(root)
+  const canView = access.permissions.includes('MENU_VIEW')
+  const canManage = access.permissions.includes('MENU_MANAGE')
+  const canManageAvailability = access.permissions.includes('MENU_AVAILABILITY_MANAGE')
+  const canShiftCheck =
+    canView && access.role !== 'STAFF' && access.permissions.includes('MENU_SHIFT_CHECK')
+  const refs = buildMenuDom(root, canShiftCheck)
   const deps = buildApiDeps(isDebug)
 
   let disposed = false
   let loadAbort: AbortController | null = null
+  let confirmAbort: AbortController | null = null
   let loadSeq = 0
   let menu: VenueMenuCategoryDto[] = []
-
-  const canView = access.permissions.includes('MENU_VIEW')
-  const canManage = access.permissions.includes('MENU_MANAGE')
-  const canManageAvailability = access.permissions.includes('MENU_AVAILABILITY_MANAGE')
+  let shiftFilter: ShiftCheckFilter = 'all'
+  let shiftSearch = ''
+  let shiftConfirming = false
+  let shiftNeedsRefresh = false
+  const draftItemAvailability = new Map<number, boolean>()
+  const draftOptionAvailability = new Map<number, { itemId: number; isAvailable: boolean }>()
+  const selectedItemIds = new Set<number>()
+  const selectedOptionIds = new Set<number>()
+  let filteredItemIds: number[] = []
+  let filteredOptionIds: number[] = []
   if (!canManage) {
     refs.createCategoryInput.closest('.venue-form-row')?.remove()
   }
@@ -493,10 +635,368 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
     return getOptionCopy(ownerItem ? isHookahMenuItem(ownerItem) : false)
   }
 
+  const findOptionById = (optionId: number) => {
+    for (const category of menu) {
+      for (const item of category.items) {
+        const option = getScopedOptions(item).find((candidate) => candidate.id === optionId)
+        if (option) return option
+      }
+    }
+    return null
+  }
+
+  const effectiveItemAvailability = (item: VenueMenuItemDto) =>
+    draftItemAvailability.get(item.id) ?? item.isAvailable
+
+  const effectiveOptionAvailability = (option: VenueMenuOptionDto) =>
+    draftOptionAvailability.get(option.id)?.isAvailable ?? option.isAvailable
+
+  const setItemDraft = (item: VenueMenuItemDto, isAvailable: boolean) => {
+    if (item.isAvailable === isAvailable) {
+      draftItemAvailability.delete(item.id)
+    } else {
+      draftItemAvailability.set(item.id, isAvailable)
+    }
+  }
+
+  const setOptionDraft = (option: VenueMenuOptionDto, isAvailable: boolean) => {
+    if (option.isAvailable === isAvailable) {
+      draftOptionAvailability.delete(option.id)
+    } else {
+      draftOptionAvailability.set(option.id, { itemId: option.itemId, isAvailable })
+    }
+  }
+
+  const clearShiftDraft = () => {
+    draftItemAvailability.clear()
+    draftOptionAvailability.clear()
+    selectedItemIds.clear()
+    selectedOptionIds.clear()
+    filteredItemIds = []
+    filteredOptionIds = []
+    shiftFilter = 'all'
+    shiftSearch = ''
+    if (refs.shiftCheck) {
+      refs.shiftCheck.searchInput.value = ''
+    }
+    shiftNeedsRefresh = false
+  }
+
+  const rebaseShiftDraft = (
+    nextMenu: VenueMenuCategoryDto[],
+    previousItemDrafts: Map<number, boolean>,
+    previousOptionDrafts: Map<number, { itemId: number; isAvailable: boolean }>
+  ) => {
+    const nextItems = new Map<number, VenueMenuItemDto>()
+    const nextOptions = new Map<number, VenueMenuOptionDto>()
+    nextMenu.forEach((category) => {
+      category.items.forEach((item) => {
+        nextItems.set(item.id, item)
+        getScopedOptions(item).forEach((option) => nextOptions.set(option.id, option))
+      })
+    })
+
+    draftItemAvailability.clear()
+    previousItemDrafts.forEach((desired, itemId) => {
+      const item = nextItems.get(itemId)
+      if (item && item.isAvailable !== desired) {
+        draftItemAvailability.set(itemId, desired)
+      }
+    })
+
+    draftOptionAvailability.clear()
+    previousOptionDrafts.forEach((draft, optionId) => {
+      const option = nextOptions.get(optionId)
+      if (option && option.itemId === draft.itemId && option.isAvailable !== draft.isAvailable) {
+        draftOptionAvailability.set(optionId, draft)
+      }
+    })
+
+    for (const itemId of selectedItemIds) {
+      if (!nextItems.has(itemId)) selectedItemIds.delete(itemId)
+    }
+    for (const optionId of selectedOptionIds) {
+      if (!nextOptions.has(optionId)) selectedOptionIds.delete(optionId)
+    }
+  }
+
+  const shiftRowMatchesFilter = (isAvailable: boolean, isDirty: boolean) => {
+    if (shiftFilter === 'unavailable') return !isAvailable
+    if (shiftFilter === 'dirty') return isDirty
+    return true
+  }
+
+  const buildShiftSelection = (
+    labelText: string,
+    checked: boolean,
+    onChange: (checked: boolean) => void
+  ) => {
+    const label = el('label', { className: 'venue-shift-check-select' })
+    const input = document.createElement('input')
+    input.type = 'checkbox'
+    input.checked = checked
+    input.setAttribute('aria-label', labelText)
+    input.addEventListener('change', () => onChange(input.checked))
+    label.appendChild(input)
+    return label
+  }
+
+  const buildShiftAvailabilityToggle = (
+    labelText: string,
+    isAvailable: boolean,
+    onChange: (checked: boolean) => void
+  ) => {
+    const label = el('label', { className: 'venue-shift-check-availability' })
+    const input = document.createElement('input')
+    input.type = 'checkbox'
+    input.checked = isAvailable
+    input.setAttribute('aria-label', labelText)
+    input.addEventListener('change', () => onChange(input.checked))
+    const text = el('span', { text: isAvailable ? 'Есть в наличии' : 'Нет в наличии' })
+    append(label, input, text)
+    return label
+  }
+
+  const renderShiftCheck = () => {
+    const shiftRefs = refs.shiftCheck
+    if (!shiftRefs) return
+
+    Object.entries(shiftRefs.filterButtons).forEach(([filter, button]) => {
+      button.dataset.active = String(filter === shiftFilter)
+    })
+
+    let itemMadeAvailable = 0
+    let itemMadeUnavailable = 0
+    draftItemAvailability.forEach((isAvailable) => {
+      if (isAvailable) itemMadeAvailable += 1
+      else itemMadeUnavailable += 1
+    })
+    let optionMadeAvailable = 0
+    let optionMadeUnavailable = 0
+    draftOptionAvailability.forEach((draft) => {
+      if (draft.isAvailable) optionMadeAvailable += 1
+      else optionMadeUnavailable += 1
+    })
+    shiftRefs.itemMadeAvailable.textContent = String(itemMadeAvailable)
+    shiftRefs.itemMadeUnavailable.textContent = String(itemMadeUnavailable)
+    shiftRefs.optionMadeAvailable.textContent = String(optionMadeAvailable)
+    shiftRefs.optionMadeUnavailable.textContent = String(optionMadeUnavailable)
+
+    const normalizedQuery = shiftSearch.trim().toLocaleLowerCase('ru-RU')
+    const visibleItemIds: number[] = []
+    const visibleOptionIds: number[] = []
+    shiftRefs.categories.replaceChildren()
+
+    menu.forEach((category) => {
+      const totalItems = category.items.length
+      const allCategoryOptions = category.items.flatMap((item) => getScopedOptions(item))
+      const availableItems = category.items.filter(effectiveItemAvailability).length
+      const availableOptions = allCategoryOptions.filter(effectiveOptionAvailability).length
+
+      const categoryCard = el('section', { className: 'venue-shift-check-category' })
+      categoryCard.dataset.categoryId = String(category.id)
+      const categoryHeader = el('div', { className: 'venue-shift-check-category-header' })
+      const categoryHeading = el('div')
+      append(
+        categoryHeading,
+        el('h4', { text: category.name }),
+        el('p', {
+          className: 'venue-order-sub',
+          text:
+            `Позиции: ${availableItems}/${totalItems} · ` +
+            `Опции: ${availableOptions}/${allCategoryOptions.length}`
+        })
+      )
+      const categoryActions = el('div', { className: 'venue-inline-actions' })
+      const categoryAvailable = el('button', {
+        className: 'button-small',
+        text: 'Позиции категории доступны'
+      }) as HTMLButtonElement
+      const categoryUnavailable = el('button', {
+        className: 'button-small button-secondary',
+        text: 'Позиции категории недоступны'
+      }) as HTMLButtonElement
+      categoryAvailable.disabled = shiftConfirming || shiftNeedsRefresh || totalItems === 0
+      categoryUnavailable.disabled = shiftConfirming || shiftNeedsRefresh || totalItems === 0
+      categoryAvailable.addEventListener('click', () => {
+        category.items.forEach((item) => setItemDraft(item, true))
+        shiftRefs.status.textContent = ''
+        renderShiftCheck()
+      })
+      categoryUnavailable.addEventListener('click', () => {
+        category.items.forEach((item) => setItemDraft(item, false))
+        shiftRefs.status.textContent = ''
+        renderShiftCheck()
+      })
+      append(categoryActions, categoryAvailable, categoryUnavailable)
+      append(categoryHeader, categoryHeading, categoryActions)
+
+      const categoryItems = el('div', { className: 'venue-shift-check-items' })
+      category.items.forEach((item) => {
+        const itemNameMatches =
+          !normalizedQuery || item.name.toLocaleLowerCase('ru-RU').includes(normalizedQuery)
+        const itemIsDirty = draftItemAvailability.has(item.id)
+        const itemIsAvailable = effectiveItemAvailability(item)
+        const itemVisible =
+          itemNameMatches && shiftRowMatchesFilter(itemIsAvailable, itemIsDirty)
+
+        const visibleOptions = getScopedOptions(item).filter((option) => {
+          const queryMatches =
+            !normalizedQuery ||
+            itemNameMatches ||
+            option.name.toLocaleLowerCase('ru-RU').includes(normalizedQuery)
+          return (
+            queryMatches &&
+            shiftRowMatchesFilter(
+              effectiveOptionAvailability(option),
+              draftOptionAvailability.has(option.id)
+            )
+          )
+        })
+        if (!itemVisible && visibleOptions.length === 0) return
+
+        const itemGroup = el('div', { className: 'venue-shift-check-item-group' })
+        if (itemVisible) {
+          visibleItemIds.push(item.id)
+          const itemRow = el('div', { className: 'venue-shift-check-item' })
+          itemRow.dataset.itemId = String(item.id)
+          const selection = buildShiftSelection(
+            `Выбрать позицию: ${item.name}`,
+            selectedItemIds.has(item.id),
+            (checked) => {
+              if (checked) selectedItemIds.add(item.id)
+              else selectedItemIds.delete(item.id)
+              renderShiftCheck()
+            }
+          )
+          selection.querySelector('input')!.disabled = shiftConfirming
+          const itemInfo = el('div', { className: 'venue-shift-check-row-info' })
+          itemInfo.appendChild(el('strong', { text: item.name }))
+          if (itemIsDirty) {
+            itemInfo.appendChild(el('span', { className: 'menu-item-badge', text: 'Несохранено' }))
+          }
+          const availability = buildShiftAvailabilityToggle(
+            `Позиция доступна: ${item.name}`,
+            itemIsAvailable,
+            (checked) => {
+              setItemDraft(item, checked)
+              shiftRefs.status.textContent = ''
+              renderShiftCheck()
+            }
+          )
+          availability.querySelector('input')!.disabled = shiftConfirming || shiftNeedsRefresh
+          append(itemRow, selection, itemInfo, availability)
+          itemGroup.appendChild(itemRow)
+        } else {
+          itemGroup.appendChild(
+            el('p', { className: 'venue-shift-check-item-context', text: `Позиция: ${item.name}` })
+          )
+        }
+
+        if (visibleOptions.length > 0) {
+          const optionsHeader = el('div', { className: 'venue-shift-check-options-header' })
+          const optionsTitle = el('span', { className: 'venue-menu-options-title', text: 'Опции позиции' })
+          const optionsActions = el('div', { className: 'venue-inline-actions' })
+          const optionsAvailable = el('button', {
+            className: 'button-small',
+            text: 'Опции позиции доступны'
+          }) as HTMLButtonElement
+          const optionsUnavailable = el('button', {
+            className: 'button-small button-secondary',
+            text: 'Опции позиции недоступны'
+          }) as HTMLButtonElement
+          const scopedOptions = getScopedOptions(item)
+          optionsAvailable.disabled = shiftConfirming || shiftNeedsRefresh || scopedOptions.length === 0
+          optionsUnavailable.disabled = shiftConfirming || shiftNeedsRefresh || scopedOptions.length === 0
+          optionsAvailable.addEventListener('click', () => {
+            scopedOptions.forEach((option) => setOptionDraft(option, true))
+            shiftRefs.status.textContent = ''
+            renderShiftCheck()
+          })
+          optionsUnavailable.addEventListener('click', () => {
+            scopedOptions.forEach((option) => setOptionDraft(option, false))
+            shiftRefs.status.textContent = ''
+            renderShiftCheck()
+          })
+          append(optionsActions, optionsAvailable, optionsUnavailable)
+          append(optionsHeader, optionsTitle, optionsActions)
+
+          const optionsList = el('div', { className: 'venue-shift-check-options' })
+          visibleOptions.forEach((option) => {
+            visibleOptionIds.push(option.id)
+            const optionRow = el('div', { className: 'venue-shift-check-option' })
+            optionRow.dataset.optionId = String(option.id)
+            const selection = buildShiftSelection(
+              `Выбрать опцию: ${option.name}`,
+              selectedOptionIds.has(option.id),
+              (checked) => {
+                if (checked) selectedOptionIds.add(option.id)
+                else selectedOptionIds.delete(option.id)
+                renderShiftCheck()
+              }
+            )
+            selection.querySelector('input')!.disabled = shiftConfirming
+            const optionInfo = el('div', { className: 'venue-shift-check-row-info' })
+            optionInfo.appendChild(el('span', { text: option.name }))
+            if (draftOptionAvailability.has(option.id)) {
+              optionInfo.appendChild(el('span', { className: 'menu-item-badge', text: 'Несохранено' }))
+            }
+            const availability = buildShiftAvailabilityToggle(
+              `Опция доступна: ${option.name}`,
+              effectiveOptionAvailability(option),
+              (checked) => {
+                setOptionDraft(option, checked)
+                shiftRefs.status.textContent = ''
+                renderShiftCheck()
+              }
+            )
+            availability.querySelector('input')!.disabled = shiftConfirming || shiftNeedsRefresh
+            append(optionRow, selection, optionInfo, availability)
+            optionsList.appendChild(optionRow)
+          })
+          append(itemGroup, optionsHeader, optionsList)
+        }
+        categoryItems.appendChild(itemGroup)
+      })
+
+      if (categoryItems.childElementCount > 0) {
+        append(categoryCard, categoryHeader, categoryItems)
+        shiftRefs.categories.appendChild(categoryCard)
+      }
+    })
+
+    filteredItemIds = visibleItemIds
+    filteredOptionIds = visibleOptionIds
+    if (shiftRefs.categories.childElementCount === 0) {
+      shiftRefs.categories.appendChild(
+        el('p', { className: 'venue-empty', text: 'По заданным условиям ничего не найдено.' })
+      )
+    }
+
+    const allFilteredSelected =
+      visibleItemIds.length + visibleOptionIds.length > 0 &&
+      visibleItemIds.every((itemId) => selectedItemIds.has(itemId)) &&
+      visibleOptionIds.every((optionId) => selectedOptionIds.has(optionId))
+    shiftRefs.selectFilteredButton.textContent = allFilteredSelected
+      ? 'Снять выбор с отфильтрованных'
+      : 'Выбрать все отфильтрованные'
+    shiftRefs.selectFilteredButton.disabled =
+      shiftConfirming || shiftNeedsRefresh || visibleItemIds.length + visibleOptionIds.length === 0
+    const hasSelection = selectedItemIds.size + selectedOptionIds.size > 0
+    shiftRefs.selectedAvailableButton.disabled = shiftConfirming || shiftNeedsRefresh || !hasSelection
+    shiftRefs.selectedUnavailableButton.disabled = shiftConfirming || shiftNeedsRefresh || !hasSelection
+    shiftRefs.confirmButton.disabled = shiftConfirming || shiftNeedsRefresh
+    shiftRefs.cancelButton.disabled = shiftConfirming
+    shiftRefs.confirmButton.textContent = shiftConfirming
+      ? 'Подтверждаем…'
+      : 'Подтвердить проверку'
+  }
+
   const renderMenu = () => {
     refs.categories.replaceChildren()
     if (!menu.length) {
       refs.categories.appendChild(el('p', { className: 'venue-empty', text: 'Категории не найдены.' }))
+      renderShiftCheck()
       return
     }
     menu.forEach((category) => {
@@ -706,12 +1206,15 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
         })
       )
     })
+    renderShiftCheck()
   }
 
-  const loadMenu = async () => {
+  const loadMenu = async (
+    options: { rebaseDraft?: boolean; shiftRefresh?: boolean } = {}
+  ): Promise<boolean> => {
     if (!canView) {
       refs.categories.replaceChildren(el('p', { className: 'venue-empty', text: 'Недостаточно прав для просмотра меню.' }))
-      return
+      return false
     }
     hideError()
     setStatus('Загрузка...')
@@ -722,16 +1225,183 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
     loadAbort = controller
     const seq = ++loadSeq
     const result = await venueGetMenu(backendUrl, venueId, deps, controller.signal)
-    if (disposed || loadSeq !== seq) return
+    if (disposed || loadSeq !== seq) return false
     loadAbort = null
-    if (!result.ok && result.error.code === REQUEST_ABORTED_CODE) return
+    if (!result.ok && result.error.code === REQUEST_ABORTED_CODE) return false
     if (!result.ok) {
       showError(result.error)
       setStatus('')
-      return
+      return false
+    }
+    const previousItemDrafts = new Map(draftItemAvailability)
+    const previousOptionDrafts = new Map(draftOptionAvailability)
+    if (options.rebaseDraft === false) {
+      clearShiftDraft()
+    } else {
+      rebaseShiftDraft(result.data.categories, previousItemDrafts, previousOptionDrafts)
     }
     menu = result.data.categories
+    shiftNeedsRefresh = false
     renderMenu()
+    if (refs.shiftCheck && options.shiftRefresh) {
+      refs.shiftCheck.status.textContent =
+        'Проверка обновлена. Проверьте изменения и подтвердите ещё раз.'
+    }
+    setStatus(`Обновлено: ${new Date().toLocaleTimeString()}`)
+    return true
+  }
+
+  const showShiftCheckError = (error: ApiErrorInfo) => {
+    const normalized = normalizeErrorCode(error)
+    if (normalized === ApiErrorCodes.UNAUTHORIZED || normalized === ApiErrorCodes.INITDATA_INVALID) {
+      clearSession()
+    }
+
+    let title = 'Ошибка'
+    let message = 'Не удалось завершить проверку меню.'
+    let severity: 'info' | 'warn' | 'error' = 'error'
+    let actions: ApiErrorAction[] = [
+      { label: 'Повторить', kind: 'primary', onClick: () => void submitShiftCheck() },
+      {
+        label: 'Обновить проверку',
+        kind: 'secondary',
+        onClick: () => void loadMenu({ rebaseDraft: true, shiftRefresh: true })
+      }
+    ]
+
+    const isMissing =
+      error.status === 404 ||
+      error.code === 'MENU_SHIFT_CHECK_ITEM_NOT_FOUND' ||
+      error.code === 'MENU_SHIFT_CHECK_OPTION_NOT_FOUND' ||
+      error.code === 'MENU_SHIFT_CHECK_ENTITY_NOT_FOUND'
+    if (error.code === ApiErrorCodes.MENU_SHIFT_CHECK_STALE || error.status === 409) {
+      title = 'Меню изменилось'
+      message = 'Меню изменилось. Обновите проверку и повторите подтверждение.'
+      severity = 'warn'
+      shiftNeedsRefresh = true
+      actions = [
+        {
+          label: 'Обновить проверку',
+          kind: 'primary',
+          onClick: () => void loadMenu({ rebaseDraft: true, shiftRefresh: true })
+        }
+      ]
+    } else if (normalized === ApiErrorCodes.FORBIDDEN) {
+      title = 'Недостаточно прав'
+      message = 'Недостаточно прав для проверки меню.'
+      severity = 'warn'
+      shiftNeedsRefresh = true
+      actions = []
+    } else if (isMissing) {
+      title = 'Меню изменилось'
+      message = 'Одна из позиций больше не существует. Обновите проверку.'
+      severity = 'warn'
+      shiftNeedsRefresh = true
+      actions = [
+        {
+          label: 'Обновить проверку',
+          kind: 'primary',
+          onClick: () => void loadMenu({ rebaseDraft: true, shiftRefresh: true })
+        }
+      ]
+    }
+
+    refs.error.dataset.severity = severity
+    refs.errorTitle.textContent = title
+    refs.errorMessage.textContent = message
+    renderErrorActions(refs.errorActions, actions)
+    renderErrorDetails(refs.errorDetails, error, { isDebug })
+    refs.error.hidden = false
+    renderShiftCheck()
+  }
+
+  async function submitShiftCheck() {
+    const shiftRefs = refs.shiftCheck
+    if (!shiftRefs || shiftConfirming || shiftNeedsRefresh) return
+
+    const itemChanges = [...draftItemAvailability.entries()]
+      .sort(([leftId], [rightId]) => leftId - rightId)
+      .map(([itemId, desiredIsAvailable]) => {
+        const item = findItemById(itemId)
+        return item
+          ? {
+              itemId,
+              expectedIsAvailable: item.isAvailable,
+              desiredIsAvailable
+            }
+          : null
+      })
+    const optionChanges = [...draftOptionAvailability.entries()]
+      .sort(([leftId], [rightId]) => leftId - rightId)
+      .map(([optionId, draft]) => {
+        const option = findOptionById(optionId)
+        return option && option.itemId === draft.itemId
+          ? {
+              optionId,
+              itemId: option.itemId,
+              expectedIsAvailable: option.isAvailable,
+              desiredIsAvailable: draft.isAvailable
+            }
+          : null
+      })
+
+    if (itemChanges.some((change) => change === null) || optionChanges.some((change) => change === null)) {
+      showShiftCheckError({
+        status: 404,
+        code: 'MENU_SHIFT_CHECK_ENTITY_NOT_FOUND',
+        message: ''
+      })
+      return
+    }
+
+    hideError()
+    shiftConfirming = true
+    shiftRefs.status.textContent = 'Завершаем проверку...'
+    renderShiftCheck()
+    confirmAbort?.abort()
+    const controller = new AbortController()
+    confirmAbort = controller
+    const result = await venueCompleteMenuShiftCheck(
+      backendUrl,
+      {
+        venueId,
+        body: {
+          items: itemChanges.filter((change) => change !== null),
+          options: optionChanges.filter((change) => change !== null)
+        }
+      },
+      deps,
+      controller.signal
+    )
+    if (disposed || confirmAbort !== controller) return
+    confirmAbort = null
+    shiftConfirming = false
+    if (!result.ok && result.error.code === REQUEST_ABORTED_CODE) {
+      renderShiftCheck()
+      return
+    }
+    if (!result.ok) {
+      shiftRefs.status.textContent = ''
+      showShiftCheckError(result.error)
+      return
+    }
+    if (result.data.venueId !== venueId) {
+      shiftRefs.status.textContent = ''
+      showShiftCheckError({
+        status: 500,
+        code: ApiErrorCodes.INTERNAL_ERROR,
+        message: ''
+      })
+      return
+    }
+
+    menu = result.data.categories
+    clearShiftDraft()
+    hideError()
+    renderMenu()
+    shiftRefs.status.textContent =
+      `Проверка меню завершена. Изменено позиций: ${result.data.changedItemCount}, ` +
+      `опций: ${result.data.changedOptionCount}.`
     setStatus(`Обновлено: ${new Date().toLocaleTimeString()}`)
   }
 
@@ -758,15 +1428,91 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
 
   const disposables: Array<() => void> = []
   disposables.push(on(refs.createCategoryButton, 'click', () => void createCategory()))
+  if (refs.shiftCheck) {
+    const shiftRefs = refs.shiftCheck
+    disposables.push(
+      on(shiftRefs.searchInput, 'input', () => {
+        shiftSearch = shiftRefs.searchInput.value
+        renderShiftCheck()
+      })
+    )
+    Object.entries(shiftRefs.filterButtons).forEach(([filter, button]) => {
+      disposables.push(
+        on(button, 'click', () => {
+          shiftFilter = filter as ShiftCheckFilter
+          renderShiftCheck()
+        })
+      )
+    })
+    disposables.push(
+      on(shiftRefs.selectFilteredButton, 'click', () => {
+        const allSelected =
+          filteredItemIds.length + filteredOptionIds.length > 0 &&
+          filteredItemIds.every((itemId) => selectedItemIds.has(itemId)) &&
+          filteredOptionIds.every((optionId) => selectedOptionIds.has(optionId))
+        filteredItemIds.forEach((itemId) => {
+          if (allSelected) selectedItemIds.delete(itemId)
+          else selectedItemIds.add(itemId)
+        })
+        filteredOptionIds.forEach((optionId) => {
+          if (allSelected) selectedOptionIds.delete(optionId)
+          else selectedOptionIds.add(optionId)
+        })
+        renderShiftCheck()
+      })
+    )
+    disposables.push(
+      on(shiftRefs.selectedAvailableButton, 'click', () => {
+        selectedItemIds.forEach((itemId) => {
+          const item = findItemById(itemId)
+          if (item) setItemDraft(item, true)
+        })
+        selectedOptionIds.forEach((optionId) => {
+          const option = findOptionById(optionId)
+          if (option) setOptionDraft(option, true)
+        })
+        shiftRefs.status.textContent = ''
+        renderShiftCheck()
+      })
+    )
+    disposables.push(
+      on(shiftRefs.selectedUnavailableButton, 'click', () => {
+        selectedItemIds.forEach((itemId) => {
+          const item = findItemById(itemId)
+          if (item) setItemDraft(item, false)
+        })
+        selectedOptionIds.forEach((optionId) => {
+          const option = findOptionById(optionId)
+          if (option) setOptionDraft(option, false)
+        })
+        shiftRefs.status.textContent = ''
+        renderShiftCheck()
+      })
+    )
+    disposables.push(
+      on(shiftRefs.cancelButton, 'click', () => {
+        clearShiftDraft()
+        shiftRefs.status.textContent = 'Несохранённые изменения отменены.'
+        hideError()
+        renderShiftCheck()
+      })
+    )
+    disposables.push(on(shiftRefs.confirmButton, 'click', () => void submitShiftCheck()))
+  }
 
   refs.createCategoryButton.disabled = !canManage
   refs.createCategoryButton.title = canManage ? '' : 'Недостаточно прав'
 
-  void loadMenu()
+  void loadMenu({ rebaseDraft: false })
 
   return () => {
     disposed = true
+    loadSeq += 1
     loadAbort?.abort()
+    confirmAbort?.abort()
+    loadAbort = null
+    confirmAbort = null
+    clearShiftDraft()
     disposables.forEach((dispose) => dispose())
   }
 }

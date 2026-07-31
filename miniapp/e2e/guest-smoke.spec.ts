@@ -224,6 +224,30 @@ type VenueMenuCategoryFixture = {
   items: VenueMenuItemFixture[]
 }
 
+type VenueMenuShiftCheckRequestFixture = {
+  items: Array<{
+    itemId: number
+    expectedIsAvailable: boolean
+    desiredIsAvailable: boolean
+  }>
+  options: Array<{
+    optionId: number
+    itemId: number
+    expectedIsAvailable: boolean
+    desiredIsAvailable: boolean
+  }>
+}
+
+type VenueMenuShiftCheckAccessFixture = {
+  venueId: number
+  venueName: string
+  venueCity: string
+  venueStatus: string
+  role: 'OWNER' | 'MANAGER' | 'STAFF'
+  permissions: string[]
+  categories: VenueMenuCategoryFixture[]
+}
+
 type VenueStatsResponse = {
   venueId: number
   period: 'today' | '7d' | '30d'
@@ -4524,6 +4548,113 @@ function buildDefaultVenueMenu(): VenueMenuCategoryFixture[] {
   ]
 }
 
+function buildMenuShiftCheckFixture(
+  idOffset = 0,
+  nameSuffix = ''
+): VenueMenuCategoryFixture[] {
+  return [
+    {
+      id: 30 + idOffset,
+      name: `Кальянное меню${nameSuffix}`,
+      sortOrder: 0,
+      categoryType: 'HOOKAH',
+      items: [
+        {
+          id: 310 + idOffset,
+          categoryId: 30 + idOffset,
+          name: `Кальян Ягодный${nameSuffix}`,
+          priceMinor: 180000,
+          currency: 'RUB',
+          isAvailable: true,
+          sortOrder: 0,
+          effectiveItemType: 'HOOKAH',
+          supportsBaseFlavorProfiles: true,
+          options: [
+            {
+              id: 401 + idOffset,
+              itemId: 310 + idOffset,
+              name: `Яблоко${nameSuffix}`,
+              priceDeltaMinor: 0,
+              isAvailable: true,
+              sortOrder: 0
+            },
+            {
+              id: 402 + idOffset,
+              itemId: 310 + idOffset,
+              name: `Мята${nameSuffix}`,
+              priceDeltaMinor: 10000,
+              isAvailable: false,
+              sortOrder: 1
+            }
+          ]
+        },
+        {
+          id: 311 + idOffset,
+          categoryId: 30 + idOffset,
+          name: `Кальян Классический${nameSuffix}`,
+          priceMinor: 170000,
+          currency: 'RUB',
+          isAvailable: false,
+          sortOrder: 1,
+          effectiveItemType: 'HOOKAH',
+          supportsBaseFlavorProfiles: true,
+          options: [
+            {
+              id: 403 + idOffset,
+              itemId: 311 + idOffset,
+              name: `Лёд${nameSuffix}`,
+              priceDeltaMinor: 0,
+              isAvailable: true,
+              sortOrder: 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      id: 31 + idOffset,
+      name: `Напитки${nameSuffix}`,
+      sortOrder: 1,
+      categoryType: 'DRINK',
+      items: [
+        {
+          id: 320 + idOffset,
+          categoryId: 31 + idOffset,
+          name: `Чай${nameSuffix}`,
+          priceMinor: 30000,
+          currency: 'RUB',
+          isAvailable: true,
+          sortOrder: 0,
+          effectiveItemType: 'DRINK',
+          supportsBaseFlavorProfiles: false,
+          options: [
+            {
+              id: 410 + idOffset,
+              itemId: 320 + idOffset,
+              name: `Большой чайник${nameSuffix}`,
+              priceDeltaMinor: 15000,
+              isAvailable: false,
+              sortOrder: 0
+            }
+          ]
+        },
+        {
+          id: 321 + idOffset,
+          categoryId: 31 + idOffset,
+          name: `Лимонад${nameSuffix}`,
+          priceMinor: 45000,
+          currency: 'RUB',
+          isAvailable: true,
+          sortOrder: 1,
+          effectiveItemType: 'DRINK',
+          supportsBaseFlavorProfiles: false,
+          options: []
+        }
+      ]
+    }
+  ]
+}
+
 async function mockVenueMenuApi(
   page: Page,
   options: {
@@ -4831,6 +4962,262 @@ async function mockVenueMenuApi(
     getCreateItemCalls: () => createItemCalls,
     getUpdateItemCalls: () => updateItemCalls,
     getItemAvailabilityCalls: () => itemAvailabilityCalls
+  }
+}
+
+async function mockVenueMenuShiftCheckApi(
+  page: Page,
+  options: {
+    accesses?: VenueMenuShiftCheckAccessFixture[]
+    shiftCheckErrors?: ApiErrorFixture[]
+  } = {}
+) {
+  const accesses =
+    options.accesses ??
+    [
+      {
+        venueId: 1,
+        venueName: 'Микс',
+        venueCity: 'Москва',
+        venueStatus: 'PUBLISHED',
+        role: 'MANAGER' as const,
+        permissions: ['MENU_VIEW', 'MENU_MANAGE', 'MENU_AVAILABILITY_MANAGE', 'MENU_SHIFT_CHECK'],
+        categories: buildDefaultVenueMenu()
+      }
+    ]
+  const categoriesByVenue = new Map(accesses.map((access) => [access.venueId, access.categories]))
+  const shiftCheckErrors = [...(options.shiftCheckErrors ?? [])]
+  const shiftCheckRequests: Array<{ venueId: number; body: VenueMenuShiftCheckRequestFixture }> = []
+  const menuRequests: number[] = []
+  let itemAvailabilityCalls = 0
+  let optionAvailabilityCalls = 0
+
+  type DeferredMenuResponse = {
+    promise: Promise<void>
+    release: () => void
+  }
+  const deferredMenuResponses = new Map<number, DeferredMenuResponse[]>()
+  const cloneCategories = (categories: VenueMenuCategoryFixture[]) =>
+    JSON.parse(JSON.stringify(categories)) as VenueMenuCategoryFixture[]
+  const allItems = (venueId: number) =>
+    (categoriesByVenue.get(venueId) ?? []).flatMap((category) => category.items)
+  const allOptions = (venueId: number) => allItems(venueId).flatMap((item) => item.options)
+  const findItem = (venueId: number, itemId: number) =>
+    allItems(venueId).find((item) => item.id === itemId) ?? null
+  const findOption = (venueId: number, optionId: number) =>
+    allOptions(venueId).find((option) => option.id === optionId) ?? null
+  const menuResponse = (
+    venueId: number,
+    changedItemCount = 0,
+    changedOptionCount = 0
+  ) => {
+    const categories = categoriesByVenue.get(venueId) ?? []
+    const items = allItems(venueId)
+    const menuOptions = allOptions(venueId)
+    return {
+      venueId,
+      categories,
+      changedItemCount,
+      changedOptionCount,
+      reviewedItemCount: items.length,
+      reviewedOptionCount: menuOptions.length,
+      availableItemCount: items.filter((item) => item.isAvailable).length,
+      availableOptionCount: menuOptions.filter((option) => option.isAvailable).length
+    }
+  }
+  const errorEnvelope = (error: ApiErrorFixture) =>
+    jsonResponse(
+      {
+        error: {
+          code:
+            error.code ??
+            (error.status === 403
+              ? 'FORBIDDEN'
+              : error.status === 409
+                ? 'MENU_SHIFT_CHECK_STALE'
+                : 'INTERNAL_ERROR'),
+          message:
+            error.message ??
+            (error.status === 409
+              ? 'Меню изменилось. Обновите проверку и повторите подтверждение.'
+              : 'Не удалось завершить проверку меню.')
+        }
+      },
+      error.status
+    )
+  const deferNextMenuLoad = (venueId: number) => {
+    let release = () => undefined
+    const promise = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const queue = deferredMenuResponses.get(venueId) ?? []
+    queue.push({ promise, release })
+    deferredMenuResponses.set(venueId, queue)
+    return release
+  }
+
+  await page.route('**/api/auth/telegram', async (route) => {
+    await route.fulfill(jsonResponse({ token: 'e2e-session-token', expiresAtEpochSeconds: sessionExpiresAt }))
+  })
+
+  await page.route('**/api/venue/me', async (route) => {
+    await route.fulfill(
+      jsonResponse({
+        userId: 123456789,
+        venues: accesses.map(({ categories: _categories, ...access }) => access)
+      })
+    )
+  })
+
+  await page.route('**/api/venue/menu?**', async (route) => {
+    const request = route.request()
+    const venueId = Number(new URL(request.url()).searchParams.get('venueId'))
+    const categories = categoriesByVenue.get(venueId)
+    if (request.method() !== 'GET' || !categories) {
+      await route.fulfill(errorEnvelope({ status: 404, code: 'NOT_FOUND', message: 'Меню не найдено.' }))
+      return
+    }
+    menuRequests.push(venueId)
+    const snapshot = cloneCategories(categories)
+    const gate = deferredMenuResponses.get(venueId)?.shift()
+    await gate?.promise
+    try {
+      await route.fulfill(jsonResponse({ venueId, categories: snapshot }))
+    } catch {
+      // A venue switch aborts the disposed screen request; the late fixture response is intentionally ignored.
+    }
+  })
+
+  await page.route('**/api/venue/menu/items/*/availability**', async (route) => {
+    const request = route.request()
+    const url = new URL(request.url())
+    const venueId = Number(url.searchParams.get('venueId'))
+    const itemId = Number(url.pathname.match(/\/items\/(\d+)\/availability$/)?.[1])
+    const access = accesses.find((candidate) => candidate.venueId === venueId)
+    const item = findItem(venueId, itemId)
+    if (
+      request.method() !== 'PATCH' ||
+      !access?.permissions.includes('MENU_AVAILABILITY_MANAGE') ||
+      !item
+    ) {
+      await route.fulfill(errorEnvelope({ status: item ? 403 : 404 }))
+      return
+    }
+    const body = (await request.postDataJSON()) as { isAvailable: boolean }
+    itemAvailabilityCalls += 1
+    item.isAvailable = body.isAvailable
+    await route.fulfill(jsonResponse(item))
+  })
+
+  await page.route('**/api/venue/menu/options/*/availability**', async (route) => {
+    const request = route.request()
+    const url = new URL(request.url())
+    const venueId = Number(url.searchParams.get('venueId'))
+    const optionId = Number(url.pathname.match(/\/options\/(\d+)\/availability$/)?.[1])
+    const access = accesses.find((candidate) => candidate.venueId === venueId)
+    const menuOption = findOption(venueId, optionId)
+    if (
+      request.method() !== 'PATCH' ||
+      !access?.permissions.includes('MENU_AVAILABILITY_MANAGE') ||
+      !menuOption
+    ) {
+      await route.fulfill(errorEnvelope({ status: menuOption ? 403 : 404 }))
+      return
+    }
+    const body = (await request.postDataJSON()) as { isAvailable: boolean }
+    optionAvailabilityCalls += 1
+    menuOption.isAvailable = body.isAvailable
+    await route.fulfill(jsonResponse(menuOption))
+  })
+
+  await page.route('**/api/venue/menu/shift-check?**', async (route) => {
+    const request = route.request()
+    const venueId = Number(new URL(request.url()).searchParams.get('venueId'))
+    const access = accesses.find((candidate) => candidate.venueId === venueId)
+    if (
+      request.method() !== 'POST' ||
+      !access ||
+      (access.role !== 'OWNER' && access.role !== 'MANAGER') ||
+      !access.permissions.includes('MENU_SHIFT_CHECK')
+    ) {
+      await route.fulfill(errorEnvelope({ status: 403, code: 'FORBIDDEN', message: 'Недостаточно прав.' }))
+      return
+    }
+
+    const body = (await request.postDataJSON()) as VenueMenuShiftCheckRequestFixture
+    shiftCheckRequests.push({
+      venueId,
+      body: JSON.parse(JSON.stringify(body)) as VenueMenuShiftCheckRequestFixture
+    })
+    const queuedError = shiftCheckErrors.shift()
+    if (queuedError) {
+      await route.fulfill(errorEnvelope(queuedError))
+      return
+    }
+
+    const duplicateItemIds = new Set<number>()
+    const duplicateOptionIds = new Set<number>()
+    const invalidItemChange = body.items.some((change) => {
+      if (duplicateItemIds.has(change.itemId)) return true
+      duplicateItemIds.add(change.itemId)
+      const item = findItem(venueId, change.itemId)
+      return (
+        !item ||
+        item.isAvailable !== change.expectedIsAvailable ||
+        change.expectedIsAvailable === change.desiredIsAvailable
+      )
+    })
+    const invalidOptionChange = body.options.some((change) => {
+      if (duplicateOptionIds.has(change.optionId)) return true
+      duplicateOptionIds.add(change.optionId)
+      const menuOption = findOption(venueId, change.optionId)
+      return (
+        !menuOption ||
+        menuOption.itemId !== change.itemId ||
+        menuOption.isAvailable !== change.expectedIsAvailable ||
+        change.expectedIsAvailable === change.desiredIsAvailable
+      )
+    })
+    if (invalidItemChange || invalidOptionChange) {
+      await route.fulfill(
+        errorEnvelope({
+          status: 409,
+          code: 'MENU_SHIFT_CHECK_STALE',
+          message: 'Меню изменилось. Обновите проверку и повторите подтверждение.'
+        })
+      )
+      return
+    }
+
+    body.items.forEach((change) => {
+      const item = findItem(venueId, change.itemId)
+      if (item) item.isAvailable = change.desiredIsAvailable
+    })
+    body.options.forEach((change) => {
+      const menuOption = findOption(venueId, change.optionId)
+      if (menuOption) menuOption.isAvailable = change.desiredIsAvailable
+    })
+    await route.fulfill(jsonResponse(menuResponse(venueId, body.items.length, body.options.length)))
+  })
+
+  return {
+    getCategories: (venueId = 1) => categoriesByVenue.get(venueId) ?? [],
+    getMenuRequests: () => [...menuRequests],
+    getShiftCheckRequests: () => [...shiftCheckRequests],
+    getItemAvailabilityCalls: () => itemAvailabilityCalls,
+    getOptionAvailabilityCalls: () => optionAvailabilityCalls,
+    queueShiftCheckError: (error: ApiErrorFixture) => {
+      shiftCheckErrors.push(error)
+    },
+    deferNextMenuLoad,
+    setItemAvailability: (venueId: number, itemId: number, isAvailable: boolean) => {
+      const item = findItem(venueId, itemId)
+      if (item) item.isAvailable = isAvailable
+    },
+    setOptionAvailability: (venueId: number, optionId: number, isAvailable: boolean) => {
+      const menuOption = findOption(venueId, optionId)
+      if (menuOption) menuOption.isAvailable = isAvailable
+    }
   }
 }
 
@@ -10157,6 +10544,365 @@ test('venue manager can create promotions from the management section', async ({
   await form.getByRole('button', { name: 'Сохранить черновик' }).click()
   await expect(page.getByText('Черновик акции создан.')).toBeVisible()
   expect(api.getMutations()).toEqual(['create'])
+})
+
+test('venue manager drafts cancels and atomically confirms one menu shift check batch', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueMenuShiftCheckApi(page, {
+    accesses: [
+      {
+        venueId: 1,
+        venueName: 'Микс',
+        venueCity: 'Москва',
+        venueStatus: 'PUBLISHED',
+        role: 'MANAGER',
+        permissions: ['MENU_VIEW', 'MENU_MANAGE', 'MENU_AVAILABILITY_MANAGE', 'MENU_SHIFT_CHECK'],
+        categories: buildMenuShiftCheckFixture()
+      }
+    ]
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+
+  const shiftCheck = page.locator('.venue-menu-shift-check')
+  const search = shiftCheck.getByRole('searchbox', { name: 'Поиск по позициям и опциям' })
+  const itemRow = (itemId: number) =>
+    shiftCheck.locator(`.venue-shift-check-item[data-item-id="${itemId}"]`)
+  const optionRow = (optionId: number) =>
+    shiftCheck.locator(`.venue-shift-check-option[data-option-id="${optionId}"]`)
+  const category = (categoryId: number) =>
+    shiftCheck.locator(`.venue-shift-check-category[data-category-id="${categoryId}"]`)
+  const itemGroup = (itemId: number) => itemRow(itemId).locator('..')
+  const confirmationGroups = shiftCheck.locator('.venue-shift-check-confirmation-grid > div')
+  const prepareDraft = async () => {
+    await shiftCheck.getByLabel('Позиция доступна: Кальян Ягодный').uncheck()
+    await shiftCheck.getByLabel('Опция доступна: Яблоко').uncheck()
+    await category(31).getByRole('button', { name: 'Позиции категории недоступны' }).click()
+    await itemGroup(320).getByRole('button', { name: 'Опции позиции доступны' }).click()
+    await search.fill('Кальян Классический')
+    await shiftCheck.getByRole('button', { name: 'Выбрать все отфильтрованные' }).click()
+    await expect(shiftCheck.getByLabel('Выбрать позицию: Кальян Классический')).toBeChecked()
+    await shiftCheck.getByRole('button', { name: 'Выбранные доступны' }).click()
+    await search.fill('')
+  }
+
+  await expect(shiftCheck).toBeVisible()
+  await expect(shiftCheck).not.toHaveAttribute('open', '')
+  await shiftCheck.locator('summary').click()
+  await expect(
+    shiftCheck.getByText(
+      'Проверьте наличие позиций и вариантов перед началом смены. Изменения применятся только после подтверждения.',
+      { exact: true }
+    )
+  ).toBeVisible()
+  await expect(category(30)).toContainText('Позиции: 1/2 · Опции: 2/3')
+  await expect(category(31)).toContainText('Позиции: 2/2 · Опции: 0/1')
+
+  await search.fill('Мята')
+  await expect(optionRow(402)).toBeVisible()
+  await expect(optionRow(401)).toHaveCount(0)
+  await expect(itemRow(310)).toHaveCount(0)
+  await search.fill('')
+  await shiftCheck.getByRole('button', { name: 'Нет в наличии', exact: true }).click()
+  await expect(itemRow(311)).toBeVisible()
+  await expect(optionRow(402)).toBeVisible()
+  await expect(optionRow(410)).toBeVisible()
+  await expect(optionRow(401)).toHaveCount(0)
+  await shiftCheck.getByRole('button', { name: 'Все', exact: true }).click()
+
+  await prepareDraft()
+  expect(api.getShiftCheckRequests()).toHaveLength(0)
+  expect(api.getItemAvailabilityCalls()).toBe(0)
+  expect(api.getOptionAvailabilityCalls()).toBe(0)
+  await expect(category(30)).toContainText('Позиции: 1/2 · Опции: 1/3')
+  await expect(category(31)).toContainText('Позиции: 0/2 · Опции: 1/1')
+  await expect(confirmationGroups.nth(0)).toContainText('Доступны: 1')
+  await expect(confirmationGroups.nth(0)).toContainText('Недоступны: 3')
+  await expect(confirmationGroups.nth(1)).toContainText('Доступны: 1')
+  await expect(confirmationGroups.nth(1)).toContainText('Недоступны: 1')
+
+  await shiftCheck.getByRole('button', { name: 'Есть несохранённые изменения', exact: true }).click()
+  await expect(itemRow(310)).toBeVisible()
+  await expect(itemRow(311)).toBeVisible()
+  await expect(itemRow(320)).toBeVisible()
+  await expect(itemRow(321)).toBeVisible()
+  await expect(optionRow(401)).toBeVisible()
+  await expect(optionRow(410)).toBeVisible()
+  await expect(optionRow(402)).toHaveCount(0)
+  await shiftCheck.getByRole('button', { name: 'Отменить изменения' }).click()
+
+  expect(api.getShiftCheckRequests()).toHaveLength(0)
+  await expect(shiftCheck.getByText('Несохранённые изменения отменены.', { exact: true })).toBeVisible()
+  await shiftCheck.getByRole('button', { name: 'Все', exact: true }).click()
+  await expect(shiftCheck.getByLabel('Позиция доступна: Кальян Ягодный')).toBeChecked()
+  await expect(shiftCheck.getByLabel('Позиция доступна: Кальян Классический')).not.toBeChecked()
+  await expect(shiftCheck.getByLabel('Опция доступна: Яблоко')).toBeChecked()
+  await expect(shiftCheck.getByLabel('Опция доступна: Большой чайник')).not.toBeChecked()
+  await expect(confirmationGroups.nth(0)).toContainText('Доступны: 0')
+  await expect(confirmationGroups.nth(0)).toContainText('Недоступны: 0')
+  await expect(confirmationGroups.nth(1)).toContainText('Доступны: 0')
+  await expect(confirmationGroups.nth(1)).toContainText('Недоступны: 0')
+
+  await prepareDraft()
+  await shiftCheck.getByRole('button', { name: 'Подтвердить проверку' }).click()
+  await expect.poll(() => api.getShiftCheckRequests()).toHaveLength(1)
+  expect(api.getShiftCheckRequests()).toEqual([
+    {
+      venueId: 1,
+      body: {
+        items: [
+          { itemId: 310, expectedIsAvailable: true, desiredIsAvailable: false },
+          { itemId: 311, expectedIsAvailable: false, desiredIsAvailable: true },
+          { itemId: 320, expectedIsAvailable: true, desiredIsAvailable: false },
+          { itemId: 321, expectedIsAvailable: true, desiredIsAvailable: false }
+        ],
+        options: [
+          { optionId: 401, itemId: 310, expectedIsAvailable: true, desiredIsAvailable: false },
+          { optionId: 410, itemId: 320, expectedIsAvailable: false, desiredIsAvailable: true }
+        ]
+      }
+    }
+  ])
+  await expect(
+    shiftCheck.getByText('Проверка меню завершена. Изменено позиций: 4, опций: 2.', { exact: true })
+  ).toBeVisible()
+  await expect(shiftCheck.getByLabel('Позиция доступна: Кальян Ягодный')).not.toBeChecked()
+  await expect(shiftCheck.getByLabel('Позиция доступна: Кальян Классический')).toBeChecked()
+  await expect(shiftCheck.getByLabel('Опция доступна: Яблоко')).not.toBeChecked()
+  await expect(shiftCheck.getByLabel('Опция доступна: Большой чайник')).toBeChecked()
+  expect(api.getShiftCheckRequests()).toHaveLength(1)
+  expect(api.getItemAvailabilityCalls()).toBe(0)
+  expect(api.getOptionAvailabilityCalls()).toBe(0)
+})
+
+test('venue owner can complete a no-op menu shift check with one empty batch', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueMenuShiftCheckApi(page, {
+    accesses: [
+      {
+        venueId: 1,
+        venueName: 'Микс',
+        venueCity: 'Москва',
+        venueStatus: 'PUBLISHED',
+        role: 'OWNER',
+        permissions: ['MENU_VIEW', 'MENU_MANAGE', 'MENU_AVAILABILITY_MANAGE', 'MENU_SHIFT_CHECK'],
+        categories: buildMenuShiftCheckFixture()
+      }
+    ]
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+  const shiftCheck = page.locator('.venue-menu-shift-check')
+  await shiftCheck.locator('summary').click()
+  await shiftCheck.getByRole('button', { name: 'Подтвердить проверку' }).click()
+
+  await expect.poll(() => api.getShiftCheckRequests()).toHaveLength(1)
+  expect(api.getShiftCheckRequests()).toEqual([
+    {
+      venueId: 1,
+      body: {
+        items: [],
+        options: []
+      }
+    }
+  ])
+  await expect(
+    shiftCheck.getByText('Проверка меню завершена. Изменено позиций: 0, опций: 0.', { exact: true })
+  ).toBeVisible()
+})
+
+test('menu shift check rebases a stale draft and keeps a failed confirmation retryable', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueMenuShiftCheckApi(page, {
+    accesses: [
+      {
+        venueId: 1,
+        venueName: 'Микс',
+        venueCity: 'Москва',
+        venueStatus: 'PUBLISHED',
+        role: 'MANAGER',
+        permissions: ['MENU_VIEW', 'MENU_MANAGE', 'MENU_AVAILABILITY_MANAGE', 'MENU_SHIFT_CHECK'],
+        categories: buildMenuShiftCheckFixture()
+      }
+    ]
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+  const shiftCheck = page.locator('.venue-menu-shift-check')
+  const errorCard = page.locator('.venue-menu-builder > .error-card')
+  await shiftCheck.locator('summary').click()
+  await shiftCheck.getByLabel('Позиция доступна: Кальян Ягодный').uncheck()
+
+  api.queueShiftCheckError({
+    status: 409,
+    code: 'MENU_SHIFT_CHECK_STALE',
+    message: 'Меню изменилось. Обновите проверку и повторите подтверждение.'
+  })
+  await shiftCheck.getByRole('button', { name: 'Подтвердить проверку' }).click()
+  await expect.poll(() => api.getShiftCheckRequests()).toHaveLength(1)
+  await expect(
+    errorCard.getByText('Меню изменилось. Обновите проверку и повторите подтверждение.', { exact: true })
+  ).toBeVisible()
+  await expect(shiftCheck.getByLabel('Позиция доступна: Кальян Ягодный')).not.toBeChecked()
+  await expect(shiftCheck.getByLabel('Позиция доступна: Кальян Ягодный')).toBeDisabled()
+
+  api.setOptionAvailability(1, 402, true)
+  await errorCard.getByRole('button', { name: 'Обновить проверку' }).click()
+  await expect(
+    shiftCheck.getByText('Проверка обновлена. Проверьте изменения и подтвердите ещё раз.', { exact: true })
+  ).toBeVisible()
+  await expect(shiftCheck.getByLabel('Позиция доступна: Кальян Ягодный')).not.toBeChecked()
+  await expect(shiftCheck.getByLabel('Позиция доступна: Кальян Ягодный')).toBeEnabled()
+  await expect(shiftCheck.getByLabel('Опция доступна: Мята')).toBeChecked()
+
+  api.queueShiftCheckError({
+    status: 500,
+    code: 'INTERNAL_ERROR',
+    message: 'database details must stay private'
+  })
+  await shiftCheck.getByRole('button', { name: 'Подтвердить проверку' }).click()
+  await expect.poll(() => api.getShiftCheckRequests()).toHaveLength(2)
+  await expect(errorCard.getByText('Не удалось завершить проверку меню.', { exact: true })).toBeVisible()
+  await expect(errorCard).not.toContainText('database details must stay private')
+  await expect(shiftCheck.getByLabel('Позиция доступна: Кальян Ягодный')).not.toBeChecked()
+  await expect(shiftCheck.getByRole('button', { name: 'Подтвердить проверку' })).toBeEnabled()
+
+  await errorCard.getByRole('button', { name: 'Повторить' }).click()
+  await expect.poll(() => api.getShiftCheckRequests()).toHaveLength(3)
+  await expect(
+    shiftCheck.getByText('Проверка меню завершена. Изменено позиций: 1, опций: 0.', { exact: true })
+  ).toBeVisible()
+  expect(api.getShiftCheckRequests().map((request) => request.body)).toEqual([
+    {
+      items: [{ itemId: 310, expectedIsAvailable: true, desiredIsAvailable: false }],
+      options: []
+    },
+    {
+      items: [{ itemId: 310, expectedIsAvailable: true, desiredIsAvailable: false }],
+      options: []
+    },
+    {
+      items: [{ itemId: 310, expectedIsAvailable: true, desiredIsAvailable: false }],
+      options: []
+    }
+  ])
+  expect(api.getCategories()[0].items[0].isAvailable).toBe(false)
+})
+
+test('menu shift check clears venue drafts and ignores a disposed late menu response', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const permissions = ['MENU_VIEW', 'MENU_MANAGE', 'MENU_AVAILABILITY_MANAGE', 'MENU_SHIFT_CHECK']
+  const api = await mockVenueMenuShiftCheckApi(page, {
+    accesses: [
+      {
+        venueId: 1,
+        venueName: 'Микс',
+        venueCity: 'Москва',
+        venueStatus: 'PUBLISHED',
+        role: 'MANAGER',
+        permissions,
+        categories: buildMenuShiftCheckFixture()
+      },
+      {
+        venueId: 2,
+        venueName: 'Дым',
+        venueCity: 'Казань',
+        venueStatus: 'PUBLISHED',
+        role: 'MANAGER',
+        permissions,
+        categories: buildMenuShiftCheckFixture(1000, ' Второй')
+      }
+    ]
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+  let shiftCheck = page.locator('.venue-menu-shift-check')
+  const venueSelect = page.locator('.venue-controls select.venue-select')
+  await shiftCheck.locator('summary').click()
+  await shiftCheck.getByLabel('Позиция доступна: Кальян Ягодный').uncheck()
+  await shiftCheck.getByLabel('Выбрать позицию: Кальян Ягодный').check()
+  await expect(shiftCheck.locator('.menu-item-badge').filter({ hasText: 'Несохранено' })).toHaveCount(1)
+  await expect(shiftCheck.getByLabel('Выбрать позицию: Кальян Ягодный')).toBeChecked()
+
+  await venueSelect.selectOption('2')
+  shiftCheck = page.locator('.venue-menu-shift-check')
+  await shiftCheck.locator('summary').click()
+  await expect(shiftCheck.getByLabel('Позиция доступна: Кальян Ягодный Второй')).toBeChecked()
+  await expect(shiftCheck.getByLabel('Выбрать позицию: Кальян Ягодный Второй')).not.toBeChecked()
+  await expect(shiftCheck.locator('.menu-item-badge').filter({ hasText: 'Несохранено' })).toHaveCount(0)
+  await shiftCheck.getByRole('button', { name: 'Подтвердить проверку' }).click()
+  await expect.poll(() => api.getShiftCheckRequests()).toHaveLength(1)
+  expect(api.getShiftCheckRequests()[0]).toEqual({
+    venueId: 2,
+    body: { items: [], options: [] }
+  })
+
+  const releaseVenueOne = api.deferNextMenuLoad(1)
+  const venueOneRequestsBefore = api.getMenuRequests().filter((venueId) => venueId === 1).length
+  await venueSelect.selectOption('1')
+  await expect
+    .poll(() => api.getMenuRequests().filter((venueId) => venueId === 1).length)
+    .toBe(venueOneRequestsBefore + 1)
+  await venueSelect.selectOption('2')
+  const secondVenueItem = page.locator('.venue-menu-item').filter({ hasText: 'Кальян Ягодный Второй' })
+  await expect(secondVenueItem).toBeVisible()
+  releaseVenueOne()
+
+  await expect(venueSelect).toHaveValue('2')
+  await expect(secondVenueItem).toBeVisible()
+  await expect(page.locator('.venue-menu-item').filter({ hasText: /^Кальян Ягодный$/ })).toHaveCount(0)
+  expect(api.getShiftCheckRequests()).toHaveLength(1)
+})
+
+test('venue staff has no menu shift check but keeps individual stop-list access', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueMenuShiftCheckApi(page, {
+    accesses: [
+      {
+        venueId: 1,
+        venueName: 'Микс',
+        venueCity: 'Москва',
+        venueStatus: 'PUBLISHED',
+        role: 'STAFF',
+        permissions: ['MENU_VIEW', 'MENU_AVAILABILITY_MANAGE'],
+        categories: buildMenuShiftCheckFixture()
+      }
+    ]
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+  await expect(page.locator('.venue-menu-shift-check')).toHaveCount(0)
+  await expect(page.getByText('Проверка меню перед сменой', { exact: true })).toHaveCount(0)
+
+  const item = page.locator('.venue-menu-item').filter({ hasText: 'Кальян Ягодный' })
+  await item.getByLabel('Доступно гостям', { exact: true }).uncheck()
+  await expect.poll(() => api.getItemAvailabilityCalls()).toBe(1)
+  await expect(item.getByLabel('В стоп-листе', { exact: true })).not.toBeChecked()
+
+  const directResult = await page.evaluate(async () => {
+    const response = await fetch('/api/venue/menu/shift-check?venueId=1', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer e2e-session-token',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ items: [], options: [] })
+    })
+    return {
+      status: response.status,
+      body: (await response.json()) as { error?: { code?: string } }
+    }
+  })
+  expect(directResult).toEqual({
+    status: 403,
+    body: { error: { code: 'FORBIDDEN', message: 'Недостаточно прав.' } }
+  })
+  await expect(page.locator('.venue-menu-shift-check')).toHaveCount(0)
 })
 
 test('venue manager manages menu item flavors from mini app', async ({ page }) => {

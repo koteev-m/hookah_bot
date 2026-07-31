@@ -89,6 +89,39 @@ data class AvailabilityRequest(
 )
 
 @Serializable
+data class MenuShiftCheckRequest(
+    val items: List<MenuShiftCheckItemChange> = emptyList(),
+    val options: List<MenuShiftCheckOptionChange> = emptyList(),
+)
+
+@Serializable
+data class MenuShiftCheckItemChange(
+    val itemId: Long,
+    val expectedIsAvailable: Boolean,
+    val desiredIsAvailable: Boolean,
+)
+
+@Serializable
+data class MenuShiftCheckOptionChange(
+    val optionId: Long,
+    val itemId: Long,
+    val expectedIsAvailable: Boolean,
+    val desiredIsAvailable: Boolean,
+)
+
+@Serializable
+data class MenuShiftCheckResponse(
+    val venueId: Long,
+    val categories: List<VenueMenuCategoryDto>,
+    val changedItemCount: Int,
+    val changedOptionCount: Int,
+    val reviewedItemCount: Int,
+    val reviewedOptionCount: Int,
+    val availableItemCount: Int,
+    val availableOptionCount: Int,
+)
+
+@Serializable
 data class ReorderCategoriesRequest(
     val categoryIds: List<Long>,
 )

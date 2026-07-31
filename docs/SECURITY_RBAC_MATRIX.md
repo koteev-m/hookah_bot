@@ -1,8 +1,8 @@
 # Security / RBAC Permission Matrix
 
-Дата актуализации: 2026-07-29.
+Дата актуализации: 2026-07-30.
 
-Статус: **current product reference / UPDATED**. Runtime permission parity is **PARTIAL** unless a specific route, test or smoke result is cited by the relevant implementation task. Venue Mode operational surfaces are detailed in `docs/VENUE_OPERATIONS.md`; staff profile/today-shift/tips permissions are detailed in `docs/STAFF_PROFILES_SHIFTS_TIPS.md`; booking lifecycle permissions are detailed in `docs/BOOKING_LIFECYCLE.md`; Telegram fallback/staff-chat permissions are detailed in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`; menu/stop-list role policy is detailed in `docs/MENU_OPTIONS_STOPLIST.md`; venue media upload/storage security is detailed in `docs/MEDIA_STORAGE_UPLOAD.md`; validation strategy is detailed in `docs/TESTING_QA_SMOKE_STRATEGY.md`; release/deploy operations are detailed in `docs/DEPLOYMENT_RUNBOOK.md`.
+Статус: **current product reference / UPDATED**. Runtime permission parity is **PARTIAL** unless a specific route, test or smoke result is cited by the relevant implementation task. The bounded OWNER/MANAGER menu shift-check permission is **MENU SHIFT CHECK PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**; this does not close broader permission or dangerous-action audit parity. Venue Mode operational surfaces are detailed in `docs/VENUE_OPERATIONS.md`; staff profile/today-shift/tips permissions are detailed in `docs/STAFF_PROFILES_SHIFTS_TIPS.md`; booking lifecycle permissions are detailed in `docs/BOOKING_LIFECYCLE.md`; Telegram fallback/staff-chat permissions are detailed in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`; menu/stop-list role policy is detailed in `docs/MENU_OPTIONS_STOPLIST.md`; venue media upload/storage security is detailed in `docs/MEDIA_STORAGE_UPLOAD.md`; validation strategy is detailed in `docs/TESTING_QA_SMOKE_STRATEGY.md`; release/deploy operations are detailed in `docs/DEPLOYMENT_RUNBOOK.md`.
 
 ## Core Rule
 
@@ -76,12 +76,14 @@ Target decision: remove `ADMIN` from the product model and keep it only as a com
 | Staff | `staff_call.view`, `staff_call.ack_complete` | Own venue calls | Current ACK/DONE smoke passed; CANCELLED UI/lifecycle and row-level actor columns remain future. |
 | Staff | `booking.view`, arrival/no-show where allowed | Own venue bookings | Current STAFF booking split. Confirm/cancel/change/message/settings denied. |
 | Staff | `menu.view`, `table.view`, `menu_availability.manage` | Own venue operational availability | Current docs say item/option stop-list parity is aligned. Target menu policy is `staff_stoplist_enabled` or equivalent before Staff can change availability; see `docs/MENU_OPTIONS_STOPLIST.md`. |
+| Staff | `MENU_SHIFT_CHECK` denied | All venue scopes | Current Phase 1 rule. Entry is hidden and direct API is denied; existing individual item/option availability permission is unchanged. |
 | Staff | `staff_profile.edit_own_draft` | Own linked profile only | Current Phase 1 where policy allows. Staff may edit own draft fields only, cannot self-publish or enable guest visibility. Photo upload remains future. |
 | Staff | `support_ticket.none`, `venue_chat.none`, `feedback.none`, `venue_preview.none`, `billing.none`, `platform.none`, `settings.none` | All scopes | Current product rule. Direct API must return 403/denial even if UI hides nav. |
 | Staff | `promotion.manage.none`, `promotion.calculate.none` | All scopes | Phase 1/2 rule. Staff may see persisted order facts but does not configure or calculate promotions. |
 | Venue Manager | `order_queue.view`, `order_batch.status_update`, `order_batch.reject` | Own venue | Current where route permissions allow. |
 | Venue Manager | `booking.manage`, `staff_call.manage` | Own venue | Current. |
 | Venue Manager | `menu.view`, `menu.manage`, `stop_list.manage` | Own venue | Current with policy caveats by route. Conservative target keeps Manager to stop-list/shift check/basic availability unless broad `MENU_MANAGE` is explicitly retained; see `docs/MENU_OPTIONS_STOPLIST.md`. |
+| Venue Manager | `MENU_SHIFT_CHECK` | Own venue only | Phase 1 locally validated. May prepare a local draft and atomically confirm one bounded availability batch, including no-op completion. |
 | Venue Manager | `table.view`, limited `table.manage` | Own venue | Current where backend permission allows; owner-only QR actions must stay denied if configured so. |
 | Venue Manager | `support_ticket.manage_own_venue`, `venue_chat.manage_own_venue` | Own venue only | Current support/chat MVP. Venue cannot reply when support ticket is assigned to Platform unless product policy explicitly allows it. |
 | Venue Manager | `feedback.view_own_venue`, `feedback.follow_up_low` | Own venue only | Current MVP. Read-only aggregate/list; rating `1..3` follow-up opens exact `VENUE_CHAT`. Public review link edit denied. |
@@ -92,6 +94,7 @@ Target decision: remove `ADMIN` from the product model and keep it only as a com
 | Venue Manager | `billing.none`, dangerous lifecycle none | Billing/platform/lifecycle | Current product rule. |
 | Venue Owner | All venue operations inside own venue | Own venue | Current via active `venue_members(role=OWNER)`. |
 | Venue Owner | `staff.manage`, `staff_invite.create`, `menu.manage`, `stop_list.manage`, `table_qr.manage/rotate/export`, `settings.manage`, `staff_chat.link/unlink/test` | Own venue | Current where implemented; dangerous actions need confirmation/audit. |
+| Venue Owner | `MENU_SHIFT_CHECK` | Own venue only | Phase 1 locally validated. May prepare a local draft and atomically confirm one bounded availability batch, including no-op completion. |
 | Venue Owner | `staff_profile.manage`, `staff_profile.publish`, `staff_shift.manage_today`, `staff_tip_method.approve` | Own venue | Current for Phase 1 profiles + today shift; future for tip method approval. |
 | Venue Owner | `venue_preview.view` | Own venue only | Current. Server-selected preview is read-only and grants no lifecycle mutation, publication, share-link, auto-save or unsaved-form authority. |
 | Venue Owner | `billing.view/pay` | Own venue subscription/payment state | Current manual billing MVP for view/pay surfaces; Platform-only mark-paid/courtesy remain denied. |
@@ -115,7 +118,7 @@ Target decision: remove `ADMIN` from the product model and keep it only as a com
 | Venue chats | Guest bot/Mini App entry where implemented. | Guest `Чаты`. | Owner/Manager `Сообщения`. | No by default. | Never for ordinary venue chats. | Staff denied. |
 | Post-visit feedback | No automated prompt; public review setting uses the same backend source as Mini App. | Submit only from own completed History detail; optional explicit Yandex CTA after `5/5`. | Owner/Manager read list and open low-rating exact `VENUE_CHAT`; Owner edits public review URL; Staff denied. | Feedback analytics dashboard future. | Never. | No auto support ticket, Owner message, Telegram prompt or public redirect. |
 | Booking chats | Booking action `Открыть переписку`. | Guest `Чаты`. | Owner/Manager `Сообщения`. | No by default. | Notification mirror only where existing policy allows. | Must not become support queue. |
-| Menu/stop-list | Bot owner/manager/staff paths where implemented. | Guest read/order only after QR. | Owner/Manager manage; Staff availability only. | No ordinary menu management. | No source-of-truth edits. | Price/content edits are dangerous and audited where implemented. |
+| Menu/stop-list | Bot owner/manager/staff paths where implemented; no Phase 1 shift-check UI. | Guest read/order only after QR. | Owner/Manager manage and have `MENU_SHIFT_CHECK`; Staff keeps individual availability only and has no shift-check entry/API. | No ordinary menu management or automatic Venue shift-check authority. | No source-of-truth edits. | Shift-check batch is own-venue, atomic and audited; existing individual stop-list policy is unchanged. |
 | Promotions | Existing Telegram templates and shared server-owned Happy Hours preview/submit. | Informational read plus current server-owned Happy Hours cart breakdown/submit. | Owner/Manager manage informational and bounded Happy Hours rules; Staff denied. | No ordinary venue promotion management. | Persisted order facts only. | One backend engine; Bot/Mini App clients never calculate trusted discounts. |
 | Venue card preview | Existing owner/manager guest-preview callbacks. | The real published public card. | One `Предпросмотр для гостя` renderer: server-selected `PUBLISHED_PUBLIC` uses the exact Guest read model; `PRIVATE_DRAFT` uses an own-venue saved public allowlist. Staff has no entry. | No automatic access. | No. | No Guest bypass, mutations, public URL, share token or cache. Private media delivery is authenticated and venue/section/media-scoped; raw refs are excluded. |
 | Tables/QR | Bot management where implemented. | QR context only. | Owner/Manager table/QR where allowed; Staff read-only. | No ordinary venue table management unless platform support policy says so. | No. | QR token is context pointer. |
@@ -135,7 +138,7 @@ These actions require server-side authorization and should require confirmation,
 | Venue published/hidden/paused/suspended/archived/deleted | Confirmation and audit with reason/status where implemented. |
 | Table QR token rotated/exported | Confirmation and audit; old/revoked token must not resolve. |
 | Staff chat linked/unlinked/tested | Confirmation for unlink; audit/link evidence without raw secrets. |
-| Menu price changed; item archived; option schema changed; media removed; Staff stop-list toggled; stop-list mass update | Audit safe old/new fields; no raw media/provider payloads. |
+| Menu price changed; item archived; option schema changed; media removed; Staff stop-list toggled; stop-list mass update | Audit safe old/new fields; no raw media/provider payloads. Shift-check completion requires explicit confirmation and exactly one `MENU_SHIFT_CHECK_COMPLETED` audit in the same transaction, including no-op completion. |
 | Venue media uploaded/replaced/hidden/shown/deleted | OWNER/MANAGER own venue only; strict content validation; audit safe asset/status metadata; never expose source ref, object/path key, Telegram file id or storage credentials. |
 | Promotion schedule, eligibility, reward, status, compatibility mode/matrix or priority changed | Owner/Manager own venue only; audit safe old/new rule/version, policy/version, priority and actor. |
 | Order force closed; tab reopened | Reason and audit; preserve session/tab boundaries. |
@@ -152,6 +155,7 @@ These actions require server-side authorization and should require confirmation,
 | `ADMIN` role | Legacy DB alias maps to `MANAGER`; Platform Mini App no longer exposes it. | Remove from product model; keep only compatibility alias. | Open migration/cleanup hygiene until no docs/copy/data imply separate Admin. |
 | Guest order/tab privacy | Current docs say table-session/tab scoping is closed. | Guest reads/writes own personal tab or joined shared tab only. | Keep two-guest and shared-tab privacy smoke in regression. |
 | Staff access | Staff support/venue-chat denial and operational scope are documented/smoked for current MVP. Current menu docs allow Staff item/option availability. | Staff sees operations only: orders, staff calls, allowed booking actions, menu/table read and stop-list only when enabled by venue policy. | Direct API denial tests remain critical for every new support/chat/billing/settings/menu route. |
+| Menu shift check | OWNER/MANAGER own-venue `MENU_SHIFT_CHECK`, Staff/foreign denial, bounded input, ownership checks, optimistic stale rejection and transactional audit are locally validated. | One authenticated actor confirms one all-or-nothing availability review; the client supplies no actor, owner, names, prices or private metadata. | Staging smoke remains required. Platform Owner receives no automatic Venue-route authority; Telegram shift-check UI is not part of Phase 1. |
 | Manager/Owner venue isolation | Own-venue RBAC is the product rule. | No cross-venue detail/reply/manage access. | Keep cross-venue tests for support, chats, orders, bookings and settings. |
 | Platform access | Platform Owner can manage platform scope and support tickets; ordinary venue chat hidden. | Platform does not bypass ordinary venue RBAC by default. | Event/audit explorer and analytics exports need additional privacy gates before broad release. |
 | Dangerous action audit | Several audits exist: owner invite/revoke, billing mark-paid/courtesy, staff-call ACK/DONE, support status/scope, lifecycle/status where implemented. | All dangerous actions write safe actor/target/old-new/reason evidence. | Audit coverage remains `PARTIAL` until menu price, QR rotate, force close, tab reopen and analytics export are verified. |
@@ -214,6 +218,19 @@ These actions require server-side authorization and should require confirmation,
     surface are rejected server-side; filename and browser `Content-Type` are never authority.
 32. Guest and both preview-mode DTOs, responses, errors, logs and audit contain no raw Telegram
     `file_id`, object key, filesystem path, storage credential or provider payload.
+33. OWNER and MANAGER can call menu shift check only for their own venue; STAFF, Guest,
+    Platform-only and foreign venue requests are denied.
+34. Shift-check input accepts only changed item/option ids, expected/desired availability and the
+    option's owning item id; unknown fields, duplicates, invalid ids and more than 500 combined
+    changes are rejected.
+35. Missing/foreign items or options and option/item ownership mismatch apply no partial changes
+    and create no completion audit.
+36. A stale expected item or option availability rejects the whole batch.
+37. Successful mixed and no-op confirmations each create exactly one safe
+    `MENU_SHIFT_CHECK_COMPLETED` audit in the same transaction; invalid/RBAC/rollback paths create
+    none.
+38. Existing Staff individual item/option availability routes and Telegram stop-list callbacks
+    remain unchanged.
 
 ## Roadmap Status
 
@@ -224,6 +241,8 @@ These actions require server-side authorization and should require confirmation,
 - Staff tips: `SPEC DRAFT / FUTURE`; payment provider/direct payout requires legal/product decision, and external tip intent is not proof of payment.
 - `ADMIN` decision: target is removal from product model / compatibility alias only; implementation cleanup remains a migration/copy hygiene follow-up.
 - Staff stop-list parity: current docs say operational item/option availability is aligned; per-venue `staff_stoplist_enabled` is target/future in `docs/MENU_OPTIONS_STOPLIST.md`.
+- Menu shift check: **MENU SHIFT CHECK PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**;
+  staging role/tenant/audit smoke remains required.
 - Dangerous action audit: `PARTIAL` until all listed dangerous actions have verified audit evidence.
 - Promotion configuration/status mutation audit: `PARTIAL / P2 FOLLOW-UP`; complete actor plus safe old/new rule/config/status evidence is not implemented yet.
 - Promotion Compatibility Policy: `AUDIT / FUTURE IMPLEMENTATION`; no common cross-promotion

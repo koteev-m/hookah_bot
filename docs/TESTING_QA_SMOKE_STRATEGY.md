@@ -23,6 +23,9 @@ Current practice:
   `GIFT_WITH_ITEM BOT/MINIAPP PARITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`.
   GitHub Actions and staging cross-surface smoke remain required.
 - Venue Mini App Guest Preview Phase 2.1 is **VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY / DONE / MVP / STAGING-SMOKE-PASSED**. Focused preview/Guest/RBAC/promotion backend tests, compile/lint, Mini App build and deterministic browser smoke `95/95` are green; GitHub Actions were green, staging deploy completed and manual staging smoke passed for the unified contract.
+- Menu shift check is **MENU SHIFT CHECK PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**.
+  OWNER/MANAGER use an own-venue local draft and one atomic availability batch; Staff individual
+  stop-list policy is unchanged. GitHub Actions and staging smoke remain required.
 
 Target QA model:
 - Every task ends with changed files, behavior summary, tests run, validation result, manual smoke checklist, `git status --short`, whether `scripts/dev/` was touched and whether staging deploy is needed.
@@ -102,6 +105,57 @@ Acceptance:
 
 The Preview smoke does **not** validate Venue Mini App media upload or management. No file picker,
 upload endpoint, replace/hide/delete flow or new storage path is part of Guest Preview Phase 2.1.
+
+## Venue Menu Shift Check Phase 1 Quality Gate
+
+Status:
+**MENU SHIFT CHECK PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**.
+
+The shift-check block is part of the existing Venue Menu screen. Existing immediate individual
+item/option stop-list routes remain unchanged; draft toggles and mass actions must not send
+availability mutations before one explicit confirmation.
+
+Required coverage:
+
+- OWNER and MANAGER own-venue allow; STAFF/Guest/Platform-only/foreign venue direct denial;
+- category item/option counts, search, unavailable/dirty filters, selected rows, category item
+  changes, item option changes and select-all-filtered behavior;
+- cancel sends no mutation/audit; confirm sends exactly one batch; no-op confirm writes one audit
+  with zero changed counts;
+- combined maximum 500 changes, duplicate rejection, missing/foreign item/option rejection and
+  option/item ownership validation;
+- one DB transaction for item updates, option updates and exactly one
+  `MENU_SHIFT_CHECK_COMPLETED` audit; every invalid/stale/rollback path leaves zero partial writes
+  and zero completion audits;
+- expected availability conflict rejects the whole batch with
+  `Меню изменилось. Обновите проверку и повторите подтверждение.`;
+- audit contains safe actor/venue ids, changed/reviewed counts and bounded changed-id lists, with no
+  names, prices, raw Telegram/initData/private/customer data or full request body;
+- venue switch/dispose aborts old requests, clears draft/selection and ignores late responses;
+- confirmed item/option availability is reflected by Guest menu and revalidated by stale cart
+  preview/add-batch;
+- existing individual availability routes and Telegram Bot stop-list regression remain green.
+
+Required local commands:
+
+```bash
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VenueMenuRoutesTest*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VenueMenuRepositoryTest*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*GuestVenueMenuRoutesTest*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*GuestOrderRoutesTest*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*AuditLogRepositoryTest*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*TelegramBotRouterTableTokenTest*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:compileKotlin --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:ktlintCheck --console=plain
+npm --prefix miniapp run build
+CI=1 TZ=UTC MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke
+```
+
+Recorded local evidence for this status: `VenueMenuRoutesTest`, `VenueMenuRepositoryTest`,
+`GuestVenueMenuRoutesTest`, `GuestOrderRoutesTest`, `AuditLogRepositoryTest`,
+`TelegramBotRouterTableTokenTest`, isolated `compileKotlin`, `ktlintCheck`, Mini App production
+build and the full deterministic browser smoke `100/100` passed. Green Actions and staging/manual
+role/guest smoke stay required before release readiness.
 
 ## Venue Mini App Media Foundation Future Quality Gate
 
@@ -578,6 +632,15 @@ Menu/stop-list:
 - guest cannot submit stale unavailable cart;
 - unavailable option is blocked;
 - Staff/Manager permissions match policy.
+- Owner/Manager shift-check draft changes make no request until confirmation;
+- cancel and failed validation create no mutation/audit;
+- one mixed item/option confirm is atomic and produces one safe completion audit;
+- no-op confirm produces one audit with zero changed counts;
+- stale expected availability rejects the whole batch and offers refresh;
+- Staff entry/direct request and foreign venue request are denied without changing individual
+  Staff availability policy;
+- venue switch clears draft/selection and confirmed availability reaches Guest menu plus stale cart
+  preview/add-batch validation.
 
 Booking:
 - Guest creates booking;
@@ -662,7 +725,9 @@ Telegram/staff-chat:
 - Platform Owner guest QR test escape remains open/needs verification.
 - Booking reminders and future no-show automation remain rollout-gated/partial.
 - Advanced support and billing/provider features remain future unless implemented and smoked. Growth remains partial, but Post-Visit Feedback MVP and venue-only Guest Favorites Phase 1 are staging-smoke-passed and stay in regression. Repeat Phase 1 is locally validated with deferred manual smoke in `REPEAT-MANUAL-001`; persistent templates, favorite menu items/options, recommendations/frequent items, notification opt-in, favorites-based promotions and loyalty remain future until their own bounded implementation evidence exists.
-- Menu shift check and per-venue `staff_stoplist_enabled` remain future.
+- Menu shift check is locally validated under
+  **MENU SHIFT CHECK PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**; green Actions and
+  staging smoke remain open. Per-venue `staff_stoplist_enabled` remains future.
 - Staff-chat delivery history/personal notifications/topic routing remain future.
 - CI coverage is strong for release-critical slices but not proof of every product scenario; area smoke checklists remain necessary.
 
@@ -670,6 +735,8 @@ Telegram/staff-chat:
 
 - Testing/QA smoke strategy: `UPDATED`.
 - Guest Preview Phase 2.1: **VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY / DONE / MVP / STAGING-SMOKE-PASSED**.
+- Menu shift check: **MENU SHIFT CHECK PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**;
+  staging/release gates remain open.
 - Manual smoke checklist: `CONSOLIDATED`.
 - CI coverage: `PARTIAL / release-critical split jobs current`.
 - Frontend e2e: `PARTIAL`, with smoke coverage documented.

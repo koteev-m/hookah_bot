@@ -8,6 +8,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import org.slf4j.LoggerFactory
+import java.sql.Connection
 import java.sql.SQLException
 import java.sql.Types
 import javax.sql.DataSource
@@ -27,23 +28,14 @@ class AuditLogRepository(private val dataSource: DataSource?, private val json: 
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    connection.prepareStatement(
-                        """
-                        INSERT INTO audit_log (actor_user_id, action, entity_type, entity_id, payload_json)
-                        VALUES (?, ?, ?, ?, ?)
-                        """.trimIndent(),
-                    ).use { statement ->
-                        statement.setLong(1, actorUserId)
-                        statement.setString(2, action)
-                        statement.setString(3, entityType)
-                        if (entityId == null) {
-                            statement.setNull(4, Types.BIGINT)
-                        } else {
-                            statement.setLong(4, entityId)
-                        }
-                        statement.setString(5, payloadJson)
-                        statement.executeUpdate()
-                    }
+                    append(
+                        connection = connection,
+                        actorUserId = actorUserId,
+                        action = action,
+                        entityType = entityType,
+                        entityId = entityId,
+                        payloadJson = payloadJson,
+                    )
                 }
             } catch (e: SQLException) {
                 logger.warn(
@@ -64,6 +56,33 @@ class AuditLogRepository(private val dataSource: DataSource?, private val json: 
         }
     }
 
+    fun append(
+        connection: Connection,
+        actorUserId: Long,
+        action: String,
+        entityType: String,
+        entityId: Long?,
+        payloadJson: String,
+    ) {
+        connection.prepareStatement(
+            """
+            INSERT INTO audit_log (actor_user_id, action, entity_type, entity_id, payload_json)
+            VALUES (?, ?, ?, ?, ?)
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, actorUserId)
+            statement.setString(2, action)
+            statement.setString(3, entityType)
+            if (entityId == null) {
+                statement.setNull(4, Types.BIGINT)
+            } else {
+                statement.setLong(4, entityId)
+            }
+            statement.setString(5, payloadJson)
+            statement.executeUpdate()
+        }
+    }
+
     suspend fun appendJson(
         actorUserId: Long,
         action: String,
@@ -73,5 +92,17 @@ class AuditLogRepository(private val dataSource: DataSource?, private val json: 
     ) {
         val payloadJson = json.encodeToString(JsonObject.serializer(), payload)
         append(actorUserId, action, entityType, entityId, payloadJson)
+    }
+
+    fun appendJson(
+        connection: Connection,
+        actorUserId: Long,
+        action: String,
+        entityType: String,
+        entityId: Long?,
+        payload: JsonObject,
+    ) {
+        val payloadJson = json.encodeToString(JsonObject.serializer(), payload)
+        append(connection, actorUserId, action, entityType, entityId, payloadJson)
     }
 }

@@ -35,6 +35,8 @@ import type {
   VenueMenuItemDto,
   VenueMenuOptionDto,
   VenueMenuResponse,
+  VenueMenuShiftCheckRequest,
+  VenueMenuShiftCheckResponse,
   VenuePublicCardSettingsResponse,
   VenuePublicCardSettingsUpdateRequest,
   VenuePublicReviewUrlResponse,
@@ -309,6 +311,26 @@ export async function venueGetMenu(
     backendUrl,
     `/api/venue/menu?${search.toString()}`,
     { signal },
+    deps
+  )
+}
+
+export async function venueCompleteMenuShiftCheck(
+  backendUrl: string,
+  params: { venueId: number; body: VenueMenuShiftCheckRequest },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  const search = new URLSearchParams({ venueId: String(params.venueId) })
+  return requestApi<VenueMenuShiftCheckResponse>(
+    backendUrl,
+    `/api/venue/menu/shift-check?${search.toString()}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params.body),
+      signal
+    },
     deps
   )
 }

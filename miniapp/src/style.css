@@ -1719,6 +1719,143 @@ input[type="number"] {
   background: #f8fafc;
 }
 
+.venue-menu-shift-check > summary {
+  cursor: pointer;
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.venue-menu-shift-check[open] > summary {
+  margin-bottom: 0.5rem;
+}
+
+.venue-shift-check-controls,
+.venue-shift-check-categories,
+.venue-shift-check-items,
+.venue-shift-check-options {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.venue-shift-check-controls {
+  margin-top: 0.85rem;
+}
+
+.venue-shift-check-filters,
+.venue-shift-check-selection-actions,
+.venue-shift-check-confirmation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.venue-shift-check-filters button[data-active="true"] {
+  background: #1f2a44;
+  color: #ffffff;
+}
+
+.venue-shift-check-category {
+  padding: 0.75rem;
+  border: 1px solid #dfe3eb;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.venue-shift-check-category-header,
+.venue-shift-check-options-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.venue-shift-check-category-header h4,
+.venue-shift-check-confirmation h4,
+.venue-shift-check-confirmation p {
+  margin: 0;
+}
+
+.venue-shift-check-items {
+  margin-top: 0.65rem;
+}
+
+.venue-shift-check-item-group {
+  padding: 0.65rem;
+  border: 1px solid #e5e7f2;
+  border-radius: 9px;
+  background: #ffffff;
+}
+
+.venue-shift-check-item,
+.venue-shift-check-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.venue-shift-check-option {
+  padding: 0.5rem;
+  border: 1px solid #e5e7f2;
+  border-radius: 8px;
+}
+
+.venue-shift-check-options-header {
+  margin: 0.65rem 0 0.45rem;
+}
+
+.venue-shift-check-item-context {
+  margin: 0;
+  color: #334155;
+  font-weight: 600;
+}
+
+.venue-shift-check-row-info {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.venue-shift-check-select,
+.venue-shift-check-availability {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: #475569;
+  font-size: 0.85rem;
+}
+
+.venue-shift-check-select input,
+.venue-shift-check-availability input {
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+  accent-color: #0f766e;
+}
+
+.venue-shift-check-confirmation {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 0.85rem;
+  padding: 0.8rem;
+  border: 1px solid #c7d2fe;
+  border-radius: 10px;
+  background: #eef2ff;
+}
+
+.venue-shift-check-confirmation-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.venue-shift-check-confirmation-grid > div {
+  display: grid;
+  gap: 0.25rem;
+}
+
 .venue-menu-item-info {
   display: grid;
   gap: 0.25rem;
@@ -2104,6 +2241,25 @@ input[type="number"] {
 }
 
 @media (max-width: 560px) {
+  .venue-shift-check-category-header,
+  .venue-shift-check-options-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .venue-shift-check-item,
+  .venue-shift-check-option {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .venue-shift-check-availability {
+    grid-column: 2;
+  }
+
+  .venue-shift-check-confirmation-grid {
+    grid-template-columns: 1fr;
+  }
+
   .venue-promotion-window {
     grid-template-columns: 1fr 1fr;
   }

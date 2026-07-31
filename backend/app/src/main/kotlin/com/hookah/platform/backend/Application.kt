@@ -1232,6 +1232,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                 venueMenuRoutes(
                     venueAccessRepository = venueAccessRepository,
                     venueMenuRepository = venueMenuRepository,
+                    auditLogRepository = auditLogRepository,
                 )
                 venuePromotionRoutes(
                     venueAccessRepository = venueAccessRepository,

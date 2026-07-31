@@ -1,12 +1,24 @@
 package com.hookah.platform.backend.miniapp.venue.menu
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.api.InvalidInputException
+import com.hookah.platform.backend.api.MenuShiftCheckStaleException
+import com.hookah.platform.backend.api.NotFoundException
+import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import java.sql.Connection
 import java.sql.ResultSet
 import java.sql.SQLException
+import java.sql.Statement
 import javax.sql.DataSource
+
+internal const val MENU_SHIFT_CHECK_MAX_CHANGES = 500
+const val MENU_SHIFT_CHECK_COMPLETED_AUDIT_ACTION = "MENU_SHIFT_CHECK_COMPLETED"
 
 data class VenueMenuCategory(
     val id: Long,
@@ -42,79 +54,141 @@ data class VenueMenuOption(
     val sortOrder: Int,
 )
 
+data class VenueMenuShiftCheckResult(
+    val categories: List<VenueMenuCategory>,
+    val changedItemCount: Int,
+    val changedOptionCount: Int,
+    val reviewedItemCount: Int,
+    val reviewedOptionCount: Int,
+    val availableItemCount: Int,
+    val availableOptionCount: Int,
+)
+
 class VenueMenuRepository(private val dataSource: DataSource?) {
     suspend fun getMenu(venueId: Long): List<VenueMenuCategory> {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
+                ds.connection.use { connection -> loadMenu(connection, venueId) }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    suspend fun completeShiftCheck(
+        venueId: Long,
+        actorUserId: Long,
+        itemChanges: List<MenuShiftCheckItemChange>,
+        optionChanges: List<MenuShiftCheckOptionChange>,
+        auditLogRepository: AuditLogRepository,
+    ): VenueMenuShiftCheckResult {
+        validateShiftCheckChanges(itemChanges, optionChanges)
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
                 ds.connection.use { connection ->
-                    val categories =
-                        connection.prepareStatement(
-                            """
-                            SELECT id, venue_id, name, sort_order, category_type
-                            FROM menu_categories
-                            WHERE venue_id = ?
-                            ORDER BY sort_order, id
-                            """.trimIndent(),
-                        ).use { statement ->
-                            statement.setLong(1, venueId)
-                            statement.executeQuery().use { rs ->
-                                val result = mutableListOf<VenueMenuCategory>()
-                                while (rs.next()) {
-                                    result.add(mapCategory(rs))
-                                }
-                                result
+                    val originalAutoCommit = connection.autoCommit
+                    connection.autoCommit = false
+                    try {
+                        val requestedItemIds =
+                            (
+                                itemChanges.map { it.itemId } +
+                                    optionChanges.map { it.itemId }
+                            ).distinct().sorted()
+                        val lockedItems =
+                            loadShiftCheckItemsForUpdate(
+                                connection = connection,
+                                venueId = venueId,
+                                itemIds = requestedItemIds,
+                            )
+                        if (lockedItems.size != requestedItemIds.size) {
+                            throw NotFoundException(
+                                "Одна из позиций больше не существует.",
+                            )
+                        }
+
+                        val requestedOptionIds = optionChanges.map { it.optionId }.sorted()
+                        val lockedOptions =
+                            loadShiftCheckOptionsForUpdate(
+                                connection = connection,
+                                venueId = venueId,
+                                optionIds = requestedOptionIds,
+                            )
+                        if (lockedOptions.size != requestedOptionIds.size) {
+                            throw NotFoundException("Одна из опций больше не существует.")
+                        }
+                        optionChanges.forEach { change ->
+                            val option = checkNotNull(lockedOptions[change.optionId])
+                            if (option.itemId != change.itemId) {
+                                throw InvalidInputException(
+                                    "Одна из опций не принадлежит заявленной позиции.",
+                                )
                             }
                         }
 
-                    val itemsByCategory =
-                        connection.prepareStatement(
-                            """
-                            SELECT id, venue_id, category_id, name, price_minor, currency, is_available, sort_order, item_type
-                            FROM menu_items
-                            WHERE venue_id = ?
-                            ORDER BY sort_order, id
-                            """.trimIndent(),
-                        ).use { statement ->
-                            statement.setLong(1, venueId)
-                            statement.executeQuery().use { rs ->
-                                val result = mutableMapOf<Long, MutableList<VenueMenuItem>>()
-                                while (rs.next()) {
-                                    val categoryId = rs.getLong("category_id")
-                                    val items = result.getOrPut(categoryId) { mutableListOf() }
-                                    items.add(mapItem(rs))
-                                }
-                                result
+                        val staleItem =
+                            itemChanges.any { change ->
+                                lockedItems[change.itemId]?.isAvailable != change.expectedIsAvailable
                             }
+                        val staleOption =
+                            optionChanges.any { change ->
+                                lockedOptions[change.optionId]?.isAvailable != change.expectedIsAvailable
+                            }
+                        if (staleItem || staleOption) {
+                            throw MenuShiftCheckStaleException()
                         }
 
-                    val optionsByItem =
-                        connection.prepareStatement(
-                            """
-                            SELECT id, venue_id, item_id, name, price_delta_minor, is_available, sort_order
-                            FROM menu_item_options
-                            WHERE venue_id = ?
-                            ORDER BY sort_order, id
-                            """.trimIndent(),
-                        ).use { statement ->
-                            statement.setLong(1, venueId)
-                            statement.executeQuery().use { rs ->
-                                val result = mutableMapOf<Long, MutableList<VenueMenuOption>>()
-                                while (rs.next()) {
-                                    val itemId = rs.getLong("item_id")
-                                    val options = result.getOrPut(itemId) { mutableListOf() }
-                                    options.add(mapOption(rs))
-                                }
-                                result
-                            }
-                        }
+                        updateShiftCheckItems(connection, venueId, itemChanges)
+                        updateShiftCheckOptions(connection, venueId, optionChanges)
 
-                    categories.map { category ->
-                        val items =
-                            itemsByCategory[category.id].orEmpty().map { item ->
-                                item.copy(options = optionsByItem[item.id].orEmpty())
-                            }
-                        category.copy(items = items)
+                        val categories = loadMenu(connection, venueId)
+                        val reviewedItems = categories.flatMap { it.items }
+                        val reviewedOptions = reviewedItems.flatMap { it.options }
+                        val itemsMadeAvailable =
+                            itemChanges.filter { it.desiredIsAvailable }.map { it.itemId }.sorted()
+                        val itemsMadeUnavailable =
+                            itemChanges.filterNot { it.desiredIsAvailable }.map { it.itemId }.sorted()
+                        val optionsMadeAvailable =
+                            optionChanges.filter { it.desiredIsAvailable }.map { it.optionId }.sorted()
+                        val optionsMadeUnavailable =
+                            optionChanges.filterNot { it.desiredIsAvailable }.map { it.optionId }.sorted()
+
+                        auditLogRepository.appendJson(
+                            connection = connection,
+                            actorUserId = actorUserId,
+                            action = MENU_SHIFT_CHECK_COMPLETED_AUDIT_ACTION,
+                            entityType = "venue",
+                            entityId = venueId,
+                            payload =
+                                buildJsonObject {
+                                    put("actorUserId", actorUserId)
+                                    put("venueId", venueId)
+                                    put("changedItemCount", itemChanges.size)
+                                    put("changedOptionCount", optionChanges.size)
+                                    put("itemsMadeAvailable", itemsMadeAvailable.toJsonArray())
+                                    put("itemsMadeUnavailable", itemsMadeUnavailable.toJsonArray())
+                                    put("optionsMadeAvailable", optionsMadeAvailable.toJsonArray())
+                                    put("optionsMadeUnavailable", optionsMadeUnavailable.toJsonArray())
+                                    put("reviewedItemCount", reviewedItems.size)
+                                    put("reviewedOptionCount", reviewedOptions.size)
+                                },
+                        )
+                        connection.commit()
+                        VenueMenuShiftCheckResult(
+                            categories = categories,
+                            changedItemCount = itemChanges.size,
+                            changedOptionCount = optionChanges.size,
+                            reviewedItemCount = reviewedItems.size,
+                            reviewedOptionCount = reviewedOptions.size,
+                            availableItemCount = reviewedItems.count { it.isAvailable },
+                            availableOptionCount = reviewedOptions.count { it.isAvailable },
+                        )
+                    } catch (e: Exception) {
+                        runCatching { connection.rollback() }
+                        throw e
+                    } finally {
+                        connection.autoCommit = originalAutoCommit
                     }
                 }
             } catch (e: SQLException) {
@@ -849,6 +923,254 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
         }
     }
 
+    private fun validateShiftCheckChanges(
+        itemChanges: List<MenuShiftCheckItemChange>,
+        optionChanges: List<MenuShiftCheckOptionChange>,
+    ) {
+        if (
+            itemChanges.size > MENU_SHIFT_CHECK_MAX_CHANGES ||
+            optionChanges.size > MENU_SHIFT_CHECK_MAX_CHANGES ||
+            itemChanges.size + optionChanges.size > MENU_SHIFT_CHECK_MAX_CHANGES
+        ) {
+            throw InvalidInputException(
+                "Количество изменений проверки меню не должно превышать " +
+                    "$MENU_SHIFT_CHECK_MAX_CHANGES.",
+            )
+        }
+        if (itemChanges.any { it.itemId <= 0 }) {
+            throw InvalidInputException("itemId должен быть положительным.")
+        }
+        if (optionChanges.any { it.optionId <= 0 || it.itemId <= 0 }) {
+            throw InvalidInputException("optionId и itemId должны быть положительными.")
+        }
+        if (itemChanges.map { it.itemId }.toSet().size != itemChanges.size) {
+            throw InvalidInputException("Позиции не должны повторяться.")
+        }
+        if (optionChanges.map { it.optionId }.toSet().size != optionChanges.size) {
+            throw InvalidInputException("Опции не должны повторяться.")
+        }
+        if (itemChanges.any { it.expectedIsAvailable == it.desiredIsAvailable }) {
+            throw InvalidInputException(
+                "Запрос должен содержать только изменения позиций.",
+            )
+        }
+        if (optionChanges.any { it.expectedIsAvailable == it.desiredIsAvailable }) {
+            throw InvalidInputException(
+                "Запрос должен содержать только изменения опций.",
+            )
+        }
+    }
+
+    private fun loadMenu(
+        connection: Connection,
+        venueId: Long,
+    ): List<VenueMenuCategory> {
+        val categories =
+            connection.prepareStatement(
+                """
+                SELECT id, venue_id, name, sort_order, category_type
+                FROM menu_categories
+                WHERE venue_id = ?
+                ORDER BY sort_order, id
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.executeQuery().use { rs ->
+                    buildList {
+                        while (rs.next()) {
+                            add(mapCategory(rs))
+                        }
+                    }
+                }
+            }
+        val itemsByCategory =
+            connection.prepareStatement(
+                """
+                SELECT id, venue_id, category_id, name, price_minor, currency, is_available, sort_order, item_type
+                FROM menu_items
+                WHERE venue_id = ?
+                ORDER BY sort_order, id
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.executeQuery().use { rs ->
+                    val result = mutableMapOf<Long, MutableList<VenueMenuItem>>()
+                    while (rs.next()) {
+                        val categoryId = rs.getLong("category_id")
+                        result.getOrPut(categoryId) { mutableListOf() }.add(mapItem(rs))
+                    }
+                    result
+                }
+            }
+        val optionsByItem =
+            connection.prepareStatement(
+                """
+                SELECT id, venue_id, item_id, name, price_delta_minor, is_available, sort_order
+                FROM menu_item_options
+                WHERE venue_id = ?
+                ORDER BY sort_order, id
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.executeQuery().use { rs ->
+                    val result = mutableMapOf<Long, MutableList<VenueMenuOption>>()
+                    while (rs.next()) {
+                        val itemId = rs.getLong("item_id")
+                        result.getOrPut(itemId) { mutableListOf() }.add(mapOption(rs))
+                    }
+                    result
+                }
+            }
+        return categories.map { category ->
+            category.copy(
+                items =
+                    itemsByCategory[category.id].orEmpty().map { item ->
+                        item.copy(options = optionsByItem[item.id].orEmpty())
+                    },
+            )
+        }
+    }
+
+    private fun loadShiftCheckItemsForUpdate(
+        connection: Connection,
+        venueId: Long,
+        itemIds: List<Long>,
+    ): Map<Long, ShiftCheckLockedItem> {
+        if (itemIds.isEmpty()) {
+            return emptyMap()
+        }
+        val placeholders = itemIds.joinToString(",") { "?" }
+        return connection.prepareStatement(
+            """
+            SELECT id, is_available
+            FROM menu_items
+            WHERE venue_id = ?
+              AND id IN ($placeholders)
+            ORDER BY id
+            FOR UPDATE
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            itemIds.forEachIndexed { index, itemId ->
+                statement.setLong(index + 2, itemId)
+            }
+            statement.executeQuery().use { rs ->
+                buildMap {
+                    while (rs.next()) {
+                        val itemId = rs.getLong("id")
+                        put(
+                            itemId,
+                            ShiftCheckLockedItem(
+                                isAvailable = rs.getBoolean("is_available"),
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private fun loadShiftCheckOptionsForUpdate(
+        connection: Connection,
+        venueId: Long,
+        optionIds: List<Long>,
+    ): Map<Long, ShiftCheckLockedOption> {
+        if (optionIds.isEmpty()) {
+            return emptyMap()
+        }
+        val placeholders = optionIds.joinToString(",") { "?" }
+        return connection.prepareStatement(
+            """
+            SELECT id, item_id, is_available
+            FROM menu_item_options
+            WHERE venue_id = ?
+              AND id IN ($placeholders)
+            ORDER BY id
+            FOR UPDATE
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            optionIds.forEachIndexed { index, optionId ->
+                statement.setLong(index + 2, optionId)
+            }
+            statement.executeQuery().use { rs ->
+                buildMap {
+                    while (rs.next()) {
+                        val optionId = rs.getLong("id")
+                        put(
+                            optionId,
+                            ShiftCheckLockedOption(
+                                itemId = rs.getLong("item_id"),
+                                isAvailable = rs.getBoolean("is_available"),
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private fun updateShiftCheckItems(
+        connection: Connection,
+        venueId: Long,
+        changes: List<MenuShiftCheckItemChange>,
+    ) {
+        if (changes.isEmpty()) {
+            return
+        }
+        val results =
+            connection.prepareStatement(
+                """
+                UPDATE menu_items
+                SET is_available = ?, updated_at = now()
+                WHERE id = ? AND venue_id = ? AND is_available = ?
+                """.trimIndent(),
+            ).use { statement ->
+                changes.sortedBy { it.itemId }.forEach { change ->
+                    statement.setBoolean(1, change.desiredIsAvailable)
+                    statement.setLong(2, change.itemId)
+                    statement.setLong(3, venueId)
+                    statement.setBoolean(4, change.expectedIsAvailable)
+                    statement.addBatch()
+                }
+                statement.executeBatch()
+            }
+        if (results.size != changes.size || results.any { it == 0 || it == Statement.EXECUTE_FAILED }) {
+            throw MenuShiftCheckStaleException()
+        }
+    }
+
+    private fun updateShiftCheckOptions(
+        connection: Connection,
+        venueId: Long,
+        changes: List<MenuShiftCheckOptionChange>,
+    ) {
+        if (changes.isEmpty()) {
+            return
+        }
+        val results =
+            connection.prepareStatement(
+                """
+                UPDATE menu_item_options
+                SET is_available = ?, updated_at = now()
+                WHERE id = ? AND venue_id = ? AND item_id = ? AND is_available = ?
+                """.trimIndent(),
+            ).use { statement ->
+                changes.sortedBy { it.optionId }.forEach { change ->
+                    statement.setBoolean(1, change.desiredIsAvailable)
+                    statement.setLong(2, change.optionId)
+                    statement.setLong(3, venueId)
+                    statement.setLong(4, change.itemId)
+                    statement.setBoolean(5, change.expectedIsAvailable)
+                    statement.addBatch()
+                }
+                statement.executeBatch()
+            }
+        if (results.size != changes.size || results.any { it == 0 || it == Statement.EXECUTE_FAILED }) {
+            throw MenuShiftCheckStaleException()
+        }
+    }
+
     private fun mapCategory(rs: ResultSet): VenueMenuCategory =
         VenueMenuCategory(
             id = rs.getLong("id"),
@@ -1356,4 +1678,18 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
         val ruleId: Long,
         val promotionId: Long?,
     )
+
+    private data class ShiftCheckLockedItem(
+        val isAvailable: Boolean,
+    )
+
+    private data class ShiftCheckLockedOption(
+        val itemId: Long,
+        val isAvailable: Boolean,
+    )
 }
+
+private fun List<Long>.toJsonArray() =
+    buildJsonArray {
+        forEach { add(JsonPrimitive(it)) }
+    }

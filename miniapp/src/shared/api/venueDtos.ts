@@ -604,6 +604,35 @@ export type VenueMenuResponse = {
   categories: VenueMenuCategoryDto[]
 }
 
+export type VenueMenuShiftCheckItemChangeRequest = {
+  itemId: number
+  expectedIsAvailable: boolean
+  desiredIsAvailable: boolean
+}
+
+export type VenueMenuShiftCheckOptionChangeRequest = {
+  optionId: number
+  itemId: number
+  expectedIsAvailable: boolean
+  desiredIsAvailable: boolean
+}
+
+export type VenueMenuShiftCheckRequest = {
+  items: VenueMenuShiftCheckItemChangeRequest[]
+  options: VenueMenuShiftCheckOptionChangeRequest[]
+}
+
+export type VenueMenuShiftCheckResponse = {
+  venueId: number
+  categories: VenueMenuCategoryDto[]
+  changedItemCount: number
+  changedOptionCount: number
+  reviewedItemCount: number
+  reviewedOptionCount: number
+  availableItemCount: number
+  availableOptionCount: number
+}
+
 export type VenueMenuCategoryDto = {
   id: number
   name: string
