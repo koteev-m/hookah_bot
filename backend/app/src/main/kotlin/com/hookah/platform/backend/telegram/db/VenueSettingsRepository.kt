@@ -256,6 +256,51 @@ class VenueSettingsRepository(private val dataSource: DataSource?) {
             .getOrDefault(fallback)
     }
 
+    suspend fun resolveZoneIds(
+        venueIds: Collection<Long>,
+        fallback: ZoneId = ZoneId.systemDefault(),
+    ): Map<Long, ZoneId> {
+        val ids = venueIds.distinct()
+        if (ids.isEmpty()) return emptyMap()
+        val ds = dataSource ?: return ids.associateWith { fallback }
+        val placeholders = ids.joinToString(",") { "?" }
+        val timezones =
+            try {
+                withContext(Dispatchers.IO) {
+                    ds.connection.use { connection ->
+                        connection.prepareStatement(
+                            """
+                            SELECT venue_id, timezone
+                            FROM venue_settings
+                            WHERE venue_id IN ($placeholders)
+                            """.trimIndent(),
+                        ).use { statement ->
+                            ids.forEachIndexed { index, venueId ->
+                                statement.setLong(index + 1, venueId)
+                            }
+                            statement.executeQuery().use { rs ->
+                                buildMap<Long, String?> {
+                                    while (rs.next()) {
+                                        put(rs.getLong("venue_id"), rs.getString("timezone"))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (_: SQLException) {
+                return ids.associateWith { fallback }
+            }
+        return ids.associateWith { venueId ->
+            val timezone = timezones[venueId]?.takeIf { it.isNotBlank() } ?: return@associateWith fallback
+            runCatching { ZoneId.of(timezone) }
+                .onFailure {
+                    logger.warn("Invalid venue timezone venue_id={} timezone={}", venueId, timezone)
+                }
+                .getOrDefault(fallback)
+        }
+    }
+
     suspend fun resolvePromotionZoneId(
         venueId: Long,
         fallback: ZoneId = ZoneId.of(DEFAULT_AUTO_TIMEZONE),

@@ -27,6 +27,11 @@ Current practice:
   OWNER/MANAGER use an own-venue local draft and one atomic availability batch; Staff individual
   stop-list policy is unchanged. GitHub Actions were green, staging deploy completed and the
   functional/UX manual smoke passed.
+- Catalog search/filter is
+  **CATALOG SEARCH AND FILTER PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**. Focused
+  `GuestVenueRoutesTest`, backend compile/lint, Mini App build, focused catalog/favorite browser
+  checks and full deterministic browser smoke `104/104` passed locally; GitHub Actions and staging
+  smoke remain required.
 
 Target QA model:
 - Every task ends with changed files, behavior summary, tests run, validation result, manual smoke checklist, `git status --short`, whether `scripts/dev/` was touched and whether staging deploy is needed.
@@ -43,6 +48,65 @@ Target QA model:
 | D. Mini App checks | Prove production bundle and browser smoke. | `npm --prefix miniapp run build` and e2e smoke for frontend/user-flow changes. |
 | E. Manual staging smoke | Prove real environment, Telegram WebView, staff-chat and deploy behavior. | Required after runtime/frontend/backend/Telegram/deploy changes; not required for docs-only. |
 | F. GitHub Actions | Release gate and source of CI truth. | Must be green before considering a task merged/released. If red, report failing test/assertion first, not Gradle tail. |
+
+## Catalog Search And Filter Phase 1 Quality Gate
+
+Status:
+**CATALOG SEARCH AND FILTER PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**.
+
+Backend coverage must prove:
+
+- optional `q` and `city` are trimmed, blank is equivalent to absent and values over 100
+  characters fail validation without silent truncation;
+- `q` matches name, city, address and formatted address case-insensitively; `city` uses a
+  case-insensitive exact match; combined filters use `AND`;
+- prepared parameters plus explicit escaping treat `%`, `_`, `!` and `\` literally, SQL-like input
+  cannot alter query semantics, and behavior stays PostgreSQL/H2 compatible;
+- the same query retains `PUBLISHED` lifecycle and guest subscription/availability guards, stable
+  deterministic ordering, safe DTOs, authenticated access, current-user `isFavorite` and today
+  schedule/open state;
+- favorites and schedule remain batch-enriched without per-venue N+1 reads, two users receive
+  isolated favorite state, unavailable venues disclose no card data and empty results are stable.
+
+Mini App/browser coverage must prove:
+
+- search sends encoded `q`, city selection sends encoded `city`, and both are sent together;
+- a fixed 300 ms debounce avoids an immediate request per keystroke;
+- query/filter replacement and screen disposal abort pending work, and only the latest response can
+  update the catalog even when an older response completes later;
+- city options use the initial complete unfiltered guarded response. The endpoint has no limit or
+  pagination; blank cities are removed, case-insensitive duplicates preserve normal display
+  spelling and the final list is sorted predictably;
+- initial loading, retryable error, base-catalog empty and
+  `По вашему запросу ничего не найдено` are distinct, and reset clears both `q` and `city`;
+- optimistic favorite add/remove works inside filtered results, a filtered reload cannot restore a
+  stale backend favorite value, out-of-result mutations stay safe and account switching clears the
+  previous user's query/filter/favorite state;
+- existing venue-card open, booking, ask-question, schedule and pre-QR menu-separation actions stay
+  green. Tests wait for observable requests/state and do not use arbitrary sleeps.
+
+Required local commands:
+
+```bash
+git status --short
+git diff --check
+
+./gradlew --no-daemon --max-workers=1 :backend:app:test \
+  --tests '*GuestVenueRoutesTest*' --console=plain
+
+./gradlew --no-daemon --max-workers=1 :backend:app:compileKotlin --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:ktlintCheck --console=plain
+
+npm --prefix miniapp run build
+
+CI=1 TZ=UTC MINIAPP_E2E_PORT=5174 \
+npm --prefix miniapp run e2e:smoke
+```
+
+Recorded local evidence: focused `GuestVenueRoutesTest`, backend compile, ktlint, Mini App
+production build, focused catalog/favorite browser checks and the prescribed deterministic browser
+smoke `104/104` passed. GitHub Actions and staging smoke are still required; do not use
+`STAGING-SMOKE-PASSED` or release-ready wording from this evidence.
 
 ## Venue Mini App Guest Preview Phase 2.1 Quality Gate
 
@@ -607,6 +671,22 @@ Last local validation that passed: <commands>.
 
 ## Manual Smoke Suites
 
+Guest catalog search/filter:
+- open the authenticated pre-QR catalog and confirm its initial request is unfiltered and returns
+  only guest-available venues with favorites and today schedule intact;
+- search by mixed-case name, city and address, then select a city and confirm backend `q + city`
+  `AND` behavior;
+- verify `%`, `_`, `!` and `\` are literal search text and oversized `q`/`city` fail safely;
+- type quickly and switch filters while delaying an older response; confirm debounce reduces
+  requests and the older response cannot overwrite the latest state;
+- confirm city options exclude blanks, deduplicate case-insensitively, preserve display spelling
+  and stay complete/sorted after search or filtering;
+- verify retryable error, unfiltered empty catalog, filtered no-match copy and reset of both controls;
+- add/remove a favorite in filtered results, reload the filter and switch accounts; confirm the
+  optimistic state does not roll back and no query/favorite state crosses users;
+- hide, suspend or subscription-block a matching venue and confirm search reveals neither its name
+  nor address; restore it and confirm normal guarded visibility returns.
+
 Guest communication:
 - catalog `Задать вопрос` creates/reuses `VENUE_CHAT`;
 - booking `Открыть переписку` opens `BOOKING_CHAT`;
@@ -743,6 +823,8 @@ Telegram/staff-chat:
 ## Roadmap Status
 
 - Testing/QA smoke strategy: `UPDATED`.
+- Catalog search/filter: **CATALOG SEARCH AND FILTER PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION
+  PASSED**; GitHub Actions and staging smoke remain required.
 - Guest Preview Phase 2.1: **VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY / DONE / MVP / STAGING-SMOKE-PASSED**.
 - Menu shift check: **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**; regression
   gates remain active.

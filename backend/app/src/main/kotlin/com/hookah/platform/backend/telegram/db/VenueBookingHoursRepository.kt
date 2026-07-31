@@ -122,6 +122,100 @@ class VenueBookingHoursRepository(private val dataSource: DataSource?) {
         }
     }
 
+    suspend fun findByVenuesAndDates(
+        datesByVenueId: Map<Long, Set<LocalDate>>,
+    ): Map<Long, Map<LocalDate, VenueBookingHours>> {
+        val requestedDates = datesByVenueId.filterValues { it.isNotEmpty() }
+        if (requestedDates.isEmpty()) return emptyMap()
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        val venueIds = requestedDates.keys.toList()
+        val placeholders = venueIds.joinToString(",") { "?" }
+        val allDates = requestedDates.values.flatten()
+        val fromDate = allDates.minOrNull() ?: return emptyMap()
+        val toDate = allDates.maxOrNull() ?: return emptyMap()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    val weeklyHours = mutableMapOf<Pair<Long, Int>, VenueBookingHours>()
+                    connection.prepareStatement(
+                        """
+                        SELECT venue_id, weekday, opens_at, closes_at, is_closed
+                        FROM venue_booking_hours
+                        WHERE venue_id IN ($placeholders)
+                        """.trimIndent(),
+                    ).use { statement ->
+                        venueIds.forEachIndexed { index, venueId ->
+                            statement.setLong(index + 1, venueId)
+                        }
+                        statement.executeQuery().use { rs ->
+                            while (rs.next()) {
+                                val opensAt = rs.getTime("opens_at")?.toLocalTime()
+                                val closesAt = rs.getTime("closes_at")?.toLocalTime()
+                                if (opensAt != null && closesAt != null) {
+                                    val hours =
+                                        VenueBookingHours(
+                                            venueId = rs.getLong("venue_id"),
+                                            weekday = rs.getInt("weekday"),
+                                            opensAt = opensAt,
+                                            closesAt = closesAt,
+                                            isClosed = rs.getBoolean("is_closed"),
+                                        )
+                                    weeklyHours[hours.venueId to hours.weekday] = hours
+                                }
+                            }
+                        }
+                    }
+
+                    val overrideHours = mutableMapOf<Pair<Long, LocalDate>, VenueBookingHours>()
+                    connection.prepareStatement(
+                        """
+                        SELECT venue_id, service_date, opens_at, closes_at, is_closed, guest_note
+                        FROM venue_booking_hours_overrides
+                        WHERE venue_id IN ($placeholders)
+                          AND service_date BETWEEN ? AND ?
+                        """.trimIndent(),
+                    ).use { statement ->
+                        venueIds.forEachIndexed { index, venueId ->
+                            statement.setLong(index + 1, venueId)
+                        }
+                        statement.setDate(venueIds.size + 1, SqlDate.valueOf(fromDate))
+                        statement.setDate(venueIds.size + 2, SqlDate.valueOf(toDate))
+                        statement.executeQuery().use { rs ->
+                            while (rs.next()) {
+                                val serviceDate = rs.getDate("service_date")?.toLocalDate()
+                                val opensAt = rs.getTime("opens_at")?.toLocalTime()
+                                val closesAt = rs.getTime("closes_at")?.toLocalTime()
+                                if (serviceDate != null && opensAt != null && closesAt != null) {
+                                    val hours =
+                                        VenueBookingHours(
+                                            venueId = rs.getLong("venue_id"),
+                                            weekday = serviceDate.dayOfWeek.value,
+                                            opensAt = opensAt,
+                                            closesAt = closesAt,
+                                            isClosed = rs.getBoolean("is_closed"),
+                                            guestNote = rs.getString("guest_note"),
+                                        )
+                                    overrideHours[hours.venueId to serviceDate] = hours
+                                }
+                            }
+                        }
+                    }
+
+                    requestedDates.mapValues { (venueId, dates) ->
+                        dates.mapNotNull { date ->
+                            val hours =
+                                overrideHours[venueId to date]
+                                    ?: weeklyHours[venueId to date.dayOfWeek.value]
+                            hours?.let { date to it }
+                        }.toMap()
+                    }
+                }
+            } catch (_: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
     suspend fun hasConfiguredHours(venueId: Long): Boolean {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {

@@ -45,16 +45,15 @@ fun Route.guestVenueRoutes(
 ) {
     get("/catalog") {
         val userId = call.requireUserId()
-        val venues = guestVenueRepository.listCatalogVenues()
+        val query = normalizeCatalogFilter(call.request.queryParameters["q"], "q")
+        val city = normalizeCatalogFilter(call.request.queryParameters["city"], "city")
+        val venues = guestVenueRepository.listCatalogVenues(query = query, city = city)
         val favoriteVenueIds =
             guestFavoritesRepository.findFavoriteVenueIds(
                 userId = userId,
                 venueIds = venues.map { it.id },
             )
-        val schedules =
-            venues.associate { venue ->
-                venue.id to guestVenueReadService.getTodaySchedule(venue.id)
-            }
+        val schedules = guestVenueReadService.getTodaySchedules(venues.map { it.id })
         call.respond(
             CatalogResponse(
                 venues = venues.map { it.toCatalogDto(schedules[it.id], it.id in favoriteVenueIds) },
@@ -90,6 +89,19 @@ fun Route.guestVenueRoutes(
         call.respond(menu.toResponse())
     }
 }
+
+private fun normalizeCatalogFilter(
+    rawValue: String?,
+    fieldName: String,
+): String? {
+    val normalized = rawValue?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    if (normalized.length > CATALOG_FILTER_MAX_LENGTH) {
+        throw InvalidInputException("$fieldName length must be <= $CATALOG_FILTER_MAX_LENGTH")
+    }
+    return normalized
+}
+
+private const val CATALOG_FILTER_MAX_LENGTH = 100
 
 fun Route.guestVenueInfoMediaRoutes(
     guestVenueRepository: GuestVenueRepository,

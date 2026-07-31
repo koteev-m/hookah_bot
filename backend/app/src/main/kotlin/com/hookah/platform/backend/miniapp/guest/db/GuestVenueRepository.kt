@@ -7,30 +7,62 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.sql.ResultSet
 import java.sql.SQLException
+import java.util.Locale
 import javax.sql.DataSource
 
 class GuestVenueRepository(private val dataSource: DataSource?) {
-    suspend fun listCatalogVenues(): List<VenueShort> {
+    suspend fun listCatalogVenues(
+        query: String? = null,
+        city: String? = null,
+    ): List<VenueShort> {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         val blockedStatuses = SubscriptionStatus.blockedDbValues
         val blockedPlaceholders = blockedStatuses.joinToString(",") { "?" }
+        val normalizedQuery = query?.lowercase(Locale.ROOT)
+        val normalizedCity = city?.lowercase(Locale.ROOT)
+        val queryPattern = normalizedQuery?.let { "%${escapeLikePattern(it)}%" }
+        val sql =
+            buildString {
+                append(
+                    """
+                    SELECT v.id, v.name, v.city, v.address, v.country_code, v.formatted_address,
+                           v.latitude, v.longitude, v.guest_contact, v.card_description, v.status
+                    FROM venues v
+                    LEFT JOIN venue_subscriptions vs ON vs.venue_id = v.id
+                    WHERE v.status = ?
+                      AND (vs.status IS NULL OR LOWER(vs.status) NOT IN ($blockedPlaceholders))
+                    """.trimIndent(),
+                )
+                if (queryPattern != null) {
+                    append("\n  AND (")
+                    append("\n    LOWER(v.name) LIKE ? ESCAPE '!'")
+                    append("\n    OR LOWER(v.city) LIKE ? ESCAPE '!'")
+                    append("\n    OR LOWER(v.address) LIKE ? ESCAPE '!'")
+                    append("\n    OR LOWER(v.formatted_address) LIKE ? ESCAPE '!'")
+                    append("\n  )")
+                }
+                if (normalizedCity != null) {
+                    append("\n  AND LOWER(v.city) = ?")
+                }
+                append("\nORDER BY v.id ASC")
+            }
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    connection.prepareStatement(
-                        """
-                        SELECT v.id, v.name, v.city, v.address, v.country_code, v.formatted_address,
-                               v.latitude, v.longitude, v.guest_contact, v.card_description, v.status
-                        FROM venues v
-                        LEFT JOIN venue_subscriptions vs ON vs.venue_id = v.id
-                        WHERE v.status = ?
-                          AND (vs.status IS NULL OR LOWER(vs.status) NOT IN ($blockedPlaceholders))
-                        ORDER BY v.id ASC
-                        """.trimIndent(),
-                    ).use { statement ->
-                        statement.setString(1, VenueStatus.PUBLISHED.dbValue)
+                    connection.prepareStatement(sql).use { statement ->
+                        var parameterIndex = 1
+                        statement.setString(parameterIndex++, VenueStatus.PUBLISHED.dbValue)
                         blockedStatuses.forEachIndexed { index, status ->
-                            statement.setString(index + 2, status)
+                            statement.setString(parameterIndex + index, status)
+                        }
+                        parameterIndex += blockedStatuses.size
+                        if (queryPattern != null) {
+                            repeat(CATALOG_QUERY_FIELD_COUNT) {
+                                statement.setString(parameterIndex++, queryPattern)
+                            }
+                        }
+                        if (normalizedCity != null) {
+                            statement.setString(parameterIndex, normalizedCity)
                         }
                         statement.executeQuery().use { rs ->
                             val venues = mutableListOf<VenueShort>()
@@ -46,6 +78,18 @@ class GuestVenueRepository(private val dataSource: DataSource?) {
             }
         }
     }
+
+    private fun escapeLikePattern(value: String): String =
+        buildString(value.length) {
+            value.forEach { character ->
+                when (character) {
+                    LIKE_ESCAPE -> append("!!")
+                    '%' -> append("!%")
+                    '_' -> append("!_")
+                    else -> append(character)
+                }
+            }
+        }
 
     suspend fun findVenueByIdForGuest(id: Long): VenueShort? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
@@ -91,6 +135,11 @@ class GuestVenueRepository(private val dataSource: DataSource?) {
             cardDescription = rs.getString("card_description"),
             status = status,
         )
+    }
+
+    private companion object {
+        const val LIKE_ESCAPE = '!'
+        const val CATALOG_QUERY_FIELD_COUNT = 4
     }
 }
 

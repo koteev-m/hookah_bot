@@ -338,12 +338,22 @@ input[type="number"] {
 }
 
 .catalog-controls input[type="search"],
-.catalog-controls input[type="text"] {
+.catalog-controls input[type="text"],
+.catalog-controls select {
   width: 100%;
+  box-sizing: border-box;
   padding: 0.6rem;
   border: 1px solid #dfe3eb;
   border-radius: 8px;
   font-size: 1rem;
+  color: #111827;
+  background: #ffffff;
+}
+
+.catalog-control-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
 }
 
 .catalog-list {

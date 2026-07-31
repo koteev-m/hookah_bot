@@ -26,8 +26,17 @@ type CatalogRefs = {
   errorActions: HTMLDivElement
   list: HTMLUListElement
   searchInput: HTMLInputElement
+  citySelect: HTMLSelectElement
+  resetButton: HTMLButtonElement
   retryButton: HTMLButtonElement
 }
+
+type CatalogFilters = {
+  q: string
+  city: string
+}
+
+const CATALOG_SEARCH_DEBOUNCE_MS = 300
 
 function buildApiDeps(isDebug: boolean) {
   return { isDebug, getAccessToken, clearSession }
@@ -49,13 +58,29 @@ function renderErrorActions(container: HTMLElement, actions: ApiErrorAction[]) {
 function buildCatalogDom(root: HTMLDivElement): CatalogRefs {
   const wrapper = el('div', { className: 'catalog-screen' })
   const controls = el('div', { className: 'catalog-controls' })
-  const searchLabel = el('label', { text: 'Поиск по названию или городу', className: 'field-label' })
+  const searchLabel = el('label', { text: 'Поиск по названию, городу или адресу', className: 'field-label' })
   searchLabel.htmlFor = 'catalog-search'
   const searchInput = el('input', { id: 'catalog-search' }) as HTMLInputElement
   searchInput.type = 'search'
-  searchInput.placeholder = 'Начните вводить название или город'
-  const retryButton = el('button', { className: 'button-small', text: 'Обновить' })
-  append(controls, searchLabel, searchInput, retryButton)
+  searchInput.maxLength = 100
+  searchInput.placeholder = 'Название, город или адрес'
+  searchInput.disabled = true
+
+  const cityLabel = el('label', { text: 'Город', className: 'field-label' })
+  cityLabel.htmlFor = 'catalog-city'
+  const citySelect = el('select', { id: 'catalog-city' }) as HTMLSelectElement
+  citySelect.appendChild(new Option('Все города', ''))
+  citySelect.disabled = true
+
+  const controlActions = el('div', { className: 'catalog-control-actions' })
+  const resetButton = el('button', {
+    className: 'button-small button-secondary',
+    text: 'Сбросить поиск и фильтр'
+  }) as HTMLButtonElement
+  resetButton.disabled = true
+  const retryButton = el('button', { className: 'button-small', text: 'Обновить' }) as HTMLButtonElement
+  append(controlActions, resetButton, retryButton)
+  append(controls, searchLabel, searchInput, cityLabel, citySelect, controlActions)
 
   const status = el('p', { className: 'status', text: '' })
 
@@ -81,8 +106,24 @@ function buildCatalogDom(root: HTMLDivElement): CatalogRefs {
     errorActions,
     list,
     searchInput,
+    citySelect,
+    resetButton,
     retryButton
   }
+}
+
+function buildCityOptions(venues: CatalogVenueDto[]): string[] {
+  const cities = new Map<string, string>()
+  venues.forEach((venue) => {
+    const city = venue.city?.trim()
+    if (!city) return
+    const key = city.toLocaleLowerCase('ru-RU')
+    if (!cities.has(key)) {
+      cities.set(key, city)
+    }
+  })
+  const collator = new Intl.Collator('ru-RU', { sensitivity: 'base' })
+  return Array.from(cities.values()).sort((left, right) => collator.compare(left, right))
 }
 
 function formatTodaySchedule(schedule: VenueTodayScheduleDto | null | undefined): string {
@@ -176,8 +217,12 @@ export function renderCatalogScreen(options: CatalogScreenOptions) {
   const refs = buildCatalogDom(root)
   let disposed = false
   let catalogAbort: AbortController | null = null
+  let loadSeq = 0
+  let searchDebounce: ReturnType<typeof setTimeout> | null = null
+  let cityOptionsReady = false
   let venues: CatalogVenueDto[] = []
   const pendingFavoriteVenueIds = new Set<number>()
+  const favoriteOverrides = new Map<number, boolean>()
   const favoriteMutationControllers = new Set<AbortController>()
   const disposables: Array<() => void> = []
 
@@ -187,6 +232,61 @@ export function renderCatalogScreen(options: CatalogScreenOptions) {
 
   const hideError = () => {
     refs.error.hidden = true
+  }
+
+  const currentFilters = (): CatalogFilters => ({
+    q: refs.searchInput.value.trim(),
+    city: refs.citySelect.value.trim()
+  })
+
+  const hasActiveFilters = (filters: CatalogFilters = currentFilters()) => Boolean(filters.q || filters.city)
+
+  const updateControlState = () => {
+    refs.searchInput.disabled = !cityOptionsReady
+    refs.citySelect.disabled = !cityOptionsReady
+    refs.resetButton.disabled = !cityOptionsReady || !hasActiveFilters()
+  }
+
+  const clearSearchDebounce = () => {
+    if (searchDebounce !== null) {
+      clearTimeout(searchDebounce)
+      searchDebounce = null
+    }
+  }
+
+  const invalidateCatalogRequest = () => {
+    loadSeq += 1
+    catalogAbort?.abort()
+    catalogAbort = null
+  }
+
+  const renderCityOptions = (cities: string[]) => {
+    refs.citySelect.replaceChildren(new Option('Все города', ''))
+    cities.forEach((city) => refs.citySelect.appendChild(new Option(city, city)))
+    refs.citySelect.value = ''
+  }
+
+  const withFavoriteOverrides = (items: CatalogVenueDto[]): CatalogVenueDto[] =>
+    items.map((venue) => {
+      const override = favoriteOverrides.get(venue.id)
+      return override === undefined ? venue : { ...venue, isFavorite: override }
+    })
+
+  const renderCurrentResults = () => {
+    const emptyMessage = hasActiveFilters()
+      ? 'По вашему запросу ничего не найдено'
+      : 'Пока нет доступных заведений.'
+    renderCatalogList(
+      withFavoriteOverrides(venues),
+      onOpenVenue,
+      onBookVenue,
+      onAskVenue,
+      pendingFavoriteVenueIds,
+      (venue) => void toggleFavorite(venue),
+      refs,
+      emptyMessage
+    )
+    updateControlState()
   }
 
   const showError = (error: ApiErrorInfo) => {
@@ -200,12 +300,12 @@ export function renderCatalogScreen(options: CatalogScreenOptions) {
     refs.error.dataset.severity = presentation.severity
     const actions = presentation.actions.map((action) => {
       if (action.label === 'Повторить') {
-        return { ...action, onClick: () => void loadCatalog() }
+        return { ...action, onClick: () => void loadCatalog({ refreshCityOptions: !hasActiveFilters() }) }
       }
       return action
     })
     if (!actions.length) {
-      actions.push({ label: 'Повторить', onClick: () => void loadCatalog() })
+      actions.push({ label: 'Повторить', onClick: () => void loadCatalog({ refreshCityOptions: !hasActiveFilters() }) })
     }
     renderErrorActions(refs.errorActions, actions)
     renderErrorDetails(refs.errorDetails, error, {
@@ -215,40 +315,20 @@ export function renderCatalogScreen(options: CatalogScreenOptions) {
     refs.error.hidden = false
   }
 
-  const applyFilter = () => {
-    const query = refs.searchInput.value.trim().toLowerCase()
-    const filtered = query
-      ? venues.filter((venue) => {
-          const haystack = `${venue.name} ${venue.city ?? ''}`.toLowerCase()
-          return haystack.includes(query)
-        })
-      : venues
-    const emptyMessage = venues.length
-      ? 'Ничего не найдено по заданному фильтру.'
-      : 'Пока нет доступных заведений.'
-    renderCatalogList(
-      filtered,
-      onOpenVenue,
-      onBookVenue,
-      onAskVenue,
-      pendingFavoriteVenueIds,
-      (venue) => void toggleFavorite(venue),
-      refs,
-      emptyMessage
-    )
-  }
-
   async function toggleFavorite(venue: CatalogVenueDto) {
     if (disposed || pendingFavoriteVenueIds.has(venue.id)) return
-    const previousState = venue.isFavorite
-    venue.isFavorite = !previousState
+    const hadOverride = favoriteOverrides.has(venue.id)
+    const previousOverride = favoriteOverrides.get(venue.id)
+    const previousState = previousOverride ?? venue.isFavorite
+    const desiredState = !previousState
+    favoriteOverrides.set(venue.id, desiredState)
     pendingFavoriteVenueIds.add(venue.id)
     setStatus('')
-    applyFilter()
+    renderCurrentResults()
 
     const controller = new AbortController()
     favoriteMutationControllers.add(controller)
-    const result = venue.isFavorite
+    const result = desiredState
       ? await guestAddFavoriteVenue(backendUrl, venue.id, buildApiDeps(isDebug), controller.signal)
       : await guestRemoveFavoriteVenue(backendUrl, venue.id, buildApiDeps(isDebug), controller.signal)
     favoriteMutationControllers.delete(controller)
@@ -257,27 +337,37 @@ export function renderCatalogScreen(options: CatalogScreenOptions) {
     }
     pendingFavoriteVenueIds.delete(venue.id)
     if (!result.ok) {
-      venue.isFavorite = previousState
+      if (hadOverride && previousOverride !== undefined) {
+        favoriteOverrides.set(venue.id, previousOverride)
+      } else {
+        favoriteOverrides.delete(venue.id)
+      }
       setStatus('Не удалось изменить избранное.')
     }
-    applyFilter()
+    renderCurrentResults()
   }
 
-  async function loadCatalog() {
+  async function loadCatalog(options: { refreshCityOptions?: boolean } = {}) {
     if (disposed) return
+    clearSearchDebounce()
+    const filters = currentFilters()
+    const refreshCityOptions = options.refreshCityOptions === true && !hasActiveFilters(filters)
+    catalogAbort?.abort()
+    const controller = new AbortController()
+    catalogAbort = controller
+    const seq = ++loadSeq
     setStatus('Загрузка каталога...')
     hideError()
     refs.list.replaceChildren()
-    if (catalogAbort) {
-      catalogAbort.abort()
-    }
-    const controller = new AbortController()
-    catalogAbort = controller
 
-    const result = await guestGetCatalog(backendUrl, buildApiDeps(isDebug), controller.signal)
-    if (disposed || catalogAbort !== controller) {
+    const result = await guestGetCatalog(backendUrl, buildApiDeps(isDebug), controller.signal, {
+      q: filters.q || null,
+      city: filters.city || null
+    })
+    if (disposed || loadSeq !== seq || catalogAbort !== controller) {
       return
     }
+    catalogAbort = null
     if (!result.ok && result.error.code === REQUEST_ABORTED_CODE) {
       return
     }
@@ -288,21 +378,60 @@ export function renderCatalogScreen(options: CatalogScreenOptions) {
     }
 
     venues = result.data.venues ?? []
+    if (refreshCityOptions) {
+      renderCityOptions(buildCityOptions(venues))
+      cityOptionsReady = true
+    }
     setStatus('')
-    applyFilter()
+    renderCurrentResults()
+  }
+
+  const handleSearchInput = () => {
+    clearSearchDebounce()
+    invalidateCatalogRequest()
+    setStatus('')
+    hideError()
+    updateControlState()
+    searchDebounce = setTimeout(() => {
+      searchDebounce = null
+      if (disposed) return
+      void loadCatalog()
+    }, CATALOG_SEARCH_DEBOUNCE_MS)
+  }
+
+  const handleCityChange = () => {
+    clearSearchDebounce()
+    invalidateCatalogRequest()
+    updateControlState()
+    void loadCatalog()
+  }
+
+  const resetFilters = () => {
+    if (!hasActiveFilters()) return
+    refs.searchInput.value = ''
+    refs.citySelect.value = ''
+    clearSearchDebounce()
+    invalidateCatalogRequest()
+    updateControlState()
+    void loadCatalog({ refreshCityOptions: true })
   }
 
   disposables.push(
-    on(refs.retryButton, 'click', () => void loadCatalog()),
-    on(refs.searchInput, 'input', () => applyFilter())
+    on(refs.retryButton, 'click', () => void loadCatalog({ refreshCityOptions: !hasActiveFilters() })),
+    on(refs.resetButton, 'click', resetFilters),
+    on(refs.searchInput, 'input', handleSearchInput),
+    on(refs.citySelect, 'change', handleCityChange)
   )
 
   void getAccessToken()
-  void loadCatalog()
+  void loadCatalog({ refreshCityOptions: true })
 
   return () => {
     disposed = true
+    loadSeq += 1
+    clearSearchDebounce()
     catalogAbort?.abort()
+    catalogAbort = null
     favoriteMutationControllers.forEach((controller) => controller.abort())
     disposables.forEach((dispose) => dispose())
   }

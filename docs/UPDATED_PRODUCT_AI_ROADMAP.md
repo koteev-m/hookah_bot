@@ -161,6 +161,9 @@ Status: `DONE / P1 POLISH`.
 Done:
 
 - guest catalog and venue card baseline;
+- catalog search/filter Phase 1: backend-owned optional `q`/`city`, a 300 ms Mini App debounce,
+  abort/latest-response protection, complete city options from the initial unfiltered guarded
+  catalog and preserved current-user favorites/today schedule;
 - pre-QR venue card without structured order menu;
 - `ℹ️ Информация` and `📖 Фото-меню` info sections;
 - Mini App media proxy for info-section images/PDFs;
@@ -745,7 +748,6 @@ Not selected as implementation right now:
 - Order Session Tab Core Hardening stays a regression responsibility, not a new runtime block: preserve current `table_session_id`/`tab_id` behavior, active-order uniqueness, tab-scoped views and privacy boundaries from `docs/ORDER_SESSION_TAB_CORE.md`.
 - Booking Reminder MVP is already implemented/test-backed and has controlled staging smoke; broader enablement is a rollout decision, not a new feature block.
 - Staff Schedule needs a dedicated optional-module spec, and Staff Photo Upload needs consent plus safe media storage/picker policy before runtime implementation.
-- Catalog already has client-side name/city search; server-side name/city/address filtering is a useful later scaling slice, but it is less direct product value than closing the existing promotions parity gap now.
 - Mini App mutation and fallback payload verification is closed; keep it in regression.
 - Guest-facing bill/display-number/full-bill parity, Venue Mini App full bill parity, Guest Bill Request / Payment Method UX, Staff Chat Noise Reduction / Table Activity Card and hookah placeholder polish are closed; keep them in regression rather than selecting them again.
 - Platform Billing Cockpit / Owner Payment UX, Platform Billing Renewal / Advance Invoice / Courtesy Days and Staff/Manager invite deep-link sharing polish are closed; keep read-only GET checks, explicit POST creation, courtesy audit, Manager/Staff payment-control denials and invite acceptance/share UX in regression.
@@ -959,6 +961,30 @@ If a new roadmap is needed later, update this file instead of creating another r
 ## 12. Next Development Block
 
 Latest closed blocks: Staff profiles + today on shift Phase 1; Staff-call guest-visible CANCELLED finishing patch; Booking Arrival Guard / Staff-Chat Booking Buttons; Platform Billing Cockpit / Owner Payment UX; Platform Billing Renewal / Advance Invoice / Courtesy Days; Staff/Manager invite deep-link sharing polish; Guest Communication UX / Support Tickets MVP; Guest History Foundation MVP; Post-Visit Feedback MVP plus public-review/follow-up smoke-fix; Guest Favorites Phase 1 (`DONE / MVP / STAGING-SMOKE-PASSED`). Repeat as Template Phase 1 is `MVP IMPLEMENTED / LOCAL VALIDATION PASSED / DEFERRED MANUAL SMOKE`; its production-readiness gate remains open in [`REPEAT-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#repeat-manual-001), but does not block an independent bounded block.
+
+Latest locally validated bounded runtime slice:
+**CATALOG SEARCH AND FILTER PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**.
+
+- Authenticated `GET /api/guest/catalog` accepts optional `q` and `city`. Both are trimmed, blank is
+  absent and values over 100 characters are rejected rather than truncated. `q` matches name,
+  city, address and formatted address case-insensitively; `city` is a case-insensitive exact match;
+  together they use `AND`.
+- Prepared parameters and explicit LIKE escaping keep `%`, `_`, `!` and `\` literal with compatible
+  PostgreSQL/H2 behavior. The existing `PUBLISHED` lifecycle and guest subscription/availability
+  resolver remain authoritative, ordering remains deterministic, and current-user favorites plus
+  today schedule use the existing batch enrichment without N+1 queries.
+- The Mini App sends encoded backend `q`/`city` after a fixed 300 ms debounce. Request abort plus a
+  latest-generation guard prevents stale responses and screen disposal cancels pending work.
+  Initial loading, retryable error, base-catalog empty, filtered no-match and reset states are
+  distinct; optimistic favorite overrides remain authoritative across filtered reloads and user
+  switches clear catalog/favorite state.
+- City options come from the initial complete unfiltered guarded catalog. The current endpoint has
+  no limit or pagination; blank cities are removed, spelling is preserved while deduplicating
+  case-insensitively, and options are sorted predictably.
+- Focused `GuestVenueRoutesTest`, backend compile, ktlint, Mini App production build, focused
+  catalog/favorite browser checks and the prescribed full deterministic Playwright smoke `104/104`
+  passed locally. GitHub Actions and staging smoke remain required; this is not release/staging
+  evidence. No migration, index, facets/pagination API, media/R2 or analytics work was added.
 
 Latest staging-smoke-passed bounded runtime slice:
 **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**.

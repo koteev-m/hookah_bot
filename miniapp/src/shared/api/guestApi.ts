@@ -89,9 +89,18 @@ function isBillPaymentMethod(value: string): value is BillPaymentMethod {
 export async function guestGetCatalog(
   backendUrl: string,
   deps: RequestDependencies,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  options?: { q?: string | null; city?: string | null }
 ): Promise<ApiResult<CatalogResponse>> {
-  return requestApi<CatalogResponse>(backendUrl, '/api/guest/catalog', { signal }, deps)
+  const search = new URLSearchParams()
+  if (options?.q) {
+    search.set('q', options.q)
+  }
+  if (options?.city) {
+    search.set('city', options.city)
+  }
+  const suffix = search.toString() ? `?${search.toString()}` : ''
+  return requestApi<CatalogResponse>(backendUrl, `/api/guest/catalog${suffix}`, { signal }, deps)
 }
 
 export async function guestGetVenue(

@@ -167,6 +167,26 @@ type PublicCardSettings = {
   cardDescription: string | null
 }
 
+type GuestCatalogVenueFixture = {
+  id: number
+  name: string
+  city?: string | null
+  address?: string | null
+  countryCode?: string | null
+  formattedAddress?: string | null
+  displayAddress?: string | null
+  routeUrl?: string | null
+  cardDescription?: string | null
+  todaySchedule?: Record<string, unknown> | null
+}
+
+type CatalogRequestCapture = {
+  url: string
+  q: string | null
+  city: string | null
+  authorization: string | undefined
+}
+
 type GuestMenuOption = {
   id: number
   name: string
@@ -902,6 +922,29 @@ function buildPublicCardSettings(overrides: Partial<PublicCardSettings> = {}): P
   }
 }
 
+function buildGuestCatalogVenue(overrides: Partial<GuestCatalogVenueFixture> = {}): GuestCatalogVenueFixture {
+  return {
+    id: 1,
+    name: 'Микс',
+    city: 'Москва',
+    address: 'Пилотная, 1',
+    countryCode: 'RU',
+    formattedAddress: null,
+    displayAddress: 'Москва, Пилотная, 1',
+    routeUrl: buildTextRouteUrl('Микс', 'RU', 'Москва', 'Пилотная, 1'),
+    cardDescription: 'Тестовая карточка',
+    todaySchedule: {
+      date: '2030-01-10',
+      isConfigured: false,
+      isClosed: false,
+      isOpenNow: false,
+      statusLabel: 'График не указан',
+      timeLabel: null
+    },
+    ...overrides
+  }
+}
+
 function buildVenueGuestPreviewFixture(
   venueId = 1,
   overrides: Omit<Partial<VenueGuestPreviewFixture>, 'venue'> & {
@@ -1204,6 +1247,7 @@ async function mockGuestApi(
     favoriteMutationFailureOnce?: boolean
     isolateFavoriteUsers?: boolean
     venueAvailable?: boolean
+    catalogVenues?: GuestCatalogVenueFixture[]
     cartPreview?: CartPreviewFixture
     cartPreviewResolver?: (request: CartPreviewRequestFixture) => CartPreviewFixture
     addBatchResponse?: AddBatchResponseFixture
@@ -1238,6 +1282,22 @@ async function mockGuestApi(
   ])
   let favoriteMutationFailureOnce = options.favoriteMutationFailureOnce === true
   let venueAvailable = options.venueAvailable !== false
+  let catalogVenues = [...(options.catalogVenues ?? [buildGuestCatalogVenue()])]
+  const catalogRequests: CatalogRequestCapture[] = []
+  const catalogResponseAttempts: CatalogRequestCapture[] = []
+  const catalogErrors: ApiErrorFixture[] = []
+  const deferredCatalogResponses: Array<{
+    filters: { q?: string | null; city?: string | null }
+    promise: Promise<void>
+    release: () => void
+  }> = []
+  const favoriteMutationRequests: Array<{ venueId: number; method: string }> = []
+  const deferredFavoriteMutations: Array<{
+    venueId: number
+    method?: string
+    promise: Promise<void>
+    release: () => void
+  }> = []
   let tableScope: GuestTableScopeFixture =
     options.tableScope ?? {
       venueId: 1,
@@ -1360,33 +1420,87 @@ async function mockGuestApi(
     return ids
   }
 
-  await page.route('**/api/guest/catalog', async (route) => {
-    const favoriteIds = favoriteIdsForRequest(route.request())
-    await route.fulfill(
-      jsonResponse({
-        venues: venueAvailable ? [
-          {
-            id: 1,
-            name: 'Микс',
-            city: 'Москва',
-            address: 'Пилотная, 1',
-            countryCode: 'RU',
-            displayAddress: 'Москва, Пилотная, 1',
-            routeUrl: buildTextRouteUrl('Микс', 'RU', 'Москва', 'Пилотная, 1'),
-            cardDescription: 'Тестовая карточка',
-            isFavorite: favoriteIds.has(1),
-            todaySchedule: {
-              date: '2030-01-10',
-              isConfigured: false,
-              isClosed: false,
-              isOpenNow: false,
-              statusLabel: 'График не указан',
-              timeLabel: null
-            }
-          }
-        ] : []
-      })
-    )
+  const deferNextCatalogResponse = (filters: { q?: string | null; city?: string | null } = {}) => {
+    let release = () => undefined
+    const promise = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    deferredCatalogResponses.push({ filters, promise, release })
+    return release
+  }
+
+  const deferNextFavoriteMutation = (venueId: number, method?: 'POST' | 'DELETE') => {
+    let release = () => undefined
+    const promise = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    deferredFavoriteMutations.push({ venueId, method, promise, release })
+    return release
+  }
+
+  const normalizedCatalogText = (value: string | null | undefined) => value?.trim().toLocaleLowerCase('ru-RU') ?? ''
+
+  const filterCatalogVenues = (q: string | null, city: string | null) => {
+    const normalizedQuery = normalizedCatalogText(q)
+    const normalizedCity = normalizedCatalogText(city)
+    return catalogVenues.filter((venue) => {
+      const matchesQuery =
+        !normalizedQuery ||
+        [venue.name, venue.city, venue.address, venue.formattedAddress].some((value) =>
+          normalizedCatalogText(value).includes(normalizedQuery)
+        )
+      const matchesCity = !normalizedCity || normalizedCatalogText(venue.city) === normalizedCity
+      return matchesQuery && matchesCity
+    })
+  }
+
+  await page.route('**/api/guest/catalog**', async (route) => {
+    const request = route.request()
+    const url = new URL(request.url())
+    const capture: CatalogRequestCapture = {
+      url: request.url(),
+      q: url.searchParams.get('q'),
+      city: url.searchParams.get('city'),
+      authorization: request.headers().authorization
+    }
+    catalogRequests.push(capture)
+    const favoriteIds = favoriteIdsForRequest(request)
+    const response = catalogErrors.length
+      ? (() => {
+          const error = catalogErrors.shift()!
+          return jsonResponse(
+            {
+              error: {
+                code: error.code ?? 'INTERNAL_ERROR',
+                message: error.message ?? 'Не удалось загрузить каталог.'
+              }
+            },
+            error.status
+          )
+        })()
+      : jsonResponse({
+          venues: venueAvailable
+            ? filterCatalogVenues(capture.q, capture.city).map((venue) => ({
+                ...venue,
+                isFavorite: favoriteIds.has(venue.id)
+              }))
+            : []
+        })
+    const deferredIndex = deferredCatalogResponses.findIndex(({ filters }) => {
+      const qMatches = !Object.prototype.hasOwnProperty.call(filters, 'q') || (filters.q ?? null) === capture.q
+      const cityMatches =
+        !Object.prototype.hasOwnProperty.call(filters, 'city') || (filters.city ?? null) === capture.city
+      return qMatches && cityMatches
+    })
+    const gate = deferredIndex >= 0 ? deferredCatalogResponses.splice(deferredIndex, 1)[0] : null
+    await gate?.promise
+    try {
+      await route.fulfill(response)
+    } catch {
+      // A newer filter or disposed catalog screen intentionally aborts this request.
+    } finally {
+      catalogResponseAttempts.push(capture)
+    }
   })
 
   await page.route('**/api/guest/venue/1', async (route) => {
@@ -1445,6 +1559,14 @@ async function mockGuestApi(
     }
     const venueMatch = path.match(/^\/api\/guest\/favorites\/venues\/(\d+)$/)
     if (venueMatch && (request.method() === 'POST' || request.method() === 'DELETE')) {
+      const venueId = Number(venueMatch[1])
+      const method = request.method()
+      favoriteMutationRequests.push({ venueId, method })
+      const deferredIndex = deferredFavoriteMutations.findIndex(
+        (deferred) => deferred.venueId === venueId && (!deferred.method || deferred.method === method)
+      )
+      const gate = deferredIndex >= 0 ? deferredFavoriteMutations.splice(deferredIndex, 1)[0] : null
+      await gate?.promise
       if (options.favoriteMutationDelayMs) {
         await new Promise((resolve) => setTimeout(resolve, options.favoriteMutationDelayMs))
       }
@@ -1455,7 +1577,6 @@ async function mockGuestApi(
         )
         return
       }
-      const venueId = Number(venueMatch[1])
       if (request.method() === 'POST' && venueAvailable) {
         favoriteIds.add(venueId)
       }
@@ -2037,6 +2158,17 @@ async function mockGuestApi(
     setVenueAvailable: (available: boolean) => {
       venueAvailable = available
     },
+    setCatalogVenues: (venues: GuestCatalogVenueFixture[]) => {
+      catalogVenues = [...venues]
+    },
+    getCatalogRequests: () => [...catalogRequests],
+    getCatalogResponseAttempts: () => [...catalogResponseAttempts],
+    queueCatalogError: (error: ApiErrorFixture) => {
+      catalogErrors.push(error)
+    },
+    deferNextCatalogResponse,
+    getFavoriteMutationRequests: () => [...favoriteMutationRequests],
+    deferNextFavoriteMutation,
     setPromotions: (items: Array<Omit<VenuePromotionFixture, 'status'>>) => {
       promotions = items
     },
@@ -5221,6 +5353,189 @@ async function mockVenueMenuShiftCheckApi(
   }
 }
 
+test('guest catalog sends debounced backend search and city filters then resets', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockGuestApi(page, {
+    catalogVenues: [
+      buildGuestCatalogVenue({ id: 1, name: 'Микс & чай', city: 'Москва', address: 'Пилотная, 1' }),
+      buildGuestCatalogVenue({ id: 2, name: 'Вторая Москва', city: 'москва', address: 'Тверская, 2' }),
+      buildGuestCatalogVenue({ id: 3, name: 'Казанский зал', city: 'Казань', address: 'Баумана, 3' }),
+      buildGuestCatalogVenue({ id: 4, name: 'Северный зал', city: 'Санкт-Петербург', address: 'Невский, 4' }),
+      buildGuestCatalogVenue({ id: 5, name: 'Без города', city: '  ', address: 'Адрес, 5' })
+    ]
+  })
+
+  await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  const search = page.getByRole('searchbox', { name: 'Поиск по названию, городу или адресу' })
+  const city = page.getByRole('combobox', { name: 'Город' })
+  const reset = page.getByRole('button', { name: 'Сбросить поиск и фильтр' })
+  await expect(search).toBeEnabled()
+  await expect(city).toBeEnabled()
+  await expect(reset).toBeDisabled()
+  expect(await city.locator('option').allTextContents()).toEqual([
+    'Все города',
+    'Казань',
+    'Москва',
+    'Санкт-Петербург'
+  ])
+
+  const initialRequestCount = api.getCatalogRequests().length
+  await page.clock.install()
+  await search.fill('М')
+  await search.fill('Микс')
+  await search.fill('Микс & чай')
+  await page.clock.fastForward(299)
+  expect(api.getCatalogRequests()).toHaveLength(initialRequestCount)
+  await page.clock.fastForward(1)
+  await expect.poll(() => api.getCatalogRequests()).toHaveLength(initialRequestCount + 1)
+  const searchRequest = api.getCatalogRequests().at(-1)!
+  expect(searchRequest.q).toBe('Микс & чай')
+  expect(searchRequest.city).toBeNull()
+  expect(searchRequest.url).toContain('%26')
+  await expect(page.getByText('Микс & чай', { exact: true })).toBeVisible()
+
+  await city.selectOption('Москва')
+  await expect.poll(() => api.getCatalogRequests()).toHaveLength(initialRequestCount + 2)
+  const combinedRequest = api.getCatalogRequests().at(-1)!
+  expect(combinedRequest).toMatchObject({ q: 'Микс & чай', city: 'Москва' })
+  expect(combinedRequest.url).toContain(encodeURIComponent('Москва'))
+  const filteredCard = page.locator('.catalog-item').filter({ hasText: 'Микс & чай' })
+  await expect(filteredCard.getByRole('button', { name: 'Открыть карточку' })).toBeVisible()
+  await expect(filteredCard.getByRole('button', { name: 'Задать вопрос' })).toBeVisible()
+  await expect(filteredCard.getByRole('button', { name: 'Забронировать' })).toBeVisible()
+
+  await reset.click()
+  await expect.poll(() => api.getCatalogRequests()).toHaveLength(initialRequestCount + 3)
+  expect(api.getCatalogRequests().at(-1)).toMatchObject({ q: null, city: null })
+  await expect(search).toHaveValue('')
+  await expect(city).toHaveValue('')
+  await expect(reset).toBeDisabled()
+  await expect(page.locator('.catalog-item')).toHaveCount(5)
+
+  const resetMixCard = page.locator('.catalog-item').filter({ hasText: 'Микс & чай' })
+  await resetMixCard.getByRole('button', { name: 'Забронировать' }).click()
+  await expect.poll(() => page.evaluate(() => window.location.hash)).toBe('#/bookings?venueId=1')
+  await page.evaluate(() => { window.location.hash = '#/catalog' })
+  await expect(search).toBeEnabled()
+  await page.locator('.catalog-item').filter({ hasText: 'Микс & чай' }).getByRole('button', { name: 'Задать вопрос' }).click()
+  await expect.poll(() => page.evaluate(() => window.location.hash)).toBe('#/messages?venueId=1')
+  await page.evaluate(() => { window.location.hash = '#/catalog' })
+  await expect(search).toBeEnabled()
+  await page.locator('.catalog-item').filter({ hasText: 'Микс & чай' }).getByRole('button', { name: 'Открыть карточку' }).click()
+  await expect.poll(() => page.evaluate(() => window.location.hash)).toBe('#/venue/1')
+})
+
+test('guest catalog has deterministic loading retry general-empty and no-match states', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockGuestApi(page, { catalogVenues: [] })
+  api.queueCatalogError({ status: 500, code: 'INTERNAL_ERROR', message: 'Failed' })
+  const releaseInitial = api.deferNextCatalogResponse({ q: null, city: null })
+
+  await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  const search = page.getByRole('searchbox', { name: 'Поиск по названию, городу или адресу' })
+  const city = page.getByRole('combobox', { name: 'Город' })
+  await expect(page.getByText('Загрузка каталога...', { exact: true })).toBeVisible()
+  await expect(search).toBeDisabled()
+  await expect(city).toBeDisabled()
+  releaseInitial()
+
+  const errorCard = page.locator('.catalog-screen .error-card')
+  await expect(errorCard).toBeVisible()
+  await errorCard.getByRole('button', { name: 'Повторить' }).click()
+  await expect(page.getByText('Пока нет доступных заведений.', { exact: true })).toBeVisible()
+  await expect(search).toBeEnabled()
+  await expect(city).toBeEnabled()
+
+  api.setCatalogVenues([buildGuestCatalogVenue()])
+  await page.getByRole('button', { name: 'Обновить', exact: true }).click()
+  await expect(page.getByText('Микс', { exact: true })).toBeVisible()
+  const beforeNoMatch = api.getCatalogRequests().length
+  await search.fill('совпадений нет')
+  await expect.poll(() => api.getCatalogRequests().length).toBe(beforeNoMatch + 1)
+  await expect(page.getByText('По вашему запросу ничего не найдено', { exact: true })).toBeVisible()
+
+  api.queueCatalogError({ status: 500, code: 'INTERNAL_ERROR', message: 'Failed again' })
+  await page.getByRole('button', { name: 'Обновить', exact: true }).click()
+  await expect(errorCard).toBeVisible()
+  await errorCard.getByRole('button', { name: 'Повторить' }).click()
+  await expect(page.getByText('По вашему запросу ничего не найдено', { exact: true })).toBeVisible()
+})
+
+test('guest catalog latest response wins and disposed requests cannot restore old results', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockGuestApi(page, {
+    catalogVenues: [
+      buildGuestCatalogVenue({ id: 1, name: 'Старый зал' }),
+      buildGuestCatalogVenue({ id: 2, name: 'Новый зал' })
+    ]
+  })
+
+  await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  const search = page.getByRole('searchbox', { name: 'Поиск по названию, городу или адресу' })
+  await expect(search).toBeEnabled()
+  await page.clock.install()
+
+  const releaseOld = api.deferNextCatalogResponse({ q: 'Старый', city: null })
+  await search.fill('Старый')
+  await page.clock.fastForward(300)
+  await expect.poll(() => api.getCatalogRequests().some((request) => request.q === 'Старый')).toBe(true)
+
+  await search.fill('Новый')
+  await page.clock.fastForward(300)
+  await expect(page.getByText('Новый зал', { exact: true })).toBeVisible()
+  await expect(page.getByText('Старый зал', { exact: true })).toHaveCount(0)
+  releaseOld()
+  await expect.poll(() => api.getCatalogResponseAttempts().some((request) => request.q === 'Старый')).toBe(true)
+  await expect(page.getByText('Новый зал', { exact: true })).toBeVisible()
+  await expect(page.getByText('Старый зал', { exact: true })).toHaveCount(0)
+
+  const releaseDisposed = api.deferNextCatalogResponse({ q: 'После ухода', city: null })
+  await search.fill('После ухода')
+  await page.clock.fastForward(300)
+  await expect.poll(() => api.getCatalogRequests().some((request) => request.q === 'После ухода')).toBe(true)
+  await page.getByRole('button', { name: 'Профиль', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Профиль', exact: true })).toBeVisible()
+  releaseDisposed()
+  await expect.poll(() => api.getCatalogResponseAttempts().some((request) => request.q === 'После ухода')).toBe(true)
+  await expect(page.getByRole('heading', { name: 'Профиль', exact: true })).toBeVisible()
+})
+
+test('guest catalog favorite override survives stale reload and an off-result mutation', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockGuestApi(page, {
+    catalogVenues: [
+      buildGuestCatalogVenue({ id: 1, name: 'Микс', city: 'Москва' }),
+      buildGuestCatalogVenue({ id: 2, name: 'Казанский зал', city: 'Казань' })
+    ]
+  })
+  const releaseFavorite = api.deferNextFavoriteMutation(1, 'POST')
+
+  await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  const mixCard = page.locator('.catalog-item').filter({ hasText: 'Микс' })
+  await mixCard.getByRole('button', { name: 'В избранное' }).click()
+  await expect.poll(() => api.getFavoriteMutationRequests()).toEqual([{ venueId: 1, method: 'POST' }])
+  await expect(mixCard.getByRole('button', { name: 'В избранном' })).toBeDisabled()
+
+  const requestsBeforeReload = api.getCatalogRequests().length
+  await page.getByRole('button', { name: 'Обновить', exact: true }).click()
+  await expect.poll(() => api.getCatalogRequests()).toHaveLength(requestsBeforeReload + 1)
+  await expect(mixCard.getByRole('button', { name: 'В избранном' })).toBeDisabled()
+
+  await page.getByRole('combobox', { name: 'Город' }).selectOption('Казань')
+  await expect(page.getByText('Казанский зал', { exact: true })).toBeVisible()
+  await expect(page.getByText('Микс', { exact: true })).toHaveCount(0)
+  releaseFavorite()
+  await expect.poll(() => api.getFavoriteVenueIds(123456789)).toEqual([1])
+
+  await page.getByRole('button', { name: 'Сбросить поиск и фильтр' }).click()
+  const restoredMixCard = page.locator('.catalog-item').filter({ hasText: 'Микс' })
+  await expect(restoredMixCard.getByRole('button', { name: 'В избранном' })).toBeEnabled()
+  await expect(restoredMixCard.getByRole('button', { name: 'В избранном' })).toHaveAttribute('aria-pressed', 'true')
+})
+
 test('pre-QR guest card shows info/photo menu and hides structured order menu', async ({ page }) => {
   await installTelegramWebApp(page, 123456789)
   const api = await mockGuestApi(page)
@@ -5420,6 +5735,11 @@ test('guest favorite venues are isolated between accounts', async ({ page }) => 
   await page.getByRole('button', { name: 'В избранное' }).click()
   await expect(page.getByRole('button', { name: 'В избранном' })).toBeEnabled()
   expect(api.getFavoriteVenueIds(123456789)).toEqual([1])
+  const firstUserRequestCount = api.getCatalogRequests().length
+  await page.getByRole('searchbox', { name: 'Поиск по названию, городу или адресу' }).fill('Мик')
+  await page.getByRole('combobox', { name: 'Город' }).selectOption('Москва')
+  await expect.poll(() => api.getCatalogRequests()).toHaveLength(firstUserRequestCount + 1)
+  expect(api.getCatalogRequests().at(-1)).toMatchObject({ q: 'Мик', city: 'Москва' })
 
   await page.evaluate(({ userId, initData }) => {
     window.localStorage.setItem('__e2e_telegram_user_id', String(userId))
@@ -5427,6 +5747,8 @@ test('guest favorite venues are isolated between accounts', async ({ page }) => 
     window.location.hash = '#/catalog'
   }, { userId: 987654321, initData: otherMockInitData })
   await page.reload()
+  await expect(page.getByRole('searchbox', { name: 'Поиск по названию, городу или адресу' })).toHaveValue('')
+  await expect(page.getByRole('combobox', { name: 'Город' })).toHaveValue('')
   await expect(page.getByRole('button', { name: 'В избранное' })).toHaveAttribute('aria-pressed', 'false')
   expect(api.getFavoriteVenueIds(987654321)).toEqual([])
 
@@ -5435,6 +5757,8 @@ test('guest favorite venues are isolated between accounts', async ({ page }) => 
     window.localStorage.setItem('__e2e_telegram_init_data', initData)
   }, { userId: 123456789, initData: mockInitData })
   await page.reload()
+  await expect(page.getByRole('searchbox', { name: 'Поиск по названию, городу или адресу' })).toHaveValue('')
+  await expect(page.getByRole('combobox', { name: 'Город' })).toHaveValue('')
   await expect(page.getByRole('button', { name: 'В избранном' })).toHaveAttribute('aria-pressed', 'true')
 })
 

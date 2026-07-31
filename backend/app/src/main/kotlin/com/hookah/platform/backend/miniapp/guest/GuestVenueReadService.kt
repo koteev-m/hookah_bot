@@ -114,7 +114,7 @@ class GuestVenueReadService(
         return VenueResponse(
             venue =
                 venue.toVenueDto(
-                    todaySchedule = buildTodaySchedule(venue.id, zoneId),
+                    todaySchedule = buildTodaySchedules(mapOf(venue.id to zoneId)).getValue(venue.id),
                     weeklyHours = weeklyHours.map { it.toGuestDto() },
                     dateExceptions = dateExceptions.map { it.toGuestDto() },
                     todayStaff = todayStaff,
@@ -166,19 +166,41 @@ class GuestVenueReadService(
     }
 
     suspend fun getTodaySchedule(venueId: Long): VenueTodayScheduleDto {
-        val zoneId = venueSettingsRepository.resolveZoneId(venueId)
-        return buildTodaySchedule(venueId, zoneId)
+        return getTodaySchedules(listOf(venueId)).getValue(venueId)
     }
 
-    private suspend fun buildTodaySchedule(
-        venueId: Long,
-        zoneId: ZoneId,
+    suspend fun getTodaySchedules(venueIds: Collection<Long>): Map<Long, VenueTodayScheduleDto> {
+        val zoneIds = venueSettingsRepository.resolveZoneIds(venueIds)
+        return buildTodaySchedules(zoneIds)
+    }
+
+    private suspend fun buildTodaySchedules(zoneIds: Map<Long, ZoneId>): Map<Long, VenueTodayScheduleDto> {
+        if (zoneIds.isEmpty()) return emptyMap()
+        val now = Instant.now()
+        val localDateTimes = zoneIds.mapValues { (_, zoneId) -> LocalDateTime.ofInstant(now, zoneId) }
+        val datesByVenueId =
+            localDateTimes.mapValues { (_, localDateTime) ->
+                val today = localDateTime.toLocalDate()
+                setOf(today, today.minusDays(1))
+            }
+        val hoursByVenueId = venueBookingHoursRepository.findByVenuesAndDates(datesByVenueId)
+        return localDateTimes.mapValues { (venueId, localDateTime) ->
+            val today = localDateTime.toLocalDate()
+            buildTodaySchedule(
+                localDateTime = localDateTime,
+                todayHours = hoursByVenueId[venueId]?.get(today),
+                previousHours = hoursByVenueId[venueId]?.get(today.minusDays(1)),
+            )
+        }
+    }
+
+    private fun buildTodaySchedule(
+        localDateTime: LocalDateTime,
+        todayHours: VenueBookingHours?,
+        previousHours: VenueBookingHours?,
     ): VenueTodayScheduleDto {
-        val localDateTime = LocalDateTime.ofInstant(Instant.now(), zoneId)
         val today = localDateTime.toLocalDate()
-        val todayHours = venueBookingHoursRepository.findByVenueAndDate(venueId, today)
         val previousDate = today.minusDays(1)
-        val previousHours = venueBookingHoursRepository.findByVenueAndDate(venueId, previousDate)
         val previousOpenNow = previousHours?.containsOpenInstant(previousDate, localDateTime) == true
         val todayOpenNow = todayHours?.containsOpenInstant(today, localDateTime) == true
         val hours =

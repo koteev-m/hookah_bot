@@ -12,8 +12,11 @@ import com.hookah.platform.backend.module
 import com.hookah.platform.backend.moduleWithOverrides
 import com.hookah.platform.backend.telegram.TelegramDownloadedFile
 import com.hookah.platform.backend.test.assertApiErrorEnvelope
+import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
+import io.ktor.client.request.parameter
+import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
@@ -52,10 +55,181 @@ class GuestVenueRoutesTest {
 
             application { module() }
 
-            val response = client.get("/api/guest/catalog")
+            val response =
+                client.get("/api/guest/catalog") {
+                    parameter("q", "Published")
+                    parameter("city", "City")
+                }
+            val oversizedResponse =
+                client.get("/api/guest/catalog") {
+                    parameter("q", "q".repeat(101))
+                }
 
             assertEquals(HttpStatusCode.Unauthorized, response.status)
             assertApiErrorEnvelope(response, ApiErrorCodes.UNAUTHORIZED)
+            assertEquals(HttpStatusCode.Unauthorized, oversizedResponse.status)
+            assertApiErrorEnvelope(oversizedResponse, ApiErrorCodes.UNAUTHORIZED)
+        }
+
+    @Test
+    fun `catalog query matches name city address and formatted address case insensitively after trim`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-catalog-query-fields")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venueIds =
+                DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                    val nameId =
+                        insertVenue(connection, "Northern Mix", "Москва", "Тверская, 1", VenueStatus.PUBLISHED.dbValue)
+                    val cityId =
+                        insertVenue(connection, "Volga Lounge", "Казань", "Баумана, 7", VenueStatus.PUBLISHED.dbValue)
+                    val addressId =
+                        insertVenue(
+                            connection,
+                            "Third Place",
+                            "Самара",
+                            "Особенная набережная, 9",
+                            VenueStatus.PUBLISHED.dbValue,
+                        )
+                    val formattedId =
+                        insertVenue(
+                            connection,
+                            "Fourth Place",
+                            "Тула",
+                            "Советская, 2",
+                            VenueStatus.PUBLISHED.dbValue,
+                        )
+                    updateFormattedAddress(connection, formattedId, "Россия, Тульская область, памятный проспект")
+                    listOf(nameId, cityId, addressId, formattedId)
+                }
+            val token = issueToken(config)
+
+            assertEquals(
+                listOf(venueIds[0]),
+                client.requestCatalogPayload(token, query = "  nOrThErN  ").venues.map { it.id },
+            )
+            assertEquals(
+                listOf(venueIds[1]),
+                client.requestCatalogPayload(token, query = "кАзАнЬ").venues.map { it.id },
+            )
+            assertEquals(
+                listOf(venueIds[2]),
+                client.requestCatalogPayload(token, query = "НАБЕРЕЖНАЯ").venues.map { it.id },
+            )
+            assertEquals(
+                listOf(venueIds[3]),
+                client.requestCatalogPayload(token, query = "тУлЬсКаЯ ОбЛаСтЬ").venues.map { it.id },
+            )
+        }
+
+    @Test
+    fun `catalog city filter is exact query and city use AND and blank filters are absent`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-catalog-query-city")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venueIds =
+                DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                    listOf(
+                        insertVenue(connection, "Alpha", "Москва", "Первая, 1", VenueStatus.PUBLISHED.dbValue),
+                        insertVenue(connection, "Beta", "мОсКвА", "Вторая, 2", VenueStatus.PUBLISHED.dbValue),
+                        insertVenue(connection, "Gamma", "Казань", "Третья, 3", VenueStatus.PUBLISHED.dbValue),
+                        insertVenue(connection, "Delta", "Новая Москва", "Четвёртая, 4", VenueStatus.PUBLISHED.dbValue),
+                    )
+                }
+            val token = issueToken(config)
+
+            val unfilteredIds = client.requestCatalogPayload(token).venues.map { it.id }
+            val blankIds = client.requestCatalogPayload(token, query = "   ", city = "  ").venues.map { it.id }
+            val moscowIds = client.requestCatalogPayload(token, city = "  МОСКВА ").venues.map { it.id }
+            val combinedIds =
+                client.requestCatalogPayload(token, query = " beta ", city = "МОСКВА").venues.map { it.id }
+            val andEmpty = client.requestCatalogPayload(token, query = "Gamma", city = "Москва").venues
+            val firstEmpty = client.requestCatalogPayload(token, query = "no such venue").venues
+            val secondEmpty = client.requestCatalogPayload(token, query = "no such venue").venues
+
+            assertEquals(venueIds, unfilteredIds)
+            assertEquals(unfilteredIds, blankIds)
+            assertEquals(venueIds.take(2), moscowIds)
+            assertEquals(listOf(venueIds[1]), combinedIds)
+            assertTrue(andEmpty.isEmpty())
+            assertEquals(emptyList(), firstEmpty)
+            assertEquals(firstEmpty, secondEmpty)
+        }
+
+    @Test
+    fun `catalog query treats LIKE metacharacters and SQL-like input literally`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-catalog-query-literals")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venueIds =
+                DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                    val percentId =
+                        insertVenue(connection, "100% Smoke", "Москва", "Первая, 1", VenueStatus.PUBLISHED.dbValue)
+                    val underscoreId =
+                        insertVenue(
+                            connection,
+                            "Under Place",
+                            "Москва",
+                            "Under_score, 2",
+                            VenueStatus.PUBLISHED.dbValue,
+                        )
+                    val escapeId =
+                        insertVenue(connection, "Escape Place", "Москва", "Третья, 3", VenueStatus.PUBLISHED.dbValue)
+                    updateFormattedAddress(connection, escapeId, "Россия, Москва, Escape!Place")
+                    val backslashId =
+                        insertVenue(
+                            connection,
+                            "Back\\Slash",
+                            "Москва",
+                            "Четвертая, 4",
+                            VenueStatus.PUBLISHED.dbValue,
+                        )
+                    insertVenue(connection, "Ordinary", "Москва", "Пятая, 5", VenueStatus.PUBLISHED.dbValue)
+                    listOf(percentId, underscoreId, escapeId, backslashId)
+                }
+            val token = issueToken(config)
+
+            assertEquals(listOf(venueIds[0]), client.requestCatalogPayload(token, query = "%").venues.map { it.id })
+            assertEquals(listOf(venueIds[1]), client.requestCatalogPayload(token, query = "_").venues.map { it.id })
+            assertEquals(listOf(venueIds[2]), client.requestCatalogPayload(token, query = "!").venues.map { it.id })
+            assertEquals(listOf(venueIds[3]), client.requestCatalogPayload(token, query = "\\").venues.map { it.id })
+            assertTrue(client.requestCatalogPayload(token, query = "%' OR 1=1 --").venues.isEmpty())
+        }
+
+    @Test
+    fun `catalog rejects oversized query and city without truncating`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-catalog-query-validation")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+            val token = issueToken(config)
+
+            val oversizedQuery = client.requestCatalog(token, query = "q".repeat(101))
+            val oversizedCity = client.requestCatalog(token, city = "c".repeat(101))
+            val maxLengthQuery = client.requestCatalog(token, query = "q".repeat(100))
+
+            assertEquals(HttpStatusCode.BadRequest, oversizedQuery.status)
+            assertApiErrorEnvelope(oversizedQuery, ApiErrorCodes.INVALID_INPUT)
+            assertEquals(HttpStatusCode.BadRequest, oversizedCity.status)
+            assertApiErrorEnvelope(oversizedCity, ApiErrorCodes.INVALID_INPUT)
+            assertEquals(HttpStatusCode.OK, maxLengthQuery.status)
         }
 
     @Test
@@ -83,6 +257,8 @@ class GuestVenueRoutesTest {
             assertEquals(venues.publishedId, payload.venues.first().id)
             assertEquals(false, payload.venues.any { it.id == venues.draftId })
             assertEquals(false, payload.venues.any { it.id == venues.deletedId })
+            assertTrue(client.requestCatalogPayload(token, query = "Hidden").venues.isEmpty())
+            assertTrue(client.requestCatalogPayload(token, query = "Suspended").venues.isEmpty())
         }
 
     @Test
@@ -110,18 +286,12 @@ class GuestVenueRoutesTest {
             val favoriteToken = issueToken(config, TELEGRAM_USER_ID)
             val otherToken = issueToken(config, OTHER_TELEGRAM_USER_ID)
 
-            val favoriteCatalog =
-                client.get("/api/guest/catalog") {
-                    headers { append(HttpHeaders.Authorization, "Bearer $favoriteToken") }
-                }
+            val favoriteCatalog = client.requestCatalog(favoriteToken, query = "Published")
             val favoriteDetail =
                 client.get("/api/guest/venue/${venues.publishedId}") {
                     headers { append(HttpHeaders.Authorization, "Bearer $favoriteToken") }
                 }
-            val otherCatalog =
-                client.get("/api/guest/catalog") {
-                    headers { append(HttpHeaders.Authorization, "Bearer $otherToken") }
-                }
+            val otherCatalog = client.requestCatalog(otherToken, query = "Published")
             val otherDetail =
                 client.get("/api/guest/venue/${venues.publishedId}") {
                     headers { append(HttpHeaders.Authorization, "Bearer $otherToken") }
@@ -169,6 +339,7 @@ class GuestVenueRoutesTest {
             assertEquals(HttpStatusCode.OK, response.status)
             val payload = json.decodeFromString(CatalogResponse.serializer(), response.bodyAsText())
             assertEquals(listOf(publishedId), payload.venues.map { it.id })
+            assertTrue(client.requestCatalogPayload(token, query = "Blocked").venues.isEmpty())
         }
 
     @Test
@@ -395,47 +566,69 @@ class GuestVenueRoutesTest {
 
             client.get("/health")
 
-            val today = LocalDate.now(ZoneId.of("UTC"))
-            val venueId =
+            val venueIds =
                 DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
-                    val id = insertVenue(connection, "Mix", "Москва", "Новый Арбат, 24", VenueStatus.PUBLISHED.dbValue)
-                    insertVenueTimezone(connection, id, "UTC")
-                    insertWeeklyHours(
-                        connection = connection,
-                        venueId = id,
-                        weekday = today.dayOfWeek.value,
-                        opensAt = "00:00:00",
-                        closesAt = "00:00:00",
-                        isClosed = false,
-                    )
-                    id
+                    val openId =
+                        insertVenue(connection, "Mix Open", "Москва", "Новый Арбат, 24", VenueStatus.PUBLISHED.dbValue)
+                    insertVenueTimezone(connection, openId, "UTC")
+                    (1..7).forEach { weekday ->
+                        insertWeeklyHours(
+                            connection = connection,
+                            venueId = openId,
+                            weekday = weekday,
+                            opensAt = "00:00:00",
+                            closesAt = "00:00:00",
+                            isClosed = false,
+                        )
+                    }
+                    val closedId =
+                        insertVenue(connection, "Mix Closed", "Москва", "Арбат, 1", VenueStatus.PUBLISHED.dbValue)
+                    insertVenueTimezone(connection, closedId, "UTC")
+                    (1..7).forEach { weekday ->
+                        insertWeeklyHours(
+                            connection = connection,
+                            venueId = closedId,
+                            weekday = weekday,
+                            opensAt = "00:00:00",
+                            closesAt = "00:00:00",
+                            isClosed = true,
+                        )
+                    }
+                    listOf(openId, closedId)
                 }
-            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            venueIds.forEach { venueId -> seedSubscription(jdbcUrl, venueId, "ACTIVE") }
             val token = issueToken(config)
 
-            val catalogResponse =
-                client.get("/api/guest/catalog") {
-                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
-                }
+            val catalogDateBefore = LocalDate.now(ZoneId.of("UTC"))
+            val catalogResponse = client.requestCatalog(token, query = "mix")
+            val catalogDateAfter = LocalDate.now(ZoneId.of("UTC"))
             assertEquals(HttpStatusCode.OK, catalogResponse.status)
             val catalogPayload = json.decodeFromString(CatalogResponse.serializer(), catalogResponse.bodyAsText())
-            val catalogSchedule = catalogPayload.venues.single().todaySchedule
+            assertEquals(venueIds, catalogPayload.venues.map { it.id })
+            val catalogSchedule = catalogPayload.venues.first().todaySchedule
             check(catalogSchedule != null)
-            assertEquals(today.toString(), catalogSchedule.date)
+            assertTrue(catalogSchedule.date in setOf(catalogDateBefore.toString(), catalogDateAfter.toString()))
             assertEquals("Круглосуточно", catalogSchedule.timeLabel)
             assertEquals("Открыто сейчас", catalogSchedule.statusLabel)
             assertEquals(true, catalogSchedule.isConfigured)
             assertEquals(true, catalogSchedule.isOpenNow)
+            val closedCatalogSchedule = catalogPayload.venues.last().todaySchedule
+            check(closedCatalogSchedule != null)
+            assertEquals("Закрыто сегодня", closedCatalogSchedule.statusLabel)
+            assertEquals(true, closedCatalogSchedule.isConfigured)
+            assertEquals(true, closedCatalogSchedule.isClosed)
 
+            val venueDateBefore = LocalDate.now(ZoneId.of("UTC"))
             val venueResponse =
-                client.get("/api/guest/venue/$venueId") {
+                client.get("/api/guest/venue/${venueIds.first()}") {
                     headers { append(HttpHeaders.Authorization, "Bearer $token") }
                 }
+            val venueDateAfter = LocalDate.now(ZoneId.of("UTC"))
             assertEquals(HttpStatusCode.OK, venueResponse.status)
             val venuePayload = json.decodeFromString(VenueResponse.serializer(), venueResponse.bodyAsText())
             val venueSchedule = venuePayload.venue.todaySchedule
             check(venueSchedule != null)
-            assertEquals(today.toString(), venueSchedule.date)
+            assertTrue(venueSchedule.date in setOf(venueDateBefore.toString(), venueDateAfter.toString()))
             assertEquals("00:00", venueSchedule.opensAt)
             assertEquals("00:00", venueSchedule.closesAt)
             assertEquals(true, venueSchedule.isConfigured)
@@ -462,10 +655,7 @@ class GuestVenueRoutesTest {
             seedSubscription(jdbcUrl, venueId, "ACTIVE")
             val token = issueToken(config)
 
-            val catalogResponse =
-                client.get("/api/guest/catalog") {
-                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
-                }
+            val catalogResponse = client.requestCatalog(token, query = "mix")
             assertEquals(HttpStatusCode.OK, catalogResponse.status)
             val catalogPayload = json.decodeFromString(CatalogResponse.serializer(), catalogResponse.bodyAsText())
             val catalogSchedule = catalogPayload.venues.single().todaySchedule
@@ -941,6 +1131,27 @@ class GuestVenueRoutesTest {
         return service.issueToken(userId).token
     }
 
+    private suspend fun HttpClient.requestCatalog(
+        token: String,
+        query: String? = null,
+        city: String? = null,
+    ): HttpResponse =
+        get("/api/guest/catalog") {
+            headers { append(HttpHeaders.Authorization, "Bearer $token") }
+            query?.let { parameter("q", it) }
+            city?.let { parameter("city", it) }
+        }
+
+    private suspend fun HttpClient.requestCatalogPayload(
+        token: String,
+        query: String? = null,
+        city: String? = null,
+    ): CatalogResponse {
+        val response = requestCatalog(token = token, query = query, city = city)
+        assertEquals(HttpStatusCode.OK, response.status)
+        return json.decodeFromString(CatalogResponse.serializer(), response.bodyAsText())
+    }
+
     private fun insertUser(
         connection: java.sql.Connection,
         userId: Long,
@@ -998,6 +1209,20 @@ class GuestVenueRoutesTest {
             }
         }
         error("Failed to insert venue")
+    }
+
+    private fun updateFormattedAddress(
+        connection: java.sql.Connection,
+        venueId: Long,
+        formattedAddress: String,
+    ) {
+        connection.prepareStatement(
+            "UPDATE venues SET formatted_address = ? WHERE id = ?",
+        ).use { statement ->
+            statement.setString(1, formattedAddress)
+            statement.setLong(2, venueId)
+            statement.executeUpdate()
+        }
     }
 
     private fun insertVenueTimezone(

@@ -12,6 +12,10 @@
 Актуальный scope после последних fix-pack'ов:
 
 - pre-QR Guest catalog/card shows only public venue info, booking entry and `ℹ️ Информация`; structured order menu is hidden until QR/table context.
+- Catalog Search and Filter Phase 1 is **CATALOG SEARCH AND FILTER PHASE 1 / MVP IMPLEMENTED /
+  LOCAL VALIDATION PASSED**: backend `q`/`city`, complete city options, 300 ms debounce,
+  abort/latest-response safety and favorite overrides passed local backend/build/browser validation
+  including full deterministic smoke `104/104`; GitHub Actions and staging smoke remain required.
 - `📖 Фото-меню` is an info section, not the order menu.
 - info-section images/PDFs are loaded through backend media proxy.
 - Venue Owner/Manager/Staff Mini App entry must be opened through inline `web_app` buttons.
@@ -167,7 +171,14 @@ Remaining:
   - staff chat notification receives `tableSessionId`;
   - invalid reason/comment and rate limit are rejected.
 - `GuestVenueRoutesTest`
-  - catalog and venue-by-id read models expose safe today schedule/open state only through existing guest visibility gates.
+  - optional trimmed `q` matches name/city/address/formatted address case-insensitively, optional
+    trimmed `city` is a case-insensitive exact filter, blank values are absent, combined filters use
+    `AND` and values over 100 characters are rejected;
+  - prepared parameters and LIKE escaping keep `%`, `_`, `!` and `\` literal under PostgreSQL/H2;
+  - hidden/lifecycle/subscription-blocked venues remain undisclosed, authentication is required and
+    empty results plus deterministic ordering stay stable;
+  - catalog and venue-by-id read models preserve safe today schedule/open state and current-user
+    `isFavorite` through existing batch enrichment and guest visibility gates without N+1 reads.
 - `GuestBookingRoutesTest`
   - direct guest booking create/update rejects closed weekdays, closed date overrides and out-of-hours scheduled times;
   - valid in-hours booking remains accepted.
@@ -183,10 +194,28 @@ Known option/flavor coverage:
 - Backend guest menu tests must keep asserting that an option is returned only for its owning item and unavailable options stay hidden.
 - Follow-ups: Mini App normalize/reset remains deferred unless pilots need it; DB-level duplicate/race protection for base flavor apply is optional if concurrent apply becomes an issue.
 
+Catalog search/filter browser coverage:
+
+- API requests encode `q`/`city` and combine them; the fixed debounce is 300 ms;
+- abort plus latest-generation protection prevents an older response from replacing the current
+  result, and screen disposal cancels pending work;
+- initial complete unfiltered catalog seeds city options because the endpoint has no limit or
+  pagination; blank cities are removed, case-insensitive duplicates preserve display spelling and
+  sorting is predictable;
+- initial loading, retryable error, unfiltered empty, filtered no-match and reset states are
+  distinct;
+- optimistic favorite overrides survive filtered reloads, mutations outside the current result
+  stay safe and account switching clears prior query/filter/favorite state;
+- focused catalog/favorite checks and the prescribed full deterministic browser smoke `104/104`
+  passed locally.
+
 Manual runtime coverage for each release batch:
 
 - Telegram opens Mini App with non-empty `Telegram.WebApp.initData`;
 - pre-QR catalog does not expose structured order categories/items;
+- pre-QR catalog search and city filtering are backend-driven, debounced and stale-response safe;
+- hidden/suspended/subscription-blocked venues cannot be enumerated by name, city or address;
+- filtered favorite add/remove, reset and account switching preserve current-user isolation;
 - info/photo-menu sections render text and media through backend proxy;
 - guest sees table context;
 - frontend sends `tableSessionId` in staff call payload.
@@ -387,6 +416,25 @@ Steps:
 6. Confirm `📖 Фото-меню` appears inside info when owner filled it.
 7. Confirm image media loads from backend media proxy and PDF opens through `Открыть PDF`.
 8. Confirm booking entry works if bookings are enabled for the venue.
+9. Confirm search copy is `Поиск по названию, городу или адресу` and the city control has an
+   accessible label plus `Все города`.
+10. Search by mixed-case name, city, address and formatted address; confirm the matching request is
+    backend `q`, not client-side filtering.
+11. Select a city and confirm backend `city`; combine it with `q` and verify `AND` behavior.
+12. Enter `%`, `_`, `!` and `\` as literal search text and verify they do not expand the result set.
+    Send a direct oversized `q`/`city` API request and verify safe validation rejection without
+    truncation; the Mini App search input itself remains capped at 100 characters.
+13. Type quickly and change city while an older response is delayed; confirm the 300 ms debounce
+    reduces requests and the latest response remains visible.
+14. Confirm city options come from the initial complete unfiltered guarded catalog, omit blanks,
+    deduplicate case-insensitively with normal display spelling and remain predictably sorted.
+15. Confirm retryable load error, empty whole catalog and
+    `По вашему запросу ничего не найдено` are distinct; reset clears search and city.
+16. Add/remove a favorite inside filtered results and reload; confirm stale response data does not
+    roll back the optimistic state. Mutating a venue outside the current result remains safe.
+17. Switch Telegram account and confirm no previous query/filter/favorite override survives.
+18. Hide, suspend or subscription-block a matching venue and confirm search reveals neither its
+    name nor address; restore it and confirm guarded visibility returns.
 
 ### QR/table order flow
 
@@ -1087,6 +1135,14 @@ Canonical model: `docs/DEPLOYMENT_RUNBOOK.md`.
 3. Extend cross-channel bill snapshots when selected option price deltas are implemented.
 
 ## 21. Next Implementation Smoke Target
+
+Catalog search/filter status:
+**CATALOG SEARCH AND FILTER PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**.
+Focused `GuestVenueRoutesTest`, backend compile, ktlint, Mini App production build, focused
+catalog/favorite browser checks and the prescribed full deterministic smoke `104/104` passed
+locally. The endpoint keeps complete unfiltered city-source semantics with no limit/pagination,
+existing availability/favorite/schedule guards and 300 ms debounce plus abort/latest protection.
+GitHub Actions and staging smoke remain required; do not mark this slice staging-smoke-passed yet.
 
 Menu Shift Check status: **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**.
 Focused backend route/repository/Guest/order/audit/Telegram regressions, Kotlin compile/lint, Mini
