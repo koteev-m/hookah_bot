@@ -1,6 +1,6 @@
 # Venue Owner
 
-Дата актуализации: 2026-07-30.
+Дата актуализации: 2026-07-31.
 
 Статус: **current role reference**. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. Этот файл разделяет Telegram bot owner setup flow и Venue Mini App owner panel.
 
@@ -55,7 +55,8 @@ Venue Owner открывает Venue Mini App через inline `web_app` entry,
 - `Отзывы` with read-only aggregate/list and manual low-rating `Связаться с гостем`;
 - staff calls;
 - shift-extension requests/settings;
-- menu/availability management;
+- menu/availability management, including **MENU SHIFT CHECK PHASE 1 / DONE / MVP /
+  STAGING-SMOKE-PASSED** for the own venue;
 - tables/QR management;
 - staff management where implemented;
 - public staff profile publish/hide and today-shift management;
@@ -82,7 +83,8 @@ Mini App остаётся backend-RBAC enforced: кнопки в UI не явл�
 - Управлять `🍽 Заказным меню`, категориями, позициями, ценами и availability.
 - Управлять stop-list item/option availability.
 - Управлять option groups/values, item media, featured/top-list and unavailable-display policy where implemented.
-- Запускать shift check and mass availability actions where implemented, with confirmation/audit for dangerous changes.
+- Запускать own-venue shift check: use ordinary availability switches or the separate mass-selection
+  mode, keep changes in a local draft, review the confirmation summary and send one atomic batch.
 - Управлять tables/QR, включая rotation/export where owner permission allows.
 - Управлять staff list/invites/roles with last-owner protection.
 - Управлять public staff profiles: create/edit, link to venue member or keep display-only, publish/hide and control guest visibility.
@@ -135,7 +137,9 @@ Mini App остаётся backend-RBAC enforced: кнопки в UI не явл�
   Mini App still has no file picker, upload endpoint, replace, hide/show or delete UI.
 - Structured menu item photos/descriptions/thumbnails and option/flavor media are
   `MISSING / FUTURE`; do not confuse them with the working view-only `📖 Фото-меню`.
-- Menu/options/stop-list spec is `UPDATED` in `docs/MENU_OPTIONS_STOPLIST.md`: selected-option parity is smoke-closed, while broader media/top-list/shift-check/audit coverage remains partial/future.
+- Menu/options/stop-list spec is `UPDATED` in `docs/MENU_OPTIONS_STOPLIST.md`: selected-option
+  parity and Menu Shift Check Phase 1 are staging-smoke-passed; broader media/top-list and
+  dangerous-action audit coverage remains partial/future.
 - Multi-venue owner selector/entry should be smoke-tested if owner has several memberships.
 - Platform owner invite, owner revoke and ownership access management belong to Platform Owner flow, not this role doc.
 - Platform Owner can add a Venue Owner by invite and can revoke one OWNER when another active OWNER remains; create/accept/revoke actions are audited.
@@ -174,7 +178,10 @@ Mini App остаётся backend-RBAC enforced: кнопки в UI не явл�
 15. Owner opens subscription screen and sees adjusted `Оплачено до ... включительно` / next-payment state when billing/courtesy exists.
 16. Owner sees visible open invoice/payment state where allowed, but cannot mark invoice paid or add courtesy/free days.
 17. Owner order queue can group by table, while detail shows separate batches and tabs; closing/force-closing order/session does not allow new batches into the old active order and requires reason/audit where implemented.
-18. Owner menu smoke follows `docs/MENU_OPTIONS_STOPLIST.md`: create category/item/options, change availability, verify guest stale-submit rejection, and verify price/name/options snapshots in old orders.
+18. Owner menu smoke follows `docs/MENU_OPTIONS_STOPLIST.md`: create category/item/options, change
+    availability, and keep the passed shift-check two-accordion UX, local draft/mass mode, atomic
+    summary confirmation, stale rejection, safe audit, Guest stale-submit and venue isolation in
+    regression; verify price/name/options snapshots in old orders.
 19. Phase 1 staff profile smoke: Owner creates display-only and linked profiles, publishes/hides public visibility, marks `Сегодня на смене`, and guest sees only public visible profiles/shifts without `linked_user_id` or private contact data.
 20. Owner opens `Ссылка для отзывов`, sees the Yandex Maps/Yandex Business helper plus ethical hint, and saves/clears the same URL used by Bot and Mini App.
 21. Owner sees only own-venue feedback and `Связаться с гостем` only for ratings `1..3`.

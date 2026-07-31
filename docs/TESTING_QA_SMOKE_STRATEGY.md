@@ -1,6 +1,6 @@
 # Testing / QA Smoke Strategy
 
-Дата актуализации: 2026-07-30.
+Дата актуализации: 2026-07-31.
 
 Статус: **current product reference / UPDATED**. This document is the canonical QA/smoke strategy for the Telegram bot + Mini App platform. It consolidates local validation, GitHub Actions expectations, area-specific smoke suites, staging policy, failure reporting and Codex handoff rules. Deployment and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
 
@@ -23,9 +23,10 @@ Current practice:
   `GIFT_WITH_ITEM BOT/MINIAPP PARITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`.
   GitHub Actions and staging cross-surface smoke remain required.
 - Venue Mini App Guest Preview Phase 2.1 is **VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY / DONE / MVP / STAGING-SMOKE-PASSED**. Focused preview/Guest/RBAC/promotion backend tests, compile/lint, Mini App build and deterministic browser smoke `95/95` are green; GitHub Actions were green, staging deploy completed and manual staging smoke passed for the unified contract.
-- Menu shift check is **MENU SHIFT CHECK PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**.
+- Menu shift check is **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**.
   OWNER/MANAGER use an own-venue local draft and one atomic availability batch; Staff individual
-  stop-list policy is unchanged. GitHub Actions and staging smoke remain required.
+  stop-list policy is unchanged. GitHub Actions were green, staging deploy completed and the
+  functional/UX manual smoke passed.
 
 Target QA model:
 - Every task ends with changed files, behavior summary, tests run, validation result, manual smoke checklist, `git status --short`, whether `scripts/dev/` was touched and whether staging deploy is needed.
@@ -109,7 +110,7 @@ upload endpoint, replace/hide/delete flow or new storage path is part of Guest P
 ## Venue Menu Shift Check Phase 1 Quality Gate
 
 Status:
-**MENU SHIFT CHECK PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**.
+**MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**.
 
 The shift-check block is part of the existing Venue Menu screen. Existing immediate individual
 item/option stop-list routes remain unchanged; draft toggles and mass actions must not send
@@ -118,8 +119,15 @@ availability mutations before one explicit confirmation.
 Required coverage:
 
 - OWNER and MANAGER own-venue allow; STAFF/Guest/Platform-only/foreign venue direct denial;
+- two collapsed-by-default task-oriented accordions are mutually exclusive; the category form and
+  category details stay compact until explicitly opened;
+- normal mode exposes only availability switches with nested options and dirty badges; selection
+  checkboxes/actions appear only in the separate mass-selection mode with distinct accessible
+  roles/labels;
 - category item/option counts, search, unavailable/dirty filters, selected rows, category item
   changes, item option changes and select-all-filtered behavior;
+- collapse/reopen preserves the draft; cancel restores backend state; venue switch clears the
+  expanded state, draft, selection and pending confirmation context;
 - cancel sends no mutation/audit; confirm sends exactly one batch; no-op confirm writes one audit
   with zero changed counts;
 - combined maximum 500 changes, duplicate rejection, missing/foreign item/option rejection and
@@ -151,11 +159,13 @@ npm --prefix miniapp run build
 CI=1 TZ=UTC MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke
 ```
 
-Recorded local evidence for this status: `VenueMenuRoutesTest`, `VenueMenuRepositoryTest`,
+Recorded local evidence: `VenueMenuRoutesTest`, `VenueMenuRepositoryTest`,
 `GuestVenueMenuRoutesTest`, `GuestOrderRoutesTest`, `AuditLogRepositoryTest`,
 `TelegramBotRouterTableTokenTest`, isolated `compileKotlin`, `ktlintCheck`, Mini App production
-build and the full deterministic browser smoke `100/100` passed. Green Actions and staging/manual
-role/guest smoke stay required before release readiness.
+build and the full deterministic browser smoke `100/100` passed. GitHub Actions were green,
+staging deploy completed and manual smoke passed for Owner, Manager, Staff/foreign denial, the two
+accordion UX, mass mode, draft/cancel/venue isolation, atomic/no-op/stale behavior, safe audit,
+Guest availability/stale-cart rejection and Telegram stop-list parity.
 
 ## Venue Mini App Media Foundation Future Quality Gate
 
@@ -725,9 +735,8 @@ Telegram/staff-chat:
 - Platform Owner guest QR test escape remains open/needs verification.
 - Booking reminders and future no-show automation remain rollout-gated/partial.
 - Advanced support and billing/provider features remain future unless implemented and smoked. Growth remains partial, but Post-Visit Feedback MVP and venue-only Guest Favorites Phase 1 are staging-smoke-passed and stay in regression. Repeat Phase 1 is locally validated with deferred manual smoke in `REPEAT-MANUAL-001`; persistent templates, favorite menu items/options, recommendations/frequent items, notification opt-in, favorites-based promotions and loyalty remain future until their own bounded implementation evidence exists.
-- Menu shift check is locally validated under
-  **MENU SHIFT CHECK PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**; green Actions and
-  staging smoke remain open. Per-venue `staff_stoplist_enabled` remains future.
+- Menu shift check is **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED** and stays
+  in regression. Per-venue `staff_stoplist_enabled` remains future.
 - Staff-chat delivery history/personal notifications/topic routing remain future.
 - CI coverage is strong for release-critical slices but not proof of every product scenario; area smoke checklists remain necessary.
 
@@ -735,8 +744,8 @@ Telegram/staff-chat:
 
 - Testing/QA smoke strategy: `UPDATED`.
 - Guest Preview Phase 2.1: **VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY / DONE / MVP / STAGING-SMOKE-PASSED**.
-- Menu shift check: **MENU SHIFT CHECK PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**;
-  staging/release gates remain open.
+- Menu shift check: **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**; regression
+  gates remain active.
 - Manual smoke checklist: `CONSOLIDATED`.
 - CI coverage: `PARTIAL / release-critical split jobs current`.
 - Frontend e2e: `PARTIAL`, with smoke coverage documented.

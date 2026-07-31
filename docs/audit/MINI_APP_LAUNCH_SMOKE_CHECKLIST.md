@@ -1,6 +1,6 @@
 # Mini App Launch Smoke Checklist
 
-Дата: 2026-07-30.
+Дата: 2026-07-31.
 
 Цель: зафиксировать launch smoke/e2e coverage для core Mini App сценариев без изменения бизнес-логики. В `miniapp/package.json` есть `dev`, `build`, `preview` и минимальный browser smoke `e2e:smoke`. Поэтому стратегия на этот шаг гибридная:
 
@@ -29,10 +29,11 @@
 - M9a Deployment SSH Reliability Hardening is CLOSED / staging smoke passed: the committed opt-in ControlMaster helper opened one authenticated persistent connection after a bounded retry, reused that connection for rsync/plain SSH through the existing deployment script, completed image build/upload and backend recreate, and passed local/public health, DB health and Mini App static checks. The normal `./scripts/deploy-staging.sh hookah-staging` path remains supported and unchanged. The exact fresh SSH connection failure cause remains unconfirmed.
 - M9b Venue Working Hours and Date Exceptions Mini App Parity plus M9b.1 date-exception ranges/rejection copy, M9b.2 exception save/list UX and M9b.3 date-range editing is CLOSED / staging smoke passed: OWNER/MANAGER can manage weekly hours, inclusive closed/special-hours exception ranges and optional guest-facing reasons/comments in Venue Mini App; successful exception saves close/reset the form and reveal the saved row in the compact list; existing closed and changed-hours exceptions can be edited to a new inclusive date range; STAFF is hidden/forbidden; guest catalog/card read models expose safe today schedule/open state; and direct Guest Mini App booking create/update validates configured venue hours with human schedule errors. Missing schedule setup shows `График не указан` / `Заведение пока не настроило график бронирования.`, not `Закрыто`.
 - Venue Mini App Guest Preview Phase 2.1 is **VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY / DONE / MVP / STAGING-SMOKE-PASSED**. One `Предпросмотр для гостя` entry calls `GET /api/venue/{venueId}/guest-preview`; the backend selects exact guarded `PUBLISHED_PUBLIC` Guest state or OWNER/MANAGER own-venue `PRIVATE_DRAFT` saved public projection through the shared public-facing assembly. Focused backend preview/Guest/RBAC/promotion tests, Kotlin compile/lint, Mini App build and deterministic smoke `95/95` passed; GitHub Actions were green, staging deploy completed and manual staging smoke passed. This slice did not add or validate media upload.
-- Menu Shift Check Phase 1 is **MENU SHIFT CHECK PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**. OWNER/MANAGER prepare item/option availability in a local draft and confirm one
-  optimistic atomic batch with no-op completion and one safe audit; STAFF entry/direct access is
-  denied while its existing individual stop-list policy remains unchanged. Green Actions and
-  staging smoke are not claimed.
+- Menu Shift Check Phase 1 is **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**.
+  OWNER/MANAGER prepare item/option availability in a local draft and confirm one optimistic atomic
+  batch with no-op completion and one safe audit; STAFF entry/direct access is denied while its
+  existing individual stop-list policy remains unchanged. GitHub Actions were green, staging deploy
+  completed and the functional/UX smoke passed.
 - Mini App mutation / operational verification closure pack is CLOSED / code-test verification passed: actual Mini App PUT/PATCH/DELETE CORS preflights allow `Content-Type` and `Authorization`, Guest Mini App staff-call payload/backend row/staff-chat event include `tableSessionId`, linked staff-chat staff-call notification enqueue is covered, and fallback quick order emits `Telegram.WebApp.sendData` with `{ "cmd": "start_quick_order", "table_token": "<tableToken>" }`. No staging smoke is claimed by this item.
 - Staff Call Lifecycle ACK/DONE audit hardening and guest-visible CANCELLED finishing patch: CLOSED / staging smoke passed. Real Telegram Mini App smoke confirmed Guest call creation, staff-chat notification, Venue Mode NEW/ACK/DONE, Venue Mini App `STAFF_CALL_ACK` / `STAFF_CALL_DONE` audit with top-level actor evidence and `source=venue_miniapp`, Telegram staff-chat ACK/DONE message edits plus audit with `source=telegram_staff_chat`, Guest ability to create a new call after DONE, and guest-visible terminal `CANCELLED` as `Вызов отменён` for the current guest/tableSession. Audit remains best-effort; row-level ACK/DONE actor/timestamp columns, manual cancel UI and staff-call UX polish remain separate follow-ups.
 - Guest Table Context UX Cleanup / Feature-gated Extension Module: CLOSED / staging smoke passed. Real Telegram Mini App QR smoke confirmed correct venue/table context, route/copy address/booking actions hidden in table context, pre-visit venue card still showing address/route/copy/booking, `Продление работы заведения` hidden without active order/bill or unavailable extension state, visible only when active order state makes it available, and hidden again after bill/order close.
@@ -54,7 +55,7 @@
 - Order/session/tab core docs: `docs/ORDER_SESSION_TAB_CORE.md` is the source of truth for `TABLE_SESSION`, `ACTIVE_TABLE_ORDER`, `ORDER_BATCH`, `TAB`, bill/request/close flow, privacy boundaries and visit-history foundation. Current runtime docs say table-session/tab scoping, Guest History Foundation and Post-Visit Feedback MVP are closed; Repeat Phase 1 is local-smoke-passed; force-close reason/audit, broader loyalty/preorder and analytics remain future/partial.
 - Analytics/events docs: `docs/ANALYTICS_EVENTS.md` is the source of truth for analytics events, KPI formulas, dashboards, audit/event boundaries and payload privacy rules. Implementation remains partial/needs verification; client events must not drive money, access, billing or order state.
 - Security/RBAC docs: `docs/SECURITY_RBAC_MATRIX.md` is the source of truth for roles, scopes, permissions, surface parity, dangerous actions, auth/trust boundaries and the security smoke checklist. Permission parity and dangerous-action audit remain partial unless route tests/smoke prove them.
-- Menu/options/stop-list docs: `docs/MENU_OPTIONS_STOPLIST.md` is the source of truth for structured menu, option/modifier snapshots, media/PDF boundaries, featured/top-list, stop-list, shift check, availability validation and menu permissions. Selected-option parity is smoke-closed; broader menu constructor/media/top-list/shift-check/audit coverage remains partial/future.
+- Menu/options/stop-list docs: `docs/MENU_OPTIONS_STOPLIST.md` is the source of truth for structured menu, option/modifier snapshots, media/PDF boundaries, featured/top-list, stop-list, shift check, availability validation and menu permissions. Selected-option and Menu Shift Check Phase 1 are staging-smoke-passed; broader menu constructor/media/top-list/audit coverage remains partial/future.
 - Venue operations docs: `docs/VENUE_OPERATIONS.md` is the source of truth for Venue dashboard, orders, order detail, batches, tabs/bill, staff calls, bookings, menu/stop-list, tables/QR, staff/invites, staff-chat, settings, stats and operational smoke. Venue Mode is source of truth; staff-chat is radar/shortcut only.
 - Booking lifecycle docs: `docs/BOOKING_LIFECYCLE.md` is the source of truth for guest booking flow, Venue booking queue, statuses, hold minutes, `arrival_deadline`, confirmed-only arrival actions, reminders, `BOOKING_CHAT`, booking support routing, analytics, RBAC and booking smoke. Current queue/hold/list/chat/arrival-guard, booking `SEATED` -> Guest History and booking-only `SEATED` feedback eligibility are smoke-closed by slice; reminder rollout, automation and preorder remain partial/future.
 - Telegram fallback/staff-chat docs: `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md` is the source of truth for Telegram bot entrypoints, QR `/start`, table-context bot menu, fallback chat order, bot staff-call, staff-chat link/test/unlink, notification policy, callback security and Telegram/Mini App parity. Staff-chat is radar/shortcut only.
@@ -118,9 +119,9 @@ Confirmed:
 Remaining:
 
 - repeat this smoke after any additional release batch;
-- Menu Shift Check Phase 1 is locally validated only; run green Actions, staging deploy and the
-  OWNER/MANAGER/STAFF/foreign, atomicity/stale/audit and Guest availability smoke below before
-  extending the current staging status;
+- Menu Shift Check Phase 1 is staging-smoke-passed; keep the Owner/Manager/Staff/foreign,
+  two-accordion UX, atomicity/stale/audit, Guest availability and Telegram stop-list parity cases
+  below in regression;
 - keep M9b/M9b.1/M9b.2/M9b.3 schedule behavior in regression after future release batches;
 - real acquiring provider remains future work;
 - Telegram Stars remains future work;
@@ -454,37 +455,39 @@ Steps:
 
 ### Menu Shift Check Phase 1 smoke status
 
-Status: **MENU SHIFT CHECK PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**.
+Status: **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**.
 
-Staging/manual target:
+Passed staging/manual coverage:
 
-1. OWNER opens Menu and expands `Проверка меню перед сменой`; MANAGER sees the same own-venue
-   workflow.
-2. Category available/total item and option counts match saved backend state.
-3. Search matches item and option names; `Все`, `Нет в наличии` and
-   `Есть несохранённые изменения` filters behave correctly.
-4. Toggle one item and one option, then use selected rows, a category item action, an item option
-   action and `Выбрать все отфильтрованные`; verify no mutation request is sent yet.
-5. Verify confirmation summary has correct available/unavailable item and option counts.
-6. Click `Отменить изменения`; saved state and audit remain unchanged.
-7. Prepare a mixed item/option draft and click `Подтвердить проверку`; exactly one
-   `POST /api/venue/menu/shift-check?venueId=<id>` is sent and saved state refreshes.
-8. Confirm exactly one `MENU_SHIFT_CHECK_COMPLETED` audit with actor/venue, changed/reviewed
-   counts and bounded changed-id lists; verify no names, prices, raw Telegram/initData/private data
-   or full request body.
-9. Confirm a no-op review changes no menu row and creates exactly one audit with zero changed
-   counts.
-10. Change one expected availability through another actor after loading the draft; the whole
-    confirmation is rejected with `Меню изменилось. Обновите проверку и повторите подтверждение.`,
-    no partial write/audit occurs, and refresh leaves the screen usable.
-11. Verify duplicate, missing, foreign, option/item mismatch and oversized requests apply no
-    partial writes and create no completion audit.
-12. Switch venues during load and during a pending confirmation; old content/draft/selection is
-    cleared and no late response affects the new venue.
-13. STAFF has no block/hash-route entry and direct API is forbidden; existing individual
-    item/option availability controls and Telegram Bot stop-list still work.
-14. After confirmation, Guest menu reflects item and option availability and a stale Guest cart
-    cannot pass preview/add-batch validation.
+1. OWNER and MANAGER see two compact task-oriented accordions: `Редактирование меню` and
+   `Проверка меню перед сменой`; both start collapsed and opening one collapses the other.
+2. The new-category form stays hidden until `Добавить категорию`; categories remain compact and
+   expand on demand.
+3. Shift-check description says changes apply only after confirmation; readiness category/item/
+   option counts match saved backend state, and search plus filters work.
+4. Normal mode has no selection checkboxes: item/option availability uses the clear `В наличии` /
+   `Нет в наличии` switch, options are visually nested and dirty rows show `Изменено`.
+5. Availability switches and selection controls use distinct roles/accessible labels.
+6. Selection checkboxes appear only after `Массовое изменение`; selected count, make available,
+   make unavailable, clear selection and exit actions change only the local draft.
+7. Collapse/reopen preserves the draft. Cancel restores saved backend state without mutation or
+   completion audit.
+8. Confirmation summary shows correct available/unavailable item and option counts; a mixed confirm
+   sends exactly one `POST /api/venue/menu/shift-check?venueId=<id>` and refreshes authoritative
+   state.
+9. Exactly one safe `MENU_SHIFT_CHECK_COMPLETED` audit contains actor/venue ids, changed/reviewed
+   counts and bounded ids, with no names, prices, raw Telegram/initData/private data or full body.
+10. A no-op review changes no menu row and creates exactly one audit with zero changed counts.
+11. Stale Owner/Manager state rejects the whole confirmation with
+    `Меню изменилось. Обновите проверку и повторите подтверждение.`, with no partial write/audit.
+12. Duplicate, missing, foreign, option/item mismatch and oversized requests apply no partial
+    writes and create no completion audit.
+13. Venue switch resets expanded state, draft, selection and pending confirmation context; no old
+    response can affect the new venue.
+14. STAFF has no entry and direct API is forbidden; existing individual item/option availability
+    controls and Telegram Bot stop-list still work.
+15. Confirmed state reaches Guest menu; stale item/option carts fail preview/add-batch validation.
+16. Menu/order regression and cleanup of staging test data passed.
 
 ### M5 staff calls lifecycle smoke status
 
@@ -1085,10 +1088,10 @@ Canonical model: `docs/DEPLOYMENT_RUNBOOK.md`.
 
 ## 21. Next Implementation Smoke Target
 
-Menu Shift Check status: **MENU SHIFT CHECK PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**.
+Menu Shift Check status: **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**.
 Focused backend route/repository/Guest/order/audit/Telegram regressions, Kotlin compile/lint, Mini
-App build and full deterministic smoke `100/100` passed locally. Green Actions, staging deploy and
-the manual role/atomicity/stale/audit/Guest checks above remain required.
+App build and full deterministic smoke `100/100` passed locally. GitHub Actions were green,
+staging deploy completed and the manual functional/UX checks above passed.
 
 Simple Venue Promotions Phase 1 and Executable Promotions Phase 2 / Happy Hours Percent are DONE / STAGING-SMOKE-PASSED. Gift parity is `GIFT_WITH_ITEM BOT/MINIAPP PARITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`, bounded to signed scoped decisions, explicit fixed/selectable gift choice, optional skip, one gift per submitted batch/tab, current server revalidation, coupled trigger/reward lifecycle and persisted linkage through the existing engine; its next gates are independent review, green CI and staging cross-surface smoke. Repeat as Template Phase 1 remains MVP IMPLEMENTED / LOCAL VALIDATION PASSED / DEFERRED MANUAL SMOKE, and `REPEAT-MANUAL-001` remains open unchanged. Existing order/session/tab uniqueness and privacy behavior stays in regression rather than being reopened without evidence; M4A-M4C messages, M5 staff calls, M6 staff-chat management, M7b, rollout-gated M7c, M8b-Free, M9a, M9b/M9b.1/M9b.2/M9b.3, Guest History, Post-Visit Feedback and Favorites stay in regression smoke.
 

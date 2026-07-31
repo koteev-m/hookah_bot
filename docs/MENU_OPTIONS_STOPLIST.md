@@ -1,8 +1,8 @@
 # Menu / Options / Stop-List Model
 
-Дата актуализации: 2026-07-30.
+Дата актуализации: 2026-07-31.
 
-Статус: **current product reference / SPEC UPDATED**. Menu/options/flavors parity is documented as smoke-closed for the structured selected-option flow. The bounded shift-check slice is **MENU SHIFT CHECK PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**; the broader menu constructor, media/top-list governance, remaining audit coverage and permission parity remain **PARTIAL** unless a specific implementation task proves them.
+Статус: **current product reference / SPEC UPDATED**. Menu/options/flavors parity is documented as smoke-closed for the structured selected-option flow. The bounded shift-check slice is **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**; the broader menu constructor, media/top-list governance, remaining audit coverage and permission parity remain **PARTIAL** unless a specific implementation task proves them.
 
 ## Core Rule
 
@@ -41,7 +41,7 @@ Menu permissions are governed by `docs/SECURITY_RBAC_MATRIX.md`; Venue Mode oper
 | Photos/descriptions | Current structured menu item repositories/DTOs/rendering do not expose item photos, thumbnails or descriptions. The DB has a legacy `menu_items.description` column, but current Bot/Venue/Guest menu paths do not read or write it. | Item photos can be shown in structured menu; descriptions are guest-safe. | Structured menu-item media/description is `MISSING / FUTURE`; do not infer support from working info-section media. |
 | Featured/top-list | Product spec requires featured/top list; implementation evidence is partial. | Venue manually pins items; not paid placement. | Paid placement/boosting belongs to Growth/Platform, not menu featured. |
 | PDF/media | `Фото-меню` exists as a flat info/media section and is separate from structured order menu. Bot OWNER/MANAGER can add image/PDF attachments, delete one and hide/show the whole section. | PDF/photo menu is view-only; no direct order unless item exists in structured menu. | Venue Mini App authoring/upload is missing; direct replace, per-attachment hide and optional subsections remain future. |
-| Shift check | OWNER/MANAGER Venue Mini App Phase 1 is implemented and locally validated: saved menu state, per-category counts, search/filters, local draft changes, mass item/category/option actions and one atomic confirmation request. STAFF has no entry/direct permission. | Venue Mode keeps readiness counts, optimistic availability checks, one bounded batch, no-op completion evidence and recoverable stale-state handling. | Staging smoke remains required; Telegram shift-check UI and a queryable history table are not part of Phase 1. |
+| Shift check | **DONE / MVP / STAGING-SMOKE-PASSED**: OWNER/MANAGER Venue Mini App uses saved menu state, readiness counts, search/filters, local draft, a separate mass-selection mode, confirmation summary and one atomic request. STAFF has no entry/direct permission. | Venue Mode keeps optimistic availability checks, one bounded batch, no-op completion evidence and recoverable stale-state handling. | Keep role/tenant, atomicity, stale-state, Guest availability and Telegram stop-list parity in regression; Telegram shift-check UI and a queryable history table are not part of Phase 1. |
 | Audit logs | `MENU_SHIFT_CHECK_COMPLETED` is written exactly once in the same DB transaction as a successful batch, including no-op completion; failed validation, RBAC denial and rollback write no completion audit. Other role/menu/stop-list audit gaps remain. | Price changes, archive/delete, mass stop-list, media removal, option schema change and Staff stop-list toggles write safe audit. | Dangerous-action audit outside the bounded shift-check slice remains `PARTIAL`. |
 | Telegram vs Mini App parity | Options/flavors parity is smoke-closed; some Telegram owner flows remain richer. | Required menu/stop-list operations are aligned across Bot and Mini App or documented as exceptions. | Keep cross-surface parity smoke for Staff stop-list and selected options. |
 | Staff stop-list permissions | Current docs say STAFF has `MENU_AVAILABILITY_MANAGE` and can toggle item/option availability; STAFF cannot edit structure/prices/options schema. | Recommended MVP: Staff cannot change menu structure/prices; Staff stop-list works only when `staff_stoplist_enabled` or equivalent policy allows it, and is identical in Bot/Mini App. | Current global Staff stop-list permission is acceptable only if intentionally enabled and audited; per-venue toggle remains target/future. |
@@ -199,12 +199,19 @@ Option stop-list:
 - search.
 
 Shift check Phase 1:
-- the existing Menu screen contains the collapsible block `Проверка меню перед сменой`; it is not
-  a second menu or stock/inventory system;
+- the existing Menu screen has two task-oriented accordions, both collapsed by default:
+  `Редактирование меню` for categories/items/prices/options/top-list and
+  `Проверка меню перед сменой` for availability review. Opening one collapses the other; this is
+  not a second menu or stock/inventory system;
+- normal shift-check rows expose only the availability switch with `В наличии` / `Нет в наличии`;
+  options are visually nested under their item and a locally changed row shows `Изменено`.
+  Selection checkboxes appear only after `Массовое изменение`, use a different accessible role and
+  label from availability, and the mode exposes selected count, make available/unavailable, clear
+  selection and exit actions;
 - OWNER/MANAGER see saved categories plus available/total item and option counts, search by item or
   option and filters `Все`, `Нет в наличии`, `Есть несохранённые изменения`;
-- individual item/option changes, selected-row changes, category item changes, item option changes
-  and `Выбрать все отфильтрованные` update only the local draft;
+- individual item/option switches and category/item/option mass actions update only the local
+  draft. Collapse/reopen preserves the draft; cancel restores saved backend state;
 - confirmation shows separate available/unavailable item and option counts. `Отменить изменения`
   clears the draft without a backend mutation or audit;
 - `POST /api/venue/menu/shift-check?venueId=<id>` sends only changed item/option ids, expected saved
@@ -218,8 +225,9 @@ Shift check Phase 1:
 - if any expected availability is stale, the whole batch is rejected and the UI shows
   `Меню изменилось. Обновите проверку и повторите подтверждение.`; refresh rebases still-relevant
   draft intent onto current saved state;
-- venue switching/disposal aborts old reads and confirmation, clears draft/selection and prevents a
-  late response from one venue from appearing or being applied in another;
+- venue switching/disposal collapses both accordions, aborts old reads and confirmation, clears
+  draft/selection and prevents a late response from one venue from appearing or being applied in
+  another;
 - ordinary individual item/option stop-list routes remain immediate and unchanged, including the
   current Staff policy.
 
@@ -303,8 +311,9 @@ Audit payloads must use safe ids and old/new safe fields only. Do not include ra
   `MISSING / FUTURE`.
 - Structured menu-item media/description/thumbnail and option/flavor media: `MISSING / FUTURE`.
 - Featured/top-list: `PARTIAL/FUTURE` unless implementation evidence proves a given slice.
-- Shift check: `MENU SHIFT CHECK PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED`; staging
-  smoke remains required before release readiness.
+- Shift check: `MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`; keep the passed
+  role/tenant, UX, atomicity, stale-state, Guest availability and Telegram parity scenarios in
+  regression.
 - Guest server-side availability validation: `REQUIRED`; current stale/unavailable option rejection is documented as covered for the smoked options/flavors flow, but broader availability validation should stay in regression.
 - Promotions/paid placement remain separate from featured/top-list and follow `docs/GROWTH_RETENTION.md` plus `docs/PLATFORM_COCKPIT.md`.
 

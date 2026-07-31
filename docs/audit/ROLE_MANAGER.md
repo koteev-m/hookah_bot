@@ -1,6 +1,6 @@
 # Manager
 
-Дата актуализации: 2026-07-30.
+Дата актуализации: 2026-07-31.
 
 Статус: **current role reference**. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. `ADMIN` в runtime сейчас является legacy alias для `MANAGER`.
 
@@ -52,7 +52,8 @@ Manager Mini App areas:
 - `Отзывы` with read-only own-venue aggregate/list and low-rating `Связаться с гостем`;
 - staff calls;
 - shift-extension requests/settings;
-- menu and availability management;
+- menu and availability management, including **MENU SHIFT CHECK PHASE 1 / DONE / MVP /
+  STAGING-SMOKE-PASSED** for the own venue;
 - tables management and QR export where backend permission allows;
 - staff chat link/status;
 - stats;
@@ -79,6 +80,8 @@ Manager Mini App areas:
 - View Manager analytics where implemented: shift dashboard, queue backlog, SLA timers, active staff calls and bookings waiting response.
 - Manage paid shift-extension settings and confirm requests.
 - Manage structured menu/categories/items and stop-list/availability.
+- Use `Проверка меню перед сменой` for the own venue: prepare a local availability draft, enter the
+  separate mass-selection mode when needed, review the summary and atomically confirm once.
 - Manage tables and QR export according to current permissions.
 - Link/test staff chat if current role permission allows.
 - View staff list and create conservative STAFF invites if current route policy allows.
@@ -125,7 +128,10 @@ Manager Mini App areas:
 - Telegram fallback/staff-chat spec is `UPDATED` in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`: Manager bot operations, staff-chat link/test permissions, state-aware booking callbacks, callback RBAC and notification policy stay canonical and in regression.
 - Testing/QA smoke strategy is `UPDATED` in `docs/TESTING_QA_SMOKE_STRATEGY.md`: Manager/Venue changes require role smoke and direct denial checks according to change type.
 - Analytics/events are `SPEC UPDATED / PARTIAL` in `docs/ANALYTICS_EVENTS.md`: Manager dashboard should stay shift/operations-focused and must not expose billing/platform analytics.
-- Menu/options/stop-list spec is `UPDATED` in `docs/MENU_OPTIONS_STOPLIST.md`: current docs allow broad Manager menu management, but conservative target policy keeps Manager to stop-list, shift check and basic availability unless product explicitly retains broader `MENU_MANAGE`.
+- Menu/options/stop-list spec is `UPDATED` in `docs/MENU_OPTIONS_STOPLIST.md`: Menu Shift Check Phase
+  1 is **DONE / MVP / STAGING-SMOKE-PASSED** for own-venue Manager access. Current docs allow broad
+  Manager menu management, but conservative target policy keeps Manager to stop-list, shift check
+  and basic availability unless product explicitly retains broader `MENU_MANAGE`.
 - Growth/retention is `SPEC UPDATED / PARTIAL-FUTURE` overall. Post-Visit Feedback read and low-rating exact `VENUE_CHAT` follow-up are DONE / MVP / staging-smoke-passed; favorites, repeat and simple promotions remain future. Staff remains excluded from feedback and growth campaign management.
 - Staff profiles / today shift are `MVP DONE / SMOKE-PASSED`: Manager may mark today's visible shift under current conservative policy, while Owner remains the default for profile publish/hide and future tip-method approval. Schedule, photo upload and staff tips remain future.
 
@@ -147,7 +153,11 @@ Manager Mini App areas:
 13. If manager can create STAFF invite under current policy, invite result shows valid Telegram deep link, copy/share actions and fallback command; accepted invite grants STAFF.
 14. Manager cannot access billing payment controls, mark-paid or courtesy/free-days actions.
 15. Manager order queue can group by table, while detail shows separate batches and tabs; closing/force-closing order/session does not allow new batches into the old active order and requires reason/audit where implemented.
-16. Manager menu permissions match the product policy from `docs/MENU_OPTIONS_STOPLIST.md`: stop-list/shift check/basic availability are allowed, while price/media/structure/schema edits are allowed only if broad Manager `MENU_MANAGE` is intentionally retained and tested.
+16. Manager menu permissions match `docs/MENU_OPTIONS_STOPLIST.md`: own-venue shift check uses the
+    local draft, separate mass mode, summary and one atomic confirmation; Staff/foreign denial,
+    stale rejection, safe audit and venue-switch isolation stay in regression. Price/media/
+    structure/schema edits are allowed only if broad Manager `MENU_MANAGE` is intentionally
+    retained and tested.
 17. Manager can mark a public staff profile `Сегодня на смене` only inside own venue and cannot publish/hide profiles or approve tip methods.
 18. Manager sees only own-venue feedback, can open exact `VENUE_CHAT` follow-up only for rating `1..3`, and sees the feedback context without an auto-sent personal message.
 19. Manager cannot edit the Owner-only public review URL; feedback follow-up creates no support ticket or staff-chat notification.

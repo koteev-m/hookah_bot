@@ -32,6 +32,15 @@
 > block preview without auto-save. The unified result is **VENUE MINI APP GUEST PREVIEW /
 > PUBLISHED + PRIVATE DRAFT READ-ONLY / DONE / MVP / STAGING-SMOKE-PASSED** after green Actions,
 > staging deploy and manual smoke; media upload parity remains outside this status.
+>
+> Current correction as of 2026-07-31: Menu Shift Check Phase 1 is **MENU SHIFT CHECK PHASE 1 /
+> DONE / MVP / STAGING-SMOKE-PASSED**. Venue Mini App OWNER/MANAGER use two task-oriented Menu
+> accordions, a local draft, ordinary availability switches, a separate mass-selection mode and
+> one confirmation summary/atomic request. STAFF has no shift-check entry/API, while its existing
+> individual Bot/Mini App stop-list policy is unchanged. Guest availability/stale-cart behavior,
+> venue isolation and Telegram stop-list parity passed staging smoke; Telegram has no Phase 1
+> shift-check batch UI by design.
+>
 > Current media audit: public-card info-section image/PDF management is **PARTIAL / BOT-FIRST**;
 > Bot OWNER/MANAGER can add attachments backed by Telegram `file_id`, delete an attachment and
 > hide/show the whole section, while Venue Mini App has no file picker, upload endpoint or authoring

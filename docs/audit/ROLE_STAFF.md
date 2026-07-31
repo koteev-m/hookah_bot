@@ -1,12 +1,12 @@
 # Staff
 
-Дата актуализации: 2026-07-21.
+Дата актуализации: 2026-07-31.
 
 Статус: **current role reference**. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. STAFF - операционная роль смены, не management-role.
 
 ## Current status
 
-STAFF может работать с заказами, вызовами, закрытием счёта и операционным stop-list по позициям/вкусам. STAFF не получает финансовые bill-edit права и не управляет структурой/контентом меню, столами, персоналом или настройками.
+STAFF может работать с заказами, вызовами, закрытием счёта и операционным stop-list по позициям/вкусам. STAFF не получает финансовые bill-edit права, не управляет структурой/контентом меню, столами, персоналом или настройками и не получает `MENU_SHIFT_CHECK`.
 
 Guest communication follows `docs/COMMUNICATION_MODEL.md`: STAFF handles operational `STAFF_CALL` / order flows only. STAFF does not see `Помощь` / `SUPPORT_TICKET`, ordinary `VENUE_CHAT` or Post-Visit Feedback/follow-up. Booking lifecycle and Staff arrival/no-show boundaries follow `docs/BOOKING_LIFECYCLE.md`. Telegram/staff-chat callback behavior follows `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. STAFF permissions, denied scopes and direct-API smoke expectations are governed by `docs/SECURITY_RBAC_MATRIX.md`. Public staff profile, own draft edit and future staff-tip boundaries are governed by `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. Venue operations are governed by `docs/VENUE_OPERATIONS.md`. Menu/stop-list policy follows `docs/MENU_OPTIONS_STOPLIST.md`. Order/session/tab behavior follows `docs/ORDER_SESSION_TAB_CORE.md`. Analytics/KPI rules follow `docs/ANALYTICS_EVENTS.md`. Testing/QA smoke strategy follows `docs/TESTING_QA_SMOKE_STRATEGY.md`. Release/deploy operations follow `docs/DEPLOYMENT_RUNBOOK.md`.
 
@@ -92,6 +92,8 @@ STAFF Mini App behavior:
 - Create/delete/reorder menu categories or items.
 - Add/edit/delete flavors/options or change option/flavor names/prices.
 - Apply base flavor profiles.
+- Open `Проверка меню перед сменой` or call its batch confirmation API; Phase 1 keeps the entry
+  hidden and enforces server-side denial without changing individual stop-list permission.
 - Confirm new booking.
 - Cancel booking.
 - Change/propose booking time.
@@ -130,7 +132,11 @@ STAFF Mini App behavior:
 - Telegram fallback/staff-chat spec is `UPDATED` in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`: Staff remains operational-only; staff-chat booking callbacks are state-aware shortcuts with server-side role/scope/state checks and do not grant support, venue-chat, settings, billing or platform access.
 - Testing/QA smoke strategy is `UPDATED` in `docs/TESTING_QA_SMOKE_STRATEGY.md`: Staff changes require nav/API denial smoke and staff-chat callback denial checks where affected.
 - Analytics/events are `SPEC UPDATED / PARTIAL` in `docs/ANALYTICS_EVENTS.md`: STAFF has operational queue/counters only and no business analytics by default.
-- Menu/options/stop-list spec is `UPDATED` in `docs/MENU_OPTIONS_STOPLIST.md`: current runtime docs allow STAFF item/option availability through `MENU_AVAILABILITY_MANAGE`; target policy is Staff stop-list only when venue policy enables it, with no structure, price, media, option schema or featured/top-list access.
+- Menu/options/stop-list spec is `UPDATED` in `docs/MENU_OPTIONS_STOPLIST.md`: Menu Shift Check Phase
+  1 is **DONE / MVP / STAGING-SMOKE-PASSED** with STAFF entry hidden and direct API denied. Current
+  runtime docs still allow STAFF individual item/option availability through
+  `MENU_AVAILABILITY_MANAGE`; target policy is Staff stop-list only when venue policy enables it,
+  with no structure, price, media, option schema or featured/top-list access.
 - Staff profiles / today shift are `MVP DONE / SMOKE-PASSED`: Staff may edit only own linked draft fields if policy allows; Staff cannot self-publish, enable public visibility or approve future tip methods. Photo upload, schedule and staff tips remain future.
 - Staff tips are future and must not be implemented as platform-collected payments, Telegram Stars or crypto in MVP.
 
@@ -142,16 +148,18 @@ STAFF Mini App behavior:
 4. STAFF does not see `Скидка`, `Исключить`, `Вернуть`.
 5. Direct STAFF bill-edit/menu/table/staff/settings mutations return 403.
 6. STAFF sees menu content and tables read-only, but can toggle menu item and option/flavor availability for operational stop-list.
-7. STAFF dashboard has call counters and no staff chat status row.
-8. STAFF can accept/close active `NEW` / `ACK` staff calls; linked Telegram staff group receives Mini App-created staff-call notification and staff-call ACK/DONE audit rows include actor evidence during regression smoke. Terminal `CANCELLED` is not active work.
-9. STAFF sees bookings and can mark arrived/no-show only for confirmed bookings.
-10. Direct STAFF confirm/cancel/change/message/settings booking attempts are denied.
-11. STAFF does not see `Помощь` / `Обращения`, cannot open/reply support tickets, and cannot open/reply ordinary venue chats through direct API calls.
-12. STAFF sees and confirms shift-extension requests where `SHIFT_EXTENSION_CONFIRM` allows it, but cannot edit extension settings.
-13. Newly invited STAFF can open Venue Mode after accepting deep link, but cannot see billing/payment controls.
-14. STAFF order detail shows batches and tabs without exposing unrelated guests' private/support data; staff chat order notification mirrors the backend order state but is not treated as source of truth.
-15. STAFF does not see Owner/Platform analytics dashboards or raw analytics/audit payloads.
-16. STAFF stop-list action, where allowed, changes only item/option availability, writes audit where implemented and behaves identically in Telegram Bot and Venue Mini App.
-17. If policy allows own draft edit, STAFF can edit only own linked public-profile draft fields and cannot publish, hide, enable visibility, edit another profile, mark shifts or approve tip methods.
-18. STAFF does not see `Отзывы`, cannot list feedback or trigger `Связаться с гостем` through direct API, and cannot access the Owner-only public review URL setting.
-19. Staff-chat receives no feedback submission or follow-up context.
+7. STAFF does not see `Проверка меню перед сменой`; direct shift-check batch requests are denied,
+   while the existing individual item/option stop-list remains available.
+8. STAFF dashboard has call counters and no staff chat status row.
+9. STAFF can accept/close active `NEW` / `ACK` staff calls; linked Telegram staff group receives Mini App-created staff-call notification and staff-call ACK/DONE audit rows include actor evidence during regression smoke. Terminal `CANCELLED` is not active work.
+10. STAFF sees bookings and can mark arrived/no-show only for confirmed bookings.
+11. Direct STAFF confirm/cancel/change/message/settings booking attempts are denied.
+12. STAFF does not see `Помощь` / `Обращения`, cannot open/reply support tickets, and cannot open/reply ordinary venue chats through direct API calls.
+13. STAFF sees and confirms shift-extension requests where `SHIFT_EXTENSION_CONFIRM` allows it, but cannot edit extension settings.
+14. Newly invited STAFF can open Venue Mode after accepting deep link, but cannot see billing/payment controls.
+15. STAFF order detail shows batches and tabs without exposing unrelated guests' private/support data; staff chat order notification mirrors the backend order state but is not treated as source of truth.
+16. STAFF does not see Owner/Platform analytics dashboards or raw analytics/audit payloads.
+17. STAFF stop-list action, where allowed, changes only item/option availability, writes audit where implemented and behaves identically in Telegram Bot and Venue Mini App.
+18. If policy allows own draft edit, STAFF can edit only own linked public-profile draft fields and cannot publish, hide, enable visibility, edit another profile, mark shifts or approve tip methods.
+19. STAFF does not see `Отзывы`, cannot list feedback or trigger `Связаться с гостем` through direct API, and cannot access the Owner-only public review URL setting.
+20. Staff-chat receives no feedback submission or follow-up context.

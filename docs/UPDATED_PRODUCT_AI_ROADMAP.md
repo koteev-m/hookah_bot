@@ -1,6 +1,6 @@
 # Product + Telegram AI Bots Roadmap
 
-Дата обновления: 2026-07-30.
+Дата обновления: 2026-07-31.
 
 Статус документа: canonical roadmap. Этот файл объединяет актуальный product roadmap, Mini App launch roadmap и Telegram-native AI Bots roadmap. Старые audit-файлы в `docs/audit/` остаются evidence/history, но не являются текущим backlog без сверки с этим roadmap и текущим кодом.
 
@@ -46,7 +46,7 @@
 - Order/session/tab core docs are current in `docs/ORDER_SESSION_TAB_CORE.md`: `TABLE_SESSION`, `ACTIVE_TABLE_ORDER`, `ORDER_BATCH`, `TAB`, bill/request/close flow, privacy boundaries and visit-history foundation are `SPEC UPDATED`. Current runtime docs say table-session/tab scoping, Guest History Foundation and Post-Visit Feedback MVP are staging-smoke-passed, while Repeat Phase 1 is locally validated with deferred environment-dependent manual smoke; force-close policy/audit, loyalty/preorder and broader analytics remain partial/future.
 - Analytics/events docs are current in `docs/ANALYTICS_EVENTS.md`: analytics events, audit/event boundaries, KPI formulas, role dashboards and payload privacy rules are `SPEC UPDATED`; implementation and Platform dashboards remain partial/future unless specific events are verified.
 - Security/RBAC docs are current in `docs/SECURITY_RBAC_MATRIX.md`: roles, scopes, permissions, surface parity, dangerous actions, auth/trust boundaries and security smoke checklist are `UPDATED`; permission parity and dangerous-action audit coverage remain partial unless specific route tests/smoke evidence exists. `ADMIN` is a legacy compatibility alias to `MANAGER`, not a product role.
-- Menu/options/stop-list docs are current in `docs/MENU_OPTIONS_STOPLIST.md`: structured menu terms, option/modifier snapshots, media/PDF boundaries, featured/top-list, stop-list, shift check, availability validation and menu permissions are `SPEC UPDATED`. Selected-option parity is smoke-closed; the bounded OWNER/MANAGER shift-check slice is `MENU SHIFT CHECK PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED`; broader menu constructor/media/top-list and remaining audit coverage remain partial/future.
+- Menu/options/stop-list docs are current in `docs/MENU_OPTIONS_STOPLIST.md`: structured menu terms, option/modifier snapshots, media/PDF boundaries, featured/top-list, stop-list, shift check, availability validation and menu permissions are `SPEC UPDATED`. Selected-option parity is smoke-closed; the bounded OWNER/MANAGER shift-check slice is `MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`; broader menu constructor/media/top-list and remaining audit coverage remain partial/future.
 - Venue info-section media storage/upload is canonical in `docs/MEDIA_STORAGE_UPLOAD.md`: current
   Telegram-`file_id` architecture, hybrid asset model, security/lifecycle contract and bounded
   Venue Mini App slice are specified; runtime remains missing and verdict is
@@ -221,9 +221,10 @@ Remaining P1:
 - final staging smoke after each release batch;
 - continue bounded venue settings slices where backend-backed; media-section authoring remains bot/platform-canonical, while the unified Published/private-saved Guest Preview and informational promotions have backend-backed Venue Mini App surfaces. Authenticated read-only preview delivery of existing guest-visible media does not add upload/authoring, and venue subscription state is covered by the staging-smoked billing MVP, while real acquiring and Telegram Stars remain separate future work;
 - Venue Mini App normalize/reset helper only if still needed after pilots; base flavor profile apply, item-level stop-list and flavor-level stop-list parity are smoke-passed. Preserve STAFF no-settings/no-menu-content-management boundaries while keeping operational stop-list allowed;
-- shift check remains **MENU SHIFT CHECK PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**
-  until green Actions, staging deploy and role/guest manual smoke. It adds no Telegram shift-check
-  UI and does not alter existing Staff individual availability;
+- shift check is **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**; keep the
+  Owner/Manager/Staff/foreign, two-accordion UX, atomicity/stale/audit, Guest availability and
+  Telegram stop-list parity scenarios in regression. It adds no Telegram shift-check UI and does
+  not alter existing Staff individual availability;
 - custom date range picker, arbitrary period stats, AI-generated summaries, advanced analytics/platform dashboards/network stats remain later; read-only venue stats is covered by closed M2;
 - M4B/M4C Unified Messages Inbox UX and lifecycle are CLOSED after staging smoke; keep multi-venue/thread scoping, unread clearing and resolve/reopen in regression;
 - deeper operational frontend smoke/e2e coverage beyond the current Guest/Venue Mini App browser smoke.
@@ -383,10 +384,13 @@ Milestones:
 13. M9b: Venue Working Hours and Date Exceptions Mini App Parity; Status: CLOSED / staging smoke passed. Existing backend/Bot weekly hours and concrete-date overrides now have Venue Mini App owner/manager settings, inclusive date-exception ranges with optional guest-facing reason/comment, M9b.2 post-save exception UX, M9b.3 date-range editing for existing exceptions, guest-visible open/closed read models and direct Mini App booking validation with human schedule rejection copy, without broad settings redesign. M9b.1 Schedule Exception Ranges and Guest Copy, M9b.2 Schedule Exception Save UX and M9b.3 Schedule Exception Range Editing are also CLOSED / staging smoke passed; keep schedule validation and Bot closed-date copy in regression.
 14. Simple Venue Promotions Phase 1: `DONE / MVP / STAGING-SMOKE-PASSED`; focused Owner/Manager builder/status management and current-active Guest venue-detail reads share the existing Bot repository. GitHub Actions, staging deploy and manual parity smoke passed.
 15. Venue Mini App Guest Preview Phase 2.1: **VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY / DONE / MVP / STAGING-SMOKE-PASSED**. One OWNER/MANAGER own-venue entry `Предпросмотр для гостя` calls `GET /api/venue/{venueId}/guest-preview`; the backend selects `PUBLISHED_PUBLIC` or `PRIVATE_DRAFT` through the shared public-facing assembly. Published mode is the exact guarded Guest venue/info state; private mode is the saved public-facing projection when Guest availability is unavailable, without any draft access through the public Guest API. The UI shows exact published/private badges and copy, safe lifecycle reasons, origin-aware return, authenticated scoped existing media and no guest actions. Unsaved public-card, weekly-schedule or date-exception edits block preview with no auto-save; after Save it reads backend state. Venue switch aborts/clears and rejects late state. STAFF/foreign/Platform-only access, private fields, hidden sections, unpublished staff, inactive/non-current promotions and raw refs remain denied. GitHub Actions were green, staging deploy completed and manual staging smoke passed. Media upload, draft editing, publication and share links remain out of scope.
-16. Menu Shift Check Phase 1: **MENU SHIFT CHECK PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**. OWNER/MANAGER review the saved menu in Venue Mini App, prepare availability changes
-    locally and confirm one bounded atomic batch with optimistic stale protection, no-op completion
-    and one safe audit. STAFF remains on the existing individual stop-list policy and has no
-    shift-check entry/direct permission.
+16. Menu Shift Check Phase 1: **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**.
+    The Menu screen uses two collapsed-by-default task-oriented accordions with mutual collapse.
+    OWNER/MANAGER review the saved menu, use ordinary availability switches or enter a separate
+    mass-selection mode, prepare changes locally and confirm one bounded atomic batch with a
+    summary, optimistic stale protection, no-op completion and one safe audit. Draft survives
+    collapse and is cleared on cancel/venue switch. STAFF remains on the existing individual
+    stop-list policy and has no shift-check entry/direct permission.
 17. Future: menu semantic type/media polish after current options/flavors regression remains green.
 
 | Priority | Block | Current evidence | Product target | Recommended action |
@@ -956,13 +960,15 @@ If a new roadmap is needed later, update this file instead of creating another r
 
 Latest closed blocks: Staff profiles + today on shift Phase 1; Staff-call guest-visible CANCELLED finishing patch; Booking Arrival Guard / Staff-Chat Booking Buttons; Platform Billing Cockpit / Owner Payment UX; Platform Billing Renewal / Advance Invoice / Courtesy Days; Staff/Manager invite deep-link sharing polish; Guest Communication UX / Support Tickets MVP; Guest History Foundation MVP; Post-Visit Feedback MVP plus public-review/follow-up smoke-fix; Guest Favorites Phase 1 (`DONE / MVP / STAGING-SMOKE-PASSED`). Repeat as Template Phase 1 is `MVP IMPLEMENTED / LOCAL VALIDATION PASSED / DEFERRED MANUAL SMOKE`; its production-readiness gate remains open in [`REPEAT-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#repeat-manual-001), but does not block an independent bounded block.
 
-Latest locally validated bounded runtime slice:
-**MENU SHIFT CHECK PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**.
+Latest staging-smoke-passed bounded runtime slice:
+**MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**.
 
 - OWNER/MANAGER use `Проверка меню перед сменой` inside the existing Venue Menu screen; STAFF is
   hidden/forbidden and its existing individual item/option stop-list behavior is unchanged.
-- Search, filters, selection, category/item/option mass actions and confirmation summary are local
-  draft UX. Cancel sends no mutation; confirm sends one
+- `Редактирование меню` and `Проверка меню перед сменой` are compact mutually exclusive
+  accordions, collapsed by default. Normal mode uses availability switches; selection appears only
+  in a separate mass mode. Search, filters, local changes and confirmation summary are draft UX;
+  collapse/reopen preserves the draft, while cancel and venue switch clear it. Confirm sends one
   `POST /api/venue/menu/shift-check?venueId=<id>` request.
 - A maximum of 500 combined changes is checked for duplicates, existence, venue and item/option
   ownership and expected availability. Item/option updates plus exactly one safe
@@ -975,8 +981,8 @@ Latest locally validated bounded runtime slice:
   shift-check UI or Staff policy change was added.
 - `VenueMenuRoutesTest`, `VenueMenuRepositoryTest`, `GuestVenueMenuRoutesTest`,
   `GuestOrderRoutesTest`, `AuditLogRepositoryTest`, `TelegramBotRouterTableTokenTest`, isolated
-  Kotlin compile, ktlint, Mini App build and full deterministic e2e `100/100` passed. Green Actions
-  and staging smoke remain required before release readiness.
+  Kotlin compile, ktlint, Mini App build and full deterministic e2e `100/100` passed. GitHub
+  Actions were green, staging deploy completed and the manual functional/UX smoke passed.
 
 Latest informational promotion milestone: **Simple Venue Promotions Phase 1**. The later executable
 Happy Hours Percent milestone is recorded below as `DONE / STAGING-SMOKE-PASSED`.

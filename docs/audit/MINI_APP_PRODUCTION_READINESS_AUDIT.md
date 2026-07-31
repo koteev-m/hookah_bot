@@ -62,6 +62,14 @@
 > MVP / STAGING-SMOKE-PASSED** after green Actions, staging deploy and manual smoke. This does not
 > implement media upload/manage parity.
 >
+> Current correction as of 2026-07-31: Menu Shift Check Phase 1 is **MENU SHIFT CHECK PHASE 1 /
+> DONE / MVP / STAGING-SMOKE-PASSED**. OWNER/MANAGER own-venue access, STAFF/foreign denial, two
+> task-oriented Menu accordions, local draft and separate mass-selection mode, availability
+> switches, confirmation summary, one atomic batch, stale-state rejection, safe completion audit,
+> Guest availability/stale-cart behavior, venue-switch isolation and Telegram stop-list parity
+> passed after green Actions and staging deploy. Existing Staff individual stop-list policy is
+> unchanged; broader menu/media/top-list and dangerous-action audit gaps remain partial/future.
+>
 > Current media correction as of 2026-07-29: venue/public-card image/PDF management is
 > **PARTIAL / BOT-FIRST**. Bot OWNER/MANAGER can add/delete Telegram-`file_id` attachments and
 > hide/show their whole info section; Guest and Published Preview render guarded proxy URLs. Venue

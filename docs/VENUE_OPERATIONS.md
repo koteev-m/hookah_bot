@@ -1,8 +1,8 @@
 # Venue Mode Operations Model
 
-Дата актуализации: 2026-07-30.
+Дата актуализации: 2026-07-31.
 
-Статус: **current product reference / SPEC UPDATED**. Core Venue operations are partly smoke-closed across orders, bill display, staff calls, bookings, confirmed-only booking arrival actions, state-aware staff-chat booking shortcuts, staff-chat, menu options and settings slices. The bounded shift-check slice is **MENU SHIFT CHECK PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**. The full Venue Mode implementation is still **PARTIAL / needs verification** for broad dashboard completeness, arbitrary stats, remaining dangerous-action audit coverage, broader settings parity and deep cross-surface e2e.
+Статус: **current product reference / SPEC UPDATED**. Core Venue operations are partly smoke-closed across orders, bill display, staff calls, bookings, confirmed-only booking arrival actions, state-aware staff-chat booking shortcuts, staff-chat, menu options and settings slices. The bounded shift-check slice is **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**. The full Venue Mode implementation is still **PARTIAL / needs verification** for broad dashboard completeness, arbitrary stats, remaining dangerous-action audit coverage, broader settings parity and deep cross-surface e2e.
 
 ## Core Rule
 
@@ -32,7 +32,7 @@ Canonical dependencies:
 | Tabs / bill | Operational bill by personal/shared tabs. | Guest/Venue/Bot bill parity is smoke-closed; bill request/payment method is smoke-closed. | Tab reopen and force-close audit remain future/partial. |
 | Staff calls | Live operational requests from table context. | M5 lifecycle, ACK/DONE audit hardening and guest-visible terminal `CANCELLED` status are staging-smoked. | Manual cancel UI, quick replies and row-level actor/timestamps remain future. |
 | Bookings | Venue booking queue and lifecycle. | Booking queue/lifecycle, hold settings, confirmed-only arrival actions, state-aware staff-chat booking buttons, reminders and attendance indicators are partially/smoke-closed. | Broader lifecycle automation/preorder/reminder rollout remains partial/future. |
-| Menu | Structured order menu management. | Structured selected-option parity is smoke-closed; OWNER/MANAGER atomic pre-shift availability review is implemented and locally validated. Menu constructor broader status is partial. | Use `docs/MENU_OPTIONS_STOPLIST.md`; shift-check staging smoke and broad media/top-list governance remain open. |
+| Menu | Structured order menu management. | Structured selected-option parity and OWNER/MANAGER atomic pre-shift availability review are staging-smoke-passed. Menu constructor broader status is partial. | Use `docs/MENU_OPTIONS_STOPLIST.md`; broad media/top-list governance remains open. |
 | Stop-list | Fast operational availability toggles. | Item/option availability parity is documented for current Staff/Manager/Owner paths; shift-check mass changes use an OWNER/MANAGER-only local draft and one batch confirmation. | Per-venue `staff_stoplist_enabled` and audit completeness outside shift check remain future/partial. |
 | Tables / QR | Physical table inventory and QR context. | Tables/QR basics exist; table-session runtime behavior is documented separately. | Single table CRUD/diagnostics/QR rotate audit need verification. |
 | Staff / invites | Membership, roles and invite links. | Staff/Manager invite sharing and acceptance are staging-smoked; Platform Owner OWNER invite/revoke is smoke-closed. | Role parity still needs regression after new routes. |
@@ -229,11 +229,17 @@ Venue Operations view:
 - Guest checkout server-side availability validation is required.
 
 Shift-check Phase 1:
-- OWNER/MANAGER open `Проверка меню перед сменой` inside the existing Menu screen; STAFF has no
-  entry and direct `MENU_SHIFT_CHECK` access is denied;
+- the Menu screen has two mutually exclusive task-oriented accordions, collapsed by default:
+  `Редактирование меню` with a hidden-until-requested new-category form and compact expandable
+  categories, and `Проверка меню перед сменой`; opening one collapses the other;
+- OWNER/MANAGER open the shift-check accordion; STAFF has no entry and direct
+  `MENU_SHIFT_CHECK` access is denied;
 - current categories and item/option availability counts come from saved backend state. Search,
-  unavailable/dirty filters, row selection and mass item/category/option actions mutate only the
-  local draft;
+  unavailable/dirty filters, availability switches and mass item/category/option actions mutate
+  only the local draft;
+- normal rows show `В наличии` / `Нет в наличии` switches without selection checkboxes; options are
+  nested under items and dirty rows show `Изменено`. Checkboxes and selection actions exist only in
+  the separate `Массовое изменение` mode and have distinct accessible roles/labels;
 - cancel clears the draft without mutation/audit. Confirm shows the change summary and sends one
   `POST /api/venue/menu/shift-check?venueId=<id>` request, including an allowed no-op request;
 - the backend validates a combined maximum of 500 changed rows, duplicates, existence, venue and
@@ -242,8 +248,9 @@ Shift-check Phase 1:
   transaction. Any invalid/stale row rolls back the whole completion;
 - stale state uses `Меню изменилось. Обновите проверку и повторите подтверждение.` and leaves the
   screen recoverable. Refresh loads current saved state and keeps still-relevant draft intent;
-- switching venue or disposing the screen aborts old work and clears draft/selection, so a pending
-  confirmation cannot apply to the next venue;
+- collapse/reopen preserves the local draft. Switching venue or disposing the screen collapses the
+  accordions, aborts old work and clears draft/selection, so a pending confirmation cannot apply to
+  the next venue;
 - existing individual item/option availability routes and Telegram stop-list flow remain
   unchanged. This slice adds no stock quantities, menu structure mutation, media, migration,
   Telegram shift-check UI or history table.
@@ -462,7 +469,7 @@ Current vs target:
 | Full bill | Staff full bill exists. | Management bill parity smoke-closed. | Bill context in activity-card. | Tab reopen/paid state machine partial. | Regression |
 | Staff calls | Bot/staff-chat callbacks exist. | M5 queue/lifecycle and guest-visible `CANCELLED` smoke-closed. | Notifications and ACK/DONE callbacks. | Manual cancel UI, quick replies and row-level actors future. | Regression/P2 |
 | Bookings | Bot and venue booking flows exist. | Queue/lifecycle/hold settings smoke-closed. | Operational notifications where policy allows. | Broader automation/preorder/reminder rollout future. | Regression/P2 |
-| Menu manage | Bot owner/manager flows exist; no Phase 1 shift-check UI. | Options/flavors parity smoke-closed; OWNER/MANAGER shift check is locally validated; broader constructor partial. | No source-of-truth edits. | Follow `docs/MENU_OPTIONS_STOPLIST.md`; keep the atomic batch/stale/audit contract in regression. | Regression/P2 |
+| Menu manage | Bot owner/manager flows exist; no Phase 1 shift-check UI. | Options/flavors parity and OWNER/MANAGER shift check are staging-smoke-passed; broader constructor partial. | No source-of-truth edits. | Follow `docs/MENU_OPTIONS_STOPLIST.md`; keep the UX, atomic batch/stale/audit contract in regression. | Regression/P2 |
 | Stop-list | Existing immediate Bot paths remain unchanged. | Item/option parity documented/smoked; shift-check draft/mass confirmation is OWNER/MANAGER-only. | Callback shortcuts only if role-checked. | Per-venue Staff stop-list flag future. | Regression/P2 |
 | Tables/QR | Bot table flows exist. | Basics exist. | No. | QR rotate audit/diagnostics need verification. | P2 |
 | Staff invites | Bot invite acceptance exists. | Copy/share invite result smoke-closed. | No. | Keep role denial/last-owner protection in regression. | Regression |
@@ -479,8 +486,8 @@ Current vs target:
 - Venue/public-card media management is `PARTIAL / BOT-FIRST`; Venue Mini App media upload is
   `MISSING / FUTURE`. Structured menu-item media is separately `MISSING / FUTURE`; the working
   Guest/Bot info-section rendering and view-only Photo/PDF menu must not be relabeled missing.
-- Shift check is locally validated for OWNER/MANAGER atomic availability review; staging smoke is
-  still required. Existing Staff item/option stop-list parity is unchanged and per-venue
+- Shift check is **DONE / MVP / STAGING-SMOKE-PASSED** for OWNER/MANAGER atomic availability
+  review. Existing Staff item/option stop-list parity is unchanged and per-venue
   `staff_stoplist_enabled` remains future.
 - Manager broad `MENU_MANAGE` remains a product-policy decision: keep and test it, or narrow to stop-list/shift check/basic availability.
 - Staff-chat notification policy is documented for orders/calls/bookings and explicitly excludes support, venue chats and post-visit feedback/follow-up context; personal staff notifications remain future.
@@ -496,8 +503,8 @@ Current vs target:
 - Settings: `PARTIAL`, with several backend-backed slices closed, including Owner-only `Ссылка для отзывов` shared by Bot/Mini App.
 - Guest Preview Phase 2.1: **VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY / DONE / MVP / STAGING-SMOKE-PASSED**; focused backend preview/Guest/RBAC/promotion tests, compile/lint, Mini App build and deterministic smoke `95/95` are green, GitHub Actions were green, staging deploy completed and manual staging smoke passed.
 - Full bill/display/order snapshots: `CLOSED for current smoke paths`, `PARTIAL` for force-close/reopen/all modifier variants.
-- Shift check: **MENU SHIFT CHECK PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**; no staging
-  or production-readiness claim.
+- Shift check: **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**; keep its role,
+  tenant, UX, atomicity, stale-state, Guest availability and Telegram parity checks in regression.
 - Stop-list parity: current individual item/option parity remains documented; per-venue Staff
   policy remains future.
 - Staff-chat source-of-truth policy: `DOCUMENTED`.
