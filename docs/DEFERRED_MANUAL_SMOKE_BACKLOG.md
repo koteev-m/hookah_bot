@@ -1,6 +1,6 @@
 # Deferred Manual Smoke Backlog
 
-Дата актуализации: 2026-07-23.
+Дата актуализации: 2026-08-01.
 
 Статус: **current product reference / ACTIVE BACKLOG**.
 
@@ -55,6 +55,7 @@
 | ID | Feature | Priority | Current status | Blocking impact |
 | --- | --- | --- | --- | --- |
 | [`REPEAT-MANUAL-001`](#repeat-manual-001) | Repeat as Template Phase 1 | P1 | `BLOCKED_BY_ENVIRONMENT` | Repeat production-readiness remains open for environment-dependent parity/privacy/context scenarios; independent bounded development may continue. |
+| [`CATALOG-SEARCH-MANUAL-001`](#catalog-search-manual-001) | Catalog Search and Filter Phase 1 | P2 | `BLOCKED_BY_ENVIRONMENT` | Does not block the current MVP/release; required before catalog pagination, ranking, map/geo or a large pilot rollout. |
 
 ## REPEAT-MANUAL-001
 
@@ -389,3 +390,106 @@
 - [`docs/audit/MINI_APP_LAUNCH_SMOKE_CHECKLIST.md`](audit/MINI_APP_LAUNCH_SMOKE_CHECKLIST.md)
 - [`docs/ORDER_SESSION_TAB_CORE.md`](ORDER_SESSION_TAB_CORE.md)
 - [`docs/MENU_OPTIONS_STOPLIST.md`](MENU_OPTIONS_STOPLIST.md)
+
+## CATALOG-SEARCH-MANUAL-001
+
+- **Feature:** Catalog Search and Filter Phase 1
+- **Priority:** P2
+- **Current status:** `BLOCKED_BY_ENVIRONMENT`
+- **Runtime status:** `CATALOG SEARCH AND FILTER PHASE 1 / DONE / MVP /
+  STAGING-SMOKE-PASSED`
+- **Deferred scope status:** `EXTENDED MULTI-VENUE CATALOG DATASET REGRESSION /
+  NON-BLOCKING DEFERRED MANUAL SMOKE / CATALOG-SEARCH-MANUAL-001`
+- **Reason deferred:** недостаточно опубликованных тестовых заведений; недостаточно городов и
+  повторяющихся городов; нет подготовленного постоянного QA-каталога; ограничены возможности
+  двухаккаунтной проверки favorites/search state.
+- **Blocking impact:** не блокирует текущий MVP/release. Проверка обязательна до catalog
+  pagination, ranking, map/geo или большого pilot rollout.
+
+### Prerequisites
+
+- минимум 5 `PUBLISHED` guest-available venues;
+- минимум 3 разных города;
+- минимум 2 venue в одном городе;
+- уникальные поисковые слова в `name`;
+- уникальные поисковые слова в `address` / `formatted_address`;
+- минимум 1 `DRAFT` / `HIDDEN` venue с известными `name` / `city` / `address`;
+- Guest A;
+- Guest B;
+- возможность временно hide/publish тестовое venue;
+- сохранённое исходное состояние favorites/statuses для cleanup.
+
+### Automated Evidence Already Available
+
+- `GuestVenueRoutesTest` `23/23`;
+- `compileKotlin` PASS;
+- `ktlintCheck` PASS;
+- Mini App build PASS;
+- Playwright `104/104`;
+- GitHub Actions green;
+- current limited-dataset staging smoke passed.
+
+Это evidence подтверждает закрытие текущего Phase 1 MVP, но не считается выполнением расширенных
+manual scenarios ниже.
+
+### Manual Steps And Expected Results
+
+1. City filter возвращает несколько venues одного города.
+2. City filter исключает venues остальных городов.
+3. Address search находит venue по уникальному слову адреса.
+4. `q + city` даёт корректное пересечение.
+5. City options не дублируются по регистру.
+6. Stable ordering сохраняется при нескольких результатах.
+7. Hidden / `DRAFT` venue не находится по точному `name` / `city` / `address`.
+8. `%`, `_`, `!`, backslash и SQL-like input не раскрывают весь каталог.
+9. Быстрый ввод подтверждает latest-response-wins на большем наборе данных.
+10. Favorite add/remove работает внутри выдачи из нескольких результатов.
+11. Guest A / Guest B получают собственное `isFavorite`.
+12. Hide → publish корректно убирает и возвращает venue в поиск.
+13. Reset возвращает полный guarded каталог.
+14. Cleanup восстанавливает venue statuses и favorites.
+
+Expected result для каждого шага: наблюдаемое поведение совпадает с описанием, guarded catalog не
+раскрывает недоступные venue, а пользовательское search/favorite state не пересекается между Guest
+A и Guest B.
+
+### Cleanup / Restoration
+
+1. Восстановить исходные venue statuses.
+2. Восстановить исходные favorites Guest A и Guest B.
+3. Подтвердить, что временно скрытое venue возвращено в исходное состояние.
+4. Сверить итоговое состояние с сохранённым baseline и записать restoration evidence.
+
+### Result Record
+
+- **Result:** `<PASSED | FAILED>`
+- **Date:** `<YYYY-MM-DD>`
+- **Actor:** `<name/role>`
+- **Environment:** `<staging or other production-like environment>`
+- **Venue dataset:** `<safe venue labels/count/cities; no unrelated PII>`
+- **Guest accounts:** `<Guest A / Guest B safe labels>`
+- **Defects:** `<links/IDs or none>`
+- **Two-account isolation:** `<confirmed/not confirmed>`
+- **Cleanup/restoration evidence:** `<summary or link>`
+- **Notes:** `<optional>`
+
+### Closure Criteria
+
+`CATALOG-SEARCH-MANUAL-001` можно перевести в `PASSED` только когда:
+
+- все сценарии выполнены на staging или другом production-like environment;
+- записаны дата и исполнитель;
+- зафиксированы defects или `none`;
+- восстановлены venue statuses/favorites;
+- подтверждена двухаккаунтная изоляция.
+
+До выполнения всех условий нельзя утверждать, что extended multi-venue catalog dataset regression
+пройдена. Открытая запись не понижает статус текущего Catalog Search and Filter Phase 1 MVP.
+
+### Related Docs
+
+- [`docs/PRODUCT_SPEC.md`](PRODUCT_SPEC.md)
+- [`docs/UPDATED_PRODUCT_AI_ROADMAP.md`](UPDATED_PRODUCT_AI_ROADMAP.md)
+- [`docs/TESTING_QA_SMOKE_STRATEGY.md`](TESTING_QA_SMOKE_STRATEGY.md)
+- [`docs/audit/MINI_APP_LAUNCH_SMOKE_CHECKLIST.md`](audit/MINI_APP_LAUNCH_SMOKE_CHECKLIST.md)
+- [`docs/audit/ROLE_GUEST.md`](audit/ROLE_GUEST.md)

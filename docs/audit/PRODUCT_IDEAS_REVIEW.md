@@ -6,6 +6,16 @@
 
 > Current correction as of 2026-07-06: Guest Communication UX / Support Tickets MVP is now CLOSED / smoke passed. The current model is `BOOKING_CHAT`, `VENUE_CHAT`, `SUPPORT_TICKET`, `STAFF_CALL` in `docs/COMMUNICATION_MODEL.md`; Staff is denied support/venue chats, Platform sees support tickets but not ordinary venue chats, and support/venue chats do not post to staff-chat. Advanced support features such as SLA automation, macros, CSAT, attachments and diagnostics reports remain later.
 >
+> Current correction as of 2026-08-01: the historical catalog row and detailed section below are
+> superseded for the bounded search/filter scope. **CATALOG SEARCH AND FILTER PHASE 1 / DONE / MVP
+> / STAGING-SMOKE-PASSED** now uses authenticated backend `q`/`city`, case-insensitive
+> name/city/address/formatted-address search, exact city filtering, `AND`, safe literal escaping,
+> existing Guest lifecycle/subscription/favorite/schedule guards and backend-driven Mini App UX with
+> debounce plus abort/latest-response protection. The current limited-dataset staging smoke passed.
+> Map/geo, district/open-now/price filters, ranking, pagination and extended multi-venue regression
+> remain future; the latter is **NON-BLOCKING DEFERRED MANUAL SMOKE /
+> CATALOG-SEARCH-MANUAL-001** and is not claimed as passed.
+>
 > Current correction as of 2026-07-08: Booking arrival guard and staff-chat booking lifecycle buttons are DONE/MVP / staging smoke passed. Seat/no-show actions are shown and accepted only for `CONFIRMED`; `PENDING`, `CHANGED` and terminal statuses do not expose dangerous arrival actions; staff-chat booking notifications are state-aware; stale/no-permission callbacks answer safely; `BOOKING_CHAT` messages do not post to staff-chat. Reminder rollout, automatic no-show, preorder and broader visit-history/feedback integration remain partial/future.
 >
 > Current docs correction as of 2026-07-06: Platform cockpit status is consolidated in `docs/PLATFORM_COCKPIT.md`. Manual billing and support-ticket center are closed as MVPs; onboarding request cockpit, placements, Platform analytics, real acquiring/Stars, recurring payments and lifecycle state normalization remain future/partial.

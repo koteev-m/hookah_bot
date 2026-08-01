@@ -1,6 +1,6 @@
 # Guest
 
-Дата актуализации: 2026-07-23.
+Дата актуализации: 2026-08-01.
 
 Статус: **current role reference**. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. Этот файл фиксирует текущее поведение Guest в Telegram bot и Mini App после последних parity/fix-pack'ов.
 
@@ -39,6 +39,13 @@ Canonical communication split: see `docs/COMMUNICATION_MODEL.md`. Guest-facing l
 ## Mini App
 
 Pre-QR Guest Mini App:
+- Catalog Search and Filter Phase 1 is **DONE / MVP / STAGING-SMOKE-PASSED**. The authenticated
+  catalog sends server-side optional `q`/`city`; search covers name/city/address/formatted address,
+  city is an exact case-insensitive filter and combined filters use `AND`.
+- Search uses copy `Поиск по названию, городу или адресу`, city filter `Все города`, 300 ms
+  debounce, encoded requests, abort/latest-response protection, distinct loading/error/empty/
+  no-match states and reset. City options come from the complete initial unfiltered guarded
+  catalog and favorites remain current-user scoped inside filtered results.
 - карточка заведения показывает safe guest-visible данные;
 - venue detail shows `Сегодня работают` with public visible staff profiles only, below main venue information/actions; catalog may later show a compact `Сегодня: Иван, Алина` line;
 - `ℹ️ Информация` отдаёт только visible + filled owner info sections;
@@ -89,6 +96,8 @@ Account/bookings:
 ## Allowed actions
 
 - Смотреть каталог и published guest-visible venues.
+- Искать published guest-available venues по name/city/address и фильтровать по city without
+  weakening lifecycle/subscription guards or current-user favorite isolation.
 - Открывать карточку заведения и заполненные visible info sections.
 - Смотреть public visible staff profiles and `Сегодня работают`.
 - Смотреть `📖 Фото-меню` как информационный media/text section.
@@ -127,6 +136,9 @@ Account/bookings:
 
 ## Known gaps / needs smoke
 
+- Extended multi-venue catalog dataset regression is **NON-BLOCKING DEFERRED MANUAL SMOKE /
+  CATALOG-SEARCH-MANUAL-001**. The current limited-dataset staging smoke passed and Phase 1 remains
+  DONE; the deferred scenarios are required before pagination, ranking, map/geo or a large pilot.
 - M7b `Мои брони` still needs real two-account Telegram runtime isolation smoke; local tests/e2e and staging Bot `/my` visual parity for the same booking's label/time/deadline are already green.
 - M7c adaptive booking reminders passed one controlled real Telegram staging smoke but remain disabled by default for rollout; `Да, буду` records attendance intent without changing booking status, edits the guest reminder message, and Guest Mini App shows `Вы подтвердили, что придёте` when recorded.
 - Booking lifecycle spec is `UPDATED` in `docs/BOOKING_LIFECYCLE.md`: guest create/list/cancel/proposed-time response, `Держим до`, reminders, `BOOKING_CHAT`, booking support routing and no-show/seated history dependencies are canonical.
@@ -152,7 +164,10 @@ Account/bookings:
 
 ## Smoke-critical checks
 
-1. Открыть каталог без QR: карточка venue не показывает заказное `🍽 Меню`.
+1. Открыть каталог без QR: search/city filter используют backend `q`/`city`, name/city/address
+   search, `q + city`, no-match/reset, literal special characters, filtered favorites, schedule
+   enrichment and unavailable-venue non-disclosure работают, а карточка venue не показывает
+   заказное `🍽 Меню`.
 2. Открыть `ℹ️ Информация`: видны только заполненные visible sections.
 3. Проверить `📖 Фото-меню`: изображения/PDF открываются через Mini App.
 4. Сканировать QR: structured order menu появляется только после table context.

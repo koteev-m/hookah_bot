@@ -1,6 +1,6 @@
 # Testing / QA Smoke Strategy
 
-Дата актуализации: 2026-07-31.
+Дата актуализации: 2026-08-01.
 
 Статус: **current product reference / UPDATED**. This document is the canonical QA/smoke strategy for the Telegram bot + Mini App platform. It consolidates local validation, GitHub Actions expectations, area-specific smoke suites, staging policy, failure reporting and Codex handoff rules. Deployment and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
 
@@ -28,10 +28,12 @@ Current practice:
   stop-list policy is unchanged. GitHub Actions were green, staging deploy completed and the
   functional/UX manual smoke passed.
 - Catalog search/filter is
-  **CATALOG SEARCH AND FILTER PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**. Focused
+  **CATALOG SEARCH AND FILTER PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**. Focused
   `GuestVenueRoutesTest`, backend compile/lint, Mini App build, focused catalog/favorite browser
-  checks and full deterministic browser smoke `104/104` passed locally; GitHub Actions and staging
-  smoke remain required.
+  checks and full deterministic browser smoke `104/104` passed locally; GitHub Actions were green,
+  staging deploy completed and manual staging smoke passed on the current limited venue dataset.
+  Extended multi-venue coverage remains **NON-BLOCKING DEFERRED MANUAL SMOKE /
+  CATALOG-SEARCH-MANUAL-001** and does not downgrade the completed MVP.
 
 Target QA model:
 - Every task ends with changed files, behavior summary, tests run, validation result, manual smoke checklist, `git status --short`, whether `scripts/dev/` was touched and whether staging deploy is needed.
@@ -52,7 +54,7 @@ Target QA model:
 ## Catalog Search And Filter Phase 1 Quality Gate
 
 Status:
-**CATALOG SEARCH AND FILTER PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**.
+**CATALOG SEARCH AND FILTER PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**.
 
 Backend coverage must prove:
 
@@ -105,8 +107,17 @@ npm --prefix miniapp run e2e:smoke
 
 Recorded local evidence: focused `GuestVenueRoutesTest`, backend compile, ktlint, Mini App
 production build, focused catalog/favorite browser checks and the prescribed deterministic browser
-smoke `104/104` passed. GitHub Actions and staging smoke are still required; do not use
-`STAGING-SMOKE-PASSED` or release-ready wording from this evidence.
+smoke `104/104` passed. GitHub Actions were green, staging deploy completed and the current
+limited-dataset manual staging smoke passed for initial catalog, name/city/address search, city
+filter, combined `q + city`, no-match/reset, literal special characters, filtered favorites,
+schedule enrichment, unavailable-venue non-disclosure and venue-card regressions.
+
+The completed Phase 1 status does not claim an extended dataset smoke. Multi-result ordering,
+case-insensitive city deduplication, larger-set latest-response-wins, two-account favorite state
+and hide/publish restoration remain **NON-BLOCKING DEFERRED MANUAL SMOKE /
+CATALOG-SEARCH-MANUAL-001** in
+[`docs/DEFERRED_MANUAL_SMOKE_BACKLOG.md`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#catalog-search-manual-001).
+That entry is required before catalog pagination, ranking, map/geo or a large pilot rollout.
 
 ## Venue Mini App Guest Preview Phase 2.1 Quality Gate
 
@@ -823,8 +834,10 @@ Telegram/staff-chat:
 ## Roadmap Status
 
 - Testing/QA smoke strategy: `UPDATED`.
-- Catalog search/filter: **CATALOG SEARCH AND FILTER PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION
-  PASSED**; GitHub Actions and staging smoke remain required.
+- Catalog search/filter: **CATALOG SEARCH AND FILTER PHASE 1 / DONE / MVP /
+  STAGING-SMOKE-PASSED** after green Actions, staging deploy and limited-dataset manual smoke.
+  Extended dataset coverage remains non-blocking deferred manual smoke in
+  `CATALOG-SEARCH-MANUAL-001`.
 - Guest Preview Phase 2.1: **VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY / DONE / MVP / STAGING-SMOKE-PASSED**.
 - Menu shift check: **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**; regression
   gates remain active.

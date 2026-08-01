@@ -135,6 +135,16 @@ SHOULD:
 ## Block 4 — Guest journey (catalog/booking/visit)
 MUST:
 - List venues with address, description, hours, menu preview and pricing.
+- Catalog Search and Filter Phase 1 is **CATALOG SEARCH AND FILTER PHASE 1 / DONE / MVP /
+  STAGING-SMOKE-PASSED**. Authenticated `GET /api/guest/catalog?q=&city=` uses optional trimmed
+  `q` and `city`; blank values are absent, values over 100 characters fail safely, `q` searches
+  name/city/address/formatted address case-insensitively, `city` is a case-insensitive exact match,
+  and combined filters use `AND`. User `%`, `_`, `!`, backslash and SQL-like input remain literal
+  through prepared parameters and explicit escaping.
+- Catalog filtering must preserve deterministic ordering, `PUBLISHED` plus guest-allowed
+  subscription/lifecycle guards, current-user favorites, today schedule/open state and batch-style
+  enrichment without N+1 reads. The Mini App uses backend `q`/`city`, 300 ms debounce,
+  abort/latest-response protection, distinct loading/error/empty/no-match states and reset.
 - Booking: user selects venue + date/time; venue confirms/changes/cancels.
 - Booking lifecycle, `Держим до HH:mm`, reminders, booking chat and no-show/seated semantics must follow `docs/BOOKING_LIFECYCLE.md`.
 - Booking status notifications (within Telegram constraints).
@@ -142,6 +152,10 @@ MUST:
 - Guest table context must survive normal Telegram/Mini App refreshes during a visit, but must not trap the guest forever. Mini App and Bot expose `Завершить визит` for the current guest/table context.
 SHOULD:
 - Favorites and history (Block 15) integrate with catalog.
+- Extended multi-venue catalog dataset regression is **NON-BLOCKING DEFERRED MANUAL SMOKE /
+  CATALOG-SEARCH-MANUAL-001**. It is required before catalog pagination, ranking, map/geo or a
+  large pilot rollout, but the limited current staging dataset does not downgrade the completed
+  Phase 1 MVP status.
 - Returning guest can safely restore an active table context while their table session/tab/order is still open, without rescanning QR. Manual `Завершить визит` stores a user-scoped exit marker so that guest no longer restores the table context; scanning the table QR again explicitly re-enters and clears that marker.
 - Manual guest exit is blocked only for that guest's obligations in the current `table_session`: active order/bill batches or active `NEW`/`ACK` staff calls created by the guest. Empty personal tabs and another guest's order/call at the same table do not block exit.
 - Current staging-smoked behavior: pre-visit venue card keeps address, route/copy address and booking actions; active table context hides those pre-visit actions and shows `Завершить визит`. Exiting does not close the shared physical `table_sessions` row for other guests.

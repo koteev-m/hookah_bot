@@ -1,6 +1,6 @@
 # Mini App Launch Smoke Checklist
 
-Дата: 2026-07-31.
+Дата: 2026-08-01.
 
 Цель: зафиксировать launch smoke/e2e coverage для core Mini App сценариев без изменения бизнес-логики. В `miniapp/package.json` есть `dev`, `build`, `preview` и минимальный browser smoke `e2e:smoke`. Поэтому стратегия на этот шаг гибридная:
 
@@ -12,10 +12,12 @@
 Актуальный scope после последних fix-pack'ов:
 
 - pre-QR Guest catalog/card shows only public venue info, booking entry and `ℹ️ Информация`; structured order menu is hidden until QR/table context.
-- Catalog Search and Filter Phase 1 is **CATALOG SEARCH AND FILTER PHASE 1 / MVP IMPLEMENTED /
-  LOCAL VALIDATION PASSED**: backend `q`/`city`, complete city options, 300 ms debounce,
+- Catalog Search and Filter Phase 1 is **CATALOG SEARCH AND FILTER PHASE 1 / DONE / MVP /
+  STAGING-SMOKE-PASSED**: backend `q`/`city`, complete city options, 300 ms debounce,
   abort/latest-response safety and favorite overrides passed local backend/build/browser validation
-  including full deterministic smoke `104/104`; GitHub Actions and staging smoke remain required.
+  including full deterministic smoke `104/104`; GitHub Actions were green, staging deploy completed
+  and manual staging smoke passed on the current limited venue dataset. Extended multi-venue
+  coverage remains **NON-BLOCKING DEFERRED MANUAL SMOKE / CATALOG-SEARCH-MANUAL-001**.
 - `📖 Фото-меню` is an info section, not the order menu.
 - info-section images/PDFs are loaded through backend media proxy.
 - Venue Owner/Manager/Staff Mini App entry must be opened through inline `web_app` buttons.
@@ -435,6 +437,11 @@ Steps:
 17. Switch Telegram account and confirm no previous query/filter/favorite override survives.
 18. Hide, suspend or subscription-block a matching venue and confirm search reveals neither its
     name nor address; restore it and confirm guarded visibility returns.
+
+Current limited-dataset staging smoke passed for the Phase 1 contract and venue-card regressions.
+This does not claim the extended multi-venue dataset scenarios below are complete. Their canonical
+status is **NON-BLOCKING DEFERRED MANUAL SMOKE / CATALOG-SEARCH-MANUAL-001** in
+[`docs/DEFERRED_MANUAL_SMOKE_BACKLOG.md`](../DEFERRED_MANUAL_SMOKE_BACKLOG.md#catalog-search-manual-001).
 
 ### QR/table order flow
 
@@ -1137,12 +1144,15 @@ Canonical model: `docs/DEPLOYMENT_RUNBOOK.md`.
 ## 21. Next Implementation Smoke Target
 
 Catalog search/filter status:
-**CATALOG SEARCH AND FILTER PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**.
+**CATALOG SEARCH AND FILTER PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**.
 Focused `GuestVenueRoutesTest`, backend compile, ktlint, Mini App production build, focused
 catalog/favorite browser checks and the prescribed full deterministic smoke `104/104` passed
 locally. The endpoint keeps complete unfiltered city-source semantics with no limit/pagination,
 existing availability/favorite/schedule guards and 300 ms debounce plus abort/latest protection.
-GitHub Actions and staging smoke remain required; do not mark this slice staging-smoke-passed yet.
+GitHub Actions were green, staging deploy completed and manual staging smoke passed on the current
+limited venue dataset. Extended multi-venue catalog regression is non-blocking and remains deferred
+under `CATALOG-SEARCH-MANUAL-001`; it is required before pagination, ranking, map/geo or a large
+pilot rollout and is not claimed as passed here.
 
 Menu Shift Check status: **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**.
 Focused backend route/repository/Guest/order/audit/Telegram regressions, Kotlin compile/lint, Mini
