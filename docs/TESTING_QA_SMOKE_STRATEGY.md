@@ -51,6 +51,73 @@ Target QA model:
 | E. Manual staging smoke | Prove real environment, Telegram WebView, staff-chat and deploy behavior. | Required after runtime/frontend/backend/Telegram/deploy changes; not required for docs-only. |
 | F. GitHub Actions | Release gate and source of CI truth. | Must be green before considering a task merged/released. If red, report failing test/assertion first, not Gradle tail. |
 
+## Staff Schedule Phase 1 Future Quality Gate
+
+Status: **SPEC READY / RUNTIME NOT IMPLEMENTED / NO MIGRATION EXPECTED**. The complete acceptance
+matrix is canonical in `docs/STAFF_PROFILES_SHIFTS_TIPS.md`; this section defines the release gate
+for its future runtime implementation.
+
+Required backend coverage:
+
+- Owner and Manager bounded create/update/cancel in their own venue;
+- Staff mutation, Guest, foreign venue and Platform-only denial;
+- Staff own-shift read plus safe non-canceled overlapping colleagues, with unrelated shifts and all
+  of the requester's own linked profiles excluded from colleague projections;
+- display-only profiles without self-view and without private linkage in Staff DTOs;
+- venue-local interpretation with explicit `Europe/Moscow` fail-safe, browser/system timezone
+  independence, DST handling and no trusted client offset/status;
+- overnight and inclusive 24-hour maximum; non-positive and over-24-hour rejection;
+- future-only create/update, 90-day create horizon, required bounded `from/to`, 31-day maximum query
+  and 30-day recent/90-day future read envelope;
+- one profile/start-date conflict, including concurrent create and date-changing update mapping;
+- computed scheduled/active/completed, stored canceled, no lifecycle worker, completed/canceled
+  immutability and active cancel-only policy;
+- cancel confirmation carries a non-authoritative expected confirmation state; crossing
+  `SCHEDULED -> ACTIVE` after preview is rejected and requires the stronger active confirmation;
+- expected-`updatedAt` stale rejection and no-op behavior; every real Schedule/related Today write
+  advances the round-tripped token, and two mutations with one token commit exactly one;
+- exactly one transaction-bound safe `STAFF_SHIFT_CREATED`, `STAFF_SHIFT_UPDATED` or
+  `STAFF_SHIFT_CANCELED` audit for a successful real mutation and none for no-op/denial/error/rollback;
+- planned times survive a Today request that omits them, schedule rows stay guest-hidden, an engaged
+  Today overlay blocks Schedule date/time moves, and current Staff Profile/Today Shift/Guest
+  `Сегодня работают` behavior remains unchanged.
+- any complete row invalid under the current venue timezone/DST/duration rules fails closed for
+  Staff overlap/self reads and returns a neutral safe Owner/Manager warning/repair contract instead
+  of guessing its origin, crashing or silently reinterpreting it; future-date rows follow
+  repair/cancel, venue-today rows cancel-only and past rows read-only.
+
+Required Mini App/e2e coverage:
+
+- Owner `График смен` week list/editor and Manager parity;
+- Staff read-only `Мои смены` with overlap-only colleagues and no admin controls;
+- week navigation, timezone copy and overnight rendering;
+- loading, optional empty, retryable error, update preview, cancel confirmation and active warning;
+- stale conflict offers refresh and never overwrites current state;
+- venue switch aborts/clears old data and ignores late responses; selected-venue persistence is
+  restored only after fresh access-list validation;
+- direct Staff mutation denial plus existing Staff Profiles/Today Shift and Guest regression.
+
+No Telegram behavior is added. Do not add reminders, outbox events, buttons, staff-chat messages or
+Telegram mutation UI to satisfy this gate.
+
+Local gate for the future runtime task:
+
+```bash
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VenueStaffRoutesTest*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VenueRbacRoutesTest*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*GuestVenueRoutesTest*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:compileKotlin --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:ktlintCheck --console=plain
+npm --prefix miniapp run build
+MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke
+git diff --check
+```
+
+Release gate: green GitHub Actions, staging deploy, Owner/Manager/Staff manual smoke, timezone and
+overnight smoke, two-account Staff privacy smoke, venue-switch stale-response smoke, unchanged
+Today/Guest smoke and cleanup of test rows. This docs-only specification task runs none of those
+runtime gates and requires no staging deploy.
+
 ## Catalog Search And Filter Phase 1 Quality Gate
 
 Status:
@@ -503,6 +570,7 @@ Expectations:
 | Support/tickets | `*Support*`, RBAC tests, Mini App build/e2e if UI changed. | Backend split + Mini App if affected. | Yes for runtime. | Guest/Venue/Platform support smoke. | Medium/high. |
 | Booking | `*VenueBookingRoutesTest*`, Guest booking/reminder tests if affected, Telegram tests if bot changed. | `backend-venue-booking-rbac`, Telegram lightweight where affected. | Yes for runtime. | Booking lifecycle smoke. | Medium/high. |
 | Menu/stop-list | Menu/availability route tests, order stale-availability tests, Mini App build/e2e if UI changed. | Backend + Mini App if affected. | Usually yes. | Menu/stop-list smoke. | Medium/high. |
+| Staff Schedule | `*VenueStaffRoutesTest*`, `*VenueRbacRoutesTest*`, `*GuestVenueRoutesTest*`, compile/lint, Mini App build/e2e. | Backend split + Mini App. | Yes for runtime. | Owner/Manager/Staff, timezone/overnight, two-account privacy, Today/Guest regression and venue switch. | High for privacy/time semantics. |
 | Guest history/growth | `*Visit*`, `*GuestVisitRoutesTest*`, Mini App build/e2e smoke for UI changes. | Backend split + Mini App if affected. | Yes for runtime. | Guest History or Growth checklist from `docs/GROWTH_RETENTION.md`. | Medium/high for privacy. |
 
 ## Standard Pre-Commit Workflow
@@ -612,6 +680,7 @@ If Gradle OOM occurs:
 | Guest communication | `docs/COMMUNICATION_MODEL.md` |
 | Order/session/tab | `docs/ORDER_SESSION_TAB_CORE.md` |
 | Venue operations | `docs/VENUE_OPERATIONS.md` |
+| Staff profiles / Today Shift / Staff Schedule | `docs/STAFF_PROFILES_SHIFTS_TIPS.md` |
 | Menu/stop-list | `docs/MENU_OPTIONS_STOPLIST.md` |
 | Venue media storage/upload | `docs/MEDIA_STORAGE_UPLOAD.md` |
 | Booking lifecycle | `docs/BOOKING_LIFECYCLE.md` |
@@ -728,6 +797,20 @@ Venue operations:
 - booking queue works if implemented;
 - staff-chat receives order/call only.
 
+Staff Schedule Phase 1, after runtime implementation:
+- Owner and Manager open `График смен`, navigate weeks, create/edit a future ordinary shift and
+  create an overnight shift with `следующий день` copy;
+- active shift has no edit action and requires stronger cancel confirmation; completed/canceled is
+  immutable;
+- Staff opens `Мои смены`, sees only own rows and colleagues overlapping each row, including one
+  display-only colleague, with no private account/Telegram fields or admin actions;
+- a second Staff account with no overlap sees no colleague/full-venue schedule;
+- stale update is rejected and refresh loads the other actor's state;
+- switching venue during a delayed request clears the old week and ignores its late response;
+- a scheduled row never appears in Guest `Сегодня работают`; manual Today Shift still controls
+  Guest presence and does not erase planned times;
+- no Telegram reminder/button, staff-chat message or outbox event is created.
+
 Menu/stop-list:
 - Owner toggles item unavailable;
 - guest cannot submit stale unavailable cart;
@@ -828,6 +911,9 @@ Telegram/staff-chat:
 - Advanced support and billing/provider features remain future unless implemented and smoked. Growth remains partial, but Post-Visit Feedback MVP and venue-only Guest Favorites Phase 1 are staging-smoke-passed and stay in regression. Repeat Phase 1 is locally validated with deferred manual smoke in `REPEAT-MANUAL-001`; persistent templates, favorite menu items/options, recommendations/frequent items, notification opt-in, favorites-based promotions and loyalty remain future until their own bounded implementation evidence exists.
 - Menu shift check is **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED** and stays
   in regression. Per-venue `staff_stoplist_enabled` remains future.
+- Staff Schedule Phase 1 is `SPEC READY / RUNTIME NOT IMPLEMENTED`; its privacy/timezone/Today
+  compatibility gates are not passed until a future implementation completes local, CI and staging
+  validation.
 - Staff-chat delivery history/personal notifications/topic routing remain future.
 - CI coverage is strong for release-critical slices but not proof of every product scenario; area smoke checklists remain necessary.
 
@@ -841,6 +927,7 @@ Telegram/staff-chat:
 - Guest Preview Phase 2.1: **VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY / DONE / MVP / STAGING-SMOKE-PASSED**.
 - Menu shift check: **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**; regression
   gates remain active.
+- Staff Schedule Phase 1: `SPEC READY / RUNTIME NOT IMPLEMENTED / NO MIGRATION EXPECTED`.
 - Manual smoke checklist: `CONSOLIDATED`.
 - CI coverage: `PARTIAL / release-critical split jobs current`.
 - Frontend e2e: `PARTIAL`, with smoke coverage documented.

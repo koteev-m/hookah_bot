@@ -1,6 +1,6 @@
 # Venue Mode Operations Model
 
-Дата актуализации: 2026-07-31.
+Дата актуализации: 2026-08-01.
 
 Статус: **current product reference / SPEC UPDATED**. Core Venue operations are partly smoke-closed across orders, bill display, staff calls, bookings, confirmed-only booking arrival actions, state-aware staff-chat booking shortcuts, staff-chat, menu options and settings slices. The bounded shift-check slice is **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**. The full Venue Mode implementation is still **PARTIAL / needs verification** for broad dashboard completeness, arbitrary stats, remaining dangerous-action audit coverage, broader settings parity and deep cross-surface e2e.
 
@@ -17,7 +17,8 @@ Canonical dependencies:
 - `docs/BOOKING_LIFECYCLE.md` for booking statuses, hold/deadline, reminders, booking chat and no-show/seated policy.
 - `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md` for Telegram bot entrypoints, fallback order, staff-call callbacks, staff-chat link/test/unlink, notification policy and callback security.
 - `docs/SECURITY_RBAC_MATRIX.md` for roles, permissions, scopes and dangerous actions.
-- `docs/STAFF_PROFILES_SHIFTS_TIPS.md` for public staff profiles, today's visible staff and future staff-tip boundaries.
+- `docs/STAFF_PROFILES_SHIFTS_TIPS.md` for public staff profiles, manual Today Shift, optional Staff
+  Schedule Phase 1 and future staff-tip boundaries.
 - `docs/ANALYTICS_EVENTS.md` for operational events, KPIs, audit/event boundaries and dashboard targets.
 - `docs/TESTING_QA_SMOKE_STRATEGY.md` for validation commands, staging policy and operational smoke strategy.
 - `docs/DEPLOYMENT_RUNBOOK.md` for release/deploy, logs, staging smoke and incident operations.
@@ -36,7 +37,8 @@ Canonical dependencies:
 | Stop-list | Fast operational availability toggles. | Item/option availability parity is documented for current Staff/Manager/Owner paths; shift-check mass changes use an OWNER/MANAGER-only local draft and one batch confirmation. | Per-venue `staff_stoplist_enabled` and audit completeness outside shift check remain future/partial. |
 | Tables / QR | Physical table inventory and QR context. | Tables/QR basics exist; table-session runtime behavior is documented separately. | Single table CRUD/diagnostics/QR rotate audit need verification. |
 | Staff / invites | Membership, roles and invite links. | Staff/Manager invite sharing and acceptance are staging-smoked; Platform Owner OWNER invite/revoke is smoke-closed. | Role parity still needs regression after new routes. |
-| Staff profiles / today shift | Guest-visible opt-in staff profiles and manual "today on shift". | Phase 1 backend + Mini App implementation exists and smoke passed; both server-selected Guest Preview modes preserve the public-profile/visible-shift filters. | Tips and safe consent-based photo upload remain future. |
+| Staff profiles / today shift | Guest-visible opt-in staff profiles and manual "today on shift". | Phase 1 is DONE / MVP / STAGING-SMOKE-PASSED. Both server-selected Guest Preview modes preserve the public-profile/visible-shift filters. | Tips and safe consent-based photo upload remain future. |
+| Staff schedule | Optional venue-local planning of one shift per profile/start-date. | Phase 1 canonical spec is ready; runtime is not implemented. | Owner/Manager bounded week management and Staff own/overlap read only; no Guest, Telegram, reminder, payroll or Today-source migration. |
 | Staff-chat | Linked group diagnostics and operational notifications. | Link/test/unlink, live order activity-card behavior and state-aware booking shortcuts are smoke-closed. | Personal staff notifications and unified event policy remain future. |
 | Feedback | Internal post-visit feedback from completed Guest History. | DONE / MVP / staging-smoke-passed: Owner/Manager read own-venue aggregate/list and can manually open exact `VENUE_CHAT` follow-up for ratings `1..3`; Staff denied. | Platform feedback analytics dashboard and automated prompts remain future. |
 | Settings / card preview | Venue profile, schedule, booking hold, extension, staff-chat and read-only public-card preview. | Booking hold, shift extension, public profile/card, schedule/date exceptions and Owner-only public review link are smoke-closed. One `Предпросмотр для гостя` entry uses one backend-selected `PUBLISHED_PUBLIC` / own-venue `PRIVATE_DRAFT` endpoint and is **DONE / MVP / STAGING-SMOKE-PASSED**. Unsaved public-card, weekly-schedule and date-exception changes block preview without auto-save. | Broader settings/media authoring, versioned snapshots and publish workflow remain future; archived/deleted/missing venues continue to fail closed. |
@@ -300,7 +302,7 @@ Current vs target:
 - Platform Owner can invite/revoke Venue Owner with last-owner protection.
 - Broader staff management parity should stay in role smoke after new routes.
 
-## Staff Profiles / Today Shift
+## Staff Profiles / Today Shift / Staff Schedule
 
 Canonical spec: `docs/STAFF_PROFILES_SHIFTS_TIPS.md`.
 
@@ -318,8 +320,19 @@ Phase 1 implementation:
   name, role/custom role, bio/tags and safe placeholder/photo only.
 - No staff tips or payments are implemented in Phase 1.
 
-Future:
-- `STAFF_SCHEDULE` full future-date shift calendar, staff availability, shift swaps and reminders;
+Staff Schedule Phase 1 target, not current runtime:
+- `График смен` is an optional section under `Работа смены`; an empty graph blocks no existing flow
+  and there is no enable/disable setting;
+- Owner/Manager manage one future interval per staff profile and venue-local start date in a bounded
+  week list; Staff sees `Мои смены` and safe colleagues only where intervals overlap;
+- local date/time, overnight, DST, 90-day horizon, computed lifecycle, optimistic concurrency,
+  atomic audit and privacy follow `docs/STAFF_PROFILES_SHIFTS_TIPS.md`;
+- schedule rows never auto-publish to Guest, and current manual Today Shift plus Guest
+  `Сегодня работают` remain unchanged;
+- no new Telegram or staff-chat flow is part of the slice.
+
+Future outside Schedule Phase 1:
+- staff availability, shift swaps, recurring templates, reminders and attendance;
 - personal Telegram shift confirmations/sign-up, with Venue Mode schedule as source of truth;
 - photo upload/media picker with consent, moderation and safe storage;
 - separate staff communication chat/forum topics only after an explicit product decision;
@@ -473,6 +486,7 @@ Current vs target:
 | Stop-list | Existing immediate Bot paths remain unchanged. | Item/option parity documented/smoked; shift-check draft/mass confirmation is OWNER/MANAGER-only. | Callback shortcuts only if role-checked. | Per-venue Staff stop-list flag future. | Regression/P2 |
 | Tables/QR | Bot table flows exist. | Basics exist. | No. | QR rotate audit/diagnostics need verification. | P2 |
 | Staff invites | Bot invite acceptance exists. | Copy/share invite result smoke-closed. | No. | Keep role denial/last-owner protection in regression. | Regression |
+| Staff schedule | No Phase 1 flow. | Spec ready; runtime not implemented. Target labels are `График смен` for Owner/Manager and `Мои смены` for Staff. | No Phase 1 event/button. | Venue Mini App only; bounded own-venue management/read and Today/Guest compatibility per canonical staff spec. | Next bounded runtime slice |
 | Staff-chat link/test | Bot link command exists. | M6 link/test/unlink smoke-closed. | Target group. | Personal notifications future. | Regression |
 | Settings / card preview | Bot and Mini App share the public review URL source; Bot remains richer in info-section/media authoring. | Backend-backed slices include Owner-only `Ссылка для отзывов` and one read-only `Предпросмотр для гостя` screen with server-selected `PUBLISHED_PUBLIC` / `PRIVATE_DRAFT`; preview is **DONE / MVP / STAGING-SMOKE-PASSED**. | No. | Keep exact Guest parity, saved-private allowlist, dirty-state guard, RBAC/privacy/media scope and lifecycle/stale-state boundaries in regression; media upload remains a separate future block. | Regression/P2 |
 | Stats | Bot stats exist. | Read-only stats smoke-closed. | No. | Custom ranges/advanced analytics future. | P2 |
@@ -491,6 +505,8 @@ Current vs target:
   `staff_stoplist_enabled` remains future.
 - Manager broad `MENU_MANAGE` remains a product-policy decision: keep and test it, or narrow to stop-list/shift check/basic availability.
 - Staff-chat notification policy is documented for orders/calls/bookings and explicitly excludes support, venue chats and post-visit feedback/follow-up context; personal staff notifications remain future.
+- Staff Schedule Phase 1 is implementation-ready in the canonical staff spec but has no runtime;
+  it must reuse `staff_shifts` without auto-publishing to Guest or adding Telegram flows.
 - Multi-venue selector/entry should stay in regression for users with several venue memberships.
 
 ## Roadmap Status
@@ -508,6 +524,7 @@ Current vs target:
 - Stop-list parity: current individual item/option parity remains documented; per-venue Staff
   policy remains future.
 - Staff-chat source-of-truth policy: `DOCUMENTED`.
+- Staff Schedule Phase 1: `SPEC READY / RUNTIME NOT IMPLEMENTED / NO MIGRATION EXPECTED`.
 
 ## Operational Smoke Checklist
 
