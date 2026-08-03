@@ -303,6 +303,110 @@ export type VenueStaffTodayShiftsResponse = {
   shifts: VenueStaffShiftDto[]
 }
 
+export type VenueStaffScheduleComputedStatus =
+  | 'scheduled'
+  | 'active'
+  | 'completed'
+  | 'canceled'
+  | string
+
+export type VenueStaffScheduleConfirmationState =
+  | 'SCHEDULED'
+  | 'ACTIVE'
+  | 'INVALID_INTERVAL'
+  | string
+
+export type VenueStaffScheduleWarningDto = {
+  code: string
+  message: string
+  allowedActions: string[]
+}
+
+export type VenueStaffScheduleAdminShiftDto = {
+  id: number
+  staffProfileId: number
+  displayName: string
+  roleLabel?: string | null
+  subtype: VenueStaffProfileSubtype
+  shiftDate: string
+  startsAt: string
+  endsAt: string
+  endsNextDay: boolean
+  computedStatus?: VenueStaffScheduleComputedStatus | null
+  cancelConfirmationState?: VenueStaffScheduleConfirmationState | null
+  updatedAt: string
+  storedStatus: VenueStaffShiftStatus
+  isGuestVisible: boolean
+  manuallyMarkedActive: boolean
+  warning?: VenueStaffScheduleWarningDto | null
+}
+
+export type VenueStaffScheduleListResponse = {
+  venueId: number
+  venueName?: string | null
+  timezone: string
+  venueToday: string
+  from: string
+  to: string
+  shifts: VenueStaffScheduleAdminShiftDto[]
+}
+
+export type VenueStaffScheduleCreateRequest = {
+  staffProfileId: number
+  shiftDate: string
+  startsAt: string
+  endsAt: string
+}
+
+export type VenueStaffScheduleUpdateRequest = {
+  shiftDate: string
+  startsAt: string
+  endsAt: string
+  expectedUpdatedAt: string
+}
+
+export type VenueStaffScheduleCancelRequest = {
+  expectedUpdatedAt: string
+  expectedConfirmationState: VenueStaffScheduleConfirmationState
+}
+
+export type VenueStaffScheduleMutationResponse = {
+  shift: VenueStaffScheduleAdminShiftDto
+}
+
+export type VenueStaffScheduleColleagueDto = {
+  staffProfileId: number
+  displayName: string
+  roleLabel?: string | null
+  subtype: VenueStaffProfileSubtype
+  shiftDate: string
+  startsAt: string
+  endsAt: string
+  endsNextDay: boolean
+  computedStatus: VenueStaffScheduleComputedStatus
+}
+
+export type VenueStaffScheduleOwnShiftDto = {
+  id: number
+  staffProfileId: number
+  shiftDate: string
+  startsAt: string
+  endsAt: string
+  endsNextDay: boolean
+  computedStatus: VenueStaffScheduleComputedStatus
+  colleagues: VenueStaffScheduleColleagueDto[]
+}
+
+export type VenueStaffScheduleOwnListResponse = {
+  venueId: number
+  venueName?: string | null
+  timezone: string
+  venueToday: string
+  from: string
+  to: string
+  shifts: VenueStaffScheduleOwnShiftDto[]
+}
+
 export type VenueStaffInviteRequest = {
   role: 'OWNER' | 'MANAGER' | 'STAFF'
   expiresIn?: number

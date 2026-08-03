@@ -25,6 +25,7 @@ import { renderVenuePromotionsScreen } from './venuePromotions'
 import { renderVenueSettingsScreen } from './venueSettings'
 import { renderVenueShiftExtensionsScreen } from './venueShiftExtensions'
 import { renderVenueStaffScreen } from './venueStaff'
+import { renderVenueStaffScheduleScreen } from './venueStaffSchedule'
 import { renderVenueStatsScreen } from './venueStats'
 import { renderVenueSubscriptionScreen } from './venueSubscription'
 import { renderVenueTablesScreen } from './venueTables'
@@ -46,6 +47,7 @@ type RouteName =
   | 'menu'
   | 'tables'
   | 'staff'
+  | 'shifts'
   | 'stats'
   | 'feedback'
   | 'settings'
@@ -111,6 +113,7 @@ function resolveRoute(): Route {
       'menu',
       'tables',
       'staff',
+      'shifts',
       'stats',
       'feedback',
       'settings',
@@ -184,6 +187,7 @@ function buildVenueShell(root: HTMLDivElement): VenueShellRefs {
     menu: el('button', { className: 'nav-button', text: 'Заказное меню' }) as HTMLButtonElement,
     tables: el('button', { className: 'nav-button', text: 'Столы и QR' }) as HTMLButtonElement,
     staff: el('button', { className: 'nav-button', text: 'Персонал' }) as HTMLButtonElement,
+    shifts: el('button', { className: 'nav-button', text: 'График смен' }) as HTMLButtonElement,
     stats: el('button', { className: 'nav-button', text: 'Статистика' }) as HTMLButtonElement,
     feedback: el('button', { className: 'nav-button', text: 'Отзывы' }) as HTMLButtonElement,
     settings: el('button', { className: 'nav-button', text: 'Настройки' }) as HTMLButtonElement,
@@ -201,7 +205,8 @@ function buildVenueShell(root: HTMLDivElement): VenueShellRefs {
         navButtons.bookings,
         navButtons.messages,
         navButtons.calls,
-        navButtons.extensions
+        navButtons.extensions,
+        navButtons.shifts
       ]
     },
     {
@@ -410,7 +415,22 @@ export function mountVenueApp(options: VenueAppOptions) {
     refs.venueSelect.hidden = accessList.length <= 1
     refs.venueSelect.disabled = accessList.length <= 1
     updateAccessFromSelection()
+    persistSelectedVenue()
     render()
+  }
+
+  const persistSelectedVenue = () => {
+    const nextUrl = new URL(window.location.href)
+    const allowedSelection =
+      selectedVenueId != null && accessList.some((venue) => venue.venueId === selectedVenueId)
+        ? selectedVenueId
+        : null
+    if (allowedSelection) {
+      nextUrl.searchParams.set('venueId', String(allowedSelection))
+    } else {
+      nextUrl.searchParams.delete('venueId')
+    }
+    window.history.replaceState(null, '', `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`)
   }
 
   const updateAccessFromSelection = () => {
@@ -438,6 +458,9 @@ export function mountVenueApp(options: VenueAppOptions) {
     refs.navButtons.promotions.hidden = currentRole !== 'OWNER' && currentRole !== 'MANAGER'
     refs.navButtons.tables.hidden = !hasPermission('TABLE_VIEW')
     refs.navButtons.staff.hidden = currentRole === 'STAFF'
+    refs.navButtons.shifts.hidden =
+      !hasPermission('STAFF_SCHEDULE_VIEW') && !hasPermission('STAFF_SCHEDULE_VIEW_OWN')
+    refs.navButtons.shifts.textContent = currentRole === 'STAFF' ? 'Мои смены' : 'График смен'
     refs.navButtons.stats.hidden = currentRole !== 'OWNER' && currentRole !== 'MANAGER'
     refs.navButtons.feedback.hidden = !hasPermission('FEEDBACK_VIEW')
     refs.navButtons.subscription.hidden = currentRole !== 'OWNER'
@@ -476,6 +499,8 @@ export function mountVenueApp(options: VenueAppOptions) {
         return currentRole === 'OWNER'
       case 'staff':
         return currentRole !== 'STAFF'
+      case 'shifts':
+        return hasPermission('STAFF_SCHEDULE_VIEW') || hasPermission('STAFF_SCHEDULE_VIEW_OWN')
       case 'stats':
         return currentRole === 'OWNER' || currentRole === 'MANAGER'
       case 'feedback':
@@ -580,6 +605,14 @@ export function mountVenueApp(options: VenueAppOptions) {
           access,
           currentUserId: currentUserId ?? 0
         })
+      case 'shifts':
+        return renderVenueStaffScheduleScreen({
+          root: screenRoot,
+          backendUrl,
+          isDebug,
+          venueId,
+          access
+        })
       case 'stats':
         return renderVenueStatsScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
       case 'feedback':
@@ -629,6 +662,7 @@ export function mountVenueApp(options: VenueAppOptions) {
   disposables.push(on(refs.navButtons.promotions, 'click', () => navigate('#/promotions')))
   disposables.push(on(refs.navButtons.tables, 'click', () => navigate('#/tables')))
   disposables.push(on(refs.navButtons.staff, 'click', () => navigate('#/staff')))
+  disposables.push(on(refs.navButtons.shifts, 'click', () => navigate('#/shifts')))
   disposables.push(on(refs.navButtons.stats, 'click', () => navigate('#/stats')))
   disposables.push(on(refs.navButtons.feedback, 'click', () => navigate('#/feedback')))
   disposables.push(on(refs.navButtons.settings, 'click', () => navigate('#/settings')))
@@ -638,6 +672,7 @@ export function mountVenueApp(options: VenueAppOptions) {
   disposables.push(
     on(refs.venueSelect, 'change', () => {
       updateAccessFromSelection()
+      persistSelectedVenue()
       render()
     })
   )

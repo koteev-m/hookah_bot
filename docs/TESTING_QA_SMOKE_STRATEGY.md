@@ -34,6 +34,10 @@ Current practice:
   staging deploy completed and manual staging smoke passed on the current limited venue dataset.
   Extended multi-venue coverage remains **NON-BLOCKING DEFERRED MANUAL SMOKE /
   CATALOG-SEARCH-MANUAL-001** and does not downgrade the completed MVP.
+- Staff Schedule is
+  **STAFF SCHEDULE PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**. Migration verdict is
+  **NO_MIGRATION_EXPECTED**. Green Actions and staging smoke are pending, so production readiness
+  is not claimed.
 
 Target QA model:
 - Every task ends with changed files, behavior summary, tests run, validation result, manual smoke checklist, `git status --short`, whether `scripts/dev/` was touched and whether staging deploy is needed.
@@ -51,19 +55,22 @@ Target QA model:
 | E. Manual staging smoke | Prove real environment, Telegram WebView, staff-chat and deploy behavior. | Required after runtime/frontend/backend/Telegram/deploy changes; not required for docs-only. |
 | F. GitHub Actions | Release gate and source of CI truth. | Must be green before considering a task merged/released. If red, report failing test/assertion first, not Gradle tail. |
 
-## Staff Schedule Phase 1 Future Quality Gate
+## Staff Schedule Phase 1 Release Quality Gate
 
-Status: **SPEC READY / RUNTIME NOT IMPLEMENTED / NO MIGRATION EXPECTED**. The complete acceptance
-matrix is canonical in `docs/STAFF_PROFILES_SHIFTS_TIPS.md`; this section defines the release gate
-for its future runtime implementation.
+Status: **STAFF SCHEDULE PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**.
+Migration verdict: **NO_MIGRATION_EXPECTED**. Green Actions and staging smoke are pending; do not
+claim production readiness until both pass. The complete acceptance matrix remains canonical in
+`docs/STAFF_PROFILES_SHIFTS_TIPS.md`; this section defines the remaining CI/staging release gates.
 
-Required backend coverage:
+Locally validated backend coverage:
 
 - Owner and Manager bounded create/update/cancel in their own venue;
 - Staff mutation, Guest, foreign venue and Platform-only denial;
 - Staff own-shift read plus safe non-canceled overlapping colleagues, with unrelated shifts and all
   of the requester's own linked profiles excluded from colleague projections;
-- display-only profiles without self-view and without private linkage in Staff DTOs;
+- colleague DTOs may include the safe profile identifier `staffProfileId` plus display/schedule
+  fields, but exclude shift-row ids, linked user/account ids, Telegram fields, `updatedAt`,
+  guest-visibility flags and admin/mutation metadata; display-only profiles have no self-view;
 - venue-local interpretation with explicit `Europe/Moscow` fail-safe, browser/system timezone
   independence, DST handling and no trusted client offset/status;
 - overnight and inclusive 24-hour maximum; non-positive and over-24-hour rejection;
@@ -86,7 +93,7 @@ Required backend coverage:
   of guessing its origin, crashing or silently reinterpreting it; future-date rows follow
   repair/cancel, venue-today rows cancel-only and past rows read-only.
 
-Required Mini App/e2e coverage:
+Locally validated Mini App/e2e coverage:
 
 - Owner `График смен` week list/editor and Manager parity;
 - Staff read-only `Мои смены` with overlap-only colleagues and no admin controls;
@@ -100,7 +107,7 @@ Required Mini App/e2e coverage:
 No Telegram behavior is added. Do not add reminders, outbox events, buttons, staff-chat messages or
 Telegram mutation UI to satisfy this gate.
 
-Local gate for the future runtime task:
+Recorded local gate:
 
 ```bash
 ./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VenueStaffRoutesTest*' --console=plain
@@ -109,14 +116,16 @@ Local gate for the future runtime task:
 ./gradlew --no-daemon --max-workers=1 :backend:app:compileKotlin --console=plain
 ./gradlew --no-daemon --max-workers=1 :backend:app:ktlintCheck --console=plain
 npm --prefix miniapp run build
-MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke
+CI=1 TZ=UTC MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke
 git diff --check
 ```
 
-Release gate: green GitHub Actions, staging deploy, Owner/Manager/Staff manual smoke, timezone and
-overnight smoke, two-account Staff privacy smoke, venue-switch stale-response smoke, unchanged
-Today/Guest smoke and cleanup of test rows. This docs-only specification task runs none of those
-runtime gates and requires no staging deploy.
+Recorded local evidence: all listed backend selectors, backend compile/lint, Mini App build,
+`git diff --check` and the full deterministic browser smoke (`109/109`) passed.
+
+Remaining release gate: green GitHub Actions, staging deploy, Owner/Manager/Staff manual smoke,
+timezone and overnight smoke, two-account Staff privacy smoke, venue-switch stale-response smoke,
+unchanged Today/Guest smoke and cleanup of test rows.
 
 ## Catalog Search And Filter Phase 1 Quality Gate
 
@@ -797,13 +806,14 @@ Venue operations:
 - booking queue works if implemented;
 - staff-chat receives order/call only.
 
-Staff Schedule Phase 1, after runtime implementation:
+Staff Schedule Phase 1 staging smoke (pending):
 - Owner and Manager open `График смен`, navigate weeks, create/edit a future ordinary shift and
   create an overnight shift with `следующий день` copy;
 - active shift has no edit action and requires stronger cancel confirmation; completed/canceled is
   immutable;
 - Staff opens `Мои смены`, sees only own rows and colleagues overlapping each row, including one
-  display-only colleague, with no private account/Telegram fields or admin actions;
+  display-only colleague; safe `staffProfileId` is allowed, while shift-row ids, private
+  account/Telegram linkage and admin actions are absent;
 - a second Staff account with no overlap sees no colleague/full-venue schedule;
 - stale update is rejected and refresh loads the other actor's state;
 - switching venue during a delayed request clears the old week and ignores its late response;
@@ -911,9 +921,10 @@ Telegram/staff-chat:
 - Advanced support and billing/provider features remain future unless implemented and smoked. Growth remains partial, but Post-Visit Feedback MVP and venue-only Guest Favorites Phase 1 are staging-smoke-passed and stay in regression. Repeat Phase 1 is locally validated with deferred manual smoke in `REPEAT-MANUAL-001`; persistent templates, favorite menu items/options, recommendations/frequent items, notification opt-in, favorites-based promotions and loyalty remain future until their own bounded implementation evidence exists.
 - Menu shift check is **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED** and stays
   in regression. Per-venue `staff_stoplist_enabled` remains future.
-- Staff Schedule Phase 1 is `SPEC READY / RUNTIME NOT IMPLEMENTED`; its privacy/timezone/Today
-  compatibility gates are not passed until a future implementation completes local, CI and staging
-  validation.
+- Staff Schedule Phase 1 is
+  `STAFF SCHEDULE PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED`; privacy/timezone/Today
+  compatibility gates passed locally. Green Actions and staging smoke remain pending, so
+  production readiness is not claimed.
 - Staff-chat delivery history/personal notifications/topic routing remain future.
 - CI coverage is strong for release-critical slices but not proof of every product scenario; area smoke checklists remain necessary.
 
@@ -927,7 +938,8 @@ Telegram/staff-chat:
 - Guest Preview Phase 2.1: **VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY / DONE / MVP / STAGING-SMOKE-PASSED**.
 - Menu shift check: **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**; regression
   gates remain active.
-- Staff Schedule Phase 1: `SPEC READY / RUNTIME NOT IMPLEMENTED / NO MIGRATION EXPECTED`.
+- Staff Schedule Phase 1: `STAFF SCHEDULE PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED`;
+  migration verdict `NO_MIGRATION_EXPECTED`; green Actions and staging smoke remain pending.
 - Manual smoke checklist: `CONSOLIDATED`.
 - CI coverage: `PARTIAL / release-critical split jobs current`.
 - Frontend e2e: `PARTIAL`, with smoke coverage documented.

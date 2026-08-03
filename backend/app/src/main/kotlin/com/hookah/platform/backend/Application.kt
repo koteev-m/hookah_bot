@@ -93,6 +93,7 @@ import com.hookah.platform.backend.miniapp.venue.venueGuestPreviewRoutes
 import com.hookah.platform.backend.miniapp.venue.venueRoutes
 import com.hookah.platform.backend.miniapp.venue.venueStaffCallRoutes
 import com.hookah.platform.backend.miniapp.venue.venueStaffRoutes
+import com.hookah.platform.backend.miniapp.venue.venueStaffScheduleRoutes
 import com.hookah.platform.backend.platform.PlatformConfig
 import com.hookah.platform.backend.platform.PlatformSubscriptionSettingsRepository
 import com.hookah.platform.backend.platform.PlatformUserRepository
@@ -221,6 +222,7 @@ import kotlinx.serialization.json.put
 import org.slf4j.LoggerFactory
 import java.io.File
 import java.net.URI
+import java.time.Clock
 import java.time.Duration
 import java.time.Instant
 import java.time.format.DateTimeFormatter
@@ -253,6 +255,7 @@ internal data class ModuleOverrides(
     val staffChatNotifier: StaffChatNotifier? = null,
     val staffBillUpdateNotifier: StaffBillUpdateNotifier? = null,
     val venueLocationProvider: VenueLocationProvider? = null,
+    val staffScheduleClock: Clock? = null,
 )
 
 private fun ApplicationCall.isApiRequest(): Boolean {
@@ -1217,6 +1220,13 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     venueOwnerAccountRepository = venueOwnerAccountRepository,
                     auditLogRepository = auditLogRepository,
                     telegramBotUsername = telegramConfig.botUsername,
+                )
+                venueStaffScheduleRoutes(
+                    venueAccessRepository = venueAccessRepository,
+                    venueStaffProfileRepository = venueStaffProfileRepository,
+                    venueSettingsRepository = venueSettingsRepository,
+                    auditLogRepository = auditLogRepository,
+                    clock = overrides.staffScheduleClock ?: Clock.systemUTC(),
                 )
                 venueStaffCallRoutes(
                     venueAccessRepository = venueAccessRepository,

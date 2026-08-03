@@ -1546,6 +1546,191 @@ input[type="number"] {
   line-height: 1.45;
 }
 
+.venue-staff-schedule,
+.venue-schedule-week,
+.venue-schedule-day,
+.venue-schedule-form,
+.venue-schedule-confirmation,
+.venue-schedule-confirmation-summary,
+.venue-schedule-summary-lines {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.venue-schedule-header {
+  display: grid;
+  gap: 0.65rem;
+  margin-top: 0;
+}
+
+.venue-schedule-heading-row,
+.venue-schedule-week-navigation,
+.venue-schedule-shift,
+.venue-schedule-shift-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+}
+
+.venue-schedule-heading-row,
+.venue-schedule-shift {
+  justify-content: space-between;
+}
+
+.venue-schedule-heading-row h2,
+.venue-schedule-day h3,
+.venue-schedule-summary-lines p,
+.venue-schedule-status,
+.venue-schedule-timezone,
+.venue-schedule-interval,
+.venue-schedule-row-warning,
+.venue-schedule-today-overlay,
+.venue-schedule-active-warning {
+  margin: 0;
+}
+
+.venue-schedule-week-navigation {
+  justify-content: flex-start;
+}
+
+.venue-schedule-week-label {
+  min-width: 13rem;
+  color: #25324d;
+  font-weight: 700;
+  text-align: center;
+}
+
+.venue-schedule-timezone {
+  padding: 0.55rem 0.65rem;
+  border-radius: 8px;
+  background: #f1f5f9;
+}
+
+.venue-schedule-day {
+  margin-top: 0;
+}
+
+.venue-schedule-shift {
+  padding: 0.75rem;
+  border: 1px solid #e5e7f2;
+  border-radius: 10px;
+  background: #f8fafc;
+  align-items: flex-start;
+}
+
+.venue-schedule-shift-main,
+.venue-schedule-own-shift {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.venue-schedule-shift-main {
+  min-width: min(100%, 15rem);
+  flex: 1 1 15rem;
+}
+
+.venue-schedule-interval {
+  color: #1e293b;
+  font-weight: 650;
+}
+
+.venue-schedule-lifecycle {
+  width: fit-content;
+  padding: 0.2rem 0.45rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #334155;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.venue-schedule-lifecycle[data-tone='scheduled'] {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.venue-schedule-lifecycle[data-tone='active'] {
+  border-color: #86efac;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.venue-schedule-lifecycle[data-tone='completed'] {
+  border-color: #cbd5e1;
+  background: #f1f5f9;
+  color: #475569;
+}
+
+.venue-schedule-lifecycle[data-tone='canceled'],
+.venue-schedule-lifecycle[data-tone='warning'] {
+  border-color: #fde68a;
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.venue-schedule-row-warning,
+.venue-schedule-today-overlay,
+.venue-schedule-active-warning {
+  padding: 0.55rem 0.65rem;
+  border-radius: 8px;
+  background: #fffbeb;
+  color: #92400e;
+  font-size: 0.88rem;
+  line-height: 1.35;
+}
+
+.venue-schedule-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: 0.75rem;
+}
+
+.venue-schedule-field {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.venue-schedule-overnight-hint {
+  padding: 0.55rem 0.65rem;
+  border-radius: 8px;
+  background: #eef2ff;
+}
+
+.venue-schedule-colleagues {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding-left: 1.2rem;
+  color: #334155;
+  font-size: 0.9rem;
+}
+
+.venue-schedule-empty,
+.venue-schedule-loading {
+  margin-top: 0;
+  color: #64748b;
+}
+
+@media (max-width: 640px) {
+  .venue-schedule-week-navigation > button,
+  .venue-schedule-week-label {
+    flex: 1 1 8rem;
+  }
+
+  .venue-schedule-week-label {
+    order: -1;
+    flex-basis: 100%;
+  }
+
+  .venue-schedule-shift-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+}
+
 .venue-checkbox-label {
   display: inline-flex;
   gap: 0.4rem;

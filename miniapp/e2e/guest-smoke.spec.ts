@@ -4355,6 +4355,311 @@ async function mockVenueStaffChatApi(
   }
 }
 
+type VenueStaffScheduleAccessFixture = {
+  venueId: number
+  venueName: string
+  venueCity: string
+  venueStatus: string
+  role: 'OWNER' | 'MANAGER' | 'STAFF'
+  permissions: string[]
+}
+
+type VenueStaffScheduleAdminShiftFixture = {
+  id: number
+  staffProfileId: number
+  displayName: string
+  roleLabel?: string | null
+  subtype: string
+  shiftDate: string
+  startsAt: string
+  endsAt: string
+  endsNextDay: boolean
+  computedStatus: string | null
+  cancelConfirmationState: string | null
+  updatedAt: string
+  storedStatus: string
+  isGuestVisible: boolean
+  manuallyMarkedActive: boolean
+}
+
+async function mockVenueStaffScheduleApi(
+  page: Page,
+  options: {
+    accesses?: VenueStaffScheduleAccessFixture[]
+    adminShifts?: Record<number, VenueStaffScheduleAdminShiftFixture[]>
+    ownShifts?: Record<number, Array<Record<string, unknown>>>
+  } = {}
+) {
+  const accesses =
+    options.accesses ??
+    [
+      {
+        venueId: 1,
+        venueName: 'Микс',
+        venueCity: 'Москва',
+        venueStatus: 'PUBLISHED',
+        role: 'OWNER' as const,
+        permissions: ['STAFF_SCHEDULE_VIEW', 'STAFF_SCHEDULE_MANAGE']
+      }
+    ]
+  const defaultAdminShift = (venueId: number): VenueStaffScheduleAdminShiftFixture => ({
+    id: venueId * 1000 + 1,
+    staffProfileId: venueId * 100 + 1,
+    displayName: venueId === 1 ? 'Алексей' : 'Мария Второй',
+    roleLabel: null,
+    subtype: 'hookah_master',
+    shiftDate: '2030-01-08',
+    startsAt: '22:00',
+    endsAt: '06:00',
+    endsNextDay: true,
+    computedStatus: 'scheduled',
+    cancelConfirmationState: 'SCHEDULED',
+    updatedAt: `2030-01-07T10:00:0${venueId}Z`,
+    storedStatus: 'scheduled',
+    isGuestVisible: false,
+    manuallyMarkedActive: false
+  })
+  const adminShifts = new Map<number, VenueStaffScheduleAdminShiftFixture[]>(
+    accesses.map((access) => [
+      access.venueId,
+      (options.adminShifts?.[access.venueId] ?? [defaultAdminShift(access.venueId)]).map((shift) => ({
+        ...shift
+      }))
+    ])
+  )
+  const profiles = new Map(
+    accesses.map((access) => [
+      access.venueId,
+      [
+        {
+          id: access.venueId * 100 + 1,
+          linkedUserId: 123456789,
+          displayName: access.venueId === 1 ? 'Алексей' : 'Мария Второй',
+          roleLabel: null,
+          subtype: 'hookah_master',
+          photoRef: null,
+          bio: null,
+          tags: [],
+          isGuestVisible: false,
+          publishedAt: null,
+          disabledAt: null,
+          createdAt: '2030-01-01T10:00:00Z',
+          updatedAt: '2030-01-01T10:00:00Z',
+          todayShift: null
+        },
+        {
+          id: access.venueId * 100 + 2,
+          linkedUserId: null,
+          displayName: access.venueId === 1 ? 'Светлана' : 'Илья Второй',
+          roleLabel: 'Бармен',
+          subtype: 'other',
+          photoRef: null,
+          bio: null,
+          tags: [],
+          isGuestVisible: false,
+          publishedAt: null,
+          disabledAt: null,
+          createdAt: '2030-01-01T10:00:00Z',
+          updatedAt: '2030-01-01T10:00:00Z',
+          todayShift: null
+        }
+      ]
+    ])
+  )
+  const defaultOwnShifts: Array<Record<string, unknown>> = [
+    {
+      id: 1001,
+      staffProfileId: 101,
+      shiftDate: '2030-01-08',
+      startsAt: '22:00',
+      endsAt: '06:00',
+      endsNextDay: true,
+      computedStatus: 'scheduled',
+      colleagues: [
+        {
+          staffProfileId: 102,
+          displayName: 'Светлана',
+          roleLabel: 'Бармен',
+          subtype: 'other',
+          shiftDate: '2030-01-09',
+          startsAt: '01:00',
+          endsAt: '05:00',
+          endsNextDay: false,
+          computedStatus: 'scheduled'
+        }
+      ]
+    }
+  ]
+  const ownShifts = new Map(
+    accesses.map((access) => [
+      access.venueId,
+      (options.ownShifts?.[access.venueId] ?? defaultOwnShifts).map((shift) => ({ ...shift }))
+    ])
+  )
+  const mutations: Array<{ venueId: number; method: string; path: string; body: Record<string, unknown> }> = []
+  const listRequests: Array<{ venueId: number; path: string; from: string | null; to: string | null }> = []
+  const mutationErrors: Array<{ status: number; code: string; message: string }> = []
+  const deferredLoads = new Map<number, Array<{ promise: Promise<void>; release: () => void }>>()
+
+  const deferNextList = (venueId: number) => {
+    let release = () => undefined
+    const promise = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const queue = deferredLoads.get(venueId) ?? []
+    queue.push({ promise, release })
+    deferredLoads.set(venueId, queue)
+    return release
+  }
+
+  await page.route('**/api/auth/telegram', async (route) => {
+    await route.fulfill(jsonResponse({ token: 'e2e-session-token', expiresAtEpochSeconds: sessionExpiresAt }))
+  })
+
+  await page.route('**/api/venue/me', async (route) => {
+    await route.fulfill(jsonResponse({ userId: 123456789, venues: accesses }))
+  })
+
+  await page.route('**/api/venue/*/staff/profiles**', async (route) => {
+    const path = new URL(route.request().url()).pathname
+    const venueId = Number(path.match(/^\/api\/venue\/(\d+)\/staff\/profiles$/)?.[1])
+    if (route.request().method() !== 'GET' || !profiles.has(venueId)) {
+      await route.fulfill(jsonResponse({ error: { code: 'NOT_FOUND', message: 'Not found' } }, 404))
+      return
+    }
+    await route.fulfill(jsonResponse({ profiles: profiles.get(venueId) }))
+  })
+
+  await page.route('**/api/venue/*/staff/shifts**', async (route) => {
+    const request = route.request()
+    const url = new URL(request.url())
+    const path = url.pathname
+    const match = path.match(/^\/api\/venue\/(\d+)\/staff\/shifts(?:\/(me|\d+))?(?:\/(cancel))?$/)
+    const venueId = Number(match?.[1])
+    const resource = match?.[2] ?? null
+    const action = match?.[3] ?? null
+    const access = accesses.find((candidate) => candidate.venueId === venueId)
+    if (!match || !access) {
+      await route.fulfill(jsonResponse({ error: { code: 'NOT_FOUND', message: 'Not found' } }, 404))
+      return
+    }
+
+    const canView = access.permissions.includes('STAFF_SCHEDULE_VIEW')
+    const canViewOwn = access.permissions.includes('STAFF_SCHEDULE_VIEW_OWN')
+    const canManage = access.permissions.includes('STAFF_SCHEDULE_MANAGE')
+
+    if (request.method() === 'GET') {
+      listRequests.push({
+        venueId,
+        path,
+        from: url.searchParams.get('from'),
+        to: url.searchParams.get('to')
+      })
+      const gate = deferredLoads.get(venueId)?.shift()
+      await gate?.promise
+      if (resource === 'me') {
+        if (!canViewOwn) {
+          await route.fulfill(jsonResponse({ error: { code: 'FORBIDDEN', message: 'Недостаточно прав.' } }, 403))
+          return
+        }
+        await route.fulfill(
+          jsonResponse({
+            venueId,
+            venueName: access.venueName,
+            timezone: 'Europe/Moscow',
+            venueToday: '2030-01-07',
+            from: url.searchParams.get('from'),
+            to: url.searchParams.get('to'),
+            shifts: ownShifts.get(venueId) ?? []
+          })
+        )
+        return
+      }
+      if (!canView) {
+        await route.fulfill(jsonResponse({ error: { code: 'FORBIDDEN', message: 'Недостаточно прав.' } }, 403))
+        return
+      }
+      await route.fulfill(
+        jsonResponse({
+          venueId,
+          venueName: access.venueName,
+          timezone: 'Europe/Moscow',
+          venueToday: '2030-01-07',
+          from: url.searchParams.get('from'),
+          to: url.searchParams.get('to'),
+          shifts: adminShifts.get(venueId) ?? []
+        })
+      )
+      return
+    }
+
+    if (!canManage) {
+      await route.fulfill(jsonResponse({ error: { code: 'FORBIDDEN', message: 'Недостаточно прав.' } }, 403))
+      return
+    }
+    const body = ((await request.postDataJSON()) ?? {}) as Record<string, unknown>
+    mutations.push({ venueId, method: request.method(), path, body })
+    const queuedError = mutationErrors.shift()
+    if (queuedError) {
+      await route.fulfill(
+        jsonResponse({ error: { code: queuedError.code, message: queuedError.message } }, queuedError.status)
+      )
+      return
+    }
+    const shifts = adminShifts.get(venueId) ?? []
+    let shift: VenueStaffScheduleAdminShiftFixture | undefined
+    if (request.method() === 'POST' && resource == null) {
+      const profileId = Number(body.staffProfileId)
+      const profile = profiles.get(venueId)?.find((candidate) => candidate.id === profileId)
+      shift = {
+        id: venueId * 1000 + shifts.length + 10,
+        staffProfileId: profileId,
+        displayName: profile?.displayName ?? 'Сотрудник',
+        roleLabel: profile?.roleLabel,
+        subtype: profile?.subtype ?? 'other',
+        shiftDate: String(body.shiftDate),
+        startsAt: String(body.startsAt),
+        endsAt: String(body.endsAt),
+        endsNextDay: String(body.endsAt) <= String(body.startsAt),
+        computedStatus: 'scheduled',
+        cancelConfirmationState: 'SCHEDULED',
+        updatedAt: '2030-01-07T11:00:00Z',
+        storedStatus: 'scheduled',
+        isGuestVisible: false,
+        manuallyMarkedActive: false
+      }
+      shifts.push(shift)
+    } else {
+      shift = shifts.find((candidate) => candidate.id === Number(resource))
+      if (!shift) {
+        await route.fulfill(jsonResponse({ error: { code: 'NOT_FOUND', message: 'Not found' } }, 404))
+        return
+      }
+      if (request.method() === 'PUT') {
+        shift.shiftDate = String(body.shiftDate)
+        shift.startsAt = String(body.startsAt)
+        shift.endsAt = String(body.endsAt)
+        shift.endsNextDay = shift.endsAt <= shift.startsAt
+        shift.updatedAt = '2030-01-07T12:00:00Z'
+      } else if (request.method() === 'POST' && action === 'cancel') {
+        shift.computedStatus = 'canceled'
+        shift.storedStatus = 'canceled'
+        shift.cancelConfirmationState = null
+        shift.updatedAt = '2030-01-07T13:00:00Z'
+      }
+    }
+    adminShifts.set(venueId, shifts)
+    await route.fulfill(jsonResponse({ shift }))
+  })
+
+  return {
+    getMutations: () => [...mutations],
+    getListRequests: () => [...listRequests],
+    queueMutationError: (error: { status: number; code: string; message: string }) => mutationErrors.push(error),
+    deferNextList
+  }
+}
+
 function buildVenueBooking(overrides: Partial<VenueBookingFixture> = {}): VenueBookingFixture {
   return {
     bookingId: 701,
@@ -8388,6 +8693,236 @@ test('venue owner staff cards use human profile labels and hide raw technical fi
     { status: 'active', isGuestVisible: true },
     { status: 'canceled', isGuestVisible: false }
   ])
+})
+
+test('venue owner manages a weekly staff schedule with local overnight copy', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueStaffScheduleApi(page)
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'График смен', exact: true }).click()
+
+  const schedule = page.locator('.venue-staff-schedule')
+  await expect(schedule.getByRole('heading', { name: 'График смен', exact: true })).toBeVisible()
+  await expect(schedule).toContainText('Europe/Moscow')
+  await expect(schedule).toContainText('22:00–06:00, следующий день')
+  await expect(schedule).toContainText('Запланирована')
+
+  await schedule.getByRole('button', { name: 'Добавить смену' }).click()
+  const form = schedule.locator('.venue-schedule-form')
+  await form.getByLabel('Сотрудник').selectOption('102')
+  await expect(form.getByRole('option', { name: /Светлана.*без привязки/ })).toHaveCount(1)
+  await form.getByLabel('Дата начала').fill('2030-01-10')
+  await form.getByLabel('Начало').fill('20:00')
+  await form.getByLabel('Окончание').fill('04:00')
+  await expect(form).toContainText('20:00–04:00, следующий день')
+  await form.getByRole('button', { name: 'Проверить смену' }).click()
+
+  const confirmation = schedule.locator('.venue-schedule-confirmation')
+  await expect(confirmation).toContainText('Сотрудник: Светлана')
+  await expect(confirmation).toContainText('20:00–04:00, следующий день')
+  await expect(confirmation).toContainText('Часовой пояс: Europe/Moscow')
+  await confirmation.getByRole('button', { name: 'Создать смену' }).click()
+  await expect.poll(() => api.getMutations()).toHaveLength(1)
+  expect(api.getMutations()[0]).toMatchObject({
+    venueId: 1,
+    method: 'POST',
+    path: '/api/venue/1/staff/shifts',
+    body: {
+      staffProfileId: 102,
+      shiftDate: '2030-01-10',
+      startsAt: '20:00',
+      endsAt: '04:00'
+    }
+  })
+
+  let displayOnlyRow = schedule.locator('.venue-schedule-shift').filter({ hasText: 'Светлана' })
+  await expect(displayOnlyRow).toContainText('Бармен')
+  await displayOnlyRow.getByRole('button', { name: 'Редактировать' }).click()
+  await form.getByLabel('Начало').fill('21:00')
+  await form.getByLabel('Окончание').fill('05:00')
+  await form.getByRole('button', { name: 'Проверить изменения' }).click()
+  await expect(confirmation).toContainText('Было: 10.01.2030 · 20:00–04:00, следующий день')
+  await expect(confirmation).toContainText('Станет: 10.01.2030 · 21:00–05:00, следующий день')
+  await confirmation.getByRole('button', { name: 'Сохранить изменения' }).click()
+  await expect.poll(() => api.getMutations()).toHaveLength(2)
+  expect(api.getMutations()[1].body).toEqual({
+    shiftDate: '2030-01-10',
+    startsAt: '21:00',
+    endsAt: '05:00',
+    expectedUpdatedAt: '2030-01-07T11:00:00Z'
+  })
+
+  displayOnlyRow = schedule.locator('.venue-schedule-shift').filter({ hasText: 'Светлана' })
+  await displayOnlyRow.getByRole('button', { name: 'Отменить' }).click()
+  await expect(confirmation).toContainText('Подтвердите отмену смены')
+  await confirmation.getByRole('button', { name: 'Отменить смену' }).click()
+  await expect.poll(() => api.getMutations()).toHaveLength(3)
+  expect(api.getMutations()[2].body).toEqual({
+    expectedUpdatedAt: '2030-01-07T12:00:00Z',
+    expectedConfirmationState: 'SCHEDULED'
+  })
+  await expect(displayOnlyRow.getByRole('button', { name: 'Редактировать' })).toHaveCount(0)
+  await expect(displayOnlyRow.getByRole('button', { name: 'Отменить' })).toHaveCount(0)
+
+  await schedule.getByRole('button', { name: 'Следующая неделя' }).click()
+  await expect.poll(() => api.getListRequests().at(-1)).toMatchObject({
+    venueId: 1,
+    from: '2030-01-14',
+    to: '2030-01-20'
+  })
+  await expect(schedule).toContainText('На этой неделе смен нет.')
+})
+
+test('venue manager has the same staff schedule editor controls', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockVenueStaffScheduleApi(page, {
+    accesses: [
+      {
+        venueId: 1,
+        venueName: 'Микс',
+        venueCity: 'Москва',
+        venueStatus: 'PUBLISHED',
+        role: 'MANAGER',
+        permissions: ['STAFF_SCHEDULE_VIEW', 'STAFF_SCHEDULE_MANAGE']
+      }
+    ]
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'График смен', exact: true }).click()
+  const schedule = page.locator('.venue-staff-schedule')
+  await expect(schedule.getByRole('button', { name: 'Добавить смену' })).toBeVisible()
+  const row = schedule.locator('.venue-schedule-shift').filter({ hasText: 'Алексей' })
+  await expect(row.getByRole('button', { name: 'Редактировать' })).toBeVisible()
+  await expect(row.getByRole('button', { name: 'Отменить' })).toBeVisible()
+})
+
+test('venue staff sees only own shifts and safe overlapping colleagues', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueStaffScheduleApi(page, {
+    accesses: [
+      {
+        venueId: 1,
+        venueName: 'Микс',
+        venueCity: 'Москва',
+        venueStatus: 'PUBLISHED',
+        role: 'STAFF',
+        permissions: ['STAFF_SCHEDULE_VIEW_OWN']
+      }
+    ]
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await expect(page.getByRole('button', { name: 'Персонал', exact: true })).toHaveCount(0)
+  await page.getByRole('button', { name: 'Мои смены', exact: true }).click()
+
+  const schedule = page.locator('.venue-staff-schedule')
+  await expect(schedule.getByRole('heading', { name: 'Мои смены', exact: true })).toBeVisible()
+  await expect(schedule).toContainText('Микс')
+  await expect(schedule).toContainText('22:00–06:00, следующий день')
+  await expect(schedule).toContainText('Коллеги в этой смене')
+  await expect(schedule).toContainText('Светлана · Бармен · 01:00–05:00 · Запланирована')
+  await expect(schedule).not.toContainText('linkedUserId')
+  await expect(schedule.getByRole('button', { name: 'Добавить смену' })).toHaveCount(0)
+  await expect(schedule.getByRole('button', { name: 'Редактировать' })).toHaveCount(0)
+  await expect(schedule.getByRole('button', { name: 'Отменить' })).toHaveCount(0)
+  expect(api.getListRequests().every((request) => request.path.endsWith('/me'))).toBe(true)
+
+  const directMutation = await page.evaluate(async () => {
+    const response = await fetch('/api/venue/1/staff/shifts', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer e2e-session-token',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        staffProfileId: 101,
+        shiftDate: '2030-01-10',
+        startsAt: '18:00',
+        endsAt: '02:00'
+      })
+    })
+    return { status: response.status, body: await response.json() }
+  })
+  expect(directMutation).toMatchObject({
+    status: 403,
+    body: { error: { code: 'FORBIDDEN' } }
+  })
+})
+
+test('staff schedule stale edit requires refresh and never overwrites current row', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueStaffScheduleApi(page)
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'График смен', exact: true }).click()
+  const schedule = page.locator('.venue-staff-schedule')
+  const row = schedule.locator('.venue-schedule-shift').filter({ hasText: 'Алексей' })
+  await row.getByRole('button', { name: 'Редактировать' }).click()
+  const form = schedule.locator('.venue-schedule-form')
+  await form.getByLabel('Начало').fill('20:00')
+  await form.getByRole('button', { name: 'Проверить изменения' }).click()
+  api.queueMutationError({
+    status: 409,
+    code: 'STAFF_SHIFT_STALE',
+    message: 'График изменился. Обновите данные и повторите действие.'
+  })
+  await schedule.getByRole('button', { name: 'Сохранить изменения' }).click()
+
+  await expect(schedule).toContainText('График изменился. Обновите данные и повторите действие.')
+  await expect(schedule.locator('.venue-schedule-form')).toBeHidden()
+  await expect(schedule.locator('.venue-schedule-confirmation')).toBeHidden()
+  await expect(row).toContainText('22:00–06:00, следующий день')
+  await schedule.getByRole('button', { name: 'Обновить график' }).click()
+  await expect(schedule).not.toContainText('График изменился. Обновите данные и повторите действие.')
+  await expect(row).toContainText('22:00–06:00, следующий день')
+})
+
+test('staff schedule venue switch clears draft ignores late response and restores allowed venue', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const accesses: VenueStaffScheduleAccessFixture[] = [
+    {
+      venueId: 1,
+      venueName: 'Микс',
+      venueCity: 'Москва',
+      venueStatus: 'PUBLISHED',
+      role: 'OWNER',
+      permissions: ['STAFF_SCHEDULE_VIEW', 'STAFF_SCHEDULE_MANAGE']
+    },
+    {
+      venueId: 2,
+      venueName: 'Дым',
+      venueCity: 'Казань',
+      venueStatus: 'PUBLISHED',
+      role: 'OWNER',
+      permissions: ['STAFF_SCHEDULE_VIEW', 'STAFF_SCHEDULE_MANAGE']
+    }
+  ]
+  const api = await mockVenueStaffScheduleApi(page, { accesses })
+  const releaseVenueOne = api.deferNextList(1)
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'График смен', exact: true }).click()
+  let schedule = page.locator('.venue-staff-schedule')
+  await expect(schedule).toContainText('Загружаем смены…')
+  await schedule.getByRole('button', { name: 'Добавить смену' }).click()
+  await schedule.locator('.venue-schedule-form').getByLabel('Дата начала').fill('2030-01-10')
+
+  const venueSelect = page.locator('.venue-controls select.venue-select')
+  await venueSelect.selectOption('2')
+  schedule = page.locator('.venue-staff-schedule')
+  await expect(schedule.locator('.venue-schedule-form')).toBeHidden()
+  await expect(schedule).toContainText('Мария Второй')
+  await expect(schedule).not.toContainText('Алексей')
+  await expect.poll(() => new URL(page.url()).searchParams.get('venueId')).toBe('2')
+
+  releaseVenueOne()
+  await expect(schedule).toContainText('Мария Второй')
+  await expect(schedule).not.toContainText('Алексей')
+  await page.reload()
+  await expect(venueSelect).toHaveValue('2')
+  await expect(page.locator('.venue-staff-schedule')).toContainText('Мария Второй')
 })
 
 test('expired staff chat link code is not presented as usable', async ({ page }) => {

@@ -3,6 +3,7 @@ package com.hookah.platform.backend.miniapp.guest
 import com.hookah.platform.backend.ModuleOverrides
 import com.hookah.platform.backend.api.ApiErrorCodes
 import com.hookah.platform.backend.miniapp.guest.api.CatalogResponse
+import com.hookah.platform.backend.miniapp.guest.api.GuestTodayStaffResponse
 import com.hookah.platform.backend.miniapp.guest.api.VenueInfoSectionsResponse
 import com.hookah.platform.backend.miniapp.guest.api.VenueResponse
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
@@ -758,6 +759,16 @@ class GuestVenueRoutesTest {
                             published = true,
                             disabled = false,
                         )
+                    val plannedProfile =
+                        insertStaffProfile(
+                            connection = connection,
+                            venueId = venueId,
+                            displayName = "Запланирован",
+                            subtype = "waiter",
+                            isGuestVisible = true,
+                            published = true,
+                            disabled = false,
+                        )
                     val otherVenueProfile =
                         insertStaffProfile(
                             connection = connection,
@@ -772,6 +783,7 @@ class GuestVenueRoutesTest {
                     insertStaffShift(connection, venueId, hiddenProfile, today, "active", true)
                     insertStaffShift(connection, venueId, canceledProfile, today, "canceled", true)
                     insertStaffShift(connection, venueId, privateShiftProfile, today, "active", false)
+                    insertStaffShift(connection, venueId, plannedProfile, today, "scheduled", false)
                     insertStaffShift(connection, otherVenueId, otherVenueProfile, today, "active", true)
                     SeededTodayStaff(venueId = venueId)
                 }
@@ -789,6 +801,7 @@ class GuestVenueRoutesTest {
             assertFalse(responseBody.contains(RAW_STAFF_PHOTO_REF))
             val payload = json.decodeFromString(VenueResponse.serializer(), responseBody)
             assertEquals(listOf("Иван"), payload.venue.todayStaff.map { it.displayName })
+            assertFalse(responseBody.contains("Запланирован"))
             assertEquals("hookah_master", payload.venue.todayStaff.single().subtype)
             assertEquals(listOf("крепко"), payload.venue.todayStaff.single().tags)
             assertNull(payload.venue.todayStaff.single().photoRef)
@@ -798,8 +811,12 @@ class GuestVenueRoutesTest {
                     headers { append(HttpHeaders.Authorization, "Bearer $token") }
                 }
             assertEquals(HttpStatusCode.OK, endpointResponse.status)
-            assertFalse(endpointResponse.bodyAsText().contains("linkedUserId"))
-            assertFalse(endpointResponse.bodyAsText().contains("telegram", ignoreCase = true))
+            val endpointBody = endpointResponse.bodyAsText()
+            assertFalse(endpointBody.contains("linkedUserId"))
+            assertFalse(endpointBody.contains("telegram", ignoreCase = true))
+            val endpointPayload = json.decodeFromString(GuestTodayStaffResponse.serializer(), endpointBody)
+            assertEquals(listOf("Иван"), endpointPayload.staff.map { it.displayName })
+            assertFalse(endpointBody.contains("Запланирован"))
         }
 
     @Test

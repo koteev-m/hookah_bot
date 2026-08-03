@@ -22,9 +22,14 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.sql.DriverManager
 import java.sql.Statement
+import java.time.Instant
+import java.time.LocalDate
+import java.time.LocalTime
+import java.time.ZoneId
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 class VenueStaffRoutesTest {
@@ -691,6 +696,88 @@ class VenueStaffRoutesTest {
         }
 
     @Test
+    fun `today shift preserves planned times and advances updated at when times are omitted`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("staff-today-preserves-planned-times")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val ownerId = 6151L
+            val venueId = seedVenueMembership(jdbcUrl, ownerId, "OWNER")
+            val ownerToken = issueToken(config, ownerId)
+            val profile =
+                client.post("/api/venue/$venueId/staff/profiles") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            StaffProfileCreateRequest.serializer(),
+                            StaffProfileCreateRequest(displayName = "Плановая смена", subtype = "waiter"),
+                        ),
+                    )
+                }.let { response ->
+                    assertEquals(HttpStatusCode.OK, response.status)
+                    json.decodeFromString(StaffProfileDto.serializer(), response.bodyAsText())
+                }
+            val oldUpdatedAt = Instant.parse("2000-01-01T00:00:00Z")
+            val today = LocalDate.now(ZoneId.of("UTC"))
+
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                connection.prepareStatement(
+                    "INSERT INTO venue_settings (venue_id, timezone) VALUES (?, 'UTC')",
+                ).use { statement ->
+                    statement.setLong(1, venueId)
+                    statement.executeUpdate()
+                }
+                connection.prepareStatement(
+                    """
+                    INSERT INTO staff_shifts (
+                        venue_id,
+                        staff_profile_id,
+                        shift_date,
+                        starts_at,
+                        ends_at,
+                        status,
+                        is_guest_visible,
+                        manually_marked_active,
+                        created_by_user_id,
+                        updated_by_user_id,
+                        updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, 'scheduled', FALSE, FALSE, ?, ?, ?)
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setLong(1, venueId)
+                    statement.setLong(2, profile.id)
+                    statement.setObject(3, today)
+                    statement.setObject(4, LocalTime.of(9, 0))
+                    statement.setObject(5, LocalTime.of(17, 0))
+                    statement.setLong(6, ownerId)
+                    statement.setLong(7, ownerId)
+                    statement.setTimestamp(8, java.sql.Timestamp.from(oldUpdatedAt))
+                    statement.executeUpdate()
+                }
+            }
+
+            val response =
+                client.post("/api/venue/$venueId/staff/profiles/${profile.id}/today-shift") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"status":"active","isGuestVisible":true}""")
+                }
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            val shift = json.decodeFromString(StaffShiftResponse.serializer(), response.bodyAsText()).shift
+            assertEquals("09:00", shift.startsAt)
+            assertEquals("17:00", shift.endsAt)
+            assertNotEquals(oldUpdatedAt.toString(), shift.updatedAt)
+        }
+
+    @Test
     fun `staff can edit own linked draft fields only and cannot publish`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("staff-profile-own-edit")
@@ -1129,5 +1216,6 @@ class VenueStaffRoutesTest {
         val status: String,
         val isGuestVisible: Boolean,
         val manuallyMarkedActive: Boolean,
+        val updatedAt: String,
     )
 }

@@ -31,7 +31,7 @@ Tokens and client-provided ids are context pointers, not authority:
 | `feedback` | One post-visit rating/tags/comment bound to a visible completed guest visit. | Guest submits only for own visible completed visit; Venue Owner/Manager reads own venue and may open low-rating `VENUE_CHAT`; Staff none; Platform dashboard future. |
 | `staff_profile` | Public staff display profile and linked private venue-member relation. | Guest sees only opt-in public fields; linked user ids stay private; Owner controls publish/hide. |
 | `staff_shift` | Manual "today on shift" visibility for public staff profiles. | Guest sees only visible shifts for visible profiles; Manager shift marking depends on venue policy. |
-| `staff_schedule` | Optional private venue planning over complete staff-shift intervals. | Owner/Manager manage only their venue; Staff sees own shifts plus safe overlapping colleagues; Guest/foreign/Platform-only access is denied. Runtime not implemented. |
+| `staff_schedule` | Optional private venue planning over complete staff-shift intervals. | Owner/Manager manage only their venue; Staff sees own shifts plus safe overlapping colleagues; Guest/foreign/Platform-only access is denied. `STAFF SCHEDULE PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED`. |
 | `staff_tip` | Future staff-specific tip method/intent. | External tip link + intent only in Phase 2; money does not touch platform in MVP; intent is not proof of payment. |
 | `billing` | Subscription, invoices, payments and commercial terms. | Platform Owner manages; Venue Owner views/pays where implemented; Manager/Staff none. |
 | `analytics/audit` | KPI dashboards, event facts and critical-change evidence. | Role-specific views; raw event/audit payloads are restricted and privacy-filtered. |
@@ -43,7 +43,7 @@ Tokens and client-provided ids are context pointers, not authority:
 | Guest | End user without venue/platform role. | Can browse, book, order in verified table session, use own chats/tickets and own tabs. |
 | Tab Host | Guest who creates/hosts a shared tab. | Derived responsibility inside `tab` scope, not a global role. |
 | Tab Member | Guest who joined a shared tab by invitation/consent. | Derived responsibility inside `tab` scope, not a global role. |
-| Staff | Shift operations role. | Orders, operational calls, allowed booking arrival/no-show and stop-list availability; target Schedule Phase 1 adds own-shift plus safe-overlap read only. No schedule mutation, support tickets, venue chats, feedback dashboard/follow-up, billing, settings or platform. |
+| Staff | Shift operations role. | Orders, operational calls, allowed booking arrival/no-show and stop-list availability; Schedule Phase 1 provides own-shift plus safe-overlap read only. No schedule mutation, support tickets, venue chats, feedback dashboard/follow-up, billing, settings or platform. |
 | Venue Manager | Venue operations management role. | Own venue only. Can manage bookings, orders, menu/availability, tables where allowed, chats, feedback read/follow-up and own-venue support. No platform/billing commercial controls or public review link editing. |
 | Venue Owner | Venue owner role through active `venue_members(role=OWNER)`. | Own venue operations, staff, settings, staff chat, feedback read/follow-up, public review link editing and venue billing view/pay where implemented. |
 | Platform Owner | Platform-wide operator. | Venues, lifecycle, owner access, billing, support center, analytics/audit. Does not see ordinary `VENUE_CHAT` by default. |
@@ -80,7 +80,7 @@ Target decision: remove `ADMIN` from the product model and keep it only as a com
 | Staff | `menu.view`, `table.view`, `menu_availability.manage` | Own venue operational availability | Current docs say item/option stop-list parity is aligned. Target menu policy is `staff_stoplist_enabled` or equivalent before Staff can change availability; see `docs/MENU_OPTIONS_STOPLIST.md`. |
 | Staff | `MENU_SHIFT_CHECK` denied | All venue scopes | Current Phase 1 rule. Entry is hidden and direct API is denied; existing individual item/option availability permission is unchanged. |
 | Staff | `staff_profile.edit_own_draft` | Own linked profile only | Current Phase 1 where policy allows. Staff may edit own draft fields only, cannot self-publish or enable guest visibility. Photo upload remains future. |
-| Staff | `STAFF_SCHEDULE_VIEW_OWN` | Own linked profiles in one venue plus safe overlapping colleagues | Schedule Phase 1 target; runtime not implemented. No full roster/calendar, mutation, private linkage, Telegram/member ids, actor metadata or non-overlapping shifts. |
+| Staff | `STAFF_SCHEDULE_VIEW_OWN` | Own linked profiles in one venue plus safe overlapping colleagues | Current Schedule Phase 1 runtime. The colleague projection may include safe `staffProfileId` plus display/schedule fields; no full roster/calendar, mutation, linked user/account ids, Telegram data, actor metadata or non-overlapping shifts. |
 | Staff | `support_ticket.none`, `venue_chat.none`, `feedback.none`, `venue_preview.none`, `billing.none`, `platform.none`, `settings.none` | All scopes | Current product rule. Direct API must return 403/denial even if UI hides nav. |
 | Staff | `promotion.manage.none`, `promotion.calculate.none` | All scopes | Phase 1/2 rule. Staff may see persisted order facts but does not configure or calculate promotions. |
 | Venue Manager | `order_queue.view`, `order_batch.status_update`, `order_batch.reject` | Own venue | Current where route permissions allow. |
@@ -93,14 +93,14 @@ Target decision: remove `ADMIN` from the product model and keep it only as a com
 | Venue Manager | `promotion.manage` | Own venue only | Current for informational Phase 1 and the Happy Hours percentage schedule/target/reward/status slice through server-validated routes. |
 | Venue Manager | `staff_invite.create_staff_only` | Own venue | Current conservative policy where route allows; cannot create Owner/Platform access. |
 | Venue Manager | `staff_shift.manage_today` | Own venue | Current conservative Phase 1. Manager marks today shift state, but does not approve public profiles or future tip methods by default. |
-| Venue Manager | `STAFF_SCHEDULE_VIEW`, `STAFF_SCHEDULE_MANAGE` | Own venue only | Schedule Phase 1 target; runtime not implemented. Same bounded future-shift create/update/cancel authority as Owner; distinct from current Today Shift policy. |
+| Venue Manager | `STAFF_SCHEDULE_VIEW`, `STAFF_SCHEDULE_MANAGE` | Own venue only | Current Schedule Phase 1 runtime. Same bounded future-shift create/update/cancel authority as Owner; distinct from current Today Shift policy. |
 | Venue Manager | `venue_preview.view` | Own venue only | Current. One endpoint selects `PUBLISHED_PUBLIC` through exact Guest guards or `PRIVATE_DRAFT` through the saved public-facing allowlist. |
 | Venue Manager | `billing.none`, dangerous lifecycle none | Billing/platform/lifecycle | Current product rule. |
 | Venue Owner | All venue operations inside own venue | Own venue | Current via active `venue_members(role=OWNER)`. |
 | Venue Owner | `staff.manage`, `staff_invite.create`, `menu.manage`, `stop_list.manage`, `table_qr.manage/rotate/export`, `settings.manage`, `staff_chat.link/unlink/test` | Own venue | Current where implemented; dangerous actions need confirmation/audit. |
 | Venue Owner | `MENU_SHIFT_CHECK` | Own venue only | Phase 1 staging-smoke-passed. May prepare a local draft and atomically confirm one bounded availability batch, including no-op completion. |
 | Venue Owner | `staff_profile.manage`, `staff_profile.publish`, `staff_shift.manage_today`, `staff_tip_method.approve` | Own venue | Current for Phase 1 profiles + today shift; future for tip method approval. |
-| Venue Owner | `STAFF_SCHEDULE_VIEW`, `STAFF_SCHEDULE_MANAGE` | Own venue only | Schedule Phase 1 target; runtime not implemented. Bounded list/create/update/cancel with lifecycle, stale-write and audit guards. |
+| Venue Owner | `STAFF_SCHEDULE_VIEW`, `STAFF_SCHEDULE_MANAGE` | Own venue only | Current Schedule Phase 1 runtime. Bounded list/create/update/cancel with lifecycle, stale-write and audit guards. |
 | Venue Owner | `venue_preview.view` | Own venue only | Current. Server-selected preview is read-only and grants no lifecycle mutation, publication, share-link, auto-save or unsaved-form authority. |
 | Venue Owner | `billing.view/pay` | Own venue subscription/payment state | Current manual billing MVP for view/pay surfaces; Platform-only mark-paid/courtesy remain denied. |
 | Venue Owner | `support_ticket.manage_own_venue`, `venue_chat.manage_own_venue` | Own venue only | Current. Can transfer support tickets to Platform. |
@@ -129,7 +129,7 @@ Target decision: remove `ADMIN` from the product model and keep it only as a com
 | Venue card preview | Existing owner/manager guest-preview callbacks. | The real published public card. | One `Предпросмотр для гостя` renderer: server-selected `PUBLISHED_PUBLIC` uses the exact Guest read model; `PRIVATE_DRAFT` uses an own-venue saved public allowlist. Staff has no entry. | No automatic access. | No. | No Guest bypass, mutations, public URL, share token or cache. Private media delivery is authenticated and venue/section/media-scoped; raw refs are excluded. |
 | Tables/QR | Bot management where implemented. | QR context only. | Owner/Manager table/QR where allowed; Staff read-only. | No ordinary venue table management unless platform support policy says so. | No. | QR token is context pointer. |
 | Staff invites | Bot invite acceptance. | No. | Owner/Manager invite where allowed. | OWNER invite/revoke. | No. | Last-owner protection server-side. |
-| Staff schedule | No Phase 1 flow. | No. | Target: Owner/Manager `График смен`; Staff read-only `Мои смены`. | No automatic authority. | No Phase 1 flow. | Venue Mini App is source of truth; Guest/Telegram/foreign access denied and Today Shift stays separate. |
+| Staff schedule | No Phase 1 flow. | No. | `STAFF SCHEDULE PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED`: Owner/Manager `График смен`; Staff read-only `Мои смены`. | No automatic authority. | No Phase 1 flow. | Venue Mini App is source of truth; Guest/Telegram/foreign access denied and Today Shift stays separate. |
 | Settings | Bot owner/manager setup where implemented. | No management. | Owner/Manager settings where allowed; Staff none. | Platform settings for platform scope. | No. | UI hiding is not enough. |
 | Billing | Bot/platform/owner messaging where implemented. | No. | Venue Owner view/pay state; Manager/Staff none. | Platform billing cockpit. | No. | Money mutations need explicit POST and audit. |
 | Analytics | Bot stats where implemented. | No dashboard; future profile summaries only. | Owner/Manager role dashboards where reliable. Staff operational counters only. | Platform analytics future/partial. | Delivery telemetry only. | Analytics events are not operational truth. |
@@ -169,8 +169,8 @@ These actions require server-side authorization and should require confirmation,
 | Dangerous action audit | Several audits exist: owner invite/revoke, billing mark-paid/courtesy, staff-call ACK/DONE, support status/scope, lifecycle/status where implemented. | All dangerous actions write safe actor/target/old-new/reason evidence. | Audit coverage remains `PARTIAL` until menu price, QR rotate, force close, tab reopen and analytics export are verified. |
 | Promotion configuration/status mutation audit | `PARTIAL / P2 FOLLOW-UP`. Promotion management is server-authorized, but there is not yet complete actor plus safe old/new rule/config/status evidence for every mutation. | Record actor, venue/promotion/rule identity, version and safe old/new schedule, target, reward and status evidence. | Do not treat promotion mutation audit as `DONE` until a separate implementation and verification slice closes this gap. |
 | Promotion financial compatibility | Current slices have bounded percentage/manual-discount and gift reward guards, but no documented common cross-promotion conflict policy. Gift smoke observed Happy Hours Percentage and Gift With Item together; this is not a confirmed runtime bug. | One server-owned, reward-type-aware policy uses `STACKABLE`, `EXCLUSIVE` or `OVERRIDE`, explicit priority and deterministic winner/tie-break rules for all executable promotions and manual discounts. | `AUDIT / FUTURE IMPLEMENTATION`. Fail closed against accidental discount addition; later loyalty, promo codes and cashback must reuse the same mechanism. |
-| Staff profiles / today shift | Phase 1 is DONE / MVP / STAGING-SMOKE-PASSED; canonical model is `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. | Guest sees only public visible profile/shift data; Owner controls publish/hide; Staff may edit own linked draft only; Manager may mark active/completed/canceled today shifts. | Keep role/privacy and Guest-visibility behavior in regression. |
-| Staff Schedule Phase 1 | No runtime permissions/routes/UI exist. Existing `staff_shifts` and `updated_at` can support the bounded model without migration. | Owner/Manager manage own-venue planned shifts; Staff reads own plus safe overlapping colleagues; Guest/foreign/Platform-only access denied. | `SPEC READY / RUNTIME NOT IMPLEMENTED`. Add explicit permission values, route denial/privacy tests, atomic audit and Today/Guest regression before release. |
+| Staff profiles / today shift | `STAFF PROFILES + TODAY SHIFT PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`; canonical model is `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. | Guest sees only public visible profile/shift data; Owner controls publish/hide; Staff may edit own linked draft only; Manager may mark active/completed/canceled today shifts. | Keep role/privacy and Guest-visibility behavior in regression. |
+| Staff Schedule Phase 1 | `STAFF SCHEDULE PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED`. Explicit runtime permissions/routes/UI reuse `staff_shifts` and `updated_at`; migration verdict `NO_MIGRATION_EXPECTED`. | Owner/Manager manage own-venue planned shifts; Staff reads own plus safe overlapping colleagues; Guest/foreign/Platform-only access denied. | Green Actions and staging smoke remain pending; keep route denial/privacy, atomic audit and Today/Guest behavior in regression. No production-readiness claim yet. |
 | Venue card preview | **VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY / DONE / MVP / STAGING-SMOKE-PASSED**. | One OWNER/MANAGER own-venue endpoint selects exact guarded Guest state or a saved, server-allowlisted private projection through the shared public-facing assembly. | Keep direct role/foreign/lifecycle denial, dirty-form no-auto-save, private-marker absence, `no-store`, authenticated media scoping and stale-state isolation in regression. |
 | Post-visit feedback | History-only submit, own-venue Owner/Manager read, Owner-only public review URL and low-rating exact `VENUE_CHAT` follow-up are DONE / MVP / staging-smoke-passed. | Preserve own-visit/own-venue isolation, Staff denial and manual-only external/follow-up actions. | Platform feedback dashboard, automated prompts and public review automation remain future/disabled. |
 | Staff tips | No runtime implementation yet; canonical future boundaries are `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. | Phase 2 external staff tip link + intent only; money does not touch platform in MVP; intent is not proof of payment. | Provider/direct payout needs legal/product decision; Telegram Stars and crypto are not MVP. |
@@ -244,8 +244,9 @@ These actions require server-side authorization and should require confirmation,
     foreign venue and Platform-only direct requests are denied.
 40. Staff schedule read derives the current user server-side, returns only own shifts plus
     non-canceled overlapping colleagues, excludes every profile linked to that same user from the
-    colleague side, and exposes no linked user, Telegram/member id, username, invite state, actor
-    metadata, private notes or unrelated venue schedule.
+    colleague side, and may expose the colleague's safe `staffProfileId` but no linked user/account
+    id, Telegram/member id, username, invite state, actor metadata, private notes or unrelated venue
+    schedule.
 41. Schedule create writes guest visibility false; reaching a planned shift never publishes Guest
     `Сегодня работают`, an engaged manual Today overlay blocks Schedule date/time moves, and current
     Today Shift/Guest APIs stay unchanged.
@@ -259,9 +260,11 @@ These actions require server-side authorization and should require confirmation,
 
 - Security/RBAC matrix: `UPDATED`.
 - Permission parity: `PARTIAL`; keep route-level denial tests and role smoke in regression.
-- Staff profiles / today shift: `DONE / MVP / STAGING-SMOKE-PASSED`.
-- Staff Schedule Phase 1: `SPEC READY / RUNTIME NOT IMPLEMENTED / NO MIGRATION EXPECTED`; all new
-  permission and privacy checks above remain future acceptance gates.
+- Staff profiles / today shift:
+  `STAFF PROFILES + TODAY SHIFT PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`.
+- Staff Schedule Phase 1: `STAFF SCHEDULE PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED`;
+  migration verdict `NO_MIGRATION_EXPECTED`; permission/privacy acceptance gates passed locally,
+  while green Actions and staging smoke remain pending.
 - Guest Preview Phase 2.1: **VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY / DONE / MVP / STAGING-SMOKE-PASSED**; focused preview/Guest/RBAC/promotion tests, compile/lint, Mini App build and deterministic smoke `95/95` passed, GitHub Actions were green, staging deploy completed and manual staging smoke passed.
 - Staff tips: `SPEC DRAFT / FUTURE`; payment provider/direct payout requires legal/product decision, and external tip intent is not proof of payment.
 - `ADMIN` decision: target is removal from product model / compatibility alias only; implementation cleanup remains a migration/copy hygiene follow-up.

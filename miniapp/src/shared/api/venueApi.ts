@@ -81,6 +81,12 @@ import type {
   VenueStaffProfileDto,
   VenueStaffProfilesResponse,
   VenueStaffProfileUpdateRequest,
+  VenueStaffScheduleCancelRequest,
+  VenueStaffScheduleCreateRequest,
+  VenueStaffScheduleListResponse,
+  VenueStaffScheduleMutationResponse,
+  VenueStaffScheduleOwnListResponse,
+  VenueStaffScheduleUpdateRequest,
   VenueStaffShiftResponse,
   VenueStaffShiftUpsertRequest,
   VenueStaffUpdateRoleRequest,
@@ -1346,6 +1352,101 @@ export async function venueUpsertTodayStaffShift(
   return requestApi<VenueStaffShiftResponse>(
     backendUrl,
     `/api/venue/${params.venueId}/staff/profiles/${params.profileId}/today-shift`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params.body),
+      signal
+    },
+    deps
+  )
+}
+
+export async function venueGetStaffSchedule(
+  backendUrl: string,
+  params: { venueId: number; from: string; to: string },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  const search = new URLSearchParams({ from: params.from, to: params.to })
+  return requestApi<VenueStaffScheduleListResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/staff/shifts?${search.toString()}`,
+    { signal },
+    deps
+  )
+}
+
+export async function venueGetMyStaffSchedule(
+  backendUrl: string,
+  params: { venueId: number; from: string; to: string },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  const search = new URLSearchParams({ from: params.from, to: params.to })
+  return requestApi<VenueStaffScheduleOwnListResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/staff/shifts/me?${search.toString()}`,
+    { signal },
+    deps
+  )
+}
+
+export async function venueCreateStaffScheduleShift(
+  backendUrl: string,
+  params: { venueId: number; body: VenueStaffScheduleCreateRequest },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenueStaffScheduleMutationResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/staff/shifts`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params.body),
+      signal
+    },
+    deps
+  )
+}
+
+export async function venueUpdateStaffScheduleShift(
+  backendUrl: string,
+  params: {
+    venueId: number
+    shiftId: number
+    body: VenueStaffScheduleUpdateRequest
+  },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenueStaffScheduleMutationResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/staff/shifts/${params.shiftId}`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params.body),
+      signal
+    },
+    deps
+  )
+}
+
+export async function venueCancelStaffScheduleShift(
+  backendUrl: string,
+  params: {
+    venueId: number
+    shiftId: number
+    body: VenueStaffScheduleCancelRequest
+  },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenueStaffScheduleMutationResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/staff/shifts/${params.shiftId}/cancel`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

@@ -146,3 +146,57 @@ class MenuShiftCheckStaleException :
         httpStatus = HttpStatusCode.Conflict,
         message = "Меню изменилось. Обновите проверку и повторите подтверждение.",
     )
+
+class StaffShiftDateConflictException(
+    details: JsonObject? = null,
+) : ApiException(
+        code = ApiErrorCodes.STAFF_SHIFT_DATE_CONFLICT,
+        httpStatus = HttpStatusCode.Conflict,
+        message = "У сотрудника уже есть смена на эту дату.",
+        details = details,
+    )
+
+class StaffShiftTodayOverrideException(
+    details: JsonObject? = null,
+) : ApiException(
+        code = ApiErrorCodes.STAFF_SHIFT_TODAY_OVERRIDE,
+        httpStatus = HttpStatusCode.Conflict,
+        message = "Эта смена уже управляется через «Сегодня на смене». Обновите данные.",
+        details = details,
+    )
+
+class StaffShiftInvalidIntervalException(
+    details: JsonObject? = null,
+) : ApiException(
+        code = ApiErrorCodes.STAFF_SHIFT_INVALID_INTERVAL,
+        httpStatus = HttpStatusCode.BadRequest,
+        message = "Не удалось определить интервал смены. Проверьте дату и время.",
+        details = details,
+    )
+
+class StaffShiftImmutableException(
+    details: JsonObject? = null,
+) : ApiException(
+        code = ApiErrorCodes.STAFF_SHIFT_IMMUTABLE,
+        httpStatus = HttpStatusCode.Conflict,
+        message = "Эту смену больше нельзя изменить.",
+        details = details,
+    )
+
+class StaffShiftStaleException(
+    details: JsonObject? = null,
+) : ApiException(
+        code = ApiErrorCodes.STAFF_SHIFT_STALE,
+        httpStatus = HttpStatusCode.Conflict,
+        message = "График изменился. Обновите данные и повторите действие.",
+        details = details,
+    )
+
+class StaffShiftConfirmationStaleException(
+    details: JsonObject? = null,
+) : ApiException(
+        code = ApiErrorCodes.STAFF_SHIFT_CONFIRMATION_STALE,
+        httpStatus = HttpStatusCode.Conflict,
+        message = "Статус смены изменился. Обновите данные и подтвердите действие повторно.",
+        details = details,
+    )

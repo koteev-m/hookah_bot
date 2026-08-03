@@ -3,9 +3,10 @@
 Дата актуализации: 2026-08-01.
 
 Статус: **canonical staff visibility/schedule/tips spec**.
-`STAFF_PROFILE + SHIFT_TODAY PHASE 1` is **DONE / MVP / STAGING-SMOKE-PASSED**.
-`STAFF_SCHEDULE PHASE 1 / OPTIONAL VENUE SHIFT PLANNING` is **SPEC READY / RUNTIME
-NOT IMPLEMENTED**. `STAFF_TIP`, photo upload/media picker and staff shift sign-up/chat workflows
+`STAFF PROFILES + TODAY SHIFT PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`.
+`STAFF SCHEDULE PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED`.
+Green GitHub Actions and staging smoke are pending, so the schedule slice is not production-ready.
+`STAFF_TIP`, photo upload/media picker and staff shift sign-up/chat workflows
 remain future. Phase 2 may create staff tip intents with external staff tip links, but the platform
 must not collect guest order payments or staff tips in MVP.
 
@@ -22,9 +23,9 @@ orders. Staff tips, when implemented, must target a specific staff profile, not 
 
 | Domain | Purpose | MVP status |
 | --- | --- | --- |
-| `STAFF_PROFILE` | Guest-visible profile for a hookah master, waiter, admin or other staff subtype. | Phase 1 DONE / MVP / STAGING-SMOKE-PASSED. |
-| `SHIFT_TODAY` | Simple manual "today on shift" visibility for public staff profiles. | Phase 1 DONE / MVP / STAGING-SMOKE-PASSED. |
-| `STAFF_SCHEDULE` | Optional bounded venue schedule for planned staff shifts. | Phase 1 spec ready; runtime not implemented. |
+| `STAFF_PROFILE` | Guest-visible profile for a hookah master, waiter, admin or other staff subtype. | `STAFF PROFILES + TODAY SHIFT PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`. |
+| `SHIFT_TODAY` | Simple manual "today on shift" visibility for public staff profiles. | `STAFF PROFILES + TODAY SHIFT PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`. |
+| `STAFF_SCHEDULE` | Optional bounded venue schedule for planned staff shifts. | `STAFF SCHEDULE PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED`; release gates pending. |
 | `STAFF_TIP` | Future CTA and intent to thank a specific staff member. | Phase 2+ / spec draft. |
 
 ## Staff Profiles / Today Shift Phase 1 MVP
@@ -51,8 +52,8 @@ The already implemented Staff Profiles / Today Shift slice explicitly excludes:
 - Telegram Stars tips;
 - crypto;
 - online guest order payment through the platform;
-- full staff scheduling/calendar runtime; the separate implementation-ready Schedule Phase 1
-  contract starts below;
+- schedule behavior inside the Profiles/Today slice itself; Staff Schedule Phase 1 is a separate,
+  optional implemented module described below;
 - photo upload/media picker;
 - separate staff communication chat/forum topics;
 - Telegram shift confirmation, shift sign-up or shift swaps.
@@ -137,7 +138,10 @@ MVP behavior:
 
 ## STAFF_SCHEDULE Phase 1 / Optional Venue Shift Planning
 
-Status: **SPEC READY / RUNTIME NOT IMPLEMENTED**.
+Status: **STAFF SCHEDULE PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**.
+
+Green GitHub Actions and staging smoke are pending. This status is local validation evidence, not
+production-readiness evidence.
 
 `STAFF_SCHEDULE` is an optional Venue Mode module. A venue that does not create shifts continues to
 use Staff Profiles, manual Today Shift, Staff Calls, Orders, Bookings and every Guest flow exactly as
@@ -146,11 +150,11 @@ Venue Mini App remains the source of truth.
 
 Migration verdict: **NO_MIGRATION_EXPECTED**.
 
-Specification verdict: **STAFF_SCHEDULE_SPEC_READY_FOR_IMPLEMENTATION**.
+Implementation verdict: **STAFF SCHEDULE PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**.
 
 ### Current Runtime And Schema Evidence
 
-The implementation must start from the existing foundation, not a second schedule model:
+The runtime reuses the existing foundation rather than introducing a second schedule model:
 
 - PostgreSQL migration
   `backend/app/src/main/resources/db/migration/postgresql/V117__staff_profiles_today_shifts.sql`
@@ -161,29 +165,27 @@ The implementation must start from the existing foundation, not a second schedul
   `UNIQUE (staff_profile_id, shift_date)`. It already enforces one shift per profile and venue-local
   start date. The same-venue composite foreign key prevents assigning another venue's profile.
 - `shift_date DATE`, `starts_at TIME`, `ends_at TIME`, the four stored status values and
-  `updated_at` already exist. Schedule-created rows must require both times in application code even
+  `updated_at` already exist. Schedule create/update requires both times in application code even
   though legacy Today Shift rows allow null times.
 - `staff_profiles.linked_user_id` is nullable, so display-only profiles are already supported.
 - There is no `version`, cancellation-reason, end-date, origin or timezone-snapshot column. Phase 1
   does not require one: `updated_at` is the optimistic token, cancellation has no reason field, and
   the next-day end is derived from local times.
-- `VenueStaffProfileRepository.upsertTodayShift` accepts an arbitrary `shiftDate` despite its name,
-  but it has destructive upsert semantics: an existing row's times/status/visibility/manual flag are
-  all overwritten. It must not be reused blindly for schedule CRUD.
-- Current Today Shift Mini App writes only status and guest visibility. Omitted times currently
-  become null, so the implementation must add preserve-on-omission behavior before a planned row
-  can safely reach its venue-local Today flow.
+- `VenueStaffProfileRepository` now has focused bounded list/create/CAS-update/CAS-cancel schedule
+  methods. Schedule CRUD does not use the legacy Today upsert as a generic overwrite.
+- Today Shift mutations preserve existing planned date/time fields when the request omits them;
+  schedule update/cancel preserves manual Today Shift visibility and operational flags.
 - Guest `Сегодня работают` reads the same table but requires `is_guest_visible=true`, stored
   `scheduled|active`, and a published visible profile. It does not require
-  `manually_marked_active`; therefore every schedule create must explicitly store
-  `is_guest_visible=false` and must never rely on the database default.
-- `AuditLogRepository` already supports transaction-bound `appendJson(connection, ...)`, so the
-  required schedule audit can be atomic without a new table.
+  `manually_marked_active`; schedule create explicitly stores `is_guest_visible=false` and
+  `manually_marked_active=false` rather than relying on database defaults.
+- `STAFF_SHIFT_CREATED`, `STAFF_SHIFT_UPDATED` and `STAFF_SHIFT_CANCELED` use transaction-bound
+  audit writes, so a failed/no-op/stale/denied mutation creates no schedule audit.
 - `VenueSettingsRepository.DEFAULT_AUTO_TIMEZONE` is `Europe/Moscow`. The generic timezone resolver
-  falls back safely for missing/blank/invalid configuration when an explicit fallback is supplied;
-  schedule code must not use browser or server-system timezone.
-- Current `VenueRbac` has no schedule permissions. The implementation must add explicit schedule
-  read/manage permissions and update exact permission-set tests.
+  is the explicit fallback for missing/blank/invalid configuration. Schedule resolution does not
+  trust browser/system timezone or a client UTC offset.
+- `VenueRbac` has explicit full-view, own-view and manage schedule permissions with exact
+  permission-set and route denial coverage.
 
 ### Bounded Shift Model
 
@@ -326,7 +328,7 @@ Manual Today Shift remains the sole source of Guest `Сегодня работа
 | Guest | Denied from all schedule APIs. | `Сегодня работают` remains the separate public read. |
 | Platform Owner | No automatic Phase 1 schedule authority. | A real venue membership is still required. |
 
-Recommended runtime permissions are separate `STAFF_SCHEDULE_VIEW`,
+Runtime permissions are separate `STAFF_SCHEDULE_VIEW`,
 `STAFF_SCHEDULE_VIEW_OWN` and `STAFF_SCHEDULE_MANAGE` values. Owner/Manager receive full view and
 manage; Staff receives own view only. UI hiding is convenience; routes must re-check membership,
 venue ownership, profile ownership and lifecycle.
@@ -340,8 +342,8 @@ venue ownership, profile ownership and lifecycle.
 - The colleague side excludes every profile linked to the authenticated user, not only the current
   own row; a user's second linked profile must never return that same user as their own colleague.
 - A canceled own shift has no working-together colleague projection.
-- A colleague projection contains only `displayName`, `roleLabel`, `subtype`, local start/end,
-  `endsNextDay` and computed lifecycle status.
+- A colleague projection contains only the safe profile identity `staffProfileId`, `displayName`,
+  `roleLabel`, `subtype`, local start/end, `endsNextDay` and computed lifecycle status.
 - Staff receives no full venue roster or schedule on dates where they have no own shift.
 - Staff DTOs contain no `linked_user_id`, venue-member/Telegram user id, Telegram username, invite
   state, photo ref, bio/private notes, actor ids, audit metadata, guest-publication flags or
@@ -352,13 +354,13 @@ venue ownership, profile ownership and lifecycle.
   manual Today Shift settings. Schedule presence never publishes it.
 - Phase 1 adds no venue visibility toggle for colleagues.
 
-### API Contract Proposal
+### Runtime API Contract
 
 The most compatible resource namespace extends the existing `/staff/shifts/today` collection.
 `PUT` is intentional for schedule update: all three mutable date/time fields are required and
-replace the interval as one unit, avoiding the omission semantics that make the current Today
-upsert unsafe for planned times. Existing Staff Profile `PATCH` remains appropriate for its
-partial-field contract; Schedule must not copy that behavior.
+replace the interval as one unit. The Today wrapper instead preserves planned times when they are
+omitted. Existing Staff Profile `PATCH` remains appropriate for its partial-field contract;
+Schedule does not copy that behavior.
 
 | Method | Route | Access | Contract |
 | --- | --- | --- | --- |
@@ -403,11 +405,12 @@ Owner/Manager shift DTO contains shift id, safe staff-profile id/display name/ro
 date/time, `endsNextDay`, nullable `computedStatus`, server-derived nullable
 `cancelConfirmationState`, venue timezone and `updatedAt`. For the shared-row compatibility case it
 also returns admin-only `storedStatus`, `isGuestVisible` and `manuallyMarkedActive`, so a Today
-override is explicit. An unresolvable complete row has no invented status and returns safe
-`STAFF_SHIFT_INVALID_INTERVAL` warning/allowed-actions metadata with cancel confirmation state
+override is explicit. An unresolvable non-canceled complete row has no invented status and returns
+safe `STAFF_SHIFT_INVALID_INTERVAL` warning/allowed-actions metadata with cancel confirmation state
 `INVALID_INTERVAL` when cancel is allowed. The DTO omits linked users, Telegram data and actor
 metadata. Staff uses a separate DTO: own shift identity/date/time/computed status/venue plus nested
-safe colleagues; invalid rows, colleague ids, Today overlay and admin/optimistic fields are absent.
+safe colleagues. A colleague's safe `staffProfileId` is present; invalid rows, shift-row ids,
+linked-user/account/Telegram ids, Today overlay and admin/optimistic fields are absent.
 
 Requests must not accept `actorUserId`, owner id, arbitrary venue id, Telegram identifiers,
 `isGuestVisible`, `manuallyMarkedActive`, trusted lifecycle status, timezone, UTC offset or computed
@@ -564,18 +567,19 @@ Telegram:
 - Staff-chat remains notification/radar/shortcut for existing domains and receives no schedule
   notification in Phase 1.
 
-### Likely Runtime Files
+### Runtime Implementation Files
 
 Backend:
 
-- `backend/app/src/main/kotlin/com/hookah/platform/backend/miniapp/venue/VenueStaffRoutes.kt`, or a
-  focused `VenueStaffScheduleRoutes.kt` mounted beside it;
+- `backend/app/src/main/kotlin/com/hookah/platform/backend/miniapp/venue/VenueStaffScheduleRoutes.kt`,
+  mounted from `backend/app/src/main/kotlin/com/hookah/platform/backend/Application.kt`;
+- `backend/app/src/main/kotlin/com/hookah/platform/backend/miniapp/venue/staff/VenueStaffScheduleDomain.kt`;
 - `backend/app/src/main/kotlin/com/hookah/platform/backend/miniapp/venue/staff/VenueStaffProfileRepository.kt`;
 - `backend/app/src/main/kotlin/com/hookah/platform/backend/miniapp/venue/VenueRbac.kt`;
 - `backend/app/src/main/kotlin/com/hookah/platform/backend/api/ApiErrors.kt` and exception mapping for
   conflict/stale codes;
-- `backend/app/src/test/kotlin/com/hookah/platform/backend/miniapp/venue/VenueStaffRoutesTest.kt`,
-  exact RBAC permission tests, repository coverage, and `GuestVenueRoutesTest` regression.
+- `VenueStaffRoutesTestSchedule.kt`, `VenueStaffRoutesTestTimeContract.kt`, the existing
+  `VenueStaffRoutesTest.kt`, exact RBAC permission tests and `GuestVenueRoutesTest` regression.
 
 Mini App:
 
@@ -585,13 +589,12 @@ Mini App:
 - `miniapp/src/style.css`;
 - `miniapp/e2e/guest-smoke.spec.ts`.
 
-Repository guidance: reuse `staff_profiles`, `staff_shifts` and `VenueStaffProfileRepository`, but
-add explicit bounded list/create/CAS-update/CAS-cancel methods. Keep `upsertTodayShift` as the legacy
-Today wrapper or refactor its internals; do not rename it to a generic schedule method unless its
-unsafe upsert semantics are removed and all Today compatibility tests are green. Inject a `Clock`
-into schedule lifecycle/horizon logic for deterministic tests.
+The implementation reuses `staff_profiles`, `staff_shifts` and
+`VenueStaffProfileRepository`, with explicit bounded list/create/CAS-update/CAS-cancel methods.
+`upsertTodayShift` remains the focused Today wrapper with preserve-on-omission compatibility, while
+schedule lifecycle/horizon logic uses an injected `Clock` for deterministic tests.
 
-### Validation Gates For The Future Runtime Slice
+### Validation Evidence And Remaining Release Gates
 
 Local:
 
@@ -602,11 +605,15 @@ Local:
 ./gradlew --no-daemon --max-workers=1 :backend:app:compileKotlin --console=plain
 ./gradlew --no-daemon --max-workers=1 :backend:app:ktlintCheck --console=plain
 npm --prefix miniapp run build
-MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke
+CI=1 TZ=UTC MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke
 git diff --check
 ```
 
-Release:
+Recorded local evidence: focused `*VenueStaffRoutesTest*`, backend compilation/test compilation,
+Kotlin lint, Mini App build, `git diff --check` and the full deterministic Mini App smoke suite
+(`109/109`) passed.
+
+Remaining release gates:
 
 - green GitHub Actions before release;
 - staging deploy after green Actions;
@@ -735,7 +742,8 @@ Analytics events are not the source of truth. Domain tables and audit logs remai
 - Photo upload/media picker: `FUTURE`.
 - Venue info-section media decision does not close staff-photo scope; see
   `docs/MEDIA_STORAGE_UPLOAD.md`.
-- Staff schedule: `PHASE 1 SPEC READY / RUNTIME NOT IMPLEMENTED`.
+- Staff schedule: `STAFF SCHEDULE PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED`;
+  `NO_MIGRATION_EXPECTED`; green Actions and staging smoke remain pending.
 - Staff shift Telegram notifications/sign-up/swaps: `FUTURE`.
 - Separate staff communication chat/forum topics: `OPEN DECISION / FUTURE`.
 - Staff tips: `SPEC DRAFT / FUTURE`.
@@ -744,9 +752,9 @@ Analytics events are not the source of truth. Domain tables and audit logs remai
 - Payments for tips: `FUTURE / needs legal/payment decision`.
 - Guest order online payment: not in scope; order payment remains the offline terminal model.
 
-## Next Implementation Step
+## Next Release Step
 
-Implement the bounded optional `STAFF_SCHEDULE` runtime contract in this document without a
-migration, then run the listed local, CI and staging gates. Keep Staff Profiles/Today Shift staging
-smoke in regression and do not infer that the new schedule itself is implemented or smoke-passed.
-Keep staff tips, photo upload, staff communication/chat/sign-up and every payment path out of scope.
+Wait for green GitHub Actions, then deploy to staging and run the listed Owner/Manager/Staff,
+timezone/overnight/privacy, venue-switch and Today/Guest regression smoke. Do not claim production
+readiness until those gates pass. Keep staff tips, photo upload, staff
+communication/chat/sign-up and every payment path out of scope.
