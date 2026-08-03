@@ -403,6 +403,7 @@ function getOptionCopy(isHookah: boolean) {
 
 function renderOptionRow(
   option: VenueMenuOptionDto,
+  itemName: string,
   currency: string,
   canManage: boolean,
   canManageAvailability: boolean,
@@ -414,6 +415,7 @@ function renderOptionRow(
   }
 ) {
   const row = el('div', { className: 'venue-menu-option' })
+  row.dataset.optionId = String(option.id)
   const info = el('div', { className: 'venue-menu-option-info' })
   const name = el('span', { text: option.name })
   append(info, name)
@@ -435,6 +437,12 @@ function renderOptionRow(
     })
     availabilityInput.type = 'checkbox'
     availabilityInput.checked = option.isAvailable
+    availabilityInput.setAttribute(
+      'aria-label',
+      option.isAvailable
+        ? `Доступен гостям: вариант ${option.name} для ${itemName}`
+        : `В стоп-листе: вариант ${option.name} для ${itemName}`
+    )
     availabilityInput.addEventListener('change', () => {
       availabilityInput.disabled = true
       handlers.onSetOptionAvailability(option, availabilityInput.checked)
@@ -495,6 +503,7 @@ function renderItemRow(
   const canApplyBaseFlavorProfiles = isHookah && canManage && (item.missingBaseFlavorProfilesCount ?? 0) > 0
 
   const row = el('div', { className: 'venue-menu-item' })
+  row.dataset.itemId = String(item.id)
   const info = el('div', { className: 'venue-menu-item-info' })
   const name = el('strong', { text: item.name })
   const price = el('span', { className: 'venue-menu-item-price', text: formatPrice(item.priceMinor, item.currency) })
@@ -537,7 +546,7 @@ function renderItemRow(
     } else {
       itemOptions.forEach((option) => {
         optionsList.appendChild(
-          renderOptionRow(option, item.currency, canManage, canManageAvailability, optionCopy, {
+          renderOptionRow(option, item.name, item.currency, canManage, canManageAvailability, optionCopy, {
             onEditOption,
             onDeleteOption,
             onSetOptionAvailability
@@ -568,6 +577,10 @@ function renderItemRow(
     })
     availabilityInput.type = 'checkbox'
     availabilityInput.checked = item.isAvailable
+    availabilityInput.setAttribute(
+      'aria-label',
+      item.isAvailable ? `Доступно гостям: ${item.name}` : `В стоп-листе: ${item.name}`
+    )
     availabilityInput.addEventListener('change', () => {
       availabilityInput.disabled = true
       onSetItemAvailability(item, availabilityInput.checked)

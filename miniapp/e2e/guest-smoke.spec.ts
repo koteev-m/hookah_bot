@@ -11862,6 +11862,11 @@ test('venue staff has no menu shift check but keeps individual stop-list access'
   await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
   await expect(page.locator('.venue-menu-shift-check')).toHaveCount(0)
   await expect(page.getByText('Проверка меню перед сменой', { exact: true })).toHaveCount(0)
+  await expect(page.getByRole('searchbox', { name: 'Поиск по позициям и опциям' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Массовое изменение' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Подтвердить проверку' })).toHaveCount(0)
+  await expect(page.locator('.venue-shift-check-item')).toHaveCount(0)
+  await expect(page.locator('.venue-shift-check-option')).toHaveCount(0)
 
   const editing = page.locator('details.venue-menu-editing')
   await expect(editing).not.toHaveAttribute('open', '')
@@ -11870,10 +11875,33 @@ test('venue staff has no menu shift check but keeps individual stop-list access'
   await editing
     .locator('details.venue-menu-category[data-category-id="30"] > summary')
     .click()
-  const item = page.locator('.venue-menu-item').filter({ hasText: 'Кальян Ягодный' })
-  await item.getByLabel('Доступно гостям', { exact: true }).uncheck()
+  const item = editing.locator('.venue-menu-item[data-item-id="310"]')
+  const mintOption = item.locator('.venue-menu-option[data-option-id="402"]')
+  await expect(item).toHaveCount(1)
+  await expect(mintOption).toHaveCount(1)
+  await expect(
+    item.getByRole('checkbox', { name: 'Доступно гостям: Кальян Ягодный', exact: true })
+  ).toBeChecked()
+  await expect(
+    mintOption.getByRole('checkbox', {
+      name: 'В стоп-листе: вариант Мята для Кальян Ягодный',
+      exact: true
+    })
+  ).not.toBeChecked()
+  await item
+    .getByRole('checkbox', { name: 'Доступно гостям: Кальян Ягодный', exact: true })
+    .uncheck()
   await expect.poll(() => api.getItemAvailabilityCalls()).toBe(1)
-  await expect(item.getByLabel('В стоп-листе', { exact: true })).not.toBeChecked()
+  await expect(
+    item.getByRole('checkbox', { name: 'В стоп-листе: Кальян Ягодный', exact: true })
+  ).not.toBeChecked()
+  await expect(
+    mintOption.getByRole('checkbox', {
+      name: 'В стоп-листе: вариант Мята для Кальян Ягодный',
+      exact: true
+    })
+  ).not.toBeChecked()
+  expect(api.getOptionAvailabilityCalls()).toBe(0)
 
   const directResult = await page.evaluate(async () => {
     const response = await fetch('/api/venue/menu/shift-check?venueId=1', {
@@ -11999,12 +12027,22 @@ test('venue manager manages menu item flavors from mini app', async ({ page }) =
       .locator(`details.venue-menu-category[data-category-id="${categoryId}"] > summary`)
       .click()
   }
-  await expect(hookahItem().getByLabel('Доступно гостям')).toBeChecked()
-  await hookahItem().getByLabel('Доступно гостям').uncheck()
-  await expect(hookahItem().getByLabel('В стоп-листе')).not.toBeChecked()
+  await expect(
+    hookahItem().getByRole('checkbox', { name: 'Доступно гостям: Кальян', exact: true })
+  ).toBeChecked()
+  await hookahItem()
+    .getByRole('checkbox', { name: 'Доступно гостям: Кальян', exact: true })
+    .uncheck()
+  await expect(
+    hookahItem().getByRole('checkbox', { name: 'В стоп-листе: Кальян', exact: true })
+  ).not.toBeChecked()
   await expect(hookahItem().locator('.menu-item-badge').filter({ hasText: 'Стоп-лист' })).toBeVisible()
-  await hookahItem().getByLabel('В стоп-листе').check()
-  await expect(hookahItem().getByLabel('Доступно гостям')).toBeChecked()
+  await hookahItem()
+    .getByRole('checkbox', { name: 'В стоп-листе: Кальян', exact: true })
+    .check()
+  await expect(
+    hookahItem().getByRole('checkbox', { name: 'Доступно гостям: Кальян', exact: true })
+  ).toBeChecked()
   expect(api.getItemAvailabilityCalls()).toBe(2)
   await expect(hookahItem().getByText('Вкусы / опции')).toBeVisible()
   await expect(hookahItem().getByText('Добавьте вкусы, чтобы гости выбирали их при заказе.')).toBeVisible()
@@ -12048,12 +12086,32 @@ test('venue manager manages menu item flavors from mini app', async ({ page }) =
   expect(api.getUpdateOptionCalls()).toBe(1)
 
   const editedOption = () => page.locator('.venue-menu-option').filter({ hasText: 'Яблоко без мяты' })
-  await editedOption().getByLabel('Доступен гостям').uncheck()
-  await expect(editedOption().getByLabel('В стоп-листе')).not.toBeChecked()
+  await editedOption()
+    .getByRole('checkbox', {
+      name: 'Доступен гостям: вариант Яблоко без мяты для Кальян',
+      exact: true
+    })
+    .uncheck()
+  await expect(
+    editedOption().getByRole('checkbox', {
+      name: 'В стоп-листе: вариант Яблоко без мяты для Кальян',
+      exact: true
+    })
+  ).not.toBeChecked()
   await expect(editedOption().locator('.menu-item-badge').filter({ hasText: 'Стоп-лист' })).toBeVisible()
   expect(api.getAvailabilityCalls()).toBe(1)
-  await editedOption().getByLabel('В стоп-листе').check()
-  await expect(editedOption().getByLabel('Доступен гостям')).toBeChecked()
+  await editedOption()
+    .getByRole('checkbox', {
+      name: 'В стоп-листе: вариант Яблоко без мяты для Кальян',
+      exact: true
+    })
+    .check()
+  await expect(
+    editedOption().getByRole('checkbox', {
+      name: 'Доступен гостям: вариант Яблоко без мяты для Кальян',
+      exact: true
+    })
+  ).toBeChecked()
   expect(api.getAvailabilityCalls()).toBe(2)
 
   await editedOption().getByRole('button', { name: 'Удалить вкус' }).click()
@@ -12141,13 +12199,32 @@ test('venue staff sees menu flavors without edit controls', async ({ page }) => 
   await expect(hookahItem.getByRole('button', { name: 'Удалить' })).toHaveCount(0)
   await expect(hookahItem.getByRole('button', { name: '↑' })).toHaveCount(0)
   await expect(hookahItem.getByRole('button', { name: '↓' })).toHaveCount(0)
-  await expect(hookahItem.getByLabel('Доступно гостям')).toBeChecked()
-  await expect(hookahItem.getByLabel('Доступен гостям')).toBeChecked()
+  await expect(
+    hookahItem.getByRole('checkbox', { name: 'Доступно гостям: Кальян', exact: true })
+  ).toBeChecked()
+  await expect(
+    appleOption.getByRole('checkbox', {
+      name: 'Доступен гостям: вариант Яблоко для Кальян',
+      exact: true
+    })
+  ).toBeChecked()
 
-  await appleOption.getByLabel('Доступен гостям').uncheck()
-  await expect(appleOption.getByLabel('В стоп-листе')).not.toBeChecked()
+  await appleOption
+    .getByRole('checkbox', {
+      name: 'Доступен гостям: вариант Яблоко для Кальян',
+      exact: true
+    })
+    .uncheck()
+  await expect(
+    appleOption.getByRole('checkbox', {
+      name: 'В стоп-листе: вариант Яблоко для Кальян',
+      exact: true
+    })
+  ).not.toBeChecked()
   await expect(appleOption.locator('.menu-item-badge').filter({ hasText: 'Стоп-лист' })).toBeVisible()
-  await hookahItem.getByLabel('Доступно гостям').uncheck()
+  await hookahItem
+    .getByRole('checkbox', { name: 'Доступно гостям: Кальян', exact: true })
+    .uncheck()
   await expect(hookahItem.locator('.menu-item-badge').filter({ hasText: 'Стоп-лист' })).toHaveCount(2)
   expect(api.getAvailabilityCalls()).toBe(1)
   expect(api.getItemAvailabilityCalls()).toBe(1)
