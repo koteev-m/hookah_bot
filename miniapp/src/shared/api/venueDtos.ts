@@ -341,6 +341,16 @@ export type VenueStaffScheduleAdminShiftDto = {
   warning?: VenueStaffScheduleWarningDto | null
 }
 
+export type VenueStaffScheduleEffectiveHoursState = 'OPEN' | 'CLOSED' | 'NOT_CONFIGURED'
+
+export type VenueStaffScheduleEffectiveHoursDto = {
+  serviceDate: string
+  state: VenueStaffScheduleEffectiveHoursState
+  opensAt?: string | null
+  closesAt?: string | null
+  endsNextDay: boolean
+}
+
 export type VenueStaffScheduleListResponse = {
   venueId: number
   venueName?: string | null
@@ -349,6 +359,7 @@ export type VenueStaffScheduleListResponse = {
   from: string
   to: string
   shifts: VenueStaffScheduleAdminShiftDto[]
+  effectiveHours: VenueStaffScheduleEffectiveHoursDto[]
 }
 
 export type VenueStaffScheduleCreateRequest = {
@@ -423,6 +434,22 @@ export type VenueStaffInviteResponse = {
   deepLink?: string | null
   fallbackCommand?: string
   copyText?: string
+}
+
+export type VenueStaffPendingInviteDto = {
+  handle: string
+  role: 'MANAGER' | 'STAFF'
+  status: 'PENDING'
+  createdAt: string
+  expiresAt: string
+}
+
+export type VenueStaffPendingInvitesResponse = {
+  invites: VenueStaffPendingInviteDto[]
+}
+
+export type VenueStaffInviteRevokeResponse = {
+  ok: boolean
 }
 
 export type VenueStaffInviteAcceptRequest = {

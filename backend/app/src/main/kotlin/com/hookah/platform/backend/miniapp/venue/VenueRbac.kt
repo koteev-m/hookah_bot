@@ -9,6 +9,14 @@ enum class VenueRole {
 }
 
 enum class VenuePermission {
+    STAFF_ACCESS_VIEW,
+    STAFF_INVITE_CREATE_STAFF,
+    STAFF_INVITE_CREATE_MANAGER,
+    STAFF_INVITE_REVOKE_STAFF,
+    STAFF_INVITE_REVOKE_MANAGER,
+    STAFF_PROFILE_MANAGE_STAFF,
+    STAFF_PROFILE_PUBLISH_STAFF,
+    STAFF_PROFILE_EDIT_OWN,
     STAFF_CHAT_LINK,
     VENUE_SETTINGS,
     ORDER_STATUS_UPDATE,
@@ -61,6 +69,13 @@ object VenuePermissions {
         return when (role) {
             VenueRole.OWNER ->
                 setOf(
+                    VenuePermission.STAFF_ACCESS_VIEW,
+                    VenuePermission.STAFF_INVITE_CREATE_STAFF,
+                    VenuePermission.STAFF_INVITE_CREATE_MANAGER,
+                    VenuePermission.STAFF_INVITE_REVOKE_STAFF,
+                    VenuePermission.STAFF_INVITE_REVOKE_MANAGER,
+                    VenuePermission.STAFF_PROFILE_MANAGE_STAFF,
+                    VenuePermission.STAFF_PROFILE_PUBLISH_STAFF,
                     VenuePermission.STAFF_CHAT_LINK,
                     VenuePermission.VENUE_SETTINGS,
                     VenuePermission.ORDER_STATUS_UPDATE,
@@ -88,6 +103,12 @@ object VenuePermissions {
                 )
             VenueRole.MANAGER ->
                 setOf(
+                    VenuePermission.STAFF_ACCESS_VIEW,
+                    VenuePermission.STAFF_INVITE_CREATE_STAFF,
+                    VenuePermission.STAFF_INVITE_REVOKE_STAFF,
+                    VenuePermission.STAFF_PROFILE_MANAGE_STAFF,
+                    VenuePermission.STAFF_PROFILE_PUBLISH_STAFF,
+                    VenuePermission.STAFF_PROFILE_EDIT_OWN,
                     VenuePermission.STAFF_CHAT_LINK,
                     VenuePermission.ORDER_STATUS_UPDATE,
                     VenuePermission.ORDER_QUEUE_VIEW,
@@ -112,6 +133,7 @@ object VenuePermissions {
                 )
             VenueRole.STAFF ->
                 setOf(
+                    VenuePermission.STAFF_PROFILE_EDIT_OWN,
                     VenuePermission.ORDER_QUEUE_VIEW,
                     VenuePermission.ORDER_STATUS_UPDATE,
                     VenuePermission.BOOKING_VIEW,

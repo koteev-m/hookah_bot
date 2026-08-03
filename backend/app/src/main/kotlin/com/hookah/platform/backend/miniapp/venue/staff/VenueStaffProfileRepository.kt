@@ -9,13 +9,17 @@ import com.hookah.platform.backend.api.StaffShiftInvalidIntervalException
 import com.hookah.platform.backend.api.StaffShiftStaleException
 import com.hookah.platform.backend.api.StaffShiftTodayOverrideException
 import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
+import com.hookah.platform.backend.miniapp.venue.VenueRole
+import com.hookah.platform.backend.miniapp.venue.VenueRoleMapping
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObjectBuilder
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.sql.Connection
@@ -162,249 +166,526 @@ class VenueStaffProfileRepository(
     suspend fun createProfile(
         venueId: Long,
         actorUserId: Long,
+        actorRole: VenueRole,
         input: StaffProfileWrite,
-    ): VenueStaffProfile {
-        val ds = dataSource ?: throw DatabaseUnavailableException()
-        return withContext(Dispatchers.IO) {
-            try {
-                ds.connection.use { connection ->
-                    connection.prepareStatement(
-                        """
-                        INSERT INTO staff_profiles (
-                            venue_id,
-                            linked_user_id,
-                            display_name,
-                            role_label,
-                            subtype,
-                            photo_ref,
-                            bio,
-                            tags,
-                            is_guest_visible,
-                            created_by_user_id,
-                            updated_by_user_id,
-                            published_at,
-                            disabled_at
-                        )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """.trimIndent(),
-                        Statement.RETURN_GENERATED_KEYS,
-                    ).use { statement ->
-                        statement.setLong(1, venueId)
-                        statement.setNullableLong(2, input.linkedUserId)
-                        statement.setString(3, input.displayName)
-                        statement.setNullableString(4, input.roleLabel)
-                        statement.setString(5, input.subtype)
-                        statement.setNullableString(6, input.photoRef)
-                        statement.setNullableString(7, input.bio)
-                        statement.setNullableString(8, encodeTags(input.tags))
-                        statement.setBoolean(9, input.isGuestVisible)
-                        statement.setLong(10, actorUserId)
-                        statement.setLong(11, actorUserId)
-                        if (input.isGuestVisible) {
-                            statement.setTimestamp(12, Timestamp.from(Instant.now()))
-                            statement.setNull(13, Types.TIMESTAMP)
-                        } else {
-                            statement.setNull(12, Types.TIMESTAMP)
-                            statement.setNull(13, Types.TIMESTAMP)
-                        }
-                        statement.executeUpdate()
-                        val profileId =
-                            statement.generatedKeys.use { rs ->
-                                if (rs.next()) {
-                                    rs.getLong(1)
-                                } else {
-                                    throw DatabaseUnavailableException()
-                                }
-                            }
-                        findProfileInConnection(connection, venueId, profileId) ?: throw DatabaseUnavailableException()
+        auditLogRepository: AuditLogRepository,
+    ): StaffProfileMutationResult =
+        inTransaction { connection ->
+            if (!actorRoleStillApplies(connection, venueId, actorUserId, actorRole)) {
+                return@inTransaction StaffProfileMutationResult.Forbidden
+            }
+            when (validateRequestedLink(connection, venueId, input.linkedUserId, actorRole)) {
+                StaffProfileLinkValidation.ALLOWED -> Unit
+                StaffProfileLinkValidation.INVALID -> return@inTransaction StaffProfileMutationResult.InvalidLink
+                StaffProfileLinkValidation.PROTECTED -> return@inTransaction StaffProfileMutationResult.Forbidden
+            }
+            val publishedAt = Instant.now().takeIf { input.isGuestVisible }
+            val profileId =
+                connection.prepareStatement(
+                    """
+                    INSERT INTO staff_profiles (
+                        venue_id,
+                        linked_user_id,
+                        display_name,
+                        role_label,
+                        subtype,
+                        photo_ref,
+                        bio,
+                        tags,
+                        is_guest_visible,
+                        created_by_user_id,
+                        updated_by_user_id,
+                        published_at,
+                        disabled_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """.trimIndent(),
+                    Statement.RETURN_GENERATED_KEYS,
+                ).use { statement ->
+                    statement.setLong(1, venueId)
+                    statement.setNullableLong(2, input.linkedUserId)
+                    statement.setString(3, input.displayName)
+                    statement.setNullableString(4, input.roleLabel)
+                    statement.setString(5, input.subtype)
+                    statement.setNullableString(6, input.photoRef)
+                    statement.setNullableString(7, input.bio)
+                    statement.setNullableString(8, encodeTags(input.tags))
+                    statement.setBoolean(9, input.isGuestVisible)
+                    statement.setLong(10, actorUserId)
+                    statement.setLong(11, actorUserId)
+                    statement.setNullableInstant(12, publishedAt)
+                    statement.setNull(13, Types.TIMESTAMP)
+                    statement.executeUpdate()
+                    statement.generatedKeys.use { rs ->
+                        if (rs.next()) rs.getLong(1) else throw DatabaseUnavailableException()
                     }
                 }
-            } catch (e: SQLException) {
-                throw DatabaseUnavailableException()
-            }
+            val profile =
+                findProfileInConnection(connection, venueId, profileId)
+                    ?: throw DatabaseUnavailableException()
+            appendStaffProfileAudit(
+                connection = connection,
+                auditLogRepository = auditLogRepository,
+                actorUserId = actorUserId,
+                action = STAFF_PROFILE_CREATED_AUDIT_ACTION,
+                old = null,
+                new = profile,
+                changedFields = profileCreationFieldNames(input),
+            )
+            StaffProfileMutationResult.Success(profile, changed = true)
         }
-    }
 
     suspend fun updateProfile(
         venueId: Long,
         profileId: Long,
         actorUserId: Long,
-        input: StaffProfileWrite,
-        publishedAt: Instant?,
-        disabledAt: Instant?,
-    ): VenueStaffProfile? {
-        val ds = dataSource ?: throw DatabaseUnavailableException()
-        return withContext(Dispatchers.IO) {
-            try {
-                ds.connection.use { connection ->
-                    connection.prepareStatement(
-                        """
-                        UPDATE staff_profiles
-                        SET linked_user_id = ?,
-                            display_name = ?,
-                            role_label = ?,
-                            subtype = ?,
-                            photo_ref = ?,
-                            bio = ?,
-                            tags = ?,
-                            is_guest_visible = ?,
-                            updated_by_user_id = ?,
-                            published_at = ?,
-                            disabled_at = ?,
-                            updated_at = CURRENT_TIMESTAMP
-                        WHERE venue_id = ? AND id = ?
-                        """.trimIndent(),
-                    ).use { statement ->
-                        statement.setNullableLong(1, input.linkedUserId)
-                        statement.setString(2, input.displayName)
-                        statement.setNullableString(3, input.roleLabel)
-                        statement.setString(4, input.subtype)
-                        statement.setNullableString(5, input.photoRef)
-                        statement.setNullableString(6, input.bio)
-                        statement.setNullableString(7, encodeTags(input.tags))
-                        statement.setBoolean(8, input.isGuestVisible)
-                        statement.setLong(9, actorUserId)
-                        statement.setNullableInstant(10, publishedAt)
-                        statement.setNullableInstant(11, disabledAt)
-                        statement.setLong(12, venueId)
-                        statement.setLong(13, profileId)
-                        if (statement.executeUpdate() == 0) {
-                            return@withContext null
-                        }
-                    }
-                    findProfileInConnection(connection, venueId, profileId)
-                }
-            } catch (e: SQLException) {
-                throw DatabaseUnavailableException()
+        actorRole: VenueRole,
+        selfEditOnlyRequest: Boolean,
+        auditLogRepository: AuditLogRepository,
+        buildInput: (VenueStaffProfile) -> StaffProfileWrite,
+    ): StaffProfileMutationResult =
+        inTransaction { connection ->
+            if (!actorRoleStillApplies(connection, venueId, actorUserId, actorRole)) {
+                return@inTransaction StaffProfileMutationResult.Forbidden
             }
+            val current =
+                findProfileInConnection(connection, venueId, profileId, forUpdate = true)
+                    ?: return@inTransaction StaffProfileMutationResult.NotFound
+            val input = buildInput(current)
+            val changedFields = changedProfileFields(current, input)
+            when (
+                authorizeProfileMutation(
+                    connection = connection,
+                    venueId = venueId,
+                    actorUserId = actorUserId,
+                    actorRole = actorRole,
+                    current = current,
+                    requestedLinkedUserId = input.linkedUserId,
+                    changedFields = changedFields,
+                    selfEditOnlyRequest = selfEditOnlyRequest,
+                    publishing = false,
+                )
+            ) {
+                StaffProfileLinkValidation.ALLOWED -> Unit
+                StaffProfileLinkValidation.INVALID -> return@inTransaction StaffProfileMutationResult.InvalidLink
+                StaffProfileLinkValidation.PROTECTED -> return@inTransaction StaffProfileMutationResult.Forbidden
+            }
+            if (changedFields.isEmpty()) {
+                return@inTransaction StaffProfileMutationResult.Success(current, changed = false)
+            }
+            val now = Instant.now()
+            val publishedAt =
+                if (input.isGuestVisible) current.publishedAt ?: now else current.publishedAt
+            val disabledAt =
+                when {
+                    input.isGuestVisible -> null
+                    current.isGuestVisible -> now
+                    else -> current.disabledAt
+                }
+            connection.prepareStatement(
+                """
+                UPDATE staff_profiles
+                SET linked_user_id = ?,
+                    display_name = ?,
+                    role_label = ?,
+                    subtype = ?,
+                    photo_ref = ?,
+                    bio = ?,
+                    tags = ?,
+                    is_guest_visible = ?,
+                    updated_by_user_id = ?,
+                    published_at = ?,
+                    disabled_at = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE venue_id = ? AND id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setNullableLong(1, input.linkedUserId)
+                statement.setString(2, input.displayName)
+                statement.setNullableString(3, input.roleLabel)
+                statement.setString(4, input.subtype)
+                statement.setNullableString(5, input.photoRef)
+                statement.setNullableString(6, input.bio)
+                statement.setNullableString(7, encodeTags(input.tags))
+                statement.setBoolean(8, input.isGuestVisible)
+                statement.setLong(9, actorUserId)
+                statement.setNullableInstant(10, publishedAt)
+                statement.setNullableInstant(11, disabledAt)
+                statement.setLong(12, venueId)
+                statement.setLong(13, profileId)
+                if (statement.executeUpdate() != 1) {
+                    throw DatabaseUnavailableException()
+                }
+            }
+            val updated =
+                findProfileInConnection(connection, venueId, profileId)
+                    ?: throw DatabaseUnavailableException()
+            appendStaffProfileAudit(
+                connection = connection,
+                auditLogRepository = auditLogRepository,
+                actorUserId = actorUserId,
+                action = STAFF_PROFILE_UPDATED_AUDIT_ACTION,
+                old = current,
+                new = updated,
+                changedFields = changedFields,
+            )
+            StaffProfileMutationResult.Success(updated, changed = true)
         }
-    }
 
     suspend fun publishProfile(
         venueId: Long,
         profileId: Long,
         actorUserId: Long,
-    ): VenueStaffProfile? {
-        val ds = dataSource ?: throw DatabaseUnavailableException()
-        return withContext(Dispatchers.IO) {
-            try {
-                ds.connection.use { connection ->
-                    connection.prepareStatement(
-                        """
-                        UPDATE staff_profiles
-                        SET is_guest_visible = TRUE,
-                            published_at = COALESCE(published_at, CURRENT_TIMESTAMP),
-                            disabled_at = NULL,
-                            updated_by_user_id = ?,
-                            updated_at = CURRENT_TIMESTAMP
-                        WHERE venue_id = ? AND id = ?
-                        """.trimIndent(),
-                    ).use { statement ->
-                        statement.setLong(1, actorUserId)
-                        statement.setLong(2, venueId)
-                        statement.setLong(3, profileId)
-                        if (statement.executeUpdate() == 0) {
-                            return@withContext null
-                        }
-                    }
-                    findProfileInConnection(connection, venueId, profileId)
-                }
-            } catch (e: SQLException) {
-                throw DatabaseUnavailableException()
-            }
-        }
-    }
+        actorRole: VenueRole,
+        auditLogRepository: AuditLogRepository,
+    ): StaffProfileMutationResult =
+        setProfileVisibility(
+            venueId = venueId,
+            profileId = profileId,
+            actorUserId = actorUserId,
+            actorRole = actorRole,
+            visible = true,
+            auditLogRepository = auditLogRepository,
+        )
 
     suspend fun hideProfile(
         venueId: Long,
         profileId: Long,
         actorUserId: Long,
-    ): VenueStaffProfile? {
-        val ds = dataSource ?: throw DatabaseUnavailableException()
-        return withContext(Dispatchers.IO) {
-            try {
-                ds.connection.use { connection ->
-                    connection.prepareStatement(
-                        """
-                        UPDATE staff_profiles
-                        SET is_guest_visible = FALSE,
-                            disabled_at = CURRENT_TIMESTAMP,
-                            updated_by_user_id = ?,
-                            updated_at = CURRENT_TIMESTAMP
-                        WHERE venue_id = ? AND id = ?
-                        """.trimIndent(),
-                    ).use { statement ->
-                        statement.setLong(1, actorUserId)
-                        statement.setLong(2, venueId)
-                        statement.setLong(3, profileId)
-                        if (statement.executeUpdate() == 0) {
-                            return@withContext null
-                        }
-                    }
-                    findProfileInConnection(connection, venueId, profileId)
-                }
-            } catch (e: SQLException) {
-                throw DatabaseUnavailableException()
+        actorRole: VenueRole,
+        auditLogRepository: AuditLogRepository,
+    ): StaffProfileMutationResult =
+        setProfileVisibility(
+            venueId = venueId,
+            profileId = profileId,
+            actorUserId = actorUserId,
+            actorRole = actorRole,
+            visible = false,
+            auditLogRepository = auditLogRepository,
+        )
+
+    private suspend fun setProfileVisibility(
+        venueId: Long,
+        profileId: Long,
+        actorUserId: Long,
+        actorRole: VenueRole,
+        visible: Boolean,
+        auditLogRepository: AuditLogRepository,
+    ): StaffProfileMutationResult =
+        inTransaction { connection ->
+            if (!actorRoleStillApplies(connection, venueId, actorUserId, actorRole)) {
+                return@inTransaction StaffProfileMutationResult.Forbidden
             }
+            val current =
+                findProfileInConnection(connection, venueId, profileId, forUpdate = true)
+                    ?: return@inTransaction StaffProfileMutationResult.NotFound
+            when (
+                authorizeProfileMutation(
+                    connection = connection,
+                    venueId = venueId,
+                    actorUserId = actorUserId,
+                    actorRole = actorRole,
+                    current = current,
+                    requestedLinkedUserId = current.linkedUserId,
+                    changedFields = setOf(STAFF_PROFILE_VISIBILITY_FIELD),
+                    selfEditOnlyRequest = false,
+                    publishing = true,
+                )
+            ) {
+                StaffProfileLinkValidation.ALLOWED -> Unit
+                StaffProfileLinkValidation.INVALID -> return@inTransaction StaffProfileMutationResult.InvalidLink
+                StaffProfileLinkValidation.PROTECTED -> return@inTransaction StaffProfileMutationResult.Forbidden
+            }
+            if (current.isGuestVisible == visible) {
+                return@inTransaction StaffProfileMutationResult.Success(current, changed = false)
+            }
+            val now = Instant.now()
+            connection.prepareStatement(
+                """
+                UPDATE staff_profiles
+                SET is_guest_visible = ?,
+                    published_at = ?,
+                    disabled_at = ?,
+                    updated_by_user_id = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE venue_id = ? AND id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setBoolean(1, visible)
+                statement.setNullableInstant(2, if (visible) current.publishedAt ?: now else current.publishedAt)
+                statement.setNullableInstant(3, if (visible) null else now)
+                statement.setLong(4, actorUserId)
+                statement.setLong(5, venueId)
+                statement.setLong(6, profileId)
+                if (statement.executeUpdate() != 1) {
+                    throw DatabaseUnavailableException()
+                }
+            }
+            val updated =
+                findProfileInConnection(connection, venueId, profileId)
+                    ?: throw DatabaseUnavailableException()
+            appendStaffProfileAudit(
+                connection = connection,
+                auditLogRepository = auditLogRepository,
+                actorUserId = actorUserId,
+                action =
+                    if (visible) {
+                        STAFF_PROFILE_PUBLISHED_AUDIT_ACTION
+                    } else {
+                        STAFF_PROFILE_HIDDEN_AUDIT_ACTION
+                    },
+                old = current,
+                new = updated,
+                changedFields = setOf(STAFF_PROFILE_VISIBILITY_FIELD),
+            )
+            StaffProfileMutationResult.Success(updated, changed = true)
+        }
+
+    private fun actorRoleStillApplies(
+        connection: Connection,
+        venueId: Long,
+        actorUserId: Long,
+        expectedRole: VenueRole,
+    ): Boolean = lockMembershipRole(connection, venueId, actorUserId) == expectedRole
+
+    private fun validateRequestedLink(
+        connection: Connection,
+        venueId: Long,
+        linkedUserId: Long?,
+        actorRole: VenueRole,
+    ): StaffProfileLinkValidation {
+        if (linkedUserId == null) {
+            return StaffProfileLinkValidation.ALLOWED
+        }
+        val linkedRole =
+            lockMembershipRole(connection, venueId, linkedUserId)
+                ?: return StaffProfileLinkValidation.INVALID
+        return when (actorRole) {
+            VenueRole.OWNER -> StaffProfileLinkValidation.ALLOWED
+            VenueRole.MANAGER ->
+                if (linkedRole == VenueRole.STAFF) {
+                    StaffProfileLinkValidation.ALLOWED
+                } else {
+                    StaffProfileLinkValidation.PROTECTED
+                }
+            VenueRole.STAFF -> StaffProfileLinkValidation.PROTECTED
         }
     }
+
+    private fun authorizeProfileMutation(
+        connection: Connection,
+        venueId: Long,
+        actorUserId: Long,
+        actorRole: VenueRole,
+        current: VenueStaffProfile,
+        requestedLinkedUserId: Long?,
+        changedFields: Set<String>,
+        selfEditOnlyRequest: Boolean,
+        publishing: Boolean,
+    ): StaffProfileLinkValidation {
+        if (actorRole == VenueRole.OWNER) {
+            return validateRequestedLink(connection, venueId, requestedLinkedUserId, actorRole)
+        }
+        val currentLinkedRole =
+            current.linkedUserId?.let { lockMembershipRole(connection, venueId, it) }
+        if (actorRole == VenueRole.STAFF) {
+            val safeSelfEdit =
+                current.linkedUserId == actorUserId &&
+                    currentLinkedRole == VenueRole.STAFF &&
+                    requestedLinkedUserId == current.linkedUserId &&
+                    selfEditOnlyRequest &&
+                    !publishing &&
+                    changedFields.all { it in STAFF_PROFILE_SELF_EDIT_FIELDS }
+            return if (safeSelfEdit) {
+                StaffProfileLinkValidation.ALLOWED
+            } else {
+                StaffProfileLinkValidation.PROTECTED
+            }
+        }
+        val safeManagerSelfEdit =
+            current.linkedUserId == actorUserId &&
+                currentLinkedRole == VenueRole.MANAGER &&
+                requestedLinkedUserId == current.linkedUserId &&
+                selfEditOnlyRequest &&
+                !publishing &&
+                changedFields.all { it in STAFF_PROFILE_SELF_EDIT_FIELDS }
+        if (safeManagerSelfEdit) {
+            return StaffProfileLinkValidation.ALLOWED
+        }
+        val currentManageable =
+            current.linkedUserId == null || currentLinkedRole == VenueRole.STAFF
+        if (!currentManageable) {
+            return StaffProfileLinkValidation.PROTECTED
+        }
+        return validateRequestedLink(connection, venueId, requestedLinkedUserId, VenueRole.MANAGER)
+    }
+
+    private fun lockMembershipRole(
+        connection: Connection,
+        venueId: Long,
+        userId: Long,
+    ): VenueRole? =
+        connection.prepareStatement(
+            """
+            SELECT role
+            FROM venue_members
+            WHERE venue_id = ? AND user_id = ?
+            FOR UPDATE
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, userId)
+            statement.executeQuery().use { rs ->
+                if (rs.next()) VenueRoleMapping.fromDb(rs.getString("role")) else null
+            }
+        }
+
+    private fun changedProfileFields(
+        current: VenueStaffProfile,
+        input: StaffProfileWrite,
+    ): Set<String> =
+        buildSet {
+            if (current.linkedUserId != input.linkedUserId) add(STAFF_PROFILE_LINKAGE_FIELD)
+            if (current.displayName != input.displayName) add("displayName")
+            if (current.roleLabel != input.roleLabel) add("roleLabel")
+            if (current.subtype != input.subtype) add("subtype")
+            if (current.photoRef != input.photoRef) add("photoRef")
+            if (current.bio != input.bio) add("bio")
+            if (current.tags != input.tags) add("tags")
+            if (current.isGuestVisible != input.isGuestVisible) add(STAFF_PROFILE_VISIBILITY_FIELD)
+        }
+
+    private fun profileCreationFieldNames(input: StaffProfileWrite): Set<String> =
+        buildSet {
+            add("displayName")
+            add("subtype")
+            if (input.linkedUserId != null) add(STAFF_PROFILE_LINKAGE_FIELD)
+            if (input.roleLabel != null) add("roleLabel")
+            if (input.photoRef != null) add("photoRef")
+            if (input.bio != null) add("bio")
+            if (input.tags.isNotEmpty()) add("tags")
+            if (input.isGuestVisible) add(STAFF_PROFILE_VISIBILITY_FIELD)
+        }
+
+    private fun appendStaffProfileAudit(
+        connection: Connection,
+        auditLogRepository: AuditLogRepository,
+        actorUserId: Long,
+        action: String,
+        old: VenueStaffProfile?,
+        new: VenueStaffProfile,
+        changedFields: Set<String>,
+    ) {
+        val oldLinkage = old?.let { profileLinkageClass(connection, it.venueId, it.linkedUserId) }
+        val newLinkage = profileLinkageClass(connection, new.venueId, new.linkedUserId)
+        val newTargetRole = new.linkedUserId?.let { lockMembershipRole(connection, new.venueId, it) }
+        auditLogRepository.appendJson(
+            connection = connection,
+            actorUserId = actorUserId,
+            action = action,
+            entityType = STAFF_PROFILE_AUDIT_ENTITY_TYPE,
+            entityId = new.id,
+            payload =
+                buildJsonObject {
+                    put("venueId", new.venueId)
+                    put("staffProfileId", new.id)
+                    put(
+                        "changedFields",
+                        JsonArray(changedFields.sorted().map { JsonPrimitive(it) }),
+                    )
+                    putNullableString("oldLinkageClass", oldLinkage?.name)
+                    put("newLinkageClass", newLinkage.name)
+                    if (newTargetRole == VenueRole.STAFF || newTargetRole == VenueRole.MANAGER) {
+                        put("targetRole", newTargetRole.name)
+                    }
+                    putNullableBoolean("oldPublished", old?.isPublished())
+                    put("newPublished", new.isPublished())
+                    putNullableBoolean("oldHidden", old?.let { !it.isPublished() })
+                    put("newHidden", !new.isPublished())
+                },
+        )
+    }
+
+    private fun profileLinkageClass(
+        connection: Connection,
+        venueId: Long,
+        linkedUserId: Long?,
+    ): StaffProfileLinkageClass {
+        if (linkedUserId == null) return StaffProfileLinkageClass.DISPLAY_ONLY
+        return if (lockMembershipRole(connection, venueId, linkedUserId) == VenueRole.STAFF) {
+            StaffProfileLinkageClass.STAFF_LINKED
+        } else {
+            StaffProfileLinkageClass.PROTECTED
+        }
+    }
+
+    private fun authorizeTodayShiftMutation(
+        connection: Connection,
+        actorRole: VenueRole,
+        profile: VenueStaffProfile,
+    ): Boolean =
+        when (actorRole) {
+            VenueRole.OWNER -> true
+            VenueRole.MANAGER ->
+                profileLinkageClass(connection, profile.venueId, profile.linkedUserId) in
+                    MANAGER_TODAY_SHIFT_ALLOWED_LINKAGES
+            VenueRole.STAFF -> false
+        }
+
+    private fun VenueStaffProfile.isPublished(): Boolean = isGuestVisible && publishedAt != null && disabledAt == null
 
     suspend fun upsertTodayShift(
         venueId: Long,
         staffProfileId: Long,
         shiftDate: LocalDate,
         actorUserId: Long,
+        actorRole: VenueRole,
         input: StaffShiftWrite,
-    ): VenueStaffShift {
-        val ds = dataSource ?: throw DatabaseUnavailableException()
-        return withContext(Dispatchers.IO) {
-            try {
-                ds.connection.use { connection ->
-                    val initialAutoCommit = connection.autoCommit
-                    connection.autoCommit = false
-                    try {
-                        if (!lockProfileInConnection(connection, venueId, staffProfileId)) {
-                            throw DatabaseUnavailableException()
-                        }
-                        val existing =
-                            findShiftForUpdateInConnection(
-                                connection = connection,
-                                venueId = venueId,
-                                staffProfileId = staffProfileId,
-                                shiftDate = shiftDate,
-                            )
-                        val shift =
-                            if (existing == null) {
-                                insertShiftInConnection(
-                                    connection = connection,
-                                    venueId = venueId,
-                                    staffProfileId = staffProfileId,
-                                    shiftDate = shiftDate,
-                                    actorUserId = actorUserId,
-                                    input = input,
-                                )
-                            } else {
-                                updateTodayShiftInConnection(
-                                    connection = connection,
-                                    existing = existing,
-                                    actorUserId = actorUserId,
-                                    input = input,
-                                )
-                            }
-                        connection.commit()
-                        shift
-                    } catch (e: Exception) {
-                        runCatching { connection.rollback() }
-                        throw e
-                    } finally {
-                        connection.autoCommit = initialAutoCommit
-                    }
-                }
-            } catch (e: SQLException) {
-                throw DatabaseUnavailableException()
+        auditLogRepository: AuditLogRepository,
+    ): StaffTodayShiftMutationResult =
+        inTransaction { connection ->
+            if (!actorRoleStillApplies(connection, venueId, actorUserId, actorRole)) {
+                return@inTransaction StaffTodayShiftMutationResult.Forbidden
             }
+            val profile =
+                findProfileInConnection(connection, venueId, staffProfileId, forUpdate = true)
+                    ?: return@inTransaction StaffTodayShiftMutationResult.NotFound
+            if (!authorizeTodayShiftMutation(connection, actorRole, profile)) {
+                return@inTransaction StaffTodayShiftMutationResult.Forbidden
+            }
+            val existing =
+                findShiftForUpdateInConnection(
+                    connection = connection,
+                    venueId = venueId,
+                    staffProfileId = staffProfileId,
+                    shiftDate = shiftDate,
+                )
+            val shift =
+                if (existing == null) {
+                    insertShiftInConnection(
+                        connection = connection,
+                        venueId = venueId,
+                        staffProfileId = staffProfileId,
+                        shiftDate = shiftDate,
+                        actorUserId = actorUserId,
+                        input = input,
+                    )
+                } else {
+                    updateTodayShiftInConnection(
+                        connection = connection,
+                        existing = existing,
+                        actorUserId = actorUserId,
+                        input = input,
+                    )
+                }
+            appendStaffTodayShiftAudit(
+                connection = connection,
+                auditLogRepository = auditLogRepository,
+                actorUserId = actorUserId,
+                shift = shift,
+            )
+            StaffTodayShiftMutationResult.Success(shift)
         }
-    }
 
     suspend fun listScheduledShifts(
         venueId: Long,
@@ -840,6 +1121,7 @@ class VenueStaffProfileRepository(
         connection: Connection,
         venueId: Long,
         profileId: Long,
+        forUpdate: Boolean = false,
     ): VenueStaffProfile? =
         connection.prepareStatement(
             """
@@ -862,6 +1144,7 @@ class VenueStaffProfileRepository(
                 updated_at AS profile_updated_at
             FROM staff_profiles
             WHERE venue_id = ? AND id = ?
+            ${if (forUpdate) "FOR UPDATE" else ""}
             """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, venueId)
@@ -995,6 +1278,28 @@ class VenueStaffProfileRepository(
             statement.executeUpdate()
         }
         return findShiftByIdInConnection(connection, existing.id) ?: throw DatabaseUnavailableException()
+    }
+
+    private fun appendStaffTodayShiftAudit(
+        connection: Connection,
+        auditLogRepository: AuditLogRepository,
+        actorUserId: Long,
+        shift: VenueStaffShift,
+    ) {
+        auditLogRepository.appendJson(
+            connection = connection,
+            actorUserId = actorUserId,
+            action = "$STAFF_TODAY_SHIFT_AUDIT_ACTION_PREFIX${shift.status}",
+            entityType = STAFF_SHIFT_AUDIT_ENTITY_TYPE,
+            entityId = shift.id,
+            payload =
+                buildJsonObject {
+                    put("venueId", shift.venueId)
+                    put("profileId", shift.staffProfileId)
+                    put("shiftId", shift.id)
+                    put("status", shift.status)
+                },
+        )
     }
 
     private fun lockProfileInConnection(
@@ -1276,6 +1581,41 @@ data class StaffProfileWrite(
     val isGuestVisible: Boolean,
 )
 
+sealed interface StaffProfileMutationResult {
+    data class Success(
+        val profile: VenueStaffProfile,
+        val changed: Boolean,
+    ) : StaffProfileMutationResult
+
+    data object NotFound : StaffProfileMutationResult
+
+    data object InvalidLink : StaffProfileMutationResult
+
+    data object Forbidden : StaffProfileMutationResult
+}
+
+sealed interface StaffTodayShiftMutationResult {
+    data class Success(
+        val shift: VenueStaffShift,
+    ) : StaffTodayShiftMutationResult
+
+    data object NotFound : StaffTodayShiftMutationResult
+
+    data object Forbidden : StaffTodayShiftMutationResult
+}
+
+private enum class StaffProfileLinkValidation {
+    ALLOWED,
+    INVALID,
+    PROTECTED,
+}
+
+private enum class StaffProfileLinkageClass {
+    DISPLAY_ONLY,
+    STAFF_LINKED,
+    PROTECTED,
+}
+
 data class StaffShiftWrite(
     val startsAt: LocalTime?,
     val endsAt: LocalTime?,
@@ -1380,11 +1720,26 @@ private fun JsonObjectBuilder.putNullableBoolean(
 }
 
 private const val STAFF_SHIFT_AUDIT_ENTITY_TYPE = "staff_shift"
+private const val STAFF_TODAY_SHIFT_AUDIT_ACTION_PREFIX = "staff_shift_marked_"
+private const val STAFF_PROFILE_AUDIT_ENTITY_TYPE = "staff_profile"
+private const val STAFF_PROFILE_CREATED_AUDIT_ACTION = "STAFF_PROFILE_CREATED"
+private const val STAFF_PROFILE_UPDATED_AUDIT_ACTION = "STAFF_PROFILE_UPDATED"
+private const val STAFF_PROFILE_PUBLISHED_AUDIT_ACTION = "STAFF_PROFILE_PUBLISHED"
+private const val STAFF_PROFILE_HIDDEN_AUDIT_ACTION = "STAFF_PROFILE_HIDDEN"
+private const val STAFF_PROFILE_LINKAGE_FIELD = "linkage"
+private const val STAFF_PROFILE_VISIBILITY_FIELD = "isGuestVisible"
 private const val STAFF_SHIFT_CREATED_AUDIT_ACTION = "STAFF_SHIFT_CREATED"
 private const val STAFF_SHIFT_UPDATED_AUDIT_ACTION = "STAFF_SHIFT_UPDATED"
 private const val STAFF_SHIFT_CANCELED_AUDIT_ACTION = "STAFF_SHIFT_CANCELED"
 private const val STAFF_SHIFT_INVALID_INTERVAL_VALIDATION_STATE = "INVALID_INTERVAL"
 private const val STAFF_SCHEDULE_FUTURE_DAYS = 90L
+
+private val STAFF_PROFILE_SELF_EDIT_FIELDS = setOf("photoRef", "bio", "tags")
+private val MANAGER_TODAY_SHIFT_ALLOWED_LINKAGES =
+    setOf(
+        StaffProfileLinkageClass.DISPLAY_ONLY,
+        StaffProfileLinkageClass.STAFF_LINKED,
+    )
 
 private val scheduleShiftSelectColumns =
     """

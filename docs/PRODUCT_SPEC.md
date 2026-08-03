@@ -35,11 +35,13 @@ Venue operations source of truth:
 Staff profiles, Today Shift, Staff Schedule and staff tips source of truth:
 - Canonical `STAFF_PROFILE`, manual `SHIFT_TODAY`, optional `STAFF_SCHEDULE` and future `STAFF_TIP`
   model is tracked in `docs/STAFF_PROFILES_SHIFTS_TIPS.md`.
-- `STAFF PROFILES + TODAY SHIFT PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`.
-  Staff Schedule Phase 1 is `STAFF SCHEDULE PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED`;
-  migration verdict `NO_MIGRATION_EXPECTED`. Green Actions and staging smoke are pending, so it is
-  not production-ready. It remains optional, Venue Mini App only and does not change Guest
-  `Сегодня работают`.
+- `STAFF OPERATIONS SLICE A / MANAGER PARITY + SHIFT TIME DEFAULTS / MVP IMPLEMENTED / LOCAL VALIDATION PASSED`.
+  Staff Schedule Phase 1 remains
+  `STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / PRODUCT AND RBAC POLISH REQUIRED`;
+  the schedule schema remains `NO_MIGRATION_EXPECTED`. Slice A requires green Actions, invite
+  revoke migration rollout and a new staging smoke before production readiness. It remains Venue
+  Mini App only and does not change Guest `Сегодня работают`.
+  Optional Team/Schedule settings and Guest `MANUAL`/`SCHEDULE` source selection are future Slice B.
   Staff tips and any payment provider/direct payout path are future and require separate
   legal/product decision.
 
@@ -93,9 +95,10 @@ Derived responsibilities:
 - shift_extension_settings: per-venue paid extension policy, fixed duration/price, enabled flag
 - shift_extension_request: guest request to extend active table/venue service window; statuses pending/approved/rejected/cancelled
 - order_service_charge: non-menu bill charge such as approved paid extension; included in bill totals but not shown as a normal order-menu item
-- staff_profile / staff_shift: current public opt-in profiles/manual Today Shift plus the
-  MVP-implemented and locally validated optional private Staff Schedule Phase 1; one planned
-  interval per profile and venue-local start date, with Guest publication remaining manual; canonical spec is
+- staff_profile / staff_shift: current public opt-in profiles/manual Today Shift plus the bounded
+  private Staff Schedule Phase 1; Manager manages only display-only/Staff-linked cards; effective
+  venue hours are create defaults, never a server restriction; one planned interval per profile and
+  venue-local start date, with Guest publication remaining manual; canonical spec is
   `docs/STAFF_PROFILES_SHIFTS_TIPS.md`
 - staff_tip_method / staff_tip_intent: future staff-tip model for a specific staff member; MVP money must not touch the platform and tip intent is not proof of payment
 - subscription: venue_id, status trialing/active/past_due/suspended/canceled, price override, trial_end, paid_until, grace_end, methods enabled(card/stars)
@@ -129,13 +132,18 @@ MUST:
 - Platform Owner can create venues, invite/add venue OWNER users, list active OWNER memberships and revoke a venue OWNER only when another active OWNER remains.
 - Runtime venue ownership access is based on active `venue_members` rows with role `OWNER`; membership revoke does not relink `venues.owner_account_id` or legal/billing primary owner records.
 - Staff has no support-ticket, ordinary venue-chat, billing, settings or platform permissions in the MVP.
+- Manager may create/list/revoke only Staff invites, manage only display-only/active-Staff-linked
+  cards and use the existing Staff Schedule permission. Owner/Manager profiles, roles, membership
+  removal/deactivation, ownership, billing and platform settings stay outside Manager authority.
 - Optional Staff Schedule Phase 1 adds only Staff read-own plus safe overlapping-colleague
   visibility. The safe colleague projection may expose profile-scoped `staffProfileId`, but never
   linked user/account ids or Telegram data. Owner/Manager manage their own venue schedule;
   Staff/Guest/foreign/Platform-only mutation is denied.
 - Platform Owner sees support tickets but not ordinary `VENUE_CHAT` unless future product policy explicitly changes it.
 SHOULD:
-- Audit log for owner invite/revoke and role changes.
+- Transaction-bound safe audit for staff invite create/revoke and profile create/update/publish/hide,
+  plus existing owner invite/revoke and role changes; never store invite secrets or profile/Telegram
+  PII in audit payloads.
 
 ## Block 3 — Entry points & context (QR/deep links)
 MUST:

@@ -1,6 +1,6 @@
 # Testing / QA Smoke Strategy
 
-Дата актуализации: 2026-08-01.
+Дата актуализации: 2026-08-03.
 
 Статус: **current product reference / UPDATED**. This document is the canonical QA/smoke strategy for the Telegram bot + Mini App platform. It consolidates local validation, GitHub Actions expectations, area-specific smoke suites, staging policy, failure reporting and Codex handoff rules. Deployment and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
 
@@ -35,9 +35,11 @@ Current practice:
   Extended multi-venue coverage remains **NON-BLOCKING DEFERRED MANUAL SMOKE /
   CATALOG-SEARCH-MANUAL-001** and does not downgrade the completed MVP.
 - Staff Schedule is
-  **STAFF SCHEDULE PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**. Migration verdict is
-  **NO_MIGRATION_EXPECTED**. Green Actions and staging smoke are pending, so production readiness
-  is not claimed.
+  **STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / PRODUCT AND RBAC POLISH REQUIRED**.
+  Staff Operations Slice A is
+  **MANAGER PARITY + SHIFT TIME DEFAULTS / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**. The schedule
+  schema remains **NO_MIGRATION_EXPECTED**; invite revoke adds PostgreSQL V120/H2 V121. Green
+  Actions, rollout and a new staging smoke are pending, so production readiness is not claimed.
 
 Target QA model:
 - Every task ends with changed files, behavior summary, tests run, validation result, manual smoke checklist, `git status --short`, whether `scripts/dev/` was touched and whether staging deploy is needed.
@@ -57,12 +59,27 @@ Target QA model:
 
 ## Staff Schedule Phase 1 Release Quality Gate
 
-Status: **STAFF SCHEDULE PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**.
-Migration verdict: **NO_MIGRATION_EXPECTED**. Green Actions and staging smoke are pending; do not
-claim production readiness until both pass. The complete acceptance matrix remains canonical in
+Status:
+**STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / PRODUCT AND RBAC POLISH REQUIRED**.
+Slice A status:
+**STAFF OPERATIONS SLICE A / MANAGER PARITY + SHIFT TIME DEFAULTS / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**.
+Schedule-schema verdict: **NO_MIGRATION_EXPECTED**. Green Actions, migration rollout and new staging
+smoke are pending; do not claim production readiness until those gates pass. The complete acceptance matrix remains canonical in
 `docs/STAFF_PROFILES_SHIFTS_TIPS.md`; this section defines the remaining CI/staging release gates.
+Rollout order is new binaries plus PostgreSQL V120, then revoke UI enablement with all old runtime
+instances drained, then staging smoke; old binaries do not understand `revoked_at`.
 
 Locally validated backend coverage:
+
+- Manager creates Staff but not Manager/Owner/Admin invites, sees/revokes pending Staff only; Owner
+  retains Staff/Manager create/list/revoke, and Staff/foreign/Guest/Platform-only is denied;
+- invite pending predicates, revoked preview/accept/decline failure, used/expired/repeated revoke,
+  controlled accept-vs-revoke race, secret-safe transaction-bound create/revoke audit and rollback;
+- Manager display-only/Staff-linked profile create/edit/publish/hide, protected Owner/other-Manager
+  denial, safe own edit, invalid/foreign linkage denial, Owner/Staff regression and safe
+  transaction-bound audit with no denial/no-op/rollback success row;
+- weekly/exception/overnight/closed/not-configured effective-hours response, venue timezone,
+  batched range semantics and explicit error propagation; shifts outside hours remain allowed;
 
 - Owner and Manager bounded create/update/cancel in their own venue;
 - Staff mutation, Guest, foreign venue and Platform-only denial;
@@ -579,7 +596,7 @@ Expectations:
 | Support/tickets | `*Support*`, RBAC tests, Mini App build/e2e if UI changed. | Backend split + Mini App if affected. | Yes for runtime. | Guest/Venue/Platform support smoke. | Medium/high. |
 | Booking | `*VenueBookingRoutesTest*`, Guest booking/reminder tests if affected, Telegram tests if bot changed. | `backend-venue-booking-rbac`, Telegram lightweight where affected. | Yes for runtime. | Booking lifecycle smoke. | Medium/high. |
 | Menu/stop-list | Menu/availability route tests, order stale-availability tests, Mini App build/e2e if UI changed. | Backend + Mini App if affected. | Usually yes. | Menu/stop-list smoke. | Medium/high. |
-| Staff Schedule | `*VenueStaffRoutesTest*`, `*VenueRbacRoutesTest*`, `*GuestVenueRoutesTest*`, compile/lint, Mini App build/e2e. | Backend split + Mini App. | Yes for runtime. | Owner/Manager/Staff, timezone/overnight, two-account privacy, Today/Guest regression and venue switch. | High for privacy/time semantics. |
+| Staff Operations / Schedule | `*VenueStaffRoutesTest*`, `*StaffInviteRepositoryTest*`, `*VenueRbacRoutesTest*`, `*GuestVenueRoutesTest*`, compile/lint, Mini App build/e2e. | Backend split + Mini App. | Yes for runtime and migration. | Owner/Manager/Staff invite/profile boundaries, race/audit, effective hours, timezone/overnight, privacy, Today/Guest regression and venue switch. | High for RBAC/privacy/time semantics. |
 | Guest history/growth | `*Visit*`, `*GuestVisitRoutesTest*`, Mini App build/e2e smoke for UI changes. | Backend split + Mini App if affected. | Yes for runtime. | Guest History or Growth checklist from `docs/GROWTH_RETENTION.md`. | Medium/high for privacy. |
 
 ## Standard Pre-Commit Workflow
@@ -806,9 +823,17 @@ Venue operations:
 - booking queue works if implemented;
 - staff-chat receives order/call only.
 
-Staff Schedule Phase 1 staging smoke (pending):
+Staff Operations Slice A / Staff Schedule staging smoke (pending):
+- Manager sees `Добавить сотрудника`, can create only Staff, sees/revokes only pending Staff and
+  cannot use the revoked invite; Owner still creates/sees/revokes Staff and Manager invites;
+- Manager creates display-only and Staff-linked cards, edits/publishes/hides them, while Owner and
+  other Manager cards are read-only; Owner and Staff self-edit regressions remain unchanged;
 - Owner and Manager open `График смен`, navigate weeks, create/edit a future ordinary shift and
   create an overnight shift with `следующий день` copy;
+- an `OPEN` date prefills effective venue hours, a date exception wins over weekly, `CLOSED` and
+  `NOT_CONFIGURED` stay blank with manual copy, and load error is not shown as not configured;
+- manual time survives date change, explicit `Заполнить по часам заведения` reapplies hours, and
+  editing an existing shift preserves persisted times until explicit action;
 - active shift has no edit action and requires stronger cancel confirmation; completed/canceled is
   immutable;
 - Staff opens `Мои смены`, sees only own rows and colleagues overlapping each row, including one
@@ -922,9 +947,9 @@ Telegram/staff-chat:
 - Menu shift check is **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED** and stays
   in regression. Per-venue `staff_stoplist_enabled` remains future.
 - Staff Schedule Phase 1 is
-  `STAFF SCHEDULE PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED`; privacy/timezone/Today
-  compatibility gates passed locally. Green Actions and staging smoke remain pending, so
-  production readiness is not claimed.
+  `STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / PRODUCT AND RBAC POLISH REQUIRED`;
+  Slice A privacy/RBAC/effective-hours/Today compatibility gates passed locally. Green Actions and
+  a new staging smoke remain pending, so production readiness is not claimed.
 - Staff-chat delivery history/personal notifications/topic routing remain future.
 - CI coverage is strong for release-critical slices but not proof of every product scenario; area smoke checklists remain necessary.
 
@@ -938,8 +963,12 @@ Telegram/staff-chat:
 - Guest Preview Phase 2.1: **VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY / DONE / MVP / STAGING-SMOKE-PASSED**.
 - Menu shift check: **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**; regression
   gates remain active.
-- Staff Schedule Phase 1: `STAFF SCHEDULE PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED`;
-  migration verdict `NO_MIGRATION_EXPECTED`; green Actions and staging smoke remain pending.
+- Staff Operations Slice A:
+  `MANAGER PARITY + SHIFT TIME DEFAULTS / MVP IMPLEMENTED / LOCAL VALIDATION PASSED`.
+- Staff Schedule Phase 1:
+  `STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / PRODUCT AND RBAC POLISH REQUIRED`;
+  schedule-schema verdict `NO_MIGRATION_EXPECTED`; green Actions, invite migration rollout and new
+  staging smoke remain pending. Optional module/source settings remain Slice B future.
 - Manual smoke checklist: `CONSOLIDATED`.
 - CI coverage: `PARTIAL / release-critical split jobs current`.
 - Frontend e2e: `PARTIAL`, with smoke coverage documented.

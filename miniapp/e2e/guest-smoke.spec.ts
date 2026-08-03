@@ -4043,13 +4043,48 @@ async function mockVenueStaffChatApi(
     permissions?: string[]
     linked?: boolean
     generatedExpiresAt?: string
+    pendingInvites?: Array<{
+      handle: string
+      role: 'MANAGER' | 'STAFF'
+      status: 'PENDING'
+      createdAt: string
+      expiresAt: string
+    }>
   } = {}
 ) {
   const role = options.role ?? 'OWNER'
-  const permissions = options.permissions ?? (role === 'STAFF' ? [] : ['STAFF_CHAT_LINK'])
+  const permissions =
+    options.permissions ??
+    (role === 'OWNER'
+      ? [
+          'STAFF_CHAT_LINK',
+          'STAFF_INVITE_CREATE_STAFF',
+          'STAFF_INVITE_CREATE_MANAGER',
+          'STAFF_INVITE_REVOKE_STAFF',
+          'STAFF_INVITE_REVOKE_MANAGER',
+          'STAFF_PROFILE_MANAGE_STAFF',
+          'STAFF_PROFILE_MANAGE_PROTECTED',
+          'STAFF_PROFILE_PUBLISH_STAFF',
+          'STAFF_PROFILE_PUBLISH_PROTECTED',
+          'STAFF_PROFILE_EDIT_OWN',
+          'STAFF_SCHEDULE_MANAGE'
+        ]
+      : role === 'MANAGER'
+        ? [
+            'STAFF_CHAT_LINK',
+            'STAFF_INVITE_CREATE_STAFF',
+            'STAFF_INVITE_REVOKE_STAFF',
+            'STAFF_PROFILE_MANAGE_STAFF',
+            'STAFF_PROFILE_PUBLISH_STAFF',
+            'STAFF_PROFILE_EDIT_OWN',
+            'STAFF_SCHEDULE_MANAGE'
+          ]
+        : ['STAFF_PROFILE_EDIT_OWN'])
   let linked = options.linked ?? true
   let generated = 0
-  let staffInvites = 0
+  const staffInviteRequests: Array<{ role?: string }> = []
+  let pendingInvites = (options.pendingInvites ?? []).map((invite) => ({ ...invite }))
+  const revokedInviteHandles: string[] = []
   let testMessages = 0
   let unlinks = 0
   let activeCodeHint: string | null = null
@@ -4087,6 +4122,70 @@ async function mockVenueStaffChatApi(
       tags: ['крепкие миксы'],
       isGuestVisible: false,
       publishedAt: null,
+      disabledAt: null,
+      createdAt: '2030-01-10T18:00:00Z',
+      updatedAt: '2030-01-10T18:00:00Z',
+      todayShift: null
+    },
+    {
+      id: 502,
+      linkedUserId: 222222222,
+      displayName: 'Светлана',
+      roleLabel: null,
+      subtype: 'waiter',
+      photoRef: null,
+      bio: 'Работает в зале.',
+      tags: ['сервис'],
+      isGuestVisible: false,
+      publishedAt: null,
+      disabledAt: null,
+      createdAt: '2030-01-10T18:00:00Z',
+      updatedAt: '2030-01-10T18:00:00Z',
+      todayShift: null
+    },
+    {
+      id: 503,
+      linkedUserId: null,
+      displayName: 'Карточка без доступа',
+      roleLabel: 'Бармен',
+      subtype: 'other',
+      photoRef: null,
+      bio: null,
+      tags: [],
+      isGuestVisible: false,
+      publishedAt: null,
+      disabledAt: null,
+      createdAt: '2030-01-10T18:00:00Z',
+      updatedAt: '2030-01-10T18:00:00Z',
+      todayShift: null
+    },
+    {
+      id: 504,
+      linkedUserId: 333333333,
+      displayName: 'Другой менеджер',
+      roleLabel: 'Менеджер зала',
+      subtype: 'admin',
+      photoRef: null,
+      bio: null,
+      tags: [],
+      isGuestVisible: true,
+      publishedAt: '2030-01-10T18:00:00Z',
+      disabledAt: null,
+      createdAt: '2030-01-10T18:00:00Z',
+      updatedAt: '2030-01-10T18:00:00Z',
+      todayShift: null
+    },
+    {
+      id: 505,
+      linkedUserId: 111111111,
+      displayName: 'Владелец заведения',
+      roleLabel: 'Владелец',
+      subtype: 'admin',
+      photoRef: null,
+      bio: null,
+      tags: [],
+      isGuestVisible: true,
+      publishedAt: '2030-01-10T18:00:00Z',
       disabledAt: null,
       createdAt: '2030-01-10T18:00:00Z',
       updatedAt: '2030-01-10T18:00:00Z',
@@ -4250,23 +4349,68 @@ async function mockVenueStaffChatApi(
             role,
             createdAt: '2030-01-10T18:00:00Z',
             invitedByUserId: null
+          },
+          {
+            userId: 222222222,
+            role: 'STAFF',
+            createdAt: '2030-01-10T18:00:00Z',
+            invitedByUserId: 123456789
+          },
+          {
+            userId: 333333333,
+            role: 'MANAGER',
+            createdAt: '2030-01-10T18:00:00Z',
+            invitedByUserId: 111111111
+          },
+          {
+            userId: 111111111,
+            role: 'OWNER',
+            createdAt: '2030-01-10T18:00:00Z',
+            invitedByUserId: null
           }
         ]
       })
     )
   })
 
-  await page.route('**/api/venue/1/staff/invites', async (route) => {
-    if (route.request().method() !== 'POST') {
+  await page.route('**/api/venue/1/staff/invites**', async (route) => {
+    const request = route.request()
+    const path = new URL(request.url()).pathname
+    if (request.method() === 'GET' && path === '/api/venue/1/staff/invites') {
+      await route.fulfill(jsonResponse({ invites: pendingInvites }))
+      return
+    }
+    const revokeMatch = path.match(/^\/api\/venue\/1\/staff\/invites\/([^/]+)\/revoke$/)
+    if (request.method() === 'POST' && revokeMatch) {
+      const handle = decodeURIComponent(revokeMatch[1])
+      const existing = pendingInvites.find((invite) => invite.handle === handle)
+      if (!existing) {
+        await route.fulfill(jsonResponse({ error: { code: 'INVITE_NOT_PENDING', message: 'Invite is not pending' } }, 409))
+        return
+      }
+      revokedInviteHandles.push(handle)
+      pendingInvites = pendingInvites.filter((invite) => invite.handle !== handle)
+      await route.fulfill(jsonResponse({ ok: true }))
+      return
+    }
+    if (request.method() !== 'POST' || path !== '/api/venue/1/staff/invites') {
       await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'not found' }) })
       return
     }
-    staffInvites += 1
-    const body = (await route.request().postDataJSON()) as { role?: string }
+    const body = (await request.postDataJSON()) as { role?: string }
+    staffInviteRequests.push(body)
     const inviteCode = 'ABC234'
     const startPayload = `staff_invite_${inviteCode}`
     const deepLink = `https://t.me/TestHookahBot?start=${startPayload}`
     const fallbackCommand = `/start ${startPayload}`
+    const pendingRole = body.role === 'MANAGER' ? 'MANAGER' : 'STAFF'
+    pendingInvites.push({
+      handle: `pending-${staffInviteRequests.length}`,
+      role: pendingRole,
+      status: 'PENDING',
+      createdAt: '2030-01-10T18:00:00Z',
+      expiresAt: '2030-01-17T18:00:00Z'
+    })
     await route.fulfill(
       jsonResponse({
         inviteCode,
@@ -4343,7 +4487,10 @@ async function mockVenueStaffChatApi(
 
   return {
     getGeneratedCalls: () => generated,
-    getStaffInvites: () => staffInvites,
+    getStaffInvites: () => staffInviteRequests.length,
+    getStaffInviteRequests: () => [...staffInviteRequests],
+    getPendingInvites: () => pendingInvites.map((invite) => ({ ...invite })),
+    getRevokedInviteHandles: () => [...revokedInviteHandles],
     getProfileCreateRequests: () => profileCreateRequests,
     getProfileUpdateRequests: () => profileUpdateRequests,
     getShiftRequests: () => shiftRequests,
@@ -4382,12 +4529,22 @@ type VenueStaffScheduleAdminShiftFixture = {
   manuallyMarkedActive: boolean
 }
 
+type VenueStaffScheduleEffectiveHoursFixture = {
+  serviceDate: string
+  state: 'OPEN' | 'CLOSED' | 'NOT_CONFIGURED'
+  opensAt?: string | null
+  closesAt?: string | null
+  endsNextDay: boolean
+}
+
 async function mockVenueStaffScheduleApi(
   page: Page,
   options: {
     accesses?: VenueStaffScheduleAccessFixture[]
     adminShifts?: Record<number, VenueStaffScheduleAdminShiftFixture[]>
     ownShifts?: Record<number, Array<Record<string, unknown>>>
+    effectiveHours?: Record<number, VenueStaffScheduleEffectiveHoursFixture[]>
+    timezones?: Record<number, string>
   } = {}
 ) {
   const accesses =
@@ -4496,6 +4653,47 @@ async function mockVenueStaffScheduleApi(
       (options.ownShifts?.[access.venueId] ?? defaultOwnShifts).map((shift) => ({ ...shift }))
     ])
   )
+  const defaultEffectiveHours: VenueStaffScheduleEffectiveHoursFixture[] = [
+    {
+      serviceDate: '2030-01-07',
+      state: 'OPEN',
+      opensAt: '18:00',
+      closesAt: '02:00',
+      endsNextDay: true
+    },
+    {
+      serviceDate: '2030-01-08',
+      state: 'OPEN',
+      opensAt: '20:00',
+      closesAt: '04:00',
+      endsNextDay: true
+    },
+    {
+      serviceDate: '2030-01-09',
+      state: 'CLOSED',
+      opensAt: null,
+      closesAt: null,
+      endsNextDay: false
+    },
+    {
+      serviceDate: '2030-01-10',
+      state: 'NOT_CONFIGURED',
+      opensAt: null,
+      closesAt: null,
+      endsNextDay: false
+    }
+  ]
+  const effectiveHours = new Map(
+    accesses.map((access) => [
+      access.venueId,
+      new Map(
+        (options.effectiveHours?.[access.venueId] ?? defaultEffectiveHours).map((hours) => [
+          hours.serviceDate,
+          { ...hours }
+        ])
+      )
+    ])
+  )
   const mutations: Array<{ venueId: number; method: string; path: string; body: Record<string, unknown> }> = []
   const listRequests: Array<{ venueId: number; path: string; from: string | null; to: string | null }> = []
   const mutationErrors: Array<{ status: number; code: string; message: string }> = []
@@ -4566,7 +4764,7 @@ async function mockVenueStaffScheduleApi(
           jsonResponse({
             venueId,
             venueName: access.venueName,
-            timezone: 'Europe/Moscow',
+            timezone: options.timezones?.[venueId] ?? 'Europe/Moscow',
             venueToday: '2030-01-07',
             from: url.searchParams.get('from'),
             to: url.searchParams.get('to'),
@@ -4583,11 +4781,24 @@ async function mockVenueStaffScheduleApi(
         jsonResponse({
           venueId,
           venueName: access.venueName,
-          timezone: 'Europe/Moscow',
+          timezone: options.timezones?.[venueId] ?? 'Europe/Moscow',
           venueToday: '2030-01-07',
           from: url.searchParams.get('from'),
           to: url.searchParams.get('to'),
-          shifts: adminShifts.get(venueId) ?? []
+          shifts: adminShifts.get(venueId) ?? [],
+          effectiveHours: eachIsoDate(
+            url.searchParams.get('from') ?? '2030-01-07',
+            url.searchParams.get('to') ?? '2030-01-07'
+          ).map(
+            (serviceDate) =>
+              effectiveHours.get(venueId)?.get(serviceDate) ?? {
+                serviceDate,
+                state: 'NOT_CONFIGURED',
+                opensAt: null,
+                closesAt: null,
+                endsNextDay: false
+              }
+          )
         })
       )
       return
@@ -8511,7 +8722,7 @@ test('venue owner creates manager staff invite with copyable deep link', async (
   const deepLink = 'https://t.me/TestHookahBot?start=staff_invite_ABC234'
   const fallbackCommand = '/start staff_invite_ABC234'
   const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(deepLink)}&text=${encodeURIComponent(
-    'Приглашение в Микс. Роль: MANAGER. Откройте ссылку, чтобы принять доступ.'
+    'Приглашение в Микс. Роль: Менеджер. Откройте ссылку, чтобы принять доступ.'
   )}`
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
@@ -8519,9 +8730,9 @@ test('venue owner creates manager staff invite with copyable deep link', async (
   await page.getByRole('button', { name: 'Персонал', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Персонал' })).toBeVisible()
   await page.locator('.venue-staff select.venue-select').first().selectOption('MANAGER')
-  await page.getByRole('button', { name: 'Создать инвайт' }).click()
+  await page.getByRole('button', { name: 'Добавить сотрудника' }).click()
 
-  await expect(page.locator('.venue-invite-result')).toContainText('MANAGER')
+  await expect(page.locator('.venue-invite-result')).toContainText('Менеджер')
   await expect(page.locator('.venue-invite-result')).toContainText('Микс')
   await expect(page.locator('.venue-invite-result')).toContainText('Приглашение создано')
   await expect(page.getByText('Ссылка для сотрудника')).toBeVisible()
@@ -8535,7 +8746,7 @@ test('venue owner creates manager staff invite with copyable deep link', async (
   await expect(page.getByText('Код:')).toHaveCount(0)
   await expect(page.getByText('Передайте сотруднику приглашение.')).toHaveCount(0)
   await expect(page.locator('.venue-invite-result')).toContainText(
-    'Отправьте эту ссылку сотруднику. Он откроет её в Telegram и получит роль MANAGER в заведении «Микс».'
+    'Отправьте эту ссылку сотруднику. Он откроет её в Telegram и получит роль Менеджер в заведении «Микс».'
   )
   await expect(page.getByText('Если ссылка не открылась')).toBeVisible()
   await expect(page.getByText('Скопируйте команду и отправьте её сотруднику вручную.')).not.toBeVisible()
@@ -8585,6 +8796,185 @@ test('venue owner creates manager staff invite with copyable deep link', async (
     .toBe(true)
 })
 
+test('venue manager creates and revokes only staff invites', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueStaffChatApi(page, {
+    role: 'MANAGER',
+    linked: true,
+    pendingInvites: [
+      {
+        handle: 'existing-staff',
+        role: 'STAFF',
+        status: 'PENDING',
+        createdAt: '2030-01-10T18:00:00Z',
+        expiresAt: '2030-01-17T18:00:00Z'
+      },
+      {
+        handle: 'hidden-manager',
+        role: 'MANAGER',
+        status: 'PENDING',
+        createdAt: '2030-01-10T18:00:00Z',
+        expiresAt: '2030-01-17T18:00:00Z'
+      }
+    ]
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Персонал', exact: true }).click()
+
+  const accessCard = page.locator('.venue-staff > .card').first()
+  const roleSelect = accessCard.getByLabel('Роль приглашения')
+  await expect(accessCard.getByRole('heading', { name: 'Доступ сотрудников' })).toBeVisible()
+  await expect(accessCard.getByRole('button', { name: 'Добавить сотрудника' })).toBeVisible()
+  await expect(roleSelect.getByRole('option')).toHaveCount(1)
+  await expect(roleSelect.getByRole('option', { name: 'Сотрудник' })).toHaveText('Сотрудник')
+  await expect(roleSelect.getByRole('option', { name: 'Менеджер' })).toHaveCount(0)
+  await expect(roleSelect.getByRole('option', { name: 'Владелец' })).toHaveCount(0)
+
+  const pending = accessCard.locator('.venue-pending-invite-list')
+  await expect(pending.locator('.venue-pending-invite-row')).toHaveCount(1)
+  await expect(pending).toContainText('Сотрудник')
+  await expect(pending).not.toContainText('Менеджер')
+
+  await accessCard.getByRole('button', { name: 'Добавить сотрудника' }).click()
+  await expect.poll(() => api.getStaffInviteRequests()).toEqual([{ role: 'STAFF' }])
+  await expect(accessCard.locator('.venue-invite-result')).toContainText('Сотрудник')
+  await expect(pending.locator('.venue-pending-invite-row')).toHaveCount(2)
+
+  await pending.getByRole('button', { name: 'Отозвать приглашение' }).last().click()
+  await expect.poll(() => api.getRevokedInviteHandles()).toEqual(['pending-1'])
+  await expect(pending.locator('.venue-pending-invite-row')).toHaveCount(1)
+  expect(api.getPendingInvites().some((invite) => invite.handle === 'hidden-manager')).toBe(true)
+})
+
+test('venue manager manages staff and display cards while protected cards stay read only', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueStaffChatApi(page, { role: 'MANAGER', linked: true })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Персонал', exact: true }).click()
+
+  const cards = page.locator('.venue-public-staff')
+  await expect(cards.getByRole('heading', { name: 'Карточки команды' })).toBeVisible()
+  await expect(cards).toContainText('Карточками владельцев и других менеджеров управляет владелец.')
+  await expect(cards.getByRole('button', { name: 'Добавить карточку сотрудника' })).toBeVisible()
+
+  const otherManager = cards.locator('.venue-profile-row').filter({ hasText: 'Другой менеджер' })
+  const owner = cards.locator('.venue-profile-row').filter({ hasText: 'Владелец заведения' })
+  for (const protectedRow of [otherManager, owner]) {
+    await expect(protectedRow).toContainText('Только просмотр — карточкой управляет владелец.')
+    await expect(protectedRow.getByRole('button', { name: 'Редактировать' })).toHaveCount(0)
+    await expect(protectedRow.getByRole('button', { name: /Опубликовать|Скрыть/ })).toHaveCount(0)
+    await expect(protectedRow.getByRole('button', { name: 'Сегодня на смене' })).toHaveCount(0)
+  }
+
+  const ownManagerCard = cards.locator('.venue-profile-row').filter({ hasText: 'Алексей' })
+  await ownManagerCard.getByRole('button', { name: 'Редактировать' }).click()
+  await expect(ownManagerCard.getByLabel('Имя на карточке')).toHaveCount(0)
+  await expect(ownManagerCard.getByLabel('Тип сотрудника')).toHaveCount(0)
+  await expect(ownManagerCard.getByLabel('Привязать к сотруднику')).toHaveCount(0)
+  await expect(ownManagerCard.getByLabel('Коротко о сотруднике')).toBeVisible()
+  await ownManagerCard.getByRole('button', { name: 'Отмена' }).click()
+
+  await cards.getByRole('button', { name: 'Добавить карточку сотрудника' }).click()
+  let createForm = cards.locator('.venue-profile-form')
+  await expect(createForm.getByRole('option', { name: /#222222222/ })).toHaveCount(1)
+  await expect(createForm.getByRole('option', { name: /#333333333/ })).toHaveCount(0)
+  await expect(createForm.getByRole('option', { name: /#111111111/ })).toHaveCount(0)
+  await createForm.getByLabel('Имя на карточке').fill('Карточка менеджера')
+  await createForm.getByRole('button', { name: 'Создать профиль' }).click()
+  await expect.poll(() => api.getProfileCreateRequests()).toHaveLength(1)
+  expect(api.getProfileCreateRequests()[0]).toMatchObject({
+    displayName: 'Карточка менеджера',
+    linkedUserId: null
+  })
+
+  await cards.getByRole('button', { name: 'Добавить карточку сотрудника' }).click()
+  createForm = cards.locator('.venue-profile-form')
+  await createForm.getByLabel('Имя на карточке').fill('Новый сотрудник')
+  await createForm.getByLabel('Привязать к сотруднику').selectOption('222222222')
+  await createForm.getByRole('button', { name: 'Создать профиль' }).click()
+  await expect.poll(() => api.getProfileCreateRequests()).toHaveLength(2)
+  expect(api.getProfileCreateRequests()[1]).toMatchObject({
+    displayName: 'Новый сотрудник',
+    linkedUserId: 222222222
+  })
+
+  const staffCard = cards.locator('.venue-profile-row').filter({ hasText: 'Светлана' })
+  await expect(staffCard.getByRole('button', { name: 'Редактировать' })).toBeVisible()
+  await expect(staffCard.getByRole('button', { name: 'Опубликовать' })).toBeVisible()
+  await staffCard.getByRole('button', { name: 'Редактировать' }).click()
+  await staffCard.getByLabel('Имя на карточке').fill('Светлана Новая')
+  await staffCard.getByRole('button', { name: 'Сохранить' }).click()
+  await expect.poll(() => api.getProfileUpdateRequests()).toHaveLength(1)
+  await staffCard.getByRole('button', { name: 'Опубликовать' }).click()
+  await expect(staffCard).toContainText('Опубликован — виден гостям')
+  await staffCard.getByRole('button', { name: 'Скрыть' }).click()
+  await expect(staffCard).toContainText('Скрыт — виден только в кабинете')
+})
+
+test('venue switch clears staff invite and profile drafts', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockVenueStaffChatApi(page, { role: 'MANAGER', linked: true })
+  const permissions = [
+    'STAFF_INVITE_CREATE_STAFF',
+    'STAFF_INVITE_REVOKE_STAFF',
+    'STAFF_PROFILE_MANAGE_STAFF',
+    'STAFF_PROFILE_PUBLISH_STAFF',
+    'STAFF_PROFILE_EDIT_OWN',
+    'STAFF_SCHEDULE_MANAGE'
+  ]
+  await page.route('**/api/venue/me', async (route) => {
+    await route.fulfill(
+      jsonResponse({
+        userId: 123456789,
+        venues: [
+          {
+            venueId: 1,
+            venueName: 'Микс',
+            venueCity: 'Москва',
+            venueStatus: 'PUBLISHED',
+            role: 'MANAGER',
+            permissions
+          },
+          {
+            venueId: 2,
+            venueName: 'Дым',
+            venueCity: 'Казань',
+            venueStatus: 'PUBLISHED',
+            role: 'MANAGER',
+            permissions
+          }
+        ]
+      })
+    )
+  })
+  await page.route('**/api/venue/2/staff', async (route) => {
+    await route.fulfill(jsonResponse({ members: [] }))
+  })
+  await page.route('**/api/venue/2/staff/profiles**', async (route) => {
+    await route.fulfill(jsonResponse({ profiles: [] }))
+  })
+  await page.route('**/api/venue/2/staff/invites**', async (route) => {
+    await route.fulfill(jsonResponse({ invites: [] }))
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Персонал', exact: true }).click()
+  let staff = page.locator('.venue-staff')
+  await staff.getByRole('button', { name: 'Добавить сотрудника' }).click()
+  await expect(staff.locator('.venue-invite-result')).toBeVisible()
+  await staff.getByRole('button', { name: 'Добавить карточку сотрудника' }).click()
+  await expect(staff.locator('.venue-profile-form')).toBeVisible()
+
+  await page.locator('.venue-controls select.venue-select').selectOption('2')
+  staff = page.locator('.venue-staff')
+  await expect(staff.getByRole('heading', { name: 'Доступ сотрудников' })).toBeVisible()
+  await expect(staff.locator('.venue-invite-result')).toBeHidden()
+  await expect(staff.locator('.venue-profile-form')).toBeHidden()
+  await expect(staff.locator('.venue-pending-invite-list')).toContainText('Ожидающих приглашений нет.')
+})
+
 test('venue owner staff cards use human profile labels and hide raw technical fields', async ({ page }) => {
   await installTelegramWebApp(page, 123456789)
   const api = await mockVenueStaffChatApi(page, { role: 'OWNER', linked: true })
@@ -8594,7 +8984,7 @@ test('venue owner staff cards use human profile labels and hide raw technical fi
 
   const staffCards = page.locator('.venue-public-staff')
   const createForm = staffCards.locator('.venue-profile-form')
-  await expect(staffCards.getByRole('heading', { name: 'Карточки сотрудников' })).toBeVisible()
+  await expect(staffCards.getByRole('heading', { name: 'Карточки команды' })).toBeVisible()
   await expect(staffCards).toContainText(
     'Создайте карточки сотрудников, которых гости увидят в карточке заведения.'
   )
@@ -8677,10 +9067,11 @@ test('venue owner staff cards use human profile labels and hide raw technical fi
     displayName: 'Максим',
     roleLabel: 'Мастер миксов',
     subtype: 'other',
-    linkedUserId: 123456789,
     bio: 'Люблю крепкие миксы.',
     tags: ['крепкие миксы', 'авторские вкусы']
   })
+  expect(updateRequest).not.toHaveProperty('linkedUserId')
+  expect(updateRequest).not.toHaveProperty('unlinkUser')
   expect(updateRequest).not.toHaveProperty('photoRef')
 
   await profileRow.getByRole('button', { name: 'Опубликовать' }).click()
@@ -8693,6 +9084,134 @@ test('venue owner staff cards use human profile labels and hide raw technical fi
     { status: 'active', isGuestVisible: true },
     { status: 'canceled', isGuestVisible: false }
   ])
+})
+
+test('staff shift form uses effective venue hours without overwriting manual or stored times', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockVenueStaffScheduleApi(page, {
+    timezones: { 1: 'Asia/Yekaterinburg' }
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'График смен', exact: true }).click()
+
+  const schedule = page.locator('.venue-staff-schedule')
+  await expect(schedule).toContainText('Asia/Yekaterinburg')
+  await schedule.getByRole('button', { name: 'Добавить смену' }).click()
+  const form = schedule.locator('.venue-schedule-form')
+  const date = form.getByLabel('Дата начала')
+  const start = form.getByLabel('Начало')
+  const end = form.getByLabel('Окончание')
+
+  await expect(date).toHaveValue('2030-01-07')
+  await expect(start).toHaveValue('18:00')
+  await expect(end).toHaveValue('02:00')
+  await expect(form).toContainText('По графику заведения: 18:00–02:00, следующий день.')
+
+  await date.fill('2030-01-08')
+  await expect(start).toHaveValue('20:00')
+  await expect(end).toHaveValue('04:00')
+  await expect(form).toContainText('По графику заведения: 20:00–04:00, следующий день.')
+
+  await start.fill('21:00')
+  await end.fill('05:00')
+  await date.fill('2030-01-07')
+  await expect(start).toHaveValue('21:00')
+  await expect(end).toHaveValue('05:00')
+  await expect(form.getByRole('button', { name: 'Заполнить по часам заведения' })).toBeVisible()
+  await form.getByRole('button', { name: 'Заполнить по часам заведения' }).click()
+  await expect(start).toHaveValue('18:00')
+  await expect(end).toHaveValue('02:00')
+
+  await date.fill('2030-01-09')
+  await expect(start).toHaveValue('')
+  await expect(end).toHaveValue('')
+  await expect(form).toContainText('По графику заведение закрыто в этот день.')
+  await expect(form.getByRole('button', { name: 'Указать время вручную' })).toBeVisible()
+  await form.getByRole('button', { name: 'Указать время вручную' }).click()
+  await start.fill('19:00')
+  await end.fill('01:00')
+  await date.fill('2030-01-08')
+  await expect(start).toHaveValue('19:00')
+  await expect(end).toHaveValue('01:00')
+  await form.getByRole('button', { name: 'Заполнить по часам заведения' }).click()
+
+  await date.fill('2030-01-10')
+  await expect(start).toHaveValue('')
+  await expect(end).toHaveValue('')
+  await expect(form).toContainText('Часы работы заведения на этот день не настроены.')
+  await form.getByRole('button', { name: 'Закрыть' }).click()
+
+  const storedShift = schedule.locator('.venue-schedule-shift').filter({ hasText: 'Алексей' })
+  await storedShift.getByRole('button', { name: 'Редактировать' }).click()
+  await expect(date).toHaveValue('2030-01-08')
+  await expect(start).toHaveValue('22:00')
+  await expect(end).toHaveValue('06:00')
+  await expect(form.getByRole('button', { name: 'Заполнить по часам заведения' })).toBeVisible()
+  await date.fill('2030-01-07')
+  await expect(start).toHaveValue('22:00')
+  await expect(end).toHaveValue('06:00')
+  await form.getByRole('button', { name: 'Заполнить по часам заведения' }).click()
+  await expect(start).toHaveValue('18:00')
+  await expect(end).toHaveValue('02:00')
+})
+
+test('staff shift AUTO clears stale hours on load error and retries an aborted date', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueStaffScheduleApi(page)
+  await page.route('**/api/venue/1/staff/shifts**', async (route) => {
+    const request = route.request()
+    const url = new URL(request.url())
+    if (
+      request.method() === 'GET' &&
+      url.searchParams.get('from') === '2030-01-14' &&
+      url.searchParams.get('to') === '2030-01-14'
+    ) {
+      await route.fulfill(
+        jsonResponse(
+          { error: { code: 'DATABASE_UNAVAILABLE', message: 'Временно недоступно.' } },
+          503
+        )
+      )
+      return
+    }
+    await route.fallback()
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'График смен', exact: true }).click()
+  const schedule = page.locator('.venue-staff-schedule')
+  await schedule.getByRole('button', { name: 'Добавить смену' }).click()
+  const form = schedule.locator('.venue-schedule-form')
+  const date = form.getByLabel('Дата начала')
+  const start = form.getByLabel('Начало')
+  const end = form.getByLabel('Окончание')
+
+  await expect(start).toHaveValue('18:00')
+  await expect(end).toHaveValue('02:00')
+  await date.fill('2030-01-14')
+  await expect(start).toHaveValue('')
+  await expect(end).toHaveValue('')
+  await expect(form).toContainText('Не удалось загрузить часы заведения.')
+
+  const releaseFirstDate = api.deferNextList(1)
+  await date.fill('2030-01-15')
+  await expect(form).toContainText('Загружаем часы заведения')
+  await date.fill('2030-01-16')
+  await expect(form).toContainText('Часы работы заведения на этот день не настроены.')
+  releaseFirstDate()
+
+  await date.fill('2030-01-15')
+  await expect(form).toContainText('Часы работы заведения на этот день не настроены.')
+  await expect
+    .poll(
+      () =>
+        api
+          .getListRequests()
+          .filter((request) => request.from === '2030-01-15' && request.to === '2030-01-15')
+          .length
+    )
+    .toBe(2)
 })
 
 test('venue owner manages a weekly staff schedule with local overnight copy', async ({ page }) => {

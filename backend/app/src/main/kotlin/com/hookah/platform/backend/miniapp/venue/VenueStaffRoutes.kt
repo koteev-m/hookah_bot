@@ -7,8 +7,11 @@ import com.hookah.platform.backend.api.NotFoundException
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteAcceptResult
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteConfig
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteRepository
+import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteRevokeResult
+import com.hookah.platform.backend.miniapp.venue.staff.StaffProfileMutationResult
 import com.hookah.platform.backend.miniapp.venue.staff.StaffProfileWrite
 import com.hookah.platform.backend.miniapp.venue.staff.StaffShiftWrite
+import com.hookah.platform.backend.miniapp.venue.staff.StaffTodayShiftMutationResult
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffMember
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffProfile
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffProfileRepository
@@ -33,8 +36,6 @@ import io.ktor.server.routing.patch
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 import org.slf4j.LoggerFactory
 import java.time.Instant
 import java.time.LocalDate
@@ -73,6 +74,25 @@ data class StaffInviteResponse(
     val deepLink: String? = null,
     val fallbackCommand: String,
     val copyText: String,
+)
+
+@Serializable
+data class StaffPendingInvitesResponse(
+    val invites: List<StaffPendingInviteDto>,
+)
+
+@Serializable
+data class StaffPendingInviteDto(
+    val handle: String,
+    val role: String,
+    val status: String,
+    val createdAt: String,
+    val expiresAt: String,
+)
+
+@Serializable
+data class StaffInviteRevokeResponse(
+    val ok: Boolean,
 )
 
 @Serializable
@@ -194,9 +214,7 @@ fun Route.venueStaffRoutes(
             val userId = call.requireUserId()
             val venueId = call.requireVenueId()
             val requesterRole = resolveVenueRole(venueAccessRepository, userId, venueId)
-            if (requesterRole == VenueRole.STAFF) {
-                throw ForbiddenException()
-            }
+            requesterRole.requireStaffPermission(VenuePermission.STAFF_ACCESS_VIEW)
             val members = venueStaffRepository.listMembers(venueId)
             call.respond(
                 VenueStaffListResponse(
@@ -219,11 +237,12 @@ fun Route.venueStaffRoutes(
             if (targetRole == VenueRole.OWNER) {
                 throw InvalidInputException("OWNER cannot be assigned from venue staff invite flow")
             }
-            if (requesterRole == VenueRole.STAFF) {
-                throw ForbiddenException()
-            }
-            if (requesterRole == VenueRole.MANAGER && targetRole != VenueRole.STAFF) {
-                throw ForbiddenException()
+            when (targetRole) {
+                VenueRole.STAFF ->
+                    requesterRole.requireStaffPermission(VenuePermission.STAFF_INVITE_CREATE_STAFF)
+                VenueRole.MANAGER ->
+                    requesterRole.requireStaffPermission(VenuePermission.STAFF_INVITE_CREATE_MANAGER)
+                VenueRole.OWNER -> error("OWNER invite was rejected above")
             }
             val ttlSeconds = resolveInviteTtl(request.expiresIn, staffInviteConfig)
             val result =
@@ -232,6 +251,7 @@ fun Route.venueStaffRoutes(
                     createdByUserId = userId,
                     role = targetRole.name,
                     ttlSeconds = ttlSeconds,
+                    auditLogRepository = auditLogRepository,
                 ) ?: throw DatabaseUnavailableException()
             val startPayload = buildStaffInviteStartPayload(result.code)
             val deepLink =
@@ -267,6 +287,58 @@ fun Route.venueStaffRoutes(
                     copyText = copyText,
                 ),
             )
+        }
+
+        get("/{venueId}/staff/invites") {
+            val userId = call.requireUserId()
+            val venueId = call.requireVenueId()
+            val requesterRole = resolveVenueRole(venueAccessRepository, userId, venueId)
+            requesterRole.requireStaffPermission(VenuePermission.STAFF_ACCESS_VIEW)
+            val invites =
+                staffInviteRepository.listPendingInvites(
+                    venueId = venueId,
+                    allowedRoles = requesterRole.pendingInviteRolesForRead(),
+                ) ?: throw DatabaseUnavailableException()
+            call.respond(
+                StaffPendingInvitesResponse(
+                    invites =
+                        invites.map { invite ->
+                            StaffPendingInviteDto(
+                                handle = invite.handle,
+                                role = invite.role,
+                                status = STAFF_INVITE_PENDING_STATUS,
+                                createdAt = invite.createdAt.toString(),
+                                expiresAt = invite.expiresAt.toString(),
+                            )
+                        },
+                ),
+            )
+        }
+
+        post("/{venueId}/staff/invites/{handle}/revoke") {
+            val userId = call.requireUserId()
+            val venueId = call.requireVenueId()
+            val handle =
+                call.parameters["handle"]
+                    ?.trim()
+                    ?.takeIf { it.isNotEmpty() }
+                    ?: throw InvalidInputException("invite handle is required")
+            val requesterRole = resolveVenueRole(venueAccessRepository, userId, venueId)
+            val allowedRoles = requesterRole.pendingInviteRolesForRevoke()
+            when (
+                staffInviteRepository.revokePendingInvite(
+                    venueId = venueId,
+                    handle = handle,
+                    actorUserId = userId,
+                    allowedRoles = allowedRoles,
+                    auditLogRepository = auditLogRepository,
+                )
+            ) {
+                is StaffInviteRevokeResult.Success -> call.respond(StaffInviteRevokeResponse(ok = true))
+                StaffInviteRevokeResult.InvalidOrExpired ->
+                    throw InvalidInputException("Invite is not pending or cannot be revoked")
+                StaffInviteRevokeResult.DatabaseError -> throw DatabaseUnavailableException()
+            }
         }
 
         post("/staff/invites/accept") {
@@ -336,24 +408,17 @@ fun Route.venueStaffRoutes(
             val userId = call.requireUserId()
             val venueId = call.requireVenueId()
             val requesterRole = resolveVenueRole(venueAccessRepository, userId, venueId)
-            if (requesterRole != VenueRole.OWNER) {
-                throw ForbiddenException()
-            }
+            requesterRole.requireStaffPermission(VenuePermission.STAFF_PROFILE_MANAGE_STAFF)
             val request = call.receive<VenueStaffProfileCreateRequest>()
-            requireLinkedUserInVenue(venueStaffRepository, venueId, request.linkedUserId)
-            val profile =
+            val result =
                 venueStaffProfileRepository.createProfile(
                     venueId = venueId,
                     actorUserId = userId,
+                    actorRole = requesterRole,
                     input = request.toWrite(),
+                    auditLogRepository = auditLogRepository,
                 )
-            appendStaffProfileAuditBestEffort(
-                auditLogRepository = auditLogRepository,
-                actorUserId = userId,
-                action = "staff_profile_created",
-                venueId = venueId,
-                profileId = profile.id,
-            )
+            val profile = result.requireProfileMutationSuccess()
             call.respond(profile.toDto())
         }
 
@@ -362,65 +427,44 @@ fun Route.venueStaffRoutes(
             val venueId = call.requireVenueId()
             val profileId = call.requireProfileId()
             val requesterRole = resolveVenueRole(venueAccessRepository, userId, venueId)
-            val current = venueStaffProfileRepository.findProfile(venueId, profileId) ?: throw NotFoundException()
             val request = call.receive<VenueStaffProfileUpdateRequest>()
-            val write =
-                when (requesterRole) {
-                    VenueRole.OWNER -> {
-                        val linkedUserId =
-                            when {
-                                request.unlinkUser -> null
-                                request.linkedUserId != null -> request.linkedUserId
-                                else -> current.linkedUserId
-                            }
-                        requireLinkedUserInVenue(venueStaffRepository, venueId, linkedUserId)
-                        request.toOwnerWrite(current, linkedUserId)
+            when (requesterRole) {
+                VenueRole.OWNER -> requesterRole.requireStaffPermission(VenuePermission.STAFF_PROFILE_MANAGE_STAFF)
+                VenueRole.MANAGER -> {
+                    if (request.hasManagementFields()) {
+                        requesterRole.requireStaffPermission(VenuePermission.STAFF_PROFILE_MANAGE_STAFF)
+                    } else {
+                        requesterRole.requireStaffPermission(VenuePermission.STAFF_PROFILE_EDIT_OWN)
                     }
-                    VenueRole.STAFF -> {
-                        if (current.linkedUserId != userId || request.hasOwnerOnlyFields()) {
-                            throw ForbiddenException()
-                        }
-                        request.toOwnDraftWrite(current)
-                    }
-                    VenueRole.MANAGER -> throw ForbiddenException()
                 }
-            val nextVisibility = write.isGuestVisible
-            val now = Instant.now()
-            val publishedAt =
-                if (nextVisibility) {
-                    current.publishedAt ?: now
-                } else {
-                    current.publishedAt
+                VenueRole.STAFF -> {
+                    requesterRole.requireStaffPermission(VenuePermission.STAFF_PROFILE_EDIT_OWN)
+                    if (request.hasManagementFields()) throw ForbiddenException()
                 }
-            val disabledAt =
-                if (nextVisibility) {
-                    null
-                } else if (current.isGuestVisible) {
-                    now
-                } else {
-                    current.disabledAt
-                }
-            val updated =
+            }
+            val result =
                 venueStaffProfileRepository.updateProfile(
                     venueId = venueId,
                     profileId = profileId,
                     actorUserId = userId,
-                    input = write,
-                    publishedAt = publishedAt,
-                    disabledAt = disabledAt,
-                ) ?: throw NotFoundException()
-            appendStaffProfileAuditBestEffort(
-                auditLogRepository = auditLogRepository,
-                actorUserId = userId,
-                action =
-                    if (requesterRole == VenueRole.STAFF) {
-                        "staff_profile_own_draft_updated"
-                    } else {
-                        "staff_profile_updated"
+                    actorRole = requesterRole,
+                    selfEditOnlyRequest = !request.hasManagementFields(),
+                    auditLogRepository = auditLogRepository,
+                    buildInput = { current ->
+                        if (requesterRole == VenueRole.STAFF) {
+                            request.toOwnDraftWrite(current)
+                        } else {
+                            val linkedUserId =
+                                when {
+                                    request.unlinkUser -> null
+                                    request.linkedUserId != null -> request.linkedUserId
+                                    else -> current.linkedUserId
+                                }
+                            request.toManagementWrite(current, linkedUserId)
+                        }
                     },
-                venueId = venueId,
-                profileId = updated.id,
-            )
+                )
+            val updated = result.requireProfileMutationSuccess()
             call.respond(updated.toDto())
         }
 
@@ -429,22 +473,16 @@ fun Route.venueStaffRoutes(
             val venueId = call.requireVenueId()
             val profileId = call.requireProfileId()
             val requesterRole = resolveVenueRole(venueAccessRepository, userId, venueId)
-            if (requesterRole != VenueRole.OWNER) {
-                throw ForbiddenException()
-            }
-            val profile =
+            requesterRole.requireStaffPermission(VenuePermission.STAFF_PROFILE_PUBLISH_STAFF)
+            val result =
                 venueStaffProfileRepository.publishProfile(
                     venueId = venueId,
                     profileId = profileId,
                     actorUserId = userId,
-                ) ?: throw NotFoundException()
-            appendStaffProfileAuditBestEffort(
-                auditLogRepository = auditLogRepository,
-                actorUserId = userId,
-                action = "staff_profile_published",
-                venueId = venueId,
-                profileId = profile.id,
-            )
+                    actorRole = requesterRole,
+                    auditLogRepository = auditLogRepository,
+                )
+            val profile = result.requireProfileMutationSuccess()
             call.respond(profile.toDto())
         }
 
@@ -453,22 +491,16 @@ fun Route.venueStaffRoutes(
             val venueId = call.requireVenueId()
             val profileId = call.requireProfileId()
             val requesterRole = resolveVenueRole(venueAccessRepository, userId, venueId)
-            if (requesterRole != VenueRole.OWNER) {
-                throw ForbiddenException()
-            }
-            val profile =
+            requesterRole.requireStaffPermission(VenuePermission.STAFF_PROFILE_PUBLISH_STAFF)
+            val result =
                 venueStaffProfileRepository.hideProfile(
                     venueId = venueId,
                     profileId = profileId,
                     actorUserId = userId,
-                ) ?: throw NotFoundException()
-            appendStaffProfileAuditBestEffort(
-                auditLogRepository = auditLogRepository,
-                actorUserId = userId,
-                action = "staff_profile_hidden",
-                venueId = venueId,
-                profileId = profile.id,
-            )
+                    actorRole = requesterRole,
+                    auditLogRepository = auditLogRepository,
+                )
+            val profile = result.requireProfileMutationSuccess()
             call.respond(profile.toDto())
         }
 
@@ -498,20 +530,18 @@ fun Route.venueStaffRoutes(
             if (requesterRole == VenueRole.STAFF) {
                 throw ForbiddenException()
             }
-            if (venueStaffProfileRepository.findProfile(venueId, profileId) == null) {
-                throw NotFoundException()
-            }
             val request = call.receive<VenueStaffShiftUpsertRequest>()
             val status = normalizeShiftStatus(request.status)
             if (requesterRole == VenueRole.MANAGER && status == STAFF_SHIFT_STATUS_SCHEDULED) {
                 throw ForbiddenException()
             }
-            val shift =
+            val result =
                 venueStaffProfileRepository.upsertTodayShift(
                     venueId = venueId,
                     staffProfileId = profileId,
                     shiftDate = resolveVenueToday(venueSettingsRepository, venueId),
                     actorUserId = userId,
+                    actorRole = requesterRole,
                     input =
                         StaffShiftWrite(
                             startsAt = parseNullableLocalTime(request.startsAt, "startsAt"),
@@ -520,15 +550,9 @@ fun Route.venueStaffRoutes(
                             isGuestVisible = request.isGuestVisible ?: true,
                             manuallyMarkedActive = status == STAFF_SHIFT_STATUS_ACTIVE,
                         ),
+                    auditLogRepository = auditLogRepository,
                 )
-            appendStaffShiftAuditBestEffort(
-                auditLogRepository = auditLogRepository,
-                actorUserId = userId,
-                venueId = venueId,
-                profileId = profileId,
-                shiftId = shift.id,
-                status = shift.status,
-            )
+            val shift = result.requireTodayShiftMutationSuccess()
             call.respond(VenueStaffShiftResponse(shift = shift.toDto()))
         }
 
@@ -626,7 +650,7 @@ private fun VenueStaffProfileCreateRequest.toWrite(): StaffProfileWrite =
         isGuestVisible = isGuestVisible,
     )
 
-private fun VenueStaffProfileUpdateRequest.toOwnerWrite(
+private fun VenueStaffProfileUpdateRequest.toManagementWrite(
     current: VenueStaffProfile,
     linkedUserId: Long?,
 ): StaffProfileWrite =
@@ -657,7 +681,7 @@ private fun VenueStaffProfileUpdateRequest.toOwnDraftWrite(current: VenueStaffPr
         isGuestVisible = current.isGuestVisible,
     )
 
-private fun VenueStaffProfileUpdateRequest.hasOwnerOnlyFields(): Boolean =
+private fun VenueStaffProfileUpdateRequest.hasManagementFields(): Boolean =
     displayName != null ||
         roleLabel != null ||
         subtype != null ||
@@ -689,6 +713,8 @@ private fun resolveInviteTtl(
 
 private fun buildStaffInviteStartPayload(code: String): String = "staff_invite_$code"
 
+private const val STAFF_INVITE_PENDING_STATUS = "PENDING"
+
 private fun buildStaffInviteInstructions(
     role: String,
     venueName: String,
@@ -707,17 +733,40 @@ private fun buildStaffInviteInstructions(
         append("\nЗапасная команда: $fallbackCommand")
     }
 
-private suspend fun requireLinkedUserInVenue(
-    venueStaffRepository: VenueStaffRepository,
-    venueId: Long,
-    linkedUserId: Long?,
-) {
-    if (linkedUserId == null) {
-        return
+private fun VenueRole.requireStaffPermission(permission: VenuePermission) {
+    if (permission !in VenuePermissions.forRole(this)) {
+        throw ForbiddenException()
     }
-    venueStaffRepository.findMember(venueId, linkedUserId)
-        ?: throw InvalidInputException("linkedUserId must be an existing venue member")
 }
+
+private fun VenueRole.pendingInviteRolesForRead(): Set<String> =
+    buildSet {
+        val permissions = VenuePermissions.forRole(this@pendingInviteRolesForRead)
+        if (VenuePermission.STAFF_INVITE_REVOKE_STAFF in permissions) add(VenueRole.STAFF.name)
+        if (VenuePermission.STAFF_INVITE_REVOKE_MANAGER in permissions) add(VenueRole.MANAGER.name)
+    }
+
+private fun VenueRole.pendingInviteRolesForRevoke(): Set<String> {
+    val roles = pendingInviteRolesForRead()
+    if (roles.isEmpty()) throw ForbiddenException()
+    return roles
+}
+
+private fun StaffProfileMutationResult.requireProfileMutationSuccess(): VenueStaffProfile =
+    when (this) {
+        is StaffProfileMutationResult.Success -> profile
+        StaffProfileMutationResult.NotFound -> throw NotFoundException()
+        StaffProfileMutationResult.InvalidLink ->
+            throw InvalidInputException("linkedUserId must be an active member of this venue")
+        StaffProfileMutationResult.Forbidden -> throw ForbiddenException()
+    }
+
+private fun StaffTodayShiftMutationResult.requireTodayShiftMutationSuccess(): VenueStaffShift =
+    when (this) {
+        is StaffTodayShiftMutationResult.Success -> shift
+        StaffTodayShiftMutationResult.NotFound -> throw NotFoundException()
+        StaffTodayShiftMutationResult.Forbidden -> throw ForbiddenException()
+    }
 
 private suspend fun resolveVenueToday(
     venueSettingsRepository: VenueSettingsRepository,
@@ -796,53 +845,6 @@ private fun parseNullableLocalTime(
     val value = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return null
     return runCatching { LocalTime.parse(value) }
         .getOrElse { throw InvalidInputException("$fieldName must be HH:mm or HH:mm:ss") }
-}
-
-private suspend fun appendStaffProfileAuditBestEffort(
-    auditLogRepository: AuditLogRepository,
-    actorUserId: Long,
-    action: String,
-    venueId: Long,
-    profileId: Long,
-) {
-    runCatching {
-        auditLogRepository.appendJson(
-            actorUserId = actorUserId,
-            action = action,
-            entityType = "staff_profile",
-            entityId = profileId,
-            payload =
-                buildJsonObject {
-                    put("venueId", venueId)
-                    put("profileId", profileId)
-                },
-        )
-    }
-}
-
-private suspend fun appendStaffShiftAuditBestEffort(
-    auditLogRepository: AuditLogRepository,
-    actorUserId: Long,
-    venueId: Long,
-    profileId: Long,
-    shiftId: Long,
-    status: String,
-) {
-    runCatching {
-        auditLogRepository.appendJson(
-            actorUserId = actorUserId,
-            action = "staff_shift_marked_$status",
-            entityType = "staff_shift",
-            entityId = shiftId,
-            payload =
-                buildJsonObject {
-                    put("venueId", venueId)
-                    put("profileId", profileId)
-                    put("shiftId", shiftId)
-                    put("status", status)
-                },
-        )
-    }
 }
 
 private const val STAFF_PROFILE_SUBTYPE_OTHER = "other"

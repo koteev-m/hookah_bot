@@ -74,9 +74,11 @@ import type {
   VenueStaffChatStatusResponse,
   VenueStaffInviteAcceptRequest,
   VenueStaffInviteAcceptResponse,
+  VenueStaffInviteRevokeResponse,
   VenueStaffInviteRequest,
   VenueStaffInviteResponse,
   VenueStaffListResponse,
+  VenueStaffPendingInvitesResponse,
   VenueStaffProfileCreateRequest,
   VenueStaffProfileDto,
   VenueStaffProfilesResponse,
@@ -1472,6 +1474,34 @@ export async function venueCreateInvite(
       body: JSON.stringify(params.body),
       signal
     },
+    deps
+  )
+}
+
+export async function venueGetPendingStaffInvites(
+  backendUrl: string,
+  venueId: number,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenueStaffPendingInvitesResponse>(
+    backendUrl,
+    `/api/venue/${venueId}/staff/invites`,
+    { signal },
+    deps
+  )
+}
+
+export async function venueRevokeStaffInvite(
+  backendUrl: string,
+  params: { venueId: number; handle: string },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenueStaffInviteRevokeResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/staff/invites/${encodeURIComponent(params.handle)}/revoke`,
+    { method: 'POST', signal },
     deps
   )
 }

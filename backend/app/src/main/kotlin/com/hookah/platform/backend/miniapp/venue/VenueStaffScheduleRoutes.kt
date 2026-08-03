@@ -17,6 +17,8 @@ import com.hookah.platform.backend.miniapp.venue.staff.invalidStaffScheduleAllow
 import com.hookah.platform.backend.miniapp.venue.staff.resolveStaffScheduleInterval
 import com.hookah.platform.backend.miniapp.venue.staff.staffScheduleConfirmationState
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
+import com.hookah.platform.backend.telegram.db.VenueBookingHours
+import com.hookah.platform.backend.telegram.db.VenueBookingHoursRepository
 import com.hookah.platform.backend.telegram.db.VenueSettingsRepository
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.call
@@ -45,7 +47,24 @@ data class VenueStaffScheduleListResponse(
     val venueToday: String,
     val from: String,
     val to: String,
+    val effectiveHours: List<VenueStaffScheduleEffectiveHoursDto>,
     val shifts: List<VenueStaffScheduleShiftDto>,
+)
+
+@Serializable
+enum class VenueStaffScheduleEffectiveHoursState {
+    OPEN,
+    CLOSED,
+    NOT_CONFIGURED,
+}
+
+@Serializable
+data class VenueStaffScheduleEffectiveHoursDto(
+    val serviceDate: String,
+    val state: VenueStaffScheduleEffectiveHoursState,
+    val endsNextDay: Boolean,
+    val opensAt: String? = null,
+    val closesAt: String? = null,
 )
 
 @Serializable
@@ -141,6 +160,7 @@ data class VenueStaffScheduleMutationResponse(
 fun Route.venueStaffScheduleRoutes(
     venueAccessRepository: VenueAccessRepository,
     venueStaffProfileRepository: VenueStaffProfileRepository,
+    venueBookingHoursRepository: VenueBookingHoursRepository,
     venueSettingsRepository: VenueSettingsRepository,
     auditLogRepository: AuditLogRepository,
     clock: Clock = Clock.systemUTC(),
@@ -151,6 +171,11 @@ fun Route.venueStaffScheduleRoutes(
             membership.requirePermission(VenuePermission.STAFF_SCHEDULE_VIEW)
             val context = resolveStaffScheduleContext(venueSettingsRepository, membership.venueId, clock)
             val range = call.requireStaffScheduleRange(context.venueToday)
+            val serviceDates = range.serviceDates()
+            val hoursByDate =
+                venueBookingHoursRepository
+                    .findByVenuesAndDates(mapOf(membership.venueId to serviceDates.toSet()))[membership.venueId]
+                    .orEmpty()
             val rows =
                 venueStaffProfileRepository.listScheduledShifts(
                     venueId = membership.venueId,
@@ -165,6 +190,7 @@ fun Route.venueStaffScheduleRoutes(
                     venueToday = context.venueToday.toString(),
                     from = range.from.toString(),
                     to = range.to.toString(),
+                    effectiveHours = serviceDates.map { date -> hoursByDate[date].toEffectiveHoursDto(date) },
                     shifts = rows.mapNotNull { it.toAdminDto(context) },
                 ),
             )
@@ -304,6 +330,34 @@ private data class StaffScheduleRange(
     val from: LocalDate,
     val to: LocalDate,
 )
+
+private fun StaffScheduleRange.serviceDates(): List<LocalDate> =
+    (0L..ChronoUnit.DAYS.between(from, to)).map(from::plusDays)
+
+private fun VenueBookingHours?.toEffectiveHoursDto(serviceDate: LocalDate): VenueStaffScheduleEffectiveHoursDto {
+    if (this == null) {
+        return VenueStaffScheduleEffectiveHoursDto(
+            serviceDate = serviceDate.toString(),
+            state = VenueStaffScheduleEffectiveHoursState.NOT_CONFIGURED,
+            endsNextDay = false,
+        )
+    }
+    if (isClosed) {
+        return VenueStaffScheduleEffectiveHoursDto(
+            serviceDate = serviceDate.toString(),
+            state = VenueStaffScheduleEffectiveHoursState.CLOSED,
+            endsNextDay = false,
+        )
+    }
+    val scheduleWindow = checkNotNull(toScheduleWindow(serviceDate))
+    return VenueStaffScheduleEffectiveHoursDto(
+        serviceDate = serviceDate.toString(),
+        state = VenueStaffScheduleEffectiveHoursState.OPEN,
+        opensAt = formatScheduleTime(opensAt),
+        closesAt = formatScheduleTime(closesAt),
+        endsNextDay = scheduleWindow.closesAt.toLocalDate().isAfter(serviceDate),
+    )
+}
 
 private data class StaffScheduleIntervalInput(
     val shiftDate: LocalDate,

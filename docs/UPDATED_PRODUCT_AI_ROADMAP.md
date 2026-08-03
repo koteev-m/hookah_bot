@@ -1,6 +1,6 @@
 # Product + Telegram AI Bots Roadmap
 
-Дата обновления: 2026-08-01.
+Дата обновления: 2026-08-03.
 
 Статус документа: canonical roadmap. Этот файл объединяет актуальный product roadmap, Mini App launch roadmap и Telegram-native AI Bots roadmap. Старые audit-файлы в `docs/audit/` остаются evidence/history, но не являются текущим backlog без сверки с этим roadmap и текущим кодом.
 
@@ -44,10 +44,11 @@
 - Growth/retention docs are current in `docs/GROWTH_RETENTION.md`: Guest History Foundation, Post-Visit Feedback MVP, venue-only Guest Favorites Phase 1 and Simple Venue Promotions Phase 1 are DONE / MVP / staging-smoke-passed. Repeat as Template Phase 1 is `MVP IMPLEMENTED / LOCAL VALIDATION PASSED / DEFERRED MANUAL SMOKE`; its environment-dependent production-readiness gate remains open in [`REPEAT-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#repeat-manual-001) without blocking independent bounded development. Executable Promotions Phase 2 / Happy Hours Percent is `DONE / STAGING-SMOKE-PASSED`; Gift parity is `GIFT_WITH_ITEM BOT/MINIAPP PARITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`, with independent review, CI and staging still required. Favorites covers catalog/detail mutations, Account list, current-user isolation, unavailable filtering/restoration, shared Bot/Mini App storage, Telegram Profile/Catalog entrypoints and source-aware Back. The manual `5/5` public review CTA and low-rating exact `VENUE_CHAT` follow-up are closed; persistent templates, favorite menu items/options, recommendations/frequent items, notification opt-in, favorites-based promotions, loyalty and broader analytics remain future/partial.
 - Staff profiles, Today Shift, optional Staff Schedule and future staff tips are canonical in
   `docs/STAFF_PROFILES_SHIFTS_TIPS.md`:
-  `STAFF PROFILES + TODAY SHIFT PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`;
-  `STAFF SCHEDULE PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED`, migration verdict
-  `NO_MIGRATION_EXPECTED`. Green Actions and staging smoke are pending, so schedule production
-  readiness is not claimed. Phase 2 may add external staff tip link + `staff_tip_intent`;
+  `STAFF OPERATIONS SLICE A / MANAGER PARITY + SHIFT TIME DEFAULTS / MVP IMPLEMENTED / LOCAL VALIDATION PASSED`;
+  `STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / PRODUCT AND RBAC POLISH REQUIRED`,
+  with schedule-schema verdict `NO_MIGRATION_EXPECTED`. Slice A needs green Actions, PostgreSQL
+  V120/H2 V121 invite-revoke rollout and a new staging smoke. Optional module/source settings stay
+  future Slice B. Phase 2 may add external staff tip link + `staff_tip_intent`;
   provider/direct payout, Telegram Stars and crypto are not MVP.
 - Order/session/tab core docs are current in `docs/ORDER_SESSION_TAB_CORE.md`: `TABLE_SESSION`, `ACTIVE_TABLE_ORDER`, `ORDER_BATCH`, `TAB`, bill/request/close flow, privacy boundaries and visit-history foundation are `SPEC UPDATED`. Current runtime docs say table-session/tab scoping, Guest History Foundation and Post-Visit Feedback MVP are staging-smoke-passed, while Repeat Phase 1 is locally validated with deferred environment-dependent manual smoke; force-close policy/audit, loyalty/preorder and broader analytics remain partial/future.
 - Analytics/events docs are current in `docs/ANALYTICS_EVENTS.md`: analytics events, audit/event boundaries, KPI formulas, role dashboards and payload privacy rules are `SPEC UPDATED`; implementation and Platform dashboards remain partial/future unless specific events are verified.
@@ -414,7 +415,8 @@ Milestones:
 | P1 CLOSED | Guest Table Session Exit / Expiry UX | Real Telegram Mini App staging smoke passed after fixing the initial `415 Unsupported Media Type` by sending JSON with `Content-Type: application/json`. The endpoint remains user-scoped through `guest_table_session_exits`; shared `table_sessions` are not closed for all guests. | `Завершить визит` clears only the current guest's restorable table context when there is no active order/bill or NEW/ACK staff call. Active current-user obligations block with clear copy; DONE calls and other guests at the same table do not block. Explicit QR scan re-enters and clears that user's exit marker. | Keep user/tenant scoping tests, stale-restore checks and real Telegram QR re-entry in regression. Shared physical table-session close after all bills are closed remains a separate lifecycle decision. |
 | P1/P2 FOLLOW-UP | Paid venue/shift extension owner settings parity | Backend data/API, Guest Mini App request UX, bill service charges, Venue Mini App owner/manager settings, Venue order queue/detail approval, Staff Chat pending approve/reject actions and Guest Bot ordering-menu section request entry are implemented. Existing `order_batch_items` require `menu_item_id`, so extension remains a separate service charge rather than a normal menu/cart item. Owner/Manager Bot settings parity is still pending if bot-side settings remain required. | Guest requests extension from active order/table/bill context through service action `Продление работы заведения`; STAFF/MANAGER see and approve/reject fixed-price requests inside active order/table/bill context and staff-chat live order message; MANAGER/OWNER configure price/duration in Mini App. | Defer Owner/Manager Bot settings parity behind guest/order/bill correctness unless a pilot venue requires bot-only settings. Preserve STAFF no-settings rule and never expose extension as catalog item/cart item/order batch item. |
 | P1 DONE / MVP / STAGING-SMOKE-PASSED | Staff profiles + today on shift | Phase 1 backend + Mini App implementation, GitHub Actions, staging deploy and post-fix staging smoke are complete. Canonical status is in `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. | Owner creates/edits/publishes opt-in public staff profiles, profiles may be linked to venue members or display-only, Owner/Manager marks `Сегодня на смене`, and guests see only public visible profiles/shifts. Venue staff cards are compact, create form is collapsed by default, `Другое` requires custom role name, raw User ID / Photo ref are not exposed, and guest `Сегодня работают` appears below main venue info. | Keep in regression. Do not add tips payments, providers, Stars, crypto, guest order online payment, schedule, photo upload or staff chat sign-up inside this existing slice. |
-| STAFF SCHEDULE PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED | Staff schedule | Runtime implements Owner/Manager bounded week management and Staff own/overlap read, reuses the existing `staff_profiles` / `staff_shifts` schema (`NO_MIGRATION_EXPECTED`), and passed local backend/Mini App validation. Manual Today Shift and Guest `Сегодня работают` are unchanged. | Optional Venue Mini App week planning: Owner/Manager bounded create/update/cancel; Staff own shifts plus safe overlapping colleagues; venue timezone/overnight, computed lifecycle, stale guard and atomic audit; no Guest auto-publication. | Run green Actions and staging smoke; do not claim production readiness until both pass. Keep Today Shift/Guest unchanged and keep availability, recurring/split shifts, reminders, swaps, Telegram and payroll out of scope. |
+| STAFF OPERATIONS SLICE A / MANAGER PARITY + SHIFT TIME DEFAULTS / MVP IMPLEMENTED / LOCAL VALIDATION PASSED | Staff access + team cards + shift defaults | Manager Staff-only invite create/list/revoke and display-only/Staff-linked card management are implemented with protected Owner/Manager linkage and transaction-bound safe audit. | Schedule GET returns batched effective venue hours; create AUTO defaults, MANUAL preservation and edit stored-time invariant are implemented. | Run green Actions, deploy migrations/new binaries, drain old runtime instances and staging-smoke before release. Optional module settings and Guest source are Slice B future. |
+| STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / PRODUCT AND RBAC POLISH REQUIRED | Staff schedule | Runtime implements Owner/Manager bounded week management and Staff own/overlap read, reusing `staff_profiles` / `staff_shifts` (`NO_MIGRATION_EXPECTED`). Manual Today Shift and Guest `Сегодня работают` are unchanged. | Optional Venue Mini App week planning with venue timezone/overnight, computed lifecycle, stale guard and atomic audit; effective hours remain defaults only. | Keep this status until a new Slice A staging smoke. Keep Today Shift/Guest unchanged and recurring/split shifts, reminders, swaps, Telegram and payroll out of scope. |
 | FUTURE | Staff profile photo upload/media picker | Current Phase 1 hides raw Photo ref manual input and uses safe placeholder/public fields. | Consent-based staff profile photo upload with safe storage, moderation/deletion rules and guest-safe rendering. | Do not expose raw `photo_ref` owner input. Specify storage/moderation before implementation. |
 | FUTURE / SPEC DRAFT | Staff tips for a specific employee | Future staff-tip model is in `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. | Phase 2 may add external staff tip link + `staff_tip_intent`; tip goes to a specific staff profile. | Tip intent is not proof of payment. Provider/direct payout is Phase 3+ after legal/product decision. Platform-collected tips are not MVP. |
 | OPEN DECISION / FUTURE | Staff shift Telegram notifications and staff communication chat | Phase 1 does not implement shift sign-up/swaps or a separate staff communication chat. | Employees may later confirm shifts/request swaps through personal bot notifications; larger venues may need forum topics or a dedicated staff communication group. | Current recommendation: do not add a second group. Revisit only after Staff Schedule passes staging smoke. |
@@ -754,8 +756,9 @@ Not selected as implementation right now:
 - H2/PostgreSQL active-order + personal-tab uniqueness fidelity is closed; keep it in regression.
 - Order Session Tab Core Hardening stays a regression responsibility, not a new runtime block: preserve current `table_session_id`/`tab_id` behavior, active-order uniqueness, tab-scoped views and privacy boundaries from `docs/ORDER_SESSION_TAB_CORE.md`.
 - Booking Reminder MVP is already implemented/test-backed and has controlled staging smoke; broader enablement is a rollout decision, not a new feature block.
-- Staff Schedule runtime is `STAFF SCHEDULE PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED`;
-  green Actions and staging smoke remain pending. Staff Photo Upload still needs consent plus safe
+- Staff Schedule runtime is
+  `STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / PRODUCT AND RBAC POLISH REQUIRED`;
+  Slice A is locally validated and needs green Actions plus new staging smoke. Staff Photo Upload still needs consent plus safe
   media storage/picker policy and is not part of that implementation.
 - Mini App mutation and fallback payload verification is closed; keep it in regression.
 - Guest-facing bill/display-number/full-bill parity, Venue Mini App full bill parity, Guest Bill Request / Payment Method UX, Staff Chat Noise Reduction / Table Activity Card and hookah placeholder polish are closed; keep them in regression rather than selecting them again.
@@ -982,12 +985,14 @@ its production-readiness gate remains open in
 independent bounded block.
 
 Current bounded runtime slice awaiting release gates:
-**STAFF SCHEDULE PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**. Venue Mini App supports
-Owner/Manager week management and Staff own/overlap read. The existing `staff_profiles` /
-`staff_shifts` schema was reused (`NO_MIGRATION_EXPECTED`). Manual Today Shift and Guest
-`Сегодня работают` remain unchanged. Green Actions and staging smoke are pending; do not claim
-production readiness. Telegram, reminders, recurring/split shifts, payroll, staff media and Media
-Upload/R2 remain out of scope. Canonical acceptance and validation gates are in
+**STAFF OPERATIONS SLICE A / MANAGER PARITY + SHIFT TIME DEFAULTS / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**.
+Venue Mini App supports Manager Staff-only invite lifecycle, safe team-card parity and venue-hours
+shift defaults without constraining manual intervals. Staff Schedule remains
+`FUNCTIONALLY PASSED ON STAGING / PRODUCT AND RBAC POLISH REQUIRED`; manual Today Shift and Guest
+`Сегодня работают` remain unchanged. Green Actions, migration rollout and a new staging smoke are
+pending; do not claim production readiness. Optional module settings, Guest source changes,
+Telegram, reminders, recurring/split shifts, payroll, staff media and Media Upload/R2 remain out of
+scope. Canonical acceptance and validation gates are in
 `docs/STAFF_PROFILES_SHIFTS_TIPS.md` and `docs/TESTING_QA_SMOKE_STRATEGY.md`.
 
 Latest closed bounded runtime slice:

@@ -335,6 +335,22 @@ class VenueStaffRoutesTest {
             assertEquals(HttpStatusCode.Forbidden, forbiddenResponse.status)
             assertApiErrorEnvelope(forbiddenResponse, ApiErrorCodes.FORBIDDEN)
 
+            listOf("OWNER", "ADMIN").forEach { blockedRole ->
+                val blockedResponse =
+                    client.post("/api/venue/$venueId/staff/invites") {
+                        headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                        contentType(ContentType.Application.Json)
+                        setBody(
+                            json.encodeToString(
+                                StaffInviteRequest.serializer(),
+                                StaffInviteRequest(role = blockedRole),
+                            ),
+                        )
+                    }
+                assertEquals(HttpStatusCode.BadRequest, blockedResponse.status)
+                assertApiErrorEnvelope(blockedResponse, ApiErrorCodes.INVALID_INPUT)
+            }
+
             val allowedResponse =
                 client.post("/api/venue/$venueId/staff/invites") {
                     headers { append(HttpHeaders.Authorization, "Bearer $token") }
@@ -345,6 +361,191 @@ class VenueStaffRoutesTest {
             assertEquals(HttpStatusCode.OK, allowedResponse.status)
             val payload = json.decodeFromString(StaffInviteResponse.serializer(), allowedResponse.bodyAsText())
             assertTrue(payload.inviteCode.isNotBlank())
+        }
+
+    @Test
+    fun `pending invite lifecycle filters manager access revokes staff and keeps audit payload safe`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("staff-invite-pending-lifecycle")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val ownerId = 3101L
+            val managerId = 3102L
+            val staffId = 3103L
+            val foreignManagerId = 3104L
+            val venueId = seedVenueMembership(jdbcUrl, ownerId, "OWNER")
+            seedVenueMembership(jdbcUrl, managerId, "MANAGER", venueId)
+            seedVenueMembership(jdbcUrl, staffId, "STAFF", venueId)
+            seedVenueMembership(jdbcUrl, foreignManagerId, "MANAGER")
+            val ownerToken = issueToken(config, ownerId)
+            val managerToken = issueToken(config, managerId)
+
+            val staffInvite =
+                client.post("/api/venue/$venueId/staff/invites") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $managerToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody(json.encodeToString(StaffInviteRequest.serializer(), StaffInviteRequest(role = "STAFF")))
+                }.let { response ->
+                    assertEquals(HttpStatusCode.OK, response.status)
+                    json.decodeFromString(StaffInviteResponse.serializer(), response.bodyAsText())
+                }
+            client.post("/api/venue/$venueId/staff/invites") {
+                headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                contentType(ContentType.Application.Json)
+                setBody(json.encodeToString(StaffInviteRequest.serializer(), StaffInviteRequest(role = "MANAGER")))
+            }.also { response -> assertEquals(HttpStatusCode.OK, response.status) }
+
+            val managerPending =
+                client.get("/api/venue/$venueId/staff/invites") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $managerToken") }
+                }.let { response ->
+                    assertEquals(HttpStatusCode.OK, response.status)
+                    json.decodeFromString(PendingInvitesResponse.serializer(), response.bodyAsText())
+                }
+            assertEquals(listOf("STAFF"), managerPending.invites.map { it.role })
+            assertTrue(managerPending.invites.single().handle.startsWith("sih_"))
+            assertEquals("PENDING", managerPending.invites.single().status)
+
+            val ownerPending =
+                client.get("/api/venue/$venueId/staff/invites") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                }.let { response ->
+                    assertEquals(HttpStatusCode.OK, response.status)
+                    json.decodeFromString(PendingInvitesResponse.serializer(), response.bodyAsText())
+                }
+            assertEquals(setOf("STAFF", "MANAGER"), ownerPending.invites.map { it.role }.toSet())
+            val staffHandle = ownerPending.invites.single { it.role == "STAFF" }.handle
+            val managerHandle = ownerPending.invites.single { it.role == "MANAGER" }.handle
+
+            val protectedRevoke =
+                client.post("/api/venue/$venueId/staff/invites/$managerHandle/revoke") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $managerToken") }
+                }
+            assertEquals(HttpStatusCode.BadRequest, protectedRevoke.status)
+            assertApiErrorEnvelope(protectedRevoke, ApiErrorCodes.INVALID_INPUT)
+
+            val revoke =
+                client.post("/api/venue/$venueId/staff/invites/$staffHandle/revoke") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $managerToken") }
+                }
+            assertEquals(HttpStatusCode.OK, revoke.status)
+            assertTrue(json.decodeFromString(StaffInviteRevokeResponse.serializer(), revoke.bodyAsText()).ok)
+
+            val repeatedRevoke =
+                client.post("/api/venue/$venueId/staff/invites/$staffHandle/revoke") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $managerToken") }
+                }
+            assertEquals(HttpStatusCode.BadRequest, repeatedRevoke.status)
+            assertApiErrorEnvelope(repeatedRevoke, ApiErrorCodes.INVALID_INPUT)
+
+            val revokedAccept =
+                client.post("/api/venue/staff/invites/accept") {
+                    headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config, foreignManagerId)}") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            StaffInviteAcceptRequest.serializer(),
+                            StaffInviteAcceptRequest(inviteCode = staffInvite.inviteCode),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.BadRequest, revokedAccept.status)
+            assertApiErrorEnvelope(revokedAccept, ApiErrorCodes.INVALID_INPUT)
+
+            val staffList =
+                client.get("/api/venue/$venueId/staff/invites") {
+                    headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config, staffId)}") }
+                }
+            assertEquals(HttpStatusCode.Forbidden, staffList.status)
+            assertApiErrorEnvelope(staffList, ApiErrorCodes.FORBIDDEN)
+
+            val foreignList =
+                client.get("/api/venue/$venueId/staff/invites") {
+                    headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config, foreignManagerId)}") }
+                }
+            assertEquals(HttpStatusCode.Forbidden, foreignList.status)
+            assertApiErrorEnvelope(foreignList, ApiErrorCodes.FORBIDDEN)
+
+            val audits = loadInviteAuditRows(jdbcUrl)
+            assertEquals(2, audits.count { it.action == "STAFF_INVITE_CREATED" })
+            assertEquals(1, audits.count { it.action == "STAFF_INVITE_REVOKED" })
+            audits.forEach { audit ->
+                assertTrue(audit.payload.contains("inviteHandle"))
+                assertTrue(audit.payload.contains("targetRole"))
+                assertTrue(!audit.payload.contains(staffInvite.inviteCode))
+                assertTrue(!audit.payload.contains("code_hash", ignoreCase = true))
+                assertTrue(!audit.payload.contains("telegram", ignoreCase = true))
+            }
+        }
+
+    @Test
+    fun `used and expired invites cannot be revoked`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("staff-invite-revoke-terminal")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val ownerId = 3151L
+            val inviteeId = 3152L
+            val venueId = seedVenueMembership(jdbcUrl, ownerId, "OWNER")
+            seedUser(jdbcUrl, inviteeId)
+            val token = issueToken(config, ownerId)
+
+            suspend fun createStaffInvite(): StaffInviteResponse =
+                client.post("/api/venue/$venueId/staff/invites") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody(json.encodeToString(StaffInviteRequest.serializer(), StaffInviteRequest(role = "STAFF")))
+                }.let { response ->
+                    assertEquals(HttpStatusCode.OK, response.status)
+                    json.decodeFromString(StaffInviteResponse.serializer(), response.bodyAsText())
+                }
+
+            suspend fun pendingStaffHandle(): String =
+                client.get("/api/venue/$venueId/staff/invites") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }.let { response ->
+                    assertEquals(HttpStatusCode.OK, response.status)
+                    json.decodeFromString(PendingInvitesResponse.serializer(), response.bodyAsText())
+                        .invites.single { it.role == "STAFF" }.handle
+                }
+
+            val usedInvite = createStaffInvite()
+            val usedHandle = pendingStaffHandle()
+            client.post("/api/venue/staff/invites/accept") {
+                headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config, inviteeId)}") }
+                contentType(ContentType.Application.Json)
+                setBody(
+                    json.encodeToString(
+                        StaffInviteAcceptRequest.serializer(),
+                        StaffInviteAcceptRequest(inviteCode = usedInvite.inviteCode),
+                    ),
+                )
+            }.also { response -> assertEquals(HttpStatusCode.OK, response.status) }
+            val usedRevoke =
+                client.post("/api/venue/$venueId/staff/invites/$usedHandle/revoke") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.BadRequest, usedRevoke.status)
+
+            val expiredInvite = createStaffInvite()
+            val expiredHandle = pendingStaffHandle()
+            expireStaffInvite(jdbcUrl, venueId, expiredInvite.inviteCode)
+            val expiredRevoke =
+                client.post("/api/venue/$venueId/staff/invites/$expiredHandle/revoke") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.BadRequest, expiredRevoke.status)
+
+            assertEquals(0, loadInviteAuditRows(jdbcUrl).count { it.action == "STAFF_INVITE_REVOKED" })
         }
 
     @Test
@@ -858,7 +1059,7 @@ class VenueStaffRoutesTest {
         }
 
     @Test
-    fun `manager can mark today shift but cannot publish or schedule profile`() =
+    fun `manager today shift preserves scheduled status and can publish display-only profile`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("staff-profile-manager-shift")
             val config = buildConfig(jdbcUrl)
@@ -920,8 +1121,9 @@ class VenueStaffRoutesTest {
                 client.post("/api/venue/$venueId/staff/profiles/${profile.id}/publish") {
                     headers { append(HttpHeaders.Authorization, "Bearer $managerToken") }
                 }
-            assertEquals(HttpStatusCode.Forbidden, publishResponse.status)
-            assertApiErrorEnvelope(publishResponse, ApiErrorCodes.FORBIDDEN)
+            assertEquals(HttpStatusCode.OK, publishResponse.status)
+            val published = json.decodeFromString(StaffProfileDto.serializer(), publishResponse.bodyAsText())
+            assertTrue(published.isGuestVisible)
         }
 
     @Test
@@ -1078,6 +1280,31 @@ class VenueStaffRoutesTest {
         }
     }
 
+    private fun loadInviteAuditRows(jdbcUrl: String): List<InviteAuditRow> =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT action, payload_json
+                FROM audit_log
+                WHERE entity_type = 'staff_invite'
+                ORDER BY id
+                """.trimIndent(),
+            ).use { statement ->
+                statement.executeQuery().use { rs ->
+                    buildList {
+                        while (rs.next()) {
+                            add(
+                                InviteAuditRow(
+                                    action = rs.getString("action"),
+                                    payload = rs.getString("payload_json"),
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
     private fun expireStaffInvite(
         jdbcUrl: String,
         venueId: Long,
@@ -1134,6 +1361,30 @@ class VenueStaffRoutesTest {
         val venueId: Long,
         val member: StaffMemberDto,
         val alreadyMember: Boolean,
+    )
+
+    @Serializable
+    private data class PendingInvitesResponse(
+        val invites: List<PendingInviteDto>,
+    )
+
+    @Serializable
+    private data class PendingInviteDto(
+        val handle: String,
+        val role: String,
+        val status: String,
+        val createdAt: String,
+        val expiresAt: String,
+    )
+
+    @Serializable
+    private data class StaffInviteRevokeResponse(
+        val ok: Boolean,
+    )
+
+    private data class InviteAuditRow(
+        val action: String,
+        val payload: String,
     )
 
     @Serializable

@@ -218,6 +218,112 @@ class VenueStaffRoutesTestSchedule {
         }
 
     @Test
+    fun `admin schedule returns effective hours and does not enforce them as shift bounds`() =
+        testApplication {
+            val now = Instant.parse("2026-08-01T21:30:00Z")
+            val jdbcUrl = buildJdbcUrl("staff-schedule-effective-hours")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application {
+                moduleWithOverrides(
+                    ModuleOverrides(staffScheduleClock = Clock.fixed(now, ZoneOffset.UTC)),
+                )
+            }
+            client.get("/health")
+
+            val ownerId = 8151L
+            val venueId = seedVenue(jdbcUrl, ownerId, "Asia/Tomsk")
+            val profileId = seedProfile(jdbcUrl, venueId, ownerId, "Вне часов")
+            seedWeeklyHours(jdbcUrl, venueId, weekday = 7, opensAt = "18:00", closesAt = "02:00")
+            seedWeeklyHours(jdbcUrl, venueId, weekday = 1, opensAt = "17:00", closesAt = "01:00")
+            seedWeeklyHours(jdbcUrl, venueId, weekday = 2, opensAt = "10:00", closesAt = "22:00")
+            seedWeeklyHours(jdbcUrl, venueId, weekday = 4, opensAt = "00:00", closesAt = "00:00")
+            seedDateOverride(
+                jdbcUrl = jdbcUrl,
+                venueId = venueId,
+                serviceDate = LocalDate.parse("2026-08-03"),
+                opensAt = "20:00",
+                closesAt = "04:00",
+            )
+            seedDateOverride(
+                jdbcUrl = jdbcUrl,
+                venueId = venueId,
+                serviceDate = LocalDate.parse("2026-08-04"),
+                opensAt = "00:00",
+                closesAt = "00:00",
+                isClosed = true,
+            )
+            val token = issueToken(config, ownerId)
+
+            val outsideHoursCreate =
+                client.post("/api/venue/$venueId/staff/shifts") {
+                    bearer(token)
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            VenueStaffScheduleCreateRequest.serializer(),
+                            VenueStaffScheduleCreateRequest(
+                                staffProfileId = profileId,
+                                shiftDate = "2026-08-02",
+                                startsAt = "10:00",
+                                endsAt = "12:00",
+                            ),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, outsideHoursCreate.status)
+            val created = outsideHoursCreate.decodeMutation().shift
+            assertEquals("10:00", created.startsAt)
+            assertEquals("12:00", created.endsAt)
+
+            val listResponse =
+                client.get("/api/venue/$venueId/staff/shifts?from=2026-08-02&to=2026-08-06") {
+                    bearer(token)
+                }
+            assertEquals(HttpStatusCode.OK, listResponse.status)
+            val payload =
+                json.decodeFromString(VenueStaffScheduleListResponse.serializer(), listResponse.bodyAsText())
+            assertEquals("Asia/Tomsk", payload.timezone)
+            assertEquals("2026-08-02", payload.venueToday)
+            assertEquals(listOf(created.id), payload.shifts.map { it.id })
+            assertEquals(
+                listOf("2026-08-02", "2026-08-03", "2026-08-04", "2026-08-05", "2026-08-06"),
+                payload.effectiveHours.map { it.serviceDate },
+            )
+
+            val effectiveHours = payload.effectiveHours.associateBy { it.serviceDate }
+            val weeklyOvernight = checkNotNull(effectiveHours["2026-08-02"])
+            assertEquals(VenueStaffScheduleEffectiveHoursState.OPEN, weeklyOvernight.state)
+            assertEquals("18:00", weeklyOvernight.opensAt)
+            assertEquals("02:00", weeklyOvernight.closesAt)
+            assertTrue(weeklyOvernight.endsNextDay)
+
+            val changedHours = checkNotNull(effectiveHours["2026-08-03"])
+            assertEquals(VenueStaffScheduleEffectiveHoursState.OPEN, changedHours.state)
+            assertEquals("20:00", changedHours.opensAt)
+            assertEquals("04:00", changedHours.closesAt)
+            assertTrue(changedHours.endsNextDay)
+
+            val closed = checkNotNull(effectiveHours["2026-08-04"])
+            assertEquals(VenueStaffScheduleEffectiveHoursState.CLOSED, closed.state)
+            assertNull(closed.opensAt)
+            assertNull(closed.closesAt)
+            assertFalse(closed.endsNextDay)
+
+            val notConfigured = checkNotNull(effectiveHours["2026-08-05"])
+            assertEquals(VenueStaffScheduleEffectiveHoursState.NOT_CONFIGURED, notConfigured.state)
+            assertNull(notConfigured.opensAt)
+            assertNull(notConfigured.closesAt)
+            assertFalse(notConfigured.endsNextDay)
+
+            val fullDay = checkNotNull(effectiveHours["2026-08-06"])
+            assertEquals(VenueStaffScheduleEffectiveHoursState.OPEN, fullDay.state)
+            assertEquals("00:00", fullDay.opensAt)
+            assertEquals("00:00", fullDay.closesAt)
+            assertTrue(fullDay.endsNextDay)
+        }
+
+    @Test
     fun `staff sees only own overlapping colleagues and has no admin access`() =
         testApplication {
             val now = Instant.parse("2026-08-01T20:00:00Z")
@@ -1093,6 +1199,58 @@ class VenueStaffRoutesTestSchedule {
                 }
             }
         }
+
+    private fun seedWeeklyHours(
+        jdbcUrl: String,
+        venueId: Long,
+        weekday: Int,
+        opensAt: String,
+        closesAt: String,
+        isClosed: Boolean = false,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                INSERT INTO venue_booking_hours (venue_id, weekday, opens_at, closes_at, is_closed)
+                VALUES (?, ?, ?, ?, ?)
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.setInt(2, weekday)
+                statement.setObject(3, LocalTime.parse(opensAt))
+                statement.setObject(4, LocalTime.parse(closesAt))
+                statement.setBoolean(5, isClosed)
+                statement.executeUpdate()
+            }
+        }
+    }
+
+    private fun seedDateOverride(
+        jdbcUrl: String,
+        venueId: Long,
+        serviceDate: LocalDate,
+        opensAt: String,
+        closesAt: String,
+        isClosed: Boolean = false,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                INSERT INTO venue_booking_hours_overrides (
+                    venue_id, service_date, opens_at, closes_at, is_closed
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.setObject(2, serviceDate)
+                statement.setObject(3, LocalTime.parse(opensAt))
+                statement.setObject(4, LocalTime.parse(closesAt))
+                statement.setBoolean(5, isClosed)
+                statement.executeUpdate()
+            }
+        }
+    }
 
     private fun seedShift(
         jdbcUrl: String,

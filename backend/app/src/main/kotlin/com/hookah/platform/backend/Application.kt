@@ -1224,6 +1224,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                 venueStaffScheduleRoutes(
                     venueAccessRepository = venueAccessRepository,
                     venueStaffProfileRepository = venueStaffProfileRepository,
+                    venueBookingHoursRepository = venueBookingHoursRepository,
                     venueSettingsRepository = venueSettingsRepository,
                     auditLogRepository = auditLogRepository,
                     clock = overrides.staffScheduleClock ?: Clock.systemUTC(),

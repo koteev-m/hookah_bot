@@ -17,6 +17,7 @@ import type {
   VenueStaffScheduleColleagueDto,
   VenueStaffScheduleComputedStatus,
   VenueStaffScheduleConfirmationState,
+  VenueStaffScheduleEffectiveHoursDto,
   VenueStaffScheduleOwnShiftDto
 } from '../shared/api/venueDtos'
 import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
@@ -41,6 +42,9 @@ type AdminFormRefs = {
   dateInput: HTMLInputElement
   startInput: HTMLInputElement
   endInput: HTMLInputElement
+  effectiveHoursStatus: HTMLParagraphElement
+  manualTimeButton: HTMLButtonElement
+  applyHoursButton: HTMLButtonElement
   overnightHint: HTMLParagraphElement
   previewButton: HTMLButtonElement
   closeFormButton: HTMLButtonElement
@@ -75,12 +79,14 @@ type ShiftDraft = {
   endsAt: string
 }
 
+type ShiftTimeSource = 'AUTO' | 'MANUAL'
+type EffectiveHoursLookupState = 'LOADING' | 'ERROR'
+
 type PendingConfirmation =
   | { kind: 'create'; draft: ShiftDraft }
   | { kind: 'update'; shift: VenueStaffScheduleAdminShiftDto; draft: ShiftDraft }
   | { kind: 'cancel'; shift: VenueStaffScheduleAdminShiftDto }
 
-const DEFAULT_TIMEZONE = 'Europe/Moscow'
 const STALE_COPY = 'График изменился. Обновите данные и повторите действие.'
 const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -323,6 +329,23 @@ function buildAdminDom(): AdminFormRefs {
     renderField('Начало', startInput),
     renderField('Окончание', endInput)
   )
+  const effectiveHoursStatus = el('p', {
+    className: 'venue-order-sub venue-schedule-effective-hours',
+    text: ''
+  }) as HTMLParagraphElement
+  effectiveHoursStatus.setAttribute('aria-live', 'polite')
+  const manualTimeButton = el('button', {
+    className: 'button-tertiary button-small',
+    text: 'Указать время вручную'
+  }) as HTMLButtonElement
+  manualTimeButton.hidden = true
+  const applyHoursButton = el('button', {
+    className: 'button-tertiary button-small',
+    text: 'Заполнить по часам заведения'
+  }) as HTMLButtonElement
+  applyHoursButton.hidden = true
+  const effectiveHoursActions = el('div', { className: 'venue-profile-form-actions' })
+  append(effectiveHoursActions, manualTimeButton, applyHoursButton)
   const overnightHint = el('p', {
     className: 'venue-order-sub venue-schedule-overnight-hint',
     text: 'Если окончание не позже начала, смена завершится на следующий день.'
@@ -334,7 +357,15 @@ function buildAdminDom(): AdminFormRefs {
   }) as HTMLButtonElement
   const formActions = el('div', { className: 'venue-profile-form-actions' })
   append(formActions, previewButton, closeFormButton)
-  append(formCard, formTitle, formGrid, overnightHint, formActions)
+  append(
+    formCard,
+    formTitle,
+    formGrid,
+    effectiveHoursStatus,
+    effectiveHoursActions,
+    overnightHint,
+    formActions
+  )
 
   const confirmationCard = el('section', { className: 'card venue-schedule-confirmation' })
   confirmationCard.hidden = true
@@ -357,6 +388,9 @@ function buildAdminDom(): AdminFormRefs {
     dateInput,
     startInput,
     endInput,
+    effectiveHoursStatus,
+    manualTimeButton,
+    applyHoursButton,
     overnightHint,
     previewButton,
     closeFormButton,
@@ -426,8 +460,11 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
   let disposed = false
   let loadAbort: AbortController | null = null
   let mutationAbort: AbortController | null = null
+  let effectiveHoursAbort: AbortController | null = null
+  let effectiveHoursRequestDate: string | null = null
   let loadSeq = 0
   let mutationSeq = 0
+  let effectiveHoursSeq = 0
   let weekStart = startOfIsoWeek(bootstrapUtcDate())
   let venueToday: string | null = null
   let timezone: string | null = null
@@ -439,6 +476,9 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
   let pendingConfirmation: PendingConfirmation | null = null
   let mutationPending = false
   let weekExplicitlyChanged = false
+  let timeSource: ShiftTimeSource = 'AUTO'
+  const effectiveHoursByDate = new Map<string, VenueStaffScheduleEffectiveHoursDto>()
+  const effectiveHoursLookupStates = new Map<string, EffectiveHoursLookupState>()
 
   const weekEnd = () => addIsoDays(weekStart, 6)
 
@@ -487,7 +527,11 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
     admin.dateInput.value = ''
     admin.startInput.value = ''
     admin.endInput.value = ''
+    admin.effectiveHoursStatus.textContent = ''
+    admin.manualTimeButton.hidden = true
+    admin.applyHoursButton.hidden = true
     admin.overnightHint.textContent = 'Если окончание не позже начала, смена завершится на следующий день.'
+    timeSource = 'AUTO'
   }
 
   const showStaleError = (error: ApiErrorInfo) => {
@@ -725,6 +769,135 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
     }
   }
 
+  const markHoursRange = (from: string, state: EffectiveHoursLookupState) => {
+    for (let index = 0; index < 7; index += 1) {
+      effectiveHoursLookupStates.set(addIsoDays(from, index), state)
+    }
+  }
+
+  const storeEffectiveHours = (
+    from: string,
+    values: VenueStaffScheduleEffectiveHoursDto[]
+  ) => {
+    const valuesByDate = new Map(values.map((value) => [value.serviceDate, value]))
+    for (let index = 0; index < 7; index += 1) {
+      const date = addIsoDays(from, index)
+      const value = valuesByDate.get(date)
+      if (value) {
+        effectiveHoursByDate.set(date, value)
+        effectiveHoursLookupStates.delete(date)
+      } else {
+        effectiveHoursByDate.delete(date)
+        effectiveHoursLookupStates.set(date, 'ERROR')
+      }
+    }
+  }
+
+  function syncEffectiveHoursForForm(applyAuto: boolean) {
+    const admin = refs.admin
+    if (!admin || !admin.dateInput.value) return
+    const date = admin.dateInput.value
+    const hours = effectiveHoursByDate.get(date)
+    const lookupState = effectiveHoursLookupStates.get(date)
+    admin.manualTimeButton.hidden = true
+    admin.applyHoursButton.hidden = true
+
+    if (!hours) {
+      if (applyAuto && timeSource === 'AUTO' && !editingShift) {
+        admin.startInput.value = ''
+        admin.endInput.value = ''
+        updateOvernightHint()
+      }
+      admin.effectiveHoursStatus.textContent =
+        lookupState === 'LOADING'
+          ? 'Загружаем часы заведения для выбранной даты…'
+          : lookupState === 'ERROR'
+            ? 'Не удалось загрузить часы заведения. Время не подставлено; его можно указать вручную.'
+            : 'Часы заведения для выбранной даты ещё не загружены.'
+      admin.manualTimeButton.hidden = lookupState === 'LOADING'
+      return
+    }
+
+    if (hours.state === 'OPEN' && hours.opensAt && hours.closesAt) {
+      if (applyAuto && timeSource === 'AUTO' && !editingShift) {
+        admin.startInput.value = hours.opensAt
+        admin.endInput.value = hours.closesAt
+        updateOvernightHint()
+      }
+      admin.effectiveHoursStatus.textContent = `По графику заведения: ${formatInterval(
+        hours.opensAt,
+        hours.closesAt,
+        hours.endsNextDay
+      )}.`
+      admin.applyHoursButton.hidden = timeSource === 'AUTO' && !editingShift
+      return
+    }
+
+    if (applyAuto && timeSource === 'AUTO' && !editingShift) {
+      admin.startInput.value = ''
+      admin.endInput.value = ''
+      updateOvernightHint()
+    }
+    if (hours.state === 'CLOSED') {
+      admin.effectiveHoursStatus.textContent = 'По графику заведение закрыто в этот день.'
+    } else if (hours.state === 'NOT_CONFIGURED') {
+      admin.effectiveHoursStatus.textContent =
+        'Часы работы заведения на этот день не настроены. Укажите время смены вручную.'
+    } else {
+      admin.effectiveHoursStatus.textContent =
+        'Часы заведения заполнены некорректно. Время не подставлено; его можно указать вручную.'
+    }
+    admin.manualTimeButton.hidden = false
+  }
+
+  async function loadEffectiveHoursForDate(date: string) {
+    const admin = refs.admin
+    if (!admin || !date || disposed) return
+    const previousRequestDate = effectiveHoursRequestDate
+    effectiveHoursAbort?.abort()
+    if (
+      previousRequestDate &&
+      effectiveHoursLookupStates.get(previousRequestDate) === 'LOADING'
+    ) {
+      effectiveHoursLookupStates.delete(previousRequestDate)
+    }
+    effectiveHoursAbort = new AbortController()
+    effectiveHoursRequestDate = date
+    const controller = effectiveHoursAbort
+    const seq = ++effectiveHoursSeq
+    effectiveHoursByDate.delete(date)
+    effectiveHoursLookupStates.set(date, 'LOADING')
+    syncEffectiveHoursForForm(true)
+    const result = await venueGetStaffSchedule(
+      backendUrl,
+      { venueId, from: date, to: date },
+      deps,
+      controller.signal
+    )
+    if (disposed || effectiveHoursAbort !== controller || effectiveHoursSeq !== seq) return
+    effectiveHoursAbort = null
+    effectiveHoursRequestDate = null
+    if (!result.ok) {
+      if (result.error.code !== REQUEST_ABORTED_CODE) {
+        effectiveHoursLookupStates.set(date, 'ERROR')
+        if (admin.dateInput.value === date) syncEffectiveHoursForForm(true)
+      }
+      return
+    }
+    const hours = result.data.effectiveHours?.find((value) => value.serviceDate === date)
+    if (!hours) {
+      effectiveHoursLookupStates.set(date, 'ERROR')
+    } else {
+      effectiveHoursByDate.set(date, hours)
+      effectiveHoursLookupStates.delete(date)
+    }
+    if (result.data.timezone?.trim()) {
+      timezone = result.data.timezone
+      refs.timezoneCopy.textContent = `Все даты и время указаны в часовом поясе заведения: ${timezone}.`
+    }
+    if (admin.dateInput.value === date) syncEffectiveHoursForForm(true)
+  }
+
   const setLoading = () => {
     hideError()
     setStatus('Загрузка графика…')
@@ -746,6 +919,14 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
     mutationPending = false
     const from = weekStart
     const to = weekEnd()
+
+    effectiveHoursAbort?.abort()
+    effectiveHoursAbort = null
+    effectiveHoursRequestDate = null
+    effectiveHoursSeq += 1
+    effectiveHoursByDate.clear()
+    effectiveHoursLookupStates.clear()
+    if (!isStaffView) markHoursRange(from, 'LOADING')
 
     if (isStaffView) {
       const result = await venueGetMyStaffSchedule(
@@ -786,6 +967,8 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
       const failed = !scheduleResult.ok ? scheduleResult : !profilesResult.ok ? profilesResult : null
       if (failed && !failed.ok) {
         if (failed.error.code !== REQUEST_ABORTED_CODE) {
+          markHoursRange(from, 'ERROR')
+          syncEffectiveHoursForForm(true)
           setStatus('')
           showError(failed.error, () => void load())
         }
@@ -805,11 +988,15 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
       adminShifts = scheduleResult.data.shifts.filter(
         (shift) => shift.shiftDate >= from && shift.shiftDate <= to
       )
+      storeEffectiveHours(from, scheduleResult.data.effectiveHours ?? [])
       profiles = profilesResult.data.profiles
       populateProfiles()
+      syncEffectiveHoursForForm(true)
     }
 
-    refs.timezoneCopy.textContent = `Все даты и время указаны в часовом поясе заведения: ${timezone || DEFAULT_TIMEZONE}.`
+    refs.timezoneCopy.textContent = timezone
+      ? `Все даты и время указаны в часовом поясе заведения: ${timezone}.`
+      : 'Часовой пояс заведения не загружен.'
     updateWeekControls()
     renderWeek()
     setStatus('График обновлён.')
@@ -835,10 +1022,19 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
     admin.dateInput.min = venueToday ?? ''
     admin.dateInput.max = venueToday ? addIsoDays(venueToday, 90) : ''
     admin.dateInput.value = venueToday && weekStart < venueToday ? venueToday : weekStart
-    admin.startInput.value = '18:00'
-    admin.endInput.value = '02:00'
+    admin.startInput.value = ''
+    admin.endInput.value = ''
+    timeSource = 'AUTO'
     updateOvernightHint()
     admin.formCard.hidden = false
+    if (
+      !effectiveHoursByDate.has(admin.dateInput.value) &&
+      !effectiveHoursLookupStates.has(admin.dateInput.value)
+    ) {
+      void loadEffectiveHoursForDate(admin.dateInput.value)
+    } else {
+      syncEffectiveHoursForForm(true)
+    }
     admin.profileSelect.focus()
   }
 
@@ -857,12 +1053,21 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
     admin.dateInput.value = shift.shiftDate
     admin.startInput.value = shift.startsAt
     admin.endInput.value = shift.endsAt
+    timeSource = 'MANUAL'
     updateOvernightHint()
     admin.formCard.hidden = false
+    if (
+      !effectiveHoursByDate.has(admin.dateInput.value) &&
+      !effectiveHoursLookupStates.has(admin.dateInput.value)
+    ) {
+      void loadEffectiveHoursForDate(admin.dateInput.value)
+    } else {
+      syncEffectiveHoursForForm(false)
+    }
     admin.dateInput.focus()
   }
 
-  const updateOvernightHint = () => {
+  function updateOvernightHint() {
     const admin = refs.admin
     if (!admin) return
     admin.overnightHint.textContent = endsNextDay(admin.startInput.value, admin.endInput.value)
@@ -870,9 +1075,51 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
       : 'Если окончание не позже начала, смена завершится на следующий день.'
   }
 
+  const handleDateChange = () => {
+    const admin = refs.admin
+    if (!admin || !admin.dateInput.value) return
+    if (editingShift) timeSource = 'MANUAL'
+    const date = admin.dateInput.value
+    if (!effectiveHoursByDate.has(date) && !effectiveHoursLookupStates.has(date)) {
+      void loadEffectiveHoursForDate(date)
+      return
+    }
+    syncEffectiveHoursForForm(true)
+  }
+
+  const markTimesManual = () => {
+    timeSource = 'MANUAL'
+    updateOvernightHint()
+    syncEffectiveHoursForForm(false)
+  }
+
+  const enableManualTimes = () => {
+    const admin = refs.admin
+    if (!admin) return
+    timeSource = 'MANUAL'
+    syncEffectiveHoursForForm(false)
+    admin.startInput.focus()
+  }
+
+  const applyVenueHours = () => {
+    const admin = refs.admin
+    if (!admin) return
+    const hours = effectiveHoursByDate.get(admin.dateInput.value)
+    if (!hours || hours.state !== 'OPEN' || !hours.opensAt || !hours.closesAt) return
+    admin.startInput.value = hours.opensAt
+    admin.endInput.value = hours.closesAt
+    timeSource = 'AUTO'
+    updateOvernightHint()
+    syncEffectiveHoursForForm(false)
+  }
+
   const readDraft = (): ShiftDraft | null => {
     const admin = refs.admin
     if (!admin) return null
+    if (!timezone?.trim()) {
+      showToast('Дождитесь загрузки часового пояса заведения')
+      return null
+    }
     if (!admin.profileSelect.value || !admin.dateInput.value || !admin.startInput.value || !admin.endInput.value) {
       showToast('Заполните сотрудника, дату и время смены')
       return null
@@ -940,7 +1187,7 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
         })
       )
     }
-    summary.appendChild(el('p', { text: `Часовой пояс: ${timezone || DEFAULT_TIMEZONE}` }))
+    summary.appendChild(el('p', { text: `Часовой пояс: ${timezone}` }))
     admin.confirmationSummary.replaceChildren(summary)
     admin.confirmButton.textContent = editingShift ? 'Сохранить изменения' : 'Создать смену'
     admin.confirmButton.className = ''
@@ -1083,8 +1330,11 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
       on(admin.addButton, 'click', openCreateForm),
       on(admin.closeFormButton, 'click', resetEditor),
       on(admin.previewButton, 'click', openDraftConfirmation),
-      on(admin.startInput, 'input', updateOvernightHint),
-      on(admin.endInput, 'input', updateOvernightHint),
+      on(admin.dateInput, 'input', handleDateChange),
+      on(admin.startInput, 'input', markTimesManual),
+      on(admin.endInput, 'input', markTimesManual),
+      on(admin.manualTimeButton, 'click', enableManualTimes),
+      on(admin.applyHoursButton, 'click', applyVenueHours),
       on(admin.closeConfirmationButton, 'click', () => {
         if (pendingConfirmation?.kind === 'cancel') {
           resetEditor()
@@ -1113,11 +1363,16 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
     mutationSeq += 1
     loadAbort?.abort()
     mutationAbort?.abort()
+    effectiveHoursAbort?.abort()
     loadAbort = null
     mutationAbort = null
+    effectiveHoursAbort = null
+    effectiveHoursRequestDate = null
     adminShifts = []
     ownShifts = []
     profiles = []
+    effectiveHoursByDate.clear()
+    effectiveHoursLookupStates.clear()
     resetEditor()
     refs.list.replaceChildren()
     disposables.forEach((dispose) => dispose())

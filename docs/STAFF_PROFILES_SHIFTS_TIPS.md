@@ -1,11 +1,13 @@
 # Staff Profiles, Today Shift, Staff Schedule And Staff Tips
 
-Дата актуализации: 2026-08-01.
+Дата актуализации: 2026-08-03.
 
 Статус: **canonical staff visibility/schedule/tips spec**.
 `STAFF PROFILES + TODAY SHIFT PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`.
-`STAFF SCHEDULE PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED`.
-Green GitHub Actions and staging smoke are pending, so the schedule slice is not production-ready.
+`STAFF OPERATIONS SLICE A / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`.
+Slice A scope is `MANAGER PARITY + SHIFT TIME DEFAULTS`.
+`STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / PRODUCT AND RBAC POLISH REQUIRED`.
+Slice A still requires green Actions, migration rollout and a new staging smoke before release.
 `STAFF_TIP`, photo upload/media picker and staff shift sign-up/chat workflows
 remain future. Phase 2 may create staff tip intents with external staff tip links, but the platform
 must not collect guest order payments or staff tips in MVP.
@@ -25,23 +27,31 @@ orders. Staff tips, when implemented, must target a specific staff profile, not 
 | --- | --- | --- |
 | `STAFF_PROFILE` | Guest-visible profile for a hookah master, waiter, admin or other staff subtype. | `STAFF PROFILES + TODAY SHIFT PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`. |
 | `SHIFT_TODAY` | Simple manual "today on shift" visibility for public staff profiles. | `STAFF PROFILES + TODAY SHIFT PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`. |
-| `STAFF_SCHEDULE` | Optional bounded venue schedule for planned staff shifts. | `STAFF SCHEDULE PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED`; release gates pending. |
+| `STAFF_SCHEDULE` | Optional bounded venue schedule for planned staff shifts. | `STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / PRODUCT AND RBAC POLISH REQUIRED`. |
 | `STAFF_TIP` | Future CTA and intent to thank a specific staff member. | Phase 2+ / spec draft. |
 
 ## Staff Profiles / Today Shift Phase 1 MVP
 
-Current Phase 1 implementation includes:
-- Owner creates and edits staff profiles.
+Current Phase 1 implementation plus Staff Operations Slice A includes:
+- Owner keeps broad staff-profile management over same-venue memberships.
+- Manager creates and manages display-only and active-Staff-linked profiles, including
+  publish/hide; Owner/Manager-linked cards are protected and read-only except the Manager's
+  existing safe self-edit fields.
 - Profile may be linked to a real venue member through `linked_user_id`, or may be display-only.
 - Public visibility is opt-in through `is_guest_visible`.
-- Owner publishes/hides profiles.
+- Owner publishes/hides profiles; Manager publishes/hides only display-only or Staff-linked
+  profiles.
 - Staff may edit only their own linked draft fields if policy allows.
 - Staff cannot self-publish.
 - Owner/Manager may mark "today on shift"; conservative MVP allows Manager to mark
   active/completed/canceled and keeps scheduled shifts Owner-only.
+- Manager может менять manual Today Shift только для display-only и active STAFF-linked profiles
+  своего venue. OWNER/MANAGER-linked, orphaned, missing, inactive и foreign linkages protected.
 - Guest sees `Сегодня работают` on venue detail below the main venue information/actions, not as
   the first block.
-- Venue Mode `Персонал` has the polished `Карточки сотрудников` UX: the create form is collapsed
+- Venue Mode `Персонал` separates `Доступ сотрудников` from `Карточки команды`: Owner/Manager see
+  current access, safe pending invites and revoke controls, while protected cards are explicit.
+- The create form is collapsed
   by default, existing cards are compact, `Другое` requires `Название роли`, and raw User ID /
   Photo ref inputs are not exposed.
 - Catalog may later show a short `Сегодня: Иван, Алина` line.
@@ -84,7 +94,25 @@ Rules:
 - If `subtype=other`, Owner must provide `role_label` / `Название роли`; this custom role is what
   guests see. Old or incomplete `other` profiles fall back to `Сотрудник`, not `Другое`.
 - Public guest DTOs must not include `linked_user_id`, Telegram ids, phone, email or private notes.
-- Profile publish/hide is a venue-owner controlled action in MVP.
+- Manager profile mutations re-check current linkage, current membership role, requested linkage
+  and requested membership role inside the mutation transaction. Manager targets are limited to
+  display-only or a same-venue Staff membership; missing/foreign and Owner/Manager links fail
+  closed. Owner keeps the broader existing policy.
+- Publish/hide follows the same protected-linkage policy. Staff cannot self-publish.
+
+## Staff Access / Pending Invites
+
+- Manager creates only `STAFF` invites; Owner creates `STAFF` and `MANAGER` invites. Neither role
+  creates `OWNER` or legacy `ADMIN` through this venue flow.
+- Pending means `used_at IS NULL AND revoked_at IS NULL AND expires_at > now`.
+- Owner lists/revokes pending `STAFF` and `MANAGER`; Manager lists/revokes pending `STAFF` only.
+- Pending DTOs contain only opaque handle, role, status and timestamps. Secret code/hash/deep link
+  remains confined to the existing one-time create response.
+- Accept/decline and revoke use competing conditional claims, so exactly one terminal mutation can
+  win and membership creation rolls back if accept loses.
+- PostgreSQL `V120` and H2 `V121` add only `revoked_at` and `revoked_by_user_id` plus pending-query
+  indexes. New binaries must be deployed before revoke UI is enabled; old runtime instances must
+  be drained, then staging-smoked, because they do not understand revoked invites.
 
 ## SHIFT_TODAY Model
 
@@ -120,7 +148,7 @@ MVP behavior:
 
 ## Venue UX
 
-- Section name: `Карточки сотрудников`.
+- Section names: `Доступ сотрудников`, `Карточки команды`, and the existing `График смен`.
 - Profiles are optional.
 - Guest sees only published profiles.
 - `Сегодня на смене` makes the published profile appear in `Сегодня работают`.
@@ -132,16 +160,18 @@ MVP behavior:
 - Raw User ID and raw Photo ref are not visible manual owner inputs.
 - Photo upload is future; use a safe placeholder until real upload/media picker exists.
 - Owner manages profiles, guest visibility and publish/hide state.
-- Manager may manage today's active/completed/canceled shift state.
+- Manager manages only display-only/Staff-linked cards; Owner/other-Manager cards remain read-only.
+- Manager may manage today's active/completed/canceled shift state only for display-only and active
+  same-venue Staff-linked profiles; every protected linkage fails closed.
 - Staff may edit only own linked draft fields.
-- Staff cannot publish themselves or enable guest visibility without Owner approval in MVP.
+- Staff cannot publish themselves or enable guest visibility through the self-edit route.
 
 ## STAFF_SCHEDULE Phase 1 / Optional Venue Shift Planning
 
-Status: **STAFF SCHEDULE PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**.
+Status: **STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / PRODUCT AND RBAC POLISH REQUIRED**.
 
-Green GitHub Actions and staging smoke are pending. This status is local validation evidence, not
-production-readiness evidence.
+Staff Operations Slice A adds locally validated product/RBAC polish and still requires a new
+staging smoke. This is not a production-readiness claim.
 
 `STAFF_SCHEDULE` is an optional Venue Mode module. A venue that does not create shifts continues to
 use Staff Profiles, manual Today Shift, Staff Calls, Orders, Bookings and every Guest flow exactly as
@@ -150,7 +180,8 @@ Venue Mini App remains the source of truth.
 
 Migration verdict: **NO_MIGRATION_EXPECTED**.
 
-Implementation verdict: **STAFF SCHEDULE PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**.
+Implementation verdict:
+**STAFF OPERATIONS SLICE A / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
 
 ### Current Runtime And Schema Evidence
 
@@ -175,6 +206,10 @@ The runtime reuses the existing foundation rather than introducing a second sche
   methods. Schedule CRUD does not use the legacy Today upsert as a generic overwrite.
 - Today Shift mutations preserve existing planned date/time fields when the request omits them;
   schedule update/cancel preserves manual Today Shift visibility and operational flags.
+- Manual Today mutations re-check the actor membership/role, lock and classify the current profile
+  linkage, lock/read the existing Today row when present, write only the existing manual fields and
+  append the existing Today success audit in one JDBC transaction. Denial or audit failure commits
+  neither shift nor audit.
 - Guest `Сегодня работают` reads the same table but requires `is_guest_visible=true`, stored
   `scheduled|active`, and a published visible profile. It does not require
   `manually_marked_active`; schedule create explicitly stores `is_guest_visible=false` and
@@ -226,6 +261,17 @@ The runtime reuses the existing foundation rather than introducing a second sche
   offset.
 - Responses include `endsNextDay`; the UI renders an overnight interval explicitly, for example
   `22:00–06:00, следующий день`.
+- Owner/Manager schedule GET also returns one `effectiveHours` item per requested service date.
+  Date exceptions override weekly hours; venue timezone is authoritative; `closesAt <= opensAt`
+  means next day. Successful absence is `NOT_CONFIGURED`, an explicit closure is `CLOSED`, and a
+  repository error fails the request instead of pretending hours are not configured.
+- Effective hours are create-form defaults only. They never reject a manually entered shift
+  outside venue opening hours.
+- Create starts in `AUTO`: `OPEN` prefills the configured interval, while `CLOSED` and
+  `NOT_CONFIGURED` leave time blank with manual-entry copy. After a user edits either time, date
+  changes preserve those `MANUAL` values and offer `Заполнить по часам заведения`.
+- Edit always starts from the persisted shift interval. It never replaces stored values
+  automatically; applying venue hours is an explicit action.
 - Stored values remain venue-local wall-clock values. A later venue-timezone setting change does not
   rewrite rows; future shifts keep their local clock fields and are interpreted by the current
   venue timezone. Mutation audit records the timezone used, and timezone-change UX should prompt an
@@ -364,7 +410,7 @@ Schedule does not copy that behavior.
 
 | Method | Route | Access | Contract |
 | --- | --- | --- | --- |
-| `GET` | `/api/venue/{venueId}/staff/shifts?from=&to=` | Owner/Manager | Full bounded schedule for shifts whose start date is in range. |
+| `GET` | `/api/venue/{venueId}/staff/shifts?from=&to=` | Owner/Manager | Full bounded schedule plus batched effective venue hours for every requested date. |
 | `POST` | `/api/venue/{venueId}/staff/shifts` | Owner/Manager | Create one future shift. |
 | `PUT` | `/api/venue/{venueId}/staff/shifts/{shiftId}` | Owner/Manager | Replace mutable date/time fields with optimistic token. |
 | `POST` | `/api/venue/{venueId}/staff/shifts/{shiftId}/cancel` | Owner/Manager | Cancel with optimistic token. |
@@ -700,13 +746,23 @@ Rules:
 - Guest may create a future tip intent only for a visible, `tips_enabled` staff profile.
 - Owner manages profiles, publish/hide state, optional own-venue schedule and future tip-method
   approval.
-- Manager keeps the current Today Shift boundary and, once Schedule Phase 1 is implemented, receives
-  the same own-venue planned-shift management as Owner.
+- Manager manages display-only/Staff-linked profiles and their publish/hide state, cannot mutate
+  Owner/other-Manager linkage or visibility, and keeps safe self-edit for their own linked card.
+- Manager may change manual Today Shift only for display-only and active same-venue Staff-linked
+  profiles. Owner/Manager-linked, orphaned, missing, inactive/removed and foreign linkages are
+  protected. Manager receives the same own-venue planned-shift management as Owner.
 - Staff edits only own linked draft fields; Schedule Phase 1 adds read-own and safe overlapping
   colleague visibility, never schedule mutation.
 - Platform Owner may later moderate/disable unsafe public profiles or tip methods.
-- Public profile/Today actions keep current audit behavior. Schedule create/update/cancel requires
-  the transaction-bound audit contract above.
+- Venue Mini App invite create/revoke and dedicated profile create/update/publish/hide routes write
+  transaction-bound safe audit:
+  `STAFF_INVITE_CREATED`, `STAFF_INVITE_REVOKED`, `STAFF_PROFILE_CREATED`,
+  `STAFF_PROFILE_UPDATED`, `STAFF_PROFILE_PUBLISHED`, `STAFF_PROFILE_HIDDEN`. Payloads contain only
+  venue/entity identity, opaque invite handle, safe role/linkage class, changed field names and
+  old/new publication/linkage state; no code/hash, Telegram identity, raw content or photo ref.
+- Telegram Bot invite audit parity and feature-specific generic PATCH visibility action taxonomy
+  remain P2 follow-ups; this Slice A does not claim them closed.
+- Schedule create/update/cancel keeps the transaction-bound audit contract above.
 
 ## Privacy And Security
 
@@ -742,8 +798,14 @@ Analytics events are not the source of truth. Domain tables and audit logs remai
 - Photo upload/media picker: `FUTURE`.
 - Venue info-section media decision does not close staff-photo scope; see
   `docs/MEDIA_STORAGE_UPLOAD.md`.
-- Staff schedule: `STAFF SCHEDULE PHASE 1 / MVP IMPLEMENTED / LOCAL VALIDATION PASSED`;
-  `NO_MIGRATION_EXPECTED`; green Actions and staging smoke remain pending.
+- Staff Operations Slice A:
+  `MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`;
+  scope is `MANAGER PARITY + SHIFT TIME DEFAULTS`.
+- Staff schedule:
+  `STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / PRODUCT AND RBAC POLISH REQUIRED`;
+  the schedule model itself remains `NO_MIGRATION_EXPECTED`.
+- Optional Team/Schedule module settings and a Guest `MANUAL`/`SCHEDULE` source switch are Slice B
+  `FUTURE`; Slice A adds neither.
 - Staff shift Telegram notifications/sign-up/swaps: `FUTURE`.
 - Separate staff communication chat/forum topics: `OPEN DECISION / FUTURE`.
 - Staff tips: `SPEC DRAFT / FUTURE`.
@@ -754,7 +816,9 @@ Analytics events are not the source of truth. Domain tables and audit logs remai
 
 ## Next Release Step
 
-Wait for green GitHub Actions, then deploy to staging and run the listed Owner/Manager/Staff,
-timezone/overnight/privacy, venue-switch and Today/Guest regression smoke. Do not claim production
-readiness until those gates pass. Keep staff tips, photo upload, staff
+Wait for green GitHub Actions, deploy new binaries with PostgreSQL V120 before enabling revoke UI,
+drain old runtime instances, then run the listed Owner/Manager/Staff, invite race/revoke,
+effective-hours/timezone/overnight/privacy, venue-switch and Today/Guest regression smoke. Do not
+claim production readiness until those gates pass. Keep optional module/source settings, staff
+tips, photo upload, staff
 communication/chat/sign-up and every payment path out of scope.
