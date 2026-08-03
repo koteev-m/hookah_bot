@@ -38,7 +38,7 @@ Canonical dependencies:
 | Tables / QR | Physical table inventory and QR context. | Tables/QR basics exist; table-session runtime behavior is documented separately. | Single table CRUD/diagnostics/QR rotate audit need verification. |
 | Staff / invites | Membership, roles, pending invite lifecycle and team cards. | `STAFF OPERATIONS SLICE A / MANAGER PARITY + SHIFT TIME DEFAULTS / MVP IMPLEMENTED / LOCAL VALIDATION PASSED`; Platform Owner OWNER invite/revoke remains smoke-closed. | Green Actions, migration rollout and new staging smoke are required. |
 | Staff profiles / today shift | Guest-visible opt-in staff profiles and manual "today on shift". | `STAFF PROFILES + TODAY SHIFT PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`. Both server-selected Guest Preview modes preserve the public-profile/visible-shift filters. | Tips and safe consent-based photo upload remain future. |
-| Staff schedule | Optional venue-local planning of one shift per profile/start-date. | `STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / PRODUCT AND RBAC POLISH REQUIRED`; the schedule model remains `NO_MIGRATION_EXPECTED`. | Slice A needs new staging smoke; no Guest, Telegram, reminder, payroll, module setting or Today-source migration. |
+| Staff schedule | Optional venue-local planning of one shift per profile/start-date. | `STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / RESTORE + BULK ASSIGNMENT IMPLEMENTED / LOCAL VALIDATION PASSED`; the schedule model remains `NO_MIGRATION_EXPECTED`. | Restore/bulk needs green Actions, deploy and new staging smoke; no Guest, Telegram, reminder, payroll, module setting or Today-source migration. |
 | Staff-chat | Linked group diagnostics and operational notifications. | Link/test/unlink, live order activity-card behavior and state-aware booking shortcuts are smoke-closed. | Personal staff notifications and unified event policy remain future. |
 | Feedback | Internal post-visit feedback from completed Guest History. | DONE / MVP / staging-smoke-passed: Owner/Manager read own-venue aggregate/list and can manually open exact `VENUE_CHAT` follow-up for ratings `1..3`; Staff denied. | Platform feedback analytics dashboard and automated prompts remain future. |
 | Settings / card preview | Venue profile, schedule, booking hold, extension, staff-chat and read-only public-card preview. | Booking hold, shift extension, public profile/card, schedule/date exceptions and Owner-only public review link are smoke-closed. One `Предпросмотр для гостя` entry uses one backend-selected `PUBLISHED_PUBLIC` / own-venue `PRIVATE_DRAFT` endpoint and is **DONE / MVP / STAGING-SMOKE-PASSED**. Unsaved public-card, weekly-schedule and date-exception changes block preview without auto-save. | Broader settings/media authoring, versioned snapshots and publish workflow remain future; archived/deleted/missing venues continue to fail closed. |
@@ -330,7 +330,7 @@ Staff Profiles + Today Shift Phase 1 implementation
 - No staff tips or payments are implemented in Phase 1.
 
 Staff Schedule Phase 1 implemented runtime
-(`STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / PRODUCT AND RBAC POLISH REQUIRED`):
+(`STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / RESTORE + BULK ASSIGNMENT IMPLEMENTED / LOCAL VALIDATION PASSED`):
 - `График смен` is an optional section under `Работа смены`; an empty graph blocks no existing flow
   and there is no enable/disable setting;
 - Owner/Manager manage one future interval per staff profile and venue-local start date in a bounded
@@ -342,6 +342,26 @@ Staff Schedule Phase 1 implemented runtime
 - create uses effective `OPEN` hours only as defaults, `CLOSED`/`NOT_CONFIGURED` remain blank with
   manual entry, manual values survive date changes, and edit always starts from stored times;
 - effective hours never prohibit manually creating a shift outside opening hours;
+- the schema remains one `staff_shifts` row per profile/date under
+  `UNIQUE (staff_profile_id, shift_date)`. The exact former gap was that a canceled historical row
+  occupied this slot while canceled rows were immutable, so ordinary create could only return a
+  generic conflict;
+- a future canceled row now offers explicit `Восстановить`: it reuses the same `shiftId`, keeps or
+  explicitly replaces both times, requires `expectedUpdatedAt`, advances the CAS token and writes
+  `STAFF_SHIFT_RESTORED` in the same transaction. Past canceled, scheduled, active, completed,
+  Today-overlay, stale and foreign rows fail closed;
+- ordinary create never restores silently. Authorized Owner/Manager receives a typed safe conflict:
+  canceled can offer restore; scheduled says `Смена уже запланирована на эту дату.`; active and
+  completed keep lifecycle denial. Foreign/unauthorized actors receive no existing-row details;
+- `Добавить смену` supports multi-select, common effective-hours defaults, apply-to-all and
+  per-employee interval overrides. Preflight requires explicit restore for a canceled row, blocks
+  scheduled/active/completed conflicts and shows created/restored counts;
+- one `POST /api/venue/{venueId}/staff/shifts/batch` carries 1..50 normalized `CREATE`/`RESTORE`
+  assignments. Duplicate profile/date slots, missing/foreign profiles, invalid intervals, stale
+  restore or any lifecycle conflict reject the whole request;
+- batch locks profiles by id, then existing rows by profile/date, performs writes and per-row audit
+  in one transaction. One failure yields zero partial rows and zero partial audits; common intervals
+  remain several ordinary rows, never a group-shift entity;
 - schedule rows never auto-publish to Guest, and current manual Today Shift plus Guest
   `Сегодня работают` remain unchanged;
 - no new Telegram or staff-chat flow is part of the slice.
@@ -502,7 +522,7 @@ Current vs target:
 | Stop-list | Existing immediate Bot paths remain unchanged. | Item/option parity documented/smoked; shift-check draft/mass confirmation is OWNER/MANAGER-only. | Callback shortcuts only if role-checked. | Per-venue Staff stop-list flag future. | Regression/P2 |
 | Tables/QR | Bot table flows exist. | Basics exist. | No. | QR rotate audit/diagnostics need verification. | P2 |
 | Staff invites | Bot invite acceptance exists. | Copy/share invite result smoke-closed. | No. | Keep role denial/last-owner protection in regression. | Regression |
-| Staff schedule | No Phase 1 flow. | `STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / PRODUCT AND RBAC POLISH REQUIRED`: Owner/Manager use `График смен`; Staff uses read-only `Мои смены`. | No Phase 1 event/button. | Venue Mini App only; keep effective-hours, bounded own-venue management/read and Today/Guest compatibility in regression. Slice A staging smoke is required. | Release gates |
+| Staff schedule | No Phase 1 flow. | `STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / RESTORE + BULK ASSIGNMENT IMPLEMENTED / LOCAL VALIDATION PASSED`: Owner/Manager use bulk `График смен` plus explicit canceled restore; Staff uses read-only `Мои смены`. | No Phase 1 event/button. | Venue Mini App only; keep atomicity, conflict/CAS, effective-hours, bounded own-venue management/read and Today/Guest compatibility in regression. A new staging smoke is required. | Release gates |
 | Staff-chat link/test | Bot link command exists. | M6 link/test/unlink smoke-closed. | Target group. | Personal notifications future. | Regression |
 | Settings / card preview | Bot and Mini App share the public review URL source; Bot remains richer in info-section/media authoring. | Backend-backed slices include Owner-only `Ссылка для отзывов` and one read-only `Предпросмотр для гостя` screen with server-selected `PUBLISHED_PUBLIC` / `PRIVATE_DRAFT`; preview is **DONE / MVP / STAGING-SMOKE-PASSED**. | No. | Keep exact Guest parity, saved-private allowlist, dirty-state guard, RBAC/privacy/media scope and lifecycle/stale-state boundaries in regression; media upload remains a separate future block. | Regression/P2 |
 | Stats | Bot stats exist. | Read-only stats smoke-closed. | No. | Custom ranges/advanced analytics future. | P2 |
@@ -522,10 +542,10 @@ Current vs target:
 - Manager broad `MENU_MANAGE` remains a product-policy decision: keep and test it, or narrow to stop-list/shift check/basic availability.
 - Staff-chat notification policy is documented for orders/calls/bookings and explicitly excludes support, venue chats and post-visit feedback/follow-up context; personal staff notifications remain future.
 - Staff Schedule Phase 1 is
-  `STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / PRODUCT AND RBAC POLISH REQUIRED`;
-  it reuses `staff_shifts` without auto-publishing to Guest or adding Telegram flows. Slice A is
-  locally validated but needs green Actions and a new staging smoke, so production readiness is not
-  claimed.
+  `STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / RESTORE + BULK ASSIGNMENT IMPLEMENTED / LOCAL VALIDATION PASSED`;
+  it reuses `staff_shifts`, preserves the unique profile/date invariant and adds no migration. The
+  restore/bulk runtime still needs green Actions, deploy and a new staging smoke, so production
+  readiness is not claimed. The separate Slice A V120 invite-revoke rollout remains its own gate.
 - Multi-venue selector/entry should stay in regression for users with several venue memberships.
 
 ## Roadmap Status
@@ -544,13 +564,13 @@ Current vs target:
   policy remains future.
 - Staff-chat source-of-truth policy: `DOCUMENTED`.
 - Staff Schedule Phase 1:
-  `STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / PRODUCT AND RBAC POLISH REQUIRED`;
+  `STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / RESTORE + BULK ASSIGNMENT IMPLEMENTED / LOCAL VALIDATION PASSED`;
   schedule-schema verdict `NO_MIGRATION_EXPECTED`.
 - Staff Operations Slice A:
   `MANAGER PARITY + SHIFT TIME DEFAULTS / MVP IMPLEMENTED / LOCAL VALIDATION PASSED`; invite revoke
   uses PostgreSQL V120/H2 V121. Deploy new binaries before enabling revoke UI, drain old instances
   and perform staging smoke after old instances are gone.
-- Optional Team/Schedule settings and Guest `MANUAL`/`SCHEDULE` source remain Slice B future.
+- Optional Team/Schedule settings and Guest `MANUAL`/`SCHEDULE` source remain Slice B `FUTURE`.
 
 ## Operational Smoke Checklist
 
@@ -600,3 +620,15 @@ Current vs target:
     availability immediately.
 41. Venue switching clears shift-check draft/selection and prevents an old request from updating
     the new venue.
+42. Owner/Manager selects several Staff/display-only profiles, applies common hours, overrides one
+    interval, removes one employee and confirms one batch request.
+43. A future canceled row remains visible as `Отменена`; ordinary create offers a typed conflict and
+    only explicit `Восстановить` reuses its `shiftId`.
+44. Mixed create/restore reports exact counts and either commits every shift plus one audit per row
+    or commits nothing on one invalid/stale/conflicting assignment.
+45. Staff has no batch/restore controls or direct mutation access; foreign/Guest/Platform-only
+    actors receive no safe-row conflict details.
+46. Planned/restored venue-local-today rows remain absent from Guest `Сегодня работают` until the
+    separate manual Today action is used.
+47. Venue switch clears schedule selection, per-profile overrides, confirmation and stale response;
+    existing individual edit/cancel remains green.

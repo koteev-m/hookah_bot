@@ -174,7 +174,8 @@ class VenueStaffRoutesTestSchedule {
                 auditActions(jdbcUrl, created.id),
             )
             val auditPayload = lastAuditPayload(jdbcUrl, created.id)
-            assertTrue(auditPayload.contains("\"actorUserId\":$ownerId"))
+            assertEquals(ownerId, lastAuditActorUserId(jdbcUrl, created.id))
+            assertFalse(auditPayload.contains("actorUserId"))
             assertTrue(auditPayload.contains("\"venueTimezone\":\"UTC\""))
             assertFalse(auditPayload.contains("telegram", ignoreCase = true))
             assertFalse(auditPayload.contains("username", ignoreCase = true))
@@ -1374,6 +1375,28 @@ class VenueStaffRoutesTestSchedule {
                 statement.executeQuery().use { rs ->
                     check(rs.next())
                     rs.getString(1)
+                }
+            }
+        }
+
+    private fun lastAuditActorUserId(
+        jdbcUrl: String,
+        shiftId: Long,
+    ): Long =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT actor_user_id
+                FROM audit_log
+                WHERE entity_type = 'staff_shift' AND entity_id = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, shiftId)
+                statement.executeQuery().use { rs ->
+                    check(rs.next())
+                    rs.getLong(1)
                 }
             }
         }

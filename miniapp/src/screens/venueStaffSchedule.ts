@@ -2,11 +2,12 @@ import { REQUEST_ABORTED_CODE } from '../shared/api/abort'
 import { clearSession, getAccessToken } from '../shared/api/auth'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
 import {
+  venueBatchStaffScheduleShifts,
   venueCancelStaffScheduleShift,
-  venueCreateStaffScheduleShift,
   venueGetMyStaffSchedule,
   venueGetStaffProfiles,
   venueGetStaffSchedule,
+  venueRestoreStaffScheduleShift,
   venueUpdateStaffScheduleShift
 } from '../shared/api/venueApi'
 import type {
@@ -14,6 +15,8 @@ import type {
   VenueStaffProfileDto,
   VenueStaffProfileSubtype,
   VenueStaffScheduleAdminShiftDto,
+  VenueStaffScheduleBatchAssignmentRequest,
+  VenueStaffScheduleBatchOperation,
   VenueStaffScheduleColleagueDto,
   VenueStaffScheduleComputedStatus,
   VenueStaffScheduleConfirmationState,
@@ -38,7 +41,12 @@ type AdminFormRefs = {
   addButton: HTMLButtonElement
   formCard: HTMLElement
   formTitle: HTMLHeadingElement
+  profileField: HTMLElement
   profileSelect: HTMLSelectElement
+  bulkControls: HTMLElement
+  profileOptions: HTMLDivElement
+  selectedAssignments: HTMLDivElement
+  applyCommonTimeButton: HTMLButtonElement
   dateInput: HTMLInputElement
   startInput: HTMLInputElement
   endInput: HTMLInputElement
@@ -82,13 +90,25 @@ type ShiftDraft = {
 type ShiftTimeSource = 'AUTO' | 'MANUAL'
 type EffectiveHoursLookupState = 'LOADING' | 'ERROR'
 
+type BulkAssignmentDraft = {
+  staffProfileId: number
+  startsAt: string
+  endsAt: string
+  timeSource: 'COMMON' | 'MANUAL' | 'RESTORE_SAVED'
+  operation: VenueStaffScheduleBatchOperation | null
+  existingShift: VenueStaffScheduleAdminShiftDto | null
+  conflict: string | null
+}
+
 type PendingConfirmation =
-  | { kind: 'create'; draft: ShiftDraft }
+  | { kind: 'batch'; assignments: VenueStaffScheduleBatchAssignmentRequest[] }
   | { kind: 'update'; shift: VenueStaffScheduleAdminShiftDto; draft: ShiftDraft }
+  | { kind: 'restore'; shift: VenueStaffScheduleAdminShiftDto; draft: ShiftDraft }
   | { kind: 'cancel'; shift: VenueStaffScheduleAdminShiftDto }
 
 const STALE_COPY = 'График изменился. Обновите данные и повторите действие.'
 const DAY_MS = 24 * 60 * 60 * 1000
+const MAX_BATCH_ASSIGNMENTS = 50
 
 function buildApiDeps(isDebug: boolean) {
   return { isDebug, getAccessToken, clearSession }
@@ -309,6 +329,7 @@ function buildAdminDom(): AdminFormRefs {
   const formTitle = el('h3', { text: 'Новая смена' }) as HTMLHeadingElement
   const profileSelect = document.createElement('select')
   profileSelect.className = 'venue-select'
+  const profileField = renderField('Сотрудник', profileSelect)
   const dateInput = document.createElement('input')
   dateInput.className = 'venue-input'
   dateInput.type = 'date'
@@ -324,7 +345,7 @@ function buildAdminDom(): AdminFormRefs {
   const formGrid = el('div', { className: 'venue-schedule-form-grid' })
   append(
     formGrid,
-    renderField('Сотрудник', profileSelect),
+    profileField,
     renderField('Дата начала', dateInput),
     renderField('Начало', startInput),
     renderField('Окончание', endInput)
@@ -350,6 +371,35 @@ function buildAdminDom(): AdminFormRefs {
     className: 'venue-order-sub venue-schedule-overnight-hint',
     text: 'Если окончание не позже начала, смена завершится на следующий день.'
   }) as HTMLParagraphElement
+  const bulkControls = el('div', { className: 'venue-schedule-bulk-controls' })
+  const profileOptionsTitle = el('h4', { text: 'Сотрудники' })
+  const profileOptionsCopy = el('p', {
+    className: 'venue-order-sub',
+    text: 'Выберите одного или нескольких сотрудников для общей даты.'
+  })
+  const profileOptions = el('div', {
+    className: 'venue-schedule-profile-options'
+  }) as HTMLDivElement
+  profileOptions.setAttribute('role', 'group')
+  profileOptions.setAttribute('aria-label', 'Выбор сотрудников')
+  const selectedTitle = el('h4', { text: 'Выбранные сотрудники' })
+  const applyCommonTimeButton = el('button', {
+    className: 'button-tertiary button-small',
+    text: 'Применить общее время всем'
+  }) as HTMLButtonElement
+  const selectedAssignments = el('div', {
+    className: 'venue-schedule-selected-assignments'
+  }) as HTMLDivElement
+  selectedAssignments.setAttribute('aria-live', 'polite')
+  append(
+    bulkControls,
+    profileOptionsTitle,
+    profileOptionsCopy,
+    profileOptions,
+    selectedTitle,
+    applyCommonTimeButton,
+    selectedAssignments
+  )
   const previewButton = el('button', { text: 'Проверить смену' }) as HTMLButtonElement
   const closeFormButton = el('button', {
     className: 'button-secondary',
@@ -364,6 +414,7 @@ function buildAdminDom(): AdminFormRefs {
     effectiveHoursStatus,
     effectiveHoursActions,
     overnightHint,
+    bulkControls,
     formActions
   )
 
@@ -384,7 +435,12 @@ function buildAdminDom(): AdminFormRefs {
     addButton,
     formCard,
     formTitle,
+    profileField,
     profileSelect,
+    bulkControls,
+    profileOptions,
+    selectedAssignments,
+    applyCommonTimeButton,
     dateInput,
     startInput,
     endInput,
@@ -420,6 +476,14 @@ function canCancelShift(shift: VenueStaffScheduleAdminShiftDto): boolean {
   if (shift.warning) return warningAllows(shift, 'CANCEL')
   const status = shift.computedStatus?.toLowerCase()
   return (status === 'scheduled' || status === 'active') && Boolean(shift.cancelConfirmationState)
+}
+
+function canRestoreShift(shift: VenueStaffScheduleAdminShiftDto): boolean {
+  return (
+    shift.restoreAllowed &&
+    (shift.computedStatus?.toLowerCase() === 'canceled' ||
+      shift.storedStatus.toLowerCase() === 'canceled')
+  )
 }
 
 function confirmationStateFor(shift: VenueStaffScheduleAdminShiftDto): VenueStaffScheduleConfirmationState | null {
@@ -473,12 +537,15 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
   let adminShifts: VenueStaffScheduleAdminShiftDto[] = []
   let ownShifts: VenueStaffScheduleOwnShiftDto[] = []
   let editingShift: VenueStaffScheduleAdminShiftDto | null = null
+  let restoringShift: VenueStaffScheduleAdminShiftDto | null = null
   let pendingConfirmation: PendingConfirmation | null = null
   let mutationPending = false
   let weekExplicitlyChanged = false
   let timeSource: ShiftTimeSource = 'AUTO'
+  const bulkAssignments = new Map<number, BulkAssignmentDraft>()
   const effectiveHoursByDate = new Map<string, VenueStaffScheduleEffectiveHoursDto>()
   const effectiveHoursLookupStates = new Map<string, EffectiveHoursLookupState>()
+  const shiftsByDate = new Map<string, VenueStaffScheduleAdminShiftDto[]>()
 
   const weekEnd = () => addIsoDays(weekStart, 6)
 
@@ -515,7 +582,9 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
 
   const resetEditor = () => {
     editingShift = null
+    restoringShift = null
     pendingConfirmation = null
+    bulkAssignments.clear()
     const admin = refs.admin
     if (!admin) return
     admin.formCard.hidden = true
@@ -523,7 +592,10 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
     admin.confirmationTitle.textContent = ''
     admin.confirmationSummary.replaceChildren()
     admin.profileSelect.disabled = false
+    admin.profileField.hidden = false
+    admin.bulkControls.hidden = true
     admin.profileSelect.value = profiles[0] ? String(profiles[0].id) : ''
+    admin.dateInput.disabled = false
     admin.dateInput.value = ''
     admin.startInput.value = ''
     admin.endInput.value = ''
@@ -531,7 +603,10 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
     admin.manualTimeButton.hidden = true
     admin.applyHoursButton.hidden = true
     admin.overnightHint.textContent = 'Если окончание не позже начала, смена завершится на следующий день.'
+    admin.applyCommonTimeButton.disabled = true
+    admin.selectedAssignments.replaceChildren()
     timeSource = 'AUTO'
+    renderProfileOptions()
   }
 
   const showStaleError = (error: ApiErrorInfo) => {
@@ -559,6 +634,10 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
       return
     }
     const messages: Partial<Record<string, { title: string; message: string }>> = {
+      [ApiErrorCodes.STAFF_SHIFT_CANCELED_CONFLICT]: {
+        title: 'Смена была отменена',
+        message: 'Обновите график и выберите явное восстановление отменённой смены.'
+      },
       [ApiErrorCodes.STAFF_SHIFT_DATE_CONFLICT]: {
         title: 'Смена уже существует',
         message: 'У этого сотрудника уже есть смена с такой датой начала. Обновите график.'
@@ -606,28 +685,304 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
     refs.currentButton.disabled = weekStart === startOfIsoWeek(venueToday)
   }
 
+  const sortedProfiles = () =>
+    profiles.slice().sort((left, right) => left.displayName.localeCompare(right.displayName, 'ru'))
+
+  const profileNameFor = (profileId: number): string =>
+    profiles.find((profile) => profile.id === profileId)?.displayName || `Профиль #${profileId}`
+
+  const invalidateBatchConfirmation = () => {
+    if (pendingConfirmation?.kind === 'batch') pendingConfirmation = null
+  }
+
+  const existingShiftFor = (
+    staffProfileId: number,
+    date: string
+  ): VenueStaffScheduleAdminShiftDto | null =>
+    shiftsByDate.get(date)?.find((shift) => shift.staffProfileId === staffProfileId) ?? null
+
+  const existingShiftConflictCopy = (shift: VenueStaffScheduleAdminShiftDto): string => {
+    if (shift.warning?.message) return shift.warning.message
+    switch ((shift.computedStatus ?? shift.storedStatus).toLowerCase()) {
+      case 'scheduled':
+        return 'Смена уже запланирована на эту дату.'
+      case 'active':
+        return 'Смена на эту дату уже идёт и не может быть назначена повторно.'
+      case 'completed':
+        return 'Смена на эту дату уже завершена и не может быть изменена.'
+      default:
+        return 'У сотрудника уже есть смена на эту дату.'
+    }
+  }
+
+  const reconcileBulkAssignment = (assignment: BulkAssignmentDraft, resetChoice: boolean) => {
+    const admin = refs.admin
+    if (!admin) return
+    const existing = existingShiftFor(assignment.staffProfileId, admin.dateInput.value)
+    const previousExistingId = assignment.existingShift?.id ?? null
+    assignment.existingShift = existing
+    if (!existing) {
+      if (assignment.timeSource === 'RESTORE_SAVED') {
+        assignment.startsAt = admin.startInput.value
+        assignment.endsAt = admin.endInput.value
+        assignment.timeSource = 'COMMON'
+      }
+      assignment.operation = 'CREATE'
+      assignment.conflict = null
+      return
+    }
+
+    const status = (existing.computedStatus ?? existing.storedStatus).toLowerCase()
+    if (status === 'canceled') {
+      if (resetChoice || previousExistingId !== existing.id) {
+        assignment.startsAt = existing.startsAt
+        assignment.endsAt = existing.endsAt
+        assignment.timeSource = 'RESTORE_SAVED'
+        assignment.operation = null
+      } else if (assignment.operation !== 'RESTORE') {
+        assignment.operation = null
+      }
+      assignment.conflict = existing.restoreAllowed
+        ? null
+        : 'Эту отменённую смену нельзя восстановить.'
+      return
+    }
+
+    assignment.operation = null
+    assignment.conflict = existingShiftConflictCopy(existing)
+  }
+
+  const reconcileBulkAssignments = (resetChoices: boolean) => {
+    bulkAssignments.forEach((assignment) => reconcileBulkAssignment(assignment, resetChoices))
+    invalidateBatchConfirmation()
+    renderSelectedAssignments()
+    renderProfileOptions()
+  }
+
+  const renderProfileOptions = () => {
+    const admin = refs.admin
+    if (!admin) return
+    admin.profileOptions.replaceChildren()
+    if (!profiles.length) {
+      admin.profileOptions.appendChild(
+        el('p', { className: 'venue-empty', text: 'Нет доступных карточек сотрудников.' })
+      )
+      return
+    }
+
+    sortedProfiles().forEach((profile) => {
+      const option = el('label', { className: 'venue-schedule-profile-option' })
+      const checkbox = document.createElement('input')
+      checkbox.type = 'checkbox'
+      checkbox.checked = bulkAssignments.has(profile.id)
+      checkbox.disabled = !checkbox.checked && bulkAssignments.size >= MAX_BATCH_ASSIGNMENTS
+      checkbox.setAttribute('aria-label', `Выбрать ${profile.displayName}`)
+      const linkage = profile.linkedUserId == null ? 'без привязки' : 'привязан к сотруднику'
+      const copy = el('span', {
+        text: `${profile.displayName} · ${profileRoleLabel(profile)} · ${linkage}`
+      })
+      checkbox.addEventListener('change', () => {
+        hideError()
+        if (checkbox.checked) {
+          if (bulkAssignments.size >= MAX_BATCH_ASSIGNMENTS) {
+            checkbox.checked = false
+            showToast(`Можно выбрать не больше ${MAX_BATCH_ASSIGNMENTS} сотрудников`)
+            return
+          }
+          const assignment: BulkAssignmentDraft = {
+            staffProfileId: profile.id,
+            startsAt: admin.startInput.value,
+            endsAt: admin.endInput.value,
+            timeSource: 'COMMON',
+            operation: 'CREATE',
+            existingShift: null,
+            conflict: null
+          }
+          reconcileBulkAssignment(assignment, true)
+          bulkAssignments.set(profile.id, assignment)
+        } else {
+          bulkAssignments.delete(profile.id)
+        }
+        invalidateBatchConfirmation()
+        renderProfileOptions()
+        renderSelectedAssignments()
+      })
+      append(option, checkbox, copy)
+      admin.profileOptions.appendChild(option)
+    })
+  }
+
+  const renderSelectedAssignments = () => {
+    const admin = refs.admin
+    if (!admin) return
+    admin.selectedAssignments.replaceChildren()
+    admin.applyCommonTimeButton.disabled =
+      !bulkAssignments.size || !admin.startInput.value || !admin.endInput.value
+    if (!bulkAssignments.size) {
+      admin.selectedAssignments.appendChild(
+        el('p', { className: 'venue-empty', text: 'Сотрудники пока не выбраны.' })
+      )
+      return
+    }
+
+    const assignments = Array.from(bulkAssignments.values()).sort((left, right) =>
+      profileNameFor(left.staffProfileId).localeCompare(profileNameFor(right.staffProfileId), 'ru')
+    )
+    assignments.forEach((assignment) => {
+      const profile = profiles.find((candidate) => candidate.id === assignment.staffProfileId)
+      const displayName = profile?.displayName ?? profileNameFor(assignment.staffProfileId)
+      const row = el('article', { className: 'venue-schedule-assignment' })
+      const heading = el('div', { className: 'venue-schedule-assignment-heading' })
+      const identity = el('div')
+      append(
+        identity,
+        el('strong', { text: displayName }),
+        el('p', {
+          className: 'venue-order-sub',
+          text: profile ? profileRoleLabel(profile) : 'Сотрудник'
+        })
+      )
+      const removeButton = el('button', {
+        className: 'button-tertiary button-small',
+        text: 'Убрать'
+      }) as HTMLButtonElement
+      removeButton.setAttribute('aria-label', `Убрать ${displayName}`)
+      removeButton.addEventListener('click', () => {
+        bulkAssignments.delete(assignment.staffProfileId)
+        invalidateBatchConfirmation()
+        renderProfileOptions()
+        renderSelectedAssignments()
+      })
+      append(heading, identity, removeButton)
+
+      const start = document.createElement('input')
+      start.className = 'venue-input'
+      start.type = 'time'
+      start.required = true
+      start.value = assignment.startsAt
+      const end = document.createElement('input')
+      end.className = 'venue-input'
+      end.type = 'time'
+      end.required = true
+      end.value = assignment.endsAt
+      const intervalHint = el('p', {
+        className: 'venue-order-sub venue-schedule-assignment-hint'
+      }) as HTMLParagraphElement
+      const updateHint = () => {
+        intervalHint.textContent = start.value && end.value
+          ? formatInterval(start.value, end.value, endsNextDay(start.value, end.value))
+          : 'Укажите начало и окончание.'
+      }
+      const updateAssignmentTime = () => {
+        assignment.startsAt = start.value
+        assignment.endsAt = end.value
+        assignment.timeSource = 'MANUAL'
+        invalidateBatchConfirmation()
+        updateHint()
+      }
+      start.addEventListener('input', updateAssignmentTime)
+      end.addEventListener('input', updateAssignmentTime)
+      const timeGrid = el('div', { className: 'venue-schedule-assignment-time' })
+      append(
+        timeGrid,
+        renderField(`Начало — ${displayName}`, start),
+        renderField(`Окончание — ${displayName}`, end)
+      )
+      updateHint()
+      append(row, heading, timeGrid, intervalHint)
+
+      const existing = assignment.existingShift
+      if (existing && (existing.computedStatus ?? existing.storedStatus).toLowerCase() === 'canceled') {
+        row.appendChild(
+          el('p', {
+            className: 'venue-schedule-assignment-warning',
+            text: `Смена на эту дату была отменена. Прежнее время: ${formatInterval(
+              existing.startsAt,
+              existing.endsAt,
+              existing.endsNextDay
+            )}.`
+          })
+        )
+        if (existing.restoreAllowed && assignment.operation !== 'RESTORE') {
+          const restoreButton = el('button', {
+            className: 'button-secondary button-small',
+            text: 'Восстановить'
+          }) as HTMLButtonElement
+          restoreButton.setAttribute('aria-label', `Восстановить ${displayName}`)
+          restoreButton.addEventListener('click', () => {
+            assignment.operation = 'RESTORE'
+            assignment.conflict = null
+            invalidateBatchConfirmation()
+            renderSelectedAssignments()
+          })
+          row.appendChild(restoreButton)
+        } else if (assignment.operation === 'RESTORE') {
+          row.appendChild(
+            el('p', { className: 'venue-schedule-assignment-ready', text: 'Будет восстановлена.' })
+          )
+        }
+      } else if (assignment.operation === 'CREATE') {
+        row.appendChild(
+          el('p', { className: 'venue-schedule-assignment-ready', text: 'Будет создана.' })
+        )
+      }
+      if (assignment.conflict) {
+        row.appendChild(
+          el('p', { className: 'venue-schedule-assignment-warning', text: assignment.conflict })
+        )
+      }
+      admin.selectedAssignments.appendChild(row)
+    })
+  }
+
+  const syncCommonAssignments = () => {
+    const admin = refs.admin
+    if (!admin || admin.bulkControls.hidden) return
+    bulkAssignments.forEach((assignment) => {
+      if (assignment.timeSource !== 'COMMON') return
+      assignment.startsAt = admin.startInput.value
+      assignment.endsAt = admin.endInput.value
+    })
+    invalidateBatchConfirmation()
+    renderSelectedAssignments()
+  }
+
+  const storeShiftSnapshots = (
+    from: string,
+    to: string,
+    shifts: VenueStaffScheduleAdminShiftDto[]
+  ) => {
+    let date = from
+    while (date <= to) {
+      shiftsByDate.set(
+        date,
+        shifts.filter((shift) => shift.shiftDate === date)
+      )
+      date = addIsoDays(date, 1)
+    }
+  }
+
   const populateProfiles = () => {
     const admin = refs.admin
     if (!admin) return
     const selected = admin.profileSelect.value
     admin.profileSelect.replaceChildren()
-    profiles
-      .slice()
-      .sort((left, right) => left.displayName.localeCompare(right.displayName, 'ru'))
-      .forEach((profile) => {
-        const linkage = profile.linkedUserId == null ? 'без привязки' : 'привязан к сотруднику'
-        admin.profileSelect.appendChild(
-          new Option(
-            `${profile.displayName} · ${profileRoleLabel(profile)} · ${linkage}`,
-            String(profile.id)
-          )
+    sortedProfiles().forEach((profile) => {
+      const linkage = profile.linkedUserId == null ? 'без привязки' : 'привязан к сотруднику'
+      admin.profileSelect.appendChild(
+        new Option(
+          `${profile.displayName} · ${profileRoleLabel(profile)} · ${linkage}`,
+          String(profile.id)
         )
-      })
+      )
+    })
     admin.profileSelect.value = Array.from(admin.profileSelect.options).some(
       (option) => option.value === selected
     )
       ? selected
       : admin.profileSelect.options[0]?.value ?? ''
+    renderProfileOptions()
+    renderSelectedAssignments()
   }
 
   const renderAdminShift = (shift: VenueStaffScheduleAdminShiftDto): HTMLElement => {
@@ -669,6 +1024,14 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
     }
 
     const actions = el('div', { className: 'venue-schedule-shift-actions' })
+    if (canRestoreShift(shift)) {
+      const restoreButton = el('button', {
+        className: 'button-secondary button-small',
+        text: 'Восстановить'
+      }) as HTMLButtonElement
+      restoreButton.addEventListener('click', () => openRestoreForm(shift))
+      actions.appendChild(restoreButton)
+    }
     if (canEditShift(shift)) {
       const editButton = el('button', {
         className: 'button-secondary button-small',
@@ -807,6 +1170,7 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
         admin.startInput.value = ''
         admin.endInput.value = ''
         updateOvernightHint()
+        syncCommonAssignments()
       }
       admin.effectiveHoursStatus.textContent =
         lookupState === 'LOADING'
@@ -823,6 +1187,7 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
         admin.startInput.value = hours.opensAt
         admin.endInput.value = hours.closesAt
         updateOvernightHint()
+        syncCommonAssignments()
       }
       admin.effectiveHoursStatus.textContent = `По графику заведения: ${formatInterval(
         hours.opensAt,
@@ -837,6 +1202,7 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
       admin.startInput.value = ''
       admin.endInput.value = ''
       updateOvernightHint()
+      syncCommonAssignments()
     }
     if (hours.state === 'CLOSED') {
       admin.effectiveHoursStatus.textContent = 'По графику заведение закрыто в этот день.'
@@ -850,9 +1216,13 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
     admin.manualTimeButton.hidden = false
   }
 
-  async function loadEffectiveHoursForDate(date: string) {
+  async function loadEffectiveHoursForDate(
+    date: string,
+    applyAuto = true,
+    resetChoices = false
+  ): Promise<boolean> {
     const admin = refs.admin
-    if (!admin || !date || disposed) return
+    if (!admin || !date || disposed) return false
     const previousRequestDate = effectiveHoursRequestDate
     effectiveHoursAbort?.abort()
     if (
@@ -867,23 +1237,24 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
     const seq = ++effectiveHoursSeq
     effectiveHoursByDate.delete(date)
     effectiveHoursLookupStates.set(date, 'LOADING')
-    syncEffectiveHoursForForm(true)
+    syncEffectiveHoursForForm(applyAuto)
     const result = await venueGetStaffSchedule(
       backendUrl,
       { venueId, from: date, to: date },
       deps,
       controller.signal
     )
-    if (disposed || effectiveHoursAbort !== controller || effectiveHoursSeq !== seq) return
+    if (disposed || effectiveHoursAbort !== controller || effectiveHoursSeq !== seq) return false
     effectiveHoursAbort = null
     effectiveHoursRequestDate = null
     if (!result.ok) {
       if (result.error.code !== REQUEST_ABORTED_CODE) {
         effectiveHoursLookupStates.set(date, 'ERROR')
-        if (admin.dateInput.value === date) syncEffectiveHoursForForm(true)
+        if (admin.dateInput.value === date) syncEffectiveHoursForForm(applyAuto)
       }
-      return
+      return false
     }
+    storeShiftSnapshots(date, date, result.data.shifts ?? [])
     const hours = result.data.effectiveHours?.find((value) => value.serviceDate === date)
     if (!hours) {
       effectiveHoursLookupStates.set(date, 'ERROR')
@@ -895,7 +1266,11 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
       timezone = result.data.timezone
       refs.timezoneCopy.textContent = `Все даты и время указаны в часовом поясе заведения: ${timezone}.`
     }
-    if (admin.dateInput.value === date) syncEffectiveHoursForForm(true)
+    if (admin.dateInput.value === date) {
+      syncEffectiveHoursForForm(applyAuto)
+      if (!editingShift && !restoringShift) reconcileBulkAssignments(resetChoices)
+    }
+    return true
   }
 
   const setLoading = () => {
@@ -926,6 +1301,7 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
     effectiveHoursSeq += 1
     effectiveHoursByDate.clear()
     effectiveHoursLookupStates.clear()
+    shiftsByDate.clear()
     if (!isStaffView) markHoursRange(from, 'LOADING')
 
     if (isStaffView) {
@@ -988,6 +1364,7 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
       adminShifts = scheduleResult.data.shifts.filter(
         (shift) => shift.shiftDate >= from && shift.shiftDate <= to
       )
+      storeShiftSnapshots(from, to, adminShifts)
       storeEffectiveHours(from, scheduleResult.data.effectiveHours ?? [])
       profiles = profilesResult.data.profiles
       populateProfiles()
@@ -1015,10 +1392,10 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
     if (!admin || !canManage) return
     hideError()
     resetEditor()
-    editingShift = null
-    admin.formTitle.textContent = 'Новая смена'
-    admin.previewButton.textContent = 'Проверить смену'
-    admin.profileSelect.disabled = false
+    admin.formTitle.textContent = 'Добавить смены'
+    admin.previewButton.textContent = 'Проверить смены'
+    admin.profileField.hidden = true
+    admin.bulkControls.hidden = false
     admin.dateInput.min = venueToday ?? ''
     admin.dateInput.max = venueToday ? addIsoDays(venueToday, 90) : ''
     admin.dateInput.value = venueToday && weekStart < venueToday ? venueToday : weekStart
@@ -1027,15 +1404,18 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
     timeSource = 'AUTO'
     updateOvernightHint()
     admin.formCard.hidden = false
+    renderProfileOptions()
+    renderSelectedAssignments()
     if (
       !effectiveHoursByDate.has(admin.dateInput.value) &&
       !effectiveHoursLookupStates.has(admin.dateInput.value)
     ) {
-      void loadEffectiveHoursForDate(admin.dateInput.value)
+      void loadEffectiveHoursForDate(admin.dateInput.value, true, true)
     } else {
       syncEffectiveHoursForForm(true)
+      reconcileBulkAssignments(true)
     }
-    admin.profileSelect.focus()
+    ;(admin.profileOptions.querySelector('input') as HTMLInputElement | null)?.focus()
   }
 
   function openEditForm(shift: VenueStaffScheduleAdminShiftDto) {
@@ -1046,6 +1426,8 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
     editingShift = shift
     admin.formTitle.textContent = shift.warning ? 'Исправить смену' : 'Редактировать смену'
     admin.previewButton.textContent = 'Проверить изменения'
+    admin.profileField.hidden = false
+    admin.bulkControls.hidden = true
     admin.profileSelect.value = String(shift.staffProfileId)
     admin.profileSelect.disabled = true
     admin.dateInput.min = venueToday ?? ''
@@ -1067,6 +1449,38 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
     admin.dateInput.focus()
   }
 
+  function openRestoreForm(shift: VenueStaffScheduleAdminShiftDto) {
+    const admin = refs.admin
+    if (!admin || !canManage || !canRestoreShift(shift)) return
+    hideError()
+    resetEditor()
+    restoringShift = shift
+    admin.formTitle.textContent = 'Восстановить смену'
+    admin.previewButton.textContent = 'Проверить восстановление'
+    admin.profileField.hidden = false
+    admin.bulkControls.hidden = true
+    admin.profileSelect.value = String(shift.staffProfileId)
+    admin.profileSelect.disabled = true
+    admin.dateInput.min = shift.shiftDate
+    admin.dateInput.max = shift.shiftDate
+    admin.dateInput.value = shift.shiftDate
+    admin.dateInput.disabled = true
+    admin.startInput.value = shift.startsAt
+    admin.endInput.value = shift.endsAt
+    timeSource = 'MANUAL'
+    updateOvernightHint()
+    admin.formCard.hidden = false
+    if (
+      !effectiveHoursByDate.has(shift.shiftDate) &&
+      !effectiveHoursLookupStates.has(shift.shiftDate)
+    ) {
+      void loadEffectiveHoursForDate(shift.shiftDate, false)
+    } else {
+      syncEffectiveHoursForForm(false)
+    }
+    admin.startInput.focus()
+  }
+
   function updateOvernightHint() {
     const admin = refs.admin
     if (!admin) return
@@ -1078,19 +1492,22 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
   const handleDateChange = () => {
     const admin = refs.admin
     if (!admin || !admin.dateInput.value) return
+    invalidateBatchConfirmation()
     if (editingShift) timeSource = 'MANUAL'
     const date = admin.dateInput.value
     if (!effectiveHoursByDate.has(date) && !effectiveHoursLookupStates.has(date)) {
-      void loadEffectiveHoursForDate(date)
+      void loadEffectiveHoursForDate(date, true, true)
       return
     }
     syncEffectiveHoursForForm(true)
+    if (!editingShift && !restoringShift) reconcileBulkAssignments(true)
   }
 
   const markTimesManual = () => {
     timeSource = 'MANUAL'
     updateOvernightHint()
     syncEffectiveHoursForForm(false)
+    syncCommonAssignments()
   }
 
   const enableManualTimes = () => {
@@ -1111,6 +1528,19 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
     timeSource = 'AUTO'
     updateOvernightHint()
     syncEffectiveHoursForForm(false)
+    syncCommonAssignments()
+  }
+
+  const applyCommonTimeToAll = () => {
+    const admin = refs.admin
+    if (!admin || !admin.startInput.value || !admin.endInput.value) return
+    bulkAssignments.forEach((assignment) => {
+      assignment.startsAt = admin.startInput.value
+      assignment.endsAt = admin.endInput.value
+      assignment.timeSource = 'COMMON'
+    })
+    invalidateBatchConfirmation()
+    renderSelectedAssignments()
   }
 
   const readDraft = (): ShiftDraft | null => {
@@ -1137,12 +1567,109 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
     }
   }
 
-  const profileNameFor = (profileId: number): string =>
-    profiles.find((profile) => profile.id === profileId)?.displayName || `Профиль #${profileId}`
+  const readBatchAssignments = (): VenueStaffScheduleBatchAssignmentRequest[] | null => {
+    const admin = refs.admin
+    if (!admin) return null
+    if (!timezone?.trim()) {
+      showToast('Дождитесь загрузки часового пояса заведения')
+      return null
+    }
+    if (!admin.dateInput.value) {
+      showToast('Выберите дату смен')
+      return null
+    }
+    if (!bulkAssignments.size) {
+      showToast('Выберите хотя бы одного сотрудника')
+      return null
+    }
+    const normalized: VenueStaffScheduleBatchAssignmentRequest[] = []
+    for (const assignment of bulkAssignments.values()) {
+      const name = profileNameFor(assignment.staffProfileId)
+      if (!assignment.startsAt || !assignment.endsAt) {
+        showToast(`Укажите время для сотрудника: ${name}`)
+        return null
+      }
+      if (assignment.conflict) {
+        showToast(`${name}: ${assignment.conflict}`)
+        return null
+      }
+      if (!assignment.operation) {
+        showToast(`${name}: выберите «Восстановить» или уберите сотрудника`)
+        return null
+      }
+      if (assignment.operation === 'RESTORE' && !assignment.existingShift?.updatedAt) {
+        showToast(`${name}: обновите данные отменённой смены`)
+        return null
+      }
+      normalized.push({
+        staffProfileId: assignment.staffProfileId,
+        shiftDate: admin.dateInput.value,
+        startsAt: assignment.startsAt,
+        endsAt: assignment.endsAt,
+        operation: assignment.operation,
+        ...(assignment.operation === 'RESTORE'
+          ? { expectedUpdatedAt: assignment.existingShift?.updatedAt }
+          : {})
+      })
+    }
+    return normalized
+  }
 
-  const openDraftConfirmation = () => {
+  const openDraftConfirmation = async () => {
     const admin = refs.admin
     if (!admin) return
+
+    if (!editingShift && !restoringShift) {
+      if (!admin.dateInput.value || !bulkAssignments.size) {
+        void readBatchAssignments()
+        return
+      }
+      const checkedDate = admin.dateInput.value
+      admin.previewButton.disabled = true
+      setStatus('Проверяем смены…')
+      const refreshed = await loadEffectiveHoursForDate(checkedDate, true)
+      admin.previewButton.disabled = false
+      if (disposed || admin.dateInput.value !== checkedDate || editingShift || restoringShift) return
+      setStatus('')
+      if (!refreshed) {
+        showToast('Не удалось проверить смены. Повторите попытку.')
+        return
+      }
+      const assignments = readBatchAssignments()
+      if (!assignments) return
+      pendingConfirmation = { kind: 'batch', assignments }
+      admin.confirmationTitle.textContent = 'Подтвердите назначение смен'
+      const summary = el('div', { className: 'venue-schedule-summary-lines' })
+      const createCount = assignments.filter((assignment) => assignment.operation === 'CREATE').length
+      const restoreCount = assignments.length - createCount
+      append(
+        summary,
+        el('p', { text: `Дата: ${formatDate(checkedDate)}` }),
+        el('p', { text: `Будет создано: ${createCount}` }),
+        el('p', { text: `Будет восстановлено: ${restoreCount}` })
+      )
+      assignments.forEach((assignment) => {
+        summary.appendChild(
+          el('p', {
+            text: `${profileNameFor(assignment.staffProfileId)} · ${
+              assignment.operation === 'CREATE' ? 'создание' : 'восстановление'
+            } · ${formatInterval(
+              assignment.startsAt,
+              assignment.endsAt,
+              endsNextDay(assignment.startsAt, assignment.endsAt)
+            )}`
+          })
+        )
+      })
+      summary.appendChild(el('p', { text: `Часовой пояс: ${timezone}` }))
+      admin.confirmationSummary.replaceChildren(summary)
+      admin.confirmButton.textContent = 'Создать смены'
+      admin.confirmButton.className = ''
+      admin.formCard.hidden = true
+      admin.confirmationCard.hidden = false
+      return
+    }
+
     const draft = readDraft()
     if (!draft) return
     if (editingShift && sameDraft(editingShift, draft)) {
@@ -1150,46 +1677,40 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
       resetEditor()
       return
     }
+    const targetShift = editingShift ?? restoringShift
+    if (!targetShift) return
     pendingConfirmation = editingShift
       ? { kind: 'update', shift: editingShift, draft }
-      : { kind: 'create', draft }
-    admin.confirmationTitle.textContent = editingShift ? 'Подтвердите изменения' : 'Подтвердите новую смену'
+      : { kind: 'restore', shift: targetShift, draft }
+    admin.confirmationTitle.textContent = editingShift
+      ? 'Подтвердите изменения'
+      : 'Подтвердите восстановление'
     const summary = el('div', { className: 'venue-schedule-summary-lines' })
-    if (editingShift) {
-      append(
-        summary,
-        el('p', {
-          text: `Было: ${formatDate(editingShift.shiftDate)} · ${formatInterval(
-            editingShift.startsAt,
-            editingShift.endsAt,
-            editingShift.endsNextDay
-          )}`
-        }),
-        el('p', {
-          text: `Станет: ${formatDate(draft.shiftDate)} · ${formatInterval(
-            draft.startsAt,
-            draft.endsAt,
-            endsNextDay(draft.startsAt, draft.endsAt)
-          )}`
-        })
-      )
-    } else {
-      append(
-        summary,
-        el('p', { text: `Сотрудник: ${profileNameFor(draft.staffProfileId)}` }),
-        el('p', { text: `Дата: ${formatDate(draft.shiftDate)}` }),
-        el('p', {
-          text: `Время: ${formatInterval(
-            draft.startsAt,
-            draft.endsAt,
-            endsNextDay(draft.startsAt, draft.endsAt)
-          )}`
-        })
-      )
-    }
+    append(
+      summary,
+      el('p', { text: `Сотрудник: ${profileNameFor(draft.staffProfileId)}` }),
+      el('p', {
+        text: `${editingShift ? 'Было' : 'Отменённая смена'}: ${formatDate(
+          targetShift.shiftDate
+        )} · ${formatInterval(
+          targetShift.startsAt,
+          targetShift.endsAt,
+          targetShift.endsNextDay
+        )}`
+      }),
+      el('p', {
+        text: `${editingShift ? 'Станет' : 'После восстановления'}: ${formatDate(
+          draft.shiftDate
+        )} · ${formatInterval(
+          draft.startsAt,
+          draft.endsAt,
+          endsNextDay(draft.startsAt, draft.endsAt)
+        )}`
+      })
+    )
     summary.appendChild(el('p', { text: `Часовой пояс: ${timezone}` }))
     admin.confirmationSummary.replaceChildren(summary)
-    admin.confirmButton.textContent = editingShift ? 'Сохранить изменения' : 'Создать смену'
+    admin.confirmButton.textContent = editingShift ? 'Сохранить изменения' : 'Восстановить смену'
     admin.confirmButton.className = ''
     admin.formCard.hidden = true
     admin.confirmationCard.hidden = false
@@ -1236,6 +1757,35 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
     admin.confirmationCard.hidden = false
   }
 
+  const showBatchMutationError = (error: ApiErrorInfo) => {
+    const admin = refs.admin
+    if (!admin) return
+    pendingConfirmation = null
+    admin.confirmationCard.hidden = true
+    admin.formCard.hidden = false
+    refs.error.dataset.severity = 'warn'
+    const stale =
+      error.code === ApiErrorCodes.STAFF_SHIFT_STALE ||
+      error.code === ApiErrorCodes.STAFF_SHIFT_CONFIRMATION_STALE
+    refs.errorTitle.textContent = stale ? 'График изменился' : 'Смены не созданы'
+    refs.errorMessage.textContent =
+      error.message?.trim() ||
+      (error.code === ApiErrorCodes.STAFF_SHIFT_CANCELED_CONFLICT
+        ? 'Одна из смен была отменена. Выберите её явное восстановление.'
+        : 'Пакет отклонён целиком. Проверьте сотрудников и интервалы ещё раз.')
+    renderErrorActions(refs.errorActions, [
+      {
+        label: 'Проверить смены',
+        kind: 'primary',
+        onClick: () => void openDraftConfirmation()
+      }
+    ])
+    renderErrorDetails(refs.errorDetails, error, { isDebug })
+    refs.error.hidden = false
+    const date = admin.dateInput.value
+    if (date) void loadEffectiveHoursForDate(date, false)
+  }
+
   async function submitConfirmation() {
     const admin = refs.admin
     const confirmation = pendingConfirmation
@@ -1247,9 +1797,11 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
     setStatus(
       confirmation.kind === 'cancel'
         ? 'Отменяем смену…'
-        : confirmation.kind === 'create'
-          ? 'Создаём смену…'
-          : 'Сохраняем изменения…'
+        : confirmation.kind === 'batch'
+          ? 'Создаём смены…'
+          : confirmation.kind === 'restore'
+            ? 'Восстанавливаем смену…'
+            : 'Сохраняем изменения…'
     )
     mutationAbort?.abort()
     const controller = new AbortController()
@@ -1257,10 +1809,10 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
     const seq = ++mutationSeq
 
     const result =
-      confirmation.kind === 'create'
-        ? await venueCreateStaffScheduleShift(
+      confirmation.kind === 'batch'
+        ? await venueBatchStaffScheduleShifts(
             backendUrl,
-            { venueId, body: confirmation.draft },
+            { venueId, body: { assignments: confirmation.assignments } },
             deps,
             controller.signal
           )
@@ -1280,6 +1832,21 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
               deps,
               controller.signal
             )
+          : confirmation.kind === 'restore'
+            ? await venueRestoreStaffScheduleShift(
+                backendUrl,
+                {
+                  venueId,
+                  shiftId: confirmation.shift.id,
+                  body: {
+                    expectedUpdatedAt: confirmation.shift.updatedAt,
+                    startsAt: confirmation.draft.startsAt,
+                    endsAt: confirmation.draft.endsAt
+                  }
+                },
+                deps,
+                controller.signal
+              )
           : await venueCancelStaffScheduleShift(
               backendUrl,
               {
@@ -1302,15 +1869,20 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
     admin.closeConfirmationButton.disabled = false
     if (!result.ok) {
       setStatus('')
-      if (result.error.code !== REQUEST_ABORTED_CODE) showMutationError(result.error)
+      if (result.error.code !== REQUEST_ABORTED_CODE) {
+        if (confirmation.kind === 'batch') showBatchMutationError(result.error)
+        else showMutationError(result.error)
+      }
       return
     }
     const success =
-      confirmation.kind === 'create'
-        ? 'Смена создана'
+      confirmation.kind === 'batch'
+        ? 'Смены созданы'
         : confirmation.kind === 'update'
           ? 'Смена обновлена'
-          : 'Смена отменена'
+          : confirmation.kind === 'restore'
+            ? 'Смена восстановлена'
+            : 'Смена отменена'
     resetEditor()
     showToast(success)
     await load()
@@ -1329,12 +1901,13 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
     disposables.push(
       on(admin.addButton, 'click', openCreateForm),
       on(admin.closeFormButton, 'click', resetEditor),
-      on(admin.previewButton, 'click', openDraftConfirmation),
+      on(admin.previewButton, 'click', () => void openDraftConfirmation()),
       on(admin.dateInput, 'input', handleDateChange),
       on(admin.startInput, 'input', markTimesManual),
       on(admin.endInput, 'input', markTimesManual),
       on(admin.manualTimeButton, 'click', enableManualTimes),
       on(admin.applyHoursButton, 'click', applyVenueHours),
+      on(admin.applyCommonTimeButton, 'click', applyCommonTimeToAll),
       on(admin.closeConfirmationButton, 'click', () => {
         if (pendingConfirmation?.kind === 'cancel') {
           resetEditor()
@@ -1371,8 +1944,10 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
     adminShifts = []
     ownShifts = []
     profiles = []
+    bulkAssignments.clear()
     effectiveHoursByDate.clear()
     effectiveHoursLookupStates.clear()
+    shiftsByDate.clear()
     resetEditor()
     refs.list.replaceChildren()
     disposables.forEach((dispose) => dispose())

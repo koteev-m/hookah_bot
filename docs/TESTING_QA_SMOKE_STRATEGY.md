@@ -35,11 +35,12 @@ Current practice:
   Extended multi-venue coverage remains **NON-BLOCKING DEFERRED MANUAL SMOKE /
   CATALOG-SEARCH-MANUAL-001** and does not downgrade the completed MVP.
 - Staff Schedule is
-  **STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / PRODUCT AND RBAC POLISH REQUIRED**.
+  **STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / RESTORE + BULK ASSIGNMENT IMPLEMENTED / LOCAL VALIDATION PASSED**.
   Staff Operations Slice A is
   **MANAGER PARITY + SHIFT TIME DEFAULTS / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**. The schedule
-  schema remains **NO_MIGRATION_EXPECTED**; invite revoke adds PostgreSQL V120/H2 V121. Green
-  Actions, rollout and a new staging smoke are pending, so production readiness is not claimed.
+  schema remains **NO_MIGRATION_EXPECTED**. Restore + Bulk Assignment adds no migration; the
+  separate invite-revoke Slice A adds PostgreSQL V120/H2 V121. Green Actions, deploy and a new
+  staging smoke are pending, so production readiness is not claimed.
 
 Target QA model:
 - Every task ends with changed files, behavior summary, tests run, validation result, manual smoke checklist, `git status --short`, whether `scripts/dev/` was touched and whether staging deploy is needed.
@@ -60,14 +61,14 @@ Target QA model:
 ## Staff Schedule Phase 1 Release Quality Gate
 
 Status:
-**STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / PRODUCT AND RBAC POLISH REQUIRED**.
+**STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / RESTORE + BULK ASSIGNMENT IMPLEMENTED / LOCAL VALIDATION PASSED**.
 Slice A status:
 **STAFF OPERATIONS SLICE A / MANAGER PARITY + SHIFT TIME DEFAULTS / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**.
-Schedule-schema verdict: **NO_MIGRATION_EXPECTED**. Green Actions, migration rollout and new staging
+Schedule-schema verdict: **NO_MIGRATION_EXPECTED**. Green Actions, runtime deploy and new staging
 smoke are pending; do not claim production readiness until those gates pass. The complete acceptance matrix remains canonical in
 `docs/STAFF_PROFILES_SHIFTS_TIPS.md`; this section defines the remaining CI/staging release gates.
-Rollout order is new binaries plus PostgreSQL V120, then revoke UI enablement with all old runtime
-instances drained, then staging smoke; old binaries do not understand `revoked_at`.
+The PostgreSQL V120 rollout/drain order remains required for the separate Slice A invite-revoke UI;
+it is not a migration for Restore + Bulk Assignment.
 
 Locally validated backend coverage:
 
@@ -94,14 +95,15 @@ Locally validated backend coverage:
 - future-only create/update, 90-day create horizon, required bounded `from/to`, 31-day maximum query
   and 30-day recent/90-day future read envelope;
 - one profile/start-date conflict, including concurrent create and date-changing update mapping;
-- computed scheduled/active/completed, stored canceled, no lifecycle worker, completed/canceled
-  immutability and active cancel-only policy;
+- computed scheduled/active/completed, stored canceled, no lifecycle worker, completed immutability,
+  explicit future canceled restore and active cancel-only policy;
 - cancel confirmation carries a non-authoritative expected confirmation state; crossing
   `SCHEDULED -> ACTIVE` after preview is rejected and requires the stronger active confirmation;
 - expected-`updatedAt` stale rejection and no-op behavior; every real Schedule/related Today write
   advances the round-tripped token, and two mutations with one token commit exactly one;
-- exactly one transaction-bound safe `STAFF_SHIFT_CREATED`, `STAFF_SHIFT_UPDATED` or
-  `STAFF_SHIFT_CANCELED` audit for a successful real mutation and none for no-op/denial/error/rollback;
+- exactly one transaction-bound safe `STAFF_SHIFT_CREATED`, `STAFF_SHIFT_UPDATED`,
+  `STAFF_SHIFT_CANCELED` or `STAFF_SHIFT_RESTORED` audit for a successful real mutation and none for
+  no-op/denial/error/rollback;
 - planned times survive a Today request that omits them, schedule rows stay guest-hidden, an engaged
   Today overlay blocks Schedule date/time moves, and current Staff Profile/Today Shift/Guest
   `Сегодня работают` behavior remains unchanged.
@@ -109,6 +111,22 @@ Locally validated backend coverage:
   Staff overlap/self reads and returns a neutral safe Owner/Manager warning/repair contract instead
   of guessing its origin, crashing or silently reinterpreting it; future-date rows follow
   repair/cancel, venue-today rows cancel-only and past rows read-only.
+- future canceled restore with saved and new times keeps the same `shiftId`, one database row,
+  schedule visibility defaults and an advanced CAS token;
+- restore rejects stale, scheduled, active, completed, past canceled, Today-overlay, Staff, foreign,
+  Guest and Platform-only requests without false audit or safe-row disclosure;
+- `STAFF_SHIFT_RESTORED` has the safe old/new interval/lifecycle payload and audit-column actor;
+  forced audit failure rolls the restore back;
+- ordinary authorized create classifies canceled/scheduled/active/completed conflicts safely, while
+  foreign actors receive no existing-row details;
+- 1..50 assignment batch supports common/per-profile intervals and mixed `CREATE`/`RESTORE`; one
+  database transaction rejects duplicate slots, missing/foreign profiles, invalid interval, stale
+  restore or one lifecycle conflict and rolls back every write and audit;
+- deterministic lock order is profile id, then profile/date row, then writes, per-row audits and
+  commit; concurrent create/restore has one deterministic winner without process-local locks or
+  arbitrary sleeps;
+- the existing single-profile create, individual edit/cancel/CAS, planned/manual Today and Staff
+  self-view regressions remain green.
 
 Locally validated Mini App/e2e coverage:
 
@@ -120,6 +138,14 @@ Locally validated Mini App/e2e coverage:
 - venue switch aborts/clears old data and ignores late responses; selected-venue persistence is
   restored only after fresh access-list validation;
 - direct Staff mutation denial plus existing Staff Profiles/Today Shift and Guest regression.
+- multi-select Staff/display-only profiles, common effective hours, apply-to-all, per-employee
+  override and employee removal;
+- explicit canceled-row restore choice, scheduled/active/completed blocking reasons and exact
+  create/restore confirmation counts;
+- one normalized batch request, atomic-error unchanged state, success week refresh and retained
+  canceled historical row with restore action;
+- Staff has no restore/batch controls, existing individual edit/cancel remains, and venue switch
+  clears selection/draft/confirmation/stale response.
 
 No Telegram behavior is added. Do not add reminders, outbox events, buttons, staff-chat messages or
 Telegram mutation UI to satisfy this gate.
@@ -137,10 +163,12 @@ CI=1 TZ=UTC MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke
 git diff --check
 ```
 
-Recorded local evidence: all listed backend selectors, backend compile/lint, Mini App build,
-`git diff --check` and the full deterministic browser smoke (`109/109`) passed.
+The commands above are the required current-worktree gate for Restore + Bulk Assignment. Record the
+exact results in the implementation handoff; do not reuse an earlier Slice A browser count as proof
+for this slice.
 
 Remaining release gate: green GitHub Actions, staging deploy, Owner/Manager/Staff manual smoke,
+saved/new-time restore, common/per-profile and mixed atomic batch, typed conflict presentation,
 timezone and overnight smoke, two-account Staff privacy smoke, venue-switch stale-response smoke,
 unchanged Today/Guest smoke and cleanup of test rows.
 
@@ -596,7 +624,7 @@ Expectations:
 | Support/tickets | `*Support*`, RBAC tests, Mini App build/e2e if UI changed. | Backend split + Mini App if affected. | Yes for runtime. | Guest/Venue/Platform support smoke. | Medium/high. |
 | Booking | `*VenueBookingRoutesTest*`, Guest booking/reminder tests if affected, Telegram tests if bot changed. | `backend-venue-booking-rbac`, Telegram lightweight where affected. | Yes for runtime. | Booking lifecycle smoke. | Medium/high. |
 | Menu/stop-list | Menu/availability route tests, order stale-availability tests, Mini App build/e2e if UI changed. | Backend + Mini App if affected. | Usually yes. | Menu/stop-list smoke. | Medium/high. |
-| Staff Operations / Schedule | `*VenueStaffRoutesTest*`, `*StaffInviteRepositoryTest*`, `*VenueRbacRoutesTest*`, `*GuestVenueRoutesTest*`, compile/lint, Mini App build/e2e. | Backend split + Mini App. | Yes for runtime and migration. | Owner/Manager/Staff invite/profile boundaries, race/audit, effective hours, timezone/overnight, privacy, Today/Guest regression and venue switch. | High for RBAC/privacy/time semantics. |
+| Staff Operations / Schedule | `*VenueStaffRoutesTest*`, `*StaffInviteRepositoryTest*`, `*VenueRbacRoutesTest*`, `*GuestVenueRoutesTest*`, compile/lint, Mini App build/e2e. | Backend split + Mini App. | Yes for runtime; migration only when the selected slice has one. | Owner/Manager/Staff boundaries, restore/create typed conflict, atomic batch/race/audit, effective hours, timezone/overnight, privacy, Today/Guest regression and venue switch. | High for atomicity/RBAC/privacy/time semantics. |
 | Guest history/growth | `*Visit*`, `*GuestVisitRoutesTest*`, Mini App build/e2e smoke for UI changes. | Backend split + Mini App if affected. | Yes for runtime. | Guest History or Growth checklist from `docs/GROWTH_RETENTION.md`. | Medium/high for privacy. |
 
 ## Standard Pre-Commit Workflow
@@ -835,14 +863,23 @@ Staff Operations Slice A / Staff Schedule staging smoke (pending):
 - manual time survives date change, explicit `Заполнить по часам заведения` reapplies hours, and
   editing an existing shift preserves persisted times until explicit action;
 - active shift has no edit action and requires stronger cancel confirmation; completed/canceled is
-  immutable;
+  immutable except that a future schedule-default canceled row has explicit restore;
+- Owner/Manager selects several Staff/display-only profiles, applies common hours, overrides one
+  interval, removes one employee and sees exact `Будет создано` / `Будет восстановлено` counts;
+- a future canceled historical row remains visible with `Отменена`, old interval and explicit
+  `Восстановить`; ordinary create reports the typed canceled conflict and never restores silently;
+- scheduled/active/completed conflict blocks confirmation with a safe employee-specific reason;
+- one mixed `CREATE`/`RESTORE` request commits all shifts and one audit per row; one stale/invalid/
+  conflicting assignment leaves every row and audit unchanged;
 - Staff opens `Мои смены`, sees only own rows and colleagues overlapping each row, including one
   display-only colleague; safe `staffProfileId` is allowed, while shift-row ids, private
   account/Telegram linkage and admin actions are absent;
 - a second Staff account with no overlap sees no colleague/full-venue schedule;
 - stale update is rejected and refresh loads the other actor's state;
 - switching venue during a delayed request clears the old week and ignores its late response;
-- a scheduled row never appears in Guest `Сегодня работают`; manual Today Shift still controls
+- switching venue also clears selected employees, per-profile interval overrides, confirmation and
+  stale conflict state;
+- a scheduled/restored row never appears in Guest `Сегодня работают`; manual Today Shift still controls
   Guest presence and does not erase planned times;
 - no Telegram reminder/button, staff-chat message or outbox event is created.
 
@@ -947,9 +984,10 @@ Telegram/staff-chat:
 - Menu shift check is **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED** and stays
   in regression. Per-venue `staff_stoplist_enabled` remains future.
 - Staff Schedule Phase 1 is
-  `STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / PRODUCT AND RBAC POLISH REQUIRED`;
-  Slice A privacy/RBAC/effective-hours/Today compatibility gates passed locally. Green Actions and
-  a new staging smoke remain pending, so production readiness is not claimed.
+  `STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / RESTORE + BULK ASSIGNMENT IMPLEMENTED / LOCAL VALIDATION PASSED`;
+  restore/batch atomicity, typed-conflict, privacy/RBAC/effective-hours/Today compatibility remain
+  required regression gates. Green Actions and a new staging smoke remain pending, so production
+  readiness is not claimed.
 - Staff-chat delivery history/personal notifications/topic routing remain future.
 - CI coverage is strong for release-critical slices but not proof of every product scenario; area smoke checklists remain necessary.
 
@@ -966,9 +1004,10 @@ Telegram/staff-chat:
 - Staff Operations Slice A:
   `MANAGER PARITY + SHIFT TIME DEFAULTS / MVP IMPLEMENTED / LOCAL VALIDATION PASSED`.
 - Staff Schedule Phase 1:
-  `STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / PRODUCT AND RBAC POLISH REQUIRED`;
-  schedule-schema verdict `NO_MIGRATION_EXPECTED`; green Actions, invite migration rollout and new
-  staging smoke remain pending. Optional module/source settings remain Slice B future.
+  `STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / RESTORE + BULK ASSIGNMENT IMPLEMENTED / LOCAL VALIDATION PASSED`;
+  schedule-schema verdict `NO_MIGRATION_EXPECTED`; green Actions, runtime deploy and new staging
+  smoke remain pending. The invite migration rollout is the separate Slice A gate. Optional module/
+  source settings remain Slice B `FUTURE`.
 - Manual smoke checklist: `CONSOLIDATED`.
 - CI coverage: `PARTIAL / release-critical split jobs current`.
 - Frontend e2e: `PARTIAL`, with smoke coverage documented.

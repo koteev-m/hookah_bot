@@ -148,11 +148,21 @@ class MenuShiftCheckStaleException :
     )
 
 class StaffShiftDateConflictException(
+    message: String = "У сотрудника уже есть смена на эту дату.",
     details: JsonObject? = null,
 ) : ApiException(
         code = ApiErrorCodes.STAFF_SHIFT_DATE_CONFLICT,
         httpStatus = HttpStatusCode.Conflict,
-        message = "У сотрудника уже есть смена на эту дату.",
+        message = message,
+        details = details,
+    )
+
+class StaffShiftCanceledConflictException(
+    details: JsonObject? = null,
+) : ApiException(
+        code = ApiErrorCodes.STAFF_SHIFT_CANCELED_CONFLICT,
+        httpStatus = HttpStatusCode.Conflict,
+        message = "Смена на эту дату была отменена. Используйте явное восстановление.",
         details = details,
     )
 

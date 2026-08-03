@@ -83,11 +83,14 @@ import type {
   VenueStaffProfileDto,
   VenueStaffProfilesResponse,
   VenueStaffProfileUpdateRequest,
+  VenueStaffScheduleBatchRequest,
+  VenueStaffScheduleBatchResponse,
   VenueStaffScheduleCancelRequest,
   VenueStaffScheduleCreateRequest,
   VenueStaffScheduleListResponse,
   VenueStaffScheduleMutationResponse,
   VenueStaffScheduleOwnListResponse,
+  VenueStaffScheduleRestoreRequest,
   VenueStaffScheduleUpdateRequest,
   VenueStaffShiftResponse,
   VenueStaffShiftUpsertRequest,
@@ -1413,6 +1416,25 @@ export async function venueCreateStaffScheduleShift(
   )
 }
 
+export async function venueBatchStaffScheduleShifts(
+  backendUrl: string,
+  params: { venueId: number; body: VenueStaffScheduleBatchRequest },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenueStaffScheduleBatchResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/staff/shifts/batch`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params.body),
+      signal
+    },
+    deps
+  )
+}
+
 export async function venueUpdateStaffScheduleShift(
   backendUrl: string,
   params: {
@@ -1449,6 +1471,29 @@ export async function venueCancelStaffScheduleShift(
   return requestApi<VenueStaffScheduleMutationResponse>(
     backendUrl,
     `/api/venue/${params.venueId}/staff/shifts/${params.shiftId}/cancel`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params.body),
+      signal
+    },
+    deps
+  )
+}
+
+export async function venueRestoreStaffScheduleShift(
+  backendUrl: string,
+  params: {
+    venueId: number
+    shiftId: number
+    body: VenueStaffScheduleRestoreRequest
+  },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenueStaffScheduleMutationResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/staff/shifts/${params.shiftId}/restore`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

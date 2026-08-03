@@ -338,6 +338,7 @@ export type VenueStaffScheduleAdminShiftDto = {
   storedStatus: VenueStaffShiftStatus
   isGuestVisible: boolean
   manuallyMarkedActive: boolean
+  restoreAllowed: boolean
   warning?: VenueStaffScheduleWarningDto | null
 }
 
@@ -369,6 +370,21 @@ export type VenueStaffScheduleCreateRequest = {
   endsAt: string
 }
 
+export type VenueStaffScheduleBatchOperation = 'CREATE' | 'RESTORE'
+
+export type VenueStaffScheduleBatchAssignmentRequest = {
+  staffProfileId: number
+  shiftDate: string
+  startsAt: string
+  endsAt: string
+  operation: VenueStaffScheduleBatchOperation
+  expectedUpdatedAt?: string
+}
+
+export type VenueStaffScheduleBatchRequest = {
+  assignments: VenueStaffScheduleBatchAssignmentRequest[]
+}
+
 export type VenueStaffScheduleUpdateRequest = {
   shiftDate: string
   startsAt: string
@@ -381,8 +397,18 @@ export type VenueStaffScheduleCancelRequest = {
   expectedConfirmationState: VenueStaffScheduleConfirmationState
 }
 
+export type VenueStaffScheduleRestoreRequest = {
+  expectedUpdatedAt: string
+  startsAt?: string
+  endsAt?: string
+}
+
 export type VenueStaffScheduleMutationResponse = {
   shift: VenueStaffScheduleAdminShiftDto
+}
+
+export type VenueStaffScheduleBatchResponse = {
+  shifts: VenueStaffScheduleAdminShiftDto[]
 }
 
 export type VenueStaffScheduleColleagueDto = {

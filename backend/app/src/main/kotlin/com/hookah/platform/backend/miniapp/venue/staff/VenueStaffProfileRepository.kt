@@ -2,6 +2,8 @@ package com.hookah.platform.backend.miniapp.venue.staff
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.api.InvalidInputException
+import com.hookah.platform.backend.api.NotFoundException
+import com.hookah.platform.backend.api.StaffShiftCanceledConflictException
 import com.hookah.platform.backend.api.StaffShiftConfirmationStaleException
 import com.hookah.platform.backend.api.StaffShiftDateConflictException
 import com.hookah.platform.backend.api.StaffShiftImmutableException
@@ -739,54 +741,28 @@ class VenueStaffProfileRepository(
         auditLogRepository: AuditLogRepository,
     ): VenueStaffScheduledShift? =
         inTransaction { connection ->
-            if (!lockProfileInConnection(connection, venueId, staffProfileId)) {
-                return@inTransaction null
+            val profile =
+                findProfileInConnection(connection, venueId, staffProfileId, forUpdate = true)
+                    ?: return@inTransaction null
+            findShiftForUpdateInConnection(connection, venueId, staffProfileId, shiftDate)?.let { existing ->
+                throwScheduleCreateConflict(
+                    current = VenueStaffScheduledShift(profile, existing),
+                    now = now,
+                    venueToday = LocalDate.ofInstant(now, zoneId),
+                    zoneId = zoneId,
+                )
             }
-            val updatedAt = now.truncatedTo(java.time.temporal.ChronoUnit.MILLIS)
-            val shiftId =
-                try {
-                    connection.prepareStatement(
-                        """
-                        INSERT INTO staff_shifts (
-                            venue_id,
-                            staff_profile_id,
-                            shift_date,
-                            starts_at,
-                            ends_at,
-                            status,
-                            is_guest_visible,
-                            manually_marked_active,
-                            created_by_user_id,
-                            updated_by_user_id,
-                            updated_at
-                        )
-                        VALUES (?, ?, ?, ?, ?, ?, FALSE, FALSE, ?, ?, ?)
-                        """.trimIndent(),
-                        Statement.RETURN_GENERATED_KEYS,
-                    ).use { statement ->
-                        statement.setLong(1, venueId)
-                        statement.setLong(2, staffProfileId)
-                        statement.setObject(3, shiftDate)
-                        statement.setObject(4, startsAt)
-                        statement.setObject(5, endsAt)
-                        statement.setString(6, STAFF_SHIFT_SCHEDULED_STATUS)
-                        statement.setLong(7, actorUserId)
-                        statement.setLong(8, actorUserId)
-                        statement.setTimestamp(9, Timestamp.from(updatedAt))
-                        statement.executeUpdate()
-                        statement.generatedKeys.use { rs ->
-                            if (rs.next()) rs.getLong(1) else throw DatabaseUnavailableException()
-                        }
-                    }
-                } catch (e: SQLException) {
-                    if (e.isUniqueViolation()) {
-                        throw StaffShiftDateConflictException()
-                    }
-                    throw e
-                }
             val created =
-                findScheduledShiftInConnection(connection, venueId, shiftId, forUpdate = false)
-                    ?: throw DatabaseUnavailableException()
+                insertScheduledShiftInConnection(
+                    connection = connection,
+                    venueId = venueId,
+                    staffProfileId = staffProfileId,
+                    shiftDate = shiftDate,
+                    startsAt = startsAt,
+                    endsAt = endsAt,
+                    actorUserId = actorUserId,
+                    updatedAt = now,
+                )
             val interval =
                 resolveStaffScheduleInterval(shiftDate, startsAt, endsAt, zoneId).interval
                     ?: throw StaffShiftInvalidIntervalException()
@@ -803,6 +779,193 @@ class VenueStaffProfileRepository(
                 zoneId = zoneId,
             )
             created
+        }
+
+    suspend fun restoreScheduledShift(
+        venueId: Long,
+        shiftId: Long,
+        startsAt: LocalTime?,
+        endsAt: LocalTime?,
+        expectedUpdatedAt: Instant,
+        actorUserId: Long,
+        now: Instant,
+        venueToday: LocalDate,
+        zoneId: ZoneId,
+        auditLogRepository: AuditLogRepository,
+    ): VenueStaffScheduledShift? =
+        inTransaction { connection ->
+            if ((startsAt == null) != (endsAt == null)) {
+                throw InvalidInputException("startsAt и endsAt нужно передать вместе.")
+            }
+            val current =
+                findScheduledShiftInConnection(connection, venueId, shiftId, forUpdate = true)
+                    ?: return@inTransaction null
+            validateRestorableShift(
+                current = current,
+                expectedUpdatedAt = expectedUpdatedAt,
+                now = now,
+                venueToday = venueToday,
+                zoneId = zoneId,
+            )
+            val restoredStartsAt = startsAt ?: current.shift.startsAt ?: throw StaffShiftInvalidIntervalException()
+            val restoredEndsAt = endsAt ?: current.shift.endsAt ?: throw StaffShiftInvalidIntervalException()
+            validateRestoredInterval(
+                shiftDate = current.shift.shiftDate,
+                startsAt = restoredStartsAt,
+                endsAt = restoredEndsAt,
+                now = now,
+                venueToday = venueToday,
+                zoneId = zoneId,
+            )
+            val restored =
+                restoreScheduledShiftInConnection(
+                    connection = connection,
+                    current = current,
+                    startsAt = restoredStartsAt,
+                    endsAt = restoredEndsAt,
+                    expectedUpdatedAt = expectedUpdatedAt,
+                    actorUserId = actorUserId,
+                    now = now,
+                )
+            appendStaffScheduleAudit(
+                connection = connection,
+                auditLogRepository = auditLogRepository,
+                actorUserId = actorUserId,
+                action = STAFF_SHIFT_RESTORED_AUDIT_ACTION,
+                old = current,
+                new = restored,
+                oldLifecycle = StaffScheduleLifecycle.CANCELED,
+                newLifecycle = StaffScheduleLifecycle.SCHEDULED,
+                zoneId = zoneId,
+            )
+            restored
+        }
+
+    suspend fun mutateScheduledShiftsBatch(
+        venueId: Long,
+        assignments: List<StaffScheduleBatchAssignment>,
+        actorUserId: Long,
+        now: Instant,
+        venueToday: LocalDate,
+        zoneId: ZoneId,
+        auditLogRepository: AuditLogRepository,
+    ): List<VenueStaffScheduledShift> =
+        inTransaction { connection ->
+            val orderedAssignments = assignments.sortedWith(staffScheduleBatchAssignmentOrder)
+            if (orderedAssignments.map { it.slot }.distinct().size != orderedAssignments.size) {
+                throw InvalidInputException("В batch есть повторяющиеся сотрудник и дата.")
+            }
+
+            val profilesById =
+                orderedAssignments
+                    .map { it.staffProfileId }
+                    .distinct()
+                    .associateWith { staffProfileId ->
+                        findProfileInConnection(connection, venueId, staffProfileId, forUpdate = true)
+                            ?: throw NotFoundException()
+                    }
+
+            val currentBySlot =
+                orderedAssignments.associate { assignment ->
+                    assignment.slot to
+                        findShiftForUpdateInConnection(
+                            connection = connection,
+                            venueId = venueId,
+                            staffProfileId = assignment.staffProfileId,
+                            shiftDate = assignment.shiftDate,
+                        )?.let { VenueStaffScheduledShift(checkNotNull(profilesById[assignment.staffProfileId]), it) }
+                }
+
+            orderedAssignments.forEach { assignment ->
+                val current = currentBySlot[assignment.slot]
+                when (assignment.operation) {
+                    StaffScheduleBatchOperation.CREATE -> {
+                        if (current != null) {
+                            throwScheduleCreateConflict(current, now, venueToday, zoneId)
+                        }
+                    }
+                    StaffScheduleBatchOperation.RESTORE -> {
+                        val existing = current ?: throw NotFoundException()
+                        validateRestorableShift(
+                            current = existing,
+                            expectedUpdatedAt = assignment.expectedUpdatedAt ?: throw StaffShiftStaleException(),
+                            now = now,
+                            venueToday = venueToday,
+                            zoneId = zoneId,
+                        )
+                    }
+                }
+                validateRestoredInterval(
+                    shiftDate = assignment.shiftDate,
+                    startsAt = assignment.startsAt,
+                    endsAt = assignment.endsAt,
+                    now = now,
+                    venueToday = venueToday,
+                    zoneId = zoneId,
+                )
+            }
+
+            val mutations =
+                orderedAssignments.map { assignment ->
+                    when (assignment.operation) {
+                        StaffScheduleBatchOperation.CREATE -> {
+                            val created =
+                                insertScheduledShiftInConnection(
+                                    connection = connection,
+                                    venueId = venueId,
+                                    staffProfileId = assignment.staffProfileId,
+                                    shiftDate = assignment.shiftDate,
+                                    startsAt = assignment.startsAt,
+                                    endsAt = assignment.endsAt,
+                                    actorUserId = actorUserId,
+                                    updatedAt = now,
+                                )
+                            StaffSchedulePendingAudit(
+                                action = STAFF_SHIFT_CREATED_AUDIT_ACTION,
+                                old = null,
+                                new = created,
+                                oldLifecycle = null,
+                                newLifecycle = StaffScheduleLifecycle.SCHEDULED,
+                            )
+                        }
+                        StaffScheduleBatchOperation.RESTORE -> {
+                            val current = checkNotNull(currentBySlot[assignment.slot])
+                            val restored =
+                                restoreScheduledShiftInConnection(
+                                    connection = connection,
+                                    current = current,
+                                    startsAt = assignment.startsAt,
+                                    endsAt = assignment.endsAt,
+                                    expectedUpdatedAt = checkNotNull(assignment.expectedUpdatedAt),
+                                    actorUserId = actorUserId,
+                                    now = now,
+                                )
+                            StaffSchedulePendingAudit(
+                                action = STAFF_SHIFT_RESTORED_AUDIT_ACTION,
+                                old = current,
+                                new = restored,
+                                oldLifecycle = StaffScheduleLifecycle.CANCELED,
+                                newLifecycle = StaffScheduleLifecycle.SCHEDULED,
+                            )
+                        }
+                    }
+                }
+
+            mutations.forEach { mutation ->
+                appendStaffScheduleAudit(
+                    connection = connection,
+                    auditLogRepository = auditLogRepository,
+                    actorUserId = actorUserId,
+                    action = mutation.action,
+                    old = mutation.old,
+                    new = mutation.new,
+                    oldLifecycle = mutation.oldLifecycle,
+                    newLifecycle = mutation.newLifecycle,
+                    zoneId = zoneId,
+                )
+            }
+            val shiftsBySlot = mutations.associate { it.new.shift.slot to it.new }
+            assignments.map { assignment -> checkNotNull(shiftsBySlot[assignment.slot]) }
         }
 
     suspend fun updateScheduledShift(
@@ -1280,6 +1443,212 @@ class VenueStaffProfileRepository(
         return findShiftByIdInConnection(connection, existing.id) ?: throw DatabaseUnavailableException()
     }
 
+    private fun insertScheduledShiftInConnection(
+        connection: Connection,
+        venueId: Long,
+        staffProfileId: Long,
+        shiftDate: LocalDate,
+        startsAt: LocalTime,
+        endsAt: LocalTime,
+        actorUserId: Long,
+        updatedAt: Instant,
+    ): VenueStaffScheduledShift {
+        val normalizedUpdatedAt = updatedAt.truncatedTo(java.time.temporal.ChronoUnit.MILLIS)
+        val shiftId =
+            try {
+                connection.prepareStatement(
+                    """
+                    INSERT INTO staff_shifts (
+                        venue_id,
+                        staff_profile_id,
+                        shift_date,
+                        starts_at,
+                        ends_at,
+                        status,
+                        is_guest_visible,
+                        manually_marked_active,
+                        created_by_user_id,
+                        updated_by_user_id,
+                        updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, FALSE, FALSE, ?, ?, ?)
+                    """.trimIndent(),
+                    Statement.RETURN_GENERATED_KEYS,
+                ).use { statement ->
+                    statement.setLong(1, venueId)
+                    statement.setLong(2, staffProfileId)
+                    statement.setObject(3, shiftDate)
+                    statement.setObject(4, startsAt)
+                    statement.setObject(5, endsAt)
+                    statement.setString(6, STAFF_SHIFT_SCHEDULED_STATUS)
+                    statement.setLong(7, actorUserId)
+                    statement.setLong(8, actorUserId)
+                    statement.setTimestamp(9, Timestamp.from(normalizedUpdatedAt))
+                    statement.executeUpdate()
+                    statement.generatedKeys.use { rs ->
+                        if (rs.next()) rs.getLong(1) else throw DatabaseUnavailableException()
+                    }
+                }
+            } catch (e: SQLException) {
+                if (e.isUniqueViolation()) {
+                    throw StaffShiftDateConflictException()
+                }
+                throw e
+            }
+        return findScheduledShiftInConnection(connection, venueId, shiftId, forUpdate = false)
+            ?: throw DatabaseUnavailableException()
+    }
+
+    private fun restoreScheduledShiftInConnection(
+        connection: Connection,
+        current: VenueStaffScheduledShift,
+        startsAt: LocalTime,
+        endsAt: LocalTime,
+        expectedUpdatedAt: Instant,
+        actorUserId: Long,
+        now: Instant,
+    ): VenueStaffScheduledShift {
+        val nextUpdatedAt = nextStaffShiftUpdatedAt(now, current.shift.updatedAt)
+        val updatedCount =
+            connection.prepareStatement(
+                """
+                UPDATE staff_shifts
+                SET starts_at = ?,
+                    ends_at = ?,
+                    status = ?,
+                    updated_by_user_id = ?,
+                    updated_at = ?
+                WHERE venue_id = ?
+                  AND id = ?
+                  AND status = ?
+                  AND updated_at = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setObject(1, startsAt)
+                statement.setObject(2, endsAt)
+                statement.setString(3, STAFF_SHIFT_SCHEDULED_STATUS)
+                statement.setLong(4, actorUserId)
+                statement.setTimestamp(5, Timestamp.from(nextUpdatedAt))
+                statement.setLong(6, current.shift.venueId)
+                statement.setLong(7, current.shift.id)
+                statement.setString(8, STAFF_SHIFT_CANCELED_STATUS)
+                statement.setTimestamp(9, Timestamp.from(expectedUpdatedAt))
+                statement.executeUpdate()
+            }
+        if (updatedCount != 1) {
+            throw StaffShiftStaleException()
+        }
+        return findScheduledShiftInConnection(
+            connection = connection,
+            venueId = current.shift.venueId,
+            shiftId = current.shift.id,
+            forUpdate = false,
+        ) ?: throw DatabaseUnavailableException()
+    }
+
+    private fun validateRestorableShift(
+        current: VenueStaffScheduledShift,
+        expectedUpdatedAt: Instant,
+        now: Instant,
+        venueToday: LocalDate,
+        zoneId: ZoneId,
+    ) {
+        if (current.shift.updatedAt != expectedUpdatedAt) {
+            throw StaffShiftStaleException()
+        }
+        val details = staffShiftConflictDetails(current, now, venueToday, zoneId)
+        if (!current.shift.status.equals(STAFF_SHIFT_CANCELED_STATUS, ignoreCase = true)) {
+            throw StaffShiftImmutableException(details)
+        }
+        if (!current.shift.hasScheduleVisibilityDefaults()) {
+            throw StaffShiftTodayOverrideException(details)
+        }
+        if (!current.shift.isRestorableCanceledShift(now, venueToday, zoneId)) {
+            throw StaffShiftImmutableException(details)
+        }
+    }
+
+    private fun validateRestoredInterval(
+        shiftDate: LocalDate,
+        startsAt: LocalTime,
+        endsAt: LocalTime,
+        now: Instant,
+        venueToday: LocalDate,
+        zoneId: ZoneId,
+    ) {
+        if (shiftDate.isAfter(venueToday.plusDays(STAFF_SCHEDULE_FUTURE_DAYS))) {
+            throw InvalidInputException("Смену можно запланировать не более чем на 90 дней вперёд.")
+        }
+        val interval =
+            resolveStaffScheduleInterval(shiftDate, startsAt, endsAt, zoneId).interval
+                ?: throw StaffShiftInvalidIntervalException()
+        if (!interval.startsAt.isAfter(now)) {
+            throw InvalidInputException("Начало смены должно быть в будущем.")
+        }
+    }
+
+    private fun throwScheduleCreateConflict(
+        current: VenueStaffScheduledShift,
+        now: Instant,
+        venueToday: LocalDate,
+        zoneId: ZoneId,
+    ): Nothing {
+        val details = staffShiftConflictDetails(current, now, venueToday, zoneId)
+        if (current.shift.status.equals(STAFF_SHIFT_CANCELED_STATUS, ignoreCase = true)) {
+            throw StaffShiftCanceledConflictException(details)
+        }
+        val lifecycle = resolveStoredShiftLifecycle(current.shift, now, zoneId)
+        when (lifecycle) {
+            StaffScheduleLifecycle.SCHEDULED ->
+                throw StaffShiftDateConflictException(
+                    message = "Смена уже запланирована на эту дату.",
+                    details = details,
+                )
+            StaffScheduleLifecycle.ACTIVE,
+            StaffScheduleLifecycle.COMPLETED,
+            StaffScheduleLifecycle.CANCELED,
+            null,
+            -> throw StaffShiftImmutableException(details)
+        }
+    }
+
+    private fun staffShiftConflictDetails(
+        current: VenueStaffScheduledShift,
+        now: Instant,
+        venueToday: LocalDate,
+        zoneId: ZoneId,
+    ) = buildJsonObject {
+        val resolution =
+            resolveStaffScheduleInterval(
+                current.shift.shiftDate,
+                current.shift.startsAt,
+                current.shift.endsAt,
+                zoneId,
+            )
+        val lifecycle = resolveStoredShiftLifecycle(current.shift, now, zoneId)
+        put("existingShiftId", current.shift.id)
+        put("staffProfileId", current.shift.staffProfileId)
+        put("status", lifecycle?.name ?: current.shift.status.uppercase(java.util.Locale.ROOT))
+        put("expectedUpdatedAt", current.shift.updatedAt.toString())
+        put("shiftDate", current.shift.shiftDate.toString())
+        putNullableString("startsAt", current.shift.startsAt?.toString())
+        putNullableString("endsAt", current.shift.endsAt?.toString())
+        put("endsNextDay", resolution.interval?.endsNextDay ?: false)
+        put("canRestore", current.shift.isRestorableCanceledShift(now, venueToday, zoneId))
+    }
+
+    private fun resolveStoredShiftLifecycle(
+        shift: VenueStaffShift,
+        now: Instant,
+        zoneId: ZoneId,
+    ): StaffScheduleLifecycle? {
+        if (shift.status.equals(STAFF_SHIFT_CANCELED_STATUS, ignoreCase = true)) {
+            return StaffScheduleLifecycle.CANCELED
+        }
+        val interval = resolveStaffScheduleInterval(shift.shiftDate, shift.startsAt, shift.endsAt, zoneId).interval
+        return interval?.let { computeStaffScheduleLifecycle(shift.status, it, now) }
+    }
+
     private fun appendStaffTodayShiftAudit(
         connection: Connection,
         auditLogRepository: AuditLogRepository,
@@ -1301,24 +1670,6 @@ class VenueStaffProfileRepository(
                 },
         )
     }
-
-    private fun lockProfileInConnection(
-        connection: Connection,
-        venueId: Long,
-        staffProfileId: Long,
-    ): Boolean =
-        connection.prepareStatement(
-            """
-            SELECT id
-            FROM staff_profiles
-            WHERE venue_id = ? AND id = ?
-            FOR UPDATE
-            """.trimIndent(),
-        ).use { statement ->
-            statement.setLong(1, venueId)
-            statement.setLong(2, staffProfileId)
-            statement.executeQuery().use { it.next() }
-        }
 
     private fun findScheduledShiftInConnection(
         connection: Connection,
@@ -1386,7 +1737,6 @@ class VenueStaffProfileRepository(
             entityId = new.shift.id,
             payload =
                 buildJsonObject {
-                    put("actorUserId", actorUserId)
                     put("venueId", new.shift.venueId)
                     put("staffProfileId", new.shift.staffProfileId)
                     put("shiftId", new.shift.id)
@@ -1624,6 +1974,28 @@ data class StaffShiftWrite(
     val manuallyMarkedActive: Boolean,
 )
 
+private data class StaffShiftSlot(
+    val staffProfileId: Long,
+    val shiftDate: LocalDate,
+)
+
+private data class StaffSchedulePendingAudit(
+    val action: String,
+    val old: VenueStaffScheduledShift?,
+    val new: VenueStaffScheduledShift,
+    val oldLifecycle: StaffScheduleLifecycle?,
+    val newLifecycle: StaffScheduleLifecycle,
+)
+
+private val StaffScheduleBatchAssignment.slot: StaffShiftSlot
+    get() = StaffShiftSlot(staffProfileId, shiftDate)
+
+private val VenueStaffShift.slot: StaffShiftSlot
+    get() = StaffShiftSlot(staffProfileId, shiftDate)
+
+private val staffScheduleBatchAssignmentOrder =
+    compareBy<StaffScheduleBatchAssignment>({ it.staffProfileId }, { it.shiftDate })
+
 data class PublicVenueStaffToday(
     val id: Long,
     val displayName: String,
@@ -1731,6 +2103,7 @@ private const val STAFF_PROFILE_VISIBILITY_FIELD = "isGuestVisible"
 private const val STAFF_SHIFT_CREATED_AUDIT_ACTION = "STAFF_SHIFT_CREATED"
 private const val STAFF_SHIFT_UPDATED_AUDIT_ACTION = "STAFF_SHIFT_UPDATED"
 private const val STAFF_SHIFT_CANCELED_AUDIT_ACTION = "STAFF_SHIFT_CANCELED"
+private const val STAFF_SHIFT_RESTORED_AUDIT_ACTION = "STAFF_SHIFT_RESTORED"
 private const val STAFF_SHIFT_INVALID_INTERVAL_VALIDATION_STATE = "INVALID_INTERVAL"
 private const val STAFF_SCHEDULE_FUTURE_DAYS = 90L
 

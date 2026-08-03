@@ -6,6 +6,8 @@ import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.NotFoundException
 import com.hookah.platform.backend.api.StaffShiftInvalidIntervalException
 import com.hookah.platform.backend.miniapp.venue.staff.StaffScheduleAllowedAction
+import com.hookah.platform.backend.miniapp.venue.staff.StaffScheduleBatchAssignment
+import com.hookah.platform.backend.miniapp.venue.staff.StaffScheduleBatchOperation
 import com.hookah.platform.backend.miniapp.venue.staff.StaffScheduleConfirmationState
 import com.hookah.platform.backend.miniapp.venue.staff.StaffScheduleIntervalState
 import com.hookah.platform.backend.miniapp.venue.staff.StaffScheduleLifecycle
@@ -14,6 +16,7 @@ import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffProfileReposito
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffScheduledShift
 import com.hookah.platform.backend.miniapp.venue.staff.computeStaffScheduleLifecycle
 import com.hookah.platform.backend.miniapp.venue.staff.invalidStaffScheduleAllowedActions
+import com.hookah.platform.backend.miniapp.venue.staff.isRestorableCanceledShift
 import com.hookah.platform.backend.miniapp.venue.staff.resolveStaffScheduleInterval
 import com.hookah.platform.backend.miniapp.venue.staff.staffScheduleConfirmationState
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
@@ -95,6 +98,7 @@ data class VenueStaffScheduleShiftDto(
     val storedStatus: String,
     val isGuestVisible: Boolean,
     val manuallyMarkedActive: Boolean,
+    val restoreAllowed: Boolean = false,
     val warning: VenueStaffScheduleWarningDto? = null,
 )
 
@@ -153,8 +157,41 @@ data class VenueStaffScheduleCancelRequest(
 )
 
 @Serializable
+data class VenueStaffScheduleRestoreRequest(
+    val expectedUpdatedAt: String,
+    val startsAt: String? = null,
+    val endsAt: String? = null,
+)
+
+@Serializable
+enum class VenueStaffScheduleBatchOperation {
+    CREATE,
+    RESTORE,
+}
+
+@Serializable
+data class VenueStaffScheduleBatchAssignmentRequest(
+    val staffProfileId: Long,
+    val shiftDate: String,
+    val startsAt: String,
+    val endsAt: String,
+    val operation: VenueStaffScheduleBatchOperation,
+    val expectedUpdatedAt: String? = null,
+)
+
+@Serializable
+data class VenueStaffScheduleBatchRequest(
+    val assignments: List<VenueStaffScheduleBatchAssignmentRequest>,
+)
+
+@Serializable
 data class VenueStaffScheduleMutationResponse(
     val shift: VenueStaffScheduleShiftDto,
+)
+
+@Serializable
+data class VenueStaffScheduleBatchMutationResponse(
+    val shifts: List<VenueStaffScheduleShiftDto>,
 )
 
 fun Route.venueStaffScheduleRoutes(
@@ -258,6 +295,74 @@ fun Route.venueStaffScheduleRoutes(
             )
         }
 
+        post("/{venueId}/staff/shifts/batch") {
+            val membership = call.requireStaffScheduleMembership(venueAccessRepository)
+            membership.requirePermission(VenuePermission.STAFF_SCHEDULE_MANAGE)
+            val context = resolveStaffScheduleContext(venueSettingsRepository, membership.venueId, clock)
+            val request = call.receive<VenueStaffScheduleBatchRequest>()
+            if (request.assignments.isEmpty() || request.assignments.size > MAX_STAFF_SCHEDULE_BATCH_SIZE) {
+                throw InvalidInputException("Batch должен содержать от 1 до 50 назначений.")
+            }
+            val slots =
+                request.assignments.map { assignment -> assignment.staffProfileId to assignment.shiftDate.trim() }
+            if (slots.distinct().size != slots.size) {
+                throw InvalidInputException("В batch есть повторяющиеся сотрудник и дата.")
+            }
+            val assignments =
+                request.assignments.map { assignment ->
+                    if (assignment.staffProfileId <= 0) {
+                        throw InvalidInputException("staffProfileId must be positive")
+                    }
+                    val input =
+                        normalizeNewStaffScheduleInterval(
+                            shiftDateRaw = assignment.shiftDate,
+                            startsAtRaw = assignment.startsAt,
+                            endsAtRaw = assignment.endsAt,
+                            context = context,
+                        )
+                    val expectedUpdatedAt =
+                        when (assignment.operation) {
+                            VenueStaffScheduleBatchOperation.CREATE -> {
+                                if (assignment.expectedUpdatedAt != null) {
+                                    throw InvalidInputException("CREATE не принимает expectedUpdatedAt.")
+                                }
+                                null
+                            }
+                            VenueStaffScheduleBatchOperation.RESTORE ->
+                                assignment.expectedUpdatedAt
+                                    ?.let(::parseExpectedUpdatedAt)
+                                    ?: throw InvalidInputException("RESTORE требует expectedUpdatedAt.")
+                        }
+                    StaffScheduleBatchAssignment(
+                        staffProfileId = assignment.staffProfileId,
+                        shiftDate = input.shiftDate,
+                        startsAt = input.startsAt,
+                        endsAt = input.endsAt,
+                        operation =
+                            when (assignment.operation) {
+                                VenueStaffScheduleBatchOperation.CREATE -> StaffScheduleBatchOperation.CREATE
+                                VenueStaffScheduleBatchOperation.RESTORE -> StaffScheduleBatchOperation.RESTORE
+                            },
+                        expectedUpdatedAt = expectedUpdatedAt,
+                    )
+                }
+            val mutated =
+                venueStaffProfileRepository.mutateScheduledShiftsBatch(
+                    venueId = membership.venueId,
+                    assignments = assignments,
+                    actorUserId = membership.userId,
+                    now = context.now,
+                    venueToday = context.venueToday,
+                    zoneId = context.zoneId,
+                    auditLogRepository = auditLogRepository,
+                )
+            call.respond(
+                VenueStaffScheduleBatchMutationResponse(
+                    shifts = mutated.map { it.toAdminDto(context) ?: throw NotFoundException() },
+                ),
+            )
+        }
+
         put("/{venueId}/staff/shifts/{shiftId}") {
             val membership = call.requireStaffScheduleMembership(venueAccessRepository)
             membership.requirePermission(VenuePermission.STAFF_SCHEDULE_MANAGE)
@@ -282,6 +387,35 @@ fun Route.venueStaffScheduleRoutes(
             call.respond(
                 VenueStaffScheduleMutationResponse(
                     shift = updated.toAdminDto(context) ?: throw NotFoundException(),
+                ),
+            )
+        }
+
+        post("/{venueId}/staff/shifts/{shiftId}/restore") {
+            val membership = call.requireStaffScheduleMembership(venueAccessRepository)
+            membership.requirePermission(VenuePermission.STAFF_SCHEDULE_MANAGE)
+            val shiftId = call.requireScheduleShiftId()
+            val context = resolveStaffScheduleContext(venueSettingsRepository, membership.venueId, clock)
+            val request = call.receive<VenueStaffScheduleRestoreRequest>()
+            if ((request.startsAt == null) != (request.endsAt == null)) {
+                throw InvalidInputException("startsAt и endsAt нужно передать вместе.")
+            }
+            val restored =
+                venueStaffProfileRepository.restoreScheduledShift(
+                    venueId = membership.venueId,
+                    shiftId = shiftId,
+                    startsAt = request.startsAt?.let { parseLocalTime(it, "startsAt") },
+                    endsAt = request.endsAt?.let { parseLocalTime(it, "endsAt") },
+                    expectedUpdatedAt = parseExpectedUpdatedAt(request.expectedUpdatedAt),
+                    actorUserId = membership.userId,
+                    now = context.now,
+                    venueToday = context.venueToday,
+                    zoneId = context.zoneId,
+                    auditLogRepository = auditLogRepository,
+                ) ?: throw NotFoundException()
+            call.respond(
+                VenueStaffScheduleMutationResponse(
+                    shift = restored.toAdminDto(context) ?: throw NotFoundException(),
                 ),
             )
         }
@@ -523,6 +657,7 @@ private fun VenueStaffScheduledShift.toAdminDto(context: StaffScheduleRequestCon
         storedStatus = shift.status,
         isGuestVisible = shift.isGuestVisible,
         manuallyMarkedActive = shift.manuallyMarkedActive,
+        restoreAllowed = shift.isRestorableCanceledShift(context.now, context.venueToday, context.zoneId),
         warning =
             if (resolution.state == StaffScheduleIntervalState.INVALID) {
                 VenueStaffScheduleWarningDto(
@@ -655,6 +790,7 @@ private fun parseLocalTime(
 }
 
 private const val MAX_STAFF_SCHEDULE_RANGE_DISTANCE_DAYS = 30L
+private const val MAX_STAFF_SCHEDULE_BATCH_SIZE = 50
 private const val STAFF_SCHEDULE_PAST_READ_DAYS = 30L
 private const val STAFF_SCHEDULE_FUTURE_DAYS = 90L
 private val DATE_PATTERN = Regex("""\d{4}-\d{2}-\d{2}""")

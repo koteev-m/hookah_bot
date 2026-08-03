@@ -6,8 +6,9 @@
 `STAFF PROFILES + TODAY SHIFT PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`.
 `STAFF OPERATIONS SLICE A / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`.
 Slice A scope is `MANAGER PARITY + SHIFT TIME DEFAULTS`.
-`STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / PRODUCT AND RBAC POLISH REQUIRED`.
-Slice A still requires green Actions, migration rollout and a new staging smoke before release.
+`STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / RESTORE + BULK ASSIGNMENT IMPLEMENTED / LOCAL VALIDATION PASSED`.
+Restore + Bulk Assignment still requires green Actions, runtime deploy and a new staging smoke. The
+separate Slice A invite-revoke V120/H2 V121 rollout remains its own release gate.
 `STAFF_TIP`, photo upload/media picker and staff shift sign-up/chat workflows
 remain future. Phase 2 may create staff tip intents with external staff tip links, but the platform
 must not collect guest order payments or staff tips in MVP.
@@ -27,7 +28,7 @@ orders. Staff tips, when implemented, must target a specific staff profile, not 
 | --- | --- | --- |
 | `STAFF_PROFILE` | Guest-visible profile for a hookah master, waiter, admin or other staff subtype. | `STAFF PROFILES + TODAY SHIFT PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`. |
 | `SHIFT_TODAY` | Simple manual "today on shift" visibility for public staff profiles. | `STAFF PROFILES + TODAY SHIFT PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`. |
-| `STAFF_SCHEDULE` | Optional bounded venue schedule for planned staff shifts. | `STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / PRODUCT AND RBAC POLISH REQUIRED`. |
+| `STAFF_SCHEDULE` | Optional bounded venue schedule for planned staff shifts. | `STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / RESTORE + BULK ASSIGNMENT IMPLEMENTED / LOCAL VALIDATION PASSED`. |
 | `STAFF_TIP` | Future CTA and intent to thank a specific staff member. | Phase 2+ / spec draft. |
 
 ## Staff Profiles / Today Shift Phase 1 MVP
@@ -168,10 +169,13 @@ MVP behavior:
 
 ## STAFF_SCHEDULE Phase 1 / Optional Venue Shift Planning
 
-Status: **STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / PRODUCT AND RBAC POLISH REQUIRED**.
+Status: **STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / RESTORE + BULK ASSIGNMENT IMPLEMENTED / LOCAL VALIDATION PASSED**.
 
-Staff Operations Slice A adds locally validated product/RBAC polish and still requires a new
-staging smoke. This is not a production-readiness claim.
+The bounded Restore + Bulk Assignment slice adds explicit canceled-shift restoration and atomic
+multi-profile assignment. It is locally validated and still requires green Actions, staging deploy
+and a new staging smoke. This is not a production-readiness claim. The existing Staff Operations
+Slice A invite-revoke V120/H2 V121 rollout remains a separate release gate and is not a migration
+for this schedule slice.
 
 `STAFF_SCHEDULE` is an optional Venue Mode module. A venue that does not create shifts continues to
 use Staff Profiles, manual Today Shift, Staff Calls, Orders, Bookings and every Guest flow exactly as
@@ -202,8 +206,9 @@ The runtime reuses the existing foundation rather than introducing a second sche
 - There is no `version`, cancellation-reason, end-date, origin or timezone-snapshot column. Phase 1
   does not require one: `updated_at` is the optimistic token, cancellation has no reason field, and
   the next-day end is derived from local times.
-- `VenueStaffProfileRepository` now has focused bounded list/create/CAS-update/CAS-cancel schedule
-  methods. Schedule CRUD does not use the legacy Today upsert as a generic overwrite.
+- `VenueStaffProfileRepository` has focused bounded list/create/CAS-update/CAS-cancel/CAS-restore
+  schedule methods plus one transaction-bound batch path. Schedule CRUD does not use the legacy
+  Today upsert as a generic overwrite.
 - Today Shift mutations preserve existing planned date/time fields when the request omits them;
   schedule update/cancel preserves manual Today Shift visibility and operational flags.
 - Manual Today mutations re-check the actor membership/role, lock and classify the current profile
@@ -214,8 +219,10 @@ The runtime reuses the existing foundation rather than introducing a second sche
   `scheduled|active`, and a published visible profile. It does not require
   `manually_marked_active`; schedule create explicitly stores `is_guest_visible=false` and
   `manually_marked_active=false` rather than relying on database defaults.
-- `STAFF_SHIFT_CREATED`, `STAFF_SHIFT_UPDATED` and `STAFF_SHIFT_CANCELED` use transaction-bound
-  audit writes, so a failed/no-op/stale/denied mutation creates no schedule audit.
+- `STAFF_SHIFT_CREATED`, `STAFF_SHIFT_UPDATED`, `STAFF_SHIFT_CANCELED` and
+  `STAFF_SHIFT_RESTORED` use transaction-bound audit writes, so a failed/no-op/stale/denied
+  mutation creates no schedule audit. A batch writes one audit row per actual create/restore and
+  commits none if any assignment or audit fails.
 - `VenueSettingsRepository.DEFAULT_AUTO_TIMEZONE` is `Europe/Moscow`. The generic timezone resolver
   is the explicit fallback for missing/blank/invalid configuration. Schedule resolution does not
   trust browser/system timezone or a client UTC offset.
@@ -230,13 +237,19 @@ The runtime reuses the existing foundation rather than introducing a second sche
 - A shift may end on the next local calendar day.
 - A profile may have at most one row for the same `shift_date`; the existing unique constraint is
   the final create-race guard.
+- Several employees assigned to one common interval are represented by several ordinary
+  `staff_shifts` rows created in one atomic batch. There is no group-shift entity.
 - Schedule rows require non-null `starts_at` and `ends_at`.
 - `staffProfileId` is immutable after creation. Reassignment is cancel + create, keeping shift
   identity and audit simple.
 - There are no recurring templates, multiple intervals per profile/date or split shifts.
 - There is no hard delete. Cancellation preserves the row and audit history.
-- A canceled row continues to occupy its profile/start-date unique slot; Phase 1 does not recreate
-  or restore another shift for that same profile/date.
+- A canceled row continues to occupy its profile/start-date unique slot. This is the exact former
+  product gap: ordinary create hit the unique constraint and returned only a generic date conflict,
+  while the schedule API treated the canceled row as immutable, so the employee could not be
+  scheduled again on that date.
+- Restoration is now an explicit action over the existing `shiftId`; it changes the same row from
+  `canceled` to `scheduled`, optionally replaces its interval and never inserts a second row.
 
 ### Venue Timezone, DST And Overnight
 
@@ -283,6 +296,9 @@ The runtime reuses the existing foundation rather than introducing a second sche
 - A new shift's resolved start instant must be strictly later than server `now`; backdated creation
   is rejected.
 - `shift_date` may be no later than venue-local `today + 90 days`.
+- Restore keeps the existing `shift_date`. Its resolved replacement start, whether using the saved
+  interval or an explicitly supplied new interval, must also be strictly in the future and inside
+  the same 90-day horizon.
 - Ordinary update is allowed only while the existing shift is computed `SCHEDULED` and no manual
   Today overlay is engaged. A complete row that is invalid under the current venue-zone rules may
   instead receive one explicit repair update only when its old `shift_date` is after venue-local
@@ -315,7 +331,8 @@ remain lowercase to match current conventions.
   and DST/duration rules fails closed for Staff schedule/overlap reads; Owner/Manager receives a safe
   `STAFF_SHIFT_INVALID_INTERVAL` warning with local fields and exact `allowedActions` instead of a
   crash, origin guess or silent reinterpretation.
-- Create: Owner/Manager creates a future row.
+- Create: Owner/Manager creates a future row only when no profile/date row exists. It never silently
+  restores a canceled row.
 - Update: Owner/Manager may change only `shiftDate`, `startsAt` and `endsAt` while computed status is
   `SCHEDULED` and the shared row still has its schedule defaults: stored `scheduled`,
   `is_guest_visible=false`, `manually_marked_active=false`. The explicit invalid-interval repair
@@ -324,14 +341,17 @@ remain lowercase to match current conventions.
 - Active: time editing is forbidden. Owner/Manager may cancel only after an explicit confirmation
   that the active shift is being ended in the plan.
 - Completed: immutable; no update or cancel.
-- Canceled: Schedule APIs do not update, restore or reactivate it. On the venue-local current date,
-  the existing manual Today action remains an explicit operational override of the shared row and
-  may replace that state under its current contract; this exception is surfaced in the schedule
-  read model and current Today audit rather than treated as a silent schedule transition.
+- Canceled: a future row with schedule visibility defaults may be restored only through explicit
+  `Восстановить смену`. Restore requires exact `expectedUpdatedAt`, keeps the existing `shiftId` and
+  `shift_date`, changes `canceled -> scheduled`, and either keeps both saved times or replaces both
+  times explicitly. A past canceled row, an invalid/stale token, a Today-overlay row and every
+  non-canceled lifecycle fail closed. On the venue-local current date, the existing manual Today
+  action remains a separate explicit operational override under its current contract.
 - Invalid complete interval: a row dated after venue-local today may be repaired under the strict
   defaults above or, if not already canceled, canceled; a non-canceled row dated today may only be
-  canceled with the invalid-state warning; a past or already-canceled row is immutable. All paths
-  require CAS, confirmation where applicable and safe audit.
+  canceled with the invalid-state warning; a past row is immutable. An already-canceled invalid row
+  cannot prove that its saved start remains future and is therefore not restorable. All paths require
+  CAS, confirmation where applicable and safe audit.
 - No-op update returns the unchanged safe DTO and writes neither `updated_at` nor audit.
 
 ### Today Shift Compatibility
@@ -341,6 +361,10 @@ Manual Today Shift remains the sole source of Guest `Сегодня работа
 - Schedule create/update never promotes Guest/Today state: create writes `is_guest_visible=false`
   and `manually_marked_active=false` explicitly, while schedule update preserves the existing Today
   overlay fields.
+- Restore is available only for a canceled row that still has the schedule defaults
+  `is_guest_visible=false` and `manually_marked_active=false`. It therefore cannot republish a prior
+  Today overlay or erase manual Today state as a side effect. A restored venue-local-today row is
+  still only a planned schedule row; publication remains the separate existing Today action.
 - Reaching the scheduled start time does not publish the profile to Guest and does not change the
   Guest API/read model.
 - The existing Today Shift route, current Today controls and Guest routes keep their current product
@@ -367,7 +391,7 @@ Manual Today Shift remains the sole source of Guest `Сегодня работа
 
 | Actor | Phase 1 permission | Scope |
 | --- | --- | --- |
-| Venue Owner | Read full bounded schedule; create, update and cancel. | Own venue only. |
+| Venue Owner | Read full bounded schedule; create one/batch, restore, update and cancel. | Own venue only. |
 | Venue Manager | Same operational schedule management as Owner. | Own venue only. |
 | Staff | Read own shifts and safe colleagues whose non-canceled intervals overlap that own shift. | Own linked profiles in the selected venue only. |
 | Foreign venue user | Denied. | No cross-venue read or mutation. |
@@ -412,7 +436,9 @@ Schedule does not copy that behavior.
 | --- | --- | --- | --- |
 | `GET` | `/api/venue/{venueId}/staff/shifts?from=&to=` | Owner/Manager | Full bounded schedule plus batched effective venue hours for every requested date. |
 | `POST` | `/api/venue/{venueId}/staff/shifts` | Owner/Manager | Create one future shift. |
+| `POST` | `/api/venue/{venueId}/staff/shifts/batch` | Owner/Manager | Atomically apply 1..50 normalized `CREATE`/`RESTORE` assignments. |
 | `PUT` | `/api/venue/{venueId}/staff/shifts/{shiftId}` | Owner/Manager | Replace mutable date/time fields with optimistic token. |
+| `POST` | `/api/venue/{venueId}/staff/shifts/{shiftId}/restore` | Owner/Manager | Explicitly restore one future canceled shift with optimistic token and optional replacement interval. |
 | `POST` | `/api/venue/{venueId}/staff/shifts/{shiftId}/cancel` | Owner/Manager | Cancel with optimistic token. |
 | `GET` | `/api/venue/{venueId}/staff/shifts/me?from=&to=` | Staff | Own shifts plus safe overlapping colleagues. |
 
@@ -447,11 +473,48 @@ Cancel request:
 }
 ```
 
+Restore request. `startsAt` and `endsAt` are omitted together to reuse the saved interval or supplied
+together to restore with new times:
+
+```json
+{
+  "expectedUpdatedAt": "2026-08-01T10:15:30Z",
+  "startsAt": "20:00",
+  "endsAt": "04:00"
+}
+```
+
+Batch request. The client normalizes the common date/default interval into every assignment;
+`RESTORE` requires `expectedUpdatedAt`, while `CREATE` must not send it:
+
+```json
+{
+  "assignments": [
+    {
+      "staffProfileId": 42,
+      "shiftDate": "2026-08-10",
+      "startsAt": "18:00",
+      "endsAt": "02:00",
+      "operation": "CREATE"
+    },
+    {
+      "staffProfileId": 43,
+      "shiftDate": "2026-08-10",
+      "startsAt": "20:00",
+      "endsAt": "00:00",
+      "operation": "RESTORE",
+      "expectedUpdatedAt": "2026-08-01T10:15:30Z"
+    }
+  ]
+}
+```
+
 Owner/Manager shift DTO contains shift id, safe staff-profile id/display name/role/type, local
 date/time, `endsNextDay`, nullable `computedStatus`, server-derived nullable
 `cancelConfirmationState`, venue timezone and `updatedAt`. For the shared-row compatibility case it
 also returns admin-only `storedStatus`, `isGuestVisible` and `manuallyMarkedActive`, so a Today
-override is explicit. An unresolvable non-canceled complete row has no invented status and returns
+override is explicit. It returns server-derived `restoreAllowed` only for a future canceled row that
+passes the restore preconditions. An unresolvable non-canceled complete row has no invented status and returns
 safe `STAFF_SHIFT_INVALID_INTERVAL` warning/allowed-actions metadata with cancel confirmation state
 `INVALID_INTERVAL` when cancel is allowed. The DTO omits linked users, Telegram data and actor
 metadata. Staff uses a separate DTO: own shift identity/date/time/computed status/venue plus nested
@@ -466,8 +529,15 @@ must compare with a fresh computation and reject on mismatch. `venueId` comes on
 route and is checked against membership. Every shift-by-id repository query/update uses both
 `venue_id` and `id`.
 
-Expected domain failures include `STAFF_SHIFT_DATE_CONFLICT` (`409`) for duplicate profile/date on
-create or date-changing update, invalid/bounded range, past or over-90-day shift,
+Ordinary create classifies an authorized existing profile/date row without disclosing private
+linkage: canceled returns typed `STAFF_SHIFT_CANCELED_CONFLICT` (`409`) with safe
+`existingShiftId`, `staffProfileId`, lifecycle status, `expectedUpdatedAt`, date/time,
+`endsNextDay` and `canRestore`; scheduled returns `STAFF_SHIFT_DATE_CONFLICT` (`409`) with
+`Смена уже запланирована на эту дату.`; active/completed return the current immutable-policy denial.
+Foreign/unauthorized actors receive only the normal scoped denial and no existing-row details.
+
+Other expected domain failures include `STAFF_SHIFT_DATE_CONFLICT` (`409`) for a date-changing
+update, invalid/bounded range, past or over-90-day shift,
 `STAFF_SHIFT_TODAY_OVERRIDE` (`409`) for an engaged Today overlay, invalid timezone-resolved
 interval, immutable lifecycle, `STAFF_SHIFT_CONFIRMATION_STALE` (`409`) when time-derived state
 changed after cancel preview, and `STAFF_SHIFT_STALE` (`409`). Unknown/foreign ids fail safely
@@ -475,7 +545,8 @@ without disclosing another venue.
 
 ### Optimistic Concurrency And Atomicity
 
-- Update and cancel require the exact `updatedAt` returned by the admin DTO.
+- Update, cancel and restore require the exact `updatedAt` returned by the admin DTO. Every batch
+  `RESTORE` carries the token for its own row.
 - Inside one transaction, select the own-venue row, compare the token and normalized desired
   fields, validate lifecycle/horizon, apply `UPDATE ... WHERE venue_id=? AND id=? AND updated_at=?`,
   and append audit through the same connection.
@@ -490,6 +561,18 @@ without disclosing another venue.
 - A concurrent create or date-changing update that violates
   `staff_shifts_one_per_profile_date` maps to a safe duplicate conflict, not generic
   database-unavailable.
+- Batch size is bounded to 1..50 and duplicate `(staffProfileId, shiftDate)` slots inside one
+  request are rejected before writes. All profiles must resolve inside the selected venue;
+  display-only and Staff-linked profiles remain valid schedule targets. Owner/Manager-linked
+  protected profiles follow the existing schedule-management policy; batch does not widen Manager
+  profile editing, role or membership authority.
+- One database transaction validates the complete batch before mutation, then applies all creates
+  and restores and appends all per-row audits. One missing/foreign profile, invalid interval,
+  scheduled/active/completed conflict, stale restore or audit failure rolls back every row and every
+  audit; partial success is impossible.
+- Database locks use the deterministic order `staff profiles by id -> existing staff_shift rows by
+  profile/date -> create/restore writes -> audit rows -> commit`. The implementation sorts by
+  `staffProfileId`, then `shiftDate`; it does not use a process-local lock.
 - `updated_at` is sufficient for Phase 1. Persist an application-generated token strictly later
   than the old value at a precision round-tripped identically by PostgreSQL and H2, return that
   exact persisted value, and test two mutations with one expected token: exactly one commits. A
@@ -504,14 +587,20 @@ Schedule mutation and audit are one transaction. Required exact actions:
 
 - `STAFF_SHIFT_CREATED`;
 - `STAFF_SHIFT_UPDATED`;
-- `STAFF_SHIFT_CANCELED`.
+- `STAFF_SHIFT_CANCELED`;
+- `STAFF_SHIFT_RESTORED`.
 
-Safe payload contains `actorUserId`, `venueId`, `staffProfileId`, `shiftId`, old/new `shiftDate`,
+Actor identity is stored through the audit actor column. Safe payload contains `venueId`,
+`staffProfileId`, `shiftId`, old/new `shiftDate`,
 old/new `startsAt`, old/new `endsAt`, old/new computed lifecycle state and `venueTimezone`. Creation
 uses null old values; cancellation uses the unchanged interval plus old/new lifecycle. Phase 1 has
 no cancellation reason, so no reason field is accepted or audited. For an invalid-row repair or
 cancel, unavailable old computed lifecycle is null and safe `oldValidationState=INVALID_INTERVAL`
 explains why; it is never guessed.
+
+Restore records `CANCELED -> SCHEDULED` with the saved or explicitly replaced old/new interval.
+Batch writes one `STAFF_SHIFT_CREATED` or `STAFF_SHIFT_RESTORED` row for each actual assignment and
+no aggregate success audit. Audit failure rolls back the corresponding schedule writes.
 
 Never include Telegram ids/usernames, linked user id, invite state, private profile fields, payroll,
 raw request body or unrelated PII. Update form shows an old-to-new date/time summary before submit;
@@ -523,13 +612,23 @@ not authorization: backend revalidates all state. A no-op update produces no fal
 - Venue Mode section: `График смен` under `Работа смены`.
 - Use a compact Monday-Sunday week list, not drag-and-drop: week navigation, day groups, employee
   display name/role, interval, lifecycle status and overnight marker.
-- Actions: `Добавить смену`, `Редактировать`, `Отменить` according to lifecycle.
-- Create/edit form fields: employee, date, start, end. Employee is selectable on create and locked
-  on edit. Copy states that all times use the venue timezone and shows the resolved timezone id.
+- Actions: `Добавить смену`, `Редактировать`, `Отменить` and explicit `Восстановить` according to
+  lifecycle. A future canceled historical row keeps its safe old interval and `Отменена` badge.
+- `Добавить смену` is a group-assignment form: date, effective venue hours, common default interval,
+  multi-select over Staff/display-only profiles and one selected-employee row with editable start/end
+  for each profile. The user can `Применить общее время всем`, override one employee, remove an
+  employee, `Проверить смены` and then `Создать смены`.
+- Existing edit remains a one-shift form with the employee locked. Mass edit of saved scheduled
+  shifts is not part of this slice.
 - When end is not after start by wall clock, preview says it ends next day. Confirmation summary
   uses copy such as `22:00–06:00, следующий день`.
 - Loading, empty, retryable error and stale-edit states are distinct. Empty copy explains that the
   optional graph is unused and does not block current operations.
+- Preflight classifies every selected profile/date. A canceled row says
+  `Смена на эту дату была отменена.` and requires explicit `Восстановить` or removal from the batch;
+  it is never restored silently. Scheduled/active/completed conflicts identify the employee with a
+  safe reason, block confirmation and prevent a partial request. Confirmation shows exact
+  `Будет создано: N` / `Будет восстановлено: N` counts and submits one batch request.
 - An engaged manual Today overlay removes the time-edit action and explains that `Сегодня на смене`
   already controls this shared row; explicit cancel remains available with its impact summary.
 - `STAFF_SHIFT_INVALID_INTERVAL` renders a safe admin warning. A row dated after venue-local today
@@ -541,7 +640,8 @@ not authorization: backend revalidates all state. A no-op update produces no fal
   for the confirmation appropriate to the new state; it never upgrades a scheduled confirmation to
   an active cancellation silently.
 - Venue switch disposes/aborts the old request, clears rows/form/confirmation, and ignores late
-  responses. Reuse current AbortController + sequence guards.
+  responses. It also clears employee selection, per-profile overrides, batch confirmation and stale
+  conflict details. Reuse current AbortController + sequence guards.
 - The selected venue remains selected through section/week navigation and reload. Reuse the
   existing Venue Mode selector and persist its `venueId` in the sanctioned navigation context;
   restore it only after revalidating it against the fresh membership list, otherwise clear it and
@@ -577,34 +677,57 @@ Backend/repository/API:
 13. Past start is rejected.
 14. More than 90 days ahead is rejected; list periods are bounded.
 15. One shift per profile/start-date is enforced and create/update races return conflict.
-16. Completed and canceled shifts are immutable.
+16. Completed shifts are immutable; canceled shifts are historical rows and only a future
+    schedule-default row can use the explicit CAS restore action.
 17. Active shift cannot be edited and can be canceled only through the stronger explicit action;
     crossing `SCHEDULED -> ACTIVE` after preview forces refresh and reconfirmation.
 18. Stale update/cancel is rejected atomically; two mutations with one token commit exactly one,
     and a Today write invalidates an open Schedule editor.
-19. Create/update/cancel writes one safe transaction-bound audit; no-op writes none.
+19. Create/update/cancel/restore writes one safe transaction-bound audit; no-op writes none. Batch
+    audit count and action match its created/restored row count.
 20. Staff/colleague DTOs contain no private linkage, Telegram or actor metadata.
 21. Today Shift and Guest `Сегодня работают` remain manual/unchanged; planned times survive Today
     requests that omit them, schedule rows never auto-publish, an engaged Today overlay blocks
     Schedule date/time moves, and the documented manual-Today override/cancel interaction is
     explicit and routed through the existing Today audit path.
+22. Restore keeps the same `shiftId`, creates no second row, supports saved or new times, advances
+    the CAS token and records `STAFF_SHIFT_RESTORED` in the same transaction.
+23. Restore rejects stale, scheduled, active, completed, past canceled, foreign and unauthorized
+    requests; an audit failure rolls it back and Guest Today remains unchanged.
+24. Authorized ordinary create returns lifecycle-specific typed conflict details for an occupied
+    safe slot; foreign actors receive no row details.
+25. Batch creates several profiles with common or per-profile intervals and may mix `CREATE` with
+    `RESTORE`.
+26. Duplicate slots, missing/foreign profiles, invalid intervals, oversized requests, scheduled
+    conflicts and stale restores reject the whole batch with zero partial rows and audits.
+27. Concurrent create/restore and competing CAS mutations have one deterministic winner; tests use
+    deterministic barriers/concurrency fixtures, not arbitrary sleeps.
+28. The existing single-profile create route, individual edit/cancel/CAS, Today planned/manual
+    compatibility and Staff self-view stay green.
 
 Mini App/e2e:
 
-1. Owner week list/editor.
-2. Manager week list/editor.
+1. Owner week list/editor with multi-select assignment.
+2. Manager week list/editor with the same batch/restore controls.
 3. Staff read-only `Мои смены`.
 4. Same-shift colleagues only.
 5. Empty/loading/error states.
 6. Overnight rendering.
 7. Week navigation and bounded queries.
-8. Cancel confirmation, including active warning.
+8. Cancel confirmation, including active warning; future canceled rows remain visible with
+   `Отменена`, safe old interval and explicit restore.
 9. Stale error and refresh.
 10. Venue switch clears stale data and late responses; the selected venue survives navigation and
     reload only after fresh access-list validation.
 11. Staff direct mutation is denied even if called outside UI.
 12. Existing Today Shift and Staff Profile flows remain green.
-13. Guest `Сегодня работают` remains unchanged and receives no planned shift automatically.
+13. Guest `Сегодня работают` remains unchanged and receives no planned/restored shift automatically.
+14. Common effective hours, apply-to-all, per-employee override and removal are deterministic; closed
+    and not-configured dates preserve the existing manual-entry behavior.
+15. Preflight shows canceled restore choice, blocks scheduled/active/completed conflicts, reports
+    create/restore counts and sends exactly one normalized batch request.
+16. Atomic error leaves every row unchanged; success refreshes the week.
+17. Existing individual edit/cancel and Staff no-batch/no-restore controls remain green.
 
 Telegram:
 
@@ -636,7 +759,8 @@ Mini App:
 - `miniapp/e2e/guest-smoke.spec.ts`.
 
 The implementation reuses `staff_profiles`, `staff_shifts` and
-`VenueStaffProfileRepository`, with explicit bounded list/create/CAS-update/CAS-cancel methods.
+`VenueStaffProfileRepository`, with explicit bounded list/create/CAS-update/CAS-cancel/CAS-restore
+and atomic batch methods.
 `upsertTodayShift` remains the focused Today wrapper with preserve-on-omission compatibility, while
 schedule lifecycle/horizon logic uses an injected `Clock` for deterministic tests.
 
@@ -655,9 +779,9 @@ CI=1 TZ=UTC MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke
 git diff --check
 ```
 
-Recorded local evidence: focused `*VenueStaffRoutesTest*`, backend compilation/test compilation,
-Kotlin lint, Mini App build, `git diff --check` and the full deterministic Mini App smoke suite
-(`109/109`) passed.
+The commands above are the required local gate for Restore + Bulk Assignment. Record exact command
+results from the current worktree in the implementation handoff; do not reuse the earlier Slice A
+browser count as evidence for this slice.
 
 Remaining release gates:
 
@@ -667,6 +791,8 @@ Remaining release gates:
 - overnight/timezone/DST smoke;
 - two-account Staff visibility smoke;
 - venue-switch stale-response smoke;
+- explicit old-time/new-time restore plus mixed atomic create/restore batch smoke;
+- canceled/scheduled conflict presentation, create/restore confirmation counts and one-request proof;
 - Today Shift/Guest regression;
 - cleanup of disposable test shifts/profiles.
 
@@ -802,10 +928,10 @@ Analytics events are not the source of truth. Domain tables and audit logs remai
   `MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`;
   scope is `MANAGER PARITY + SHIFT TIME DEFAULTS`.
 - Staff schedule:
-  `STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / PRODUCT AND RBAC POLISH REQUIRED`;
+  `STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / RESTORE + BULK ASSIGNMENT IMPLEMENTED / LOCAL VALIDATION PASSED`;
   the schedule model itself remains `NO_MIGRATION_EXPECTED`.
 - Optional Team/Schedule module settings and a Guest `MANUAL`/`SCHEDULE` source switch are Slice B
-  `FUTURE`; Slice A adds neither.
+  `FUTURE`; Restore + Bulk Assignment adds neither.
 - Staff shift Telegram notifications/sign-up/swaps: `FUTURE`.
 - Separate staff communication chat/forum topics: `OPEN DECISION / FUTURE`.
 - Staff tips: `SPEC DRAFT / FUTURE`.
@@ -816,9 +942,10 @@ Analytics events are not the source of truth. Domain tables and audit logs remai
 
 ## Next Release Step
 
-Wait for green GitHub Actions, deploy new binaries with PostgreSQL V120 before enabling revoke UI,
-drain old runtime instances, then run the listed Owner/Manager/Staff, invite race/revoke,
-effective-hours/timezone/overnight/privacy, venue-switch and Today/Guest regression smoke. Do not
-claim production readiness until those gates pass. Keep optional module/source settings, staff
-tips, photo upload, staff
-communication/chat/sign-up and every payment path out of scope.
+Wait for green GitHub Actions, deploy the runtime change and run the listed Owner/Manager/Staff,
+restore/batch atomicity, effective-hours/timezone/overnight/privacy, venue-switch and Today/Guest
+regression smoke. Do not claim production readiness until those gates pass. The existing
+PostgreSQL V120 invite-revoke rollout/drain requirement belongs to Staff Operations Slice A. The
+Restore + Bulk Assignment slice adds no migration and does not change the unique constraint. Keep Slice B module/
+source settings, tips, photo upload, staff communication/chat/sign-up and every payment path out of
+scope.

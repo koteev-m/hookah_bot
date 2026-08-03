@@ -24,6 +24,12 @@ enum class StaffScheduleConfirmationState {
 enum class StaffScheduleAllowedAction {
     UPDATE,
     CANCEL,
+    RESTORE,
+}
+
+enum class StaffScheduleBatchOperation {
+    CREATE,
+    RESTORE,
 }
 
 enum class StaffScheduleIntervalState {
@@ -46,6 +52,15 @@ data class StaffScheduleIntervalResolution(
 data class VenueStaffScheduledShift(
     val profile: VenueStaffProfile,
     val shift: VenueStaffShift,
+)
+
+data class StaffScheduleBatchAssignment(
+    val staffProfileId: Long,
+    val shiftDate: LocalDate,
+    val startsAt: LocalTime,
+    val endsAt: LocalTime,
+    val operation: StaffScheduleBatchOperation,
+    val expectedUpdatedAt: Instant? = null,
 )
 
 fun resolveStaffScheduleInterval(
@@ -122,6 +137,23 @@ fun VenueStaffShift.hasScheduleDefaults(): Boolean =
         !isGuestVisible &&
         !manuallyMarkedActive
 
+fun VenueStaffShift.hasScheduleVisibilityDefaults(): Boolean = !isGuestVisible && !manuallyMarkedActive
+
+fun VenueStaffShift.isRestorableCanceledShift(
+    now: Instant,
+    venueToday: LocalDate,
+    zoneId: ZoneId,
+): Boolean {
+    if (!status.equals(STAFF_SHIFT_CANCELED_STATUS, ignoreCase = true) ||
+        !hasScheduleVisibilityDefaults() ||
+        shiftDate.isAfter(venueToday.plusDays(STAFF_SCHEDULE_FUTURE_DAYS))
+    ) {
+        return false
+    }
+    val interval = resolveStaffScheduleInterval(shiftDate, startsAt, endsAt, zoneId).interval ?: return false
+    return interval.startsAt.isAfter(now)
+}
+
 fun nextStaffShiftUpdatedAt(
     now: Instant,
     previous: Instant,
@@ -144,3 +176,4 @@ const val STAFF_SHIFT_SCHEDULED_STATUS = "scheduled"
 const val STAFF_SHIFT_CANCELED_STATUS = "canceled"
 
 private val MAX_STAFF_SHIFT_DURATION: Duration = Duration.ofHours(24)
+private const val STAFF_SCHEDULE_FUTURE_DAYS = 90L

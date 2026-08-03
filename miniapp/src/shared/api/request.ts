@@ -56,6 +56,7 @@ export async function requestApi<T>(
         status: response.status,
         code: envelope?.error?.code,
         message: envelope?.error?.message,
+        details: envelope?.error?.details,
         requestId
       }
       if (isAuthenticatedApi(path) && response.status === 401) {
@@ -134,6 +135,7 @@ export async function requestBinary(
         status: response.status,
         code: envelope?.error?.code,
         message: envelope?.error?.message,
+        details: envelope?.error?.details,
         requestId
       }
       if (isAuthenticatedApi(path) && response.status === 401) {
