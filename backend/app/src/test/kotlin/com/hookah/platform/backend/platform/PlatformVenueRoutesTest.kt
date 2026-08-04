@@ -671,7 +671,16 @@ class PlatformVenueRoutesTest {
                     acceptResponse.bodyAsText(),
                 )
             assertEquals(venueId, acceptPayload.venueId)
+            assertFalse(acceptPayload.alreadyMember)
+            assertEquals(inviteeId, acceptPayload.member.userId)
+            assertEquals("Test User", acceptPayload.member.displayName)
+            assertEquals("user$inviteeId", acceptPayload.member.username)
             assertEquals("OWNER", acceptPayload.member.role)
+            assertTrue(acceptPayload.member.active)
+            assertEquals(null, acceptPayload.member.linkedStaffProfileId)
+            assertEquals(null, acceptPayload.member.linkedStaffProfileDisplayName)
+            assertEquals("NOT_LINKED", acceptPayload.member.profileLinkState)
+            assertEquals("OWNER", loadVenueMemberRole(jdbcUrl, venueId, inviteeId))
             assertEquals(inviteeId, loadPrimaryOwnerForVenueAccount(jdbcUrl, venueId))
             val acceptAuditPayloads = loadAuditPayloads(jdbcUrl, "VENUE_OWNER_INVITE_ACCEPT")
             assertEquals(1, acceptAuditPayloads.size)
@@ -1019,9 +1028,13 @@ class PlatformVenueRoutesTest {
     @Serializable
     private data class VenueStaffMemberDto(
         val userId: Long,
+        val displayName: String,
+        val username: String? = null,
         val role: String,
-        val createdAt: String,
-        val invitedByUserId: Long? = null,
+        val active: Boolean,
+        val linkedStaffProfileId: Long? = null,
+        val linkedStaffProfileDisplayName: String? = null,
+        val profileLinkState: String,
     )
 
     @Serializable
