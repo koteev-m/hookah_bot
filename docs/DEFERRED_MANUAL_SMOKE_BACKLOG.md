@@ -68,9 +68,9 @@
   the venue that had no active linked staff card. Automated create-from-member/concurrency evidence
   and the broader identity-linking manual smoke are complete, but they are not a substitute for this
   exact environment-dependent UI path.
-- **Blocking impact:** none for the completed Identity Linking MVP and none for starting the
-  independent Optional Team/Schedule Module Slice B. Run before a broader staff-directory pilot when
-  a disposable free Staff member is available. Do not create a second backlog entry for this case.
+- **Blocking impact:** none for the completed Identity Linking MVP and no downgrade of the completed
+  Optional Team/Schedule Module Slice B. Run before a broader staff-directory pilot when a
+  disposable free Staff member is available. Do not create a second backlog entry for this case.
 
 ### Prerequisites
 

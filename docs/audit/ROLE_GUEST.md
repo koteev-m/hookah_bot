@@ -10,9 +10,12 @@ Guest - пользователь без venue-ролей. Основной пр�
 
 Canonical communication split: see `docs/COMMUNICATION_MODEL.md`. Guest-facing labels are `Чаты` for venue conversations and `Помощь` for support tickets/problems. Guest booking lifecycle, hold/deadline, reminders and booking chat behavior are governed by `docs/BOOKING_LIFECYCLE.md`. Telegram QR entrypoints, fallback order and bot staff-call behavior are governed by `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. Guest permissions, table/session/tab scope and trust boundaries are governed by `docs/SECURITY_RBAC_MATRIX.md`. Structured menu/options/stop-list behavior is governed by `docs/MENU_OPTIONS_STOPLIST.md`. Public staff profiles, today's visible staff and future staff-tip boundaries are governed by `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. Order/session/tab behavior is governed by `docs/ORDER_SESSION_TAB_CORE.md`. Analytics/event rules are governed by `docs/ANALYTICS_EVENTS.md`. Testing/QA smoke strategy is governed by `docs/TESTING_QA_SMOKE_STRATEGY.md`. Release/deploy operations follow `docs/DEPLOYMENT_RUNBOOK.md`. Guest growth/retention scope is tracked in `docs/GROWTH_RETENTION.md`; History, Post-Visit Feedback and venue-only Favorites are staging-smoked, while favorite menu items/options, repeat, promotions, notification opt-in and loyalty require dedicated implementation evidence.
 
-Current Staff Today correction: Staff Schedule Phase 1 is completed, but Guest source remains
-`MANUAL`. Only an explicitly saved manual Today state for a published guest-visible profile can
-populate `Сегодня работают`; a planned, restored or future Schedule row does not publish staff.
+Current Staff Today correction: Staff Schedule Phase 1 and `STAFF OPERATIONS SLICE B / OPTIONAL
+TEAM AND SCHEDULE MODULE / GUEST MANUAL OR SCHEDULE SOURCE` are `DONE / MVP /
+STAGING-SMOKE-PASSED`. In `MANUAL`, only the explicitly saved manual Today state for a published
+guest-visible profile can populate `Сегодня работают`; planned Schedule rows do not publish by
+themselves. In `SCHEDULE`, only a currently ACTIVE public presence is returned, with no MANUAL
+fallback. Module-off or Guest-visibility-off returns an empty projection without revealing why.
 Guest never receives future/full schedule, shift id, linked user, Telegram identity, membership
 role, invite/link state, audit or CAS fields.
 
@@ -53,7 +56,7 @@ Pre-QR Guest Mini App:
   no-match states and reset. City options come from the complete initial unfiltered guarded
   catalog and favorites remain current-user scoped inside filtered results.
 - карточка заведения показывает safe guest-visible данные;
-- venue detail shows `Сегодня работают` only from the current `MANUAL` source and only with
+- venue detail shows `Сегодня работают` from the saved `MANUAL` or `SCHEDULE` source and only with
   published guest-visible public fields, below main venue information/actions; catalog may later
   show a compact `Сегодня: Иван, Алина` line;
 - `ℹ️ Информация` отдаёт только visible + filled owner info sections;
@@ -167,10 +170,11 @@ Account/bookings:
 - Analytics/events are `SPEC UPDATED / PARTIAL` in `docs/ANALYTICS_EVENTS.md`; Guest-facing analytics is limited to future profile/history summaries, while client events remain low-trust UX diagnostics.
 - Menu/options/stop-list model is `SPEC UPDATED` in `docs/MENU_OPTIONS_STOPLIST.md`: selected-option parity is smoke-closed, but broader modifier/media/top-list/shift-check coverage remains partial/future.
 - Real acquiring provider, Telegram Stars and automatic recurring payments remain future work; guest bill request is still an on-site operational request, not online payment.
-- Staff profiles/manual Today and Staff Schedule Phase 1 are `DONE / MVP /
-  STAGING-SMOKE-PASSED`. Guest still sees only the exact current `MANUAL` public projection; hidden
-  profiles, internal identity, future/full schedule and private linkage must stay denied in
-  regression.
+- Staff profiles/manual Today, Staff Schedule Phase 1 and Slice B are `DONE / MVP /
+  STAGING-SMOKE-PASSED`. Module-off or Guest-visibility-off returns an empty projection; otherwise
+  Guest sees exactly the saved `MANUAL` projection or current active-only `SCHEDULE` projection
+  without fallback. Hidden profiles, internal identity, future/full schedule and private linkage
+  must stay denied in regression.
 - Staff tips are future: Phase 2 may use external staff tip link + intent, but no money touches the platform in MVP and intent is not proof of payment.
 - Booking changed-time/accept status зависит от backend support и должен проверяться по статусам.
 

@@ -13,9 +13,14 @@ Guest communication follows `docs/COMMUNICATION_MODEL.md`: Manager can handle `B
 Current Staff Operations correction: Slice A, Identity Linking, Staff Schedule Phase 1 and Canceled
 Shift Restore + Bulk Assignment are `DONE / MVP / STAGING-SMOKE-PASSED`. Manager creates/lists/
 revokes only Staff invites; manages and publishes/hides display-only or active-Staff-linked cards;
-marks their manual Today state; and manages own-venue planned shifts, restore and bulk assignment.
+marks their manual Today state only while source is `MANUAL`; and manages own-venue planned shifts,
+restore and bulk assignment. In `SCHEDULE`, manual control is unavailable and direct mutation fails
+safely.
 Protected Owner/Manager cards and every duplicate state are read-only with redacted linkage and
-`canManage=false`; duplicate repair is Owner-only.
+`canManage=false`; duplicate repair is Owner-only. `STAFF OPERATIONS SLICE B / OPTIONAL TEAM AND
+SCHEDULE MODULE / GUEST MANUAL OR SCHEDULE SOURCE / DONE / MVP / STAGING-SMOKE-PASSED`: Manager
+has only narrow `STAFF_MODULE_SETTINGS_MANAGE`, uses full-object CAS and does not gain broad
+`VENUE_SETTINGS`. Module-off retains data and core operational access.
 
 Role mapping:
 - DB `MANAGER` -> `VenueRole.MANAGER`;
@@ -69,6 +74,8 @@ Manager Mini App areas:
 - staff list/invite only where current conservative route policy allows; invite result uses a valid Telegram deep link, copy/share actions and a secondary fallback command.
 - `График смен` with create/update/cancel, explicit same-row restore and atomic bulk
   assignment for the own venue;
+- dedicated `Команда и график смен` settings through narrow `STAFF_MODULE_SETTINGS_MANAGE`, with
+  full-object CAS and no broad venue-settings authority;
 - safe Staff directory/profile controls within the protected-link policy above.
 
 ## Allowed actions
@@ -96,9 +103,11 @@ Manager Mini App areas:
 - Link/test staff chat if current role permission allows.
 - View staff list and create conservative STAFF invites if current route policy allows.
 - Create/list/revoke Staff invites; manage and publish/hide display-only/active-Staff-linked cards;
-  mark their manual Today state.
+  mark their manual Today state only in source `MANUAL`.
 - Manage own-venue Staff Schedule: bounded create/update/cancel, explicit canceled restore and
   atomic bulk assignment. Effective venue hours are defaults only.
+- Manage only the dedicated Staff Module master/Guest visibility/MANUAL-or-SCHEDULE settings;
+  module-off retains profiles/shifts and core staff/operational access.
 - Create/manage simple `VENUE_PROMOTION` only if the growth MVP explicitly allows Manager access; terms, period and visibility/status are mandatory, and promo notifications require guest opt-in.
 
 ## Denied actions
@@ -107,6 +116,7 @@ Manager Mini App areas:
 - Subscription commercial terms, Platform Owner billing cockpit, manual mark-paid and courtesy/free-days controls.
 - Billing/payment controls in Venue Owner subscription screen.
 - Owner-only venue settings if backend requires owner permission.
+- Broad `VENUE_SETTINGS`; the dedicated Staff Module permission does not grant other Owner settings.
 - Edit the Owner-only public review URL setting.
 - Promote users to owner/platform owner or bypass last-owner protection.
 - Rotate all table tokens or other owner-only QR actions if backend permission does not allow it.
@@ -150,7 +160,9 @@ Manager Mini App areas:
 - Staff profiles, manual Today, identity linking and Staff Schedule are `DONE / MVP /
   STAGING-SMOKE-PASSED`: Manager may publish/hide only display-only/active-Staff-linked cards,
   manage their Today state and operate the bounded schedule. Duplicate repair is Owner-only. Photo
-  upload and staff tips remain future.
+  upload and staff tips remain future. Slice B is also `DONE / MVP / STAGING-SMOKE-PASSED` with
+  narrow Manager settings/CAS, module-off retained data/core access, MANUAL persisted control and
+  active-only SCHEDULE/no-fallback behavior in regression.
 
 ## Smoke-critical checks
 
@@ -175,9 +187,12 @@ Manager Mini App areas:
     stale rejection, safe audit and venue-switch isolation stay in regression. Price/media/
     structure/schema edits are allowed only if broad Manager `MENU_MANAGE` is intentionally
     retained and tested.
-17. Manager can publish/hide and mark manual Today only for display-only/active-Staff-linked cards,
-    manages own-venue schedule/restore/bulk, sees protected/duplicate cards read-only and cannot
-    repair duplicates or approve tip methods.
+17. Manager can publish/hide and, in source `MANUAL`, mark manual Today only for
+    display-only/active-Staff-linked cards,
+    manages own-venue schedule/restore/bulk and the dedicated Staff Module settings with CAS, sees
+    protected/duplicate cards read-only, has no broad `VENUE_SETTINGS`, and cannot repair duplicates
+    or approve tip methods. Module-off retains data/core access; Guest gets exact MANUAL or current
+    active SCHEDULE public projection without fallback.
 18. Manager sees only own-venue feedback, can open exact `VENUE_CHAT` follow-up only for rating `1..3`, and sees the feedback context without an auto-sent personal message.
 19. Manager cannot edit the Owner-only public review URL; feedback follow-up creates no support ticket or staff-chat notification.
 

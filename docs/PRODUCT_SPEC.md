@@ -43,15 +43,16 @@ Staff profiles, Today Shift, Staff Schedule and staff tips source of truth:
   STAGING-SMOKE-PASSED`. Green Actions, staging deploy and manual smoke are complete for those
   previously closed slices.
 - `STAFF OPERATIONS SLICE B / OPTIONAL TEAM AND SCHEDULE MODULE / GUEST MANUAL OR SCHEDULE SOURCE /
-  MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`. OWNER and MANAGER
+  DONE / MVP / STAGING-SMOKE-PASSED`. OWNER and MANAGER
   manage the own-venue module through the narrow `STAFF_MODULE_SETTINGS_MANAGE` permission; this
   does not grant MANAGER broad `VENUE_SETTINGS`. Master-off retains memberships, invites, roles,
   profiles, shifts, nested settings and audit history, and leaves core venue operations available.
   Guest/Preview returns no team when master or Guest visibility is off; otherwise `MANUAL` keeps
   explicit Today publication and `SCHEDULE` selects only current active public presence with no
-  MANUAL fallback or future/private schedule fields. This is a local status only: GitHub Actions,
-  staging deploy and staging smoke for Slice B are not claimed yet. Detailed disable, RBAC/privacy,
-  migration, test and rollout contracts remain canonical in the staff document.
+  MANUAL fallback or future/private schedule fields. Green GitHub Actions, staging deploy,
+  PostgreSQL V121 application and the bounded manual staging smoke are complete. Detailed disable,
+  RBAC/privacy, migration, test, rollout and semantic forward-fix rollback contracts remain
+  canonical in the staff document.
   Staff tips and any payment provider/direct payout path are future and require separate
   legal/product decision.
 

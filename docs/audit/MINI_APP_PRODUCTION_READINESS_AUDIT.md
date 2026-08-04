@@ -83,11 +83,13 @@
 > **STAFF OPERATIONS SLICE A / MANAGER PARITY + SHIFT TIME DEFAULTS**, **STAFF IDENTITY LINKING UX
 > + DUPLICATE PREVENTION**, **STAFF SCHEDULE PHASE 1** and **STAFF SCHEDULE / CANCELED SHIFT RESTORE
 > + BULK ASSIGNMENT** are all **DONE / MVP / STAGING-SMOKE-PASSED** after green Actions, staging
-> deploy and manual smoke. Manager duplicate state is read-only, duplicate repair is Owner-only,
-> and Guest remains on exact manual Today publication with no future/full schedule disclosure. The
+> deploy and manual smoke. **STAFF OPERATIONS SLICE B / OPTIONAL TEAM AND SCHEDULE MODULE / GUEST
+> MANUAL OR SCHEDULE SOURCE / DONE / MVP / STAGING-SMOKE-PASSED** is also closed: narrow settings
+> RBAC, module-off retention/core access, persisted MANUAL visibility, active-only SCHEDULE without
+> fallback and Guest/Preview privacy passed staging smoke after PostgreSQL V121 rollout. Manager
+> duplicate state remains read-only and duplicate repair remains Owner-only. The
 > separate free-member create-from-member manual path is non-blocking and tracked once in
-> `STAFF-IDENTITY-MANUAL-001`. Slice B optional module/source settings remain future and do not
-> retroactively change these completed statuses.
+> `STAFF-IDENTITY-MANUAL-001`; it does not downgrade any completed Staff status.
 
 Режим: read-only аудит. Код, миграции, тесты, backend/frontend business logic не менялись.
 

@@ -15,6 +15,10 @@ Schedule Phase 1 and Canceled Shift Restore + Bulk Assignment are `DONE / MVP /
 STAGING-SMOKE-PASSED`. Owner manages the bounded schedule and is the only role that repairs a
 duplicate link: open both real cards in the common list, safely unlink only the wrong card and keep
 the correct link plus all schedule/history rows. No automatic merge/delete/relink is allowed.
+`STAFF OPERATIONS SLICE B / OPTIONAL TEAM AND SCHEDULE MODULE / GUEST MANUAL OR SCHEDULE SOURCE /
+DONE / MVP / STAGING-SMOKE-PASSED`: Owner manages the dedicated full-object settings with CAS,
+can re-enable retained profiles/shifts, and sees an explanation rather than deleted data while the
+module is off. This does not alter the earlier Staff closures.
 
 Runtime Venue Owner access is granted by an active `venue_members` row with role `OWNER`. Legacy/primary owner linkages such as `venues.owner_account_id` and `venue_owner_accounts.primary_owner_user_id` do not by themselves preserve Venue Mini App or Telegram Bot venue-owner access after the OWNER membership is revoked.
 
@@ -68,6 +72,8 @@ Venue Owner открывает Venue Mini App через inline `web_app` entry,
 - public staff profile publish/hide and today-shift management;
 - `График смен` with create/update/cancel, same-row canceled restore and atomic bulk
   assignment;
+- dedicated `Команда и график смен` settings with master toggle, Guest visibility,
+  `MANUAL`/`SCHEDULE` source and full-object CAS;
 - staff chat link/status;
 - subscription/payment state screen with adjusted paid-through and next-payment dates;
 - future/partial `Акции и удержание` only when backend-backed; Staff must not manage campaigns;
@@ -96,8 +102,13 @@ Mini App остаётся backend-RBAC enforced: кнопки в UI не явл�
 - Управлять tables/QR, включая rotation/export where owner permission allows.
 - Управлять staff list/invites/roles with last-owner protection.
 - Управлять public staff profiles: create/edit, link to venue member or keep display-only, publish/hide and control guest visibility.
-- Mark staff profiles as `Сегодня на смене`, with Manager participation under current conservative policy.
+- In source `MANUAL`, mark staff profiles as `Сегодня на смене`, with Manager participation under
+  current conservative policy; in `SCHEDULE`, the manual control is unavailable and direct
+  mutation fails safely.
 - Manage bounded Staff Schedule, including explicit canceled restore and atomic bulk assignment.
+- Manage the dedicated Staff Module settings; module-off retains profiles/shifts/nested settings
+  and core membership/invite/role/operational access, while re-enable restores the saved module
+  data without duplicates.
 - Repair duplicate profile linkage through Owner-only safe unlink of the wrong concrete card; never
   merge/delete/relink automatically.
 - Approve future external staff tip methods only after the Phase 2 spec/runtime exists.
@@ -167,7 +178,9 @@ Mini App остаётся backend-RBAC enforced: кнопки в UI не явл�
 - Growth/retention is `SPEC UPDATED / PARTIAL-FUTURE` overall. Post-Visit Feedback, manual `5/5` public review CTA and low-rating exact `VENUE_CHAT` follow-up are DONE / MVP / staging-smoke-passed. Favorites, repeat and simple promotions remain future; Staff remains excluded from feedback and growth campaign management.
 - Staff profiles/Today, identity linking and Staff Schedule are `DONE / MVP /
   STAGING-SMOKE-PASSED`: Owner manages visibility, schedule and Owner-only duplicate repair. Photo
-  upload and staff tips remain future.
+  upload and staff tips remain future. Slice B is also `DONE / MVP / STAGING-SMOKE-PASSED` with
+  Owner settings/CAS, module-off retention, MANUAL persisted control and active-only SCHEDULE
+  projection in regression.
 - Staff tips are `SPEC DRAFT / FUTURE`: Phase 2 external staff tip link + intent only, no platform-collected money; provider/direct payout needs legal/product decision.
 
 ## Smoke-critical checks
@@ -197,8 +210,10 @@ Mini App остаётся backend-RBAC enforced: кнопки в UI не явл�
     regression; verify price/name/options snapshots in old orders.
 19. Staff Operations smoke: Owner creates display-only/linked profiles, publishes/hides and marks
     manual Today; creates/edits/cancels/restores/bulk-assigns shifts; sees both duplicate cards and
-    safely unlinks only the wrong one. Guest receives only public current-manual fields, never
-    linkage identity or future/full schedule.
+    safely unlinks only the wrong one. Owner saves the dedicated module settings with CAS; module
+    off retains data/core access and re-enable restores it. Guest receives only the exact MANUAL or
+    current active SCHEDULE public projection, never fallback, linkage identity or future/full
+    schedule.
 20. Owner opens `Ссылка для отзывов`, sees the Yandex Maps/Yandex Business helper plus ethical hint, and saves/clears the same URL used by Bot and Mini App.
 21. Owner sees only own-venue feedback and `Связаться с гостем` only for ratings `1..3`.
 22. Follow-up opens exact `VENUE_CHAT` with `Отзыв после визита` context; active chat is reused and a closed/resolved old chat leads to a new active chat.

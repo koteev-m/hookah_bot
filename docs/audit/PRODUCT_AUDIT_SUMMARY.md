@@ -8,9 +8,11 @@
 > identity are missing/future are superseded. Staff Profiles/Today, Staff Operations Slice A,
 > Identity Linking, Staff Schedule Phase 1 and Canceled Shift Restore + Bulk Assignment are **DONE /
 > MVP / STAGING-SMOKE-PASSED**. Manager duplicate state is read-only and duplicate repair is
-> Owner-only; Guest Today source remains `MANUAL` and exposes no future/full schedule or internal
-> identity. Optional Team/Schedule settings plus Guest `MANUAL`/`SCHEDULE` selection are the one
-> separate next Slice B, not part of these completed blocks.
+> Owner-only. **STAFF OPERATIONS SLICE B / OPTIONAL TEAM AND SCHEDULE MODULE / GUEST MANUAL OR
+> SCHEDULE SOURCE / DONE / MVP / STAGING-SMOKE-PASSED** is also closed after green Actions,
+> PostgreSQL V121 staging rollout and bounded smoke. `MANUAL` preserves saved Today publication;
+> `SCHEDULE` exposes only active public presence, with no fallback or future/full/internal schedule
+> data. The completed earlier Staff statuses remain unchanged.
 >
 > Current correction as of 2026-06-03: many items below were later fixed or changed by product decision, including active order table-session scoping, Mini App CORS mutation methods, Mini App staff call payload/lifecycle, STAFF stop-list policy, Venue Mini App full bill/bill controls/close, bookings MVP, pre-QR guest menu behavior, platform owner access, commercial terms sync and venue lifecycle. Check `docs/UPDATED_PRODUCT_AI_ROADMAP.md`, `docs/audit/MINI_APP_LAUNCH_SMOKE_CHECKLIST.md` and current code before using any item here as implementation scope.
 >

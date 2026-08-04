@@ -44,11 +44,12 @@
   SLICE A / MANAGER PARITY + SHIFT TIME DEFAULTS**, **STAFF IDENTITY LINKING UX + DUPLICATE
   PREVENTION**, **STAFF SCHEDULE PHASE 1** and **STAFF SCHEDULE / CANCELED SHIFT RESTORE + BULK
   ASSIGNMENT** are all **DONE / MVP / STAGING-SMOKE-PASSED** after green Actions, staging deploy
-  and manual smoke. Owner/Manager Schedule CRUD, Staff overlap-only own view, timezone/overnight,
-  stale CAS, explicit same-row restore, mixed atomic bulk, Manager Staff-only invites/profile
-  boundaries, safe human identities, Owner-only duplicate repair, venue/account isolation and
-  cleanup passed. Guest source remains `MANUAL`: Schedule does not publish staff or disclose future/full
-  schedule. The separate free-Staff-account create-from-member UI scenario was not evidenced and is
+  and manual smoke. **STAFF OPERATIONS SLICE B / OPTIONAL TEAM AND SCHEDULE MODULE / GUEST MANUAL
+  OR SCHEDULE SOURCE / DONE / MVP / STAGING-SMOKE-PASSED** is also closed after green Actions,
+  staging PostgreSQL V121 rollout and bounded smoke. Owner/Manager narrow settings, Staff denial,
+  stale CAS, module-off retained data/core access, re-enable, persisted MANUAL visibility,
+  active-only SCHEDULE without fallback, Guest/Preview privacy, venue/account isolation and cleanup
+  passed. The separate free-Staff-account create-from-member UI scenario was not evidenced and is
   tracked once as non-blocking
   [`STAFF-IDENTITY-MANUAL-001`](../DEFERRED_MANUAL_SMOKE_BACKLOG.md#staff-identity-manual-001).
 - Mini App mutation / operational verification closure pack is CLOSED / code-test verification passed: actual Mini App PUT/PATCH/DELETE CORS preflights allow `Content-Type` and `Authorization`, Guest Mini App staff-call payload/backend row/staff-chat event include `tableSessionId`, linked staff-chat staff-call notification enqueue is covered, and fallback quick order emits `Telegram.WebApp.sendData` with `{ "cmd": "start_quick_order", "table_token": "<tableToken>" }`. No staging smoke is claimed by this item.
@@ -91,7 +92,7 @@
 
 ## Current Staging Smoke Status
 
-Status: `PASSED FOR CURRENT RELEASE THROUGH STAFF OPERATIONS SLICE A, STAFF IDENTITY LINKING AND STAFF SCHEDULE RESTORE/BULK`; baseline smoke passed on 2026-06-04, with later staged parity/deployment smokes recorded through M9b.3, guest table-context exit, guest bill/bill-request parity, staff-chat activity card, hookah placeholder polish, manual billing cockpit/renewal/courtesy, staff invite deep-link sharing polish, guest communication/support-ticket split, Post-Visit Feedback, unified Guest Preview and the current Staff closure recorded above.
+Status: `PASSED FOR CURRENT RELEASE THROUGH STAFF OPERATIONS SLICE B`; baseline smoke passed on 2026-06-04, with later staged parity/deployment smokes recorded through M9b.3, guest table-context exit, guest bill/bill-request parity, staff-chat activity card, hookah placeholder polish, manual billing cockpit/renewal/courtesy, staff invite deep-link sharing polish, guest communication/support-ticket split, Post-Visit Feedback, unified Guest Preview and the current Staff closure recorded above.
 
 Confirmed:
 

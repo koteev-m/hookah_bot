@@ -48,8 +48,11 @@
 > staging deploy and manual smoke. Venue Mini App uses safe human staff identity; Manager has
 > Staff-only invite/profile authority and duplicate state is read-only; Owner-only repair preserves
 > the correct card and schedule/history. Owner/Manager manage the bounded schedule and Staff has
-> read-only `Мои смены`. Guest Today source remains manual and exposes no future/full schedule.
-> Optional module settings and `MANUAL`/`SCHEDULE` Guest source selection are separate Slice B.
+> read-only `Мои смены` while the module is enabled. **STAFF OPERATIONS SLICE B / OPTIONAL TEAM AND
+> SCHEDULE MODULE / GUEST MANUAL OR SCHEDULE SOURCE / DONE / MVP / STAGING-SMOKE-PASSED** is closed
+> after green Actions, staging PostgreSQL V121 rollout and bounded smoke. `MANUAL` preserves saved
+> Today publication; `SCHEDULE` exposes current active public presence only, with no fallback or
+> future/full/private schedule data. Bot schedule mutation/settings UI remains outside Slice B.
 >
 > Current media audit: public-card info-section image/PDF management is **PARTIAL / BOT-FIRST**;
 > Bot OWNER/MANAGER can add attachments backed by Telegram `file_id`, delete an attachment and

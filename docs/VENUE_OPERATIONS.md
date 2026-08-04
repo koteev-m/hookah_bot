@@ -38,7 +38,7 @@ Canonical dependencies:
 | Tables / QR | Physical table inventory and QR context. | Tables/QR basics exist; table-session runtime behavior is documented separately. | Single table CRUD/diagnostics/QR rotate audit need verification. |
 | Staff / invites | Membership, roles, pending invite lifecycle and team cards. | `STAFF OPERATIONS SLICE A / MANAGER PARITY + SHIFT TIME DEFAULTS / DONE / MVP / STAGING-SMOKE-PASSED`; Platform Owner OWNER invite/revoke remains smoke-closed. | Keep Manager Staff-only authority, protected cards, invite revocation and identity privacy in regression. |
 | Staff profiles / today shift | Guest-visible opt-in staff profiles and the configured Today source. | `STAFF PROFILES + TODAY SHIFT PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`. Slice B keeps MANUAL publication or derives current SCHEDULE presence through the shared resolver; both Preview modes use the same filters. | Tips and safe consent-based photo upload remain future. |
-| Staff schedule | Optional venue-local planning of one shift per profile/start-date. | `STAFF SCHEDULE PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`; `CANCELED SHIFT RESTORE + BULK ASSIGNMENT / DONE / MVP / STAGING-SMOKE-PASSED`; Slice B module/source settings are MVP-implemented and locally validated, pending review before commit. | Keep schedule, restore/bulk, CAS, timezone, module guards, Guest source parity and RBAC/privacy in regression; no Slice B staging claim yet. |
+| Staff schedule | Optional venue-local planning of one shift per profile/start-date. | `STAFF SCHEDULE PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`; `CANCELED SHIFT RESTORE + BULK ASSIGNMENT / DONE / MVP / STAGING-SMOKE-PASSED`; `STAFF OPERATIONS SLICE B / OPTIONAL TEAM AND SCHEDULE MODULE / GUEST MANUAL OR SCHEDULE SOURCE / DONE / MVP / STAGING-SMOKE-PASSED`. | Keep schedule, restore/bulk, CAS, timezone, module guards, Guest source parity and RBAC/privacy in regression. |
 | Staff-chat | Linked group diagnostics and operational notifications. | Link/test/unlink, live order activity-card behavior and state-aware booking shortcuts are smoke-closed. | Personal staff notifications and unified event policy remain future. |
 | Feedback | Internal post-visit feedback from completed Guest History. | DONE / MVP / staging-smoke-passed: Owner/Manager read own-venue aggregate/list and can manually open exact `VENUE_CHAT` follow-up for ratings `1..3`; Staff denied. | Platform feedback analytics dashboard and automated prompts remain future. |
 | Settings / card preview | Venue profile, schedule, booking hold, extension, staff-chat and read-only public-card preview. | Booking hold, shift extension, public profile/card, schedule/date exceptions and Owner-only public review link are smoke-closed. One `Предпросмотр для гостя` entry uses one backend-selected `PUBLISHED_PUBLIC` / own-venue `PRIVATE_DRAFT` endpoint and is **DONE / MVP / STAGING-SMOKE-PASSED**. Unsaved public-card, weekly-schedule and date-exception changes block preview without auto-save. | Broader settings/media authoring, versioned snapshots and publish workflow remain future; archived/deleted/missing venues continue to fail closed. |
@@ -368,9 +368,9 @@ ASSIGNMENT / DONE / MVP / STAGING-SMOKE-PASSED`):
   `SCHEDULE` exposes only current active public presence and never falls back to manual flags;
 - no new Telegram or staff-chat flow is part of the slice.
 
-Staff Operations Slice B locally validated runtime:
+Staff Operations Slice B staging-closed runtime:
 - exact status: `STAFF OPERATIONS SLICE B / OPTIONAL TEAM AND SCHEDULE MODULE / GUEST MANUAL OR
-  SCHEDULE SOURCE / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`;
+  SCHEDULE SOURCE / DONE / MVP / STAGING-SMOKE-PASSED`;
 - OWNER/MANAGER use `STAFF_MODULE_SETTINGS_MANAGE` for the own venue; MANAGER receives no broad
   `VENUE_SETTINGS` authority. Settings use explicit save, full-object CAS and safe atomic audit;
 - master-off retains memberships, pending/accepted invites, roles, profiles, shifts, nested settings
@@ -380,7 +380,11 @@ Staff Operations Slice B locally validated runtime:
   yields an empty team without revealing why; `MANUAL` preserves explicit exact-date publication;
   `SCHEDULE` returns only current ACTIVE `[start,end)` venue-timezone/overnight presence, with public
   profile filters, deterministic profile dedupe, no fallback and no private/future schedule data;
-- no GitHub Actions, staging deploy or staging smoke is claimed by this local status.
+- green GitHub Actions, successful staging deploy, PostgreSQL V121 application and the bounded
+  Owner/Manager/Staff/Guest smoke are complete. Staging also confirmed safe CAS refresh, retained
+  data/core access while off, re-enable without duplicates, MANUAL persisted state, active-only
+  SCHEDULE with no fallback, Guest privacy, venue/account isolation and cleanup to
+  `true / true / MANUAL`.
 
 Future outside Schedule Phase 1 / Slice B:
 - staff availability, shift swaps, recurring templates, reminders and attendance;
@@ -590,7 +594,7 @@ Current vs target:
   `MANAGER PARITY + SHIFT TIME DEFAULTS / DONE / MVP / STAGING-SMOKE-PASSED`; invite revoke uses
   PostgreSQL V120/H2 V121 and the rollout/manual smoke are complete.
 - `STAFF OPERATIONS SLICE B / OPTIONAL TEAM AND SCHEDULE MODULE / GUEST MANUAL OR SCHEDULE SOURCE /
-  MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`.
+  DONE / MVP / STAGING-SMOKE-PASSED`.
 - Slice B stores master enabled, Guest team visibility and `MANUAL`/`SCHEDULE` source in
   `venue_settings`, defaulting to `true` / `true` / `MANUAL`. Master-off retains profile/shift
   rows and every core membership/invite/role/operational flow, guards only profiles/Today/schedule,
@@ -599,8 +603,9 @@ Current vs target:
 - Owner/Manager use a dedicated narrow settings permission and full-object CAS; Manager receives
   no broad venue-settings authority. `MANUAL` preserves explicit Today publication;
   `SCHEDULE` returns only current ACTIVE venue-timezone/overnight shifts with published public
-  cards, no fallback, future/full schedule or private identity. The local status does not claim
-  GitHub Actions, staging deploy or staging smoke; release review/validation remains required.
+  cards, no fallback, future/full schedule or private identity. Green Actions, staging deploy,
+  PostgreSQL V121 rollout and the bounded manual smoke are complete; old-binary rollback after real
+  `SCHEDULE` use remains semantically unsafe and uses forward-fix policy.
   Detailed contracts remain in `docs/STAFF_PROFILES_SHIFTS_TIPS.md`.
 
 ## Operational Smoke Checklist

@@ -14,6 +14,10 @@ Current Staff Schedule correction: Phase 1 and Canceled Shift Restore + Bulk Ass
 MVP / STAGING-SMOKE-PASSED`. STAFF has read-only `Мои смены`: own linked-profile shifts
 plus safe colleagues only when their non-canceled intervals overlap. Unrelated/full venue schedule,
 all mutation controls, linked account/Telegram identity and admin/CAS fields remain denied.
+`STAFF OPERATIONS SLICE B / OPTIONAL TEAM AND SCHEDULE MODULE / GUEST MANUAL OR SCHEDULE SOURCE /
+DONE / MVP / STAGING-SMOKE-PASSED`: Staff receives no settings authority; `Мои смены` is hidden
+while the module is disabled, direct optional routes remain denied, and orders/bookings/calls/menu
+plus membership-based core access continue to work.
 
 Current backend permissions:
 - `ORDER_QUEUE_VIEW`;
@@ -67,7 +71,8 @@ STAFF Mini App behavior:
 - shift-extension requests view/confirm where backend allows;
 - menu content read-only, with operational item/option availability toggles;
 - tables read-only;
-- read-only `Мои смены` with overlap-only safe colleagues;
+- read-only `Мои смены` with overlap-only safe colleagues while the optional module is enabled;
+  the entry is hidden while disabled and bookmarked/direct optional routes fail safely;
 - forbidden management controls hidden and backend-protected.
 - `Помощь` / `Обращения`, ordinary venue chats and `Отзывы`/feedback follow-up are hidden and backend-forbidden.
 
@@ -150,7 +155,9 @@ STAFF Mini App behavior:
 - Staff profiles/Today and Staff Schedule are `DONE / MVP / STAGING-SMOKE-PASSED`: Staff may edit
   only own linked draft fields if policy allows and has read-only own-schedule/overlap visibility.
   Staff cannot self-publish, enable public visibility, mutate schedule or approve future tip
-  methods. Photo upload and staff tips remain future.
+  methods. Slice B is also `DONE / MVP / STAGING-SMOKE-PASSED`: module-off hides `Мои смены` and
+  blocks optional profile/Today/schedule routes without removing memberships or core operational
+  access. Photo upload and staff tips remain future.
 - Staff tips are future and must not be implemented as platform-collected payments, Telegram Stars or crypto in MVP.
 
 ## Smoke-critical checks
@@ -176,6 +183,9 @@ STAFF Mini App behavior:
 18. If policy allows own draft edit, STAFF can edit only own linked public-profile draft fields and cannot publish, hide, enable visibility, edit another profile, mark shifts or approve tip methods.
 19. STAFF does not see `Отзывы`, cannot list feedback or trigger `Связаться с гостем` through direct API, and cannot access the Owner-only public review URL setting.
 20. Staff-chat receives no feedback submission or follow-up context.
-21. STAFF opens `Мои смены`, sees only own shifts plus safe interval-overlapping colleagues
+21. With the module enabled, STAFF opens `Мои смены`, sees only own shifts plus safe
+    interval-overlapping colleagues
     (including overnight cases), and direct create/update/cancel/restore/bulk or unrelated-schedule
     reads are denied.
+22. With the module disabled, STAFF does not see `Мои смены`, direct optional routes are blocked,
+    settings remain denied, and core orders/bookings/calls/menu access still works.

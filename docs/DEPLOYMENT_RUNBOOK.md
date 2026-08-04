@@ -1,6 +1,6 @@
 # Deployment / Runbook / Operations
 
-Дата актуализации: 2026-07-07.
+Дата актуализации: 2026-08-04.
 
 Статус: **current operations reference / UPDATED**. This document is the canonical deploy, release and operations runbook for the Telegram bot + Mini App platform. Use it together with `docs/TESTING_QA_SMOKE_STRATEGY.md` for validation scope, `docs/STAGING_DEPLOYMENT.md` for one-VPS staging details, `docs/OPERATIONS.md` for metrics/queue incident basics and `docs/MIGRATION_POLICY.md` for Flyway policy.
 
@@ -171,20 +171,24 @@ Rules:
 ### Staff Operations Slice B Rollout Boundary
 
 `STAFF OPERATIONS SLICE B / OPTIONAL TEAM AND SCHEDULE MODULE / GUEST MANUAL OR SCHEDULE SOURCE /
-MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT` uses additive
-PostgreSQL V121 and H2 V122 migrations. Before staging:
+DONE / MVP / STAGING-SMOKE-PASSED` uses additive PostgreSQL V121 and H2 V122 migrations. The
+staging rollout completed in this order:
 
-1. Apply the additive migration.
-2. Deploy only the new backend binary.
-3. Verify that all old backend instances have been replaced.
-4. Only then enable the settings-mutation UI.
-5. Run the bounded Owner/Manager/Staff/Guest manual smoke from the canonical Staff plan.
+1. Staging PostgreSQL applied V121; the Testcontainers migration run had already executed
+   V120 -> V121 with `skipped=0` and `failures=0`.
+2. Only the new backend binary was deployed.
+3. Instance verification showed exactly one new backend instance and no remaining old backend
+   instances before settings mutation.
+4. Settings mutation was exercised only after that verification.
+5. The bounded Owner/Manager/Staff/Guest manual smoke from the canonical Staff plan passed, and
+   cleanup restored `true / true / MANUAL` plus the original manual Today state.
 
-Before any real Slice B settings use, the old binary is structurally schema-compatible because it
+Before real Slice B settings use, the old binary was structurally schema-compatible because it
 ignores the additive columns. After a venue switches `todayStaffSource` to `SCHEDULE`, an old binary
 would ignore that source and resume `MANUAL` Guest behavior. Previous-binary rollback is therefore
-semantically unsafe after real settings use; use a forward fix. Exact deploy/rollback commands
-remain subject to the existing runbook verification requirement.
+semantically unsafe after real settings use; use a forward fix. Feature-specific rollback command
+refinement remains open, and exact deploy/rollback commands remain subject to the existing runbook
+verification requirement.
 
 ## Staging Smoke Policy
 

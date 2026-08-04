@@ -45,9 +45,8 @@ Current practice:
   lock; invite revoke uses PostgreSQL V120/H2 V121. Green Actions, deploy and manual staging smoke
   are complete.
 - Staff Operations Slice B is
-  `STAFF OPERATIONS SLICE B / OPTIONAL TEAM AND SCHEDULE MODULE / GUEST MANUAL OR SCHEDULE SOURCE / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`. This
-  records local implementation and validation only; final full e2e recheck, independent review,
-  GitHub Actions, staging deploy and bounded manual smoke remain open.
+  `STAFF OPERATIONS SLICE B / OPTIONAL TEAM AND SCHEDULE MODULE / GUEST MANUAL OR SCHEDULE SOURCE / DONE / MVP / STAGING-SMOKE-PASSED`. Green GitHub Actions, staging deploy,
+  PostgreSQL V121 application and the bounded manual smoke are complete.
 
 Target QA model:
 - Every task ends with changed files, behavior summary, tests run, validation result, manual smoke checklist, `git status --short`, whether `scripts/dev/` was touched and whether staging deploy is needed.
@@ -79,10 +78,10 @@ The complete acceptance matrix remains canonical in `docs/STAFF_PROFILES_SHIFTS_
 PostgreSQL V120/H2 V121 belongs to Slice A invite revoke, not Restore + Bulk Assignment; its rollout
 is included in the completed release evidence.
 
-### Staff Operations Slice B Local Validation Gate
+### Staff Operations Slice B Release Quality Gate
 
 Status:
-`STAFF OPERATIONS SLICE B / OPTIONAL TEAM AND SCHEDULE MODULE / GUEST MANUAL OR SCHEDULE SOURCE / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`.
+`STAFF OPERATIONS SLICE B / OPTIONAL TEAM AND SCHEDULE MODULE / GUEST MANUAL OR SCHEDULE SOURCE / DONE / MVP / STAGING-SMOKE-PASSED`.
 
 The additive settings migrations, runtime repository/API/CAS/audit, narrow RBAC, fail-closed module
 guards, shared MANUAL/SCHEDULE Guest resolver and bounded Mini App UX are implemented. Local
@@ -102,10 +101,22 @@ Recorded local validation:
 - focused Slice B browser checks and the exact full Mini App e2e smoke passed (`131/131`);
 - independent read-only review found no remaining P0/P1 findings.
 
-This status does not claim green GitHub Actions, staging deploy or manual staging/Telegram smoke.
-Those release gates remain required before release; PostgreSQL V121/H2 V122 must be rolled out
-before enabling the settings mutation UI, as defined in the canonical staff plan and deployment
-runbook.
+Release/staging evidence:
+
+- GitHub Actions completed green and staging deploy succeeded;
+- staging PostgreSQL applied V121 after the Testcontainers V120 -> V121 run reported
+  `skipped=0`, `failures=0`; H2 V122 remains the test-family counterpart;
+- exactly one new backend instance served settings mutation and no old backend instance remained;
+- the 13-scenario manual smoke passed: defaults, Owner persistence, Manager narrow authority, Staff
+  denial/navigation, stale CAS, MANUAL persistence, Guest visibility-off, master-off retained
+  data/core access, re-enable, SCHEDULE active-only/no-fallback, privacy, venue/account isolation and
+  cleanup;
+- cleanup restored module enabled, Guest visibility enabled, source `MANUAL`, the original manual
+  Today state and core Staff access.
+
+The exact scenario-by-scenario record remains in `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. Old-binary
+rollback after real `source=SCHEDULE` use is semantically unsafe; release handling remains
+forward-fix.
 
 Locally validated backend coverage:
 
@@ -978,11 +989,13 @@ Staff Identity Linking UX / Staff Operations Slice A / Staff Schedule staging sm
   Guest presence and does not erase planned times;
 - no Telegram reminder/button, staff-chat message or outbox event is created.
 
-Recorded result: **PASSED** after green Actions and staging deploy. The current source remains
-`MANUAL`: only explicit manual Today Shift publication makes a published guest-visible card appear
-in `Сегодня работают`; planned/future schedule rows and the full staff schedule remain private. The
-create-from-member step above was not separately run with a qualifying free Staff member and is
-deferred only in `STAFF-IDENTITY-MANUAL-001`.
+Recorded result: **PASSED** after green Actions and staging deploy. At that pre-Slice-B smoke the
+source remained `MANUAL`: only explicit manual Today Shift publication made a published
+guest-visible card appear in `Сегодня работают`; planned/future schedule rows and the full staff
+schedule remained private. The current correction is the Slice B release gate above: a venue may
+now save `MANUAL` or active-only `SCHEDULE` with no fallback. The create-from-member step above was
+not separately run with a qualifying free Staff member and is deferred only in
+`STAFF-IDENTITY-MANUAL-001`.
 
 Menu/stop-list:
 - Owner toggles item unavailable;
@@ -1108,8 +1121,8 @@ Telegram/staff-chat:
   Assignment and Identity Linking are also `DONE / MVP / STAGING-SMOKE-PASSED`; the Phase 1
   schedule/identity schema verdict remains `NO_MIGRATION_EXPECTED`.
 - Staff Operations Slice B:
-  `STAFF OPERATIONS SLICE B / OPTIONAL TEAM AND SCHEDULE MODULE / GUEST MANUAL OR SCHEDULE SOURCE / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`; independent review,
-  final full e2e recheck, Actions, staging deploy and manual smoke remain open.
+  `STAFF OPERATIONS SLICE B / OPTIONAL TEAM AND SCHEDULE MODULE / GUEST MANUAL OR SCHEDULE SOURCE / DONE / MVP / STAGING-SMOKE-PASSED`; local validation, independent review, green Actions,
+  staging deploy, PostgreSQL V121 rollout and manual smoke are complete.
 - Manual smoke checklist: `CONSOLIDATED`.
 - CI coverage: `PARTIAL / release-critical split jobs current`.
 - Frontend e2e: `PARTIAL`, with smoke coverage documented.
