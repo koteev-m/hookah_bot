@@ -1,6 +1,6 @@
 # Deferred Manual Smoke Backlog
 
-Дата актуализации: 2026-08-01.
+Дата актуализации: 2026-08-04.
 
 Статус: **current product reference / ACTIVE BACKLOG**.
 
@@ -56,6 +56,59 @@
 | --- | --- | --- | --- | --- |
 | [`REPEAT-MANUAL-001`](#repeat-manual-001) | Repeat as Template Phase 1 | P1 | `BLOCKED_BY_ENVIRONMENT` | Repeat production-readiness remains open for environment-dependent parity/privacy/context scenarios; independent bounded development may continue. |
 | [`CATALOG-SEARCH-MANUAL-001`](#catalog-search-manual-001) | Catalog Search and Filter Phase 1 | P2 | `BLOCKED_BY_ENVIRONMENT` | Does not block the current MVP/release; required before catalog pagination, ranking, map/geo or a large pilot rollout. |
+| [`STAFF-IDENTITY-MANUAL-001`](#staff-identity-manual-001) | Staff Identity create-from-member free-account scenario | P2 | `BLOCKED_BY_ENVIRONMENT` | Non-blocking coverage gap only; Identity Linking remains `DONE / MVP / STAGING-SMOKE-PASSED`. |
+
+## STAFF-IDENTITY-MANUAL-001
+
+- **Feature:** Staff Identity Linking UX + Duplicate Prevention
+- **Priority:** P2 / non-blocking
+- **Current status:** `BLOCKED_BY_ENVIRONMENT`
+- **Runtime status:** `DONE / MVP / STAGING-SMOKE-PASSED`
+- **Reason deferred:** current smoke records do not identify a separate accepted Staff account in
+  the venue that had no active linked staff card. Automated create-from-member/concurrency evidence
+  and the broader identity-linking manual smoke are complete, but they are not a substitute for this
+  exact environment-dependent UI path.
+- **Blocking impact:** none for the completed Identity Linking MVP and none for starting the
+  independent Optional Team/Schedule Module Slice B. Run before a broader staff-directory pilot when
+  a disposable free Staff member is available. Do not create a second backlog entry for this case.
+
+### Prerequisites
+
+- one staging venue with Owner access;
+- one accepted `STAFF` venue member whose `disabled_at`-active profile link count is zero;
+- the member's current safe Telegram `displayName` and nullable username available through normal
+  authentication/upsert;
+- a cleanup plan that preserves memberships and unrelated schedule/history rows.
+
+### Automated Evidence Already Available
+
+- create-from-member derives current identity server-side and requires explicit subtype;
+- the created profile is an active Guest-hidden draft;
+- one-active-link enforcement and typed duplicate conflict are transaction-bound;
+- PostgreSQL concurrent create/relink tests passed with one winner and winner-only audit;
+- Guest DTO/privacy, protected profile and venue/account isolation regressions passed.
+
+### Manual Steps And Expected Results
+
+1. Owner opens `Доступ сотрудников` for the staging venue.
+2. Confirm the free Staff member is shown by human `displayName`, `@username` or `Без username`,
+   role and `NOT_LINKED` state without a raw-id primary label.
+3. Select `Создать карточку`, choose an explicit subtype and save.
+4. Confirm exactly one card is created with the server-derived current identity, hidden from Guest;
+   the member row changes to `Открыть карточку`, and a second active link is rejected.
+5. Confirm no automatic Guest Today publication, no second profile row and no unrelated
+   schedule/history mutation.
+6. Cleanup by disabling/unlinking only the disposable test card through the normal authorized flow;
+   verify the venue membership and unrelated rows remain.
+
+### Result
+
+- **Result:** not run; no qualifying free Staff account is recorded.
+- **Date / actor:** pending.
+- **Cleanup:** pending with the scenario.
+- **Related docs:** `docs/STAFF_PROFILES_SHIFTS_TIPS.md`,
+  `docs/TESTING_QA_SMOKE_STRATEGY.md`,
+  `docs/audit/MINI_APP_LAUNCH_SMOKE_CHECKLIST.md`.
 
 ## REPEAT-MANUAL-001
 

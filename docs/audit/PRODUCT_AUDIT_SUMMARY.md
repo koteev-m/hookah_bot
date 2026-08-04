@@ -4,6 +4,14 @@
 
 > Historical audit snapshot. The P0/P1 list in this file is not the current backlog.
 >
+> Current correction as of 2026-08-04: historical statements that Staff Schedule or human staff
+> identity are missing/future are superseded. Staff Profiles/Today, Staff Operations Slice A,
+> Identity Linking, Staff Schedule Phase 1 and Canceled Shift Restore + Bulk Assignment are **DONE /
+> MVP / STAGING-SMOKE-PASSED**. Manager duplicate state is read-only and duplicate repair is
+> Owner-only; Guest Today source remains `MANUAL` and exposes no future/full schedule or internal
+> identity. Optional Team/Schedule settings plus Guest `MANUAL`/`SCHEDULE` selection are the one
+> separate next Slice B, not part of these completed blocks.
+>
 > Current correction as of 2026-06-03: many items below were later fixed or changed by product decision, including active order table-session scoping, Mini App CORS mutation methods, Mini App staff call payload/lifecycle, STAFF stop-list policy, Venue Mini App full bill/bill controls/close, bookings MVP, pre-QR guest menu behavior, platform owner access, commercial terms sync and venue lifecycle. Check `docs/UPDATED_PRODUCT_AI_ROADMAP.md`, `docs/audit/MINI_APP_LAUNCH_SMOKE_CHECKLIST.md` and current code before using any item here as implementation scope.
 >
 > Current checkpoint as of 2026-06-26: M1-M6 Venue Bot-to-Mini-App parity slices are closed through IA shell, stats, bookings, support inbox lifecycle, staff calls and staff-chat management. M7a booking hold settings is CLOSED / staging smoke passed. M7b Guest Mini App `Мои брони` is implemented with local validation and staging visual parity for Bot `/my` public label, venue-local time and `Держим до`; real two-account Telegram runtime isolation remains unverified. M7c adaptive reminders are implemented, code/test-backed and passed one controlled real Telegram staging smoke; runtime remains disabled by default and staging is back to `BOOKING_REMINDER_WORKER_ENABLED=false`. M8a/M8b-Free public profile/card settings is CLOSED / staging smoke passed: Venue Mini App edits public location/contact/description with provider-free local country/city data and manual address fallback. M9a Deployment SSH Reliability Hardening is CLOSED / staging smoke passed: the committed opt-in ControlMaster helper completed a real staging deploy and endpoint smoke while the normal deploy command remains supported; the exact SSH/network root cause remains unconfirmed. M9b/M9b.1/M9b.2/M9b.3 schedule parity is CLOSED / staging smoke passed. The latest enriched staff-chat attendance copy is code/test-backed but not manually re-smoked with a new booking. Remaining launch-relevant gaps are no longer the old P0 order/session/CORS/staff-call/schedule list; use the current roadmap for operational Mini App verification, billing, support/growth and runtime regression priorities.

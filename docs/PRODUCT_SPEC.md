@@ -35,13 +35,18 @@ Venue operations source of truth:
 Staff profiles, Today Shift, Staff Schedule and staff tips source of truth:
 - Canonical `STAFF_PROFILE`, manual `SHIFT_TODAY`, optional `STAFF_SCHEDULE` and future `STAFF_TIP`
   model is tracked in `docs/STAFF_PROFILES_SHIFTS_TIPS.md`.
-- `STAFF OPERATIONS SLICE A / MANAGER PARITY + SHIFT TIME DEFAULTS / MVP IMPLEMENTED / LOCAL VALIDATION PASSED`.
-  Staff Schedule Phase 1 remains
-  `STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / PRODUCT AND RBAC POLISH REQUIRED`;
-  the schedule schema remains `NO_MIGRATION_EXPECTED`. Slice A requires green Actions, invite
-  revoke migration rollout and a new staging smoke before production readiness. It remains Venue
-  Mini App only and does not change Guest `Сегодня работают`.
-  Optional Team/Schedule settings and Guest `MANUAL`/`SCHEDULE` source selection are future Slice B.
+- `STAFF PROFILES + TODAY SHIFT PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`;
+  `STAFF OPERATIONS SLICE A / MANAGER PARITY + SHIFT TIME DEFAULTS / DONE / MVP /
+  STAGING-SMOKE-PASSED`; `STAFF IDENTITY LINKING UX + DUPLICATE PREVENTION / DONE / MVP /
+  STAGING-SMOKE-PASSED`; `STAFF SCHEDULE PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`; and
+  `STAFF SCHEDULE / CANCELED SHIFT RESTORE + BULK ASSIGNMENT / DONE / MVP /
+  STAGING-SMOKE-PASSED`. Green Actions, staging deploy and manual smoke are complete. Schedule
+  remains Venue Mini App only and Guest `Сегодня работают` remains manual until Slice B.
+  The next Staff runtime block is exactly `STAFF OPERATIONS SLICE B / OPTIONAL TEAM AND SCHEDULE
+  MODULE / GUEST MANUAL OR SCHEDULE SOURCE`, with read-only audit verdict
+  `IMPLEMENT_STAFF_OPERATIONS_SLICE_B_NOW`. Its backward-compatible `venue_settings` defaults are
+  master enabled, Guest team visible and source `MANUAL`; detailed disable, RBAC/privacy,
+  migration, test and rollout contracts remain canonical in the staff document.
   Staff tips and any payment provider/direct payout path are future and require separate
   legal/product decision.
 
@@ -135,6 +140,9 @@ MUST:
 - Manager may create/list/revoke only Staff invites, manage only display-only/active-Staff-linked
   cards and use the existing Staff Schedule permission. Owner/Manager profiles, roles, membership
   removal/deactivation, ownership, billing and platform settings stay outside Manager authority.
+- Manager duplicate link state is read-only with protected linkage redacted and `canManage=false`;
+  duplicate repair is Owner-only through safe unlink of the wrong concrete card. Automatic
+  merge/delete/relink is forbidden.
 - Optional Staff Schedule Phase 1 adds only Staff read-own plus safe overlapping-colleague
   visibility. The safe colleague projection may expose profile-scoped `staffProfileId`, but never
   linked user/account ids or Telegram data. Owner/Manager manage their own venue schedule;

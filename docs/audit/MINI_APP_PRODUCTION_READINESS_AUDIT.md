@@ -78,6 +78,16 @@
 > view-only Photo/PDF menu still works as an info section. Staff photo upload is separate and
 > **FUTURE**. A cross-layer upload slice should wait for a storage/bridge and safe
 > delivery/deletion specification: **NEEDS_MEDIA_STORAGE_SPEC_FIRST**.
+>
+> Current Staff correction as of 2026-08-04: **STAFF PROFILES + TODAY SHIFT PHASE 1**,
+> **STAFF OPERATIONS SLICE A / MANAGER PARITY + SHIFT TIME DEFAULTS**, **STAFF IDENTITY LINKING UX
+> + DUPLICATE PREVENTION**, **STAFF SCHEDULE PHASE 1** and **STAFF SCHEDULE / CANCELED SHIFT RESTORE
+> + BULK ASSIGNMENT** are all **DONE / MVP / STAGING-SMOKE-PASSED** after green Actions, staging
+> deploy and manual smoke. Manager duplicate state is read-only, duplicate repair is Owner-only,
+> and Guest remains on exact manual Today publication with no future/full schedule disclosure. The
+> separate free-member create-from-member manual path is non-blocking and tracked once in
+> `STAFF-IDENTITY-MANUAL-001`. Slice B optional module/source settings remain future and do not
+> retroactively change these completed statuses.
 
 Режим: read-only аудит. Код, миграции, тесты, backend/frontend business logic не менялись.
 

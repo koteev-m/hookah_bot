@@ -41,6 +41,16 @@
 > venue isolation and Telegram stop-list parity passed staging smoke; Telegram has no Phase 1
 > shift-check batch UI by design.
 >
+> Current correction as of 2026-08-04: historical rows that describe staff labels as `User <id>`,
+> conservative Manager invite/profile gaps or Staff Schedule as missing are superseded. Staff
+> Profiles/Today, Staff Operations Slice A, Identity Linking, Staff Schedule Phase 1 and Canceled
+> Shift Restore + Bulk Assignment are **DONE / MVP / STAGING-SMOKE-PASSED** after green Actions,
+> staging deploy and manual smoke. Venue Mini App uses safe human staff identity; Manager has
+> Staff-only invite/profile authority and duplicate state is read-only; Owner-only repair preserves
+> the correct card and schedule/history. Owner/Manager manage the bounded schedule and Staff has
+> read-only `Мои смены`. Guest Today source remains manual and exposes no future/full schedule.
+> Optional module settings and `MANUAL`/`SCHEDULE` Guest source selection are separate Slice B.
+>
 > Current media audit: public-card info-section image/PDF management is **PARTIAL / BOT-FIRST**;
 > Bot OWNER/MANAGER can add attachments backed by Telegram `file_id`, delete an attachment and
 > hide/show the whole section, while Venue Mini App has no file picker, upload endpoint or authoring

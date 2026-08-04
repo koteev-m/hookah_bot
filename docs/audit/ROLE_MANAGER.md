@@ -1,6 +1,6 @@
 # Manager
 
-Дата актуализации: 2026-07-31.
+Дата актуализации: 2026-08-04.
 
 Статус: **current role reference**. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. `ADMIN` в runtime сейчас является legacy alias для `MANAGER`.
 
@@ -9,6 +9,13 @@
 Manager - операционная management-роль venue. Manager ведёт смену, заказы, брони, меню/availability и столы в рамках текущих backend permissions. Manager не является Platform Owner и не получает platform-wide права. Growth/retention scope is governed by `docs/GROWTH_RETENTION.md`; Post-Visit Feedback read/follow-up is staging-smoked, while promotions and other growth loops remain partial/future.
 
 Guest communication follows `docs/COMMUNICATION_MODEL.md`: Manager can handle `BOOKING_CHAT`, `VENUE_CHAT` and own-venue `SUPPORT_TICKET`; `STAFF_CALL` remains a separate operational queue. Booking lifecycle and queue rules follow `docs/BOOKING_LIFECYCLE.md`. Telegram bot fallback, staff-chat and callback rules follow `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. Manager permissions, billing denial, cross-venue isolation and dangerous-action boundaries are governed by `docs/SECURITY_RBAC_MATRIX.md`. Public staff profiles, today shift and future staff tips follow `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. Venue operations are governed by `docs/VENUE_OPERATIONS.md`. Menu/stop-list policy follows `docs/MENU_OPTIONS_STOPLIST.md`. Order/session/tab behavior follows `docs/ORDER_SESSION_TAB_CORE.md`. Analytics/KPI rules follow `docs/ANALYTICS_EVENTS.md`. Testing/QA smoke strategy follows `docs/TESTING_QA_SMOKE_STRATEGY.md`. Release/deploy operations follow `docs/DEPLOYMENT_RUNBOOK.md`.
+
+Current Staff Operations correction: Slice A, Identity Linking, Staff Schedule Phase 1 and Canceled
+Shift Restore + Bulk Assignment are `DONE / MVP / STAGING-SMOKE-PASSED`. Manager creates/lists/
+revokes only Staff invites; manages and publishes/hides display-only or active-Staff-linked cards;
+marks their manual Today state; and manages own-venue planned shifts, restore and bulk assignment.
+Protected Owner/Manager cards and every duplicate state are read-only with redacted linkage and
+`canManage=false`; duplicate repair is Owner-only.
 
 Role mapping:
 - DB `MANAGER` -> `VenueRole.MANAGER`;
@@ -60,6 +67,9 @@ Manager Mini App areas:
 - read-only `Предпросмотр для гостя`: one backend-selected `PUBLISHED_PUBLIC` /
   `PRIVATE_DRAFT` endpoint is **DONE / MVP / STAGING-SMOKE-PASSED**;
 - staff list/invite only where current conservative route policy allows; invite result uses a valid Telegram deep link, copy/share actions and a secondary fallback command.
+- `График смен` with create/update/cancel, explicit same-row restore and atomic bulk
+  assignment for the own venue;
+- safe Staff directory/profile controls within the protected-link policy above.
 
 ## Allowed actions
 
@@ -85,7 +95,10 @@ Manager Mini App areas:
 - Manage tables and QR export according to current permissions.
 - Link/test staff chat if current role permission allows.
 - View staff list and create conservative STAFF invites if current route policy allows.
-- Mark public staff profiles as `Сегодня на смене` under the current conservative Phase 1 policy.
+- Create/list/revoke Staff invites; manage and publish/hide display-only/active-Staff-linked cards;
+  mark their manual Today state.
+- Manage own-venue Staff Schedule: bounded create/update/cancel, explicit canceled restore and
+  atomic bulk assignment. Effective venue hours are defaults only.
 - Create/manage simple `VENUE_PROMOTION` only if the growth MVP explicitly allows Manager access; terms, period and visibility/status are mandatory, and promo notifications require guest opt-in.
 
 ## Denied actions
@@ -103,13 +116,14 @@ Manager Mini App areas:
 - Promise automatic discounts, cashback, points or promo-code redemption without a real promotion/loyalty engine and discount accounting.
 - Send marketing/promo notifications without guest opt-in, frequency limits and unsubscribe.
 - See billing metrics, platform analytics, another venue's analytics or raw event payloads containing message text/initData/payment secrets/card data.
-- Publish/hide public staff profiles or approve future staff tip methods unless product policy explicitly grants it; Owner approval is the conservative default.
+- Publish/hide protected Owner/Manager/duplicate profiles, repair duplicate linkage, or approve
+  future staff tip methods. Manager duplicate state has no open/edit/link/unlink repair action.
 - Add payment providers, Telegram Stars, crypto or platform-collected staff tips through staff/today-shift flows.
 
 ## Known gaps / needs smoke
 
 - `ADMIN == MANAGER` remains an intentional legacy alias, but product copy should avoid promising a separate admin role.
-- Manager staff management scope is conservative and should be smoke-tested before pilot.
+- Manager Staff-only invite/profile/schedule scope is staging-smoke-passed and stays in regression.
 - Staff invite deep-link sharing polish is CLOSED / staging smoke passed for the allowed manager invite path: link is selectable/copyable/shareable and accepted payload grants the intended role.
 - Some Telegram manager flows may still be richer than Mini App equivalents.
 - Venue/public-card image/PDF management is `PARTIAL / BOT-FIRST`: Manager can manage attachments
@@ -133,7 +147,10 @@ Manager Mini App areas:
   Manager menu management, but conservative target policy keeps Manager to stop-list, shift check
   and basic availability unless product explicitly retains broader `MENU_MANAGE`.
 - Growth/retention is `SPEC UPDATED / PARTIAL-FUTURE` overall. Post-Visit Feedback read and low-rating exact `VENUE_CHAT` follow-up are DONE / MVP / staging-smoke-passed; favorites, repeat and simple promotions remain future. Staff remains excluded from feedback and growth campaign management.
-- Staff profiles / today shift are `MVP DONE / SMOKE-PASSED`: Manager may mark today's visible shift under current conservative policy, while Owner remains the default for profile publish/hide and future tip-method approval. Schedule, photo upload and staff tips remain future.
+- Staff profiles, manual Today, identity linking and Staff Schedule are `DONE / MVP /
+  STAGING-SMOKE-PASSED`: Manager may publish/hide only display-only/active-Staff-linked cards,
+  manage their Today state and operate the bounded schedule. Duplicate repair is Owner-only. Photo
+  upload and staff tips remain future.
 
 ## Smoke-critical checks
 
@@ -158,7 +175,9 @@ Manager Mini App areas:
     stale rejection, safe audit and venue-switch isolation stay in regression. Price/media/
     structure/schema edits are allowed only if broad Manager `MENU_MANAGE` is intentionally
     retained and tested.
-17. Manager can mark a public staff profile `Сегодня на смене` only inside own venue and cannot publish/hide profiles or approve tip methods.
+17. Manager can publish/hide and mark manual Today only for display-only/active-Staff-linked cards,
+    manages own-venue schedule/restore/bulk, sees protected/duplicate cards read-only and cannot
+    repair duplicates or approve tip methods.
 18. Manager sees only own-venue feedback, can open exact `VENUE_CHAT` follow-up only for rating `1..3`, and sees the feedback context without an auto-sent personal message.
 19. Manager cannot edit the Owner-only public review URL; feedback follow-up creates no support ticket or staff-chat notification.
 

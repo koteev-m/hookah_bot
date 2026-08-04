@@ -1,6 +1,6 @@
 # Testing / QA Smoke Strategy
 
-Дата актуализации: 2026-08-03.
+Дата актуализации: 2026-08-04.
 
 Статус: **current product reference / UPDATED**. This document is the canonical QA/smoke strategy for the Telegram bot + Mini App platform. It consolidates local validation, GitHub Actions expectations, area-specific smoke suites, staging policy, failure reporting and Codex handoff rules. Deployment and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
 
@@ -35,16 +35,15 @@ Current practice:
   Extended multi-venue coverage remains **NON-BLOCKING DEFERRED MANUAL SMOKE /
   CATALOG-SEARCH-MANUAL-001** and does not downgrade the completed MVP.
 - Staff identity linking is
-  **STAFF IDENTITY LINKING UX + DUPLICATE PREVENTION / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+  **STAFF IDENTITY LINKING UX + DUPLICATE PREVENTION / DONE / MVP / STAGING-SMOKE-PASSED**.
 - Staff Schedule is
-  **STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / IDENTITY LINKING FIX IMPLEMENTED / STAGING RE-SMOKE REQUIRED**.
+  **STAFF SCHEDULE PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**.
   Staff Operations Slice A is
-  **MANAGER PARITY + SHIFT TIME DEFAULTS / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**. The schedule
-  schema remains **NO_MIGRATION_EXPECTED**. Restore + Bulk Assignment remains implemented, and
-  Staff Identity Linking UX Polish serializes one-active-profile checks on the existing
-  `venue_members` row, also without a migration. The separate invite-revoke Slice A adds
-  PostgreSQL V120/H2 V121. Green Actions, deploy and a new staging smoke are pending, so production
-  readiness is not claimed.
+  **MANAGER PARITY + SHIFT TIME DEFAULTS / DONE / MVP / STAGING-SMOKE-PASSED**. Canceled Shift
+  Restore + Bulk Assignment is **DONE / MVP / STAGING-SMOKE-PASSED**. The Phase 1 schedule schema
+  remains **NO_MIGRATION_EXPECTED**; Identity Linking used the existing transaction-bound member
+  lock; invite revoke uses PostgreSQL V120/H2 V121. Green Actions, deploy and manual staging smoke
+  are complete.
 
 Target QA model:
 - Every task ends with changed files, behavior summary, tests run, validation result, manual smoke checklist, `git status --short`, whether `scripts/dev/` was touched and whether staging deploy is needed.
@@ -65,16 +64,30 @@ Target QA model:
 ## Staff Schedule Phase 1 Release Quality Gate
 
 Status:
-**STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / IDENTITY LINKING FIX IMPLEMENTED / STAGING RE-SMOKE REQUIRED**.
+**STAFF SCHEDULE PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**.
 Slice A status:
-**STAFF OPERATIONS SLICE A / MANAGER PARITY + SHIFT TIME DEFAULTS / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**.
+**STAFF OPERATIONS SLICE A / MANAGER PARITY + SHIFT TIME DEFAULTS / DONE / MVP /
+STAGING-SMOKE-PASSED**.
 Schedule and identity-linking schema verdict: **NO_MIGRATION_EXPECTED**. Restore + Bulk Assignment
-remains implemented; identity polish changes no Schedule calculation/lifecycle, Today Staff or
-Guest source. Green Actions, runtime deploy and new staging smoke are pending; do not claim
-production readiness until those gates pass. The complete acceptance matrix remains canonical in
-`docs/STAFF_PROFILES_SHIFTS_TIPS.md`; this section defines the remaining CI/staging release gates.
-The PostgreSQL V120 rollout/drain order remains required for the separate Slice A invite-revoke UI;
-it is not a migration for Restore + Bulk Assignment.
+is **DONE / MVP / STAGING-SMOKE-PASSED**; identity linking is also **DONE / MVP /
+STAGING-SMOKE-PASSED** and changes no Schedule calculation/lifecycle, Today Staff or Guest source.
+The complete acceptance matrix remains canonical in `docs/STAFF_PROFILES_SHIFTS_TIPS.md`.
+PostgreSQL V120/H2 V121 belongs to Slice A invite revoke, not Restore + Bulk Assignment; its rollout
+is included in the completed release evidence.
+
+### Staff Operations Slice B Future Release Gate
+
+The next Staff runtime block is exactly `OPTIONAL TEAM AND SCHEDULE MODULE / GUEST MANUAL OR
+SCHEDULE SOURCE`; current read-only verdict is `IMPLEMENT_STAFF_OPERATIONS_SLICE_B_NOW`. This is a
+future gate and no Slice B runtime test or smoke is claimed by the current docs-only sync.
+
+Before Slice B can be marked done, automated coverage must prove PostgreSQL/H2 defaults and source
+check, full-object monotonic CAS, narrow Owner/Manager permission, Staff/foreign/Platform denial,
+tenant-before-state guards, transaction-bound settings audit, data-retaining disable/re-enable,
+unchanged core access, MANUAL exact-date publication, SCHEDULE ACTIVE `[start,end)`
+timezone/overnight/DST boundaries with no fallback, Guest/Preview privacy/parity and venue/account
+switch isolation. Then run focused checks, compile/lint, Mini App build/e2e, wait for green Actions,
+deploy staging and complete the bounded manual smoke from the canonical staff plan.
 
 Locally validated backend coverage:
 
@@ -209,11 +222,13 @@ handoff; do not reuse an earlier Slice A browser count as proof for this slice.
 The PostgreSQL selector is proof only when Gradle reports executed tests greater than zero,
 `skipped = 0` and `failures = 0`; a Docker/Testcontainers assumption skip is not a pass.
 
-Remaining release gate: green GitHub Actions, staging deploy, Owner/Manager/Staff identity and
-linking manual smoke, missing-username and duplicate/manual-unlink smoke, two-request link race,
-venue/account-switch isolation, saved/new-time restore, common/per-profile and mixed atomic batch,
-typed conflict presentation, timezone and overnight smoke, two-account Staff privacy smoke,
-unchanged Today/Guest smoke and cleanup of test rows.
+Release result: green GitHub Actions, staging deploy and manual smoke passed for Owner/Manager/Staff
+identity and schedule boundaries, username/missing-username labels, duplicate Owner-only repair,
+venue/account isolation, saved/new-time restore, common/per-person and mixed atomic batch, typed
+conflicts, timezone/overnight, Staff privacy, unchanged Today/Guest behavior and cleanup. A separate
+free-Staff-account create-from-member UI path was not evidenced and is tracked as the non-blocking
+[`STAFF-IDENTITY-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#staff-identity-manual-001); it does
+not downgrade Identity Linking MVP.
 
 ## Catalog Search And Filter Phase 1 Quality Gate
 
@@ -894,13 +909,15 @@ Venue operations:
 - booking queue works if implemented;
 - staff-chat receives order/call only.
 
-Staff Identity Linking UX / Staff Operations Slice A / Staff Schedule staging smoke (pending):
+Staff Identity Linking UX / Staff Operations Slice A / Staff Schedule staging smoke
+(passed, excluding the deferred free-member create-from-member manual scenario below):
 - accepted Staff member shows Telegram display name, `@username` when present or `Без username`
   with safe hint, role badge and link status; full raw id is not the main label;
 - pending invitation shows role/status/created/expires and authorized revoke only, with no recipient
   identity; after accept it disappears and the active member appears with fresh identity/link state;
-- `Создать карточку` from a member row opens the form with that member/name preselected and creates
-  one Guest-hidden draft; linked member changes to `Открыть карточку` and cannot be selected again;
+- Automated/contract coverage confirms that `Создать карточку` from a member row preselects that
+  member/name, creates one Guest-hidden draft, changes the linked member to `Открыть карточку` and
+  excludes it from repeat selection. A separate qualifying free-member manual run is not claimed;
 - Manager sees active Staff identities/actions only and cannot receive Owner/Manager as editable
   targets; Owner retains current controls and protected/last-owner constraints;
 - a second ordinary link is rejected; two concurrent create/link requests have one winner; existing
@@ -942,6 +959,12 @@ Staff Identity Linking UX / Staff Operations Slice A / Staff Schedule staging sm
 - a scheduled/restored row never appears in Guest `Сегодня работают`; manual Today Shift still controls
   Guest presence and does not erase planned times;
 - no Telegram reminder/button, staff-chat message or outbox event is created.
+
+Recorded result: **PASSED** after green Actions and staging deploy. The current source remains
+`MANUAL`: only explicit manual Today Shift publication makes a published guest-visible card appear
+in `Сегодня работают`; planned/future schedule rows and the full staff schedule remain private. The
+create-from-member step above was not separately run with a qualifying free Staff member and is
+deferred only in `STAFF-IDENTITY-MANUAL-001`.
 
 Menu/stop-list:
 - Owner toggles item unavailable;
@@ -1043,12 +1066,10 @@ Telegram/staff-chat:
 - Advanced support and billing/provider features remain future unless implemented and smoked. Growth remains partial, but Post-Visit Feedback MVP and venue-only Guest Favorites Phase 1 are staging-smoke-passed and stay in regression. Repeat Phase 1 is locally validated with deferred manual smoke in `REPEAT-MANUAL-001`; persistent templates, favorite menu items/options, recommendations/frequent items, notification opt-in, favorites-based promotions and loyalty remain future until their own bounded implementation evidence exists.
 - Menu shift check is **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED** and stays
   in regression. Per-venue `staff_stoplist_enabled` remains future.
-- Staff Schedule Phase 1 is
-  `STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / IDENTITY LINKING FIX IMPLEMENTED / STAGING RE-SMOKE REQUIRED`;
-  Restore + Bulk Assignment remains implemented. Identity/linking, duplicate/race/unlink,
-  restore/batch atomicity, typed-conflict, privacy/RBAC/effective-hours/Today compatibility remain
-  required regression gates. Green Actions and a new staging smoke remain pending, so production
-  readiness is not claimed.
+- Staff Schedule Phase 1, Canceled Shift Restore + Bulk Assignment, Staff Operations Slice A and
+  Identity Linking are `DONE / MVP / STAGING-SMOKE-PASSED`. Identity/linking,
+  duplicate/race/Owner-only repair, restore/batch atomicity, typed-conflict,
+  privacy/RBAC/effective-hours/Today compatibility remain regression gates.
 - Staff-chat delivery history/personal notifications/topic routing remain future.
 - CI coverage is strong for release-critical slices but not proof of every product scenario; area smoke checklists remain necessary.
 
@@ -1063,13 +1084,12 @@ Telegram/staff-chat:
 - Menu shift check: **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**; regression
   gates remain active.
 - Staff Operations Slice A:
-  `MANAGER PARITY + SHIFT TIME DEFAULTS / MVP IMPLEMENTED / LOCAL VALIDATION PASSED`.
+  `MANAGER PARITY + SHIFT TIME DEFAULTS / DONE / MVP / STAGING-SMOKE-PASSED`.
 - Staff Schedule Phase 1:
-  `STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / IDENTITY LINKING FIX IMPLEMENTED / STAGING RE-SMOKE REQUIRED`;
-  Restore + Bulk Assignment remains implemented; schedule and identity-linking schema verdicts are
-  `NO_MIGRATION_EXPECTED`; green Actions, runtime deploy and new staging smoke remain pending. The
-  invite migration rollout is the separate Slice A gate. Optional module/source settings remain
-  Slice B `FUTURE` and unchanged.
+  `STAFF SCHEDULE PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`; Canceled Shift Restore + Bulk
+  Assignment and Identity Linking are also `DONE / MVP / STAGING-SMOKE-PASSED`; the Phase 1
+  schedule/identity schema verdict remains `NO_MIGRATION_EXPECTED`. Optional module/source settings
+  remain separate Slice B `FUTURE` work.
 - Manual smoke checklist: `CONSOLIDATED`.
 - CI coverage: `PARTIAL / release-critical split jobs current`.
 - Frontend e2e: `PARTIAL`, with smoke coverage documented.

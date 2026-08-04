@@ -1,6 +1,6 @@
 # Staff
 
-Дата актуализации: 2026-07-31.
+Дата актуализации: 2026-08-04.
 
 Статус: **current role reference**. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. STAFF - операционная роль смены, не management-role.
 
@@ -9,6 +9,11 @@
 STAFF может работать с заказами, вызовами, закрытием счёта и операционным stop-list по позициям/вкусам. STAFF не получает финансовые bill-edit права, не управляет структурой/контентом меню, столами, персоналом или настройками и не получает `MENU_SHIFT_CHECK`.
 
 Guest communication follows `docs/COMMUNICATION_MODEL.md`: STAFF handles operational `STAFF_CALL` / order flows only. STAFF does not see `Помощь` / `SUPPORT_TICKET`, ordinary `VENUE_CHAT` or Post-Visit Feedback/follow-up. Booking lifecycle and Staff arrival/no-show boundaries follow `docs/BOOKING_LIFECYCLE.md`. Telegram/staff-chat callback behavior follows `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. STAFF permissions, denied scopes and direct-API smoke expectations are governed by `docs/SECURITY_RBAC_MATRIX.md`. Public staff profile, own draft edit and future staff-tip boundaries are governed by `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. Venue operations are governed by `docs/VENUE_OPERATIONS.md`. Menu/stop-list policy follows `docs/MENU_OPTIONS_STOPLIST.md`. Order/session/tab behavior follows `docs/ORDER_SESSION_TAB_CORE.md`. Analytics/KPI rules follow `docs/ANALYTICS_EVENTS.md`. Testing/QA smoke strategy follows `docs/TESTING_QA_SMOKE_STRATEGY.md`. Release/deploy operations follow `docs/DEPLOYMENT_RUNBOOK.md`.
+
+Current Staff Schedule correction: Phase 1 and Canceled Shift Restore + Bulk Assignment are `DONE /
+MVP / STAGING-SMOKE-PASSED`. STAFF has read-only `Мои смены`: own linked-profile shifts
+plus safe colleagues only when their non-canceled intervals overlap. Unrelated/full venue schedule,
+all mutation controls, linked account/Telegram identity and admin/CAS fields remain denied.
 
 Current backend permissions:
 - `ORDER_QUEUE_VIEW`;
@@ -19,7 +24,8 @@ Current backend permissions:
 - `SHIFT_EXTENSION_CONFIRM`;
 - `MENU_VIEW`;
 - `MENU_AVAILABILITY_MANAGE`;
-- `TABLE_VIEW`.
+- `TABLE_VIEW`;
+- `STAFF_SCHEDULE_VIEW_OWN`.
 
 STAFF не получает:
 - `MENU_MANAGE`;
@@ -61,6 +67,7 @@ STAFF Mini App behavior:
 - shift-extension requests view/confirm where backend allows;
 - menu content read-only, with operational item/option availability toggles;
 - tables read-only;
+- read-only `Мои смены` with overlap-only safe colleagues;
 - forbidden management controls hidden and backend-protected.
 - `Помощь` / `Обращения`, ordinary venue chats and `Отзывы`/feedback follow-up are hidden and backend-forbidden.
 
@@ -82,6 +89,7 @@ STAFF Mini App behavior:
 - View tables read-only.
 - Use Venue Mini App working panel.
 - Edit own linked staff-profile draft fields only if current policy allows and `linked_user_id` matches current user; photo upload/media picker remains future.
+- View own planned shifts and safe overlapping colleagues in the selected venue.
 
 ## Denied actions
 
@@ -105,6 +113,8 @@ STAFF Mini App behavior:
 - Create invites/update roles/remove members.
 - Publish/hide public staff profiles or enable guest visibility for their own profile.
 - Edit another staff profile or mark themselves/others `Сегодня на смене` unless a future explicit policy grants it.
+- Read the full venue schedule, unrelated colleagues or another user's shifts; create, update,
+  cancel, restore or bulk-assign shifts.
 - Configure or approve future staff tip methods.
 - Manage staff chat link/status diagnostics.
 - See or reply to `SUPPORT_TICKET`.
@@ -137,7 +147,10 @@ STAFF Mini App behavior:
   runtime docs still allow STAFF individual item/option availability through
   `MENU_AVAILABILITY_MANAGE`; target policy is Staff stop-list only when venue policy enables it,
   with no structure, price, media, option schema or featured/top-list access.
-- Staff profiles / today shift are `MVP DONE / SMOKE-PASSED`: Staff may edit only own linked draft fields if policy allows; Staff cannot self-publish, enable public visibility or approve future tip methods. Photo upload, schedule and staff tips remain future.
+- Staff profiles/Today and Staff Schedule are `DONE / MVP / STAGING-SMOKE-PASSED`: Staff may edit
+  only own linked draft fields if policy allows and has read-only own-schedule/overlap visibility.
+  Staff cannot self-publish, enable public visibility, mutate schedule or approve future tip
+  methods. Photo upload and staff tips remain future.
 - Staff tips are future and must not be implemented as platform-collected payments, Telegram Stars or crypto in MVP.
 
 ## Smoke-critical checks
@@ -163,3 +176,6 @@ STAFF Mini App behavior:
 18. If policy allows own draft edit, STAFF can edit only own linked public-profile draft fields and cannot publish, hide, enable visibility, edit another profile, mark shifts or approve tip methods.
 19. STAFF does not see `Отзывы`, cannot list feedback or trigger `Связаться с гостем` through direct API, and cannot access the Owner-only public review URL setting.
 20. Staff-chat receives no feedback submission or follow-up context.
+21. STAFF opens `Мои смены`, sees only own shifts plus safe interval-overlapping colleagues
+    (including overnight cases), and direct create/update/cancel/restore/bulk or unrelated-schedule
+    reads are denied.

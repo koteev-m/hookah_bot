@@ -1,20 +1,87 @@
 # Staff Profiles, Today Shift, Staff Schedule And Staff Tips
 
-Дата актуализации: 2026-08-03.
+Дата актуализации: 2026-08-04.
 
 Статус: **canonical staff visibility/schedule/tips spec**.
 `STAFF PROFILES + TODAY SHIFT PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`.
-`STAFF OPERATIONS SLICE A / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`.
-Slice A scope is `MANAGER PARITY + SHIFT TIME DEFAULTS`.
-`STAFF IDENTITY LINKING UX + DUPLICATE PREVENTION / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`.
-`STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / IDENTITY LINKING FIX IMPLEMENTED / STAGING RE-SMOKE REQUIRED`.
-The identity-linking blocker fix and the already implemented Restore + Bulk Assignment context
-still require independent re-review, green Actions, runtime deploy and a new staging smoke. The identity slice does not
-change Staff Schedule calculations/lifecycle, Today Staff or Guest source behavior. The separate
-Slice A invite-revoke V120/H2 V121 rollout remains its own release gate.
+`STAFF OPERATIONS SLICE A / MANAGER PARITY + SHIFT TIME DEFAULTS / DONE / MVP / STAGING-SMOKE-PASSED`.
+`STAFF IDENTITY LINKING UX + DUPLICATE PREVENTION / DONE / MVP / STAGING-SMOKE-PASSED`.
+`STAFF SCHEDULE PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`.
+`STAFF SCHEDULE / CANCELED SHIFT RESTORE + BULK ASSIGNMENT / DONE / MVP / STAGING-SMOKE-PASSED`.
+Green GitHub Actions, staging deploy and the bounded manual smoke described below are complete.
+These completed slices remain separate from the future Optional Team/Schedule Module Slice B.
 `STAFF_TIP`, photo upload/media picker and staff shift sign-up/chat workflows
 remain future. Phase 2 may create staff tip intents with external staff tip links, but the platform
 must not collect guest order payments or staff tips in MVP.
+
+## Current Release Closure / 2026-08-04
+
+The completed status is backed by green Actions, staging deploy and successful manual smoke:
+
+- Staff Schedule: Owner and Manager create/update/cancel; Staff read-only own shifts; overlapping
+  colleagues; unrelated shifts hidden; overnight rendering; venue timezone; week navigation; stale
+  Owner/Manager CAS conflict; venue-switch isolation; display-only profiles; direct Staff mutation
+  denial; validation and cleanup.
+- Canceled Shift Restore + Bulk Assignment: restore with saved or new interval; same `shiftId` and no
+  second row; employee multi-select; common hours and per-person override; mixed `CREATE + RESTORE`;
+  atomic conflict rollback; explicit restore without silent resurrection; Owner/Manager access;
+  Staff read-only; Today Shift compatibility; individual edit/cancel regression.
+- Manager parity and invites: Staff-only invite create/list/revoke; Owner/Manager invite denial for
+  Manager; revoked deep link fail-closed; Owner invite regression; Manager profile CRUD only for
+  display-only/Staff-linked cards; protected Owner/Manager cards read-only; protected Today Shift
+  boundary; effective weekly hours; date exception precedence; closed/not-configured behavior;
+  manual time preservation; explicit `Заполнить по часам заведения`; edit preserves the stored
+  interval.
+- Identity linking: human `displayName`; `@username` or `Без username`; raw Telegram id is not the
+  primary label; Manager duplicate state is read-only and redacted; Owner sees both real cards and
+  safely unlinks only the wrong one; the correct card remains linked; schedule/history rows remain;
+  Staff sees one own shift and Manager as a colleague; a second active linked card is rejected;
+  protected-profile controls, Guest privacy and account/venue isolation passed.
+- Guest Today Staff regression: current source remains `MANUAL`; a published guest-visible profile
+  appears in `Сегодня работают` only after explicit manual Today Shift save. Staff Schedule
+  alone never publishes a profile, future shifts are not disclosed and Guest receives no full staff
+  schedule.
+
+The records do not prove that a separate Staff account with no active card was available for the
+manual create-from-member path. This one non-blocking scenario is tracked only as
+[`STAFF-IDENTITY-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#staff-identity-manual-001); it does
+not downgrade the completed Identity Linking MVP.
+
+### Current Staff Identity Policy
+
+1. Owner/Manager private directory uses safe human identity: `displayName`, nullable `username`,
+   role and profile link state. Transport identifiers are not primary UI labels.
+2. Manager sees protected Owner/Manager profiles read-only for management, linkage, publication
+   and Today controls, with `linkedUserId` redacted and `canManage=false`. The existing separate
+   self-edit permission may update only the actor's own safe non-management draft fields; it grants
+   no protected-card management or duplicate-repair authority.
+3. Duplicate state is read-only for Manager. Owner alone opens both cards in the common list and
+   safely unlinks the wrong card; automatic merge/delete/relink is forbidden.
+4. One venue member has at most one active linked staff card. Active means `disabled_at IS NULL`;
+   create/relink/reactivation enforce the invariant inside the target-membership transaction, and
+   PostgreSQL concurrency tests passed.
+5. Create-from-member derives the current Telegram identity server-side, requires an explicit
+   subtype and creates a hidden draft without automatic Guest publication.
+6. Guest receives no Telegram id, username as internal identity, membership role or invite/link
+   state; only published public-card fields are returned.
+
+### Non-Blocking Slice B UX Follow-Up
+
+`MANUAL TODAY SHIFT CONTROL CLARITY` remains future and does not block the completed statuses. In
+`MANUAL`, replace the ambiguous save action `Сегодня на смене` with a persisted switch
+`Показывать сотрудника гостям сегодня`, explicit `Включено / Выключено` state and
+success copy `Сотрудник отображается в блоке «Сегодня работают».`. In future
+`source=SCHEDULE`, the manual control is hidden or read-only.
+
+### Remaining P2 / Future
+
+- opaque venue-scoped member reference instead of raw Staff-id transport;
+- operational log masking;
+- generic `PATCH` publish/hide audit taxonomy;
+- cross-relink deadlock hardening;
+- broader audit assertion hardening;
+- feature-specific old-binary rollback runbook;
+- manual Today Shift control clarity.
 
 ## Core Rule
 
@@ -31,7 +98,7 @@ orders. Staff tips, when implemented, must target a specific staff profile, not 
 | --- | --- | --- |
 | `STAFF_PROFILE` | Guest-visible profile for a hookah master, waiter, admin or other staff subtype. | `STAFF PROFILES + TODAY SHIFT PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`. |
 | `SHIFT_TODAY` | Simple manual "today on shift" visibility for public staff profiles. | `STAFF PROFILES + TODAY SHIFT PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`. |
-| `STAFF_SCHEDULE` | Optional bounded venue schedule for planned staff shifts. | `STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / IDENTITY LINKING FIX IMPLEMENTED / STAGING RE-SMOKE REQUIRED`. Restore + Bulk Assignment remains implemented; the identity-linking fix does not change schedule behavior. |
+| `STAFF_SCHEDULE` | Optional bounded venue schedule for planned staff shifts. | `STAFF SCHEDULE PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`; `CANCELED SHIFT RESTORE + BULK ASSIGNMENT / DONE / MVP / STAGING-SMOKE-PASSED`. |
 | `STAFF_TIP` | Future CTA and intent to thank a specific staff member. | Phase 2+ / spec draft. |
 
 ## Staff Profiles / Today Shift Phase 1 MVP
@@ -39,8 +106,7 @@ orders. Staff tips, when implemented, must target a specific staff profile, not 
 Current Phase 1 implementation plus Staff Operations Slice A includes:
 - Owner keeps broad staff-profile management over same-venue memberships.
 - Manager creates and manages display-only and active-Staff-linked profiles, including
-  publish/hide; Owner/Manager-linked cards are protected and read-only except the Manager's
-  existing safe self-edit fields.
+  publish/hide; Owner/Manager-linked cards are protected and read-only.
 - Profile may be linked to a real venue member through `linked_user_id`, or may be display-only.
 - Public visibility is opt-in through `is_guest_visible`.
 - Owner publishes/hides profiles; Manager publishes/hides only display-only or Staff-linked
@@ -61,8 +127,8 @@ Current Phase 1 implementation plus Staff Operations Slice A includes:
 - `Создать карточку` from an unlinked member preselects that member and current safe display name;
   `Открыть карточку` opens the existing linked card. Manual id copying is not required.
 - One venue member may have at most one active linked profile. Existing duplicates are reported and
-  repaired only through explicit safe unlink; they are never merged, deleted, relinked or hidden
-  automatically.
+  repaired only by Owner through explicit safe unlink of the wrong card; Manager sees duplicate
+  state read-only. Rows are never merged, deleted, relinked or hidden automatically.
 - The create form is collapsed
   by default, existing cards are compact, `Другое` requires `Название роли`, and raw User ID /
   Photo ref inputs are not exposed.
@@ -111,18 +177,19 @@ Rules:
   or migration is required.
 - If exactly one active linked card exists, mutation returns a typed conflict with its safe profile
   reference. If more than one exists, projection state is `DUPLICATE_LINK_DETECTED` and ordinary
-  new linking is blocked until explicit unlink leaves one primary card.
+  new linking is blocked until Owner explicitly safe-unlinks the wrong card and leaves one primary
+  card.
 - Existing duplicates remain distinct rows for Schedule/Today/self-view. No read-side dedupe,
   automatic primary selection, merge, delete or relink is allowed.
 - If `subtype=other`, Owner must provide `role_label` / `Название роли`; this custom role is what
   guests see. Old or incomplete `other` profiles fall back to `Сотрудник`, not `Другое`.
 - Public guest DTOs must not include `linked_user_id`, Telegram ids, phone, email or private notes.
 - Owner/Manager private profile DTOs are actor-aware and contain server-computed
-  `linkageClass`, `canManage` and `isSelf`. Manager receives `linkedUserId=null` for protected,
-  duplicate, missing/orphaned, Owner-linked and Manager-linked cards; the Manager's own linked card
-  is `PROTECTED`, `isSelf=true` and keeps only safe self-edit. Owner keeps the existing broader
-  private linkage projection and repair controls. Staff self-view uses `isSelf` and does not expose
-  the raw linkage id.
+  `linkageClass`, `canManage` and `isSelf`. Manager receives `linkedUserId=null` and
+  `canManage=false` for protected, duplicate, missing/orphaned, Owner-linked and Manager-linked
+  cards, including the Manager's own protected card. Owner keeps the existing broader private
+  linkage projection and is the only role that repairs duplicates. Staff self-view uses `isSelf`
+  and does not expose the raw linkage id.
 - Manager profile mutations re-check current linkage, current membership role, requested linkage
   and requested membership role inside the mutation transaction. Manager targets are limited to
   display-only or a same-venue Staff membership; missing/foreign and Owner/Manager links fail
@@ -175,7 +242,8 @@ Target fields:
 
 MVP behavior:
 - The venue manually marks who is working today.
-- Full scheduling, recurring shifts, payroll, assignment and staff performance analytics are future.
+- Bounded Staff Schedule Phase 1 and bulk assignment are completed separate modules. Recurring
+  shifts, attendance, payroll and staff performance analytics remain future.
 - Guest visibility requires both the shift and the linked staff profile to be guest-visible.
 
 ## Guest UX
@@ -183,8 +251,9 @@ MVP behavior:
 - Venue detail shows `Сегодня работают` with visible public staff profiles when such shifts exist.
 - `Сегодня работают` appears below main venue information/actions/menu context, not as the first
   card after the venue header.
-- Guest API exposes only public profile display fields and the today-shift state; it does not expose
-  `linked_user_id`, Telegram ids, invite state or private contact fields.
+- Guest API exposes only published public-card display fields and the current manual Today
+  projection. It does not expose `linked_user_id`, Telegram id, username as internal identity,
+  membership role, invite/link state, private contacts, future shifts or the full staff schedule.
 - Catalog may later show a compact line such as `Сегодня: Иван, Алина`.
 - Staff profile detail may show display name, role/custom role, subtype fallback, bio, tags and
   photo placeholder or approved photo when future upload exists.
@@ -210,6 +279,8 @@ MVP behavior:
 
 - An unlinked row offers `Создать карточку`; a linked row offers `Открыть карточку`; a duplicate row
   shows `К этому сотруднику привязано несколько карточек. Выберите основную и отвяжите остальные.`
+  Manager sees this state without open/edit/link/unlink repair controls; only Owner opens both real
+  cards from the common list and safely unlinks the wrong card.
 - Profiles are optional.
 - Guest sees only published profiles.
 - `Сегодня на смене` makes the published profile appear in `Сегодня работают`.
@@ -225,6 +296,8 @@ MVP behavior:
 - Photo upload is future; use a safe placeholder until real upload/media picker exists.
 - Owner manages profiles, guest visibility and publish/hide state.
 - Manager manages only display-only/Staff-linked cards; Owner/other-Manager cards remain read-only.
+- Every protected Owner/Manager card returns redacted `linkedUserId` and `canManage=false` to
+  Manager; duplicate repair is Owner-only.
 - Manager may manage today's active/completed/canceled shift state only for display-only and active
   same-venue Staff-linked profiles; every protected linkage fails closed.
 - Staff may edit only own linked draft fields.
@@ -250,8 +323,8 @@ Backend/repository/API:
    HTTP transactions through both create-from-member and relink paths, proves the target membership
    lock wait without sleeps, and commits one winner plus one typed conflict with winner-only audit.
 6. Existing multiple active links return `DUPLICATE_LINK_DETECTED`, create no cleanup mutation and
-   remain distinct until explicit safe unlink. Foreign/removed and protected Owner/Manager targets
-   are denied under current policy.
+   remain distinct until Owner-only explicit safe unlink. Foreign/removed and protected
+   Owner/Manager targets are denied under current policy.
 7. Successful create/update reuses `STAFF_PROFILE_CREATED` / `STAFF_PROFILE_UPDATED` with safe
    venue/profile/linkage/role-class/changed-field payload. Denial, duplicate and no-op paths write no
    success audit.
@@ -263,8 +336,8 @@ Mini App/e2e:
    a raw-id primary label.
 2. `Создать карточку` preselects the correct member/display name; `Открыть карточку` opens the one
    existing card, and already-linked members cannot be selected again.
-3. Duplicate linkage shows the exact warning and remains resolvable by explicit unlink without
-   masking distinct Schedule rows.
+3. Duplicate linkage shows the exact warning and remains resolvable only by Owner explicit safe
+   unlink without masking distinct Schedule rows.
 4. Manager sees Staff identities/actions but no editable protected Owner/Manager targets; Owner
    retains current controls.
 5. Venue/account switch clears directory, selection and profile state and rejects late responses;
@@ -273,15 +346,14 @@ Mini App/e2e:
 
 ## STAFF_SCHEDULE Phase 1 / Optional Venue Shift Planning
 
-Status: **STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / IDENTITY LINKING FIX IMPLEMENTED / STAGING RE-SMOKE REQUIRED**.
+Status: **STAFF SCHEDULE PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**.
 
 The bounded Restore + Bulk Assignment slice adds explicit canceled-shift restoration and atomic
-multi-profile assignment. It is locally validated and still requires green Actions, staging deploy
-and a new staging smoke. Staff Identity Linking UX Polish is the latest bounded slice; it reuses the
-already implemented schedule/profile rows without changing calculations or lifecycle. This is not
-a production-readiness claim. The existing Staff Operations
-Slice A invite-revoke V120/H2 V121 rollout remains a separate release gate and is not a migration
-for this schedule slice.
+multi-profile assignment and is **DONE / MVP / STAGING-SMOKE-PASSED**. Staff Identity Linking UX
+reuses the already implemented schedule/profile rows without changing calculations or lifecycle and
+is also **DONE / MVP / STAGING-SMOKE-PASSED**. The Slice A PostgreSQL V120/H2 V121 invite-revoke
+schema remains separate from schedule schema; its green Actions, rollout and staging smoke are now
+part of the completed Slice A evidence.
 
 `STAFF_SCHEDULE` is an optional Venue Mode module. A venue that does not create shifts continues to
 use Staff Profiles, manual Today Shift, Staff Calls, Orders, Bookings and every Guest flow exactly as
@@ -291,7 +363,8 @@ Venue Mini App remains the source of truth.
 Migration verdict: **NO_MIGRATION_EXPECTED**.
 
 Implementation verdict:
-**STAFF OPERATIONS SLICE A / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+**STAFF OPERATIONS SLICE A / MANAGER PARITY + SHIFT TIME DEFAULTS / DONE / MVP /
+STAGING-SMOKE-PASSED**.
 
 ### Current Runtime And Schema Evidence
 
@@ -870,7 +943,7 @@ and atomic batch methods.
 `upsertTodayShift` remains the focused Today wrapper with preserve-on-omission compatibility, while
 schedule lifecycle/horizon logic uses an injected `Clock` for deterministic tests.
 
-### Validation Evidence And Remaining Release Gates
+### Validation And Release Evidence
 
 Local:
 
@@ -886,26 +959,14 @@ npm --prefix miniapp run build
 CI=1 TZ=UTC MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke
 ```
 
-The commands above are the required local gate for Staff Identity Linking UX Polish and the
-unchanged Restore + Bulk Assignment regression. Record exact command results from the current
-worktree in the implementation handoff; do not reuse an earlier Slice A browser count as evidence
-for this slice.
-
-Remaining release gates:
-
-- green GitHub Actions before release;
-- staging deploy after green Actions;
-- accepted-name, username/missing-username, create/open and already-linked manual smoke;
-- duplicate warning, explicit unlink and deterministic double-link race smoke;
-- venue/account-switch identity and selection isolation smoke;
-- Owner, Manager and Staff manual smoke;
-- overnight/timezone/DST smoke;
-- two-account Staff visibility smoke;
-- venue-switch stale-response smoke;
-- explicit old-time/new-time restore plus mixed atomic create/restore batch smoke;
-- canceled/scheduled conflict presentation, create/restore confirmation counts and one-request proof;
-- Today Shift/Guest regression;
-- cleanup of disposable test shifts/profiles.
+These commands remain the regression gate for future changes. For the completed release, GitHub
+Actions were green, staging deploy completed and the current manual evidence covers accepted human
+identity and username fallback, protected/duplicate controls, Owner-only safe repair,
+venue/account-switch isolation, Owner/Manager/Staff roles, timezone/overnight, stale CAS,
+saved/new-time restore, mixed atomic create/restore batch, typed conflicts, Today Shift/Guest
+compatibility and cleanup. The only environment-dependent scenario not separately evidenced is the
+free-member create-from-member path tracked in `STAFF-IDENTITY-MANUAL-001`; it is non-blocking and
+does not change the completed status.
 
 ### Explicit Out Of Scope
 
@@ -979,15 +1040,18 @@ Rules:
 
 ## RBAC
 
-- Guest views only public visible profiles and shifts.
+- Guest views only the published public-card fields selected by the exact manual Today projection;
+  Guest never receives the full or future Staff Schedule.
 - Guest may create a future tip intent only for a visible, `tips_enabled` staff profile.
 - Owner manages profiles, publish/hide state, optional own-venue schedule and future tip-method
   approval.
 - Manager manages display-only/Staff-linked profiles and their publish/hide state, cannot mutate
-  Owner/other-Manager linkage or visibility, and keeps safe self-edit for their own linked card.
+  Owner/Manager linkage or visibility; every protected card, including the Manager's own linked
+  card, is read-only with redacted `linkedUserId` and `canManage=false`.
 - Manager receives active Staff identities only in the private directory/link selector and may
-  create/open/link/unlink only Staff cards. Owner retains the broader current policy and
-  last-owner/protected constraints.
+  create/open/link/unlink only ordinarily manageable Staff cards. Duplicate state is always
+  read-only for Manager; Owner alone opens both concrete cards and unlinks the wrong one. Owner
+  retains the broader current policy and last-owner/protected constraints.
 - Manager may change manual Today Shift only for display-only and active same-venue Staff-linked
   profiles. Owner/Manager-linked, orphaned, missing, inactive/removed and foreign linkages are
   protected. Manager receives the same own-venue planned-shift management as Owner.
@@ -1002,7 +1066,7 @@ Rules:
   old/new publication/linkage state; no code/hash, Telegram identity, raw content or photo ref.
 - Telegram Bot invite audit parity and feature-specific generic PATCH visibility action taxonomy
   remain P2 follow-ups; this Slice A does not claim them closed.
-- Schedule create/update/cancel keeps the transaction-bound audit contract above.
+- Schedule create/update/cancel/restore keeps the transaction-bound audit contract above.
 - Duplicate-link denial is not a successful profile mutation and writes no success audit.
 
 ## Privacy And Security
@@ -1039,17 +1103,16 @@ Analytics events are not the source of truth. Domain tables and audit logs remai
 - Today on shift: `DONE / MVP / STAGING-SMOKE-PASSED`.
 - Staff profile UX polish: `DONE / MVP / STAGING-SMOKE-PASSED`.
 - Staff Identity Linking UX + Duplicate Prevention:
-  `MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`.
+  `DONE / MVP / STAGING-SMOKE-PASSED`.
 - Photo upload/media picker: `FUTURE`.
 - Venue info-section media decision does not close staff-photo scope; see
   `docs/MEDIA_STORAGE_UPLOAD.md`.
 - Staff Operations Slice A:
-  `MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`;
-  scope is `MANAGER PARITY + SHIFT TIME DEFAULTS`.
+  `MANAGER PARITY + SHIFT TIME DEFAULTS / DONE / MVP / STAGING-SMOKE-PASSED`.
 - Staff schedule:
-  `STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / IDENTITY LINKING FIX IMPLEMENTED / STAGING RE-SMOKE REQUIRED`;
-  Restore + Bulk Assignment remains implemented and the schedule model itself remains
-  `NO_MIGRATION_EXPECTED`. Identity linking also requires no migration because mutations serialize
+  `STAFF SCHEDULE PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`; Canceled Shift Restore + Bulk
+  Assignment is `DONE / MVP / STAGING-SMOKE-PASSED`. The completed Phase 1 schedule model remains
+  `NO_MIGRATION_EXPECTED`; identity linking also required no migration because mutations serialize
   on the existing `venue_members` row.
 - Optional Team/Schedule module settings and a Guest `MANUAL`/`SCHEDULE` source switch are Slice B
   `FUTURE`; Restore + Bulk Assignment and Staff Identity Linking UX Polish add neither.
@@ -1061,14 +1124,372 @@ Analytics events are not the source of truth. Domain tables and audit logs remai
 - Payments for tips: `FUTURE / needs legal/payment decision`.
 - Guest order online payment: not in scope; order payment remains the offline terminal model.
 
-## Next Release Step
+## Next Staff Runtime Block / Slice B Implementation-Ready Plan
 
-Wait for green GitHub Actions, deploy the runtime change and run the listed identity/linking,
-duplicate/race/unlink, Owner/Manager/Staff, restore/batch atomicity,
-effective-hours/timezone/overnight/privacy, venue-switch/account-switch and Today/Guest
-regression smoke. Do not claim production readiness until those gates pass. The existing
-PostgreSQL V120 invite-revoke rollout/drain requirement belongs to Staff Operations Slice A. The
-Restore + Bulk Assignment and identity-linking slices add no migration and do not change existing
-schedule constraints. Do not enable the new linking UI while an old runtime without the duplicate
-check can still accept profile writes. Keep Slice B module/source settings, tips, photo upload,
-staff communication/chat/sign-up and every payment path out of scope.
+Selected block:
+`STAFF OPERATIONS SLICE B / OPTIONAL TEAM AND SCHEDULE MODULE / GUEST MANUAL OR SCHEDULE SOURCE`.
+
+Read-only audit verdict: **IMPLEMENT_STAFF_OPERATIONS_SLICE_B_NOW**.
+
+This is exactly one next Staff runtime block. It does not reopen or merge the completed Phase 1,
+Slice A, identity-linking or restore/bulk releases above.
+
+### 1. Current Schema And Runtime Evidence
+
+- Audit snapshot: repository HEAD `4ae93e810ffa8d72532244e48963a8a510b0adfa` on 2026-08-04.
+- `venue_settings` exists in both database families and already has `updated_at`: PostgreSQL
+  `V60__venue_settings.sql` uses `TIMESTAMPTZ`; H2 `V60__venue_settings.sql` uses
+  `TIMESTAMP WITH TIME ZONE`.
+- None of `team_schedule_module_enabled`, `guest_team_visible` or `today_staff_source` exists in
+  schema, repository models, routes, DTOs or Mini App code.
+- PostgreSQL Flyway head is V120; H2 Flyway head is V121. The database factory selects separate
+  `db/migration/postgresql` and `db/migration/h2` locations, so the different heads are expected.
+- `VenueSettingsRepository` currently reads notification/timezone/review fields but does not map
+  `updated_at`; its default insert names columns explicitly, so new database defaults will also
+  protect old insert call sites.
+- Guest venue detail, standalone Today Staff and both Guest Preview modes already converge on
+  `GuestVenueReadService`. That service resolves the venue timezone and currently selects the
+  exact venue-local date through `VenueStaffProfileRepository.listPublicTodayStaff`.
+- The current manual public query requires a published, guest-visible, non-disabled profile and a
+  guest-visible non-canceled row for the exact date. Schedule-created rows default to
+  `is_guest_visible=false` and `manually_marked_active=false`, so Staff Schedule alone does not
+  publish a person.
+- `VenueStaffScheduleDomain` already owns interval validation, venue-timezone conversion,
+  overnight handling, DST rejection and lifecycle calculation. `ACTIVE` is already start
+  inclusive and end exclusive.
+- Core membership/invite routes and profile/Today routes currently share `VenueStaffRoutes`; the
+  guard must therefore be applied per optional route, not around the whole Staff router.
+- `/venue/me` currently returns role plus static permissions only. It needs one safe module-enabled
+  capability for Staff navigation without exposing the settings object or granting settings read.
+- Manager has no broad `VENUE_SETTINGS` permission. Existing protected Manager projections use
+  redacted `linkedUserId` and `canManage=false`; a distinct `STAFF_PROFILE_EDIT_OWN` path permits
+  only the actor's safe self draft fields. Slice B preserves that separation while master-off
+  guards every optional profile route.
+
+### 2. Final Settings Model
+
+```text
+StaffModuleSettings {
+  teamScheduleModuleEnabled: Boolean
+  guestTeamVisible: Boolean
+  todayStaffSource: MANUAL | SCHEDULE
+  updatedAt: Instant
+}
+```
+
+Store the three product fields in the existing one-row-per-venue `venue_settings` table. Reuse
+`updated_at` as the opaque CAS token; do not add a second version column. The settings API is a
+dedicated full-object `GET`/`PUT /api/venue/{venueId}/staff-module-settings`, separate from broad
+venue settings.
+
+`PUT` request:
+
+```text
+teamScheduleModuleEnabled
+guestTeamVisible
+todayStaffSource
+expectedUpdatedAt
+```
+
+The response returns the saved full object with the new `updatedAt`. Unknown source values fail
+validation. A stale token fails safely without mutation or success audit. A no-op returns the
+current object and writes no success audit. The repository locks the one venue-settings row,
+compares `expectedUpdatedAt`, chooses an explicit millisecond-safe value strictly greater than the
+previous token, updates all three fields and appends audit on the same connection before commit.
+Because `updated_at` belongs to the shared row, a concurrent change to another venue setting
+conservatively makes this form stale and requires reload.
+Use typed `409 STAFF_MODULE_SETTINGS_STALE` for the stale CAS response; do not overload a generic
+validation error.
+
+### 3. Backward-Compatible Defaults And Backfill
+
+```text
+teamScheduleModuleEnabled = true
+guestTeamVisible = true
+todayStaffSource = MANUAL
+```
+
+Use `NOT NULL DEFAULT` columns. The additive migration backfills existing rows through those
+defaults, and future/legacy explicit-column inserts inherit them. A missing legacy
+`venue_settings` row is read as these defaults; authenticated settings `GET` materializes the row
+before returning a real `updatedAt` CAS token. Do not rewrite profile or shift rows.
+
+### 4. Module Route Guards And Disable Semantics
+
+Authorization order is mandatory: authenticate, resolve own-venue membership and required RBAC,
+then read module state. Foreign venue, Staff settings access and Platform-only access must not be
+able to distinguish enabled from disabled.
+
+When `teamScheduleModuleEnabled=false`:
+
+- keep memberships, invites, roles, order/booking/call/menu/table and all other operational access;
+- keep profile, shift and settings rows unchanged;
+- leave the dedicated settings `GET`/`PUT` available to authorized Owner/Manager so the module can
+  be enabled again;
+- guard profile CRUD/publish/hide/self-edit, manual Today reads/writes and all schedule reads/writes
+  after tenant/RBAC checks with a safe `409 STAFF_MODULE_DISABLED`;
+- show Owner/Manager a disabled explanation and enable action without loading protected module
+  data;
+- hide `Мои смены` for Staff, while direct navigation/API still fails closed;
+- return an empty Today Staff/team projection to Guest and both Preview modes;
+- re-enable against the same retained profiles/shifts and settings values.
+
+Core Staff directory and invite list/create/revoke/accept semantics are not module routes and must
+never be guarded by the master switch. Do not wrap the complete `VenueStaffRoutes` tree.
+When master is enabled but `todayStaffSource=SCHEDULE`, manual Today reads may remain available for
+truthful read-only state, but every direct manual Today mutation fails after tenant/RBAC/module
+checks with `409 STAFF_TODAY_SOURCE_CONFLICT` and
+`Состав для гостей определяется активными сменами в графике.` Switching source never clears a
+manual overlay.
+
+### 5. MANUAL/SCHEDULE Guest Resolver
+
+One server resolver feeds venue detail, `GET /api/guest/venue/{id}/today-staff` and Guest Preview.
+It first returns empty when master is off or `guestTeamVisible=false`, then selects exactly one
+source with no fallback.
+
+`MANUAL` preserves the current contract:
+
+- exact venue-local date;
+- the existing manual Today mutation and public-row predicate: shift `is_guest_visible=true`,
+  stored `scheduled|active`, and the current exact-date row; do not add a new origin field or make
+  `manually_marked_active` a new Guest-read prerequisite;
+- published, guest-visible, non-disabled profile;
+- current public `GuestTodayStaffDto` only;
+- planned schedule rows alone never publish a person.
+
+`SCHEDULE` does not use manual Today publication flags as authority and returns only profiles whose
+shared shift row:
+
+- is valid and not canceled;
+- resolves to lifecycle `ACTIVE` at the injected current instant;
+- satisfies `start <= now < end`;
+- is published, guest-visible and not disabled.
+
+A manual-only row without a complete valid interval is excluded. If a planned row already carries
+a historical manual Today overlay, it qualifies only through its valid active interval, never
+because of `is_guest_visible`/`manually_marked_active`; switching sources does not clear either
+flag or rewrite the row.
+
+Query the venue-local today and previous date so an overnight shift remains active after midnight,
+then resolve/dedupe in the domain layer with deterministic public ordering. Do not return future or
+completed shifts, full schedule, shift id, linked user, Telegram identity, membership role,
+concurrency token or audit fields. Do not fall back from `SCHEDULE` to `MANUAL` when no shift is
+active.
+
+### 6. Timezone And Overnight Contract
+
+Inject one `Clock`/current `Instant` into the resolver. Resolve the venue `ZoneId` once, inspect
+today plus yesterday, and reuse `resolveStaffScheduleInterval` and
+`computeStaffScheduleLifecycle`. Keep the current DST policy: nonexistent local instants are
+invalid; an overlap uses the earlier valid offset; maximum duration stays 24 hours. Start is
+inclusive and end is exclusive.
+
+### 7. RBAC And Privacy
+
+- Add narrow `STAFF_MODULE_SETTINGS_MANAGE` to Owner and Manager only. Do not grant Manager
+  `VENUE_SETTINGS`.
+- Owner/Manager settings authority is own-venue only. Staff and foreign venue are denied before
+  module state is read. Platform-only identity gains nothing automatically.
+- Staff keeps read-own schedule only while the module is enabled and never receives settings.
+- Guest receives only the existing public profile projection. It receives no shift id, link state,
+  username/internal identity, Telegram id, member role, invite state, raw settings or audit/CAS
+  data.
+- Existing Owner-only duplicate repair, one-active-link invariant and Manager protected/duplicate
+  read-only management policy remain unchanged.
+
+### 8. Owner/Manager Settings UX
+
+Venue Mode -> `Настройки` adds one card:
+
+`Команда и график смен`
+
+`Используйте этот раздел, если хотите вести карточки сотрудников и график смен в Mini App. При
+отключении сохранённые данные не удаляются. Доступ сотрудников к заказам и кабинету продолжает
+работать.`
+
+Controls:
+
+1. `Использовать карточки команды и график смен`.
+2. `Показывать команду гостям`.
+3. `Кто сегодня работает`: `Вручную` / `По графику смен`.
+
+Hide or disable nested controls when master is off, but retain their saved values in the draft.
+Save the full object with `expectedUpdatedAt`; on success show a concise confirmation summary.
+Stale save reloads and asks the user to review the current settings rather than overwriting them.
+The transaction writes exactly one safe `STAFF_MODULE_SETTINGS_UPDATED` audit containing venue,
+actor, changed field names and old/new enum/boolean values. Audit failure rolls back the update;
+denial, invalid input, stale CAS, no-op and rollback write no success audit.
+
+### 9. Staff Navigation And Venue Staff Screen
+
+- Add `teamScheduleModuleEnabled` as a safe per-membership capability in `/venue/me`.
+- Hide Staff `Мои смены` when disabled and block a bookmarked route before loading data.
+- Keep Owner/Manager `Персонал` because `Доступ сотрудников` and invites are core. Replace only the
+  optional cards/Today area with the disabled explanation and enable CTA; do not request profile or
+  Today data while off. Keep safe member/link-state rows visible, but hide/disable their
+  `Создать карточку` / `Открыть карточку` module actions.
+- Owner/Manager `График смен` may remain discoverable and render the same explanation/CTA while off.
+- Venue/account switches must discard stale module/settings/profile/schedule responses.
+
+### 10. Guest And Preview Behavior
+
+`guestTeamVisible=false` or master-off yields an empty Today Staff list in the real Guest venue
+envelope, standalone Today endpoint and both `PUBLISHED_PUBLIC` and `PRIVATE_DRAFT` Preview modes.
+The existing renderer already omits the empty `Сегодня работают` block. Preview must call the same
+resolver; it must not create a private schedule backdoor or reveal future shifts.
+
+### 11. Exact Migration Need And Numbers
+
+The next implementation adds only:
+
+- PostgreSQL `V121__staff_module_settings.sql`;
+- H2 `V122__staff_module_settings.sql`.
+
+Each migration adds:
+
+```sql
+team_schedule_module_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+guest_team_visible BOOLEAN NOT NULL DEFAULT TRUE,
+today_staff_source VARCHAR(16) NOT NULL DEFAULT 'MANUAL',
+CHECK (today_staff_source IN ('MANUAL', 'SCHEDULE'))
+```
+
+Reuse existing `updated_at`; add no table, index or destructive backfill. Do not add a constraint
+that clears or rewrites nested values when master is false. Recheck both heads immediately before
+implementation because unrelated commits can consume these numbers.
+
+### 12. Likely Files
+
+Backend/schema:
+
+- `backend/app/src/main/resources/db/migration/postgresql/V121__staff_module_settings.sql`;
+- `backend/app/src/main/resources/db/migration/h2/V122__staff_module_settings.sql`;
+- new
+  `backend/app/src/main/kotlin/com/hookah/platform/backend/miniapp/venue/staff/VenueStaffModuleSettingsRepository.kt`
+  over the existing `venue_settings` table;
+- new
+  `backend/app/src/main/kotlin/com/hookah/platform/backend/miniapp/venue/VenueStaffModuleSettingsRoutes.kt`;
+- `backend/app/src/main/kotlin/com/hookah/platform/backend/miniapp/venue/VenueRbac.kt`;
+- `backend/app/src/main/kotlin/com/hookah/platform/backend/miniapp/venue/VenueRoutes.kt`;
+- `backend/app/src/main/kotlin/com/hookah/platform/backend/miniapp/venue/VenueStaffRoutes.kt`;
+- `backend/app/src/main/kotlin/com/hookah/platform/backend/miniapp/venue/VenueStaffScheduleRoutes.kt`;
+- `backend/app/src/main/kotlin/com/hookah/platform/backend/miniapp/venue/staff/VenueStaffProfileRepository.kt`;
+- `backend/app/src/main/kotlin/com/hookah/platform/backend/miniapp/guest/GuestVenueReadService.kt`;
+- `backend/app/src/main/kotlin/com/hookah/platform/backend/api/ApiErrors.kt` and
+  `ApiException.kt` for typed conflicts;
+- `backend/app/src/main/kotlin/com/hookah/platform/backend/Application.kt` for wiring.
+
+Mini App:
+
+- `miniapp/src/shared/api/venueDtos.ts`;
+- `miniapp/src/shared/api/venueApi.ts`;
+- `miniapp/src/shared/api/types.ts` and, if needed,
+  `miniapp/src/shared/ui/apiErrorPresenter.ts`;
+- `miniapp/src/screens/venueApp.ts`;
+- `miniapp/src/screens/venueSettings.ts`;
+- `miniapp/src/screens/venueStaff.ts`;
+- `miniapp/src/screens/venueStaffSchedule.ts`;
+- `miniapp/src/style.css`;
+- `miniapp/e2e/guest-smoke.spec.ts`.
+
+Focused tests will likely add one settings-route suite and extend:
+
+- `backend/app/src/test/kotlin/com/hookah/platform/backend/miniapp/venue/VenueStaffModuleSettingsRoutesTest.kt`;
+- `backend/app/src/test/kotlin/com/hookah/platform/backend/PostgresMigrationSmokeTest.kt`;
+- `backend/app/src/test/kotlin/com/hookah/platform/backend/miniapp/venue/VenueRbacRoutesTest.kt`;
+- `backend/app/src/test/kotlin/com/hookah/platform/backend/miniapp/venue/VenueStaffRoutesTest.kt`;
+- `backend/app/src/test/kotlin/com/hookah/platform/backend/miniapp/venue/VenueStaffRoutesTestSchedule.kt`;
+- `backend/app/src/test/kotlin/com/hookah/platform/backend/miniapp/guest/GuestVenueRoutesTest.kt`;
+- `backend/app/src/test/kotlin/com/hookah/platform/backend/miniapp/venue/VenueGuestPreviewRoutesTest.kt`.
+
+### 13. Backend Test Matrix
+
+- PostgreSQL/H2 migrations: defaults, existing-row backfill, source check, existing
+  `updated_at`, independent Flyway heads and legacy explicit-column insert.
+- Settings routes: Owner/Manager success; Manager still lacks broad `VENUE_SETTINGS`; Staff,
+  foreign venue and Platform-only denied; full-object validation; monotonic CAS; stale/no-op;
+  venue isolation; transaction-bound audit and rollback.
+- Disable/re-enable: rows and nested settings preserved; core membership/invite/order/booking/call/
+  menu access unchanged; every optional profile/Today/schedule route guarded after tenant/RBAC;
+  data visible again after re-enable.
+- MANUAL: exact venue-local date, unchanged public-row predicate, profile
+  publication/visibility/disabled filters and schedule-alone non-publication.
+- SCHEDULE: active-only start/end boundaries, overnight, timezone and DST; future, completed,
+  canceled, invalid, unpublished, hidden and disabled rows excluded; deterministic dedupe; no
+  fallback; public DTO privacy.
+- Guest detail, standalone Today and both Preview modes return the same projection; off/hidden
+  settings return empty.
+- Preserve profile/linking/duplicate, individual schedule, restore/bulk, Today Shift and venue/
+  account-switch regressions.
+
+### 14. Mini App And E2E Matrix
+
+- Owner and Manager load/save all three controls, nested disabled state, full-object CAS,
+  confirmation summary and stale reload; Staff has no settings control.
+- Core directory/invite UI remains usable while master is off; profile requests are absent and the
+  optional area shows explanation/enable CTA.
+- Staff `Мои смены` is hidden while off; Owner/Manager schedule explanation works; bookmarked/API
+  routes fail safely.
+- `MANUAL` renders persisted switch `Показывать сотрудника гостям сегодня`, current
+  `Включено / Выключено` state and success copy
+  `Сотрудник отображается в блоке «Сегодня работают».` When global Guest team visibility is off,
+  the copy must truthfully say that publication is currently suppressed.
+- `SCHEDULE` hides or locks manual Today controls and shows
+  `Состав для гостей определяется активными сменами в графике.` Direct mutation returns
+  `409 STAFF_TODAY_SOURCE_CONFLICT`.
+- Guest/Preview hides empty blocks, shows only active scheduled staff in SCHEDULE and preserves
+  venue/account switch isolation.
+
+### 15. Rollout And Staging Smoke
+
+After implementation: run the focused backend suites, PostgreSQL migration/concurrency coverage,
+ktlint/compile, Mini App build and focused e2e; wait for green Actions before staging deploy.
+Staging smoke must prove defaults preserve current MANUAL behavior, all three settings and CAS,
+master-off empty Guest/Preview plus fail-closed module routes, retained row counts and core staff
+access, re-enable restoration, MANUAL publication, SCHEDULE current/overnight boundaries with no
+fallback, Owner/Manager narrow authority, Staff/foreign denial, privacy and venue/account switching.
+Do not claim production readiness from local checks alone.
+
+### 16. Explicit Out Of Scope
+
+- payroll or attendance;
+- recurring shifts, swaps or reminders;
+- Telegram schedule mutation UI;
+- separate staff chat;
+- staff media, upload, R2 or object storage;
+- tips or payments;
+- staff removal or role mutation;
+- full/future schedule for Guest;
+- automatic row deletion, merge, relink or cancellation;
+- arbitrary notification campaigns.
+
+### 17. Outcome-First Implementation Prompt
+
+```text
+Implement exactly STAFF OPERATIONS SLICE B / OPTIONAL TEAM AND SCHEDULE MODULE /
+GUEST MANUAL OR SCHEDULE SOURCE.
+
+Preserve core memberships, invites, roles and all non-team operational access. Add the three
+backward-compatible venue_settings fields with defaults true/true/MANUAL using the current next
+PostgreSQL/H2 migration heads, reusing updated_at for full-object CAS. Add a dedicated narrow
+Owner/Manager permission and settings GET/PUT with transaction-bound safe
+STAFF_MODULE_SETTINGS_UPDATED audit; do not grant Manager broad VENUE_SETTINGS.
+
+Guard only optional profile/Today/schedule routes after tenant and RBAC checks. Master-off must
+retain all rows, keep core staff access working, hide Staff own-schedule navigation, show an
+Owner/Manager enable explanation, return empty Guest/Preview projections and restore saved data on
+re-enable.
+
+Keep MANUAL behavior exact and add a persisted Today switch. For SCHEDULE, use the existing venue
+timezone/overnight/DST lifecycle domain and return only ACTIVE [start,end) published,
+guest-visible, non-disabled profiles through the existing public DTO, with no future/full schedule,
+private identity, shift id or MANUAL fallback. Make Guest venue detail, standalone Today and both
+Preview modes share one resolver.
+
+Update focused backend, PostgreSQL/H2 migration, RBAC/privacy, Mini App and e2e tests. Keep payroll,
+attendance, recurring shifts, swaps, reminders, Telegram mutation UI, staff chat, media/R2,
+tips/payments, staff removal/role mutation, Guest future schedule, automatic data deletion and
+campaigns out of scope. Run focused checks first, then required compile/build/e2e; wait for green
+Actions and complete staging smoke before marking Slice B done.
+```

@@ -1,6 +1,6 @@
 # Mini App Launch Smoke Checklist
 
-Дата: 2026-08-01.
+Дата: 2026-08-04.
 
 Цель: зафиксировать launch smoke/e2e coverage для core Mini App сценариев без изменения бизнес-логики. В `miniapp/package.json` есть `dev`, `build`, `preview` и минимальный browser smoke `e2e:smoke`. Поэтому стратегия на этот шаг гибридная:
 
@@ -40,6 +40,17 @@
   batch with no-op completion and one safe audit; STAFF entry/direct access is denied while its
   existing individual stop-list policy remains unchanged. GitHub Actions were green, staging deploy
   completed and the functional/UX smoke passed.
+- Staff Operations current correction: **STAFF PROFILES + TODAY SHIFT PHASE 1**, **STAFF OPERATIONS
+  SLICE A / MANAGER PARITY + SHIFT TIME DEFAULTS**, **STAFF IDENTITY LINKING UX + DUPLICATE
+  PREVENTION**, **STAFF SCHEDULE PHASE 1** and **STAFF SCHEDULE / CANCELED SHIFT RESTORE + BULK
+  ASSIGNMENT** are all **DONE / MVP / STAGING-SMOKE-PASSED** after green Actions, staging deploy
+  and manual smoke. Owner/Manager Schedule CRUD, Staff overlap-only own view, timezone/overnight,
+  stale CAS, explicit same-row restore, mixed atomic bulk, Manager Staff-only invites/profile
+  boundaries, safe human identities, Owner-only duplicate repair, venue/account isolation and
+  cleanup passed. Guest source remains `MANUAL`: Schedule does not publish staff or disclose future/full
+  schedule. The separate free-Staff-account create-from-member UI scenario was not evidenced and is
+  tracked once as non-blocking
+  [`STAFF-IDENTITY-MANUAL-001`](../DEFERRED_MANUAL_SMOKE_BACKLOG.md#staff-identity-manual-001).
 - Mini App mutation / operational verification closure pack is CLOSED / code-test verification passed: actual Mini App PUT/PATCH/DELETE CORS preflights allow `Content-Type` and `Authorization`, Guest Mini App staff-call payload/backend row/staff-chat event include `tableSessionId`, linked staff-chat staff-call notification enqueue is covered, and fallback quick order emits `Telegram.WebApp.sendData` with `{ "cmd": "start_quick_order", "table_token": "<tableToken>" }`. No staging smoke is claimed by this item.
 - Staff Call Lifecycle ACK/DONE audit hardening and guest-visible CANCELLED finishing patch: CLOSED / staging smoke passed. Real Telegram Mini App smoke confirmed Guest call creation, staff-chat notification, Venue Mode NEW/ACK/DONE, Venue Mini App `STAFF_CALL_ACK` / `STAFF_CALL_DONE` audit with top-level actor evidence and `source=venue_miniapp`, Telegram staff-chat ACK/DONE message edits plus audit with `source=telegram_staff_chat`, Guest ability to create a new call after DONE, and guest-visible terminal `CANCELLED` as `Вызов отменён` for the current guest/tableSession. Audit remains best-effort; row-level ACK/DONE actor/timestamp columns, manual cancel UI and staff-call UX polish remain separate follow-ups.
 - Guest Table Context UX Cleanup / Feature-gated Extension Module: CLOSED / staging smoke passed. Real Telegram Mini App QR smoke confirmed correct venue/table context, route/copy address/booking actions hidden in table context, pre-visit venue card still showing address/route/copy/booking, `Продление работы заведения` hidden without active order/bill or unavailable extension state, visible only when active order state makes it available, and hidden again after bill/order close.
@@ -80,7 +91,7 @@
 
 ## Current Staging Smoke Status
 
-Status: `PASSED FOR CURRENT RELEASE THROUGH VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY`; baseline smoke passed on 2026-06-04, with later staged parity/deployment smokes recorded through M9b.3, guest table-context exit, guest bill/bill-request parity, staff-chat activity card, hookah placeholder polish, manual billing cockpit/renewal/courtesy, staff invite deep-link sharing polish, guest communication/support-ticket split, Post-Visit Feedback and unified Guest Preview.
+Status: `PASSED FOR CURRENT RELEASE THROUGH STAFF OPERATIONS SLICE A, STAFF IDENTITY LINKING AND STAFF SCHEDULE RESTORE/BULK`; baseline smoke passed on 2026-06-04, with later staged parity/deployment smokes recorded through M9b.3, guest table-context exit, guest bill/bill-request parity, staff-chat activity card, hookah placeholder polish, manual billing cockpit/renewal/courtesy, staff invite deep-link sharing polish, guest communication/support-ticket split, Post-Visit Feedback, unified Guest Preview and the current Staff closure recorded above.
 
 Confirmed:
 
@@ -1285,7 +1296,9 @@ Manual Staff Profiles Phase 1 regression smoke:
 5. Selecting `Другое` shows required `Название роли` with guest-facing helper copy; saving without it is blocked.
 6. OWNER creates a display-only profile and a linked profile, then publishes and hides visibility.
 7. OWNER marks a published profile `Сегодня на смене`.
-8. MANAGER, where current policy allows, can mark today-shift state but cannot publish/hide profiles or approve future tip methods.
+8. MANAGER can mark manual Today state and publish/hide only display-only or active-Staff-linked
+   cards. Protected Owner/Manager/duplicate cards are read-only; duplicate repair is Owner-only;
+   future tip-method approval remains denied.
 9. STAFF cannot publish/hide profiles and can edit only own linked draft fields where policy allows.
 10. Guest venue detail shows `Сегодня работают` below main venue information/actions.
 11. Guest sees public display name, role/custom role, bio/tags and safe placeholder/photo only.

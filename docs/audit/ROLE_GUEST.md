@@ -1,6 +1,6 @@
 # Guest
 
-Дата актуализации: 2026-08-01.
+Дата актуализации: 2026-08-04.
 
 Статус: **current role reference**. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. Этот файл фиксирует текущее поведение Guest в Telegram bot и Mini App после последних parity/fix-pack'ов.
 
@@ -9,6 +9,12 @@
 Guest - пользователь без venue-ролей. Основной продуктовый приоритет: каталог, карточка заведения, бронь, QR/table order flow, staff call, сообщения с заведением и просмотр своего заказа/счёта.
 
 Canonical communication split: see `docs/COMMUNICATION_MODEL.md`. Guest-facing labels are `Чаты` for venue conversations and `Помощь` for support tickets/problems. Guest booking lifecycle, hold/deadline, reminders and booking chat behavior are governed by `docs/BOOKING_LIFECYCLE.md`. Telegram QR entrypoints, fallback order and bot staff-call behavior are governed by `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. Guest permissions, table/session/tab scope and trust boundaries are governed by `docs/SECURITY_RBAC_MATRIX.md`. Structured menu/options/stop-list behavior is governed by `docs/MENU_OPTIONS_STOPLIST.md`. Public staff profiles, today's visible staff and future staff-tip boundaries are governed by `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. Order/session/tab behavior is governed by `docs/ORDER_SESSION_TAB_CORE.md`. Analytics/event rules are governed by `docs/ANALYTICS_EVENTS.md`. Testing/QA smoke strategy is governed by `docs/TESTING_QA_SMOKE_STRATEGY.md`. Release/deploy operations follow `docs/DEPLOYMENT_RUNBOOK.md`. Guest growth/retention scope is tracked in `docs/GROWTH_RETENTION.md`; History, Post-Visit Feedback and venue-only Favorites are staging-smoked, while favorite menu items/options, repeat, promotions, notification opt-in and loyalty require dedicated implementation evidence.
+
+Current Staff Today correction: Staff Schedule Phase 1 is completed, but Guest source remains
+`MANUAL`. Only an explicitly saved manual Today state for a published guest-visible profile can
+populate `Сегодня работают`; a planned, restored or future Schedule row does not publish staff.
+Guest never receives future/full schedule, shift id, linked user, Telegram identity, membership
+role, invite/link state, audit or CAS fields.
 
 Ключевое разделение:
 - **до QR / без table context** guest видит каталог и информацию о заведении, но не видит заказное structured menu;
@@ -47,7 +53,9 @@ Pre-QR Guest Mini App:
   no-match states and reset. City options come from the complete initial unfiltered guarded
   catalog and favorites remain current-user scoped inside filtered results.
 - карточка заведения показывает safe guest-visible данные;
-- venue detail shows `Сегодня работают` with public visible staff profiles only, below main venue information/actions; catalog may later show a compact `Сегодня: Иван, Алина` line;
+- venue detail shows `Сегодня работают` only from the current `MANUAL` source and only with
+  published guest-visible public fields, below main venue information/actions; catalog may later
+  show a compact `Сегодня: Иван, Алина` line;
 - `ℹ️ Информация` отдаёт только visible + filled owner info sections;
 - `section_type=menu` отображается как `📖 Фото-меню`;
 - media из info sections открываются через backend proxy, без raw Telegram URL и без bot token во frontend;
@@ -130,7 +138,8 @@ Account/bookings:
 - Доверять client-side price; итоговая цена и option deltas считаются server-side.
 - Видеть чужие chats/support tickets.
 - Завершать или скрывать чужой table context/session за тем же физическим столом.
-- Видеть `linked_user_id`, private Telegram username/id, phone/email or hidden staff profiles/shifts.
+- Видеть `linked_user_id`, Telegram id, username as internal identity, membership role,
+  invite/link state, phone/email, hidden profiles, shift id, future shifts or full staff schedule.
 - Считать future `staff_tip_intent` подтверждением оплаты или оплатой счёта.
 - Видеть operator analytics dashboards; Guest gets only profile/history-facing summaries later.
 
@@ -158,7 +167,10 @@ Account/bookings:
 - Analytics/events are `SPEC UPDATED / PARTIAL` in `docs/ANALYTICS_EVENTS.md`; Guest-facing analytics is limited to future profile/history summaries, while client events remain low-trust UX diagnostics.
 - Menu/options/stop-list model is `SPEC UPDATED` in `docs/MENU_OPTIONS_STOPLIST.md`: selected-option parity is smoke-closed, but broader modifier/media/top-list/shift-check coverage remains partial/future.
 - Real acquiring provider, Telegram Stars and automatic recurring payments remain future work; guest bill request is still an on-site operational request, not online payment.
-- Staff profiles / today shift are `MVP DONE / SMOKE-PASSED` in `docs/STAFF_PROFILES_SHIFTS_TIPS.md`: Guest sees `Сегодня работают` below main venue info with only public visible fields; hidden profiles and private linked fields must stay denied in regression.
+- Staff profiles/manual Today and Staff Schedule Phase 1 are `DONE / MVP /
+  STAGING-SMOKE-PASSED`. Guest still sees only the exact current `MANUAL` public projection; hidden
+  profiles, internal identity, future/full schedule and private linkage must stay denied in
+  regression.
 - Staff tips are future: Phase 2 may use external staff tip link + intent, but no money touches the platform in MVP and intent is not proof of payment.
 - Booking changed-time/accept status зависит от backend support и должен проверяться по статусам.
 
