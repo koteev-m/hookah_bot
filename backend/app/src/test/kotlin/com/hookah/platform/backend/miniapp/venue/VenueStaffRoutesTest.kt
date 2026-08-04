@@ -4,13 +4,17 @@ import com.hookah.platform.backend.api.ApiErrorCodes
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.module
+import com.hookah.platform.backend.telegram.User
+import com.hookah.platform.backend.telegram.db.UserRepository
 import com.hookah.platform.backend.test.assertApiErrorEnvelope
+import io.ktor.client.HttpClient
 import io.ktor.client.request.delete
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
 import io.ktor.client.request.patch
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
+import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
@@ -18,8 +22,13 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.server.config.MapApplicationConfig
 import io.ktor.server.testing.testApplication
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import org.h2.jdbcx.JdbcDataSource
 import java.sql.DriverManager
 import java.sql.Statement
 import java.time.Instant
@@ -29,6 +38,7 @@ import java.time.ZoneId
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
@@ -37,7 +47,7 @@ class VenueStaffRoutesTest {
     private val appEnv = "test"
 
     @Test
-    fun `owner and manager can list staff members`() =
+    fun `owner and manager receive safe identity projection with server side role scope`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("staff-list-allowed")
             val config = buildConfig(jdbcUrl)
@@ -50,9 +60,13 @@ class VenueStaffRoutesTest {
             val ownerId = 1101L
             val managerId = 1102L
             val staffId = 1103L
+            val usernameOnlyStaffId = 1104L
             val venueId = seedVenueMembership(jdbcUrl, ownerId, "OWNER")
             seedVenueMembership(jdbcUrl, managerId, "MANAGER", venueId)
             seedVenueMembership(jdbcUrl, staffId, "STAFF", venueId)
+            seedVenueMembership(jdbcUrl, usernameOnlyStaffId, "STAFF", venueId)
+            seedUserIdentity(jdbcUrl, staffId, "max_kataev", "Максим", "Катаев")
+            seedUserIdentity(jdbcUrl, usernameOnlyStaffId, "only_username", null, null)
             val ownerToken = issueToken(config, ownerId)
             val managerToken = issueToken(config, managerId)
 
@@ -69,8 +83,493 @@ class VenueStaffRoutesTest {
             assertEquals(HttpStatusCode.OK, managerResponse.status)
             val ownerPayload = json.decodeFromString(StaffListResponse.serializer(), ownerResponse.bodyAsText())
             val managerPayload = json.decodeFromString(StaffListResponse.serializer(), managerResponse.bodyAsText())
-            assertEquals(setOf(ownerId, managerId, staffId), ownerPayload.members.map { it.userId }.toSet())
-            assertEquals(setOf(ownerId, managerId, staffId), managerPayload.members.map { it.userId }.toSet())
+            assertEquals(
+                setOf(ownerId, managerId, staffId, usernameOnlyStaffId),
+                ownerPayload.members.map { it.userId }.toSet(),
+            )
+            assertEquals(listOf(staffId, usernameOnlyStaffId), managerPayload.members.map { it.userId })
+            val staff = managerPayload.members.single { it.userId == staffId }
+            assertEquals("Максим Катаев", staff.displayName)
+            assertEquals("max_kataev", staff.username)
+            assertEquals("STAFF", staff.role)
+            assertTrue(staff.active)
+            assertEquals("NOT_LINKED", staff.profileLinkState)
+            assertEquals(null, staff.linkedStaffProfileId)
+            val usernameOnlyStaff = managerPayload.members.single { it.userId == usernameOnlyStaffId }
+            assertEquals("only_username", usernameOnlyStaff.displayName)
+            assertEquals("only_username", usernameOnlyStaff.username)
+            val responseText = managerResponse.bodyAsText()
+            assertTrue("invitedByUserId" !in responseText)
+            assertTrue("createdAt" !in responseText)
+            assertTrue("phone" !in responseText.lowercase())
+            assertTrue("inviteCode" !in responseText)
+        }
+
+    @Test
+    fun `member identity falls back safely when username is missing`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("staff-list-missing-username")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val ownerId = 1151L
+            val staffId = 1152L
+            val venueId = seedVenueMembership(jdbcUrl, ownerId, "OWNER")
+            seedVenueMembership(jdbcUrl, staffId, "STAFF", venueId)
+            seedUserIdentity(jdbcUrl, staffId, null, "Максим", "Катаев")
+
+            val response =
+                client.get("/api/venue/$venueId/staff") {
+                    headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config, ownerId)}") }
+                }
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            val member =
+                json.decodeFromString(StaffListResponse.serializer(), response.bodyAsText())
+                    .members.single { it.userId == staffId }
+            assertEquals("Максим Катаев", member.displayName)
+            assertEquals(null, member.username)
+        }
+
+    @Test
+    fun `create from member rereads identity ignores forged authority and creates hidden active draft`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("staff-create-from-member-authority")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val ownerId = 1161L
+            val staffId = 1162L
+            val venueId = seedVenueMembership(jdbcUrl, ownerId, "OWNER")
+            seedVenueMembership(jdbcUrl, staffId, "STAFF", venueId)
+            seedUserIdentity(jdbcUrl, staffId, "old_username", "Старое", "Имя")
+            val ownerToken = issueToken(config, ownerId)
+
+            val beforeUpsert = loadStaffMember(client, venueId, ownerToken, staffId)
+            assertEquals("Старое Имя", beforeUpsert.displayName)
+            UserRepository(h2DataSource(jdbcUrl)).upsert(
+                User(
+                    id = staffId,
+                    username = "new_username",
+                    firstName = "Новое",
+                    lastName = "Имя",
+                ),
+            )
+            val afterUpsert = loadStaffMember(client, venueId, ownerToken, staffId)
+            assertEquals("Новое Имя", afterUpsert.displayName)
+            assertEquals("new_username", afterUpsert.username)
+
+            val response =
+                client.post("/api/venue/$venueId/staff/profiles/from-member") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        """
+                        {
+                          "userId": $staffId,
+                          "subtype": "waiter",
+                          "displayName": "FORGED_NAME",
+                          "username": "forged_username",
+                          "isGuestVisible": true,
+                          "publishedAt": "2020-01-01T00:00:00Z",
+                          "actorUserId": 999999,
+                          "venueId": 999999,
+                          "membershipRole": "OWNER"
+                        }
+                        """.trimIndent(),
+                    )
+                }
+
+            assertEquals(HttpStatusCode.OK, response.status, response.bodyAsText())
+            val responseText = response.bodyAsText()
+            assertFalse(responseText.contains("FORGED_NAME"))
+            assertFalse(responseText.contains("forged_username"))
+            val created = json.decodeFromString(StaffProfileDto.serializer(), responseText)
+            assertEquals(staffId, created.linkedUserId)
+            assertEquals("STAFF_LINKED", created.linkageClass)
+            assertTrue(created.canManage)
+            assertFalse(created.isSelf)
+            assertEquals("Новое Имя", created.displayName)
+            assertEquals(false, created.isGuestVisible)
+            assertEquals(null, created.publishedAt)
+            assertEquals(null, created.disabledAt)
+            assertEquals(1, countActiveLinkedProfiles(jdbcUrl, venueId, staffId))
+
+            val auditPayload = loadSingleStaffProfileAuditPayload(jdbcUrl, venueId)
+            assertTrue(auditPayload.contains("\"newLinkageClass\":\"STAFF_LINKED\""))
+            assertTrue(auditPayload.contains("\"targetRole\":\"STAFF\""))
+            listOf(
+                staffId.toString(),
+                "new_username",
+                "Новое Имя",
+                "FORGED_NAME",
+                "forged_username",
+                "isGuestVisible",
+                "publishedAt",
+            ).forEach { sensitive -> assertFalse(auditPayload.contains(sensitive)) }
+        }
+
+    @Test
+    fun `create from member validates subtype and generic create cannot link`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("staff-create-from-member-validation")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val ownerId = 1166L
+            val staffId = 1167L
+            val venueId = seedVenueMembership(jdbcUrl, ownerId, "OWNER")
+            seedVenueMembership(jdbcUrl, staffId, "STAFF", venueId)
+            val ownerToken = issueToken(config, ownerId)
+
+            val invalidBodies =
+                listOf(
+                    """{"userId":$staffId}""",
+                    """{"userId":$staffId,"subtype":"other"}""",
+                    """{"userId":$staffId,"subtype":"other","roleLabel":"   "}""",
+                    """{"userId":$staffId,"subtype":"waiter","roleLabel":"Лишняя роль"}""",
+                )
+            invalidBodies.forEach { body ->
+                val response =
+                    client.post("/api/venue/$venueId/staff/profiles/from-member") {
+                        headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                        contentType(ContentType.Application.Json)
+                        setBody(body)
+                    }
+                assertEquals(HttpStatusCode.BadRequest, response.status, response.bodyAsText())
+                assertApiErrorEnvelope(response, ApiErrorCodes.INVALID_INPUT)
+            }
+
+            val bypassResponse =
+                client.post("/api/venue/$venueId/staff/profiles") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            StaffProfileCreateRequest.serializer(),
+                            StaffProfileCreateRequest(
+                                displayName = "Forged linked profile",
+                                linkedUserId = staffId,
+                                isGuestVisible = true,
+                            ),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.BadRequest, bypassResponse.status)
+            val bypassBody = bypassResponse.bodyAsText()
+            assertApiErrorEnvelope(bypassResponse, ApiErrorCodes.INVALID_INPUT)
+            assertFalse(bypassBody.contains(staffId.toString()))
+            assertFalse(bypassBody.contains("STAFF"))
+            assertEquals(0, countActiveLinkedProfiles(jdbcUrl, venueId, staffId))
+            assertEquals(0, countStaffProfileSuccessAudits(jdbcUrl, venueId))
+        }
+
+    @Test
+    fun `member projection reports linked and duplicate states without automatic cleanup`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("staff-link-state")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val ownerId = 1171L
+            val staffId = 1172L
+            val managerId = 1173L
+            val venueId = seedVenueMembership(jdbcUrl, ownerId, "OWNER")
+            seedVenueMembership(jdbcUrl, staffId, "STAFF", venueId)
+            seedVenueMembership(jdbcUrl, managerId, "MANAGER", venueId)
+            seedUserIdentity(jdbcUrl, staffId, null, "Максим", null)
+            val ownerToken = issueToken(config, ownerId)
+            val managerToken = issueToken(config, managerId)
+
+            val firstResponse =
+                postStaffProfile(
+                    client = client,
+                    venueId = venueId,
+                    token = ownerToken,
+                    request = StaffProfileCreateRequest(displayName = "Максим", linkedUserId = staffId),
+                )
+            assertEquals(HttpStatusCode.OK, firstResponse.status)
+            val first = json.decodeFromString(StaffProfileDto.serializer(), firstResponse.bodyAsText())
+
+            val linkedMember = loadStaffMember(client, venueId, ownerToken, staffId)
+            assertEquals("LINKED", linkedMember.profileLinkState)
+            assertEquals(first.id, linkedMember.linkedStaffProfileId)
+            assertEquals("Максим", linkedMember.linkedStaffProfileDisplayName)
+
+            val deniedSecond =
+                postStaffProfile(
+                    client = client,
+                    venueId = venueId,
+                    token = ownerToken,
+                    request = StaffProfileCreateRequest(displayName = "Дубль", linkedUserId = staffId),
+                )
+            assertProfileLinkConflict(deniedSecond, "LINKED", first.id)
+            assertEquals(1, countActiveLinkedProfiles(jdbcUrl, venueId, staffId))
+            assertEquals(1, countStaffProfileSuccessAudits(jdbcUrl, venueId))
+
+            val duplicateId = seedActiveStaffProfile(jdbcUrl, venueId, staffId, ownerId, "Старый дубль")
+            val duplicateMember = loadStaffMember(client, venueId, ownerToken, staffId)
+            assertEquals("DUPLICATE_LINK_DETECTED", duplicateMember.profileLinkState)
+            assertEquals(null, duplicateMember.linkedStaffProfileId)
+            assertEquals(null, duplicateMember.linkedStaffProfileDisplayName)
+
+            val managerProfilesResponse =
+                client.get("/api/venue/$venueId/staff/profiles") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $managerToken") }
+                }
+            assertEquals(HttpStatusCode.OK, managerProfilesResponse.status)
+            val managerProfilesBody = managerProfilesResponse.bodyAsText()
+            val duplicateProfiles =
+                json.decodeFromString(StaffProfilesResponse.serializer(), managerProfilesBody).profiles
+                    .filter { it.id == first.id || it.id == duplicateId }
+            assertEquals(2, duplicateProfiles.size)
+            duplicateProfiles.forEach { duplicateProfile ->
+                assertEquals(null, duplicateProfile.linkedUserId)
+                assertEquals("DUPLICATE_LINK_DETECTED", duplicateProfile.linkageClass)
+                assertFalse(duplicateProfile.canManage)
+                assertFalse(duplicateProfile.isSelf)
+            }
+            assertFalse(managerProfilesBody.contains(staffId.toString()))
+
+            val managerMutationResponse =
+                client.patch("/api/venue/$venueId/staff/profiles/$duplicateId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $managerToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            StaffProfileUpdateRequest.serializer(),
+                            StaffProfileUpdateRequest(displayName = "Менеджер не должен менять дубль"),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.Forbidden, managerMutationResponse.status)
+            val managerMutationBody = managerMutationResponse.bodyAsText()
+            assertApiErrorEnvelope(managerMutationResponse, ApiErrorCodes.FORBIDDEN)
+            assertFalse(managerMutationBody.contains(staffId.toString()))
+            assertFalse(managerMutationBody.contains("linkedUserId"))
+            assertEquals(2, countActiveLinkedProfiles(jdbcUrl, venueId, staffId))
+            assertEquals(1, countStaffProfileSuccessAudits(jdbcUrl, venueId))
+
+            val ownerProfilesResponse =
+                client.get("/api/venue/$venueId/staff/profiles") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                }
+            assertEquals(HttpStatusCode.OK, ownerProfilesResponse.status)
+            json.decodeFromString(StaffProfilesResponse.serializer(), ownerProfilesResponse.bodyAsText())
+                .profiles
+                .filter { it.id == first.id || it.id == duplicateId }
+                .forEach { duplicateProfile ->
+                    assertEquals(staffId, duplicateProfile.linkedUserId)
+                    assertEquals("DUPLICATE_LINK_DETECTED", duplicateProfile.linkageClass)
+                    assertTrue(duplicateProfile.canManage)
+                }
+
+            val deniedWithExistingDuplicate =
+                postStaffProfile(
+                    client = client,
+                    venueId = venueId,
+                    token = ownerToken,
+                    request = StaffProfileCreateRequest(displayName = "Третий", linkedUserId = staffId),
+                )
+            assertProfileLinkConflict(deniedWithExistingDuplicate, "DUPLICATE_LINK_DETECTED", null)
+            assertEquals(2, countActiveLinkedProfiles(jdbcUrl, venueId, staffId))
+            assertEquals(1, countStaffProfileSuccessAudits(jdbcUrl, venueId))
+
+            val unlinkResponse =
+                client.patch("/api/venue/$venueId/staff/profiles/$duplicateId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            StaffProfileUpdateRequest.serializer(),
+                            StaffProfileUpdateRequest(unlinkUser = true),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, unlinkResponse.status)
+            assertEquals(1, countActiveLinkedProfiles(jdbcUrl, venueId, staffId))
+            assertEquals("LINKED", loadStaffMember(client, venueId, ownerToken, staffId).profileLinkState)
+        }
+
+    @Test
+    fun `relink and reactivation cannot create a second active linked profile`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("staff-link-reactivation")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val ownerId = 1181L
+            val staffId = 1182L
+            val venueId = seedVenueMembership(jdbcUrl, ownerId, "OWNER")
+            seedVenueMembership(jdbcUrl, staffId, "STAFF", venueId)
+            val ownerToken = issueToken(config, ownerId)
+
+            val hiddenCandidate =
+                postStaffProfile(
+                    client,
+                    venueId,
+                    ownerToken,
+                    StaffProfileCreateRequest(displayName = "Скрытая", linkedUserId = staffId),
+                ).let { response ->
+                    assertEquals(HttpStatusCode.OK, response.status)
+                    json.decodeFromString(StaffProfileDto.serializer(), response.bodyAsText())
+                }
+            val publishCandidate =
+                client.post("/api/venue/$venueId/staff/profiles/${hiddenCandidate.id}/publish") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                }
+            assertEquals(HttpStatusCode.OK, publishCandidate.status)
+            val hideResponse =
+                client.post("/api/venue/$venueId/staff/profiles/${hiddenCandidate.id}/hide") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                }
+            assertEquals(HttpStatusCode.OK, hideResponse.status)
+
+            val active =
+                postStaffProfile(
+                    client,
+                    venueId,
+                    ownerToken,
+                    StaffProfileCreateRequest(displayName = "Основная", linkedUserId = staffId),
+                ).let { response ->
+                    assertEquals(HttpStatusCode.OK, response.status)
+                    json.decodeFromString(StaffProfileDto.serializer(), response.bodyAsText())
+                }
+
+            val publishHidden =
+                client.post("/api/venue/$venueId/staff/profiles/${hiddenCandidate.id}/publish") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                }
+            assertProfileLinkConflict(publishHidden, "LINKED", active.id)
+
+            val displayOnly =
+                postStaffProfile(
+                    client,
+                    venueId,
+                    ownerToken,
+                    StaffProfileCreateRequest(displayName = "Без связи"),
+                ).let { response ->
+                    assertEquals(HttpStatusCode.OK, response.status)
+                    json.decodeFromString(StaffProfileDto.serializer(), response.bodyAsText())
+                }
+            val relinkResponse =
+                client.patch("/api/venue/$venueId/staff/profiles/${displayOnly.id}") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            StaffProfileUpdateRequest.serializer(),
+                            StaffProfileUpdateRequest(linkedUserId = staffId),
+                        ),
+                    )
+                }
+            assertProfileLinkConflict(relinkResponse, "LINKED", active.id)
+
+            val hiddenDisplayOnly =
+                postStaffProfile(
+                    client,
+                    venueId,
+                    ownerToken,
+                    StaffProfileCreateRequest(displayName = "Скрытая без связи", isGuestVisible = true),
+                ).let { response ->
+                    assertEquals(HttpStatusCode.OK, response.status)
+                    json.decodeFromString(StaffProfileDto.serializer(), response.bodyAsText())
+                }
+            val hideDisplayOnly =
+                client.post("/api/venue/$venueId/staff/profiles/${hiddenDisplayOnly.id}/hide") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                }
+            assertEquals(HttpStatusCode.OK, hideDisplayOnly.status)
+            val linkHiddenResponse =
+                client.patch("/api/venue/$venueId/staff/profiles/${hiddenDisplayOnly.id}") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            StaffProfileUpdateRequest.serializer(),
+                            StaffProfileUpdateRequest(linkedUserId = staffId),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, linkHiddenResponse.status)
+            val linkedHidden = json.decodeFromString(StaffProfileDto.serializer(), linkHiddenResponse.bodyAsText())
+            assertEquals(staffId, linkedHidden.linkedUserId)
+            assertTrue(linkedHidden.disabledAt != null)
+            val publishLinkedHidden =
+                client.post("/api/venue/$venueId/staff/profiles/${hiddenDisplayOnly.id}/publish") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                }
+            assertProfileLinkConflict(publishLinkedHidden, "LINKED", active.id)
+            assertEquals(1, countActiveLinkedProfiles(jdbcUrl, venueId, staffId))
+        }
+
+    @Test
+    fun `concurrent double link has one winner and one safe conflict`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("staff-link-concurrent")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val ownerId = 1191L
+            val staffId = 1192L
+            val managerId = 1193L
+            val venueId = seedVenueMembership(jdbcUrl, ownerId, "OWNER")
+            seedVenueMembership(jdbcUrl, staffId, "STAFF", venueId)
+            seedVenueMembership(jdbcUrl, managerId, "MANAGER", venueId)
+            val ownerToken = issueToken(config, ownerId)
+            val managerToken = issueToken(config, managerId)
+
+            val responses =
+                coroutineScope {
+                    listOf(
+                        async {
+                            postStaffProfile(
+                                client,
+                                venueId,
+                                ownerToken,
+                                StaffProfileCreateRequest(displayName = "Первый", linkedUserId = staffId),
+                            )
+                        },
+                        async {
+                            postStaffProfile(
+                                client,
+                                venueId,
+                                managerToken,
+                                StaffProfileCreateRequest(displayName = "Второй", linkedUserId = staffId),
+                            )
+                        },
+                    ).map { it.await() }
+                }
+
+            assertEquals(1, responses.count { it.status == HttpStatusCode.OK })
+            assertEquals(1, responses.count { it.status == HttpStatusCode.Conflict })
+            assertProfileLinkConflict(responses.single { it.status == HttpStatusCode.Conflict }, "LINKED", null)
+            assertEquals(1, countActiveLinkedProfiles(jdbcUrl, venueId, staffId))
+            assertEquals(1, countStaffProfileSuccessAudits(jdbcUrl, venueId))
         }
 
     @Test
@@ -207,7 +706,11 @@ class VenueStaffRoutesTest {
                 )
             assertEquals(venueId, acceptPayload.venueId)
             assertEquals(inviteeId, acceptPayload.member.userId)
+            assertEquals("Test User", acceptPayload.member.displayName)
+            assertEquals("user", acceptPayload.member.username)
             assertEquals("STAFF", acceptPayload.member.role)
+            assertTrue(acceptPayload.member.active)
+            assertEquals("NOT_LINKED", acceptPayload.member.profileLinkState)
         }
 
     @Test
@@ -405,7 +908,9 @@ class VenueStaffRoutesTest {
                     headers { append(HttpHeaders.Authorization, "Bearer $managerToken") }
                 }.let { response ->
                     assertEquals(HttpStatusCode.OK, response.status)
-                    json.decodeFromString(PendingInvitesResponse.serializer(), response.bodyAsText())
+                    val responseText = response.bodyAsText()
+                    assertPendingInviteProjectionIsIdentityFree(responseText)
+                    json.decodeFromString(PendingInvitesResponse.serializer(), responseText)
                 }
             assertEquals(listOf("STAFF"), managerPending.invites.map { it.role })
             assertTrue(managerPending.invites.single().handle.startsWith("sih_"))
@@ -416,7 +921,9 @@ class VenueStaffRoutesTest {
                     headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
                 }.let { response ->
                     assertEquals(HttpStatusCode.OK, response.status)
-                    json.decodeFromString(PendingInvitesResponse.serializer(), response.bodyAsText())
+                    val responseText = response.bodyAsText()
+                    assertPendingInviteProjectionIsIdentityFree(responseText)
+                    json.decodeFromString(PendingInvitesResponse.serializer(), responseText)
                 }
             assertEquals(setOf("STAFF", "MANAGER"), ownerPending.invites.map { it.role }.toSet())
             val staffHandle = ownerPending.invites.single { it.role == "STAFF" }.handle
@@ -830,23 +1337,20 @@ class VenueStaffRoutesTest {
             val ownerToken = issueToken(config, ownerId)
 
             val createResponse =
-                client.post("/api/venue/$venueId/staff/profiles") {
-                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
-                    contentType(ContentType.Application.Json)
-                    setBody(
-                        json.encodeToString(
-                            StaffProfileCreateRequest.serializer(),
-                            StaffProfileCreateRequest(
-                                displayName = "Иван",
-                                roleLabel = "Мастер",
-                                subtype = "hookah_master",
-                                linkedUserId = staffId,
-                                bio = "Любит крепкие чаши",
-                                tags = listOf("крепко", "ягоды"),
-                            ),
+                postStaffProfile(
+                    client = client,
+                    venueId = venueId,
+                    token = ownerToken,
+                    request =
+                        StaffProfileCreateRequest(
+                            displayName = "Иван",
+                            roleLabel = "Мастер",
+                            subtype = "hookah_master",
+                            linkedUserId = staffId,
+                            bio = "Любит крепкие чаши",
+                            tags = listOf("крепко", "ягоды"),
                         ),
-                    )
-                }
+                )
 
             assertEquals(HttpStatusCode.OK, createResponse.status)
             val created = json.decodeFromString(StaffProfileDto.serializer(), createResponse.bodyAsText())
@@ -995,22 +1499,20 @@ class VenueStaffRoutesTest {
             seedVenueMembership(jdbcUrl, staffId, "STAFF", venueId)
             val ownerToken = issueToken(config, ownerId)
             val staffToken = issueToken(config, staffId)
+            seedUserIdentity(jdbcUrl, staffId, null, "Алина", null)
 
             val profile =
-                client.post("/api/venue/$venueId/staff/profiles") {
-                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
-                    contentType(ContentType.Application.Json)
-                    setBody(
-                        json.encodeToString(
-                            StaffProfileCreateRequest.serializer(),
-                            StaffProfileCreateRequest(
-                                displayName = "Алина",
-                                subtype = "waiter",
-                                linkedUserId = staffId,
-                            ),
+                postStaffProfile(
+                    client = client,
+                    venueId = venueId,
+                    token = ownerToken,
+                    request =
+                        StaffProfileCreateRequest(
+                            displayName = "Алина",
+                            subtype = "waiter",
+                            linkedUserId = staffId,
                         ),
-                    )
-                }.let { response ->
+                ).let { response ->
                     assertEquals(HttpStatusCode.OK, response.status)
                     json.decodeFromString(StaffProfileDto.serializer(), response.bodyAsText())
                 }
@@ -1180,6 +1682,219 @@ class VenueStaffRoutesTest {
                 }
             assertEquals(HttpStatusCode.Forbidden, shiftResponse.status)
             assertApiErrorEnvelope(shiftResponse, ApiErrorCodes.FORBIDDEN)
+        }
+
+    private suspend fun postStaffProfile(
+        client: HttpClient,
+        venueId: Long,
+        token: String,
+        request: StaffProfileCreateRequest,
+    ): HttpResponse {
+        val linkedUserId = request.linkedUserId
+        if (linkedUserId != null) {
+            return client.post("/api/venue/$venueId/staff/profiles/from-member") {
+                headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                contentType(ContentType.Application.Json)
+                setBody(
+                    json.encodeToString(
+                        StaffProfileCreateFromMemberRequest.serializer(),
+                        StaffProfileCreateFromMemberRequest(
+                            userId = linkedUserId,
+                            subtype = request.subtype,
+                            roleLabel =
+                                if (request.subtype == "other") {
+                                    request.roleLabel ?: "Сотрудник"
+                                } else {
+                                    null
+                                },
+                        ),
+                    ),
+                )
+            }
+        }
+        return client.post("/api/venue/$venueId/staff/profiles") {
+            headers { append(HttpHeaders.Authorization, "Bearer $token") }
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(StaffProfileCreateRequest.serializer(), request))
+        }
+    }
+
+    private suspend fun loadStaffMember(
+        client: HttpClient,
+        venueId: Long,
+        token: String,
+        userId: Long,
+    ): StaffMemberDto {
+        val response =
+            client.get("/api/venue/$venueId/staff") {
+                headers { append(HttpHeaders.Authorization, "Bearer $token") }
+            }
+        assertEquals(HttpStatusCode.OK, response.status)
+        return json.decodeFromString(StaffListResponse.serializer(), response.bodyAsText())
+            .members.single { it.userId == userId }
+    }
+
+    private suspend fun assertProfileLinkConflict(
+        response: HttpResponse,
+        expectedState: String,
+        expectedProfileId: Long?,
+    ) {
+        assertEquals(HttpStatusCode.Conflict, response.status)
+        val error = json.parseToJsonElement(response.bodyAsText()).jsonObject.getValue("error").jsonObject
+        assertEquals(ApiErrorCodes.STAFF_PROFILE_LINK_CONFLICT, error.getValue("code").jsonPrimitive.content)
+        val details = error.getValue("details").jsonObject
+        assertEquals(expectedState, details.getValue("profileLinkState").jsonPrimitive.content)
+        if (expectedProfileId != null) {
+            assertEquals(expectedProfileId, details.getValue("linkedStaffProfileId").jsonPrimitive.content.toLong())
+        }
+        assertTrue("userId" !in details)
+        assertTrue("username" !in details)
+        assertTrue("linkedStaffProfileDisplayName" !in details)
+    }
+
+    private fun assertPendingInviteProjectionIsIdentityFree(responseText: String) {
+        assertTrue("userId" !in responseText)
+        assertTrue("username" !in responseText)
+        assertTrue("displayName" !in responseText)
+        assertTrue("firstName" !in responseText)
+        assertTrue("lastName" !in responseText)
+        assertTrue("phone" !in responseText.lowercase())
+        assertTrue("inviteCode" !in responseText)
+    }
+
+    private fun seedUserIdentity(
+        jdbcUrl: String,
+        userId: Long,
+        username: String?,
+        firstName: String?,
+        lastName: String?,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                UPDATE users
+                SET username = ?, first_name = ?, last_name = ?
+                WHERE telegram_user_id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setString(1, username)
+                statement.setString(2, firstName)
+                statement.setString(3, lastName)
+                statement.setLong(4, userId)
+                statement.executeUpdate()
+            }
+        }
+    }
+
+    private fun seedActiveStaffProfile(
+        jdbcUrl: String,
+        venueId: Long,
+        linkedUserId: Long,
+        actorUserId: Long,
+        displayName: String,
+    ): Long =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                INSERT INTO staff_profiles (
+                    venue_id,
+                    linked_user_id,
+                    display_name,
+                    subtype,
+                    is_guest_visible,
+                    created_by_user_id,
+                    updated_by_user_id,
+                    published_at,
+                    disabled_at
+                )
+                VALUES (?, ?, ?, 'other', FALSE, ?, ?, NULL, NULL)
+                """.trimIndent(),
+                Statement.RETURN_GENERATED_KEYS,
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.setLong(2, linkedUserId)
+                statement.setString(3, displayName)
+                statement.setLong(4, actorUserId)
+                statement.setLong(5, actorUserId)
+                statement.executeUpdate()
+                statement.generatedKeys.use { rs ->
+                    check(rs.next())
+                    rs.getLong(1)
+                }
+            }
+        }
+
+    private fun countActiveLinkedProfiles(
+        jdbcUrl: String,
+        venueId: Long,
+        linkedUserId: Long,
+    ): Int =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT COUNT(*)
+                FROM staff_profiles
+                WHERE venue_id = ? AND linked_user_id = ? AND disabled_at IS NULL
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.setLong(2, linkedUserId)
+                statement.executeQuery().use { rs ->
+                    check(rs.next())
+                    rs.getInt(1)
+                }
+            }
+        }
+
+    private fun countStaffProfileSuccessAudits(
+        jdbcUrl: String,
+        venueId: Long,
+    ): Int =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT COUNT(*)
+                FROM audit_log
+                WHERE entity_type = 'staff_profile'
+                  AND payload_json LIKE ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setString(1, "%\"venueId\":$venueId%")
+                statement.executeQuery().use { rs ->
+                    check(rs.next())
+                    rs.getInt(1)
+                }
+            }
+        }
+
+    private fun loadSingleStaffProfileAuditPayload(
+        jdbcUrl: String,
+        venueId: Long,
+    ): String =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT payload_json
+                FROM audit_log
+                WHERE entity_type = 'staff_profile'
+                  AND payload_json LIKE ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setString(1, "%\"venueId\":$venueId%")
+                statement.executeQuery().use { rs ->
+                    check(rs.next())
+                    val payload = rs.getString("payload_json")
+                    check(!rs.next())
+                    payload
+                }
+            }
+        }
+
+    private fun h2DataSource(jdbcUrl: String): JdbcDataSource =
+        JdbcDataSource().apply {
+            setURL(jdbcUrl)
+            user = "sa"
+            password = ""
         }
 
     private fun buildJdbcUrl(prefix: String): String {
@@ -1390,7 +2105,13 @@ class VenueStaffRoutesTest {
     @Serializable
     private data class StaffMemberDto(
         val userId: Long,
+        val displayName: String,
+        val username: String? = null,
         val role: String,
+        val active: Boolean,
+        val linkedStaffProfileId: Long? = null,
+        val linkedStaffProfileDisplayName: String? = null,
+        val profileLinkState: String,
     )
 
     @Serializable
@@ -1408,6 +2129,13 @@ class VenueStaffRoutesTest {
         val bio: String? = null,
         val tags: List<String> = emptyList(),
         val isGuestVisible: Boolean = false,
+    )
+
+    @Serializable
+    private data class StaffProfileCreateFromMemberRequest(
+        val userId: Long,
+        val subtype: String,
+        val roleLabel: String? = null,
     )
 
     @Serializable
@@ -1432,6 +2160,9 @@ class VenueStaffRoutesTest {
     private data class StaffProfileDto(
         val id: Long,
         val linkedUserId: Long? = null,
+        val linkageClass: String,
+        val canManage: Boolean,
+        val isSelf: Boolean,
         val displayName: String,
         val roleLabel: String? = null,
         val subtype: String,

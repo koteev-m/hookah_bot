@@ -192,6 +192,10 @@ function profileRoleLabel(profile: Pick<VenueStaffProfileDto, 'roleLabel' | 'sub
   return profile.roleLabel?.trim() || formatProfileSubtype(profile.subtype)
 }
 
+function profileLinkageLabel(profile: Pick<VenueStaffProfileDto, 'linkageClass'>): string {
+  return profile.linkageClass === 'DISPLAY_ONLY' ? 'без привязки' : 'привязан к сотруднику'
+}
+
 function shiftRoleLabel(
   shift: Pick<VenueStaffScheduleAdminShiftDto, 'roleLabel' | 'subtype'> | VenueStaffScheduleColleagueDto
 ): string {
@@ -777,7 +781,7 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
       checkbox.checked = bulkAssignments.has(profile.id)
       checkbox.disabled = !checkbox.checked && bulkAssignments.size >= MAX_BATCH_ASSIGNMENTS
       checkbox.setAttribute('aria-label', `Выбрать ${profile.displayName}`)
-      const linkage = profile.linkedUserId == null ? 'без привязки' : 'привязан к сотруднику'
+      const linkage = profileLinkageLabel(profile)
       const copy = el('span', {
         text: `${profile.displayName} · ${profileRoleLabel(profile)} · ${linkage}`
       })
@@ -968,7 +972,7 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
     const selected = admin.profileSelect.value
     admin.profileSelect.replaceChildren()
     sortedProfiles().forEach((profile) => {
-      const linkage = profile.linkedUserId == null ? 'без привязки' : 'привязан к сотруднику'
+      const linkage = profileLinkageLabel(profile)
       admin.profileSelect.appendChild(
         new Option(
           `${profile.displayName} · ${profileRoleLabel(profile)} · ${linkage}`,

@@ -34,13 +34,17 @@ Current practice:
   staging deploy completed and manual staging smoke passed on the current limited venue dataset.
   Extended multi-venue coverage remains **NON-BLOCKING DEFERRED MANUAL SMOKE /
   CATALOG-SEARCH-MANUAL-001** and does not downgrade the completed MVP.
+- Staff identity linking is
+  **STAFF IDENTITY LINKING UX + DUPLICATE PREVENTION / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
 - Staff Schedule is
-  **STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / RESTORE + BULK ASSIGNMENT IMPLEMENTED / LOCAL VALIDATION PASSED**.
+  **STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / IDENTITY LINKING FIX IMPLEMENTED / STAGING RE-SMOKE REQUIRED**.
   Staff Operations Slice A is
   **MANAGER PARITY + SHIFT TIME DEFAULTS / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**. The schedule
-  schema remains **NO_MIGRATION_EXPECTED**. Restore + Bulk Assignment adds no migration; the
-  separate invite-revoke Slice A adds PostgreSQL V120/H2 V121. Green Actions, deploy and a new
-  staging smoke are pending, so production readiness is not claimed.
+  schema remains **NO_MIGRATION_EXPECTED**. Restore + Bulk Assignment remains implemented, and
+  Staff Identity Linking UX Polish serializes one-active-profile checks on the existing
+  `venue_members` row, also without a migration. The separate invite-revoke Slice A adds
+  PostgreSQL V120/H2 V121. Green Actions, deploy and a new staging smoke are pending, so production
+  readiness is not claimed.
 
 Target QA model:
 - Every task ends with changed files, behavior summary, tests run, validation result, manual smoke checklist, `git status --short`, whether `scripts/dev/` was touched and whether staging deploy is needed.
@@ -61,11 +65,13 @@ Target QA model:
 ## Staff Schedule Phase 1 Release Quality Gate
 
 Status:
-**STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / RESTORE + BULK ASSIGNMENT IMPLEMENTED / LOCAL VALIDATION PASSED**.
+**STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / IDENTITY LINKING FIX IMPLEMENTED / STAGING RE-SMOKE REQUIRED**.
 Slice A status:
 **STAFF OPERATIONS SLICE A / MANAGER PARITY + SHIFT TIME DEFAULTS / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**.
-Schedule-schema verdict: **NO_MIGRATION_EXPECTED**. Green Actions, runtime deploy and new staging
-smoke are pending; do not claim production readiness until those gates pass. The complete acceptance matrix remains canonical in
+Schedule and identity-linking schema verdict: **NO_MIGRATION_EXPECTED**. Restore + Bulk Assignment
+remains implemented; identity polish changes no Schedule calculation/lifecycle, Today Staff or
+Guest source. Green Actions, runtime deploy and new staging smoke are pending; do not claim
+production readiness until those gates pass. The complete acceptance matrix remains canonical in
 `docs/STAFF_PROFILES_SHIFTS_TIPS.md`; this section defines the remaining CI/staging release gates.
 The PostgreSQL V120 rollout/drain order remains required for the separate Slice A invite-revoke UI;
 it is not a migration for Restore + Bulk Assignment.
@@ -79,6 +85,29 @@ Locally validated backend coverage:
 - Manager display-only/Staff-linked profile create/edit/publish/hide, protected Owner/other-Manager
   denial, safe own edit, invalid/foreign linkage denial, Owner/Staff regression and safe
   transaction-bound audit with no denial/no-op/rollback success row;
+- accepted Staff member projection from the existing `users` identity row, including trimmed
+  display name, present `username`, safe missing-username fallback and no second identity cache;
+- pending invite projection with role/status/created/expires only in the visible UI and no invented
+  recipient identity; accept removes pending state and exposes the fresh active member/link state;
+- Manager receives active Staff identities/link targets only, while Owner retains the current
+  permitted active-member projection; Staff/Guest/foreign/Platform-only directory reads are denied;
+- member/profile-link DTOs exclude phone, invite secrets, raw `initData`, private notes/audit
+  metadata and any Telegram/member fields from Guest DTOs;
+- private profile raw bodies use server-computed `linkageClass/canManage/isSelf`; Manager
+  Owner/Manager/orphan/duplicate projections redact raw linkage, Staff self uses `isSelf`, Owner
+  retains the broader current private contract and protected errors reveal no target metadata;
+- create-from-member accepts only `userId`, required `subtype` and compatible `roleLabel`, re-reads
+  target membership/current `users` identity, creates one active Guest-hidden draft and never treats
+  a client display name or visibility flag as authority; generic create rejects linked writes;
+- one-active-link enforcement for create/relink/reactivation under target `venue_members FOR UPDATE`,
+  typed existing-profile conflict and no success audit on denial;
+- PostgreSQL Testcontainers drives two real HTTP transactions through concurrent create-from-member
+  and relink scenarios, proves both wait on the target membership lock via PostgreSQL lock state,
+  uses no arbitrary sleep and requires exactly one winner/one typed conflict/winner-only audit;
+- pre-existing multiple active links report `DUPLICATE_LINK_DETECTED` and remain distinct; Manager
+  sees the duplicate state read-only, while Owner repairs it by opening the concrete wrong card in
+  the common card list and using safe unlink; no automatic merge/delete/relink and no
+  Schedule/self-view dedupe;
 - weekly/exception/overnight/closed/not-configured effective-hours response, venue timezone,
   batched range semantics and explicit error propagation; shifts outside hours remain allowed;
 
@@ -132,6 +161,14 @@ Locally validated Mini App/e2e coverage:
 
 - Owner `График смен` week list/editor and Manager parity;
 - Staff read-only `Мои смены` with overlap-only colleagues and no admin controls;
+- accepted employee display name, `@username`/`Без username`, role badge and link status in
+  `Доступ сотрудников`, with full raw id never used as the primary label;
+- `Создать карточку` preselects the correct active member and safe display name; one linked profile
+  changes the row action to `Открыть карточку` and removes/disables that member in other selectors;
+- duplicate-link warning uses the canonical copy and keeps every distinct profile/shift visible;
+- Manager sees Staff actions but no editable Owner/Manager targets; Owner controls are preserved;
+- venue switch and account switch abort/clear member identity, linkage, profile form and late
+  response state; Staff/Guest receive no internal directory;
 - week navigation, timezone copy and overnight rendering;
 - loading, optional empty, retryable error, update preview, cancel confirmation and active warning;
 - stale conflict offers refresh and never overwrites current state;
@@ -153,23 +190,29 @@ Telegram mutation UI to satisfy this gate.
 Recorded local gate:
 
 ```bash
+git status --short
+git diff --check
 ./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VenueStaffRoutesTest*' --console=plain
 ./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VenueRbacRoutesTest*' --console=plain
 ./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*GuestVenueRoutesTest*' --console=plain
+JAVA_TOOL_OPTIONS=-Dapi.version=1.44 ./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*StaffProfile*Concurrency*' --console=plain
 ./gradlew --no-daemon --max-workers=1 :backend:app:compileKotlin --console=plain
 ./gradlew --no-daemon --max-workers=1 :backend:app:ktlintCheck --console=plain
 npm --prefix miniapp run build
 CI=1 TZ=UTC MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke
-git diff --check
 ```
 
-The commands above are the required current-worktree gate for Restore + Bulk Assignment. Record the
-exact results in the implementation handoff; do not reuse an earlier Slice A browser count as proof
-for this slice.
+The commands above are the required current-worktree gate for Staff Identity Linking UX Polish and
+the unchanged Restore + Bulk Assignment regression. Record the exact results in the implementation
+handoff; do not reuse an earlier Slice A browser count as proof for this slice.
 
-Remaining release gate: green GitHub Actions, staging deploy, Owner/Manager/Staff manual smoke,
-saved/new-time restore, common/per-profile and mixed atomic batch, typed conflict presentation,
-timezone and overnight smoke, two-account Staff privacy smoke, venue-switch stale-response smoke,
+The PostgreSQL selector is proof only when Gradle reports executed tests greater than zero,
+`skipped = 0` and `failures = 0`; a Docker/Testcontainers assumption skip is not a pass.
+
+Remaining release gate: green GitHub Actions, staging deploy, Owner/Manager/Staff identity and
+linking manual smoke, missing-username and duplicate/manual-unlink smoke, two-request link race,
+venue/account-switch isolation, saved/new-time restore, common/per-profile and mixed atomic batch,
+typed conflict presentation, timezone and overnight smoke, two-account Staff privacy smoke,
 unchanged Today/Guest smoke and cleanup of test rows.
 
 ## Catalog Search And Filter Phase 1 Quality Gate
@@ -624,7 +667,7 @@ Expectations:
 | Support/tickets | `*Support*`, RBAC tests, Mini App build/e2e if UI changed. | Backend split + Mini App if affected. | Yes for runtime. | Guest/Venue/Platform support smoke. | Medium/high. |
 | Booking | `*VenueBookingRoutesTest*`, Guest booking/reminder tests if affected, Telegram tests if bot changed. | `backend-venue-booking-rbac`, Telegram lightweight where affected. | Yes for runtime. | Booking lifecycle smoke. | Medium/high. |
 | Menu/stop-list | Menu/availability route tests, order stale-availability tests, Mini App build/e2e if UI changed. | Backend + Mini App if affected. | Usually yes. | Menu/stop-list smoke. | Medium/high. |
-| Staff Operations / Schedule | `*VenueStaffRoutesTest*`, `*StaffInviteRepositoryTest*`, `*VenueRbacRoutesTest*`, `*GuestVenueRoutesTest*`, compile/lint, Mini App build/e2e. | Backend split + Mini App. | Yes for runtime; migration only when the selected slice has one. | Owner/Manager/Staff boundaries, restore/create typed conflict, atomic batch/race/audit, effective hours, timezone/overnight, privacy, Today/Guest regression and venue switch. | High for atomicity/RBAC/privacy/time semantics. |
+| Staff Operations / Schedule | `*VenueStaffRoutesTest*`, `*StaffInviteRepositoryTest*`, `*VenueRbacRoutesTest*`, `*GuestVenueRoutesTest*`, compile/lint, Mini App build/e2e. | Backend split + Mini App. | Yes for runtime; migration only when the selected slice has one. | Safe member identity/link projection, Owner/Manager/Staff boundaries, one-active-link and duplicate/race/unlink/audit, restore/create typed conflict, atomic batch, effective hours, timezone/overnight, privacy, Today/Guest regression and venue/account switch. | High for atomicity/RBAC/privacy/time semantics. |
 | Guest history/growth | `*Visit*`, `*GuestVisitRoutesTest*`, Mini App build/e2e smoke for UI changes. | Backend split + Mini App if affected. | Yes for runtime. | Guest History or Growth checklist from `docs/GROWTH_RETENTION.md`. | Medium/high for privacy. |
 
 ## Standard Pre-Commit Workflow
@@ -851,7 +894,24 @@ Venue operations:
 - booking queue works if implemented;
 - staff-chat receives order/call only.
 
-Staff Operations Slice A / Staff Schedule staging smoke (pending):
+Staff Identity Linking UX / Staff Operations Slice A / Staff Schedule staging smoke (pending):
+- accepted Staff member shows Telegram display name, `@username` when present or `Без username`
+  with safe hint, role badge and link status; full raw id is not the main label;
+- pending invitation shows role/status/created/expires and authorized revoke only, with no recipient
+  identity; after accept it disappears and the active member appears with fresh identity/link state;
+- `Создать карточку` from a member row opens the form with that member/name preselected and creates
+  one Guest-hidden draft; linked member changes to `Открыть карточку` and cannot be selected again;
+- Manager sees active Staff identities/actions only and cannot receive Owner/Manager as editable
+  targets; Owner retains current controls and protected/last-owner constraints;
+- a second ordinary link is rejected; two concurrent create/link requests have one winner; existing
+  duplicate data shows `К этому сотруднику привязано несколько карточек. Выберите основную и
+  отвяжите остальные.` with no automatic cleanup or success audit;
+- Manager duplicate state is read-only, exposes no arbitrary profile reference and offers no
+  open/edit/link/unlink action; Owner opens the concrete wrong card in the common card list and uses
+  the existing safe unlink flow; the other card stays linked, every distinct profile/shift/history
+  remains visible, and no automatic merge/delete occurs;
+- venue switch and account switch clear member identities, selected member, profile/link state and
+  late responses; Staff/Guest never receive the internal directory and Guest DTOs remain unchanged;
 - Manager sees `Добавить сотрудника`, can create only Staff, sees/revokes only pending Staff and
   cannot use the revoked invite; Owner still creates/sees/revokes Staff and Manager invites;
 - Manager creates display-only and Staff-linked cards, edits/publishes/hides them, while Owner and
@@ -984,7 +1044,8 @@ Telegram/staff-chat:
 - Menu shift check is **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED** and stays
   in regression. Per-venue `staff_stoplist_enabled` remains future.
 - Staff Schedule Phase 1 is
-  `STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / RESTORE + BULK ASSIGNMENT IMPLEMENTED / LOCAL VALIDATION PASSED`;
+  `STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / IDENTITY LINKING FIX IMPLEMENTED / STAGING RE-SMOKE REQUIRED`;
+  Restore + Bulk Assignment remains implemented. Identity/linking, duplicate/race/unlink,
   restore/batch atomicity, typed-conflict, privacy/RBAC/effective-hours/Today compatibility remain
   required regression gates. Green Actions and a new staging smoke remain pending, so production
   readiness is not claimed.
@@ -1004,10 +1065,11 @@ Telegram/staff-chat:
 - Staff Operations Slice A:
   `MANAGER PARITY + SHIFT TIME DEFAULTS / MVP IMPLEMENTED / LOCAL VALIDATION PASSED`.
 - Staff Schedule Phase 1:
-  `STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / RESTORE + BULK ASSIGNMENT IMPLEMENTED / LOCAL VALIDATION PASSED`;
-  schedule-schema verdict `NO_MIGRATION_EXPECTED`; green Actions, runtime deploy and new staging
-  smoke remain pending. The invite migration rollout is the separate Slice A gate. Optional module/
-  source settings remain Slice B `FUTURE`.
+  `STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / IDENTITY LINKING FIX IMPLEMENTED / STAGING RE-SMOKE REQUIRED`;
+  Restore + Bulk Assignment remains implemented; schedule and identity-linking schema verdicts are
+  `NO_MIGRATION_EXPECTED`; green Actions, runtime deploy and new staging smoke remain pending. The
+  invite migration rollout is the separate Slice A gate. Optional module/source settings remain
+  Slice B `FUTURE` and unchanged.
 - Manual smoke checklist: `CONSOLIDATED`.
 - CI coverage: `PARTIAL / release-critical split jobs current`.
 - Frontend e2e: `PARTIAL`, with smoke coverage documented.

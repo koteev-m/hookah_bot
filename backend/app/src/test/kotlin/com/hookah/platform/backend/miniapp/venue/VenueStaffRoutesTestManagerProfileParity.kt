@@ -82,6 +82,9 @@ class VenueStaffRoutesTestManagerProfileParity {
                         ),
                 )
             assertNull(displayOnly.linkedUserId)
+            assertEquals("DISPLAY_ONLY", displayOnly.linkageClass)
+            assertTrue(displayOnly.canManage)
+            assertFalse(displayOnly.isSelf)
 
             val staffLinked =
                 createProfile(
@@ -97,7 +100,11 @@ class VenueStaffRoutesTestManagerProfileParity {
                             tags = listOf("private-staff-tag"),
                         ),
                 )
+            setVisibility(client, venueId, staffLinked.id, managerToken, "publish").requireProfile()
             assertEquals(staffId, staffLinked.linkedUserId)
+            assertEquals("STAFF_LINKED", staffLinked.linkageClass)
+            assertTrue(staffLinked.canManage)
+            assertFalse(staffLinked.isSelf)
 
             val updatedDisplay =
                 patchProfile(
@@ -210,6 +217,7 @@ class VenueStaffRoutesTestManagerProfileParity {
             val staffId = 72_004L
             val foreignOwnerId = 72_005L
             val foreignStaffId = 72_006L
+            val orphanedUserId = 72_007L
             val missingUserId = 99_999_999L
             val venueId = seedVenueMembership(jdbcUrl, ownerId, "OWNER")
             seedVenueMembership(jdbcUrl, managerId, "MANAGER", venueId)
@@ -253,7 +261,91 @@ class VenueStaffRoutesTestManagerProfileParity {
                         linkedUserId = managerId,
                     ),
                 )
+            seedUser(jdbcUrl, orphanedUserId)
+            val orphanedProfileId =
+                seedPublishedProfile(jdbcUrl, venueId, orphanedUserId, ownerId, "Нет membership")
+            assertEquals(ownerId, ownerProfile.linkedUserId)
+            assertEquals("STAFF_LINKED", ownerProfile.linkageClass)
+            assertTrue(ownerProfile.canManage)
+            assertEquals(otherManagerId, otherManagerProfile.linkedUserId)
+            assertTrue(otherManagerProfile.canManage)
+            assertEquals(managerId, ownManagerProfile.linkedUserId)
+            assertTrue(ownManagerProfile.canManage)
             assertEquals(3, fetchProfileAuditRows(jdbcUrl).size)
+
+            listOf(ownerId, otherManagerId, managerId).forEach { protectedTargetUserId ->
+                val response =
+                    postProfileFromMember(
+                        client = client,
+                        venueId = venueId,
+                        token = managerToken,
+                        request =
+                            StaffProfileCreateFromMemberRequest(
+                                userId = protectedTargetUserId,
+                                subtype = "admin",
+                            ),
+                    )
+                assertEquals(HttpStatusCode.Forbidden, response.status)
+                assertApiErrorEnvelope(response, ApiErrorCodes.FORBIDDEN)
+                val responseBody = response.bodyAsText()
+                listOf(ownerId, otherManagerId, managerId).forEach { protectedUserId ->
+                    assertFalse(responseBody.contains(protectedUserId.toString()))
+                }
+                listOf("OWNER", "MANAGER", "membership", "linkedUserId").forEach { protectedMetadata ->
+                    assertFalse(responseBody.contains(protectedMetadata, ignoreCase = true))
+                }
+            }
+            assertEquals(4, countProfiles(jdbcUrl, venueId))
+            assertEquals(3, fetchProfileAuditRows(jdbcUrl).size)
+
+            val managerListResponse =
+                client.get("/api/venue/$venueId/staff/profiles") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $managerToken") }
+                }
+            assertEquals(HttpStatusCode.OK, managerListResponse.status)
+            val managerListBody = managerListResponse.bodyAsText()
+            val managerProfiles =
+                json.decodeFromString(StaffProfilesResponse.serializer(), managerListBody)
+                    .profiles
+                    .associateBy { it.id }
+            val managerOwnerProjection = managerProfiles.getValue(ownerProfile.id)
+            assertEquals(null, managerOwnerProjection.linkedUserId)
+            assertEquals("PROTECTED", managerOwnerProjection.linkageClass)
+            assertFalse(managerOwnerProjection.canManage)
+            assertFalse(managerOwnerProjection.isSelf)
+            val otherManagerProjection = managerProfiles.getValue(otherManagerProfile.id)
+            assertEquals(null, otherManagerProjection.linkedUserId)
+            assertEquals("PROTECTED", otherManagerProjection.linkageClass)
+            assertFalse(otherManagerProjection.canManage)
+            assertFalse(otherManagerProjection.isSelf)
+            val ownManagerProjection = managerProfiles.getValue(ownManagerProfile.id)
+            assertEquals(null, ownManagerProjection.linkedUserId)
+            assertEquals("PROTECTED", ownManagerProjection.linkageClass)
+            assertFalse(ownManagerProjection.canManage)
+            assertTrue(ownManagerProjection.isSelf)
+            val orphanedProjection = managerProfiles.getValue(orphanedProfileId)
+            assertEquals(null, orphanedProjection.linkedUserId)
+            assertEquals("PROTECTED", orphanedProjection.linkageClass)
+            assertFalse(orphanedProjection.canManage)
+            assertFalse(orphanedProjection.isSelf)
+            assertFalse(managerListBody.contains("linkedUserId"))
+            listOf(ownerId, otherManagerId, managerId, orphanedUserId).forEach { protectedUserId ->
+                assertFalse(managerListBody.contains(protectedUserId.toString()))
+            }
+
+            val ownerListResponse =
+                client.get("/api/venue/$venueId/staff/profiles") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                }
+            assertEquals(HttpStatusCode.OK, ownerListResponse.status)
+            val ownerOrphanedProjection =
+                json.decodeFromString(StaffProfilesResponse.serializer(), ownerListResponse.bodyAsText())
+                    .profiles
+                    .single { it.id == orphanedProfileId }
+            assertEquals(orphanedUserId, ownerOrphanedProjection.linkedUserId)
+            assertEquals("PROTECTED", ownerOrphanedProjection.linkageClass)
+            assertTrue(ownerOrphanedProjection.canManage)
+            assertFalse(ownerOrphanedProjection.isSelf)
 
             val protectedResponses =
                 listOf(
@@ -306,6 +398,13 @@ class VenueStaffRoutesTestManagerProfileParity {
             protectedResponses.forEach { response ->
                 assertEquals(HttpStatusCode.Forbidden, response.status)
                 assertApiErrorEnvelope(response, ApiErrorCodes.FORBIDDEN)
+                val responseBody = response.bodyAsText()
+                listOf(ownerId, otherManagerId, managerId, staffId).forEach { protectedUserId ->
+                    assertFalse(responseBody.contains(protectedUserId.toString()))
+                }
+                listOf("OWNER", "MANAGER", "membership", "linkedUserId").forEach { protectedMetadata ->
+                    assertFalse(responseBody.contains(protectedMetadata, ignoreCase = true))
+                }
             }
 
             val missingTargetResponse =
@@ -343,7 +442,10 @@ class VenueStaffRoutesTestManagerProfileParity {
                         tags = listOf("manager-private-tag"),
                     ),
                 ).requireProfile()
-            assertEquals(managerId, safeOwnEdit.linkedUserId)
+            assertEquals(null, safeOwnEdit.linkedUserId)
+            assertEquals("PROTECTED", safeOwnEdit.linkageClass)
+            assertFalse(safeOwnEdit.canManage)
+            assertTrue(safeOwnEdit.isSelf)
             assertEquals("manager private bio must not leak", safeOwnEdit.bio)
 
             val audits = fetchProfileAuditRows(jdbcUrl)
@@ -442,7 +544,7 @@ class VenueStaffRoutesTestManagerProfileParity {
                     ),
                 )
             val auditCountBeforeStaffMutation = fetchProfileAuditRows(jdbcUrl).size
-            val safeStaffEdit =
+            val safeStaffEditResponse =
                 patchProfile(
                     client,
                     venueId,
@@ -453,9 +555,18 @@ class VenueStaffRoutesTestManagerProfileParity {
                         bio = "staff private bio must not leak",
                         tags = listOf("staff-private-tag"),
                     ),
-                ).requireProfile()
-            assertEquals(staffId, safeStaffEdit.linkedUserId)
-            assertEquals("Сотрудник", safeStaffEdit.displayName)
+                )
+            val safeStaffEditBody = safeStaffEditResponse.bodyAsText()
+            assertEquals(HttpStatusCode.OK, safeStaffEditResponse.status, safeStaffEditBody)
+            assertFalse(safeStaffEditBody.contains(staffId.toString()))
+            assertFalse(safeStaffEditBody.contains("linkedUserId"))
+            assertTrue(safeStaffEditBody.contains("\"isSelf\":true"))
+            val safeStaffEdit = json.decodeFromString(StaffProfileDto.serializer(), safeStaffEditBody)
+            assertEquals(null, safeStaffEdit.linkedUserId)
+            assertEquals("STAFF_LINKED", safeStaffEdit.linkageClass)
+            assertFalse(safeStaffEdit.canManage)
+            assertTrue(safeStaffEdit.isSelf)
+            assertEquals("Test User", safeStaffEdit.displayName)
             assertEquals("staff private bio must not leak", safeStaffEdit.bio)
 
             val forbiddenStaffResponses =
@@ -542,6 +653,7 @@ class VenueStaffRoutesTestManagerProfileParity {
                             isGuestVisible = true,
                         ),
                 )
+            setVisibility(client, venueId, staffLinked.id, managerToken, "publish").requireProfile()
             seedPlannedTodayShift(
                 jdbcUrl = jdbcUrl,
                 venueId = venueId,
@@ -572,7 +684,7 @@ class VenueStaffRoutesTestManagerProfileParity {
             assertTrue(staffState.manuallyMarkedActive)
 
             assertEquals(
-                setOf("Ручная карточка", "Активный сотрудник"),
+                setOf("Ручная карточка", "Test User"),
                 guestTodayNames(client, venueId, guestToken).toSet(),
             )
             assertEquals(2, countTodaySuccessAudits(jdbcUrl))
@@ -903,11 +1015,46 @@ class VenueStaffRoutesTestManagerProfileParity {
         venueId: Long,
         token: String,
         request: StaffProfileCreateRequest,
-    ): HttpResponse =
-        client.post("/api/venue/$venueId/staff/profiles") {
+    ): HttpResponse {
+        val linkedUserId = request.linkedUserId
+        if (linkedUserId != null) {
+            return client.post("/api/venue/$venueId/staff/profiles/from-member") {
+                headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                contentType(ContentType.Application.Json)
+                setBody(
+                    json.encodeToString(
+                        StaffProfileCreateFromMemberRequest.serializer(),
+                        StaffProfileCreateFromMemberRequest(
+                            userId = linkedUserId,
+                            subtype = request.subtype,
+                            roleLabel =
+                                if (request.subtype == "other") {
+                                    request.roleLabel ?: "Сотрудник"
+                                } else {
+                                    null
+                                },
+                        ),
+                    ),
+                )
+            }
+        }
+        return client.post("/api/venue/$venueId/staff/profiles") {
             headers { append(HttpHeaders.Authorization, "Bearer $token") }
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(StaffProfileCreateRequest.serializer(), request))
+        }
+    }
+
+    private suspend fun postProfileFromMember(
+        client: HttpClient,
+        venueId: Long,
+        token: String,
+        request: StaffProfileCreateFromMemberRequest,
+    ): HttpResponse =
+        client.post("/api/venue/$venueId/staff/profiles/from-member") {
+            headers { append(HttpHeaders.Authorization, "Bearer $token") }
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(StaffProfileCreateFromMemberRequest.serializer(), request))
         }
 
     private suspend fun patchProfile(
@@ -1393,6 +1540,13 @@ class VenueStaffRoutesTestManagerProfileParity {
     )
 
     @Serializable
+    private data class StaffProfileCreateFromMemberRequest(
+        val userId: Long,
+        val subtype: String,
+        val roleLabel: String? = null,
+    )
+
+    @Serializable
     private data class StaffProfileUpdateRequest(
         val displayName: String? = null,
         val roleLabel: String? = null,
@@ -1412,9 +1566,17 @@ class VenueStaffRoutesTestManagerProfileParity {
     )
 
     @Serializable
+    private data class StaffProfilesResponse(
+        val profiles: List<StaffProfileDto>,
+    )
+
+    @Serializable
     private data class StaffProfileDto(
         val id: Long,
         val linkedUserId: Long? = null,
+        val linkageClass: String,
+        val canManage: Boolean,
+        val isSelf: Boolean,
         val displayName: String,
         val roleLabel: String? = null,
         val subtype: String,

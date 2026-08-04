@@ -216,11 +216,21 @@ export type StaffChatLinkCodeResponse = {
   testCommand?: string | null
 }
 
+export type VenueStaffProfileLinkState =
+  | 'NOT_LINKED'
+  | 'LINKED'
+  | 'DUPLICATE_LINK_DETECTED'
+  | 'PROTECTED'
+
 export type VenueStaffMemberDto = {
   userId: number
+  displayName: string
+  username?: string | null
   role: 'OWNER' | 'MANAGER' | 'STAFF'
-  createdAt: string
-  invitedByUserId?: number | null
+  active: boolean
+  linkedStaffProfileId?: number | null
+  linkedStaffProfileDisplayName?: string | null
+  profileLinkState: VenueStaffProfileLinkState
 }
 
 export type VenueStaffListResponse = {
@@ -228,6 +238,12 @@ export type VenueStaffListResponse = {
 }
 
 export type VenueStaffProfileSubtype = 'hookah_master' | 'waiter' | 'admin' | 'other' | string
+
+export type VenueStaffProfileLinkageClass =
+  | 'DISPLAY_ONLY'
+  | 'STAFF_LINKED'
+  | 'PROTECTED'
+  | 'DUPLICATE_LINK_DETECTED'
 
 export type VenueStaffShiftStatus = 'scheduled' | 'active' | 'completed' | 'canceled' | string
 
@@ -247,6 +263,9 @@ export type VenueStaffShiftDto = {
 export type VenueStaffProfileDto = {
   id: number
   linkedUserId?: number | null
+  linkageClass: VenueStaffProfileLinkageClass
+  canManage: boolean
+  isSelf: boolean
   displayName: string
   roleLabel?: string | null
   subtype: VenueStaffProfileSubtype
@@ -269,11 +288,16 @@ export type VenueStaffProfileCreateRequest = {
   displayName: string
   roleLabel?: string | null
   subtype?: VenueStaffProfileSubtype
-  linkedUserId?: number | null
   photoRef?: string | null
   bio?: string | null
   tags?: string[]
   isGuestVisible?: boolean
+}
+
+export type VenueStaffProfileCreateFromMemberRequest = {
+  userId: number
+  subtype: VenueStaffProfileSubtype
+  roleLabel?: string
 }
 
 export type VenueStaffProfileUpdateRequest = {

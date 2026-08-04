@@ -6,9 +6,12 @@
 `STAFF PROFILES + TODAY SHIFT PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`.
 `STAFF OPERATIONS SLICE A / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`.
 Slice A scope is `MANAGER PARITY + SHIFT TIME DEFAULTS`.
-`STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / RESTORE + BULK ASSIGNMENT IMPLEMENTED / LOCAL VALIDATION PASSED`.
-Restore + Bulk Assignment still requires green Actions, runtime deploy and a new staging smoke. The
-separate Slice A invite-revoke V120/H2 V121 rollout remains its own release gate.
+`STAFF IDENTITY LINKING UX + DUPLICATE PREVENTION / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`.
+`STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / IDENTITY LINKING FIX IMPLEMENTED / STAGING RE-SMOKE REQUIRED`.
+The identity-linking blocker fix and the already implemented Restore + Bulk Assignment context
+still require independent re-review, green Actions, runtime deploy and a new staging smoke. The identity slice does not
+change Staff Schedule calculations/lifecycle, Today Staff or Guest source behavior. The separate
+Slice A invite-revoke V120/H2 V121 rollout remains its own release gate.
 `STAFF_TIP`, photo upload/media picker and staff shift sign-up/chat workflows
 remain future. Phase 2 may create staff tip intents with external staff tip links, but the platform
 must not collect guest order payments or staff tips in MVP.
@@ -28,7 +31,7 @@ orders. Staff tips, when implemented, must target a specific staff profile, not 
 | --- | --- | --- |
 | `STAFF_PROFILE` | Guest-visible profile for a hookah master, waiter, admin or other staff subtype. | `STAFF PROFILES + TODAY SHIFT PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`. |
 | `SHIFT_TODAY` | Simple manual "today on shift" visibility for public staff profiles. | `STAFF PROFILES + TODAY SHIFT PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`. |
-| `STAFF_SCHEDULE` | Optional bounded venue schedule for planned staff shifts. | `STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / RESTORE + BULK ASSIGNMENT IMPLEMENTED / LOCAL VALIDATION PASSED`. |
+| `STAFF_SCHEDULE` | Optional bounded venue schedule for planned staff shifts. | `STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / IDENTITY LINKING FIX IMPLEMENTED / STAGING RE-SMOKE REQUIRED`. Restore + Bulk Assignment remains implemented; the identity-linking fix does not change schedule behavior. |
 | `STAFF_TIP` | Future CTA and intent to thank a specific staff member. | Phase 2+ / spec draft. |
 
 ## Staff Profiles / Today Shift Phase 1 MVP
@@ -52,6 +55,14 @@ Current Phase 1 implementation plus Staff Operations Slice A includes:
   the first block.
 - Venue Mode `Персонал` separates `Доступ сотрудников` from `Карточки команды`: Owner/Manager see
   current access, safe pending invites and revoke controls, while protected cards are explicit.
+- Accepted members are rendered from the existing `users` identity row as Telegram display name,
+  optional `@username`, venue role and profile-link state. Full Telegram user id remains only a
+  compatible request value and is not the primary UI label.
+- `Создать карточку` from an unlinked member preselects that member and current safe display name;
+  `Открыть карточку` opens the existing linked card. Manual id copying is not required.
+- One venue member may have at most one active linked profile. Existing duplicates are reported and
+  repaired only through explicit safe unlink; they are never merged, deleted, relinked or hidden
+  automatically.
 - The create form is collapsed
   by default, existing cards are compact, `Другое` requires `Название роли`, and raw User ID /
   Photo ref inputs are not exposed.
@@ -92,9 +103,26 @@ Target fields:
 Rules:
 - Display-only profiles are allowed for staff who have not accepted an invite yet.
 - Linking a profile to a venue member must verify the user belongs to the same venue.
+- Active means `disabled_at IS NULL`; draft and published cards are active, while a hidden/disabled
+  historical card is not. A member may have at most one active linked profile in one venue.
+- Create, relink and reactivation lock the target `(venue_id, user_id)` row in `venue_members`,
+  re-check the current role/scope, then inspect active profiles and mutate plus audit in the same
+  database transaction. Concurrent requests for one member have one winner; no process-local lock
+  or migration is required.
+- If exactly one active linked card exists, mutation returns a typed conflict with its safe profile
+  reference. If more than one exists, projection state is `DUPLICATE_LINK_DETECTED` and ordinary
+  new linking is blocked until explicit unlink leaves one primary card.
+- Existing duplicates remain distinct rows for Schedule/Today/self-view. No read-side dedupe,
+  automatic primary selection, merge, delete or relink is allowed.
 - If `subtype=other`, Owner must provide `role_label` / `Название роли`; this custom role is what
   guests see. Old or incomplete `other` profiles fall back to `Сотрудник`, not `Другое`.
 - Public guest DTOs must not include `linked_user_id`, Telegram ids, phone, email or private notes.
+- Owner/Manager private profile DTOs are actor-aware and contain server-computed
+  `linkageClass`, `canManage` and `isSelf`. Manager receives `linkedUserId=null` for protected,
+  duplicate, missing/orphaned, Owner-linked and Manager-linked cards; the Manager's own linked card
+  is `PROTECTED`, `isSelf=true` and keeps only safe self-edit. Owner keeps the existing broader
+  private linkage projection and repair controls. Staff self-view uses `isSelf` and does not expose
+  the raw linkage id.
 - Manager profile mutations re-check current linkage, current membership role, requested linkage
   and requested membership role inside the mutation transaction. Manager targets are limited to
   display-only or a same-venue Staff membership; missing/foreign and Owner/Manager links fail
@@ -103,12 +131,28 @@ Rules:
 
 ## Staff Access / Pending Invites
 
+- Member identity is read from the existing `users` row joined to `venue_members`: trimmed
+  `first_name + last_name`, then the existing safe fallback convention, plus nullable normalized
+  `username`. Bot message/callback handling and Mini App Telegram authentication already upsert
+  these fields, so no second identity cache is added.
+- Current membership has no parallel active-status table/flag: an active member is an existing
+  `venue_members` row; removal deletes that row and a later link attempt fails closed.
+- The Owner/Manager projection contains only a safe member reference/current internal user id,
+  `displayName`, nullable `username`, role, active state, nullable linked profile id/name and
+  `profileLinkState`: `NOT_LINKED`, `LINKED`, `DUPLICATE_LINK_DETECTED` or `PROTECTED`.
+- It excludes phone, invite code/hash, raw `initData`, private notes, audit metadata and Telegram
+  identity from every Guest DTO. The full Telegram id may remain an internal request value but is
+  not rendered as the main label; a last-four-digit hint is allowed when names are ambiguous or
+  username is absent.
 - Manager creates only `STAFF` invites; Owner creates `STAFF` and `MANAGER` invites. Neither role
   creates `OWNER` or legacy `ADMIN` through this venue flow.
 - Pending means `used_at IS NULL AND revoked_at IS NULL AND expires_at > now`.
 - Owner lists/revokes pending `STAFF` and `MANAGER`; Manager lists/revokes pending `STAFF` only.
 - Pending DTOs contain only opaque handle, role, status and timestamps. Secret code/hash/deep link
   remains confined to the existing one-time create response.
+- Pending UI shows only target role, status, created/expires timestamps and the authorized revoke
+  action; no recipient name or Telegram identity is invented. After accept the pending row leaves
+  the list and the active member projection is rebuilt from current `users` identity/linkage state.
 - Accept/decline and revoke use competing conditional claims, so exactly one terminal mutation can
   win and membership creation rolls back if accept loses.
 - PostgreSQL `V120` and H2 `V121` add only `revoked_at` and `revoked_by_user_id` plus pending-query
@@ -150,6 +194,22 @@ MVP behavior:
 ## Venue UX
 
 - Section names: `Доступ сотрудников`, `Карточки команды`, and the existing `График смен`.
+- In `Доступ сотрудников`, an accepted member is shown as display name plus `@username` or
+  `Без username` (with an optional last-four id hint), role badge and link status. Raw full id is
+  never the primary label.
+
+  ```text
+  Максим Катаев
+  @max_kataev · Сотрудник
+  ```
+
+  ```text
+  Максим Катаев
+  Без username · ID …4821 · Сотрудник
+  ```
+
+- An unlinked row offers `Создать карточку`; a linked row offers `Открыть карточку`; a duplicate row
+  shows `К этому сотруднику привязано несколько карточек. Выберите основную и отвяжите остальные.`
 - Profiles are optional.
 - Guest sees only published profiles.
 - `Сегодня на смене` makes the published profile appear in `Сегодня работают`.
@@ -157,6 +217,9 @@ MVP behavior:
 - Existing cards are compact by default and show name, role/custom role, published/hidden state,
   today-shift state and actions.
 - Full edit form opens only through `Редактировать`.
+- `Привязать к сотруднику` uses the same safe identity labels. Already-linked members are excluded
+  or disabled with `Уже привязан к карточке «…»`; duplicate targets cannot be selected for a new
+  link.
 - `Другое` requires `Название роли` with guest-facing custom role copy.
 - Raw User ID and raw Photo ref are not visible manual owner inputs.
 - Photo upload is future; use a safe placeholder until real upload/media picker exists.
@@ -167,13 +230,56 @@ MVP behavior:
 - Staff may edit only own linked draft fields.
 - Staff cannot publish themselves or enable guest visibility through the self-edit route.
 
+### Staff Identity Linking UX Acceptance
+
+Backend/repository/API:
+
+1. Accepted Staff projection contains current Telegram display name and nullable username; missing
+   username uses safe fallback copy, while pending invites contain no recipient identity.
+2. Manager receives active Staff members only as link targets; Owner retains the current permitted
+   projection. Staff/Guest/foreign actors cannot read the directory.
+3. The projection exposes only the documented safe fields and link state; Guest DTOs remain
+   unchanged and contain no member/Telegram identity.
+4. Direct create/preselected form targets one active same-venue member, rereads membership and
+   identity server-side through `POST /api/venue/{venueId}/staff/profiles/from-member`, whose body
+   contains only `userId`, required `subtype` and compatible `roleLabel`. It creates an active draft
+   hidden from Guest and never trusts actor, venue, role, Telegram name, display name or visibility
+   from the request. Generic profile create is display-only and rejects `linkedUserId`.
+5. One existing active profile returns `LINKED`; a second active link is a typed conflict with the
+   existing safe profile reference. PostgreSQL Testcontainers concurrency coverage drives two real
+   HTTP transactions through both create-from-member and relink paths, proves the target membership
+   lock wait without sleeps, and commits one winner plus one typed conflict with winner-only audit.
+6. Existing multiple active links return `DUPLICATE_LINK_DETECTED`, create no cleanup mutation and
+   remain distinct until explicit safe unlink. Foreign/removed and protected Owner/Manager targets
+   are denied under current policy.
+7. Successful create/update reuses `STAFF_PROFILE_CREATED` / `STAFF_PROFILE_UPDATED` with safe
+   venue/profile/linkage/role-class/changed-field payload. Denial, duplicate and no-op paths write no
+   success audit.
+8. Existing Staff Schedule, Today Staff, Guest Today and profile RBAC tests remain green.
+
+Mini App/e2e:
+
+1. Accepted members show display name, `@username` or `Без username`, role and link status without
+   a raw-id primary label.
+2. `Создать карточку` preselects the correct member/display name; `Открыть карточку` opens the one
+   existing card, and already-linked members cannot be selected again.
+3. Duplicate linkage shows the exact warning and remains resolvable by explicit unlink without
+   masking distinct Schedule rows.
+4. Manager sees Staff identities/actions but no editable protected Owner/Manager targets; Owner
+   retains current controls.
+5. Venue/account switch clears directory, selection and profile state and rejects late responses;
+   Staff/Guest never receive the internal directory.
+6. Existing invites, profiles, Today Shift and Staff Schedule e2e remain green.
+
 ## STAFF_SCHEDULE Phase 1 / Optional Venue Shift Planning
 
-Status: **STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / RESTORE + BULK ASSIGNMENT IMPLEMENTED / LOCAL VALIDATION PASSED**.
+Status: **STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / IDENTITY LINKING FIX IMPLEMENTED / STAGING RE-SMOKE REQUIRED**.
 
 The bounded Restore + Bulk Assignment slice adds explicit canceled-shift restoration and atomic
 multi-profile assignment. It is locally validated and still requires green Actions, staging deploy
-and a new staging smoke. This is not a production-readiness claim. The existing Staff Operations
+and a new staging smoke. Staff Identity Linking UX Polish is the latest bounded slice; it reuses the
+already implemented schedule/profile rows without changing calculations or lifecycle. This is not
+a production-readiness claim. The existing Staff Operations
 Slice A invite-revoke V120/H2 V121 rollout remains a separate release gate and is not a migration
 for this schedule slice.
 
@@ -769,6 +875,8 @@ schedule lifecycle/horizon logic uses an injected `Clock` for deterministic test
 Local:
 
 ```bash
+git status --short
+git diff --check
 ./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VenueStaffRoutesTest*' --console=plain
 ./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VenueRbacRoutesTest*' --console=plain
 ./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*GuestVenueRoutesTest*' --console=plain
@@ -776,17 +884,20 @@ Local:
 ./gradlew --no-daemon --max-workers=1 :backend:app:ktlintCheck --console=plain
 npm --prefix miniapp run build
 CI=1 TZ=UTC MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke
-git diff --check
 ```
 
-The commands above are the required local gate for Restore + Bulk Assignment. Record exact command
-results from the current worktree in the implementation handoff; do not reuse the earlier Slice A
-browser count as evidence for this slice.
+The commands above are the required local gate for Staff Identity Linking UX Polish and the
+unchanged Restore + Bulk Assignment regression. Record exact command results from the current
+worktree in the implementation handoff; do not reuse an earlier Slice A browser count as evidence
+for this slice.
 
 Remaining release gates:
 
 - green GitHub Actions before release;
 - staging deploy after green Actions;
+- accepted-name, username/missing-username, create/open and already-linked manual smoke;
+- duplicate warning, explicit unlink and deterministic double-link race smoke;
+- venue/account-switch identity and selection isolation smoke;
 - Owner, Manager and Staff manual smoke;
 - overnight/timezone/DST smoke;
 - two-account Staff visibility smoke;
@@ -874,6 +985,9 @@ Rules:
   approval.
 - Manager manages display-only/Staff-linked profiles and their publish/hide state, cannot mutate
   Owner/other-Manager linkage or visibility, and keeps safe self-edit for their own linked card.
+- Manager receives active Staff identities only in the private directory/link selector and may
+  create/open/link/unlink only Staff cards. Owner retains the broader current policy and
+  last-owner/protected constraints.
 - Manager may change manual Today Shift only for display-only and active same-venue Staff-linked
   profiles. Owner/Manager-linked, orphaned, missing, inactive/removed and foreign linkages are
   protected. Manager receives the same own-venue planned-shift management as Owner.
@@ -889,11 +1003,14 @@ Rules:
 - Telegram Bot invite audit parity and feature-specific generic PATCH visibility action taxonomy
   remain P2 follow-ups; this Slice A does not claim them closed.
 - Schedule create/update/cancel keeps the transaction-bound audit contract above.
+- Duplicate-link denial is not a successful profile mutation and writes no success audit.
 
 ## Privacy And Security
 
 - No phone/email public by default.
-- No raw Telegram username unless explicit opt-in exists.
+- Guest/public surfaces contain no raw Telegram username. The authenticated Owner/Manager staff
+  directory may show the current safe `@username` for identity linking; it exposes no phone or
+  other private Telegram data and is unavailable to Staff/Guest.
 - `linked_user_id` is not exposed through guest APIs.
 - Schedule Staff DTOs also exclude linked users, Telegram/member ids, usernames, invite state,
   actor metadata, private notes and non-overlapping venue schedule data.
@@ -921,6 +1038,8 @@ Analytics events are not the source of truth. Domain tables and audit logs remai
 - Staff profiles: `DONE / MVP / STAGING-SMOKE-PASSED`.
 - Today on shift: `DONE / MVP / STAGING-SMOKE-PASSED`.
 - Staff profile UX polish: `DONE / MVP / STAGING-SMOKE-PASSED`.
+- Staff Identity Linking UX + Duplicate Prevention:
+  `MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`.
 - Photo upload/media picker: `FUTURE`.
 - Venue info-section media decision does not close staff-photo scope; see
   `docs/MEDIA_STORAGE_UPLOAD.md`.
@@ -928,10 +1047,12 @@ Analytics events are not the source of truth. Domain tables and audit logs remai
   `MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`;
   scope is `MANAGER PARITY + SHIFT TIME DEFAULTS`.
 - Staff schedule:
-  `STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / RESTORE + BULK ASSIGNMENT IMPLEMENTED / LOCAL VALIDATION PASSED`;
-  the schedule model itself remains `NO_MIGRATION_EXPECTED`.
+  `STAFF SCHEDULE PHASE 1 / FUNCTIONALLY PASSED ON STAGING / IDENTITY LINKING FIX IMPLEMENTED / STAGING RE-SMOKE REQUIRED`;
+  Restore + Bulk Assignment remains implemented and the schedule model itself remains
+  `NO_MIGRATION_EXPECTED`. Identity linking also requires no migration because mutations serialize
+  on the existing `venue_members` row.
 - Optional Team/Schedule module settings and a Guest `MANUAL`/`SCHEDULE` source switch are Slice B
-  `FUTURE`; Restore + Bulk Assignment adds neither.
+  `FUTURE`; Restore + Bulk Assignment and Staff Identity Linking UX Polish add neither.
 - Staff shift Telegram notifications/sign-up/swaps: `FUTURE`.
 - Separate staff communication chat/forum topics: `OPEN DECISION / FUTURE`.
 - Staff tips: `SPEC DRAFT / FUTURE`.
@@ -942,10 +1063,12 @@ Analytics events are not the source of truth. Domain tables and audit logs remai
 
 ## Next Release Step
 
-Wait for green GitHub Actions, deploy the runtime change and run the listed Owner/Manager/Staff,
-restore/batch atomicity, effective-hours/timezone/overnight/privacy, venue-switch and Today/Guest
+Wait for green GitHub Actions, deploy the runtime change and run the listed identity/linking,
+duplicate/race/unlink, Owner/Manager/Staff, restore/batch atomicity,
+effective-hours/timezone/overnight/privacy, venue-switch/account-switch and Today/Guest
 regression smoke. Do not claim production readiness until those gates pass. The existing
 PostgreSQL V120 invite-revoke rollout/drain requirement belongs to Staff Operations Slice A. The
-Restore + Bulk Assignment slice adds no migration and does not change the unique constraint. Keep Slice B module/
-source settings, tips, photo upload, staff communication/chat/sign-up and every payment path out of
-scope.
+Restore + Bulk Assignment and identity-linking slices add no migration and do not change existing
+schedule constraints. Do not enable the new linking UI while an old runtime without the duplicate
+check can still accept profile writes. Keep Slice B module/source settings, tips, photo upload,
+staff communication/chat/sign-up and every payment path out of scope.

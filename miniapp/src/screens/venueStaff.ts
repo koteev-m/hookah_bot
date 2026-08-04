@@ -4,6 +4,7 @@ import { normalizeErrorCode } from '../shared/api/errorMapping'
 import {
   venueCreateInvite,
   venueCreateStaffProfile,
+  venueCreateStaffProfileFromMember,
   venueGetPendingStaffInvites,
   venueGetStaff,
   venueGetStaffProfiles,
@@ -68,12 +69,17 @@ type StaffRefs = {
   profileCard: HTMLElement
   profileAddButton: HTMLButtonElement
   profileForm: HTMLDivElement
+  profileNameField: HTMLElement
   profileName: HTMLInputElement
   profileSubtype: HTMLSelectElement
   profileRoleLabelField: HTMLElement
   profileRoleLabel: HTMLInputElement
+  profileLinkedUserField: HTMLElement
   profileLinkedUser: HTMLSelectElement
+  profilePhotoPlaceholder: HTMLElement
+  profileBioField: HTMLElement
   profileBio: HTMLTextAreaElement
+  profileTagsField: HTMLElement
   profileTags: HTMLInputElement
   profileCreateButton: HTMLButtonElement
   profileCancelButton: HTMLButtonElement
@@ -263,8 +269,10 @@ function buildStaffDom(root: HTMLDivElement, access: VenueAccessDto): StaffRefs 
   profileName.className = 'venue-input'
   profileName.placeholder = 'Например: Максим'
   profileName.maxLength = 120
+  const profileNameField = renderProfileField('Имя на карточке', profileName, 'Так это имя увидят гости.')
   const profileSubtype = document.createElement('select')
   profileSubtype.className = 'venue-select'
+  profileSubtype.appendChild(new Option('Выберите тип сотрудника', ''))
   profileSubtype.appendChild(new Option('Кальянный мастер', 'hookah_master'))
   profileSubtype.appendChild(new Option('Официант', 'waiter'))
   profileSubtype.appendChild(new Option('Администратор', 'admin'))
@@ -277,14 +285,25 @@ function buildStaffDom(root: HTMLDivElement, access: VenueAccessDto): StaffRefs 
   profileRoleLabelField.hidden = true
   const profileLinkedUser = document.createElement('select')
   profileLinkedUser.className = 'venue-select'
+  const profileLinkedUserField = renderProfileField(
+    'Привязать к сотруднику',
+    profileLinkedUser,
+    'Привязка нужна, чтобы сотрудник мог позже редактировать своё описание. Гостям эта связь не показывается.'
+  )
   const profileBio = document.createElement('textarea')
   profileBio.className = 'venue-textarea'
   profileBio.placeholder = 'Например: Люблю крепкие миксы и помогаю подобрать вкус под настроение.'
   profileBio.maxLength = 1000
   profileBio.rows = 3
+  const profileBioField = renderProfileField('Коротко о сотруднике', profileBio)
   const profileTags = document.createElement('input')
   profileTags.className = 'venue-input'
   profileTags.placeholder = 'Например: крепкие миксы, фруктовые чаши, авторские вкусы'
+  const profileTagsField = renderProfileField(
+    'Специализация',
+    profileTags,
+    'Можно указать через запятую. Это поможет гостям понять стиль сотрудника.'
+  )
   const photoPlaceholder = el('div', {
     className: 'venue-profile-photo-placeholder',
     text: 'Фото сотрудника — позже'
@@ -295,21 +314,13 @@ function buildStaffDom(root: HTMLDivElement, access: VenueAccessDto): StaffRefs 
   append(profileFormActions, profileCreateButton, profileCancelButton)
   append(
     profileForm,
-    renderProfileField('Имя на карточке', profileName, 'Так это имя увидят гости.'),
+    profileNameField,
     renderProfileField('Тип сотрудника', profileSubtype),
     profileRoleLabelField,
-    renderProfileField(
-      'Привязать к сотруднику',
-      profileLinkedUser,
-      'Привязка нужна, чтобы сотрудник мог позже редактировать своё описание. Гостям эта связь не показывается.'
-    ),
+    profileLinkedUserField,
     photoPlaceholder,
-    renderProfileField('Коротко о сотруднике', profileBio),
-    renderProfileField(
-      'Специализация',
-      profileTags,
-      'Можно указать через запятую. Это поможет гостям понять стиль сотрудника.'
-    ),
+    profileBioField,
+    profileTagsField,
     profileFormActions
   )
   const profileStatus = el('p', { className: 'status', text: '' })
@@ -357,12 +368,17 @@ function buildStaffDom(root: HTMLDivElement, access: VenueAccessDto): StaffRefs 
     profileCard,
     profileAddButton,
     profileForm,
+    profileNameField,
     profileName,
     profileSubtype,
     profileRoleLabelField,
     profileRoleLabel,
+    profileLinkedUserField,
     profileLinkedUser,
+    profilePhotoPlaceholder: photoPlaceholder,
+    profileBioField,
     profileBio,
+    profileTagsField,
     profileTags,
     profileCreateButton,
     profileCancelButton,
@@ -417,44 +433,80 @@ function renderMemberRow(
   member: VenueStaffMemberDto,
   currentUserId: number,
   canManageRoles: boolean,
+  canCreateProfiles: boolean,
   onUpdateRole: (member: VenueStaffMemberDto, role: VenueStaffMemberDto['role']) => void,
-  onRemove: (member: VenueStaffMemberDto) => void
+  onRemove: (member: VenueStaffMemberDto) => void,
+  onCreateProfile: (member: VenueStaffMemberDto) => void,
+  onOpenProfile: (member: VenueStaffMemberDto) => void
 ) {
   const row = el('div', { className: 'venue-staff-row' })
   const info = el('div', { className: 'venue-staff-info' })
+  const identityMeta = el('p', { className: 'venue-staff-identity-meta' })
   append(
-    info,
-    el('strong', { text: `User ${member.userId}` }),
-    el('p', { className: 'venue-order-sub', text: `Роль: ${formatStaffRole(member.role)}` })
+    identityMeta,
+    el('span', { text: formatMemberUsername(member) }),
+    document.createTextNode(' · '),
+    el('span', { className: 'venue-staff-role-badge', text: formatStaffRole(member.role) })
   )
+  append(info, el('strong', { text: member.displayName }), identityMeta)
 
-  const actions = el('div', { className: 'venue-staff-actions' })
-  const roleSelect = document.createElement('select')
-  roleSelect.className = 'venue-select'
-  roleSelect.appendChild(new Option('Владелец', 'OWNER'))
-  roleSelect.appendChild(new Option('Менеджер', 'MANAGER'))
-  roleSelect.appendChild(new Option('Сотрудник', 'STAFF'))
-  roleSelect.value = member.role
-  const updateButton = el('button', { className: 'button-small', text: 'Обновить' }) as HTMLButtonElement
-  const removeButton = el('button', { className: 'button-small button-secondary', text: 'Удалить' }) as HTMLButtonElement
-
-  const disableManage = !canManageRoles || member.userId === currentUserId
-  roleSelect.disabled = disableManage
-  updateButton.disabled = disableManage
-  removeButton.disabled = !canManageRoles || member.userId === currentUserId
-
-  if (member.userId === currentUserId) {
-    updateButton.title = 'Нельзя менять свою роль'
-    removeButton.title = 'Нельзя удалить себя'
-  } else if (!canManageRoles) {
-    updateButton.title = 'Недостаточно прав'
-    removeButton.title = 'Недостаточно прав'
+  const linkState = el('p', {
+    className: 'venue-staff-link-state',
+    text: formatMemberLinkState(member)
+  })
+  linkState.dataset.state = member.profileLinkState
+  info.appendChild(linkState)
+  if (member.profileLinkState === 'DUPLICATE_LINK_DETECTED') {
+    info.appendChild(
+      el('p', {
+        className: 'venue-staff-link-warning',
+        text: DUPLICATE_LINK_WARNING
+      })
+    )
   }
 
-  updateButton.addEventListener('click', () => onUpdateRole(member, roleSelect.value as VenueStaffMemberDto['role']))
-  removeButton.addEventListener('click', () => onRemove(member))
+  const actions = el('div', { className: 'venue-staff-actions' })
+  if (member.profileLinkState === 'NOT_LINKED' && canCreateProfiles && member.active) {
+    const createButton = el('button', {
+      className: 'button-small venue-staff-profile-link-action',
+      text: 'Создать карточку'
+    }) as HTMLButtonElement
+    createButton.addEventListener('click', () => onCreateProfile(member))
+    actions.appendChild(createButton)
+  } else if (member.profileLinkState === 'LINKED' && member.linkedStaffProfileId != null) {
+    const openButton = el('button', {
+      className: 'button-small button-secondary venue-staff-profile-link-action',
+      text: 'Открыть карточку'
+    }) as HTMLButtonElement
+    openButton.addEventListener('click', () => onOpenProfile(member))
+    actions.appendChild(openButton)
+  }
 
-  append(actions, roleSelect, updateButton, removeButton)
+  if (canManageRoles) {
+    const roleSelect = document.createElement('select')
+    roleSelect.className = 'venue-select'
+    roleSelect.setAttribute('aria-label', `Роль: ${member.displayName}`)
+    roleSelect.appendChild(new Option('Владелец', 'OWNER'))
+    roleSelect.appendChild(new Option('Менеджер', 'MANAGER'))
+    roleSelect.appendChild(new Option('Сотрудник', 'STAFF'))
+    roleSelect.value = member.role
+    const updateButton = el('button', { className: 'button-small', text: 'Обновить' }) as HTMLButtonElement
+    const removeButton = el('button', { className: 'button-small button-secondary', text: 'Удалить' }) as HTMLButtonElement
+
+    const isCurrentMember = member.userId === currentUserId
+    roleSelect.disabled = isCurrentMember
+    updateButton.disabled = isCurrentMember
+    removeButton.disabled = isCurrentMember
+    if (isCurrentMember) {
+      updateButton.title = 'Нельзя менять свою роль'
+      removeButton.title = 'Нельзя удалить себя'
+    }
+
+    updateButton.addEventListener('click', () => onUpdateRole(member, roleSelect.value as VenueStaffMemberDto['role']))
+    removeButton.addEventListener('click', () => onRemove(member))
+    append(actions, roleSelect, updateButton, removeButton)
+  }
+
   append(row, info, actions)
   return row
 }
@@ -524,38 +576,109 @@ function parseLinkedUserValue(value: string): number | null {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : Number.NaN
 }
 
-function formatLinkedMemberOption(member: VenueStaffMemberDto, currentUserId: number): string {
-  const self = member.userId === currentUserId ? ' · вы' : ''
-  return `${formatStaffRole(member.role)}${self} · #${member.userId}`
+const DUPLICATE_LINK_WARNING =
+  'К этому сотруднику привязано несколько карточек. Выберите основную и отвяжите остальные.'
+
+function formatMemberUsername(member: VenueStaffMemberDto): string {
+  const username = member.username?.trim().replace(/^@+/, '')
+  if (username) return `@${username}`
+  return `Без username · ID …${String(member.userId).slice(-4).padStart(4, '0')}`
+}
+
+function formatLinkedMemberOption(member: VenueStaffMemberDto): string {
+  return `${member.displayName} · ${formatMemberUsername(member)} · ${formatStaffRole(member.role)}`
+}
+
+function formatMemberLinkState(member: VenueStaffMemberDto): string {
+  switch (member.profileLinkState) {
+    case 'NOT_LINKED':
+      return 'Карточка не создана'
+    case 'LINKED':
+      return member.linkedStaffProfileDisplayName?.trim()
+        ? `Привязан к карточке «${member.linkedStaffProfileDisplayName.trim()}»`
+        : 'Карточка связана с сотрудником'
+    case 'DUPLICATE_LINK_DETECTED':
+      return 'Обнаружено несколько активных карточек'
+    case 'PROTECTED':
+      return 'Защищённая привязка'
+    default:
+      return member.profileLinkState
+  }
+}
+
+function linkedMemberOptionSuffix(member: VenueStaffMemberDto): string | null {
+  switch (member.profileLinkState) {
+    case 'LINKED':
+      return member.linkedStaffProfileDisplayName?.trim()
+        ? `Уже привязан к карточке «${member.linkedStaffProfileDisplayName.trim()}»`
+        : 'Уже привязан к карточке'
+    case 'DUPLICATE_LINK_DETECTED':
+      return 'Привязано несколько карточек'
+    case 'PROTECTED':
+      return 'Недоступен для привязки'
+    default:
+      return null
+  }
+}
+
+type StaffProfileLinkConflictDetails = {
+  profileLinkState: VenueStaffMemberDto['profileLinkState'] | null
+  linkedStaffProfileId: number | null
+}
+
+function parseStaffProfileLinkConflictDetails(details: unknown): StaffProfileLinkConflictDetails {
+  if (!details || typeof details !== 'object') {
+    return { profileLinkState: null, linkedStaffProfileId: null }
+  }
+  const record = details as Record<string, unknown>
+  const rawState = record.profileLinkState
+  const profileLinkState =
+    rawState === 'NOT_LINKED' ||
+    rawState === 'LINKED' ||
+    rawState === 'DUPLICATE_LINK_DETECTED' ||
+    rawState === 'PROTECTED'
+      ? rawState
+      : null
+  const nestedRef =
+    record.linkedStaffProfileRef && typeof record.linkedStaffProfileRef === 'object'
+      ? (record.linkedStaffProfileRef as Record<string, unknown>)
+      : null
+  const rawProfileId =
+    record.linkedStaffProfileId ??
+    record.staffProfileId ??
+    record.existingStaffProfileId ??
+    nestedRef?.id
+  const linkedStaffProfileId =
+    typeof rawProfileId === 'number' && Number.isInteger(rawProfileId) && rawProfileId > 0
+      ? rawProfileId
+      : null
+  return { profileLinkState, linkedStaffProfileId }
 }
 
 function populateLinkedUserSelect(
   select: HTMLSelectElement,
   members: VenueStaffMemberDto[],
-  currentUserId: number,
   selectedUserId: number | null | undefined,
   allowedRoles?: ReadonlySet<VenueStaffMemberDto['role']>
 ) {
   const selectedValue = selectedUserId ? String(selectedUserId) : ''
   select.replaceChildren(new Option('Не привязывать — просто карточка для гостей', ''))
-  members.filter((member) => !allowedRoles || allowedRoles.has(member.role)).forEach((member) => {
-    select.appendChild(new Option(formatLinkedMemberOption(member, currentUserId), String(member.userId)))
-  })
+  members
+    .filter((member) => !allowedRoles || allowedRoles.has(member.role))
+    .forEach((member) => {
+      const isCurrentSelection = String(member.userId) === selectedValue
+      const suffix = isCurrentSelection ? null : linkedMemberOptionSuffix(member)
+      const option = new Option(
+        [formatLinkedMemberOption(member), suffix].filter(Boolean).join(' · '),
+        String(member.userId)
+      )
+      option.disabled = !isCurrentSelection && (!member.active || member.profileLinkState !== 'NOT_LINKED')
+      select.appendChild(option)
+    })
   if (selectedValue && !Array.from(select.options).some((option) => option.value === selectedValue)) {
     select.appendChild(new Option('Текущая привязка недоступна', selectedValue))
   }
   select.value = Array.from(select.options).some((option) => option.value === selectedValue) ? selectedValue : ''
-}
-
-type ProfileLinkageClass = 'DISPLAY_ONLY' | 'STAFF_LINKED' | 'PROTECTED'
-
-function profileLinkageClass(
-  profile: VenueStaffProfileDto,
-  members: VenueStaffMemberDto[]
-): ProfileLinkageClass {
-  if (profile.linkedUserId == null) return 'DISPLAY_ONLY'
-  const linkedMember = members.find((member) => member.userId === profile.linkedUserId)
-  return linkedMember?.role === 'STAFF' ? 'STAFF_LINKED' : 'PROTECTED'
 }
 
 function normalizeOptionalText(value: string): string | null {
@@ -576,8 +699,8 @@ function formatShiftLine(profile: VenueStaffProfileDto): string {
 function renderProfileRow(
   profile: VenueStaffProfileDto,
   access: VenueAccessDto,
-  currentUserId: number,
   staffMembers: VenueStaffMemberDto[],
+  directoryReady: boolean,
   isEditing: boolean,
   handlers: {
     onSave: (profile: VenueStaffProfileDto, draft: {
@@ -596,22 +719,21 @@ function renderProfileRow(
     onShift: (profile: VenueStaffProfileDto, status: VenueStaffShiftStatus, isGuestVisible: boolean) => void
   }
 ) {
-  const isOwner = access.role === 'OWNER'
-  const linkageClass = profileLinkageClass(profile, staffMembers)
-  const canManageProfile =
-    isOwner ||
-    (access.permissions.includes('STAFF_PROFILE_MANAGE_STAFF') && linkageClass !== 'PROTECTED')
+  const canManageProfile = directoryReady && profile.canManage === true
   const canPublishProfile =
-    isOwner ||
-    (access.permissions.includes('STAFF_PROFILE_PUBLISH_STAFF') && linkageClass !== 'PROTECTED')
+    canManageProfile &&
+    (access.role === 'OWNER' || access.permissions.includes('STAFF_PROFILE_PUBLISH_STAFF'))
   const canEditOwn =
-    access.permissions.includes('STAFF_PROFILE_EDIT_OWN') && profile.linkedUserId === currentUserId
+    directoryReady &&
+    profile.isSelf === true &&
+    access.permissions.includes('STAFF_PROFILE_EDIT_OWN')
   const canEdit = canManageProfile || canEditOwn
   const canManageShift =
-    access.permissions.includes('STAFF_SCHEDULE_MANAGE') &&
-    (isOwner || linkageClass !== 'PROTECTED')
+    canManageProfile &&
+    access.permissions.includes('STAFF_SCHEDULE_MANAGE')
 
   const row = el('div', { className: 'venue-staff-row venue-profile-row' })
+  row.dataset.staffProfileId = String(profile.id)
   const info = el('div', { className: 'venue-staff-info' })
   append(
     info,
@@ -634,8 +756,8 @@ function renderProfileRow(
   info.appendChild(el('p', { className: 'venue-order-sub', text: visibility }))
   if (
     access.role === 'MANAGER' &&
-    linkageClass === 'PROTECTED' &&
-    profile.linkedUserId !== currentUserId
+    profile.linkageClass === 'PROTECTED' &&
+    !profile.isSelf
   ) {
     info.appendChild(
       el('p', {
@@ -677,9 +799,8 @@ function renderProfileRow(
     populateLinkedUserSelect(
       linkedSelect,
       staffMembers,
-      currentUserId,
       profile.linkedUserId,
-      isOwner ? undefined : new Set<VenueStaffMemberDto['role']>(['STAFF'])
+      access.role === 'OWNER' ? undefined : new Set<VenueStaffMemberDto['role']>(['STAFF'])
     )
     const bioInput = document.createElement('textarea')
     bioInput.className = 'venue-textarea'
@@ -786,6 +907,10 @@ function renderProfileRow(
   return row
 }
 
+type CreateProfileMode =
+  | { kind: 'DISPLAY_ONLY' }
+  | { kind: 'FROM_MEMBER'; userId: number }
+
 export function renderVenueStaffScreen(options: VenueStaffOptions) {
   const { root, backendUrl, isDebug, venueId, access, currentUserId } = options
   if (!root) return () => undefined
@@ -803,9 +928,12 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
   let currentPendingInvites: VenueStaffPendingInviteDto[] = []
   const revokingInviteHandles = new Set<string>()
   let staffMembers: VenueStaffMemberDto[] = []
+  let directoryReady = false
   let currentProfiles: VenueStaffProfileDto[] = []
   let isCreateFormOpen = false
+  let createProfileMode: CreateProfileMode | null = null
   let editingProfileId: number | null = null
+  let pendingOpenProfileId: number | null = null
 
   const canInviteStaff =
     access.role === 'OWNER' || access.permissions.includes('STAFF_INVITE_CREATE_STAFF')
@@ -834,8 +962,21 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
   }
 
   const syncCreateFormVisibility = () => {
-    refs.profileForm.hidden = !isCreateFormOpen || !canCreateProfiles
+    const formUsable = canCreateProfiles && directoryReady
+    const isFromMember = createProfileMode?.kind === 'FROM_MEMBER'
+    refs.profileForm.hidden = !isCreateFormOpen || !formUsable
     refs.profileAddButton.hidden = isCreateFormOpen || !canCreateProfiles
+    refs.profileAddButton.disabled = !formUsable
+    refs.profileAddButton.title = formUsable ? '' : 'Дождитесь актуального списка сотрудников'
+    refs.profileName.readOnly = isFromMember
+    refs.profileLinkedUserField.hidden = !isFromMember
+    refs.profileLinkedUser.disabled = true
+    refs.profilePhotoPlaceholder.hidden = isFromMember
+    refs.profileBioField.hidden = isFromMember
+    refs.profileTagsField.hidden = isFromMember
+    refs.profileCreateButton.textContent = isFromMember ? 'Создать карточку' : 'Создать профиль'
+    refs.profileCreateButton.disabled = !formUsable
+    refs.profileCreateButton.title = formUsable ? '' : 'Дождитесь актуального списка сотрудников'
     updateRoleLabelField(
       refs.profileRoleLabelField,
       refs.profileRoleLabel,
@@ -843,13 +984,18 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
     )
   }
 
-  const resetCreateForm = () => {
+  const clearCreateFormFields = () => {
     refs.profileName.value = ''
-    refs.profileSubtype.value = 'hookah_master'
+    refs.profileSubtype.value = ''
     refs.profileRoleLabel.value = ''
     refs.profileLinkedUser.value = ''
     refs.profileBio.value = ''
     refs.profileTags.value = ''
+  }
+
+  const resetCreateForm = () => {
+    createProfileMode = null
+    clearCreateFormFields()
     isCreateFormOpen = false
     syncCreateFormVisibility()
   }
@@ -979,7 +1125,15 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
         el('strong', { text: formatStaffRole(invite.role) }),
         el('p', {
           className: 'venue-order-sub',
-          text: `Ожидает принятия · действует до ${formatInviteExpires(invite.expiresAt)}`
+          text: 'Статус: ожидает принятия'
+        }),
+        el('p', {
+          className: 'venue-order-sub',
+          text: `Создано: ${formatInviteExpires(invite.createdAt)}`
+        }),
+        el('p', {
+          className: 'venue-order-sub',
+          text: `Действует до: ${formatInviteExpires(invite.expiresAt)}`
         })
       )
       row.appendChild(info)
@@ -998,26 +1152,48 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
 
   const renderStaff = (members: VenueStaffMemberDto[], currentUserId: number) => {
     refs.list.replaceChildren()
-    staffMembers = members
+    staffMembers = members.filter(
+      (member) => member.active && (access.role === 'OWNER' || member.role === 'STAFF')
+    )
+    syncCreateFormVisibility()
     populateLinkedUserSelect(
       refs.profileLinkedUser,
       staffMembers,
-      currentUserId,
       null,
       linkableProfileRoles
     )
     if (currentProfiles.length) {
       renderProfiles(currentProfiles)
     }
-    if (!members.length) {
+    if (!staffMembers.length) {
       refs.list.appendChild(el('p', { className: 'venue-empty', text: 'Сотрудники не найдены.' }))
       return
     }
-    members.forEach((member) => {
+    staffMembers.forEach((member) => {
       refs.list.appendChild(
-        renderMemberRow(member, currentUserId, canManageRoles, (target, role) => void updateRole(target, role), (target) => void removeMember(target))
+        renderMemberRow(
+          member,
+          currentUserId,
+          canManageRoles,
+          canCreateProfiles,
+          (target, role) => void updateRole(target, role),
+          (target) => void removeMember(target),
+          (target) => openCreateFormForMember(target),
+          (target) => openProfileForMember(target)
+        )
       )
     })
+  }
+
+  const focusPendingProfile = () => {
+    const profileId = pendingOpenProfileId
+    if (profileId == null) return
+    const profileRow = refs.profileList.querySelector<HTMLElement>(`[data-staff-profile-id="${profileId}"]`)
+    if (!profileRow) return
+    pendingOpenProfileId = null
+    profileRow.tabIndex = -1
+    profileRow.focus({ preventScroll: true })
+    profileRow.scrollIntoView({ behavior: 'smooth', block: 'center' })
   }
 
   const renderProfiles = (profiles: VenueStaffProfileDto[]) => {
@@ -1028,7 +1204,7 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
     }
     profiles.forEach((profile) => {
       refs.profileList.appendChild(
-        renderProfileRow(profile, access, currentUserId, staffMembers, editingProfileId === profile.id, {
+        renderProfileRow(profile, access, staffMembers, directoryReady, editingProfileId === profile.id, {
           onSave: (target, draft) => void saveProfile(target, draft),
           onEdit: (target) => {
             editingProfileId = target.id
@@ -1046,21 +1222,80 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
         })
       )
     })
+    focusPendingProfile()
+  }
+
+  const openCreateFormForMember = (member: VenueStaffMemberDto) => {
+    if (
+      !directoryReady ||
+      !canCreateProfiles ||
+      !member.active ||
+      member.profileLinkState !== 'NOT_LINKED'
+    ) {
+      showToast('Карточку для этого сотрудника сейчас создать нельзя')
+      return
+    }
+    clearCreateFormFields()
+    populateLinkedUserSelect(
+      refs.profileLinkedUser,
+      staffMembers,
+      member.userId,
+      linkableProfileRoles
+    )
+    refs.profileName.value = member.displayName.trim()
+    refs.profileLinkedUser.value = String(member.userId)
+    createProfileMode = { kind: 'FROM_MEMBER', userId: member.userId }
+    editingProfileId = null
+    isCreateFormOpen = true
+    syncCreateFormVisibility()
+    renderProfiles(currentProfiles)
+    refs.profileSubtype.focus()
+    refs.profileForm.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
+  const openProfileForMember = (member: VenueStaffMemberDto) => {
+    const profileId = member.linkedStaffProfileId
+    if (member.profileLinkState !== 'LINKED' || profileId == null) {
+      showToast('Связанная карточка недоступна')
+      return
+    }
+    resetCreateForm()
+    editingProfileId = profileId
+    pendingOpenProfileId = profileId
+    renderProfiles(currentProfiles)
   }
 
   const loadStaff = async () => {
     if (access.role === 'STAFF') {
+      directoryReady = true
       staffMembers = []
       populateLinkedUserSelect(
         refs.profileLinkedUser,
         staffMembers,
-        currentUserId,
         null,
         linkableProfileRoles
       )
       refs.list.replaceChildren(el('p', { className: 'venue-empty', text: 'Управление ролями недоступно.' }))
+      if (currentProfiles.length) {
+        renderProfiles(currentProfiles)
+      }
       setStatus('')
       return
+    }
+    directoryReady = false
+    staffMembers = []
+    editingProfileId = null
+    pendingOpenProfileId = null
+    resetCreateForm()
+    populateLinkedUserSelect(
+      refs.profileLinkedUser,
+      staffMembers,
+      null,
+      linkableProfileRoles
+    )
+    refs.list.replaceChildren()
+    if (currentProfiles.length) {
+      renderProfiles(currentProfiles)
     }
     hideError()
     setStatus('Загрузка...')
@@ -1079,6 +1314,7 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
       setStatus('')
       return
     }
+    directoryReady = true
     renderStaff(result.data.members, currentUserId)
     setStatus(`Обновлено: ${new Date().toLocaleTimeString()}`)
   }
@@ -1143,6 +1379,35 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
     void loadPendingInvites()
   }
 
+  const reloadMemberProfiles = async () => {
+    await Promise.all([loadStaff(), loadProfiles()])
+  }
+
+  const handleProfileLinkConflict = async (error: ApiErrorInfo) => {
+    const details = parseStaffProfileLinkConflictDetails(error.details)
+    resetCreateForm()
+    editingProfileId = null
+    hideError()
+    await reloadMemberProfiles()
+    if (disposed) return
+    if (
+      directoryReady &&
+      details.profileLinkState === 'LINKED' &&
+      details.linkedStaffProfileId != null
+    ) {
+      editingProfileId = details.linkedStaffProfileId
+      pendingOpenProfileId = details.linkedStaffProfileId
+      renderProfiles(currentProfiles)
+    }
+    showToast(
+      details.profileLinkState === 'DUPLICATE_LINK_DETECTED'
+        ? DUPLICATE_LINK_WARNING
+        : details.profileLinkState === 'LINKED' && details.linkedStaffProfileId != null
+          ? 'Карточка сотрудника уже существует. Открываем её.'
+          : 'Карточка сотрудника уже существует.'
+    )
+  }
+
   const revokePendingInvite = async (invite: VenueStaffPendingInviteDto) => {
     if (!canRevokeInvite(invite) || revokingInviteHandles.has(invite.handle)) {
       showToast('Недостаточно прав')
@@ -1205,7 +1470,7 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
       return
     }
     showToast('Роль обновлена')
-    void loadStaff()
+    void reloadMemberProfiles()
   }
 
   const removeMember = async (member: VenueStaffMemberDto) => {
@@ -1222,54 +1487,89 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
       return
     }
     showToast('Участник удалён')
-    void loadStaff()
+    void reloadMemberProfiles()
   }
 
   const createProfile = async () => {
-    if (!canCreateProfiles) {
+    if (!canCreateProfiles || !directoryReady || !createProfileMode) {
       showToast('Недостаточно прав')
       return
     }
-    const linkedUserId = parseLinkedUserValue(refs.profileLinkedUser.value)
-    if (Number.isNaN(linkedUserId)) {
-      showToast('Некорректная привязка сотрудника')
-      return
-    }
+    const mode = createProfileMode
     const displayName = refs.profileName.value.trim()
-    if (!displayName) {
+    if (mode.kind === 'DISPLAY_ONLY' && !displayName) {
       showToast('Укажите имя')
       return
     }
     const subtype = refs.profileSubtype.value as VenueStaffProfileSubtype
+    if (!subtype) {
+      showToast('Выберите тип сотрудника')
+      refs.profileSubtype.focus()
+      return
+    }
     const roleLabel = normalizeOptionalText(refs.profileRoleLabel.value)
     if (isOtherProfileSubtype(subtype) && !roleLabel) {
       showToast('Укажите название роли')
       refs.profileRoleLabel.focus()
       return
     }
-    const result = await venueCreateStaffProfile(
-      backendUrl,
-      {
-        venueId,
-        body: {
-          displayName,
-          roleLabel: isOtherProfileSubtype(subtype) ? roleLabel : null,
-          subtype,
-          linkedUserId,
-          bio: normalizeOptionalText(refs.profileBio.value),
-          tags: splitTags(refs.profileTags.value)
-        }
-      },
-      deps
-    )
+    if (mode.kind === 'FROM_MEMBER') {
+      const member = staffMembers.find((candidate) => candidate.userId === mode.userId)
+      if (!member || !member.active || member.profileLinkState !== 'NOT_LINKED') {
+        showToast('Карточку для этого сотрудника сейчас создать нельзя')
+        return
+      }
+    }
+    const result =
+      mode.kind === 'FROM_MEMBER'
+        ? await venueCreateStaffProfileFromMember(
+          backendUrl,
+          {
+            venueId,
+            body: {
+              userId: mode.userId,
+              subtype,
+              ...(isOtherProfileSubtype(subtype) && roleLabel ? { roleLabel } : {})
+            }
+          },
+          deps
+        )
+        : await venueCreateStaffProfile(
+          backendUrl,
+          {
+            venueId,
+            body: {
+              displayName,
+              roleLabel: isOtherProfileSubtype(subtype) ? roleLabel : null,
+              subtype,
+              bio: normalizeOptionalText(refs.profileBio.value),
+              tags: splitTags(refs.profileTags.value)
+            }
+          },
+          deps
+        )
     if (disposed) return
     if (!result.ok) {
+      if (result.error.code === ApiErrorCodes.STAFF_PROFILE_LINK_CONFLICT) {
+        await handleProfileLinkConflict(result.error)
+        return
+      }
       showError(result.error)
       return
     }
+    const createdProfileId = result.data.id
+    const shouldOpenDraft = mode.kind === 'FROM_MEMBER'
     resetCreateForm()
-    showToast('Профиль создан')
-    void loadProfiles()
+    showToast(shouldOpenDraft ? 'Карточка создана' : 'Профиль создан')
+    if (!shouldOpenDraft) {
+      void reloadMemberProfiles()
+      return
+    }
+    await reloadMemberProfiles()
+    if (disposed || !directoryReady) return
+    editingProfileId = createdProfileId
+    pendingOpenProfileId = createdProfileId
+    renderProfiles(currentProfiles)
   }
 
   const saveProfile = async (
@@ -1304,12 +1604,20 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
     )
     if (disposed) return
     if (!result.ok) {
+      if (result.error.code === ApiErrorCodes.STAFF_PROFILE_LINK_CONFLICT) {
+        await handleProfileLinkConflict(result.error)
+        return
+      }
       showError(result.error)
       return
     }
     showToast('Профиль обновлён')
     editingProfileId = null
-    void loadProfiles()
+    if (body.linkedUserId !== undefined || body.unlinkUser === true) {
+      void reloadMemberProfiles()
+    } else {
+      void loadProfiles()
+    }
   }
 
   const publishProfile = async (profile: VenueStaffProfileDto) => {
@@ -1324,11 +1632,15 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
     const result = await venuePublishStaffProfile(backendUrl, { venueId, profileId: profile.id }, deps)
     if (disposed) return
     if (!result.ok) {
+      if (result.error.code === ApiErrorCodes.STAFF_PROFILE_LINK_CONFLICT) {
+        await handleProfileLinkConflict(result.error)
+        return
+      }
       showError(result.error)
       return
     }
     showToast('Профиль опубликован')
-    void loadProfiles()
+    void reloadMemberProfiles()
   }
 
   const hideProfile = async (profile: VenueStaffProfileDto) => {
@@ -1339,7 +1651,7 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
       return
     }
     showToast('Профиль скрыт')
-    void loadProfiles()
+    void reloadMemberProfiles()
   }
 
   const updateTodayShift = async (
@@ -1368,6 +1680,18 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
   const disposables: Array<() => void> = []
   disposables.push(on(refs.inviteButton, 'click', () => void createInvite()))
   disposables.push(on(refs.profileAddButton, 'click', () => {
+    if (!canCreateProfiles || !directoryReady) {
+      showToast('Дождитесь актуального списка сотрудников')
+      return
+    }
+    clearCreateFormFields()
+    populateLinkedUserSelect(
+      refs.profileLinkedUser,
+      [],
+      null,
+      linkableProfileRoles
+    )
+    createProfileMode = { kind: 'DISPLAY_ONLY' }
     isCreateFormOpen = true
     editingProfileId = null
     syncCreateFormVisibility()
@@ -1423,12 +1747,9 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
 
   refs.inviteButton.disabled = !canInvite
   refs.inviteButton.title = canInvite ? '' : 'Недостаточно прав'
-  refs.profileCreateButton.disabled = !canCreateProfiles
-  refs.profileCreateButton.title = canCreateProfiles ? '' : 'Недостаточно прав'
   populateLinkedUserSelect(
     refs.profileLinkedUser,
     staffMembers,
-    currentUserId,
     null,
     linkableProfileRoles
   )
@@ -1447,6 +1768,12 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
 
   return () => {
     disposed = true
+    directoryReady = false
+    staffMembers = []
+    currentProfiles = []
+    createProfileMode = null
+    editingProfileId = null
+    pendingOpenProfileId = null
     loadAbort?.abort()
     profileLoadAbort?.abort()
     pendingInviteLoadAbort?.abort()

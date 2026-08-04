@@ -4,6 +4,7 @@ import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.NotFoundException
+import com.hookah.platform.backend.api.StaffProfileLinkConflictException
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteAcceptResult
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteConfig
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteRepository
@@ -14,6 +15,8 @@ import com.hookah.platform.backend.miniapp.venue.staff.StaffShiftWrite
 import com.hookah.platform.backend.miniapp.venue.staff.StaffTodayShiftMutationResult
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffMember
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffProfile
+import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffProfileAccess
+import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffProfileLinkState
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffProfileRepository
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffProfileWithTodayShift
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffRemoveResult
@@ -36,6 +39,8 @@ import io.ktor.server.routing.patch
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.slf4j.LoggerFactory
 import java.time.Instant
 import java.time.LocalDate
@@ -51,9 +56,13 @@ data class VenueStaffListResponse(
 @Serializable
 data class VenueStaffMemberDto(
     val userId: Long,
+    val displayName: String,
+    val username: String? = null,
     val role: String,
-    val createdAt: String,
-    val invitedByUserId: Long? = null,
+    val active: Boolean,
+    val linkedStaffProfileId: Long? = null,
+    val linkedStaffProfileDisplayName: String? = null,
+    val profileLinkState: String,
 )
 
 @Serializable
@@ -126,6 +135,9 @@ data class VenueStaffProfilesResponse(
 data class VenueStaffProfileDto(
     val id: Long,
     val linkedUserId: Long? = null,
+    val linkageClass: String,
+    val canManage: Boolean,
+    val isSelf: Boolean,
     val displayName: String,
     val roleLabel: String? = null,
     val subtype: String,
@@ -164,6 +176,13 @@ data class VenueStaffProfileCreateRequest(
     val bio: String? = null,
     val tags: List<String> = emptyList(),
     val isGuestVisible: Boolean = false,
+)
+
+@Serializable
+data class VenueStaffProfileCreateFromMemberRequest(
+    val userId: Long,
+    val subtype: String,
+    val roleLabel: String? = null,
 )
 
 @Serializable
@@ -215,7 +234,11 @@ fun Route.venueStaffRoutes(
             val venueId = call.requireVenueId()
             val requesterRole = resolveVenueRole(venueAccessRepository, userId, venueId)
             requesterRole.requireStaffPermission(VenuePermission.STAFF_ACCESS_VIEW)
-            val members = venueStaffRepository.listMembers(venueId)
+            val members =
+                venueStaffRepository.listMembers(
+                    venueId = venueId,
+                    allowedRoles = setOf(VenueRole.STAFF).takeIf { requesterRole == VenueRole.MANAGER },
+                )
             call.respond(
                 VenueStaffListResponse(
                     members = members.map { it.toDto() },
@@ -375,10 +398,13 @@ fun Route.venueStaffRoutes(
             when (result) {
                 is StaffInviteAcceptResult.Success -> {
                     appendOwnerInviteAcceptAuditBestEffort(auditLogRepository, result, logger)
+                    val member =
+                        venueStaffRepository.findMember(result.member.venueId, result.member.userId)
+                            ?: result.member
                     call.respond(
                         StaffInviteAcceptResponse(
                             venueId = result.member.venueId,
-                            member = result.member.toDto(),
+                            member = member.toDto(),
                             alreadyMember = result.alreadyMember,
                         ),
                     )
@@ -400,6 +426,8 @@ fun Route.venueStaffRoutes(
                     venueId = venueId,
                     today = today,
                     linkedUserId = if (requesterRole == VenueRole.STAFF) userId else null,
+                    requesterUserId = userId,
+                    requesterRole = requesterRole,
                 )
             call.respond(VenueStaffProfilesResponse(profiles = profiles.map { it.toDto() }))
         }
@@ -410,6 +438,9 @@ fun Route.venueStaffRoutes(
             val requesterRole = resolveVenueRole(venueAccessRepository, userId, venueId)
             requesterRole.requireStaffPermission(VenuePermission.STAFF_PROFILE_MANAGE_STAFF)
             val request = call.receive<VenueStaffProfileCreateRequest>()
+            if (request.linkedUserId != null) {
+                throw InvalidInputException("Linked profile creation requires the member flow")
+            }
             val result =
                 venueStaffProfileRepository.createProfile(
                     venueId = venueId,
@@ -418,8 +449,28 @@ fun Route.venueStaffRoutes(
                     input = request.toWrite(),
                     auditLogRepository = auditLogRepository,
                 )
-            val profile = result.requireProfileMutationSuccess()
-            call.respond(profile.toDto())
+            call.respond(result.requireProfileMutationSuccess().toDto())
+        }
+
+        post("/{venueId}/staff/profiles/from-member") {
+            val userId = call.requireUserId()
+            val venueId = call.requireVenueId()
+            val requesterRole = resolveVenueRole(venueAccessRepository, userId, venueId)
+            requesterRole.requireStaffPermission(VenuePermission.STAFF_PROFILE_MANAGE_STAFF)
+            val request = call.receive<VenueStaffProfileCreateFromMemberRequest>()
+            val subtype = normalizeProfileSubtype(request.subtype)
+            val roleLabel = normalizeCreateFromMemberRoleLabel(subtype, request.roleLabel)
+            val result =
+                venueStaffProfileRepository.createProfileFromMember(
+                    venueId = venueId,
+                    actorUserId = userId,
+                    actorRole = requesterRole,
+                    targetUserId = request.userId,
+                    subtype = subtype,
+                    roleLabel = roleLabel,
+                    auditLogRepository = auditLogRepository,
+                )
+            call.respond(result.requireProfileMutationSuccess().toDto())
         }
 
         patch("/{venueId}/staff/profiles/{profileId}") {
@@ -464,8 +515,7 @@ fun Route.venueStaffRoutes(
                         }
                     },
                 )
-            val updated = result.requireProfileMutationSuccess()
-            call.respond(updated.toDto())
+            call.respond(result.requireProfileMutationSuccess().toDto())
         }
 
         post("/{venueId}/staff/profiles/{profileId}/publish") {
@@ -482,8 +532,7 @@ fun Route.venueStaffRoutes(
                     actorRole = requesterRole,
                     auditLogRepository = auditLogRepository,
                 )
-            val profile = result.requireProfileMutationSuccess()
-            call.respond(profile.toDto())
+            call.respond(result.requireProfileMutationSuccess().toDto())
         }
 
         post("/{venueId}/staff/profiles/{profileId}/hide") {
@@ -500,8 +549,7 @@ fun Route.venueStaffRoutes(
                     actorRole = requesterRole,
                     auditLogRepository = auditLogRepository,
                 )
-            val profile = result.requireProfileMutationSuccess()
-            call.respond(profile.toDto())
+            call.respond(result.requireProfileMutationSuccess().toDto())
         }
 
         get("/{venueId}/staff/shifts/today") {
@@ -599,17 +647,33 @@ fun Route.venueStaffRoutes(
 private fun VenueStaffMember.toDto(): VenueStaffMemberDto =
     VenueStaffMemberDto(
         userId = userId,
+        displayName = displayName,
+        username = username,
         role = role,
-        createdAt = createdAt.toString(),
-        invitedByUserId = invitedByUserId,
+        active = active,
+        linkedStaffProfileId = linkedStaffProfileId,
+        linkedStaffProfileDisplayName = linkedStaffProfileDisplayName,
+        profileLinkState = profileLinkState.name,
     )
 
-private fun VenueStaffProfileWithTodayShift.toDto(): VenueStaffProfileDto = profile.toDto(todayShift = todayShift)
+private fun VenueStaffProfileWithTodayShift.toDto(): VenueStaffProfileDto =
+    profile.toDto(
+        access = checkNotNull(access) { "Private staff profile projection is required" },
+        todayShift = todayShift,
+    )
 
-private fun VenueStaffProfile.toDto(todayShift: VenueStaffShift? = null): VenueStaffProfileDto =
+private fun StaffProfileMutationResult.Success.toDto(): VenueStaffProfileDto = profile.toDto(access = access)
+
+private fun VenueStaffProfile.toDto(
+    access: VenueStaffProfileAccess,
+    todayShift: VenueStaffShift? = null,
+): VenueStaffProfileDto =
     VenueStaffProfileDto(
         id = id,
-        linkedUserId = linkedUserId,
+        linkedUserId = access.linkedUserId,
+        linkageClass = access.linkageClass.name,
+        canManage = access.canManage,
+        isSelf = access.isSelf,
         displayName = displayName,
         roleLabel = roleLabel,
         subtype = subtype,
@@ -640,7 +704,7 @@ private fun VenueStaffShift.toDto(): VenueStaffShiftDto =
 
 private fun VenueStaffProfileCreateRequest.toWrite(): StaffProfileWrite =
     StaffProfileWrite(
-        linkedUserId = linkedUserId,
+        linkedUserId = null,
         displayName = normalizeRequiredText(displayName, "displayName", STAFF_PROFILE_DISPLAY_NAME_MAX_LENGTH),
         roleLabel = normalizeNullableText(roleLabel, STAFF_PROFILE_SHORT_TEXT_MAX_LENGTH),
         subtype = normalizeProfileSubtype(subtype),
@@ -752,13 +816,27 @@ private fun VenueRole.pendingInviteRolesForRevoke(): Set<String> {
     return roles
 }
 
-private fun StaffProfileMutationResult.requireProfileMutationSuccess(): VenueStaffProfile =
+private fun StaffProfileMutationResult.requireProfileMutationSuccess(): StaffProfileMutationResult.Success =
     when (this) {
-        is StaffProfileMutationResult.Success -> profile
+        is StaffProfileMutationResult.Success -> this
         StaffProfileMutationResult.NotFound -> throw NotFoundException()
         StaffProfileMutationResult.InvalidLink ->
-            throw InvalidInputException("linkedUserId must be an active member of this venue")
+            throw InvalidInputException("Selected staff member is unavailable")
         StaffProfileMutationResult.Forbidden -> throw ForbiddenException()
+        is StaffProfileMutationResult.LinkConflict ->
+            throw StaffProfileLinkConflictException(
+                message =
+                    when (profileLinkState) {
+                        VenueStaffProfileLinkState.DUPLICATE_LINK_DETECTED ->
+                            "К этому сотруднику привязано несколько карточек. Выберите основную и отвяжите остальные."
+                        else -> "К этому сотруднику уже привязана активная карточка."
+                    },
+                details =
+                    buildJsonObject {
+                        put("profileLinkState", profileLinkState.name)
+                        linkedStaffProfileId?.let { put("linkedStaffProfileId", it) }
+                    },
+            )
     }
 
 private fun StaffTodayShiftMutationResult.requireTodayShiftMutationSuccess(): VenueStaffShift =
@@ -812,6 +890,20 @@ private fun normalizeProfileSubtype(raw: String): String {
         throw InvalidInputException("subtype must be one of hookah_master, waiter, admin, other")
     }
     return value
+}
+
+private fun normalizeCreateFromMemberRoleLabel(
+    subtype: String,
+    rawRoleLabel: String?,
+): String? {
+    val roleLabel = normalizeNullableText(rawRoleLabel, STAFF_PROFILE_SHORT_TEXT_MAX_LENGTH)
+    if (subtype == STAFF_PROFILE_SUBTYPE_OTHER) {
+        return roleLabel ?: throw InvalidInputException("roleLabel is required for subtype other")
+    }
+    if (roleLabel != null) {
+        throw InvalidInputException("roleLabel is allowed only for subtype other")
+    }
+    return null
 }
 
 private fun normalizeProfileTags(raw: List<String>): List<String> {

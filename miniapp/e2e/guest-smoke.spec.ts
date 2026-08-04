@@ -4036,6 +4036,104 @@ async function mockVenueStaffCallsApi(
   }
 }
 
+type VenueStaffProfileLinkStateFixture =
+  | 'NOT_LINKED'
+  | 'LINKED'
+  | 'DUPLICATE_LINK_DETECTED'
+  | 'PROTECTED'
+
+type VenueStaffMemberFixture = {
+  userId: number
+  displayName: string
+  username?: string | null
+  role: 'OWNER' | 'MANAGER' | 'STAFF'
+  active: boolean
+  linkedStaffProfileId?: number | null
+  linkedStaffProfileDisplayName?: string | null
+  profileLinkState: VenueStaffProfileLinkStateFixture
+}
+
+type StaffProfileFixture = {
+  id: number
+  linkedUserId?: number | null
+  displayName: string
+  roleLabel?: string | null
+  subtype: string
+  photoRef?: string | null
+  bio?: string | null
+  tags: string[]
+  isGuestVisible: boolean
+  publishedAt?: string | null
+  disabledAt?: string | null
+  createdAt: string
+  updatedAt: string
+  todayShift?: Record<string, unknown> | null
+}
+
+type StaffProfileLinkageClassFixture =
+  | 'DISPLAY_ONLY'
+  | 'STAFF_LINKED'
+  | 'PROTECTED'
+  | 'DUPLICATE_LINK_DETECTED'
+
+type StaffProfileLinkConflictFixture = {
+  profileLinkState: Exclude<VenueStaffProfileLinkStateFixture, 'NOT_LINKED'>
+  linkedStaffProfileId?: number | null
+  winningProfile?: StaffProfileFixture
+}
+
+type ProjectedStaffProfileFixture = StaffProfileFixture & {
+  linkedUserId: number | null
+  linkageClass: StaffProfileLinkageClassFixture
+  canManage: boolean
+  isSelf: boolean
+}
+
+type VenueStaffGetResponsesFixture = {
+  directory: { members: VenueStaffMemberFixture[] }
+  profiles: { profiles: ProjectedStaffProfileFixture[] }
+}
+
+async function waitForVenueStaffGetResponses(
+  page: Page,
+  venueId: number
+): Promise<VenueStaffGetResponsesFixture> {
+  const directoryPath = `/api/venue/${venueId}/staff`
+  const profilesPath = `/api/venue/${venueId}/staff/profiles`
+  const [directoryResponse, profilesResponse] = await Promise.all([
+    page.waitForResponse((response) => {
+      const request = response.request()
+      return request.method() === 'GET' && new URL(response.url()).pathname === directoryPath
+    }),
+    page.waitForResponse((response) => {
+      const request = response.request()
+      return request.method() === 'GET' && new URL(response.url()).pathname === profilesPath
+    })
+  ])
+  return {
+    directory: (await directoryResponse.json()) as VenueStaffGetResponsesFixture['directory'],
+    profiles: (await profilesResponse.json()) as VenueStaffGetResponsesFixture['profiles']
+  }
+}
+
+function recordVenueStaffProfileMutations(page: Page, venueId: number) {
+  const profilePathPrefix = `/api/venue/${venueId}/staff/profiles`
+  const mutations: Array<{ method: string; path: string; body: unknown }> = []
+  page.on('request', (request) => {
+    const path = new URL(request.url()).pathname
+    const method = request.method()
+    if (method === 'GET' || !path.startsWith(profilePathPrefix)) return
+    let body: unknown = null
+    try {
+      body = request.postDataJSON()
+    } catch {
+      body = request.postData()
+    }
+    mutations.push({ method, path, body })
+  })
+  return mutations
+}
+
 async function mockVenueStaffChatApi(
   page: Page,
   options: {
@@ -4050,8 +4148,13 @@ async function mockVenueStaffChatApi(
       createdAt: string
       expiresAt: string
     }>
+    members?: VenueStaffMemberFixture[]
+    staffProfiles?: StaffProfileFixture[]
+    holdFirstStaffDirectory?: boolean
+    staffDirectoryFailuresBeforeSuccess?: number
   } = {}
 ) {
+  let accessUserId = 123456789
   const role = options.role ?? 'OWNER'
   const permissions =
     options.permissions ??
@@ -4090,27 +4193,12 @@ async function mockVenueStaffChatApi(
   let activeCodeHint: string | null = null
   let activeCodeExpiresAt: string | null = null
   const generatedCodes = ['ABC123', 'DEF456', 'GHI789']
-  type StaffProfileFixture = {
-    id: number
-    linkedUserId?: number | null
-    displayName: string
-    roleLabel?: string | null
-    subtype: string
-    photoRef?: string | null
-    bio?: string | null
-    tags: string[]
-    isGuestVisible: boolean
-    publishedAt?: string | null
-    disabledAt?: string | null
-    createdAt: string
-    updatedAt: string
-    todayShift?: Record<string, unknown> | null
-  }
   let nextProfileId = 700
   const profileCreateRequests: Array<Record<string, unknown>> = []
+  const profileCreateFromMemberRequests: Array<Record<string, unknown>> = []
   const profileUpdateRequests: Array<Record<string, unknown>> = []
   const shiftRequests: Array<Record<string, unknown>> = []
-  const staffProfiles: StaffProfileFixture[] = [
+  const defaultStaffProfiles: StaffProfileFixture[] = [
     {
       id: 501,
       linkedUserId: 123456789,
@@ -4192,6 +4280,156 @@ async function mockVenueStaffChatApi(
       todayShift: null
     }
   ]
+  const staffProfiles = (options.staffProfiles ?? defaultStaffProfiles).map((profile) => ({
+    ...profile,
+    tags: [...profile.tags],
+    todayShift: profile.todayShift ? { ...profile.todayShift } : null
+  }))
+  const defaultStaffMembers: VenueStaffMemberFixture[] = [
+    {
+      userId: 123456789,
+      displayName: 'Алексей Морозов',
+      username: 'alexey_owner',
+      role,
+      active: true,
+      linkedStaffProfileId: 501,
+      linkedStaffProfileDisplayName: 'Алексей',
+      profileLinkState: 'LINKED'
+    },
+    {
+      userId: 222222222,
+      displayName: 'Светлана Орлова',
+      username: 'sveta_staff',
+      role: 'STAFF',
+      active: true,
+      linkedStaffProfileId: 502,
+      linkedStaffProfileDisplayName: 'Светлана',
+      profileLinkState: 'LINKED'
+    },
+    {
+      userId: 444444444,
+      displayName: 'Максим Катаев',
+      username: 'max_kataev',
+      role: 'STAFF',
+      active: true,
+      linkedStaffProfileId: null,
+      linkedStaffProfileDisplayName: null,
+      profileLinkState: 'NOT_LINKED'
+    },
+    {
+      userId: 555555555,
+      displayName: 'Анна Петрова',
+      username: null,
+      role: 'STAFF',
+      active: true,
+      linkedStaffProfileId: null,
+      linkedStaffProfileDisplayName: null,
+      profileLinkState: 'NOT_LINKED'
+    },
+    {
+      userId: 666666666,
+      displayName: 'Ирина Безопасная',
+      username: 'safe_<script>&"',
+      role: 'STAFF',
+      active: true,
+      linkedStaffProfileId: null,
+      linkedStaffProfileDisplayName: null,
+      profileLinkState: 'NOT_LINKED'
+    },
+    {
+      userId: 333333333,
+      displayName: 'Другой Менеджер',
+      username: 'other_manager',
+      role: 'MANAGER',
+      active: true,
+      linkedStaffProfileId: 504,
+      linkedStaffProfileDisplayName: 'Другой менеджер',
+      profileLinkState: 'PROTECTED'
+    },
+    {
+      userId: 111111111,
+      displayName: 'Владелец Заведения',
+      username: null,
+      role: 'OWNER',
+      active: true,
+      linkedStaffProfileId: 505,
+      linkedStaffProfileDisplayName: 'Владелец заведения',
+      profileLinkState: 'PROTECTED'
+    }
+  ]
+  const staffMembers = (options.members ?? defaultStaffMembers).map((member) => ({ ...member }))
+  let nextProfileLinkConflict: StaffProfileLinkConflictFixture | null = null
+  let shouldHoldStaffDirectory = options.holdFirstStaffDirectory === true
+  let staffDirectoryFailuresRemaining = options.staffDirectoryFailuresBeforeSuccess ?? 0
+  let releaseStaffDirectoryGate: (() => void) | null = null
+  const staffDirectoryGate = new Promise<void>((resolve) => {
+    releaseStaffDirectoryGate = resolve
+  })
+
+  const projectStaffProfile = (profile: StaffProfileFixture) => {
+    const linkedMember = profile.linkedUserId == null
+      ? null
+      : staffMembers.find((member) => member.userId === profile.linkedUserId) ?? null
+    const activeLinkCount = profile.linkedUserId == null
+      ? 0
+      : staffProfiles.filter(
+        (candidate) =>
+          candidate.linkedUserId === profile.linkedUserId && candidate.disabledAt == null
+      ).length
+    let linkageClass: StaffProfileLinkageClassFixture
+    if (profile.linkedUserId == null) {
+      linkageClass = 'DISPLAY_ONLY'
+    } else if (profile.disabledAt == null && activeLinkCount > 1) {
+      linkageClass = 'DUPLICATE_LINK_DETECTED'
+    } else if (linkedMember?.active && linkedMember.role === 'STAFF') {
+      linkageClass = 'STAFF_LINKED'
+    } else {
+      linkageClass = 'PROTECTED'
+    }
+    const canManage =
+      role === 'OWNER' ||
+      (role === 'MANAGER' &&
+        (linkageClass === 'DISPLAY_ONLY' ||
+          linkageClass === 'STAFF_LINKED'))
+    const isSelf = profile.linkedUserId != null && profile.linkedUserId === accessUserId
+    const linkedUserId =
+      role === 'STAFF' ||
+      (role === 'MANAGER' &&
+        (linkageClass === 'PROTECTED' || linkageClass === 'DUPLICATE_LINK_DETECTED'))
+        ? null
+        : profile.linkedUserId ?? null
+    return {
+      ...profile,
+      linkedUserId,
+      linkageClass,
+      canManage,
+      isSelf,
+      tags: [...profile.tags],
+      todayShift: profile.todayShift ? { ...profile.todayShift } : null
+    }
+  }
+
+  const syncStaffMemberLinkState = (userId: number | null | undefined) => {
+    if (userId == null) return
+    const member = staffMembers.find((candidate) => candidate.userId === userId)
+    if (!member || member.role !== 'STAFF') return
+    const linkedProfiles = staffProfiles.filter(
+      (profile) => profile.linkedUserId === userId && profile.disabledAt == null
+    )
+    if (!linkedProfiles.length) {
+      member.profileLinkState = 'NOT_LINKED'
+      member.linkedStaffProfileId = null
+      member.linkedStaffProfileDisplayName = null
+    } else if (linkedProfiles.length === 1) {
+      member.profileLinkState = 'LINKED'
+      member.linkedStaffProfileId = linkedProfiles[0].id
+      member.linkedStaffProfileDisplayName = linkedProfiles[0].displayName
+    } else {
+      member.profileLinkState = 'DUPLICATE_LINK_DETECTED'
+      member.linkedStaffProfileId = null
+      member.linkedStaffProfileDisplayName = null
+    }
+  }
 
   await page.route('**/api/auth/telegram', async (route) => {
     await route.fulfill(jsonResponse({ token: 'e2e-session-token', expiresAtEpochSeconds: sessionExpiresAt }))
@@ -4200,7 +4438,7 @@ async function mockVenueStaffChatApi(
   await page.route('**/api/venue/me', async (route) => {
     await route.fulfill(
       jsonResponse({
-        userId: 123456789,
+        userId: accessUserId,
         venues: [
           {
             venueId: 1,
@@ -4241,7 +4479,90 @@ async function mockVenueStaffChatApi(
     const profileMatch = path.match(/^\/api\/venue\/1\/staff\/profiles\/(\d+)(?:\/(publish|hide|today-shift))?$/)
 
     if (path === '/api/venue/1/staff/profiles' && method === 'GET') {
-      await route.fulfill(jsonResponse({ profiles: staffProfiles }))
+      await route.fulfill(jsonResponse({ profiles: staffProfiles.map(projectStaffProfile) }))
+      return
+    }
+
+    if (path === '/api/venue/1/staff/profiles/from-member' && method === 'POST') {
+      const body = (await request.postDataJSON()) as Record<string, unknown>
+      profileCreateFromMemberRequests.push(body)
+      const linkedUserId = typeof body.userId === 'number' ? body.userId : null
+      if (nextProfileLinkConflict) {
+        const conflict = nextProfileLinkConflict
+        nextProfileLinkConflict = null
+        if (conflict.winningProfile) {
+          staffProfiles.push({
+            ...conflict.winningProfile,
+            tags: [...conflict.winningProfile.tags],
+            todayShift: conflict.winningProfile.todayShift
+              ? { ...conflict.winningProfile.todayShift }
+              : null
+          })
+          syncStaffMemberLinkState(conflict.winningProfile.linkedUserId)
+        }
+        await route.fulfill(
+          jsonResponse(
+            {
+              error: {
+                code: 'STAFF_PROFILE_LINK_CONFLICT',
+                message: 'Staff member already has an active linked profile',
+                details: {
+                  profileLinkState: conflict.profileLinkState,
+                  linkedStaffProfileId:
+                    conflict.profileLinkState === 'LINKED'
+                      ? conflict.linkedStaffProfileId ?? null
+                      : null
+                }
+              }
+            },
+            409
+          )
+        )
+        return
+      }
+      const linkedMember = linkedUserId == null
+        ? null
+        : staffMembers.find((member) => member.userId === linkedUserId) ?? null
+      if (!linkedMember || linkedMember.profileLinkState !== 'NOT_LINKED') {
+        await route.fulfill(
+          jsonResponse(
+            {
+              error: {
+                code: 'STAFF_PROFILE_LINK_CONFLICT',
+                message: 'Staff member already has an active linked profile',
+                details: {
+                  profileLinkState: linkedMember?.profileLinkState ?? 'PROTECTED',
+                  linkedStaffProfileId:
+                    linkedMember?.profileLinkState === 'LINKED'
+                      ? linkedMember.linkedStaffProfileId ?? null
+                      : null
+                }
+              }
+            },
+            409
+          )
+        )
+        return
+      }
+      const profile: StaffProfileFixture = {
+        id: nextProfileId++,
+        linkedUserId,
+        displayName: linkedMember.displayName,
+        roleLabel: typeof body.roleLabel === 'string' ? body.roleLabel : null,
+        subtype: String(body.subtype ?? ''),
+        photoRef: null,
+        bio: null,
+        tags: [],
+        isGuestVisible: false,
+        publishedAt: null,
+        disabledAt: null,
+        createdAt: '2030-01-10T18:05:00Z',
+        updatedAt: '2030-01-10T18:05:00Z',
+        todayShift: null
+      }
+      staffProfiles.push(profile)
+      syncStaffMemberLinkState(linkedUserId)
+      await route.fulfill(jsonResponse(projectStaffProfile(profile)))
       return
     }
 
@@ -4250,7 +4571,7 @@ async function mockVenueStaffChatApi(
       profileCreateRequests.push(body)
       const profile: StaffProfileFixture = {
         id: nextProfileId++,
-        linkedUserId: typeof body.linkedUserId === 'number' ? body.linkedUserId : null,
+        linkedUserId: null,
         displayName: String(body.displayName ?? ''),
         roleLabel: typeof body.roleLabel === 'string' ? body.roleLabel : null,
         subtype: String(body.subtype ?? 'other'),
@@ -4265,7 +4586,7 @@ async function mockVenueStaffChatApi(
         todayShift: null
       }
       staffProfiles.push(profile)
-      await route.fulfill(jsonResponse(profile))
+      await route.fulfill(jsonResponse(projectStaffProfile(profile)))
       return
     }
 
@@ -4285,6 +4606,7 @@ async function mockVenueStaffChatApi(
     if (method === 'PATCH' && !action) {
       const body = (await request.postDataJSON()) as Record<string, unknown>
       profileUpdateRequests.push(body)
+      const previousLinkedUserId = profile.linkedUserId
       if (typeof body.displayName === 'string') profile.displayName = body.displayName
       if (typeof body.roleLabel === 'string' || body.roleLabel === null) profile.roleLabel = body.roleLabel
       if (typeof body.subtype === 'string') profile.subtype = body.subtype
@@ -4294,7 +4616,9 @@ async function mockVenueStaffChatApi(
       if (typeof body.bio === 'string' || body.bio === null) profile.bio = body.bio
       if (Array.isArray(body.tags)) profile.tags = body.tags.map(String)
       profile.updatedAt = '2030-01-10T18:06:00Z'
-      await route.fulfill(jsonResponse(profile))
+      syncStaffMemberLinkState(previousLinkedUserId)
+      syncStaffMemberLinkState(profile.linkedUserId)
+      await route.fulfill(jsonResponse(projectStaffProfile(profile)))
       return
     }
 
@@ -4302,14 +4626,16 @@ async function mockVenueStaffChatApi(
       profile.isGuestVisible = true
       profile.publishedAt = '2030-01-10T18:07:00Z'
       profile.disabledAt = null
-      await route.fulfill(jsonResponse(profile))
+      syncStaffMemberLinkState(profile.linkedUserId)
+      await route.fulfill(jsonResponse(projectStaffProfile(profile)))
       return
     }
 
     if (method === 'POST' && action === 'hide') {
       profile.isGuestVisible = false
       profile.disabledAt = '2030-01-10T18:08:00Z'
-      await route.fulfill(jsonResponse(profile))
+      syncStaffMemberLinkState(profile.linkedUserId)
+      await route.fulfill(jsonResponse(projectStaffProfile(profile)))
       return
     }
 
@@ -4341,36 +4667,25 @@ async function mockVenueStaffChatApi(
       await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'not found' }) })
       return
     }
-    await route.fulfill(
-      jsonResponse({
-        members: [
-          {
-            userId: 123456789,
-            role,
-            createdAt: '2030-01-10T18:00:00Z',
-            invitedByUserId: null
-          },
-          {
-            userId: 222222222,
-            role: 'STAFF',
-            createdAt: '2030-01-10T18:00:00Z',
-            invitedByUserId: 123456789
-          },
-          {
-            userId: 333333333,
-            role: 'MANAGER',
-            createdAt: '2030-01-10T18:00:00Z',
-            invitedByUserId: 111111111
-          },
-          {
-            userId: 111111111,
-            role: 'OWNER',
-            createdAt: '2030-01-10T18:00:00Z',
-            invitedByUserId: null
-          }
-        ]
-      })
-    )
+    if (shouldHoldStaffDirectory) {
+      shouldHoldStaffDirectory = false
+      await staffDirectoryGate
+    }
+    if (staffDirectoryFailuresRemaining > 0) {
+      staffDirectoryFailuresRemaining -= 1
+      await route.fulfill(
+        jsonResponse(
+          { error: { code: 'DATABASE_UNAVAILABLE', message: 'Staff directory unavailable' } },
+          503
+        )
+      )
+      return
+    }
+    staffMembers.forEach((member) => syncStaffMemberLinkState(member.userId))
+    const visibleMembers = role === 'MANAGER'
+      ? staffMembers.filter((member) => member.active && member.role === 'STAFF')
+      : staffMembers.filter((member) => member.active)
+    await route.fulfill(jsonResponse({ members: visibleMembers }))
   })
 
   await page.route('**/api/venue/1/staff/invites**', async (route) => {
@@ -4492,12 +4807,46 @@ async function mockVenueStaffChatApi(
     getPendingInvites: () => pendingInvites.map((invite) => ({ ...invite })),
     getRevokedInviteHandles: () => [...revokedInviteHandles],
     getProfileCreateRequests: () => profileCreateRequests,
+    getProfileCreateFromMemberRequests: () => profileCreateFromMemberRequests,
     getProfileUpdateRequests: () => profileUpdateRequests,
+    getStaffMembers: () => staffMembers.map((member) => ({ ...member })),
+    addStaffProfile: (profile: StaffProfileFixture) => {
+      staffProfiles.push({
+        ...profile,
+        tags: [...profile.tags],
+        todayShift: profile.todayShift ? { ...profile.todayShift } : null
+      })
+      syncStaffMemberLinkState(profile.linkedUserId)
+    },
     getShiftRequests: () => shiftRequests,
     getTestMessages: () => testMessages,
     getUnlinks: () => unlinks,
     setLinked: (next: boolean) => {
       linked = next
+    },
+    releaseStaffDirectory: () => {
+      releaseStaffDirectoryGate?.()
+      releaseStaffDirectoryGate = null
+    },
+    queueProfileLinkConflict: (conflict: StaffProfileLinkConflictFixture) => {
+      nextProfileLinkConflict = conflict
+    },
+    setAccountStaffState: (
+      userId: number,
+      members: VenueStaffMemberFixture[],
+      profiles: StaffProfileFixture[] = []
+    ) => {
+      accessUserId = userId
+      staffMembers.splice(0, staffMembers.length, ...members.map((member) => ({ ...member })))
+      staffProfiles.splice(
+        0,
+        staffProfiles.length,
+        ...profiles.map((profile) => ({
+          ...profile,
+          tags: [...profile.tags],
+          todayShift: profile.todayShift ? { ...profile.todayShift } : null
+        }))
+      )
     }
   }
 }
@@ -4614,6 +4963,9 @@ async function mockVenueStaffScheduleApi(
         {
           id: access.venueId * 100 + 1,
           linkedUserId: 123456789,
+          linkageClass: 'STAFF_LINKED',
+          canManage: true,
+          isSelf: true,
           displayName: access.venueId === 1 ? 'Алексей' : 'Мария Второй',
           roleLabel: null,
           subtype: 'hookah_master',
@@ -4630,6 +4982,9 @@ async function mockVenueStaffScheduleApi(
         {
           id: access.venueId * 100 + 2,
           linkedUserId: null,
+          linkageClass: 'DISPLAY_ONLY',
+          canManage: true,
+          isSelf: false,
           displayName: access.venueId === 1 ? 'Светлана' : 'Илья Второй',
           roleLabel: 'Бармен',
           subtype: 'other',
@@ -4646,6 +5001,9 @@ async function mockVenueStaffScheduleApi(
         {
           id: access.venueId * 100 + 3,
           linkedUserId: 987654321,
+          linkageClass: 'STAFF_LINKED',
+          canManage: true,
+          isSelf: false,
           displayName: access.venueId === 1 ? 'Максим' : 'Максим Второй',
           roleLabel: null,
           subtype: 'waiter',
@@ -4662,6 +5020,9 @@ async function mockVenueStaffScheduleApi(
         {
           id: access.venueId * 100 + 4,
           linkedUserId: null,
+          linkageClass: 'DISPLAY_ONLY',
+          canManage: true,
+          isSelf: false,
           displayName: access.venueId === 1 ? 'Анна' : 'Анна Второй',
           roleLabel: 'Администратор зала',
           subtype: 'admin',
@@ -9041,7 +9402,12 @@ test('venue manager creates and revokes only staff invites', async ({ page }) =>
   const pending = accessCard.locator('.venue-pending-invite-list')
   await expect(pending.locator('.venue-pending-invite-row')).toHaveCount(1)
   await expect(pending).toContainText('Сотрудник')
+  await expect(pending).toContainText('Статус: ожидает принятия')
+  await expect(pending).toContainText('Создано:')
+  await expect(pending).toContainText('Действует до:')
   await expect(pending).not.toContainText('Менеджер')
+  await expect(pending).not.toContainText('username')
+  await expect(pending).not.toContainText('User ')
 
   await accessCard.getByRole('button', { name: 'Добавить сотрудника' }).click()
   await expect.poll(() => api.getStaffInviteRequests()).toEqual([{ role: 'STAFF' }])
@@ -9060,6 +9426,28 @@ test('venue manager manages staff and display cards while protected cards stay r
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await page.getByRole('button', { name: 'Персонал', exact: true }).click()
+
+  const accessCard = page.locator('.venue-staff > .card').first()
+  const svetlanaMember = accessCard.locator('.venue-staff-row').filter({ hasText: 'Светлана Орлова' })
+  const maximMember = accessCard.locator('.venue-staff-row').filter({ hasText: 'Максим Катаев' })
+  const annaMember = accessCard.locator('.venue-staff-row').filter({ hasText: 'Анна Петрова' })
+  const safeUsernameMember = accessCard.locator('.venue-staff-row').filter({ hasText: 'Ирина Безопасная' })
+  await expect(svetlanaMember).toContainText('@sveta_staff')
+  await expect(svetlanaMember.locator('.venue-staff-role-badge')).toHaveText('Сотрудник')
+  await expect(svetlanaMember).toContainText('Привязан к карточке «Светлана»')
+  await expect(svetlanaMember.getByRole('button', { name: 'Открыть карточку' })).toBeVisible()
+  await expect(maximMember).toContainText('@max_kataev')
+  await expect(maximMember).toContainText('Карточка не создана')
+  await expect(maximMember.getByRole('button', { name: 'Создать карточку' })).toBeVisible()
+  await expect(annaMember).toContainText('Без username · ID …5555')
+  await expect(safeUsernameMember).toContainText('@safe_<script>&"')
+  await expect(safeUsernameMember.locator('script')).toHaveCount(0)
+  await expect(accessCard).not.toContainText('Алексей Морозов')
+  await expect(accessCard).not.toContainText('Другой Менеджер')
+  await expect(accessCard).not.toContainText('Владелец Заведения')
+  await expect(accessCard).not.toContainText('222222222')
+  await expect(accessCard).not.toContainText('444444444')
+  await expect(accessCard).not.toContainText('555555555')
 
   const cards = page.locator('.venue-public-staff')
   await expect(cards.getByRole('heading', { name: 'Карточки команды' })).toBeVisible()
@@ -9085,45 +9473,114 @@ test('venue manager manages staff and display cards while protected cards stay r
 
   await cards.getByRole('button', { name: 'Добавить карточку сотрудника' }).click()
   let createForm = cards.locator('.venue-profile-form')
-  await expect(createForm.getByRole('option', { name: /#222222222/ })).toHaveCount(1)
-  await expect(createForm.getByRole('option', { name: /#333333333/ })).toHaveCount(0)
-  await expect(createForm.getByRole('option', { name: /#111111111/ })).toHaveCount(0)
+  await expect(createForm.getByLabel('Привязать к сотруднику')).toBeHidden()
   await createForm.getByLabel('Имя на карточке').fill('Карточка менеджера')
+  await createForm.getByLabel('Тип сотрудника').selectOption('waiter')
   await createForm.getByRole('button', { name: 'Создать профиль' }).click()
   await expect.poll(() => api.getProfileCreateRequests()).toHaveLength(1)
   expect(api.getProfileCreateRequests()[0]).toMatchObject({
-    displayName: 'Карточка менеджера',
-    linkedUserId: null
+    displayName: 'Карточка менеджера'
   })
+  expect(api.getProfileCreateRequests()[0]).not.toHaveProperty('linkedUserId')
+  expect(api.getProfileCreateFromMemberRequests()).toHaveLength(0)
 
-  await cards.getByRole('button', { name: 'Добавить карточку сотрудника' }).click()
+  await maximMember.getByRole('button', { name: 'Создать карточку' }).click()
   createForm = cards.locator('.venue-profile-form')
-  await createForm.getByLabel('Имя на карточке').fill('Новый сотрудник')
-  await createForm.getByLabel('Привязать к сотруднику').selectOption('222222222')
-  await createForm.getByRole('button', { name: 'Создать профиль' }).click()
-  await expect.poll(() => api.getProfileCreateRequests()).toHaveLength(2)
-  expect(api.getProfileCreateRequests()[1]).toMatchObject({
-    displayName: 'Новый сотрудник',
-    linkedUserId: 222222222
+  await expect(createForm.getByLabel('Имя на карточке')).toHaveValue('Максим Катаев')
+  await expect(createForm.getByLabel('Имя на карточке')).not.toBeEditable()
+  await expect(createForm.getByLabel('Привязать к сотруднику')).toHaveValue('444444444')
+  await expect(createForm.getByLabel('Привязать к сотруднику')).toBeDisabled()
+  await expect(createForm.getByLabel('Коротко о сотруднике')).toBeHidden()
+  await expect(createForm.getByLabel('Специализация')).toBeHidden()
+  await expect(createForm.getByLabel('Тип сотрудника')).toHaveValue('')
+  await createForm.getByRole('button', { name: 'Создать карточку' }).click()
+  await expect.poll(() => api.getProfileCreateFromMemberRequests()).toHaveLength(0)
+  await createForm.getByLabel('Тип сотрудника').selectOption('waiter')
+  await createForm.getByRole('button', { name: 'Создать карточку' }).click()
+  await expect.poll(() => api.getProfileCreateFromMemberRequests()).toHaveLength(1)
+  expect(api.getProfileCreateFromMemberRequests()[0]).toEqual({
+    userId: 444444444,
+    subtype: 'waiter'
   })
+  expect(api.getProfileCreateFromMemberRequests()[0]).not.toHaveProperty('displayName')
+  expect(api.getProfileCreateFromMemberRequests()[0]).not.toHaveProperty('isGuestVisible')
+  expect(api.getProfileCreateRequests()).toHaveLength(1)
+  const createdDraft = cards.locator('.venue-profile-row').filter({ hasText: 'Максим Катаев' })
+  await expect(createdDraft).toBeFocused()
+  await expect(createdDraft).toContainText('Скрыт — виден только в кабинете')
+  await expect(createdDraft.getByLabel('Имя на карточке')).toHaveValue('Максим Катаев')
 
-  const staffCard = cards.locator('.venue-profile-row').filter({ hasText: 'Светлана' })
+  await svetlanaMember.getByRole('button', { name: 'Открыть карточку' }).click()
+  let staffCard = cards.locator('.venue-profile-row').filter({ hasText: 'Светлана' })
+  await expect(staffCard).toBeFocused()
+  await expect(staffCard.getByLabel('Имя на карточке')).toBeVisible()
+  await staffCard.getByRole('button', { name: 'Отмена' }).click()
   await expect(staffCard.getByRole('button', { name: 'Редактировать' })).toBeVisible()
   await expect(staffCard.getByRole('button', { name: 'Опубликовать' })).toBeVisible()
   await staffCard.getByRole('button', { name: 'Редактировать' }).click()
   await staffCard.getByLabel('Имя на карточке').fill('Светлана Новая')
   await staffCard.getByRole('button', { name: 'Сохранить' }).click()
   await expect.poll(() => api.getProfileUpdateRequests()).toHaveLength(1)
+  staffCard = cards.locator('.venue-profile-row').filter({ hasText: 'Светлана Новая' })
   await staffCard.getByRole('button', { name: 'Опубликовать' }).click()
   await expect(staffCard).toContainText('Опубликован — виден гостям')
   await staffCard.getByRole('button', { name: 'Скрыть' }).click()
   await expect(staffCard).toContainText('Скрыт — виден только в кабинете')
 })
 
-test('venue switch clears staff invite and profile drafts', async ({ page }) => {
+test('staff profile controls fail closed while the current directory loads or errors', async ({ page }) => {
   await installTelegramWebApp(page, 123456789)
-  await mockVenueStaffChatApi(page, { role: 'MANAGER', linked: true })
+  const api = await mockVenueStaffChatApi(page, {
+    role: 'MANAGER',
+    linked: true,
+    holdFirstStaffDirectory: true,
+    staffDirectoryFailuresBeforeSuccess: 1
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Персонал', exact: true }).click()
+
+  const staff = page.locator('.venue-staff')
+  const cards = staff.locator('.venue-public-staff')
+  const displayOnly = cards.locator('.venue-profile-row').filter({ hasText: 'Карточка без доступа' })
+  await expect(displayOnly).toBeVisible()
+  await expect(displayOnly.getByRole('button', { name: 'Редактировать' })).toHaveCount(0)
+  await expect(displayOnly.getByRole('button', { name: 'Опубликовать' })).toHaveCount(0)
+  await expect(cards.getByRole('button', { name: 'Добавить карточку сотрудника' })).toBeDisabled()
+
+  api.releaseStaffDirectory()
+  await expect(staff.getByRole('heading', { name: 'Сервис временно недоступен' })).toBeVisible()
+  await expect(displayOnly.getByRole('button', { name: 'Редактировать' })).toHaveCount(0)
+  await expect(cards.getByRole('button', { name: 'Добавить карточку сотрудника' })).toBeDisabled()
+
+  await staff.getByRole('button', { name: 'Повторить' }).click()
+  await expect(displayOnly.getByRole('button', { name: 'Редактировать' })).toBeVisible()
+  await expect(displayOnly.getByRole('button', { name: 'Опубликовать' })).toBeVisible()
+  await expect(cards.getByRole('button', { name: 'Добавить карточку сотрудника' })).toBeEnabled()
+})
+
+test('manager duplicate staff links stay read-only across reload refresh and venue switch', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueStaffChatApi(page, { role: 'MANAGER', linked: true })
+  api.addStaffProfile({
+    id: 506,
+    linkedUserId: 222222222,
+    displayName: 'Светлана дубль',
+    roleLabel: null,
+    subtype: 'waiter',
+    photoRef: null,
+    bio: null,
+    tags: [],
+    isGuestVisible: false,
+    publishedAt: null,
+    disabledAt: null,
+    createdAt: '2030-01-10T18:00:00Z',
+    updatedAt: '2030-01-10T18:00:00Z',
+    todayShift: null
+  })
+
   const permissions = [
+    'STAFF_CHAT_LINK',
     'STAFF_INVITE_CREATE_STAFF',
     'STAFF_INVITE_REVOKE_STAFF',
     'STAFF_PROFILE_MANAGE_STAFF',
@@ -9166,6 +9623,418 @@ test('venue switch clears staff invite and profile drafts', async ({ page }) => 
     await route.fulfill(jsonResponse({ invites: [] }))
   })
 
+  const profileMutations = recordVenueStaffProfileMutations(page, 1)
+  const assertRawDuplicateContract = (responses: VenueStaffGetResponsesFixture) => {
+    const duplicateMember = responses.directory.members.find(
+      (member) => member.userId === 222222222
+    )
+    expect(duplicateMember).toMatchObject({
+      profileLinkState: 'DUPLICATE_LINK_DETECTED',
+      linkedStaffProfileId: null,
+      linkedStaffProfileDisplayName: null
+    })
+    expect(duplicateMember).not.toHaveProperty('linkedUserId')
+
+    const duplicateProfiles = responses.profiles.profiles.filter(
+      (profile) => profile.linkageClass === 'DUPLICATE_LINK_DETECTED'
+    )
+    expect(duplicateProfiles.map((profile) => profile.id).sort((left, right) => left - right)).toEqual([
+      502,
+      506
+    ])
+    duplicateProfiles.forEach((profile) => {
+      expect(profile).toMatchObject({
+        linkageClass: 'DUPLICATE_LINK_DETECTED',
+        canManage: false,
+        linkedUserId: null
+      })
+    })
+    responses.profiles.profiles
+      .filter(
+        (profile) =>
+          profile.linkageClass === 'PROTECTED' ||
+          profile.linkageClass === 'DUPLICATE_LINK_DETECTED'
+      )
+      .forEach((profile) => expect(profile.linkedUserId).toBeNull())
+
+    const rawJson = JSON.stringify(responses)
+    expect(rawJson).not.toContain('123456789')
+    expect(rawJson).not.toContain('333333333')
+    expect(rawJson).not.toContain('111111111')
+  }
+  const assertDuplicateUiIsReadOnly = async () => {
+    const staff = page.locator('.venue-staff')
+    const accessCard = staff.locator(':scope > .card').filter({
+      has: page.getByRole('heading', { name: 'Доступ сотрудников', exact: true })
+    })
+    const memberRow = accessCard.locator('.venue-staff-row').filter({
+      has: page.getByText('Светлана Орлова', { exact: true })
+    })
+    await expect(memberRow).toHaveCount(1)
+    await expect(memberRow.locator('.venue-staff-link-state')).toHaveText(
+      'Обнаружено несколько активных карточек'
+    )
+    await expect(memberRow.locator('.venue-staff-link-warning')).toHaveText(
+      'К этому сотруднику привязано несколько карточек. Выберите основную и отвяжите остальные.'
+    )
+    for (const action of [
+      'Открыть карточку',
+      'Редактировать',
+      'Отвязать',
+      'Связать',
+      'Создать карточку'
+    ]) {
+      await expect(memberRow.getByRole('button', { name: action, exact: true })).toHaveCount(0)
+    }
+    await expect(memberRow.getByRole('button')).toHaveCount(0)
+    await expect(memberRow.locator('input, select, textarea')).toHaveCount(0)
+
+    for (const profileId of [502, 506]) {
+      const profile = staff.locator(`.venue-profile-row[data-staff-profile-id="${profileId}"]`)
+      await expect(profile).toBeVisible()
+      await expect(profile.getByRole('button')).toHaveCount(0)
+      await expect(profile.locator('input, select, textarea')).toHaveCount(0)
+      await expect(profile.locator('option[value="222222222"]')).toHaveCount(0)
+    }
+    await expect(staff).not.toContainText('222222222')
+    expect(profileMutations).toHaveLength(0)
+    expect(api.getProfileUpdateRequests()).toHaveLength(0)
+  }
+
+  const initialResponsesPromise = waitForVenueStaffGetResponses(page, 1)
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Персонал', exact: true }).click()
+  assertRawDuplicateContract(await initialResponsesPromise)
+  await assertDuplicateUiIsReadOnly()
+
+  await page.getByRole('button', { name: 'Обзор', exact: true }).click()
+  const refreshedResponsesPromise = waitForVenueStaffGetResponses(page, 1)
+  await page.getByRole('button', { name: 'Персонал', exact: true }).click()
+  assertRawDuplicateContract(await refreshedResponsesPromise)
+  await assertDuplicateUiIsReadOnly()
+
+  const reloadedResponsesPromise = waitForVenueStaffGetResponses(page, 1)
+  await page.reload()
+  await page.getByRole('button', { name: 'Персонал', exact: true }).click()
+  assertRawDuplicateContract(await reloadedResponsesPromise)
+  await assertDuplicateUiIsReadOnly()
+
+  const venueSelect = page.locator('.venue-controls select.venue-select')
+  const venueTwoResponsesPromise = waitForVenueStaffGetResponses(page, 2)
+  await venueSelect.selectOption('2')
+  const venueTwoResponses = await venueTwoResponsesPromise
+  expect(venueTwoResponses.directory.members).toEqual([])
+  expect(venueTwoResponses.profiles.profiles).toEqual([])
+
+  const switchedBackResponsesPromise = waitForVenueStaffGetResponses(page, 1)
+  await venueSelect.selectOption('1')
+  assertRawDuplicateContract(await switchedBackResponsesPromise)
+  await assertDuplicateUiIsReadOnly()
+})
+
+test('owner repairs one concrete duplicate staff card with safe unlink only', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const primaryShift = {
+    id: 1502,
+    staffProfileId: 502,
+    shiftDate: '2030-01-10',
+    startsAt: '18:00',
+    endsAt: '23:00',
+    status: 'active',
+    isGuestVisible: false,
+    manuallyMarkedActive: true,
+    createdAt: '2030-01-10T18:00:00Z',
+    updatedAt: '2030-01-10T18:00:00Z'
+  }
+  const wrongCardShift = {
+    id: 1506,
+    staffProfileId: 506,
+    shiftDate: '2030-01-09',
+    startsAt: '19:00',
+    endsAt: '01:00',
+    status: 'completed',
+    isGuestVisible: false,
+    manuallyMarkedActive: false,
+    createdAt: '2030-01-09T19:00:00Z',
+    updatedAt: '2030-01-10T01:00:00Z'
+  }
+  const api = await mockVenueStaffChatApi(page, {
+    role: 'OWNER',
+    linked: true,
+    members: [
+      {
+        userId: 222222222,
+        displayName: 'Светлана Орлова',
+        username: 'sveta_staff',
+        role: 'STAFF',
+        active: true,
+        linkedStaffProfileId: null,
+        linkedStaffProfileDisplayName: null,
+        profileLinkState: 'DUPLICATE_LINK_DETECTED'
+      }
+    ],
+    staffProfiles: [
+      {
+        id: 502,
+        linkedUserId: 222222222,
+        displayName: 'Светлана',
+        roleLabel: null,
+        subtype: 'waiter',
+        photoRef: null,
+        bio: 'Основная карточка',
+        tags: ['сервис'],
+        isGuestVisible: false,
+        publishedAt: null,
+        disabledAt: null,
+        createdAt: '2030-01-01T18:00:00Z',
+        updatedAt: '2030-01-10T18:00:00Z',
+        todayShift: primaryShift
+      },
+      {
+        id: 506,
+        linkedUserId: 222222222,
+        displayName: 'Светлана дубль',
+        roleLabel: null,
+        subtype: 'waiter',
+        photoRef: null,
+        bio: 'Неправильная карточка',
+        tags: ['зал'],
+        isGuestVisible: false,
+        publishedAt: null,
+        disabledAt: null,
+        createdAt: '2030-01-02T18:00:00Z',
+        updatedAt: '2030-01-10T18:00:00Z',
+        todayShift: wrongCardShift
+      }
+    ]
+  })
+  const profileMutations = recordVenueStaffProfileMutations(page, 1)
+
+  const initialResponsesPromise = waitForVenueStaffGetResponses(page, 1)
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Персонал', exact: true }).click()
+  const initialResponses = await initialResponsesPromise
+  expect(initialResponses.directory.members.find((member) => member.userId === 222222222)).toMatchObject({
+    profileLinkState: 'DUPLICATE_LINK_DETECTED',
+    linkedStaffProfileId: null,
+    linkedStaffProfileDisplayName: null
+  })
+  const initialDuplicateProfiles = initialResponses.profiles.profiles.filter(
+    (profile) => profile.id === 502 || profile.id === 506
+  )
+  expect(initialDuplicateProfiles.map((profile) => profile.id).sort((left, right) => left - right)).toEqual([
+    502,
+    506
+  ])
+  initialDuplicateProfiles.forEach((profile) => {
+    expect(profile).toMatchObject({
+      linkedUserId: 222222222,
+      linkageClass: 'DUPLICATE_LINK_DETECTED',
+      canManage: true,
+      disabledAt: null
+    })
+  })
+
+  const accessCard = page.locator('.venue-staff > .card').filter({
+    has: page.getByRole('heading', { name: 'Доступ сотрудников', exact: true })
+  })
+  const memberRow = accessCard.locator('.venue-staff-row').filter({
+    has: page.getByText('Светлана Орлова', { exact: true })
+  })
+  await expect(memberRow.locator('.venue-staff-link-warning')).toHaveText(
+    'К этому сотруднику привязано несколько карточек. Выберите основную и отвяжите остальные.'
+  )
+
+  const cards = page.locator('.venue-public-staff')
+  const primaryProfile = cards.locator('.venue-profile-row[data-staff-profile-id="502"]')
+  const wrongProfile = cards.locator('.venue-profile-row[data-staff-profile-id="506"]')
+  await expect(primaryProfile).toHaveAttribute('data-staff-profile-id', '502')
+  await expect(wrongProfile).toHaveAttribute('data-staff-profile-id', '506')
+  await expect(primaryProfile).toContainText('Светлана')
+  await expect(wrongProfile).toContainText('Светлана дубль')
+  await expect(primaryProfile).toContainText('Сегодня на смене · 18:00-23:00')
+  await expect(wrongProfile).toContainText('Не на смене сегодня · 19:00-01:00')
+
+  await primaryProfile.getByRole('button', { name: 'Редактировать', exact: true }).click()
+  await expect(primaryProfile.getByLabel('Привязать к сотруднику')).toHaveValue('222222222')
+  await primaryProfile.getByRole('button', { name: 'Отмена', exact: true }).click()
+
+  await wrongProfile.getByRole('button', { name: 'Редактировать', exact: true }).click()
+  const wrongProfileLink = wrongProfile.getByLabel('Привязать к сотруднику')
+  await expect(wrongProfileLink).toHaveValue('222222222')
+  await wrongProfileLink.selectOption('')
+  const repairRefreshPromise = waitForVenueStaffGetResponses(page, 1)
+  await wrongProfile.getByRole('button', { name: 'Сохранить', exact: true }).click()
+  const repairedResponses = await repairRefreshPromise
+
+  await expect.poll(() => profileMutations).toHaveLength(1)
+  expect(profileMutations[0]).toMatchObject({
+    method: 'PATCH',
+    path: '/api/venue/1/staff/profiles/506',
+    body: { unlinkUser: true }
+  })
+  expect(profileMutations[0].body).not.toHaveProperty('linkedUserId')
+  await expect.poll(() => api.getProfileUpdateRequests()).toHaveLength(1)
+  expect(api.getProfileUpdateRequests()[0]).toMatchObject({ unlinkUser: true })
+  expect(api.getProfileUpdateRequests()[0]).not.toHaveProperty('linkedUserId')
+
+  expect(repairedResponses.directory.members.find((member) => member.userId === 222222222)).toMatchObject({
+    profileLinkState: 'LINKED',
+    linkedStaffProfileId: 502,
+    linkedStaffProfileDisplayName: 'Светлана'
+  })
+  const repairedPrimary = repairedResponses.profiles.profiles.find((profile) => profile.id === 502)
+  const repairedWrongCard = repairedResponses.profiles.profiles.find((profile) => profile.id === 506)
+  expect(repairedPrimary).toMatchObject({
+    linkedUserId: 222222222,
+    linkageClass: 'STAFF_LINKED',
+    disabledAt: null,
+    createdAt: '2030-01-01T18:00:00Z'
+  })
+  expect(repairedWrongCard).toMatchObject({
+    linkedUserId: null,
+    linkageClass: 'DISPLAY_ONLY',
+    disabledAt: null,
+    createdAt: '2030-01-02T18:00:00Z'
+  })
+  expect(repairedPrimary?.todayShift).toEqual(primaryShift)
+  expect(repairedWrongCard?.todayShift).toEqual(wrongCardShift)
+  expect(
+    repairedResponses.profiles.profiles
+      .filter((profile) => profile.id === 502 || profile.id === 506)
+      .map((profile) => profile.id)
+      .sort((left, right) => left - right)
+  ).toEqual([502, 506])
+
+  const reloadedResponsesPromise = waitForVenueStaffGetResponses(page, 1)
+  await page.reload()
+  await page.getByRole('button', { name: 'Персонал', exact: true }).click()
+  const reloadedResponses = await reloadedResponsesPromise
+  expect(reloadedResponses.directory.members.find((member) => member.userId === 222222222)).toMatchObject({
+    profileLinkState: 'LINKED',
+    linkedStaffProfileId: 502,
+    linkedStaffProfileDisplayName: 'Светлана'
+  })
+  const reloadedPrimary = reloadedResponses.profiles.profiles.find((profile) => profile.id === 502)
+  const reloadedWrongCard = reloadedResponses.profiles.profiles.find((profile) => profile.id === 506)
+  expect(reloadedPrimary?.todayShift).toEqual(primaryShift)
+  expect(reloadedWrongCard?.todayShift).toEqual(wrongCardShift)
+  expect(reloadedPrimary).toMatchObject({ linkageClass: 'STAFF_LINKED', disabledAt: null })
+  expect(reloadedWrongCard).toMatchObject({ linkageClass: 'DISPLAY_ONLY', disabledAt: null })
+  await expect(primaryProfile).toBeVisible()
+  await expect(wrongProfile).toBeVisible()
+  await expect(primaryProfile).toContainText('Сегодня на смене · 18:00-23:00')
+  await expect(wrongProfile).toContainText('Не на смене сегодня · 19:00-01:00')
+  expect(profileMutations).toHaveLength(1)
+})
+
+test('concurrent profile link conflict opens the winning safe profile without a duplicate', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueStaffChatApi(page, { role: 'MANAGER', linked: true })
+  api.queueProfileLinkConflict({
+    profileLinkState: 'LINKED',
+    linkedStaffProfileId: 706,
+    winningProfile: {
+      id: 706,
+      linkedUserId: 444444444,
+      displayName: 'Максим Катаев',
+      roleLabel: null,
+      subtype: 'waiter',
+      photoRef: null,
+      bio: null,
+      tags: [],
+      isGuestVisible: false,
+      publishedAt: null,
+      disabledAt: null,
+      createdAt: '2030-01-10T18:05:00Z',
+      updatedAt: '2030-01-10T18:05:00Z',
+      todayShift: null
+    }
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Персонал', exact: true }).click()
+
+  const accessCard = page.locator('.venue-staff > .card').first()
+  let maximMember = accessCard.locator('.venue-staff-row').filter({ hasText: 'Максим Катаев' })
+  await maximMember.getByRole('button', { name: 'Создать карточку' }).click()
+  const createForm = page.locator('.venue-public-staff .venue-profile-form')
+  await createForm.getByLabel('Тип сотрудника').selectOption('waiter')
+  await createForm.getByRole('button', { name: 'Создать карточку' }).click()
+
+  await expect.poll(() => api.getProfileCreateFromMemberRequests()).toHaveLength(1)
+  expect(api.getProfileCreateRequests()).toHaveLength(0)
+  await expect(createForm).toBeHidden()
+  maximMember = accessCard.locator('.venue-staff-row').filter({ hasText: 'Максим Катаев' })
+  await expect(maximMember).toContainText('Привязан к карточке «Максим Катаев»')
+  await expect(maximMember.getByRole('button', { name: 'Открыть карточку' })).toBeVisible()
+  const winningProfile = page.locator('.venue-profile-row[data-staff-profile-id="706"]')
+  await expect(winningProfile).toBeFocused()
+  await expect(winningProfile.getByLabel('Имя на карточке')).toHaveValue('Максим Катаев')
+  await expect(page.locator('.venue-profile-row').filter({ hasText: 'Максим Катаев' })).toHaveCount(1)
+})
+
+test('venue switch clears staff invite and profile drafts', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockVenueStaffChatApi(page, { role: 'MANAGER', linked: true })
+  const permissions = [
+    'STAFF_INVITE_CREATE_STAFF',
+    'STAFF_INVITE_REVOKE_STAFF',
+    'STAFF_PROFILE_MANAGE_STAFF',
+    'STAFF_PROFILE_PUBLISH_STAFF',
+    'STAFF_PROFILE_EDIT_OWN',
+    'STAFF_SCHEDULE_MANAGE'
+  ]
+  await page.route('**/api/venue/me', async (route) => {
+    await route.fulfill(
+      jsonResponse({
+        userId: 123456789,
+        venues: [
+          {
+            venueId: 1,
+            venueName: 'Микс',
+            venueCity: 'Москва',
+            venueStatus: 'PUBLISHED',
+            role: 'MANAGER',
+            permissions
+          },
+          {
+            venueId: 2,
+            venueName: 'Дым',
+            venueCity: 'Казань',
+            venueStatus: 'PUBLISHED',
+            role: 'MANAGER',
+            permissions
+          }
+        ]
+      })
+    )
+  })
+  await page.route('**/api/venue/2/staff', async (route) => {
+    await route.fulfill(
+      jsonResponse({
+        members: [
+          {
+            userId: 266666666,
+            displayName: 'Мария Вторая',
+            username: null,
+            role: 'STAFF',
+            active: true,
+            linkedStaffProfileId: null,
+            linkedStaffProfileDisplayName: null,
+            profileLinkState: 'NOT_LINKED'
+          }
+        ]
+      })
+    )
+  })
+  await page.route('**/api/venue/2/staff/profiles**', async (route) => {
+    await route.fulfill(jsonResponse({ profiles: [] }))
+  })
+  await page.route('**/api/venue/2/staff/invites**', async (route) => {
+    await route.fulfill(jsonResponse({ invites: [] }))
+  })
+
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await page.getByRole('button', { name: 'Персонал', exact: true }).click()
   let staff = page.locator('.venue-staff')
@@ -9173,6 +10042,7 @@ test('venue switch clears staff invite and profile drafts', async ({ page }) => 
   await expect(staff.locator('.venue-invite-result')).toBeVisible()
   await staff.getByRole('button', { name: 'Добавить карточку сотрудника' }).click()
   await expect(staff.locator('.venue-profile-form')).toBeVisible()
+  await expect(staff).toContainText('Максим Катаев')
 
   await page.locator('.venue-controls select.venue-select').selectOption('2')
   staff = page.locator('.venue-staff')
@@ -9180,6 +10050,49 @@ test('venue switch clears staff invite and profile drafts', async ({ page }) => 
   await expect(staff.locator('.venue-invite-result')).toBeHidden()
   await expect(staff.locator('.venue-profile-form')).toBeHidden()
   await expect(staff.locator('.venue-pending-invite-list')).toContainText('Ожидающих приглашений нет.')
+  await expect(staff).toContainText('Мария Вторая')
+  await expect(staff).toContainText('Без username · ID …6666')
+  await expect(staff).not.toContainText('Максим Катаев')
+  await expect(staff).not.toContainText('266666666')
+})
+
+test('account switch does not reuse prior venue member identities', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueStaffChatApi(page, { role: 'MANAGER', linked: true })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Персонал', exact: true }).click()
+  let accessCard = page.locator('.venue-staff > .card').first()
+  await expect(accessCard).toContainText('Максим Катаев')
+
+  api.setAccountStaffState(
+    987654321,
+    [
+      {
+        userId: 888888888,
+        displayName: 'Екатерина Новая',
+        username: 'new_account_staff',
+        role: 'STAFF',
+        active: true,
+        linkedStaffProfileId: null,
+        linkedStaffProfileDisplayName: null,
+        profileLinkState: 'NOT_LINKED'
+      }
+    ]
+  )
+  await page.evaluate(({ userId, initData }) => {
+    window.localStorage.setItem('__e2e_telegram_user_id', String(userId))
+    window.localStorage.setItem('__e2e_telegram_init_data', initData)
+  }, { userId: 987654321, initData: otherMockInitData })
+  await page.goto(`?mode=venue&smokeUser=other#tgWebAppData=${encodeURIComponent(otherMockInitData)}`)
+  await page.getByRole('button', { name: 'Персонал', exact: true }).click()
+
+  accessCard = page.locator('.venue-staff > .card').first()
+  await expect(accessCard).toContainText('Екатерина Новая')
+  await expect(accessCard).toContainText('@new_account_staff')
+  await expect(accessCard).not.toContainText('Максим Катаев')
+  await expect(accessCard).not.toContainText('Светлана Орлова')
+  await expect(accessCard).not.toContainText('888888888')
 })
 
 test('venue owner staff cards use human profile labels and hide raw technical fields', async ({ page }) => {
@@ -9212,12 +10125,11 @@ test('venue owner staff cards use human profile labels and hide raw technical fi
   await staffCards.getByRole('button', { name: 'Добавить карточку сотрудника' }).click()
   await expect(createForm.getByLabel('Имя на карточке')).toBeVisible()
   await expect(createForm.getByLabel('Тип сотрудника')).toBeVisible()
-  await expect(createForm.getByLabel('Привязать к сотруднику')).toBeVisible()
+  await expect(createForm.getByLabel('Привязать к сотруднику')).toBeHidden()
   await expect(createForm.getByLabel('Коротко о сотруднике')).toBeVisible()
   await expect(createForm.getByLabel('Специализация')).toBeVisible()
-  await expect(createForm.getByRole('option', { name: /#123456789/ })).toHaveCount(1)
+  await expect(createForm).not.toContainText('123456789')
   await expect(createForm).toContainText('Так это имя увидят гости.')
-  await expect(createForm).toContainText('Гостям эта связь не показывается.')
   await expect(createForm).toContainText('Можно указать через запятую.')
   await expect(createForm).toContainText('Фото сотрудника — позже')
   await expect(createForm.getByPlaceholder('User ID')).toHaveCount(0)
@@ -9232,7 +10144,6 @@ test('venue owner staff cards use human profile labels and hide raw technical fi
     'Например: Бармен, Старший смены, Мастер миксов'
   )
   await expect(createForm).toContainText('Так роль будет показана гостям.')
-  await createForm.getByLabel('Привязать к сотруднику').selectOption('123456789')
   await createForm.getByLabel('Коротко о сотруднике').fill('Люблю крепкие миксы.')
   await createForm.getByLabel('Специализация').fill('крепкие миксы, авторские вкусы')
   await createForm.getByRole('button', { name: 'Создать профиль' }).click()
@@ -9251,10 +10162,11 @@ test('venue owner staff cards use human profile labels and hide raw technical fi
     displayName: 'Максим',
     roleLabel: 'Мастер миксов',
     subtype: 'other',
-    linkedUserId: 123456789,
     bio: 'Люблю крепкие миксы.',
     tags: ['крепкие миксы', 'авторские вкусы']
   })
+  expect(createRequest).not.toHaveProperty('linkedUserId')
+  expect(createRequest).not.toHaveProperty('isGuestVisible')
   expect(createRequest).not.toHaveProperty('photoRef')
 
   const profileRow = staffCards.locator('.venue-profile-row').filter({ hasText: 'Максим' })

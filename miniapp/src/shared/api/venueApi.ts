@@ -79,6 +79,7 @@ import type {
   VenueStaffInviteResponse,
   VenueStaffListResponse,
   VenueStaffPendingInvitesResponse,
+  VenueStaffProfileCreateFromMemberRequest,
   VenueStaffProfileCreateRequest,
   VenueStaffProfileDto,
   VenueStaffProfilesResponse,
@@ -1291,6 +1292,25 @@ export async function venueCreateStaffProfile(
   return requestApi<VenueStaffProfileDto>(
     backendUrl,
     `/api/venue/${params.venueId}/staff/profiles`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params.body),
+      signal
+    },
+    deps
+  )
+}
+
+export async function venueCreateStaffProfileFromMember(
+  backendUrl: string,
+  params: { venueId: number; body: VenueStaffProfileCreateFromMemberRequest },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenueStaffProfileDto>(
+    backendUrl,
+    `/api/venue/${params.venueId}/staff/profiles/from-member`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

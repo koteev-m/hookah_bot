@@ -147,6 +147,16 @@ class MenuShiftCheckStaleException :
         message = "Меню изменилось. Обновите проверку и повторите подтверждение.",
     )
 
+class StaffProfileLinkConflictException(
+    message: String,
+    details: JsonObject,
+) : ApiException(
+        code = ApiErrorCodes.STAFF_PROFILE_LINK_CONFLICT,
+        httpStatus = HttpStatusCode.Conflict,
+        message = message,
+        details = details,
+    )
+
 class StaffShiftDateConflictException(
     message: String = "У сотрудника уже есть смена на эту дату.",
     details: JsonObject? = null,
