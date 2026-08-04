@@ -35,6 +35,7 @@ export type VenueStaffScheduleOptions = {
   isDebug: boolean
   venueId: number
   access: VenueAccessDto
+  onOpenStaffModuleSettings?: () => void
 }
 
 type AdminFormRefs = {
@@ -513,8 +514,30 @@ function sameDraft(shift: VenueStaffScheduleAdminShiftDto, draft: ShiftDraft): b
 }
 
 export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOptions) {
-  const { root, backendUrl, isDebug, venueId, access } = options
+  const { root, backendUrl, isDebug, venueId, access, onOpenStaffModuleSettings } = options
   if (!root) return () => undefined
+
+  if (access.teamScheduleModuleEnabled === false) {
+    const card = el('section', { className: 'card venue-module-disabled' })
+    append(
+      card,
+      el('h2', { text: access.role === 'STAFF' ? 'Мои смены' : 'График смен' }),
+      el('p', {
+        className: 'venue-order-sub',
+        text: 'Карточки команды и график смен отключены. Сохранённые смены не удалены и снова появятся после включения модуля.'
+      })
+    )
+    if (access.permissions.includes('STAFF_MODULE_SETTINGS_MANAGE') && onOpenStaffModuleSettings) {
+      const enableButton = el('button', {
+        className: 'button-small button-secondary',
+        text: 'Включить в настройках'
+      }) as HTMLButtonElement
+      enableButton.addEventListener('click', onOpenStaffModuleSettings)
+      card.appendChild(enableButton)
+    }
+    root.replaceChildren(card)
+    return () => root.replaceChildren()
+  }
 
   const canManage = access.permissions.includes('STAFF_SCHEDULE_MANAGE')
   const canViewAll = access.permissions.includes('STAFF_SCHEDULE_VIEW')

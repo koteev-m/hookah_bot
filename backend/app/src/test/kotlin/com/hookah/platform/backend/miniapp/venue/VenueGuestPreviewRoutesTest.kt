@@ -2,6 +2,7 @@ package com.hookah.platform.backend.miniapp.venue
 
 import com.hookah.platform.backend.ModuleOverrides
 import com.hookah.platform.backend.api.ApiErrorCodes
+import com.hookah.platform.backend.miniapp.guest.api.GuestTodayStaffResponse
 import com.hookah.platform.backend.miniapp.guest.api.VenueInfoSectionsResponse
 import com.hookah.platform.backend.miniapp.guest.api.VenueResponse
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
@@ -26,9 +27,11 @@ import java.sql.DriverManager
 import java.sql.Statement
 import java.sql.Time
 import java.sql.Timestamp
+import java.time.Clock
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
+import java.time.ZoneOffset
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -114,6 +117,122 @@ class VenueGuestPreviewRoutesTest {
             assertEquals(VenueGuestPreviewMode.PUBLISHED_PUBLIC, managerPreview.mode)
             assertEquals(guestVenue.venue, managerPreview.venue)
             assertEquals(guestSections.sections, managerPreview.infoSections)
+        }
+
+    @Test
+    fun `staff module settings keep Guest Today and both Preview modes on one saved projection`() =
+        testApplication {
+            val now = Instant.parse("2026-08-04T14:00:00Z")
+            val today = LocalDate.of(2026, 8, 4)
+            val jdbcUrl = buildJdbcUrl("venue-guest-preview-staff-module")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application {
+                moduleWithOverrides(ModuleOverrides(staffScheduleClock = Clock.fixed(now, ZoneOffset.UTC)))
+            }
+            client.get("/health")
+
+            val fixture = seedPublishedPreview(jdbcUrl, today = today)
+            val token = issueToken(config, ACTOR_USER_ID)
+
+            suspend fun publicSurfaceNames(): List<List<String>> {
+                val venueResponse = client.getAuthenticated("/api/guest/venue/${fixture.venueId}", token)
+                val todayResponse =
+                    client.getAuthenticated("/api/guest/venue/${fixture.venueId}/today-staff", token)
+                val previewResponse = client.getAuthenticated(previewPath(fixture.venueId), token)
+                assertEquals(HttpStatusCode.OK, venueResponse.status)
+                assertEquals(HttpStatusCode.OK, todayResponse.status)
+                assertEquals(HttpStatusCode.OK, previewResponse.status)
+                val venue = json.decodeFromString(VenueResponse.serializer(), venueResponse.bodyAsText())
+                val standalone =
+                    json.decodeFromString(GuestTodayStaffResponse.serializer(), todayResponse.bodyAsText())
+                val preview =
+                    json.decodeFromString(VenueGuestPreviewResponse.serializer(), previewResponse.bodyAsText())
+                assertEquals(VenueGuestPreviewMode.PUBLISHED_PUBLIC, preview.mode)
+                assertPublicOnly(venueResponse.bodyAsText())
+                assertPublicOnly(todayResponse.bodyAsText())
+                assertPublicOnly(previewResponse.bodyAsText())
+                return listOf(
+                    venue.venue.todayStaff.map { it.displayName },
+                    standalone.staff.map { it.displayName },
+                    preview.venue.todayStaff.map { it.displayName },
+                )
+            }
+
+            assertEquals(List(3) { listOf(PUBLIC_STAFF_NAME) }, publicSurfaceNames())
+
+            updateStaffModuleSettings(
+                jdbcUrl = jdbcUrl,
+                venueId = fixture.venueId,
+                moduleEnabled = true,
+                guestVisible = true,
+                source = "SCHEDULE",
+            )
+            assertEquals(List(3) { listOf(PUBLIC_STAFF_NAME) }, publicSurfaceNames())
+            val scheduledStandalone =
+                client.getAuthenticated("/api/guest/venue/${fixture.venueId}/today-staff", token).let { response ->
+                    json.decodeFromString(GuestTodayStaffResponse.serializer(), response.bodyAsText())
+                }
+            assertNull(scheduledStandalone.staff.single().startsAt)
+            assertNull(scheduledStandalone.staff.single().endsAt)
+
+            updateStaffModuleSettings(
+                jdbcUrl = jdbcUrl,
+                venueId = fixture.venueId,
+                moduleEnabled = true,
+                guestVisible = false,
+                source = "SCHEDULE",
+            )
+            assertEquals(List(3) { emptyList() }, publicSurfaceNames())
+
+            updateStaffModuleSettings(
+                jdbcUrl = jdbcUrl,
+                venueId = fixture.venueId,
+                moduleEnabled = false,
+                guestVisible = true,
+                source = "MANUAL",
+            )
+            assertEquals(List(3) { emptyList() }, publicSurfaceNames())
+
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                connection.prepareStatement("UPDATE venues SET status = 'DRAFT' WHERE id = ?").use { statement ->
+                    statement.setLong(1, fixture.venueId)
+                    statement.executeUpdate()
+                }
+            }
+            updateStaffModuleSettings(
+                jdbcUrl = jdbcUrl,
+                venueId = fixture.venueId,
+                moduleEnabled = true,
+                guestVisible = true,
+                source = "MANUAL",
+            )
+            val privatePreviewResponse = client.getAuthenticated(previewPath(fixture.venueId), token)
+            assertEquals(HttpStatusCode.OK, privatePreviewResponse.status)
+            val privatePreview =
+                json.decodeFromString(
+                    VenueGuestPreviewResponse.serializer(),
+                    privatePreviewResponse.bodyAsText(),
+                )
+            assertEquals(VenueGuestPreviewMode.PRIVATE_DRAFT, privatePreview.mode)
+            assertEquals(listOf(PUBLIC_STAFF_NAME), privatePreview.venue.todayStaff.map { it.displayName })
+            assertPublicOnly(privatePreviewResponse.bodyAsText())
+
+            updateStaffModuleSettings(
+                jdbcUrl = jdbcUrl,
+                venueId = fixture.venueId,
+                moduleEnabled = true,
+                guestVisible = false,
+                source = "MANUAL",
+            )
+            val hiddenPrivatePreview =
+                client.getAuthenticated(previewPath(fixture.venueId), token).let { response ->
+                    assertEquals(HttpStatusCode.OK, response.status)
+                    json.decodeFromString(VenueGuestPreviewResponse.serializer(), response.bodyAsText())
+                }
+            assertEquals(VenueGuestPreviewMode.PRIVATE_DRAFT, hiddenPrivatePreview.mode)
+            assertTrue(hiddenPrivatePreview.venue.todayStaff.isEmpty())
         }
 
     @Test
@@ -342,6 +461,7 @@ class VenueGuestPreviewRoutesTest {
     private fun seedPublishedPreview(
         jdbcUrl: String,
         status: VenueStatus = VenueStatus.PUBLISHED,
+        today: LocalDate = LocalDate.now(ZoneId.of("UTC")),
     ): PublishedPreviewFixture =
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             seedUser(connection, ACTOR_USER_ID)
@@ -366,7 +486,6 @@ class VenueGuestPreviewRoutesTest {
                     isClosed = weekday == 7,
                 )
             }
-            val today = LocalDate.now(ZoneId.of("UTC"))
             val exceptionDates = listOf(today.plusDays(3), today.plusDays(10))
             insertDateException(
                 connection = connection,
@@ -799,6 +918,32 @@ class VenueGuestPreviewRoutesTest {
                 statement.setString(1, role)
                 statement.setLong(2, venueId)
                 statement.setLong(3, userId)
+                statement.executeUpdate()
+            }
+        }
+    }
+
+    private fun updateStaffModuleSettings(
+        jdbcUrl: String,
+        venueId: Long,
+        moduleEnabled: Boolean,
+        guestVisible: Boolean,
+        source: String,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                UPDATE venue_settings
+                SET team_schedule_module_enabled = ?,
+                    guest_team_visible = ?,
+                    today_staff_source = ?
+                WHERE venue_id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setBoolean(1, moduleEnabled)
+                statement.setBoolean(2, guestVisible)
+                statement.setString(3, source)
+                statement.setLong(4, venueId)
                 statement.executeUpdate()
             }
         }

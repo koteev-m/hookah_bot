@@ -43,6 +43,7 @@ import com.hookah.platform.backend.miniapp.guest.BookingExpiryWorkerConfig
 import com.hookah.platform.backend.miniapp.guest.BookingReminderWorker
 import com.hookah.platform.backend.miniapp.guest.BookingReminderWorkerConfig
 import com.hookah.platform.backend.miniapp.guest.GuestRateLimitConfig
+import com.hookah.platform.backend.miniapp.guest.GuestTodayStaffResolver
 import com.hookah.platform.backend.miniapp.guest.GuestVenueReadService
 import com.hookah.platform.backend.miniapp.guest.InMemoryRateLimiter
 import com.hookah.platform.backend.miniapp.guest.RepeatOrderResolver
@@ -83,6 +84,8 @@ import com.hookah.platform.backend.miniapp.venue.orders.venueOrderRoutes
 import com.hookah.platform.backend.miniapp.venue.promotions.venuePromotionRoutes
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteConfig
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteRepository
+import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffModuleGuard
+import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffModuleSettingsRepository
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffProfileRepository
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffRepository
 import com.hookah.platform.backend.miniapp.venue.stats.venueStatsRoutes
@@ -92,6 +95,7 @@ import com.hookah.platform.backend.miniapp.venue.venueBillingRoutes
 import com.hookah.platform.backend.miniapp.venue.venueGuestPreviewRoutes
 import com.hookah.platform.backend.miniapp.venue.venueRoutes
 import com.hookah.platform.backend.miniapp.venue.venueStaffCallRoutes
+import com.hookah.platform.backend.miniapp.venue.venueStaffModuleSettingsRoutes
 import com.hookah.platform.backend.miniapp.venue.venueStaffRoutes
 import com.hookah.platform.backend.miniapp.venue.venueStaffScheduleRoutes
 import com.hookah.platform.backend.platform.PlatformConfig
@@ -562,17 +566,24 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
     val telegramVenueContextRepository = TelegramVenueContextRepository(dataSource)
     val venueStaffRepository = VenueStaffRepository(dataSource)
     val venueStaffProfileRepository = VenueStaffProfileRepository(dataSource, json)
+    val staffOperationsClock = overrides.staffScheduleClock ?: Clock.systemUTC()
+    val venueStaffModuleSettingsRepository =
+        VenueStaffModuleSettingsRepository(dataSource, staffOperationsClock)
+    val venueStaffModuleGuard = VenueStaffModuleGuard(venueStaffModuleSettingsRepository)
+    val guestTodayStaffResolver = GuestTodayStaffResolver(venueStaffProfileRepository)
     val guestVenueReadService =
         GuestVenueReadService(
             guestVenueRepository = guestVenueRepository,
             guestFavoritesRepository = guestFavoritesRepository,
-            venueStaffProfileRepository = venueStaffProfileRepository,
             venueInfoSectionsRepository = venueInfoSectionsRepository,
             venueInfoSectionMediaRepository = venueInfoSectionMediaRepository,
             subscriptionRepository = subscriptionRepository,
             venueBookingHoursRepository = venueBookingHoursRepository,
             venueSettingsRepository = venueSettingsRepository,
             venuePromotionRepository = venuePromotionRepository,
+            venueStaffModuleSettingsRepository = venueStaffModuleSettingsRepository,
+            guestTodayStaffResolver = guestTodayStaffResolver,
+            clock = staffOperationsClock,
         )
     val bookingReminderWorker =
         BookingReminderWorker(
@@ -1201,6 +1212,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     venueRepository = venueRepository,
                     venueBookingHoursRepository = venueBookingHoursRepository,
                     venueSettingsRepository = venueSettingsRepository,
+                    venueStaffModuleSettingsRepository = venueStaffModuleSettingsRepository,
                     venueLocationProvider = venueLocationProvider,
                     staffChatNotifier = guestStaffChatNotifier,
                     telegramBotUsername = telegramConfig.botUsername,
@@ -1208,6 +1220,11 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                 venueBillingRoutes(
                     venueAccessRepository = venueAccessRepository,
                     billingOverviewService = billingOverviewService,
+                    auditLogRepository = auditLogRepository,
+                )
+                venueStaffModuleSettingsRoutes(
+                    venueAccessRepository = venueAccessRepository,
+                    settingsRepository = venueStaffModuleSettingsRepository,
                     auditLogRepository = auditLogRepository,
                 )
                 venueStaffRoutes(
@@ -1219,6 +1236,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     venueSettingsRepository = venueSettingsRepository,
                     venueOwnerAccountRepository = venueOwnerAccountRepository,
                     auditLogRepository = auditLogRepository,
+                    staffModuleGuard = venueStaffModuleGuard,
                     telegramBotUsername = telegramConfig.botUsername,
                 )
                 venueStaffScheduleRoutes(
@@ -1227,7 +1245,8 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     venueBookingHoursRepository = venueBookingHoursRepository,
                     venueSettingsRepository = venueSettingsRepository,
                     auditLogRepository = auditLogRepository,
-                    clock = overrides.staffScheduleClock ?: Clock.systemUTC(),
+                    staffModuleGuard = venueStaffModuleGuard,
+                    clock = staffOperationsClock,
                 )
                 venueStaffCallRoutes(
                     venueAccessRepository = venueAccessRepository,

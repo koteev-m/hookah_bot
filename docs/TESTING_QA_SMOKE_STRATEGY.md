@@ -44,6 +44,10 @@ Current practice:
   remains **NO_MIGRATION_EXPECTED**; Identity Linking used the existing transaction-bound member
   lock; invite revoke uses PostgreSQL V120/H2 V121. Green Actions, deploy and manual staging smoke
   are complete.
+- Staff Operations Slice B is
+  `STAFF OPERATIONS SLICE B / OPTIONAL TEAM AND SCHEDULE MODULE / GUEST MANUAL OR SCHEDULE SOURCE / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`. This
+  records local implementation and validation only; final full e2e recheck, independent review,
+  GitHub Actions, staging deploy and bounded manual smoke remain open.
 
 Target QA model:
 - Every task ends with changed files, behavior summary, tests run, validation result, manual smoke checklist, `git status --short`, whether `scripts/dev/` was touched and whether staging deploy is needed.
@@ -75,19 +79,33 @@ The complete acceptance matrix remains canonical in `docs/STAFF_PROFILES_SHIFTS_
 PostgreSQL V120/H2 V121 belongs to Slice A invite revoke, not Restore + Bulk Assignment; its rollout
 is included in the completed release evidence.
 
-### Staff Operations Slice B Future Release Gate
+### Staff Operations Slice B Local Validation Gate
 
-The next Staff runtime block is exactly `OPTIONAL TEAM AND SCHEDULE MODULE / GUEST MANUAL OR
-SCHEDULE SOURCE`; current read-only verdict is `IMPLEMENT_STAFF_OPERATIONS_SLICE_B_NOW`. This is a
-future gate and no Slice B runtime test or smoke is claimed by the current docs-only sync.
+Status:
+`STAFF OPERATIONS SLICE B / OPTIONAL TEAM AND SCHEDULE MODULE / GUEST MANUAL OR SCHEDULE SOURCE / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`.
 
-Before Slice B can be marked done, automated coverage must prove PostgreSQL/H2 defaults and source
-check, full-object monotonic CAS, narrow Owner/Manager permission, Staff/foreign/Platform denial,
-tenant-before-state guards, transaction-bound settings audit, data-retaining disable/re-enable,
-unchanged core access, MANUAL exact-date publication, SCHEDULE ACTIVE `[start,end)`
-timezone/overnight/DST boundaries with no fallback, Guest/Preview privacy/parity and venue/account
-switch isolation. Then run focused checks, compile/lint, Mini App build/e2e, wait for green Actions,
-deploy staging and complete the bounded manual smoke from the canonical staff plan.
+The additive settings migrations, runtime repository/API/CAS/audit, narrow RBAC, fail-closed module
+guards, shared MANUAL/SCHEDULE Guest resolver and bounded Mini App UX are implemented. Local
+targeted evidence covers PostgreSQL/H2 defaults and source check, monotonic full-object CAS,
+Owner/Manager settings routes, Staff/foreign/Guest/Platform denial, tenant-before-state behavior,
+transaction-bound audit and rollback, retained-data disable/re-enable, unchanged core access,
+MANUAL exact-date publication, SCHEDULE ACTIVE `[start,end)` timezone/overnight/DST behavior with
+no fallback, Guest/Preview privacy/parity and venue-switch isolation.
+
+Recorded local validation:
+
+- targeted `*VenueStaffModuleSettings*`, `*VenueStaffRoutesTest*`, `*VenueRbacRoutesTest*`,
+  `*GuestVenueRoutesTest*` and `*VenueGuestPreviewRoutesTest*` selectors passed;
+- `:backend:app:compileKotlin` and `:backend:app:ktlintCheck` passed;
+- `npm --prefix miniapp run build` passed;
+- the real PostgreSQL migration smoke executed V120→V121 with `skipped=0` and `failures=0`;
+- focused Slice B browser checks and the exact full Mini App e2e smoke passed (`131/131`);
+- independent read-only review found no remaining P0/P1 findings.
+
+This status does not claim green GitHub Actions, staging deploy or manual staging/Telegram smoke.
+Those release gates remain required before release; PostgreSQL V121/H2 V122 must be rolled out
+before enabling the settings mutation UI, as defined in the canonical staff plan and deployment
+runbook.
 
 Locally validated backend coverage:
 
@@ -1088,8 +1106,10 @@ Telegram/staff-chat:
 - Staff Schedule Phase 1:
   `STAFF SCHEDULE PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`; Canceled Shift Restore + Bulk
   Assignment and Identity Linking are also `DONE / MVP / STAGING-SMOKE-PASSED`; the Phase 1
-  schedule/identity schema verdict remains `NO_MIGRATION_EXPECTED`. Optional module/source settings
-  remain separate Slice B `FUTURE` work.
+  schedule/identity schema verdict remains `NO_MIGRATION_EXPECTED`.
+- Staff Operations Slice B:
+  `STAFF OPERATIONS SLICE B / OPTIONAL TEAM AND SCHEDULE MODULE / GUEST MANUAL OR SCHEDULE SOURCE / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`; independent review,
+  final full e2e recheck, Actions, staging deploy and manual smoke remain open.
 - Manual smoke checklist: `CONSOLIDATED`.
 - CI coverage: `PARTIAL / release-critical split jobs current`.
 - Frontend e2e: `PARTIAL`, with smoke coverage documented.

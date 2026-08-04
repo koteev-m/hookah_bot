@@ -1,6 +1,7 @@
 package com.hookah.platform.backend.miniapp.venue.staff
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.NotFoundException
 import com.hookah.platform.backend.api.StaffShiftCanceledConflictException
@@ -11,6 +12,8 @@ import com.hookah.platform.backend.api.StaffShiftInvalidIntervalException
 import com.hookah.platform.backend.api.StaffShiftStaleException
 import com.hookah.platform.backend.api.StaffShiftTodayOverrideException
 import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
+import com.hookah.platform.backend.miniapp.venue.VenuePermission
+import com.hookah.platform.backend.miniapp.venue.VenuePermissions
 import com.hookah.platform.backend.miniapp.venue.VenueRole
 import com.hookah.platform.backend.miniapp.venue.VenueRoleMapping
 import kotlinx.coroutines.Dispatchers
@@ -206,9 +209,11 @@ class VenueStaffProfileRepository(
         auditLogRepository: AuditLogRepository,
     ): StaffProfileMutationResult =
         inTransaction { connection ->
+            lockVenueForStaffModuleGuard(connection, venueId)
             if (!actorRoleStillApplies(connection, venueId, actorUserId, actorRole)) {
                 return@inTransaction StaffProfileMutationResult.Forbidden
             }
+            requireStaffModuleEnabledAfterVenueLock(connection, venueId)
             if (input.linkedUserId != null) {
                 return@inTransaction StaffProfileMutationResult.InvalidLink
             }
@@ -239,9 +244,11 @@ class VenueStaffProfileRepository(
         auditLogRepository: AuditLogRepository,
     ): StaffProfileMutationResult =
         inTransaction { connection ->
+            lockVenueForStaffModuleGuard(connection, venueId)
             if (!actorRoleStillApplies(connection, venueId, actorUserId, actorRole)) {
                 return@inTransaction StaffProfileMutationResult.Forbidden
             }
+            requireStaffModuleEnabledAfterVenueLock(connection, venueId)
             guardActiveLink(
                 connection = connection,
                 venueId = venueId,
@@ -294,9 +301,11 @@ class VenueStaffProfileRepository(
         buildInput: (VenueStaffProfile) -> StaffProfileWrite,
     ): StaffProfileMutationResult =
         inTransaction { connection ->
+            lockVenueForStaffModuleGuard(connection, venueId)
             if (!actorRoleStillApplies(connection, venueId, actorUserId, actorRole)) {
                 return@inTransaction StaffProfileMutationResult.Forbidden
             }
+            requireStaffModuleEnabledAfterVenueLock(connection, venueId)
             val current =
                 findProfileInConnection(connection, venueId, profileId, forUpdate = true)
                     ?: return@inTransaction StaffProfileMutationResult.NotFound
@@ -445,9 +454,11 @@ class VenueStaffProfileRepository(
         auditLogRepository: AuditLogRepository,
     ): StaffProfileMutationResult =
         inTransaction { connection ->
+            lockVenueForStaffModuleGuard(connection, venueId)
             if (!actorRoleStillApplies(connection, venueId, actorUserId, actorRole)) {
                 return@inTransaction StaffProfileMutationResult.Forbidden
             }
+            requireStaffModuleEnabledAfterVenueLock(connection, venueId)
             val current =
                 findProfileInConnection(connection, venueId, profileId, forUpdate = true)
                     ?: return@inTransaction StaffProfileMutationResult.NotFound
@@ -612,6 +623,17 @@ class VenueStaffProfileRepository(
         actorUserId: Long,
         expectedRole: VenueRole,
     ): Boolean = lockMembershipRole(connection, venueId, actorUserId) == expectedRole
+
+    private fun requireScheduleActorAuthorized(
+        connection: Connection,
+        venueId: Long,
+        actorUserId: Long,
+    ) {
+        val role = lockMembershipRole(connection, venueId, actorUserId)
+        if (role == null || VenuePermission.STAFF_SCHEDULE_MANAGE !in VenuePermissions.forRole(role)) {
+            throw ForbiddenException()
+        }
+    }
 
     private fun profileAccessInConnection(
         connection: Connection,
@@ -978,9 +1000,11 @@ class VenueStaffProfileRepository(
         auditLogRepository: AuditLogRepository,
     ): StaffTodayShiftMutationResult =
         inTransaction { connection ->
+            lockVenueForStaffModuleGuard(connection, venueId)
             if (!actorRoleStillApplies(connection, venueId, actorUserId, actorRole)) {
                 return@inTransaction StaffTodayShiftMutationResult.Forbidden
             }
+            requireManualTodaySourceAfterVenueLock(connection, venueId)
             val profile =
                 findProfileInConnection(connection, venueId, staffProfileId, forUpdate = true)
                     ?: return@inTransaction StaffTodayShiftMutationResult.NotFound
@@ -1073,6 +1097,9 @@ class VenueStaffProfileRepository(
         auditLogRepository: AuditLogRepository,
     ): VenueStaffScheduledShift? =
         inTransaction { connection ->
+            lockVenueForStaffModuleGuard(connection, venueId)
+            requireScheduleActorAuthorized(connection, venueId, actorUserId)
+            requireStaffModuleEnabledAfterVenueLock(connection, venueId)
             val profile =
                 findProfileInConnection(connection, venueId, staffProfileId, forUpdate = true)
                     ?: return@inTransaction null
@@ -1126,6 +1153,9 @@ class VenueStaffProfileRepository(
         auditLogRepository: AuditLogRepository,
     ): VenueStaffScheduledShift? =
         inTransaction { connection ->
+            lockVenueForStaffModuleGuard(connection, venueId)
+            requireScheduleActorAuthorized(connection, venueId, actorUserId)
+            requireStaffModuleEnabledAfterVenueLock(connection, venueId)
             if ((startsAt == null) != (endsAt == null)) {
                 throw InvalidInputException("startsAt и endsAt нужно передать вместе.")
             }
@@ -1183,6 +1213,9 @@ class VenueStaffProfileRepository(
         auditLogRepository: AuditLogRepository,
     ): List<VenueStaffScheduledShift> =
         inTransaction { connection ->
+            lockVenueForStaffModuleGuard(connection, venueId)
+            requireScheduleActorAuthorized(connection, venueId, actorUserId)
+            requireStaffModuleEnabledAfterVenueLock(connection, venueId)
             val orderedAssignments = assignments.sortedWith(staffScheduleBatchAssignmentOrder)
             if (orderedAssignments.map { it.slot }.distinct().size != orderedAssignments.size) {
                 throw InvalidInputException("В batch есть повторяющиеся сотрудник и дата.")
@@ -1314,6 +1347,9 @@ class VenueStaffProfileRepository(
         auditLogRepository: AuditLogRepository,
     ): VenueStaffScheduledShift? =
         inTransaction { connection ->
+            lockVenueForStaffModuleGuard(connection, venueId)
+            requireScheduleActorAuthorized(connection, venueId, actorUserId)
+            requireStaffModuleEnabledAfterVenueLock(connection, venueId)
             val current =
                 findScheduledShiftInConnection(connection, venueId, shiftId, forUpdate = true)
                     ?: return@inTransaction null
@@ -1443,6 +1479,9 @@ class VenueStaffProfileRepository(
         auditLogRepository: AuditLogRepository,
     ): VenueStaffScheduledShift? =
         inTransaction { connection ->
+            lockVenueForStaffModuleGuard(connection, venueId)
+            requireScheduleActorAuthorized(connection, venueId, actorUserId)
+            requireStaffModuleEnabledAfterVenueLock(connection, venueId)
             val current =
                 findScheduledShiftInConnection(connection, venueId, shiftId, forUpdate = true)
                     ?: return@inTransaction null

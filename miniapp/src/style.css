@@ -2028,6 +2028,42 @@ input[type="number"] {
   font-size: 0.85rem;
 }
 
+.venue-staff-module-settings,
+.venue-staff-module-confirmation {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.venue-staff-module-settings h3,
+.venue-staff-module-confirmation h4,
+.venue-staff-module-confirmation p,
+.venue-staff-module-status {
+  margin: 0;
+}
+
+.venue-staff-module-nested {
+  padding: 0.75rem;
+  border: 1px solid #dfe3eb;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.venue-staff-module-nested[data-disabled='true'] {
+  opacity: 0.6;
+}
+
+.venue-staff-source-options {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.venue-staff-module-confirmation {
+  padding: 0.75rem;
+  border: 1px solid #fecaca;
+  border-radius: 10px;
+  background: #fff7ed;
+}
+
 .venue-inline-actions {
   display: flex;
   flex-wrap: wrap;

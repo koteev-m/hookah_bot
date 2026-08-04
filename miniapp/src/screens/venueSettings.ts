@@ -9,13 +9,15 @@ import {
   venueGetPublicReviewUrl,
   venueGetScheduleSettings,
   venueGetShiftExtensionSettings,
+  venueGetStaffModuleSettings,
   venueReplaceScheduleOverrideRange,
   venueUpdateScheduleDay,
   venueUpdateScheduleOverrideRange,
   venueUpdateBookingSettings,
   venueUpdatePublicCardSettings,
   venueUpdatePublicReviewUrl,
-  venueUpdateShiftExtensionSettings
+  venueUpdateShiftExtensionSettings,
+  venueUpdateStaffModuleSettings
 } from '../shared/api/venueApi'
 import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
 import type {
@@ -26,7 +28,9 @@ import type {
   VenuePublicReviewUrlResponse,
   VenueScheduleDayDto,
   VenueScheduleOverrideDto,
-  VenueScheduleSettingsResponse
+  VenueScheduleSettingsResponse,
+  VenueStaffModuleSettingsDto,
+  VenueTodayStaffSource
 } from '../shared/api/venueDtos'
 import { countryName, filterCities, filterCountries, type LocalCityOption } from '../shared/location/localLocationData'
 import { append, el, on } from '../shared/ui/dom'
@@ -40,10 +44,25 @@ export type VenueSettingsOptions = {
   venueId: number
   access: VenueAccessDto
   onOpenPreview?: () => void
+  onStaffModuleSettingsSaved?: (settings: VenueStaffModuleSettingsDto) => void
 }
 
 type VenueSettingsRefs = {
   status: HTMLParagraphElement
+  staffModuleCard: HTMLElement
+  staffModuleForm: HTMLDivElement
+  staffModuleMasterInput: HTMLInputElement
+  staffModuleNested: HTMLDivElement
+  staffModuleGuestVisibleInput: HTMLInputElement
+  staffModuleManualInput: HTMLInputElement
+  staffModuleScheduleInput: HTMLInputElement
+  staffModuleStatus: HTMLParagraphElement
+  staffModuleSaveButton: HTMLButtonElement
+  staffModuleRefreshButton: HTMLButtonElement
+  staffModuleRetryButton: HTMLButtonElement
+  staffModuleConfirmation: HTMLDivElement
+  staffModuleConfirmButton: HTMLButtonElement
+  staffModuleCancelButton: HTMLButtonElement
   publicCard: HTMLElement
   publicName: HTMLParagraphElement
   countryInput: HTMLInputElement
@@ -125,6 +144,12 @@ type PublicCardDraft = {
   cardDescription: string | null
 }
 
+type StaffModuleSettingsDraft = {
+  teamScheduleModuleEnabled: boolean
+  guestTeamVisible: boolean
+  todayStaffSource: VenueTodayStaffSource
+}
+
 function buildApiDeps(isDebug: boolean) {
   return { isDebug, getAccessToken, clearSession }
 }
@@ -135,6 +160,128 @@ function buildDom(root: HTMLDivElement): VenueSettingsRefs {
   const title = el('h2', { text: 'Настройки' })
   const status = el('p', { className: 'status', text: '' })
   append(header, title, status)
+
+  const staffModuleCard = el('section', { className: 'card venue-staff-module-settings' })
+  staffModuleCard.dataset.testid = 'staff-module-settings'
+  const staffModuleTitle = el('h3', { text: 'Команда и график смен' })
+  const staffModuleDescription = el('p', {
+    text:
+      'Используйте этот раздел, если хотите вести карточки сотрудников и график смен в Mini App. ' +
+      'При отключении сохранённые данные не удаляются. Доступ сотрудников к заказам и кабинету ' +
+      'продолжает работать.'
+  })
+  const staffModuleForm = el('div', { className: 'venue-form-grid' }) as HTMLDivElement
+  const staffModuleMasterLabel = document.createElement('label')
+  staffModuleMasterLabel.className = 'venue-settings-toggle'
+  const staffModuleMasterInput = document.createElement('input')
+  staffModuleMasterInput.type = 'checkbox'
+  staffModuleMasterInput.dataset.testid = 'staff-module-master'
+  const staffModuleMasterText = el('span', { text: 'Использовать карточки команды и график смен' })
+  append(staffModuleMasterLabel, staffModuleMasterInput, staffModuleMasterText)
+
+  const staffModuleNested = el('div', {
+    className: 'venue-form-grid venue-staff-module-nested'
+  }) as HTMLDivElement
+  const staffModuleGuestVisibleLabel = document.createElement('label')
+  staffModuleGuestVisibleLabel.className = 'venue-settings-toggle'
+  const staffModuleGuestVisibleInput = document.createElement('input')
+  staffModuleGuestVisibleInput.type = 'checkbox'
+  staffModuleGuestVisibleInput.dataset.testid = 'staff-module-guest-visible'
+  const staffModuleGuestVisibleText = el('span', { text: 'Показывать команду гостям' })
+  append(staffModuleGuestVisibleLabel, staffModuleGuestVisibleInput, staffModuleGuestVisibleText)
+
+  const staffModuleSourceLabel = el('p', { className: 'field-label', text: 'Кто сегодня работает' })
+  const staffModuleSourceChoices = el('div', {
+    className: 'venue-staff-source-options'
+  }) as HTMLDivElement
+  const staffModuleManualLabel = document.createElement('label')
+  staffModuleManualLabel.className = 'venue-settings-toggle'
+  const staffModuleManualInput = document.createElement('input')
+  staffModuleManualInput.type = 'radio'
+  staffModuleManualInput.name = 'venue-staff-today-source'
+  staffModuleManualInput.value = 'MANUAL'
+  staffModuleManualInput.checked = true
+  staffModuleManualInput.dataset.testid = 'staff-module-source-manual'
+  const staffModuleManualText = el('span', { text: 'Вручную' })
+  append(staffModuleManualLabel, staffModuleManualInput, staffModuleManualText)
+  const staffModuleScheduleLabel = document.createElement('label')
+  staffModuleScheduleLabel.className = 'venue-settings-toggle'
+  const staffModuleScheduleInput = document.createElement('input')
+  staffModuleScheduleInput.type = 'radio'
+  staffModuleScheduleInput.name = 'venue-staff-today-source'
+  staffModuleScheduleInput.value = 'SCHEDULE'
+  staffModuleScheduleInput.dataset.testid = 'staff-module-source-schedule'
+  const staffModuleScheduleText = el('span', { text: 'По графику смен' })
+  append(staffModuleScheduleLabel, staffModuleScheduleInput, staffModuleScheduleText)
+  append(staffModuleSourceChoices, staffModuleManualLabel, staffModuleScheduleLabel)
+  append(
+    staffModuleNested,
+    staffModuleGuestVisibleLabel,
+    staffModuleSourceLabel,
+    staffModuleSourceChoices
+  )
+
+  const staffModuleStatus = el('p', {
+    className: 'venue-order-sub venue-staff-module-status',
+    text: 'Загрузка настроек модуля…'
+  })
+  const staffModuleActions = el('div', { className: 'venue-inline-actions' })
+  const staffModuleSaveButton = el('button', { text: 'Сохранить' }) as HTMLButtonElement
+  staffModuleSaveButton.dataset.testid = 'staff-module-save'
+  staffModuleSaveButton.disabled = true
+  const staffModuleRefreshButton = el('button', {
+    className: 'button-secondary',
+    text: 'Обновить данные'
+  }) as HTMLButtonElement
+  staffModuleRefreshButton.hidden = true
+  const staffModuleRetryButton = el('button', {
+    className: 'button-secondary',
+    text: 'Повторить сохранение'
+  }) as HTMLButtonElement
+  staffModuleRetryButton.hidden = true
+  append(
+    staffModuleActions,
+    staffModuleSaveButton,
+    staffModuleRefreshButton,
+    staffModuleRetryButton
+  )
+
+  const staffModuleConfirmation = el('div', {
+    className: 'venue-staff-module-confirmation'
+  }) as HTMLDivElement
+  staffModuleConfirmation.hidden = true
+  staffModuleConfirmation.dataset.testid = 'staff-module-disable-confirmation'
+  const staffModuleConfirmationTitle = el('h4', { text: 'Подтвердите отключение' })
+  const staffModuleConfirmationSummary = el('p', {
+    text:
+      'Карточки команды и график смен станут недоступны, а команда исчезнет из гостевого блока. ' +
+      'Профили, смены, приглашения, роли и доступ сотрудников к рабочим разделам сохранятся.'
+  })
+  const staffModuleConfirmationActions = el('div', { className: 'venue-inline-actions' })
+  const staffModuleConfirmButton = el('button', {
+    className: 'button-danger',
+    text: 'Отключить модуль'
+  }) as HTMLButtonElement
+  const staffModuleCancelButton = el('button', {
+    className: 'button-secondary',
+    text: 'Отмена'
+  }) as HTMLButtonElement
+  append(staffModuleConfirmationActions, staffModuleConfirmButton, staffModuleCancelButton)
+  append(
+    staffModuleConfirmation,
+    staffModuleConfirmationTitle,
+    staffModuleConfirmationSummary,
+    staffModuleConfirmationActions
+  )
+  append(
+    staffModuleForm,
+    staffModuleMasterLabel,
+    staffModuleNested,
+    staffModuleStatus,
+    staffModuleActions,
+    staffModuleConfirmation
+  )
+  append(staffModuleCard, staffModuleTitle, staffModuleDescription, staffModuleForm)
 
   const publicCard = el('section', { className: 'card' })
   const publicTitle = el('h3', { text: 'Публичная карточка' })
@@ -421,11 +568,35 @@ function buildDom(root: HTMLDivElement): VenueSettingsRefs {
   append(extensionCard, extensionTitle, description, extensionSummary, extensionHint, extensionForm)
 
   const backButton = el('button', { className: 'button-secondary', text: 'Вернуться в обзор' }) as HTMLButtonElement
-  append(wrapper, header, publicCard, reviewLinkCard, scheduleCard, bookingCard, extensionCard, backButton)
+  append(
+    wrapper,
+    header,
+    staffModuleCard,
+    publicCard,
+    reviewLinkCard,
+    scheduleCard,
+    bookingCard,
+    extensionCard,
+    backButton
+  )
   root.replaceChildren(wrapper)
 
   return {
     status,
+    staffModuleCard,
+    staffModuleForm,
+    staffModuleMasterInput,
+    staffModuleNested,
+    staffModuleGuestVisibleInput,
+    staffModuleManualInput,
+    staffModuleScheduleInput,
+    staffModuleStatus,
+    staffModuleSaveButton,
+    staffModuleRefreshButton,
+    staffModuleRetryButton,
+    staffModuleConfirmation,
+    staffModuleConfirmButton,
+    staffModuleCancelButton,
     publicCard,
     publicName,
     countryInput,
@@ -557,6 +728,32 @@ function sameDraft(a: PublicCardDraft, b: PublicCardDraft): boolean {
     a.guestContact === b.guestContact &&
     a.cardDescription === b.cardDescription
   )
+}
+
+function staffModuleSettingsToDraft(settings: VenueStaffModuleSettingsDto): StaffModuleSettingsDraft {
+  return {
+    teamScheduleModuleEnabled: settings.teamScheduleModuleEnabled,
+    guestTeamVisible: settings.guestTeamVisible,
+    todayStaffSource: settings.todayStaffSource
+  }
+}
+
+function sameStaffModuleDraft(
+  left: StaffModuleSettingsDraft,
+  right: StaffModuleSettingsDraft
+): boolean {
+  return (
+    left.teamScheduleModuleEnabled === right.teamScheduleModuleEnabled &&
+    left.guestTeamVisible === right.guestTeamVisible &&
+    left.todayStaffSource === right.todayStaffSource
+  )
+}
+
+function staffModuleSavedSummary(settings: VenueStaffModuleSettingsDto): string {
+  const moduleState = settings.teamScheduleModuleEnabled ? 'модуль включён' : 'модуль выключен'
+  const guestState = settings.guestTeamVisible ? 'команда видна гостям' : 'команда скрыта от гостей'
+  const source = settings.todayStaffSource === 'MANUAL' ? 'состав задаётся вручную' : 'состав определяется графиком'
+  return `Сохранено: ${moduleState}, ${guestState}, ${source}.`
 }
 
 function deadlineExample(minutes: number): string {
@@ -836,6 +1033,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   const canManageSchedule = access.role === 'OWNER' || access.role === 'MANAGER'
   const canManageBookingSettings = access.permissions.includes('BOOKING_MANAGE')
   const canManageShiftExtension = access.permissions.includes('SHIFT_EXTENSION_SETTINGS')
+  const canManageStaffModuleSettings = access.permissions.includes('STAFF_MODULE_SETTINGS_MANAGE')
   const disposables: Array<() => void> = []
 
   let disposed = false
@@ -845,6 +1043,8 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   let scheduleSaveAbort: AbortController | null = null
   let bookingSaveAbort: AbortController | null = null
   let extensionSaveAbort: AbortController | null = null
+  let staffModuleLoadAbort: AbortController | null = null
+  let staffModuleSaveAbort: AbortController | null = null
   let currentPublicCardSettings: VenuePublicCardSettingsResponse | null = null
   let publicCardSnapshot: PublicCardDraft | null = null
   let selectedCountryCode: string | null = 'RU'
@@ -864,6 +1064,13 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   let scheduleSaving = false
   let currentBookingSettings: VenueBookingSettingsResponse | null = null
   let currentShiftExtensionSettings: ShiftExtensionSettingsDto | null = null
+  let currentStaffModuleSettings: VenueStaffModuleSettingsDto | null = null
+  let staffModuleSnapshot: StaffModuleSettingsDraft | null = null
+  let pendingStaffModuleDraft: StaffModuleSettingsDraft | null = null
+  let staffModuleSaving = false
+  let staffModuleRefreshing = false
+  let staffModuleNeedsRefresh = false
+  let staffModuleReadyToRetry = false
 
   const resetOverrideFormValues = () => {
     refs.overrideFromDateInput.value = ''
@@ -957,14 +1164,186 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   if (!canManageShiftExtension) {
     refs.extensionCard.remove()
   }
+  if (!canManageStaffModuleSettings) {
+    refs.staffModuleCard.remove()
+  }
   if (
     !canManagePublicCard &&
     !canManageReviewLink &&
     !canManageSchedule &&
     !canManageBookingSettings &&
-    !canManageShiftExtension
+    !canManageShiftExtension &&
+    !canManageStaffModuleSettings
   ) {
     refs.status.textContent = 'У вас нет доступа к настройкам заведения.'
+  }
+
+  const currentStaffModuleDraft = (): StaffModuleSettingsDraft => ({
+    teamScheduleModuleEnabled: refs.staffModuleMasterInput.checked,
+    guestTeamVisible: refs.staffModuleGuestVisibleInput.checked,
+    todayStaffSource: refs.staffModuleScheduleInput.checked ? 'SCHEDULE' : 'MANUAL'
+  })
+
+  const applyStaffModuleDraft = (draft: StaffModuleSettingsDraft) => {
+    refs.staffModuleMasterInput.checked = draft.teamScheduleModuleEnabled
+    refs.staffModuleGuestVisibleInput.checked = draft.guestTeamVisible
+    refs.staffModuleManualInput.checked = draft.todayStaffSource === 'MANUAL'
+    refs.staffModuleScheduleInput.checked = draft.todayStaffSource === 'SCHEDULE'
+  }
+
+  const staffModuleIsDirty = () => {
+    if (!staffModuleSnapshot) return false
+    return !sameStaffModuleDraft(currentStaffModuleDraft(), staffModuleSnapshot)
+  }
+
+  const closeStaffModuleConfirmation = () => {
+    pendingStaffModuleDraft = null
+    refs.staffModuleConfirmation.hidden = true
+  }
+
+  const updateStaffModuleControls = () => {
+    if (!canManageStaffModuleSettings) return
+    const loaded = currentStaffModuleSettings != null && staffModuleSnapshot != null
+    const confirmationOpen = pendingStaffModuleDraft != null
+    const busy = staffModuleSaving || staffModuleRefreshing
+    refs.staffModuleMasterInput.disabled = !loaded || busy || confirmationOpen
+    const nestedDisabled = !loaded || busy || confirmationOpen || !refs.staffModuleMasterInput.checked
+    refs.staffModuleNested.dataset.disabled = String(nestedDisabled)
+    refs.staffModuleNested.setAttribute('aria-disabled', String(nestedDisabled))
+    refs.staffModuleGuestVisibleInput.disabled = nestedDisabled
+    refs.staffModuleManualInput.disabled = nestedDisabled
+    refs.staffModuleScheduleInput.disabled = nestedDisabled
+    refs.staffModuleSaveButton.disabled =
+      !loaded || busy || confirmationOpen || staffModuleNeedsRefresh || !staffModuleIsDirty()
+    refs.staffModuleSaveButton.textContent = staffModuleSaving ? 'Сохраняем…' : 'Сохранить'
+    refs.staffModuleRefreshButton.hidden = !staffModuleNeedsRefresh
+    refs.staffModuleRefreshButton.disabled = busy
+    refs.staffModuleRetryButton.hidden = !staffModuleReadyToRetry
+    refs.staffModuleRetryButton.disabled = busy || !staffModuleIsDirty()
+    refs.staffModuleConfirmButton.disabled = busy
+    refs.staffModuleCancelButton.disabled = busy
+  }
+
+  const setStaffModuleAuthoritativeSettings = (
+    settings: VenueStaffModuleSettingsDto,
+    draftToKeep: StaffModuleSettingsDraft | null = null
+  ) => {
+    currentStaffModuleSettings = settings
+    staffModuleSnapshot = staffModuleSettingsToDraft(settings)
+    applyStaffModuleDraft(draftToKeep ?? staffModuleSnapshot)
+  }
+
+  const loadStaffModuleSettings = async (preserveDraft = false) => {
+    if (!canManageStaffModuleSettings || staffModuleSaving) return
+    const draftToKeep = preserveDraft && staffModuleSnapshot ? currentStaffModuleDraft() : null
+    staffModuleRefreshing = true
+    closeStaffModuleConfirmation()
+    updateStaffModuleControls()
+    refs.staffModuleStatus.textContent = preserveDraft
+      ? 'Обновляем актуальные данные. Черновик останется в форме…'
+      : 'Загрузка настроек модуля…'
+    staffModuleLoadAbort?.abort()
+    const controller = new AbortController()
+    staffModuleLoadAbort = controller
+    const result = await venueGetStaffModuleSettings(
+      backendUrl,
+      venueId,
+      deps,
+      controller.signal
+    )
+    if (disposed || staffModuleLoadAbort !== controller) return
+    staffModuleLoadAbort = null
+    staffModuleRefreshing = false
+    if (!result.ok) {
+      if (result.error.code === REQUEST_ABORTED_CODE) return
+      staffModuleNeedsRefresh = true
+      renderApiError(refs.staffModuleStatus, result.error, isDebug)
+      updateStaffModuleControls()
+      return
+    }
+    setStaffModuleAuthoritativeSettings(result.data, draftToKeep)
+    staffModuleNeedsRefresh = false
+    staffModuleReadyToRetry = draftToKeep != null && staffModuleIsDirty()
+    if (draftToKeep && staffModuleReadyToRetry) {
+      refs.staffModuleStatus.textContent =
+        'Актуальные данные загружены. Черновик сохранён — проверьте его и повторите сохранение.'
+    } else if (draftToKeep) {
+      refs.staffModuleStatus.textContent = 'Актуальные настройки уже совпадают с вашим черновиком.'
+    } else {
+      refs.staffModuleStatus.textContent = 'Настройки модуля загружены.'
+    }
+    updateStaffModuleControls()
+  }
+
+  const saveStaffModuleSettings = async (draft: StaffModuleSettingsDraft) => {
+    const authoritative = currentStaffModuleSettings
+    if (
+      !canManageStaffModuleSettings ||
+      !authoritative ||
+      staffModuleSaving ||
+      staffModuleRefreshing ||
+      staffModuleNeedsRefresh
+    ) return
+
+    staffModuleSaving = true
+    staffModuleReadyToRetry = false
+    closeStaffModuleConfirmation()
+    updateStaffModuleControls()
+    staffModuleSaveAbort?.abort()
+    const controller = new AbortController()
+    staffModuleSaveAbort = controller
+    const result = await venueUpdateStaffModuleSettings(
+      backendUrl,
+      {
+        venueId,
+        body: {
+          teamScheduleModuleEnabled: draft.teamScheduleModuleEnabled,
+          guestTeamVisible: draft.guestTeamVisible,
+          todayStaffSource: draft.todayStaffSource,
+          expectedUpdatedAt: authoritative.updatedAt
+        }
+      },
+      deps,
+      controller.signal
+    )
+    if (disposed || staffModuleSaveAbort !== controller) return
+    staffModuleSaveAbort = null
+    staffModuleSaving = false
+    if (!result.ok) {
+      if (result.error.code === REQUEST_ABORTED_CODE) return
+      if (normalizeErrorCode(result.error) === ApiErrorCodes.STAFF_MODULE_SETTINGS_STALE) {
+        staffModuleNeedsRefresh = true
+        refs.staffModuleStatus.textContent =
+          'Настройки изменились. Обновите данные и повторите действие. Черновик сохранён.'
+        updateStaffModuleControls()
+        return
+      }
+      renderApiError(refs.staffModuleStatus, result.error, isDebug)
+      updateStaffModuleControls()
+      return
+    }
+    setStaffModuleAuthoritativeSettings(result.data)
+    staffModuleNeedsRefresh = false
+    refs.staffModuleStatus.textContent = staffModuleSavedSummary(result.data)
+    updateStaffModuleControls()
+    options.onStaffModuleSettingsSaved?.(result.data)
+    showToast('Настройки команды и графика смен сохранены.')
+  }
+
+  const beginStaffModuleSave = () => {
+    if (!staffModuleIsDirty() || staffModuleNeedsRefresh) return
+    const draft = currentStaffModuleDraft()
+    if (
+      currentStaffModuleSettings?.teamScheduleModuleEnabled &&
+      !draft.teamScheduleModuleEnabled
+    ) {
+      pendingStaffModuleDraft = draft
+      refs.staffModuleConfirmation.hidden = false
+      refs.staffModuleStatus.textContent = 'Проверьте последствия отключения и подтвердите действие.'
+      updateStaffModuleControls()
+      return
+    }
+    void saveStaffModuleSettings(draft)
   }
 
   const currentPublicCardDraft = (): PublicCardDraft => ({
@@ -1684,6 +2063,27 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     if (message) refs.locationHint.textContent = message
   }
 
+  disposables.push(on(refs.staffModuleMasterInput, 'change', updateStaffModuleControls))
+  disposables.push(on(refs.staffModuleGuestVisibleInput, 'change', updateStaffModuleControls))
+  disposables.push(on(refs.staffModuleManualInput, 'change', updateStaffModuleControls))
+  disposables.push(on(refs.staffModuleScheduleInput, 'change', updateStaffModuleControls))
+  disposables.push(on(refs.staffModuleSaveButton, 'click', beginStaffModuleSave))
+  disposables.push(on(refs.staffModuleRefreshButton, 'click', () => {
+    void loadStaffModuleSettings(true)
+  }))
+  disposables.push(on(refs.staffModuleRetryButton, 'click', beginStaffModuleSave))
+  disposables.push(on(refs.staffModuleConfirmButton, 'click', () => {
+    const draft = pendingStaffModuleDraft
+    if (!draft) return
+    pendingStaffModuleDraft = null
+    refs.staffModuleConfirmation.hidden = true
+    void saveStaffModuleSettings(draft)
+  }))
+  disposables.push(on(refs.staffModuleCancelButton, 'click', () => {
+    closeStaffModuleConfirmation()
+    refs.staffModuleStatus.textContent = 'Отключение отменено. Черновик сохранён.'
+    updateStaffModuleControls()
+  }))
   disposables.push(on(refs.publicCardSaveButton, 'click', () => void savePublicCardSettings()))
   disposables.push(on(refs.publicCardPreviewButton, 'click', openPublicCardPreview))
   disposables.push(on(refs.reviewLinkInput, 'input', updateReviewLinkButtons))
@@ -1768,6 +2168,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   }))
 
   void load()
+  void loadStaffModuleSettings()
 
   return () => {
     disposed = true
@@ -1778,6 +2179,8 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     if (publicCardSavedTimer) window.clearTimeout(publicCardSavedTimer)
     bookingSaveAbort?.abort()
     extensionSaveAbort?.abort()
+    staffModuleLoadAbort?.abort()
+    staffModuleSaveAbort?.abort()
     disposables.forEach((dispose) => dispose())
   }
 }

@@ -130,6 +130,13 @@ type BookingSettings = {
   quickHoldMinutes: number[]
 }
 
+type VenueStaffModuleSettingsFixture = {
+  teamScheduleModuleEnabled: boolean
+  guestTeamVisible: boolean
+  todayStaffSource: 'MANUAL' | 'SCHEDULE'
+  updatedAt: string
+}
+
 type VenueScheduleDay = {
   weekday: number
   opensAt: string
@@ -2205,6 +2212,7 @@ async function mockVenueShiftExtensionApi(
     failPublicCardUpdateOnce?: boolean
     promotionFacts?: boolean
     activePromotionReward?: boolean
+    staffModuleSettings?: VenueStaffModuleSettingsFixture
   } = {}
 ) {
   const role = options.role ?? 'STAFF'
@@ -2215,12 +2223,19 @@ async function mockVenueShiftExtensionApi(
   let scheduleSettings = options.scheduleSettings ?? buildVenueScheduleSettings()
   let publicCardSettings = options.publicCardSettings ?? buildPublicCardSettings()
   let publicReviewUrl = options.publicReviewUrl ?? null
+  let staffModuleSettings = options.staffModuleSettings ?? {
+    teamScheduleModuleEnabled: true,
+    guestTeamVisible: true,
+    todayStaffSource: 'MANUAL' as const,
+    updatedAt: '2030-01-10T18:00:00.000001Z'
+  }
   let approveCalls = 0
   let rejectCalls = 0
   let updateSettingsCalls = 0
   let updateBookingSettingsCalls = 0
   let updatePublicCardSettingsCalls = 0
   let updatePublicReviewUrlCalls = 0
+  let updateStaffModuleSettingsCalls = 0
   let locationProviderCalls = 0
   let failPublicCardUpdateOnce = options.failPublicCardUpdateOnce === true
   const promotionFacts = options.promotionFacts === true
@@ -2278,6 +2293,24 @@ async function mockVenueShiftExtensionApi(
 
   await page.route('**/api/venue/1/staff-calls**', async (route) => {
     await route.fulfill(jsonResponse({ items: [] }))
+  })
+
+  await page.route('**/api/venue/1/staff-module-settings', async (route) => {
+    if (route.request().method() === 'PUT') {
+      updateStaffModuleSettingsCalls += 1
+      const body = (await route.request().postDataJSON()) as {
+        teamScheduleModuleEnabled: boolean
+        guestTeamVisible: boolean
+        todayStaffSource: 'MANUAL' | 'SCHEDULE'
+      }
+      staffModuleSettings = {
+        teamScheduleModuleEnabled: body.teamScheduleModuleEnabled,
+        guestTeamVisible: body.guestTeamVisible,
+        todayStaffSource: body.todayStaffSource,
+        updatedAt: `2030-01-10T18:00:00.${String(updateStaffModuleSettingsCalls + 1).padStart(6, '0')}Z`
+      }
+    }
+    await route.fulfill(jsonResponse(staffModuleSettings))
   })
 
   const orderPendingShiftExtension = () => {
@@ -2800,12 +2833,14 @@ async function mockVenueShiftExtensionApi(
     getUpdateBookingSettingsCalls: () => updateBookingSettingsCalls,
     getUpdatePublicCardSettingsCalls: () => updatePublicCardSettingsCalls,
     getUpdatePublicReviewUrlCalls: () => updatePublicReviewUrlCalls,
+    getUpdateStaffModuleSettingsCalls: () => updateStaffModuleSettingsCalls,
     getLocationProviderCalls: () => locationProviderCalls,
     getSettings: () => settings,
     getBookingSettings: () => bookingSettings,
     getScheduleSettings: () => scheduleSettings,
     getPublicCardSettings: () => publicCardSettings,
     getPublicReviewUrl: () => publicReviewUrl,
+    getStaffModuleSettings: () => ({ ...staffModuleSettings }),
     getRejectedReasons: () => rejectedReasons,
     setRequests: (nextRequests: ShiftExtensionRequest[]) => {
       requests = nextRequests
@@ -4152,6 +4187,7 @@ async function mockVenueStaffChatApi(
     staffProfiles?: StaffProfileFixture[]
     holdFirstStaffDirectory?: boolean
     staffDirectoryFailuresBeforeSuccess?: number
+    staffModuleSettings?: VenueStaffModuleSettingsFixture
   } = {}
 ) {
   let accessUserId = 123456789
@@ -4170,7 +4206,8 @@ async function mockVenueStaffChatApi(
           'STAFF_PROFILE_PUBLISH_STAFF',
           'STAFF_PROFILE_PUBLISH_PROTECTED',
           'STAFF_PROFILE_EDIT_OWN',
-          'STAFF_SCHEDULE_MANAGE'
+          'STAFF_SCHEDULE_MANAGE',
+          'STAFF_MODULE_SETTINGS_MANAGE'
         ]
       : role === 'MANAGER'
         ? [
@@ -4180,7 +4217,8 @@ async function mockVenueStaffChatApi(
             'STAFF_PROFILE_MANAGE_STAFF',
             'STAFF_PROFILE_PUBLISH_STAFF',
             'STAFF_PROFILE_EDIT_OWN',
-            'STAFF_SCHEDULE_MANAGE'
+            'STAFF_SCHEDULE_MANAGE',
+            'STAFF_MODULE_SETTINGS_MANAGE'
           ]
         : ['STAFF_PROFILE_EDIT_OWN'])
   let linked = options.linked ?? true
@@ -4198,6 +4236,13 @@ async function mockVenueStaffChatApi(
   const profileCreateFromMemberRequests: Array<Record<string, unknown>> = []
   const profileUpdateRequests: Array<Record<string, unknown>> = []
   const shiftRequests: Array<Record<string, unknown>> = []
+  let profileGetCalls = 0
+  let staffModuleSettings = options.staffModuleSettings ?? {
+    teamScheduleModuleEnabled: true,
+    guestTeamVisible: true,
+    todayStaffSource: 'MANUAL' as const,
+    updatedAt: '2030-01-10T18:00:00.000001Z'
+  }
   const defaultStaffProfiles: StaffProfileFixture[] = [
     {
       id: 501,
@@ -4361,6 +4406,7 @@ async function mockVenueStaffChatApi(
   let nextProfileLinkConflict: StaffProfileLinkConflictFixture | null = null
   let shouldHoldStaffDirectory = options.holdFirstStaffDirectory === true
   let staffDirectoryFailuresRemaining = options.staffDirectoryFailuresBeforeSuccess ?? 0
+  const deferredProfileLoads: Array<{ promise: Promise<void>; release: () => void }> = []
   let releaseStaffDirectoryGate: (() => void) | null = null
   const staffDirectoryGate = new Promise<void>((resolve) => {
     releaseStaffDirectoryGate = resolve
@@ -4446,7 +4492,8 @@ async function mockVenueStaffChatApi(
             venueCity: 'Москва',
             venueStatus: 'PUBLISHED',
             role,
-            permissions
+            permissions,
+            teamScheduleModuleEnabled: staffModuleSettings.teamScheduleModuleEnabled
           }
         ]
       })
@@ -4471,6 +4518,10 @@ async function mockVenueStaffChatApi(
     await route.fulfill(jsonResponse({ items: [] }))
   })
 
+  await page.route('**/api/venue/1/staff-module-settings', async (route) => {
+    await route.fulfill(jsonResponse(staffModuleSettings))
+  })
+
   await page.route('**/api/venue/1/staff/profiles**', async (route) => {
     const request = route.request()
     const url = new URL(request.url())
@@ -4479,6 +4530,9 @@ async function mockVenueStaffChatApi(
     const profileMatch = path.match(/^\/api\/venue\/1\/staff\/profiles\/(\d+)(?:\/(publish|hide|today-shift))?$/)
 
     if (path === '/api/venue/1/staff/profiles' && method === 'GET') {
+      profileGetCalls += 1
+      const gate = deferredProfileLoads.shift()
+      await gate?.promise
       await route.fulfill(jsonResponse({ profiles: staffProfiles.map(projectStaffProfile) }))
       return
     }
@@ -4809,6 +4863,7 @@ async function mockVenueStaffChatApi(
     getProfileCreateRequests: () => profileCreateRequests,
     getProfileCreateFromMemberRequests: () => profileCreateFromMemberRequests,
     getProfileUpdateRequests: () => profileUpdateRequests,
+    getProfileGetCalls: () => profileGetCalls,
     getStaffMembers: () => staffMembers.map((member) => ({ ...member })),
     addStaffProfile: (profile: StaffProfileFixture) => {
       staffProfiles.push({
@@ -4819,6 +4874,17 @@ async function mockVenueStaffChatApi(
       syncStaffMemberLinkState(profile.linkedUserId)
     },
     getShiftRequests: () => shiftRequests,
+    setStaffModuleSettings: (settings: VenueStaffModuleSettingsFixture) => {
+      staffModuleSettings = { ...settings }
+    },
+    deferNextProfileLoad: () => {
+      let release = () => undefined
+      const promise = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      deferredProfileLoads.push({ promise, release })
+      return release
+    },
     getTestMessages: () => testMessages,
     getUnlinks: () => unlinks,
     setLinked: (next: boolean) => {
@@ -4858,6 +4924,7 @@ type VenueStaffScheduleAccessFixture = {
   venueStatus: string
   role: 'OWNER' | 'MANAGER' | 'STAFF'
   permissions: string[]
+  teamScheduleModuleEnabled?: boolean
 }
 
 type VenueStaffScheduleAdminShiftFixture = {
@@ -9852,8 +9919,10 @@ test('owner repairs one concrete duplicate staff card with safe unlink only', as
   await expect(wrongProfile).toHaveAttribute('data-staff-profile-id', '506')
   await expect(primaryProfile).toContainText('Светлана')
   await expect(wrongProfile).toContainText('Светлана дубль')
-  await expect(primaryProfile).toContainText('Сегодня на смене · 18:00-23:00')
-  await expect(wrongProfile).toContainText('Не на смене сегодня · 19:00-01:00')
+  await expect(primaryProfile).toContainText('По графику: запланирован сегодня · 18:00-23:00 · Сегодня на смене')
+  await expect(primaryProfile).toContainText('Для гостей: выключено вручную')
+  await expect(wrongProfile).toContainText('По графику: запланирован сегодня · 19:00-01:00 · Не на смене сегодня')
+  await expect(wrongProfile).toContainText('Для гостей: выключено вручную')
 
   await primaryProfile.getByRole('button', { name: 'Редактировать', exact: true }).click()
   await expect(primaryProfile.getByLabel('Привязать к сотруднику')).toHaveValue('222222222')
@@ -9923,8 +9992,10 @@ test('owner repairs one concrete duplicate staff card with safe unlink only', as
   expect(reloadedWrongCard).toMatchObject({ linkageClass: 'DISPLAY_ONLY', disabledAt: null })
   await expect(primaryProfile).toBeVisible()
   await expect(wrongProfile).toBeVisible()
-  await expect(primaryProfile).toContainText('Сегодня на смене · 18:00-23:00')
-  await expect(wrongProfile).toContainText('Не на смене сегодня · 19:00-01:00')
+  await expect(primaryProfile).toContainText('По графику: запланирован сегодня · 18:00-23:00 · Сегодня на смене')
+  await expect(primaryProfile).toContainText('Для гостей: выключено вручную')
+  await expect(wrongProfile).toContainText('По графику: запланирован сегодня · 19:00-01:00 · Не на смене сегодня')
+  await expect(wrongProfile).toContainText('Для гостей: выключено вручную')
   expect(profileMutations).toHaveLength(1)
 })
 
@@ -10095,6 +10166,171 @@ test('account switch does not reuse prior venue member identities', async ({ pag
   await expect(accessCard).not.toContainText('888888888')
 })
 
+test('staff module off keeps access and invites available and explains profile and schedule sections', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueStaffChatApi(page, {
+    role: 'OWNER',
+    permissions: [
+      'STAFF_INVITE_CREATE_STAFF',
+      'STAFF_INVITE_CREATE_MANAGER',
+      'STAFF_INVITE_REVOKE_STAFF',
+      'STAFF_INVITE_REVOKE_MANAGER',
+      'STAFF_SCHEDULE_VIEW',
+      'STAFF_MODULE_SETTINGS_MANAGE'
+    ],
+    pendingInvites: [
+      {
+        handle: 'saved-invite',
+        role: 'STAFF',
+        status: 'PENDING',
+        createdAt: '2030-01-10T18:00:00Z',
+        expiresAt: '2030-01-17T18:00:00Z'
+      }
+    ],
+    staffModuleSettings: {
+      teamScheduleModuleEnabled: false,
+      guestTeamVisible: false,
+      todayStaffSource: 'SCHEDULE',
+      updatedAt: '2030-01-10T18:00:00.000001Z'
+    }
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Персонал', exact: true }).click()
+
+  const accessCard = page.locator('.venue-staff > .card').first()
+  await expect(accessCard.getByRole('heading', { name: 'Доступ сотрудников' })).toBeVisible()
+  await expect(accessCard).toContainText('Светлана Орлова')
+  await expect(accessCard).toContainText('Статус: ожидает принятия')
+  await accessCard.getByRole('button', { name: 'Добавить сотрудника' }).click()
+  await expect.poll(() => api.getStaffInvites()).toBe(1)
+
+  const profileCard = page.locator('.venue-public-staff')
+  await expect(profileCard).toContainText('Карточки команды и график смен отключены.')
+  await expect(profileCard).toContainText('Сохранённые данные не удалены')
+  await expect(profileCard.getByRole('button', { name: 'Включить в настройках' })).toBeVisible()
+  await expect.poll(() => api.getProfileGetCalls()).toBe(0)
+
+  await page.getByRole('button', { name: 'График смен', exact: true }).click()
+  const schedule = page.locator('.screen-root .venue-module-disabled')
+  await expect(schedule).toContainText('Карточки команды и график смен отключены.')
+  await expect(schedule).toContainText('Сохранённые смены не удалены')
+  await expect(schedule.getByRole('button', { name: 'Включить в настройках' })).toBeVisible()
+})
+
+test('staff module off hides My shifts navigation and rejects a direct view locally', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueStaffScheduleApi(page, {
+    accesses: [
+      {
+        venueId: 1,
+        venueName: 'Микс',
+        venueCity: 'Москва',
+        venueStatus: 'PUBLISHED',
+        role: 'STAFF',
+        permissions: ['STAFF_SCHEDULE_VIEW_OWN'],
+        teamScheduleModuleEnabled: false
+      }
+    ]
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await expect(page.getByRole('button', { name: 'Мои смены', exact: true })).toHaveCount(0)
+  await page.evaluate(() => {
+    window.location.hash = '#/shifts'
+  })
+  await expect(page.getByRole('heading', { name: 'Мои смены недоступны' })).toBeVisible()
+  await expect(page.getByText('Карточки команды и график смен отключены в настройках заведения.')).toBeVisible()
+  expect(api.getListRequests()).toHaveLength(0)
+})
+
+test('manual Today publication is persisted and schedule source removes the manual control', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueStaffChatApi(page, {
+    role: 'OWNER',
+    linked: true,
+    staffModuleSettings: {
+      teamScheduleModuleEnabled: true,
+      guestTeamVisible: true,
+      todayStaffSource: 'MANUAL',
+      updatedAt: '2030-01-10T18:00:00.000001Z'
+    }
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Персонал', exact: true }).click()
+  let profileRow = page.locator('.venue-profile-row').filter({ hasText: 'Алексей' })
+  await expect(profileRow).toContainText('По графику: не запланирован сегодня')
+  await expect(profileRow).toContainText('Для гостей: выключено вручную')
+  await profileRow.getByRole('button', { name: 'Опубликовать' }).click()
+  await expect(profileRow).toContainText('Опубликован — виден гостям')
+  const manualSwitch = profileRow.getByRole('switch', { name: 'Выключено' })
+  await expect(manualSwitch).toHaveAttribute('aria-checked', 'false')
+  const releaseProfileRefresh = api.deferNextProfileLoad()
+  const todayMutationResponse = page.waitForResponse((response) => {
+    const request = response.request()
+    return (
+      request.method() === 'POST' &&
+      new URL(response.url()).pathname === '/api/venue/1/staff/profiles/501/today-shift'
+    )
+  })
+  await manualSwitch.click()
+  await todayMutationResponse
+  try {
+    await expect(profileRow.getByRole('switch', { name: 'Включено' })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    )
+    await expect(profileRow.getByRole('switch', { name: 'Включено' })).toBeEnabled()
+  } finally {
+    releaseProfileRefresh()
+  }
+  await expect.poll(() => api.getShiftRequests()).toEqual([{ status: 'active', isGuestVisible: true }])
+  await expect(page.getByText('Сотрудник отображается в блоке «Сегодня работают».')).toBeVisible()
+  await expect(profileRow.getByRole('switch', { name: 'Включено' })).toHaveAttribute('aria-checked', 'true')
+
+  api.setStaffModuleSettings({
+    teamScheduleModuleEnabled: true,
+    guestTeamVisible: true,
+    todayStaffSource: 'SCHEDULE',
+    updatedAt: '2030-01-10T18:00:00.000002Z'
+  })
+  await page.reload()
+  profileRow = page.locator('.venue-profile-row').filter({ hasText: 'Алексей' })
+  await expect(profileRow).toContainText('Состав для гостей определяется активными сменами в графике.')
+  await expect(profileRow.getByRole('switch')).toHaveCount(0)
+  expect(api.getShiftRequests()).toEqual([{ status: 'active', isGuestVisible: true }])
+})
+
+test('manual Today success copy does not claim public visibility when guest team is hidden', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueStaffChatApi(page, {
+    role: 'OWNER',
+    staffModuleSettings: {
+      teamScheduleModuleEnabled: true,
+      guestTeamVisible: false,
+      todayStaffSource: 'MANUAL',
+      updatedAt: '2030-01-10T18:00:00.000001Z'
+    }
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Персонал', exact: true }).click()
+  const profileRow = page.locator('.venue-profile-row').filter({ hasText: 'Алексей' })
+  await profileRow.getByRole('switch', { name: 'Выключено' }).click()
+
+  await expect.poll(() => api.getShiftRequests()).toEqual([{ status: 'active', isGuestVisible: true }])
+  await expect(page.getByRole('status')).toHaveText(
+    'Ручная отметка сохранена. Показ команды гостям отключён в настройках.'
+  )
+  await expect(page.getByRole('status')).not.toContainText(
+    'Сотрудник отображается в блоке «Сегодня работают».'
+  )
+  await expect(profileRow).toContainText(
+    'Для гостей: включено вручную, но показ команды отключён в настройках'
+  )
+})
+
 test('venue owner staff cards use human profile labels and hide raw technical fields', async ({ page }) => {
   await installTelegramWebApp(page, 123456789)
   const api = await mockVenueStaffChatApi(page, { role: 'OWNER', linked: true })
@@ -10195,9 +10431,9 @@ test('venue owner staff cards use human profile labels and hide raw technical fi
 
   await profileRow.getByRole('button', { name: 'Опубликовать' }).click()
   await expect(profileRow).toContainText('Опубликован — виден гостям')
-  await profileRow.getByRole('button', { name: 'Сегодня на смене' }).click()
+  await profileRow.getByRole('switch', { name: 'Выключено' }).click()
   await expect.poll(() => api.getShiftRequests().length).toBe(1)
-  await profileRow.getByRole('button', { name: 'Не на смене сегодня' }).click()
+  await profileRow.getByRole('switch', { name: 'Включено' }).click()
   await expect.poll(() => api.getShiftRequests().length).toBe(2)
   expect(api.getShiftRequests()).toEqual([
     { status: 'active', isGuestVisible: true },
@@ -11565,6 +11801,154 @@ test('guest direct venue route cannot read an unavailable draft card', async ({ 
   expect(apiPaths).not.toContain('/api/venue/1/guest-preview')
 })
 
+test('venue owner disables and re-enables staff module without resetting nested settings', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueShiftExtensionApi(page, {
+    role: 'OWNER',
+    permissions: ['STAFF_MODULE_SETTINGS_MANAGE'],
+    staffModuleSettings: {
+      teamScheduleModuleEnabled: true,
+      guestTeamVisible: false,
+      todayStaffSource: 'SCHEDULE',
+      updatedAt: '2030-01-10T18:00:00.000001Z'
+    }
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Настройки', exact: true }).click()
+
+  const card = page.getByTestId('staff-module-settings')
+  const master = card.getByTestId('staff-module-master')
+  const guestVisible = card.getByTestId('staff-module-guest-visible')
+  const scheduleSource = card.getByTestId('staff-module-source-schedule')
+  await expect(card.getByRole('heading', { name: 'Команда и график смен' })).toBeVisible()
+  await expect(master).toBeChecked()
+  await expect(guestVisible).not.toBeChecked()
+  await expect(scheduleSource).toBeChecked()
+
+  await master.uncheck()
+  await expect(guestVisible).toBeDisabled()
+  await expect(scheduleSource).toBeDisabled()
+  await card.getByTestId('staff-module-save').click()
+  const confirmation = card.getByTestId('staff-module-disable-confirmation')
+  await expect(confirmation).toBeVisible()
+  await expect(confirmation).toContainText('Профили, смены, приглашения, роли и доступ сотрудников')
+  await confirmation.getByRole('button', { name: 'Отключить модуль' }).click()
+
+  await expect.poll(() => api.getStaffModuleSettings()).toMatchObject({
+    teamScheduleModuleEnabled: false,
+    guestTeamVisible: false,
+    todayStaffSource: 'SCHEDULE'
+  })
+  await expect(card).toContainText('Сохранено: модуль выключен')
+  await expect(guestVisible).not.toBeChecked()
+  await expect(scheduleSource).toBeChecked()
+
+  await master.check()
+  await expect(guestVisible).toBeEnabled()
+  await expect(scheduleSource).toBeEnabled()
+  await expect(guestVisible).not.toBeChecked()
+  await expect(scheduleSource).toBeChecked()
+  await card.getByTestId('staff-module-save').click()
+  await expect.poll(() => api.getStaffModuleSettings()).toMatchObject({
+    teamScheduleModuleEnabled: true,
+    guestTeamVisible: false,
+    todayStaffSource: 'SCHEDULE'
+  })
+  expect(api.getUpdateStaffModuleSettingsCalls()).toBe(2)
+})
+
+test('venue manager sees staff module settings through the narrow permission', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockVenueShiftExtensionApi(page, {
+    role: 'MANAGER',
+    permissions: ['STAFF_MODULE_SETTINGS_MANAGE']
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Настройки', exact: true }).click()
+  await expect(page.getByTestId('staff-module-settings')).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Команда и график смен' })).toBeVisible()
+})
+
+test('staff module settings venue switch ignores a late response from the previous venue', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const accesses: VenueStaffScheduleAccessFixture[] = [
+    {
+      venueId: 1,
+      venueName: 'Микс',
+      venueCity: 'Москва',
+      venueStatus: 'PUBLISHED',
+      role: 'OWNER',
+      permissions: ['STAFF_MODULE_SETTINGS_MANAGE']
+    },
+    {
+      venueId: 2,
+      venueName: 'Дым',
+      venueCity: 'Казань',
+      venueStatus: 'PUBLISHED',
+      role: 'OWNER',
+      permissions: ['STAFF_MODULE_SETTINGS_MANAGE']
+    }
+  ]
+  await mockVenueStaffScheduleApi(page, { accesses })
+  let releaseVenueOne = () => undefined
+  let venueOneRequestStarted = false
+  let venueOneRequestReleased = false
+  const venueOneGate = new Promise<void>((resolve) => {
+    releaseVenueOne = resolve
+  })
+  const settingsByVenue: Record<number, VenueStaffModuleSettingsFixture> = {
+    1: {
+      teamScheduleModuleEnabled: false,
+      guestTeamVisible: true,
+      todayStaffSource: 'MANUAL',
+      updatedAt: '2030-01-10T18:00:00.000001Z'
+    },
+    2: {
+      teamScheduleModuleEnabled: true,
+      guestTeamVisible: false,
+      todayStaffSource: 'SCHEDULE',
+      updatedAt: '2030-01-10T18:00:00.000002Z'
+    }
+  }
+  await page.route('**/api/venue/*/staff-module-settings', async (route) => {
+    const venueId = Number(new URL(route.request().url()).pathname.split('/')[3])
+    if (venueId === 1) {
+      venueOneRequestStarted = true
+      await venueOneGate
+      venueOneRequestReleased = true
+    }
+    await route.fulfill(jsonResponse(settingsByVenue[venueId]))
+  })
+  await page.route('**/api/venue/*/public-card', async (route) => {
+    const venueId = Number(new URL(route.request().url()).pathname.split('/')[3])
+    await route.fulfill(jsonResponse(buildPublicCardSettings({ venueId, name: accesses[venueId - 1].venueName })))
+  })
+  await page.route('**/api/venue/*/schedule', async (route) => {
+    const venueId = Number(new URL(route.request().url()).pathname.split('/')[3])
+    await route.fulfill(jsonResponse({ ...buildVenueScheduleSettings(), venueId }))
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Настройки', exact: true }).click()
+  await expect.poll(() => venueOneRequestStarted).toBe(true)
+
+  const venueSelect = page.locator('.venue-controls select.venue-select')
+  await venueSelect.selectOption('2')
+  const card = page.getByTestId('staff-module-settings')
+  await expect(card.getByTestId('staff-module-master')).toBeChecked()
+  await expect(card.getByTestId('staff-module-guest-visible')).not.toBeChecked()
+  await expect(card.getByTestId('staff-module-source-schedule')).toBeChecked()
+  releaseVenueOne()
+  await expect.poll(() => venueOneRequestReleased).toBe(true)
+
+  await expect(card.getByTestId('staff-module-master')).toBeChecked()
+  await expect(card.getByTestId('staff-module-guest-visible')).not.toBeChecked()
+  await expect(card.getByTestId('staff-module-source-schedule')).toBeChecked()
+  await expect.poll(() => new URL(page.url()).searchParams.get('venueId')).toBe('2')
+})
+
 test('venue manager configures public profile card settings', async ({ page }) => {
   await installTelegramWebApp(page, 123456789)
   const api = await mockVenueShiftExtensionApi(page, {
@@ -11678,7 +12062,7 @@ test('venue owner configures public review link settings', async ({ page }) => {
   expect(api.getPublicReviewUrl()).toBeNull()
 })
 
-test('venue staff does not see public profile card settings', async ({ page }) => {
+test('venue staff does not see public card or staff module settings', async ({ page }) => {
   await installTelegramWebApp(page, 123456789)
   await mockVenueShiftExtensionApi(page, {
     role: 'STAFF',
@@ -11693,6 +12077,7 @@ test('venue staff does not see public profile card settings', async ({ page }) =
   })
   await expect(page.getByRole('heading', { name: 'Недостаточно прав' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Публичная карточка' })).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: 'Команда и график смен' })).toHaveCount(0)
 })
 
 test('venue public card failed save preserves manual location draft', async ({ page }) => {

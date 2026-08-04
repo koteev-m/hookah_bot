@@ -7,6 +7,7 @@ import {
   venueCreateStaffProfileFromMember,
   venueGetPendingStaffInvites,
   venueGetStaff,
+  venueGetStaffModuleSettings,
   venueGetStaffProfiles,
   venueHideStaffProfile,
   venuePublishStaffProfile,
@@ -24,7 +25,8 @@ import type {
   VenueStaffPendingInviteDto,
   VenueStaffProfileSubtype,
   VenueStaffProfileUpdateRequest,
-  VenueStaffShiftStatus
+  VenueStaffShiftStatus,
+  VenueStaffModuleSettingsDto
 } from '../shared/api/venueDtos'
 import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
 import { getTelegramContext } from '../shared/telegram'
@@ -40,6 +42,7 @@ export type VenueStaffOptions = {
   venueId: number
   access: VenueAccessDto
   currentUserId: number
+  onOpenStaffModuleSettings?: () => void
 }
 
 type StaffRefs = {
@@ -67,6 +70,9 @@ type StaffRefs = {
   pendingInviteList: HTMLDivElement
   list: HTMLDivElement
   profileCard: HTMLElement
+  profileEnabledContent: HTMLDivElement
+  profileDisabledPanel: HTMLDivElement
+  profileEnableButton: HTMLButtonElement
   profileAddButton: HTMLButtonElement
   profileForm: HTMLDivElement
   profileNameField: HTMLElement
@@ -248,6 +254,17 @@ function buildStaffDom(root: HTMLDivElement, access: VenueAccessDto): StaffRefs 
 
   const profileCard = el('section', { className: 'card venue-public-staff' })
   const profileTitle = el('h3', { text: 'Карточки команды' })
+  const profileDisabledPanel = el('div', { className: 'venue-module-disabled' }) as HTMLDivElement
+  const profileDisabledCopy = el('p', {
+    className: 'venue-order-sub',
+    text: 'Карточки команды и график смен отключены. Сохранённые данные не удалены, а доступ сотрудников к заказам и кабинету продолжает работать.'
+  })
+  const profileEnableButton = el('button', {
+    className: 'button-small button-secondary',
+    text: 'Включить в настройках'
+  }) as HTMLButtonElement
+  append(profileDisabledPanel, profileDisabledCopy, profileEnableButton)
+  const profileEnabledContent = el('div', { className: 'venue-module-enabled' }) as HTMLDivElement
   const profileDescription = el('p', {
     className: 'venue-order-sub',
     text: 'Создайте карточки сотрудников, которых гости увидят в карточке заведения. Например: кальянщики, официанты или администраторы.'
@@ -326,8 +343,7 @@ function buildStaffDom(root: HTMLDivElement, access: VenueAccessDto): StaffRefs 
   const profileStatus = el('p', { className: 'status', text: '' })
   const profileList = el('div', { className: 'venue-staff-list venue-profile-list' })
   append(
-    profileCard,
-    profileTitle,
+    profileEnabledContent,
     profileDescription,
     privacyNote,
     shiftNote,
@@ -337,6 +353,7 @@ function buildStaffDom(root: HTMLDivElement, access: VenueAccessDto): StaffRefs 
     profileStatus,
     profileList
   )
+  append(profileCard, profileTitle, profileDisabledPanel, profileEnabledContent)
 
   append(wrapper, header, profileCard)
   root.replaceChildren(wrapper)
@@ -366,6 +383,9 @@ function buildStaffDom(root: HTMLDivElement, access: VenueAccessDto): StaffRefs 
     pendingInviteList,
     list,
     profileCard,
+    profileEnabledContent,
+    profileDisabledPanel,
+    profileEnableButton,
     profileAddButton,
     profileForm,
     profileNameField,
@@ -686,22 +706,20 @@ function normalizeOptionalText(value: string): string | null {
   return trimmed ? trimmed : null
 }
 
-function formatShiftLine(profile: VenueStaffProfileDto): string {
+function formatScheduledShiftLine(profile: VenueStaffProfileDto): string {
   const shift = profile.todayShift
-  if (!shift) return 'Не на смене сегодня'
-  const time =
-    shift.startsAt || shift.endsAt
-      ? ` · ${shift.startsAt ?? '—'}-${shift.endsAt ?? '—'}`
-      : ''
-  return `${formatShiftStatus(shift.status)}${time}`
+  if (!shift?.startsAt || !shift.endsAt) return 'не запланирован сегодня'
+  return `запланирован сегодня · ${shift.startsAt}-${shift.endsAt} · ${formatShiftStatus(shift.status)}`
 }
 
 function renderProfileRow(
   profile: VenueStaffProfileDto,
   access: VenueAccessDto,
+  moduleSettings: VenueStaffModuleSettingsDto | null,
   staffMembers: VenueStaffMemberDto[],
   directoryReady: boolean,
   isEditing: boolean,
+  todayMutationPending: boolean,
   handlers: {
     onSave: (profile: VenueStaffProfileDto, draft: {
       displayName?: string | null
@@ -740,9 +758,28 @@ function renderProfileRow(
     el('strong', { text: profile.displayName }),
     el('p', {
       className: 'venue-order-sub',
-      text: `${formatProfileRole(profile)} · ${formatShiftLine(profile)}`
+      text: formatProfileRole(profile)
     })
   )
+  info.appendChild(
+    el('p', {
+      className: 'venue-order-sub',
+      text: `По графику: ${formatScheduledShiftLine(profile)}`
+    })
+  )
+  const manualGuestVisible =
+    profile.todayShift?.isGuestVisible === true &&
+    (profile.todayShift.status === 'active' || profile.todayShift.status === 'scheduled')
+  if (moduleSettings?.todayStaffSource === 'MANUAL') {
+    info.appendChild(
+      el('p', {
+        className: 'venue-order-sub',
+        text: moduleSettings.guestTeamVisible
+          ? `Для гостей: ${manualGuestVisible ? 'включено' : 'выключено'} вручную`
+          : `Для гостей: ${manualGuestVisible ? 'включено вручную, но показ команды отключён в настройках' : 'выключено вручную'}`
+      })
+    )
+  }
   if (profile.tags?.length) {
     info.appendChild(el('p', { className: 'venue-order-sub', text: profile.tags.join(', ') }))
   }
@@ -889,18 +926,35 @@ function renderProfileRow(
     actions.appendChild(visibilityButton)
   }
 
-  if (canManageShift) {
+  if (canManageShift && moduleSettings?.todayStaffSource === 'SCHEDULE') {
+    actions.appendChild(
+      el('p', {
+        className: 'venue-order-sub',
+        text: 'Состав для гостей определяется активными сменами в графике.'
+      })
+    )
+  }
+
+  if (canManageShift && moduleSettings?.todayStaffSource === 'MANUAL') {
     const shiftHelp = el('p', {
       className: 'venue-order-sub',
-      text: 'Отмеченные сотрудники появятся у гостей в блоке «Сегодня работают».'
+      text: 'Показывать сотрудника гостям сегодня'
     })
-    const shiftActions = el('div', { className: 'venue-profile-shift-actions' })
-    const activeButton = el('button', { className: 'button-small', text: 'Сегодня на смене' }) as HTMLButtonElement
-    const inactiveButton = el('button', { className: 'button-small button-secondary', text: 'Не на смене сегодня' }) as HTMLButtonElement
-    activeButton.addEventListener('click', () => handlers.onShift(profile, 'active', true))
-    inactiveButton.addEventListener('click', () => handlers.onShift(profile, 'canceled', false))
-    append(shiftActions, activeButton, inactiveButton)
-    append(actions, shiftHelp, shiftActions)
+    const publicationButton = el('button', {
+      className: manualGuestVisible ? 'button-small' : 'button-small button-secondary',
+      text: manualGuestVisible ? 'Включено' : 'Выключено'
+    }) as HTMLButtonElement
+    publicationButton.setAttribute('role', 'switch')
+    publicationButton.setAttribute('aria-checked', String(manualGuestVisible))
+    publicationButton.disabled = todayMutationPending
+    publicationButton.addEventListener('click', () =>
+      handlers.onShift(
+        profile,
+        manualGuestVisible ? 'canceled' : 'active',
+        !manualGuestVisible
+      )
+    )
+    append(actions, shiftHelp, publicationButton)
   }
 
   append(row, info, actions)
@@ -912,7 +966,15 @@ type CreateProfileMode =
   | { kind: 'FROM_MEMBER'; userId: number }
 
 export function renderVenueStaffScreen(options: VenueStaffOptions) {
-  const { root, backendUrl, isDebug, venueId, access, currentUserId } = options
+  const {
+    root,
+    backendUrl,
+    isDebug,
+    venueId,
+    access,
+    currentUserId,
+    onOpenStaffModuleSettings
+  } = options
   if (!root) return () => undefined
   const refs = buildStaffDom(root, access)
   const deps = buildApiDeps(isDebug)
@@ -921,6 +983,7 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
   let loadAbort: AbortController | null = null
   let profileLoadAbort: AbortController | null = null
   let pendingInviteLoadAbort: AbortController | null = null
+  let moduleSettingsLoadAbort: AbortController | null = null
   let loadSeq = 0
   let profileLoadSeq = 0
   let pendingInviteLoadSeq = 0
@@ -934,6 +997,10 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
   let createProfileMode: CreateProfileMode | null = null
   let editingProfileId: number | null = null
   let pendingOpenProfileId: number | null = null
+  let moduleSettings: VenueStaffModuleSettingsDto | null = null
+  const todayMutationProfileIds = new Set<number>()
+
+  const moduleEnabled = access.teamScheduleModuleEnabled !== false
 
   const canInviteStaff =
     access.role === 'OWNER' || access.permissions.includes('STAFF_INVITE_CREATE_STAFF')
@@ -953,6 +1020,12 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
       ? access.role === 'OWNER' || access.permissions.includes('STAFF_INVITE_REVOKE_MANAGER')
       : access.role === 'OWNER' || access.permissions.includes('STAFF_INVITE_REVOKE_STAFF')
 
+  refs.profileDisabledPanel.hidden = moduleEnabled
+  refs.profileEnabledContent.hidden = !moduleEnabled
+  refs.profileEnableButton.hidden =
+    !access.permissions.includes('STAFF_MODULE_SETTINGS_MANAGE') || !onOpenStaffModuleSettings
+  refs.profileEnableButton.addEventListener('click', () => onOpenStaffModuleSettings?.())
+
   const setStatus = (text: string) => {
     refs.status.textContent = text
   }
@@ -962,10 +1035,10 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
   }
 
   const syncCreateFormVisibility = () => {
-    const formUsable = canCreateProfiles && directoryReady
+    const formUsable = moduleEnabled && canCreateProfiles && directoryReady
     const isFromMember = createProfileMode?.kind === 'FROM_MEMBER'
     refs.profileForm.hidden = !isCreateFormOpen || !formUsable
-    refs.profileAddButton.hidden = isCreateFormOpen || !canCreateProfiles
+    refs.profileAddButton.hidden = isCreateFormOpen || !canCreateProfiles || !moduleEnabled
     refs.profileAddButton.disabled = !formUsable
     refs.profileAddButton.title = formUsable ? '' : 'Дождитесь актуального списка сотрудников'
     refs.profileName.readOnly = isFromMember
@@ -1175,7 +1248,7 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
           member,
           currentUserId,
           canManageRoles,
-          canCreateProfiles,
+          canCreateProfiles && moduleEnabled,
           (target, role) => void updateRole(target, role),
           (target) => void removeMember(target),
           (target) => openCreateFormForMember(target),
@@ -1204,7 +1277,15 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
     }
     profiles.forEach((profile) => {
       refs.profileList.appendChild(
-        renderProfileRow(profile, access, staffMembers, directoryReady, editingProfileId === profile.id, {
+        renderProfileRow(
+          profile,
+          access,
+          moduleSettings,
+          staffMembers,
+          directoryReady,
+          editingProfileId === profile.id,
+          todayMutationProfileIds.has(profile.id),
+          {
           onSave: (target, draft) => void saveProfile(target, draft),
           onEdit: (target) => {
             editingProfileId = target.id
@@ -1219,7 +1300,8 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
           onPublish: (target) => void publishProfile(target),
           onHide: (target) => void hideProfile(target),
           onShift: (target, status, isGuestVisible) => void updateTodayShift(target, status, isGuestVisible)
-        })
+          }
+        )
       )
     })
     focusPendingProfile()
@@ -1228,6 +1310,7 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
   const openCreateFormForMember = (member: VenueStaffMemberDto) => {
     if (
       !directoryReady ||
+      !moduleEnabled ||
       !canCreateProfiles ||
       !member.active ||
       member.profileLinkState !== 'NOT_LINKED'
@@ -1254,6 +1337,10 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
   }
 
   const openProfileForMember = (member: VenueStaffMemberDto) => {
+    if (!moduleEnabled) {
+      showToast('Карточки команды отключены в настройках')
+      return
+    }
     const profileId = member.linkedStaffProfileId
     if (member.profileLinkState !== 'LINKED' || profileId == null) {
       showToast('Связанная карточка недоступна')
@@ -1320,6 +1407,12 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
   }
 
   const loadProfiles = async () => {
+    if (!moduleEnabled) {
+      currentProfiles = []
+      refs.profileList.replaceChildren()
+      setProfileStatus('')
+      return
+    }
     hideError()
     setProfileStatus('Загрузка...')
     if (profileLoadAbort) {
@@ -1340,6 +1433,33 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
     currentProfiles = result.data.profiles
     renderProfiles(result.data.profiles)
     setProfileStatus(`Обновлено: ${new Date().toLocaleTimeString()}`)
+  }
+
+  const loadModuleSettings = async () => {
+    if (!moduleEnabled || !access.permissions.includes('STAFF_MODULE_SETTINGS_MANAGE')) {
+      moduleSettings = null
+      return
+    }
+    moduleSettingsLoadAbort?.abort()
+    const controller = new AbortController()
+    moduleSettingsLoadAbort = controller
+    const result = await venueGetStaffModuleSettings(
+      backendUrl,
+      venueId,
+      deps,
+      controller.signal
+    )
+    if (disposed || moduleSettingsLoadAbort !== controller) return
+    moduleSettingsLoadAbort = null
+    if (!result.ok && result.error.code === REQUEST_ABORTED_CODE) return
+    if (!result.ok) {
+      moduleSettings = null
+      renderProfiles(currentProfiles)
+      showError(result.error)
+      return
+    }
+    moduleSettings = result.data
+    renderProfiles(currentProfiles)
   }
 
   const loadPendingInvites = async () => {
@@ -1375,12 +1495,13 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
 
   const reloadAll = () => {
     void loadStaff()
+    void loadModuleSettings()
     void loadProfiles()
     void loadPendingInvites()
   }
 
   const reloadMemberProfiles = async () => {
-    await Promise.all([loadStaff(), loadProfiles()])
+    await Promise.all([loadStaff(), loadModuleSettings(), loadProfiles()])
   }
 
   const handleProfileLinkConflict = async (error: ApiErrorInfo) => {
@@ -1659,21 +1780,42 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
     status: VenueStaffShiftStatus,
     isGuestVisible: boolean
   ) => {
-    if (!canManageProfileShifts) {
+    if (!moduleEnabled || moduleSettings?.todayStaffSource !== 'MANUAL' || !canManageProfileShifts) {
       showToast('Недостаточно прав')
       return
     }
+    if (todayMutationProfileIds.has(profile.id)) return
+    todayMutationProfileIds.add(profile.id)
+    renderProfiles(currentProfiles)
     const result = await venueUpsertTodayStaffShift(
       backendUrl,
       { venueId, profileId: profile.id, body: { status, isGuestVisible } },
       deps
     )
     if (disposed) return
+    todayMutationProfileIds.delete(profile.id)
     if (!result.ok) {
+      renderProfiles(currentProfiles)
       showError(result.error)
       return
     }
-    showToast('Смена обновлена')
+    currentProfiles = currentProfiles.map((current) =>
+      current.id === profile.id ? { ...current, todayShift: result.data.shift } : current
+    )
+    renderProfiles(currentProfiles)
+    const profileCanBePublic =
+      moduleSettings?.guestTeamVisible === true &&
+      profile.isGuestVisible &&
+      Boolean(profile.publishedAt) &&
+      !profile.disabledAt
+    const successMessage = !isGuestVisible
+      ? 'Сотрудник скрыт из блока «Сегодня работают».'
+      : profileCanBePublic
+        ? 'Сотрудник отображается в блоке «Сегодня работают».'
+        : moduleSettings?.guestTeamVisible === false
+          ? 'Ручная отметка сохранена. Показ команды гостям отключён в настройках.'
+          : 'Ручная отметка сохранена. Сначала опубликуйте карточку сотрудника.'
+    showToast(successMessage)
     void loadProfiles()
   }
 
@@ -1763,7 +1905,8 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
     refs.profileTags.disabled = true
   }
   void loadStaff()
-  void loadProfiles()
+  void loadModuleSettings()
+  if (moduleEnabled) void loadProfiles()
   void loadPendingInvites()
 
   return () => {
@@ -1777,6 +1920,7 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
     loadAbort?.abort()
     profileLoadAbort?.abort()
     pendingInviteLoadAbort?.abort()
+    moduleSettingsLoadAbort?.abort()
     disposables.forEach((dispose) => dispose())
   }
 }

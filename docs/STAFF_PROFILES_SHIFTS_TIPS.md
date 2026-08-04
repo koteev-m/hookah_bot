@@ -8,8 +8,11 @@
 `STAFF IDENTITY LINKING UX + DUPLICATE PREVENTION / DONE / MVP / STAGING-SMOKE-PASSED`.
 `STAFF SCHEDULE PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`.
 `STAFF SCHEDULE / CANCELED SHIFT RESTORE + BULK ASSIGNMENT / DONE / MVP / STAGING-SMOKE-PASSED`.
+`STAFF OPERATIONS SLICE B / OPTIONAL TEAM AND SCHEDULE MODULE / GUEST MANUAL OR SCHEDULE SOURCE /
+MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`.
 Green GitHub Actions, staging deploy and the bounded manual smoke described below are complete.
-These completed slices remain separate from the future Optional Team/Schedule Module Slice B.
+Those release claims apply to the previously closed slices only. Slice B is locally implemented
+and still requires independent review, green Actions, staging rollout and bounded manual smoke.
 `STAFF_TIP`, photo upload/media picker and staff shift sign-up/chat workflows
 remain future. Phase 2 may create staff tip intents with external staff tip links, but the platform
 must not collect guest order payments or staff tips in MVP.
@@ -37,10 +40,9 @@ The completed status is backed by green Actions, staging deploy and successful m
   safely unlinks only the wrong one; the correct card remains linked; schedule/history rows remain;
   Staff sees one own shift and Manager as a colleague; a second active linked card is rejected;
   protected-profile controls, Guest privacy and account/venue isolation passed.
-- Guest Today Staff regression: current source remains `MANUAL`; a published guest-visible profile
-  appears in `Сегодня работают` only after explicit manual Today Shift save. Staff Schedule
-  alone never publishes a profile, future shifts are not disclosed and Guest receives no full staff
-  schedule.
+- Guest Today Staff baseline: `MANUAL` preserves the exact explicit Today publication contract;
+  `SCHEDULE` is now an optional venue setting and publishes only a currently active shift. There is
+  no source fallback, future shifts remain private and Guest receives no full staff schedule.
 
 The records do not prove that a separate Staff account with no active card was available for the
 manual create-from-member path. This one non-blocking scenario is tracked only as
@@ -65,13 +67,12 @@ not downgrade the completed Identity Linking MVP.
 6. Guest receives no Telegram id, username as internal identity, membership role or invite/link
    state; only published public-card fields are returned.
 
-### Non-Blocking Slice B UX Follow-Up
+### Slice B Manual Today UX
 
-`MANUAL TODAY SHIFT CONTROL CLARITY` remains future and does not block the completed statuses. In
-`MANUAL`, replace the ambiguous save action `Сегодня на смене` with a persisted switch
-`Показывать сотрудника гостям сегодня`, explicit `Включено / Выключено` state and
-success copy `Сотрудник отображается в блоке «Сегодня работают».`. In future
-`source=SCHEDULE`, the manual control is hidden or read-only.
+`MANUAL TODAY SHIFT CONTROL CLARITY` is locally implemented without changing the already closed
+Staff statuses. `MANUAL` uses the persisted switch `Показывать сотрудника гостям сегодня`, shows
+the authoritative `Включено / Выключено` state and separates planned schedule status from Guest
+publication. In `SCHEDULE`, the manual control is hidden and direct mutation fails safely.
 
 ### Remaining P2 / Future
 
@@ -80,8 +81,8 @@ success copy `Сотрудник отображается в блоке «Сег
 - generic `PATCH` publish/hide audit taxonomy;
 - cross-relink deadlock hardening;
 - broader audit assertion hardening;
-- feature-specific old-binary rollback runbook;
-- manual Today Shift control clarity.
+- feature-specific deployment command verification; Slice B's semantic rollback boundary is
+  documented in `docs/DEPLOYMENT_RUNBOOK.md`.
 
 ## Core Rule
 
@@ -1114,8 +1115,9 @@ Analytics events are not the source of truth. Domain tables and audit logs remai
   Assignment is `DONE / MVP / STAGING-SMOKE-PASSED`. The completed Phase 1 schedule model remains
   `NO_MIGRATION_EXPECTED`; identity linking also required no migration because mutations serialize
   on the existing `venue_members` row.
-- Optional Team/Schedule module settings and a Guest `MANUAL`/`SCHEDULE` source switch are Slice B
-  `FUTURE`; Restore + Bulk Assignment and Staff Identity Linking UX Polish add neither.
+- Optional Team/Schedule module settings and the Guest `MANUAL`/`SCHEDULE` source switch are:
+  `STAFF OPERATIONS SLICE B / OPTIONAL TEAM AND SCHEDULE MODULE / GUEST MANUAL OR SCHEDULE SOURCE /
+  MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`.
 - Staff shift Telegram notifications/sign-up/swaps: `FUTURE`.
 - Separate staff communication chat/forum topics: `OPEN DECISION / FUTURE`.
 - Staff tips: `SPEC DRAFT / FUTURE`.
@@ -1124,32 +1126,29 @@ Analytics events are not the source of truth. Domain tables and audit logs remai
 - Payments for tips: `FUTURE / needs legal/payment decision`.
 - Guest order online payment: not in scope; order payment remains the offline terminal model.
 
-## Next Staff Runtime Block / Slice B Implementation-Ready Plan
+## Staff Operations Slice B / Local Implementation Contract
 
 Selected block:
 `STAFF OPERATIONS SLICE B / OPTIONAL TEAM AND SCHEDULE MODULE / GUEST MANUAL OR SCHEDULE SOURCE`.
 
-Read-only audit verdict: **IMPLEMENT_STAFF_OPERATIONS_SLICE_B_NOW**.
+Local implementation verdict: **MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE
+COMMIT**.
 
-This is exactly one next Staff runtime block. It does not reopen or merge the completed Phase 1,
+This remains one bounded Staff runtime block. It does not reopen or merge the completed Phase 1,
 Slice A, identity-linking or restore/bulk releases above.
 
 ### 1. Current Schema And Runtime Evidence
 
-- Audit snapshot: repository HEAD `4ae93e810ffa8d72532244e48963a8a510b0adfa` on 2026-08-04.
 - `venue_settings` exists in both database families and already has `updated_at`: PostgreSQL
   `V60__venue_settings.sql` uses `TIMESTAMPTZ`; H2 `V60__venue_settings.sql` uses
   `TIMESTAMP WITH TIME ZONE`.
-- None of `team_schedule_module_enabled`, `guest_team_visible` or `today_staff_source` exists in
-  schema, repository models, routes, DTOs or Mini App code.
-- PostgreSQL Flyway head is V120; H2 Flyway head is V121. The database factory selects separate
-  `db/migration/postgresql` and `db/migration/h2` locations, so the different heads are expected.
-- `VenueSettingsRepository` currently reads notification/timezone/review fields but does not map
-  `updated_at`; its default insert names columns explicitly, so new database defaults will also
-  protect old insert call sites.
-- Guest venue detail, standalone Today Staff and both Guest Preview modes already converge on
-  `GuestVenueReadService`. That service resolves the venue timezone and currently selects the
-  exact venue-local date through `VenueStaffProfileRepository.listPublicTodayStaff`.
+- Slice B adds these fields through PostgreSQL `V121__staff_module_settings.sql` and H2
+  `V122__staff_module_settings.sql`; pre-change heads were verified as V120 and V121 respectively.
+- The dedicated repository owns the bounded model and full-object CAS. Other `venue_settings`
+  writers advance the shared `updated_at` monotonically, so unrelated concurrent edits also make a
+  stale Slice B form reload instead of overwriting the shared row.
+- Guest venue detail, standalone Today Staff and both Guest Preview modes converge through
+  `GuestVenueReadService` on one `GuestTodayStaffResolver` and one injected current instant.
 - The current manual public query requires a published, guest-visible, non-disabled profile and a
   guest-visible non-canceled row for the exact date. Schedule-created rows default to
   `is_guest_visible=false` and `manually_marked_active=false`, so Staff Schedule alone does not
@@ -1157,14 +1156,14 @@ Slice A, identity-linking or restore/bulk releases above.
 - `VenueStaffScheduleDomain` already owns interval validation, venue-timezone conversion,
   overnight handling, DST rejection and lifecycle calculation. `ACTIVE` is already start
   inclusive and end exclusive.
-- Core membership/invite routes and profile/Today routes currently share `VenueStaffRoutes`; the
-  guard must therefore be applied per optional route, not around the whole Staff router.
-- `/venue/me` currently returns role plus static permissions only. It needs one safe module-enabled
-  capability for Staff navigation without exposing the settings object or granting settings read.
+- Core membership/invite routes and profile/Today routes share `VenueStaffRoutes`; one shared guard
+  is applied only to optional module routes, never around the whole Staff router.
+- `/venue/me` exposes only the safe `teamScheduleModuleEnabled` capability needed for Staff
+  navigation, not the settings object or settings authority.
 - Manager has no broad `VENUE_SETTINGS` permission. Existing protected Manager projections use
   redacted `linkedUserId` and `canManage=false`; a distinct `STAFF_PROFILE_EDIT_OWN` path permits
-  only the actor's safe self draft fields. Slice B preserves that separation while master-off
-  guards every optional profile route.
+  only the actor's safe self draft fields. Slice B preserves that separation and grants only
+  `STAFF_MODULE_SETTINGS_MANAGE` to Owner/Manager.
 
 ### 2. Final Settings Model
 
@@ -1211,8 +1210,9 @@ todayStaffSource = MANUAL
 
 Use `NOT NULL DEFAULT` columns. The additive migration backfills existing rows through those
 defaults, and future/legacy explicit-column inserts inherit them. A missing legacy
-`venue_settings` row is read as these defaults; authenticated settings `GET` materializes the row
-before returning a real `updatedAt` CAS token. Do not rewrite profile or shift rows.
+`venue_settings` row is read deterministically as these defaults with the bounded missing-row CAS
+token; `GET` does not materialize it. The first successful `PUT` materializes the row
+transactionally and returns authoritative `updatedAt`. Do not rewrite profile or shift rows.
 
 ### 4. Module Route Guards And Disable Semantics
 
@@ -1238,7 +1238,7 @@ Core Staff directory and invite list/create/revoke/accept semantics are not modu
 never be guarded by the master switch. Do not wrap the complete `VenueStaffRoutes` tree.
 When master is enabled but `todayStaffSource=SCHEDULE`, manual Today reads may remain available for
 truthful read-only state, but every direct manual Today mutation fails after tenant/RBAC/module
-checks with `409 STAFF_TODAY_SOURCE_CONFLICT` and
+checks with `409 TODAY_STAFF_SOURCE_SCHEDULE` and
 `Состав для гостей определяется активными сменами в графике.` Switching source never clears a
 manual overlay.
 
@@ -1339,9 +1339,9 @@ envelope, standalone Today endpoint and both `PUBLISHED_PUBLIC` and `PRIVATE_DRA
 The existing renderer already omits the empty `Сегодня работают` block. Preview must call the same
 resolver; it must not create a private schedule backdoor or reveal future shifts.
 
-### 11. Exact Migration Need And Numbers
+### 11. Exact Migration Numbers
 
-The next implementation adds only:
+The local implementation adds only:
 
 - PostgreSQL `V121__staff_module_settings.sql`;
 - H2 `V122__staff_module_settings.sql`.
@@ -1356,10 +1356,10 @@ CHECK (today_staff_source IN ('MANUAL', 'SCHEDULE'))
 ```
 
 Reuse existing `updated_at`; add no table, index or destructive backfill. Do not add a constraint
-that clears or rewrites nested values when master is false. Recheck both heads immediately before
-implementation because unrelated commits can consume these numbers.
+that clears or rewrites nested values when master is false. Both heads were rechecked immediately
+before creating the files; no number conflict was present.
 
-### 12. Likely Files
+### 12. Implemented File Surfaces
 
 Backend/schema:
 
@@ -1393,7 +1393,7 @@ Mini App:
 - `miniapp/src/style.css`;
 - `miniapp/e2e/guest-smoke.spec.ts`.
 
-Focused tests will likely add one settings-route suite and extend:
+Focused tests add one settings-route suite and extend:
 
 - `backend/app/src/test/kotlin/com/hookah/platform/backend/miniapp/venue/VenueStaffModuleSettingsRoutesTest.kt`;
 - `backend/app/src/test/kotlin/com/hookah/platform/backend/PostgresMigrationSmokeTest.kt`;
@@ -1437,14 +1437,14 @@ Focused tests will likely add one settings-route suite and extend:
   the copy must truthfully say that publication is currently suppressed.
 - `SCHEDULE` hides or locks manual Today controls and shows
   `Состав для гостей определяется активными сменами в графике.` Direct mutation returns
-  `409 STAFF_TODAY_SOURCE_CONFLICT`.
+  `409 TODAY_STAFF_SOURCE_SCHEDULE`.
 - Guest/Preview hides empty blocks, shows only active scheduled staff in SCHEDULE and preserves
   venue/account switch isolation.
 
 ### 15. Rollout And Staging Smoke
 
-After implementation: run the focused backend suites, PostgreSQL migration/concurrency coverage,
-ktlint/compile, Mini App build and focused e2e; wait for green Actions before staging deploy.
+Local validation covers the focused backend suites, real PostgreSQL migration smoke,
+ktlint/compile, Mini App build and e2e. Green Actions are still required before staging deploy.
 Staging smoke must prove defaults preserve current MANUAL behavior, all three settings and CAS,
 master-off empty Guest/Preview plus fail-closed module routes, retained row counts and core staff
 access, re-enable restoration, MANUAL publication, SCHEDULE current/overnight boundaries with no
@@ -1464,15 +1464,15 @@ Do not claim production readiness from local checks alone.
 - automatic row deletion, merge, relink or cancellation;
 - arbitrary notification campaigns.
 
-### 17. Outcome-First Implementation Prompt
+### 17. Outcome-First Closure Contract
 
 ```text
-Implement exactly STAFF OPERATIONS SLICE B / OPTIONAL TEAM AND SCHEDULE MODULE /
-GUEST MANUAL OR SCHEDULE SOURCE.
+Keep exactly STAFF OPERATIONS SLICE B / OPTIONAL TEAM AND SCHEDULE MODULE /
+GUEST MANUAL OR SCHEDULE SOURCE within this bounded contract.
 
-Preserve core memberships, invites, roles and all non-team operational access. Add the three
-backward-compatible venue_settings fields with defaults true/true/MANUAL using the current next
-PostgreSQL/H2 migration heads, reusing updated_at for full-object CAS. Add a dedicated narrow
+Preserve core memberships, invites, roles and all non-team operational access. Keep the three
+backward-compatible venue_settings fields with defaults true/true/MANUAL in PostgreSQL V121 and
+H2 V122, reusing updated_at for full-object CAS. Keep a dedicated narrow
 Owner/Manager permission and settings GET/PUT with transaction-bound safe
 STAFF_MODULE_SETTINGS_UPDATED audit; do not grant Manager broad VENUE_SETTINGS.
 
@@ -1487,9 +1487,9 @@ guest-visible, non-disabled profiles through the existing public DTO, with no fu
 private identity, shift id or MANUAL fallback. Make Guest venue detail, standalone Today and both
 Preview modes share one resolver.
 
-Update focused backend, PostgreSQL/H2 migration, RBAC/privacy, Mini App and e2e tests. Keep payroll,
+Keep focused backend, PostgreSQL/H2 migration, RBAC/privacy, Mini App and e2e tests green. Keep payroll,
 attendance, recurring shifts, swaps, reminders, Telegram mutation UI, staff chat, media/R2,
 tips/payments, staff removal/role mutation, Guest future schedule, automatic data deletion and
-campaigns out of scope. Run focused checks first, then required compile/build/e2e; wait for green
-Actions and complete staging smoke before marking Slice B done.
+campaigns out of scope. Wait for green Actions and complete staging smoke before adding any staging
+or production completion claim.
 ```

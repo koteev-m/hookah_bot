@@ -168,6 +168,24 @@ Rules:
 - Billing/subscription state changes require audit and cannot be silently reversed.
 - If backup/restore commands are unknown for the environment, mark rollback as **RUNBOOK GAP** before release.
 
+### Staff Operations Slice B Rollout Boundary
+
+`STAFF OPERATIONS SLICE B / OPTIONAL TEAM AND SCHEDULE MODULE / GUEST MANUAL OR SCHEDULE SOURCE /
+MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT` uses additive
+PostgreSQL V121 and H2 V122 migrations. Before staging:
+
+1. Apply the additive migration.
+2. Deploy only the new backend binary.
+3. Verify that all old backend instances have been replaced.
+4. Only then enable the settings-mutation UI.
+5. Run the bounded Owner/Manager/Staff/Guest manual smoke from the canonical Staff plan.
+
+Before any real Slice B settings use, the old binary is structurally schema-compatible because it
+ignores the additive columns. After a venue switches `todayStaffSource` to `SCHEDULE`, an old binary
+would ignore that source and resume `MANUAL` Guest behavior. Previous-binary rollback is therefore
+semantically unsafe after real settings use; use a forward fix. Exact deploy/rollback commands
+remain subject to the existing runbook verification requirement.
+
 ## Staging Smoke Policy
 
 After runtime staging deploy:

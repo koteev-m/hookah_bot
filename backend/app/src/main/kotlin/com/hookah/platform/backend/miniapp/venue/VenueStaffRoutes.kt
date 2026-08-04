@@ -14,6 +14,7 @@ import com.hookah.platform.backend.miniapp.venue.staff.StaffProfileWrite
 import com.hookah.platform.backend.miniapp.venue.staff.StaffShiftWrite
 import com.hookah.platform.backend.miniapp.venue.staff.StaffTodayShiftMutationResult
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffMember
+import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffModuleGuard
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffProfile
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffProfileAccess
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffProfileLinkState
@@ -225,6 +226,7 @@ fun Route.venueStaffRoutes(
     venueSettingsRepository: VenueSettingsRepository,
     venueOwnerAccountRepository: VenueOwnerAccountRepository = VenueOwnerAccountRepository(null),
     auditLogRepository: AuditLogRepository = AuditLogRepository(null),
+    staffModuleGuard: VenueStaffModuleGuard,
     telegramBotUsername: String? = null,
 ) {
     val logger = LoggerFactory.getLogger("VenueStaffRoutes")
@@ -420,6 +422,7 @@ fun Route.venueStaffRoutes(
             val userId = call.requireUserId()
             val venueId = call.requireVenueId()
             val requesterRole = resolveVenueRole(venueAccessRepository, userId, venueId)
+            staffModuleGuard.requireEnabledAfterAccessCheck(venueId)
             val today = resolveVenueToday(venueSettingsRepository, venueId)
             val profiles =
                 venueStaffProfileRepository.listProfiles(
@@ -437,6 +440,7 @@ fun Route.venueStaffRoutes(
             val venueId = call.requireVenueId()
             val requesterRole = resolveVenueRole(venueAccessRepository, userId, venueId)
             requesterRole.requireStaffPermission(VenuePermission.STAFF_PROFILE_MANAGE_STAFF)
+            staffModuleGuard.requireEnabledAfterAccessCheck(venueId)
             val request = call.receive<VenueStaffProfileCreateRequest>()
             if (request.linkedUserId != null) {
                 throw InvalidInputException("Linked profile creation requires the member flow")
@@ -457,6 +461,7 @@ fun Route.venueStaffRoutes(
             val venueId = call.requireVenueId()
             val requesterRole = resolveVenueRole(venueAccessRepository, userId, venueId)
             requesterRole.requireStaffPermission(VenuePermission.STAFF_PROFILE_MANAGE_STAFF)
+            staffModuleGuard.requireEnabledAfterAccessCheck(venueId)
             val request = call.receive<VenueStaffProfileCreateFromMemberRequest>()
             val subtype = normalizeProfileSubtype(request.subtype)
             val roleLabel = normalizeCreateFromMemberRoleLabel(subtype, request.roleLabel)
@@ -493,6 +498,7 @@ fun Route.venueStaffRoutes(
                     if (request.hasManagementFields()) throw ForbiddenException()
                 }
             }
+            staffModuleGuard.requireEnabledAfterAccessCheck(venueId)
             val result =
                 venueStaffProfileRepository.updateProfile(
                     venueId = venueId,
@@ -524,6 +530,7 @@ fun Route.venueStaffRoutes(
             val profileId = call.requireProfileId()
             val requesterRole = resolveVenueRole(venueAccessRepository, userId, venueId)
             requesterRole.requireStaffPermission(VenuePermission.STAFF_PROFILE_PUBLISH_STAFF)
+            staffModuleGuard.requireEnabledAfterAccessCheck(venueId)
             val result =
                 venueStaffProfileRepository.publishProfile(
                     venueId = venueId,
@@ -541,6 +548,7 @@ fun Route.venueStaffRoutes(
             val profileId = call.requireProfileId()
             val requesterRole = resolveVenueRole(venueAccessRepository, userId, venueId)
             requesterRole.requireStaffPermission(VenuePermission.STAFF_PROFILE_PUBLISH_STAFF)
+            staffModuleGuard.requireEnabledAfterAccessCheck(venueId)
             val result =
                 venueStaffProfileRepository.hideProfile(
                     venueId = venueId,
@@ -556,6 +564,7 @@ fun Route.venueStaffRoutes(
             val userId = call.requireUserId()
             val venueId = call.requireVenueId()
             val requesterRole = resolveVenueRole(venueAccessRepository, userId, venueId)
+            staffModuleGuard.requireEnabledAfterAccessCheck(venueId)
             val today = resolveVenueToday(venueSettingsRepository, venueId)
             val profiles =
                 venueStaffProfileRepository.listProfiles(
@@ -578,6 +587,7 @@ fun Route.venueStaffRoutes(
             if (requesterRole == VenueRole.STAFF) {
                 throw ForbiddenException()
             }
+            staffModuleGuard.requireManualTodaySourceAfterAccessCheck(venueId)
             val request = call.receive<VenueStaffShiftUpsertRequest>()
             val status = normalizeShiftStatus(request.status)
             if (requesterRole == VenueRole.MANAGER && status == STAFF_SHIFT_STATUS_SCHEDULED) {

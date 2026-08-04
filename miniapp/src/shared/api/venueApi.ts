@@ -84,6 +84,8 @@ import type {
   VenueStaffProfileDto,
   VenueStaffProfilesResponse,
   VenueStaffProfileUpdateRequest,
+  VenueStaffModuleSettingsDto,
+  VenueStaffModuleSettingsUpdateRequest,
   VenueStaffScheduleBatchRequest,
   VenueStaffScheduleBatchResponse,
   VenueStaffScheduleCancelRequest,
@@ -113,6 +115,39 @@ export async function venueGetMe(
   signal?: AbortSignal
 ) {
   return requestApi<VenueMeResponse>(backendUrl, '/api/venue/me', { signal }, deps)
+}
+
+export async function venueGetStaffModuleSettings(
+  backendUrl: string,
+  venueId: number,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenueStaffModuleSettingsDto>(
+    backendUrl,
+    `/api/venue/${venueId}/staff-module-settings`,
+    { signal },
+    deps
+  )
+}
+
+export async function venueUpdateStaffModuleSettings(
+  backendUrl: string,
+  params: { venueId: number; body: VenueStaffModuleSettingsUpdateRequest },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenueStaffModuleSettingsDto>(
+    backendUrl,
+    `/api/venue/${params.venueId}/staff-module-settings`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params.body),
+      signal
+    },
+    deps
+  )
 }
 
 export async function venueGetGuestPreview(

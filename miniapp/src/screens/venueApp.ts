@@ -445,6 +445,12 @@ export function mountVenueApp(options: VenueAppOptions) {
 
   const hasPermission = (permission: string) => currentPermissions.includes(permission)
   const canManagePublicCard = () => currentRole === 'OWNER' || currentRole === 'MANAGER'
+  const selectedAccess = () =>
+    selectedVenueId == null
+      ? null
+      : accessList.find((venue) => venue.venueId === selectedVenueId) ?? null
+  const staffOwnScheduleModuleDisabled = () =>
+    currentRole === 'STAFF' && selectedAccess()?.teamScheduleModuleEnabled === false
 
   const updateNavVisibility = () => {
     refs.navButtons.orders.hidden = !hasPermission('ORDER_QUEUE_VIEW')
@@ -459,14 +465,18 @@ export function mountVenueApp(options: VenueAppOptions) {
     refs.navButtons.tables.hidden = !hasPermission('TABLE_VIEW')
     refs.navButtons.staff.hidden = currentRole === 'STAFF'
     refs.navButtons.shifts.hidden =
-      !hasPermission('STAFF_SCHEDULE_VIEW') && !hasPermission('STAFF_SCHEDULE_VIEW_OWN')
+      staffOwnScheduleModuleDisabled() ||
+      (!hasPermission('STAFF_SCHEDULE_VIEW') && !hasPermission('STAFF_SCHEDULE_VIEW_OWN'))
     refs.navButtons.shifts.textContent = currentRole === 'STAFF' ? 'Мои смены' : 'График смен'
     refs.navButtons.stats.hidden = currentRole !== 'OWNER' && currentRole !== 'MANAGER'
     refs.navButtons.feedback.hidden = !hasPermission('FEEDBACK_VIEW')
     refs.navButtons.subscription.hidden = currentRole !== 'OWNER'
     refs.navButtons.chat.hidden = !hasPermission('STAFF_CHAT_LINK')
     refs.navButtons.settings.hidden =
-      !canManagePublicCard() && !hasPermission('SHIFT_EXTENSION_SETTINGS') && !hasPermission('BOOKING_MANAGE')
+      !canManagePublicCard() &&
+      !hasPermission('SHIFT_EXTENSION_SETTINGS') &&
+      !hasPermission('BOOKING_MANAGE') &&
+      !hasPermission('STAFF_MODULE_SETTINGS_MANAGE')
     refs.navSections.forEach((section) => {
       section.element.hidden = section.buttons.every((button) => button.hidden)
     })
@@ -494,13 +504,21 @@ export function mountVenueApp(options: VenueAppOptions) {
       case 'tables':
         return hasPermission('TABLE_VIEW')
       case 'settings':
-        return canManagePublicCard() || hasPermission('SHIFT_EXTENSION_SETTINGS') || hasPermission('BOOKING_MANAGE')
+        return (
+          canManagePublicCard() ||
+          hasPermission('SHIFT_EXTENSION_SETTINGS') ||
+          hasPermission('BOOKING_MANAGE') ||
+          hasPermission('STAFF_MODULE_SETTINGS_MANAGE')
+        )
       case 'subscription':
         return currentRole === 'OWNER'
       case 'staff':
         return currentRole !== 'STAFF'
       case 'shifts':
-        return hasPermission('STAFF_SCHEDULE_VIEW') || hasPermission('STAFF_SCHEDULE_VIEW_OWN')
+        return (
+          !staffOwnScheduleModuleDisabled() &&
+          (hasPermission('STAFF_SCHEDULE_VIEW') || hasPermission('STAFF_SCHEDULE_VIEW_OWN'))
+        )
       case 'stats':
         return currentRole === 'OWNER' || currentRole === 'MANAGER'
       case 'feedback':
@@ -530,7 +548,16 @@ export function mountVenueApp(options: VenueAppOptions) {
     }
     if (!canAccessRoute(route.name)) {
       const denied = el('section', { className: 'card' })
-      append(denied, el('h2', { text: 'Недостаточно прав' }), el('p', { text: 'У вас нет доступа к этому разделу.' }))
+      const staffScheduleDisabled = route.name === 'shifts' && staffOwnScheduleModuleDisabled()
+      append(
+        denied,
+        el('h2', { text: staffScheduleDisabled ? 'Мои смены недоступны' : 'Недостаточно прав' }),
+        el('p', {
+          text: staffScheduleDisabled
+            ? 'Карточки команды и график смен отключены в настройках заведения.'
+            : 'У вас нет доступа к этому разделу.'
+        })
+      )
       refs.content.replaceChildren(denied)
       return () => undefined
     }
@@ -603,7 +630,8 @@ export function mountVenueApp(options: VenueAppOptions) {
           isDebug,
           venueId,
           access,
-          currentUserId: currentUserId ?? 0
+          currentUserId: currentUserId ?? 0,
+          onOpenStaffModuleSettings: () => navigate('#/settings')
         })
       case 'shifts':
         return renderVenueStaffScheduleScreen({
@@ -611,7 +639,8 @@ export function mountVenueApp(options: VenueAppOptions) {
           backendUrl,
           isDebug,
           venueId,
-          access
+          access,
+          onOpenStaffModuleSettings: () => navigate('#/settings')
         })
       case 'stats':
         return renderVenueStatsScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
@@ -624,7 +653,17 @@ export function mountVenueApp(options: VenueAppOptions) {
           isDebug,
           venueId,
           access,
-          onOpenPreview: () => navigate('#/guest-preview?from=settings')
+          onOpenPreview: () => navigate('#/guest-preview?from=settings'),
+          onStaffModuleSettingsSaved: (settings) => {
+            if (disposed || selectedVenueId !== venueId) return
+            const index = accessList.findIndex((item) => item.venueId === venueId)
+            if (index < 0) return
+            accessList[index] = {
+              ...accessList[index],
+              teamScheduleModuleEnabled: settings.teamScheduleModuleEnabled
+            }
+            updateNavVisibility()
+          }
         })
       case 'subscription':
         return renderVenueSubscriptionScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })

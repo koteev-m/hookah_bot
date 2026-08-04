@@ -40,12 +40,17 @@ Staff profiles, Today Shift, Staff Schedule and staff tips source of truth:
   STAGING-SMOKE-PASSED`; `STAFF IDENTITY LINKING UX + DUPLICATE PREVENTION / DONE / MVP /
   STAGING-SMOKE-PASSED`; `STAFF SCHEDULE PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`; and
   `STAFF SCHEDULE / CANCELED SHIFT RESTORE + BULK ASSIGNMENT / DONE / MVP /
-  STAGING-SMOKE-PASSED`. Green Actions, staging deploy and manual smoke are complete. Schedule
-  remains Venue Mini App only and Guest `Сегодня работают` remains manual until Slice B.
-  The next Staff runtime block is exactly `STAFF OPERATIONS SLICE B / OPTIONAL TEAM AND SCHEDULE
-  MODULE / GUEST MANUAL OR SCHEDULE SOURCE`, with read-only audit verdict
-  `IMPLEMENT_STAFF_OPERATIONS_SLICE_B_NOW`. Its backward-compatible `venue_settings` defaults are
-  master enabled, Guest team visible and source `MANUAL`; detailed disable, RBAC/privacy,
+  STAGING-SMOKE-PASSED`. Green Actions, staging deploy and manual smoke are complete for those
+  previously closed slices.
+- `STAFF OPERATIONS SLICE B / OPTIONAL TEAM AND SCHEDULE MODULE / GUEST MANUAL OR SCHEDULE SOURCE /
+  MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`. OWNER and MANAGER
+  manage the own-venue module through the narrow `STAFF_MODULE_SETTINGS_MANAGE` permission; this
+  does not grant MANAGER broad `VENUE_SETTINGS`. Master-off retains memberships, invites, roles,
+  profiles, shifts, nested settings and audit history, and leaves core venue operations available.
+  Guest/Preview returns no team when master or Guest visibility is off; otherwise `MANUAL` keeps
+  explicit Today publication and `SCHEDULE` selects only current active public presence with no
+  MANUAL fallback or future/private schedule fields. This is a local status only: GitHub Actions,
+  staging deploy and staging smoke for Slice B are not claimed yet. Detailed disable, RBAC/privacy,
   migration, test and rollout contracts remain canonical in the staff document.
   Staff tips and any payment provider/direct payout path are future and require separate
   legal/product decision.
@@ -103,7 +108,8 @@ Derived responsibilities:
 - staff_profile / staff_shift: current public opt-in profiles/manual Today Shift plus the bounded
   private Staff Schedule Phase 1; Manager manages only display-only/Staff-linked cards; effective
   venue hours are create defaults, never a server restriction; one planned interval per profile and
-  venue-local start date, with Guest publication remaining manual; canonical spec is
+  venue-local start date. Guest Today uses the saved `MANUAL` or `SCHEDULE` source without fallback;
+  canonical spec is
   `docs/STAFF_PROFILES_SHIFTS_TIPS.md`
 - staff_tip_method / staff_tip_intent: future staff-tip model for a specific staff member; MVP money must not touch the platform and tip intent is not proof of payment
 - subscription: venue_id, status trialing/active/past_due/suspended/canceled, price override, trial_end, paid_until, grace_end, methods enabled(card/stars)
@@ -140,6 +146,10 @@ MUST:
 - Manager may create/list/revoke only Staff invites, manage only display-only/active-Staff-linked
   cards and use the existing Staff Schedule permission. Owner/Manager profiles, roles, membership
   removal/deactivation, ownership, billing and platform settings stay outside Manager authority.
+- Owner/Manager may manage the own-venue optional Team/Schedule module only through
+  `STAFF_MODULE_SETTINGS_MANAGE`; Manager does not gain broad `VENUE_SETTINGS`. Disabling the module
+  guards profile/Today/schedule surfaces but never removes staff data or core membership/invite/role
+  and operational access.
 - Manager duplicate link state is read-only with protected linkage redacted and `canManage=false`;
   duplicate repair is Owner-only through safe unlink of the wrong concrete card. Automatic
   merge/delete/relink is forbidden.

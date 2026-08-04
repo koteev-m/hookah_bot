@@ -22,8 +22,7 @@ import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import com.hookah.platform.backend.miniapp.venue.containsOpenInstant
 import com.hookah.platform.backend.miniapp.venue.formatScheduleRange
 import com.hookah.platform.backend.miniapp.venue.formatScheduleTime
-import com.hookah.platform.backend.miniapp.venue.staff.PublicVenueStaffToday
-import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffProfileRepository
+import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffModuleSettingsRepository
 import com.hookah.platform.backend.telegram.db.VenueBookingDateOverride
 import com.hookah.platform.backend.telegram.db.VenueBookingHours
 import com.hookah.platform.backend.telegram.db.VenueBookingHoursRepository
@@ -34,8 +33,8 @@ import com.hookah.platform.backend.telegram.db.VenueInfoSectionsRepository
 import com.hookah.platform.backend.telegram.db.VenuePromotion
 import com.hookah.platform.backend.telegram.db.VenuePromotionRepository
 import com.hookah.platform.backend.telegram.db.VenueSettingsRepository
+import java.time.Clock
 import java.time.Instant
-import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
 
@@ -47,13 +46,15 @@ internal enum class GuestVenueReadVisibility {
 class GuestVenueReadService(
     private val guestVenueRepository: GuestVenueRepository,
     private val guestFavoritesRepository: GuestFavoritesRepository,
-    private val venueStaffProfileRepository: VenueStaffProfileRepository,
     private val venueInfoSectionsRepository: VenueInfoSectionsRepository,
     private val venueInfoSectionMediaRepository: VenueInfoSectionMediaRepository,
     private val subscriptionRepository: SubscriptionRepository,
     private val venueBookingHoursRepository: VenueBookingHoursRepository,
     private val venueSettingsRepository: VenueSettingsRepository,
     private val venuePromotionRepository: VenuePromotionRepository,
+    private val venueStaffModuleSettingsRepository: VenueStaffModuleSettingsRepository,
+    private val guestTodayStaffResolver: GuestTodayStaffResolver,
+    private val clock: Clock = Clock.systemUTC(),
 ) {
     suspend fun getVenue(
         userId: Long,
@@ -84,6 +85,7 @@ class GuestVenueReadService(
         userId: Long?,
         visibility: GuestVenueReadVisibility,
     ): VenueResponse {
+        val now = clock.instant()
         val isFavorite =
             if (visibility == GuestVenueReadVisibility.PUBLISHED_PUBLIC && userId != null) {
                 guestFavoritesRepository.isVenueFavorite(userId = userId, venueId = venue.id)
@@ -95,7 +97,7 @@ class GuestVenueReadService(
                 venueId = venue.id,
                 fallback = ZoneId.of(VenueSettingsRepository.DEFAULT_AUTO_TIMEZONE),
             )
-        val today = LocalDateTime.ofInstant(Instant.now(), zoneId).toLocalDate()
+        val today = LocalDateTime.ofInstant(now, zoneId).toLocalDate()
         val weeklyHours = venueBookingHoursRepository.listWeeklyHours(venue.id)
         val dateExceptions =
             venueBookingHoursRepository.listDateOverrides(
@@ -103,7 +105,7 @@ class GuestVenueReadService(
                 limit = MAX_GUEST_DATE_EXCEPTIONS,
                 fromDate = today,
             )
-        val todayStaff = buildTodayStaff(venue.id, today)
+        val todayStaff = buildTodayStaff(venue.id, now, zoneId)
         val promotions =
             when (visibility) {
                 GuestVenueReadVisibility.PUBLISHED_PUBLIC ->
@@ -114,7 +116,7 @@ class GuestVenueReadService(
         return VenueResponse(
             venue =
                 venue.toVenueDto(
-                    todaySchedule = buildTodaySchedules(mapOf(venue.id to zoneId)).getValue(venue.id),
+                    todaySchedule = buildTodaySchedules(mapOf(venue.id to zoneId), now).getValue(venue.id),
                     weeklyHours = weeklyHours.map { it.toGuestDto() },
                     dateExceptions = dateExceptions.map { it.toGuestDto() },
                     todayStaff = todayStaff,
@@ -161,8 +163,7 @@ class GuestVenueReadService(
     suspend fun getTodayStaff(venueId: Long): List<GuestTodayStaffDto> {
         ensureGuestBrowseAvailable(venueId, guestVenueRepository, subscriptionRepository)
         val zoneId = venueSettingsRepository.resolveZoneId(venueId)
-        val today = LocalDateTime.ofInstant(Instant.now(), zoneId).toLocalDate()
-        return buildTodayStaff(venueId, today)
+        return buildTodayStaff(venueId, clock.instant(), zoneId)
     }
 
     suspend fun getTodaySchedule(venueId: Long): VenueTodayScheduleDto {
@@ -171,12 +172,14 @@ class GuestVenueReadService(
 
     suspend fun getTodaySchedules(venueIds: Collection<Long>): Map<Long, VenueTodayScheduleDto> {
         val zoneIds = venueSettingsRepository.resolveZoneIds(venueIds)
-        return buildTodaySchedules(zoneIds)
+        return buildTodaySchedules(zoneIds, clock.instant())
     }
 
-    private suspend fun buildTodaySchedules(zoneIds: Map<Long, ZoneId>): Map<Long, VenueTodayScheduleDto> {
+    private suspend fun buildTodaySchedules(
+        zoneIds: Map<Long, ZoneId>,
+        now: Instant,
+    ): Map<Long, VenueTodayScheduleDto> {
         if (zoneIds.isEmpty()) return emptyMap()
-        val now = Instant.now()
         val localDateTimes = zoneIds.mapValues { (_, zoneId) -> LocalDateTime.ofInstant(now, zoneId) }
         val datesByVenueId =
             localDateTimes.mapValues { (_, localDateTime) ->
@@ -239,9 +242,15 @@ class GuestVenueReadService(
 
     private suspend fun buildTodayStaff(
         venueId: Long,
-        today: LocalDate,
+        now: Instant,
+        zoneId: ZoneId,
     ): List<GuestTodayStaffDto> =
-        venueStaffProfileRepository.listPublicTodayStaff(venueId, today).map { it.toGuestDto() }
+        guestTodayStaffResolver.resolve(
+            venueId = venueId,
+            now = now,
+            zoneId = zoneId,
+            settings = venueStaffModuleSettingsRepository.get(venueId),
+        )
 
     private companion object {
         const val MAX_GUEST_DATE_EXCEPTIONS = 100
@@ -325,21 +334,6 @@ private fun VenuePromotion.toGuestDto(): GuestVenuePromotionDto =
         startsAt = startsAt?.toString(),
         endsAt = endsAt?.toString(),
         templateType = templateType.dbValue,
-    )
-
-private fun PublicVenueStaffToday.toGuestDto(): GuestTodayStaffDto =
-    GuestTodayStaffDto(
-        id = id,
-        displayName = displayName,
-        roleLabel = roleLabel,
-        subtype = subtype,
-        photoRef = null,
-        bio = bio,
-        tags = tags,
-        shiftDate = shiftDate.toString(),
-        startsAt = startsAt?.toString(),
-        endsAt = endsAt?.toString(),
-        shiftStatus = shiftStatus,
     )
 
 private fun VenueInfoSection.toGuestInfoDto(media: List<VenueInfoSectionMediaDto>): VenueInfoSectionDto =

@@ -12,6 +12,7 @@ import com.hookah.platform.backend.miniapp.venue.staff.StaffScheduleConfirmation
 import com.hookah.platform.backend.miniapp.venue.staff.StaffScheduleIntervalState
 import com.hookah.platform.backend.miniapp.venue.staff.StaffScheduleLifecycle
 import com.hookah.platform.backend.miniapp.venue.staff.StaffScheduleResolvedInterval
+import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffModuleGuard
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffProfileRepository
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffScheduledShift
 import com.hookah.platform.backend.miniapp.venue.staff.computeStaffScheduleLifecycle
@@ -200,12 +201,14 @@ fun Route.venueStaffScheduleRoutes(
     venueBookingHoursRepository: VenueBookingHoursRepository,
     venueSettingsRepository: VenueSettingsRepository,
     auditLogRepository: AuditLogRepository,
+    staffModuleGuard: VenueStaffModuleGuard,
     clock: Clock = Clock.systemUTC(),
 ) {
     route("/venue") {
         get("/{venueId}/staff/shifts") {
             val membership = call.requireStaffScheduleMembership(venueAccessRepository)
             membership.requirePermission(VenuePermission.STAFF_SCHEDULE_VIEW)
+            staffModuleGuard.requireEnabledAfterAccessCheck(membership.venueId)
             val context = resolveStaffScheduleContext(venueSettingsRepository, membership.venueId, clock)
             val range = call.requireStaffScheduleRange(context.venueToday)
             val serviceDates = range.serviceDates()
@@ -236,6 +239,7 @@ fun Route.venueStaffScheduleRoutes(
         get("/{venueId}/staff/shifts/me") {
             val membership = call.requireStaffScheduleMembership(venueAccessRepository)
             membership.requirePermission(VenuePermission.STAFF_SCHEDULE_VIEW_OWN)
+            staffModuleGuard.requireEnabledAfterAccessCheck(membership.venueId)
             val context = resolveStaffScheduleContext(venueSettingsRepository, membership.venueId, clock)
             val range = call.requireStaffScheduleRange(context.venueToday)
             val candidates =
@@ -270,6 +274,7 @@ fun Route.venueStaffScheduleRoutes(
         post("/{venueId}/staff/shifts") {
             val membership = call.requireStaffScheduleMembership(venueAccessRepository)
             membership.requirePermission(VenuePermission.STAFF_SCHEDULE_MANAGE)
+            staffModuleGuard.requireEnabledAfterAccessCheck(membership.venueId)
             val context = resolveStaffScheduleContext(venueSettingsRepository, membership.venueId, clock)
             val request = call.receive<VenueStaffScheduleCreateRequest>()
             if (request.staffProfileId <= 0) {
@@ -298,6 +303,7 @@ fun Route.venueStaffScheduleRoutes(
         post("/{venueId}/staff/shifts/batch") {
             val membership = call.requireStaffScheduleMembership(venueAccessRepository)
             membership.requirePermission(VenuePermission.STAFF_SCHEDULE_MANAGE)
+            staffModuleGuard.requireEnabledAfterAccessCheck(membership.venueId)
             val context = resolveStaffScheduleContext(venueSettingsRepository, membership.venueId, clock)
             val request = call.receive<VenueStaffScheduleBatchRequest>()
             if (request.assignments.isEmpty() || request.assignments.size > MAX_STAFF_SCHEDULE_BATCH_SIZE) {
@@ -366,6 +372,7 @@ fun Route.venueStaffScheduleRoutes(
         put("/{venueId}/staff/shifts/{shiftId}") {
             val membership = call.requireStaffScheduleMembership(venueAccessRepository)
             membership.requirePermission(VenuePermission.STAFF_SCHEDULE_MANAGE)
+            staffModuleGuard.requireEnabledAfterAccessCheck(membership.venueId)
             val shiftId = call.requireScheduleShiftId()
             val context = resolveStaffScheduleContext(venueSettingsRepository, membership.venueId, clock)
             val request = call.receive<VenueStaffScheduleUpdateRequest>()
@@ -394,6 +401,7 @@ fun Route.venueStaffScheduleRoutes(
         post("/{venueId}/staff/shifts/{shiftId}/restore") {
             val membership = call.requireStaffScheduleMembership(venueAccessRepository)
             membership.requirePermission(VenuePermission.STAFF_SCHEDULE_MANAGE)
+            staffModuleGuard.requireEnabledAfterAccessCheck(membership.venueId)
             val shiftId = call.requireScheduleShiftId()
             val context = resolveStaffScheduleContext(venueSettingsRepository, membership.venueId, clock)
             val request = call.receive<VenueStaffScheduleRestoreRequest>()
@@ -423,6 +431,7 @@ fun Route.venueStaffScheduleRoutes(
         post("/{venueId}/staff/shifts/{shiftId}/cancel") {
             val membership = call.requireStaffScheduleMembership(venueAccessRepository)
             membership.requirePermission(VenuePermission.STAFF_SCHEDULE_MANAGE)
+            staffModuleGuard.requireEnabledAfterAccessCheck(membership.venueId)
             val shiftId = call.requireScheduleShiftId()
             val context = resolveStaffScheduleContext(venueSettingsRepository, membership.venueId, clock)
             val request = call.receive<VenueStaffScheduleCancelRequest>()

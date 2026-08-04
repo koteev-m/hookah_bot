@@ -14,6 +14,7 @@ import com.hookah.platform.backend.miniapp.venue.location.VenueLocationResolvedI
 import com.hookah.platform.backend.miniapp.venue.location.VenueLocationSuggestProviderRequest
 import com.hookah.platform.backend.miniapp.venue.location.VenueLocationSuggestionItem
 import com.hookah.platform.backend.miniapp.venue.location.VenueLocationSuggestionKind
+import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffModuleSettingsRepository
 import com.hookah.platform.backend.telegram.StaffChatNotificationResult
 import com.hookah.platform.backend.telegram.StaffChatNotifier
 import com.hookah.platform.backend.telegram.db.StaffChatLinkCodeRepository
@@ -66,6 +67,7 @@ data class VenueAccessDto(
     val venueStatus: String? = null,
     val role: String,
     val permissions: List<String>,
+    val teamScheduleModuleEnabled: Boolean = true,
 )
 
 @Serializable
@@ -214,6 +216,7 @@ fun Route.venueRoutes(
     venueRepository: VenueRepository,
     venueBookingHoursRepository: VenueBookingHoursRepository,
     venueSettingsRepository: VenueSettingsRepository,
+    venueStaffModuleSettingsRepository: VenueStaffModuleSettingsRepository,
     venueLocationProvider: VenueLocationProvider = DisabledVenueLocationProvider(),
     staffChatNotifier: StaffChatNotifier? = null,
     telegramBotUsername: String? = null,
@@ -222,6 +225,8 @@ fun Route.venueRoutes(
         get("/me") {
             val userId = call.requireUserId()
             val memberships = venueAccessRepository.listVenueMemberships(userId)
+            val staffModuleSettings =
+                venueStaffModuleSettingsRepository.getAll(memberships.map { it.venueId })
             val venues =
                 memberships.mapNotNull { membership ->
                     val role = VenueRoleMapping.fromDb(membership.role)
@@ -242,6 +247,8 @@ fun Route.venueRoutes(
                         venueStatus = membership.venueStatus,
                         role = role.name,
                         permissions = permissions.map { it.name },
+                        teamScheduleModuleEnabled =
+                            staffModuleSettings.getValue(membership.venueId).teamScheduleModuleEnabled,
                     )
                 }
             if (venues.isEmpty()) {

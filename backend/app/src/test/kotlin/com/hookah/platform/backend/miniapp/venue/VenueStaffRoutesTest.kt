@@ -1684,6 +1684,171 @@ class VenueStaffRoutesTest {
             assertApiErrorEnvelope(shiftResponse, ApiErrorCodes.FORBIDDEN)
         }
 
+    @Test
+    fun `disabled module guards optional staff routes after access checks and keeps core directory available`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("staff-module-guards")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val ownerId = 64_101L
+            val staffId = 64_102L
+            val foreignOwnerId = 64_103L
+            val venueId = seedVenueMembership(jdbcUrl, ownerId, "OWNER")
+            seedVenueMembership(jdbcUrl, staffId, "STAFF", venueId)
+            seedVenueMembership(jdbcUrl, foreignOwnerId, "OWNER")
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                connection.prepareStatement(
+                    """
+                    INSERT INTO venue_settings (
+                        venue_id,
+                        timezone,
+                        team_schedule_module_enabled,
+                        guest_team_visible,
+                        today_staff_source
+                    )
+                    VALUES (?, 'UTC', FALSE, TRUE, 'MANUAL')
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setLong(1, venueId)
+                    statement.executeUpdate()
+                }
+            }
+            val ownerToken = issueToken(config, ownerId)
+            val staffToken = issueToken(config, staffId)
+            val foreignToken = issueToken(config, foreignOwnerId)
+            val today = LocalDate.now(ZoneId.of("UTC"))
+
+            val directoryResponse =
+                client.get("/api/venue/$venueId/staff") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                }
+            assertEquals(HttpStatusCode.OK, directoryResponse.status)
+            assertEquals(
+                setOf(ownerId, staffId),
+                json.decodeFromString(StaffListResponse.serializer(), directoryResponse.bodyAsText())
+                    .members.map { it.userId }.toSet(),
+            )
+            val inviteListResponse =
+                client.get("/api/venue/$venueId/staff/invites") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                }
+            assertEquals(HttpStatusCode.OK, inviteListResponse.status)
+
+            val profileCreateResponse =
+                client.post("/api/venue/$venueId/staff/profiles") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            StaffProfileCreateRequest.serializer(),
+                            StaffProfileCreateRequest(displayName = "Не создавать", subtype = "waiter"),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.Conflict, profileCreateResponse.status)
+            assertApiErrorEnvelope(profileCreateResponse, ApiErrorCodes.STAFF_MODULE_DISABLED)
+
+            val profileListResponse =
+                client.get("/api/venue/$venueId/staff/profiles") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                }
+            assertEquals(HttpStatusCode.Conflict, profileListResponse.status)
+            assertApiErrorEnvelope(profileListResponse, ApiErrorCodes.STAFF_MODULE_DISABLED)
+
+            val todayResponse =
+                client.get("/api/venue/$venueId/staff/shifts/today") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                }
+            assertEquals(HttpStatusCode.Conflict, todayResponse.status)
+            assertApiErrorEnvelope(todayResponse, ApiErrorCodes.STAFF_MODULE_DISABLED)
+
+            val adminScheduleResponse =
+                client.get("/api/venue/$venueId/staff/shifts?from=$today&to=$today") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                }
+            assertEquals(HttpStatusCode.Conflict, adminScheduleResponse.status)
+            assertApiErrorEnvelope(adminScheduleResponse, ApiErrorCodes.STAFF_MODULE_DISABLED)
+
+            val scheduleCreateResponse =
+                client.post("/api/venue/$venueId/staff/shifts") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        """{"staffProfileId":999999,"shiftDate":"$today","startsAt":"10:00","endsAt":"18:00"}""",
+                    )
+                }
+            assertEquals(HttpStatusCode.Conflict, scheduleCreateResponse.status)
+            assertApiErrorEnvelope(scheduleCreateResponse, ApiErrorCodes.STAFF_MODULE_DISABLED)
+
+            val ownScheduleResponse =
+                client.get("/api/venue/$venueId/staff/shifts/me?from=$today&to=$today") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $staffToken") }
+                }
+            assertEquals(HttpStatusCode.Conflict, ownScheduleResponse.status)
+            assertApiErrorEnvelope(ownScheduleResponse, ApiErrorCodes.STAFF_MODULE_DISABLED)
+
+            val foreignProfileResponse =
+                client.get("/api/venue/$venueId/staff/profiles") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $foreignToken") }
+                }
+            assertEquals(HttpStatusCode.Forbidden, foreignProfileResponse.status)
+            assertApiErrorEnvelope(foreignProfileResponse, ApiErrorCodes.FORBIDDEN)
+
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                connection.prepareStatement(
+                    """
+                    UPDATE venue_settings
+                    SET team_schedule_module_enabled = TRUE,
+                        today_staff_source = 'SCHEDULE'
+                    WHERE venue_id = ?
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setLong(1, venueId)
+                    statement.executeUpdate()
+                }
+            }
+            val profile =
+                client.post("/api/venue/$venueId/staff/profiles") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            StaffProfileCreateRequest.serializer(),
+                            StaffProfileCreateRequest(displayName = "Источник графика", subtype = "waiter"),
+                        ),
+                    )
+                }.let { response ->
+                    assertEquals(HttpStatusCode.OK, response.status, response.bodyAsText())
+                    json.decodeFromString(StaffProfileDto.serializer(), response.bodyAsText())
+                }
+            val manualMutationResponse =
+                client.post("/api/venue/$venueId/staff/profiles/${profile.id}/today-shift") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody(json.encodeToString(StaffShiftUpsertRequest.serializer(), StaffShiftUpsertRequest()))
+                }
+            assertEquals(HttpStatusCode.Conflict, manualMutationResponse.status)
+            assertApiErrorEnvelope(manualMutationResponse, ApiErrorCodes.TODAY_STAFF_SOURCE_SCHEDULE)
+            assertFalse(manualMutationResponse.bodyAsText().contains("teamScheduleModuleEnabled"))
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                connection.prepareStatement(
+                    "SELECT COUNT(*) FROM staff_shifts WHERE venue_id = ? AND staff_profile_id = ?",
+                ).use { statement ->
+                    statement.setLong(1, venueId)
+                    statement.setLong(2, profile.id)
+                    statement.executeQuery().use { rs ->
+                        assertTrue(rs.next())
+                        assertEquals(0, rs.getInt(1))
+                    }
+                }
+            }
+        }
+
     private suspend fun postStaffProfile(
         client: HttpClient,
         venueId: Long,

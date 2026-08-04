@@ -170,7 +170,7 @@ class VenueSettingsRepository(private val dataSource: DataSource?) {
                         """
                         UPDATE venue_settings
                         SET $column = ?,
-                            updated_at = CURRENT_TIMESTAMP
+                            updated_at = $MONOTONIC_UPDATED_AT_SQL
                         WHERE venue_id = ?
                         """.trimIndent(),
                     ).use { statement ->
@@ -205,7 +205,7 @@ class VenueSettingsRepository(private val dataSource: DataSource?) {
                         """
                         UPDATE venue_settings
                         SET timezone = ?,
-                            updated_at = CURRENT_TIMESTAMP
+                            updated_at = $MONOTONIC_UPDATED_AT_SQL
                         WHERE venue_id = ?
                         """.trimIndent(),
                     ).use { statement ->
@@ -351,7 +351,7 @@ class VenueSettingsRepository(private val dataSource: DataSource?) {
                         """
                         UPDATE venue_settings
                         SET public_review_url = ?,
-                            updated_at = CURRENT_TIMESTAMP
+                            updated_at = $MONOTONIC_UPDATED_AT_SQL
                         WHERE venue_id = ?
                         """.trimIndent(),
                     ).use { statement ->
@@ -377,7 +377,7 @@ class VenueSettingsRepository(private val dataSource: DataSource?) {
                         """
                         UPDATE venue_settings
                         SET public_review_url = NULL,
-                            updated_at = CURRENT_TIMESTAMP
+                            updated_at = $MONOTONIC_UPDATED_AT_SQL
                         WHERE venue_id = ?
                         """.trimIndent(),
                     ).use { statement ->
@@ -763,6 +763,9 @@ class VenueSettingsRepository(private val dataSource: DataSource?) {
             }
         }
 }
+
+private const val MONOTONIC_UPDATED_AT_SQL =
+    "GREATEST(CURRENT_TIMESTAMP, updated_at + INTERVAL '0.001' SECOND)"
 
 private enum class CtaTimestampUpdate {
     SHOWN,

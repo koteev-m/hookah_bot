@@ -220,3 +220,24 @@ class StaffShiftConfirmationStaleException(
         message = "Статус смены изменился. Обновите данные и подтвердите действие повторно.",
         details = details,
     )
+
+class StaffModuleSettingsStaleException :
+    ApiException(
+        code = ApiErrorCodes.STAFF_MODULE_SETTINGS_STALE,
+        httpStatus = HttpStatusCode.Conflict,
+        message = "Настройки изменились. Обновите данные и повторите действие.",
+    )
+
+class StaffModuleDisabledException :
+    ApiException(
+        code = ApiErrorCodes.STAFF_MODULE_DISABLED,
+        httpStatus = HttpStatusCode.Conflict,
+        message = "Карточки команды и график смен отключены в настройках заведения.",
+    )
+
+class TodayStaffSourceScheduleException :
+    ApiException(
+        code = ApiErrorCodes.TODAY_STAFF_SOURCE_SCHEDULE,
+        httpStatus = HttpStatusCode.Conflict,
+        message = "Состав для гостей определяется активными сменами в графике.",
+    )

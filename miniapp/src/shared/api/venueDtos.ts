@@ -11,11 +11,28 @@ export type VenueAccessDto = {
   venueStatus?: string | null
   role: 'OWNER' | 'MANAGER' | 'STAFF'
   permissions: string[]
+  teamScheduleModuleEnabled?: boolean
 }
 
 export type VenueMeResponse = {
   userId: number
   venues: VenueAccessDto[]
+}
+
+export type VenueTodayStaffSource = 'MANUAL' | 'SCHEDULE'
+
+export type VenueStaffModuleSettingsDto = {
+  teamScheduleModuleEnabled: boolean
+  guestTeamVisible: boolean
+  todayStaffSource: VenueTodayStaffSource
+  updatedAt: string
+}
+
+export type VenueStaffModuleSettingsUpdateRequest = {
+  teamScheduleModuleEnabled: boolean
+  guestTeamVisible: boolean
+  todayStaffSource: VenueTodayStaffSource
+  expectedUpdatedAt: string
 }
 
 export type VenueGuestPreviewMode = 'PUBLISHED_PUBLIC' | 'PRIVATE_DRAFT'
