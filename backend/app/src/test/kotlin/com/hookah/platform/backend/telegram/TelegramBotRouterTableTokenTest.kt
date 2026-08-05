@@ -636,7 +636,7 @@ class TelegramBotRouterTableTokenTest {
         coEvery { venueContextRepository.setSelectedVenue(any(), any(), any()) } returns Unit
         coEvery { venueContextRepository.clearSelectedVenue(any(), any()) } returns Unit
         coEvery { venueSettingsRepository.find(any()) } returns null
-        coEvery { venueSettingsRepository.resolveZoneId(any(), any()) } returns ZoneId.systemDefault()
+        coEvery { venueSettingsRepository.resolveZoneId(any(), any()) } answers { secondArg() }
         coEvery { venueSettingsRepository.getPublicReviewUrl(any()) } returns null
         coEvery { venueSettingsRepository.hasPublicReviewCtaBeenShown(any(), any()) } returns false
         coEvery { venueSettingsRepository.markPublicReviewCtaShown(any(), any(), any()) } answers {
