@@ -5,14 +5,17 @@ import com.google.zxing.client.j2se.MatrixToImageWriter
 import com.google.zxing.qrcode.QRCodeWriter
 import com.hookah.platform.backend.ai.AiAssistantService
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.NotFoundException
 import com.hookah.platform.backend.location.VenueLocationDisplay
 import com.hookah.platform.backend.location.buildYandexVenueRouteUrl
 import com.hookah.platform.backend.location.formatVenueDisplayAddress
+import com.hookah.platform.backend.miniapp.guest.PLATFORM_GUEST_RECONFIRM_MESSAGE
 import com.hookah.platform.backend.miniapp.guest.RepeatOrderPlan
 import com.hookah.platform.backend.miniapp.guest.RepeatOrderResolver
 import com.hookah.platform.backend.miniapp.guest.db.BookingStatus
+import com.hookah.platform.backend.miniapp.guest.db.ConfirmedPlatformGuestMutationContext
 import com.hookah.platform.backend.miniapp.guest.db.CreateInviteResult
 import com.hookah.platform.backend.miniapp.guest.db.FavoriteMenuItem
 import com.hookah.platform.backend.miniapp.guest.db.GuestAttendanceConfirmationStatus
@@ -20,12 +23,17 @@ import com.hookah.platform.backend.miniapp.guest.db.GuestBookingRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestFavoritesRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestMenuRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestTabModel
+import com.hookah.platform.backend.miniapp.guest.db.GuestTableActivationResult
+import com.hookah.platform.backend.miniapp.guest.db.GuestTableContextLifecycleRepository
+import com.hookah.platform.backend.miniapp.guest.db.GuestTableTeardownResult
 import com.hookah.platform.backend.miniapp.guest.db.GuestTabsRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestVisitDetail
 import com.hookah.platform.backend.miniapp.guest.db.GuestVisitHistoryItem
 import com.hookah.platform.backend.miniapp.guest.db.GuestVisitOrderItem
 import com.hookah.platform.backend.miniapp.guest.db.GuestVisitPromotionDiscount
 import com.hookah.platform.backend.miniapp.guest.db.MenuItemModel
+import com.hookah.platform.backend.miniapp.guest.db.PlatformGuestContextValidationResult
+import com.hookah.platform.backend.miniapp.guest.db.PlatformGuestTableMutationResult
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionEndBlockedReason
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRecord
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
@@ -37,6 +45,7 @@ import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackVenueFilter
 import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackVenueSummary
 import com.hookah.platform.backend.miniapp.guest.db.VisitRepository
 import com.hookah.platform.backend.miniapp.guest.db.attendanceScheduleVersionEpochSeconds
+import com.hookah.platform.backend.miniapp.guest.requireConfirmedPlatformGuestMutation
 import com.hookah.platform.backend.miniapp.shift.CreateShiftExtensionRequestCommand
 import com.hookah.platform.backend.miniapp.shift.ShiftExtensionRepository
 import com.hookah.platform.backend.miniapp.shift.ShiftExtensionRequestRecord
@@ -198,6 +207,7 @@ import kotlinx.serialization.json.put
 import org.slf4j.LoggerFactory
 import java.io.ByteArrayOutputStream
 import java.security.SecureRandom
+import java.sql.Connection
 import java.time.DateTimeException
 import java.time.DayOfWeek
 import java.time.Duration
@@ -214,10 +224,34 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
 private val botGiftCallbackRandom = SecureRandom()
+private val platformGuestQrCallbackRandom = SecureRandom()
+
+private sealed class PlatformGuestBotMutationAttempt<out T> {
+    data class Applied<T>(val value: T) : PlatformGuestBotMutationAttempt<T>()
+
+    object Stopped : PlatformGuestBotMutationAttempt<Nothing>()
+}
+
+private data class BotTabResolution(
+    val tableSession: TableSessionRecord,
+    val personalTab: GuestTabModel,
+    val userTabs: List<GuestTabModel>,
+)
+
+private data class QuickOrderMutationResult(
+    val existingOrderId: Long?,
+    val orderId: Long,
+    val batchId: Long,
+)
 
 private fun newBotGiftCallbackTag(): String =
     ByteArray(9)
         .also(botGiftCallbackRandom::nextBytes)
+        .let { Base64.getUrlEncoder().withoutPadding().encodeToString(it) }
+
+private fun newPlatformGuestQrCallbackTag(): String =
+    ByteArray(9)
+        .also(platformGuestQrCallbackRandom::nextBytes)
         .let { Base64.getUrlEncoder().withoutPadding().encodeToString(it) }
 
 class TelegramBotRouter(
@@ -291,6 +325,10 @@ class TelegramBotRouter(
             guestTabsRepository = guestTabsRepository,
         ),
     private val botGiftCallbackTagFactory: () -> String = ::newBotGiftCallbackTag,
+    private val guestTableContextLifecycleRepository: GuestTableContextLifecycleRepository? = null,
+    private val platformGuestQrPendingTtl: Duration = Duration.ofMinutes(5),
+    private val platformGuestQrNowProvider: () -> Instant = Instant::now,
+    private val platformGuestQrCallbackTagFactory: () -> String = ::newPlatformGuestQrCallbackTag,
 ) {
     private val logger = LoggerFactory.getLogger(TelegramBotRouter::class.java)
     private val aiTelegramHandler =
@@ -333,6 +371,7 @@ class TelegramBotRouter(
     private val botBookingPendingConfirmations = ConcurrentHashMap<Long, BotBookingDraft>()
     private val botBookingEditContexts = ConcurrentHashMap<Long, BotBookingEditContext>()
     private val botBookingScreenMessageIds = ConcurrentHashMap<BotBookingScreenKey, Long>()
+    private val platformGuestQrPendingStore = PlatformGuestQrPendingConfirmationStore()
     private val venueBookingCancelReasonDrafts = ConcurrentHashMap<Long, VenueBookingCancelReasonDraft>()
     private val botVenuePreviewContexts = ConcurrentHashMap<Long, BotVenuePreviewContext>()
     private val botDraftCartOrderSeq = AtomicLong(0L)
@@ -582,6 +621,8 @@ class TelegramBotRouter(
     private val inviteCodeMaxAttempts = 32
     private val inviteCodeTtl = Duration.ofMinutes(15)
     private val staffInviteStartPrefix = "staff_invite_"
+    private val platformGuestQrConfirmCallbackPrefix = "pgqr_c:"
+    private val platformGuestQrCancelCallbackPrefix = "pgqr_x:"
     private val bookingDateFormatter = DateTimeFormatter.ofPattern("dd.MM")
     private val bookingDateConfirmFormatter = DateTimeFormatter.ofPattern("dd.MM.yyyy")
     private val bookingDateTimeFormatter = DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm")
@@ -803,8 +844,18 @@ class TelegramBotRouter(
         val chatId = message.chat.id
         val text = message.text?.trim()
         val isPlatformOwnerUser = isPlatformOwner(from?.id)
-        val state = dialogStateRepository.get(chatId)
         val command = parseCommand(text)
+        val isControlledPlatformGuestQrStart =
+            isPlatformOwnerUser &&
+                !isGroupChat(message.chat.type) &&
+                command?.name == "/start" &&
+                !command.argument.isNullOrBlank() &&
+                parseStaffInviteStartCode(command.argument) == null
+        if (isControlledPlatformGuestQrStart) {
+            handleStartCommand(chatId, from, text ?: "")
+            return
+        }
+        val state = dialogStateRepository.get(chatId)
         if (command != null && isVenueConnectionDialogState(state.state)) {
             dialogStateRepository.clear(chatId)
         }
@@ -994,7 +1045,7 @@ class TelegramBotRouter(
                 text == "🛎️ Вызов персонала" ||
                 text == "🛎 Вызвать персонал" ->
                 showStaffCallReasons(chatId)
-            text == "🚪 Завершить визит" -> handleEndTableVisitRequest(chatId)
+            text == "🚪 Завершить визит" -> handleEndTableVisitRequest(chatId, from?.id)
             text == "🚪 Сменить стол" || text == "🔁 Сменить стол" -> handleChangeTableRequest(chatId)
             text == "🏠 В каталог" -> showMainMenu(chatId, from)
             state.state == DialogStateType.VENUE_CONNECT_WAIT_NAME && !text.isNullOrBlank() ->
@@ -1167,27 +1218,63 @@ class TelegramBotRouter(
         val cmd = obj["cmd"]?.jsonPrimitive?.content
         val token = obj["table_token"]?.jsonPrimitive?.content
         if (!token.isNullOrBlank()) {
-            when (applyTableToken(chatId, from, token)) {
-                ApplyTableTokenResult.Applied -> Unit
-                ApplyTableTokenResult.Invalid -> {
-                    sendFallback(chatId, from, "QR недействителен или база недоступна. Используйте меню ниже.")
-                    return
+            val actorUserId = from?.id
+            if (isPlatformOwner(actorUserId)) {
+                val validation =
+                    guestTableContextLifecycleRepository?.validatePlatformBotContext(
+                        actorUserId = actorUserId ?: return,
+                        chatId = chatId,
+                    ) ?: PlatformGuestContextValidationResult.DatabaseUnavailable
+                when (validation) {
+                    is PlatformGuestContextValidationResult.Active ->
+                        if (validation.identity.tableToken != token) {
+                            enqueueMessage(
+                                chatId,
+                                "Откройте QR-код ещё раз и подтвердите вход в Telegram.",
+                            )
+                            return
+                        }
+                    PlatformGuestContextValidationResult.Inactive -> {
+                        enqueueMessage(
+                            chatId,
+                            "Откройте QR-код ещё раз и подтвердите вход в Telegram.",
+                        )
+                        return
+                    }
+                    PlatformGuestContextValidationResult.DatabaseUnavailable -> {
+                        enqueueMessage(chatId, "База недоступна, попробуйте позже.")
+                        return
+                    }
                 }
-                ApplyTableTokenResult.TableUnavailable -> {
-                    enqueueMessage(chatId, "Этот стол временно недоступен. Обратитесь к персоналу.")
-                    return
-                }
-                ApplyTableTokenResult.Blocked -> {
-                    enqueueMessage(chatId, subscriptionBlockedMessage)
-                    return
-                }
-                ApplyTableTokenResult.VenueUnavailableForGuest -> {
-                    enqueueMessage(chatId, "Заведение пока не доступно для гостей.")
-                    return
-                }
-                ApplyTableTokenResult.DatabaseUnavailable -> {
-                    enqueueMessage(chatId, "База недоступна, попробуйте позже.")
-                    return
+            } else {
+                when (
+                    applyTableToken(
+                        chatId = chatId,
+                        from = from,
+                        token = token,
+                    )
+                ) {
+                    ApplyTableTokenResult.Applied -> Unit
+                    ApplyTableTokenResult.Invalid -> {
+                        sendFallback(chatId, from, "QR недействителен или база недоступна. Используйте меню ниже.")
+                        return
+                    }
+                    ApplyTableTokenResult.TableUnavailable -> {
+                        enqueueMessage(chatId, "Этот стол временно недоступен. Обратитесь к персоналу.")
+                        return
+                    }
+                    ApplyTableTokenResult.Blocked -> {
+                        enqueueMessage(chatId, subscriptionBlockedMessage)
+                        return
+                    }
+                    ApplyTableTokenResult.VenueUnavailableForGuest -> {
+                        enqueueMessage(chatId, "Заведение пока не доступно для гостей.")
+                        return
+                    }
+                    ApplyTableTokenResult.DatabaseUnavailable -> {
+                        enqueueMessage(chatId, "База недоступна, попробуйте позже.")
+                        return
+                    }
                 }
             }
         }
@@ -1246,6 +1333,24 @@ class TelegramBotRouter(
         }
         var callbackAnswered = false
         when {
+            data?.startsWith(platformGuestQrConfirmCallbackPrefix) == true -> {
+                callbackAnswered = true
+                confirmPlatformGuestQrTest(
+                    chatId = chatId,
+                    from = callbackQuery.from,
+                    callbackQueryId = callbackQuery.id,
+                    data = data,
+                )
+            }
+            data?.startsWith(platformGuestQrCancelCallbackPrefix) == true -> {
+                callbackAnswered = true
+                cancelPlatformGuestQrTest(
+                    chatId = chatId,
+                    from = callbackQuery.from,
+                    callbackQueryId = callbackQuery.id,
+                    data = data,
+                )
+            }
             data == "guest_profile_name" -> {
                 callbackAnswered = true
                 promptGuestProfileName(chatId, callbackQuery.from, callbackQuery.id)
@@ -2172,15 +2277,43 @@ class TelegramBotRouter(
         from: User?,
         text: String,
     ) {
-        if (isPlatformOwner(from?.id)) {
-            showOwnerMainMenu(chatId)
-            return
-        }
         val parts = text.trim().split(Regex("\\s+"))
         val command = parts.firstOrNull()?.substringBefore("@") ?: ""
         val token = if (command == "/start") parts.getOrNull(1) else null
         if (token.isNullOrBlank()) {
-            showRoleAwareMainMenu(chatId, from)
+            if (isPlatformOwner(from?.id)) {
+                from?.id?.let { actorUserId ->
+                    platformGuestQrPendingStore.clear(
+                        PlatformGuestQrPendingKey(actorUserId = actorUserId, chatId = chatId),
+                    )
+                    if (
+                        showPlatformGuestTableMenuIfActive(
+                            chatId = chatId,
+                            actorUserId = actorUserId,
+                            text =
+                                "Сейчас включён гостевой режим проверки. " +
+                                    "Используйте «Завершить визит», чтобы вернуться в кабинет платформы.",
+                        )
+                    ) {
+                        return
+                    }
+                }
+                showOwnerMainMenu(chatId)
+            } else {
+                showRoleAwareMainMenu(chatId, from)
+            }
+            return
+        }
+        if (isPlatformOwner(from?.id)) {
+            val actorUserId = from?.id ?: return
+            if (parseStaffInviteStartCode(token) != null) {
+                platformGuestQrPendingStore.clear(
+                    PlatformGuestQrPendingKey(actorUserId = actorUserId, chatId = chatId),
+                )
+                showOwnerMainMenu(chatId)
+            } else {
+                promptPlatformGuestQrTest(chatId, from, token)
+            }
             return
         }
         parseStaffInviteStartCode(token)?.let { inviteCode ->
@@ -2208,12 +2341,270 @@ class TelegramBotRouter(
         }
     }
 
+    private suspend fun promptPlatformGuestQrTest(
+        chatId: Long,
+        from: User?,
+        token: String,
+    ) {
+        val actorUserId = from?.id ?: return
+        if (!isPlatformOwner(actorUserId)) {
+            return
+        }
+        val key = PlatformGuestQrPendingKey(actorUserId = actorUserId, chatId = chatId)
+        val previousPending = platformGuestQrPendingStore.clear(key)
+        val now = platformGuestQrNowProvider()
+        when (
+            val access =
+                resolveTableTokenForGuest(
+                    userId = actorUserId,
+                    token = token,
+                    requirePublishedVenue = true,
+                )
+        ) {
+            is TableTokenGuestAccessResult.Allowed -> {
+                val context = access.context
+                val reference = newPlatformGuestQrPendingReference(previousPending?.reference)
+                platformGuestQrPendingStore.replace(
+                    key = key,
+                    now = now,
+                    pending =
+                        PlatformGuestQrPendingConfirmation(
+                            reference = reference,
+                            tableToken = token,
+                            venueId = context.venueId,
+                            tableId = context.tableId,
+                            expiresAt = now.plus(platformGuestQrPendingTtl),
+                        ),
+                )
+                enqueueMessage(
+                    chatId,
+                    "Проверка гостевого QR\n\n" +
+                        "Заведение: ${context.venueName}\n" +
+                        "Стол: №${context.tableNumber}\n\n" +
+                        "Вы перейдёте в обычный гостевой режим для проверки этого стола.",
+                    TelegramKeyboards.inlinePlatformGuestQrTestConfirmationActions(
+                        confirmCallbackData = platformGuestQrConfirmCallbackPrefix + reference,
+                        cancelCallbackData = platformGuestQrCancelCallbackPrefix + reference,
+                    ),
+                )
+            }
+            TableTokenGuestAccessResult.Invalid ->
+                showPlatformGuestQrFailure(chatId, "QR недействителен. Откройте QR ещё раз.")
+            TableTokenGuestAccessResult.TableUnavailable ->
+                showPlatformGuestQrFailure(
+                    chatId,
+                    "Этот стол временно недоступен. Обратитесь к персоналу.",
+                )
+            TableTokenGuestAccessResult.Blocked ->
+                showPlatformGuestQrFailure(chatId, subscriptionBlockedMessage)
+            TableTokenGuestAccessResult.VenueUnavailableForGuest ->
+                showPlatformGuestQrFailure(chatId, "Заведение пока не доступно для гостей.")
+            TableTokenGuestAccessResult.DatabaseUnavailable ->
+                showPlatformGuestQrFailure(chatId, "База недоступна, попробуйте позже.")
+        }
+    }
+
+    private suspend fun confirmPlatformGuestQrTest(
+        chatId: Long,
+        from: User,
+        callbackQueryId: String,
+        data: String,
+    ) {
+        val actorUserId = from.id
+        if (!isPlatformOwner(actorUserId)) {
+            denyPlatformGuestQrCallback(chatId, callbackQueryId)
+            return
+        }
+        val reference = data.removePrefix(platformGuestQrConfirmCallbackPrefix)
+        val key = PlatformGuestQrPendingKey(actorUserId = actorUserId, chatId = chatId)
+        val now = platformGuestQrNowProvider()
+        val pending = platformGuestQrPendingStore.consume(key, reference, now)
+        if (pending == null) {
+            denyPlatformGuestQrCallback(chatId, callbackQueryId)
+            return
+        }
+        val access =
+            resolveTableTokenForGuest(
+                userId = actorUserId,
+                token = pending.tableToken,
+                requirePublishedVenue = true,
+            )
+        val context = (access as? TableTokenGuestAccessResult.Allowed)?.context
+        if (
+            context == null ||
+            context.venueId != pending.venueId ||
+            context.tableId != pending.tableId
+        ) {
+            enqueueCallbackAnswer(chatId, callbackQueryId, "Действие недоступно. Откройте QR ещё раз.")
+            showPlatformGuestQrFailure(
+                chatId,
+                platformGuestQrRevalidationFailureMessage(access),
+            )
+            return
+        }
+        try {
+            auditLogRepository.appendJson(
+                actorUserId = actorUserId,
+                action = "PLATFORM_GUEST_QR_TEST_CONFIRMED",
+                entityType = "venue",
+                entityId = context.venueId,
+                payload =
+                    buildJsonObject {
+                        put("venueId", context.venueId)
+                        put("tableId", context.tableId)
+                        put("source", "TELEGRAM_QR_TEST")
+                    },
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logBestEffort("platform guest QR test audit", e)
+            enqueueCallbackAnswer(chatId, callbackQueryId, "Не удалось продолжить. Откройте QR ещё раз.")
+            showPlatformGuestQrFailure(
+                chatId,
+                "Не удалось включить гостевой режим. Откройте QR-код ещё раз.",
+            )
+            return
+        }
+        val activationResult =
+            guestTableContextLifecycleRepository?.activate(
+                actorUserId = actorUserId,
+                chatId = chatId,
+                tableToken = pending.tableToken,
+                expectedVenueId = context.venueId,
+                expectedTableId = context.tableId,
+                ttl = tableSessionTtl,
+            ) ?: GuestTableActivationResult.DatabaseUnavailable
+        when (activationResult) {
+            is GuestTableActivationResult.Applied -> {
+                applyGuestActivationInMemory(
+                    chatId = chatId,
+                    tableToken = activationResult.context.tableToken,
+                    tableSessionId = activationResult.tableSession.id,
+                )
+                enqueueCallbackAnswer(chatId, callbackQueryId, "Гостевой режим включён.")
+                enqueueMessage(
+                    chatId,
+                    "Гостевой режим проверки включён.\n" +
+                        "Используйте «Завершить визит», чтобы вернуться в кабинет платформы.",
+                    tableContextBotKeyboard(activationResult.context),
+                )
+            }
+            is GuestTableActivationResult.Denied,
+            GuestTableActivationResult.DatabaseUnavailable,
+            -> {
+                enqueueCallbackAnswer(chatId, callbackQueryId, "Не удалось продолжить. Откройте QR ещё раз.")
+                showPlatformGuestQrFailure(
+                    chatId,
+                    "Не удалось включить гостевой режим. Откройте QR-код ещё раз.",
+                )
+            }
+        }
+    }
+
+    private suspend fun cancelPlatformGuestQrTest(
+        chatId: Long,
+        from: User,
+        callbackQueryId: String,
+        data: String,
+    ) {
+        val actorUserId = from.id
+        if (!isPlatformOwner(actorUserId)) {
+            denyPlatformGuestQrCallback(chatId, callbackQueryId)
+            return
+        }
+        val reference = data.removePrefix(platformGuestQrCancelCallbackPrefix)
+        val key = PlatformGuestQrPendingKey(actorUserId = actorUserId, chatId = chatId)
+        val now = platformGuestQrNowProvider()
+        if (platformGuestQrPendingStore.consume(key, reference, now) == null) {
+            denyPlatformGuestQrCallback(chatId, callbackQueryId)
+            return
+        }
+        enqueueCallbackAnswer(chatId, callbackQueryId, "Режим платформы сохранён.")
+        if (
+            !showPlatformGuestTableMenuIfActive(
+                chatId = chatId,
+                actorUserId = actorUserId,
+                text = "Проверка нового QR отменена. Текущий гостевой контекст сохранён.",
+            )
+        ) {
+            showOwnerMainMenu(chatId, clearDialog = false)
+        }
+    }
+
+    private suspend fun denyPlatformGuestQrCallback(
+        chatId: Long,
+        callbackQueryId: String,
+    ) {
+        enqueueCallbackAnswer(
+            chatId,
+            callbackQueryId,
+            "Действие недоступно. Откройте QR ещё раз.",
+        )
+    }
+
+    private suspend fun showPlatformGuestQrFailure(
+        chatId: Long,
+        message: String,
+    ) {
+        val platformOwnerId = config.platformOwnerId
+        if (
+            platformOwnerId != null &&
+            showPlatformGuestTableMenuIfActive(
+                chatId = chatId,
+                actorUserId = platformOwnerId,
+                text = message,
+            )
+        ) {
+            return
+        }
+        enqueueMessage(
+            chatId,
+            message,
+            TelegramKeyboards.ownerMainMenu(
+                showMiniAppEntry = isMiniAppEntryAvailable(),
+                platformPanelUrl = platformMiniAppUrl(),
+            ),
+        )
+    }
+
+    private fun platformGuestQrRevalidationFailureMessage(access: TableTokenGuestAccessResult): String =
+        when (access) {
+            TableTokenGuestAccessResult.TableUnavailable ->
+                "Этот стол больше не доступен. Откройте QR ещё раз."
+            TableTokenGuestAccessResult.Blocked -> subscriptionBlockedMessage
+            TableTokenGuestAccessResult.VenueUnavailableForGuest ->
+                "Заведение пока не доступно для гостей. Откройте QR ещё раз."
+            TableTokenGuestAccessResult.DatabaseUnavailable -> "База недоступна, попробуйте позже."
+            TableTokenGuestAccessResult.Invalid,
+            is TableTokenGuestAccessResult.Allowed,
+            -> "QR больше не действует. Откройте QR ещё раз."
+        }
+
+    private fun newPlatformGuestQrPendingReference(previousReference: String?): String {
+        repeat(4) {
+            val candidate = platformGuestQrCallbackTagFactory()
+            if (
+                candidate != previousReference &&
+                candidate.length in 8..32 &&
+                candidate.all { it.isLetterOrDigit() || it == '_' || it == '-' }
+            ) {
+                return candidate
+            }
+        }
+        return generateSequence(::newPlatformGuestQrCallbackTag).first { it != previousReference }
+    }
+
     private suspend fun showRoleAwareMainMenu(
         chatId: Long,
         from: User?,
     ) {
         val userId = from?.id
         if (isPlatformOwner(userId)) {
+            val platformUserId = userId ?: return
+            if (showPlatformGuestTableMenuIfActive(chatId, platformUserId)) {
+                return
+            }
             showOwnerMainMenu(chatId)
             return
         }
@@ -2224,6 +2615,56 @@ class TelegramBotRouter(
         when (val access = resolveSelectedVenueBotAccess(chatId, userId)) {
             null -> showMainMenuUnlessVenueSelectorWasShown(chatId, from, userId)
             else -> showVenueBotEntry(chatId, userId!!, access)
+        }
+    }
+
+    private suspend fun showPlatformGuestTableMenuIfActive(
+        chatId: Long,
+        actorUserId: Long,
+        text: String = "Выберите действие гостевого режима.",
+    ): Boolean {
+        val repository = guestTableContextLifecycleRepository ?: return false
+        return when (
+            val validation =
+                repository.validatePlatformBotContext(
+                    actorUserId = actorUserId,
+                    chatId = chatId,
+                )
+        ) {
+            is PlatformGuestContextValidationResult.Active -> {
+                enqueueMessage(
+                    chatId,
+                    text,
+                    tableContextBotKeyboard(validation.context),
+                )
+                true
+            }
+            PlatformGuestContextValidationResult.Inactive -> {
+                val stored =
+                    try {
+                        chatContextRepository.get(chatId)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: DatabaseUnavailableException) {
+                        enqueueMessage(chatId, "База недоступна, попробуйте позже.")
+                        return true
+                    }
+                if (stored?.userId != actorUserId) {
+                    false
+                } else {
+                    enqueueMessage(
+                        chatId,
+                        "Гостевой контекст проверки больше недоступен. " +
+                            "Используйте «Завершить визит», чтобы вернуться в кабинет платформы.",
+                        TelegramKeyboards.tableContextBotFlow(),
+                    )
+                    true
+                }
+            }
+            PlatformGuestContextValidationResult.DatabaseUnavailable -> {
+                enqueueMessage(chatId, "База недоступна, попробуйте позже.")
+                true
+            }
         }
     }
 
@@ -5449,22 +5890,56 @@ class TelegramBotRouter(
             }
         val detail =
             try {
-                repository.createTicket(
-                    SupportTicketCreateInput(
-                        guestUserId = userId,
-                        category = category,
-                        title = if (venueId == null) "Обращение из бота" else "Обращение по столу",
-                        message = messageText,
-                        venueId = venueId,
-                        tableId = tableId,
-                        tableSessionId = null,
-                        orderId = null,
-                        bookingId = null,
-                        assigneeScope = scope,
-                        createdSource = SupportThreadCreatedSource.GUEST_BOT,
-                        messageSource = SupportMessageSource.GUEST_BOT,
-                    ),
-                )
+                if (userId == config.platformOwnerId && venueId != null && tableId != null) {
+                    requireConfirmedPlatformGuestMutation(
+                        userId = userId,
+                        platformOwnerUserId = config.platformOwnerId,
+                        lifecycleRepository = guestTableContextLifecycleRepository,
+                        chatId = chatId,
+                        expectedVenueId = venueId,
+                        expectedTableId = tableId,
+                        ttl = tableSessionTtl,
+                    ) { connection, confirmed ->
+                        repository.createTicket(
+                            connection = connection,
+                            input =
+                                SupportTicketCreateInput(
+                                    guestUserId = userId,
+                                    category = category,
+                                    title = "Обращение по столу",
+                                    message = messageText,
+                                    venueId = confirmed.context.venueId,
+                                    tableId = confirmed.context.tableId,
+                                    tableSessionId = confirmed.tableSession.id,
+                                    orderId = null,
+                                    bookingId = null,
+                                    assigneeScope = scope,
+                                    createdSource = SupportThreadCreatedSource.GUEST_BOT,
+                                    messageSource = SupportMessageSource.GUEST_BOT,
+                                ),
+                        )
+                    }
+                } else {
+                    repository.createTicket(
+                        SupportTicketCreateInput(
+                            guestUserId = userId,
+                            category = category,
+                            title = if (venueId == null) "Обращение из бота" else "Обращение по столу",
+                            message = messageText,
+                            venueId = venueId,
+                            tableId = tableId,
+                            tableSessionId = null,
+                            orderId = null,
+                            bookingId = null,
+                            assigneeScope = scope,
+                            createdSource = SupportThreadCreatedSource.GUEST_BOT,
+                            messageSource = SupportMessageSource.GUEST_BOT,
+                        ),
+                    )
+                }
+            } catch (_: ForbiddenException) {
+                enqueueMessage(chatId, PLATFORM_GUEST_RECONFIRM_MESSAGE)
+                return
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
@@ -22823,8 +23298,11 @@ class TelegramBotRouter(
         when (ensureGuestTableFlowAccess(context.userId, context.table.venueId)) {
             VenueGuestAccessResult.Allowed -> Unit
             VenueGuestAccessResult.Forbidden -> {
-                enqueueMessage(chatId, "Заведение пока не доступно для гостей.")
-                runCatching { chatContextRepository.clear(chatId) }
+                teardownGuestContextAfterAvailabilityLoss(
+                    chatId = chatId,
+                    actorUserId = context.userId,
+                    message = "Заведение пока не доступно для гостей. Гостевой режим завершён.",
+                )
                 return null
             }
             VenueGuestAccessResult.DatabaseUnavailable -> {
@@ -26740,19 +27218,18 @@ class TelegramBotRouter(
         return env == "dev" || env == "local" || env == "test"
     }
 
-    private suspend fun applyTableToken(
-        chatId: Long,
-        from: User?,
+    private suspend fun resolveTableTokenForGuest(
+        userId: Long,
         token: String,
-        announceChannelChoice: Boolean = false,
-    ): ApplyTableTokenResult {
+        requirePublishedVenue: Boolean = false,
+    ): TableTokenGuestAccessResult {
         val context =
             try {
                 tableTokenRepository.resolve(token)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: DatabaseUnavailableException) {
-                return ApplyTableTokenResult.DatabaseUnavailable
+                return TableTokenGuestAccessResult.DatabaseUnavailable
             }
         if (context == null) {
             val inactiveTable =
@@ -26761,25 +27238,60 @@ class TelegramBotRouter(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: DatabaseUnavailableException) {
-                    return ApplyTableTokenResult.DatabaseUnavailable
+                    return TableTokenGuestAccessResult.DatabaseUnavailable
                 }
             return if (inactiveTable != null) {
-                ApplyTableTokenResult.TableUnavailable
+                TableTokenGuestAccessResult.TableUnavailable
             } else {
-                ApplyTableTokenResult.Invalid
+                TableTokenGuestAccessResult.Invalid
             }
         }
-        val userId = from?.id ?: return ApplyTableTokenResult.Invalid
-        when (ensureGuestTableFlowAccess(userId, context.venueId)) {
+        when (
+            ensureGuestTableFlowAccess(
+                userId = userId,
+                venueId = context.venueId,
+                requirePublishedVenue = requirePublishedVenue,
+            )
+        ) {
             VenueGuestAccessResult.Allowed -> Unit
-            VenueGuestAccessResult.Forbidden -> return ApplyTableTokenResult.VenueUnavailableForGuest
-            VenueGuestAccessResult.DatabaseUnavailable -> return ApplyTableTokenResult.DatabaseUnavailable
+            VenueGuestAccessResult.Forbidden -> return TableTokenGuestAccessResult.VenueUnavailableForGuest
+            VenueGuestAccessResult.DatabaseUnavailable -> return TableTokenGuestAccessResult.DatabaseUnavailable
         }
         when (checkSubscription(context.venueId)) {
             SubscriptionCheckResult.Available -> Unit
-            SubscriptionCheckResult.Blocked -> return ApplyTableTokenResult.Blocked
-            SubscriptionCheckResult.DatabaseUnavailable -> return ApplyTableTokenResult.DatabaseUnavailable
+            SubscriptionCheckResult.Blocked -> return TableTokenGuestAccessResult.Blocked
+            SubscriptionCheckResult.DatabaseUnavailable -> return TableTokenGuestAccessResult.DatabaseUnavailable
         }
+        return TableTokenGuestAccessResult.Allowed(context)
+    }
+
+    private suspend fun applyTableToken(
+        chatId: Long,
+        from: User?,
+        token: String,
+        announceChannelChoice: Boolean = false,
+        requirePublishedVenue: Boolean = false,
+    ): ApplyTableTokenResult {
+        val userId = from?.id ?: return ApplyTableTokenResult.Invalid
+        if (isPlatformOwner(userId)) {
+            return ApplyTableTokenResult.Invalid
+        }
+        val access =
+            resolveTableTokenForGuest(
+                userId = userId,
+                token = token,
+                requirePublishedVenue = requirePublishedVenue,
+            )
+        val context =
+            when (access) {
+                is TableTokenGuestAccessResult.Allowed -> access.context
+                TableTokenGuestAccessResult.Invalid -> return ApplyTableTokenResult.Invalid
+                TableTokenGuestAccessResult.TableUnavailable -> return ApplyTableTokenResult.TableUnavailable
+                TableTokenGuestAccessResult.Blocked -> return ApplyTableTokenResult.Blocked
+                TableTokenGuestAccessResult.VenueUnavailableForGuest ->
+                    return ApplyTableTokenResult.VenueUnavailableForGuest
+                TableTokenGuestAccessResult.DatabaseUnavailable -> return ApplyTableTokenResult.DatabaseUnavailable
+            }
         try {
             chatContextRepository.saveContext(chatId, userId, context)
         } catch (e: CancellationException) {
@@ -26806,16 +27318,7 @@ class TelegramBotRouter(
         } catch (e: DatabaseUnavailableException) {
             return ApplyTableTokenResult.DatabaseUnavailable
         }
-        val key = BotDraftCartKey(chatId = chatId, tableToken = context.tableToken)
-        clearBotDraftStateForChatExceptTableToken(chatId, context.tableToken)
-        val previousSessionId = botDraftCartSessionIds[key]
-        if (previousSessionId != null && previousSessionId != activeSession.id) {
-            clearBotDraftCart(chatId, context.tableToken)
-        }
-        botDraftCartSessionIds[key] = activeSession.id
-        botBookingCommentDrafts.remove(chatId)
-        botBookingPendingConfirmations.remove(chatId)
-        botBookingEditContexts.remove(chatId)
+        applyGuestActivationInMemory(chatId, context.tableToken, activeSession.id)
         dialogStateRepository.clear(chatId)
         if (announceChannelChoice) {
             enqueueMessage(
@@ -26825,6 +27328,23 @@ class TelegramBotRouter(
             )
         }
         return ApplyTableTokenResult.Applied
+    }
+
+    private fun applyGuestActivationInMemory(
+        chatId: Long,
+        tableToken: String,
+        tableSessionId: Long,
+    ) {
+        val key = BotDraftCartKey(chatId = chatId, tableToken = tableToken)
+        clearBotDraftStateForChatExceptTableToken(chatId, tableToken)
+        val previousSessionId = botDraftCartSessionIds[key]
+        if (previousSessionId != null && previousSessionId != tableSessionId) {
+            clearBotDraftCart(chatId, tableToken)
+        }
+        botDraftCartSessionIds[key] = tableSessionId
+        botBookingCommentDrafts.remove(chatId)
+        botBookingPendingConfirmations.remove(chatId)
+        botBookingEditContexts.remove(chatId)
     }
 
     private suspend fun showTableQrEntryHint(chatId: Long) {
@@ -26903,26 +27423,60 @@ class TelegramBotRouter(
         val activeOrder = context.order ?: return
         val record =
             try {
-                shiftExtensionRepository.createPendingRequest(
-                    CreateShiftExtensionRequestCommand(
-                        venueId = context.resolved.table.venueId,
-                        tableSessionId = context.tableSession.id,
-                        tableId = context.resolved.table.tableId,
-                        tabId = context.tab.id,
-                        orderId = activeOrder.id,
-                        requestedByUserId = context.resolved.userId,
-                        currentOrderableUntil = context.tableSession.expiresAt,
-                        idempotencyKey =
-                            sourceMessageId?.let { messageId ->
-                                "guest-bot-shift-extension:$chatId:$messageId"
-                            },
-                        comment = null,
-                    ),
-                )
+                val idempotencyKey =
+                    sourceMessageId?.let { messageId ->
+                        "guest-bot-shift-extension:$chatId:$messageId"
+                    }
+                if (isPlatformOwner(context.resolved.userId)) {
+                    when (
+                        val attempt =
+                            runConfirmedPlatformGuestBotMutation(
+                                chatId = chatId,
+                                context = context.resolved,
+                                expectedTableSessionId = context.tableSession.id,
+                            ) { connection, confirmed ->
+                                shiftExtensionRepository.createPendingRequest(
+                                    connection = connection,
+                                    command =
+                                        CreateShiftExtensionRequestCommand(
+                                            venueId = confirmed.context.venueId,
+                                            tableSessionId = confirmed.tableSession.id,
+                                            tableId = confirmed.context.tableId,
+                                            tabId = context.tab.id,
+                                            orderId = activeOrder.id,
+                                            requestedByUserId = context.resolved.userId,
+                                            currentOrderableUntil = confirmed.tableSession.expiresAt,
+                                            idempotencyKey = idempotencyKey,
+                                            comment = null,
+                                        ),
+                                )
+                            }
+                    ) {
+                        is PlatformGuestBotMutationAttempt.Applied -> attempt.value
+                        PlatformGuestBotMutationAttempt.Stopped -> return
+                    }
+                } else {
+                    shiftExtensionRepository.createPendingRequest(
+                        CreateShiftExtensionRequestCommand(
+                            venueId = context.resolved.table.venueId,
+                            tableSessionId = context.tableSession.id,
+                            tableId = context.resolved.table.tableId,
+                            tabId = context.tab.id,
+                            orderId = activeOrder.id,
+                            requestedByUserId = context.resolved.userId,
+                            currentOrderableUntil = context.tableSession.expiresAt,
+                            idempotencyKey = idempotencyKey,
+                            comment = null,
+                        ),
+                    )
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
+                return
+            } catch (e: ForbiddenException) {
+                enqueueMessage(chatId, "Продление сейчас недоступно. Выберите доступный счёт и попробуйте снова.")
                 return
             } catch (e: InvalidInputException) {
                 showGuestShiftExtension(chatId, sourceMessageId)
@@ -27130,8 +27684,11 @@ class TelegramBotRouter(
         when (ensureGuestTableFlowAccess(context.userId, context.table.venueId)) {
             VenueGuestAccessResult.Allowed -> Unit
             VenueGuestAccessResult.Forbidden -> {
-                enqueueMessage(chatId, "Заведение пока не доступно для гостей.")
-                runCatching { chatContextRepository.clear(chatId) }
+                teardownGuestContextAfterAvailabilityLoss(
+                    chatId = chatId,
+                    actorUserId = context.userId,
+                    message = "Заведение пока не доступно для гостей. Гостевой режим завершён.",
+                )
                 return
             }
             VenueGuestAccessResult.DatabaseUnavailable -> {
@@ -28845,15 +29402,33 @@ class TelegramBotRouter(
             enqueueMessage(chatId, "Нужен 4-значный код. Попробуйте ещё раз.")
             return
         }
-        val tableSession = resolveCurrentTableSession(chatId, context) ?: return
         val joinedTab =
             try {
-                guestTabsRepository.joinByInvite(
-                    venueId = context.table.venueId,
-                    tableSessionId = tableSession.id,
-                    userId = context.userId,
-                    token = code,
-                )
+                if (isPlatformOwner(context.userId)) {
+                    when (
+                        val attempt =
+                            runConfirmedPlatformGuestBotMutation(chatId, context) { connection, confirmed ->
+                                guestTabsRepository.joinByInvite(
+                                    connection = connection,
+                                    venueId = confirmed.context.venueId,
+                                    tableSessionId = confirmed.tableSession.id,
+                                    userId = context.userId,
+                                    token = code,
+                                )
+                            }
+                    ) {
+                        is PlatformGuestBotMutationAttempt.Applied -> attempt.value
+                        PlatformGuestBotMutationAttempt.Stopped -> return
+                    }
+                } else {
+                    val tableSession = resolveCurrentTableSession(chatId, context) ?: return
+                    guestTabsRepository.joinByInvite(
+                        venueId = context.table.venueId,
+                        tableSessionId = tableSession.id,
+                        userId = context.userId,
+                        token = code,
+                    )
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: DatabaseUnavailableException) {
@@ -28885,14 +29460,31 @@ class TelegramBotRouter(
 
     private suspend fun createBotSharedTab(chatId: Long) {
         val context = resolveGuestContext(chatId) ?: return
-        val tableSession = resolveCurrentTableSession(chatId, context) ?: return
         val sharedTab =
             try {
-                guestTabsRepository.createSharedTab(
-                    venueId = context.table.venueId,
-                    tableSessionId = tableSession.id,
-                    ownerUserId = context.userId,
-                )
+                if (isPlatformOwner(context.userId)) {
+                    when (
+                        val attempt =
+                            runConfirmedPlatformGuestBotMutation(chatId, context) { connection, confirmed ->
+                                guestTabsRepository.createSharedTab(
+                                    connection = connection,
+                                    venueId = confirmed.context.venueId,
+                                    tableSessionId = confirmed.tableSession.id,
+                                    ownerUserId = context.userId,
+                                )
+                            }
+                    ) {
+                        is PlatformGuestBotMutationAttempt.Applied -> attempt.value
+                        PlatformGuestBotMutationAttempt.Stopped -> return
+                    }
+                } else {
+                    val tableSession = resolveCurrentTableSession(chatId, context) ?: return
+                    guestTabsRepository.createSharedTab(
+                        venueId = context.table.venueId,
+                        tableSessionId = tableSession.id,
+                        ownerUserId = context.userId,
+                    )
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: DatabaseUnavailableException) {
@@ -28910,7 +29502,7 @@ class TelegramBotRouter(
                 ),
         )
         botSelectedTabIds[key] = sharedTab.id
-        val inviteCode = createSharedInviteCode(chatId, context, tableSession.id, sharedTab.id)
+        val inviteCode = createSharedInviteCode(chatId, context, sharedTab.tableSessionId, sharedTab.id)
         if (inviteCode == null) {
             enqueueMessage(chatId, "Общий счёт создан, но код пока не сгенерирован. Попробуйте ещё раз.")
             return
@@ -28927,6 +29519,47 @@ class TelegramBotRouter(
         tableSessionId: Long,
         tabId: Long,
     ): String? {
+        if (isPlatformOwner(context.userId)) {
+            return when (
+                val attempt =
+                    runConfirmedPlatformGuestBotMutation(
+                        chatId = chatId,
+                        context = context,
+                        expectedTableSessionId = tableSessionId,
+                    ) { connection, confirmed ->
+                        guestTabsRepository.deleteExpiredInvites(connection)
+                        val expiresAt = Instant.now().plus(inviteCodeTtl)
+                        repeat(inviteCodeMaxAttempts) {
+                            val code =
+                                inviteCodeRandom
+                                    .nextInt(inviteCodeRangeExclusive)
+                                    .toString()
+                                    .padStart(inviteCodeLength, '0')
+                            when (
+                                guestTabsRepository.createInvite(
+                                    connection = connection,
+                                    tabId = tabId,
+                                    venueId = confirmed.context.venueId,
+                                    tableSessionId = confirmed.tableSession.id,
+                                    createdBy = context.userId,
+                                    token = code,
+                                    expiresAt = expiresAt,
+                                )
+                            ) {
+                                CreateInviteResult.CREATED ->
+                                    return@runConfirmedPlatformGuestBotMutation code
+                                CreateInviteResult.TOKEN_CONFLICT -> Unit
+                                CreateInviteResult.FORBIDDEN ->
+                                    return@runConfirmedPlatformGuestBotMutation null
+                            }
+                        }
+                        null
+                    }
+            ) {
+                is PlatformGuestBotMutationAttempt.Applied -> attempt.value
+                PlatformGuestBotMutationAttempt.Stopped -> null
+            }
+        }
         try {
             guestTabsRepository.deleteExpiredInvites()
         } catch (e: CancellationException) {
@@ -28966,17 +29599,38 @@ class TelegramBotRouter(
     private suspend fun resolveCurrentTableSession(
         chatId: Long,
         context: ResolvedChatContext,
-    ) = try {
-        tableSessionRepository.resolveActiveSession(
-            venueId = context.table.venueId,
-            tableId = context.table.tableId,
-            ttl = tableSessionTtl,
-        )
-    } catch (e: CancellationException) {
-        throw e
-    } catch (e: DatabaseUnavailableException) {
-        enqueueMessage(chatId, "База недоступна, попробуйте позже.")
-        null
+    ): TableSessionRecord? {
+        if (isPlatformOwner(context.userId)) {
+            return when (
+                val validation =
+                    guestTableContextLifecycleRepository?.validatePlatformBotContext(
+                        actorUserId = context.userId,
+                        chatId = chatId,
+                    ) ?: PlatformGuestContextValidationResult.DatabaseUnavailable
+            ) {
+                is PlatformGuestContextValidationResult.Active -> validation.tableSession
+                PlatformGuestContextValidationResult.Inactive -> {
+                    enqueueMessage(chatId, "Откройте QR-код ещё раз и подтвердите вход в Telegram.")
+                    null
+                }
+                PlatformGuestContextValidationResult.DatabaseUnavailable -> {
+                    enqueueMessage(chatId, "База недоступна, попробуйте позже.")
+                    null
+                }
+            }
+        }
+        return try {
+            tableSessionRepository.resolveActiveSession(
+                venueId = context.table.venueId,
+                tableId = context.table.tableId,
+                ttl = tableSessionTtl,
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: DatabaseUnavailableException) {
+            enqueueMessage(chatId, "База недоступна, попробуйте позже.")
+            null
+        }
     }
 
     private suspend fun createGuestBatchFromBotItems(
@@ -28991,6 +29645,20 @@ class TelegramBotRouter(
         expectedPreviewFingerprint: String? = null,
         giftFallbackItem: com.hookah.platform.backend.miniapp.guest.db.MenuItemModel? = null,
     ): com.hookah.platform.backend.telegram.db.CreatedOrderBatch? {
+        if (isPlatformOwner(context.userId)) {
+            return createConfirmedPlatformGuestBatchFromBotItems(
+                chatId = chatId,
+                context = context,
+                idempotencyKey = idempotencyKey,
+                tableSessionId = tableSessionId,
+                tabId = tabId,
+                comment = comment,
+                items = items,
+                giftDecisionCommand = giftDecisionCommand,
+                expectedPreviewFingerprint = expectedPreviewFingerprint,
+                giftFallbackItem = giftFallbackItem,
+            )
+        }
         val tableSession =
             try {
                 if (tableSessionId != null) {
@@ -29141,6 +29809,120 @@ class TelegramBotRouter(
         }
     }
 
+    private suspend fun createConfirmedPlatformGuestBatchFromBotItems(
+        chatId: Long,
+        context: ResolvedChatContext,
+        idempotencyKey: String,
+        tableSessionId: Long?,
+        tabId: Long?,
+        comment: String?,
+        items: List<OrderBatchItemInput>,
+        giftDecisionCommand: GiftDecisionCommand?,
+        expectedPreviewFingerprint: String?,
+        giftFallbackItem: MenuItemModel?,
+    ): CreatedOrderBatch? {
+        return try {
+            val venueZoneId = resolvePromotionVenueZoneId(context.table.venueId)
+            val attempt =
+                runConfirmedPlatformGuestBotMutation(
+                    chatId = chatId,
+                    context = context,
+                    expectedTableSessionId = tableSessionId,
+                ) { connection, confirmed ->
+                    val effectiveTabId =
+                        if (tabId != null) {
+                            if (
+                                !guestTabsRepository.isTabMember(
+                                    connection = connection,
+                                    tabId = tabId,
+                                    venueId = confirmed.context.venueId,
+                                    tableSessionId = confirmed.tableSession.id,
+                                    userId = context.userId,
+                                )
+                            ) {
+                                return@runConfirmedPlatformGuestBotMutation null
+                            }
+                            tabId
+                        } else {
+                            guestTabsRepository.ensurePersonalTab(
+                                connection = connection,
+                                venueId = confirmed.context.venueId,
+                                tableSessionId = confirmed.tableSession.id,
+                                userId = context.userId,
+                            ).id
+                        }
+                    ordersRepository.createGuestOrderBatch(
+                        connection = connection,
+                        tableId = confirmed.context.tableId,
+                        venueId = confirmed.context.venueId,
+                        tableSessionId = confirmed.tableSession.id,
+                        userId = context.userId,
+                        idempotencyKey = idempotencyKey,
+                        tabId = effectiveTabId,
+                        comment = comment,
+                        items = items,
+                        venueZoneId = venueZoneId,
+                        giftDecisionCommand = giftDecisionCommand,
+                        expectedPreviewFingerprint = expectedPreviewFingerprint,
+                    )
+                }
+            val createdBatch =
+                when (attempt) {
+                    is PlatformGuestBotMutationAttempt.Applied -> attempt.value
+                    PlatformGuestBotMutationAttempt.Stopped -> return null
+                }
+            if (createdBatch == null) {
+                enqueueMessage(chatId, "Не удалось оформить заказ, попробуйте ещё раз.")
+                return null
+            }
+            notifyStaffChatAboutOrderBatch(
+                context = context,
+                createdBatch = createdBatch,
+                comment = comment,
+                items = items,
+            )
+            createdBatch
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: GiftDecisionRequiredException) {
+            if (
+                giftFallbackItem != null &&
+                tableSessionId != null &&
+                tabId != null &&
+                addItemToBotDraftCart(
+                    chatId = chatId,
+                    tableToken = context.table.tableToken,
+                    tableSessionId = tableSessionId,
+                    tabId = tabId,
+                    item = giftFallbackItem,
+                )
+            ) {
+                enqueueMessage(
+                    chatId,
+                    "Условия акции обновились. Позиция перенесена в корзину — " +
+                        "подтвердите или пропустите актуальный подарок.",
+                )
+                showBotMenuCart(chatId)
+                return null
+            }
+            clearBotGiftState(BotDraftCartKey(chatId = chatId, tableToken = context.table.tableToken))
+            enqueueMessage(chatId, "Корзина изменилась. Проверьте подарок ещё раз.")
+            showBotMenuCart(chatId)
+            null
+        } catch (e: InvalidInputException) {
+            clearBotGiftState(BotDraftCartKey(chatId = chatId, tableToken = context.table.tableToken))
+            enqueueMessage(
+                chatId,
+                "Позиция, выбранный вариант или подарок сейчас недоступны. " +
+                    "Обновите корзину и подтвердите выбор снова.",
+            )
+            null
+        } catch (e: DatabaseUnavailableException) {
+            enqueueMessage(chatId, "База недоступна, попробуйте позже.")
+            null
+        }
+    }
+
     private suspend fun notifyStaffChatAboutOrderBatch(
         context: ResolvedChatContext,
         createdBatch: CreatedOrderBatch,
@@ -29223,33 +30005,63 @@ class TelegramBotRouter(
         chatId: Long,
         context: ResolvedChatContext,
     ): com.hookah.platform.backend.miniapp.guest.db.GuestTabModel? {
-        val tableSession = resolveCurrentTableSession(chatId, context) ?: return null
-        val personalTab =
+        val resolution =
             try {
-                guestTabsRepository.ensurePersonalTab(
-                    venueId = context.table.venueId,
-                    tableSessionId = tableSession.id,
-                    userId = context.userId,
-                )
+                if (isPlatformOwner(context.userId)) {
+                    when (
+                        val attempt =
+                            runConfirmedPlatformGuestBotMutation(chatId, context) { connection, confirmed ->
+                                val personalTab =
+                                    guestTabsRepository.ensurePersonalTab(
+                                        connection = connection,
+                                        venueId = confirmed.context.venueId,
+                                        tableSessionId = confirmed.tableSession.id,
+                                        userId = context.userId,
+                                    )
+                                BotTabResolution(
+                                    tableSession = confirmed.tableSession,
+                                    personalTab = personalTab,
+                                    userTabs =
+                                        guestTabsRepository.listTabsForUser(
+                                            connection = connection,
+                                            venueId = confirmed.context.venueId,
+                                            tableSessionId = confirmed.tableSession.id,
+                                            userId = context.userId,
+                                        ),
+                                )
+                            }
+                    ) {
+                        is PlatformGuestBotMutationAttempt.Applied -> attempt.value
+                        PlatformGuestBotMutationAttempt.Stopped -> return null
+                    }
+                } else {
+                    val tableSession = resolveCurrentTableSession(chatId, context) ?: return null
+                    val personalTab =
+                        guestTabsRepository.ensurePersonalTab(
+                            venueId = context.table.venueId,
+                            tableSessionId = tableSession.id,
+                            userId = context.userId,
+                        )
+                    BotTabResolution(
+                        tableSession = tableSession,
+                        personalTab = personalTab,
+                        userTabs =
+                            guestTabsRepository.listTabsForUser(
+                                venueId = context.table.venueId,
+                                tableSessionId = tableSession.id,
+                                userId = context.userId,
+                            ),
+                    )
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return null
             }
-        val userTabs =
-            try {
-                guestTabsRepository.listTabsForUser(
-                    venueId = context.table.venueId,
-                    tableSessionId = tableSession.id,
-                    userId = context.userId,
-                )
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: DatabaseUnavailableException) {
-                enqueueMessage(chatId, "База недоступна, попробуйте позже.")
-                return null
-            }
+        val tableSession = resolution.tableSession
+        val personalTab = resolution.personalTab
+        val userTabs = resolution.userTabs
         val key = BotDraftCartKey(chatId = chatId, tableToken = context.table.tableToken)
         val selectedTabId = botSelectedTabIds[key]
         if (selectedTabId != null) {
@@ -29653,6 +30465,33 @@ class TelegramBotRouter(
         botJoinSharedAwaitingChats.remove(chatId)
     }
 
+    internal fun clearGuestLocalStateAfterTeardown(
+        chatId: Long,
+        actorUserId: Long?,
+    ) {
+        clearAllBotDraftCartsForChat(chatId)
+        botBookingCommentDrafts.remove(chatId)
+        botBookingPendingConfirmations.remove(chatId)
+        botBookingEditContexts.remove(chatId)
+        actorUserId?.let { userId ->
+            platformGuestQrPendingStore.clear(
+                PlatformGuestQrPendingKey(actorUserId = userId, chatId = chatId),
+            )
+        }
+    }
+
+    internal suspend fun completePlatformGuestTeardownFromMiniApp(
+        chatId: Long,
+        actorUserId: Long,
+    ) {
+        clearGuestLocalStateAfterTeardown(chatId, actorUserId)
+        showPostGuestTeardownMenu(
+            chatId = chatId,
+            userId = actorUserId,
+            message = "Визит завершён. Чтобы снова заказать за столом, отсканируйте QR.",
+        )
+    }
+
     private fun clearBotDraftStateForChatExceptTableToken(
         chatId: Long,
         tableToken: String,
@@ -29726,6 +30565,10 @@ class TelegramBotRouter(
         botVenuePreviewContexts.remove(chatId)
         val userId = from?.id
         if (isPlatformOwner(userId)) {
+            val platformUserId = userId ?: return
+            if (showPlatformGuestTableMenuIfActive(chatId, platformUserId)) {
+                return
+            }
             showOwnerMainMenu(chatId)
             return
         }
@@ -29742,7 +30585,10 @@ class TelegramBotRouter(
         dialogStateRepository.clear(chatId)
     }
 
-    private suspend fun showOwnerMainMenu(chatId: Long) {
+    private suspend fun showOwnerMainMenu(
+        chatId: Long,
+        clearDialog: Boolean = true,
+    ) {
         botVenuePreviewContexts.remove(chatId)
         enqueueMessage(
             chatId,
@@ -29752,7 +30598,9 @@ class TelegramBotRouter(
                 platformPanelUrl = platformMiniAppUrl(),
             ),
         )
-        dialogStateRepository.clear(chatId)
+        if (clearDialog) {
+            dialogStateRepository.clear(chatId)
+        }
     }
 
     private suspend fun showVenueOwnerGlobalMenu(chatId: Long) {
@@ -32929,23 +33777,78 @@ class TelegramBotRouter(
             dialogStateRepository.set(chatId, DialogState(DialogStateType.QUICK_ORDER_WAIT_TEXT))
             return
         }
-        val existingOrderId = ordersRepository.findActiveOrderId(currentTab.tableSessionId)
-        val orderId =
-            ordersRepository.getOrCreateActiveOrderId(
-                tableId = context.table.tableId,
-                venueId = context.table.venueId,
-                tableSessionId = currentTab.tableSessionId,
-                venueZoneId = resolveVenueZoneId(context.table.venueId),
-            )
-        if (orderId == null) {
-            enqueueMessage(chatId, "База недоступна, попробуйте позже.")
+        val venueZoneId = resolveVenueZoneId(context.table.venueId)
+        val mutation =
+            if (isPlatformOwner(context.userId)) {
+                when (
+                    val attempt =
+                        runConfirmedPlatformGuestBotMutation(
+                            chatId = chatId,
+                            context = context,
+                            expectedTableSessionId = currentTab.tableSessionId,
+                        ) { connection, confirmed ->
+                            if (
+                                !guestTabsRepository.isTabMember(
+                                    connection = connection,
+                                    tabId = currentTab.id,
+                                    venueId = confirmed.context.venueId,
+                                    tableSessionId = confirmed.tableSession.id,
+                                    userId = context.userId,
+                                )
+                            ) {
+                                return@runConfirmedPlatformGuestBotMutation null
+                            }
+                            val existingOrderId =
+                                ordersRepository.findActiveOrderId(connection, confirmed.tableSession.id)
+                            val orderId =
+                                ordersRepository.getOrCreateActiveOrderId(
+                                    connection = connection,
+                                    tableId = confirmed.context.tableId,
+                                    venueId = confirmed.context.venueId,
+                                    tableSessionId = confirmed.tableSession.id,
+                                    venueZoneId = venueZoneId,
+                                ) ?: return@runConfirmedPlatformGuestBotMutation null
+                            val batchId =
+                                ordersRepository.createOrderBatch(
+                                    connection = connection,
+                                    orderId = orderId,
+                                    authorUserId = context.userId,
+                                    guestComment = text,
+                                    tabId = currentTab.id,
+                                ) ?: return@runConfirmedPlatformGuestBotMutation null
+                            QuickOrderMutationResult(existingOrderId, orderId, batchId)
+                        }
+                ) {
+                    is PlatformGuestBotMutationAttempt.Applied -> attempt.value
+                    PlatformGuestBotMutationAttempt.Stopped -> return
+                }
+            } else {
+                val existingOrderId = ordersRepository.findActiveOrderId(currentTab.tableSessionId)
+                val orderId =
+                    ordersRepository.getOrCreateActiveOrderId(
+                        tableId = context.table.tableId,
+                        venueId = context.table.venueId,
+                        tableSessionId = currentTab.tableSessionId,
+                        venueZoneId = venueZoneId,
+                    )
+                if (orderId == null) {
+                    enqueueMessage(chatId, "База недоступна, попробуйте позже.")
+                    return
+                }
+                val batchId = ordersRepository.createOrderBatch(orderId, context.userId, text, currentTab.id)
+                if (batchId == null) {
+                    enqueueMessage(chatId, "База недоступна, попробуйте позже.")
+                    return
+                }
+                QuickOrderMutationResult(existingOrderId, orderId, batchId)
+            }
+        if (mutation == null) {
+            enqueueMessage(chatId, "Доступ к счёту изменился. Откройте QR-код ещё раз.")
             return
         }
-        val batchId = ordersRepository.createOrderBatch(orderId, context.userId, text, currentTab.id)
-        if (batchId == null) {
-            enqueueMessage(chatId, "База недоступна, попробуйте позже.")
-            return
-        }
+        val existingOrderId = mutation.existingOrderId
+        val orderId = mutation.orderId
+        val batchId = mutation.batchId
         dialogStateRepository.clear(chatId)
         enqueueMessage(chatId, "Запрос отправлен, ожидайте подтверждения.")
         val orderSummary =
@@ -32998,62 +33901,44 @@ class TelegramBotRouter(
         )
     }
 
-    private suspend fun handleEndTableVisitRequest(chatId: Long) {
-        val context = resolveGuestContext(chatId) ?: return
-        val restored =
-            try {
-                guestTabsRepository.findLatestRestorableTableContext(
-                    userId = context.userId,
-                    tableToken = context.table.tableToken,
-                )
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: DatabaseUnavailableException) {
-                enqueueMessage(chatId, "База недоступна, попробуйте позже.")
-                return
-            }
-        if (restored == null) {
-            clearContextAndAskRescan(
-                chatId = chatId,
-                message = "Визит завершён. Чтобы снова заказать за столом, отсканируйте QR.",
-            )
-            return
-        }
+    private suspend fun handleEndTableVisitRequest(
+        chatId: Long,
+        actorUserId: Long?,
+    ) {
+        val userId = actorUserId ?: return
         val result =
-            try {
-                tableSessionRepository.endUserTableSession(
-                    userId = context.userId,
-                    tableToken = context.table.tableToken,
-                    venueId = context.table.venueId,
-                    tableId = context.table.tableId,
-                    tableSessionId = restored.tableSessionId,
-                )
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: DatabaseUnavailableException) {
-                enqueueMessage(chatId, "База недоступна, попробуйте позже.")
-                return
-            }
-        if (result == null) {
-            clearContextAndAskRescan(
+            guestTableContextLifecycleRepository?.teardownByChat(
+                actorUserId = userId,
                 chatId = chatId,
-                message = "Визит завершён. Чтобы снова заказать за столом, отсканируйте QR.",
-            )
-            return
+            ) ?: GuestTableTeardownResult.DatabaseUnavailable
+        when (result) {
+            is GuestTableTeardownResult.Cleared -> {
+                clearGuestLocalStateAfterTeardown(chatId, userId)
+                showPostGuestTeardownMenu(
+                    chatId = chatId,
+                    userId = userId,
+                    message = "Визит завершён. Чтобы снова заказать за столом, отсканируйте QR.",
+                )
+            }
+            is GuestTableTeardownResult.Blocked ->
+                enqueueMessage(
+                    chatId,
+                    result.reason.endVisitMessage() ?: "Сейчас визит нельзя завершить.",
+                    TelegramKeyboards.tableContextBotFlow(),
+                )
+            GuestTableTeardownResult.Missing -> {
+                clearGuestLocalStateAfterTeardown(chatId, userId)
+                showPostGuestTeardownMenu(
+                    chatId = chatId,
+                    userId = userId,
+                    message = "Гостевой режим завершён. Чтобы войти снова, откройте QR-код стола.",
+                )
+            }
+            GuestTableTeardownResult.Denied ->
+                enqueueMessage(chatId, "Не удалось завершить визит. Откройте меню и повторите попытку.")
+            GuestTableTeardownResult.DatabaseUnavailable ->
+                enqueueMessage(chatId, "База недоступна, попробуйте позже.")
         }
-        val blockedReason = result.blockedReason
-        if (!result.ended || blockedReason != null) {
-            enqueueMessage(
-                chatId,
-                blockedReason.endVisitMessage() ?: "Сейчас визит нельзя завершить.",
-                tableContextBotKeyboard(context.table),
-            )
-            return
-        }
-        clearContextAndAskRescan(
-            chatId = chatId,
-            message = "Визит завершён. Чтобы снова заказать за столом, отсканируйте QR.",
-        )
     }
 
     private fun TableSessionEndBlockedReason?.endVisitMessage(): String? =
@@ -33085,14 +33970,19 @@ class TelegramBotRouter(
             "Смена стола. Текущий стол: $tableDisplay. " +
                 "tableSessionId=${currentTab.tableSessionId}. orderId=$orderDisplay."
         val staffCallId =
-            staffCallRepository.createStaffCall(
-                venueId = context.table.venueId,
-                tableId = context.table.tableId,
-                createdByUserId = context.userId,
-                reason = StaffCallReason.OTHER,
-                comment = comment,
-                tableSessionId = currentTab.tableSessionId,
-            ) ?: run {
+            when (
+                val attempt =
+                    createTableScopedBotStaffCall(
+                        chatId = chatId,
+                        context = context,
+                        tableSessionId = currentTab.tableSessionId,
+                        reason = StaffCallReason.OTHER,
+                        comment = comment,
+                    )
+            ) {
+                is PlatformGuestBotMutationAttempt.Applied -> attempt.value
+                PlatformGuestBotMutationAttempt.Stopped -> return
+            } ?: run {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
             }
@@ -33142,25 +34032,19 @@ class TelegramBotRouter(
                 comment = comment,
             )
         val createdStaffCallId =
-            if (linkedOrderId != null) {
-                staffCallRepository.createStaffCall(
-                    context.table.venueId,
-                    context.table.tableId,
-                    context.userId,
-                    reason,
-                    comment,
-                    tableSessionId = tableSession.id,
-                    orderId = linkedOrderId,
-                )
-            } else {
-                staffCallRepository.createStaffCall(
-                    context.table.venueId,
-                    context.table.tableId,
-                    context.userId,
-                    reason,
-                    comment,
-                    tableSessionId = tableSession.id,
-                )
+            when (
+                val attempt =
+                    createTableScopedBotStaffCall(
+                        chatId = chatId,
+                        context = context,
+                        tableSessionId = tableSession.id,
+                        reason = reason,
+                        comment = comment,
+                        orderId = linkedOrderId,
+                    )
+            ) {
+                is PlatformGuestBotMutationAttempt.Applied -> attempt.value
+                PlatformGuestBotMutationAttempt.Stopped -> return
             }
         val staffCallId =
             createdStaffCallId ?: run {
@@ -33180,6 +34064,45 @@ class TelegramBotRouter(
             comment = comment,
             tableSessionId = tableSession.id,
             orderId = linkedOrderId,
+        )
+    }
+
+    private suspend fun createTableScopedBotStaffCall(
+        chatId: Long,
+        context: ResolvedChatContext,
+        tableSessionId: Long,
+        reason: StaffCallReason,
+        comment: String?,
+        orderId: Long? = null,
+    ): PlatformGuestBotMutationAttempt<Long?> {
+        if (isPlatformOwner(context.userId)) {
+            return runConfirmedPlatformGuestBotMutation(
+                chatId = chatId,
+                context = context,
+                expectedTableSessionId = tableSessionId,
+            ) { connection, confirmed ->
+                staffCallRepository.createGuestStaffCall(
+                    connection = connection,
+                    venueId = confirmed.context.venueId,
+                    tableId = confirmed.context.tableId,
+                    tableSessionId = confirmed.tableSession.id,
+                    createdByUserId = context.userId,
+                    reason = reason,
+                    comment = comment,
+                    orderId = orderId,
+                ).id
+            }
+        }
+        return PlatformGuestBotMutationAttempt.Applied(
+            staffCallRepository.createStaffCall(
+                venueId = context.table.venueId,
+                tableId = context.table.tableId,
+                createdByUserId = context.userId,
+                reason = reason,
+                comment = comment,
+                tableSessionId = tableSessionId,
+                orderId = orderId,
+            ),
         )
     }
 
@@ -33298,20 +34221,53 @@ class TelegramBotRouter(
         }
     }
 
-    private suspend fun clearContextAndAskRescan(
+    private suspend fun teardownGuestContextAfterAvailabilityLoss(
         chatId: Long,
-        message: String = "Контекст сброшен. Отсканируйте QR на столе или откройте каталог.",
+        actorUserId: Long,
+        message: String,
     ) {
-        val storedContext = chatContextRepository.get(chatId)
-        chatContextRepository.clear(chatId)
-        clearAllBotDraftCartsForChat(chatId)
-        botBookingCommentDrafts.remove(chatId)
-        botBookingPendingConfirmations.remove(chatId)
-        botBookingEditContexts.remove(chatId)
-        dialogStateRepository.clear(chatId)
-        val userId = storedContext?.userId
+        platformGuestQrPendingStore.clear(
+            PlatformGuestQrPendingKey(actorUserId = actorUserId, chatId = chatId),
+        )
+        val result =
+            guestTableContextLifecycleRepository?.teardownByChat(
+                actorUserId = actorUserId,
+                chatId = chatId,
+            ) ?: GuestTableTeardownResult.DatabaseUnavailable
+        when (result) {
+            is GuestTableTeardownResult.Cleared,
+            GuestTableTeardownResult.Missing,
+            -> {
+                clearGuestLocalStateAfterTeardown(chatId, actorUserId)
+                showPostGuestTeardownMenu(chatId, actorUserId, message)
+            }
+            is GuestTableTeardownResult.Blocked ->
+                enqueueMessage(
+                    chatId,
+                    result.reason.endVisitMessage() ?: "Сейчас гостевой режим нельзя завершить.",
+                    TelegramKeyboards.tableContextBotFlow(),
+                )
+            GuestTableTeardownResult.Denied ->
+                enqueueMessage(chatId, "Не удалось завершить гостевой режим. Откройте меню и повторите попытку.")
+            GuestTableTeardownResult.DatabaseUnavailable ->
+                enqueueMessage(chatId, "База недоступна, попробуйте позже.")
+        }
+    }
+
+    private suspend fun showPostGuestTeardownMenu(
+        chatId: Long,
+        userId: Long?,
+        message: String,
+    ) {
         if (isPlatformOwner(userId)) {
-            showOwnerMainMenu(chatId)
+            enqueueMessage(
+                chatId,
+                message,
+                TelegramKeyboards.ownerMainMenu(
+                    showMiniAppEntry = isMiniAppEntryAvailable(),
+                    platformPanelUrl = platformMiniAppUrl(),
+                ),
+            )
             return
         }
         when (val access = resolveSelectedVenueBotAccess(chatId, userId, promptIfMultiple = false)) {
@@ -33345,6 +34301,12 @@ class TelegramBotRouter(
         text: String = "Используйте меню ниже.",
     ) {
         val fromUserId = from?.id
+        if (isPlatformOwner(fromUserId)) {
+            val platformUserId = fromUserId ?: return
+            if (showPlatformGuestTableMenuIfActive(chatId, platformUserId, text)) {
+                return
+            }
+        }
         when (val access = resolveSelectedVenueBotAccess(chatId, fromUserId)) {
             null ->
                 if (fromUserId != null && loadVenueBotAccesses(fromUserId).size > 1) {
@@ -33432,6 +34394,37 @@ class TelegramBotRouter(
 
     private fun isPlatformOwner(userId: Long?): Boolean = userId != null && config.platformOwnerId == userId
 
+    private suspend fun <T> runConfirmedPlatformGuestBotMutation(
+        chatId: Long,
+        context: ResolvedChatContext,
+        expectedTableSessionId: Long? = null,
+        mutation: (Connection, ConfirmedPlatformGuestMutationContext) -> T,
+    ): PlatformGuestBotMutationAttempt<T> {
+        val result =
+            guestTableContextLifecycleRepository?.withConfirmedPlatformGuestMutation(
+                actorUserId = context.userId,
+                platformOwnerUserId = config.platformOwnerId,
+                chatId = chatId,
+                tableToken = context.table.tableToken,
+                expectedVenueId = context.table.venueId,
+                expectedTableId = context.table.tableId,
+                expectedSessionId = expectedTableSessionId,
+                ttl = tableSessionTtl,
+                mutation = mutation,
+            ) ?: PlatformGuestTableMutationResult.DatabaseUnavailable
+        return when (result) {
+            is PlatformGuestTableMutationResult.Applied -> PlatformGuestBotMutationAttempt.Applied(result.value)
+            PlatformGuestTableMutationResult.Denied -> {
+                enqueueMessage(chatId, "Откройте QR-код ещё раз и подтвердите вход в Telegram.")
+                PlatformGuestBotMutationAttempt.Stopped
+            }
+            PlatformGuestTableMutationResult.DatabaseUnavailable -> {
+                enqueueMessage(chatId, "База недоступна, попробуйте позже.")
+                PlatformGuestBotMutationAttempt.Stopped
+            }
+        }
+    }
+
     private suspend fun loadContext(chatId: Long): LoadContextResult {
         val saved =
             try {
@@ -33469,8 +34462,11 @@ class TelegramBotRouter(
         when (ensureGuestTableFlowAccess(context.userId, context.table.venueId)) {
             VenueGuestAccessResult.Allowed -> Unit
             VenueGuestAccessResult.Forbidden -> {
-                enqueueMessage(chatId, "Заведение пока не доступно для гостей.")
-                runCatching { chatContextRepository.clear(chatId) }
+                teardownGuestContextAfterAvailabilityLoss(
+                    chatId = chatId,
+                    actorUserId = context.userId,
+                    message = "Заведение пока не доступно для гостей. Гостевой режим завершён.",
+                )
                 return null
             }
             VenueGuestAccessResult.DatabaseUnavailable -> {
@@ -33681,6 +34677,7 @@ class TelegramBotRouter(
     private suspend fun ensureGuestTableFlowAccess(
         userId: Long,
         venueId: Long,
+        requirePublishedVenue: Boolean = false,
     ): VenueGuestAccessResult {
         val venueStatus =
             try {
@@ -33692,6 +34689,9 @@ class TelegramBotRouter(
             }
         if (venueStatus == VenueStatus.PUBLISHED) {
             return VenueGuestAccessResult.Allowed
+        }
+        if (requirePublishedVenue || isPlatformOwner(userId)) {
+            return VenueGuestAccessResult.Forbidden
         }
         val membership =
             try {
@@ -33706,6 +34706,20 @@ class TelegramBotRouter(
         } else {
             VenueGuestAccessResult.Forbidden
         }
+    }
+
+    private sealed class TableTokenGuestAccessResult {
+        data class Allowed(val context: TableContext) : TableTokenGuestAccessResult()
+
+        object Invalid : TableTokenGuestAccessResult()
+
+        object TableUnavailable : TableTokenGuestAccessResult()
+
+        object Blocked : TableTokenGuestAccessResult()
+
+        object VenueUnavailableForGuest : TableTokenGuestAccessResult()
+
+        object DatabaseUnavailable : TableTokenGuestAccessResult()
     }
 
     private sealed class ApplyTableTokenResult {

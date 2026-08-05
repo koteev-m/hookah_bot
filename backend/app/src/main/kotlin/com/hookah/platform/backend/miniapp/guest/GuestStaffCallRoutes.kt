@@ -6,6 +6,8 @@ import com.hookah.platform.backend.miniapp.guest.api.StaffCallRequest
 import com.hookah.platform.backend.miniapp.guest.api.StaffCallResponse
 import com.hookah.platform.backend.miniapp.guest.api.StaffCallStatusDto
 import com.hookah.platform.backend.miniapp.guest.api.StaffCallStatusResponse
+import com.hookah.platform.backend.miniapp.guest.db.GuestTableContextLifecycleRepository
+import com.hookah.platform.backend.miniapp.guest.db.GuestTabsRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
@@ -43,6 +45,9 @@ fun Route.guestStaffCallRoutes(
     staffChatNotifier: StaffChatNotifier? = null,
     userRepository: UserRepository = UserRepository(null),
     ordersRepository: OrdersRepository = OrdersRepository(null),
+    guestTabsRepository: GuestTabsRepository = GuestTabsRepository(null),
+    platformOwnerUserId: Long? = null,
+    guestTableContextLifecycleRepository: GuestTableContextLifecycleRepository? = null,
 ) {
     route("/staff-call") {
         installGuestStaffCallRateLimit(
@@ -62,45 +67,71 @@ fun Route.guestStaffCallRoutes(
             val table =
                 call.rateLimitResolvedTableOrNull(staffCallResolvedTableAttribute)
                     ?: (tableTokenResolver(token) ?: throw NotFoundException())
-            val tableSession =
-                tableSessionRepository.touchActiveSession(
-                    tableSessionId = request.tableSessionId,
-                    venueId = table.venueId,
-                    tableId = table.tableId,
-                    ttl = tableSessionConfig.ttl,
-                ) ?: throw NotFoundException()
-            ensureGuestActionAvailable(table.venueId, guestVenueRepository, subscriptionRepository)
             val userId = call.requireUserId()
+            if (userId != platformOwnerUserId) {
+                ensureGuestActionAvailable(table.venueId, guestVenueRepository, subscriptionRepository)
+            }
+            val tableSession =
+                if (userId == platformOwnerUserId) {
+                    null
+                } else {
+                    tableSessionRepository.touchActiveSession(
+                        tableSessionId = request.tableSessionId,
+                        venueId = table.venueId,
+                        tableId = table.tableId,
+                        ttl = tableSessionConfig.ttl,
+                    ) ?: throw NotFoundException()
+                }
+            val resolvedTableSessionId = tableSession?.id ?: request.tableSessionId
             val linkedOrderId =
                 resolveSafeStaffCallOrderId(
                     ordersRepository = ordersRepository,
                     staffCallRepository = staffCallRepository,
                     venueId = table.venueId,
-                    tableSessionId = tableSession.id,
+                    tableSessionId = resolvedTableSessionId,
                     userId = userId,
                     reason = reason,
                     comment = comment,
                 )
 
             val created =
-                if (linkedOrderId != null) {
-                    staffCallRepository.createGuestStaffCall(
-                        venueId = table.venueId,
-                        tableId = table.tableId,
-                        tableSessionId = tableSession.id,
-                        createdByUserId = userId,
-                        reason = reason,
-                        comment = comment,
-                        orderId = linkedOrderId,
-                    )
+                if (userId == platformOwnerUserId) {
+                    requireConfirmedPlatformGuestMutation(
+                        userId = userId,
+                        platformOwnerUserId = platformOwnerUserId,
+                        lifecycleRepository = guestTableContextLifecycleRepository,
+                        tableToken = token,
+                        expectedVenueId = table.venueId,
+                        expectedTableId = table.tableId,
+                        expectedTableSessionId = request.tableSessionId,
+                        ttl = tableSessionConfig.ttl,
+                    ) { connection, confirmed ->
+                        guestTabsRepository.ensurePersonalTab(
+                            connection = connection,
+                            venueId = table.venueId,
+                            tableSessionId = confirmed.tableSession.id,
+                            userId = userId,
+                        )
+                        staffCallRepository.createGuestStaffCall(
+                            connection = connection,
+                            venueId = table.venueId,
+                            tableId = table.tableId,
+                            tableSessionId = confirmed.tableSession.id,
+                            createdByUserId = userId,
+                            reason = reason,
+                            comment = comment,
+                            orderId = linkedOrderId,
+                        )
+                    }
                 } else {
                     staffCallRepository.createGuestStaffCall(
                         venueId = table.venueId,
                         tableId = table.tableId,
-                        tableSessionId = tableSession.id,
+                        tableSessionId = checkNotNull(tableSession).id,
                         createdByUserId = userId,
                         reason = reason,
                         comment = comment,
+                        orderId = linkedOrderId,
                     )
                 }
             staffChatNotifier?.notifyStaffCallNow(
@@ -110,7 +141,7 @@ fun Route.guestStaffCallRoutes(
                     tableLabel = table.tableNumber.toString(),
                     reason = reason,
                     comment = comment,
-                    tableSessionId = tableSession.id,
+                    tableSessionId = resolvedTableSessionId,
                     orderId = linkedOrderId,
                     guestDisplayName =
                         runCatching { userRepository.findGuestProfile(userId)?.guestDisplayName }
@@ -135,15 +166,24 @@ fun Route.guestStaffCallRoutes(
                 call.request.queryParameters["tableSessionId"]?.toLongOrNull()?.takeIf { it > 0 }
                     ?: throw InvalidInputException("tableSessionId must be a positive number")
             val table = tableTokenResolver(token) ?: throw NotFoundException()
-            val tableSession =
-                tableSessionRepository.touchActiveSession(
-                    tableSessionId = tableSessionId,
-                    venueId = table.venueId,
-                    tableId = table.tableId,
-                    ttl = tableSessionConfig.ttl,
-                ) ?: throw NotFoundException()
-            ensureGuestActionAvailable(table.venueId, guestVenueRepository, subscriptionRepository)
             val userId = call.requireUserId()
+            val tableSession =
+                requirePlatformGuestTokenAccessIfNeeded(
+                    userId = userId,
+                    platformOwnerUserId = platformOwnerUserId,
+                    lifecycleRepository = guestTableContextLifecycleRepository,
+                    tableToken = token,
+                    table = table,
+                    requestedTableSessionId = tableSessionId,
+                    ttl = tableSessionConfig.ttl,
+                )?.tableSession
+                    ?: tableSessionRepository.touchActiveSession(
+                        tableSessionId = tableSessionId,
+                        venueId = table.venueId,
+                        tableId = table.tableId,
+                        ttl = tableSessionConfig.ttl,
+                    ) ?: throw NotFoundException()
+            ensureGuestActionAvailable(table.venueId, guestVenueRepository, subscriptionRepository)
             val calls =
                 staffCallRepository.listByGuestTableSession(
                     venueId = table.venueId,

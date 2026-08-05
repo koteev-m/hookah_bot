@@ -12,6 +12,7 @@ import com.hookah.platform.backend.miniapp.guest.api.GuestTabResponse
 import com.hookah.platform.backend.miniapp.guest.api.GuestTabsResponse
 import com.hookah.platform.backend.miniapp.guest.api.JoinTabRequest
 import com.hookah.platform.backend.miniapp.guest.db.CreateInviteResult
+import com.hookah.platform.backend.miniapp.guest.db.GuestTableContextLifecycleRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestTabsRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
@@ -38,18 +39,35 @@ fun Route.guestTabsRoutes(
     guestTabsRepository: GuestTabsRepository,
     guestVenueRepository: GuestVenueRepository,
     subscriptionRepository: SubscriptionRepository,
+    tableSessionConfig: TableSessionConfig? = null,
+    platformOwnerUserId: Long? = null,
+    guestTableContextLifecycleRepository: GuestTableContextLifecycleRepository? = null,
 ) {
     get("/tabs") {
         val tableSessionId = parseTableSessionId(call.request.queryParameters["table_session_id"])
         val userId = call.requireUserId()
         val session = guestTabsRepository.findActiveTableSession(tableSessionId) ?: throw NotFoundException()
-        ensureGuestActionAvailable(session.venueId, guestVenueRepository, subscriptionRepository)
+        val platformAccess =
+            requirePlatformGuestSessionAccessIfNeeded(
+                userId = userId,
+                platformOwnerUserId = platformOwnerUserId,
+                lifecycleRepository = guestTableContextLifecycleRepository,
+                venueId = session.venueId,
+                tableId = session.tableId,
+                tableSessionId = session.id,
+                ttl = tableSessionConfig?.ttl,
+            )
+        if (userId != platformOwnerUserId) {
+            ensureGuestActionAvailable(session.venueId, guestVenueRepository, subscriptionRepository)
+        }
 
-        guestTabsRepository.ensurePersonalTab(
-            venueId = session.venueId,
-            tableSessionId = session.id,
-            userId = userId,
-        )
+        if (platformAccess == null) {
+            guestTabsRepository.ensurePersonalTab(
+                venueId = session.venueId,
+                tableSessionId = session.id,
+                userId = userId,
+            )
+        }
         val tabs = guestTabsRepository.listTabsForUser(session.venueId, session.id, userId)
         call.respond(GuestTabsResponse(tabs = tabs.map { it.toDto() }))
     }
@@ -58,14 +76,35 @@ fun Route.guestTabsRoutes(
         val request = call.receive<CreatePersonalTabRequest>()
         val userId = call.requireUserId()
         val session = guestTabsRepository.findActiveTableSession(request.tableSessionId) ?: throw NotFoundException()
-        ensureGuestActionAvailable(session.venueId, guestVenueRepository, subscriptionRepository)
+        if (userId != platformOwnerUserId) {
+            ensureGuestActionAvailable(session.venueId, guestVenueRepository, subscriptionRepository)
+        }
 
         val tab =
-            guestTabsRepository.ensurePersonalTab(
-                venueId = session.venueId,
-                tableSessionId = session.id,
-                userId = userId,
-            )
+            if (userId == platformOwnerUserId) {
+                requireConfirmedPlatformGuestMutation(
+                    userId = userId,
+                    platformOwnerUserId = platformOwnerUserId,
+                    lifecycleRepository = guestTableContextLifecycleRepository,
+                    expectedVenueId = session.venueId,
+                    expectedTableId = session.tableId,
+                    expectedTableSessionId = session.id,
+                    ttl = tableSessionConfig?.ttl,
+                ) { connection, confirmed ->
+                    guestTabsRepository.ensurePersonalTab(
+                        connection = connection,
+                        venueId = session.venueId,
+                        tableSessionId = confirmed.tableSession.id,
+                        userId = userId,
+                    )
+                }
+            } else {
+                guestTabsRepository.ensurePersonalTab(
+                    venueId = session.venueId,
+                    tableSessionId = session.id,
+                    userId = userId,
+                )
+            }
         call.respond(GuestTabResponse(tab = tab.toDto()))
     }
 
@@ -73,14 +112,41 @@ fun Route.guestTabsRoutes(
         val request = call.receive<CreateSharedTabRequest>()
         val userId = call.requireUserId()
         val session = guestTabsRepository.findActiveTableSession(request.tableSessionId) ?: throw NotFoundException()
-        ensureGuestActionAvailable(session.venueId, guestVenueRepository, subscriptionRepository)
+        if (userId != platformOwnerUserId) {
+            ensureGuestActionAvailable(session.venueId, guestVenueRepository, subscriptionRepository)
+        }
 
         val tab =
-            guestTabsRepository.createSharedTab(
-                venueId = session.venueId,
-                tableSessionId = session.id,
-                ownerUserId = userId,
-            )
+            if (userId == platformOwnerUserId) {
+                requireConfirmedPlatformGuestMutation(
+                    userId = userId,
+                    platformOwnerUserId = platformOwnerUserId,
+                    lifecycleRepository = guestTableContextLifecycleRepository,
+                    expectedVenueId = session.venueId,
+                    expectedTableId = session.tableId,
+                    expectedTableSessionId = session.id,
+                    ttl = tableSessionConfig?.ttl,
+                ) { connection, confirmed ->
+                    guestTabsRepository.ensurePersonalTab(
+                        connection = connection,
+                        venueId = session.venueId,
+                        tableSessionId = confirmed.tableSession.id,
+                        userId = userId,
+                    )
+                    guestTabsRepository.createSharedTab(
+                        connection = connection,
+                        venueId = session.venueId,
+                        tableSessionId = confirmed.tableSession.id,
+                        ownerUserId = userId,
+                    )
+                }
+            } else {
+                guestTabsRepository.createSharedTab(
+                    venueId = session.venueId,
+                    tableSessionId = session.id,
+                    ownerUserId = userId,
+                )
+            }
         call.respond(GuestTabResponse(tab = tab.toDto()))
     }
 
@@ -94,11 +160,65 @@ fun Route.guestTabsRoutes(
             val session =
                 guestTabsRepository.findActiveTableSession(request.tableSessionId)
                     ?: throw NotFoundException()
-            ensureGuestActionAvailable(session.venueId, guestVenueRepository, subscriptionRepository)
+            if (userId != platformOwnerUserId) {
+                ensureGuestActionAvailable(session.venueId, guestVenueRepository, subscriptionRepository)
+            }
 
-            guestTabsRepository.deleteExpiredInvites()
             val ttl = normalizeInviteTtl(request.ttlSeconds)
             val expiresAt = Instant.now().plus(ttl)
+            if (userId == platformOwnerUserId) {
+                val code =
+                    requireConfirmedPlatformGuestMutation(
+                        userId = userId,
+                        platformOwnerUserId = platformOwnerUserId,
+                        lifecycleRepository = guestTableContextLifecycleRepository,
+                        expectedVenueId = session.venueId,
+                        expectedTableId = session.tableId,
+                        expectedTableSessionId = session.id,
+                        ttl = tableSessionConfig?.ttl,
+                    ) { connection, confirmed ->
+                        guestTabsRepository.ensurePersonalTab(
+                            connection = connection,
+                            venueId = session.venueId,
+                            tableSessionId = confirmed.tableSession.id,
+                            userId = userId,
+                        )
+                        guestTabsRepository.deleteExpiredInvites(connection)
+                        repeat(INVITE_CODE_MAX_ATTEMPTS) {
+                            val candidate = generateInviteCode()
+                            when (
+                                guestTabsRepository.createInvite(
+                                    connection = connection,
+                                    tabId = tabId,
+                                    venueId = session.venueId,
+                                    tableSessionId = confirmed.tableSession.id,
+                                    createdBy = userId,
+                                    token = candidate,
+                                    expiresAt = expiresAt,
+                                )
+                            ) {
+                                CreateInviteResult.CREATED ->
+                                    return@requireConfirmedPlatformGuestMutation candidate
+
+                                CreateInviteResult.FORBIDDEN ->
+                                    throw ForbiddenException("Only shared tab owner can create invites")
+
+                                CreateInviteResult.TOKEN_CONFLICT -> Unit
+                            }
+                        }
+                        throw InvalidInputException("Unable to generate invite code")
+                    }
+                call.respond(
+                    CreateTabInviteResponse(
+                        tabId = tabId,
+                        token = code,
+                        expiresAtEpochSeconds = expiresAt.epochSecond,
+                    ),
+                )
+                return@post
+            }
+
+            guestTabsRepository.deleteExpiredInvites()
             repeat(INVITE_CODE_MAX_ATTEMPTS) {
                 val code = generateInviteCode()
                 when (
@@ -147,15 +267,43 @@ fun Route.guestTabsRoutes(
             throw InvalidInputException("token must be <= 128 characters")
         }
         val session = guestTabsRepository.findActiveTableSession(request.tableSessionId) ?: throw NotFoundException()
-        ensureGuestActionAvailable(session.venueId, guestVenueRepository, subscriptionRepository)
+        if (userId != platformOwnerUserId) {
+            ensureGuestActionAvailable(session.venueId, guestVenueRepository, subscriptionRepository)
+        }
 
         val tab =
-            guestTabsRepository.joinByInvite(
-                venueId = session.venueId,
-                tableSessionId = session.id,
-                userId = userId,
-                token = token,
-            ) ?: throw NotFoundException("Invite is invalid or expired")
+            if (userId == platformOwnerUserId) {
+                requireConfirmedPlatformGuestMutation(
+                    userId = userId,
+                    platformOwnerUserId = platformOwnerUserId,
+                    lifecycleRepository = guestTableContextLifecycleRepository,
+                    expectedVenueId = session.venueId,
+                    expectedTableId = session.tableId,
+                    expectedTableSessionId = session.id,
+                    ttl = tableSessionConfig?.ttl,
+                ) { connection, confirmed ->
+                    guestTabsRepository.ensurePersonalTab(
+                        connection = connection,
+                        venueId = session.venueId,
+                        tableSessionId = confirmed.tableSession.id,
+                        userId = userId,
+                    )
+                    guestTabsRepository.joinByInvite(
+                        connection = connection,
+                        venueId = session.venueId,
+                        tableSessionId = confirmed.tableSession.id,
+                        userId = userId,
+                        token = token,
+                    ) ?: throw NotFoundException("Invite is invalid or expired")
+                }
+            } else {
+                guestTabsRepository.joinByInvite(
+                    venueId = session.venueId,
+                    tableSessionId = session.id,
+                    userId = userId,
+                    token = token,
+                ) ?: throw NotFoundException("Invite is invalid or expired")
+            }
         call.respond(GuestTabResponse(tab = tab.toDto()))
     }
 }

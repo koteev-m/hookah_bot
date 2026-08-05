@@ -387,6 +387,13 @@ export function formatTableStatus(snapshot: TableContextSnapshot): TableStatusPr
       if (snapshot.error?.code === ApiErrorCodes.UNAUTHORIZED) {
         return { title: 'Сессия устарела — откройте заново в Telegram', severity: 'error' }
       }
+      if (snapshot.error?.code === ApiErrorCodes.FORBIDDEN) {
+        return {
+          title: 'Требуется новое подтверждение входа',
+          details: 'Откройте QR-код ещё раз и подтвердите вход в Telegram.',
+          severity: 'error'
+        }
+      }
       return { title: 'Не удалось загрузить стол. Попробуйте позже.', severity: 'error' }
     case 'resolved': {
       if (!snapshot.tableSessionActive) {

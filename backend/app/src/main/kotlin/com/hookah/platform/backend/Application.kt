@@ -52,6 +52,7 @@ import com.hookah.platform.backend.miniapp.guest.TableSessionConfig
 import com.hookah.platform.backend.miniapp.guest.db.GuestBookingRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestFavoritesRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestMenuRepository
+import com.hookah.platform.backend.miniapp.guest.db.GuestTableContextLifecycleRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestTabsRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
@@ -260,6 +261,7 @@ internal data class ModuleOverrides(
     val staffBillUpdateNotifier: StaffBillUpdateNotifier? = null,
     val venueLocationProvider: VenueLocationProvider? = null,
     val staffScheduleClock: Clock? = null,
+    val afterPlatformGuestTeardown: (suspend (chatId: Long, actorUserId: Long) -> Unit)? = null,
 )
 
 private fun ApplicationCall.isApiRequest(): Boolean {
@@ -358,6 +360,8 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
     val supportThreadRepository = SupportThreadRepository(dataSource)
     val guestMenuRepository = GuestMenuRepository(dataSource)
     val guestTabsRepository = GuestTabsRepository(dataSource)
+    val chatContextRepository = ChatContextRepository(dataSource)
+    val dialogStateRepository = DialogStateRepository(dataSource, telegramJson)
     val analyticsEventRepository = AnalyticsEventRepository(dataSource)
     val subscriptionRepository = SubscriptionRepository(dataSource, analyticsEventRepository)
     val repeatOrderResolver =
@@ -400,6 +404,16 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
     val tableSessionRepository = TableSessionRepository(dataSource, analyticsEventRepository)
     val shiftExtensionRepository = ShiftExtensionRepository(dataSource)
     val tableTokenRepository = TableTokenRepository(dataSource)
+    val guestTableContextLifecycleRepository =
+        GuestTableContextLifecycleRepository(
+            dataSource = dataSource,
+            tableTokenRepository = tableTokenRepository,
+            subscriptionRepository = subscriptionRepository,
+            tableSessionRepository = tableSessionRepository,
+            guestTabsRepository = guestTabsRepository,
+            chatContextRepository = chatContextRepository,
+            dialogStateRepository = dialogStateRepository,
+        )
     val auditLogRepository = AuditLogRepository(dataSource, json)
     val aiAssistantService =
         AiAssistantService(
@@ -653,8 +667,8 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                 idempotencyRepository = IdempotencyRepository(dataSource),
                 userRepository = userRepository,
                 tableTokenRepository = tableTokenRepository,
-                chatContextRepository = ChatContextRepository(dataSource),
-                dialogStateRepository = DialogStateRepository(dataSource, telegramJson),
+                chatContextRepository = chatContextRepository,
+                dialogStateRepository = dialogStateRepository,
                 ordersRepository = ordersRepository,
                 staffCallRepository = staffCallRepository,
                 staffChatLinkCodeRepository = staffChatLinkCodeRepository,
@@ -702,6 +716,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                 supportThreadRepository = supportThreadRepository,
                 bookingRemindersEnabled = bookingReminderWorkerConfig.enabled,
                 repeatOrderResolver = repeatOrderResolver,
+                guestTableContextLifecycleRepository = guestTableContextLifecycleRepository,
             )
 
         if (dataSource != null) {
@@ -1116,11 +1131,21 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                         tableSessionRepository = tableSessionRepository,
                         tableSessionConfig = tableSessionConfig,
                         guestTabsRepository = guestTabsRepository,
+                        platformOwnerUserId = platformConfig.ownerUserId,
+                        guestTableContextLifecycleRepository = guestTableContextLifecycleRepository,
+                        afterPlatformGuestTeardown =
+                            overrides.afterPlatformGuestTeardown ?: { chatId, actorUserId ->
+                                telegramRouter?.completePlatformGuestTeardownFromMiniApp(chatId, actorUserId)
+                                Unit
+                            },
                     )
                     guestTabsRoutes(
                         guestTabsRepository = guestTabsRepository,
                         guestVenueRepository = guestVenueRepository,
                         subscriptionRepository = subscriptionRepository,
+                        tableSessionConfig = tableSessionConfig,
+                        platformOwnerUserId = platformConfig.ownerUserId,
+                        guestTableContextLifecycleRepository = guestTableContextLifecycleRepository,
                     )
                     guestOrderRoutes(
                         guestRateLimitConfig = guestRateLimitConfig,
@@ -1138,6 +1163,8 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                         userRepository = userRepository,
                         venueSettingsRepository = venueSettingsRepository,
                         venueOrdersRepository = venueOrdersRepository,
+                        platformOwnerUserId = platformConfig.ownerUserId,
+                        guestTableContextLifecycleRepository = guestTableContextLifecycleRepository,
                     )
                     guestBookingRoutes(
                         guestVenueRepository = guestVenueRepository,
@@ -1161,6 +1188,8 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                         auditLogRepository = auditLogRepository,
                         guestRateLimitConfig = guestRateLimitConfig,
                         rateLimiter = guestRateLimiter,
+                        platformOwnerUserId = platformConfig.ownerUserId,
+                        guestTableContextLifecycleRepository = guestTableContextLifecycleRepository,
                     )
                     guestVisitRoutes(
                         visitRepository = visitRepository,
@@ -1181,6 +1210,9 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                         staffChatNotifier = guestStaffChatNotifier,
                         userRepository = userRepository,
                         ordersRepository = ordersRepository,
+                        guestTabsRepository = guestTabsRepository,
+                        platformOwnerUserId = platformConfig.ownerUserId,
+                        guestTableContextLifecycleRepository = guestTableContextLifecycleRepository,
                     )
                     guestShiftExtensionRoutes(
                         tableTokenResolver = tableTokenResolver,
@@ -1194,6 +1226,8 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                         venueSettingsRepository = venueSettingsRepository,
                         staffBillUpdateNotifier = overrides.staffBillUpdateNotifier ?: staffChatNotifier,
                         venueOrdersRepository = venueOrdersRepository,
+                        platformOwnerUserId = platformConfig.ownerUserId,
+                        guestTableContextLifecycleRepository = guestTableContextLifecycleRepository,
                     )
                     get("/_ping") {
                         call.respond(mapOf("ok" to true))

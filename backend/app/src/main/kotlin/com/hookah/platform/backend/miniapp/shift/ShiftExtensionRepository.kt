@@ -1,6 +1,7 @@
 package com.hookah.platform.backend.miniapp.shift
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.NotFoundException
 import kotlinx.coroutines.Dispatchers
@@ -179,78 +180,14 @@ class ShiftExtensionRepository(
 
     suspend fun createPendingRequest(command: CreateShiftExtensionRequestCommand): ShiftExtensionRequestRecord {
         val ds = dataSource ?: throw DatabaseUnavailableException()
-        val normalizedComment = normalizeComment(command.comment)
-        val normalizedIdempotencyKey = normalizeIdempotencyKey(command.idempotencyKey)
-        val now = Instant.now()
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
                     connection.autoCommit = false
                     try {
-                        val existingByIdempotency =
-                            normalizedIdempotencyKey?.let { idempotencyKey ->
-                                findExistingByIdempotency(
-                                    connection = connection,
-                                    venueId = command.venueId,
-                                    tableSessionId = command.tableSessionId,
-                                    requestedByUserId = command.requestedByUserId,
-                                    idempotencyKey = idempotencyKey,
-                                )
-                            }
-                        if (existingByIdempotency != null) {
-                            connection.commit()
-                            return@use existingByIdempotency
-                        }
-
-                        val existingPending =
-                            findPendingForUpdate(
-                                connection = connection,
-                                venueId = command.venueId,
-                                tableSessionId = command.tableSessionId,
-                                tabId = command.tabId,
-                            )
-                        if (existingPending != null) {
-                            connection.commit()
-                            return@use existingPending
-                        }
-
-                        val settings =
-                            loadActiveSettings(connection, command.venueId)
-                                ?: throw InvalidInputException("Shift extension is not configured")
-                        val priceMinor =
-                            settings.priceMinor
-                                ?: throw InvalidInputException("Shift extension price is not configured")
-                        ensureActiveContext(
-                            connection = connection,
-                            venueId = command.venueId,
-                            tableSessionId = command.tableSessionId,
-                            tableId = command.tableId,
-                            tabId = command.tabId,
-                            orderId = command.orderId,
-                            now = now,
-                        )
-                        ensureExtensionLimit(
-                            connection = connection,
-                            settings = settings,
-                            tableSessionId = command.tableSessionId,
-                        )
-
-                        val requestedUntil =
-                            command.currentOrderableUntil.plus(Duration.ofMinutes(settings.durationMinutes.toLong()))
-                        val requestId =
-                            insertRequest(
-                                connection = connection,
-                                command = command,
-                                settings = settings,
-                                priceMinor = priceMinor,
-                                currentOrderableUntil = command.currentOrderableUntil,
-                                requestedUntil = requestedUntil,
-                                idempotencyKey = normalizedIdempotencyKey,
-                                comment = normalizedComment,
-                                now = now,
-                            )
+                        val record = createPendingRequest(connection, command)
                         connection.commit()
-                        loadRequest(connection, command.venueId, requestId) ?: throw DatabaseUnavailableException()
+                        record
                     } catch (e: Exception) {
                         connection.rollback()
                         throw e
@@ -261,6 +198,105 @@ class ShiftExtensionRepository(
             } catch (e: SQLException) {
                 throw DatabaseUnavailableException()
             }
+        }
+    }
+
+    fun createPendingRequest(
+        connection: Connection,
+        command: CreateShiftExtensionRequestCommand,
+        now: Instant = Instant.now(),
+    ): ShiftExtensionRequestRecord {
+        ensureRequestingActorIsTabMember(connection, command)
+        val normalizedComment = normalizeComment(command.comment)
+        val normalizedIdempotencyKey = normalizeIdempotencyKey(command.idempotencyKey)
+        val existingByIdempotency =
+            normalizedIdempotencyKey?.let { idempotencyKey ->
+                findExistingByIdempotency(
+                    connection = connection,
+                    venueId = command.venueId,
+                    tableSessionId = command.tableSessionId,
+                    requestedByUserId = command.requestedByUserId,
+                    idempotencyKey = idempotencyKey,
+                )
+            }
+        if (existingByIdempotency != null) {
+            return existingByIdempotency
+        }
+
+        val existingPending =
+            findPendingForUpdate(
+                connection = connection,
+                venueId = command.venueId,
+                tableSessionId = command.tableSessionId,
+                tabId = command.tabId,
+            )
+        if (existingPending != null) {
+            return existingPending
+        }
+
+        val settings =
+            loadActiveSettings(connection, command.venueId)
+                ?: throw InvalidInputException("Shift extension is not configured")
+        val priceMinor =
+            settings.priceMinor
+                ?: throw InvalidInputException("Shift extension price is not configured")
+        ensureActiveContext(
+            connection = connection,
+            venueId = command.venueId,
+            tableSessionId = command.tableSessionId,
+            tableId = command.tableId,
+            tabId = command.tabId,
+            orderId = command.orderId,
+            now = now,
+        )
+        ensureExtensionLimit(
+            connection = connection,
+            settings = settings,
+            tableSessionId = command.tableSessionId,
+        )
+
+        val requestedUntil = command.currentOrderableUntil.plus(Duration.ofMinutes(settings.durationMinutes.toLong()))
+        val requestId =
+            insertRequest(
+                connection = connection,
+                command = command,
+                settings = settings,
+                priceMinor = priceMinor,
+                currentOrderableUntil = command.currentOrderableUntil,
+                requestedUntil = requestedUntil,
+                idempotencyKey = normalizedIdempotencyKey,
+                comment = normalizedComment,
+                now = now,
+            )
+        return loadRequest(connection, command.venueId, requestId) ?: throw DatabaseUnavailableException()
+    }
+
+    private fun ensureRequestingActorIsTabMember(
+        connection: Connection,
+        command: CreateShiftExtensionRequestCommand,
+    ) {
+        val isMember =
+            connection.prepareStatement(
+                """
+                SELECT 1
+                FROM tab t
+                JOIN tab_member tm ON tm.tab_id = t.id
+                WHERE t.id = ?
+                  AND t.venue_id = ?
+                  AND t.table_session_id = ?
+                  AND t.status = 'ACTIVE'
+                  AND tm.user_id = ?
+                FOR UPDATE
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, command.tabId)
+                statement.setLong(2, command.venueId)
+                statement.setLong(3, command.tableSessionId)
+                statement.setLong(4, command.requestedByUserId)
+                statement.executeQuery().use { result -> result.next() }
+            }
+        if (!isMember) {
+            throw ForbiddenException("Tab access denied")
         }
     }
 

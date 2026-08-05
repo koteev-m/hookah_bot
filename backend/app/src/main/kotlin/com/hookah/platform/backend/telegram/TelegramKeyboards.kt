@@ -174,6 +174,28 @@ object TelegramKeyboards {
         return ReplyKeyboardMarkup(keyboard = keyboard, resizeKeyboard = true)
     }
 
+    fun inlinePlatformGuestQrTestConfirmationActions(
+        confirmCallbackData: String,
+        cancelCallbackData: String,
+    ): InlineKeyboardMarkup =
+        InlineKeyboardMarkup(
+            inlineKeyboard =
+                listOf(
+                    listOf(
+                        InlineKeyboardButton(
+                            text = "Продолжить как гость",
+                            callbackData = confirmCallbackData,
+                        ),
+                    ),
+                    listOf(
+                        InlineKeyboardButton(
+                            text = "Остаться в режиме платформы",
+                            callbackData = cancelCallbackData,
+                        ),
+                    ),
+                ),
+        )
+
     fun mainMenu(
         hasVenueRole: Boolean,
         isPlatformOwner: Boolean,
@@ -1826,7 +1848,9 @@ object TelegramKeyboards {
         webAppUrl: String?,
     ): ReplyKeyboardMarkup = tableContextBotFlow(context)
 
-    fun tableContextBotFlow(context: TableContext): ReplyKeyboardMarkup {
+    fun tableContextBotFlow(context: TableContext): ReplyKeyboardMarkup = tableContextBotFlow()
+
+    fun tableContextBotFlow(): ReplyKeyboardMarkup {
         val keyboard =
             buildList {
                 add(

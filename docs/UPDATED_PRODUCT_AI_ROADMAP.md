@@ -69,7 +69,7 @@
   `STOP_FOR_MEDIA_STORAGE_DECISION`.
 - Venue operations docs are current in `docs/VENUE_OPERATIONS.md`: Venue Mode dashboard, orders, batches, tabs/bill, staff calls, bookings, menu/stop-list, tables/QR, staff/invites, staff-chat, settings, stats and operational smoke are `SPEC UPDATED`. Venue Mode is source of truth; staff-chat is radar/shortcut. Core slices are smoke-closed by milestone, while a complete cockpit remains partial/future in several areas.
 - Booking lifecycle docs are current in `docs/BOOKING_LIFECYCLE.md`: guest booking flow, Venue booking queue, statuses/state machine, hold minutes, `arrival_deadline`, confirmed-only arrival actions, reminders, `BOOKING_CHAT`, booking support routing, analytics, RBAC and smoke are `SPEC UPDATED`. Current booking queue, hold settings, guest list parity, booking chat, arrival guard, staff-chat booking lifecycle buttons, booking `SEATED` -> Guest History and booking-only `SEATED` feedback eligibility are smoke-closed by bounded slices; reminder rollout, full automation and preorder remain partial/future.
-- Telegram fallback/staff-chat docs are current in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`: Telegram bot entrypoints, QR `/start`, table-context bot menu, fallback chat order, bot staff-call, staff-chat link/test/unlink, notification policy, state-aware booking buttons, callback security and Telegram/Mini App parity are `SPEC UPDATED`. Staff-chat is radar/shortcut, never source of truth. Fallback payload, staff-call ACK/DONE, guest-visible staff-call `CANCELLED`, booking button lifecycle and staff-chat diagnostics are closed for current smoke paths; Platform Owner guest-QR test escape, platform menu parity, personal notifications and delivery-history surfaces remain partial/future.
+- Telegram fallback/staff-chat docs are current in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`: Telegram bot entrypoints, QR `/start`, table-context bot menu, fallback order, staff-call, staff-chat callbacks and parity are `SPEC UPDATED`. Staff-chat is radar/shortcut, never source of truth. Platform guest QR status is **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**; broader Platform menu parity, personal notifications and delivery history remain partial/future.
 - Testing/QA smoke strategy docs are current in `docs/TESTING_QA_SMOKE_STRATEGY.md`: local validation, GitHub Actions expectations, change-type test matrix, manual smoke suites, staging deploy policy, failure reporting and Codex handoff rules are `UPDATED`. Environment-blocked mandatory checks are tracked once in `docs/DEFERRED_MANUAL_SMOKE_BACKLOG.md`. CI coverage is release-critical and split; manual area smoke remains required for runtime and Telegram/staff-chat changes.
 - Deployment/runbook docs are current in `docs/DEPLOYMENT_RUNBOOK.md`: release model, staging deploy command, environment/config inventory, migration runbook, rollback policy, troubleshooting, incident response and Codex/ChatGPT handoff are `UPDATED`. Exact production deploy, previous-image rollback and backup/restore commands remain partial/needs verification.
 - M5 staff calls lifecycle is CLOSED after staging smoke: Guest Mini App uses a transient staff-call modal and compact status card, Venue Mini App has a real active-only `Вызовы` queue with accept/close, backend/staff-chat callbacks share the same lifecycle, ACK/DONE audit hardening is CLOSED / staging smoke passed across Venue Mini App and Telegram staff-chat surfaces, and guest-visible terminal `CANCELLED` is shown to the current guest/tableSession as `Вызов отменён`. Staff-chat order activity cards now hide DONE/CANCELLED generic calls from active `Оперативно`, and closing an order/bill resolves linked active BILL requests plus closed-visit staff-call leftovers. Keep notification delivery, active-only queue semantics and actor audit evidence in regression.
@@ -284,6 +284,7 @@ Remaining P1/P2:
 - distinction between billing-created and manual `SUSPENDED_BY_PLATFORM` before broader auto-reactivation;
 - primary/legal/billing owner relink and a dedicated platform-mediated legal transfer helper;
 - billing payer transfer if commercial ownership transfer requires it.
+- release closure for the locally validated controlled Platform Guest QR test: independent review, green Actions, staging deploy and real Telegram role/privacy/exit smoke.
 
 ### Guest Growth / Retention / Promotions
 
@@ -1029,14 +1030,35 @@ bounded manual smoke are complete. Telegram, reminders, recurring/split shifts, 
 payroll, staff media and Media Upload/R2 remain out of scope. Canonical acceptance and validation gates are in
 `docs/STAFF_PROFILES_SHIFTS_TIPS.md` and `docs/TESTING_QA_SMOKE_STRATEGY.md`.
 
-Read-only next-block selection as of 2026-08-04:
-**IMPLEMENT_PLATFORM_GUEST_QR_ESCAPE_NEXT**. Current `handleStartCommand` returns the Platform
-Owner menu before parsing `/start <table_token>`, while the canonical Telegram roadmap explicitly
-keeps the Platform Owner guest-QR escape open. The bounded implementation should add an explicit
-confirm/cancel choice, safe fail-closed audit and reuse the existing table-token/Guest session flow.
-It must not weaken ordinary role precedence, bypass Guest venue/subscription guards or add a second
-session engine. Schema verdict: `NO_MIGRATION_EXPECTED`; media, notification campaigns, payments,
-loyalty and broader Platform parity remain out of scope.
+Latest bounded runtime block as of 2026-08-04:
+**PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+
+- Previous root cause: `handleStartCommand` returned the Platform Owner menu before parsing
+  `/start <table_token>`, so Platform precedence made ordinary Guest QR verification unreachable.
+- Exact Platform Owner with a valid public Guest table token receives safe venue/table copy and
+  explicit confirm/cancel. Telegram carries only a short opaque reference to a five-minute
+  process-local pending record bound to actor, chat, token, venue and table; restart loses it safely,
+  and prompting creates/touches no Guest context/session/exit/audit state.
+- Confirm consumes pending, re-authorizes exact Platform Owner and commits
+  `PLATFORM_GUEST_QR_TEST_CONFIRMED`. That audit records confirmation only and is not
+  `GUEST_CONTEXT_APPLIED`. One JDBC transaction then re-resolves and locks the exact token/table/
+  venue state, reapplies published-venue and subscription guards, resolves or touches the session,
+  clears the exit marker and persisted Guest dialog, and saves the exact chat context. Any late
+  repository/SQL failure rolls every activation write back; in-memory cart/draft cleanup starts only
+  after commit. Audit failure creates no Guest context; its payload contains standard actor plus safe
+  venue/table/source only. Cancel has no audit or activation.
+- Confirmed routing is the ordinary Guest Bot/table/session/tab engine and Guest Mini App
+  `mode=guest`. Exact Platform Owner Mini App create/touch and explicit-session resolve require the
+  matching active server-owned Telegram context and no exit marker; an old entry after exit fails
+  closed. `Завершить визит` uses stored context only as teardown identity, so current token/table/
+  venue/subscription unavailability cannot prevent context/dialog/draft/pending cleanup or Platform
+  menu restoration. Tokenless `/start` keeps Guest routing while confirmed context is active and
+  returns to Platform Mode only after exit. Ordinary Guest/Venue Owner/Manager/Staff precedence is
+  unchanged; there is no persistent impersonation mode or bypass.
+- Schema verdict: `NO_MIGRATION_EXPECTED`. Independent review, green Actions, staging deploy and
+  real Telegram role/privacy/exit smoke remain mandatory; no staging result is claimed. Media/R2,
+  notifications, promotions, payments, loyalty, Staff work and broader Platform parity stay out of
+  scope.
 
 Latest closed bounded runtime slice:
 **CATALOG SEARCH AND FILTER PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**.

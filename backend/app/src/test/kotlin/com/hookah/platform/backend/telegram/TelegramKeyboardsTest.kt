@@ -45,6 +45,40 @@ class TelegramKeyboardsTest {
     }
 
     @Test
+    fun `platform guest qr confirmation uses opaque compact callbacks`() {
+        val rawToken = "RAW_TABLE_TOKEN_SECRET"
+        val venueId = 987654321L
+        val tableId = 123456789L
+        val confirmCallbackData = "pgqr_c:opaqueconfirmref"
+        val cancelCallbackData = "pgqr_x:opaquecancelref"
+
+        val markup =
+            TelegramKeyboards.inlinePlatformGuestQrTestConfirmationActions(
+                confirmCallbackData = confirmCallbackData,
+                cancelCallbackData = cancelCallbackData,
+            )
+        val buttons = markup.inlineKeyboard.flatten()
+
+        assertEquals(2, markup.inlineKeyboard.size)
+        assertTrue(markup.inlineKeyboard.all { it.size == 1 })
+        assertEquals("Продолжить как гость", buttons[0].text)
+        assertEquals(confirmCallbackData, buttons[0].callbackData)
+        assertEquals("Остаться в режиме платформы", buttons[1].text)
+        assertEquals(cancelCallbackData, buttons[1].callbackData)
+        assertTrue(confirmCallbackData != cancelCallbackData)
+        assertTrue(
+            buttons
+                .mapNotNull { it.callbackData }
+                .all { callbackData -> callbackData.toByteArray(Charsets.UTF_8).size <= 64 },
+        )
+        buttons.mapNotNull { it.callbackData }.forEach { callbackData ->
+            assertFalse(callbackData.contains(rawToken))
+            assertFalse(callbackData.contains(venueId.toString()))
+            assertFalse(callbackData.contains(tableId.toString()))
+        }
+    }
+
+    @Test
     fun `main menu shows guest mini app entry when configured`() {
         val markup =
             TelegramKeyboards.mainMenu(

@@ -7,10 +7,14 @@ import com.hookah.platform.backend.api.TooManyRequestsException
 import com.hookah.platform.backend.miniapp.guest.GuestRateLimitConfig
 import com.hookah.platform.backend.miniapp.guest.GuestRateLimitKey
 import com.hookah.platform.backend.miniapp.guest.GuestRateLimitPolicy
+import com.hookah.platform.backend.miniapp.guest.PLATFORM_GUEST_RECONFIRM_MESSAGE
 import com.hookah.platform.backend.miniapp.guest.RateLimiter
 import com.hookah.platform.backend.miniapp.guest.TableSessionConfig
+import com.hookah.platform.backend.miniapp.guest.db.ConfirmedPlatformGuestMutationContext
 import com.hookah.platform.backend.miniapp.guest.db.GuestBookingRepository
+import com.hookah.platform.backend.miniapp.guest.db.GuestTableContextLifecycleRepository
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
+import com.hookah.platform.backend.miniapp.guest.requireConfirmedPlatformGuestMutation
 import com.hookah.platform.backend.miniapp.guest.validateTableToken
 import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
 import com.hookah.platform.backend.miniapp.venue.VenuePermission
@@ -35,6 +39,7 @@ import io.ktor.server.routing.route
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import java.sql.Connection
 
 @Serializable
 data class SupportBookingContextDto(
@@ -152,6 +157,8 @@ fun Route.guestSupportRoutes(
     auditLogRepository: AuditLogRepository? = null,
     guestRateLimitConfig: GuestRateLimitConfig? = null,
     rateLimiter: RateLimiter? = null,
+    platformOwnerUserId: Long? = null,
+    guestTableContextLifecycleRepository: GuestTableContextLifecycleRepository? = null,
 ) {
     route("/support/venue-chats") {
         post {
@@ -214,48 +221,92 @@ fun Route.guestSupportRoutes(
             val request = call.receive<SupportThreadCreateRequest>()
             val messageText = normalizeSupportMessage(request.message)
             val category = normalizeSupportCategory(request.category, default = SupportThreadCategory.OTHER)
-            val verified =
-                verifyGuestTicketContext(
-                    request = request,
-                    userId = userId,
-                    category = category,
-                    tableTokenResolver = tableTokenResolver,
-                    tableSessionRepository = tableSessionRepository,
-                    tableSessionConfig = tableSessionConfig,
-                    guestBookingRepository = guestBookingRepository,
-                    supportThreadRepository = supportThreadRepository,
-                    venueRepository = venueRepository,
-                )
-            val assigneeScope = defaultAssigneeScope(category, verified.venueId)
-            enforceGuestSupportRateLimit(
-                guestRateLimitConfig = guestRateLimitConfig,
-                rateLimiter = rateLimiter,
-                userId = userId,
-                venueId = verified.venueId,
-                tableSessionId = verified.tableSessionId,
-                endpoint = "support-ticket-create",
-                selector = { supportTicket },
-            )
             val detail =
-                supportThreadRepository.createTicket(
-                    SupportTicketCreateInput(
-                        guestUserId = userId,
+                if (userId == platformOwnerUserId && !request.tableToken.isNullOrBlank()) {
+                    val tableToken = validateTableToken(request.tableToken)
+                    val referenceContext =
+                        runCatching {
+                            verifyPlatformGuestTicketReferences(
+                                request = request,
+                                userId = userId,
+                                guestBookingRepository = guestBookingRepository,
+                                venueRepository = venueRepository,
+                            )
+                        }
+                    createConfirmedPlatformGuestTicket(
+                        userId = userId,
+                        platformOwnerUserId = platformOwnerUserId,
+                        lifecycleRepository = guestTableContextLifecycleRepository,
+                        supportThreadRepository = supportThreadRepository,
+                        tableSessionConfig = tableSessionConfig,
+                        request = request,
                         category = category,
-                        title = normalizeSupportTitle(request.title, category, verified),
-                        message = messageText,
-                        venueId = verified.venueId,
-                        tableId = verified.tableId,
-                        tableSessionId = verified.tableSessionId,
-                        orderId = verified.orderId,
-                        bookingId = verified.bookingId,
-                        assigneeScope = assigneeScope,
-                        createdSource = SupportThreadCreatedSource.GUEST_MINIAPP,
-                        messageSource = SupportMessageSource.GUEST_MINIAPP,
-                        appVersion = normalizeOptionalMetadata(request.appVersion, 80),
-                        correlationId = normalizeOptionalMetadata(request.correlationId, 120),
-                    ),
-                )
-            supportThreadRepository.markThreadRead(threadId = detail.thread.id, userId = userId)
+                        messageText = messageText,
+                        referenceContext = { referenceContext.getOrThrow() },
+                        tableToken = tableToken,
+                        expectedVenueId = null,
+                        expectedTableId = null,
+                        expectedTableSessionId = request.tableSessionId,
+                        guestRateLimitConfig = guestRateLimitConfig,
+                        rateLimiter = rateLimiter,
+                    )
+                } else {
+                    val verified =
+                        verifyGuestTicketContext(
+                            request = request,
+                            userId = userId,
+                            category = category,
+                            tableTokenResolver = tableTokenResolver,
+                            tableSessionRepository = tableSessionRepository,
+                            tableSessionConfig = tableSessionConfig,
+                            guestBookingRepository = guestBookingRepository,
+                            supportThreadRepository = supportThreadRepository,
+                            venueRepository = venueRepository,
+                        )
+                    if (
+                        userId == platformOwnerUserId &&
+                        (verified.tableId != null || verified.tableSessionId != null)
+                    ) {
+                        createConfirmedPlatformGuestTicket(
+                            userId = userId,
+                            platformOwnerUserId = platformOwnerUserId,
+                            lifecycleRepository = guestTableContextLifecycleRepository,
+                            supportThreadRepository = supportThreadRepository,
+                            tableSessionConfig = tableSessionConfig,
+                            request = request,
+                            category = category,
+                            messageText = messageText,
+                            referenceContext = { verified },
+                            tableToken = null,
+                            expectedVenueId = verified.venueId,
+                            expectedTableId = verified.tableId,
+                            expectedTableSessionId = verified.tableSessionId,
+                            guestRateLimitConfig = guestRateLimitConfig,
+                            rateLimiter = rateLimiter,
+                        )
+                    } else {
+                        enforceGuestSupportRateLimit(
+                            guestRateLimitConfig = guestRateLimitConfig,
+                            rateLimiter = rateLimiter,
+                            userId = userId,
+                            venueId = verified.venueId,
+                            tableSessionId = verified.tableSessionId,
+                            endpoint = "support-ticket-create",
+                            selector = { supportTicket },
+                        )
+                        supportThreadRepository.createTicket(
+                            buildGuestSupportTicketInput(
+                                request = request,
+                                userId = userId,
+                                category = category,
+                                messageText = messageText,
+                                verified = verified,
+                            ),
+                        ).also {
+                            supportThreadRepository.markThreadRead(threadId = it.thread.id, userId = userId)
+                        }
+                    }
+                }
             call.respond(
                 SupportThreadCreateResponse(
                     thread = detail.thread.toDto(unreadCountOverride = 0),
@@ -268,8 +319,15 @@ fun Route.guestSupportRoutes(
         get("{threadId}") {
             val userId = call.requireUserId()
             val threadId = call.parseThreadId()
-            val detail = supportThreadRepository.getGuestThread(userId, threadId) ?: throw NotFoundException()
-            supportThreadRepository.markThreadRead(threadId = detail.thread.id, userId = userId)
+            val detail =
+                getGuestThreadAndMarkRead(
+                    userId = userId,
+                    platformOwnerUserId = platformOwnerUserId,
+                    lifecycleRepository = guestTableContextLifecycleRepository,
+                    tableSessionConfig = tableSessionConfig,
+                    supportThreadRepository = supportThreadRepository,
+                    threadId = threadId,
+                )
             call.respond(detail.toResponse(unreadCountOverride = 0))
         }
 
@@ -277,17 +335,17 @@ fun Route.guestSupportRoutes(
             val userId = call.requireUserId()
             val threadId = call.parseThreadId()
             val detail = supportThreadRepository.getGuestThread(userId, threadId) ?: throw NotFoundException()
-            requireThreadStatusChangeAllowed(detail.thread)
-            changeThreadStatus(
-                supportThreadRepository = supportThreadRepository,
-                auditLogRepository = auditLogRepository,
-                actorUserId = userId,
-                thread = detail.thread,
-                newStatus = SupportThreadStatus.RESOLVED,
-                source = "GUEST_MINIAPP",
-            )
-            supportThreadRepository.markThreadRead(threadId = detail.thread.id, userId = userId)
-            val updated = supportThreadRepository.getGuestThread(userId, detail.thread.id) ?: throw NotFoundException()
+            val updated =
+                changeGuestThreadStatus(
+                    userId = userId,
+                    platformOwnerUserId = platformOwnerUserId,
+                    lifecycleRepository = guestTableContextLifecycleRepository,
+                    tableSessionConfig = tableSessionConfig,
+                    supportThreadRepository = supportThreadRepository,
+                    auditLogRepository = auditLogRepository,
+                    detail = detail,
+                    newStatus = SupportThreadStatus.RESOLVED,
+                )
             call.respond(updated.toResponse(unreadCountOverride = 0))
         }
 
@@ -295,17 +353,17 @@ fun Route.guestSupportRoutes(
             val userId = call.requireUserId()
             val threadId = call.parseThreadId()
             val detail = supportThreadRepository.getGuestThread(userId, threadId) ?: throw NotFoundException()
-            requireThreadStatusChangeAllowed(detail.thread)
-            changeThreadStatus(
-                supportThreadRepository = supportThreadRepository,
-                auditLogRepository = auditLogRepository,
-                actorUserId = userId,
-                thread = detail.thread,
-                newStatus = SupportThreadStatus.IN_PROGRESS,
-                source = "GUEST_MINIAPP",
-            )
-            supportThreadRepository.markThreadRead(threadId = detail.thread.id, userId = userId)
-            val updated = supportThreadRepository.getGuestThread(userId, detail.thread.id) ?: throw NotFoundException()
+            val updated =
+                changeGuestThreadStatus(
+                    userId = userId,
+                    platformOwnerUserId = platformOwnerUserId,
+                    lifecycleRepository = guestTableContextLifecycleRepository,
+                    tableSessionConfig = tableSessionConfig,
+                    supportThreadRepository = supportThreadRepository,
+                    auditLogRepository = auditLogRepository,
+                    detail = detail,
+                    newStatus = SupportThreadStatus.IN_PROGRESS,
+                )
             call.respond(updated.toResponse(unreadCountOverride = 0))
         }
 
@@ -315,38 +373,23 @@ fun Route.guestSupportRoutes(
             val request = call.receive<SupportMessageCreateRequest>()
             val messageText = normalizeSupportMessage(request.message)
             val detail = supportThreadRepository.getGuestThread(userId, threadId) ?: throw NotFoundException()
-            requireThreadMessageAllowed(detail.thread)
-            enforceGuestSupportRateLimit(
-                guestRateLimitConfig = guestRateLimitConfig,
-                rateLimiter = rateLimiter,
-                userId = userId,
-                venueId = detail.thread.venueId,
-                tableSessionId = detail.thread.tableSessionId,
-                endpoint = "support-message",
-                selector = { supportMessage },
-            )
-            val message =
-                supportThreadRepository.addMessage(
-                    threadId = detail.thread.id,
-                    authorUserId = userId,
-                    authorRole = SupportMessageAuthorRole.GUEST,
-                    source = SupportMessageSource.GUEST_MINIAPP,
-                    text = messageText,
+            val result =
+                addGuestThreadMessage(
+                    userId = userId,
+                    platformOwnerUserId = platformOwnerUserId,
+                    lifecycleRepository = guestTableContextLifecycleRepository,
+                    tableSessionConfig = tableSessionConfig,
+                    supportThreadRepository = supportThreadRepository,
+                    auditLogRepository = auditLogRepository,
+                    guestRateLimitConfig = guestRateLimitConfig,
+                    rateLimiter = rateLimiter,
+                    detail = detail,
+                    messageText = messageText,
                 )
-            supportThreadRepository.markThreadRead(threadId = detail.thread.id, userId = userId)
-            val refreshedThread =
-                supportThreadRepository.getGuestThread(userId, detail.thread.id)?.thread ?: detail.thread
-            appendSupportReplyAuditBestEffort(
-                auditLogRepository = auditLogRepository,
-                actorUserId = userId,
-                oldThread = detail.thread,
-                refreshedThread = refreshedThread,
-                source = "GUEST_MINIAPP",
-            )
             call.respond(
                 SupportMessageCreateResponse(
-                    thread = refreshedThread.toDto(unreadCountOverride = 0),
-                    message = message.toDto(),
+                    thread = result.thread.toDto(unreadCountOverride = 0),
+                    message = result.message.toDto(),
                     queued = false,
                 ),
             )
@@ -659,6 +702,380 @@ private data class VerifiedTicketContext(
     val bookingId: Long? = null,
     val bookingDisplayNumber: Int? = null,
 )
+
+private suspend fun verifyPlatformGuestTicketReferences(
+    request: SupportThreadCreateRequest,
+    userId: Long,
+    guestBookingRepository: GuestBookingRepository,
+    venueRepository: VenueRepository,
+): VerifiedTicketContext {
+    var venueId: Long? = null
+    if (request.venueId != null) {
+        val requestedVenueId =
+            request.venueId.takeIf { it > 0 }
+                ?: throw InvalidInputException("venueId must be a positive number")
+        venueId = venueRepository.findCatalogVenueByIdForGuest(requestedVenueId)?.id ?: throw NotFoundException()
+    }
+
+    var bookingId: Long? = null
+    var bookingDisplayNumber: Int? = null
+    if (request.bookingId != null) {
+        val booking = guestBookingRepository.findActiveByGuest(request.bookingId, userId) ?: throw NotFoundException()
+        if (venueId != null && venueId != booking.venueId) {
+            throw InvalidInputException("booking does not match table context")
+        }
+        venueId = booking.venueId
+        bookingId = booking.id
+        bookingDisplayNumber = booking.displayNumber
+    }
+    return VerifiedTicketContext(
+        venueId = venueId,
+        bookingId = bookingId,
+        bookingDisplayNumber = bookingDisplayNumber,
+    )
+}
+
+private suspend fun createConfirmedPlatformGuestTicket(
+    userId: Long,
+    platformOwnerUserId: Long?,
+    lifecycleRepository: GuestTableContextLifecycleRepository?,
+    supportThreadRepository: SupportThreadRepository,
+    tableSessionConfig: TableSessionConfig,
+    request: SupportThreadCreateRequest,
+    category: SupportThreadCategory,
+    messageText: String,
+    referenceContext: () -> VerifiedTicketContext,
+    tableToken: String?,
+    expectedVenueId: Long?,
+    expectedTableId: Long?,
+    expectedTableSessionId: Long?,
+    guestRateLimitConfig: GuestRateLimitConfig?,
+    rateLimiter: RateLimiter?,
+): SupportThreadDetailRecord =
+    requireConfirmedPlatformGuestMutation(
+        userId = userId,
+        platformOwnerUserId = platformOwnerUserId,
+        lifecycleRepository = lifecycleRepository,
+        tableToken = tableToken,
+        expectedVenueId = expectedVenueId,
+        expectedTableId = expectedTableId,
+        expectedTableSessionId = expectedTableSessionId,
+        ttl = tableSessionConfig.ttl,
+    ) { connection, confirmed ->
+        val verified =
+            verifyConfirmedPlatformGuestTicketContext(
+                connection = connection,
+                request = request,
+                userId = userId,
+                supportThreadRepository = supportThreadRepository,
+                reference = referenceContext(),
+                confirmed = confirmed,
+            )
+        enforceGuestSupportRateLimit(
+            guestRateLimitConfig = guestRateLimitConfig,
+            rateLimiter = rateLimiter,
+            userId = userId,
+            venueId = verified.venueId,
+            tableSessionId = verified.tableSessionId,
+            endpoint = "support-ticket-create",
+            selector = { supportTicket },
+        )
+        supportThreadRepository.createTicket(
+            connection = connection,
+            input =
+                buildGuestSupportTicketInput(
+                    request = request,
+                    userId = userId,
+                    category = category,
+                    messageText = messageText,
+                    verified = verified,
+                ),
+        ).also {
+            supportThreadRepository.markThreadRead(connection, it.thread.id, userId)
+        }
+    }
+
+private fun verifyConfirmedPlatformGuestTicketContext(
+    connection: Connection,
+    request: SupportThreadCreateRequest,
+    userId: Long,
+    supportThreadRepository: SupportThreadRepository,
+    reference: VerifiedTicketContext,
+    confirmed: ConfirmedPlatformGuestMutationContext,
+): VerifiedTicketContext {
+    val venueId = confirmed.context.venueId
+    val tableId = confirmed.context.tableId
+    val tableSessionId = confirmed.tableSession.id
+    if (
+        (reference.venueId != null && reference.venueId != venueId) ||
+        (reference.tableId != null && reference.tableId != tableId) ||
+        (reference.tableSessionId != null && reference.tableSessionId != tableSessionId)
+    ) {
+        throw InvalidInputException("verified support context does not match confirmed table context")
+    }
+    val order =
+        request.orderId?.let { orderId ->
+            supportThreadRepository.findOrderContextForGuest(
+                connection = connection,
+                orderId = orderId,
+                userId = userId,
+                venueId = venueId,
+                tableSessionId = tableSessionId,
+            ) ?: throw NotFoundException()
+        }
+    if (order != null && order.tableId != tableId) {
+        throw InvalidInputException("order does not match confirmed table context")
+    }
+    return VerifiedTicketContext(
+        venueId = venueId,
+        tableId = tableId,
+        tableSessionId = tableSessionId,
+        orderId = order?.orderId,
+        orderDisplayLabel = order?.displayLabel,
+        bookingId = reference.bookingId,
+        bookingDisplayNumber = reference.bookingDisplayNumber,
+    )
+}
+
+private fun buildGuestSupportTicketInput(
+    request: SupportThreadCreateRequest,
+    userId: Long,
+    category: SupportThreadCategory,
+    messageText: String,
+    verified: VerifiedTicketContext,
+): SupportTicketCreateInput =
+    SupportTicketCreateInput(
+        guestUserId = userId,
+        category = category,
+        title = normalizeSupportTitle(request.title, category, verified),
+        message = messageText,
+        venueId = verified.venueId,
+        tableId = verified.tableId,
+        tableSessionId = verified.tableSessionId,
+        orderId = verified.orderId,
+        bookingId = verified.bookingId,
+        assigneeScope = defaultAssigneeScope(category, verified.venueId),
+        createdSource = SupportThreadCreatedSource.GUEST_MINIAPP,
+        messageSource = SupportMessageSource.GUEST_MINIAPP,
+        appVersion = normalizeOptionalMetadata(request.appVersion, 80),
+        correlationId = normalizeOptionalMetadata(request.correlationId, 120),
+    )
+
+private suspend fun getGuestThreadAndMarkRead(
+    userId: Long,
+    platformOwnerUserId: Long?,
+    lifecycleRepository: GuestTableContextLifecycleRepository?,
+    tableSessionConfig: TableSessionConfig,
+    supportThreadRepository: SupportThreadRepository,
+    threadId: Long,
+): SupportThreadDetailRecord {
+    val detail = supportThreadRepository.getGuestThread(userId, threadId) ?: throw NotFoundException()
+    if (!requiresConfirmedPlatformGuestThreadMutation(userId, platformOwnerUserId, detail.thread)) {
+        supportThreadRepository.markThreadRead(threadId = detail.thread.id, userId = userId)
+        return detail
+    }
+
+    return requireConfirmedPlatformGuestMutation(
+        userId = userId,
+        platformOwnerUserId = platformOwnerUserId,
+        lifecycleRepository = lifecycleRepository,
+        expectedVenueId = detail.thread.venueId,
+        expectedTableId = detail.thread.tableId,
+        expectedTableSessionId = detail.thread.tableSessionId,
+        ttl = tableSessionConfig.ttl,
+    ) { connection, confirmed ->
+        val locked =
+            supportThreadRepository.lockGuestThread(connection, userId, detail.thread.id)
+                ?: throw NotFoundException()
+        requireConfirmedPlatformGuestThread(locked.thread, detail.thread, confirmed)
+        supportThreadRepository.markThreadRead(connection, locked.thread.id, userId)
+        supportThreadRepository.getGuestThread(connection, userId, locked.thread.id) ?: throw NotFoundException()
+    }
+}
+
+private suspend fun changeGuestThreadStatus(
+    userId: Long,
+    platformOwnerUserId: Long?,
+    lifecycleRepository: GuestTableContextLifecycleRepository?,
+    tableSessionConfig: TableSessionConfig,
+    supportThreadRepository: SupportThreadRepository,
+    auditLogRepository: AuditLogRepository?,
+    detail: SupportThreadDetailRecord,
+    newStatus: SupportThreadStatus,
+): SupportThreadDetailRecord {
+    if (!requiresConfirmedPlatformGuestThreadMutation(userId, platformOwnerUserId, detail.thread)) {
+        requireThreadStatusChangeAllowed(detail.thread)
+        changeThreadStatus(
+            supportThreadRepository = supportThreadRepository,
+            auditLogRepository = auditLogRepository,
+            actorUserId = userId,
+            thread = detail.thread,
+            newStatus = newStatus,
+            source = "GUEST_MINIAPP",
+        )
+        supportThreadRepository.markThreadRead(threadId = detail.thread.id, userId = userId)
+        return supportThreadRepository.getGuestThread(userId, detail.thread.id) ?: throw NotFoundException()
+    }
+
+    val updated =
+        requireConfirmedPlatformGuestMutation(
+            userId = userId,
+            platformOwnerUserId = platformOwnerUserId,
+            lifecycleRepository = lifecycleRepository,
+            expectedVenueId = detail.thread.venueId,
+            expectedTableId = detail.thread.tableId,
+            expectedTableSessionId = detail.thread.tableSessionId,
+            ttl = tableSessionConfig.ttl,
+        ) { connection, confirmed ->
+            val locked =
+                supportThreadRepository.lockGuestThread(connection, userId, detail.thread.id)
+                    ?: throw NotFoundException()
+            requireConfirmedPlatformGuestThread(locked.thread, detail.thread, confirmed)
+            requireThreadStatusChangeAllowed(locked.thread)
+            if (locked.thread.status != newStatus) {
+                supportThreadRepository.updateThreadStatus(connection, locked.thread.id, newStatus)
+            }
+            supportThreadRepository.markThreadRead(connection, locked.thread.id, userId)
+            supportThreadRepository.getGuestThread(connection, userId, locked.thread.id) ?: throw NotFoundException()
+        }
+    if (detail.thread.status != updated.thread.status) {
+        appendSupportAuditBestEffort(
+            auditLogRepository = auditLogRepository,
+            actorUserId = userId,
+            action = SUPPORT_TICKET_STATUS_CHANGED,
+            thread = detail.thread,
+            source = "GUEST_MINIAPP",
+            oldStatus = detail.thread.status,
+            newStatus = updated.thread.status,
+        )
+    }
+    return updated
+}
+
+private data class GuestThreadMessageResult(
+    val thread: SupportThreadRecord,
+    val message: SupportMessageRecord,
+)
+
+private suspend fun addGuestThreadMessage(
+    userId: Long,
+    platformOwnerUserId: Long?,
+    lifecycleRepository: GuestTableContextLifecycleRepository?,
+    tableSessionConfig: TableSessionConfig,
+    supportThreadRepository: SupportThreadRepository,
+    auditLogRepository: AuditLogRepository?,
+    guestRateLimitConfig: GuestRateLimitConfig?,
+    rateLimiter: RateLimiter?,
+    detail: SupportThreadDetailRecord,
+    messageText: String,
+): GuestThreadMessageResult {
+    if (!requiresConfirmedPlatformGuestThreadMutation(userId, platformOwnerUserId, detail.thread)) {
+        requireThreadMessageAllowed(detail.thread)
+        enforceGuestSupportRateLimit(
+            guestRateLimitConfig = guestRateLimitConfig,
+            rateLimiter = rateLimiter,
+            userId = userId,
+            venueId = detail.thread.venueId,
+            tableSessionId = detail.thread.tableSessionId,
+            endpoint = "support-message",
+            selector = { supportMessage },
+        )
+        val message =
+            supportThreadRepository.addMessage(
+                threadId = detail.thread.id,
+                authorUserId = userId,
+                authorRole = SupportMessageAuthorRole.GUEST,
+                source = SupportMessageSource.GUEST_MINIAPP,
+                text = messageText,
+            )
+        supportThreadRepository.markThreadRead(threadId = detail.thread.id, userId = userId)
+        val refreshedThread =
+            supportThreadRepository.getGuestThread(userId, detail.thread.id)?.thread ?: detail.thread
+        appendSupportReplyAuditBestEffort(
+            auditLogRepository = auditLogRepository,
+            actorUserId = userId,
+            oldThread = detail.thread,
+            refreshedThread = refreshedThread,
+            source = "GUEST_MINIAPP",
+        )
+        return GuestThreadMessageResult(thread = refreshedThread, message = message)
+    }
+
+    val result =
+        requireConfirmedPlatformGuestMutation(
+            userId = userId,
+            platformOwnerUserId = platformOwnerUserId,
+            lifecycleRepository = lifecycleRepository,
+            expectedVenueId = detail.thread.venueId,
+            expectedTableId = detail.thread.tableId,
+            expectedTableSessionId = detail.thread.tableSessionId,
+            ttl = tableSessionConfig.ttl,
+        ) { connection, confirmed ->
+            val locked =
+                supportThreadRepository.lockGuestThread(connection, userId, detail.thread.id)
+                    ?: throw NotFoundException()
+            requireConfirmedPlatformGuestThread(locked.thread, detail.thread, confirmed)
+            requireThreadMessageAllowed(locked.thread)
+            enforceGuestSupportRateLimit(
+                guestRateLimitConfig = guestRateLimitConfig,
+                rateLimiter = rateLimiter,
+                userId = userId,
+                venueId = locked.thread.venueId,
+                tableSessionId = locked.thread.tableSessionId,
+                endpoint = "support-message",
+                selector = { supportMessage },
+            )
+            val message =
+                supportThreadRepository.addMessage(
+                    connection = connection,
+                    threadId = locked.thread.id,
+                    authorUserId = userId,
+                    authorRole = SupportMessageAuthorRole.GUEST,
+                    source = SupportMessageSource.GUEST_MINIAPP,
+                    text = messageText,
+                )
+            supportThreadRepository.markThreadRead(connection, locked.thread.id, userId)
+            val refreshedThread =
+                supportThreadRepository.getGuestThread(connection, userId, locked.thread.id)?.thread
+                    ?: throw NotFoundException()
+            GuestThreadMessageResult(thread = refreshedThread, message = message)
+        }
+    appendSupportReplyAuditBestEffort(
+        auditLogRepository = auditLogRepository,
+        actorUserId = userId,
+        oldThread = detail.thread,
+        refreshedThread = result.thread,
+        source = "GUEST_MINIAPP",
+    )
+    return result
+}
+
+private fun requiresConfirmedPlatformGuestThreadMutation(
+    userId: Long,
+    platformOwnerUserId: Long?,
+    thread: SupportThreadRecord,
+): Boolean =
+    userId == platformOwnerUserId &&
+        thread.threadType == SupportThreadType.SUPPORT_TICKET &&
+        (thread.tableId != null || thread.tableSessionId != null)
+
+private fun requireConfirmedPlatformGuestThread(
+    locked: SupportThreadRecord,
+    expected: SupportThreadRecord,
+    confirmed: ConfirmedPlatformGuestMutationContext,
+) {
+    if (
+        locked.threadType != SupportThreadType.SUPPORT_TICKET ||
+        locked.venueId != expected.venueId ||
+        locked.tableId != expected.tableId ||
+        locked.tableSessionId != expected.tableSessionId ||
+        locked.venueId != confirmed.context.venueId ||
+        locked.tableId != confirmed.context.tableId ||
+        (locked.tableSessionId != null && locked.tableSessionId != confirmed.tableSession.id)
+    ) {
+        throw ForbiddenException(PLATFORM_GUEST_RECONFIRM_MESSAGE)
+    }
+}
 
 private fun enforceGuestSupportRateLimit(
     guestRateLimitConfig: GuestRateLimitConfig?,

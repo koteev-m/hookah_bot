@@ -1,8 +1,19 @@
 package com.hookah.platform.backend.support
 
+import com.hookah.platform.backend.analytics.AnalyticsEventRepository
+import com.hookah.platform.backend.miniapp.guest.db.GuestTableContextLifecycleRepository
+import com.hookah.platform.backend.miniapp.guest.db.GuestTableTeardownCheckpoint
+import com.hookah.platform.backend.miniapp.guest.db.GuestTableTeardownResult
+import com.hookah.platform.backend.miniapp.guest.db.GuestTabsRepository
+import com.hookah.platform.backend.miniapp.guest.db.PlatformGuestTableMutationResult
+import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
+import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
 import com.hookah.platform.backend.module
+import com.hookah.platform.backend.telegram.db.ChatContextRepository
+import com.hookah.platform.backend.telegram.db.DialogStateRepository
+import com.hookah.platform.backend.telegram.db.TableTokenRepository
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
 import io.ktor.client.request.post
@@ -13,22 +24,492 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.config.MapApplicationConfig
 import io.ktor.server.testing.testApplication
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import org.h2.jdbcx.JdbcDataSource
 import java.sql.DriverManager
 import java.sql.Statement
 import java.sql.Timestamp
 import java.time.Instant
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 class SupportTicketRoutesTest {
     private val json = Json { ignoreUnknownKeys = true }
+
+    @Test
+    fun `ordinary Guest can create and reply to token-only table support without Telegram confirmation`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("support-token-only-ordinary-guest")
+            val platformOwnerId = 900001L
+            val config = buildConfig(jdbcUrl, platformOwnerId)
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+            ensureTelegramChatContextSchema(jdbcUrl)
+
+            val venueId = seedVenue(jdbcUrl)
+            seedUser(jdbcUrl, GUEST_ID)
+            val table = seedActiveTableContext(jdbcUrl, venueId)
+            val guestToken = issueToken(config, GUEST_ID)
+
+            val createResponse =
+                client.post("/api/guest/support/threads") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $guestToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody(
+                        """
+                        {
+                          "category":"ORDER_SERVICE",
+                          "message":"Нужна помощь за столом",
+                          "tableToken":"${table.token}"
+                        }
+                        """.trimIndent(),
+                    )
+                }
+
+            assertEquals(HttpStatusCode.OK, createResponse.status)
+            val thread =
+                json.parseToJsonElement(createResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("thread")
+                    .jsonObject
+            val threadId = thread.getValue("threadId").jsonPrimitive.content.toLong()
+            assertEquals(venueId.toString(), thread.getValue("venueId").jsonPrimitive.content)
+            assertEquals(table.tableId.toString(), thread.getValue("tableId").jsonPrimitive.content)
+            assertTrue(thread["tableSessionId"] == null || thread["tableSessionId"] == JsonNull)
+
+            deleteSupportReadMarker(jdbcUrl, threadId, GUEST_ID)
+            assertEquals(null, supportReadAt(jdbcUrl, threadId, GUEST_ID))
+            val detailResponse =
+                client.get("/api/guest/support/threads/$threadId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $guestToken") }
+                }
+            assertEquals(HttpStatusCode.OK, detailResponse.status)
+            assertTrue(supportReadAt(jdbcUrl, threadId, GUEST_ID) != null)
+
+            val replyResponse =
+                client.post("/api/guest/support/threads/$threadId/messages") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $guestToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"message":"Дополняю обращение"}""")
+                }
+            assertEquals(HttpStatusCode.OK, replyResponse.status)
+            assertEquals(2, supportMessageCount(jdbcUrl, threadId))
+        }
+
+    @Test
+    fun `Platform Guest token-only denial is private and side effect free before and after exit`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("support-token-only-platform-denial")
+            val platformOwnerId = 900001L
+            val config = buildConfig(jdbcUrl, platformOwnerId)
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+            ensureTelegramChatContextSchema(jdbcUrl)
+
+            val venueId = seedVenue(jdbcUrl)
+            seedUser(jdbcUrl, platformOwnerId)
+            val table = seedActiveTableContext(jdbcUrl, venueId)
+            val platformToken = issueToken(config, platformOwnerId)
+            val timingBefore = tableSessionTiming(jdbcUrl, table.tableSessionId)
+            val tabsBefore = tableRowCount(jdbcUrl, "tab")
+            val auditBefore = tableRowCount(jdbcUrl, "audit_log")
+
+            suspend fun createTicket() =
+                client.post("/api/guest/support/threads") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $platformToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody(
+                        """
+                        {
+                          "category":"ORDER_SERVICE",
+                          "message":"Проверка приватного отказа",
+                          "tableToken":"${table.token}"
+                        }
+                        """.trimIndent(),
+                    )
+                }
+
+            val missingConfirmationResponse = createTicket()
+            assertEquals(HttpStatusCode.Forbidden, missingConfirmationResponse.status)
+            val missingConfirmationMessage = apiErrorMessage(missingConfirmationResponse.bodyAsText())
+
+            seedPlatformTableConfirmation(
+                jdbcUrl = jdbcUrl,
+                chatId = platformOwnerId + 1,
+                userId = platformOwnerId,
+                venueId = venueId,
+                table = table,
+                tableToken = "mismatched-${UUID.randomUUID()}",
+            )
+            val mismatchedConfirmationResponse = createTicket()
+            assertEquals(HttpStatusCode.Forbidden, mismatchedConfirmationResponse.status)
+            val mismatchedConfirmationMessage = apiErrorMessage(mismatchedConfirmationResponse.bodyAsText())
+            assertEquals(0, tableRowCount(jdbcUrl, "support_threads"))
+            assertEquals(timingBefore, tableSessionTiming(jdbcUrl, table.tableSessionId))
+
+            clearTelegramTableContext(jdbcUrl, platformOwnerId + 1)
+            seedPlatformTableConfirmation(
+                jdbcUrl = jdbcUrl,
+                chatId = platformOwnerId + 1,
+                userId = platformOwnerId,
+                venueId = venueId,
+                table = table,
+            )
+            seedUserExit(jdbcUrl, platformOwnerId, table.tableSessionId)
+
+            val afterExitResponse = createTicket()
+            assertEquals(HttpStatusCode.Forbidden, afterExitResponse.status)
+            val afterExitMessage = apiErrorMessage(afterExitResponse.bodyAsText())
+
+            assertEquals(PLATFORM_RECONFIRM_MESSAGE, missingConfirmationMessage)
+            assertEquals(missingConfirmationMessage, mismatchedConfirmationMessage)
+            assertEquals(missingConfirmationMessage, afterExitMessage)
+            assertEquals(0, tableRowCount(jdbcUrl, "support_threads"))
+            assertEquals(0, tableRowCount(jdbcUrl, "support_messages"))
+            assertEquals(0, tableRowCount(jdbcUrl, "support_thread_reads"))
+            assertEquals(tabsBefore, tableRowCount(jdbcUrl, "tab"))
+            assertEquals(auditBefore, tableRowCount(jdbcUrl, "audit_log"))
+            assertEquals(timingBefore, tableSessionTiming(jdbcUrl, table.tableSessionId))
+        }
+
+    @Test
+    fun `Platform Guest thread detail marks read only while table context is confirmed`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("support-thread-detail-platform-confirmation")
+            val platformOwnerId = 900001L
+            val config = buildConfig(jdbcUrl, platformOwnerId)
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl)
+            seedUser(jdbcUrl, platformOwnerId)
+            val table = seedActiveTableContext(jdbcUrl, venueId)
+            seedPlatformTableConfirmation(
+                jdbcUrl = jdbcUrl,
+                chatId = platformOwnerId + 1,
+                userId = platformOwnerId,
+                venueId = venueId,
+                table = table,
+            )
+            val platformToken = issueToken(config, platformOwnerId)
+            val createResponse =
+                client.post("/api/guest/support/threads") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $platformToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody(
+                        """
+                        {
+                          "category":"ORDER_SERVICE",
+                          "message":"Проверка отметки чтения",
+                          "tableToken":"${table.token}"
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, createResponse.status)
+            val threadId =
+                json.parseToJsonElement(createResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("thread")
+                    .jsonObject
+                    .getValue("threadId")
+                    .jsonPrimitive.content.toLong()
+
+            deleteSupportReadMarker(jdbcUrl, threadId, platformOwnerId)
+            val confirmedDetailResponse =
+                client.get("/api/guest/support/threads/$threadId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $platformToken") }
+                }
+            assertEquals(HttpStatusCode.OK, confirmedDetailResponse.status)
+            assertTrue(supportReadAt(jdbcUrl, threadId, platformOwnerId) != null)
+
+            deleteSupportReadMarker(jdbcUrl, threadId, platformOwnerId)
+            val timingBefore = tableSessionTiming(jdbcUrl, table.tableSessionId)
+            val auditBefore = tableRowCount(jdbcUrl, "audit_log")
+            seedUserExit(jdbcUrl, platformOwnerId, table.tableSessionId)
+
+            val afterExitResponse =
+                client.get("/api/guest/support/threads/$threadId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $platformToken") }
+                }
+
+            assertEquals(HttpStatusCode.Forbidden, afterExitResponse.status)
+            assertEquals(PLATFORM_RECONFIRM_MESSAGE, apiErrorMessage(afterExitResponse.bodyAsText()))
+            assertEquals(null, supportReadAt(jdbcUrl, threadId, platformOwnerId))
+            assertEquals(timingBefore, tableSessionTiming(jdbcUrl, table.tableSessionId))
+            assertEquals(auditBefore, tableRowCount(jdbcUrl, "audit_log"))
+            assertEquals(0, tableRowCount(jdbcUrl, "tab"))
+        }
+
+    @Test
+    fun `Platform Guest confirmed token-only support is atomic and post-exit mutations roll back`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("support-token-only-platform-confirmed")
+            val platformOwnerId = 900001L
+            val config = buildConfig(jdbcUrl, platformOwnerId)
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl)
+            seedUser(jdbcUrl, platformOwnerId)
+            val table = seedActiveTableContext(jdbcUrl, venueId)
+            seedPlatformTableConfirmation(
+                jdbcUrl = jdbcUrl,
+                chatId = platformOwnerId + 1,
+                userId = platformOwnerId,
+                venueId = venueId,
+                table = table,
+            )
+            val platformToken = issueToken(config, platformOwnerId)
+
+            val createResponse =
+                client.post("/api/guest/support/threads") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $platformToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody(
+                        """
+                        {
+                          "category":"ORDER_SERVICE",
+                          "message":"Подтверждённое обращение",
+                          "tableToken":"${table.token}"
+                        }
+                        """.trimIndent(),
+                    )
+                }
+
+            assertEquals(HttpStatusCode.OK, createResponse.status)
+            val thread =
+                json.parseToJsonElement(createResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("thread")
+                    .jsonObject
+            val threadId = thread.getValue("threadId").jsonPrimitive.content.toLong()
+            assertEquals(table.tableSessionId.toString(), thread.getValue("tableSessionId").jsonPrimitive.content)
+            assertEquals(0, tableRowCount(jdbcUrl, "tab"))
+
+            val tokenAndSessionResponse =
+                client.post("/api/guest/support/threads") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $platformToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody(
+                        """
+                        {
+                          "category":"ORDER_SERVICE",
+                          "message":"Подтверждённое обращение с сессией",
+                          "tableToken":"${table.token}",
+                          "tableSessionId":${table.tableSessionId}
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, tokenAndSessionResponse.status)
+            val tokenAndSessionThread =
+                json.parseToJsonElement(tokenAndSessionResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("thread")
+                    .jsonObject
+            assertEquals(
+                table.tableSessionId.toString(),
+                tokenAndSessionThread.getValue("tableSessionId").jsonPrimitive.content,
+            )
+            assertEquals(0, tableRowCount(jdbcUrl, "tab"))
+
+            val statusBefore = supportThreadStatus(jdbcUrl, threadId)
+            val messageCountBefore = supportMessageCount(jdbcUrl, threadId)
+            val readAtBefore = supportReadAt(jdbcUrl, threadId, platformOwnerId)
+            val auditBefore = tableRowCount(jdbcUrl, "audit_log")
+            val timingBefore = tableSessionTiming(jdbcUrl, table.tableSessionId)
+            seedUserExit(jdbcUrl, platformOwnerId, table.tableSessionId)
+
+            val replyResponse =
+                client.post("/api/guest/support/threads/$threadId/messages") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $platformToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"message":"Не должно сохраниться"}""")
+                }
+            val resolveResponse =
+                client.post("/api/guest/support/threads/$threadId/resolve") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $platformToken") }
+                }
+
+            assertEquals(HttpStatusCode.Forbidden, replyResponse.status)
+            assertEquals(HttpStatusCode.Forbidden, resolveResponse.status)
+            assertEquals(PLATFORM_RECONFIRM_MESSAGE, apiErrorMessage(replyResponse.bodyAsText()))
+            assertEquals(PLATFORM_RECONFIRM_MESSAGE, apiErrorMessage(resolveResponse.bodyAsText()))
+            assertEquals(statusBefore, supportThreadStatus(jdbcUrl, threadId))
+            assertEquals(messageCountBefore, supportMessageCount(jdbcUrl, threadId))
+            assertEquals(readAtBefore, supportReadAt(jdbcUrl, threadId, platformOwnerId))
+            assertEquals(auditBefore, tableRowCount(jdbcUrl, "audit_log"))
+            assertEquals(timingBefore, tableSessionTiming(jdbcUrl, table.tableSessionId))
+        }
+
+    @Test
+    fun `exit wins deterministic support reply race on the confirmed context row`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("support-exit-race")
+            val platformOwnerId = 900001L
+            val config = buildConfig(jdbcUrl, platformOwnerId)
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+            ensureTelegramChatContextSchema(jdbcUrl)
+
+            val venueId = seedVenue(jdbcUrl)
+            seedUser(jdbcUrl, platformOwnerId)
+            val table = seedActiveTableContext(jdbcUrl, venueId)
+            val chatId = platformOwnerId + 1
+            seedPlatformTableConfirmation(
+                jdbcUrl = jdbcUrl,
+                chatId = chatId,
+                userId = platformOwnerId,
+                venueId = venueId,
+                table = table,
+            )
+
+            val dataSource =
+                JdbcDataSource().apply {
+                    setURL(jdbcUrl)
+                    user = "sa"
+                    password = ""
+                }
+            val supportThreadRepository = SupportThreadRepository(dataSource)
+            val initial =
+                supportThreadRepository.createTicket(
+                    SupportTicketCreateInput(
+                        guestUserId = platformOwnerId,
+                        category = SupportThreadCategory.ORDER_SERVICE,
+                        title = "Race support thread",
+                        message = "Initial support message",
+                        venueId = venueId,
+                        tableId = table.tableId,
+                        tableSessionId = table.tableSessionId,
+                        assigneeScope = SupportAssigneeScope.VENUE,
+                        createdSource = SupportThreadCreatedSource.GUEST_MINIAPP,
+                        messageSource = SupportMessageSource.GUEST_MINIAPP,
+                    ),
+                )
+            val exitHasContextLock = CountDownLatch(1)
+            val releaseExit = CountDownLatch(1)
+            val supportStarted = CountDownLatch(1)
+            val supportMutationInvoked = AtomicBoolean(false)
+            val analyticsEventRepository = AnalyticsEventRepository(dataSource)
+            val lifecycleRepository =
+                GuestTableContextLifecycleRepository(
+                    dataSource = dataSource,
+                    tableTokenRepository = TableTokenRepository(dataSource),
+                    subscriptionRepository = SubscriptionRepository(dataSource),
+                    tableSessionRepository = TableSessionRepository(dataSource, analyticsEventRepository),
+                    guestTabsRepository = GuestTabsRepository(dataSource),
+                    chatContextRepository = ChatContextRepository(dataSource),
+                    dialogStateRepository = DialogStateRepository(dataSource, json),
+                    teardownCheckpoint = { checkpoint ->
+                        if (checkpoint == GuestTableTeardownCheckpoint.AFTER_CONTEXT_LOCK) {
+                            exitHasContextLock.countDown()
+                            check(releaseExit.await(10, TimeUnit.SECONDS))
+                        }
+                    },
+                )
+            val statusBefore = supportThreadStatus(jdbcUrl, initial.thread.id)
+            val messagesBefore = supportMessageCount(jdbcUrl, initial.thread.id)
+            val readAtBefore = supportReadAt(jdbcUrl, initial.thread.id, platformOwnerId)
+            val timingBefore = tableSessionTiming(jdbcUrl, table.tableSessionId)
+
+            coroutineScope {
+                val exit =
+                    async(Dispatchers.IO) {
+                        lifecycleRepository.teardownByChat(
+                            actorUserId = platformOwnerId,
+                            chatId = chatId,
+                        )
+                    }
+                assertTrue(withContext(Dispatchers.IO) { exitHasContextLock.await(10, TimeUnit.SECONDS) })
+                val supportReply =
+                    async(Dispatchers.IO) {
+                        supportStarted.countDown()
+                        lifecycleRepository.withConfirmedPlatformGuestMutation(
+                            actorUserId = platformOwnerId,
+                            platformOwnerUserId = platformOwnerId,
+                            tableToken = table.token,
+                            expectedVenueId = venueId,
+                            expectedTableId = table.tableId,
+                            expectedSessionId = table.tableSessionId,
+                            ttl = java.time.Duration.ofHours(4),
+                        ) { connection, _ ->
+                            supportMutationInvoked.set(true)
+                            val locked =
+                                supportThreadRepository.lockGuestThread(
+                                    connection = connection,
+                                    userId = platformOwnerId,
+                                    threadId = initial.thread.id,
+                                ) ?: error("support thread disappeared")
+                            supportThreadRepository.addMessage(
+                                connection = connection,
+                                threadId = locked.thread.id,
+                                authorUserId = platformOwnerId,
+                                authorRole = SupportMessageAuthorRole.GUEST,
+                                source = SupportMessageSource.GUEST_MINIAPP,
+                                text = "This reply must not commit after exit",
+                            )
+                            supportThreadRepository.markThreadRead(
+                                connection = connection,
+                                threadId = locked.thread.id,
+                                userId = platformOwnerId,
+                            )
+                        }
+                    }
+                assertTrue(withContext(Dispatchers.IO) { supportStarted.await(10, TimeUnit.SECONDS) })
+                releaseExit.countDown()
+
+                assertIs<GuestTableTeardownResult.Cleared>(exit.await())
+                assertEquals(PlatformGuestTableMutationResult.Denied, supportReply.await())
+            }
+
+            assertFalse(supportMutationInvoked.get())
+            assertEquals(statusBefore, supportThreadStatus(jdbcUrl, initial.thread.id))
+            assertEquals(messagesBefore, supportMessageCount(jdbcUrl, initial.thread.id))
+            assertEquals(readAtBefore, supportReadAt(jdbcUrl, initial.thread.id, platformOwnerId))
+            assertEquals(timingBefore, tableSessionTiming(jdbcUrl, table.tableSessionId))
+            assertEquals(0, telegramContextCount(jdbcUrl, chatId))
+            assertEquals(0, tableRowCount(jdbcUrl, "tab"))
+        }
 
     @Test
     fun `venue scoped support ticket creation does not notify staff chat`() =
@@ -917,6 +1398,97 @@ class SupportTicketRoutesTest {
             SeededTableContext(tableId = tableId, tableSessionId = sessionId, token = token)
         }
 
+    private fun seedPlatformTableConfirmation(
+        jdbcUrl: String,
+        chatId: Long,
+        userId: Long,
+        venueId: Long,
+        table: SeededTableContext,
+        tableToken: String = table.token,
+    ) {
+        ensureTelegramChatContextSchema(jdbcUrl)
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                INSERT INTO telegram_chat_context (
+                    chat_id,
+                    user_id,
+                    venue_id,
+                    table_id,
+                    table_token,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, chatId)
+                statement.setLong(2, userId)
+                statement.setLong(3, venueId)
+                statement.setLong(4, table.tableId)
+                statement.setString(5, tableToken)
+                statement.setTimestamp(6, Timestamp.from(Instant.now()))
+                statement.executeUpdate()
+            }
+        }
+    }
+
+    private fun ensureTelegramChatContextSchema(jdbcUrl: String) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.createStatement().use { statement ->
+                statement.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS telegram_chat_context (
+                        chat_id BIGINT PRIMARY KEY,
+                        user_id BIGINT NOT NULL REFERENCES users(telegram_user_id) ON DELETE CASCADE,
+                        venue_id BIGINT NULL REFERENCES venues(id) ON DELETE SET NULL,
+                        table_id BIGINT NULL REFERENCES venue_tables(id) ON DELETE SET NULL,
+                        table_token VARCHAR(64) NULL,
+                        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """.trimIndent(),
+                )
+                statement.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_telegram_chat_context_user
+                    ON telegram_chat_context (user_id)
+                    """.trimIndent(),
+                )
+            }
+        }
+    }
+
+    private fun clearTelegramTableContext(
+        jdbcUrl: String,
+        chatId: Long,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement("DELETE FROM telegram_chat_context WHERE chat_id = ?").use { statement ->
+                statement.setLong(1, chatId)
+                statement.executeUpdate()
+            }
+        }
+    }
+
+    private fun seedUserExit(
+        jdbcUrl: String,
+        userId: Long,
+        tableSessionId: Long,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                INSERT INTO guest_table_session_exits (user_id, table_session_id, exited_at)
+                VALUES (?, ?, ?)
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, userId)
+                statement.setLong(2, tableSessionId)
+                statement.setTimestamp(3, Timestamp.from(Instant.now()))
+                statement.executeUpdate()
+            }
+        }
+    }
+
     private fun seedUser(
         jdbcUrl: String,
         userId: Long,
@@ -1042,6 +1614,133 @@ class SupportTicketRoutesTest {
             }
         }
 
+    private fun supportThreadStatus(
+        jdbcUrl: String,
+        threadId: Long,
+    ): String =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement("SELECT status FROM support_threads WHERE id = ?").use { statement ->
+                statement.setLong(1, threadId)
+                statement.executeQuery().use { rs ->
+                    rs.next()
+                    rs.getString("status")
+                }
+            }
+        }
+
+    private fun supportMessageCount(
+        jdbcUrl: String,
+        threadId: Long,
+    ): Int =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement("SELECT COUNT(*) FROM support_messages WHERE thread_id = ?").use { statement ->
+                statement.setLong(1, threadId)
+                statement.executeQuery().use { rs ->
+                    rs.next()
+                    rs.getInt(1)
+                }
+            }
+        }
+
+    private fun supportReadAt(
+        jdbcUrl: String,
+        threadId: Long,
+        userId: Long,
+    ): Instant? =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT last_read_at
+                FROM support_thread_reads
+                WHERE thread_id = ?
+                  AND user_id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, threadId)
+                statement.setLong(2, userId)
+                statement.executeQuery().use { rs ->
+                    if (rs.next()) rs.getTimestamp("last_read_at")?.toInstant() else null
+                }
+            }
+        }
+
+    private fun deleteSupportReadMarker(
+        jdbcUrl: String,
+        threadId: Long,
+        userId: Long,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                "DELETE FROM support_thread_reads WHERE thread_id = ? AND user_id = ?",
+            ).use { statement ->
+                statement.setLong(1, threadId)
+                statement.setLong(2, userId)
+                statement.executeUpdate()
+            }
+        }
+    }
+
+    private fun tableSessionTiming(
+        jdbcUrl: String,
+        tableSessionId: Long,
+    ): TableSessionTiming =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT last_activity_at, expires_at
+                FROM table_sessions
+                WHERE id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, tableSessionId)
+                statement.executeQuery().use { rs ->
+                    rs.next()
+                    TableSessionTiming(
+                        lastActivityAt = rs.getTimestamp("last_activity_at").toInstant(),
+                        expiresAt = rs.getTimestamp("expires_at").toInstant(),
+                    )
+                }
+            }
+        }
+
+    private fun tableRowCount(
+        jdbcUrl: String,
+        tableName: String,
+    ): Int =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.createStatement().use { statement ->
+                statement.executeQuery("SELECT COUNT(*) FROM $tableName").use { rs ->
+                    rs.next()
+                    rs.getInt(1)
+                }
+            }
+        }
+
+    private fun telegramContextCount(
+        jdbcUrl: String,
+        chatId: Long,
+    ): Int =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                "SELECT COUNT(*) FROM telegram_chat_context WHERE chat_id = ?",
+            ).use { statement ->
+                statement.setLong(1, chatId)
+                statement.executeQuery().use { rs ->
+                    rs.next()
+                    rs.getInt(1)
+                }
+            }
+        }
+
+    private fun apiErrorMessage(body: String): String =
+        json.parseToJsonElement(body)
+            .jsonObject
+            .getValue("error")
+            .jsonObject
+            .getValue("message")
+            .jsonPrimitive
+            .content
+
     private fun deleteSupportThread(
         jdbcUrl: String,
         threadId: Long,
@@ -1114,5 +1813,12 @@ class SupportTicketRoutesTest {
         private const val MANAGER_ID = 777777L
         private const val STAFF_ID = 888888L
         private const val STAFF_CHAT_ID = -100500L
+        private const val PLATFORM_RECONFIRM_MESSAGE =
+            "Откройте QR-код ещё раз и подтвердите вход в Telegram."
     }
+
+    private data class TableSessionTiming(
+        val lastActivityAt: Instant,
+        val expiresAt: Instant,
+    )
 }

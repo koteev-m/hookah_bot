@@ -1,5 +1,6 @@
 package com.hookah.platform.backend.telegram.db
 
+import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.telegram.DialogState
 import com.hookah.platform.backend.telegram.DialogStateType
 import kotlinx.coroutines.Dispatchers
@@ -8,6 +9,8 @@ import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.encodeToJsonElement
+import java.sql.Connection
+import java.sql.SQLException
 import javax.sql.DataSource
 
 class DialogStateRepository(
@@ -17,21 +20,25 @@ class DialogStateRepository(
     suspend fun get(chatId: Long): DialogState {
         val ds = dataSource ?: return DialogState(DialogStateType.NONE)
         return withContext(Dispatchers.IO) {
-            ds.connection.use { connection ->
-                val sql = "SELECT state, payload FROM telegram_dialog_state WHERE chat_id = ?"
-                connection.prepareStatement(sql).use { statement ->
-                    statement.setLong(1, chatId)
-                    statement.executeQuery().use { rs ->
-                        if (rs.next()) {
-                            val state = DialogStateType.valueOf(rs.getString("state"))
-                            val payloadJson = rs.getString("payload")
-                            val payload = json.decodeFromString(MapSerializer, payloadJson)
-                            DialogState(state, payload)
-                        } else {
-                            DialogState(DialogStateType.NONE)
+            try {
+                ds.connection.use { connection ->
+                    val sql = "SELECT state, payload FROM telegram_dialog_state WHERE chat_id = ?"
+                    connection.prepareStatement(sql).use { statement ->
+                        statement.setLong(1, chatId)
+                        statement.executeQuery().use { rs ->
+                            if (rs.next()) {
+                                val state = DialogStateType.valueOf(rs.getString("state"))
+                                val payloadJson = rs.getString("payload")
+                                val payload = json.decodeFromString(MapSerializer, payloadJson)
+                                DialogState(state, payload)
+                            } else {
+                                DialogState(DialogStateType.NONE)
+                            }
                         }
                     }
                 }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
             }
         }
     }
@@ -42,23 +49,27 @@ class DialogStateRepository(
     ) {
         val ds = dataSource ?: return
         withContext(Dispatchers.IO) {
-            ds.connection.use { connection ->
-                val sql =
-                    """
-                    INSERT INTO telegram_dialog_state (chat_id, state, payload, updated_at)
-                    VALUES (?, ?, ?::jsonb, now())
-                    ON CONFLICT (chat_id) DO UPDATE SET
-                        state = EXCLUDED.state,
-                        payload = EXCLUDED.payload,
-                        updated_at = now()
-                    """.trimIndent()
-                connection.prepareStatement(sql).use { statement ->
-                    statement.setLong(1, chatId)
-                    statement.setString(2, state.state.name)
-                    val payloadJson = json.encodeToJsonElement(MapSerializer, state.payload).toString()
-                    statement.setString(3, payloadJson)
-                    statement.executeUpdate()
+            try {
+                ds.connection.use { connection ->
+                    val sql =
+                        """
+                        INSERT INTO telegram_dialog_state (chat_id, state, payload, updated_at)
+                        VALUES (?, ?, ?::jsonb, now())
+                        ON CONFLICT (chat_id) DO UPDATE SET
+                            state = EXCLUDED.state,
+                            payload = EXCLUDED.payload,
+                            updated_at = now()
+                        """.trimIndent()
+                    connection.prepareStatement(sql).use { statement ->
+                        statement.setLong(1, chatId)
+                        statement.setString(2, state.state.name)
+                        val payloadJson = json.encodeToJsonElement(MapSerializer, state.payload).toString()
+                        statement.setString(3, payloadJson)
+                        statement.executeUpdate()
+                    }
                 }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
             }
         }
     }
@@ -66,12 +77,23 @@ class DialogStateRepository(
     suspend fun clear(chatId: Long) {
         val ds = dataSource ?: return
         withContext(Dispatchers.IO) {
-            ds.connection.use { connection ->
-                connection.prepareStatement("DELETE FROM telegram_dialog_state WHERE chat_id = ?").use { statement ->
-                    statement.setLong(1, chatId)
-                    statement.executeUpdate()
+            try {
+                ds.connection.use { connection ->
+                    clear(connection, chatId)
                 }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
             }
+        }
+    }
+
+    fun clear(
+        connection: Connection,
+        chatId: Long,
+    ) {
+        connection.prepareStatement("DELETE FROM telegram_dialog_state WHERE chat_id = ?").use { statement ->
+            statement.setLong(1, chatId)
+            statement.executeUpdate()
         }
     }
 

@@ -64,6 +64,39 @@ Target QA model:
 | E. Manual staging smoke | Prove real environment, Telegram WebView, staff-chat and deploy behavior. | Required after runtime/frontend/backend/Telegram/deploy changes; not required for docs-only. |
 | F. GitHub Actions | Release gate and source of CI truth. | Must be green before considering a task merged/released. If red, report failing test/assertion first, not Gradle tail. |
 
+## Platform Owner Controlled Guest QR Test Escape Quality Gate
+
+Status: **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. Schema verdict: `NO_MIGRATION_EXPECTED`. This is a Telegram + RBAC + table/session routing change; independent review, green Actions, staging deploy and real Telegram role/privacy smoke are mandatory before release.
+
+Required automated evidence:
+- Platform Owner tokenless `/start` opens Platform Mode only without active confirmed Guest context. With active context it keeps Guest routing and shows the table menu or safe `Завершить визит` instruction. A new QR prompt does not mutate current context/session, exit marker, persisted dialog, booking draft, cart/draft or success audit.
+- The five-minute process-local pending uses a short opaque callback reference bound to exact actor/chat/token/venue/table, lazily sweeps expired entries and is removed by cancel/confirm/Guest exit/clear. Phase 1 is single-instance long-polling; restart, a callback on another instance, wrong actor/chat, expiry and missing/consumed references fail closed.
+- Deterministic confirm-vs-cancel and double-confirm tests prove one conditional-consume winner without sleeps: cancel winner has no audit/activation; confirm winner has one audit and one activation attempt.
+- Confirm re-authorizes exact Platform Owner and commits safe `PLATFORM_GUEST_QR_TEST_CONFIRMED` before activation. The event records confirmation only and is not `GUEST_CONTEXT_APPLIED`; audit failure produces no Guest context and retry requires a fresh QR confirmation.
+- Real repository transaction tests inject failures after session resolve/touch, exit clear, dialog clear and at context save. Final token/venue/table identity and public Guest/subscription guards, session resolve/create/touch, exit clear, dialog clear and exact context save are one transaction; every late failure leaves session, exit, dialog and context unchanged. In-memory cart/draft cleanup follows commit only, and raw SQL failures are normalized to safe copy.
+- The H2 activation rollback matrix executes all 16 reachable `NEW|EXISTING session × INSERT|UPDATE context × four checkpoints` scenarios and compares the full authoritative snapshot, including unrelated rows. The PostgreSQL Testcontainers gate executes the required `NEW+INSERT` and `EXISTING+UPDATE` branches at all four checkpoints: 8 scenarios, `skipped=0`.
+- Exact Platform Owner Mini App create/touch and explicit-session resolve require matching active server-owned Telegram chat context and no exit marker. Missing/mismatched token/venue/table context and old token/session/button after exit cause no session touch/create, personal-tab creation or exit-marker clearing. Ordinary Guest resolve remains unchanged.
+- Deterministic DB-backed tests use latches, the production coordinator and production connection overloads for order, staff-call, tab, shift-extension and support. They prove exit-first denial with unchanged authoritative counts, mutation-first commit before teardown, post-exit denial and full rollback of a forced SQL failure; no arbitrary sleeps or mock-only authorization proof are used.
+- Exact Platform table-bound support create, detail read-receipt, reply and status flows cover confirmed token+session, confirmed token-only, missing confirmation, mismatched context and post-exit denial. Denials share one private error and leave ticket/thread/message/read/audit/session/tab state unchanged; ordinary Guest token-only support remains compatible.
+- Availability-independent teardown uses stored actor/chat context only as cleanup identity, clears context/dialog/cart/draft/pending and preserves exit semantics after token rotation/revoke, table disable/delete, venue pause/unpublish or subscription block, then returns Platform menu. New QR + confirm may re-enter.
+- Confirmed routing uses ordinary Guest menu/order/staff-call/session paths and Guest Mini App URL `mode=guest`; ordinary Guest, Venue Owner, Manager and Staff precedence remains unchanged.
+
+Required local commands:
+```bash
+git status --short
+git diff --check
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*TelegramBotRouterTableTokenTest*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*TelegramKeyboardsTest*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*GuestTableResolveRoutesTest*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*GuestTable*Activation*' --tests '*GuestTable*Teardown*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*PlatformGuestTableMutationCoordinatorTest*' --tests '*GuestOrderRoutesTest*' --tests '*GuestTabsRoutesTest*' --tests '*GuestStaffCallRoutesTest*' --tests '*ShiftExtensionRoutesTest*' --tests '*SupportTicketRoutesTest*' --console=plain
+JAVA_TOOL_OPTIONS=-Dapi.version=1.44 _JAVA_OPTIONS=-Xmx4g ./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*GuestTableContextActivationPostgresTest*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:compileKotlin --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:ktlintCheck --console=plain
+npm --prefix miniapp run build
+CI=1 TZ=UTC MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke
+```
+
 ## Staff Schedule Phase 1 Release Quality Gate
 
 Status:
@@ -691,6 +724,7 @@ Current CI jobs:
 
 Expectations:
 - All required jobs must be green before merge/release.
+- `backend-release-critical-routes` has separate required steps. The non-PostgreSQL route/security selector explicitly executes Telegram, resolve, H2 activation/teardown, mutation-coordinator, order, tab, staff-call, shift-extension and support classes alongside existing critical routes; its XML assertion fails on a missing/zero/skipped/failing suite. A second step runs only `GuestTableContextActivationPostgresTest` with `JAVA_TOOL_OPTIONS=-Dapi.version=1.44`, then independently parses its XML and requires at least 8 tests with `skipped=0`, `failures=0`, `errors=0`. Docker availability alone is not evidence, and route failure must not silently skip the PostgreSQL gate.
 - If CI is red, first identify the failing job, failing test class, failing test name, assertion/error and first useful stack frame.
 - Do not paste only `Execution failed for task ':backend:app:test'`; inspect XML/test output or CI logs for the actual assertion.
 - External/transient failures should be separated from product regressions. A network/dependency timeout is not the same as a Kotlin compile/test failure.
@@ -1069,11 +1103,22 @@ Platform/support:
 - Platform sees support tickets;
 - Platform does not see ordinary `VENUE_CHAT`;
 - billing/manual status smoke if changed;
-- lifecycle actions require reason/audit where implemented.
+- lifecycle actions require reason/audit where implemented;
+- Platform Owner tokenless `/start` opens Platform Mode without active Guest context and keeps Guest table routing while confirmed context is active;
+- valid table QR shows safe venue/table labels and exact confirm/cancel, with no pre-confirm context/session/exit/dialog/draft/audit mutation;
+- confirm/cancel and double-confirm have one conditional-consume winner;
+- `PLATFORM_GUEST_QR_TEST_CONFIRMED` contains only standard actor plus safe venue/table/source fields and means confirmation, not `GUEST_CONTEXT_APPLIED`;
+- activation late failures roll back session, exit, dialog and context together;
+- exact Platform Owner Mini App re-entry requires matching active server-owned chat context and no exit marker; old token/session entry after exit fails closed;
+- `Завершить визит` clears Guest context/dialog/draft/pending and preserves exit semantics despite current token/table/venue/subscription unavailability, then restores Platform menu.
 
 Telegram/staff-chat:
 - `/start` without table;
 - `/start <table_token>`;
+- exact Platform Owner confirm/cancel, opaque pending TTL/lazy cleanup, single-instance topology, stale/rotated/disabled token and audit/repository-failure denial;
+- Guest/Staff/Manager/Venue Owner/wrong-chat/expired/replayed direct callback denial;
+- concurrent confirm/cancel and double-confirm single-winner behavior;
+- confirmed Platform Owner table menu, Guest action routing, guarded Mini App `mode=guest`, availability-independent exit and new-confirmation re-entry;
 - fallback order;
 - staff call;
 - staff-call ACK/DONE;
@@ -1092,7 +1137,7 @@ Telegram/staff-chat:
 - Permission parity remains `PARTIAL` unless route tests prove each direct API denial/allow path.
 - Staff-call guest-visible `CANCELLED` is closed for the current guest/tableSession; manual cancel UI, quick replies and row-level actor/timestamp gaps remain future unless implemented.
 - Real Telegram fallback order smoke remains required for release confidence.
-- Platform Owner guest QR test escape remains open/needs verification.
+- Platform Owner controlled Guest QR test is locally validated and awaits independent review, green Actions, staging deploy and real Telegram smoke; no staging result is claimed yet.
 - Booking reminders and future no-show automation remain rollout-gated/partial.
 - Advanced support and billing/provider features remain future unless implemented and smoked. Growth remains partial, but Post-Visit Feedback MVP and venue-only Guest Favorites Phase 1 are staging-smoke-passed and stay in regression. Repeat Phase 1 is locally validated with deferred manual smoke in `REPEAT-MANUAL-001`; persistent templates, favorite menu items/options, recommendations/frequent items, notification opt-in, favorites-based promotions and loyalty remain future until their own bounded implementation evidence exists.
 - Menu shift check is **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED** and stays
@@ -1127,6 +1172,7 @@ Telegram/staff-chat:
 - CI coverage: `PARTIAL / release-critical split jobs current`.
 - Frontend e2e: `PARTIAL`, with smoke coverage documented.
 - Real Telegram smoke: `REQUIRED` for bot/staff-chat changes.
+- Platform Owner controlled Guest QR test: **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**; `NO_MIGRATION_EXPECTED`, mandatory staging smoke pending.
 - Staging deploy smoke policy: `DOCUMENTED`.
 - Venue media foundation quality gate: `DOCUMENTED / STORAGE DECISION REQUIRED`.
 

@@ -13,6 +13,7 @@ import javax.sql.DataSource
 data class TableSessionContext(
     val id: Long,
     val venueId: Long,
+    val tableId: Long,
 )
 
 data class GuestTabModel(
@@ -49,7 +50,7 @@ class GuestTabsRepository(private val dataSource: DataSource?) {
                 ds.connection.use { connection ->
                     connection.prepareStatement(
                         """
-                        SELECT id, venue_id
+                        SELECT id, venue_id, table_id
                         FROM table_sessions
                         WHERE id = ?
                           AND status = 'ACTIVE'
@@ -60,7 +61,11 @@ class GuestTabsRepository(private val dataSource: DataSource?) {
                         statement.setLong(1, tableSessionId)
                         statement.executeQuery().use { rs ->
                             if (rs.next()) {
-                                TableSessionContext(id = rs.getLong("id"), venueId = rs.getLong("venue_id"))
+                                TableSessionContext(
+                                    id = rs.getLong("id"),
+                                    venueId = rs.getLong("venue_id"),
+                                    tableId = rs.getLong("table_id"),
+                                )
                             } else {
                                 null
                             }
@@ -192,24 +197,9 @@ class GuestTabsRepository(private val dataSource: DataSource?) {
                 ds.connection.use { connection ->
                     connection.autoCommit = false
                     try {
-                        val existing = findPersonalTabForUpdate(connection, venueId, tableSessionId, userId)
-                        if (existing != null) {
-                            ensureMember(connection, existing.id, userId, "OWNER")
-                            connection.commit()
-                            return@use existing
-                        }
-                        ensureUserExists(connection, userId)
-                        val tabId = insertTab(connection, venueId, tableSessionId, "PERSONAL", userId)
-                        ensureMember(connection, tabId, userId, "OWNER")
+                        val personalTab = ensurePersonalTab(connection, venueId, tableSessionId, userId)
                         connection.commit()
-                        GuestTabModel(
-                            id = tabId,
-                            venueId = venueId,
-                            tableSessionId = tableSessionId,
-                            type = "PERSONAL",
-                            ownerUserId = userId,
-                            status = "ACTIVE",
-                        )
+                        personalTab
                     } catch (e: SQLException) {
                         connection.rollback()
                         if (e.sqlState == "23505") {
@@ -226,6 +216,30 @@ class GuestTabsRepository(private val dataSource: DataSource?) {
         }
     }
 
+    fun ensurePersonalTab(
+        connection: Connection,
+        venueId: Long,
+        tableSessionId: Long,
+        userId: Long,
+    ): GuestTabModel {
+        val existing = findPersonalTabForUpdate(connection, venueId, tableSessionId, userId)
+        if (existing != null) {
+            ensureMember(connection, existing.id, userId, "OWNER")
+            return existing
+        }
+        ensureUserExists(connection, userId)
+        val tabId = insertTab(connection, venueId, tableSessionId, "PERSONAL", userId)
+        ensureMember(connection, tabId, userId, "OWNER")
+        return GuestTabModel(
+            id = tabId,
+            venueId = venueId,
+            tableSessionId = tableSessionId,
+            type = "PERSONAL",
+            ownerUserId = userId,
+            status = "ACTIVE",
+        )
+    }
+
     suspend fun listTabsForUser(
         venueId: Long,
         tableSessionId: Long,
@@ -235,44 +249,43 @@ class GuestTabsRepository(private val dataSource: DataSource?) {
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    connection.prepareStatement(
-                        """
-                        SELECT t.id, t.venue_id, t.table_session_id, t.type, t.owner_user_id, t.status
-                        FROM tab t
-                        JOIN tab_member tm ON tm.tab_id = t.id
-                        WHERE t.venue_id = ?
-                          AND t.table_session_id = ?
-                          AND tm.user_id = ?
-                          AND t.status = 'ACTIVE'
-                        ORDER BY t.id
-                        """.trimIndent(),
-                    ).use { statement ->
-                        statement.setLong(1, venueId)
-                        statement.setLong(2, tableSessionId)
-                        statement.setLong(3, userId)
-                        statement.executeQuery().use { rs ->
-                            val tabs = mutableListOf<GuestTabModel>()
-                            while (rs.next()) {
-                                tabs.add(
-                                    GuestTabModel(
-                                        id = rs.getLong("id"),
-                                        venueId = rs.getLong("venue_id"),
-                                        tableSessionId = rs.getLong("table_session_id"),
-                                        type = rs.getString("type"),
-                                        ownerUserId = rs.getLong("owner_user_id").takeIf { !rs.wasNull() },
-                                        status = rs.getString("status"),
-                                    ),
-                                )
-                            }
-                            tabs
-                        }
-                    }
+                    listTabsForUser(connection, venueId, tableSessionId, userId)
                 }
             } catch (e: SQLException) {
                 throw DatabaseUnavailableException()
             }
         }
     }
+
+    fun listTabsForUser(
+        connection: Connection,
+        venueId: Long,
+        tableSessionId: Long,
+        userId: Long,
+    ): List<GuestTabModel> =
+        connection.prepareStatement(
+            """
+            SELECT t.id, t.venue_id, t.table_session_id, t.type, t.owner_user_id, t.status
+            FROM tab t
+            JOIN tab_member tm ON tm.tab_id = t.id
+            WHERE t.venue_id = ?
+              AND t.table_session_id = ?
+              AND tm.user_id = ?
+              AND t.status = 'ACTIVE'
+            ORDER BY t.id
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, tableSessionId)
+            statement.setLong(3, userId)
+            statement.executeQuery().use { rs ->
+                buildList {
+                    while (rs.next()) {
+                        add(mapTab(rs))
+                    }
+                }
+            }
+        }
 
     suspend fun createSharedTab(
         venueId: Long,
@@ -285,24 +298,9 @@ class GuestTabsRepository(private val dataSource: DataSource?) {
                 ds.connection.use { connection ->
                     connection.autoCommit = false
                     try {
-                        val existing = findSharedTabForOwnerForUpdate(connection, venueId, tableSessionId, ownerUserId)
-                        if (existing != null) {
-                            ensureMember(connection, existing.id, ownerUserId, "OWNER")
-                            connection.commit()
-                            return@use existing
-                        }
-                        ensureUserExists(connection, ownerUserId)
-                        val tabId = insertTab(connection, venueId, tableSessionId, "SHARED", ownerUserId)
-                        ensureMember(connection, tabId, ownerUserId, "OWNER")
+                        val tab = createSharedTab(connection, venueId, tableSessionId, ownerUserId)
                         connection.commit()
-                        GuestTabModel(
-                            id = tabId,
-                            venueId = venueId,
-                            tableSessionId = tableSessionId,
-                            type = "SHARED",
-                            ownerUserId = ownerUserId,
-                            status = "ACTIVE",
-                        )
+                        tab
                     } catch (e: SQLException) {
                         connection.rollback()
                         throw e
@@ -314,6 +312,30 @@ class GuestTabsRepository(private val dataSource: DataSource?) {
                 throw DatabaseUnavailableException()
             }
         }
+    }
+
+    fun createSharedTab(
+        connection: Connection,
+        venueId: Long,
+        tableSessionId: Long,
+        ownerUserId: Long,
+    ): GuestTabModel {
+        val existing = findSharedTabForOwnerForUpdate(connection, venueId, tableSessionId, ownerUserId)
+        if (existing != null) {
+            ensureMember(connection, existing.id, ownerUserId, "OWNER")
+            return existing
+        }
+        ensureUserExists(connection, ownerUserId)
+        val tabId = insertTab(connection, venueId, tableSessionId, "SHARED", ownerUserId)
+        ensureMember(connection, tabId, ownerUserId, "OWNER")
+        return GuestTabModel(
+            id = tabId,
+            venueId = venueId,
+            tableSessionId = tableSessionId,
+            type = "SHARED",
+            ownerUserId = ownerUserId,
+            status = "ACTIVE",
+        )
     }
 
     suspend fun createInvite(
@@ -330,34 +352,18 @@ class GuestTabsRepository(private val dataSource: DataSource?) {
                 ds.connection.use { connection ->
                     connection.autoCommit = false
                     try {
-                        val canInvite = isOwnerMember(connection, tabId, venueId, tableSessionId, createdBy)
-                        if (!canInvite) {
-                            connection.rollback()
-                            return@use CreateInviteResult.FORBIDDEN
-                        }
-                        ensureUserExists(connection, createdBy)
-                        try {
-                            connection.prepareStatement(
-                                """
-                                INSERT INTO tab_invite (tab_id, token, expires_at, created_by)
-                                VALUES (?, ?, ?, ?)
-                                """.trimIndent(),
-                            ).use { statement ->
-                                statement.setLong(1, tabId)
-                                statement.setString(2, token)
-                                statement.setTimestamp(3, Timestamp.from(expiresAt))
-                                statement.setLong(4, createdBy)
-                                statement.executeUpdate()
-                            }
-                        } catch (e: SQLException) {
-                            connection.rollback()
-                            if (e.isDuplicateKeyViolation()) {
-                                return@use CreateInviteResult.TOKEN_CONFLICT
-                            }
-                            throw e
-                        }
+                        val result =
+                            createInvite(
+                                connection = connection,
+                                tabId = tabId,
+                                venueId = venueId,
+                                tableSessionId = tableSessionId,
+                                createdBy = createdBy,
+                                token = token,
+                                expiresAt = expiresAt,
+                            )
                         connection.commit()
-                        CreateInviteResult.CREATED
+                        result
                     } catch (e: SQLException) {
                         connection.rollback()
                         throw e
@@ -371,23 +377,66 @@ class GuestTabsRepository(private val dataSource: DataSource?) {
         }
     }
 
+    fun createInvite(
+        connection: Connection,
+        tabId: Long,
+        venueId: Long,
+        tableSessionId: Long,
+        createdBy: Long,
+        token: String,
+        expiresAt: Instant,
+    ): CreateInviteResult {
+        if (!isOwnerMember(connection, tabId, venueId, tableSessionId, createdBy)) {
+            return CreateInviteResult.FORBIDDEN
+        }
+        val savepoint = if (connection.autoCommit) null else connection.setSavepoint()
+        return try {
+            ensureUserExists(connection, createdBy)
+            connection.prepareStatement(
+                """
+                INSERT INTO tab_invite (tab_id, token, expires_at, created_by)
+                VALUES (?, ?, ?, ?)
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, tabId)
+                statement.setString(2, token)
+                statement.setTimestamp(3, Timestamp.from(expiresAt))
+                statement.setLong(4, createdBy)
+                statement.executeUpdate()
+            }
+            CreateInviteResult.CREATED
+        } catch (e: SQLException) {
+            if (!e.isDuplicateKeyViolation()) {
+                throw e
+            }
+            savepoint?.let { connection.rollback(it) }
+            CreateInviteResult.TOKEN_CONFLICT
+        } finally {
+            savepoint?.let { runCatching { connection.releaseSavepoint(it) } }
+        }
+    }
+
     suspend fun deleteExpiredInvites() {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    connection.prepareStatement(
-                        """
-                        DELETE FROM tab_invite
-                        WHERE expires_at <= now()
-                        """.trimIndent(),
-                    ).use { statement ->
-                        statement.executeUpdate()
-                    }
+                    deleteExpiredInvites(connection)
                 }
             } catch (e: SQLException) {
                 throw DatabaseUnavailableException()
             }
+        }
+    }
+
+    fun deleteExpiredInvites(connection: Connection) {
+        connection.prepareStatement(
+            """
+            DELETE FROM tab_invite
+            WHERE expires_at <= now()
+            """.trimIndent(),
+        ).use { statement ->
+            statement.executeUpdate()
         }
     }
 
@@ -403,20 +452,7 @@ class GuestTabsRepository(private val dataSource: DataSource?) {
                 ds.connection.use { connection ->
                     connection.autoCommit = false
                     try {
-                        val tab =
-                            findInviteTabForUpdate(connection, venueId, tableSessionId, token) ?: run {
-                                connection.rollback()
-                                return@use null
-                            }
-                        ensureUserExists(connection, userId)
-                        ensureMember(connection, tab.id, userId, "MEMBER")
-                        closeEmptyOwnedSharedTabsAfterJoin(
-                            connection = connection,
-                            venueId = venueId,
-                            tableSessionId = tableSessionId,
-                            userId = userId,
-                            joinedTabId = tab.id,
-                        )
+                        val tab = joinByInvite(connection, venueId, tableSessionId, userId, token)
                         connection.commit()
                         tab
                     } catch (e: SQLException) {
@@ -432,6 +468,26 @@ class GuestTabsRepository(private val dataSource: DataSource?) {
         }
     }
 
+    fun joinByInvite(
+        connection: Connection,
+        venueId: Long,
+        tableSessionId: Long,
+        userId: Long,
+        token: String,
+    ): GuestTabModel? {
+        val tab = findInviteTabForUpdate(connection, venueId, tableSessionId, token) ?: return null
+        ensureUserExists(connection, userId)
+        ensureMember(connection, tab.id, userId, "MEMBER")
+        closeEmptyOwnedSharedTabsAfterJoin(
+            connection = connection,
+            venueId = venueId,
+            tableSessionId = tableSessionId,
+            userId = userId,
+            joinedTabId = tab.id,
+        )
+        return tab
+    }
+
     suspend fun isTabMember(
         tabId: Long,
         venueId: Long,
@@ -442,30 +498,39 @@ class GuestTabsRepository(private val dataSource: DataSource?) {
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    connection.prepareStatement(
-                        """
-                        SELECT 1
-                        FROM tab t
-                        JOIN tab_member tm ON tm.tab_id = t.id
-                        WHERE t.id = ?
-                          AND t.venue_id = ?
-                          AND t.table_session_id = ?
-                          AND t.status = 'ACTIVE'
-                          AND tm.user_id = ?
-                        """.trimIndent(),
-                    ).use { statement ->
-                        statement.setLong(1, tabId)
-                        statement.setLong(2, venueId)
-                        statement.setLong(3, tableSessionId)
-                        statement.setLong(4, userId)
-                        statement.executeQuery().use { it.next() }
-                    }
+                    isTabMember(connection, tabId, venueId, tableSessionId, userId)
                 }
             } catch (e: SQLException) {
                 throw DatabaseUnavailableException()
             }
         }
     }
+
+    fun isTabMember(
+        connection: Connection,
+        tabId: Long,
+        venueId: Long,
+        tableSessionId: Long,
+        userId: Long,
+    ): Boolean =
+        connection.prepareStatement(
+            """
+            SELECT 1
+            FROM tab t
+            JOIN tab_member tm ON tm.tab_id = t.id
+            WHERE t.id = ?
+              AND t.venue_id = ?
+              AND t.table_session_id = ?
+              AND t.status = 'ACTIVE'
+              AND tm.user_id = ?
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, tabId)
+            statement.setLong(2, venueId)
+            statement.setLong(3, tableSessionId)
+            statement.setLong(4, userId)
+            statement.executeQuery().use { it.next() }
+        }
 
     private fun insertTab(
         connection: Connection,
@@ -486,7 +551,13 @@ class GuestTabsRepository(private val dataSource: DataSource?) {
             statement.setString(3, type)
             statement.setLong(4, ownerUserId)
             statement.executeUpdate()
-            statement.generatedKeys.use { rs -> if (rs.next()) rs.getLong(1) else error("Failed to create tab") }
+            statement.generatedKeys.use { rs ->
+                if (rs.next()) {
+                    rs.getLong(1)
+                } else {
+                    throw SQLException("Failed to create tab")
+                }
+            }
         }
     }
 

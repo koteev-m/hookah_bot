@@ -67,25 +67,34 @@ class SubscriptionRepository(
             try {
                 ds.connection.use { connection ->
                     ensureRowExistsForVenue(connection, venueId)
-                    connection.prepareStatement(
-                        """
-                        SELECT status
-                        FROM venue_subscriptions
-                        WHERE venue_id = ?
-                        """.trimIndent(),
-                    ).use { statement ->
-                        statement.setLong(1, venueId)
-                        statement.executeQuery().use { rs ->
-                            if (rs.next()) {
-                                SubscriptionStatus.fromDb(rs.getString("status"))
-                            } else {
-                                SubscriptionStatus.UNKNOWN
-                            }
-                        }
-                    }
+                    getSubscriptionStatus(connection, venueId)
                 }
             } catch (e: SQLException) {
                 throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    fun getSubscriptionStatus(
+        connection: Connection,
+        venueId: Long,
+        forUpdate: Boolean = false,
+    ): SubscriptionStatus {
+        val lockClause = if (forUpdate) " FOR UPDATE" else ""
+        return connection.prepareStatement(
+            """
+            SELECT status
+            FROM venue_subscriptions
+            WHERE venue_id = ?$lockClause
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.executeQuery().use { rs ->
+                if (rs.next()) {
+                    SubscriptionStatus.fromDb(rs.getString("status"))
+                } else {
+                    SubscriptionStatus.UNKNOWN
+                }
             }
         }
     }
@@ -262,21 +271,9 @@ class SubscriptionRepository(
     private fun loadStatusForUpdate(
         connection: Connection,
         venueId: Long,
-    ): SubscriptionStatus? {
-        return connection.prepareStatement(
-            """
-            SELECT status
-            FROM venue_subscriptions
-            WHERE venue_id = ?
-            FOR UPDATE
-            """.trimIndent(),
-        ).use { statement ->
-            statement.setLong(1, venueId)
-            statement.executeQuery().use { rs ->
-                if (rs.next()) SubscriptionStatus.fromDb(rs.getString("status")) else null
-            }
-        }
-    }
+    ): SubscriptionStatus? =
+        getSubscriptionStatus(connection, venueId, forUpdate = true)
+            .takeUnless { it == SubscriptionStatus.UNKNOWN }
 
     private fun ensureRowExistsForVenue(
         connection: Connection,

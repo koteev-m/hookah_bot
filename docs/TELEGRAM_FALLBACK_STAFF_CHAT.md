@@ -1,8 +1,8 @@
 # Telegram Fallback And Staff-Chat Model
 
-Дата актуализации: 2026-07-21.
+Дата актуализации: 2026-08-04.
 
-Статус: **current product reference / SPEC UPDATED**. Telegram bot remains an entrypoint, fallback and notification surface for the same backend/Mini App product. Current docs/code evidence says fallback quick-order payload, Staff Call ACK/DONE, guest-visible staff-call `CANCELLED`, staff-chat link/test/unlink, state-aware booking staff-chat buttons, booking arrival callback guards and support/venue/booking-chat staff-chat denial are closed for current smoke paths. The complete Telegram parity model is still **PARTIAL / needs verification** for broad Telegram-vs-Mini-App parity, Platform Owner guest-QR test escape, platform menu placeholders, per-venue real staff-chat delivery, callback audit completeness and future notification history.
+Статус: **current product reference / SPEC UPDATED**. Telegram bot remains an entrypoint, fallback and notification surface for the same backend/Mini App product. Current docs/code evidence says fallback quick-order payload, Staff Call ACK/DONE, guest-visible staff-call `CANCELLED`, staff-chat link/test/unlink, state-aware booking staff-chat buttons, booking arrival callback guards and support/venue/booking-chat staff-chat denial are closed for current smoke paths. Platform guest QR status is **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT** with schema verdict `NO_MIGRATION_EXPECTED`; independent review, green Actions and real Telegram staging smoke remain required. The complete Telegram parity model is still **PARTIAL / needs verification** for broad Telegram-vs-Mini-App parity, platform menu placeholders, per-venue real staff-chat delivery, callback audit completeness and future notification history.
 
 ## Core Rule
 
@@ -37,7 +37,7 @@ Rules:
 
 | State | Context | Target behavior | Current / gap |
 | --- | --- | --- | --- |
-| `S0_NO_TABLE_CONTEXT` | Guest has no active table context. | Show catalog/open Mini App, `Чаты`, `Помощь`, `Мои брони` / `Мои заказы` where implemented, `Для кальянной` for venue roles and Platform Mode for Platform Owner. | Current docs say guest catalog, bookings, chats/help and role menus exist. Platform Owner QR guest-test escape needs verification. |
+| `S0_NO_TABLE_CONTEXT` | Guest has no active table context. | Show catalog/open Mini App, `Чаты`, `Помощь`, `Мои брони` / `Мои заказы` where implemented, `Для кальянной` for venue roles and Platform Mode for Platform Owner. | Current docs say guest catalog, bookings, chats/help and role menus exist. Exact Platform Owner may explicitly confirm a bounded Guest QR test; tokenless `/start` opens Platform Mode only when no active confirmed Guest context exists. |
 | `S1_TABLE_CONTEXT` | Guest has verified venue/table/table_session context. | Show venue + table header, open menu, active order/bill, reorder, fallback chat order, staff call, switch/rescan table, secondary help/problem entry. | Table context cleanup and user-scoped exit are smoke-closed; keep QR/table restore and exit in regression. |
 | `S2_FALLBACK_ORDER_DIALOG` | Guest orders in private bot chat. | Collect text/order, confirm/edit/cancel, create `ORDER_BATCH` with `source=bot_fallback`, attach current table_session and tab. | Current docs say `cmd=start_quick_order` payload is code-test closed; real Telegram fallback remains release smoke. |
 | `S3_STAFF_CALL_DIALOG` | Guest creates live staff call from table context. | Choose reason, optional comment, create `STAFF_CALL`, notify operational surfaces. | Staff-call create, ACK/DONE lifecycle and guest-visible terminal `CANCELLED` are smoke-closed; manual cancel UI and quick replies remain future/partial. |
@@ -49,15 +49,20 @@ Target:
 - `/start <table_token>` resolves table context.
 - `table_token` is short, opaque and base64url/deeplink-compatible.
 - Token resolution verifies venue/table visibility and table enabled state.
-- Token creates or touches `TABLE_SESSION` and default personal tab according to `docs/ORDER_SESSION_TAB_CORE.md`.
+- For an ordinary Guest, or for exact Platform Owner only after explicit confirmation, the token creates or touches `TABLE_SESSION` and default personal tab according to `docs/ORDER_SESSION_TAB_CORE.md`.
 - If token is revoked, unknown or expired, show safe copy and do not disclose internal ids.
 - If table is disabled, show safe copy and ask the guest to contact staff.
 - If venue is hidden/suspended/unavailable to guests, show safe copy and do not open ordering.
-- If the user also has Platform Owner or Venue role, product should provide explicit guest QR test mode or `Продолжить как гость` when role precedence would otherwise block guest QR smoke.
+- Only the exact Platform Owner receives the controlled `Продолжить как гость` escape when Platform precedence would otherwise block QR smoke. Venue Owner, Manager, Staff and ordinary Guest role precedence and permissions are unchanged.
+- The prompt contains safe public venue/table labels and stores only an opaque callback reference in Telegram. Its five-minute process-local pending record is bound to exact actor + chat + token + venue + table and creates no Guest context/session, exit/dialog/booking/cart/draft mutation or success audit. Phase 1 is single-instance long-polling; restart or a callback reaching another instance loses the pending reference and fails closed.
+- Confirm and cancel conditionally consume the same pending reference exactly once; a winning cancel produces no audit/activation, and a winning confirm produces one audit and one activation attempt. Insert/confirm/cancel lazily sweep expired bounded entries; all Guest exit/clear paths remove the exact actor/chat pending record.
+- Confirm re-authorizes the exact Platform Owner and writes fail-closed `PLATFORM_GUEST_QR_TEST_CONFIRMED`. That event means the actor confirmed the test only; it is not `GUEST_CONTEXT_APPLIED`. A single JDBC activation transaction then finally re-resolves token and exact venue/table identity, checks current published venue, subscription and active-table/token guards, resolves/creates/touches the session, clears exit marker and persisted Guest dialog, and saves exact chat context. Repository/SQL failure is normalized to safe copy and rolls back every activation write; in-memory cart/draft cleanup follows commit only.
+- After confirm, ordinary Guest table context has routing precedence for table menu, order/menu, staff call, Guest Mini App `mode=guest` and exit. Exact Platform Owner Mini App create/touch or explicit-session resolve requires the matching active server-owned Telegram chat context and no exit marker. Old token/session/button entry after exit fails closed without session/tab creation, touch or exit-marker clearing.
+- Existing `Завершить визит` uses stored exact actor/chat context only as teardown identity and does not require current token/table/venue/subscription availability. It clears context, persisted Guest dialog, cart/draft and pending confirmation, records or preserves the user-exit marker when the linked session remains resolvable, and restores Platform menu. If deletion makes session lookup impossible, context and local Guest state are still cleared and the old entry remains fail-closed even though no marker can be recorded. Tokenless `/start` keeps Guest routing while context is active and returns to Platform Mode only after exit; no persistent impersonation state exists.
 
 Current vs target:
 - QR/table context, restore and exit are documented as staging-smoked.
-- Platform Owner guest-QR test escape is **needs verification** unless a later smoke proves it.
+- Platform Owner guest-QR test escape is **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**; staging smoke is not yet claimed.
 
 ## Fallback Chat Order
 
@@ -198,12 +203,13 @@ Rules:
 Current vs target:
 - Existing callback strings may still contain compact numeric ids in older flows. Treat them as internal short pointers only if they are re-authorized server-side and do not expose secrets/PII.
 - New callback families should prefer opaque tokens when practical.
+- Platform Guest QR confirm/cancel callbacks carry distinct opaque references only. Direct Guest/Venue Owner/Manager/Staff calls, wrong actor/chat/reference, expired/missing/consumed pending and repeat confirm/cancel fail closed with safe copy and disclose no token or internal venue/table identity.
 
 ## Telegram / Mini App / Staff-Chat Parity Matrix
 
 | Feature | Telegram private bot current | Guest Mini App current | Venue Mini App current | Platform Mini App current | Staff-chat current | Target / gap | Priority |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| QR start/table context | `/start <table_token>` supported. | QR/table context supported. | No guest table context. | No. | No. | Role-precedence guest test escape needs verification. | Regression |
+| QR start/table context | `/start <table_token>` supported; exact Platform Owner gets explicit bounded confirm/cancel and tokenless `/start` preserves active Guest routing. Fallback table writes share the exit context lock. | Confirmed Platform test opens ordinary Guest `mode=guest` only with matching server-owned chat context; old token/session entry after exit is denied, and table mutations recheck context in their write transaction. | No new guest authority. | Platform Mode returns after explicit Guest exit. | No. | Opaque TTL pending, atomic activation/mutation authorization, availability-independent teardown and fail-closed Mini App re-entry are locally validated; staging smoke required. | Regression |
 | Open Mini App | WebApp buttons exist. | Primary UI. | Primary venue UI. | Platform cockpit. | No. | Keep `initData` path and URLs in smoke. | Regression |
 | Fallback order | Chat quick-order path exists. | Sends `start_quick_order` payload where Mini App fallback used. | Queue receives resulting batch. | No. | Order notification allowed. | Real Telegram fallback remains release smoke; shared-tab fallback future. | Regression |
 | Staff call | Bot table context/staff-chat callbacks exist. | Guest create/status plus `CANCELLED` smoke-closed. | Active queue ACK/DONE smoke-closed. | No. | Notifications and ACK/DONE callbacks. | Manual cancel UI and quick replies future. | Regression/P2 |
@@ -213,7 +219,7 @@ Current vs target:
 | Booking chat | Guest bot replies supported. | `Чаты` includes booking threads. | `Сообщения` includes booking threads. | No ordinary booking chat. | Not full chat stream. | Must not mutate booking lifecycle. | Regression |
 | Venue chat | Bot support depends on current implementation. | Catalog/detail `Задать вопрос` -> `VENUE_CHAT`. | Owner/Manager can reply. | No ordinary venue chat. | Forbidden. | Bot venue-chat entry is target/needs verification if not implemented. | P2 |
 | Post-visit feedback | No automated feedback prompt; public review URL shares backend source with Venue Mini App. | Manual submit from History detail; explicit public review click only after `5/5` when configured. | Owner/Manager feedback list and exact low-rating `VENUE_CHAT`; Owner-only URL edit. | Feedback dashboard future. | Forbidden. | Keep worker/prompts/auto-redirect disabled. | Regression |
-| Support ticket | `/support` fallback where implemented. | `Помощь`. | Own-venue `Обращения`. | Support Center. | Forbidden. | Staff denied; no staff-chat spam. | Regression |
+| Support ticket | `/support` fallback where implemented; exact Platform table-context creation uses the shared transaction guard. | `Помощь`; exact Platform `tableToken`, including token-only, requires confirmed context, while ordinary Guest compatibility remains. | Own-venue `Обращения`. | Support Center. | Forbidden. | Table-bound create/read-receipt/reply/status is exit-race-safe; global support and ordinary chats remain separate; no staff-chat spam. | Regression |
 | Orders queue | Bot shift hub exists. | No. | Primary queue. | No. | Shortcut/notification only. | Large queue/pagination parity needs smoke. | P2 |
 | Staff-call queue | Bot shift hub/staff-chat callbacks exist. | No venue queue. | Primary queue. | No. | Shortcut/notification. | Venue Mode source of truth. | Regression |
 | Staff-chat link/test | Bot paths exist. | No. | M6 smoke-closed. | No. | Target group. | Delivery history future. | Regression |
@@ -252,7 +258,7 @@ Owner:
 
 Platform Owner:
 - platform menu/support/billing where implemented;
-- should not be blocked from guest QR testing without an explicit `Продолжить как гость` / guest-mode escape if role precedence would otherwise prevent table context smoke.
+- exact actor may use the explicit controlled `Продолжить как гость` QR escape; it grants only the ordinary guarded Guest table context and returns to Platform menu through existing visit exit.
 
 ## Current Known Gaps
 
@@ -261,7 +267,6 @@ Platform Owner:
 - Mini App-created staff-call notifications and Telegram staff-chat ACK/DONE are smoke-closed, but every pilot venue still needs real group binding smoke.
 - Staff stop-list parity is documented as aligned for current item/option availability; per-venue `staff_stoplist_enabled` remains future.
 - Telegram multi-venue selected context is documented as implemented; keep selector/entry in regression for multi-venue users.
-- Platform Owner guest QR test escape is **needs verification**.
 - Telegram Platform menu placeholders/parity are **PARTIAL / needs verification** compared with Platform Mini App cockpit.
 - Staff-chat notification policy is documented here; delivery failure history, topic routing and personal staff notifications remain future.
 - Staff-chat diagnostics/link/test/unlink are M6 closed for current paths; link-code expiry/actor audit and per-venue delivery must stay in regression.
@@ -318,6 +323,7 @@ Rules:
 - Staff-chat as source of truth: explicitly `NO`.
 - Telegram/Mini App parity: `PARTIAL`, with closed slices and documented exceptions.
 - Platform Telegram menu placeholders: `OPEN/PARTIAL / needs verification`.
+- Platform Owner controlled Guest QR test: **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**; `NO_MIGRATION_EXPECTED`, with independent review, CI and staging Telegram smoke still required.
 
 ## Smoke Checklist
 
@@ -347,8 +353,15 @@ Rules:
 24. Support booking issue creates `SUPPORT_TICKET` with verified booking/venue context.
 25. Staff cannot see support tickets or venue chats from Telegram.
 26. Manager cannot access billing/settings from Telegram.
-27. Platform Owner can access Platform mode and has a way to test guest QR if product requires it.
-28. Multi-venue user selects correct venue or current gap is documented.
-29. Bot and Venue Mini App read the same public review URL; clearing it removes the Guest `5/5` CTA.
-30. No `VisitFeedbackWorker` or scheduled Telegram feedback prompt is started, and no Yandex link opens automatically.
-31. Feedback submit/follow-up context creates no staff-chat notification and no support ticket.
+27. Platform Owner tokenless `/start` opens Platform Mode without active Guest context; with active confirmed context it keeps Guest routing and shows table menu or safe exit instruction.
+28. Valid QR shows safe labels and exact confirm/cancel buttons without pre-confirm context/session/exit/dialog/booking/cart/draft/audit mutation.
+29. Concurrent confirm/cancel and double-confirm have exactly one conditional-consume winner; cancel winner has no audit/activation, confirm winner has one confirmation audit and one activation attempt.
+30. Confirm writes confirmation-only audit, then atomically revalidates exact token/venue/table and availability, resolves/touches session, clears exit/dialog and saves context; injected late failure rolls all activation writes back.
+31. Cancel, stale/rotated/disabled token, unavailable venue/subscription, audit/repository failure, expired/wrong/consumed pending and direct non-Platform callbacks create no Guest context and disclose no raw token/internal ids.
+32. Confirmed Platform Owner opens normal Guest `mode=guest`; Mini App mismatched/old token or session after exit is denied without session touch/create, personal-tab creation or exit-marker clearing.
+33. Bot/Mini App order/bill, staff-call, tab, shift-extension and table-bound support writes lock the confirmed chat context and commit final authorization with the domain row. Exit-first creates no row; notifications remain after commit. Token-only support is guarded and returns the same private denial for missing, mismatched or exited context.
+34. `Завершить визит` clears context/dialog/cart/draft/pending and preserves exit semantics after token rotation/revoke, table disable/delete, venue pause/unpublish or subscription block, then returns Platform menu; new QR + confirm can re-enter.
+35. Multi-venue user selects correct venue or current gap is documented.
+36. Bot and Venue Mini App read the same public review URL; clearing it removes the Guest `5/5` CTA.
+37. No `VisitFeedbackWorker` or scheduled Telegram feedback prompt is started, and no Yandex link opens automatically.
+38. Feedback submit/follow-up context creates no staff-chat notification and no support ticket.

@@ -1,8 +1,8 @@
 # Platform Cockpit Model
 
-Дата актуализации: 2026-07-07.
+Дата актуализации: 2026-08-04.
 
-Статус: **current product reference** for Platform Mode. Use this document together with `docs/UPDATED_PRODUCT_AI_ROADMAP.md`, `docs/COMMUNICATION_MODEL.md`, `docs/SECURITY_RBAC_MATRIX.md` and `docs/ANALYTICS_EVENTS.md` before opening new Platform, billing, support or analytics tasks.
+Статус: **current product reference** for Platform Mode. Platform guest QR status is **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**, schema verdict `NO_MIGRATION_EXPECTED`; independent review, green Actions, staging deploy and real Telegram smoke remain mandatory. Use this document together with `docs/UPDATED_PRODUCT_AI_ROADMAP.md`, `docs/COMMUNICATION_MODEL.md`, `docs/SECURITY_RBAC_MATRIX.md` and `docs/ANALYTICS_EVENTS.md` before opening new Platform, billing, support or analytics tasks.
 
 ## Scope
 
@@ -17,6 +17,7 @@ Ordinary venue operations such as orders, staff calls, booking queues, menu/stop
 | Owner / access | Owner invite, accepted Telegram deep links, active OWNER membership list and last-owner-safe OWNER revoke are smoke-passed. | Runtime venue ownership is `venue_members(role=OWNER)`, not legacy owner linkage alone. |
 | Billing / subscriptions / invoices | Manual/fake billing cockpit, subscription overview, invoice ensure, manual mark-paid, next-period invoice and courtesy days are staging-smoked. | GET overviews are read-only; money/state mutations require explicit POST actions and audit. |
 | Support Center | Support Tickets MVP is smoke-passed for `SUPPORT_TICKET`, including platform-only and venue-transferred tickets. | Platform sees support tickets, not ordinary `VENUE_CHAT`. |
+| Controlled Guest QR test | Exact Platform Owner can explicitly confirm one guarded Telegram table QR; activation and every later table-bound mutation use transaction-bound final authorization, and visit exit does not depend on current Guest availability. | Five-minute opaque process-local pending in single-instance long-polling Phase 1, shared exit/mutation chat-context lock, public Guest guards and fail-closed audit-before-apply grant no Venue authority or persistent impersonation. A callback missing on another instance fails closed. |
 | Analytics / audit | Audit rows exist for several critical operations; broad Platform analytics dashboards are future work. | `docs/ANALYTICS_EVENTS.md` is the source for event names/KPIs; Platform cockpit should show reliable operational metrics only after event semantics are stable. |
 | Growth / placements | Guest growth/retention is specified in `docs/GROWTH_RETENTION.md`; paid placement and promotion boosting are future. | No paid placement in the MVP; if implemented later, promoted content must be labeled and backed by billing, moderation and analytics. |
 | Risk / health | Billing state, venue availability and support queue status are partially visible. | Future cockpit should highlight blocked venues, overdue invoices, support queues and integration health without exposing secrets. |
@@ -112,6 +113,7 @@ Current audit/event foundation is partial and operational:
 - Support status/scope/assignment/escalation and message-add audit exists for support-ticket operations.
 - Staff-call ACK/DONE audit exists from Venue Mini App and Telegram staff-chat callbacks.
 - Order audit exists for several venue order mutations.
+- Controlled Guest QR confirmation writes `PLATFORM_GUEST_QR_TEST_CONFIRMED` before atomic Guest context activation, using the standard actor field plus safe `venueId`, `tableId` and `source=TELEGRAM_QR_TEST` only. It records the confirmation decision only and is not `GUEST_CONTEXT_APPLIED`; activation may subsequently roll back without making that truthful audit invalid.
 
 Needed Platform cockpit reporting:
 
@@ -128,7 +130,7 @@ Safety rules:
 
 - Platform permissions, dangerous actions and audit expectations are canonical in `docs/SECURITY_RBAC_MATRIX.md`.
 - Do not expose secrets, raw Telegram payloads, provider raw payloads, `.env`, initData, callback payloads or unrelated PII in Platform dashboards, audit payloads or support cards.
-- Platform Owner Telegram menu parity and guest-QR test escape remain partial/needs verification unless a later smoke proves them.
+- Platform Owner Telegram menu parity remains partial. The bounded Guest QR escape is locally validated only: exact actor/chat opaque TTL pending, single-transaction activation with final token/venue/subscription/table revalidation, server-owned Mini App re-entry guard, availability-independent exit and ordinary Guest `mode=guest`; staging smoke is still required.
 - Prefer safe aggregate metrics and opaque ids unless an operator needs a specific entity id for support.
 - Client events are lower-trust UX diagnostics and must not drive money, access, billing, order state or venue lifecycle.
 
@@ -154,6 +156,15 @@ Use this as the Platform-specific part of release smoke:
 16. Platform Owner replies/closes support tickets where implemented.
 17. Staff does not see Platform Mode or Platform Support Center.
 18. Audit payloads contain safe ids/status/scope/reason fields and no secrets/raw provider or Telegram payloads.
+19. Platform Owner `/start` without token shows Platform menu only when no active confirmed Guest context exists. With active context it keeps Guest routing and shows the Guest table menu or safe `Завершить визит` instruction.
+20. Valid public table QR shows safe venue/table labels and exact confirm/cancel; prompt does not mutate Guest context/session, exit state, persisted dialog, booking draft, cart/draft or success audit.
+21. Confirm/cancel and double-confirm conditionally consume one pending reference so exactly one action wins. Cancel produces no audit/activation; winning confirm produces one confirmation audit and one activation attempt.
+22. Confirm writes truthful `PLATFORM_GUEST_QR_TEST_CONFIRMED`, then atomically re-resolves and validates token/venue/table/availability/subscription, resolves or touches the session, clears exit/dialog and saves exact context. Injected late failures roll back every authoritative Guest-state change; the audit denotes confirmation, not `GUEST_CONTEXT_APPLIED`.
+23. Rotated/disabled token, unavailable table/venue/subscription, audit failure and wrong/expired/canceled/replayed/direct non-Platform callbacks fail closed without raw token/internal-id disclosure. Phase 1 assumes single-instance long-polling; a missing pending record on another instance also fails closed.
+24. Exact Platform Owner Mini App create/touch requires the matching active Telegram chat context and no exit marker. Mismatched token/table/venue and old token/session/button after exit create no session or personal tab, touch nothing and do not clear exit.
+25. Exact Platform order/bill, staff-call, tab, shift-extension and table-bound support create/read-receipt/reply/status mutations take the same context lock as exit and perform final authorization plus write in one transaction. Support with `tableToken` but no client session derives the live session only from confirmed context; missing/mismatched/exited context has one private side-effect-free denial.
+26. `Завершить визит` uses stored context only as teardown identity and clears context/dialog/draft/pending plus preserves exit semantics even after token rotation/revoke, table disable/delete, venue pause/unpublish or subscription block; Platform menu returns.
+27. A new QR plus confirmation can enter Guest mode again, and ordinary Guest create/resolve/exit behavior remains unchanged.
 
 ## Open Platform Gaps
 

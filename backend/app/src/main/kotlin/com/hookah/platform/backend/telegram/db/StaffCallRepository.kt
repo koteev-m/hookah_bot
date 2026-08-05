@@ -194,95 +194,83 @@ class StaffCallRepository(private val dataSource: DataSource?) {
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    val isH2 = connection.metaData.databaseProductName.contains("H2", ignoreCase = true)
-                    if (createdByUserId != null) {
-                        ensureUserExists(connection, createdByUserId, isH2)
-                    }
-                    if (isH2) {
-                        val sql =
-                            """
-                            INSERT INTO staff_calls (
-                                venue_id, table_id, table_session_id, created_by_user_id, reason, comment, status,
-                                order_id
-                            )
-                            VALUES (?, ?, ?, ?, ?, ?, 'NEW', ?)
-                            """.trimIndent()
-                        connection.prepareStatement(sql, java.sql.Statement.RETURN_GENERATED_KEYS).use { statement ->
-                            statement.setLong(1, venueId)
-                            statement.setLong(2, tableId)
-                            statement.setLong(3, tableSessionId)
-                            if (createdByUserId != null) {
-                                statement.setLong(4, createdByUserId)
-                            } else {
-                                statement.setNull(4, java.sql.Types.BIGINT)
-                            }
-                            statement.setString(5, reason.name)
-                            statement.setString(6, comment)
-                            if (orderId != null) {
-                                statement.setLong(7, orderId)
-                            } else {
-                                statement.setNull(7, java.sql.Types.BIGINT)
-                            }
-                            statement.executeUpdate()
-                            statement.generatedKeys.use { keys ->
-                                if (keys.next()) {
-                                    val id = keys.getLong(1)
-                                    val createdAt =
-                                        connection.prepareStatement(
-                                            "SELECT created_at FROM staff_calls WHERE id = ?",
-                                        ).use { select ->
-                                            select.setLong(1, id)
-                                            select.executeQuery().use { rs ->
-                                                if (rs.next()) {
-                                                    rs.getTimestamp("created_at")?.toInstant() ?: Instant.now()
-                                                } else {
-                                                    Instant.now()
-                                                }
-                                            }
-                                        }
-                                    return@withContext CreatedStaffCall(id = id, createdAt = createdAt)
-                                }
-                            }
-                        }
-                        throw DatabaseUnavailableException()
-                    }
-
-                    val sql =
-                        """
-                        INSERT INTO staff_calls (
-                            venue_id, table_id, table_session_id, created_by_user_id, reason, comment, status,
-                            order_id
-                        )
-                        VALUES (?, ?, ?, ?, ?, ?, 'NEW', ?)
-                        RETURNING id, created_at
-                        """.trimIndent()
-                    connection.prepareStatement(sql).use { statement ->
-                        statement.setLong(1, venueId)
-                        statement.setLong(2, tableId)
-                        statement.setLong(3, tableSessionId)
-                        if (createdByUserId != null) {
-                            statement.setLong(4, createdByUserId)
-                        } else {
-                            statement.setNull(4, java.sql.Types.BIGINT)
-                        }
-                        statement.setString(5, reason.name)
-                        statement.setString(6, comment)
-                        if (orderId != null) {
-                            statement.setLong(7, orderId)
-                        } else {
-                            statement.setNull(7, java.sql.Types.BIGINT)
-                        }
-                        statement.executeQuery().use { rs ->
-                            if (rs.next()) {
-                                val createdAt = rs.getTimestamp("created_at").toInstant()
-                                return@withContext CreatedStaffCall(id = rs.getLong("id"), createdAt = createdAt)
-                            }
-                        }
-                    }
+                    createGuestStaffCall(
+                        connection = connection,
+                        venueId = venueId,
+                        tableId = tableId,
+                        tableSessionId = tableSessionId,
+                        createdByUserId = createdByUserId,
+                        reason = reason,
+                        comment = comment,
+                        orderId = orderId,
+                    )
                 }
-                throw DatabaseUnavailableException()
             } catch (e: SQLException) {
                 throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    fun createGuestStaffCall(
+        connection: java.sql.Connection,
+        venueId: Long,
+        tableId: Long,
+        tableSessionId: Long,
+        createdByUserId: Long?,
+        reason: StaffCallReason,
+        comment: String?,
+        orderId: Long? = null,
+    ): CreatedStaffCall {
+        val isH2 = connection.metaData.databaseProductName.contains("H2", ignoreCase = true)
+        if (createdByUserId != null) {
+            ensureUserExists(connection, createdByUserId, isH2)
+        }
+        val returningClause = if (isH2) "" else " RETURNING id, created_at"
+        val sql =
+            """
+            INSERT INTO staff_calls (
+                venue_id, table_id, table_session_id, created_by_user_id, reason, comment, status, order_id
+            )
+            VALUES (?, ?, ?, ?, ?, ?, 'NEW', ?)$returningClause
+            """.trimIndent()
+        val statement =
+            if (isH2) {
+                connection.prepareStatement(sql, java.sql.Statement.RETURN_GENERATED_KEYS)
+            } else {
+                connection.prepareStatement(sql)
+            }
+        return statement.use {
+            it.setLong(1, venueId)
+            it.setLong(2, tableId)
+            it.setLong(3, tableSessionId)
+            if (createdByUserId != null) {
+                it.setLong(4, createdByUserId)
+            } else {
+                it.setNull(4, java.sql.Types.BIGINT)
+            }
+            it.setString(5, reason.name)
+            it.setString(6, comment)
+            if (orderId != null) {
+                it.setLong(7, orderId)
+            } else {
+                it.setNull(7, java.sql.Types.BIGINT)
+            }
+            if (isH2) {
+                it.executeUpdate()
+                it.generatedKeys.use { keys ->
+                    if (!keys.next()) {
+                        throw DatabaseUnavailableException()
+                    }
+                    val id = keys.getLong(1)
+                    CreatedStaffCall(id = id, createdAt = loadStaffCallCreatedAt(connection, id))
+                }
+            } else {
+                it.executeQuery().use { rs ->
+                    if (!rs.next()) {
+                        throw DatabaseUnavailableException()
+                    }
+                    CreatedStaffCall(id = rs.getLong("id"), createdAt = rs.getTimestamp("created_at").toInstant())
+                }
             }
         }
     }
@@ -599,93 +587,19 @@ class StaffCallRepository(private val dataSource: DataSource?) {
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    val isH2 = connection.metaData.databaseProductName.contains("H2", ignoreCase = true)
                     try {
                         connection.autoCommit = false
-                        ensureUserExists(connection, createdByUserId, isH2)
-                        connection.prepareStatement(
-                            """
-                            SELECT id
-                            FROM table_sessions
-                            WHERE id = ?
-                              AND venue_id = ?
-                              AND table_id = ?
-                            FOR UPDATE
-                            """.trimIndent(),
-                        ).use { statement ->
-                            statement.setLong(1, tableSessionId)
-                            statement.setLong(2, venueId)
-                            statement.setLong(3, tableId)
-                            statement.executeQuery().use { rs ->
-                                if (!rs.next()) {
-                                    connection.rollback()
-                                    throw DatabaseUnavailableException()
-                                }
-                            }
-                        }
-                        val existing =
-                            connection.prepareStatement(
-                                """
-                                SELECT id, created_at, status, payment_method
-                                FROM staff_calls
-                                WHERE venue_id = ?
-                                  AND table_session_id = ?
-                                  AND tab_id = ?
-                                  AND reason = 'BILL'
-                                  AND status IN ('NEW', 'ACK')
-                                ORDER BY created_at DESC, id DESC
-                                LIMIT 1
-                                """.trimIndent(),
-                            ).use { statement ->
-                                statement.setLong(1, venueId)
-                                statement.setLong(2, tableSessionId)
-                                statement.setLong(3, tabId)
-                                statement.executeQuery().use { rs ->
-                                    if (rs.next()) {
-                                        CreatedGuestBillRequest(
-                                            id = rs.getLong("id"),
-                                            createdAt = rs.getTimestamp("created_at").toInstant(),
-                                            status =
-                                                StaffCallStatus.fromDb(rs.getString("status"))
-                                                    ?: StaffCallStatus.NEW,
-                                            paymentMethod =
-                                                rs.getString("payment_method")?.toBillPaymentMethod()
-                                                    ?: paymentMethod,
-                                            alreadyActive = true,
-                                        )
-                                    } else {
-                                        null
-                                    }
-                                }
-                            }
-                        if (existing != null) {
-                            connection.commit()
-                            return@withContext existing
-                        }
                         val created =
-                            if (isH2) {
-                                insertGuestBillRequestH2(
-                                    connection = connection,
-                                    venueId = venueId,
-                                    tableId = tableId,
-                                    tableSessionId = tableSessionId,
-                                    tabId = tabId,
-                                    orderId = orderId,
-                                    createdByUserId = createdByUserId,
-                                    paymentMethod = paymentMethod,
-                                )
-                            } else {
-                                insertGuestBillRequestPostgres(
-                                    connection = connection,
-                                    venueId = venueId,
-                                    tableId = tableId,
-                                    tableSessionId = tableSessionId,
-                                    tabId = tabId,
-                                    orderId = orderId,
-                                    createdByUserId = createdByUserId,
-                                    paymentMethod = paymentMethod,
-                                )
-                            }
+                            createGuestBillRequest(
+                                connection = connection,
+                                venueId = venueId,
+                                tableId = tableId,
+                                tableSessionId = tableSessionId,
+                                tabId = tabId,
+                                orderId = orderId,
+                                createdByUserId = createdByUserId,
+                                paymentMethod = paymentMethod,
+                            )
                         connection.commit()
                         created
                     } catch (e: SQLException) {
@@ -703,6 +617,111 @@ class StaffCallRepository(private val dataSource: DataSource?) {
             }
         }
     }
+
+    fun createGuestBillRequest(
+        connection: java.sql.Connection,
+        venueId: Long,
+        tableId: Long,
+        tableSessionId: Long,
+        tabId: Long,
+        orderId: Long,
+        createdByUserId: Long,
+        paymentMethod: BillPaymentMethod,
+    ): CreatedGuestBillRequest {
+        val isH2 = connection.metaData.databaseProductName.contains("H2", ignoreCase = true)
+        ensureUserExists(connection, createdByUserId, isH2)
+        connection.prepareStatement(
+            """
+            SELECT id
+            FROM table_sessions
+            WHERE id = ?
+              AND venue_id = ?
+              AND table_id = ?
+            FOR UPDATE
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, tableSessionId)
+            statement.setLong(2, venueId)
+            statement.setLong(3, tableId)
+            statement.executeQuery().use { rs ->
+                if (!rs.next()) {
+                    throw DatabaseUnavailableException()
+                }
+            }
+        }
+        val existing =
+            connection.prepareStatement(
+                """
+                SELECT id, created_at, status, payment_method
+                FROM staff_calls
+                WHERE venue_id = ?
+                  AND table_session_id = ?
+                  AND tab_id = ?
+                  AND reason = 'BILL'
+                  AND status IN ('NEW', 'ACK')
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.setLong(2, tableSessionId)
+                statement.setLong(3, tabId)
+                statement.executeQuery().use { rs ->
+                    if (rs.next()) {
+                        CreatedGuestBillRequest(
+                            id = rs.getLong("id"),
+                            createdAt = rs.getTimestamp("created_at").toInstant(),
+                            status = StaffCallStatus.fromDb(rs.getString("status")) ?: StaffCallStatus.NEW,
+                            paymentMethod = rs.getString("payment_method")?.toBillPaymentMethod() ?: paymentMethod,
+                            alreadyActive = true,
+                        )
+                    } else {
+                        null
+                    }
+                }
+            }
+        if (existing != null) {
+            return existing
+        }
+        return if (isH2) {
+            insertGuestBillRequestH2(
+                connection = connection,
+                venueId = venueId,
+                tableId = tableId,
+                tableSessionId = tableSessionId,
+                tabId = tabId,
+                orderId = orderId,
+                createdByUserId = createdByUserId,
+                paymentMethod = paymentMethod,
+            )
+        } else {
+            insertGuestBillRequestPostgres(
+                connection = connection,
+                venueId = venueId,
+                tableId = tableId,
+                tableSessionId = tableSessionId,
+                tabId = tabId,
+                orderId = orderId,
+                createdByUserId = createdByUserId,
+                paymentMethod = paymentMethod,
+            )
+        }
+    }
+
+    private fun loadStaffCallCreatedAt(
+        connection: java.sql.Connection,
+        staffCallId: Long,
+    ): Instant =
+        connection.prepareStatement("SELECT created_at FROM staff_calls WHERE id = ?").use { select ->
+            select.setLong(1, staffCallId)
+            select.executeQuery().use { rs ->
+                if (rs.next()) {
+                    rs.getTimestamp("created_at")?.toInstant() ?: Instant.now()
+                } else {
+                    Instant.now()
+                }
+            }
+        }
 
     private fun insertGuestBillRequestPostgres(
         connection: java.sql.Connection,

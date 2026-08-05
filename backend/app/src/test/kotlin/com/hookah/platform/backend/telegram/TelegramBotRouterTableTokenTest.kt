@@ -7,12 +7,13 @@ import com.hookah.platform.backend.ai.AiDraftTextType
 import com.hookah.platform.backend.ai.AiVenueSummaryCommand
 import com.hookah.platform.backend.ai.AiVenueSummaryType
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.miniapp.guest.db.BookingRecord
 import com.hookah.platform.backend.miniapp.guest.db.BookingReminderScheduleResult
 import com.hookah.platform.backend.miniapp.guest.db.BookingStatus
+import com.hookah.platform.backend.miniapp.guest.db.ConfirmedPlatformGuestMutationContext
 import com.hookah.platform.backend.miniapp.guest.db.CreateInviteResult
-import com.hookah.platform.backend.miniapp.guest.db.EndUserTableSessionResult
 import com.hookah.platform.backend.miniapp.guest.db.FavoriteMenuItem
 import com.hookah.platform.backend.miniapp.guest.db.FavoriteVenue
 import com.hookah.platform.backend.miniapp.guest.db.GuestAttendanceConfirmationResult
@@ -21,6 +22,10 @@ import com.hookah.platform.backend.miniapp.guest.db.GuestBookingRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestFavoritesRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestMenuRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestTabModel
+import com.hookah.platform.backend.miniapp.guest.db.GuestTableActivationResult
+import com.hookah.platform.backend.miniapp.guest.db.GuestTableContextIdentity
+import com.hookah.platform.backend.miniapp.guest.db.GuestTableContextLifecycleRepository
+import com.hookah.platform.backend.miniapp.guest.db.GuestTableTeardownResult
 import com.hookah.platform.backend.miniapp.guest.db.GuestTabsRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestVisitDetail
 import com.hookah.platform.backend.miniapp.guest.db.GuestVisitHistoryItem
@@ -30,6 +35,8 @@ import com.hookah.platform.backend.miniapp.guest.db.GuestVisitPromotionDiscount
 import com.hookah.platform.backend.miniapp.guest.db.MenuCategoryModel
 import com.hookah.platform.backend.miniapp.guest.db.MenuItemModel
 import com.hookah.platform.backend.miniapp.guest.db.MenuModel
+import com.hookah.platform.backend.miniapp.guest.db.PlatformGuestContextValidationResult
+import com.hookah.platform.backend.miniapp.guest.db.PlatformGuestTableMutationResult
 import com.hookah.platform.backend.miniapp.guest.db.RestorableTableContext
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionEndBlockedReason
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRecord
@@ -213,8 +220,10 @@ import io.mockk.coVerifyOrder
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonPrimitive
@@ -257,6 +266,7 @@ class TelegramBotRouterTableTokenTest {
     private val guestMenuRepository: GuestMenuRepository = mockk()
     private val tableSessionRepository: TableSessionRepository = mockk()
     private val guestTabsRepository: GuestTabsRepository = mockk()
+    private val guestTableContextLifecycleRepository: GuestTableContextLifecycleRepository = mockk()
     private val platformVenueRepository: PlatformVenueRepository = mockk(relaxed = true)
     private val platformSubscriptionSettingsRepository: PlatformSubscriptionSettingsRepository = mockk(relaxed = true)
     private val venueOwnerAccountRepository: VenueOwnerAccountRepository = mockk(relaxed = true)
@@ -283,11 +293,18 @@ class TelegramBotRouterTableTokenTest {
     private val botGiftCallbackTagSequence = AtomicLong()
     private val firstBotGiftCallbackTag = "gift00000001"
     private val secondBotGiftCallbackTag = "gift00000002"
+    private val platformGuestQrCallbackTagSequence = AtomicLong()
+    private var platformGuestQrNow = Instant.parse("2026-08-04T10:00:00Z")
     private val router = routerWithWebAppPublicUrl(null)
 
     private fun routerWithWebAppPublicUrl(
         webAppPublicUrl: String?,
         botUsername: String? = null,
+        platformGuestQrPendingTtl: Duration = Duration.ofMinutes(5),
+        platformGuestQrNowProvider: () -> Instant = { platformGuestQrNow },
+        platformGuestQrCallbackTagFactory: () -> String = {
+            "pgqr${platformGuestQrCallbackTagSequence.incrementAndGet().toString().padStart(8, '0')}"
+        },
     ): TelegramBotRouter =
         TelegramBotRouter(
             config =
@@ -358,6 +375,10 @@ class TelegramBotRouterTableTokenTest {
             botGiftCallbackTagFactory = {
                 "gift${botGiftCallbackTagSequence.incrementAndGet().toString().padStart(8, '0')}"
             },
+            platformGuestQrPendingTtl = platformGuestQrPendingTtl,
+            platformGuestQrNowProvider = platformGuestQrNowProvider,
+            platformGuestQrCallbackTagFactory = platformGuestQrCallbackTagFactory,
+            guestTableContextLifecycleRepository = guestTableContextLifecycleRepository,
         )
 
     @BeforeEach
@@ -425,7 +446,15 @@ class TelegramBotRouterTableTokenTest {
             )
         }
         coEvery {
-            supportThreadRepository.addMessage(any(), any(), any(), any(), any(), any(), any())
+            supportThreadRepository.addMessage(
+                threadId = any(),
+                authorUserId = any(),
+                authorRole = any(),
+                source = any(),
+                text = any(),
+                telegramMessageId = any(),
+                statusAfterInsert = any(),
+            )
         } answers {
             SupportMessageRecord(
                 id = 9001L,
@@ -711,6 +740,60 @@ class TelegramBotRouterTableTokenTest {
                 endedAt = null,
                 status = TableSessionStatus.ACTIVE,
             )
+        coEvery {
+            guestTableContextLifecycleRepository.activate(
+                actorUserId = any(),
+                chatId = any(),
+                tableToken = any(),
+                expectedVenueId = any(),
+                expectedTableId = any(),
+                ttl = any(),
+                now = any(),
+            )
+        } answers {
+            val token = invocation.args[2] as String
+            val venueId = invocation.args[3] as Long
+            val tableId = invocation.args[4] as Long
+            val context =
+                platformGuestQrContext(
+                    token = token,
+                    venueId = venueId,
+                    tableId = tableId,
+                    tableNumber = if (tableId == 11L) 5 else 6,
+                )
+            GuestTableActivationResult.Applied(
+                context = context,
+                tableSession = platformGuestTableSession(context),
+            )
+        }
+        coEvery {
+            guestTableContextLifecycleRepository.validatePlatformBotContext(any(), any(), any())
+        } returns PlatformGuestContextValidationResult.Inactive
+        coEvery {
+            guestTableContextLifecycleRepository.withConfirmedPlatformGuestMutation<Any?>(
+                actorUserId = any(),
+                platformOwnerUserId = any(),
+                chatId = any(),
+                tableToken = any(),
+                expectedVenueId = any(),
+                expectedTableId = any(),
+                expectedSessionId = any(),
+                ttl = any(),
+                now = any(),
+                mutation = any(),
+            )
+        } returns PlatformGuestTableMutationResult.Denied
+        coEvery {
+            guestTableContextLifecycleRepository.teardownByChat(any(), any(), any())
+        } answers {
+            val actorUserId = invocation.args[0] as Long
+            val chatId = invocation.args[1] as Long
+            GuestTableTeardownResult.Cleared(
+                identity = platformGuestIdentity(actorUserId = actorUserId, chatId = chatId),
+                tableSessionId = 55L,
+                exitRecorded = true,
+            )
+        }
         coEvery {
             tableSessionRepository.touchActiveSession(
                 tableSessionId = any(),
@@ -1602,6 +1685,96 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
+    fun `platform old web app data without confirmed context cannot reactivate guest mode`() =
+        runBlocking {
+            stubPlatformGuestQrAccess()
+            coEvery { chatContextRepository.get(100L) } returns null
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 9_2,
+                    message =
+                        Message(
+                            messageId = 19_2,
+                            chat = Chat(id = 100L, type = "private"),
+                            fromUser = User(id = 999L),
+                            webAppData = WebAppData("""{"cmd":"start_quick_order","table_token":"TOKEN"}"""),
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) {
+                tableSessionRepository.resolveActiveSession(any(), any(), any(), any())
+            }
+            coVerify(exactly = 0) { tableSessionRepository.clearUserExit(any(), any()) }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+            coVerify(exactly = 0) { dialogStateRepository.set(100L, any()) }
+            coVerify(exactly = 1) {
+                guestTableContextLifecycleRepository.validatePlatformBotContext(999L, 100L, any())
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    "Откройте QR-код ещё раз и подтвердите вход в Telegram.",
+                    null,
+                )
+            }
+        }
+
+    @Test
+    fun `platform stale telegram callback cannot create a new guest session or shared tab`() =
+        runBlocking {
+            val context = platformGuestQrContext()
+            stubPlatformGuestQrAccess(context)
+            coEvery { chatContextRepository.get(100L) } returns
+                StoredChatContext(userId = 999L, tableToken = context.tableToken)
+            coEvery {
+                guestTableContextLifecycleRepository.validatePlatformBotContext(999L, 100L, any())
+            } returns PlatformGuestContextValidationResult.Inactive
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 9_3,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "platform-stale-create-shared",
+                            from = User(id = 999L),
+                            message = Message(messageId = 19_3, chat = Chat(id = 100L, type = "private")),
+                            data = "bot_tabs_create_shared",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 1) {
+                guestTableContextLifecycleRepository.withConfirmedPlatformGuestMutation<Any?>(
+                    actorUserId = 999L,
+                    platformOwnerUserId = 999L,
+                    chatId = 100L,
+                    tableToken = context.tableToken,
+                    expectedVenueId = context.venueId,
+                    expectedTableId = context.tableId,
+                    expectedSessionId = null,
+                    ttl = any(),
+                    now = any(),
+                    mutation = any(),
+                )
+            }
+            coVerify(exactly = 0) {
+                guestTableContextLifecycleRepository.validatePlatformBotContext(999L, 100L, any())
+            }
+            coVerify(exactly = 0) { tableSessionRepository.resolveActiveSession(any(), any(), any(), any()) }
+            coVerify(exactly = 0) { guestTabsRepository.createSharedTab(any(), any(), any()) }
+            coVerify(exactly = 0) { staffCallRepository.createStaffCall(any(), any(), any(), any(), any(), any()) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    "Откройте QR-код ещё раз и подтвердите вход в Telegram.",
+                    null,
+                )
+            }
+        }
+
+    @Test
     fun `start with disabled table token shows unavailable message without table context`() =
         runBlocking {
             val context =
@@ -2460,6 +2633,2104 @@ class TelegramBotRouterTableTokenTest {
                             it.keyboard.flatten().any { button -> button.text == "📨 Заявки на подключение" } &&
                             it.keyboard.flatten().any { button -> button.text == "📣 Продвижение" }
                     },
+                )
+            }
+            coVerify(exactly = 0) { tableTokenRepository.resolve(any()) }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(
+                    any(),
+                    match { it.contains("Проверка гостевого QR") },
+                    any(),
+                )
+            }
+        }
+
+    @Test
+    fun `tokenless platform start keeps active confirmed guest context visible`() =
+        runBlocking {
+            val context = platformGuestQrContext()
+            stubPlatformGuestQrAccess(context)
+            coEvery { chatContextRepository.get(100L) } returns
+                StoredChatContext(userId = 999L, tableToken = context.tableToken)
+            coEvery {
+                guestTableContextLifecycleRepository.validatePlatformBotContext(999L, 100L, any())
+            } returns platformGuestContextActive(context)
+
+            processTableStart(
+                updateId = 10_000_01,
+                actorUserId = 999L,
+                token = null,
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    "Сейчас включён гостевой режим проверки. " +
+                        "Используйте «Завершить визит», чтобы вернуться в кабинет платформы.",
+                    match { it == TelegramKeyboards.tableContextBotFlow(context) },
+                )
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    "Панель владельца платформы. Выберите раздел.",
+                    any(),
+                )
+            }
+        }
+
+    @Test
+    fun `platform owner valid table token shows safe confirmation without guest mutation`() =
+        runBlocking {
+            val context = platformGuestQrContext()
+            stubPlatformGuestQrAccess(context)
+
+            processTableStart(updateId = 10_001, actorUserId = 999L)
+
+            coVerify(exactly = 1) {
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    "Проверка гостевого QR\n\n" +
+                        "Заведение: Mix Public\n" +
+                        "Стол: №5\n\n" +
+                        "Вы перейдёте в обычный гостевой режим для проверки этого стола.",
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.map { it.text } ==
+                            listOf("Продолжить как гость", "Остаться в режиме платформы") &&
+                            buttons.map { it.callbackData } ==
+                            listOf(platformGuestQrConfirmCallback(), platformGuestQrCancelCallback()) &&
+                            buttons.all { button ->
+                                val callbackData = button.callbackData.orEmpty()
+                                callbackData.length <= 64 &&
+                                    !callbackData.contains("TOKEN") &&
+                                    !callbackData.contains("10") &&
+                                    !callbackData.contains("11")
+                            }
+                    },
+                )
+            }
+            coVerify(exactly = 1) { tableTokenRepository.resolve("TOKEN") }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+            coVerify(exactly = 0) {
+                tableSessionRepository.resolveActiveSession(any(), any(), any(), any())
+            }
+            coVerify(exactly = 0) { tableSessionRepository.clearUserExit(any(), any()) }
+            coVerify(exactly = 0) { auditLogRepository.appendJson(any(), any(), any(), any(), any()) }
+        }
+
+    @Test
+    fun `platform QR prompt preserves active guest dialog context and draft cart before confirmation`() =
+        runBlocking {
+            val activeContext = platformGuestQrContext(token = "ACTIVE_TOKEN")
+            val promptedContext = platformGuestQrContext(token = "NEW_TOKEN", tableId = 12L, tableNumber = 6)
+            coEvery { chatContextRepository.get(100L) } returns
+                StoredChatContext(userId = 999L, tableToken = activeContext.tableToken)
+            coEvery { tableTokenRepository.resolve(activeContext.tableToken) } returns activeContext
+            coEvery { tableTokenRepository.resolve(promptedContext.tableToken) } returns promptedContext
+            coEvery { platformVenueRepository.getVenueDetail(10L) } returns platformGuestQrVenue()
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery {
+                guestTableContextLifecycleRepository.validatePlatformBotContext(999L, 100L, any())
+            } returns platformGuestContextActive(activeContext)
+            stubConfirmedPlatformGuestMutation(activeContext)
+            coEvery { dialogStateRepository.get(100L) } returns
+                DialogState(DialogStateType.STAFF_CALL_WAIT_COMMENT)
+            coEvery { ordersRepository.findActiveOrderSummary(activeContext.tableId) } returns null
+            coEvery { guestMenuRepository.getMenu(10L) } returns
+                MenuModel(
+                    venueId = 10L,
+                    categories =
+                        listOf(
+                            MenuCategoryModel(
+                                id = 500L,
+                                name = "Основное меню",
+                                sortOrder = 0,
+                                items =
+                                    listOf(
+                                        MenuItemModel(
+                                            id = 1000L,
+                                            name = "Кальян классический",
+                                            priceMinor = 25_000L,
+                                            currency = "RUB",
+                                            isAvailable = true,
+                                            sortOrder = 0,
+                                        ),
+                                    ),
+                            ),
+                        ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "platform-guest-cart-before-prompt",
+                            from = User(id = 999L),
+                            message = Message(messageId = 210_002, chat = Chat(id = 100L, type = "private")),
+                            data = "bot_menu_item:500:1000",
+                        ),
+                ),
+            )
+            processTableStart(
+                updateId = 10_003,
+                actorUserId = 999L,
+                token = promptedContext.tableToken,
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "platform-guest-cart-after-prompt",
+                            from = User(id = 999L),
+                            message = Message(messageId = 210_004, chat = Chat(id = 100L, type = "private")),
+                            data = "bot_menu_item_cart",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { dialogStateRepository.clear(100L) }
+            coVerify(exactly = 0) { chatContextRepository.clear(100L) }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    "Кальян классический\nКоличество: 1\nСумма: 250.00 ₽",
+                    match { it is InlineKeyboardMarkup },
+                )
+            }
+        }
+
+    @Test
+    fun `platform QR prompt preserves booking draft before confirmation`() =
+        runBlocking {
+            val bookingDate = LocalDate.now(ZoneId.of("Europe/Moscow")).plusDays(1)
+            val venueZone = ZoneId.of("Europe/Moscow")
+            val scheduledAt = LocalDateTime.of(bookingDate, LocalTime.of(20, 0)).atZone(venueZone).toInstant()
+            stubPlatformGuestQrAccess()
+            coEvery { venueSettingsRepository.resolveZoneId(10L, any()) } returns venueZone
+            coEvery { venueRepository.findCatalogVenueByIdForGuest(10L) } returns
+                CatalogVenueShort(
+                    id = 10L,
+                    name = "Mix Public",
+                    city = "Москва",
+                    address = "Тверская, 1",
+                )
+            coEvery { venueBookingHoursRepository.findByVenueAndDate(10L, bookingDate) } returns
+                VenueBookingHours(
+                    venueId = 10L,
+                    weekday = bookingDate.dayOfWeek.value,
+                    opensAt = LocalTime.of(14, 0),
+                    closesAt = LocalTime.of(23, 0),
+                )
+            coEvery {
+                guestBookingRepository.create(
+                    venueId = 10L,
+                    userId = 999L,
+                    scheduledAt = scheduledAt,
+                    partySize = 2,
+                    comment = null,
+                    venueZoneId = venueZone,
+                    serviceDate = bookingDate,
+                )
+            } returns
+                BookingRecord(
+                    id = 79L,
+                    venueId = 10L,
+                    userId = 999L,
+                    scheduledAt = scheduledAt,
+                    partySize = 2,
+                    comment = null,
+                    status = BookingStatus.PENDING,
+                    displayNumber = 3,
+                    displayDate = bookingDate,
+                    arrivalDeadlineAt = scheduledAt.plus(Duration.ofMinutes(30)),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_005,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "platform-guest-booking-draft",
+                            from = User(id = 999L),
+                            message = Message(messageId = 210_005, chat = Chat(id = 100L, type = "private")),
+                            data = "bot_catalog_venue_book_comment_skip:10:$bookingDate:20_00:2",
+                        ),
+                ),
+            )
+            processTableStart(updateId = 10_006, actorUserId = 999L)
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_007,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "platform-guest-booking-confirm-after-prompt",
+                            from = User(id = 999L),
+                            message = Message(messageId = 210_007, chat = Chat(id = 100L, type = "private")),
+                            data = "bot_catalog_venue_book_confirm",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 1) {
+                guestBookingRepository.create(
+                    venueId = 10L,
+                    userId = 999L,
+                    scheduledAt = scheduledAt,
+                    partySize = 2,
+                    comment = null,
+                    venueZoneId = venueZone,
+                    serviceDate = bookingDate,
+                )
+            }
+        }
+
+    @Test
+    fun `platform owner cancel keeps platform mode and consumes confirmation`() =
+        runBlocking {
+            stubPlatformGuestQrAccess()
+            processTableStart(updateId = 10_010, actorUserId = 999L)
+
+            processPlatformGuestQrCallback(
+                updateId = 10_011,
+                callbackId = "platform-guest-cancel",
+                data = platformGuestQrCancelCallback(),
+            )
+            processPlatformGuestQrCallback(
+                updateId = 10_012,
+                callbackId = "platform-guest-confirm-after-cancel",
+                data = platformGuestQrConfirmCallback(),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    100L,
+                    "platform-guest-cancel",
+                    "Режим платформы сохранён.",
+                    false,
+                )
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    "Панель владельца платформы. Выберите раздел.",
+                    match { it is ReplyKeyboardMarkup },
+                )
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    100L,
+                    "platform-guest-confirm-after-cancel",
+                    "Действие недоступно. Откройте QR ещё раз.",
+                    false,
+                )
+            }
+            coVerify(exactly = 1) { tableTokenRepository.resolve("TOKEN") }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+            coVerify(exactly = 0) {
+                tableSessionRepository.resolveActiveSession(any(), any(), any(), any())
+            }
+            coVerify(exactly = 0) {
+                guestTableContextLifecycleRepository.activate(any(), any(), any(), any(), any(), any(), any())
+            }
+            coVerify(exactly = 0) { auditLogRepository.appendJson(any(), any(), any(), any(), any()) }
+        }
+
+    @Test
+    fun `concurrent platform cancel winner prevents audit and activation`() =
+        runBlocking {
+            val start = CompletableDeferred<Unit>()
+            val cancelConsumed = CompletableDeferred<Unit>()
+            stubPlatformGuestQrAccess()
+            coEvery { idempotencyRepository.tryAcquire(10_015L, 100L, null) } coAnswers {
+                cancelConsumed.await()
+                true
+            }
+            coEvery {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    100L,
+                    "platform-guest-concurrent-cancel-winner",
+                    "Режим платформы сохранён.",
+                    false,
+                )
+            } coAnswers {
+                cancelConsumed.complete(Unit)
+                Unit
+            }
+            processTableStart(updateId = 10_014, actorUserId = 999L)
+
+            val confirm =
+                async(Dispatchers.Default) {
+                    start.await()
+                    processPlatformGuestQrCallback(
+                        updateId = 10_015,
+                        callbackId = "platform-guest-concurrent-confirm-loser",
+                        data = platformGuestQrConfirmCallback(),
+                    )
+                }
+            val cancel =
+                async(Dispatchers.Default) {
+                    start.await()
+                    processPlatformGuestQrCallback(
+                        updateId = 10_016,
+                        callbackId = "platform-guest-concurrent-cancel-winner",
+                        data = platformGuestQrCancelCallback(),
+                    )
+                }
+            start.complete(Unit)
+            cancel.await()
+            confirm.await()
+
+            coVerify(exactly = 0) { auditLogRepository.appendJson(any(), any(), any(), any(), any()) }
+            coVerify(exactly = 0) {
+                guestTableContextLifecycleRepository.activate(any(), any(), any(), any(), any(), any(), any())
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    100L,
+                    "platform-guest-concurrent-confirm-loser",
+                    "Действие недоступно. Откройте QR ещё раз.",
+                    false,
+                )
+            }
+        }
+
+    @Test
+    fun `concurrent platform confirm winner audits and activates once while cancel fails closed`() =
+        runBlocking {
+            val start = CompletableDeferred<Unit>()
+            val auditEntered = CompletableDeferred<Unit>()
+            val releaseAudit = CompletableDeferred<Unit>()
+            val context = platformGuestQrContext()
+            stubPlatformGuestQrAccess(context)
+            coEvery { idempotencyRepository.tryAcquire(10_019L, 100L, null) } coAnswers {
+                auditEntered.await()
+                true
+            }
+            coEvery {
+                auditLogRepository.appendJson(
+                    actorUserId = 999L,
+                    action = "PLATFORM_GUEST_QR_TEST_CONFIRMED",
+                    entityType = "venue",
+                    entityId = 10L,
+                    payload = any(),
+                )
+            } coAnswers {
+                auditEntered.complete(Unit)
+                releaseAudit.await()
+            }
+            processTableStart(updateId = 10_017, actorUserId = 999L)
+
+            val confirm =
+                async(Dispatchers.Default) {
+                    start.await()
+                    processPlatformGuestQrCallback(
+                        updateId = 10_018,
+                        callbackId = "platform-guest-concurrent-confirm-winner",
+                        data = platformGuestQrConfirmCallback(),
+                    )
+                }
+            val cancel =
+                async(Dispatchers.Default) {
+                    start.await()
+                    processPlatformGuestQrCallback(
+                        updateId = 10_019,
+                        callbackId = "platform-guest-concurrent-cancel-loser",
+                        data = platformGuestQrCancelCallback(),
+                    )
+                }
+            start.complete(Unit)
+            cancel.await()
+            releaseAudit.complete(Unit)
+            confirm.await()
+
+            coVerify(exactly = 1) {
+                auditLogRepository.appendJson(
+                    999L,
+                    "PLATFORM_GUEST_QR_TEST_CONFIRMED",
+                    "venue",
+                    10L,
+                    any(),
+                )
+            }
+            coVerify(exactly = 1) {
+                guestTableContextLifecycleRepository.activate(
+                    actorUserId = 999L,
+                    chatId = 100L,
+                    tableToken = "TOKEN",
+                    expectedVenueId = 10L,
+                    expectedTableId = 11L,
+                    ttl = Duration.ofHours(2),
+                    now = any(),
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    100L,
+                    "platform-guest-concurrent-cancel-loser",
+                    "Действие недоступно. Откройте QR ещё раз.",
+                    false,
+                )
+            }
+        }
+
+    @Test
+    fun `platform owner confirm audits safe payload before applying ordinary guest context`() =
+        runBlocking {
+            val context = platformGuestQrContext()
+            stubPlatformGuestQrAccess(context)
+            processTableStart(updateId = 10_020, actorUserId = 999L)
+
+            processPlatformGuestQrCallback(
+                updateId = 10_021,
+                callbackId = "platform-guest-confirm",
+                data = platformGuestQrConfirmCallback(),
+            )
+
+            coVerifyOrder {
+                auditLogRepository.appendJson(
+                    actorUserId = 999L,
+                    action = "PLATFORM_GUEST_QR_TEST_CONFIRMED",
+                    entityType = "venue",
+                    entityId = 10L,
+                    payload =
+                        match { payload ->
+                            payload.keys == setOf("venueId", "tableId", "source") &&
+                                payload["venueId"]?.jsonPrimitive?.content == "10" &&
+                                payload["tableId"]?.jsonPrimitive?.content == "11" &&
+                                payload["source"]?.jsonPrimitive?.content == "TELEGRAM_QR_TEST" &&
+                                !payload.toString().contains("TOKEN") &&
+                                !payload.toString().contains(platformGuestQrConfirmCallback()) &&
+                                !payload.toString().contains("initData", ignoreCase = true) &&
+                                !payload.toString().contains("username", ignoreCase = true)
+                        },
+                )
+                guestTableContextLifecycleRepository.activate(
+                    actorUserId = 999L,
+                    chatId = 100L,
+                    tableToken = "TOKEN",
+                    expectedVenueId = 10L,
+                    expectedTableId = 11L,
+                    ttl = Duration.ofHours(2),
+                    now = any(),
+                )
+            }
+            coVerify(exactly = 2) { tableTokenRepository.resolve("TOKEN") }
+            coVerify(exactly = 0) {
+                tableSessionRepository.resolveActiveSession(any(), any(), any(), any())
+            }
+            coVerify(exactly = 0) { tableSessionRepository.clearUserExit(any(), any()) }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    "Гостевой режим проверки включён.\n" +
+                        "Используйте «Завершить визит», чтобы вернуться в кабинет платформы.",
+                    match { it == TelegramKeyboards.tableContextBotFlow(context) },
+                )
+            }
+        }
+
+    @Test
+    fun `platform owner confirm fails closed when token rotates after prompt`() =
+        runBlocking {
+            val context = platformGuestQrContext()
+            val resolveCalls = AtomicLong()
+            coEvery { tableTokenRepository.resolve("TOKEN") } answers {
+                if (resolveCalls.incrementAndGet() == 1L) context else null
+            }
+            coEvery { platformVenueRepository.getVenueDetail(10L) } returns platformGuestQrVenue()
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            processTableStart(updateId = 10_030, actorUserId = 999L)
+
+            processPlatformGuestQrCallback(
+                updateId = 10_031,
+                callbackId = "platform-guest-rotated",
+                data = platformGuestQrConfirmCallback(),
+            )
+
+            coVerify(exactly = 2) { tableTokenRepository.resolve("TOKEN") }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+            coVerify(exactly = 0) {
+                tableSessionRepository.resolveActiveSession(any(), any(), any(), any())
+            }
+            coVerify(exactly = 0) { auditLogRepository.appendJson(any(), any(), any(), any(), any()) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    "QR больше не действует. Откройте QR ещё раз.",
+                    match { it is ReplyKeyboardMarkup },
+                )
+            }
+        }
+
+    @Test
+    fun `platform owner confirm fails closed when table is disabled after prompt`() =
+        runBlocking {
+            val context = platformGuestQrContext()
+            val resolveCalls = AtomicLong()
+            coEvery { tableTokenRepository.resolve("TOKEN") } answers {
+                if (resolveCalls.incrementAndGet() == 1L) context else null
+            }
+            coEvery { tableTokenRepository.resolveInactiveTable("TOKEN") } returns context
+            coEvery { platformVenueRepository.getVenueDetail(10L) } returns platformGuestQrVenue()
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            processTableStart(updateId = 10_040, actorUserId = 999L)
+
+            processPlatformGuestQrCallback(
+                updateId = 10_041,
+                callbackId = "platform-guest-disabled",
+                data = platformGuestQrConfirmCallback(),
+            )
+
+            coVerify(exactly = 2) { tableTokenRepository.resolve("TOKEN") }
+            coVerify(exactly = 1) { tableTokenRepository.resolveInactiveTable("TOKEN") }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+            coVerify(exactly = 0) {
+                tableSessionRepository.resolveActiveSession(any(), any(), any(), any())
+            }
+            coVerify(exactly = 0) { auditLogRepository.appendJson(any(), any(), any(), any(), any()) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    "Этот стол больше не доступен. Откройте QR ещё раз.",
+                    match { it is ReplyKeyboardMarkup },
+                )
+            }
+        }
+
+    @Test
+    fun `platform owner confirm fails closed when venue becomes unavailable after prompt`() =
+        runBlocking {
+            val context = platformGuestQrContext()
+            val venueReads = AtomicLong()
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns context
+            coEvery { platformVenueRepository.getVenueDetail(10L) } answers {
+                if (venueReads.incrementAndGet() == 1L) {
+                    platformGuestQrVenue(status = VenueStatus.PUBLISHED)
+                } else {
+                    platformGuestQrVenue(status = VenueStatus.HIDDEN)
+                }
+            }
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            processTableStart(updateId = 10_050, actorUserId = 999L)
+
+            processPlatformGuestQrCallback(
+                updateId = 10_051,
+                callbackId = "platform-guest-hidden-venue",
+                data = platformGuestQrConfirmCallback(),
+            )
+
+            coVerify(exactly = 2) { tableTokenRepository.resolve("TOKEN") }
+            coVerify(exactly = 2) { platformVenueRepository.getVenueDetail(10L) }
+            coVerify(exactly = 1) { subscriptionRepository.getSubscriptionStatus(10L) }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+            coVerify(exactly = 0) { auditLogRepository.appendJson(any(), any(), any(), any(), any()) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    "Заведение пока не доступно для гостей. Откройте QR ещё раз.",
+                    match { it is ReplyKeyboardMarkup },
+                )
+            }
+        }
+
+    @Test
+    fun `platform owner confirm fails closed when subscription becomes blocked after prompt`() =
+        runBlocking {
+            val context = platformGuestQrContext()
+            val subscriptionReads = AtomicLong()
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns context
+            coEvery { platformVenueRepository.getVenueDetail(10L) } returns platformGuestQrVenue()
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } answers {
+                if (subscriptionReads.incrementAndGet() == 1L) {
+                    SubscriptionStatus.ACTIVE
+                } else {
+                    SubscriptionStatus.SUSPENDED_BY_PLATFORM
+                }
+            }
+            processTableStart(updateId = 10_060, actorUserId = 999L)
+
+            processPlatformGuestQrCallback(
+                updateId = 10_061,
+                callbackId = "platform-guest-blocked-subscription",
+                data = platformGuestQrConfirmCallback(),
+            )
+
+            coVerify(exactly = 2) { tableTokenRepository.resolve("TOKEN") }
+            coVerify(exactly = 2) { subscriptionRepository.getSubscriptionStatus(10L) }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+            coVerify(exactly = 0) {
+                tableSessionRepository.resolveActiveSession(any(), any(), any(), any())
+            }
+            coVerify(exactly = 0) { auditLogRepository.appendJson(any(), any(), any(), any(), any()) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    "Подписка заведения заблокирована. Заказы недоступны.",
+                    match { it is ReplyKeyboardMarkup },
+                )
+            }
+        }
+
+    @Test
+    fun `platform owner audit failure creates no guest context and consumes pending confirmation`() =
+        runBlocking {
+            stubPlatformGuestQrAccess()
+            coEvery {
+                auditLogRepository.appendJson(
+                    actorUserId = 999L,
+                    action = "PLATFORM_GUEST_QR_TEST_CONFIRMED",
+                    entityType = "venue",
+                    entityId = 10L,
+                    payload = any(),
+                )
+            } throws DatabaseUnavailableException()
+            processTableStart(updateId = 10_070, actorUserId = 999L)
+
+            processPlatformGuestQrCallback(
+                updateId = 10_071,
+                callbackId = "platform-guest-audit-failed",
+                data = platformGuestQrConfirmCallback(),
+            )
+            processPlatformGuestQrCallback(
+                updateId = 10_072,
+                callbackId = "platform-guest-audit-retry",
+                data = platformGuestQrConfirmCallback(),
+            )
+
+            coVerify(exactly = 1) {
+                auditLogRepository.appendJson(
+                    actorUserId = 999L,
+                    action = "PLATFORM_GUEST_QR_TEST_CONFIRMED",
+                    entityType = "venue",
+                    entityId = 10L,
+                    payload = any(),
+                )
+            }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+            coVerify(exactly = 0) {
+                tableSessionRepository.resolveActiveSession(any(), any(), any(), any())
+            }
+            coVerify(exactly = 0) { tableSessionRepository.clearUserExit(any(), any()) }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    100L,
+                    "platform-guest-audit-failed",
+                    "Не удалось продолжить. Откройте QR ещё раз.",
+                    false,
+                )
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    100L,
+                    "platform-guest-audit-retry",
+                    "Действие недоступно. Откройте QR ещё раз.",
+                    false,
+                )
+            }
+        }
+
+    @Test
+    fun `platform guest confirmation direct callback is denied for every non platform role`() =
+        runBlocking {
+            val context = platformGuestQrContext()
+            stubPlatformGuestQrAccess(context)
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns null
+            coEvery { venueAccessRepository.findVenueMembership(201L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venueAccessRepository.findVenueMembership(202L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery { venueAccessRepository.findVenueMembership(203L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+            coEvery { venueAccessRepository.findVenueMembership(998L, 10L) } returns null
+            processTableStart(updateId = 10_080, actorUserId = 999L)
+
+            val deniedActors =
+                listOf(
+                    200L to "guest",
+                    201L to "venue-owner",
+                    202L to "manager",
+                    203L to "staff",
+                    998L to "former-platform-owner",
+                )
+            deniedActors.forEachIndexed { index, (actorUserId, roleLabel) ->
+                processPlatformGuestQrCallback(
+                    updateId = 10_081L + index,
+                    callbackId = "platform-guest-denied-$roleLabel",
+                    actorUserId = actorUserId,
+                    data = platformGuestQrConfirmCallback(),
+                )
+            }
+            processPlatformGuestQrCallback(
+                updateId = 10_090,
+                callbackId = "platform-guest-owner-after-denials",
+                data = platformGuestQrConfirmCallback(),
+            )
+
+            deniedActors.forEach { (_, roleLabel) ->
+                coVerify {
+                    outboxEnqueuer.enqueueAnswerCallbackQuery(
+                        100L,
+                        "platform-guest-denied-$roleLabel",
+                        "Действие недоступно. Откройте QR ещё раз.",
+                        false,
+                    )
+                }
+            }
+            coVerify(exactly = 1) {
+                auditLogRepository.appendJson(
+                    999L,
+                    "PLATFORM_GUEST_QR_TEST_CONFIRMED",
+                    "venue",
+                    10L,
+                    any(),
+                )
+            }
+            coVerify(exactly = 1) {
+                guestTableContextLifecycleRepository.activate(
+                    actorUserId = 999L,
+                    chatId = 100L,
+                    tableToken = "TOKEN",
+                    expectedVenueId = 10L,
+                    expectedTableId = 11L,
+                    ttl = Duration.ofHours(2),
+                    now = any(),
+                )
+            }
+        }
+
+    @Test
+    fun `wrong chat and wrong pending reference are denied without consuming owner confirmation`() =
+        runBlocking {
+            val context = platformGuestQrContext()
+            stubPlatformGuestQrAccess(context)
+            processTableStart(updateId = 10_100, actorUserId = 999L)
+
+            processPlatformGuestQrCallback(
+                updateId = 10_101,
+                callbackId = "platform-guest-wrong-chat",
+                chatId = 101L,
+                data = platformGuestQrConfirmCallback(),
+            )
+            processPlatformGuestQrCallback(
+                updateId = 10_102,
+                callbackId = "platform-guest-wrong-ref",
+                data = "pgqr_c:wrongref0001",
+            )
+            processPlatformGuestQrCallback(
+                updateId = 10_103,
+                callbackId = "platform-guest-correct-after-wrong",
+                data = platformGuestQrConfirmCallback(),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    101L,
+                    "platform-guest-wrong-chat",
+                    "Действие недоступно. Откройте QR ещё раз.",
+                    false,
+                )
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    100L,
+                    "platform-guest-wrong-ref",
+                    "Действие недоступно. Откройте QR ещё раз.",
+                    false,
+                )
+            }
+            coVerify(exactly = 1) {
+                auditLogRepository.appendJson(
+                    999L,
+                    "PLATFORM_GUEST_QR_TEST_CONFIRMED",
+                    "venue",
+                    10L,
+                    any(),
+                )
+            }
+            coVerify(exactly = 1) {
+                guestTableContextLifecycleRepository.activate(
+                    actorUserId = 999L,
+                    chatId = 100L,
+                    tableToken = "TOKEN",
+                    expectedVenueId = 10L,
+                    expectedTableId = 11L,
+                    ttl = Duration.ofHours(2),
+                    now = any(),
+                )
+            }
+        }
+
+    @Test
+    fun `expired platform guest confirmation is removed and fails closed`() =
+        runBlocking {
+            stubPlatformGuestQrAccess()
+            processTableStart(updateId = 10_110, actorUserId = 999L)
+            platformGuestQrNow = platformGuestQrNow.plus(Duration.ofMinutes(5)).plusSeconds(1)
+
+            processPlatformGuestQrCallback(
+                updateId = 10_111,
+                callbackId = "platform-guest-expired",
+                data = platformGuestQrConfirmCallback(),
+            )
+            processPlatformGuestQrCallback(
+                updateId = 10_112,
+                callbackId = "platform-guest-expired-cancel",
+                data = platformGuestQrCancelCallback(),
+            )
+
+            coVerify(exactly = 1) { tableTokenRepository.resolve("TOKEN") }
+            coVerify(exactly = 0) { auditLogRepository.appendJson(any(), any(), any(), any(), any()) }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    100L,
+                    "platform-guest-expired",
+                    "Действие недоступно. Откройте QR ещё раз.",
+                    false,
+                )
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    100L,
+                    "platform-guest-expired-cancel",
+                    "Действие недоступно. Откройте QR ещё раз.",
+                    false,
+                )
+            }
+        }
+
+    @Test
+    fun `missing and process restart platform guest confirmations fail closed`() =
+        runBlocking {
+            processPlatformGuestQrCallback(
+                updateId = 10_120,
+                callbackId = "platform-guest-missing",
+                data = platformGuestQrConfirmCallback(),
+            )
+
+            stubPlatformGuestQrAccess()
+            processTableStart(updateId = 10_121, actorUserId = 999L)
+            val restartedRouter = routerWithWebAppPublicUrl(null)
+            processPlatformGuestQrCallback(
+                targetRouter = restartedRouter,
+                updateId = 10_122,
+                callbackId = "platform-guest-after-restart",
+                data = platformGuestQrConfirmCallback(),
+            )
+
+            coVerify(exactly = 0) { auditLogRepository.appendJson(any(), any(), any(), any(), any()) }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    100L,
+                    "platform-guest-missing",
+                    "Действие недоступно. Откройте QR ещё раз.",
+                    false,
+                )
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    100L,
+                    "platform-guest-after-restart",
+                    "Действие недоступно. Откройте QR ещё раз.",
+                    false,
+                )
+            }
+        }
+
+    @Test
+    fun `concurrent double platform guest confirm applies and audits only once`() =
+        runBlocking {
+            val start = CompletableDeferred<Unit>()
+            val auditEntered = CompletableDeferred<Unit>()
+            val releaseAudit = CompletableDeferred<Unit>()
+            val context = platformGuestQrContext()
+            stubPlatformGuestQrAccess(context)
+            coEvery { idempotencyRepository.tryAcquire(10_132L, 100L, null) } coAnswers {
+                auditEntered.await()
+                true
+            }
+            coEvery {
+                auditLogRepository.appendJson(
+                    actorUserId = 999L,
+                    action = "PLATFORM_GUEST_QR_TEST_CONFIRMED",
+                    entityType = "venue",
+                    entityId = 10L,
+                    payload = any(),
+                )
+            } coAnswers {
+                auditEntered.complete(Unit)
+                releaseAudit.await()
+            }
+            processTableStart(updateId = 10_130, actorUserId = 999L)
+
+            val firstConfirm =
+                async(Dispatchers.Default) {
+                    start.await()
+                    processPlatformGuestQrCallback(
+                        updateId = 10_131,
+                        callbackId = "platform-guest-first-confirm",
+                        data = platformGuestQrConfirmCallback(),
+                    )
+                }
+            val secondConfirm =
+                async(Dispatchers.Default) {
+                    start.await()
+                    processPlatformGuestQrCallback(
+                        updateId = 10_132,
+                        callbackId = "platform-guest-double-confirm",
+                        data = platformGuestQrConfirmCallback(),
+                    )
+                }
+            start.complete(Unit)
+            secondConfirm.await()
+            releaseAudit.complete(Unit)
+            firstConfirm.await()
+
+            coVerify(exactly = 1) {
+                auditLogRepository.appendJson(
+                    999L,
+                    "PLATFORM_GUEST_QR_TEST_CONFIRMED",
+                    "venue",
+                    10L,
+                    any(),
+                )
+            }
+            coVerify(exactly = 1) {
+                guestTableContextLifecycleRepository.activate(
+                    actorUserId = 999L,
+                    chatId = 100L,
+                    tableToken = "TOKEN",
+                    expectedVenueId = 10L,
+                    expectedTableId = 11L,
+                    ttl = Duration.ofHours(2),
+                    now = any(),
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    100L,
+                    "platform-guest-double-confirm",
+                    "Действие недоступно. Откройте QR ещё раз.",
+                    false,
+                )
+            }
+        }
+
+    @Test
+    fun `new platform guest prompt replaces previous pending confirmation`() =
+        runBlocking {
+            val firstContext = platformGuestQrContext(token = "TOKEN_A", tableId = 11L, tableNumber = 5)
+            val secondContext = platformGuestQrContext(token = "TOKEN_B", tableId = 12L, tableNumber = 6)
+            coEvery { tableTokenRepository.resolve("TOKEN_A") } returns firstContext
+            coEvery { tableTokenRepository.resolve("TOKEN_B") } returns secondContext
+            coEvery { platformVenueRepository.getVenueDetail(10L) } returns platformGuestQrVenue()
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            processTableStart(updateId = 10_140, actorUserId = 999L, token = "TOKEN_A")
+            processTableStart(updateId = 10_141, actorUserId = 999L, token = "TOKEN_B")
+
+            processPlatformGuestQrCallback(
+                updateId = 10_142,
+                callbackId = "platform-guest-replaced-old",
+                data = platformGuestQrConfirmCallback(sequence = 1L),
+            )
+            processPlatformGuestQrCallback(
+                updateId = 10_143,
+                callbackId = "platform-guest-replaced-current",
+                data = platformGuestQrConfirmCallback(sequence = 2L),
+            )
+
+            coVerify(exactly = 1) { tableTokenRepository.resolve("TOKEN_A") }
+            coVerify(exactly = 2) { tableTokenRepository.resolve("TOKEN_B") }
+            coVerify(exactly = 1) {
+                guestTableContextLifecycleRepository.activate(
+                    actorUserId = 999L,
+                    chatId = 100L,
+                    tableToken = "TOKEN_B",
+                    expectedVenueId = 10L,
+                    expectedTableId = 12L,
+                    ttl = Duration.ofHours(2),
+                    now = any(),
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    100L,
+                    "platform-guest-replaced-old",
+                    "Действие недоступно. Откройте QR ещё раз.",
+                    false,
+                )
+            }
+        }
+
+    @Test
+    fun `platform confirmed guest opens ordinary guest Mini App URL`() =
+        runBlocking {
+            val context = platformGuestQrContext()
+            val miniAppRouter = routerWithWebAppPublicUrl("https://mini.app/miniapp/")
+            stubPlatformGuestQrAccess(context)
+            coEvery { chatContextRepository.get(100L) } returns
+                StoredChatContext(userId = 999L, tableToken = "TOKEN")
+            coEvery {
+                guestTableContextLifecycleRepository.validatePlatformBotContext(999L, 100L, any())
+            } returns platformGuestContextActive(context)
+            processTableStart(
+                targetRouter = miniAppRouter,
+                updateId = 10_150,
+                actorUserId = 999L,
+            )
+            processPlatformGuestQrCallback(
+                targetRouter = miniAppRouter,
+                updateId = 10_151,
+                callbackId = "platform-guest-miniapp-confirm",
+                data = platformGuestQrConfirmCallback(),
+            )
+
+            miniAppRouter.process(
+                TelegramUpdate(
+                    updateId = 10_152,
+                    message =
+                        Message(
+                            messageId = 210_152,
+                            chat = Chat(id = 100L, type = "private"),
+                            fromUser = User(id = 999L),
+                            text = "📱 Заказывать в Mini App",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    match { it.contains("Откройте заказ по столу в Mini App") },
+                    match { markup ->
+                        val button =
+                            (markup as? InlineKeyboardMarkup)
+                                ?.inlineKeyboard
+                                ?.flatten()
+                                ?.singleOrNull()
+                        val url = button?.webApp?.url.orEmpty()
+                        button?.text == "📱 Заказывать в Mini App" &&
+                            url.contains("mode=guest") &&
+                            url.contains("tableToken=TOKEN") &&
+                            url.contains("tableSessionId=55") &&
+                            url.contains("screen=menu") &&
+                            !url.contains("mode=platform")
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `platform owner menu command keeps active confirmed guest table context`() =
+        runBlocking {
+            val context = platformGuestQrContext()
+            stubPlatformGuestQrAccess(context)
+            coEvery { chatContextRepository.get(100L) } returns
+                StoredChatContext(userId = 999L, tableToken = "TOKEN")
+            coEvery {
+                guestTableContextLifecycleRepository.validatePlatformBotContext(999L, 100L, any())
+            } returns platformGuestContextActive(context)
+            processTableStart(updateId = 10_160, actorUserId = 999L)
+            processPlatformGuestQrCallback(
+                updateId = 10_161,
+                callbackId = "platform-guest-menu-confirm",
+                data = platformGuestQrConfirmCallback(),
+            )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_162,
+                    message =
+                        Message(
+                            messageId = 210_162,
+                            chat = Chat(id = 100L, type = "private"),
+                            fromUser = User(id = 999L),
+                            text = "/menu",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    "Выберите действие гостевого режима.",
+                    match { it == TelegramKeyboards.tableContextBotFlow(context) },
+                )
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    "Панель владельца платформы. Выберите раздел.",
+                    any(),
+                )
+            }
+        }
+
+    @Test
+    fun `existing guest exit clears platform test context and restores platform menu`() =
+        runBlocking {
+            val context = platformGuestQrContext()
+            val stored = StoredChatContext(userId = 999L, tableToken = "TOKEN")
+            stubPlatformGuestQrAccess(context)
+            coEvery { chatContextRepository.get(100L) } returns stored
+            coEvery {
+                guestTabsRepository.findLatestRestorableTableContext(
+                    userId = 999L,
+                    tableToken = "TOKEN",
+                )
+            } returns null
+            processTableStart(updateId = 10_170, actorUserId = 999L)
+            processPlatformGuestQrCallback(
+                updateId = 10_171,
+                callbackId = "platform-guest-exit-confirm",
+                data = platformGuestQrConfirmCallback(),
+            )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_172,
+                    message =
+                        Message(
+                            messageId = 210_172,
+                            chat = Chat(id = 100L, type = "private"),
+                            fromUser = User(id = 999L),
+                            text = "🚪 Завершить визит",
+                        ),
+                ),
+            )
+            coEvery { chatContextRepository.get(100L) } returns null
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_173,
+                    message =
+                        Message(
+                            messageId = 210_173,
+                            chat = Chat(id = 100L, type = "private"),
+                            fromUser = User(id = 999L),
+                            text = "/menu",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 1) {
+                guestTableContextLifecycleRepository.teardownByChat(999L, 100L, any())
+            }
+            coVerify(exactly = 0) { chatContextRepository.clear(100L) }
+            coVerify(exactly = 0) {
+                guestTabsRepository.findLatestRestorableTableContext(
+                    userId = 999L,
+                    tableToken = "TOKEN",
+                )
+            }
+            coVerify(exactly = 1) {
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    "Панель владельца платформы. Выберите раздел.",
+                    match { it is ReplyKeyboardMarkup },
+                )
+            }
+            coVerify(exactly = 1) {
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    "Визит завершён. Чтобы снова заказать за столом, отсканируйте QR.",
+                    match { it is ReplyKeyboardMarkup },
+                )
+            }
+        }
+
+    @Test
+    fun `platform exit clears pending confirmation cart and booking drafts`() =
+        runBlocking {
+            val activeContext = platformGuestQrContext(token = "ACTIVE_TOKEN")
+            val promptedContext = platformGuestQrContext(token = "NEW_TOKEN", tableId = 12L, tableNumber = 6)
+            val bookingDate = LocalDate.now(ZoneId.of("Europe/Moscow")).plusDays(1)
+            val venueZone = ZoneId.of("Europe/Moscow")
+            coEvery { chatContextRepository.get(100L) } returns
+                StoredChatContext(userId = 999L, tableToken = activeContext.tableToken)
+            coEvery { tableTokenRepository.resolve(activeContext.tableToken) } returns activeContext
+            coEvery { tableTokenRepository.resolve(promptedContext.tableToken) } returns promptedContext
+            coEvery { platformVenueRepository.getVenueDetail(10L) } returns platformGuestQrVenue()
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery {
+                guestTableContextLifecycleRepository.validatePlatformBotContext(999L, 100L, any())
+            } returns platformGuestContextActive(activeContext)
+            stubConfirmedPlatformGuestMutation(activeContext)
+            coEvery { ordersRepository.findActiveOrderSummary(activeContext.tableId) } returns null
+            coEvery { venueSettingsRepository.resolveZoneId(10L, any()) } returns venueZone
+            coEvery { venueRepository.findCatalogVenueByIdForGuest(10L) } returns
+                CatalogVenueShort(
+                    id = 10L,
+                    name = "Mix Public",
+                    city = "Москва",
+                    address = "Тверская, 1",
+                )
+            coEvery { venueBookingHoursRepository.findByVenueAndDate(10L, bookingDate) } returns
+                VenueBookingHours(
+                    venueId = 10L,
+                    weekday = bookingDate.dayOfWeek.value,
+                    opensAt = LocalTime.of(14, 0),
+                    closesAt = LocalTime.of(23, 0),
+                )
+            coEvery { guestMenuRepository.getMenu(10L) } returns
+                MenuModel(
+                    venueId = 10L,
+                    categories =
+                        listOf(
+                            MenuCategoryModel(
+                                id = 500L,
+                                name = "Основное меню",
+                                sortOrder = 0,
+                                items =
+                                    listOf(
+                                        MenuItemModel(
+                                            id = 1000L,
+                                            name = "Кальян классический",
+                                            priceMinor = 25_000L,
+                                            currency = "RUB",
+                                            isAvailable = true,
+                                            sortOrder = 0,
+                                        ),
+                                    ),
+                            ),
+                        ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_173_1,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "platform-exit-cart-draft",
+                            from = User(id = 999L),
+                            message = Message(messageId = 210_173_1, chat = Chat(id = 100L, type = "private")),
+                            data = "bot_menu_item:500:1000",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_173_2,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "platform-exit-booking-draft",
+                            from = User(id = 999L),
+                            message = Message(messageId = 210_173_2, chat = Chat(id = 100L, type = "private")),
+                            data = "bot_catalog_venue_book_comment_skip:10:$bookingDate:20_00:2",
+                        ),
+                ),
+            )
+            processTableStart(
+                updateId = 10_173_3,
+                actorUserId = 999L,
+                token = promptedContext.tableToken,
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_173_4,
+                    message =
+                        Message(
+                            messageId = 210_173_4,
+                            chat = Chat(id = 100L, type = "private"),
+                            fromUser = User(id = 999L),
+                            text = "🚪 Завершить визит",
+                        ),
+                ),
+            )
+            coEvery {
+                guestTableContextLifecycleRepository.validatePlatformBotContext(999L, 100L, any())
+            } returns PlatformGuestContextValidationResult.Inactive
+            processPlatformGuestQrCallback(
+                updateId = 10_173_5,
+                callbackId = "platform-exit-stale-pending-confirm",
+                data = platformGuestQrConfirmCallback(),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_173_55,
+                    message =
+                        Message(
+                            messageId = 210_173_55,
+                            chat = Chat(id = 100L, type = "private"),
+                            fromUser = User(id = 999L),
+                            webAppData =
+                                WebAppData(
+                                    """{"cmd":"start_quick_order","table_token":"ACTIVE_TOKEN"}""",
+                                ),
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_173_6,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "platform-exit-open-cleared-cart",
+                            from = User(id = 999L),
+                            message = Message(messageId = 210_173_6, chat = Chat(id = 100L, type = "private")),
+                            data = "bot_menu_item_cart",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_173_7,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "platform-exit-confirm-cleared-booking",
+                            from = User(id = 999L),
+                            message = Message(messageId = 210_173_7, chat = Chat(id = 100L, type = "private")),
+                            data = "bot_catalog_venue_book_confirm",
+                        ),
+                ),
+            )
+            processTableStart(
+                updateId = 10_173_8,
+                actorUserId = 999L,
+                token = activeContext.tableToken,
+            )
+            processPlatformGuestQrCallback(
+                updateId = 10_173_9,
+                callbackId = "platform-exit-fresh-confirm",
+                data = platformGuestQrConfirmCallback(sequence = 2L),
+            )
+            coEvery {
+                guestTableContextLifecycleRepository.validatePlatformBotContext(999L, 100L, any())
+            } returns platformGuestContextActive(activeContext)
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_173_10,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "platform-exit-open-cart-after-fresh-confirm",
+                            from = User(id = 999L),
+                            message = Message(messageId = 210_173_10, chat = Chat(id = 100L, type = "private")),
+                            data = "bot_menu_item_cart",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 1) {
+                guestTableContextLifecycleRepository.teardownByChat(999L, 100L, any())
+            }
+            coVerify(exactly = 1) {
+                auditLogRepository.appendJson(
+                    999L,
+                    "PLATFORM_GUEST_QR_TEST_CONFIRMED",
+                    "venue",
+                    activeContext.venueId,
+                    any(),
+                )
+            }
+            coVerify(exactly = 1) {
+                guestTableContextLifecycleRepository.activate(
+                    actorUserId = 999L,
+                    chatId = 100L,
+                    tableToken = activeContext.tableToken,
+                    expectedVenueId = activeContext.venueId,
+                    expectedTableId = activeContext.tableId,
+                    ttl = any(),
+                    now = any(),
+                )
+            }
+            coVerify(exactly = 0) { guestBookingRepository.create(any(), any(), any(), any(), any(), any(), any()) }
+            coVerify(exactly = 0) {
+                dialogStateRepository.set(100L, DialogState(DialogStateType.QUICK_ORDER_WAIT_TEXT))
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    100L,
+                    "platform-exit-stale-pending-confirm",
+                    "Действие недоступно. Откройте QR ещё раз.",
+                    false,
+                )
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    "Корзина пуста.",
+                    match { it is InlineKeyboardMarkup },
+                )
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    match { it.contains("QR") && it.contains("подтверд", ignoreCase = true) },
+                    any(),
+                )
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    "Срок подтверждения истёк. Выберите дату и время заново.",
+                    any(),
+                )
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    "Визит завершён. Чтобы снова заказать за столом, отсканируйте QR.",
+                    match { it is ReplyKeyboardMarkup },
+                )
+            }
+        }
+
+    @Test
+    fun `platform Mini App teardown completion restores platform menu and clears pending prompt`() =
+        runBlocking {
+            stubPlatformGuestQrAccess()
+            processTableStart(updateId = 10_173_01, actorUserId = 999L)
+
+            router.completePlatformGuestTeardownFromMiniApp(chatId = 100L, actorUserId = 999L)
+            processPlatformGuestQrCallback(
+                updateId = 10_173_02,
+                callbackId = "platform-miniapp-exit-stale-confirm",
+                data = platformGuestQrConfirmCallback(),
+            )
+
+            coVerify(exactly = 0) { auditLogRepository.appendJson(any(), any(), any(), any(), any()) }
+            coVerify(exactly = 0) {
+                guestTableContextLifecycleRepository.activate(any(), any(), any(), any(), any(), any(), any())
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    "Визит завершён. Чтобы снова заказать за столом, отсканируйте QR.",
+                    match {
+                        it is ReplyKeyboardMarkup &&
+                            it.keyboard.flatten().any { button -> button.text == "📨 Заявки на подключение" }
+                    },
+                )
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    100L,
+                    "platform-miniapp-exit-stale-confirm",
+                    "Действие недоступно. Откройте QR ещё раз.",
+                    false,
+                )
+            }
+        }
+
+    @Test
+    fun `platform stale availability teardown consumes pending confirmation`() =
+        runBlocking {
+            val context = platformGuestQrContext()
+            val targetRouter = routerWithWebAppPublicUrl("https://mini.app/miniapp/")
+            stubPlatformGuestQrAccess(context)
+            coEvery { chatContextRepository.get(100L) } returns
+                StoredChatContext(userId = 999L, tableToken = context.tableToken)
+
+            processTableStart(
+                targetRouter = targetRouter,
+                updateId = 10_173_8,
+                actorUserId = 999L,
+            )
+            coEvery { platformVenueRepository.getVenueDetail(context.venueId) } returns
+                platformGuestQrVenue(status = VenueStatus.PAUSED)
+            targetRouter.process(
+                TelegramUpdate(
+                    updateId = 10_173_9,
+                    message =
+                        Message(
+                            messageId = 210_173_9,
+                            chat = Chat(id = 100L, type = "private"),
+                            fromUser = User(id = 999L),
+                            text = "📱 Заказывать в Mini App",
+                        ),
+                ),
+            )
+            coEvery { platformVenueRepository.getVenueDetail(context.venueId) } returns platformGuestQrVenue()
+            processPlatformGuestQrCallback(
+                targetRouter = targetRouter,
+                updateId = 10_173_10,
+                callbackId = "platform-stale-availability-confirm",
+                data = platformGuestQrConfirmCallback(),
+            )
+
+            coVerify(exactly = 1) {
+                guestTableContextLifecycleRepository.teardownByChat(999L, 100L, any())
+            }
+            coVerify(exactly = 0) { auditLogRepository.appendJson(any(), any(), any(), any(), any()) }
+            coVerify(exactly = 0) {
+                guestTableContextLifecycleRepository.activate(any(), any(), any(), any(), any(), any(), any())
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    100L,
+                    "platform-stale-availability-confirm",
+                    "Действие недоступно. Откройте QR ещё раз.",
+                    false,
+                )
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    "Заведение пока не доступно для гостей. Гостевой режим завершён.",
+                    match { it is ReplyKeyboardMarkup },
+                )
+            }
+        }
+
+    @Test
+    fun `platform exit teardown does not depend on token table venue or subscription availability`() =
+        runBlocking {
+            val contexts =
+                listOf(
+                    platformGuestQrContext(token = "VALID", venueId = 20L, tableId = 21L),
+                    platformGuestQrContext(token = "ROTATED", venueId = 30L, tableId = 31L),
+                    platformGuestQrContext(token = "TOKEN_DISABLED", venueId = 40L, tableId = 41L),
+                    platformGuestQrContext(token = "TABLE_DELETED", venueId = 50L, tableId = 51L),
+                    platformGuestQrContext(token = "VENUE_UNPUBLISHED", venueId = 60L, tableId = 61L),
+                    platformGuestQrContext(token = "VENUE_PAUSED", venueId = 70L, tableId = 71L),
+                    platformGuestQrContext(token = "SUBSCRIPTION_BLOCKED", venueId = 80L, tableId = 81L),
+                )
+            contexts.forEachIndexed { index, context ->
+                val chatId = 300L + index
+                coEvery {
+                    guestTableContextLifecycleRepository.teardownByChat(999L, chatId, any())
+                } returns
+                    GuestTableTeardownResult.Cleared(
+                        identity = platformGuestIdentity(actorUserId = 999L, chatId = chatId, context = context),
+                        tableSessionId = 550L + index,
+                        exitRecorded = true,
+                    )
+                coEvery { chatContextRepository.get(chatId) } returns
+                    StoredChatContext(userId = 999L, tableToken = context.tableToken)
+            }
+            coEvery { tableTokenRepository.resolve("VALID") } returns contexts[0]
+            coEvery { tableTokenRepository.resolve("ROTATED") } returns null
+            coEvery { tableTokenRepository.resolve("TOKEN_DISABLED") } returns null
+            coEvery { tableTokenRepository.resolveInactiveTable("TOKEN_DISABLED") } returns contexts[2]
+            coEvery { tableTokenRepository.resolve("TABLE_DELETED") } returns null
+            coEvery { tableTokenRepository.resolveInactiveTable("TABLE_DELETED") } returns null
+            coEvery { tableTokenRepository.resolve("VENUE_UNPUBLISHED") } returns contexts[4]
+            coEvery { tableTokenRepository.resolve("VENUE_PAUSED") } returns contexts[5]
+            coEvery { tableTokenRepository.resolve("SUBSCRIPTION_BLOCKED") } returns contexts[6]
+            coEvery { platformVenueRepository.getVenueDetail(20L) } returns
+                platformGuestQrVenue(venueId = 20L)
+            coEvery { platformVenueRepository.getVenueDetail(60L) } returns
+                platformGuestQrVenue(venueId = 60L, status = VenueStatus.HIDDEN)
+            coEvery { platformVenueRepository.getVenueDetail(70L) } returns
+                platformGuestQrVenue(venueId = 70L, status = VenueStatus.PAUSED)
+            coEvery { platformVenueRepository.getVenueDetail(80L) } returns
+                platformGuestQrVenue(venueId = 80L)
+            coEvery { subscriptionRepository.getSubscriptionStatus(20L) } returns SubscriptionStatus.ACTIVE
+            coEvery { subscriptionRepository.getSubscriptionStatus(80L) } returns
+                SubscriptionStatus.SUSPENDED_BY_PLATFORM
+
+            contexts.indices.forEach { index ->
+                val chatId = 300L + index
+                router.process(
+                    TelegramUpdate(
+                        updateId = 10_174L + index,
+                        message =
+                            Message(
+                                messageId = 210_174L + index,
+                                chat = Chat(id = chatId, type = "private"),
+                                fromUser = User(id = 999L),
+                                text = "🚪 Завершить визит",
+                            ),
+                    ),
+                )
+            }
+
+            coVerify(exactly = contexts.size) {
+                guestTableContextLifecycleRepository.teardownByChat(999L, any(), any())
+            }
+            coVerify(exactly = 0) { tableTokenRepository.resolve(any()) }
+            coVerify(exactly = 0) { tableTokenRepository.resolveInactiveTable(any()) }
+            coVerify(exactly = 0) { platformVenueRepository.getVenueDetail(any()) }
+            coVerify(exactly = 0) { subscriptionRepository.getSubscriptionStatus(any()) }
+            coVerify(exactly = 0) { tableSessionRepository.endUserTableSession(any(), any(), any(), any(), any()) }
+            coVerify(exactly = contexts.size) {
+                outboxEnqueuer.enqueueSendMessage(
+                    any(),
+                    "Визит завершён. Чтобы снова заказать за столом, отсканируйте QR.",
+                    match { it is ReplyKeyboardMarkup },
+                )
+            }
+        }
+
+    @Test
+    fun `ordinary guest and venue roles keep immediate table token entry`() =
+        runBlocking {
+            val actors =
+                listOf(
+                    Triple(200L, "GUEST_TOKEN", "GUEST"),
+                    Triple(201L, "OWNER_TOKEN", "OWNER"),
+                    Triple(202L, "MANAGER_TOKEN", "MANAGER"),
+                    Triple(203L, "STAFF_TOKEN", "STAFF"),
+                )
+            actors.forEachIndexed { index, (actorUserId, token, role) ->
+                val context =
+                    platformGuestQrContext(
+                        token = token,
+                        tableId = 20L + index,
+                        tableNumber = 10 + index,
+                    )
+                coEvery { tableTokenRepository.resolve(token) } returns context
+                coEvery { platformVenueRepository.getVenueDetail(10L) } returns platformGuestQrVenue()
+                coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+                if (role == "GUEST") {
+                    coEvery { venueAccessRepository.findVenueMembership(actorUserId, 10L) } returns null
+                } else {
+                    coEvery { venueAccessRepository.findVenueMembership(actorUserId, 10L) } returns
+                        VenueAccessRepository.VenueMembership(venueId = 10L, role = role)
+                }
+
+                processTableStart(
+                    updateId = 10_180L + index,
+                    actorUserId = actorUserId,
+                    chatId = 200L + index,
+                    token = token,
+                )
+
+                coVerify(exactly = 1) {
+                    chatContextRepository.saveContext(200L + index, actorUserId, context)
+                }
+                coVerify {
+                    outboxEnqueuer.enqueueSendMessage(
+                        200L + index,
+                        "Вы за столом №${10 + index} в Mix Public. Выберите удобный способ заказа.",
+                        match { it == TelegramKeyboards.tableContextBotFlow(context) },
+                    )
+                }
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(
+                    any(),
+                    match { it.contains("Проверка гостевого QR") },
+                    any(),
+                )
+            }
+            coVerify(exactly = 0) { auditLogRepository.appendJson(any(), any(), any(), any(), any()) }
+        }
+
+    @Test
+    fun `ordinary guest invalid token regression remains fail closed`() =
+        runBlocking {
+            coEvery { tableTokenRepository.resolve("INVALID_TOKEN") } returns null
+            coEvery { tableTokenRepository.resolveInactiveTable("INVALID_TOKEN") } returns null
+
+            processTableStart(
+                updateId = 10_190,
+                actorUserId = 200L,
+                token = "INVALID_TOKEN",
+            )
+
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+            coVerify(exactly = 0) {
+                tableSessionRepository.resolveActiveSession(any(), any(), any(), any())
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    "QR недействителен или база недоступна. Используйте меню ниже.",
+                    any(),
+                )
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(
+                    any(),
+                    match { it.contains("Проверка гостевого QR") },
+                    any(),
+                )
+            }
+        }
+
+    @Test
+    fun `platform atomic activation failure returns safe copy without legacy partial calls`() =
+        runBlocking {
+            stubPlatformGuestQrAccess()
+            coEvery {
+                guestTableContextLifecycleRepository.activate(
+                    actorUserId = 999L,
+                    chatId = 100L,
+                    tableToken = "TOKEN",
+                    expectedVenueId = 10L,
+                    expectedTableId = 11L,
+                    ttl = Duration.ofHours(2),
+                    now = any(),
+                )
+            } returns GuestTableActivationResult.DatabaseUnavailable
+            processTableStart(updateId = 10_200, actorUserId = 999L)
+
+            processPlatformGuestQrCallback(
+                updateId = 10_201,
+                callbackId = "platform-guest-session-failed",
+                data = platformGuestQrConfirmCallback(),
+            )
+
+            coVerify(exactly = 1) {
+                auditLogRepository.appendJson(
+                    999L,
+                    "PLATFORM_GUEST_QR_TEST_CONFIRMED",
+                    "venue",
+                    10L,
+                    any(),
+                )
+            }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+            coVerify(exactly = 0) { tableSessionRepository.clearUserExit(any(), any()) }
+            coVerify(exactly = 0) {
+                tableSessionRepository.resolveActiveSession(any(), any(), any(), any())
+            }
+            coVerify(exactly = 0) { dialogStateRepository.clear(100L) }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    100L,
+                    "platform-guest-session-failed",
+                    "Не удалось продолжить. Откройте QR ещё раз.",
+                    false,
+                )
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    "Не удалось включить гостевой режим. Откройте QR-код ещё раз.",
+                    match { it is ReplyKeyboardMarkup },
+                )
+            }
+        }
+
+    @Test
+    fun `platform menu keeps stale confirmed guest context until explicit exit`() =
+        runBlocking {
+            val context = platformGuestQrContext()
+            val resolveCalls = AtomicLong()
+            coEvery { tableTokenRepository.resolve("TOKEN") } answers {
+                if (resolveCalls.incrementAndGet() <= 3L) context else null
+            }
+            coEvery { tableTokenRepository.resolveInactiveTable("TOKEN") } returns null
+            coEvery { platformVenueRepository.getVenueDetail(10L) } returns platformGuestQrVenue()
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery { chatContextRepository.get(100L) } returns
+                StoredChatContext(userId = 999L, tableToken = "TOKEN")
+            processTableStart(updateId = 10_210, actorUserId = 999L)
+            processPlatformGuestQrCallback(
+                updateId = 10_211,
+                callbackId = "platform-guest-stale-confirm",
+                data = platformGuestQrConfirmCallback(),
+            )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_212,
+                    message =
+                        Message(
+                            messageId = 210_212,
+                            chat = Chat(id = 100L, type = "private"),
+                            fromUser = User(id = 999L),
+                            text = "/menu",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 2) { tableTokenRepository.resolve("TOKEN") }
+            coVerify(exactly = 0) { chatContextRepository.clear(100L) }
+            coVerify(exactly = 1) {
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    "Гостевой контекст проверки больше недоступен. " +
+                        "Используйте «Завершить визит», чтобы вернуться в кабинет платформы.",
+                    match { it is ReplyKeyboardMarkup },
+                )
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    "Панель владельца платформы. Выберите раздел.",
+                    any(),
+                )
+            }
+        }
+
+    @Test
+    fun `platform confirmed actor uses ordinary guest menu action`() =
+        runBlocking {
+            val context = platformGuestQrContext()
+            stubPlatformGuestQrAccess(context)
+            coEvery { chatContextRepository.get(100L) } returns
+                StoredChatContext(userId = 999L, tableToken = "TOKEN")
+            coEvery { shiftExtensionRepository.getSettings(10L) } returns disabledShiftExtensionSettings()
+            coEvery { guestMenuRepository.getMenu(10L) } returns
+                MenuModel(
+                    venueId = 10L,
+                    categories =
+                        listOf(
+                            MenuCategoryModel(
+                                id = 500L,
+                                name = "Кальяны",
+                                sortOrder = 0,
+                                items =
+                                    listOf(
+                                        MenuItemModel(
+                                            id = 1000L,
+                                            name = "Кальян классический",
+                                            priceMinor = 25_000L,
+                                            currency = "RUB",
+                                            isAvailable = true,
+                                            sortOrder = 0,
+                                        ),
+                                    ),
+                            ),
+                        ),
+                )
+            processTableStart(updateId = 10_220, actorUserId = 999L)
+            processPlatformGuestQrCallback(
+                updateId = 10_221,
+                callbackId = "platform-guest-menu-action-confirm",
+                data = platformGuestQrConfirmCallback(),
+            )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_222,
+                    message =
+                        Message(
+                            messageId = 210_222,
+                            chat = Chat(id = 100L, type = "private"),
+                            fromUser = User(id = 999L),
+                            text = "🍽️ Меню",
+                        ),
+                ),
+            )
+
+            coVerify {
+                guestMenuRepository.getMenu(10L)
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    "Mix Public\nВыберите категорию.",
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.hasInlineButton("Кальяны", "bot_menu_category:500")
+                    },
+                )
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    "Панель владельца платформы. Выберите раздел.",
+                    any(),
+                )
+            }
+        }
+
+    @Test
+    fun `platform confirmed actor opens ordinary guest staff call entry`() =
+        runBlocking {
+            val context = platformGuestQrContext()
+            stubPlatformGuestQrAccess(context)
+            coEvery { chatContextRepository.get(100L) } returns
+                StoredChatContext(userId = 999L, tableToken = "TOKEN")
+            processTableStart(updateId = 10_230, actorUserId = 999L)
+            processPlatformGuestQrCallback(
+                updateId = 10_231,
+                callbackId = "platform-guest-staff-call-confirm",
+                data = platformGuestQrConfirmCallback(),
+            )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_232,
+                    message =
+                        Message(
+                            messageId = 210_232,
+                            chat = Chat(id = 100L, type = "private"),
+                            fromUser = User(id = 999L),
+                            text = "🛎 Вызвать персонал",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    "Чем помочь?",
+                    match { markup ->
+                        val callbacks =
+                            (markup as? InlineKeyboardMarkup)
+                                ?.inlineKeyboard
+                                ?.flatten()
+                                ?.mapNotNull { it.callbackData }
+                                .orEmpty()
+                        callbacks.any { it.startsWith("staff_call_reason:") }
+                    },
+                )
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    "Панель владельца платформы. Выберите раздел.",
+                    any(),
+                )
+            }
+        }
+
+    @Test
+    fun `platform missing and initially invalid tokens create no pending guest state`() =
+        runBlocking {
+            coEvery { tableTokenRepository.resolve("INVALID_PLATFORM_TOKEN") } returns null
+            coEvery { tableTokenRepository.resolveInactiveTable("INVALID_PLATFORM_TOKEN") } returns null
+            processTableStart(updateId = 10_240, actorUserId = 999L, token = null)
+            processPlatformGuestQrCallback(
+                updateId = 10_241,
+                callbackId = "platform-guest-missing-token-direct-confirm",
+                data = platformGuestQrConfirmCallback(),
+            )
+            processTableStart(
+                updateId = 10_242,
+                actorUserId = 999L,
+                token = "INVALID_PLATFORM_TOKEN",
+            )
+            processPlatformGuestQrCallback(
+                updateId = 10_243,
+                callbackId = "platform-guest-invalid-token-direct-confirm",
+                data = platformGuestQrConfirmCallback(),
+            )
+
+            coVerify(exactly = 1) { tableTokenRepository.resolve("INVALID_PLATFORM_TOKEN") }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+            coVerify(exactly = 0) {
+                tableSessionRepository.resolveActiveSession(any(), any(), any(), any())
+            }
+            coVerify(exactly = 0) { auditLogRepository.appendJson(any(), any(), any(), any(), any()) }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(
+                    any(),
+                    match { it.contains("Проверка гостевого QR") },
+                    any(),
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    100L,
+                    "platform-guest-missing-token-direct-confirm",
+                    "Действие недоступно. Откройте QR ещё раз.",
+                    false,
+                )
+                outboxEnqueuer.enqueueAnswerCallbackQuery(
+                    100L,
+                    "platform-guest-invalid-token-direct-confirm",
+                    "Действие недоступно. Откройте QR ещё раз.",
+                    false,
+                )
+            }
+        }
+
+    @Test
+    fun `platform confirm treats explicitly revoked token as invalid repository contract`() =
+        runBlocking {
+            val context = platformGuestQrContext(token = "REVOKED_TOKEN")
+            val resolveCalls = AtomicLong()
+            coEvery { tableTokenRepository.resolve("REVOKED_TOKEN") } answers {
+                if (resolveCalls.incrementAndGet() == 1L) context else null
+            }
+            coEvery { tableTokenRepository.resolveInactiveTable("REVOKED_TOKEN") } returns null
+            coEvery { platformVenueRepository.getVenueDetail(10L) } returns platformGuestQrVenue()
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            processTableStart(
+                updateId = 10_250,
+                actorUserId = 999L,
+                token = "REVOKED_TOKEN",
+            )
+
+            processPlatformGuestQrCallback(
+                updateId = 10_251,
+                callbackId = "platform-guest-revoked",
+                data = platformGuestQrConfirmCallback(),
+            )
+
+            coVerify(exactly = 2) { tableTokenRepository.resolve("REVOKED_TOKEN") }
+            coVerify(exactly = 1) { tableTokenRepository.resolveInactiveTable("REVOKED_TOKEN") }
+            coVerify(exactly = 0) { auditLogRepository.appendJson(any(), any(), any(), any(), any()) }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    "QR больше не действует. Откройте QR ещё раз.",
+                    match { it is ReplyKeyboardMarkup },
+                )
+            }
+        }
+
+    @Test
+    fun `platform confirm treats table missing after prompt as invalid repository contract`() =
+        runBlocking {
+            val context = platformGuestQrContext(token = "MISSING_TABLE_TOKEN")
+            val resolveCalls = AtomicLong()
+            coEvery { tableTokenRepository.resolve("MISSING_TABLE_TOKEN") } answers {
+                if (resolveCalls.incrementAndGet() == 1L) context else null
+            }
+            coEvery { tableTokenRepository.resolveInactiveTable("MISSING_TABLE_TOKEN") } returns null
+            coEvery { platformVenueRepository.getVenueDetail(10L) } returns platformGuestQrVenue()
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            processTableStart(
+                updateId = 10_260,
+                actorUserId = 999L,
+                token = "MISSING_TABLE_TOKEN",
+            )
+
+            processPlatformGuestQrCallback(
+                updateId = 10_261,
+                callbackId = "platform-guest-table-missing",
+                data = platformGuestQrConfirmCallback(),
+            )
+
+            coVerify(exactly = 2) { tableTokenRepository.resolve("MISSING_TABLE_TOKEN") }
+            coVerify(exactly = 1) { tableTokenRepository.resolveInactiveTable("MISSING_TABLE_TOKEN") }
+            coVerify(exactly = 0) { auditLogRepository.appendJson(any(), any(), any(), any(), any()) }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    "QR больше не действует. Откройте QR ещё раз.",
+                    match { it is ReplyKeyboardMarkup },
+                )
+            }
+        }
+
+    @Test
+    fun `platform audit failure can retry only through a fresh successful confirmation`() =
+        runBlocking {
+            val context = platformGuestQrContext()
+            val auditAttempts = AtomicLong()
+            stubPlatformGuestQrAccess(context)
+            coEvery {
+                auditLogRepository.appendJson(
+                    actorUserId = 999L,
+                    action = "PLATFORM_GUEST_QR_TEST_CONFIRMED",
+                    entityType = "venue",
+                    entityId = 10L,
+                    payload = any(),
+                )
+            } answers {
+                if (auditAttempts.incrementAndGet() == 1L) {
+                    throw DatabaseUnavailableException()
+                }
+            }
+            processTableStart(updateId = 10_270, actorUserId = 999L)
+            processPlatformGuestQrCallback(
+                updateId = 10_271,
+                callbackId = "platform-guest-first-audit-failure",
+                data = platformGuestQrConfirmCallback(sequence = 1L),
+            )
+            processTableStart(updateId = 10_272, actorUserId = 999L)
+            processPlatformGuestQrCallback(
+                updateId = 10_273,
+                callbackId = "platform-guest-fresh-audit-success",
+                data = platformGuestQrConfirmCallback(sequence = 2L),
+            )
+
+            coVerify(exactly = 2) {
+                auditLogRepository.appendJson(
+                    actorUserId = 999L,
+                    action = "PLATFORM_GUEST_QR_TEST_CONFIRMED",
+                    entityType = "venue",
+                    entityId = 10L,
+                    payload = any(),
+                )
+            }
+            coVerify(exactly = 1) {
+                guestTableContextLifecycleRepository.activate(
+                    actorUserId = 999L,
+                    chatId = 100L,
+                    tableToken = "TOKEN",
+                    expectedVenueId = 10L,
+                    expectedTableId = 11L,
+                    ttl = Duration.ofHours(2),
+                    now = any(),
+                )
+            }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+            coVerify(exactly = 0) { tableSessionRepository.clearUserExit(any(), any()) }
+            coVerify(exactly = 1) {
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    "Гостевой режим проверки включён.\n" +
+                        "Используйте «Завершить визит», чтобы вернуться в кабинет платформы.",
+                    match { it == TelegramKeyboards.tableContextBotFlow(context) },
                 )
             }
         }
@@ -9709,7 +11980,17 @@ class TelegramBotRouterTableTokenTest {
                 )
             }
             coVerify(exactly = 0) {
-                ordersRepository.createGuestOrderBatch(any(), any(), any(), any(), any(), any(), any(), any(), any())
+                ordersRepository.createGuestOrderBatch(
+                    tableId = any(),
+                    venueId = any(),
+                    tableSessionId = any(),
+                    userId = any(),
+                    idempotencyKey = any(),
+                    tabId = any(),
+                    comment = any(),
+                    items = any(),
+                    venueZoneId = any(),
+                )
             }
         }
 
@@ -9735,7 +12016,17 @@ class TelegramBotRouterTableTokenTest {
                 outboxEnqueuer.enqueueSendMessage(100, "Визит не найден.", null)
             }
             coVerify(exactly = 0) {
-                ordersRepository.createGuestOrderBatch(any(), any(), any(), any(), any(), any(), any(), any(), any())
+                ordersRepository.createGuestOrderBatch(
+                    tableId = any(),
+                    venueId = any(),
+                    tableSessionId = any(),
+                    userId = any(),
+                    idempotencyKey = any(),
+                    tabId = any(),
+                    comment = any(),
+                    items = any(),
+                    venueZoneId = any(),
+                )
             }
         }
 
@@ -20514,6 +22805,176 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
+    fun `confirmed platform guest shift extension uses coordinator connection and preserves notification`() =
+        runBlocking {
+            val context = platformGuestQrContext()
+            coEvery { chatContextRepository.get(100L) } returns
+                StoredChatContext(userId = 999L, tableToken = context.tableToken)
+            stubPlatformGuestQrAccess(context)
+            coEvery {
+                guestTableContextLifecycleRepository.validatePlatformBotContext(999L, 100L, any())
+            } returns platformGuestContextActive(context)
+            stubConfirmedPlatformGuestMutation(context)
+            coEvery { shiftExtensionRepository.getSettings(context.venueId) } returns enabledShiftExtensionSettings()
+            coEvery { ordersRepository.findActiveOrderSummaryForTab(55L, 1L) } returns
+                ActiveOrderSummary(id = 19L, status = "ACTIVE")
+            every {
+                shiftExtensionRepository.createPendingRequest(
+                    connection = any(),
+                    command = any(),
+                    now = any(),
+                )
+            } returns shiftExtensionRequestRecord(ShiftExtensionRequestStatus.PENDING)
+            coEvery { venueOrdersRepository.loadOrderDetail(context.venueId, 19L) } returns
+                staffChatOrderDetail(
+                    batchId = 57L,
+                    status = OrderWorkflowStatus.NEW,
+                    pendingShiftExtension = pendingShiftExtension(),
+                )
+
+            processPlatformGuestQrCallback(
+                updateId = 18_605,
+                callbackId = "platform-create-extension",
+                data = "guest_shift_extension_request",
+            )
+
+            verify(exactly = 1) {
+                shiftExtensionRepository.createPendingRequest(
+                    connection = any(),
+                    command =
+                        match { command ->
+                            command.venueId == context.venueId &&
+                                command.tableSessionId == 55L &&
+                                command.tableId == context.tableId &&
+                                command.tabId == 1L &&
+                                command.orderId == 19L &&
+                                command.requestedByUserId == 999L &&
+                                command.idempotencyKey == "guest-bot-shift-extension:100:218605"
+                        },
+                    now = any(),
+                )
+            }
+            coVerify(exactly = 0) { shiftExtensionRepository.createPendingRequest(any()) }
+            coVerify(exactly = 1) {
+                staffChatNotifier.notifyBillUpdatedNow(
+                    match { notification ->
+                        notification.venueId == context.venueId &&
+                            notification.orderId == 19L &&
+                            notification.change == StaffBillUpdateChange.SHIFT_EXTENSION_REQUESTED
+                    },
+                )
+            }
+            coVerify(exactly = 1) {
+                outboxEnqueuer.enqueueEditMessageText(
+                    100L,
+                    218605L,
+                    match { text -> text.contains("Ожидает подтверждения") },
+                    match { markup -> markup is InlineKeyboardMarkup },
+                )
+            }
+        }
+
+    @Test
+    fun `confirmed platform guest shift extension membership denial has no success evidence or staff notification`() =
+        runBlocking {
+            val context = platformGuestQrContext()
+            coEvery { chatContextRepository.get(100L) } returns
+                StoredChatContext(userId = 999L, tableToken = context.tableToken)
+            stubPlatformGuestQrAccess(context)
+            coEvery {
+                guestTableContextLifecycleRepository.validatePlatformBotContext(999L, 100L, any())
+            } returns platformGuestContextActive(context)
+            stubConfirmedPlatformGuestMutation(context)
+            coEvery { shiftExtensionRepository.getSettings(context.venueId) } returns enabledShiftExtensionSettings()
+            coEvery { ordersRepository.findActiveOrderSummaryForTab(55L, 1L) } returns
+                ActiveOrderSummary(id = 19L, status = "ACTIVE")
+            every {
+                shiftExtensionRepository.createPendingRequest(
+                    connection = any(),
+                    command = any(),
+                    now = any(),
+                )
+            } throws ForbiddenException("Tab access denied")
+
+            processPlatformGuestQrCallback(
+                updateId = 18_606,
+                callbackId = "platform-extension-membership-removed",
+                data = "guest_shift_extension_request",
+            )
+
+            verify(exactly = 1) {
+                shiftExtensionRepository.createPendingRequest(
+                    connection = any(),
+                    command = match { command -> command.requestedByUserId == 999L && command.tabId == 1L },
+                    now = any(),
+                )
+            }
+            coVerify(exactly = 0) { staffChatNotifier.notifyBillUpdatedNow(any()) }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueEditMessageText(
+                    100L,
+                    218606L,
+                    match { text -> text.contains("Ожидает подтверждения") },
+                    any(),
+                )
+            }
+            coVerify(exactly = 1) {
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    "Продление сейчас недоступно. Выберите доступный счёт и попробуйте снова.",
+                    null,
+                )
+            }
+        }
+
+    @Test
+    fun `confirmed platform guest shift extension is denied when exit committed before final transaction`() =
+        runBlocking {
+            val context = platformGuestQrContext()
+            coEvery { chatContextRepository.get(100L) } returns
+                StoredChatContext(userId = 999L, tableToken = context.tableToken)
+            stubPlatformGuestQrAccess(context)
+            coEvery {
+                guestTableContextLifecycleRepository.validatePlatformBotContext(999L, 100L, any())
+            } returns platformGuestContextActive(context)
+            stubConfirmedPlatformGuestMutation(context, denyAfterAppliedCalls = 1)
+            coEvery { shiftExtensionRepository.getSettings(context.venueId) } returns enabledShiftExtensionSettings()
+            coEvery { ordersRepository.findActiveOrderSummaryForTab(55L, 1L) } returns
+                ActiveOrderSummary(id = 19L, status = "ACTIVE")
+
+            processPlatformGuestQrCallback(
+                updateId = 18_607,
+                callbackId = "platform-extension-after-exit",
+                data = "guest_shift_extension_request",
+            )
+
+            verify(exactly = 0) {
+                shiftExtensionRepository.createPendingRequest(
+                    connection = any(),
+                    command = any(),
+                    now = any(),
+                )
+            }
+            coVerify(exactly = 0) { shiftExtensionRepository.createPendingRequest(any()) }
+            coVerify(exactly = 0) { staffChatNotifier.notifyBillUpdatedNow(any()) }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueEditMessageText(
+                    100L,
+                    218607L,
+                    match { text -> text.contains("Ожидает подтверждения") },
+                    any(),
+                )
+            }
+            coVerify(exactly = 1) {
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    "Откройте QR-код ещё раз и подтвердите вход в Telegram.",
+                    null,
+                )
+            }
+        }
+
+    @Test
     fun `guest bot duplicate shift extension request does not create another pending request`() =
         runBlocking {
             val context =
@@ -23477,20 +25938,20 @@ class TelegramBotRouterTableTokenTest {
             }
             coVerify(exactly = 0) {
                 ordersRepository.createGuestOrderBatch(
-                    any(),
-                    any(),
-                    any(),
-                    any(),
-                    any(),
-                    any(),
-                    any(),
-                    any(),
-                    any(),
-                    any(),
-                    any(),
-                    any(),
-                    any(),
-                    any(),
+                    tableId = any(),
+                    venueId = any(),
+                    tableSessionId = any(),
+                    userId = any(),
+                    idempotencyKey = any(),
+                    tabId = any(),
+                    comment = any(),
+                    items = any(),
+                    venueZoneId = any(),
+                    selectedGiftChoices = any(),
+                    skippedGiftRuleIds = any(),
+                    giftDecision = any(),
+                    expectedPreviewFingerprint = any(),
+                    giftDecisionCommand = any(),
                 )
             }
         }
@@ -26047,18 +28508,13 @@ class TelegramBotRouterTableTokenTest {
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery {
-                guestTabsRepository.findLatestRestorableTableContext(userId = 200L, tableToken = "TOKEN")
-            } returns restorableTableContext(tableToken = "TOKEN", tableSessionId = 55L)
-            coEvery {
-                tableSessionRepository.endUserTableSession(
-                    userId = 200L,
-                    tableToken = "TOKEN",
-                    venueId = 10L,
-                    tableId = 11L,
+                guestTableContextLifecycleRepository.teardownByChat(200L, 100L, any())
+            } returns
+                GuestTableTeardownResult.Cleared(
+                    identity = platformGuestIdentity(actorUserId = 200L, chatId = 100L, context = context),
                     tableSessionId = 55L,
-                    now = any(),
+                    exitRecorded = true,
                 )
-            } returns EndUserTableSessionResult(ended = true, tableSessionId = 55L, blockedReason = null)
 
             router.process(
                 TelegramUpdate(
@@ -26073,19 +28529,13 @@ class TelegramBotRouterTableTokenTest {
                 ),
             )
 
-            coVerify {
-                guestTabsRepository.findLatestRestorableTableContext(userId = 200L, tableToken = "TOKEN")
-                tableSessionRepository.endUserTableSession(
-                    userId = 200L,
-                    tableToken = "TOKEN",
-                    venueId = 10L,
-                    tableId = 11L,
-                    tableSessionId = 55L,
-                    now = any(),
-                )
-                chatContextRepository.clear(100)
-                dialogStateRepository.clear(100)
+            coVerify(exactly = 1) {
+                guestTableContextLifecycleRepository.teardownByChat(200L, 100L, any())
             }
+            coVerify(exactly = 0) { guestTabsRepository.findLatestRestorableTableContext(any(), any()) }
+            coVerify(exactly = 0) { tableSessionRepository.endUserTableSession(any(), any(), any(), any(), any()) }
+            coVerify(exactly = 0) { chatContextRepository.clear(100) }
+            coVerify(exactly = 0) { dialogStateRepository.clear(100) }
             coVerify(exactly = 0) { chatContextRepository.clear(101) }
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
@@ -26112,22 +28562,12 @@ class TelegramBotRouterTableTokenTest {
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery {
-                guestTabsRepository.findLatestRestorableTableContext(userId = 200L, tableToken = "TOKEN")
-            } returns restorableTableContext(tableToken = "TOKEN", tableSessionId = 55L)
-            coEvery {
-                tableSessionRepository.endUserTableSession(
-                    userId = 200L,
-                    tableToken = "TOKEN",
-                    venueId = 10L,
-                    tableId = 11L,
-                    tableSessionId = 55L,
-                    now = any(),
-                )
+                guestTableContextLifecycleRepository.teardownByChat(200L, 100L, any())
             } returns
-                EndUserTableSessionResult(
-                    ended = false,
+                GuestTableTeardownResult.Blocked(
+                    identity = platformGuestIdentity(actorUserId = 200L, chatId = 100L, context = context),
                     tableSessionId = 55L,
-                    blockedReason = TableSessionEndBlockedReason.ACTIVE_ORDER,
+                    reason = TableSessionEndBlockedReason.ACTIVE_ORDER,
                 )
 
             router.process(
@@ -26143,6 +28583,9 @@ class TelegramBotRouterTableTokenTest {
                 ),
             )
 
+            coVerify(exactly = 1) {
+                guestTableContextLifecycleRepository.teardownByChat(200L, 100L, any())
+            }
             coVerify(exactly = 0) { chatContextRepository.clear(100) }
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
@@ -26169,8 +28612,13 @@ class TelegramBotRouterTableTokenTest {
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery {
-                guestTabsRepository.findLatestRestorableTableContext(userId = 200L, tableToken = "TOKEN")
-            } returns null
+                guestTableContextLifecycleRepository.teardownByChat(200L, 100L, any())
+            } returns
+                GuestTableTeardownResult.Cleared(
+                    identity = platformGuestIdentity(actorUserId = 200L, chatId = 100L, context = context),
+                    tableSessionId = null,
+                    exitRecorded = false,
+                )
 
             router.process(
                 TelegramUpdate(
@@ -26185,7 +28633,10 @@ class TelegramBotRouterTableTokenTest {
                 ),
             )
 
-            coVerify { chatContextRepository.clear(100) }
+            coVerify(exactly = 1) {
+                guestTableContextLifecycleRepository.teardownByChat(200L, 100L, any())
+            }
+            coVerify(exactly = 0) { chatContextRepository.clear(100) }
             coVerify(exactly = 0) {
                 tableSessionRepository.endUserTableSession(
                     userId = any(),
@@ -28468,7 +30919,17 @@ class TelegramBotRouterTableTokenTest {
                 )
             }
             coVerify(exactly = 0) {
-                ordersRepository.createGuestOrderBatch(any(), any(), any(), any(), any(), any(), any(), any(), any())
+                ordersRepository.createGuestOrderBatch(
+                    tableId = any(),
+                    venueId = any(),
+                    tableSessionId = any(),
+                    userId = any(),
+                    idempotencyKey = any(),
+                    tabId = any(),
+                    comment = any(),
+                    items = any(),
+                    venueZoneId = any(),
+                )
             }
         }
 
@@ -28504,7 +30965,17 @@ class TelegramBotRouterTableTokenTest {
                 )
             }
             coVerify(exactly = 0) {
-                ordersRepository.createGuestOrderBatch(any(), any(), any(), any(), any(), any(), any(), any(), any())
+                ordersRepository.createGuestOrderBatch(
+                    tableId = any(),
+                    venueId = any(),
+                    tableSessionId = any(),
+                    userId = any(),
+                    idempotencyKey = any(),
+                    tabId = any(),
+                    comment = any(),
+                    items = any(),
+                    venueZoneId = any(),
+                )
             }
         }
 
@@ -29057,6 +31528,227 @@ class TelegramBotRouterTableTokenTest {
             tableToken = "TOKEN",
             staffChatId = null,
         )
+
+    private fun platformGuestQrContext(
+        token: String = "TOKEN",
+        venueId: Long = 10L,
+        tableId: Long = 11L,
+        tableNumber: Int = 5,
+        venueName: String = "Mix Public",
+    ): TableContext =
+        TableContext(
+            venueId = venueId,
+            venueName = venueName,
+            tableId = tableId,
+            tableNumber = tableNumber,
+            tableToken = token,
+            staffChatId = null,
+        )
+
+    private fun platformGuestTableSession(
+        context: TableContext = platformGuestQrContext(),
+        id: Long = 55L,
+    ): TableSessionRecord =
+        TableSessionRecord(
+            id = id,
+            venueId = context.venueId,
+            tableId = context.tableId,
+            startedAt = platformGuestQrNow.minusSeconds(60),
+            lastActivityAt = platformGuestQrNow,
+            expiresAt = platformGuestQrNow.plus(Duration.ofHours(2)),
+            endedAt = null,
+            status = TableSessionStatus.ACTIVE,
+        )
+
+    private fun platformGuestIdentity(
+        actorUserId: Long = 999L,
+        chatId: Long = 100L,
+        context: TableContext = platformGuestQrContext(),
+    ): GuestTableContextIdentity =
+        GuestTableContextIdentity(
+            chatId = chatId,
+            actorUserId = actorUserId,
+            venueId = context.venueId,
+            tableId = context.tableId,
+            tableToken = context.tableToken,
+            confirmedAt = platformGuestQrNow,
+        )
+
+    private fun platformGuestContextActive(
+        context: TableContext = platformGuestQrContext(),
+        actorUserId: Long = 999L,
+        chatId: Long = 100L,
+    ): PlatformGuestContextValidationResult.Active =
+        PlatformGuestContextValidationResult.Active(
+            identity = platformGuestIdentity(actorUserId = actorUserId, chatId = chatId, context = context),
+            context = context,
+            tableSession = platformGuestTableSession(context),
+            venueStatus = VenueStatus.PUBLISHED,
+            subscriptionStatus = SubscriptionStatus.ACTIVE,
+        )
+
+    private fun stubConfirmedPlatformGuestMutation(
+        context: TableContext,
+        actorUserId: Long = 999L,
+        chatId: Long = 100L,
+        denyAfterAppliedCalls: Int? = null,
+    ) {
+        val connection = mockk<Connection>(relaxed = true)
+        var mutationCallCount = 0
+        val confirmed =
+            ConfirmedPlatformGuestMutationContext(
+                identity = platformGuestIdentity(actorUserId = actorUserId, chatId = chatId, context = context),
+                context = context,
+                tableSession = platformGuestTableSession(context),
+                venueStatus = VenueStatus.PUBLISHED,
+                subscriptionStatus = SubscriptionStatus.ACTIVE,
+            )
+        every {
+            guestTabsRepository.ensurePersonalTab(
+                connection = connection,
+                venueId = context.venueId,
+                tableSessionId = confirmed.tableSession.id,
+                userId = actorUserId,
+            )
+        } returns
+            GuestTabModel(
+                id = 1L,
+                venueId = context.venueId,
+                tableSessionId = confirmed.tableSession.id,
+                type = "PERSONAL",
+                ownerUserId = actorUserId,
+                status = "ACTIVE",
+            )
+        every {
+            guestTabsRepository.listTabsForUser(
+                connection = connection,
+                venueId = context.venueId,
+                tableSessionId = confirmed.tableSession.id,
+                userId = actorUserId,
+            )
+        } returns
+            listOf(
+                GuestTabModel(
+                    id = 1L,
+                    venueId = context.venueId,
+                    tableSessionId = confirmed.tableSession.id,
+                    type = "PERSONAL",
+                    ownerUserId = actorUserId,
+                    status = "ACTIVE",
+                ),
+            )
+        coEvery {
+            guestTableContextLifecycleRepository.withConfirmedPlatformGuestMutation<Any?>(
+                actorUserId = actorUserId,
+                platformOwnerUserId = actorUserId,
+                chatId = chatId,
+                tableToken = context.tableToken,
+                expectedVenueId = context.venueId,
+                expectedTableId = context.tableId,
+                expectedSessionId = any(),
+                ttl = any(),
+                now = any(),
+                mutation = any(),
+            )
+        } answers {
+            mutationCallCount += 1
+            if (denyAfterAppliedCalls != null && mutationCallCount > denyAfterAppliedCalls) {
+                return@answers PlatformGuestTableMutationResult.Denied
+            }
+            @Suppress("UNCHECKED_CAST")
+            val mutation =
+                invocation.args[9] as (Connection, ConfirmedPlatformGuestMutationContext) -> Any?
+            PlatformGuestTableMutationResult.Applied(
+                context = confirmed,
+                value = mutation(connection, confirmed),
+            )
+        }
+    }
+
+    private fun platformGuestQrVenue(
+        venueId: Long = 10L,
+        venueName: String = "Mix Public",
+        status: VenueStatus = VenueStatus.PUBLISHED,
+    ): PlatformVenueDetail =
+        PlatformVenueDetail(
+            id = venueId,
+            name = venueName,
+            city = "Москва",
+            address = "Тверская, 1",
+            status = status,
+            createdAt = Instant.parse("2026-08-01T10:00:00Z"),
+            deletedAt = null,
+            guestContact = null,
+            cardDescription = null,
+        )
+
+    private fun stubPlatformGuestQrAccess(
+        context: TableContext = platformGuestQrContext(),
+        venueStatus: VenueStatus = VenueStatus.PUBLISHED,
+        subscriptionStatus: SubscriptionStatus = SubscriptionStatus.ACTIVE,
+    ) {
+        coEvery { tableTokenRepository.resolve(context.tableToken) } returns context
+        coEvery { platformVenueRepository.getVenueDetail(context.venueId) } returns
+            platformGuestQrVenue(
+                venueId = context.venueId,
+                venueName = context.venueName,
+                status = venueStatus,
+            )
+        coEvery { subscriptionRepository.getSubscriptionStatus(context.venueId) } returns subscriptionStatus
+    }
+
+    private suspend fun processTableStart(
+        targetRouter: TelegramBotRouter = router,
+        updateId: Long,
+        actorUserId: Long,
+        chatId: Long = 100L,
+        token: String? = "TOKEN",
+    ) {
+        targetRouter.process(
+            TelegramUpdate(
+                updateId = updateId,
+                message =
+                    Message(
+                        messageId = updateId + 100_000L,
+                        chat = Chat(id = chatId, type = "private"),
+                        fromUser = User(id = actorUserId),
+                        text = if (token == null) "/start" else "/start $token",
+                    ),
+            ),
+        )
+    }
+
+    private suspend fun processPlatformGuestQrCallback(
+        targetRouter: TelegramBotRouter = router,
+        updateId: Long,
+        callbackId: String,
+        actorUserId: Long = 999L,
+        chatId: Long = 100L,
+        data: String,
+    ) {
+        targetRouter.process(
+            TelegramUpdate(
+                updateId = updateId,
+                callbackQuery =
+                    CallbackQuery(
+                        id = callbackId,
+                        from = User(id = actorUserId),
+                        message =
+                            Message(
+                                messageId = updateId + 200_000L,
+                                chat = Chat(id = chatId, type = "private"),
+                            ),
+                        data = data,
+                    ),
+            ),
+        )
+    }
+
+    private fun platformGuestQrConfirmCallback(sequence: Long = 1L): String =
+        "pgqr_c:pgqr${sequence.toString().padStart(8, '0')}"
+
+    private fun platformGuestQrCancelCallback(sequence: Long = 1L): String =
+        "pgqr_x:pgqr${sequence.toString().padStart(8, '0')}"
 
     private fun restorableTableContext(
         tableToken: String,

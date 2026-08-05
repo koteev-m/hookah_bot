@@ -52,77 +52,85 @@ class TableSessionRepository(
         now: Instant = Instant.now(),
     ): TableSessionRecord {
         val ds = dataSource ?: throw DatabaseUnavailableException()
-        val nextExpiry = now.plus(ttl)
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
                     connection.autoCommit = false
                     try {
-                        if (!lockTable(connection, venueId, tableId)) {
-                            connection.rollback()
-                            throw DatabaseUnavailableException()
-                        }
-
-                        val existingId = findActiveSessionForUpdate(connection, venueId, tableId, now)
-                        val sessionId =
-                            if (existingId != null) {
-                                connection.prepareStatement(
-                                    """
-                                    UPDATE table_sessions
-                                    SET last_activity_at = ?,
-                                        expires_at = CASE WHEN expires_at > ? THEN expires_at ELSE ? END
-                                    WHERE id = ?
-                                    """.trimIndent(),
-                                ).use { statement ->
-                                    statement.setTimestamp(1, Timestamp.from(now))
-                                    statement.setTimestamp(2, Timestamp.from(nextExpiry))
-                                    statement.setTimestamp(3, Timestamp.from(nextExpiry))
-                                    statement.setLong(4, existingId)
-                                    statement.executeUpdate()
-                                }
-                                existingId
-                            } else {
-                                val createdSessionId =
-                                    insertSession(
-                                        connection = connection,
-                                        venueId = venueId,
-                                        tableId = tableId,
-                                        now = now,
-                                        expiresAt = nextExpiry,
-                                    )
-                                analyticsEventRepository?.append(
-                                    connection = connection,
-                                    event =
-                                        AnalyticsEventRecord(
-                                            eventType = "table_session_started",
-                                            payload =
-                                                analyticsCorrelationPayload(
-                                                    venueId = venueId,
-                                                    tableId = tableId,
-                                                    tableSessionId = createdSessionId,
-                                                ),
-                                            venueId = venueId,
-                                            tableId = tableId,
-                                            tableSessionId = createdSessionId,
-                                            idempotencyKey = "table_session_started:$createdSessionId",
-                                        ),
-                                )
-                                createdSessionId
-                            }
-
+                        val session = resolveActiveSession(connection, venueId, tableId, ttl, now)
                         connection.commit()
-                        loadById(connection, sessionId) ?: throw DatabaseUnavailableException()
+                        session
                     } catch (e: SQLException) {
-                        connection.rollback()
+                        runCatching { connection.rollback() }
                         throw e
                     } finally {
-                        connection.autoCommit = true
+                        runCatching { connection.autoCommit = true }
                     }
                 }
             } catch (e: SQLException) {
                 throw DatabaseUnavailableException()
             }
         }
+    }
+
+    fun resolveActiveSession(
+        connection: Connection,
+        venueId: Long,
+        tableId: Long,
+        ttl: Duration,
+        now: Instant,
+    ): TableSessionRecord {
+        if (!lockTable(connection, venueId, tableId)) {
+            throw SQLException("Table is unavailable")
+        }
+        val nextExpiry = now.plus(ttl)
+        val existingId = findActiveSessionForUpdate(connection, venueId, tableId, now)
+        val sessionId =
+            if (existingId != null) {
+                connection.prepareStatement(
+                    """
+                    UPDATE table_sessions
+                    SET last_activity_at = ?,
+                        expires_at = CASE WHEN expires_at > ? THEN expires_at ELSE ? END
+                    WHERE id = ?
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setTimestamp(1, Timestamp.from(now))
+                    statement.setTimestamp(2, Timestamp.from(nextExpiry))
+                    statement.setTimestamp(3, Timestamp.from(nextExpiry))
+                    statement.setLong(4, existingId)
+                    statement.executeUpdate()
+                }
+                existingId
+            } else {
+                val createdSessionId =
+                    insertSession(
+                        connection = connection,
+                        venueId = venueId,
+                        tableId = tableId,
+                        now = now,
+                        expiresAt = nextExpiry,
+                    )
+                analyticsEventRepository?.append(
+                    connection = connection,
+                    event =
+                        AnalyticsEventRecord(
+                            eventType = "table_session_started",
+                            payload =
+                                analyticsCorrelationPayload(
+                                    venueId = venueId,
+                                    tableId = tableId,
+                                    tableSessionId = createdSessionId,
+                                ),
+                            venueId = venueId,
+                            tableId = tableId,
+                            tableSessionId = createdSessionId,
+                            idempotencyKey = "table_session_started:$createdSessionId",
+                        ),
+                )
+                createdSessionId
+            }
+        return loadById(connection, sessionId) ?: throw SQLException("Failed to load table session")
     }
 
     suspend fun touchActiveSession(
@@ -133,42 +141,53 @@ class TableSessionRepository(
         now: Instant = Instant.now(),
     ): TableSessionRecord? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
-        val nextExpiry = now.plus(ttl)
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    val updated =
-                        connection.prepareStatement(
-                            """
-                            UPDATE table_sessions
-                            SET last_activity_at = ?,
-                                expires_at = CASE WHEN expires_at > ? THEN expires_at ELSE ? END
-                            WHERE id = ?
-                              AND venue_id = ?
-                              AND table_id = ?
-                              AND status = 'ACTIVE'
-                              AND ended_at IS NULL
-                              AND expires_at > ?
-                            """.trimIndent(),
-                        ).use { statement ->
-                            statement.setTimestamp(1, Timestamp.from(now))
-                            statement.setTimestamp(2, Timestamp.from(nextExpiry))
-                            statement.setTimestamp(3, Timestamp.from(nextExpiry))
-                            statement.setLong(4, tableSessionId)
-                            statement.setLong(5, venueId)
-                            statement.setLong(6, tableId)
-                            statement.setTimestamp(7, Timestamp.from(now))
-                            statement.executeUpdate()
-                        }
-                    if (updated <= 0) {
-                        return@use null
-                    }
-                    loadById(connection, tableSessionId)
+                    touchActiveSession(connection, tableSessionId, venueId, tableId, ttl, now)
                 }
             } catch (e: SQLException) {
                 throw DatabaseUnavailableException()
             }
         }
+    }
+
+    fun touchActiveSession(
+        connection: Connection,
+        tableSessionId: Long,
+        venueId: Long,
+        tableId: Long,
+        ttl: Duration,
+        now: Instant,
+    ): TableSessionRecord? {
+        val nextExpiry = now.plus(ttl)
+        val updated =
+            connection.prepareStatement(
+                """
+                UPDATE table_sessions
+                SET last_activity_at = ?,
+                    expires_at = CASE WHEN expires_at > ? THEN expires_at ELSE ? END
+                WHERE id = ?
+                  AND venue_id = ?
+                  AND table_id = ?
+                  AND status = 'ACTIVE'
+                  AND ended_at IS NULL
+                  AND expires_at > ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setTimestamp(1, Timestamp.from(now))
+                statement.setTimestamp(2, Timestamp.from(nextExpiry))
+                statement.setTimestamp(3, Timestamp.from(nextExpiry))
+                statement.setLong(4, tableSessionId)
+                statement.setLong(5, venueId)
+                statement.setLong(6, tableId)
+                statement.setTimestamp(7, Timestamp.from(now))
+                statement.executeUpdate()
+            }
+        if (updated <= 0) {
+            return null
+        }
+        return loadById(connection, tableSessionId)
     }
 
     suspend fun extendActiveSessionUntil(
@@ -383,21 +402,29 @@ class TableSessionRepository(
         withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    connection.prepareStatement(
-                        """
-                        DELETE FROM guest_table_session_exits
-                        WHERE user_id = ?
-                          AND table_session_id = ?
-                        """.trimIndent(),
-                    ).use { statement ->
-                        statement.setLong(1, userId)
-                        statement.setLong(2, tableSessionId)
-                        statement.executeUpdate()
-                    }
+                    clearUserExit(connection, userId, tableSessionId)
                 }
             } catch (e: SQLException) {
                 throw DatabaseUnavailableException()
             }
+        }
+    }
+
+    fun clearUserExit(
+        connection: Connection,
+        userId: Long,
+        tableSessionId: Long,
+    ) {
+        connection.prepareStatement(
+            """
+            DELETE FROM guest_table_session_exits
+            WHERE user_id = ?
+              AND table_session_id = ?
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, userId)
+            statement.setLong(2, tableSessionId)
+            statement.executeUpdate()
         }
     }
 
@@ -483,7 +510,7 @@ class TableSessionRepository(
         }
     }
 
-    private fun hasActiveUserOrderObligation(
+    fun hasActiveUserOrderObligation(
         connection: Connection,
         userId: Long,
         venueId: Long,
@@ -523,7 +550,7 @@ class TableSessionRepository(
         }
     }
 
-    private fun hasActiveUserStaffCall(
+    fun hasActiveUserStaffCall(
         connection: Connection,
         userId: Long,
         venueId: Long,
@@ -550,7 +577,7 @@ class TableSessionRepository(
         }
     }
 
-    private fun recordUserExit(
+    fun recordUserExit(
         connection: Connection,
         userId: Long,
         tableSessionId: Long,
@@ -577,6 +604,129 @@ class TableSessionRepository(
             statement.setLong(2, tableSessionId)
             statement.setTimestamp(3, Timestamp.from(now))
             statement.executeUpdate()
+        }
+    }
+
+    fun hasUserExit(
+        connection: Connection,
+        userId: Long,
+        tableSessionId: Long,
+    ): Boolean =
+        connection.prepareStatement(
+            """
+            SELECT 1
+            FROM guest_table_session_exits
+            WHERE user_id = ?
+              AND table_session_id = ?
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, userId)
+            statement.setLong(2, tableSessionId)
+            statement.executeQuery().use { rs -> rs.next() }
+        }
+
+    fun hasActiveUserTabMembership(
+        connection: Connection,
+        userId: Long,
+        venueId: Long,
+        tableSessionId: Long,
+    ): Boolean =
+        connection.prepareStatement(
+            """
+            SELECT 1
+            FROM tab t
+            JOIN tab_member tm ON tm.tab_id = t.id
+            WHERE t.venue_id = ?
+              AND t.table_session_id = ?
+              AND t.status = 'ACTIVE'
+              AND tm.user_id = ?
+            LIMIT 1
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, tableSessionId)
+            statement.setLong(3, userId)
+            statement.executeQuery().use { rs -> rs.next() }
+        }
+
+    fun findActiveSessionForContext(
+        connection: Connection,
+        venueId: Long,
+        tableId: Long,
+        contextUpdatedAt: Instant,
+        now: Instant,
+        forUpdate: Boolean,
+    ): TableSessionRecord? {
+        val lockClause = if (forUpdate) " FOR UPDATE" else ""
+        return connection.prepareStatement(
+            """
+            SELECT id, venue_id, table_id, started_at, last_activity_at, expires_at, ended_at, status
+            FROM table_sessions
+            WHERE venue_id = ?
+              AND table_id = ?
+              AND status = 'ACTIVE'
+              AND ended_at IS NULL
+              AND expires_at > ?
+              AND started_at <= ?
+            ORDER BY started_at DESC, id DESC
+            LIMIT 1$lockClause
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, tableId)
+            statement.setTimestamp(3, Timestamp.from(now))
+            statement.setTimestamp(4, Timestamp.from(contextUpdatedAt))
+            statement.executeQuery().use { rs -> if (rs.next()) rs.toRecord() else null }
+        }
+    }
+
+    fun findActiveUserSessionForTeardown(
+        connection: Connection,
+        userId: Long,
+        venueId: Long,
+        tableId: Long,
+        expectedTableSessionId: Long?,
+        now: Instant,
+    ): TableSessionRecord? {
+        val sessionFilter = if (expectedTableSessionId == null) "" else " AND ts.id = ?"
+        return connection.prepareStatement(
+            """
+            SELECT ts.id,
+                   ts.venue_id,
+                   ts.table_id,
+                   ts.started_at,
+                   ts.last_activity_at,
+                   ts.expires_at,
+                   ts.ended_at,
+                   ts.status
+            FROM table_sessions ts
+            WHERE ts.venue_id = ?
+              AND ts.table_id = ?
+              AND ts.status = 'ACTIVE'
+              AND ts.ended_at IS NULL
+              AND ts.expires_at > ?
+              $sessionFilter
+              AND EXISTS (
+                  SELECT 1
+                  FROM tab t
+                  JOIN tab_member tm ON tm.tab_id = t.id
+                  WHERE t.venue_id = ts.venue_id
+                    AND t.table_session_id = ts.id
+                    AND t.status = 'ACTIVE'
+                    AND tm.user_id = ?
+              )
+            ORDER BY ts.started_at DESC, ts.id DESC
+            LIMIT 1
+            FOR UPDATE
+            """.trimIndent(),
+        ).use { statement ->
+            var parameterIndex = 1
+            statement.setLong(parameterIndex++, venueId)
+            statement.setLong(parameterIndex++, tableId)
+            statement.setTimestamp(parameterIndex++, Timestamp.from(now))
+            expectedTableSessionId?.let { statement.setLong(parameterIndex++, it) }
+            statement.setLong(parameterIndex, userId)
+            statement.executeQuery().use { rs -> if (rs.next()) rs.toRecord() else null }
         }
     }
 

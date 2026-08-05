@@ -26,6 +26,7 @@ import com.hookah.platform.backend.miniapp.guest.api.OrderBatchItemDto
 import com.hookah.platform.backend.miniapp.guest.api.SelectedOrderItemOptionDto
 import com.hookah.platform.backend.miniapp.guest.db.GuestMenuRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestTabModel
+import com.hookah.platform.backend.miniapp.guest.db.GuestTableContextLifecycleRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestTabsRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
@@ -46,6 +47,8 @@ import com.hookah.platform.backend.telegram.StaffBillRequestNotification
 import com.hookah.platform.backend.telegram.StaffChatNotifier
 import com.hookah.platform.backend.telegram.TableContext
 import com.hookah.platform.backend.telegram.billPaymentMethodLabel
+import com.hookah.platform.backend.telegram.db.ActiveOrderDetails
+import com.hookah.platform.backend.telegram.db.CreatedGuestBillRequest
 import com.hookah.platform.backend.telegram.db.CreatedOrderBatch
 import com.hookah.platform.backend.telegram.db.CreatedOrderPromotionDiscount
 import com.hookah.platform.backend.telegram.db.GiftDecisionRequiredException
@@ -78,6 +81,13 @@ private const val ITEM_PREFERENCE_NOTE_MAX_LENGTH = 200
 private const val IDEMPOTENCY_KEY_MAX_LENGTH = 128
 private const val DEFAULT_CURRENCY = "RUB"
 
+private data class GuestBillMutationResult(
+    val tableSessionId: Long,
+    val activeOrder: ActiveOrderDetails,
+    val accountLabel: String,
+    val created: CreatedGuestBillRequest,
+)
+
 fun Route.guestOrderRoutes(
     guestRateLimitConfig: GuestRateLimitConfig,
     rateLimiter: RateLimiter,
@@ -94,6 +104,8 @@ fun Route.guestOrderRoutes(
     userRepository: UserRepository = UserRepository(null),
     venueSettingsRepository: VenueSettingsRepository = VenueSettingsRepository(null),
     venueOrdersRepository: VenueOrdersRepository = VenueOrdersRepository(null),
+    platformOwnerUserId: Long? = null,
+    guestTableContextLifecycleRepository: GuestTableContextLifecycleRepository? = null,
 ) {
     get("/order/active") {
         val rawToken = call.request.queryParameters["tableToken"]
@@ -103,22 +115,33 @@ fun Route.guestOrderRoutes(
         val userId = call.requireUserId()
         val tableSessionId = parseOptionalPositiveLong(call.request.queryParameters["tableSessionId"], "tableSessionId")
         val tabId = parseOptionalPositiveLong(call.request.queryParameters["tabId"], "tabId")
+        if ((tableSessionId == null) != (tabId == null)) {
+            throw InvalidInputException("tableSessionId and tabId must be provided together")
+        }
+        val platformAccess =
+            requirePlatformGuestTokenAccessIfNeeded(
+                userId = userId,
+                platformOwnerUserId = platformOwnerUserId,
+                lifecycleRepository = guestTableContextLifecycleRepository,
+                tableToken = token,
+                table = table,
+                requestedTableSessionId = tableSessionId,
+                ttl = tableSessionConfig.ttl,
+            )
 
         val scopedActiveOrder =
             if (tableSessionId != null || tabId != null) {
-                if (tableSessionId == null || tabId == null) {
-                    throw InvalidInputException("tableSessionId and tabId must be provided together")
-                }
                 val tableSession =
-                    tableSessionRepository.touchActiveSession(
-                        tableSessionId = tableSessionId,
-                        venueId = table.venueId,
-                        tableId = table.tableId,
-                        ttl = tableSessionConfig.ttl,
-                    ) ?: throw NotFoundException()
+                    platformAccess?.tableSession
+                        ?: tableSessionRepository.touchActiveSession(
+                            tableSessionId = checkNotNull(tableSessionId),
+                            venueId = table.venueId,
+                            tableId = table.tableId,
+                            ttl = tableSessionConfig.ttl,
+                        ) ?: throw NotFoundException()
                 val member =
                     guestTabsRepository.isTabMember(
-                        tabId = tabId,
+                        tabId = checkNotNull(tabId),
                         venueId = table.venueId,
                         tableSessionId = tableSession.id,
                         userId = userId,
@@ -129,17 +152,19 @@ fun Route.guestOrderRoutes(
                 tableSession.id to (tabId to ordersRepository.findActiveOrderDetailsForTab(tableSession.id, tabId))
             } else {
                 val tableSession =
-                    tableSessionRepository.resolveActiveSession(
-                        venueId = table.venueId,
-                        tableId = table.tableId,
-                        ttl = tableSessionConfig.ttl,
-                    )
+                    platformAccess?.tableSession
+                        ?: tableSessionRepository.resolveActiveSession(
+                            venueId = table.venueId,
+                            tableId = table.tableId,
+                            ttl = tableSessionConfig.ttl,
+                        )
                 val personalTab =
-                    guestTabsRepository.ensurePersonalTab(
-                        venueId = table.venueId,
-                        tableSessionId = tableSession.id,
-                        userId = userId,
-                    )
+                    platformAccess?.personalTab
+                        ?: guestTabsRepository.ensurePersonalTab(
+                            venueId = table.venueId,
+                            tableSessionId = tableSession.id,
+                            userId = userId,
+                        )
                 val activeOrderDetails =
                     ordersRepository.findActiveOrderDetailsForTab(
                         tableSession.id,
@@ -168,20 +193,30 @@ fun Route.guestOrderRoutes(
         val giftDecision = request.giftDecision?.toCommand()
         val comment = normalizeComment(request.comment)
         val table = tableTokenResolver(token) ?: throw NotFoundException()
-        val tableSession =
+        val storedTableSession =
             tableSessionRepository.findSessionForTable(
                 tableSessionId = request.tableSessionId,
                 venueId = table.venueId,
                 tableId = table.tableId,
             ) ?: throw NotFoundException()
         if (
-            tableSession.status != TableSessionStatus.ACTIVE ||
-            tableSession.endedAt != null ||
-            !tableSession.expiresAt.isAfter(Instant.now())
+            storedTableSession.status != TableSessionStatus.ACTIVE ||
+            storedTableSession.endedAt != null ||
+            !storedTableSession.expiresAt.isAfter(Instant.now())
         ) {
             throw NotFoundException()
         }
         val userId = call.requireUserId()
+        val tableSession =
+            requirePlatformGuestTokenAccessIfNeeded(
+                userId = userId,
+                platformOwnerUserId = platformOwnerUserId,
+                lifecycleRepository = guestTableContextLifecycleRepository,
+                tableToken = token,
+                table = table,
+                requestedTableSessionId = storedTableSession.id,
+                ttl = tableSessionConfig.ttl,
+            )?.tableSession ?: storedTableSession
         ensureGuestActionAvailable(table.venueId, guestVenueRepository, subscriptionRepository)
         val member =
             guestTabsRepository.isTabMember(
@@ -226,53 +261,115 @@ fun Route.guestOrderRoutes(
         val tabId = normalizeTabId(request.tabId)
         val paymentMethod = normalizeBillPaymentMethod(request.paymentMethod)
         val table = tableTokenResolver(token) ?: throw NotFoundException()
-        val tableSession =
-            tableSessionRepository.touchActiveSession(
-                tableSessionId = request.tableSessionId,
-                venueId = table.venueId,
-                tableId = table.tableId,
-                ttl = tableSessionConfig.ttl,
-            ) ?: throw NotFoundException()
         val userId = call.requireUserId()
-        ensureGuestActionAvailable(table.venueId, guestVenueRepository, subscriptionRepository)
-        val member =
-            guestTabsRepository.isTabMember(
-                tabId = tabId,
-                venueId = table.venueId,
-                tableSessionId = tableSession.id,
-                userId = userId,
-            )
-        if (!member) {
-            throw ForbiddenException("Tab access denied")
-        }
-        val activeOrder =
-            ordersRepository.findActiveOrderDetailsForTab(
-                tableSessionId = tableSession.id,
-                tabId = tabId,
-            ) ?: throw NotFoundException()
+        val mutation =
+            if (userId == platformOwnerUserId) {
+                ensureGuestActionAvailable(table.venueId, guestVenueRepository, subscriptionRepository)
+                requireConfirmedPlatformGuestMutation(
+                    userId = userId,
+                    platformOwnerUserId = platformOwnerUserId,
+                    lifecycleRepository = guestTableContextLifecycleRepository,
+                    tableToken = token,
+                    expectedVenueId = table.venueId,
+                    expectedTableId = table.tableId,
+                    expectedTableSessionId = request.tableSessionId,
+                    ttl = tableSessionConfig.ttl,
+                ) { connection, confirmed ->
+                    if (
+                        !guestTabsRepository.isTabMember(
+                            connection = connection,
+                            tabId = tabId,
+                            venueId = table.venueId,
+                            tableSessionId = confirmed.tableSession.id,
+                            userId = userId,
+                        )
+                    ) {
+                        throw ForbiddenException("Tab access denied")
+                    }
+                    val activeOrder =
+                        ordersRepository.findActiveOrderDetailsForTab(
+                            connection = connection,
+                            tableSessionId = confirmed.tableSession.id,
+                            tabId = tabId,
+                        ) ?: throw NotFoundException()
+                    val tabs =
+                        guestTabsRepository.listTabsForUser(
+                            connection = connection,
+                            venueId = table.venueId,
+                            tableSessionId = confirmed.tableSession.id,
+                            userId = userId,
+                        )
+                    GuestBillMutationResult(
+                        tableSessionId = confirmed.tableSession.id,
+                        activeOrder = activeOrder,
+                        accountLabel = guestBillRequestAccountLabel(tabId = tabId, tabs = tabs),
+                        created =
+                            staffCallRepository.createGuestBillRequest(
+                                connection = connection,
+                                venueId = table.venueId,
+                                tableId = table.tableId,
+                                tableSessionId = confirmed.tableSession.id,
+                                tabId = tabId,
+                                orderId = activeOrder.orderId,
+                                createdByUserId = userId,
+                                paymentMethod = paymentMethod,
+                            ),
+                    )
+                }
+            } else {
+                val tableSession =
+                    tableSessionRepository.touchActiveSession(
+                        tableSessionId = request.tableSessionId,
+                        venueId = table.venueId,
+                        tableId = table.tableId,
+                        ttl = tableSessionConfig.ttl,
+                    ) ?: throw NotFoundException()
+                ensureGuestActionAvailable(table.venueId, guestVenueRepository, subscriptionRepository)
+                if (
+                    !guestTabsRepository.isTabMember(
+                        tabId = tabId,
+                        venueId = table.venueId,
+                        tableSessionId = tableSession.id,
+                        userId = userId,
+                    )
+                ) {
+                    throw ForbiddenException("Tab access denied")
+                }
+                val activeOrder =
+                    ordersRepository.findActiveOrderDetailsForTab(
+                        tableSessionId = tableSession.id,
+                        tabId = tabId,
+                    ) ?: throw NotFoundException()
+                val tabs =
+                    guestTabsRepository.listTabsForUser(
+                        venueId = table.venueId,
+                        tableSessionId = tableSession.id,
+                        userId = userId,
+                    )
+                GuestBillMutationResult(
+                    tableSessionId = tableSession.id,
+                    activeOrder = activeOrder,
+                    accountLabel = guestBillRequestAccountLabel(tabId = tabId, tabs = tabs),
+                    created =
+                        staffCallRepository.createGuestBillRequest(
+                            venueId = table.venueId,
+                            tableId = table.tableId,
+                            tableSessionId = tableSession.id,
+                            tabId = tabId,
+                            orderId = activeOrder.orderId,
+                            createdByUserId = userId,
+                            paymentMethod = paymentMethod,
+                        ),
+                )
+            }
+        val activeOrder = mutation.activeOrder
         val activeOrderDto =
             activeOrder.toDto(
                 table = table,
-                tableSessionId = tableSession.id,
+                tableSessionId = mutation.tableSessionId,
                 tabId = tabId,
             )
-        val tabs =
-            guestTabsRepository.listTabsForUser(
-                venueId = table.venueId,
-                tableSessionId = tableSession.id,
-                userId = userId,
-            )
-        val accountLabel = guestBillRequestAccountLabel(tabId = tabId, tabs = tabs)
-        val created =
-            staffCallRepository.createGuestBillRequest(
-                venueId = table.venueId,
-                tableId = table.tableId,
-                tableSessionId = tableSession.id,
-                tabId = tabId,
-                orderId = activeOrder.orderId,
-                createdByUserId = userId,
-                paymentMethod = paymentMethod,
-            )
+        val created = mutation.created
         if (!created.alreadyActive) {
             staffChatNotifier?.notifyBillRequestNow(
                 StaffBillRequestNotification(
@@ -281,7 +378,7 @@ fun Route.guestOrderRoutes(
                     tableLabel = table.tableNumber.toString(),
                     orderId = activeOrder.orderId,
                     orderDisplayLabel = orderDisplayLabel(activeOrder.displayNumber, activeOrder.orderId),
-                    accountLabel = accountLabel,
+                    accountLabel = mutation.accountLabel,
                     billTotalMinor = activeOrderDto.finalPayableTotalMinor,
                     billCurrency = activeOrderDto.currency,
                     paymentMethod = created.paymentMethod,
@@ -331,31 +428,7 @@ fun Route.guestOrderRoutes(
             val table =
                 call.rateLimitResolvedTableOrNull(addBatchResolvedTableAttribute)
                     ?: (tableTokenResolver(token) ?: throw NotFoundException())
-            val tableSession =
-                tableSessionRepository.touchActiveSession(
-                    tableSessionId = request.tableSessionId,
-                    venueId = table.venueId,
-                    tableId = table.tableId,
-                    ttl = tableSessionConfig.ttl,
-                ) ?: throw NotFoundException()
             val userId = call.requireUserId()
-            ensureGuestActionAvailable(table.venueId, guestVenueRepository, subscriptionRepository)
-            guestTabsRepository.ensurePersonalTab(
-                venueId = table.venueId,
-                tableSessionId = tableSession.id,
-                userId = userId,
-            )
-            val member =
-                guestTabsRepository.isTabMember(
-                    tabId = tabId,
-                    venueId = table.venueId,
-                    tableSessionId = tableSession.id,
-                    userId = userId,
-                )
-            if (!member) {
-                throw ForbiddenException("Tab access denied")
-            }
-
             val venueZoneId =
                 venueSettingsRepository.resolvePromotionZoneId(
                     table.venueId,
@@ -363,19 +436,90 @@ fun Route.guestOrderRoutes(
                 )
             val batch =
                 try {
-                    ordersRepository.createGuestOrderBatch(
-                        tableId = table.tableId,
-                        venueId = table.venueId,
-                        tableSessionId = tableSession.id,
-                        userId = userId,
-                        idempotencyKey = idempotencyKey,
-                        tabId = tabId,
-                        comment = comment,
-                        items = normalizedItems,
-                        venueZoneId = venueZoneId,
-                        giftDecisionCommand = giftDecision,
-                        expectedPreviewFingerprint = request.previewFingerprint?.trim()?.takeIf { it.isNotEmpty() },
-                    ) ?: throw NotFoundException()
+                    if (userId == platformOwnerUserId) {
+                        ensureGuestActionAvailable(table.venueId, guestVenueRepository, subscriptionRepository)
+                        requireConfirmedPlatformGuestMutation(
+                            userId = userId,
+                            platformOwnerUserId = platformOwnerUserId,
+                            lifecycleRepository = guestTableContextLifecycleRepository,
+                            tableToken = token,
+                            expectedVenueId = table.venueId,
+                            expectedTableId = table.tableId,
+                            expectedTableSessionId = request.tableSessionId,
+                            ttl = tableSessionConfig.ttl,
+                        ) { connection, confirmed ->
+                            guestTabsRepository.ensurePersonalTab(
+                                connection = connection,
+                                venueId = table.venueId,
+                                tableSessionId = confirmed.tableSession.id,
+                                userId = userId,
+                            )
+                            if (
+                                !guestTabsRepository.isTabMember(
+                                    connection = connection,
+                                    tabId = tabId,
+                                    venueId = table.venueId,
+                                    tableSessionId = confirmed.tableSession.id,
+                                    userId = userId,
+                                )
+                            ) {
+                                throw ForbiddenException("Tab access denied")
+                            }
+                            ordersRepository.createGuestOrderBatch(
+                                connection = connection,
+                                tableId = table.tableId,
+                                venueId = table.venueId,
+                                tableSessionId = confirmed.tableSession.id,
+                                userId = userId,
+                                idempotencyKey = idempotencyKey,
+                                tabId = tabId,
+                                comment = comment,
+                                items = normalizedItems,
+                                venueZoneId = venueZoneId,
+                                giftDecisionCommand = giftDecision,
+                                expectedPreviewFingerprint =
+                                    request.previewFingerprint?.trim()?.takeIf { it.isNotEmpty() },
+                            ) ?: throw NotFoundException()
+                        }
+                    } else {
+                        val tableSession =
+                            tableSessionRepository.touchActiveSession(
+                                tableSessionId = request.tableSessionId,
+                                venueId = table.venueId,
+                                tableId = table.tableId,
+                                ttl = tableSessionConfig.ttl,
+                            ) ?: throw NotFoundException()
+                        ensureGuestActionAvailable(table.venueId, guestVenueRepository, subscriptionRepository)
+                        guestTabsRepository.ensurePersonalTab(
+                            venueId = table.venueId,
+                            tableSessionId = tableSession.id,
+                            userId = userId,
+                        )
+                        if (
+                            !guestTabsRepository.isTabMember(
+                                tabId = tabId,
+                                venueId = table.venueId,
+                                tableSessionId = tableSession.id,
+                                userId = userId,
+                            )
+                        ) {
+                            throw ForbiddenException("Tab access denied")
+                        }
+                        ordersRepository.createGuestOrderBatch(
+                            tableId = table.tableId,
+                            venueId = table.venueId,
+                            tableSessionId = tableSession.id,
+                            userId = userId,
+                            idempotencyKey = idempotencyKey,
+                            tabId = tabId,
+                            comment = comment,
+                            items = normalizedItems,
+                            venueZoneId = venueZoneId,
+                            giftDecisionCommand = giftDecision,
+                            expectedPreviewFingerprint =
+                                request.previewFingerprint?.trim()?.takeIf { it.isNotEmpty() },
+                        ) ?: throw NotFoundException()
+                    }
                 } catch (_: GiftDecisionRequiredException) {
                     val authoritativePreview =
                         ordersRepository.previewGuestOrderBatch(
@@ -383,7 +527,7 @@ fun Route.guestOrderRoutes(
                             userId = userId,
                             items = normalizedItems,
                             venueZoneId = venueZoneId,
-                            tableSessionId = tableSession.id,
+                            tableSessionId = request.tableSessionId,
                             tabId = tabId,
                             comment = comment,
                             giftDecisionCommand = giftDecision,

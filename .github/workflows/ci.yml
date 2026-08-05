@@ -73,15 +73,117 @@ jobs:
           cache-key-prefix: ${{ runner.os }}-gradle-${{ hashFiles('gradle.properties', 'gradle/libs.versions.toml', 'settings.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties') }}
       - name: Verify Docker availability (required for Testcontainers)
         run: docker info
-      - name: Run guest venue platform route tests
+      - name: Run guest venue platform route and security tests
         run: |
-          ./gradlew --no-daemon :backend:app:test \
+          _JAVA_OPTIONS=-Xmx4g ./gradlew --no-daemon --max-workers=1 :backend:app:test \
             --tests "GuestVenueRoutesTest" \
             --tests "GuestOrderRoutesTest" \
             --tests "GuestTableResolveRoutesTest" \
+            --tests "GuestTableContextActivationRepositoryTest" \
+            --tests "GuestTableContextTeardownRepositoryTest" \
+            --tests "PlatformGuestTableMutationCoordinatorTest" \
+            --tests "PlatformGuestQrPendingConfirmationStoreTest" \
+            --tests "GuestTabsRoutesTest" \
+            --tests "GuestStaffCallRoutesTest" \
+            --tests "ShiftExtensionRoutesTest" \
+            --tests "SupportTicketRoutesTest" \
             --tests "VenueOrderRoutesTest" \
             --tests "PlatformVenueRoutesTest" \
+            --tests "TelegramBotRouterTableTokenTest" \
+            --tests "TelegramKeyboardsTest" \
             --console=plain
+      - name: Assert route and security test results
+        if: ${{ !cancelled() }}
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          from xml.etree import ElementTree
+
+          report_dir = Path("backend/app/build/test-results/test")
+          expected_classes = [
+              "com.hookah.platform.backend.miniapp.guest.GuestVenueRoutesTest",
+              "com.hookah.platform.backend.miniapp.guest.GuestOrderRoutesTest",
+              "com.hookah.platform.backend.miniapp.guest.GuestTableResolveRoutesTest",
+              "com.hookah.platform.backend.miniapp.guest.db.GuestTableContextActivationRepositoryTest",
+              "com.hookah.platform.backend.miniapp.guest.db.GuestTableContextTeardownRepositoryTest",
+              "com.hookah.platform.backend.miniapp.guest.db.PlatformGuestTableMutationCoordinatorTest",
+              "com.hookah.platform.backend.telegram.PlatformGuestQrPendingConfirmationStoreTest",
+              "com.hookah.platform.backend.miniapp.guest.GuestTabsRoutesTest",
+              "com.hookah.platform.backend.miniapp.guest.GuestStaffCallRoutesTest",
+              "com.hookah.platform.backend.miniapp.shift.ShiftExtensionRoutesTest",
+              "com.hookah.platform.backend.support.SupportTicketRoutesTest",
+              "com.hookah.platform.backend.miniapp.venue.VenueOrderRoutesTest",
+              "com.hookah.platform.backend.platform.PlatformVenueRoutesTest",
+              "com.hookah.platform.backend.telegram.TelegramBotRouterTableTokenTest",
+              "com.hookah.platform.backend.telegram.TelegramKeyboardsTest",
+          ]
+          totals = {key: 0 for key in ("tests", "skipped", "failures", "errors")}
+          problems = []
+          for class_name in expected_classes:
+              report = report_dir / f"TEST-{class_name}.xml"
+              if not report.is_file():
+                  problems.append(f"missing JUnit XML: {report}")
+                  continue
+              suite = ElementTree.parse(report).getroot()
+              counts = {key: int(suite.attrib.get(key, "0")) for key in totals}
+              for key, value in counts.items():
+                  totals[key] += value
+              if counts["tests"] <= 0:
+                  problems.append(f"no tests discovered: {class_name}")
+              if any(counts[key] for key in ("skipped", "failures", "errors")):
+                  problems.append(f"non-passing suite {class_name}: {counts}")
+
+          executed = totals["tests"] - totals["skipped"]
+          print(
+              "Route/security JUnit: "
+              f"discovered={totals['tests']} executed={executed} "
+              f"skipped={totals['skipped']} failures={totals['failures']} errors={totals['errors']}"
+          )
+          if problems:
+              raise SystemExit("\n".join(problems))
+          PY
+      - name: Run mandatory PostgreSQL activation rollback gate
+        if: ${{ !cancelled() }}
+        run: |
+          JAVA_TOOL_OPTIONS=-Dapi.version=1.44 _JAVA_OPTIONS=-Xmx4g \
+            ./gradlew --no-daemon --max-workers=1 :backend:app:test \
+            --tests "GuestTableContextActivationPostgresTest" \
+            --console=plain
+      - name: Assert PostgreSQL activation test results
+        if: ${{ !cancelled() }}
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          from xml.etree import ElementTree
+
+          report = Path(
+              "backend/app/build/test-results/test/"
+              "TEST-com.hookah.platform.backend.miniapp.guest.db."
+              "GuestTableContextActivationPostgresTest.xml"
+          )
+          if not report.is_file():
+              raise SystemExit(f"missing JUnit XML: {report}")
+          suite = ElementTree.parse(report).getroot()
+          required_rollback_scenarios = 8
+          counts = {
+              key: int(suite.attrib.get(key, "0"))
+              for key in ("tests", "skipped", "failures", "errors")
+          }
+          executed = counts["tests"] - counts["skipped"]
+          print(
+              "PostgreSQL activation JUnit: "
+              f"xml={report} discovered={counts['tests']} executed={executed} "
+              f"skipped={counts['skipped']} failures={counts['failures']} errors={counts['errors']} "
+              f"required_rollback_scenarios={required_rollback_scenarios}"
+          )
+          if counts["tests"] < required_rollback_scenarios:
+              raise SystemExit(
+                  "incomplete PostgreSQL activation rollback matrix: "
+                  f"required={required_rollback_scenarios} actual={counts['tests']}"
+              )
+          if any(counts[key] for key in ("skipped", "failures", "errors")):
+              raise SystemExit(f"PostgreSQL activation gate failed: {counts}")
+          PY
 
   backend-venue-booking-rbac:
     runs-on: ubuntu-latest

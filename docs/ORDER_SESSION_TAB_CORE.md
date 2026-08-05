@@ -1,8 +1,8 @@
 # Order / Session / Tab Core Model
 
-Дата актуализации: 2026-07-23.
+Дата актуализации: 2026-08-04.
 
-Статус: **current product reference / SPEC UPDATED**. Этот документ фиксирует product model для QR table context, active table order, order batches, personal/shared tabs, bill/request/close flow, visit-history foundation and privacy boundaries. Runtime status is mixed: the old table-only active-order risk and Guest History Foundation MVP are documented as closed in current audit notes, while force-close policy, some DB-level uniqueness nuances, repeat/feedback/loyalty/preorder and broader analytics remain future/partial.
+Статус: **current product reference / SPEC UPDATED**. Этот документ фиксирует product model для QR table context, active table order, order batches, personal/shared tabs, bill/request/close flow, visit-history foundation and privacy boundaries. Platform test status is **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**, schema verdict `NO_MIGRATION_EXPECTED`; staging Telegram/session/privacy smoke remains mandatory. Runtime status is mixed: the old table-only active-order risk and Guest History Foundation MVP are documented as closed in current audit notes, while force-close policy, some DB-level uniqueness nuances, repeat/feedback/loyalty/preorder and broader analytics remain future/partial.
 
 Analytics/event semantics for this core are defined in `docs/ANALYTICS_EVENTS.md`. Role, scope and trust-boundary decisions are defined in `docs/SECURITY_RBAC_MATRIX.md`. Structured menu, option/modifier and stop-list rules are defined in `docs/MENU_OPTIONS_STOPLIST.md`. Venue operational surfaces are defined in `docs/VENUE_OPERATIONS.md`. Booking seated/no-show lifecycle inputs are defined in `docs/BOOKING_LIFECYCLE.md`. Telegram fallback order and staff-chat behavior are defined in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. Testing/smoke strategy is defined in `docs/TESTING_QA_SMOKE_STRATEGY.md`. Release/deploy and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
 
@@ -25,6 +25,9 @@ The active order belongs to a verified table session/visit, not to a physical ta
 ## Core Invariants
 
 - QR/table token sets context, not permissions.
+- For exact Platform Owner, a table token creates no context/session until explicit controlled confirmation. The five-minute process-local opaque pending is not session state or authority and is lost safely on restart. Phase 1 uses single-instance long-polling; a callback missing on another instance fails closed.
+- Confirmed Platform Guest activation is all-or-nothing: final token/venue/table/availability/subscription validation, session resolve/create/touch, exit-marker clear, persisted Guest-dialog clear and exact chat-context save share one JDBC transaction. In-memory cart/draft cleanup follows commit only.
+- Exact Platform Owner Mini App create/touch or explicit-session resolve requires a matching active server-owned Telegram chat context and no user-exit marker. Client token, session id, `mode=guest` and Platform role are never sufficient authority.
 - All permissions and ownership checks are server-side.
 - Active orders must not mix different `table_session_id` values.
 - Guest active order view is scoped by `tableSessionId` + selected/current `tabId`.
@@ -48,7 +51,7 @@ The active order belongs to a verified table session/visit, not to a physical ta
 
 | Block | Current implementation from docs/audit | Target product model | Gap / future implementation note |
 | --- | --- | --- | --- |
-| `TABLE_SESSION` | QR resolve and table session creation exist. Guest exit is user-scoped through `guest_table_session_exits`; shared physical `table_sessions` are not closed for all guests by one guest exit. TTL cleanup exists. | Session represents the active venue/table visit context and has explicit close/expire/staff close semantics. | Staff force-close reason/audit and a product-level visit timeline need a dedicated future task if not already implemented. |
+| `TABLE_SESSION` | QR resolve and table session creation exist. Exact Platform Owner controlled test reuses this same Guest engine only after explicit confirm; prompt/cancel/audit failure create or touch no session, and activation late failures roll back session/context/exit/dialog together. Guest exit is user-scoped through `guest_table_session_exits`, uses saved context for teardown without current token/venue/table/subscription availability, and does not close a shared physical session for all guests. TTL cleanup exists. | Session represents the active venue/table visit context and has explicit close/expire/staff close semantics. | Staff force-close reason/audit and a product-level visit timeline need a dedicated future task if not already implemented. |
 | Active order lookup | Current docs state the old active-order-by-`table_id` risk is closed: active order is scoped by `table_session_id`; H2 mirrors PostgreSQL active-order uniqueness. | One active `ACTIVE_TABLE_ORDER` per current `table_session_id`/visit. | Keep regression smoke for sequential visits at same table. Do not re-open without new code/smoke evidence. |
 | Guest active order endpoint | Current docs state active order view uses `tableSessionId`/`tabId`, human `Заказ №...`, selected account label and selected-tab totals. | Guest sees only selected personal/shared tab context for the active session. | Keep privacy regression for two guests and shared tab membership. |
 | Order batch creation | `add-batch` exists; idempotency key does not duplicate batch; selected options and line notes are snapshotted where implemented. | Every batch belongs to active order + tab and records source `miniapp` / `bot_fallback`. | Source naming and analytics event completeness need verification before analytics work. |
@@ -70,6 +73,9 @@ The active order belongs to a verified table session/visit, not to a physical ta
 - History detail has `← Назад к истории`; Telegram BackButton inside detail returns to the History list, not app home.
 - After table session expiry/close or user-scoped exit, the guest must scan the table QR again to re-enter.
 - If the session is expired or unavailable, guest copy should be safe: `Отсканируйте QR на столе заново.`
+- A confirmed Platform Owner test is an ordinary Guest table context: the same menu/order/staff-call/tab rules and Guest Mini App `mode=guest` apply, with no Platform privilege inside Guest APIs.
+- Existing `Завершить визит` clears that actor's user-scoped context, persisted dialog, cart/draft and pending confirmation after token rotation/revoke, table disable/delete, venue pause/unpublish or subscription block. It records or preserves the user-exit marker when the linked session remains resolvable; if deletion makes that impossible, context and local Guest state are still cleared and re-entry remains fail-closed. Session detach/close is best-effort; cleanup and Platform menu restoration are not availability-dependent. No persistent impersonation/test flag or second session engine exists.
+- A tokenless `/start` during an active confirmed Platform Guest context keeps the Guest table menu or shows the safe instruction to use `Завершить визит`; it does not overlay Platform menu on active Guest routing. After exit, `/start` returns to Platform Mode.
 
 ## Venue / Staff UX
 
@@ -130,6 +136,7 @@ The active order belongs to a verified table session/visit, not to a physical ta
 - Platform does not need ordinary order detail by default unless support/audit policy explicitly allows it.
 - Telegram `callback_data` must use opaque ids/tokens and must not include raw sensitive data.
 - `table_token` and tab invite tokens are pointers, not authorities.
+- Platform role and opaque pending reference are not table authority. Confirm must revalidate exact actor/chat/TTL and commit safe `PLATFORM_GUEST_QR_TEST_CONFIRMED` before atomic Guest context activation. The audit means confirmation only, not `GUEST_CONTEXT_APPLIED`; activation performs the final token/published-venue/subscription/active-table/identity validation inside its transaction.
 - Rate-limit batch creation, staff call creation and tab invites.
 - Do not expose raw Telegram payloads, initData, secrets, provider payloads or unrelated PII in order/session/tab docs, DTOs, logs or analytics.
 
@@ -162,6 +169,7 @@ Use the canonical event envelope, naming convention and privacy rules from `docs
 - Runtime active-order table-only risk: documented as closed in current audit/roadmap; keep in regression.
 - Guest History Foundation MVP: `DONE / STAGING-SMOKE-PASSED`; keep privacy, terminal-status filtering, legacy closed-order detail compatibility, BackButton/list return and merge/dedup behavior in regression.
 - Remaining runtime status: `PARTIAL` for staff force-close policy/audit, some DB-level uniqueness nuances, repeat template, post-visit feedback, loyalty/preorder `visit_count` and broader analytics events.
+- Controlled Platform Guest QR test: **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**; `NO_MIGRATION_EXPECTED`, mandatory staging session/exit regression pending.
 - Growth dependencies can now build on the completed History foundation, but repeat template, feedback, loyalty/preorder and promotions still need their own implementation evidence.
 - Do not mark repeat, loyalty, preorder, promotions or feedback ready until each feature has code/test/smoke evidence.
 
@@ -192,3 +200,9 @@ Use the canonical event envelope, naming convention and privacy rules from `docs
 23. `← Назад к истории` and Telegram BackButton inside detail return to the History list.
 24. Real 404/error shows `Не удалось загрузить детали истории.`.
 25. Foreign detail returns 404, чужие personal/order details remain hidden, and booking `SEATED` + order closed does not double-count where merge/dedup applies.
+26. Platform Owner valid QR prompt leaves session, exit marker, persisted dialog, booking draft, cart/draft and context unchanged before confirm; cancel, stale token and audit failure create none.
+27. Late injected failure after session resolve/touch, exit clear or dialog clear rolls back session, exit, dialog and context together; the truthful confirmation audit may remain.
+28. Confirmed Platform Owner uses the same Guest table session/tab/action engine and Mini App `mode=guest`; matching server-owned chat context is required, and old token/session/button after exit fails closed without touch/create/personal-tab/exit-clear side effects.
+29. Exit clears context/dialog/cart/draft/pending and preserves exit semantics after token rotation/revoke, table disable/delete, venue pause/unpublish and subscription block, then returns to Platform menu.
+30. Tokenless `/start` keeps Guest routing while confirmed context is active and returns to Platform Mode only after exit.
+31. Ordinary Guest and Venue Owner/Manager/Staff QR/role precedence remains unchanged.

@@ -4,6 +4,8 @@
 
 Статус: **current product reference / UPDATED**. Runtime permission parity is **PARTIAL** unless a specific route, test or smoke result is cited by the relevant implementation task. The bounded OWNER/MANAGER menu shift-check permission is **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**; this does not close broader permission or dangerous-action audit parity. Staff module settings are `STAFF OPERATIONS SLICE B / OPTIONAL TEAM AND SCHEDULE MODULE / GUEST MANUAL OR SCHEDULE SOURCE / DONE / MVP / STAGING-SMOKE-PASSED`; green Actions, staging deploy and the bounded role/privacy smoke are complete without granting Manager broad `VENUE_SETTINGS`. Venue Mode operational surfaces are detailed in `docs/VENUE_OPERATIONS.md`; staff profile/manual-Today/optional-schedule/tips permissions are detailed in `docs/STAFF_PROFILES_SHIFTS_TIPS.md`; booking lifecycle permissions are detailed in `docs/BOOKING_LIFECYCLE.md`; Telegram fallback/staff-chat permissions are detailed in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`; menu/stop-list role policy is detailed in `docs/MENU_OPTIONS_STOPLIST.md`; venue media upload/storage security is detailed in `docs/MEDIA_STORAGE_UPLOAD.md`; validation strategy is detailed in `docs/TESTING_QA_SMOKE_STRATEGY.md`; release/deploy operations are detailed in `docs/DEPLOYMENT_RUNBOOK.md`.
 
+Platform Guest QR status: **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. Schema verdict is `NO_MIGRATION_EXPECTED`; independent review, green Actions and role/privacy smoke in real Telegram staging remain mandatory before release.
+
 ## Core Rule
 
 Server-side RBAC is the source of truth. Mini App navigation, Telegram keyboards and hidden buttons are convenience only; every read/write must verify actor, role, scope and entity ownership on the backend.
@@ -14,6 +16,9 @@ Tokens and client-provided ids are context pointers, not authority:
 - `table_session_id` is required for in-venue guest actions that mutate orders, tabs, staff calls or bill requests.
 - Tab invite token points to a shared-tab invitation; membership and state are still verified server-side.
 - Telegram `callback_data` must use opaque ids/tokens and must not contain secrets, raw provider data, raw initData, raw message text or unrelated PII.
+- Platform Guest QR confirm/cancel uses a short opaque reference to a five-minute process-local pending record bound to exact Platform Owner + chat + token + venue + table. The reference is not authority; restart, expiry, cancel or first valid conditional consumption invalidates the flow safely. Phase 1 is single-instance long-polling; a callback routed to another instance has no pending authority and fails closed.
+- Exact Platform Owner Guest Mini App create/touch or explicit-session resolve requires the matching active server-owned Telegram chat context and no user-exit marker. Client `mode=guest`, token/session id and Platform role cannot recreate context after exit.
+- Exact Platform Owner authoritative table-bound Guest mutations lock that same chat-context row first and run final context/session/exit authorization plus order/bill, staff-call, tab, shift-extension or support ticket/message/status/read-receipt write in one JDBC transaction. `tableToken` on support always invokes the guard, including token-only requests; a client token never supplies authority or a session.
 - Staff-chat callbacks are shortcuts only; every callback must re-check actor role, venue scope and entity state server-side.
 - Client analytics events are low-trust diagnostics and cannot drive money, access, billing, order state or venue lifecycle.
 
@@ -115,6 +120,7 @@ Target decision: remove `ADMIN` from the product model and keep it only as a com
 | Platform Owner | Ordinary `VENUE_CHAT` access | Venue chats | Denied by current target unless a future product policy explicitly changes it. |
 | Platform Owner | Ordinary venue Guest Preview access | Venue scope | Not granted automatically by platform scope. The Venue preview route requires an allowed OWNER/MANAGER membership in that venue. |
 | Platform Owner | Ordinary Staff Schedule access | Venue scope | Not granted automatically in Phase 1. A real own-venue membership and its venue role are required. |
+| Platform Owner | Controlled Guest QR test after explicit Telegram confirmation | One currently published, subscription-allowed, active table context | Current bounded runtime. Exact Platform Owner only; no unpublished/subscription/table bypass, no Venue mutation permission and no persistent impersonation. Confirmed context uses ordinary Guest session/tab/API rules until existing visit exit. |
 
 ## Surface Parity Matrix
 
@@ -130,7 +136,7 @@ Target decision: remove `ADMIN` from the product model and keep it only as a com
 | Menu/stop-list | Bot owner/manager/staff paths where implemented; no Phase 1 shift-check UI. | Guest read/order only after QR. | Owner/Manager manage and have `MENU_SHIFT_CHECK`; Staff keeps individual availability only and has no shift-check entry/API. | No ordinary menu management or automatic Venue shift-check authority. | No source-of-truth edits. | Shift-check batch is own-venue, atomic and audited; existing individual stop-list policy is unchanged. |
 | Promotions | Existing Telegram templates and shared server-owned Happy Hours preview/submit. | Informational read plus current server-owned Happy Hours cart breakdown/submit. | Owner/Manager manage informational and bounded Happy Hours rules; Staff denied. | No ordinary venue promotion management. | Persisted order facts only. | One backend engine; Bot/Mini App clients never calculate trusted discounts. |
 | Venue card preview | Existing owner/manager guest-preview callbacks. | The real published public card. | One `Предпросмотр для гостя` renderer: server-selected `PUBLISHED_PUBLIC` uses the exact Guest read model; `PRIVATE_DRAFT` uses an own-venue saved public allowlist. Staff has no entry. | No automatic access. | No. | No Guest bypass, mutations, public URL, share token or cache. Private media delivery is authenticated and venue/section/media-scoped; raw refs are excluded. |
-| Tables/QR | Bot management where implemented. | QR context only. | Owner/Manager table/QR where allowed; Staff read-only. | No ordinary venue table management unless platform support policy says so. | No. | QR token is context pointer. |
+| Tables/QR | Bot management where implemented; exact Platform Owner has opaque confirm/cancel for a guarded Guest QR test. | QR context only; confirmed test uses ordinary Guest `mode=guest`. | Owner/Manager table/QR where allowed; Staff read-only and receives no test escape. | No ordinary venue table management; tokenless `/start` stays in active confirmed Guest routing until explicit exit, otherwise opens Platform Mode. | No. | QR/pending reference is context only; activation atomically revalidates actor context, token, venue, subscription and table before apply. Old Mini App token/session entry after exit fails closed. |
 | Staff invites | Bot invite acceptance. | No. | Owner/Manager invite where allowed. | OWNER invite/revoke. | No. | Last-owner protection server-side. |
 | Staff schedule | No Phase 1 flow. | Current public presence only through the shared Guest resolver; no direct schedule access. | `STAFF SCHEDULE PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`: Owner/Manager `График смен`; Staff read-only `Мои смены`; explicit restore/bulk is smoke-passed. Slice B guards these surfaces when master is off. | No automatic authority. | No Phase 1 flow. | Venue Mini App is source of truth; effective hours are defaults only. `MANUAL` and `SCHEDULE` never fall back to each other or expose future/full/private schedule data. |
 | Settings | Bot owner/manager setup where implemented. | No management. | Owner/Manager settings where allowed; Slice B Team/Schedule settings use the narrow own-venue permission; Staff none. | Platform settings for platform scope; no automatic Venue Slice B authority. | No. | UI hiding is not enough; tenant/RBAC checks precede module-state reads. |
@@ -147,6 +153,7 @@ These actions require server-side authorization and should require confirmation,
 | Role granted/revoked; owner changed; last-owner removal attempted | Audit actor/target/old-new role; block last active Owner removal. |
 | Venue published/hidden/paused/suspended/archived/deleted | Confirmation and audit with reason/status where implemented. |
 | Table QR token rotated/exported | Confirmation and audit; old/revoked token must not resolve. |
+| Platform Owner confirms controlled Guest QR test | Exact Platform Owner + exact chat + unexpired opaque pending only; one conditional consume wins, then commit `PLATFORM_GUEST_QR_TEST_CONFIRMED` before atomic Guest context activation. Audit uses standard actor plus safe venue/table/source only and excludes raw token/hash, callback, initData and Telegram PII. It records confirmation only and is not `GUEST_CONTEXT_APPLIED`; final token/venue/table/public-availability/subscription revalidation and all authoritative Guest-state writes share the activation transaction. |
 | Staff chat linked/unlinked/tested | Confirmation for unlink; audit/link evidence without raw secrets. |
 | Menu price changed; item archived; option schema changed; media removed; Staff stop-list toggled; stop-list mass update | Audit safe old/new fields; no raw media/provider payloads. Shift-check completion requires explicit confirmation and exactly one `MENU_SHIFT_CHECK_COMPLETED` audit in the same transaction, including no-op completion. |
 | Venue media uploaded/replaced/hidden/shown/deleted | OWNER/MANAGER own venue only; strict content validation; audit safe asset/status metadata; never expose source ref, object/path key, Telegram file id or storage credentials. |
@@ -171,7 +178,7 @@ These actions require server-side authorization and should require confirmation,
 | Staff access | Staff support/venue-chat denial and operational scope are documented/smoked for current MVP. Current menu docs allow Staff item/option availability. | Staff sees operations only: orders, staff calls, allowed booking actions, menu/table read and stop-list only when enabled by venue policy. | Direct API denial tests remain critical for every new support/chat/billing/settings/menu route. |
 | Menu shift check | OWNER/MANAGER own-venue `MENU_SHIFT_CHECK`, Staff/foreign denial, bounded input, ownership checks, optimistic stale rejection and transactional audit are staging-smoke-passed. | One authenticated actor confirms one all-or-nothing availability review; the client supplies no actor, owner, names, prices or private metadata. | Keep role/tenant/audit denial in regression. Platform Owner receives no automatic Venue-route authority; Telegram shift-check UI is not part of Phase 1. |
 | Manager/Owner venue isolation | Own-venue RBAC is the product rule. | No cross-venue detail/reply/manage access. | Keep cross-venue tests for support, chats, orders, bookings and settings. |
-| Platform access | Platform Owner can manage platform scope and support tickets; ordinary venue chat hidden. | Platform does not bypass ordinary venue RBAC by default. | Event/audit explorer and analytics exports need additional privacy gates before broad release. |
+| Platform access | Platform Owner can manage platform scope and support tickets; ordinary venue chat is hidden. The bounded confirmed QR test enters the normal public Guest table flow only. Activation is atomic; teardown uses stored context identity and remains possible when token/table/venue/subscription becomes unavailable. | Platform does not bypass ordinary venue RBAC. Explicit Guest context temporarily wins routing only for ordinary Guest actions and is cleared by existing visit exit. Mini App re-entry requires matching chat context and no exit marker. | Event/audit explorer and analytics exports need additional privacy gates before broad release; controlled QR test still requires staging smoke. |
 | Dangerous action audit | Several audits exist: owner invite/revoke, billing mark-paid/courtesy, staff-call ACK/DONE, support status/scope, lifecycle/status where implemented. | All dangerous actions write safe actor/target/old-new/reason evidence. | Audit coverage remains `PARTIAL` until menu price, QR rotate, force close, tab reopen and analytics export are verified. |
 | Promotion configuration/status mutation audit | `PARTIAL / P2 FOLLOW-UP`. Promotion management is server-authorized, but there is not yet complete actor plus safe old/new rule/config/status evidence for every mutation. | Record actor, venue/promotion/rule identity, version and safe old/new schedule, target, reward and status evidence. | Do not treat promotion mutation audit as `DONE` until a separate implementation and verification slice closes this gap. |
 | Promotion financial compatibility | Current slices have bounded percentage/manual-discount and gift reward guards, but no documented common cross-promotion conflict policy. Gift smoke observed Happy Hours Percentage and Gift With Item together; this is not a confirmed runtime bug. | One server-owned, reward-type-aware policy uses `STACKABLE`, `EXCLUSIVE` or `OVERRIDE`, explicit priority and deterministic winner/tie-break rules for all executable promotions and manual discounts. | `AUDIT / FUTURE IMPLEMENTATION`. Fail closed against accidental discount addition; later loyalty, promo codes and cashback must reuse the same mechanism. |
@@ -280,6 +287,27 @@ These actions require server-side authorization and should require confirmation,
     Schedule dedupe occurs; only Owner opens the concrete wrong card and uses safe unlink.
 49. Pending invites contain no recipient identity. Accepted membership replaces pending state with
     the current safe projection; venue/account switches clear cached identity/link state.
+50. Platform Owner `/start` without a token shows Platform menu only without active confirmed Guest
+    context. While context is active it keeps Guest routing and shows the table menu or safe exit instruction.
+51. A valid table token shows safe public venue/table labels but does not mutate Guest context,
+    table session, exit marker, persisted dialog, booking draft, cart/draft or success audit before
+    explicit confirmation.
+52. Confirm requires the exact Platform Owner, chat, opaque reference and live TTL. Exactly one
+    conditional consume wins; then the safe confirmation-only audit is written before one transaction
+    finally re-resolves token and guards and atomically changes session, exit, dialog and exact context.
+    Audit failure creates no Guest context; activation failure rolls back authoritative Guest state.
+53. Guest, Staff, Manager, Venue Owner, inactive/non-owner actor, wrong chat/reference, expired,
+    canceled, missing and already consumed pending callbacks fail closed without an existence oracle.
+54. Confirmed Platform Owner receives only ordinary Guest table/session/tab/API and Mini App
+    `mode=guest` behavior. Mini App create/touch and explicit old session require matching active chat
+    context and no exit marker; denial creates no session/tab, touches nothing and clears no exit.
+55. Every exact-Platform table-bound order/bill, staff-call, tab, shift-extension and support mutation
+    shares the exit chat-context lock and commits final authorization with the domain write. Support
+    `tableToken` without `tableSessionId` derives identity/session only from the confirmed context;
+    missing, exited or mismatched context returns the same safe denial and writes no ticket/message/read row.
+56. `Завершить визит` clears context/dialog/cart/draft/pending and preserves exit semantics even after
+    token rotation/revoke, table disable/delete, venue pause/unpublish or subscription block, then
+    restores Platform precedence. Ordinary Guest and venue-role behavior remains unchanged.
 
 ## Roadmap Status
 
@@ -303,6 +331,7 @@ These actions require server-side authorization and should require confirmation,
 - Menu shift check: **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**; keep
   role/tenant/audit denial and unchanged Staff individual stop-list policy in regression.
 - Dangerous action audit: `PARTIAL` until all listed dangerous actions have verified audit evidence.
+- Controlled Platform Guest QR test: **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**; schema verdict `NO_MIGRATION_EXPECTED`, staging role/privacy smoke required.
 - Promotion configuration/status mutation audit: `PARTIAL / P2 FOLLOW-UP`; complete actor plus safe old/new rule/config/status evidence is not implemented yet.
 - Promotion Compatibility Policy: `AUDIT / FUTURE IMPLEMENTATION`; no common cross-promotion
   financial conflict policy has implementation or verification evidence yet.

@@ -1,5 +1,7 @@
 package com.hookah.platform.backend.miniapp.guest
 
+import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.NotFoundException
 import com.hookah.platform.backend.miniapp.guest.api.RestoredTableContextResponse
@@ -7,8 +9,11 @@ import com.hookah.platform.backend.miniapp.guest.api.TableResolveResponse
 import com.hookah.platform.backend.miniapp.guest.api.TableRestoreResponse
 import com.hookah.platform.backend.miniapp.guest.api.TableSessionEndRequest
 import com.hookah.platform.backend.miniapp.guest.api.TableSessionEndResponse
+import com.hookah.platform.backend.miniapp.guest.db.GuestTableContextLifecycleRepository
+import com.hookah.platform.backend.miniapp.guest.db.GuestTableTeardownResult
 import com.hookah.platform.backend.miniapp.guest.db.GuestTabsRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
+import com.hookah.platform.backend.miniapp.guest.db.PlatformGuestTableResolveResult
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionEndBlockedReason
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRecord
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
@@ -23,6 +28,7 @@ import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
+import kotlinx.coroutines.CancellationException
 import java.time.Instant
 
 fun Route.guestTableResolveRoutes(
@@ -32,12 +38,55 @@ fun Route.guestTableResolveRoutes(
     tableSessionRepository: TableSessionRepository,
     tableSessionConfig: TableSessionConfig,
     guestTabsRepository: GuestTabsRepository,
+    platformOwnerUserId: Long? = null,
+    guestTableContextLifecycleRepository: GuestTableContextLifecycleRepository? = null,
+    afterPlatformGuestTeardown: (suspend (chatId: Long, actorUserId: Long) -> Unit)? = null,
 ) {
     get("/table/restore") {
         val userId = call.requireUserId()
         val restored = guestTabsRepository.findLatestRestorableTableContext(userId)
         if (restored == null) {
             call.respondNoRestoredTableContext()
+            return@get
+        }
+
+        if (userId == platformOwnerUserId) {
+            when (
+                val guarded =
+                    guestTableContextLifecycleRepository?.resolvePlatformMiniApp(
+                        actorUserId = userId,
+                        tableToken = restored.tableToken,
+                        expectedVenueId = restored.venueId,
+                        expectedTableId = restored.tableId,
+                        requestedTableSessionId = restored.tableSessionId,
+                        ttl = tableSessionConfig.ttl,
+                    ) ?: PlatformGuestTableResolveResult.DatabaseUnavailable
+            ) {
+                is PlatformGuestTableResolveResult.Allowed ->
+                    call.respond(
+                        TableRestoreResponse(
+                            context =
+                                RestoredTableContextResponse(
+                                    tableToken = guarded.context.tableToken,
+                                    tabId = guarded.personalTab.id,
+                                    venueId = guarded.context.venueId,
+                                    venueName = guarded.context.venueName,
+                                    tableId = guarded.context.tableId,
+                                    tableSessionId = guarded.tableSession.id,
+                                    tableSessionStatus = guarded.tableSession.status.name,
+                                    tableSessionActive = true,
+                                    tableSessionInactiveReason = null,
+                                    tableNumber = guarded.context.tableNumber.toString(),
+                                    venueStatus = guarded.venueStatus.dbValue,
+                                    subscriptionStatus = guarded.subscriptionStatus.wire,
+                                    available = true,
+                                    unavailableReason = null,
+                                ),
+                        ),
+                    )
+                PlatformGuestTableResolveResult.Denied -> call.respondNoRestoredTableContext()
+                PlatformGuestTableResolveResult.DatabaseUnavailable -> throw DatabaseUnavailableException()
+            }
             return@get
         }
 
@@ -100,7 +149,48 @@ fun Route.guestTableResolveRoutes(
             }
         val allowCreateSession = call.request.queryParameters["resolveMode"] == "create"
 
-        val table = tableTokenResolver(token) ?: throw NotFoundException()
+        val table =
+            tableTokenResolver(token)
+                ?: if (userId == platformOwnerUserId) {
+                    throw ForbiddenException(PLATFORM_GUEST_RECONFIRM_MESSAGE)
+                } else {
+                    throw NotFoundException()
+                }
+        if (userId == platformOwnerUserId) {
+            when (
+                val guarded =
+                    guestTableContextLifecycleRepository?.resolvePlatformMiniApp(
+                        actorUserId = userId,
+                        tableToken = token,
+                        expectedVenueId = table.venueId,
+                        expectedTableId = table.tableId,
+                        requestedTableSessionId = requestedTableSessionId,
+                        ttl = tableSessionConfig.ttl,
+                    ) ?: PlatformGuestTableResolveResult.DatabaseUnavailable
+            ) {
+                is PlatformGuestTableResolveResult.Allowed ->
+                    call.respond(
+                        TableResolveResponse(
+                            venueId = guarded.context.venueId,
+                            venueName = guarded.context.venueName,
+                            tableId = guarded.context.tableId,
+                            tableSessionId = guarded.tableSession.id,
+                            tableSessionStatus = guarded.tableSession.status.name,
+                            tableSessionActive = true,
+                            tableSessionInactiveReason = null,
+                            tableNumber = guarded.context.tableNumber.toString(),
+                            venueStatus = guarded.venueStatus.dbValue,
+                            subscriptionStatus = guarded.subscriptionStatus.wire,
+                            available = true,
+                            unavailableReason = null,
+                        ),
+                    )
+                PlatformGuestTableResolveResult.Denied ->
+                    throw ForbiddenException(PLATFORM_GUEST_RECONFIRM_MESSAGE)
+                PlatformGuestTableResolveResult.DatabaseUnavailable -> throw DatabaseUnavailableException()
+            }
+            return@get
+        }
         val venue = ensureVenuePublishedForGuest(table.venueId, guestVenueRepository)
         val subscriptionStatus = subscriptionRepository.getSubscriptionStatus(table.venueId)
         val availability = VenueAvailabilityResolver.resolve(venue.status, subscriptionStatus)
@@ -185,6 +275,48 @@ fun Route.guestTableResolveRoutes(
         val tableSessionId =
             request.tableSessionId.takeIf { it > 0 }
                 ?: throw InvalidInputException("tableSessionId must be a positive number")
+        if (userId == platformOwnerUserId) {
+            when (
+                val guarded =
+                    guestTableContextLifecycleRepository?.teardownByActorAndToken(
+                        actorUserId = userId,
+                        tableToken = token,
+                        expectedTableSessionId = tableSessionId,
+                    ) ?: GuestTableTeardownResult.DatabaseUnavailable
+            ) {
+                is GuestTableTeardownResult.Cleared -> {
+                    try {
+                        afterPlatformGuestTeardown?.invoke(guarded.identity.chatId, userId)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        // Authoritative teardown is already committed; menu notification is best-effort.
+                    }
+                    call.respond(
+                        TableSessionEndResponse(
+                            ended = true,
+                            tableSessionId = guarded.tableSessionId ?: tableSessionId,
+                            blockedReason = null,
+                            message = "Визит завершён. Чтобы снова заказать за столом, отсканируйте QR.",
+                        ),
+                    )
+                }
+                is GuestTableTeardownResult.Blocked ->
+                    call.respond(
+                        TableSessionEndResponse(
+                            ended = false,
+                            tableSessionId = guarded.tableSessionId,
+                            blockedReason = guarded.reason.name,
+                            message = guarded.reason.endVisitMessage(ended = false),
+                        ),
+                    )
+                GuestTableTeardownResult.Missing,
+                GuestTableTeardownResult.Denied,
+                -> throw ForbiddenException(PLATFORM_GUEST_RECONFIRM_MESSAGE)
+                GuestTableTeardownResult.DatabaseUnavailable -> throw DatabaseUnavailableException()
+            }
+            return@post
+        }
         val table = tableTokenResolver(token) ?: throw NotFoundException()
         val result =
             tableSessionRepository.endUserTableSession(
@@ -235,3 +367,6 @@ private fun TableSessionEndBlockedReason?.endVisitMessage(ended: Boolean): Strin
             "Дождитесь завершения вызова персонала или обратитесь к сотруднику."
         null -> if (ended) "Визит завершён. Чтобы снова заказать за столом, отсканируйте QR." else null
     }
+
+internal const val PLATFORM_GUEST_RECONFIRM_MESSAGE =
+    "Откройте QR-код ещё раз и подтвердите вход в Telegram."
