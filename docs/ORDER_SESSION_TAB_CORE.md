@@ -1,8 +1,8 @@
 # Order / Session / Tab Core Model
 
-Дата актуализации: 2026-08-04.
+Дата актуализации: 2026-08-05.
 
-Статус: **current product reference / SPEC UPDATED**. Этот документ фиксирует product model для QR table context, active table order, order batches, personal/shared tabs, bill/request/close flow, visit-history foundation and privacy boundaries. Platform test status is **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**, schema verdict `NO_MIGRATION_EXPECTED`; staging Telegram/session/privacy smoke remains mandatory. Runtime status is mixed: the old table-only active-order risk and Guest History Foundation MVP are documented as closed in current audit notes, while force-close policy, some DB-level uniqueness nuances, repeat/feedback/loyalty/preorder and broader analytics remain future/partial.
+Статус: **current product reference / SPEC UPDATED**. Этот документ фиксирует product model для QR table context, active table order, order batches, personal/shared tabs, bill/request/close flow, visit-history foundation and privacy boundaries. Platform test status is **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / DONE / MVP / STAGING-SMOKE-PASSED**, schema verdict `NO_MIGRATION`; the bounded Telegram/session/privacy smoke is complete. Runtime status is mixed: the old table-only active-order risk and Guest History Foundation MVP are documented as closed in current audit notes, while force-close policy, some DB-level uniqueness nuances, repeat/feedback/loyalty/preorder and broader analytics remain future/partial.
 
 Analytics/event semantics for this core are defined in `docs/ANALYTICS_EVENTS.md`. Role, scope and trust-boundary decisions are defined in `docs/SECURITY_RBAC_MATRIX.md`. Structured menu, option/modifier and stop-list rules are defined in `docs/MENU_OPTIONS_STOPLIST.md`. Venue operational surfaces are defined in `docs/VENUE_OPERATIONS.md`. Booking seated/no-show lifecycle inputs are defined in `docs/BOOKING_LIFECYCLE.md`. Telegram fallback order and staff-chat behavior are defined in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. Testing/smoke strategy is defined in `docs/TESTING_QA_SMOKE_STRATEGY.md`. Release/deploy and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
 
@@ -169,7 +169,7 @@ Use the canonical event envelope, naming convention and privacy rules from `docs
 - Runtime active-order table-only risk: documented as closed in current audit/roadmap; keep in regression.
 - Guest History Foundation MVP: `DONE / STAGING-SMOKE-PASSED`; keep privacy, terminal-status filtering, legacy closed-order detail compatibility, BackButton/list return and merge/dedup behavior in regression.
 - Remaining runtime status: `PARTIAL` for staff force-close policy/audit, some DB-level uniqueness nuances, repeat template, post-visit feedback, loyalty/preorder `visit_count` and broader analytics events.
-- Controlled Platform Guest QR test: **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**; `NO_MIGRATION_EXPECTED`, mandatory staging session/exit regression pending.
+- Controlled Platform Guest QR test: **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / DONE / MVP / STAGING-SMOKE-PASSED**; `NO_MIGRATION`, with session/exit, old-link fail-closed, new-confirmation and ordinary-role regression covered by the bounded release evidence.
 - Growth dependencies can now build on the completed History foundation, but repeat template, feedback, loyalty/preorder and promotions still need their own implementation evidence.
 - Do not mark repeat, loyalty, preorder, promotions or feedback ready until each feature has code/test/smoke evidence.
 

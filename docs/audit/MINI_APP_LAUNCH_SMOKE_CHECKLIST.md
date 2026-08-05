@@ -1,6 +1,6 @@
 # Mini App Launch Smoke Checklist
 
-Дата: 2026-08-04.
+Дата: 2026-08-05.
 
 Цель: зафиксировать launch smoke/e2e coverage для core Mini App сценариев без изменения бизнес-логики. В `miniapp/package.json` есть `dev`, `build`, `preview` и минимальный browser smoke `e2e:smoke`. Поэтому стратегия на этот шаг гибридная:
 
@@ -11,6 +11,11 @@
 
 Актуальный scope после последних fix-pack'ов:
 
+- Platform Owner controlled Guest QR test is **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE /
+  DONE / MVP / STAGING-SMOKE-PASSED** with `NO_MIGRATION`: green Actions, staging deploy, one
+  backend instance and the bounded 15-scenario Telegram role/privacy/exit smoke are complete. The
+  exact scenario record remains canonical in `docs/TESTING_QA_SMOKE_STRATEGY.md`; broader Platform
+  menu parity remains partial.
 - pre-QR Guest catalog/card shows only public venue info, booking entry and `ℹ️ Информация`; structured order menu is hidden until QR/table context.
 - Catalog Search and Filter Phase 1 is **CATALOG SEARCH AND FILTER PHASE 1 / DONE / MVP /
   STAGING-SMOKE-PASSED**: backend `q`/`city`, complete city options, 300 ms debounce,

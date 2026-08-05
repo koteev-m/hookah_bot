@@ -1,8 +1,8 @@
 # Platform Cockpit Model
 
-Дата актуализации: 2026-08-04.
+Дата актуализации: 2026-08-05.
 
-Статус: **current product reference** for Platform Mode. Platform guest QR status is **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**, schema verdict `NO_MIGRATION_EXPECTED`; independent review, green Actions, staging deploy and real Telegram smoke remain mandatory. Use this document together with `docs/UPDATED_PRODUCT_AI_ROADMAP.md`, `docs/COMMUNICATION_MODEL.md`, `docs/SECURITY_RBAC_MATRIX.md` and `docs/ANALYTICS_EVENTS.md` before opening new Platform, billing, support or analytics tasks.
+Статус: **current product reference** for Platform Mode. Platform guest QR status is **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / DONE / MVP / STAGING-SMOKE-PASSED**, schema verdict `NO_MIGRATION`; commit/push, green Actions for the release HEAD, staging deploy and the bounded real Telegram smoke are complete. This does not make the whole product production-ready or close broader Platform/Guest parity. Use this document together with `docs/UPDATED_PRODUCT_AI_ROADMAP.md`, `docs/COMMUNICATION_MODEL.md`, `docs/SECURITY_RBAC_MATRIX.md` and `docs/ANALYTICS_EVENTS.md` before opening new Platform, billing, support or analytics tasks.
 
 ## Scope
 
@@ -130,7 +130,7 @@ Safety rules:
 
 - Platform permissions, dangerous actions and audit expectations are canonical in `docs/SECURITY_RBAC_MATRIX.md`.
 - Do not expose secrets, raw Telegram payloads, provider raw payloads, `.env`, initData, callback payloads or unrelated PII in Platform dashboards, audit payloads or support cards.
-- Platform Owner Telegram menu parity remains partial. The bounded Guest QR escape is locally validated only: exact actor/chat opaque TTL pending, single-transaction activation with final token/venue/subscription/table revalidation, server-owned Mini App re-entry guard, availability-independent exit and ordinary Guest `mode=guest`; staging smoke is still required.
+- Platform Owner Telegram menu parity remains partial. The bounded Guest QR escape is staging-closed: exact actor/chat opaque TTL pending, single-transaction activation with final token/venue/subscription/table revalidation, server-owned Mini App re-entry guard, availability-independent exit and ordinary Guest `mode=guest` stay in regression.
 - Prefer safe aggregate metrics and opaque ids unless an operator needs a specific entity id for support.
 - Client events are lower-trust UX diagnostics and must not drive money, access, billing, order state or venue lifecycle.
 

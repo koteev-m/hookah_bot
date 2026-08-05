@@ -1,8 +1,8 @@
 # Platform Owner
 
-Дата актуализации: 2026-08-04.
+Дата актуализации: 2026-08-05.
 
-Статус: **current role reference**. Controlled test status: **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**, schema verdict `NO_MIGRATION_EXPECTED`; independent review, green Actions, staging deploy and real Telegram smoke remain mandatory. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. Platform cockpit model: `docs/PLATFORM_COCKPIT.md`. Venue operations model: `docs/VENUE_OPERATIONS.md`. Booking lifecycle model: `docs/BOOKING_LIFECYCLE.md`. Telegram fallback/staff-chat model: `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. Security/RBAC model: `docs/SECURITY_RBAC_MATRIX.md`. Menu/options/stop-list model: `docs/MENU_OPTIONS_STOPLIST.md`. Analytics/events model: `docs/ANALYTICS_EVENTS.md`. Guest growth/retention model: `docs/GROWTH_RETENTION.md`. Testing/QA smoke strategy: `docs/TESTING_QA_SMOKE_STRATEGY.md`. Deployment/runbook operations: `docs/DEPLOYMENT_RUNBOOK.md`.
+Статус: **current role reference**. Controlled test status: **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / DONE / MVP / STAGING-SMOKE-PASSED**, schema verdict `NO_MIGRATION`; commit/push, green Actions for the release HEAD, staging deploy and the bounded real Telegram smoke are complete. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. Platform cockpit model: `docs/PLATFORM_COCKPIT.md`. Venue operations model: `docs/VENUE_OPERATIONS.md`. Booking lifecycle model: `docs/BOOKING_LIFECYCLE.md`. Telegram fallback/staff-chat model: `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. Security/RBAC model: `docs/SECURITY_RBAC_MATRIX.md`. Menu/options/stop-list model: `docs/MENU_OPTIONS_STOPLIST.md`. Analytics/events model: `docs/ANALYTICS_EVENTS.md`. Guest growth/retention model: `docs/GROWTH_RETENTION.md`. Testing/QA smoke strategy: `docs/TESTING_QA_SMOKE_STRATEGY.md`. Deployment/runbook operations: `docs/DEPLOYMENT_RUNBOOK.md`.
 
 ## Current status
 
@@ -26,7 +26,7 @@ Recent milestones:
 - Platform Billing Cockpit / Owner Payment UX: **CLOSED / staging smoke passed**.
 - Platform Billing Renewal / Advance Invoice / Courtesy Days: **CLOSED / staging smoke passed**.
 - Support/Tickets MVP beyond booking threads: **CLOSED / smoke passed** for Platform support-ticket visibility/reply/close and transferred-ticket handling.
-- Controlled Guest QR test: **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**; exact Platform Owner only, no staging result claimed.
+- Controlled Guest QR test: **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / DONE / MVP / STAGING-SMOKE-PASSED**; exact Platform Owner only, bounded staging result complete, no broader Platform/Venue authority granted.
 
 Canonical identity:
 - основной ключ: `PLATFORM_OWNER_TELEGRAM_ID`;
@@ -148,7 +148,7 @@ Needed Platform analytics remain future/partial:
 
 - Platform Owner role does not bypass venue-specific RBAC for ordinary venue operations unless the user also has a venue membership.
 - Ordinary Venue Mode operations are governed by `docs/VENUE_OPERATIONS.md`; booking lifecycle operations are governed by `docs/BOOKING_LIFECYCLE.md`; Telegram fallback/staff-chat behavior is governed by `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`; Platform Mode should not become the normal order/staff-call/booking/menu workspace.
-- Controlled Guest QR test is locally validated but not staging-closed. It grants no Venue operation bypass or persistent impersonation; Telegram platform menu parity outside this bounded flow remains partial.
+- Controlled Guest QR test is staging-closed for the bounded single-instance Phase 1. It grants no Venue operation bypass or persistent impersonation; Telegram platform menu parity outside this bounded flow remains partial.
 - Testing/QA smoke strategy is `UPDATED` in `docs/TESTING_QA_SMOKE_STRATEGY.md`: Platform/billing/security changes require focused backend tests, audit checks, GitHub Actions and staging smoke when runtime behavior changes.
 - `DELETED` venues should not appear in normal guest/owner/platform lists.
 - Hard delete is not part of normal flow for real venues with orders/bookings/payments/history.

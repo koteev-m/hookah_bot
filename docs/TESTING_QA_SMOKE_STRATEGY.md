@@ -1,6 +1,6 @@
 # Testing / QA Smoke Strategy
 
-Дата актуализации: 2026-08-04.
+Дата актуализации: 2026-08-05.
 
 Статус: **current product reference / UPDATED**. This document is the canonical QA/smoke strategy for the Telegram bot + Mini App platform. It consolidates local validation, GitHub Actions expectations, area-specific smoke suites, staging policy, failure reporting and Codex handoff rules. Deployment and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
 
@@ -66,7 +66,7 @@ Target QA model:
 
 ## Platform Owner Controlled Guest QR Test Escape Quality Gate
 
-Status: **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. Schema verdict: `NO_MIGRATION_EXPECTED`. This is a Telegram + RBAC + table/session routing change; independent review, green Actions, staging deploy and real Telegram role/privacy smoke are mandatory before release.
+Status: **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / DONE / MVP / STAGING-SMOKE-PASSED**. Schema verdict: `NO_MIGRATION`. Commit/push, green Actions for the release HEAD, staging deploy and the bounded real Telegram role/privacy/exit smoke are complete. This closes only the controlled single-instance Phase 1 slice and does not declare the whole product production-ready.
 
 Required automated evidence:
 - Platform Owner tokenless `/start` opens Platform Mode only without active confirmed Guest context. With active context it keeps Guest routing and shows the table menu or safe `Завершить визит` instruction. A new QR prompt does not mutate current context/session, exit marker, persisted dialog, booking draft, cart/draft or success audit.
@@ -80,6 +80,45 @@ Required automated evidence:
 - Exact Platform table-bound support create, detail read-receipt, reply and status flows cover confirmed token+session, confirmed token-only, missing confirmation, mismatched context and post-exit denial. Denials share one private error and leave ticket/thread/message/read/audit/session/tab state unchanged; ordinary Guest token-only support remains compatible.
 - Availability-independent teardown uses stored actor/chat context only as cleanup identity, clears context/dialog/cart/draft/pending and preserves exit semantics after token rotation/revoke, table disable/delete, venue pause/unpublish or subscription block, then returns Platform menu. New QR + confirm may re-enter.
 - Confirmed routing uses ordinary Guest menu/order/staff-call/session paths and Guest Mini App URL `mode=guest`; ordinary Guest, Venue Owner, Manager and Staff precedence remains unchanged.
+
+Recorded release evidence for current release HEAD `d7eb5c5a268d10c1fbcf06137833a3f23b3c128c`:
+
+- the required route/security gate completed successfully with `discovered=911`, `executed=911`,
+  `skipped=0`, `failures=0`, `errors=0`;
+- required selectors include `TelegramBotRouterTableTokenTest`, `TelegramKeyboardsTest`,
+  `GuestTableResolveRoutesTest`, activation/teardown tests, the mutation coordinator, pending
+  confirmation store, Guest order/tabs/staff-call/shift-extension/support and venue/platform route
+  regressions;
+- the PostgreSQL rollback gate completed with `executed=8`, `skipped=0`, `failures=0`, `errors=0`;
+  CI fails on missing XML, zero tests, any skipped/failure/error result or fewer than eight rollback
+  scenarios;
+- two earlier CI failures were test-only timezone-fixture defects caused by
+  `ZoneId.systemDefault()`. No production defect was found; the fixture now returns its explicit
+  fallback and the `TZ=UTC` regression passed;
+- GitHub Actions completed successfully, the release was deployed to staging and exactly one
+  backend instance served the bounded smoke.
+
+Recorded manual Telegram staging smoke (`PASSED`):
+
+1. Platform `/start` without token returned the ordinary Platform menu.
+2. A valid table QR showed the confirmation prompt.
+3. Cancel created no Guest context.
+4. Confirm entered the ordinary Guest flow.
+5. Guest Mini App opened with `mode=guest`.
+6. Table-bound menu/order/tabs/staff call/Support worked.
+7. Shift extension was covered by the permitted automated evidence because staging state did not
+   allow the manual scenario.
+8. `Завершить визит` returned to Platform Mode.
+9. The old Mini App link after exit failed closed.
+10. A new QR required a new confirmation.
+11. Replayed old confirm/cancel callbacks were denied.
+12. Ordinary Guest regression passed.
+13. Venue Owner/Manager/Staff regression passed.
+14. One backend instance was confirmed.
+15. Test Guest context and actions were cleaned up.
+
+The release added no migration: `NO_MIGRATION`. It reuses the existing table-token, table-session,
+chat-context, dialog, user-exit and audit tables.
 
 Required local commands:
 ```bash
@@ -1137,7 +1176,7 @@ Telegram/staff-chat:
 - Permission parity remains `PARTIAL` unless route tests prove each direct API denial/allow path.
 - Staff-call guest-visible `CANCELLED` is closed for the current guest/tableSession; manual cancel UI, quick replies and row-level actor/timestamp gaps remain future unless implemented.
 - Real Telegram fallback order smoke remains required for release confidence.
-- Platform Owner controlled Guest QR test is locally validated and awaits independent review, green Actions, staging deploy and real Telegram smoke; no staging result is claimed yet.
+- Platform Owner controlled Guest QR test is `DONE / MVP / STAGING-SMOKE-PASSED`; keep its CI selectors, single-instance topology and bounded Telegram role/privacy/exit scenarios in regression.
 - Booking reminders and future no-show automation remain rollout-gated/partial.
 - Advanced support and billing/provider features remain future unless implemented and smoked. Growth remains partial, but Post-Visit Feedback MVP and venue-only Guest Favorites Phase 1 are staging-smoke-passed and stay in regression. Repeat Phase 1 is locally validated with deferred manual smoke in `REPEAT-MANUAL-001`; persistent templates, favorite menu items/options, recommendations/frequent items, notification opt-in, favorites-based promotions and loyalty remain future until their own bounded implementation evidence exists.
 - Menu shift check is **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED** and stays
@@ -1172,7 +1211,7 @@ Telegram/staff-chat:
 - CI coverage: `PARTIAL / release-critical split jobs current`.
 - Frontend e2e: `PARTIAL`, with smoke coverage documented.
 - Real Telegram smoke: `REQUIRED` for bot/staff-chat changes.
-- Platform Owner controlled Guest QR test: **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**; `NO_MIGRATION_EXPECTED`, mandatory staging smoke pending.
+- Platform Owner controlled Guest QR test: **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / DONE / MVP / STAGING-SMOKE-PASSED**; `NO_MIGRATION`, bounded CI/deploy/staging smoke complete.
 - Staging deploy smoke policy: `DOCUMENTED`.
 - Venue media foundation quality gate: `DOCUMENTED / STORAGE DECISION REQUIRED`.
 

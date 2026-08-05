@@ -4,6 +4,13 @@
 
 > Historical audit snapshot. The P0/P1 list in this file is not the current backlog.
 >
+> Current correction as of 2026-08-05: the historical Platform Owner guest-QR escape gaps below are
+> superseded. **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / DONE / MVP /
+> STAGING-SMOKE-PASSED** is closed with `NO_MIGRATION` after commit/push, green Actions for the
+> release HEAD, staging deploy and the bounded real Telegram role/privacy/exit smoke. The Phase 1
+> pending confirmation remains process-local and requires one Telegram consumer; this correction
+> does not close broader Platform menu parity or declare the whole product production-ready.
+>
 > Current correction as of 2026-08-04: historical statements that Staff Schedule or human staff
 > identity are missing/future are superseded. Staff Profiles/Today, Staff Operations Slice A,
 > Identity Linking, Staff Schedule Phase 1 and Canceled Shift Restore + Bulk Assignment are **DONE /

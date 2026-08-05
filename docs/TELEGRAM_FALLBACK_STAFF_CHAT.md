@@ -1,8 +1,8 @@
 # Telegram Fallback And Staff-Chat Model
 
-Дата актуализации: 2026-08-04.
+Дата актуализации: 2026-08-05.
 
-Статус: **current product reference / SPEC UPDATED**. Telegram bot remains an entrypoint, fallback and notification surface for the same backend/Mini App product. Current docs/code evidence says fallback quick-order payload, Staff Call ACK/DONE, guest-visible staff-call `CANCELLED`, staff-chat link/test/unlink, state-aware booking staff-chat buttons, booking arrival callback guards and support/venue/booking-chat staff-chat denial are closed for current smoke paths. Platform guest QR status is **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT** with schema verdict `NO_MIGRATION_EXPECTED`; independent review, green Actions and real Telegram staging smoke remain required. The complete Telegram parity model is still **PARTIAL / needs verification** for broad Telegram-vs-Mini-App parity, platform menu placeholders, per-venue real staff-chat delivery, callback audit completeness and future notification history.
+Статус: **current product reference / SPEC UPDATED**. Telegram bot remains an entrypoint, fallback and notification surface for the same backend/Mini App product. Current docs/code evidence says fallback quick-order payload, Staff Call ACK/DONE, guest-visible staff-call `CANCELLED`, staff-chat link/test/unlink, state-aware booking staff-chat buttons, booking arrival callback guards and support/venue/booking-chat staff-chat denial are closed for current smoke paths. Platform guest QR status is **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / DONE / MVP / STAGING-SMOKE-PASSED** with schema verdict `NO_MIGRATION`; green Actions, staging deploy and the bounded real Telegram smoke are complete. The complete Telegram parity model is still **PARTIAL / needs verification** for broad Telegram-vs-Mini-App parity, platform menu placeholders, per-venue real staff-chat delivery, callback audit completeness and future notification history.
 
 ## Core Rule
 
@@ -62,7 +62,7 @@ Target:
 
 Current vs target:
 - QR/table context, restore and exit are documented as staging-smoked.
-- Platform Owner guest-QR test escape is **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**; staging smoke is not yet claimed.
+- Platform Owner guest-QR test escape is **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / DONE / MVP / STAGING-SMOKE-PASSED**; the bounded role/privacy/exit smoke is complete.
 
 ## Fallback Chat Order
 
@@ -209,7 +209,7 @@ Current vs target:
 
 | Feature | Telegram private bot current | Guest Mini App current | Venue Mini App current | Platform Mini App current | Staff-chat current | Target / gap | Priority |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| QR start/table context | `/start <table_token>` supported; exact Platform Owner gets explicit bounded confirm/cancel and tokenless `/start` preserves active Guest routing. Fallback table writes share the exit context lock. | Confirmed Platform test opens ordinary Guest `mode=guest` only with matching server-owned chat context; old token/session entry after exit is denied, and table mutations recheck context in their write transaction. | No new guest authority. | Platform Mode returns after explicit Guest exit. | No. | Opaque TTL pending, atomic activation/mutation authorization, availability-independent teardown and fail-closed Mini App re-entry are locally validated; staging smoke required. | Regression |
+| QR start/table context | `/start <table_token>` supported; exact Platform Owner gets explicit bounded confirm/cancel and tokenless `/start` preserves active Guest routing. Fallback table writes share the exit context lock. | Confirmed Platform test opens ordinary Guest `mode=guest` only with matching server-owned chat context; old token/session entry after exit is denied, and table mutations recheck context in their write transaction. | No new guest authority. | Platform Mode returns after explicit Guest exit. | No. | Opaque TTL pending, atomic activation/mutation authorization, availability-independent teardown and fail-closed Mini App re-entry are staging-smoke-passed for the bounded Phase 1. | Regression |
 | Open Mini App | WebApp buttons exist. | Primary UI. | Primary venue UI. | Platform cockpit. | No. | Keep `initData` path and URLs in smoke. | Regression |
 | Fallback order | Chat quick-order path exists. | Sends `start_quick_order` payload where Mini App fallback used. | Queue receives resulting batch. | No. | Order notification allowed. | Real Telegram fallback remains release smoke; shared-tab fallback future. | Regression |
 | Staff call | Bot table context/staff-chat callbacks exist. | Guest create/status plus `CANCELLED` smoke-closed. | Active queue ACK/DONE smoke-closed. | No. | Notifications and ACK/DONE callbacks. | Manual cancel UI and quick replies future. | Regression/P2 |
@@ -323,7 +323,7 @@ Rules:
 - Staff-chat as source of truth: explicitly `NO`.
 - Telegram/Mini App parity: `PARTIAL`, with closed slices and documented exceptions.
 - Platform Telegram menu placeholders: `OPEN/PARTIAL / needs verification`.
-- Platform Owner controlled Guest QR test: **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**; `NO_MIGRATION_EXPECTED`, with independent review, CI and staging Telegram smoke still required.
+- Platform Owner controlled Guest QR test: **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / DONE / MVP / STAGING-SMOKE-PASSED**; `NO_MIGRATION`, with CI, staging deploy and bounded Telegram smoke complete.
 
 ## Smoke Checklist
 
