@@ -13,7 +13,21 @@ import java.sql.SQLException
 import java.sql.Types
 import javax.sql.DataSource
 
-class AuditLogRepository(private val dataSource: DataSource?, private val json: Json = Json) {
+fun interface TransactionalAuditLogWriter {
+    fun appendJson(
+        connection: Connection,
+        actorUserId: Long,
+        action: String,
+        entityType: String,
+        entityId: Long?,
+        payload: JsonObject,
+    )
+}
+
+class AuditLogRepository(
+    private val dataSource: DataSource?,
+    private val json: Json = Json,
+) : TransactionalAuditLogWriter {
     private val logger = LoggerFactory.getLogger(AuditLogRepository::class.java)
 
     suspend fun append(
@@ -94,7 +108,7 @@ class AuditLogRepository(private val dataSource: DataSource?, private val json: 
         append(actorUserId, action, entityType, entityId, payloadJson)
     }
 
-    fun appendJson(
+    override fun appendJson(
         connection: Connection,
         actorUserId: Long,
         action: String,

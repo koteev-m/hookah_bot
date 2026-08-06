@@ -21,6 +21,11 @@ import io.ktor.http.contentType
 import io.ktor.server.config.MapApplicationConfig
 import io.ktor.server.testing.testApplication
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.long
 import java.sql.Connection
 import java.sql.DriverManager
 import java.sql.Statement
@@ -115,16 +120,45 @@ class VenuePromotionRoutesTest {
                 client.post("/api/venue/$venueId/promotions/${created.id}/status") {
                     authenticated(token)
                     contentType(ContentType.Application.Json)
-                    setBody("""{"status":"ACTIVE"}""")
+                    setBody(
+                        """
+                        {
+                          "status": "ACTIVE",
+                          "actorUserId": $FOREIGN_ID,
+                          "source": "TELEGRAM_BOT"
+                        }
+                        """.trimIndent(),
+                    )
                 }
             assertEquals(HttpStatusCode.OK, activateResponse.status)
+            val activateBody = activateResponse.bodyAsText()
+            assertEquals(setOf("promotion"), json.parseToJsonElement(activateBody).jsonObject.keys)
             assertEquals(
                 "ACTIVE",
                 json.decodeFromString(
                     VenuePromotionResponse.serializer(),
-                    activateResponse.bodyAsText(),
+                    activateBody,
                 ).promotion.status,
             )
+            assertFalse(activateBody.contains("actorUserId"))
+            assertFalse(activateBody.contains("VENUE_MINI_APP"))
+            assertEquals(1, loadPromotionAudits(jdbcUrl).size)
+
+            val repeatedActivateResponse =
+                client.post("/api/venue/$venueId/promotions/${created.id}/status") {
+                    authenticated(token)
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"status":"ACTIVE"}""")
+                }
+            assertEquals(HttpStatusCode.OK, repeatedActivateResponse.status)
+            assertEquals(
+                "ACTIVE",
+                json.decodeFromString(
+                    VenuePromotionResponse.serializer(),
+                    repeatedActivateResponse.bodyAsText(),
+                ).promotion.status,
+            )
+            assertEquals(1, loadPromotionAudits(jdbcUrl).size)
 
             val pauseResponse =
                 client.post("/api/venue/$venueId/promotions/${created.id}/status") {
@@ -133,6 +167,13 @@ class VenuePromotionRoutesTest {
                     setBody("""{"status":"PAUSED"}""")
                 }
             assertEquals(HttpStatusCode.OK, pauseResponse.status)
+            assertEquals(
+                "PAUSED",
+                json.decodeFromString(
+                    VenuePromotionResponse.serializer(),
+                    pauseResponse.bodyAsText(),
+                ).promotion.status,
+            )
 
             val archiveResponse =
                 client.delete("/api/venue/$venueId/promotions/${created.id}") {
@@ -146,6 +187,60 @@ class VenuePromotionRoutesTest {
                     archiveResponse.bodyAsText(),
                 ).promotion.status,
             )
+
+            val repeatedArchiveResponse =
+                client.delete("/api/venue/$venueId/promotions/${created.id}") {
+                    authenticated(token)
+                }
+            assertEquals(HttpStatusCode.OK, repeatedArchiveResponse.status)
+            assertEquals(
+                "ARCHIVED",
+                json.decodeFromString(
+                    VenuePromotionResponse.serializer(),
+                    repeatedArchiveResponse.bodyAsText(),
+                ).promotion.status,
+            )
+
+            val audits = loadPromotionAudits(jdbcUrl)
+            assertEquals(
+                listOf(
+                    "VENUE_PROMOTION_STATUS_CHANGED",
+                    "VENUE_PROMOTION_STATUS_CHANGED",
+                    "VENUE_PROMOTION_ARCHIVED",
+                ),
+                audits.map { it.action },
+            )
+            assertPromotionAudit(
+                row = audits[0],
+                actorUserId = OWNER_ID,
+                venueId = venueId,
+                promotionId = created.id,
+                templateType = "TEXT_ONLY",
+                oldStatus = "DRAFT",
+                newStatus = "ACTIVE",
+                source = "VENUE_MINI_APP",
+            )
+            assertPromotionAudit(
+                row = audits[1],
+                actorUserId = OWNER_ID,
+                venueId = venueId,
+                promotionId = created.id,
+                templateType = "TEXT_ONLY",
+                oldStatus = "ACTIVE",
+                newStatus = "PAUSED",
+                source = "VENUE_MINI_APP",
+            )
+            assertPromotionAudit(
+                row = audits[2],
+                actorUserId = OWNER_ID,
+                venueId = venueId,
+                promotionId = created.id,
+                templateType = "TEXT_ONLY",
+                oldStatus = "PAUSED",
+                newStatus = "ARCHIVED",
+                source = "VENUE_MINI_APP",
+            )
+            assertTrue(audits.all { it.payload.getValue("rules").jsonArray.isEmpty() })
 
             DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
                 connection.prepareStatement(
@@ -210,15 +305,44 @@ class VenuePromotionRoutesTest {
                     updateResponse.bodyAsText(),
                 ).promotion
             assertEquals("Менеджер обновил", updated.title)
-            assertEquals(2, assertNotNull(updated.rule).version)
-            assertEquals("MENU_CATEGORY", updated.rule?.target?.type)
-            assertEquals(categoryId, updated.rule?.target?.menuCategoryId)
+            val updatedRule = assertNotNull(updated.rule)
+            assertEquals(2, updatedRule.version)
+            assertEquals("MENU_CATEGORY", updatedRule.target?.type)
+            assertEquals(categoryId, updatedRule.target?.menuCategoryId)
 
             val archiveResponse =
                 client.delete("/api/venue/$venueId/promotions/$promotionId") {
                     authenticated(managerToken)
                 }
             assertEquals(HttpStatusCode.OK, archiveResponse.status)
+            assertEquals(
+                "ARCHIVED",
+                json.decodeFromString(
+                    VenuePromotionResponse.serializer(),
+                    archiveResponse.bodyAsText(),
+                ).promotion.status,
+            )
+            val managerAudit = loadPromotionAudits(jdbcUrl).single()
+            assertPromotionAudit(
+                row = managerAudit,
+                actorUserId = MANAGER_ID,
+                venueId = venueId,
+                promotionId = promotionId,
+                templateType = "HAPPY_HOURS_PERCENT",
+                oldStatus = "DRAFT",
+                newStatus = "ARCHIVED",
+                source = "VENUE_MINI_APP",
+                expectedRules =
+                    listOf(
+                        ExpectedAuditRule(
+                            ruleId = updatedRule.id,
+                            version = updatedRule.version,
+                            oldStatus = "DRAFT",
+                            newStatus = "ARCHIVED",
+                        ),
+                    ),
+            )
+            val auditCountBeforeDenials = loadPromotionAudits(jdbcUrl).size
 
             updateMembershipRole(jdbcUrl, venueId, MANAGER_ID, "STAFF")
             val staffResponse =
@@ -246,6 +370,22 @@ class VenuePromotionRoutesTest {
             assertEquals(HttpStatusCode.Forbidden, staffUpdateResponse.status)
             assertApiErrorEnvelope(staffUpdateResponse, ApiErrorCodes.FORBIDDEN)
 
+            val staffStatusResponse =
+                client.post("/api/venue/$venueId/promotions/$promotionId/status") {
+                    authenticated(managerToken)
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"status":"ACTIVE"}""")
+                }
+            assertEquals(HttpStatusCode.Forbidden, staffStatusResponse.status)
+            assertApiErrorEnvelope(staffStatusResponse, ApiErrorCodes.FORBIDDEN)
+
+            val staffArchiveResponse =
+                client.delete("/api/venue/$venueId/promotions/$promotionId") {
+                    authenticated(managerToken)
+                }
+            assertEquals(HttpStatusCode.Forbidden, staffArchiveResponse.status)
+            assertApiErrorEnvelope(staffArchiveResponse, ApiErrorCodes.FORBIDDEN)
+
             val foreignResponse =
                 client.get("/api/venue/$venueId/promotions") {
                     authenticated(issueToken(config, FOREIGN_ID))
@@ -262,11 +402,117 @@ class VenuePromotionRoutesTest {
             assertEquals(HttpStatusCode.Forbidden, foreignCreateResponse.status)
             assertApiErrorEnvelope(foreignCreateResponse, ApiErrorCodes.FORBIDDEN)
 
+            val foreignToken = issueToken(config, FOREIGN_ID)
+            val foreignStatusResponse =
+                client.post("/api/venue/$venueId/promotions/$promotionId/status") {
+                    authenticated(foreignToken)
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"status":"ACTIVE"}""")
+                }
+            assertEquals(HttpStatusCode.Forbidden, foreignStatusResponse.status)
+            assertApiErrorEnvelope(foreignStatusResponse, ApiErrorCodes.FORBIDDEN)
+
+            val foreignArchiveResponse =
+                client.delete("/api/venue/$venueId/promotions/$promotionId") {
+                    authenticated(foreignToken)
+                }
+            assertEquals(HttpStatusCode.Forbidden, foreignArchiveResponse.status)
+            assertApiErrorEnvelope(foreignArchiveResponse, ApiErrorCodes.FORBIDDEN)
+
             val crossVenuePromotionResponse =
                 client.get("/api/venue/$foreignVenueId/promotions") {
                     authenticated(managerToken)
                 }
             assertEquals(HttpStatusCode.Forbidden, crossVenuePromotionResponse.status)
+            assertEquals(auditCountBeforeDenials, loadPromotionAudits(jdbcUrl).size)
+        }
+
+    @Test
+    fun `audit failure returns safe error and rolls back status and archive route mutations`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("venue-promotion-audit-failure")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venueId = seedVenueMembership(jdbcUrl, OWNER_ID, "OWNER")
+            val categoryId = insertMenuCategory(jdbcUrl, venueId, "Кальяны")
+            val itemId = insertMenuItem(jdbcUrl, venueId, categoryId, "Кальян")
+            val token = issueToken(config, OWNER_ID)
+
+            suspend fun createHappyHours(title: String): VenuePromotionDto {
+                val response =
+                    client.post("/api/venue/$venueId/promotions") {
+                        authenticated(token)
+                        contentType(ContentType.Application.Json)
+                        setBody(happyHoursBody(title = title, menuItemId = itemId))
+                    }
+                assertEquals(HttpStatusCode.OK, response.status)
+                return json.decodeFromString(
+                    VenuePromotionResponse.serializer(),
+                    response.bodyAsText(),
+                ).promotion
+            }
+
+            val statusPromotion = createHappyHours("Не активируется без аудита")
+            val archivePromotion = createHappyHours("Не архивируется без аудита")
+            val activateArchiveCandidate =
+                client.post("/api/venue/$venueId/promotions/${archivePromotion.id}/status") {
+                    authenticated(token)
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"status":"ACTIVE"}""")
+                }
+            assertEquals(HttpStatusCode.OK, activateArchiveCandidate.status)
+            assertEquals(1, loadPromotionAudits(jdbcUrl).size)
+
+            val statusStateBefore = loadPromotionLifecycleState(jdbcUrl, statusPromotion.id)
+            val archiveStateBefore = loadPromotionLifecycleState(jdbcUrl, archivePromotion.id)
+            assertEquals("DRAFT", statusStateBefore.parentStatus)
+            assertEquals(listOf("DRAFT"), statusStateBefore.rules.map { it.status })
+            assertEquals("ACTIVE", archiveStateBefore.parentStatus)
+            assertEquals(listOf("ACTIVE"), archiveStateBefore.rules.map { it.status })
+
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                connection.createStatement().use { statement ->
+                    statement.execute(
+                        """
+                        ALTER TABLE audit_log
+                        ADD CONSTRAINT reject_promotion_lifecycle_audit
+                        CHECK (
+                          action <> 'VENUE_PROMOTION_ARCHIVED'
+                          AND NOT (
+                            action = 'VENUE_PROMOTION_STATUS_CHANGED'
+                            AND entity_id = ${statusPromotion.id}
+                          )
+                        )
+                        """.trimIndent(),
+                    )
+                }
+            }
+
+            val failedStatusResponse =
+                client.post("/api/venue/$venueId/promotions/${statusPromotion.id}/status") {
+                    authenticated(token)
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"status":"ACTIVE"}""")
+                }
+            assertEquals(HttpStatusCode.ServiceUnavailable, failedStatusResponse.status)
+            assertApiErrorEnvelope(failedStatusResponse, ApiErrorCodes.DATABASE_UNAVAILABLE)
+            assertEquals(statusStateBefore, loadPromotionLifecycleState(jdbcUrl, statusPromotion.id))
+
+            val failedArchiveResponse =
+                client.delete("/api/venue/$venueId/promotions/${archivePromotion.id}") {
+                    authenticated(token)
+                }
+            assertEquals(HttpStatusCode.ServiceUnavailable, failedArchiveResponse.status)
+            assertApiErrorEnvelope(failedArchiveResponse, ApiErrorCodes.DATABASE_UNAVAILABLE)
+            assertEquals(archiveStateBefore, loadPromotionLifecycleState(jdbcUrl, archivePromotion.id))
+
+            val audits = loadPromotionAudits(jdbcUrl)
+            assertEquals(1, audits.size)
+            assertEquals(archivePromotion.id, audits.single().entityId)
+            assertEquals("VENUE_PROMOTION_STATUS_CHANGED", audits.single().action)
         }
 
     @Test
@@ -801,6 +1047,171 @@ class VenuePromotionRoutesTest {
                     authenticated(token)
                 }
             assertEquals(HttpStatusCode.NotFound, blockedResponse.status)
+        }
+
+    private data class PromotionAuditRow(
+        val actorUserId: Long,
+        val action: String,
+        val entityType: String,
+        val entityId: Long?,
+        val payload: JsonObject,
+    )
+
+    private data class ExpectedAuditRule(
+        val ruleId: Long,
+        val version: Int,
+        val oldStatus: String,
+        val newStatus: String,
+    )
+
+    private data class PromotionRuleLifecycleDbState(
+        val ruleId: Long,
+        val version: Int,
+        val status: String,
+        val updatedAt: Instant,
+    )
+
+    private data class PromotionLifecycleDbState(
+        val parentStatus: String,
+        val parentUpdatedAt: Instant,
+        val rules: List<PromotionRuleLifecycleDbState>,
+    )
+
+    private fun loadPromotionAudits(jdbcUrl: String): List<PromotionAuditRow> =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT actor_user_id, action, entity_type, entity_id, payload_json
+                FROM audit_log
+                WHERE entity_type = 'venue_promotion'
+                ORDER BY id
+                """.trimIndent(),
+            ).use { statement ->
+                statement.executeQuery().use { rs ->
+                    buildList {
+                        while (rs.next()) {
+                            val entityId = rs.getLong("entity_id").let { if (rs.wasNull()) null else it }
+                            add(
+                                PromotionAuditRow(
+                                    actorUserId = rs.getLong("actor_user_id"),
+                                    action = rs.getString("action"),
+                                    entityType = rs.getString("entity_type"),
+                                    entityId = entityId,
+                                    payload = json.parseToJsonElement(rs.getString("payload_json")).jsonObject,
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+    private fun assertPromotionAudit(
+        row: PromotionAuditRow,
+        actorUserId: Long,
+        venueId: Long,
+        promotionId: Long,
+        templateType: String,
+        oldStatus: String,
+        newStatus: String,
+        source: String,
+        expectedRules: List<ExpectedAuditRule> = emptyList(),
+    ) {
+        assertEquals(actorUserId, row.actorUserId)
+        assertEquals(
+            if (newStatus == "ARCHIVED") {
+                "VENUE_PROMOTION_ARCHIVED"
+            } else {
+                "VENUE_PROMOTION_STATUS_CHANGED"
+            },
+            row.action,
+        )
+        assertEquals("venue_promotion", row.entityType)
+        assertEquals(promotionId, row.entityId)
+        assertEquals(
+            setOf(
+                "venueId",
+                "promotionId",
+                "templateType",
+                "oldStatus",
+                "newStatus",
+                "source",
+                "rules",
+            ),
+            row.payload.keys,
+        )
+        assertEquals(venueId, row.payload.getValue("venueId").jsonPrimitive.long)
+        assertEquals(promotionId, row.payload.getValue("promotionId").jsonPrimitive.long)
+        assertEquals(templateType, row.payload.getValue("templateType").jsonPrimitive.content)
+        assertEquals(oldStatus, row.payload.getValue("oldStatus").jsonPrimitive.content)
+        assertEquals(newStatus, row.payload.getValue("newStatus").jsonPrimitive.content)
+        assertEquals(source, row.payload.getValue("source").jsonPrimitive.content)
+        assertEquals(
+            expectedRules,
+            row.payload
+                .getValue("rules")
+                .jsonArray
+                .map { ruleElement ->
+                    val rule = ruleElement.jsonObject
+                    assertEquals(
+                        setOf("ruleId", "version", "oldStatus", "newStatus"),
+                        rule.keys,
+                    )
+                    ExpectedAuditRule(
+                        ruleId = rule.getValue("ruleId").jsonPrimitive.long,
+                        version = rule.getValue("version").jsonPrimitive.content.toInt(),
+                        oldStatus = rule.getValue("oldStatus").jsonPrimitive.content,
+                        newStatus = rule.getValue("newStatus").jsonPrimitive.content,
+                    )
+                },
+        )
+    }
+
+    private fun loadPromotionLifecycleState(
+        jdbcUrl: String,
+        promotionId: Long,
+    ): PromotionLifecycleDbState =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            val parent =
+                connection.prepareStatement(
+                    "SELECT status, updated_at FROM venue_promotions WHERE id = ?",
+                ).use { statement ->
+                    statement.setLong(1, promotionId)
+                    statement.executeQuery().use { rs ->
+                        assertTrue(rs.next())
+                        rs.getString("status") to rs.getTimestamp("updated_at").toInstant()
+                    }
+                }
+            val rules =
+                connection.prepareStatement(
+                    """
+                    SELECT id, version, status, updated_at
+                    FROM promotion_rules
+                    WHERE promotion_id = ?
+                    ORDER BY id
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setLong(1, promotionId)
+                    statement.executeQuery().use { rs ->
+                        buildList {
+                            while (rs.next()) {
+                                add(
+                                    PromotionRuleLifecycleDbState(
+                                        ruleId = rs.getLong("id"),
+                                        version = rs.getInt("version"),
+                                        status = rs.getString("status"),
+                                        updatedAt = rs.getTimestamp("updated_at").toInstant(),
+                                    ),
+                                )
+                            }
+                        }
+                    }
+                }
+            PromotionLifecycleDbState(
+                parentStatus = parent.first,
+                parentUpdatedAt = parent.second,
+                rules = rules,
+            )
         }
 
     private fun buildJdbcUrl(prefix: String): String {

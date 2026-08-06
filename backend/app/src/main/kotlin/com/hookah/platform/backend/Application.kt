@@ -372,9 +372,15 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
             guestVenueRepository = guestVenueRepository,
             subscriptionRepository = subscriptionRepository,
         )
-    val venuePromotionRepository = VenuePromotionRepository(dataSource)
-    val venuePromotionMediaRepository = VenuePromotionMediaRepository(dataSource)
+    val auditLogRepository = AuditLogRepository(dataSource, json)
     val venuePromotionRuleRepository = VenuePromotionRuleRepository(dataSource)
+    val venuePromotionRepository =
+        VenuePromotionRepository(
+            dataSource = dataSource,
+            ruleRepository = venuePromotionRuleRepository,
+            auditLogWriter = auditLogRepository,
+        )
+    val venuePromotionMediaRepository = VenuePromotionMediaRepository(dataSource)
     val promotionPlacementRepository = PromotionPlacementRepository(dataSource)
     val promotionVenuePlacementRepository = PromotionVenuePlacementRepository(dataSource)
     val promotionApplicationRepository = PromotionApplicationRepository(dataSource)
@@ -414,7 +420,6 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
             chatContextRepository = chatContextRepository,
             dialogStateRepository = dialogStateRepository,
         )
-    val auditLogRepository = AuditLogRepository(dataSource, json)
     val aiAssistantService =
         AiAssistantService(
             config = aiAssistantConfig,

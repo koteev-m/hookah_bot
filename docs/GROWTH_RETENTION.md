@@ -1,8 +1,8 @@
 # Guest Growth And Retention Model
 
-Дата актуализации: 2026-07-28.
+Дата актуализации: 2026-08-05.
 
-Статус: **current product reference / SPEC UPDATED**. Runtime-фичи growth/retention не считаются release-ready, пока для них нет требуемого CI/staging evidence. Guest visit/order history foundation, Post-Visit Feedback MVP, Guest Favorites Phase 1 and Simple Venue Promotions Phase 1 are **DONE / MVP / STAGING-SMOKE-PASSED**. Repeat as Template Phase 1 is **MVP IMPLEMENTED / LOCAL VALIDATION PASSED / DEFERRED MANUAL SMOKE**; its environment-dependent production-readiness gate remains open in [`REPEAT-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#repeat-manual-001), while independent bounded development may continue. Executable Promotions Phase 2 / Happy Hours Percent is **DONE / STAGING-SMOKE-PASSED**. Gift parity is **GIFT_WITH_ITEM BOT/MINIAPP PARITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**; CI and staging evidence remain open. Broader retention loops remain partial/future.
+Статус: **current product reference / SPEC UPDATED**. Runtime-фичи growth/retention не считаются release-ready, пока для них нет требуемого CI/staging evidence. Guest visit/order history foundation, Post-Visit Feedback MVP, Guest Favorites Phase 1 and Simple Venue Promotions Phase 1 are **DONE / MVP / STAGING-SMOKE-PASSED**. Repeat as Template Phase 1 is **MVP IMPLEMENTED / LOCAL VALIDATION PASSED / DEFERRED MANUAL SMOKE**; its environment-dependent production-readiness gate remains open in [`REPEAT-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#repeat-manual-001), while independent bounded development may continue. Executable Promotions Phase 2 / Happy Hours Percent is **DONE / STAGING-SMOKE-PASSED**. Gift parity is **GIFT_WITH_ITEM BOT/MINIAPP PARITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**; CI and staging evidence remain open. Promotion status/archive audit is **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. Broader retention loops and dangerous-action audit remain partial/future.
 
 ## Core Rule
 
@@ -48,6 +48,8 @@ Current implementation is **partial**:
 - Simple Venue Promotions Phase 1 is **DONE / MVP / STAGING-SMOKE-PASSED**. Venue Owner/Manager use the Venue Mini App to list, create, edit, activate, pause and archive informational `TEXT_ONLY` promotions; Staff is hidden and denied server-side. Rule-backed promotion templates remain in their existing Telegram flows and cannot be mutated through this focused API.
 - Guest venue detail shows only `ACTIVE` promotions inside their current period after the existing `PUBLISHED` venue and guest/subscription availability checks. Draft, paused, archived, future and expired promotions are not disclosed.
 - Mini App and Telegram reuse the existing `venue_promotions` schema and `VenuePromotionRepository`; no migration, parallel model or discount engine was added. Informational promotions do not change order totals or send marketing notifications.
+- Promotion status/archive writes in Venue Mini App and Telegram now use one authoritative repository transaction. Parent status, currently synchronized rule statuses and exactly one `VENUE_PROMOTION_STATUS_CHANGED` or `VENUE_PROMOTION_ARCHIVED` audit commit together; audit failure rolls the lifecycle write back.
+- Actor and `VENUE_MINI_APP` / `TELEGRAM_BOT` source are server-derived. The safe audit payload is limited to venue/promotion/template identity, old/new status, source and deterministic rule id/version/old/new status rows. No-op, stale/repeated, denied, invalid/not-found and rollback paths create no success audit.
 - The Happy Hours percentage Phase 2 slice is **DONE / STAGING-SMOKE-PASSED**. Owner/Manager can configure title, description, terms, parent date range, venue-timezone weekday windows, one item/category target, percentage `1..100` and lifecycle in Venue Mini App; Staff is hidden and denied.
 - Guest Mini App and Telegram route the same current-price cart through `OrdersRepository` and the shared `PromotionRuleEngine`. Preview is side-effect free; submit revalidates time, lifecycle, current menu/option prices and availability, session/tab authorization, persists one immutable application snapshot and is idempotent.
 - Staging smoke covered creation and activation validation, weekday/time windows, item/category targets, current price, selected-option delta, cart preview, submit recalculation, persisted bill/History, no stacking, manual-discount rejection, Owner/Manager/Staff RBAC, Bot/Mini App parity and `TEXT_ONLY` regression.
@@ -309,6 +311,7 @@ Broader Growth smoke remains future:
 - Simple Venue Promotions Phase 1: `DONE / MVP / STAGING-SMOKE-PASSED`.
 - Executable Promotions Phase 2 / Happy Hours Percent: `DONE / STAGING-SMOKE-PASSED`.
 - Gift parity: `GIFT_WITH_ITEM BOT/MINIAPP PARITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`; CI/staging gate remains open.
+- Promotion lifecycle status audit: `DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`; independent review, CI and staging remain open.
 - Reviews/post-visit feedback: `DONE / MVP / STAGING-SMOKE-PASSED`.
 - Manual `5/5` public review link CTA: `DONE / MVP`; automated review prompts and public review automation remain `FUTURE / disabled`.
 - Low-rating manual follow-up through exact `VENUE_CHAT`: `DONE / MVP`; Platform feedback analytics dashboard remains `FUTURE`.
@@ -320,16 +323,16 @@ Broader Growth smoke remains future:
 
 Guest Favorites Phase 1 is staging-closed. Repeat as Template Phase 1 is implemented and locally validated, while its environment-dependent smoke remains deferred in [`REPEAT-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#repeat-manual-001). That open feature-specific production-readiness gate does not block an independent bounded runtime block. Read-only code verification also shows that the previously recommended Order Session Tab Core Hardening is already represented by current table-session active-order uniqueness, tab-scoped guest routes and regression coverage; do not reopen it without concrete regression evidence.
 
-Implemented bounded runtime block: **Simple Venue Promotions Phase 1** — `DONE / MVP / STAGING-SMOKE-PASSED`:
+Implemented bounded runtime block: **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT** — `MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`:
 
-- exposes the existing informational `venue_promotions` foundation through focused Owner/Manager Mini App management and Guest venue-detail reads;
-- requires title, description, starts/ends, supports optional terms and keeps the existing `DRAFT` / `ACTIVE` / `PAUSED` / `ARCHIVED` lifecycle;
-- shows only currently active promotions for a guest-available `PUBLISHED` venue;
-- do not execute discounts, promo codes, loyalty, notifications, paid placement or boosting.
+- preserves the existing `DRAFT` / `ACTIVE` / `PAUSED` / `ARCHIVED` lifecycle and routes all current Mini App and Telegram status/archive writers through one repository mutation;
+- commits parent status, synchronized rule status and one safe actor-bearing audit on the same JDBC connection and transaction, or rolls them all back;
+- derives actor/source on the server and writes no success audit for no-op, stale/repeated, denied, invalid/not-found or rolled-back mutations;
+- changes no Guest visibility guard, Happy Hours/Gift calculation, bill/History snapshot, compatibility/stacking policy or API response contract.
 
-This slice reuses current schema/repository/date/status filtering and closes the informational
-Bot/Mini App parity gap without depending on physical QR/table context. It does not replace or cancel
-rule-backed promotions.
+Simple Venue Promotions Phase 1 remains `DONE / MVP / STAGING-SMOKE-PASSED`. The audit slice reuses
+the current schema and repository with no migration. Promotion create/config edit audit and broader
+dangerous-action audit coverage remain future.
 
 ## Executable Promotions Phase 2
 

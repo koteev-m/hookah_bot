@@ -2,6 +2,8 @@ package com.hookah.platform.backend.telegram.db
 
 import com.hookah.platform.backend.analytics.AnalyticsEventRepository
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
+import com.hookah.platform.backend.miniapp.venue.TransactionalAuditLogWriter
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import com.hookah.platform.backend.promotions.GiftDecisionCommand
 import com.hookah.platform.backend.promotions.GiftDecisionScopeTokenService
@@ -9,6 +11,7 @@ import com.hookah.platform.backend.promotions.PromotionGiftDecisionAction
 import com.hookah.platform.backend.test.PostgresTestEnv
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -439,7 +442,190 @@ class PromotionConfigurationConcurrencyPostgresTest {
             }
         }
 
-    private suspend fun seedFixture(dataSource: DataSource): PromotionFixture {
+    @Test
+    fun `promotion lifecycle audit failure rolls back status archive rules and timestamps`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource)
+                val baselinePromotion =
+                    assertNotNull(
+                        VenuePromotionRepository(dataSource)
+                            .getPromotionForManagement(fixture.venueId, fixture.promotionId),
+                    )
+                val baselineRule =
+                    assertNotNull(
+                        VenuePromotionRuleRepository(dataSource)
+                            .getRuleForManagement(fixture.venueId, fixture.ruleId),
+                    )
+                val baselineAuditCount = readPromotionLifecycleAudits(dataSource, fixture.promotionId).size
+                val realAuditWriter = AuditLogRepository(dataSource)
+                val failingAuditWriter =
+                    TransactionalAuditLogWriter { connection, actorUserId, action, entityType, entityId, payload ->
+                        realAuditWriter.appendJson(
+                            connection = connection,
+                            actorUserId = actorUserId,
+                            action = action,
+                            entityType = entityType,
+                            entityId = entityId,
+                            payload = payload,
+                        )
+                        throw SQLException("Synthetic promotion lifecycle audit failure", "XX999")
+                    }
+                val failingRepository =
+                    VenuePromotionRepository(
+                        dataSource = dataSource,
+                        ruleRepository = VenuePromotionRuleRepository(dataSource),
+                        auditLogWriter = failingAuditWriter,
+                    )
+
+                listOf(VenuePromotionStatus.PAUSED, VenuePromotionStatus.ARCHIVED).forEach { target ->
+                    assertFailsWith<DatabaseUnavailableException> {
+                        failingRepository.mutatePromotionLifecycle(
+                            venueId = fixture.venueId,
+                            promotionId = fixture.promotionId,
+                            expectedStatus = VenuePromotionStatus.ACTIVE,
+                            targetStatus = target,
+                            actorUserId = USER_ID,
+                            source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
+                        )
+                    }
+
+                    val promotion =
+                        assertNotNull(
+                            VenuePromotionRepository(dataSource)
+                                .getPromotionForManagement(fixture.venueId, fixture.promotionId),
+                        )
+                    val rule =
+                        assertNotNull(
+                            VenuePromotionRuleRepository(dataSource)
+                                .getRuleForManagement(fixture.venueId, fixture.ruleId),
+                        )
+                    assertEquals(baselinePromotion, promotion)
+                    assertEquals(baselineRule, rule)
+                    assertEquals(
+                        baselineAuditCount,
+                        readPromotionLifecycleAudits(dataSource, fixture.promotionId).size,
+                    )
+                    assertNotNull(
+                        VenuePromotionRepository(dataSource)
+                            .getPromotionForGuest(fixture.promotionId, OLD_ACTIVE_INSTANT),
+                    )
+                }
+            }
+        }
+
+    @Test
+    fun `concurrent lifecycle statuses commit one winner and one matching audit`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource, activate = false)
+                val calls =
+                    listOf(
+                        LifecycleRaceCall(
+                            targetStatus = VenuePromotionStatus.ACTIVE,
+                            source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
+                        ),
+                        LifecycleRaceCall(
+                            targetStatus = VenuePromotionStatus.PAUSED,
+                            source = VenuePromotionLifecycleSource.TELEGRAM_BOT,
+                        ),
+                    )
+
+                assertLifecycleRace(dataSource, fixture, calls)
+            }
+        }
+
+    @Test
+    fun `concurrent lifecycle status and archive commit one consistent audited snapshot`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource, activate = false)
+                val calls =
+                    listOf(
+                        LifecycleRaceCall(
+                            targetStatus = VenuePromotionStatus.ACTIVE,
+                            source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
+                        ),
+                        LifecycleRaceCall(
+                            targetStatus = VenuePromotionStatus.ARCHIVED,
+                            source = VenuePromotionLifecycleSource.TELEGRAM_BOT,
+                        ),
+                    )
+
+                assertLifecycleRace(dataSource, fixture, calls)
+            }
+        }
+
+    @Test
+    fun `concurrent lifecycle and configuration update preserve audited rule snapshot`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource)
+                val lifecycleDataSource = HeldPromotionParentLockDataSource(dataSource)
+                val configurationDataSource = TrackedPromotionMutationDataSource(dataSource)
+                val (paused, edited) =
+                    runWithHeldPromotionParentLock(
+                        observerDataSource = dataSource,
+                        lockHolderDataSource = lifecycleDataSource,
+                        blockedDataSource = configurationDataSource,
+                        lockHolderAction = {
+                            runBlocking { pausePromotion(lifecycleDataSource, fixture) }
+                        },
+                        blockedAction = {
+                            runBlocking { editToVersionTwo(configurationDataSource, fixture) }
+                        },
+                    )
+                assertNotNull(paused)
+                assertNotNull(edited)
+
+                val promotion =
+                    assertNotNull(
+                        VenuePromotionRepository(dataSource)
+                            .getPromotionForManagement(fixture.venueId, fixture.promotionId),
+                    )
+                val rule =
+                    assertNotNull(
+                        VenuePromotionRuleRepository(dataSource)
+                            .getRuleForManagement(fixture.venueId, fixture.ruleId),
+                    )
+                assertEquals(NEW_TITLE, promotion.title)
+                assertEquals(VenuePromotionStatus.PAUSED, promotion.status)
+                assertEquals(2, rule.version)
+                assertEquals(VenuePromotionStatus.PAUSED, rule.status)
+
+                val audits = readPromotionLifecycleAudits(dataSource, fixture.promotionId)
+                assertEquals(2, audits.size)
+                val pauseAudit = audits.last()
+                assertEquals(VENUE_PROMOTION_STATUS_CHANGED_ACTION, pauseAudit.action)
+                assertEquals(
+                    VenuePromotionStatus.ACTIVE.dbValue,
+                    pauseAudit.payload.getValue("oldStatus").jsonPrimitive.content,
+                )
+                assertEquals(
+                    VenuePromotionStatus.PAUSED.dbValue,
+                    pauseAudit.payload.getValue("newStatus").jsonPrimitive.content,
+                )
+                val auditedRule = pauseAudit.payload.getValue("rules").jsonArray.single().jsonObject
+                assertEquals(1, auditedRule.getValue("version").jsonPrimitive.content.toInt())
+                assertEquals(
+                    VenuePromotionStatus.ACTIVE.dbValue,
+                    auditedRule.getValue("oldStatus").jsonPrimitive.content,
+                )
+                assertEquals(
+                    VenuePromotionStatus.PAUSED.dbValue,
+                    auditedRule.getValue("newStatus").jsonPrimitive.content,
+                )
+            }
+        }
+
+    private suspend fun seedFixture(
+        dataSource: DataSource,
+        activate: Boolean = true,
+    ): PromotionFixture {
         val base =
             dataSource.connection.use { connection ->
                 val originalAutoCommit = connection.autoCommit
@@ -593,21 +779,21 @@ class PromotionConfigurationConcurrencyPostgresTest {
                     ),
                 createdByUserId = USER_ID,
             )
-        assertNotNull(
-            promotionRepository.setPromotionStatus(
-                venueId = base.venueId,
-                promotionId = promotion.id,
-                status = VenuePromotionStatus.ACTIVE,
-                afterUpdate = { connection, _ ->
-                    ruleRepository.synchronizeHappyHoursPromotionStatus(
-                        connection = connection,
+        if (activate) {
+            assertEquals(
+                VenuePromotionLifecycleOutcome.APPLIED,
+                assertNotNull(
+                    promotionRepository.mutatePromotionLifecycle(
                         venueId = base.venueId,
                         promotionId = promotion.id,
-                        status = VenuePromotionStatus.ACTIVE,
-                    )
-                },
-            ),
-        )
+                        expectedStatus = VenuePromotionStatus.DRAFT,
+                        targetStatus = VenuePromotionStatus.ACTIVE,
+                        actorUserId = USER_ID,
+                        source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
+                    ),
+                ).outcome,
+            )
+        }
         return PromotionFixture(
             venueId = base.venueId,
             tableId = base.tableId,
@@ -776,20 +962,18 @@ class PromotionConfigurationConcurrencyPostgresTest {
                 ),
             createdByUserId = USER_ID,
         )
-        assertNotNull(
-            promotionRepository.setPromotionStatus(
-                venueId = base.venueId,
-                promotionId = promotion.id,
-                status = VenuePromotionStatus.ACTIVE,
-                afterUpdate = { connection, _ ->
-                    ruleRepository.synchronizeGiftWithItemPromotionStatus(
-                        connection = connection,
-                        venueId = base.venueId,
-                        promotionId = promotion.id,
-                        status = VenuePromotionStatus.ACTIVE,
-                    )
-                },
-            ),
+        assertEquals(
+            VenuePromotionLifecycleOutcome.APPLIED,
+            assertNotNull(
+                promotionRepository.mutatePromotionLifecycle(
+                    venueId = base.venueId,
+                    promotionId = promotion.id,
+                    expectedStatus = VenuePromotionStatus.DRAFT,
+                    targetStatus = VenuePromotionStatus.ACTIVE,
+                    actorUserId = USER_ID,
+                    source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
+                ),
+            ).outcome,
         )
         return base
     }
@@ -836,21 +1020,153 @@ class PromotionConfigurationConcurrencyPostgresTest {
         fixture: PromotionFixture,
     ): VenuePromotion? {
         val promotionRepository = VenuePromotionRepository(dataSource)
-        val ruleRepository = VenuePromotionRuleRepository(dataSource)
-        return promotionRepository.setPromotionStatus(
+        return promotionRepository.mutatePromotionLifecycle(
             venueId = fixture.venueId,
             promotionId = fixture.promotionId,
-            status = VenuePromotionStatus.PAUSED,
-            afterUpdate = { connection, _ ->
-                ruleRepository.synchronizeHappyHoursPromotionStatus(
-                    connection = connection,
-                    venueId = fixture.venueId,
-                    promotionId = fixture.promotionId,
-                    status = VenuePromotionStatus.PAUSED,
-                )
-            },
-        )
+            expectedStatus = VenuePromotionStatus.ACTIVE,
+            targetStatus = VenuePromotionStatus.PAUSED,
+            actorUserId = USER_ID,
+            source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
+        )?.promotion
     }
+
+    private fun assertLifecycleRace(
+        dataSource: DataSource,
+        fixture: PromotionFixture,
+        calls: List<LifecycleRaceCall>,
+    ) {
+        require(calls.size == 2)
+        val lockHolderDataSource = HeldPromotionParentLockDataSource(dataSource)
+        val blockedDataSource = TrackedPromotionMutationDataSource(dataSource)
+        val lockHolderRepository = VenuePromotionRepository(lockHolderDataSource)
+        val blockedRepository = VenuePromotionRepository(blockedDataSource)
+        val (winnerMutation, loserMutation) =
+            runWithHeldPromotionParentLock(
+                observerDataSource = dataSource,
+                lockHolderDataSource = lockHolderDataSource,
+                blockedDataSource = blockedDataSource,
+                lockHolderAction = {
+                    runBlocking {
+                        lockHolderRepository.mutatePromotionLifecycle(
+                            venueId = fixture.venueId,
+                            promotionId = fixture.promotionId,
+                            expectedStatus = VenuePromotionStatus.DRAFT,
+                            targetStatus = calls[0].targetStatus,
+                            actorUserId = USER_ID,
+                            source = calls[0].source,
+                        )
+                    }
+                },
+                blockedAction = {
+                    runBlocking {
+                        blockedRepository.mutatePromotionLifecycle(
+                            venueId = fixture.venueId,
+                            promotionId = fixture.promotionId,
+                            expectedStatus = VenuePromotionStatus.DRAFT,
+                            targetStatus = calls[1].targetStatus,
+                            actorUserId = USER_ID,
+                            source = calls[1].source,
+                        )
+                    }
+                },
+            )
+        val results =
+            listOf(
+                calls[0] to assertNotNull(winnerMutation),
+                calls[1] to assertNotNull(loserMutation),
+            )
+        assertEquals(1, results.count { (_, mutation) -> mutation.outcome == VenuePromotionLifecycleOutcome.APPLIED })
+        assertEquals(1, results.count { (_, mutation) -> mutation.outcome == VenuePromotionLifecycleOutcome.STALE })
+        val winner = results.single { (_, mutation) -> mutation.outcome == VenuePromotionLifecycleOutcome.APPLIED }
+        val finalPromotion =
+            assertNotNull(
+                runBlocking {
+                    VenuePromotionRepository(dataSource)
+                        .getPromotionForManagement(fixture.venueId, fixture.promotionId)
+                },
+            )
+        val finalRule =
+            assertNotNull(
+                runBlocking {
+                    VenuePromotionRuleRepository(dataSource)
+                        .getRuleForManagement(fixture.venueId, fixture.ruleId)
+                },
+            )
+        assertEquals(winner.first.targetStatus, finalPromotion.status)
+        assertEquals(finalPromotion.status, finalRule.status)
+
+        val audit = readPromotionLifecycleAudits(dataSource, fixture.promotionId).single()
+        assertEquals(USER_ID, audit.actorUserId)
+        assertEquals(
+            if (finalPromotion.status == VenuePromotionStatus.ARCHIVED) {
+                VENUE_PROMOTION_ARCHIVED_ACTION
+            } else {
+                VENUE_PROMOTION_STATUS_CHANGED_ACTION
+            },
+            audit.action,
+        )
+        assertEquals(
+            setOf(
+                "venueId",
+                "promotionId",
+                "templateType",
+                "oldStatus",
+                "newStatus",
+                "source",
+                "rules",
+            ),
+            audit.payload.keys,
+        )
+        assertEquals(fixture.venueId, audit.payload.getValue("venueId").jsonPrimitive.content.toLong())
+        assertEquals(fixture.promotionId, audit.payload.getValue("promotionId").jsonPrimitive.content.toLong())
+        assertEquals(
+            VenuePromotionTemplateType.HAPPY_HOURS_PERCENT.dbValue,
+            audit.payload.getValue("templateType").jsonPrimitive.content,
+        )
+        assertEquals(VenuePromotionStatus.DRAFT.dbValue, audit.payload.getValue("oldStatus").jsonPrimitive.content)
+        assertEquals(finalPromotion.status.dbValue, audit.payload.getValue("newStatus").jsonPrimitive.content)
+        assertEquals(winner.first.source.name, audit.payload.getValue("source").jsonPrimitive.content)
+        val rulePayload = audit.payload.getValue("rules").jsonArray.single().jsonObject
+        assertEquals(setOf("ruleId", "version", "oldStatus", "newStatus"), rulePayload.keys)
+        assertEquals(fixture.ruleId, rulePayload.getValue("ruleId").jsonPrimitive.content.toLong())
+        assertEquals(1, rulePayload.getValue("version").jsonPrimitive.content.toInt())
+        assertEquals(VenuePromotionStatus.DRAFT.dbValue, rulePayload.getValue("oldStatus").jsonPrimitive.content)
+        assertEquals(finalRule.status.dbValue, rulePayload.getValue("newStatus").jsonPrimitive.content)
+    }
+
+    private fun readPromotionLifecycleAudits(
+        dataSource: DataSource,
+        promotionId: Long,
+    ): List<PromotionLifecycleAudit> =
+        dataSource.connection.use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT actor_user_id, action, payload_json
+                FROM audit_log
+                WHERE entity_type = 'venue_promotion'
+                  AND entity_id = ?
+                  AND action IN (?, ?)
+                ORDER BY id
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, promotionId)
+                statement.setString(2, VENUE_PROMOTION_STATUS_CHANGED_ACTION)
+                statement.setString(3, VENUE_PROMOTION_ARCHIVED_ACTION)
+                statement.executeQuery().use { rs ->
+                    buildList {
+                        while (rs.next()) {
+                            add(
+                                PromotionLifecycleAudit(
+                                    actorUserId = rs.getLong("actor_user_id"),
+                                    action = rs.getString("action"),
+                                    payload = Json.parseToJsonElement(rs.getString("payload_json")).jsonObject,
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+        }
 
     private fun ordersRepository(
         dataSource: DataSource,
@@ -1146,7 +1462,7 @@ class PromotionConfigurationConcurrencyPostgresTest {
             val mutationFuture = executor.submit(Callable<U> { mutationAction() })
             assertTrue(
                 mutationDataSource.mutationAttempted.await(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS),
-                "Promotion mutation did not attempt its parent update",
+                "Promotion mutation did not attempt its parent lock or update",
             )
             val snapshotPid = snapshotDataSource.backendPid.get()
             val mutationPid = mutationDataSource.backendPid.get()
@@ -1185,6 +1501,68 @@ class PromotionConfigurationConcurrencyPostgresTest {
             return snapshotResult to mutationResult
         } finally {
             snapshotDataSource.allowChildRead.countDown()
+            executor.shutdownNow()
+            executor.awaitTermination(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        }
+    }
+
+    private fun <T, U> runWithHeldPromotionParentLock(
+        observerDataSource: DataSource,
+        lockHolderDataSource: HeldPromotionParentLockDataSource,
+        blockedDataSource: TrackedPromotionMutationDataSource,
+        lockHolderAction: () -> T,
+        blockedAction: () -> U,
+    ): Pair<T, U> {
+        val executor = Executors.newFixedThreadPool(2)
+        try {
+            val lockHolderFuture = executor.submit(Callable<T> { lockHolderAction() })
+            assertTrue(
+                lockHolderDataSource.parentLockAcquired.await(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                "Lifecycle transaction did not acquire the promotion parent lock",
+            )
+
+            val blockedFuture = executor.submit(Callable<U> { blockedAction() })
+            assertTrue(
+                blockedDataSource.mutationAttempted.await(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                "Concurrent promotion mutation did not attempt its parent lock or update",
+            )
+            val lockHolderPid = lockHolderDataSource.backendPid.get()
+            val blockedPid = blockedDataSource.backendPid.get()
+            assertTrue(lockHolderPid > 0, "Missing PostgreSQL PID for lifecycle lock holder")
+            assertTrue(blockedPid > 0, "Missing PostgreSQL PID for blocked promotion mutation")
+
+            val blockObservation =
+                observerDataSource.connection.use { observer ->
+                    val probe =
+                        awaitPostgresBlock(
+                            observer = observer,
+                            blockedPid = blockedPid,
+                            blockerPid = lockHolderPid,
+                            mutationFuture = blockedFuture,
+                        )
+                    PostgresBlockObservation(
+                        blocked = probe.blocked,
+                        diagnostic =
+                            "${probe.diagnostic}. " +
+                                describePostgresActivity(
+                                    observer = observer,
+                                    snapshotPid = lockHolderPid,
+                                    mutationPid = blockedPid,
+                                ),
+                    )
+                }
+            assertTrue(
+                blockObservation.blocked,
+                "PostgreSQL did not report the concurrent promotion mutation blocked by the lifecycle lock. " +
+                    blockObservation.diagnostic,
+            )
+
+            lockHolderDataSource.allowLifecycleMutation.countDown()
+            val lockHolderResult = lockHolderFuture.get(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            val blockedResult = blockedFuture.get(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            return lockHolderResult to blockedResult
+        } finally {
+            lockHolderDataSource.allowLifecycleMutation.countDown()
             executor.shutdownNow()
             executor.awaitTermination(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         }
@@ -1320,6 +1698,53 @@ class PromotionConfigurationConcurrencyPostgresTest {
         }
     }
 
+    private inner class HeldPromotionParentLockDataSource(
+        private val delegate: DataSource,
+    ) : DataSource by delegate {
+        val parentLockAcquired = CountDownLatch(1)
+        val allowLifecycleMutation = CountDownLatch(1)
+        val backendPid = AtomicInteger()
+        private val held = AtomicBoolean()
+
+        override fun getConnection(): Connection = wrap(delegate.connection)
+
+        override fun getConnection(
+            username: String?,
+            password: String?,
+        ): Connection = wrap(delegate.getConnection(username, password))
+
+        private fun wrap(connection: Connection): Connection {
+            backendPid.set(this@PromotionConfigurationConcurrencyPostgresTest.backendPid(connection))
+            return object : Connection by connection {
+                override fun prepareStatement(sql: String): PreparedStatement {
+                    val prepared = connection.prepareStatement(sql)
+                    val normalized = sql.normalizedSql()
+                    if (
+                        normalized.contains("from venue_promotions p") &&
+                        normalized.contains("for update") &&
+                        held.compareAndSet(false, true)
+                    ) {
+                        return object : PreparedStatement by prepared {
+                            override fun executeQuery(): java.sql.ResultSet {
+                                check(!connection.autoCommit) {
+                                    "Promotion parent lock must be acquired in the lifecycle transaction"
+                                }
+                                val resultSet = prepared.executeQuery()
+                                parentLockAcquired.countDown()
+                                if (!allowLifecycleMutation.await(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                                    resultSet.close()
+                                    throw SQLException("Timed out while holding promotion parent lock")
+                                }
+                                return resultSet
+                            }
+                        }
+                    }
+                    return prepared
+                }
+            }
+        }
+    }
+
     private inner class TrackedPromotionMutationDataSource(
         private val delegate: DataSource,
     ) : DataSource by delegate {
@@ -1339,18 +1764,34 @@ class PromotionConfigurationConcurrencyPostgresTest {
             return object : Connection by connection {
                 override fun prepareStatement(sql: String): PreparedStatement {
                     val prepared = connection.prepareStatement(sql)
-                    if (!sql.normalizedSql().startsWith("update venue_promotions")) {
-                        return prepared
-                    }
-                    return object : PreparedStatement by prepared {
-                        override fun executeUpdate(): Int {
-                            if (signalled.compareAndSet(false, true)) {
-                                mutationAttempted.countDown()
+                    val normalized = sql.normalizedSql()
+                    if (normalized.startsWith("update venue_promotions")) {
+                        return object : PreparedStatement by prepared {
+                            override fun executeUpdate(): Int {
+                                signalMutationAttempt()
+                                return prepared.executeUpdate()
                             }
-                            return prepared.executeUpdate()
                         }
                     }
+                    if (
+                        normalized.contains("from venue_promotions p") &&
+                        normalized.contains("for update")
+                    ) {
+                        return object : PreparedStatement by prepared {
+                            override fun executeQuery(): java.sql.ResultSet {
+                                signalMutationAttempt()
+                                return prepared.executeQuery()
+                            }
+                        }
+                    }
+                    return prepared
                 }
+            }
+        }
+
+        private fun signalMutationAttempt() {
+            if (signalled.compareAndSet(false, true)) {
+                mutationAttempted.countDown()
             }
         }
     }
@@ -1416,6 +1857,17 @@ class PromotionConfigurationConcurrencyPostgresTest {
             }
         }
     }
+
+    private data class LifecycleRaceCall(
+        val targetStatus: VenuePromotionStatus,
+        val source: VenuePromotionLifecycleSource,
+    )
+
+    private data class PromotionLifecycleAudit(
+        val actorUserId: Long,
+        val action: String,
+        val payload: JsonObject,
+    )
 
     private data class BaseFixture(
         val venueId: Long,

@@ -16,6 +16,7 @@ import com.hookah.platform.backend.telegram.db.PromotionRuleTargetType
 import com.hookah.platform.backend.telegram.db.PromotionWeekdayWindow
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
 import com.hookah.platform.backend.telegram.db.VenuePromotion
+import com.hookah.platform.backend.telegram.db.VenuePromotionLifecycleSource
 import com.hookah.platform.backend.telegram.db.VenuePromotionRepository
 import com.hookah.platform.backend.telegram.db.VenuePromotionRule
 import com.hookah.platform.backend.telegram.db.VenuePromotionRuleRepository
@@ -358,47 +359,14 @@ fun Route.venuePromotionRoutes(
                 validatePromotionPeriod(current.startsAt, current.endsAt)
             }
             val updated =
-                when (current.templateType) {
-                    VenuePromotionTemplateType.HAPPY_HOURS_PERCENT -> {
-                        val ruleRepository =
-                            venuePromotionRuleRepository
-                                ?: throw InvalidInputException("Настройка Happy Hours временно недоступна.")
-                        venuePromotionRepository.setPromotionStatus(
-                            venueId = venueId,
-                            promotionId = promotionId,
-                            status = status,
-                            afterUpdate = { connection, _ ->
-                                ruleRepository.synchronizeHappyHoursPromotionStatus(
-                                    connection = connection,
-                                    venueId = venueId,
-                                    promotionId = promotionId,
-                                    status = status,
-                                )
-                            },
-                        ) ?: throw NotFoundException()
-                    }
-                    VenuePromotionTemplateType.GIFT_WITH_ITEM -> {
-                        val ruleRepository =
-                            venuePromotionRuleRepository
-                                ?: throw InvalidInputException("Настройка подарочной акции временно недоступна.")
-                        venuePromotionRepository.setPromotionStatus(
-                            venueId = venueId,
-                            promotionId = promotionId,
-                            status = status,
-                            afterUpdate = { connection, _ ->
-                                ruleRepository.synchronizeGiftWithItemPromotionStatus(
-                                    connection = connection,
-                                    venueId = venueId,
-                                    promotionId = promotionId,
-                                    status = status,
-                                )
-                            },
-                        ) ?: throw NotFoundException()
-                    }
-                    else ->
-                        venuePromotionRepository.setPromotionStatus(venueId, promotionId, status)
-                            ?: throw NotFoundException()
-                }
+                venuePromotionRepository.mutatePromotionLifecycle(
+                    venueId = venueId,
+                    promotionId = promotionId,
+                    expectedStatus = current.status,
+                    targetStatus = status,
+                    actorUserId = userId,
+                    source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
+                )?.promotion ?: throw NotFoundException()
             call.respond(VenuePromotionResponse(updated.toDto(venuePromotionRuleRepository)))
         }
 
@@ -414,8 +382,14 @@ fun Route.venuePromotionRoutes(
                 if (current.status == VenuePromotionStatus.ARCHIVED) {
                     current
                 } else {
-                    venuePromotionRepository.archivePromotion(venueId, promotionId)
-                        ?: throw NotFoundException()
+                    venuePromotionRepository.mutatePromotionLifecycle(
+                        venueId = venueId,
+                        promotionId = promotionId,
+                        expectedStatus = current.status,
+                        targetStatus = VenuePromotionStatus.ARCHIVED,
+                        actorUserId = userId,
+                        source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
+                    )?.promotion ?: throw NotFoundException()
                 }
             call.respond(VenuePromotionResponse(archived.toDto(venuePromotionRuleRepository)))
         }

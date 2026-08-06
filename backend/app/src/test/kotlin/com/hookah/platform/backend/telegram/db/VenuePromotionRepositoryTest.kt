@@ -1,15 +1,22 @@
 package com.hookah.platform.backend.telegram.db
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.miniapp.venue.TransactionalAuditLogWriter
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import com.hookah.platform.backend.miniapp.venue.menu.MenuSemanticType
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepository
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.flywaydb.core.Flyway
 import org.flywaydb.core.api.MigrationVersion
 import org.h2.jdbcx.JdbcDataSource
 import java.sql.Connection
 import java.sql.DriverManager
+import java.sql.SQLException
 import java.sql.Statement
 import java.sql.Timestamp
 import java.time.Instant
@@ -67,20 +74,435 @@ class VenuePromotionRepositoryTest {
 
             val active =
                 assertNotNull(
-                    repository.setPromotionStatus(
+                    repository.applyLifecycleForTest(
                         venueId = fixture.visibleVenueId,
                         promotionId = created.id,
-                        status = VenuePromotionStatus.ACTIVE,
+                        expectedStatus = VenuePromotionStatus.DRAFT,
+                        targetStatus = VenuePromotionStatus.ACTIVE,
                     ),
                 )
             assertEquals(VenuePromotionStatus.ACTIVE, active.status)
 
-            repository.archivePromotion(fixture.visibleVenueId, created.id)
+            repository.applyLifecycleForTest(
+                venueId = fixture.visibleVenueId,
+                promotionId = created.id,
+                expectedStatus = VenuePromotionStatus.ACTIVE,
+                targetStatus = VenuePromotionStatus.ARCHIVED,
+            )
             assertTrue(repository.listVenuePromotionsForManagement(fixture.visibleVenueId).isEmpty())
             assertEquals(
                 listOf(created.id),
                 repository.listArchivedPromotionsForManagement(fixture.visibleVenueId).map { it.id },
             )
+        }
+
+    @Test
+    fun `lifecycle active and paused transitions synchronize rules and append safe audits`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("promotion-lifecycle-status-audit")
+            val fixture = seedFixture(jdbcUrl)
+            val dataSource = dataSource(jdbcUrl)
+            val ruleRepository = VenuePromotionRuleRepository(dataSource)
+            val promotionRepository = VenuePromotionRepository(dataSource, ruleRepository)
+            val promotion =
+                promotionRepository.createPromotion(
+                    venueId = fixture.visibleVenueId,
+                    title = "Счастливые часы",
+                    description = "Скидка на кальяны",
+                    terms = null,
+                    startsAt = Instant.parse("2030-01-01T00:00:00Z"),
+                    endsAt = Instant.parse("2030-12-31T23:59:59Z"),
+                    templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
+                    createdByUserId = OWNER_ID,
+                )
+            val rule =
+                ruleRepository.createHappyHoursRule(
+                    venueId = fixture.visibleVenueId,
+                    promotionId = promotion.id,
+                    targetValue = MenuSemanticType.HOOKAH,
+                    discountPercent = 20,
+                    createdByUserId = OWNER_ID,
+                    startsTime = LocalTime.of(14, 0),
+                    endsTime = LocalTime.of(18, 0),
+                    daysOfWeek = setOf(1, 2, 3, 4, 5),
+                )
+
+            val activated =
+                assertNotNull(
+                    promotionRepository.mutatePromotionLifecycle(
+                        venueId = fixture.visibleVenueId,
+                        promotionId = promotion.id,
+                        expectedStatus = VenuePromotionStatus.DRAFT,
+                        targetStatus = VenuePromotionStatus.ACTIVE,
+                        actorUserId = OWNER_ID,
+                        source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
+                    ),
+                )
+            assertEquals(VenuePromotionLifecycleOutcome.APPLIED, activated.outcome)
+            assertEquals(VenuePromotionStatus.ACTIVE, activated.promotion.status)
+            assertEquals(
+                VenuePromotionStatus.ACTIVE,
+                ruleRepository.getRuleForManagement(fixture.visibleVenueId, rule.id)?.status,
+            )
+
+            val paused =
+                assertNotNull(
+                    promotionRepository.mutatePromotionLifecycle(
+                        venueId = fixture.visibleVenueId,
+                        promotionId = promotion.id,
+                        expectedStatus = VenuePromotionStatus.ACTIVE,
+                        targetStatus = VenuePromotionStatus.PAUSED,
+                        actorUserId = OWNER_ID,
+                        source = VenuePromotionLifecycleSource.TELEGRAM_BOT,
+                    ),
+                )
+            assertEquals(VenuePromotionLifecycleOutcome.APPLIED, paused.outcome)
+            assertEquals(VenuePromotionStatus.PAUSED, paused.promotion.status)
+            assertEquals(
+                VenuePromotionStatus.PAUSED,
+                ruleRepository.getRuleForManagement(fixture.visibleVenueId, rule.id)?.status,
+            )
+
+            val audits = readPromotionLifecycleAudits(jdbcUrl, promotion.id)
+            assertEquals(2, audits.size)
+            assertPromotionAuditEnvelope(
+                audit = audits[0],
+                action = VENUE_PROMOTION_STATUS_CHANGED_ACTION,
+                promotionId = promotion.id,
+            )
+            assertPromotionAuditPayload(
+                payload = audits[0].payload,
+                venueId = fixture.visibleVenueId,
+                promotionId = promotion.id,
+                templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
+                oldStatus = VenuePromotionStatus.DRAFT,
+                newStatus = VenuePromotionStatus.ACTIVE,
+                source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
+                expectedRules =
+                    listOf(
+                        ExpectedAuditRule(
+                            ruleId = rule.id,
+                            version = rule.version,
+                            oldStatus = VenuePromotionStatus.DRAFT,
+                            newStatus = VenuePromotionStatus.ACTIVE,
+                        ),
+                    ),
+            )
+            assertPromotionAuditEnvelope(
+                audit = audits[1],
+                action = VENUE_PROMOTION_STATUS_CHANGED_ACTION,
+                promotionId = promotion.id,
+            )
+            assertPromotionAuditPayload(
+                payload = audits[1].payload,
+                venueId = fixture.visibleVenueId,
+                promotionId = promotion.id,
+                templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
+                oldStatus = VenuePromotionStatus.ACTIVE,
+                newStatus = VenuePromotionStatus.PAUSED,
+                source = VenuePromotionLifecycleSource.TELEGRAM_BOT,
+                expectedRules =
+                    listOf(
+                        ExpectedAuditRule(
+                            ruleId = rule.id,
+                            version = rule.version,
+                            oldStatus = VenuePromotionStatus.ACTIVE,
+                            newStatus = VenuePromotionStatus.PAUSED,
+                        ),
+                    ),
+            )
+        }
+
+    @Test
+    fun `lifecycle audit uses empty rules for promotion without rules`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("promotion-lifecycle-no-rules-audit")
+            val fixture = seedFixture(jdbcUrl)
+            val promotionRepository = VenuePromotionRepository(dataSource(jdbcUrl))
+            val promotion =
+                promotionRepository.createPromotion(
+                    venueId = fixture.visibleVenueId,
+                    title = "Информационная акция",
+                    description = "Без правил",
+                    terms = null,
+                    createdByUserId = OWNER_ID,
+                )
+
+            val mutation =
+                assertNotNull(
+                    promotionRepository.mutatePromotionLifecycle(
+                        venueId = fixture.visibleVenueId,
+                        promotionId = promotion.id,
+                        expectedStatus = VenuePromotionStatus.DRAFT,
+                        targetStatus = VenuePromotionStatus.ACTIVE,
+                        actorUserId = OWNER_ID,
+                        source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
+                    ),
+                )
+
+            assertEquals(VenuePromotionLifecycleOutcome.APPLIED, mutation.outcome)
+            val audit = readPromotionLifecycleAudits(jdbcUrl, promotion.id).single()
+            assertPromotionAuditPayload(
+                payload = audit.payload,
+                venueId = fixture.visibleVenueId,
+                promotionId = promotion.id,
+                templateType = VenuePromotionTemplateType.TEXT_ONLY,
+                oldStatus = VenuePromotionStatus.DRAFT,
+                newStatus = VenuePromotionStatus.ACTIVE,
+                source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
+                expectedRules = emptyList(),
+            )
+        }
+
+    @Test
+    fun `lifecycle archive audit captures multiple rules in deterministic safe order`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("promotion-lifecycle-archive-audit")
+            val fixture = seedFixture(jdbcUrl)
+            val dataSource = dataSource(jdbcUrl)
+            val ruleRepository = VenuePromotionRuleRepository(dataSource)
+            val promotionRepository = VenuePromotionRepository(dataSource, ruleRepository)
+            val promotion =
+                promotionRepository.createPromotion(
+                    venueId = fixture.visibleVenueId,
+                    title = "Несколько правил",
+                    description = "Legacy Happy Hours",
+                    terms = null,
+                    templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
+                    createdByUserId = OWNER_ID,
+                )
+            val firstRule =
+                ruleRepository.createHappyHoursRule(
+                    venueId = fixture.visibleVenueId,
+                    promotionId = promotion.id,
+                    targetValue = MenuSemanticType.HOOKAH,
+                    discountPercent = 20,
+                    createdByUserId = OWNER_ID,
+                )
+            val secondRule =
+                ruleRepository.createHappyHoursRule(
+                    venueId = fixture.visibleVenueId,
+                    promotionId = promotion.id,
+                    targetValue = MenuSemanticType.TEA,
+                    discountPercent = 10,
+                    createdByUserId = OWNER_ID,
+                )
+
+            val archived =
+                assertNotNull(
+                    promotionRepository.mutatePromotionLifecycle(
+                        venueId = fixture.visibleVenueId,
+                        promotionId = promotion.id,
+                        expectedStatus = VenuePromotionStatus.DRAFT,
+                        targetStatus = VenuePromotionStatus.ARCHIVED,
+                        actorUserId = OWNER_ID,
+                        source = VenuePromotionLifecycleSource.TELEGRAM_BOT,
+                    ),
+                )
+
+            assertEquals(VenuePromotionLifecycleOutcome.APPLIED, archived.outcome)
+            assertEquals(VenuePromotionStatus.ARCHIVED, archived.promotion.status)
+            val audit = readPromotionLifecycleAudits(jdbcUrl, promotion.id).single()
+            assertPromotionAuditEnvelope(
+                audit = audit,
+                action = VENUE_PROMOTION_ARCHIVED_ACTION,
+                promotionId = promotion.id,
+            )
+            assertPromotionAuditPayload(
+                payload = audit.payload,
+                venueId = fixture.visibleVenueId,
+                promotionId = promotion.id,
+                templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
+                oldStatus = VenuePromotionStatus.DRAFT,
+                newStatus = VenuePromotionStatus.ARCHIVED,
+                source = VenuePromotionLifecycleSource.TELEGRAM_BOT,
+                expectedRules =
+                    listOf(firstRule, secondRule).map { rule ->
+                        ExpectedAuditRule(
+                            ruleId = rule.id,
+                            version = rule.version,
+                            oldStatus = VenuePromotionStatus.DRAFT,
+                            newStatus = VenuePromotionStatus.ARCHIVED,
+                        )
+                    },
+            )
+        }
+
+    @Test
+    fun `lifecycle no-op repeated archive and not found write no audit`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("promotion-lifecycle-no-op-audit")
+            val fixture = seedFixture(jdbcUrl)
+            val promotionRepository = VenuePromotionRepository(dataSource(jdbcUrl))
+            val activePromotionId =
+                insertPromotion(
+                    jdbcUrl = jdbcUrl,
+                    venueId = fixture.visibleVenueId,
+                    title = "Уже активна",
+                    status = VenuePromotionStatus.ACTIVE,
+                    startsAt = null,
+                    endsAt = null,
+                )
+            val archivedPromotionId =
+                insertPromotion(
+                    jdbcUrl = jdbcUrl,
+                    venueId = fixture.visibleVenueId,
+                    title = "Уже архивирована",
+                    status = VenuePromotionStatus.ARCHIVED,
+                    startsAt = null,
+                    endsAt = null,
+                )
+
+            val repeatedStatus =
+                assertNotNull(
+                    promotionRepository.mutatePromotionLifecycle(
+                        venueId = fixture.visibleVenueId,
+                        promotionId = activePromotionId,
+                        expectedStatus = VenuePromotionStatus.DRAFT,
+                        targetStatus = VenuePromotionStatus.ACTIVE,
+                        actorUserId = OWNER_ID,
+                        source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
+                    ),
+                )
+            val repeatedArchive =
+                assertNotNull(
+                    promotionRepository.mutatePromotionLifecycle(
+                        venueId = fixture.visibleVenueId,
+                        promotionId = archivedPromotionId,
+                        expectedStatus = VenuePromotionStatus.ACTIVE,
+                        targetStatus = VenuePromotionStatus.ARCHIVED,
+                        actorUserId = OWNER_ID,
+                        source = VenuePromotionLifecycleSource.TELEGRAM_BOT,
+                    ),
+                )
+            val missing =
+                promotionRepository.mutatePromotionLifecycle(
+                    venueId = fixture.visibleVenueId,
+                    promotionId = Long.MAX_VALUE,
+                    expectedStatus = VenuePromotionStatus.DRAFT,
+                    targetStatus = VenuePromotionStatus.ACTIVE,
+                    actorUserId = OWNER_ID,
+                    source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
+                )
+
+            assertEquals(VenuePromotionLifecycleOutcome.NO_OP, repeatedStatus.outcome)
+            assertEquals(VenuePromotionLifecycleOutcome.NO_OP, repeatedArchive.outcome)
+            assertNull(missing)
+            assertTrue(readPromotionLifecycleAudits(jdbcUrl, activePromotionId).isEmpty())
+            assertTrue(readPromotionLifecycleAudits(jdbcUrl, archivedPromotionId).isEmpty())
+            assertEquals(0, countPromotionLifecycleAudits(jdbcUrl))
+        }
+
+    @Test
+    fun `status audit failure rolls back parent rules timestamps and visibility`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("promotion-lifecycle-status-audit-rollback")
+            val fixture = seedFixture(jdbcUrl)
+            val dataSource = dataSource(jdbcUrl)
+            val ruleRepository = VenuePromotionRuleRepository(dataSource)
+            val promotionRepository = VenuePromotionRepository(dataSource, ruleRepository)
+            val promotion =
+                promotionRepository.createPromotion(
+                    venueId = fixture.visibleVenueId,
+                    title = "Rollback status",
+                    description = "Скидка",
+                    terms = null,
+                    startsAt = Instant.parse("2030-01-01T00:00:00Z"),
+                    endsAt = Instant.parse("2030-12-31T23:59:59Z"),
+                    templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
+                    createdByUserId = OWNER_ID,
+                )
+            val rule =
+                ruleRepository.createHappyHoursRule(
+                    venueId = fixture.visibleVenueId,
+                    promotionId = promotion.id,
+                    targetValue = MenuSemanticType.HOOKAH,
+                    discountPercent = 20,
+                    createdByUserId = OWNER_ID,
+                    startsTime = LocalTime.of(14, 0),
+                    endsTime = LocalTime.of(18, 0),
+                    daysOfWeek = setOf(1, 2, 3),
+                )
+            val before = readLifecycleSnapshot(jdbcUrl, promotion.id)
+            val failingRepository =
+                VenuePromotionRepository(
+                    dataSource = dataSource,
+                    ruleRepository = ruleRepository,
+                    auditLogWriter = failingAuditLogWriter(),
+                )
+
+            assertFailsWith<DatabaseUnavailableException> {
+                failingRepository.mutatePromotionLifecycle(
+                    venueId = fixture.visibleVenueId,
+                    promotionId = promotion.id,
+                    expectedStatus = VenuePromotionStatus.DRAFT,
+                    targetStatus = VenuePromotionStatus.ACTIVE,
+                    actorUserId = OWNER_ID,
+                    source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
+                )
+            }
+
+            assertEquals(before, readLifecycleSnapshot(jdbcUrl, promotion.id))
+            assertEquals(VenuePromotionStatus.DRAFT, before.promotionStatus)
+            assertEquals(listOf(rule.id), before.rules.map { it.ruleId })
+            assertTrue(readPromotionLifecycleAudits(jdbcUrl, promotion.id).isEmpty())
+            assertNull(
+                promotionRepository.getPromotionForGuest(
+                    promotionId = promotion.id,
+                    now = Instant.parse("2030-06-01T12:00:00Z"),
+                ),
+            )
+            assertTrue(ruleRepository.listActiveRulesForVenueAt(fixture.visibleVenueId).isEmpty())
+        }
+
+    @Test
+    fun `archive audit failure rolls back parent rules versions and timestamps`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("promotion-lifecycle-archive-audit-rollback")
+            val fixture = seedFixture(jdbcUrl)
+            val dataSource = dataSource(jdbcUrl)
+            val ruleRepository = VenuePromotionRuleRepository(dataSource)
+            val promotionRepository = VenuePromotionRepository(dataSource, ruleRepository)
+            val promotion =
+                promotionRepository.createPromotion(
+                    venueId = fixture.visibleVenueId,
+                    title = "Rollback archive",
+                    description = "Legacy rule",
+                    terms = null,
+                    templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
+                    createdByUserId = OWNER_ID,
+                )
+            val rule =
+                ruleRepository.createHappyHoursRule(
+                    venueId = fixture.visibleVenueId,
+                    promotionId = promotion.id,
+                    targetValue = MenuSemanticType.HOOKAH,
+                    discountPercent = 20,
+                    createdByUserId = OWNER_ID,
+                )
+            val before = readLifecycleSnapshot(jdbcUrl, promotion.id)
+            val failingRepository =
+                VenuePromotionRepository(
+                    dataSource = dataSource,
+                    ruleRepository = ruleRepository,
+                    auditLogWriter = failingAuditLogWriter(),
+                )
+
+            assertFailsWith<DatabaseUnavailableException> {
+                failingRepository.mutatePromotionLifecycle(
+                    venueId = fixture.visibleVenueId,
+                    promotionId = promotion.id,
+                    expectedStatus = VenuePromotionStatus.DRAFT,
+                    targetStatus = VenuePromotionStatus.ARCHIVED,
+                    actorUserId = OWNER_ID,
+                    source = VenuePromotionLifecycleSource.TELEGRAM_BOT,
+                )
+            }
+
+            assertEquals(before, readLifecycleSnapshot(jdbcUrl, promotion.id))
+            assertEquals(VenuePromotionStatus.DRAFT, before.promotionStatus)
+            assertEquals(listOf(rule.id), before.rules.map { it.ruleId })
+            assertTrue(readPromotionLifecycleAudits(jdbcUrl, promotion.id).isEmpty())
         }
 
     @Test
@@ -171,10 +593,11 @@ class VenuePromotionRepositoryTest {
                     createdByUserId = OWNER_ID,
                 )
             assertNotNull(
-                promotionRepository.setPromotionStatus(
+                promotionRepository.applyLifecycleForTest(
                     venueId = fixture.visibleVenueId,
                     promotionId = activeBanner.id,
-                    status = VenuePromotionStatus.ACTIVE,
+                    expectedStatus = VenuePromotionStatus.DRAFT,
+                    targetStatus = VenuePromotionStatus.ACTIVE,
                 ),
             )
             assertNotNull(mediaRepository.replacePrimaryImage(fixture.visibleVenueId, activeBanner.id, "photo-one"))
@@ -236,10 +659,11 @@ class VenuePromotionRepositoryTest {
                     createdByUserId = OWNER_ID,
                 )
             assertNotNull(
-                promotionRepository.setPromotionStatus(
+                promotionRepository.applyLifecycleForTest(
                     venueId = fixture.visibleVenueId,
                     promotionId = noImageBanner.id,
-                    status = VenuePromotionStatus.ACTIVE,
+                    expectedStatus = VenuePromotionStatus.DRAFT,
+                    targetStatus = VenuePromotionStatus.ACTIVE,
                 ),
             )
             val noImageRequest =
@@ -274,10 +698,11 @@ class VenuePromotionRepositoryTest {
                     createdByUserId = OWNER_ID,
                 )
             assertNotNull(
-                promotionRepository.setPromotionStatus(
+                promotionRepository.applyLifecycleForTest(
                     venueId = fixture.visibleVenueId,
                     promotionId = expiredBanner.id,
-                    status = VenuePromotionStatus.ACTIVE,
+                    expectedStatus = VenuePromotionStatus.DRAFT,
+                    targetStatus = VenuePromotionStatus.ACTIVE,
                 ),
             )
             assertNotNull(
@@ -339,7 +764,14 @@ class VenuePromotionRepositoryTest {
                 ),
             )
 
-            assertNotNull(promotionRepository.archivePromotion(fixture.visibleVenueId, activeBanner.id))
+            assertNotNull(
+                promotionRepository.applyLifecycleForTest(
+                    venueId = fixture.visibleVenueId,
+                    promotionId = activeBanner.id,
+                    expectedStatus = VenuePromotionStatus.ACTIVE,
+                    targetStatus = VenuePromotionStatus.ARCHIVED,
+                ),
+            )
             assertTrue(placementRepository.listActiveForGlobalPromotions().isEmpty())
             val archivedPlacement = assertNotNull(placementRepository.archive(activePlacement.id))
             assertEquals(PromotionPlacementStatus.ARCHIVED, archivedPlacement.status)
@@ -367,10 +799,11 @@ class VenuePromotionRepositoryTest {
                     createdByUserId = OWNER_ID,
                 )
             assertNotNull(
-                promotionRepository.setPromotionStatus(
+                promotionRepository.applyLifecycleForTest(
                     venueId = fixture.visibleVenueId,
                     promotionId = activePromotion.id,
-                    status = VenuePromotionStatus.ACTIVE,
+                    expectedStatus = VenuePromotionStatus.DRAFT,
+                    targetStatus = VenuePromotionStatus.ACTIVE,
                 ),
             )
 
@@ -897,10 +1330,11 @@ class VenuePromotionRepositoryTest {
             assertEquals(VenuePromotionStatus.ACTIVE, active.status)
             assertEquals(emptyList(), ruleRepository.listActiveRulesForVenueAt(fixture.visibleVenueId))
             assertNotNull(
-                promotionRepository.setPromotionStatus(
+                promotionRepository.applyLifecycleForTest(
                     venueId = fixture.visibleVenueId,
                     promotionId = promotion.id,
-                    status = VenuePromotionStatus.ACTIVE,
+                    expectedStatus = VenuePromotionStatus.DRAFT,
+                    targetStatus = VenuePromotionStatus.ACTIVE,
                 ),
             )
             assertEquals(
@@ -957,19 +1391,21 @@ class VenuePromotionRepositoryTest {
             assertEquals(emptyList(), ruleRepository.listActiveRulesForVenueAt(fixture.visibleVenueId).map { it.id })
 
             assertNotNull(
-                promotionRepository.setPromotionStatus(
-                    fixture.visibleVenueId,
-                    promotion.id,
-                    VenuePromotionStatus.PAUSED,
+                promotionRepository.applyLifecycleForTest(
+                    venueId = fixture.visibleVenueId,
+                    promotionId = promotion.id,
+                    expectedStatus = VenuePromotionStatus.DRAFT,
+                    targetStatus = VenuePromotionStatus.PAUSED,
                 ),
             )
             assertEquals(emptyList(), ruleRepository.listActiveRulesForVenueAt(fixture.visibleVenueId).map { it.id })
 
             assertNotNull(
-                promotionRepository.setPromotionStatus(
-                    fixture.visibleVenueId,
-                    promotion.id,
-                    VenuePromotionStatus.ACTIVE,
+                promotionRepository.applyLifecycleForTest(
+                    venueId = fixture.visibleVenueId,
+                    promotionId = promotion.id,
+                    expectedStatus = VenuePromotionStatus.PAUSED,
+                    targetStatus = VenuePromotionStatus.ACTIVE,
                 ),
             )
             assertEquals(
@@ -977,7 +1413,14 @@ class VenuePromotionRepositoryTest {
                 ruleRepository.listActiveRulesForVenueAt(fixture.visibleVenueId).map { it.id },
             )
 
-            assertNotNull(promotionRepository.archivePromotion(fixture.visibleVenueId, promotion.id))
+            assertNotNull(
+                promotionRepository.applyLifecycleForTest(
+                    venueId = fixture.visibleVenueId,
+                    promotionId = promotion.id,
+                    expectedStatus = VenuePromotionStatus.ACTIVE,
+                    targetStatus = VenuePromotionStatus.ARCHIVED,
+                ),
+            )
             assertEquals(emptyList(), ruleRepository.listActiveRulesForVenueAt(fixture.visibleVenueId).map { it.id })
             assertEquals(
                 VenuePromotionStatus.ARCHIVED,
@@ -1076,18 +1519,11 @@ class VenuePromotionRepositoryTest {
 
             val active =
                 assertNotNull(
-                    promotionRepository.setPromotionStatus(
+                    promotionRepository.applyLifecycleForTest(
                         venueId = fixture.visibleVenueId,
                         promotionId = promotion.id,
-                        status = VenuePromotionStatus.ACTIVE,
-                        afterUpdate = { connection, _ ->
-                            ruleRepository.synchronizeHappyHoursPromotionStatus(
-                                connection = connection,
-                                venueId = fixture.visibleVenueId,
-                                promotionId = promotion.id,
-                                status = VenuePromotionStatus.ACTIVE,
-                            )
-                        },
+                        expectedStatus = VenuePromotionStatus.DRAFT,
+                        targetStatus = VenuePromotionStatus.ACTIVE,
                     ),
                 )
             assertEquals(VenuePromotionStatus.ACTIVE, active.status)
@@ -1098,18 +1534,11 @@ class VenuePromotionRepositoryTest {
 
             val paused =
                 assertNotNull(
-                    promotionRepository.setPromotionStatus(
+                    promotionRepository.applyLifecycleForTest(
                         venueId = fixture.visibleVenueId,
                         promotionId = promotion.id,
-                        status = VenuePromotionStatus.PAUSED,
-                        afterUpdate = { connection, _ ->
-                            ruleRepository.synchronizeHappyHoursPromotionStatus(
-                                connection = connection,
-                                venueId = fixture.visibleVenueId,
-                                promotionId = promotion.id,
-                                status = VenuePromotionStatus.PAUSED,
-                            )
-                        },
+                        expectedStatus = VenuePromotionStatus.ACTIVE,
+                        targetStatus = VenuePromotionStatus.PAUSED,
                     ),
                 )
             assertEquals(VenuePromotionStatus.PAUSED, paused.status)
@@ -1246,18 +1675,11 @@ class VenuePromotionRepositoryTest {
 
             val active =
                 assertNotNull(
-                    promotionRepository.setPromotionStatus(
+                    promotionRepository.applyLifecycleForTest(
                         venueId = fixture.visibleVenueId,
                         promotionId = promotion.id,
-                        status = VenuePromotionStatus.ACTIVE,
-                        afterUpdate = { connection, _ ->
-                            ruleRepository.synchronizeGiftWithItemPromotionStatus(
-                                connection = connection,
-                                venueId = fixture.visibleVenueId,
-                                promotionId = promotion.id,
-                                status = VenuePromotionStatus.ACTIVE,
-                            )
-                        },
+                        expectedStatus = VenuePromotionStatus.DRAFT,
+                        targetStatus = VenuePromotionStatus.ACTIVE,
                     ),
                 )
             assertEquals(VenuePromotionStatus.ACTIVE, active.status)
@@ -1318,25 +1740,21 @@ class VenuePromotionRepositoryTest {
             assertEquals(2, readiness.ruleCount)
             assertEquals(legacyRules.first().id, readiness.rule?.id)
 
-            suspend fun setPromotionAndRuleStatus(status: VenuePromotionStatus) {
+            suspend fun setPromotionAndRuleStatus(
+                expectedStatus: VenuePromotionStatus,
+                targetStatus: VenuePromotionStatus,
+            ) {
                 assertNotNull(
-                    promotionRepository.setPromotionStatus(
+                    promotionRepository.applyLifecycleForTest(
                         venueId = fixture.visibleVenueId,
                         promotionId = promotion.id,
-                        status = status,
-                        afterUpdate = { connection, _ ->
-                            ruleRepository.synchronizeHappyHoursPromotionStatus(
-                                connection = connection,
-                                venueId = fixture.visibleVenueId,
-                                promotionId = promotion.id,
-                                status = status,
-                            )
-                        },
+                        expectedStatus = expectedStatus,
+                        targetStatus = targetStatus,
                     ),
                 )
             }
 
-            setPromotionAndRuleStatus(VenuePromotionStatus.ACTIVE)
+            setPromotionAndRuleStatus(VenuePromotionStatus.DRAFT, VenuePromotionStatus.ACTIVE)
             assertEquals(
                 setOf(VenuePromotionStatus.ACTIVE),
                 legacyRules
@@ -1344,7 +1762,7 @@ class VenuePromotionRepositoryTest {
                     .toSet(),
             )
 
-            setPromotionAndRuleStatus(VenuePromotionStatus.PAUSED)
+            setPromotionAndRuleStatus(VenuePromotionStatus.ACTIVE, VenuePromotionStatus.PAUSED)
             assertEquals(
                 setOf(VenuePromotionStatus.PAUSED),
                 legacyRules
@@ -1352,7 +1770,7 @@ class VenuePromotionRepositoryTest {
                     .toSet(),
             )
 
-            setPromotionAndRuleStatus(VenuePromotionStatus.ACTIVE)
+            setPromotionAndRuleStatus(VenuePromotionStatus.PAUSED, VenuePromotionStatus.ACTIVE)
             assertEquals(
                 setOf(VenuePromotionStatus.ACTIVE),
                 legacyRules
@@ -1362,7 +1780,7 @@ class VenuePromotionRepositoryTest {
         }
 
     @Test
-    fun `phase two parent callbacks roll back rule update and status together`() =
+    fun `phase two parent update callback and lifecycle audit failure roll back atomically`() =
         runBlocking {
             val jdbcUrl = migratedJdbcUrl("promotion-phase-two-atomic-rollback")
             val fixture = seedFixture(jdbcUrl)
@@ -1442,20 +1860,20 @@ class VenuePromotionRepositoryTest {
             assertEquals(50, ruleAfterUpdateRollback.discountPercent)
             assertEquals(originalWindows, ruleAfterUpdateRollback.weekdayWindows)
 
-            assertFailsWith<IllegalStateException> {
-                promotionRepository.setPromotionStatus(
+            val failingLifecycleRepository =
+                VenuePromotionRepository(
+                    dataSource = dataSource(jdbcUrl),
+                    ruleRepository = ruleRepository,
+                    auditLogWriter = failingAuditLogWriter(),
+                )
+            assertFailsWith<DatabaseUnavailableException> {
+                failingLifecycleRepository.mutatePromotionLifecycle(
                     venueId = fixture.visibleVenueId,
                     promotionId = promotion.id,
-                    status = VenuePromotionStatus.ACTIVE,
-                    afterUpdate = { connection, _ ->
-                        ruleRepository.synchronizeHappyHoursPromotionStatus(
-                            connection = connection,
-                            venueId = fixture.visibleVenueId,
-                            promotionId = promotion.id,
-                            status = VenuePromotionStatus.ACTIVE,
-                        )
-                        error("force status rollback")
-                    },
+                    expectedStatus = VenuePromotionStatus.DRAFT,
+                    targetStatus = VenuePromotionStatus.ACTIVE,
+                    actorUserId = OWNER_ID,
+                    source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
                 )
             }
             assertEquals(
@@ -1466,6 +1884,7 @@ class VenuePromotionRepositoryTest {
                 VenuePromotionStatus.DRAFT,
                 ruleRepository.getRuleForManagement(fixture.visibleVenueId, rule.id)?.status,
             )
+            assertTrue(readPromotionLifecycleAudits(jdbcUrl, promotion.id).isEmpty())
         }
 
     @Test
@@ -2107,16 +2526,86 @@ class VenuePromotionRepositoryTest {
             assertEquals(1, created.version)
             assertEquals(emptyList(), ruleRepository.listActiveRulesForVenueAt(fixture.visibleVenueId))
 
-            assertNotNull(
-                promotionRepository.setPromotionStatus(
-                    fixture.visibleVenueId,
-                    promotion.id,
-                    VenuePromotionStatus.ACTIVE,
-                ),
-            )
+            val activation =
+                assertNotNull(
+                    promotionRepository.mutatePromotionLifecycle(
+                        venueId = fixture.visibleVenueId,
+                        promotionId = promotion.id,
+                        expectedStatus = VenuePromotionStatus.DRAFT,
+                        targetStatus = VenuePromotionStatus.ACTIVE,
+                        actorUserId = OWNER_ID,
+                        source = VenuePromotionLifecycleSource.TELEGRAM_BOT,
+                    ),
+                )
+            assertEquals(VenuePromotionLifecycleOutcome.APPLIED, activation.outcome)
             val active = ruleRepository.listActiveRulesForVenueAt(fixture.visibleVenueId).single()
             assertEquals(PromotionRuleType.GIFT_WITH_ITEM, active.ruleType)
             assertEquals(rewardItemId, active.reward?.rewardMenuItemId)
+            val activationAudit = readPromotionLifecycleAudits(jdbcUrl, promotion.id).single()
+            assertPromotionAuditPayload(
+                payload = activationAudit.payload,
+                venueId = fixture.visibleVenueId,
+                promotionId = promotion.id,
+                templateType = VenuePromotionTemplateType.GIFT_WITH_ITEM,
+                oldStatus = VenuePromotionStatus.DRAFT,
+                newStatus = VenuePromotionStatus.ACTIVE,
+                source = VenuePromotionLifecycleSource.TELEGRAM_BOT,
+                expectedRules =
+                    listOf(
+                        ExpectedAuditRule(
+                            ruleId = created.id,
+                            version = created.version,
+                            oldStatus = VenuePromotionStatus.ACTIVE,
+                            newStatus = VenuePromotionStatus.ACTIVE,
+                        ),
+                    ),
+            )
+
+            val pause =
+                assertNotNull(
+                    promotionRepository.mutatePromotionLifecycle(
+                        venueId = fixture.visibleVenueId,
+                        promotionId = promotion.id,
+                        expectedStatus = VenuePromotionStatus.ACTIVE,
+                        targetStatus = VenuePromotionStatus.PAUSED,
+                        actorUserId = OWNER_ID,
+                        source = VenuePromotionLifecycleSource.TELEGRAM_BOT,
+                    ),
+                )
+            assertEquals(VenuePromotionLifecycleOutcome.APPLIED, pause.outcome)
+            assertEquals(
+                VenuePromotionStatus.ACTIVE,
+                ruleRepository.getRuleForManagement(fixture.visibleVenueId, created.id)?.status,
+            )
+            assertPromotionAuditPayload(
+                payload = readPromotionLifecycleAudits(jdbcUrl, promotion.id).last().payload,
+                venueId = fixture.visibleVenueId,
+                promotionId = promotion.id,
+                templateType = VenuePromotionTemplateType.GIFT_WITH_ITEM,
+                oldStatus = VenuePromotionStatus.ACTIVE,
+                newStatus = VenuePromotionStatus.PAUSED,
+                source = VenuePromotionLifecycleSource.TELEGRAM_BOT,
+                expectedRules =
+                    listOf(
+                        ExpectedAuditRule(
+                            ruleId = created.id,
+                            version = created.version,
+                            oldStatus = VenuePromotionStatus.ACTIVE,
+                            newStatus = VenuePromotionStatus.ACTIVE,
+                        ),
+                    ),
+            )
+            assertNotNull(
+                promotionRepository.mutatePromotionLifecycle(
+                    venueId = fixture.visibleVenueId,
+                    promotionId = promotion.id,
+                    expectedStatus = VenuePromotionStatus.PAUSED,
+                    targetStatus = VenuePromotionStatus.ACTIVE,
+                    actorUserId = OWNER_ID,
+                    source = VenuePromotionLifecycleSource.TELEGRAM_BOT,
+                ),
+            )
+            assertEquals(3, readPromotionLifecycleAudits(jdbcUrl, promotion.id).size)
 
             val updatedReward =
                 assertNotNull(
@@ -2334,13 +2823,7 @@ class VenuePromotionRepositoryTest {
                     status = VenuePromotionStatus.ACTIVE,
                 ),
             )
-            assertNotNull(
-                promotionRepository.setPromotionStatus(
-                    venueId = fixture.visibleVenueId,
-                    promotionId = promotion.id,
-                    status = VenuePromotionStatus.ACTIVE,
-                ),
-            )
+            setPromotionStatusForLegacyFixture(jdbcUrl, promotion.id, VenuePromotionStatus.ACTIVE)
 
             assertEquals(
                 listOf(
@@ -2524,6 +3007,203 @@ class VenuePromotionRepositoryTest {
                     rewardMenuItemId = teaItemId,
                 ),
             )
+        }
+
+    private suspend fun VenuePromotionRepository.applyLifecycleForTest(
+        venueId: Long,
+        promotionId: Long,
+        expectedStatus: VenuePromotionStatus,
+        targetStatus: VenuePromotionStatus,
+    ): VenuePromotion? =
+        mutatePromotionLifecycle(
+            venueId = venueId,
+            promotionId = promotionId,
+            expectedStatus = expectedStatus,
+            targetStatus = targetStatus,
+            actorUserId = OWNER_ID,
+            source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
+        )?.promotion
+
+    private fun setPromotionStatusForLegacyFixture(
+        jdbcUrl: String,
+        promotionId: Long,
+        status: VenuePromotionStatus,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                "UPDATE venue_promotions SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            ).use { statement ->
+                statement.setString(1, status.dbValue)
+                statement.setLong(2, promotionId)
+                assertEquals(1, statement.executeUpdate())
+            }
+        }
+    }
+
+    private fun readPromotionLifecycleAudits(
+        jdbcUrl: String,
+        promotionId: Long,
+    ): List<PromotionAuditRow> =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT actor_user_id, action, entity_type, entity_id, payload_json
+                FROM audit_log
+                WHERE entity_type = 'venue_promotion'
+                  AND entity_id = ?
+                  AND action IN (?, ?)
+                ORDER BY id
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, promotionId)
+                statement.setString(2, VENUE_PROMOTION_STATUS_CHANGED_ACTION)
+                statement.setString(3, VENUE_PROMOTION_ARCHIVED_ACTION)
+                statement.executeQuery().use { resultSet ->
+                    buildList {
+                        while (resultSet.next()) {
+                            add(
+                                PromotionAuditRow(
+                                    actorUserId = resultSet.getLong("actor_user_id"),
+                                    action = resultSet.getString("action"),
+                                    entityType = resultSet.getString("entity_type"),
+                                    entityId = resultSet.getLong("entity_id"),
+                                    payload =
+                                        Json.parseToJsonElement(
+                                            resultSet.getString("payload_json"),
+                                        ).jsonObject,
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+    private fun countPromotionLifecycleAudits(jdbcUrl: String): Int =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                "SELECT COUNT(*) FROM audit_log WHERE action IN (?, ?)",
+            ).use { statement ->
+                statement.setString(1, VENUE_PROMOTION_STATUS_CHANGED_ACTION)
+                statement.setString(2, VENUE_PROMOTION_ARCHIVED_ACTION)
+                statement.executeQuery().use { resultSet ->
+                    assertTrue(resultSet.next())
+                    resultSet.getInt(1)
+                }
+            }
+        }
+
+    private fun assertPromotionAuditEnvelope(
+        audit: PromotionAuditRow,
+        action: String,
+        promotionId: Long,
+    ) {
+        assertEquals(OWNER_ID, audit.actorUserId)
+        assertEquals(action, audit.action)
+        assertEquals("venue_promotion", audit.entityType)
+        assertEquals(promotionId, audit.entityId)
+    }
+
+    private fun assertPromotionAuditPayload(
+        payload: JsonObject,
+        venueId: Long,
+        promotionId: Long,
+        templateType: VenuePromotionTemplateType,
+        oldStatus: VenuePromotionStatus,
+        newStatus: VenuePromotionStatus,
+        source: VenuePromotionLifecycleSource,
+        expectedRules: List<ExpectedAuditRule>,
+    ) {
+        assertEquals(
+            setOf(
+                "venueId",
+                "promotionId",
+                "templateType",
+                "oldStatus",
+                "newStatus",
+                "source",
+                "rules",
+            ),
+            payload.keys,
+        )
+        assertEquals(venueId, payload.getValue("venueId").jsonPrimitive.content.toLong())
+        assertEquals(promotionId, payload.getValue("promotionId").jsonPrimitive.content.toLong())
+        assertEquals(templateType.dbValue, payload.getValue("templateType").jsonPrimitive.content)
+        assertEquals(oldStatus.dbValue, payload.getValue("oldStatus").jsonPrimitive.content)
+        assertEquals(newStatus.dbValue, payload.getValue("newStatus").jsonPrimitive.content)
+        assertEquals(source.name, payload.getValue("source").jsonPrimitive.content)
+
+        val rules = payload.getValue("rules").jsonArray
+        assertEquals(expectedRules.size, rules.size)
+        rules.zip(expectedRules).forEach { (ruleElement, expectedRule) ->
+            val rule = ruleElement.jsonObject
+            assertEquals(setOf("ruleId", "version", "oldStatus", "newStatus"), rule.keys)
+            assertEquals(expectedRule.ruleId, rule.getValue("ruleId").jsonPrimitive.content.toLong())
+            assertEquals(expectedRule.version, rule.getValue("version").jsonPrimitive.content.toInt())
+            assertEquals(expectedRule.oldStatus.dbValue, rule.getValue("oldStatus").jsonPrimitive.content)
+            assertEquals(expectedRule.newStatus.dbValue, rule.getValue("newStatus").jsonPrimitive.content)
+        }
+        assertEquals(expectedRules.map { it.ruleId }.sorted(), expectedRules.map { it.ruleId })
+    }
+
+    private fun readLifecycleSnapshot(
+        jdbcUrl: String,
+        promotionId: Long,
+    ): LifecycleSnapshot =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            val promotion =
+                connection.prepareStatement(
+                    "SELECT status, updated_at FROM venue_promotions WHERE id = ?",
+                ).use { statement ->
+                    statement.setLong(1, promotionId)
+                    statement.executeQuery().use { resultSet ->
+                        assertTrue(resultSet.next())
+                        Pair(
+                            assertNotNull(VenuePromotionStatus.fromDb(resultSet.getString("status"))),
+                            resultSet.getTimestamp("updated_at").toInstant(),
+                        )
+                    }
+                }
+            val rules =
+                connection.prepareStatement(
+                    """
+                    SELECT id, version, status, updated_at
+                    FROM promotion_rules
+                    WHERE promotion_id = ?
+                    ORDER BY id
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setLong(1, promotionId)
+                    statement.executeQuery().use { resultSet ->
+                        buildList {
+                            while (resultSet.next()) {
+                                add(
+                                    LifecycleRuleSnapshot(
+                                        ruleId = resultSet.getLong("id"),
+                                        version = resultSet.getInt("version"),
+                                        status =
+                                            assertNotNull(
+                                                VenuePromotionStatus.fromDb(
+                                                    resultSet.getString("status"),
+                                                ),
+                                            ),
+                                        updatedAt = resultSet.getTimestamp("updated_at").toInstant(),
+                                    ),
+                                )
+                            }
+                        }
+                    }
+                }
+            LifecycleSnapshot(
+                promotionStatus = promotion.first,
+                promotionUpdatedAt = promotion.second,
+                rules = rules,
+            )
+        }
+
+    private fun failingAuditLogWriter(): TransactionalAuditLogWriter =
+        TransactionalAuditLogWriter { _, _, _, _, _, _ ->
+            throw SQLException("forced promotion lifecycle audit failure")
         }
 
     private fun migratedJdbcUrl(name: String): String {
@@ -2731,6 +3411,34 @@ class VenuePromotionRepositoryTest {
         val otherVenueId: Long,
         val hiddenVenueId: Long,
         val blockedVenueId: Long,
+    )
+
+    private data class PromotionAuditRow(
+        val actorUserId: Long,
+        val action: String,
+        val entityType: String,
+        val entityId: Long,
+        val payload: JsonObject,
+    )
+
+    private data class ExpectedAuditRule(
+        val ruleId: Long,
+        val version: Int,
+        val oldStatus: VenuePromotionStatus,
+        val newStatus: VenuePromotionStatus,
+    )
+
+    private data class LifecycleSnapshot(
+        val promotionStatus: VenuePromotionStatus,
+        val promotionUpdatedAt: Instant,
+        val rules: List<LifecycleRuleSnapshot>,
+    )
+
+    private data class LifecycleRuleSnapshot(
+        val ruleId: Long,
+        val version: Int,
+        val status: VenuePromotionStatus,
+        val updatedAt: Instant,
     )
 
     private data class LegacyPromotionFixture(

@@ -1,10 +1,17 @@
 package com.hookah.platform.backend.telegram.db
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.miniapp.subscription.SubscriptionStatus
+import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
+import com.hookah.platform.backend.miniapp.venue.TransactionalAuditLogWriter
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import java.sql.Connection
 import java.sql.ResultSet
 import java.sql.SQLException
@@ -82,7 +89,30 @@ data class PromotionVenueFeedItem(
     val previewPromotions: List<PromotionPreview>,
 )
 
-class VenuePromotionRepository(private val dataSource: DataSource?) {
+enum class VenuePromotionLifecycleSource {
+    VENUE_MINI_APP,
+    TELEGRAM_BOT,
+}
+
+enum class VenuePromotionLifecycleOutcome {
+    APPLIED,
+    NO_OP,
+    STALE,
+}
+
+data class VenuePromotionLifecycleMutation(
+    val promotion: VenuePromotion,
+    val outcome: VenuePromotionLifecycleOutcome,
+)
+
+const val VENUE_PROMOTION_STATUS_CHANGED_ACTION = "VENUE_PROMOTION_STATUS_CHANGED"
+const val VENUE_PROMOTION_ARCHIVED_ACTION = "VENUE_PROMOTION_ARCHIVED"
+
+class VenuePromotionRepository(
+    private val dataSource: DataSource?,
+    private val ruleRepository: VenuePromotionRuleRepository = VenuePromotionRuleRepository(dataSource),
+    private val auditLogWriter: TransactionalAuditLogWriter = AuditLogRepository(dataSource),
+) {
     suspend fun createPromotion(
         venueId: Long,
         title: String,
@@ -265,12 +295,25 @@ class VenuePromotionRepository(private val dataSource: DataSource?) {
         }
     }
 
-    suspend fun setPromotionStatus(
+    suspend fun mutatePromotionLifecycle(
         venueId: Long,
         promotionId: Long,
-        status: VenuePromotionStatus,
-        afterUpdate: ((Connection, VenuePromotion) -> Unit)? = null,
-    ): VenuePromotion? {
+        expectedStatus: VenuePromotionStatus,
+        targetStatus: VenuePromotionStatus,
+        actorUserId: Long,
+        source: VenuePromotionLifecycleSource,
+    ): VenuePromotionLifecycleMutation? {
+        require(venueId > 0L) { "venueId must be positive" }
+        require(promotionId > 0L) { "promotionId must be positive" }
+        require(actorUserId > 0L) { "actorUserId must be positive" }
+        require(
+            targetStatus in
+                setOf(
+                    VenuePromotionStatus.ACTIVE,
+                    VenuePromotionStatus.PAUSED,
+                    VenuePromotionStatus.ARCHIVED,
+                ),
+        ) { "unsupported promotion lifecycle target" }
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
@@ -278,93 +321,69 @@ class VenuePromotionRepository(private val dataSource: DataSource?) {
                     val originalAutoCommit = connection.autoCommit
                     connection.autoCommit = false
                     try {
-                        val updated =
-                            connection.prepareStatement(
-                                """
-                                UPDATE venue_promotions
-                                SET status = ?,
-                                    updated_at = CURRENT_TIMESTAMP
-                                WHERE venue_id = ? AND id = ?
-                                """.trimIndent(),
-                            ).use { statement ->
-                                statement.setString(1, status.dbValue)
-                                statement.setLong(2, venueId)
-                                statement.setLong(3, promotionId)
-                                statement.executeUpdate()
-                            }
+                        val current =
+                            selectPromotion(
+                                connection = connection,
+                                venueId = venueId,
+                                promotionId = promotionId,
+                                forUpdate = true,
+                            )
+                        if (current == null) {
+                            connection.commit()
+                            return@use null
+                        }
+                        if (current.status == targetStatus) {
+                            connection.commit()
+                            return@use VenuePromotionLifecycleMutation(
+                                promotion = current,
+                                outcome = VenuePromotionLifecycleOutcome.NO_OP,
+                            )
+                        }
+                        if (current.status != expectedStatus) {
+                            connection.commit()
+                            return@use VenuePromotionLifecycleMutation(
+                                promotion = current,
+                                outcome = VenuePromotionLifecycleOutcome.STALE,
+                            )
+                        }
+                        if (current.status == VenuePromotionStatus.ARCHIVED) {
+                            throw InvalidInputException("Акция в архиве. Изменить статус нельзя.")
+                        }
+
+                        val oldRuleStates = lockAndLoadPromotionRuleStates(connection, venueId, promotionId)
+                        val updated = updatePromotionStatus(connection, venueId, promotionId, targetStatus)
+                        if (updated != 1) {
+                            throw SQLException("Locked venue promotion disappeared during lifecycle mutation")
+                        }
+                        synchronizePromotionRuleStatuses(
+                            connection = connection,
+                            promotion = current,
+                            targetStatus = targetStatus,
+                            source = source,
+                        )
+                        val newRuleStates = loadPromotionRuleStates(connection, venueId, promotionId)
                         val result =
-                            if (updated == 0) {
-                                null
-                            } else {
-                                selectPromotion(connection, venueId = venueId, promotionId = promotionId)
-                            }
-                        result?.let { afterUpdate?.invoke(connection, it) }
+                            selectPromotion(connection, venueId = venueId, promotionId = promotionId)
+                                ?: throw SQLException("Updated venue promotion not found")
+                        appendLifecycleAudit(
+                            connection = connection,
+                            actorUserId = actorUserId,
+                            source = source,
+                            oldPromotion = current,
+                            newPromotion = result,
+                            oldRuleStates = oldRuleStates,
+                            newRuleStates = newRuleStates,
+                        )
                         connection.commit()
-                        result
+                        VenuePromotionLifecycleMutation(
+                            promotion = result,
+                            outcome = VenuePromotionLifecycleOutcome.APPLIED,
+                        )
                     } catch (e: Exception) {
                         connection.rollback()
                         throw e
                     } finally {
                         connection.autoCommit = originalAutoCommit
-                    }
-                }
-            } catch (e: SQLException) {
-                throw DatabaseUnavailableException()
-            }
-        }
-    }
-
-    suspend fun archivePromotion(
-        venueId: Long,
-        promotionId: Long,
-    ): VenuePromotion? {
-        val ds = dataSource ?: throw DatabaseUnavailableException()
-        return withContext(Dispatchers.IO) {
-            try {
-                ds.connection.use { connection ->
-                    connection.autoCommit = false
-                    try {
-                        val updated =
-                            connection.prepareStatement(
-                                """
-                                UPDATE venue_promotions
-                                SET status = ?,
-                                    updated_at = CURRENT_TIMESTAMP
-                                WHERE venue_id = ? AND id = ?
-                                """.trimIndent(),
-                            ).use { statement ->
-                                statement.setString(1, VenuePromotionStatus.ARCHIVED.dbValue)
-                                statement.setLong(2, venueId)
-                                statement.setLong(3, promotionId)
-                                statement.executeUpdate()
-                            }
-                        val result =
-                            if (updated == 0) {
-                                null
-                            } else {
-                                lockPromotionRulesForUpdate(connection, venueId, promotionId)
-                                connection.prepareStatement(
-                                    """
-                                    UPDATE promotion_rules
-                                    SET status = ?,
-                                        updated_at = CURRENT_TIMESTAMP
-                                    WHERE venue_id = ? AND promotion_id = ?
-                                    """.trimIndent(),
-                                ).use { statement ->
-                                    statement.setString(1, VenuePromotionStatus.ARCHIVED.dbValue)
-                                    statement.setLong(2, venueId)
-                                    statement.setLong(3, promotionId)
-                                    statement.executeUpdate()
-                                }
-                                selectPromotion(connection, venueId = venueId, promotionId = promotionId)
-                            }
-                        connection.commit()
-                        result
-                    } catch (e: Exception) {
-                        connection.rollback()
-                        throw e
-                    } finally {
-                        connection.autoCommit = true
                     }
                 }
             } catch (e: SQLException) {
@@ -839,6 +858,175 @@ class VenuePromotionRepository(private val dataSource: DataSource?) {
                 throw DatabaseUnavailableException()
             }
         }
+    }
+
+    private data class PromotionLifecycleRuleState(
+        val ruleId: Long,
+        val version: Int,
+        val status: VenuePromotionStatus,
+    )
+
+    private fun updatePromotionStatus(
+        connection: Connection,
+        venueId: Long,
+        promotionId: Long,
+        status: VenuePromotionStatus,
+    ): Int =
+        connection.prepareStatement(
+            """
+            UPDATE venue_promotions
+            SET status = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE venue_id = ? AND id = ?
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setString(1, status.dbValue)
+            statement.setLong(2, venueId)
+            statement.setLong(3, promotionId)
+            statement.executeUpdate()
+        }
+
+    private fun synchronizePromotionRuleStatuses(
+        connection: Connection,
+        promotion: VenuePromotion,
+        targetStatus: VenuePromotionStatus,
+        source: VenuePromotionLifecycleSource,
+    ) {
+        if (targetStatus == VenuePromotionStatus.ARCHIVED) {
+            connection.prepareStatement(
+                """
+                UPDATE promotion_rules
+                SET status = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE venue_id = ? AND promotion_id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setString(1, VenuePromotionStatus.ARCHIVED.dbValue)
+                statement.setLong(2, promotion.venueId)
+                statement.setLong(3, promotion.id)
+                statement.executeUpdate()
+            }
+            return
+        }
+
+        when (promotion.templateType) {
+            VenuePromotionTemplateType.HAPPY_HOURS_PERCENT ->
+                ruleRepository.synchronizeHappyHoursPromotionStatus(
+                    connection = connection,
+                    venueId = promotion.venueId,
+                    promotionId = promotion.id,
+                    status = targetStatus,
+                )
+            VenuePromotionTemplateType.GIFT_WITH_ITEM ->
+                if (source == VenuePromotionLifecycleSource.VENUE_MINI_APP) {
+                    ruleRepository.synchronizeGiftWithItemPromotionStatus(
+                        connection = connection,
+                        venueId = promotion.venueId,
+                        promotionId = promotion.id,
+                        status = targetStatus,
+                    )
+                }
+            else -> Unit
+        }
+    }
+
+    private fun lockAndLoadPromotionRuleStates(
+        connection: Connection,
+        venueId: Long,
+        promotionId: Long,
+    ): List<PromotionLifecycleRuleState> =
+        loadPromotionRuleStates(
+            connection = connection,
+            venueId = venueId,
+            promotionId = promotionId,
+            forUpdate = true,
+        )
+
+    private fun loadPromotionRuleStates(
+        connection: Connection,
+        venueId: Long,
+        promotionId: Long,
+        forUpdate: Boolean = false,
+    ): List<PromotionLifecycleRuleState> =
+        connection.prepareStatement(
+            """
+            SELECT id, version, status
+            FROM promotion_rules
+            WHERE venue_id = ? AND promotion_id = ?
+            ORDER BY id
+            ${if (forUpdate) "FOR UPDATE" else ""}
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, promotionId)
+            statement.executeQuery().use { rs ->
+                buildList {
+                    while (rs.next()) {
+                        add(
+                            PromotionLifecycleRuleState(
+                                ruleId = rs.getLong("id"),
+                                version = rs.getInt("version"),
+                                status =
+                                    VenuePromotionStatus.fromDb(rs.getString("status"))
+                                        ?: throw SQLException("Unknown promotion rule status"),
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+
+    private fun appendLifecycleAudit(
+        connection: Connection,
+        actorUserId: Long,
+        source: VenuePromotionLifecycleSource,
+        oldPromotion: VenuePromotion,
+        newPromotion: VenuePromotion,
+        oldRuleStates: List<PromotionLifecycleRuleState>,
+        newRuleStates: List<PromotionLifecycleRuleState>,
+    ) {
+        val newRulesById = newRuleStates.associateBy { it.ruleId }
+        if (newRulesById.keys != oldRuleStates.mapTo(linkedSetOf()) { it.ruleId }) {
+            throw SQLException("Promotion rule set changed during lifecycle mutation")
+        }
+        val rulesPayload =
+            buildJsonArray {
+                oldRuleStates.forEach { oldRule ->
+                    val newRule =
+                        newRulesById[oldRule.ruleId]
+                            ?: throw SQLException("Promotion rule disappeared during lifecycle mutation")
+                    add(
+                        buildJsonObject {
+                            put("ruleId", oldRule.ruleId)
+                            put("version", newRule.version)
+                            put("oldStatus", oldRule.status.dbValue)
+                            put("newStatus", newRule.status.dbValue)
+                        },
+                    )
+                }
+            }
+        auditLogWriter.appendJson(
+            connection = connection,
+            actorUserId = actorUserId,
+            action =
+                if (newPromotion.status == VenuePromotionStatus.ARCHIVED) {
+                    VENUE_PROMOTION_ARCHIVED_ACTION
+                } else {
+                    VENUE_PROMOTION_STATUS_CHANGED_ACTION
+                },
+            entityType = "venue_promotion",
+            entityId = newPromotion.id,
+            payload =
+                buildJsonObject {
+                    put("venueId", newPromotion.venueId)
+                    put("promotionId", newPromotion.id)
+                    put("templateType", newPromotion.templateType.dbValue)
+                    put("oldStatus", oldPromotion.status.dbValue)
+                    put("newStatus", newPromotion.status.dbValue)
+                    put("source", source.name)
+                    put("rules", rulesPayload)
+                },
+        )
     }
 
     private fun selectPromotion(

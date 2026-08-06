@@ -761,17 +761,22 @@ Recently closed:
 - Booking Arrival Guard / Staff-Chat Booking Buttons: **CLOSED / staging smoke passed**. Arrival terminal actions are visible/accepted only from `CONFIRMED`; `PENDING`, `CHANGED` and terminal statuses do not show or accept seat/no-show; staff-chat booking notifications are state-aware; stale/no-permission callbacks answer safely; `BOOKING_CHAT` replies do not post to staff-chat.
 - Repeat as Template Phase 1: **MVP IMPLEMENTED / LOCAL VALIDATION PASSED / DEFERRED MANUAL SMOKE**. One shared `RepeatOrderResolver` serves Guest Mini App and Telegram, builds a transient plan for one own completed order, requires an active same-venue table session plus an authorized personal/joined shared tab, re-resolves current item/option availability and prices, and adds eligible lines only to the local cart after explicit confirmation. No persistent template, order, batch or staff-chat notification is created. Required environment-dependent checks remain `BLOCKED_BY_ENVIRONMENT` in [`REPEAT-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#repeat-manual-001).
 - Simple Venue Promotions Phase 1: **DONE / MVP / STAGING-SMOKE-PASSED**. Owner/Manager manage informational promotions in Venue Mini App, Staff is hidden/forbidden, Guest venue detail receives only current `ACTIVE` records for a guest-available venue, and Telegram/Mini App share `VenuePromotionRepository`. No migration, discount engine, order-price effect, campaign send or paid placement was added.
+- Promotion lifecycle status audit: **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. Mini App status/archive and Telegram activate/pause/archive use one transaction-bound repository path with server-derived actor/source and exactly one audit for a committed transition; this closes neither promotion configuration audit nor the broader dangerous-action audit.
 
 Latest implemented bounded runtime block:
 
-1. **Simple Venue Promotions Phase 1 — `DONE / MVP / STAGING-SMOKE-PASSED`**.
-   - Reuse existing `venue_promotions`, `VenuePromotionRepository`, Bot management and active-period/guest-availability filtering.
-   - Focused Owner/Manager Mini App create/list/edit/status/archive controls are implemented for informational promotions only.
-   - Guest venue-detail read/rendering is implemented for current active promotions only.
-   - Keep discounts, promo codes, rules engine expansion, notifications, paid placement and boosting out of scope.
+1. **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+   - One `VenuePromotionRepository` mutation owns the parent lock, deterministic rule locks/status synchronization and audit insert on the same JDBC connection and transaction.
+   - A real transition commits exactly one `VENUE_PROMOTION_STATUS_CHANGED` or `VENUE_PROMOTION_ARCHIVED`; no-op, stale/repeated, denied, invalid/not-found and rolled-back mutations write no success audit.
+   - Mini App derives actor from its authenticated session and source `VENUE_MINI_APP`; Telegram derives the current authenticated actor and source `TELEGRAM_BOT`. Neither public request/callback supplies audit authority.
+   - Safe audit payload is bounded to venue/promotion/template identity, old/new status, source and rule id/version/old/new status rows ordered by rule id.
 
-The executable-promotions sections below record current implementation and local-validation
-evidence; this documentation synchronization does not select or add a new runtime scope.
+Simple Venue Promotions Phase 1 remains **DONE / MVP / STAGING-SMOKE-PASSED**. The
+executable-promotions sections below retain their current implementation and validation status;
+the audit slice changes no lifecycle, promotion calculation, stacking or Guest pricing contract.
+Promotion create/config edit audit, menu price/archive audit, staff role/removal audit,
+force-close/session audit, the Promotion Compatibility Policy and a broader audit viewer remain
+future. The overall dangerous-action audit therefore remains partial.
 
 Guest Favorites Phase 1 is staging-closed. Current code also shows the former Order Session Tab Core Hardening recommendation is already covered by table-session active-order uniqueness, tab-scoped Guest order routes and privacy regression foundations. Do not reopen that closed core without concrete regression evidence.
 
@@ -794,7 +799,7 @@ Not selected as implementation right now:
 
 - remaining booking regression smoke, including real two-account Guest Mini App isolation and schedule validation;
 - remaining backend-backed venue settings slices beyond booking hold, shift extension, public card/location and schedule;
-- remaining guest growth/retention from `docs/GROWTH_RETENTION.md`: Repeat as Template Phase 1 remains locally validated with deferred manual smoke; Simple Venue Promotions Phase 1 and Happy Hours Percent are `DONE / STAGING-SMOKE-PASSED`; Gift parity is `GIFT_WITH_ITEM BOT/MINIAPP PARITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT` and awaits independent review, CI and staging; favorite menu items/options, recommendations/frequent items, notification opt-in, favorites-based promotions and loyalty stay future; venue favorites, History and Post-Visit Feedback stay in regression;
+- remaining guest growth/retention from `docs/GROWTH_RETENTION.md`: Repeat as Template Phase 1 remains locally validated with deferred manual smoke; Simple Venue Promotions Phase 1 and Happy Hours Percent are `DONE / STAGING-SMOKE-PASSED`; Gift parity and the bounded Promotion Lifecycle Status Audit are locally validated and await independent review, CI and staging; promotion create/config edit audit and the Promotion Compatibility Policy remain future; favorite menu items/options, recommendations/frequent items, notification opt-in, favorites-based promotions and loyalty stay future; venue favorites, History and Post-Visit Feedback stay in regression;
 - menu/options/stop-list governance from `docs/MENU_OPTIONS_STOPLIST.md`: keep selected-option
   snapshots, Guest stale availability validation and the locally validated atomic shift-check
   contract in regression, and resolve broader menu constructor/media/top-list and remaining audit
@@ -1162,6 +1167,18 @@ Happy Hours Percent status: **DONE / STAGING-SMOKE-PASSED**.
 
 Gift parity status:
 **GIFT_WITH_ITEM BOT/MINIAPP PARITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+
+Promotion lifecycle status audit:
+**DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+
+The authoritative repository transaction locks the parent and rules in their existing order,
+applies the current parent/rule synchronization, records the committed old/new snapshot and inserts
+exactly one `VENUE_PROMOTION_STATUS_CHANGED` or `VENUE_PROMOTION_ARCHIVED` row before one commit.
+Audit insert failure rolls back parent, rules and their lifecycle side effects. Repeated/no-op,
+stale, denied, invalid/not-found and rolled-back mutations have no success audit. Actor is stored in
+the standard audit actor field; `VENUE_MINI_APP` and `TELEGRAM_BOT` are server-derived sources.
+Payload excludes promotion text/configuration, reward/menu names, prices, media, raw requests or
+callbacks, Telegram data, `initData`, secrets and unrelated PII. No migration was added.
 
 Promotion Compatibility Policy status: **AUDIT / FUTURE IMPLEMENTATION**.
 

@@ -200,6 +200,9 @@ import com.hookah.platform.backend.telegram.db.VenueInfoSectionMediaRepository
 import com.hookah.platform.backend.telegram.db.VenueInfoSectionsRepository
 import com.hookah.platform.backend.telegram.db.VenueMenuSectionImagesRepository
 import com.hookah.platform.backend.telegram.db.VenuePromotion
+import com.hookah.platform.backend.telegram.db.VenuePromotionLifecycleMutation
+import com.hookah.platform.backend.telegram.db.VenuePromotionLifecycleOutcome
+import com.hookah.platform.backend.telegram.db.VenuePromotionLifecycleSource
 import com.hookah.platform.backend.telegram.db.VenuePromotionMedia
 import com.hookah.platform.backend.telegram.db.VenuePromotionMediaRepository
 import com.hookah.platform.backend.telegram.db.VenuePromotionMediaType
@@ -19311,15 +19314,147 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
-    fun `manager can activate venue promotion`() =
+    fun `owner lifecycle callbacks use server actor and telegram source through one repository contract`() =
         runBlocking {
-            val promotion = testPromotion(id = 505L, venueId = 10L, venueName = "Mix", title = "Сет")
+            val activationDraft =
+                testPromotion(
+                    id = 523L,
+                    venueId = 10L,
+                    venueName = "Mix",
+                    title = "Счастливые часы",
+                    status = VenuePromotionStatus.DRAFT,
+                    templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
+                )
+            val activated = activationDraft.copy(status = VenuePromotionStatus.ACTIVE)
+            val pauseActive = activationDraft.copy(id = 524L, status = VenuePromotionStatus.ACTIVE)
+            val paused = pauseActive.copy(status = VenuePromotionStatus.PAUSED)
+            val archiveCurrent = activationDraft.copy(id = 526L, status = VenuePromotionStatus.PAUSED)
+            val archived = archiveCurrent.copy(status = VenuePromotionStatus.ARCHIVED)
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery {
+                venuePromotionRepository.getPromotionForManagement(10L, 523L)
+            } returns activationDraft andThen activated
+            coEvery {
+                venuePromotionRepository.getPromotionForManagement(10L, 524L)
+            } returns pauseActive andThen paused
+            coEvery {
+                venuePromotionRepository.getPromotionForManagement(10L, 526L)
+            } returns archiveCurrent
+            coEvery {
+                venuePromotionRepository.mutatePromotionLifecycle(
+                    venueId = 10L,
+                    promotionId = 523L,
+                    expectedStatus = VenuePromotionStatus.DRAFT,
+                    targetStatus = VenuePromotionStatus.ACTIVE,
+                    actorUserId = 200L,
+                    source = VenuePromotionLifecycleSource.TELEGRAM_BOT,
+                )
+            } returns VenuePromotionLifecycleMutation(activated, VenuePromotionLifecycleOutcome.APPLIED)
+            coEvery {
+                venuePromotionRepository.mutatePromotionLifecycle(
+                    venueId = 10L,
+                    promotionId = 524L,
+                    expectedStatus = VenuePromotionStatus.ACTIVE,
+                    targetStatus = VenuePromotionStatus.PAUSED,
+                    actorUserId = 200L,
+                    source = VenuePromotionLifecycleSource.TELEGRAM_BOT,
+                )
+            } returns VenuePromotionLifecycleMutation(paused, VenuePromotionLifecycleOutcome.APPLIED)
+            coEvery {
+                venuePromotionRepository.mutatePromotionLifecycle(
+                    venueId = 10L,
+                    promotionId = 526L,
+                    expectedStatus = VenuePromotionStatus.PAUSED,
+                    targetStatus = VenuePromotionStatus.ARCHIVED,
+                    actorUserId = 200L,
+                    source = VenuePromotionLifecycleSource.TELEGRAM_BOT,
+                )
+            } returns VenuePromotionLifecycleMutation(archived, VenuePromotionLifecycleOutcome.APPLIED)
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", null)
+            coEvery { venuePromotionRepository.listVenuePromotionsForManagement(10L, any()) } returns emptyList()
+
+            listOf(
+                Triple(10_049L, "cb-happy-hours-on", "vp_on:10:523"),
+                Triple(10_050L, "cb-happy-hours-off", "vp_off:10:524"),
+                Triple(10_052L, "cb-promotion-archive", "vp_arch:10:526"),
+            ).forEach { (updateId, callbackId, data) ->
+                router.process(
+                    TelegramUpdate(
+                        updateId = updateId,
+                        callbackQuery =
+                            CallbackQuery(
+                                id = callbackId,
+                                from = User(id = 200, username = "client-supplied-name"),
+                                message = Message(messageId = updateId, chat = Chat(id = 100, type = "private")),
+                                data = data,
+                            ),
+                    ),
+                )
+            }
+
+            coVerify {
+                venuePromotionRepository.mutatePromotionLifecycle(
+                    10L,
+                    523L,
+                    VenuePromotionStatus.DRAFT,
+                    VenuePromotionStatus.ACTIVE,
+                    200L,
+                    VenuePromotionLifecycleSource.TELEGRAM_BOT,
+                )
+                venuePromotionRepository.mutatePromotionLifecycle(
+                    10L,
+                    524L,
+                    VenuePromotionStatus.ACTIVE,
+                    VenuePromotionStatus.PAUSED,
+                    200L,
+                    VenuePromotionLifecycleSource.TELEGRAM_BOT,
+                )
+                venuePromotionRepository.mutatePromotionLifecycle(
+                    10L,
+                    526L,
+                    VenuePromotionStatus.PAUSED,
+                    VenuePromotionStatus.ARCHIVED,
+                    200L,
+                    VenuePromotionLifecycleSource.TELEGRAM_BOT,
+                )
+                outboxEnqueuer.enqueueSendMessage(100, "Акция включена.", null)
+                outboxEnqueuer.enqueueSendMessage(100, "Акция приостановлена.", null)
+                outboxEnqueuer.enqueueSendMessage(100, "Акция архивирована.", null)
+            }
+            verify(exactly = 0) {
+                venuePromotionRuleRepository.synchronizeHappyHoursPromotionStatus(any(), any(), any(), any())
+            }
+            coVerify(exactly = 0) {
+                auditLogRepository.appendJson(any(), any(), any(), any(), any())
+            }
+        }
+
+    @Test
+    fun `manager keeps current promotion activation access through authoritative lifecycle mutation`() =
+        runBlocking {
+            val draft =
+                testPromotion(
+                    id = 505L,
+                    venueId = 10L,
+                    venueName = "Mix",
+                    title = "Сет",
+                    status = VenuePromotionStatus.DRAFT,
+                )
+            val active = draft.copy(status = VenuePromotionStatus.ACTIVE)
             coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
                 VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery { venuePromotionRepository.getPromotionForManagement(10L, 505L) } returns draft andThen active
             coEvery {
-                venuePromotionRepository.setPromotionStatus(10L, 505L, VenuePromotionStatus.ACTIVE)
-            } returns promotion
-            coEvery { venuePromotionRepository.getPromotionForManagement(10L, 505L) } returns promotion
+                venuePromotionRepository.mutatePromotionLifecycle(
+                    10L,
+                    505L,
+                    VenuePromotionStatus.DRAFT,
+                    VenuePromotionStatus.ACTIVE,
+                    200L,
+                    VenuePromotionLifecycleSource.TELEGRAM_BOT,
+                )
+            } returns VenuePromotionLifecycleMutation(active, VenuePromotionLifecycleOutcome.APPLIED)
 
             router.process(
                 TelegramUpdate(
@@ -19335,135 +19470,278 @@ class TelegramBotRouterTableTokenTest {
             )
 
             coVerify {
-                venuePromotionRepository.setPromotionStatus(10L, 505L, VenuePromotionStatus.ACTIVE)
+                venuePromotionRepository.mutatePromotionLifecycle(
+                    10L,
+                    505L,
+                    VenuePromotionStatus.DRAFT,
+                    VenuePromotionStatus.ACTIVE,
+                    200L,
+                    VenuePromotionLifecycleSource.TELEGRAM_BOT,
+                )
                 outboxEnqueuer.enqueueSendMessage(100, "Акция включена.", null)
             }
         }
 
     @Test
-    fun `manager activates happy hours parent and rule through one repository transaction`() =
+    fun `staff direct lifecycle callbacks are denied before promotion mutation`() =
         runBlocking {
-            val draft =
-                testPromotion(
-                    id = 523L,
-                    venueId = 10L,
-                    venueName = "Mix",
-                    title = "Счастливые часы",
-                    status = VenuePromotionStatus.DRAFT,
-                    templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
-                )
-            val active = draft.copy(status = VenuePromotionStatus.ACTIVE)
-            val connection = mockk<Connection>()
             coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
-                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
-            coEvery {
-                venuePromotionRepository.getPromotionForManagement(10L, 523L)
-            } returns draft andThen active
-            coEvery {
-                venuePromotionRepository.setPromotionStatus(
-                    venueId = 10L,
-                    promotionId = 523L,
-                    status = VenuePromotionStatus.ACTIVE,
-                    afterUpdate = any(),
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
+
+            listOf("vp_on:10:505", "vp_off:10:505", "vp_arch:10:505").forEachIndexed { index, data ->
+                router.process(
+                    TelegramUpdate(
+                        updateId = 10_060L + index,
+                        callbackQuery =
+                            CallbackQuery(
+                                id = "cb-promo-staff-$index",
+                                from = User(id = 200),
+                                message = Message(messageId = 20_060L + index, chat = Chat(id = 100, type = "private")),
+                                data = data,
+                            ),
+                    ),
                 )
-            } coAnswers {
-                arg<(Connection, VenuePromotion) -> Unit>(3).invoke(connection, active)
-                active
             }
 
-            router.process(
-                TelegramUpdate(
-                    updateId = 10_049,
-                    callbackQuery =
-                        CallbackQuery(
-                            id = "cb-happy-hours-on",
-                            from = User(id = 200),
-                            message = Message(messageId = 20_049, chat = Chat(id = 100, type = "private")),
-                            data = "vp_on:10:523",
-                        ),
-                ),
-            )
-
-            coVerify {
-                venuePromotionRepository.setPromotionStatus(
-                    venueId = 10L,
-                    promotionId = 523L,
-                    status = VenuePromotionStatus.ACTIVE,
-                    afterUpdate = any(),
-                )
-                outboxEnqueuer.enqueueSendMessage(100, "Акция включена.", null)
-            }
-            verify {
-                venuePromotionRuleRepository.synchronizeHappyHoursPromotionStatus(
-                    connection = connection,
-                    venueId = 10L,
-                    promotionId = 523L,
-                    status = VenuePromotionStatus.ACTIVE,
+            coVerify(exactly = 3) {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Раздел «Акции» доступен менеджеру или владельцу.",
+                    any(),
                 )
             }
             coVerify(exactly = 0) {
-                venuePromotionRuleRepository.validateHappyHoursActivationReadiness(10L, 523L)
-                venuePromotionRuleRepository.setRuleStatus(10L, any(), VenuePromotionStatus.ACTIVE)
+                venuePromotionRepository.getPromotionForManagement(any(), any())
+                venuePromotionRepository.mutatePromotionLifecycle(any(), any(), any(), any(), any(), any())
             }
         }
 
     @Test
-    fun `manager pauses happy hours parent and rule through one repository transaction`() =
+    fun `repeated lifecycle callbacks keep current copy without router side audit`() =
         runBlocking {
             val active =
                 testPromotion(
-                    id = 524L,
+                    id = 527L,
                     venueId = 10L,
                     venueName = "Mix",
-                    title = "Счастливые часы",
+                    title = "Активная акция",
                     status = VenuePromotionStatus.ACTIVE,
-                    templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
                 )
-            val paused = active.copy(status = VenuePromotionStatus.PAUSED)
-            val connection = mockk<Connection>()
+            val archived = active.copy(id = 528L, status = VenuePromotionStatus.ARCHIVED)
             coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
-                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venuePromotionRepository.getPromotionForManagement(10L, 527L) } returns active
+            coEvery { venuePromotionRepository.getPromotionForManagement(10L, 528L) } returns archived
             coEvery {
-                venuePromotionRepository.getPromotionForManagement(10L, 524L)
-            } returns active andThen paused
-            coEvery {
-                venuePromotionRepository.setPromotionStatus(
-                    venueId = 10L,
-                    promotionId = 524L,
-                    status = VenuePromotionStatus.PAUSED,
-                    afterUpdate = any(),
+                venuePromotionRepository.mutatePromotionLifecycle(
+                    10L,
+                    527L,
+                    VenuePromotionStatus.ACTIVE,
+                    VenuePromotionStatus.ACTIVE,
+                    200L,
+                    VenuePromotionLifecycleSource.TELEGRAM_BOT,
                 )
-            } coAnswers {
-                arg<(Connection, VenuePromotion) -> Unit>(3).invoke(connection, paused)
-                paused
-            }
+            } returns VenuePromotionLifecycleMutation(active, VenuePromotionLifecycleOutcome.NO_OP)
 
             router.process(
                 TelegramUpdate(
-                    updateId = 10_050,
+                    updateId = 10_063,
                     callbackQuery =
                         CallbackQuery(
-                            id = "cb-happy-hours-off",
+                            id = "cb-promo-repeat-on",
                             from = User(id = 200),
-                            message = Message(messageId = 20_050, chat = Chat(id = 100, type = "private")),
-                            data = "vp_off:10:524",
+                            message = Message(messageId = 20_063, chat = Chat(id = 100, type = "private")),
+                            data = "vp_on:10:527",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_064,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-repeat-archive",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_064, chat = Chat(id = 100, type = "private")),
+                            data = "vp_arch:10:528",
                         ),
                 ),
             )
 
-            verify {
-                venuePromotionRuleRepository.synchronizeHappyHoursPromotionStatus(
-                    connection = connection,
-                    venueId = 10L,
-                    promotionId = 524L,
-                    status = VenuePromotionStatus.PAUSED,
-                )
+            coVerify(exactly = 1) {
+                venuePromotionRepository.mutatePromotionLifecycle(any(), any(), any(), any(), any(), any())
             }
             coVerify {
-                outboxEnqueuer.enqueueSendMessage(100, "Акция приостановлена.", null)
+                outboxEnqueuer.enqueueSendMessage(100, "Акция включена.", null)
+                outboxEnqueuer.enqueueSendMessage(100, "Акция уже в архиве.", null)
             }
             coVerify(exactly = 0) {
-                venuePromotionRuleRepository.setRuleStatus(10L, any(), VenuePromotionStatus.PAUSED)
+                auditLogRepository.appendJson(any(), any(), any(), any(), any())
+            }
+        }
+
+    @Test
+    fun `stale lifecycle callback reports conflict without false success`() =
+        runBlocking {
+            val draft =
+                testPromotion(
+                    id = 529L,
+                    venueId = 10L,
+                    venueName = "Mix",
+                    title = "Сет",
+                    status = VenuePromotionStatus.DRAFT,
+                )
+            val active = draft.copy(status = VenuePromotionStatus.ACTIVE)
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venuePromotionRepository.getPromotionForManagement(10L, 529L) } returns draft andThen active
+            coEvery {
+                venuePromotionRepository.mutatePromotionLifecycle(
+                    10L,
+                    529L,
+                    VenuePromotionStatus.DRAFT,
+                    VenuePromotionStatus.ACTIVE,
+                    200L,
+                    VenuePromotionLifecycleSource.TELEGRAM_BOT,
+                )
+            } returns VenuePromotionLifecycleMutation(active, VenuePromotionLifecycleOutcome.STALE)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_065,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-stale-on",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_065, chat = Chat(id = 100, type = "private")),
+                            data = "vp_on:10:529",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Статус акции уже изменился. Обновите экран и повторите действие.",
+                    null,
+                )
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(100, "Акция включена.", any())
+                auditLogRepository.appendJson(any(), any(), any(), any(), any())
+            }
+        }
+
+    @Test
+    fun `lifecycle database failures return safe message without false status or archive success`() =
+        runBlocking {
+            val active =
+                testPromotion(
+                    id = 530L,
+                    venueId = 10L,
+                    venueName = "Mix",
+                    title = "Активная акция",
+                    status = VenuePromotionStatus.ACTIVE,
+                )
+            val archiveCurrent = active.copy(id = 531L, status = VenuePromotionStatus.PAUSED)
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venuePromotionRepository.getPromotionForManagement(10L, 530L) } returns active
+            coEvery { venuePromotionRepository.getPromotionForManagement(10L, 531L) } returns archiveCurrent
+            coEvery {
+                venuePromotionRepository.mutatePromotionLifecycle(
+                    10L,
+                    530L,
+                    VenuePromotionStatus.ACTIVE,
+                    VenuePromotionStatus.PAUSED,
+                    200L,
+                    VenuePromotionLifecycleSource.TELEGRAM_BOT,
+                )
+            } throws DatabaseUnavailableException()
+            coEvery {
+                venuePromotionRepository.mutatePromotionLifecycle(
+                    10L,
+                    531L,
+                    VenuePromotionStatus.PAUSED,
+                    VenuePromotionStatus.ARCHIVED,
+                    200L,
+                    VenuePromotionLifecycleSource.TELEGRAM_BOT,
+                )
+            } throws DatabaseUnavailableException()
+
+            listOf("vp_off:10:530", "vp_arch:10:531").forEachIndexed { index, data ->
+                router.process(
+                    TelegramUpdate(
+                        updateId = 10_066L + index,
+                        callbackQuery =
+                            CallbackQuery(
+                                id = "cb-promo-db-failure-$index",
+                                from = User(id = 200),
+                                message = Message(messageId = 20_066L + index, chat = Chat(id = 100, type = "private")),
+                                data = data,
+                            ),
+                    ),
+                )
+            }
+
+            coVerify(exactly = 2) {
+                outboxEnqueuer.enqueueSendMessage(100, "База недоступна, попробуйте позже.", null)
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(100, "Акция приостановлена.", any())
+                outboxEnqueuer.enqueueSendMessage(100, "Акция архивирована.", any())
+                auditLogRepository.appendJson(any(), any(), any(), any(), any())
+            }
+        }
+
+    @Test
+    fun `archive lifecycle validation failure returns safe message without false success`() =
+        runBlocking {
+            val promotion =
+                testPromotion(
+                    id = 532L,
+                    venueId = 10L,
+                    venueName = "Mix",
+                    title = "Акция с legacy-правилами",
+                    status = VenuePromotionStatus.PAUSED,
+                )
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venuePromotionRepository.getPromotionForManagement(10L, 532L) } returns promotion
+            coEvery {
+                venuePromotionRepository.mutatePromotionLifecycle(
+                    10L,
+                    532L,
+                    VenuePromotionStatus.PAUSED,
+                    VenuePromotionStatus.ARCHIVED,
+                    200L,
+                    VenuePromotionLifecycleSource.TELEGRAM_BOT,
+                )
+            } throws InvalidInputException("Изменение статуса запрещено.")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_068,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-archive-validation",
+                            from = User(id = 200),
+                            message = Message(messageId = 20_068, chat = Chat(id = 100, type = "private")),
+                            data = "vp_arch:10:532",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Акцию нельзя архивировать:\n• Изменение статуса запрещено.",
+                    null,
+                )
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(100, "Акция архивирована.", any())
+                auditLogRepository.appendJson(any(), any(), any(), any(), any())
             }
         }
 
@@ -19479,34 +19757,21 @@ class TelegramBotRouterTableTokenTest {
                     status = VenuePromotionStatus.DRAFT,
                     templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
                 )
-            val connection = mockk<Connection>()
             coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
                 VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
             coEvery {
                 venuePromotionRepository.getPromotionForManagement(10L, 525L)
             } returns draft
-            every {
-                venuePromotionRuleRepository.synchronizeHappyHoursPromotionStatus(
-                    connection = connection,
-                    venueId = 10L,
-                    promotionId = 525L,
-                    status = VenuePromotionStatus.ACTIVE,
+            coEvery {
+                venuePromotionRepository.mutatePromotionLifecycle(
+                    10L,
+                    525L,
+                    VenuePromotionStatus.DRAFT,
+                    VenuePromotionStatus.ACTIVE,
+                    200L,
+                    VenuePromotionLifecycleSource.TELEGRAM_BOT,
                 )
             } throws InvalidInputException("Добавьте хотя бы одно временное окно.")
-            coEvery {
-                venuePromotionRepository.setPromotionStatus(
-                    venueId = 10L,
-                    promotionId = 525L,
-                    status = VenuePromotionStatus.ACTIVE,
-                    afterUpdate = any(),
-                )
-            } coAnswers {
-                arg<(Connection, VenuePromotion) -> Unit>(3).invoke(
-                    connection,
-                    draft.copy(status = VenuePromotionStatus.ACTIVE),
-                )
-                draft.copy(status = VenuePromotionStatus.ACTIVE)
-            }
 
             router.process(
                 TelegramUpdate(
@@ -19530,6 +19795,7 @@ class TelegramBotRouterTableTokenTest {
             }
             coVerify(exactly = 0) {
                 outboxEnqueuer.enqueueSendMessage(100, "Акция включена.", any())
+                auditLogRepository.appendJson(any(), any(), any(), any(), any())
             }
         }
 

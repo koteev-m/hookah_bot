@@ -182,6 +182,8 @@ import com.hookah.platform.backend.telegram.db.VenueInfoSectionsRepository
 import com.hookah.platform.backend.telegram.db.VenueMenuSectionImagesRepository
 import com.hookah.platform.backend.telegram.db.VenueNotificationSetting
 import com.hookah.platform.backend.telegram.db.VenuePromotion
+import com.hookah.platform.backend.telegram.db.VenuePromotionLifecycleOutcome
+import com.hookah.platform.backend.telegram.db.VenuePromotionLifecycleSource
 import com.hookah.platform.backend.telegram.db.VenuePromotionMedia
 import com.hookah.platform.backend.telegram.db.VenuePromotionMediaRepository
 import com.hookah.platform.backend.telegram.db.VenuePromotionRepository
@@ -12307,25 +12309,16 @@ class TelegramBotRouter(
             showVenuePromotionArchivedDetailByPromotion(chatId, current)
             return
         }
-        val updated =
+        val mutation =
             try {
-                if (current.templateType == VenuePromotionTemplateType.HAPPY_HOURS_PERCENT) {
-                    venuePromotionRepository.setPromotionStatus(
-                        venueId = venueId,
-                        promotionId = promotionId,
-                        status = status,
-                        afterUpdate = { connection, _ ->
-                            venuePromotionRuleRepository.synchronizeHappyHoursPromotionStatus(
-                                connection = connection,
-                                venueId = venueId,
-                                promotionId = promotionId,
-                                status = status,
-                            )
-                        },
-                    )
-                } else {
-                    venuePromotionRepository.setPromotionStatus(venueId, promotionId, status)
-                }
+                venuePromotionRepository.mutatePromotionLifecycle(
+                    venueId = venueId,
+                    promotionId = promotionId,
+                    expectedStatus = current.status,
+                    targetStatus = status,
+                    actorUserId = userId,
+                    source = VenuePromotionLifecycleSource.TELEGRAM_BOT,
+                )
             } catch (e: InvalidInputException) {
                 val detail = e.message?.takeIf { it.isNotBlank() } ?: "Проверьте настройки акции."
                 enqueueMessage(
@@ -12342,9 +12335,14 @@ class TelegramBotRouter(
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
             }
-        if (updated == null) {
+        if (mutation == null) {
             enqueueMessage(chatId, "Акция не найдена.")
             showVenuePromotionsRootByVenueId(chatId, userId, venueId)
+            return
+        }
+        if (mutation.outcome == VenuePromotionLifecycleOutcome.STALE) {
+            enqueueMessage(chatId, "Статус акции уже изменился. Обновите экран и повторите действие.")
+            showVenuePromotionDetailByIds(chatId, userId, venueId, promotionId)
             return
         }
         enqueueMessage(
@@ -12371,15 +12369,28 @@ class TelegramBotRouter(
             showVenuePromotionArchivedDetailByPromotion(chatId, current)
             return
         }
-        val archived =
+        val mutation =
             try {
-                venuePromotionRepository.archivePromotion(venueId, promotionId)
+                venuePromotionRepository.mutatePromotionLifecycle(
+                    venueId = venueId,
+                    promotionId = promotionId,
+                    expectedStatus = current.status,
+                    targetStatus = VenuePromotionStatus.ARCHIVED,
+                    actorUserId = userId,
+                    source = VenuePromotionLifecycleSource.TELEGRAM_BOT,
+                )
+            } catch (e: InvalidInputException) {
+                val detail = e.message?.takeIf { it.isNotBlank() } ?: "Проверьте настройки акции."
+                enqueueMessage(chatId, "Акцию нельзя архивировать:\n• $detail")
+                return
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
             }
-        if (archived == null) {
+        if (mutation == null) {
             enqueueMessage(chatId, "Акция не найдена.")
+        } else if (mutation.outcome == VenuePromotionLifecycleOutcome.STALE) {
+            enqueueMessage(chatId, "Статус акции уже изменился. Обновите экран и повторите действие.")
         } else {
             enqueueMessage(chatId, "Акция архивирована.")
         }

@@ -88,6 +88,9 @@ jobs:
             --tests "ShiftExtensionRoutesTest" \
             --tests "SupportTicketRoutesTest" \
             --tests "VenueOrderRoutesTest" \
+            --tests "VenuePromotionRoutesTest" \
+            --tests "VenuePromotionRepositoryTest" \
+            --tests "AuditLogRepositoryTest" \
             --tests "PlatformVenueRoutesTest" \
             --tests "TelegramBotRouterTableTokenTest" \
             --tests "TelegramKeyboardsTest" \
@@ -113,6 +116,9 @@ jobs:
               "com.hookah.platform.backend.miniapp.shift.ShiftExtensionRoutesTest",
               "com.hookah.platform.backend.support.SupportTicketRoutesTest",
               "com.hookah.platform.backend.miniapp.venue.VenueOrderRoutesTest",
+              "com.hookah.platform.backend.miniapp.venue.promotions.VenuePromotionRoutesTest",
+              "com.hookah.platform.backend.telegram.db.VenuePromotionRepositoryTest",
+              "com.hookah.platform.backend.miniapp.venue.AuditLogRepositoryTest",
               "com.hookah.platform.backend.platform.PlatformVenueRoutesTest",
               "com.hookah.platform.backend.telegram.TelegramBotRouterTableTokenTest",
               "com.hookah.platform.backend.telegram.TelegramKeyboardsTest",
@@ -142,47 +148,67 @@ jobs:
           if problems:
               raise SystemExit("\n".join(problems))
           PY
-      - name: Run mandatory PostgreSQL activation rollback gate
+      - name: Run mandatory PostgreSQL activation and promotion concurrency gates
         if: ${{ !cancelled() }}
         run: |
           JAVA_TOOL_OPTIONS=-Dapi.version=1.44 _JAVA_OPTIONS=-Xmx4g \
             ./gradlew --no-daemon --max-workers=1 :backend:app:test \
             --tests "GuestTableContextActivationPostgresTest" \
+            --tests "PromotionConfigurationConcurrencyPostgresTest" \
             --console=plain
-      - name: Assert PostgreSQL activation test results
+      - name: Assert PostgreSQL activation and promotion test results
         if: ${{ !cancelled() }}
         run: |
           python3 - <<'PY'
           from pathlib import Path
           from xml.etree import ElementTree
 
-          report = Path(
-              "backend/app/build/test-results/test/"
-              "TEST-com.hookah.platform.backend.miniapp.guest.db."
-              "GuestTableContextActivationPostgresTest.xml"
-          )
-          if not report.is_file():
-              raise SystemExit(f"missing JUnit XML: {report}")
-          suite = ElementTree.parse(report).getroot()
-          required_rollback_scenarios = 8
-          counts = {
-              key: int(suite.attrib.get(key, "0"))
-              for key in ("tests", "skipped", "failures", "errors")
-          }
-          executed = counts["tests"] - counts["skipped"]
-          print(
-              "PostgreSQL activation JUnit: "
-              f"xml={report} discovered={counts['tests']} executed={executed} "
-              f"skipped={counts['skipped']} failures={counts['failures']} errors={counts['errors']} "
-              f"required_rollback_scenarios={required_rollback_scenarios}"
-          )
-          if counts["tests"] < required_rollback_scenarios:
-              raise SystemExit(
-                  "incomplete PostgreSQL activation rollback matrix: "
-                  f"required={required_rollback_scenarios} actual={counts['tests']}"
+          report_dir = Path("backend/app/build/test-results/test")
+          required_suites = [
+              (
+                  "activation",
+                  report_dir / (
+                      "TEST-com.hookah.platform.backend.miniapp.guest.db."
+                      "GuestTableContextActivationPostgresTest.xml"
+                  ),
+                  8,
+              ),
+              (
+                  "promotion lifecycle/configuration",
+                  report_dir / (
+                      "TEST-com.hookah.platform.backend.telegram.db."
+                      "PromotionConfigurationConcurrencyPostgresTest.xml"
+                  ),
+                  10,
+              ),
+          ]
+          problems = []
+          for label, report, minimum_tests in required_suites:
+              if not report.is_file():
+                  problems.append(f"missing JUnit XML: {report}")
+                  continue
+              suite = ElementTree.parse(report).getroot()
+              counts = {
+                  key: int(suite.attrib.get(key, "0"))
+                  for key in ("tests", "skipped", "failures", "errors")
+              }
+              executed = counts["tests"] - counts["skipped"]
+              print(
+                  f"PostgreSQL {label} JUnit: xml={report} "
+                  f"discovered={counts['tests']} executed={executed} "
+                  f"skipped={counts['skipped']} failures={counts['failures']} "
+                  f"errors={counts['errors']} required={minimum_tests}"
               )
-          if any(counts[key] for key in ("skipped", "failures", "errors")):
-              raise SystemExit(f"PostgreSQL activation gate failed: {counts}")
+              if counts["tests"] < minimum_tests:
+                  problems.append(
+                      f"incomplete PostgreSQL {label} matrix: "
+                      f"required={minimum_tests} actual={counts['tests']}"
+                  )
+              if any(counts[key] for key in ("skipped", "failures", "errors")):
+                  problems.append(f"PostgreSQL {label} gate failed: {counts}")
+
+          if problems:
+              raise SystemExit("\n".join(problems))
           PY
 
   backend-venue-booking-rbac:
