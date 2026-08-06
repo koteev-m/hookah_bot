@@ -2,7 +2,7 @@
 
 Дата актуализации: 2026-08-06.
 
-Статус: **current product reference / UPDATED**. Runtime permission parity is **PARTIAL** unless a specific route, test or smoke result is cited by the relevant implementation task. The bounded promotion status block is **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**; this does not close broader dangerous-action audit parity. The bounded OWNER/MANAGER menu shift-check permission is **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**. Staff module settings are `STAFF OPERATIONS SLICE B / OPTIONAL TEAM AND SCHEDULE MODULE / GUEST MANUAL OR SCHEDULE SOURCE / DONE / MVP / STAGING-SMOKE-PASSED`; green Actions, staging deploy and the bounded role/privacy smoke are complete without granting Manager broad `VENUE_SETTINGS`. Venue Mode operational surfaces are detailed in `docs/VENUE_OPERATIONS.md`; staff profile/manual-Today/optional-schedule/tips permissions are detailed in `docs/STAFF_PROFILES_SHIFTS_TIPS.md`; booking lifecycle permissions are detailed in `docs/BOOKING_LIFECYCLE.md`; Telegram fallback/staff-chat permissions are detailed in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`; menu/stop-list role policy is detailed in `docs/MENU_OPTIONS_STOPLIST.md`; venue media upload/storage security is detailed in `docs/MEDIA_STORAGE_UPLOAD.md`; validation strategy is detailed in `docs/TESTING_QA_SMOKE_STRATEGY.md`; release/deploy operations are detailed in `docs/DEPLOYMENT_RUNBOOK.md`.
+Статус: **current product reference / UPDATED**. Runtime permission parity is **PARTIAL** unless a specific route, test or smoke result is cited by the relevant implementation task. The bounded promotion status block is **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Staff role/removal audit is **DANGEROUS ACTION AUDIT SLICE / STAFF ROLE AND REMOVAL AUDIT / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. Neither bounded slice closes broader dangerous-action audit parity. The bounded OWNER/MANAGER menu shift-check permission is **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**. Staff module settings are `STAFF OPERATIONS SLICE B / OPTIONAL TEAM AND SCHEDULE MODULE / GUEST MANUAL OR SCHEDULE SOURCE / DONE / MVP / STAGING-SMOKE-PASSED`; green Actions, staging deploy and the bounded role/privacy smoke are complete without granting Manager broad `VENUE_SETTINGS`. Venue Mode operational surfaces are detailed in `docs/VENUE_OPERATIONS.md`; staff profile/manual-Today/optional-schedule/tips permissions are detailed in `docs/STAFF_PROFILES_SHIFTS_TIPS.md`; booking lifecycle permissions are detailed in `docs/BOOKING_LIFECYCLE.md`; Telegram fallback/staff-chat permissions are detailed in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`; menu/stop-list role policy is detailed in `docs/MENU_OPTIONS_STOPLIST.md`; venue media upload/storage security is detailed in `docs/MEDIA_STORAGE_UPLOAD.md`; validation strategy is detailed in `docs/TESTING_QA_SMOKE_STRATEGY.md`; release/deploy operations are detailed in `docs/DEPLOYMENT_RUNBOOK.md`.
 
 Platform Guest QR status: **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / DONE / MVP / STAGING-SMOKE-PASSED**. Schema verdict is `NO_MIGRATION`; commit/push, green Actions for the release HEAD, staging deploy and the bounded real Telegram role/privacy smoke are complete. Broader permission parity and dangerous-action audit coverage remain `PARTIAL`.
 
@@ -150,7 +150,7 @@ These actions require server-side authorization and should require confirmation,
 
 | Action | Required safety |
 | --- | --- |
-| Role granted/revoked; owner changed; last-owner removal attempted | Block last active Owner removal. The future `STAFF ROLE / REMOVAL AUDIT` may write only the safe actor/target/old-new role evidence defined by the canonical target-identity privacy contract below. |
+| Venue staff role changed or member removed; last-owner mutation attempted | Owner-only Mini App and Telegram mutations share one deterministic membership-lock transaction. A real applied role change/removal writes exactly one targeted audit before commit; last-owner, denial, no-op, not-found, invalid and rollback paths write none. Platform owner-access mutations remain a separate slice. |
 | Venue published/hidden/paused/suspended/archived/deleted | Confirmation and audit with reason/status where implemented. |
 | Table QR token rotated/exported | Confirmation and audit; old/revoked token must not resolve. |
 | Platform Owner confirms controlled Guest QR test | Exact Platform Owner + exact chat + unexpired opaque pending only; one conditional consume wins, then commit `PLATFORM_GUEST_QR_TEST_CONFIRMED` before atomic Guest context activation. Audit uses standard actor plus safe venue/table/source only and excludes raw token/hash, callback, initData and Telegram PII. It records confirmation only and is not `GUEST_CONTEXT_APPLIED`; final token/venue/table/public-availability/subscription revalidation and all authoritative Guest-state writes share the activation transaction. |
@@ -169,43 +169,38 @@ These actions require server-side authorization and should require confirmation,
 | Staff Schedule shift created/updated/canceled/restored | Owner/Manager own venue only; update preview and cancel confirmation; active cancel has stronger warning; optimistic stale rejection; `STAFF_SHIFT_CREATED/UPDATED/CANCELED/RESTORED` audit is atomic with safe old/new interval/lifecycle/timezone fields and no private linkage/raw request. |
 | Staff module settings updated | Owner/Manager own venue only through `STAFF_MODULE_SETTINGS_MANAGE`; full-object CAS and `STAFF_MODULE_SETTINGS_UPDATED` audit are atomic. No-op, stale, denial, audit failure or rollback writes no success audit; payload contains only safe old/new setting values and changed field names. |
 
-### STAFF ROLE / REMOVAL AUDIT target-identity privacy contract (future)
+### STAFF ROLE / REMOVAL AUDIT target-identity contract
 
-This contract governs the future `STAFF ROLE / REMOVAL AUDIT` slice.
+Status: **DANGEROUS ACTION AUDIT SLICE / STAFF ROLE AND REMOVAL AUDIT / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
 
-- Actor identity is stored only through the standard `audit_log.actor_user_id` field. Do not
-  duplicate actor identity in `audit_log.payload_json`.
-- `venue_members.user_id` is a raw Telegram user ID. `users.telegram_user_id` is also a raw
-  Telegram user ID.
-- A target staff member may be identified in audit only through one of these existing and explicitly
-  permitted mechanisms:
-  1. an existing dedicated target-column audit schema whose canonical contract explicitly permits a
-     target of this type; or
-  2. an existing opaque venue-scoped member reference.
-- It is forbidden to persist in `audit_log.payload_json`, custom logs, error details or custom audit
-  metadata: `venue_members.user_id`; `users.telegram_user_id`; a raw Telegram ID named
-  `targetUserId`, `memberId`, `userRef` or a similarly named raw Telegram ID; display name;
-  username; phone; invite code,
-  handle or link; or a self-made hash/HMAC of a Telegram ID. Renaming a raw Telegram ID does not
-  make it a safe identifier.
-- `TARGET_AUDIT_IDENTIFIER_DECISION_REQUIRED` is mandatory. Before this slice, a read-only
-  runtime/schema audit must find an existing expressly permitted dedicated target-column or an
-  existing opaque venue-scoped member reference. If neither exists, implementation stops without
-  changes and returns `TARGET_AUDIT_IDENTIFIER_DECISION_REQUIRED`.
-- The stop rule may not be bypassed by adding a migration, creating a new hash/HMAC identifier,
-  writing a raw Telegram ID, silently omitting target identity from audit, using a display name or
-  username, or expanding the scope to a new member-reference model. The stop report must state:
-  existing target identifiers; why each is safe or unsafe; the minimum product/schema decision
-  required; and which runtime files were not changed.
-- Only after the gate succeeds and names the exact canonical identifier and source may target
-  identity be recorded in its canonical permitted placement. Add a target field only when the gate
-  names that exact canonical field and source. The otherwise safe payload fields are `venueId`,
-  `oldRole`, `newRole` (role change only) and `source`; do not introduce a `safeTargetReference`
-  placeholder.
+The privacy gate is complete. `target_user_id is permitted only as a dedicated internal audit column. It remains prohibited in JSON, logs, errors and client projections.` PostgreSQL V122 and
+H2 V123 add nullable `audit_log.target_user_id BIGINT`, the named foreign key
+`fk_audit_log_target_user` to `users.telegram_user_id` with `ON DELETE SET NULL`, and
+`idx_audit_log_target_user_created_at (target_user_id, created_at)`. Existing rows and legacy audit
+inserts keep `target_user_id = NULL`.
 
-This bounded promotion lifecycle slice does not close the overall dangerous-action audit. Promotion
-create/config edit audit, menu price/archive audit, staff role/removal audit, force-close/session
-audit, the Promotion Compatibility Policy and a broader audit viewer remain future.
+- Actor identity remains only in `audit_log.actor_user_id`; target identity remains only in
+  `audit_log.target_user_id`. Neither identity is duplicated in `payload_json`.
+- `VENUE_STAFF_ROLE_CHANGED` uses entity `venue` / `venueId` and payload `oldRole`, `newRole`,
+  `source`. `VENUE_STAFF_MEMBER_REMOVED` uses the same entity and payload `oldRole`, `source`.
+  Source is server-owned `VENUE_MINI_APP` or `TELEGRAM_BOT`; `venueId` is not duplicated in payload.
+- Audit payloads and custom logs/errors exclude target IDs, actor duplicates, display name,
+  username, phone, profile/link content, invite data, raw requests, callback/initData, secrets and
+  unrelated PII. Telegram messages and client projections never expose `target_user_id` or use a
+  raw target-ID fallback; the existing permitted human identity display remains unchanged.
+- One audit-aware repository transaction locks actor, target and every Owner membership in
+  deterministic `user_id` order, rechecks current Owner authority and target membership, enforces
+  last-owner policy, applies the mutation and writes the targeted audit on the same JDBC connection.
+  Audit failure rolls the membership mutation back.
+- Audit exists only for `APPLIED`. Same-role `NO_OP`, repeated/not-found removal, invalid role,
+  current non-Owner/foreign actor, last-owner mutation, audit failure and any rollback write zero
+  success rows. Existing HTTP/Telegram response policy and Mini App controls are unchanged.
+- P2 follow-up: the existing cross-dialect `actor_user_id` nullability/FK inconsistency remains
+  unchanged and must be handled separately; this slice does not alter the actor column.
+
+These bounded staff and promotion lifecycle slices do not close the overall dangerous-action audit.
+Promotion create/config edit, menu price/archive, QR rotate, force-close/session, tab reopen,
+analytics export, the Promotion Compatibility Policy and a broader audit viewer remain future.
 
 ## Current Implementation Vs Target
 
@@ -219,6 +214,7 @@ audit, the Promotion Compatibility Policy and a broader audit viewer remain futu
 | Manager/Owner venue isolation | Own-venue RBAC is the product rule. | No cross-venue detail/reply/manage access. | Keep cross-venue tests for support, chats, orders, bookings and settings. |
 | Platform access | Platform Owner can manage platform scope and support tickets; ordinary venue chat is hidden. The bounded confirmed QR test enters the normal public Guest table flow only. Activation is atomic; teardown uses stored context identity and remains possible when token/table/venue/subscription becomes unavailable. | Platform does not bypass ordinary venue RBAC. Explicit Guest context temporarily wins routing only for ordinary Guest actions and is cleared by existing visit exit. Mini App re-entry requires matching chat context and no exit marker. | Controlled QR Phase 1 is staging-smoke-passed and stays in regression; event/audit explorer and analytics exports still need additional privacy gates before broad release. |
 | Dangerous action audit | Several audits exist: owner invite/revoke, billing mark-paid/courtesy, staff-call ACK/DONE, support status/scope, lifecycle/status where implemented. | All dangerous actions write safe actor/target/old-new/reason evidence. | Audit coverage remains `PARTIAL` until menu price, QR rotate, force close, tab reopen and analytics export are verified. |
+| Staff role/removal audit | **DANGEROUS ACTION AUDIT SLICE / STAFF ROLE AND REMOVAL AUDIT / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. Venue Mini App and Telegram use one locked transaction and targeted audit column for applied Owner-authorized mutations. | Exactly one safe audit row for an applied role change/removal; zero for no-op, denial, last-owner, not-found and rollback. | Local H2/PostgreSQL repository/routes/Telegram/concurrency/privacy evidence is green. Independent review, commit, green Actions, staging deploy and bounded staging smoke remain required; broader dangerous actions remain partial. |
 | Promotion lifecycle status audit | **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Mini App status/archive routes and Telegram activate/pause/archive callbacks pass authenticated actor plus server-owned source to one repository mutation. Parent status, synchronized rule statuses and one audit row share one JDBC connection and transaction; an audit failure rolls every lifecycle write back. | A committed real transition writes exactly one action: `VENUE_PROMOTION_STATUS_CHANGED` or `VENUE_PROMOTION_ARCHIVED`. Payload contains only `venueId`, `promotionId`, `templateType`, old/new status, source and deterministic rule id/version/old/new status rows; actor stays in the standard audit actor column. | This closes only lifecycle status/archive. Promotion create/config edit and the wider dangerous-action audit remain future; no-op, stale, repeated archive, denial, invalid/not-found and rollback paths have no success audit. Owner/Manager/Staff/foreign RBAC, Telegram/Mini App parity and payload privacy passed staging smoke. |
 | Promotion financial compatibility | Current slices have bounded percentage/manual-discount and gift reward guards, but no documented common cross-promotion conflict policy. Gift smoke observed Happy Hours Percentage and Gift With Item together; this is not a confirmed runtime bug. | One server-owned, reward-type-aware policy uses `STACKABLE`, `EXCLUSIVE` or `OVERRIDE`, explicit priority and deterministic winner/tie-break rules for all executable promotions and manual discounts. | `AUDIT / FUTURE IMPLEMENTATION`. Fail closed against accidental discount addition; later loyalty, promo codes and cashback must reuse the same mechanism. |
 | Staff profiles / today shift | `STAFF IDENTITY LINKING UX + DUPLICATE PREVENTION / DONE / MVP / STAGING-SMOKE-PASSED`; canonical model is `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. | Accepted members use current `users` identity. Private profiles carry server-computed `linkageClass/canManage/isSelf`; Manager protected/duplicate cards redact raw linkage and are read-only. Create-from-member derives identity and always creates a Guest-hidden active draft; generic create is display-only. One active link is serialized on `venue_members`; duplicate repair is Owner-only and never automatic. | Keep raw-response privacy, subtype validation, Manager Staff-only policy, PostgreSQL double-create/relink concurrency, winner-only audit, stale-directory fail-closed, account/venue switch and Guest visibility in regression. The deferred free-member manual scenario does not downgrade the completed MVP. |

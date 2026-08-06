@@ -1,18 +1,26 @@
 package com.hookah.platform.backend.miniapp.venue.staff
 
+import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
+import com.hookah.platform.backend.miniapp.venue.TransactionalTargetedAuditLogWriter
 import com.hookah.platform.backend.miniapp.venue.VenueRole
 import com.hookah.platform.backend.miniapp.venue.VenueRoleMapping
 import com.hookah.platform.backend.telegram.debugTelegramException
 import com.hookah.platform.backend.telegram.sanitizeTelegramForLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.slf4j.LoggerFactory
 import java.sql.Connection
+import java.sql.SQLException
 import java.time.Instant
 import java.util.Locale
 import javax.sql.DataSource
 
-class VenueStaffRepository(private val dataSource: DataSource?) {
+class VenueStaffRepository(
+    private val dataSource: DataSource?,
+    private val auditLogWriter: TransactionalTargetedAuditLogWriter = AuditLogRepository(dataSource),
+) {
     private val logger = LoggerFactory.getLogger(VenueStaffRepository::class.java)
 
     suspend fun listMembers(
@@ -40,34 +48,12 @@ class VenueStaffRepository(private val dataSource: DataSource?) {
         }
     }
 
-    suspend fun updateRole(
-        venueId: Long,
-        userId: Long,
-        role: String,
-    ): Boolean {
-        val ds = dataSource ?: return false
-        return withContext(Dispatchers.IO) {
-            ds.connection.use { connection ->
-                connection.prepareStatement(
-                    """
-                    UPDATE venue_members
-                    SET role = ?
-                    WHERE venue_id = ? AND user_id = ?
-                    """.trimIndent(),
-                ).use { statement ->
-                    statement.setString(1, role)
-                    statement.setLong(2, venueId)
-                    statement.setLong(3, userId)
-                    statement.executeUpdate() > 0
-                }
-            }
-        }
-    }
-
     suspend fun updateRoleWithOwnerGuard(
         venueId: Long,
-        userId: Long,
-        newRole: String,
+        actorUserId: Long,
+        targetUserId: Long,
+        newRole: VenueRole,
+        source: VenueStaffMutationSource,
     ): VenueStaffUpdateResult {
         val ds = dataSource ?: return VenueStaffUpdateResult.DatabaseError
         return withContext(Dispatchers.IO) {
@@ -75,12 +61,33 @@ class VenueStaffRepository(private val dataSource: DataSource?) {
                 val initialAutoCommit = connection.autoCommit
                 connection.autoCommit = false
                 try {
-                    val members = loadMembersForOwnerGuard(connection, venueId, userId)
-                    val currentMember =
-                        members.firstOrNull { it.userId == userId }
+                    val members =
+                        lockMembershipsForMutation(
+                            connection = connection,
+                            venueId = venueId,
+                            actorUserId = actorUserId,
+                            targetUserId = targetUserId,
+                        )
+                    val actorMember = members.firstOrNull { it.userId == actorUserId }
+                    if (actorMember == null || !isOwnerLikeRole(actorMember.role)) {
+                        return@use rollbackAndReturn(connection) { VenueStaffUpdateResult.Forbidden }
+                    }
+                    val targetMember =
+                        members.firstOrNull { it.userId == targetUserId }
                             ?: return@use rollbackAndReturn(connection) { VenueStaffUpdateResult.NotFound }
                     val ownerLikeCount = members.count { isOwnerLikeRole(it.role) }
-                    val isDemotion = isOwnerLikeRole(currentMember.role) && !isOwnerLikeRole(newRole)
+                    val oldRole = targetMember.role.trim().uppercase(Locale.ROOT)
+                    if (oldRole == newRole.name) {
+                        val currentMember =
+                            loadMemberProjections(connection, venueId, userId = targetUserId).singleOrNull()
+                                ?: throw SQLException("Locked venue member projection disappeared")
+                        connection.commit()
+                        return@use VenueStaffUpdateResult.Success(
+                            member = currentMember,
+                            outcome = VenueStaffMutationOutcome.NO_OP,
+                        )
+                    }
+                    val isDemotion = isOwnerLikeRole(oldRole) && newRole != VenueRole.OWNER
                     if (isDemotion && ownerLikeCount <= 1) {
                         return@use rollbackAndReturn(connection) { VenueStaffUpdateResult.LastOwner }
                     }
@@ -91,29 +98,38 @@ class VenueStaffRepository(private val dataSource: DataSource?) {
                         WHERE venue_id = ? AND user_id = ?
                         """.trimIndent(),
                     ).use { statement ->
-                        statement.setString(1, newRole)
+                        statement.setString(1, newRole.name)
                         statement.setLong(2, venueId)
-                        statement.setLong(3, userId)
+                        statement.setLong(3, targetUserId)
                         if (statement.executeUpdate() == 0) {
                             return@use rollbackAndReturn(connection) { VenueStaffUpdateResult.NotFound }
                         }
                     }
                     val updatedMember =
-                        loadMemberProjections(connection, venueId, userId = userId).singleOrNull()
+                        loadMemberProjections(connection, venueId, userId = targetUserId).singleOrNull()
                             ?: throw IllegalStateException("Updated venue member disappeared")
+                    auditLogWriter.appendTargetedJson(
+                        connection = connection,
+                        actorUserId = actorUserId,
+                        targetUserId = targetUserId,
+                        action = VENUE_STAFF_ROLE_CHANGED_ACTION,
+                        entityType = "venue",
+                        entityId = venueId,
+                        payload =
+                            buildJsonObject {
+                                put("oldRole", oldRole)
+                                put("newRole", newRole.name)
+                                put("source", source.name)
+                            },
+                    )
                     connection.commit()
-                    VenueStaffUpdateResult.Success(updatedMember)
+                    VenueStaffUpdateResult.Success(
+                        member = updatedMember,
+                        outcome = VenueStaffMutationOutcome.APPLIED,
+                    )
                 } catch (e: Exception) {
                     rollbackBestEffort(connection)
-                    logger.warn(
-                        "Failed to update venue member venueId={} userId={}: {}",
-                        venueId,
-                        userId,
-                        sanitizeTelegramForLog(e.message),
-                    )
-                    logger.debugTelegramException(
-                        e,
-                    ) { "updateRoleWithOwnerGuard exception venueId=$venueId userId=$userId" }
+                    logMutationFailure(VENUE_STAFF_ROLE_CHANGED_ACTION, venueId, e)
                     VenueStaffUpdateResult.DatabaseError
                 } finally {
                     connection.autoCommit = initialAutoCommit
@@ -122,30 +138,11 @@ class VenueStaffRepository(private val dataSource: DataSource?) {
         }
     }
 
-    suspend fun removeMember(
-        venueId: Long,
-        userId: Long,
-    ): Boolean {
-        val ds = dataSource ?: return false
-        return withContext(Dispatchers.IO) {
-            ds.connection.use { connection ->
-                connection.prepareStatement(
-                    """
-                    DELETE FROM venue_members
-                    WHERE venue_id = ? AND user_id = ?
-                    """.trimIndent(),
-                ).use { statement ->
-                    statement.setLong(1, venueId)
-                    statement.setLong(2, userId)
-                    statement.executeUpdate() > 0
-                }
-            }
-        }
-    }
-
     suspend fun removeMemberWithOwnerGuard(
         venueId: Long,
-        userId: Long,
+        actorUserId: Long,
+        targetUserId: Long,
+        source: VenueStaffMutationSource,
     ): VenueStaffRemoveResult {
         val ds = dataSource ?: return VenueStaffRemoveResult.DatabaseError
         return withContext(Dispatchers.IO) {
@@ -153,12 +150,23 @@ class VenueStaffRepository(private val dataSource: DataSource?) {
                 val initialAutoCommit = connection.autoCommit
                 connection.autoCommit = false
                 try {
-                    val members = loadMembersForOwnerGuard(connection, venueId, userId)
-                    val currentMember =
-                        members.firstOrNull { it.userId == userId }
+                    val members =
+                        lockMembershipsForMutation(
+                            connection = connection,
+                            venueId = venueId,
+                            actorUserId = actorUserId,
+                            targetUserId = targetUserId,
+                        )
+                    val actorMember = members.firstOrNull { it.userId == actorUserId }
+                    if (actorMember == null || !isOwnerLikeRole(actorMember.role)) {
+                        return@use rollbackAndReturn(connection) { VenueStaffRemoveResult.Forbidden }
+                    }
+                    val targetMember =
+                        members.firstOrNull { it.userId == targetUserId }
                             ?: return@use rollbackAndReturn(connection) { VenueStaffRemoveResult.NotFound }
                     val ownerLikeCount = members.count { isOwnerLikeRole(it.role) }
-                    if (isOwnerLikeRole(currentMember.role) && ownerLikeCount <= 1) {
+                    val oldRole = targetMember.role.trim().uppercase(Locale.ROOT)
+                    if (isOwnerLikeRole(oldRole) && ownerLikeCount <= 1) {
                         return@use rollbackAndReturn(connection) { VenueStaffRemoveResult.LastOwner }
                     }
                     connection.prepareStatement(
@@ -168,24 +176,29 @@ class VenueStaffRepository(private val dataSource: DataSource?) {
                         """.trimIndent(),
                     ).use { statement ->
                         statement.setLong(1, venueId)
-                        statement.setLong(2, userId)
+                        statement.setLong(2, targetUserId)
                         if (statement.executeUpdate() == 0) {
                             return@use rollbackAndReturn(connection) { VenueStaffRemoveResult.NotFound }
                         }
                     }
+                    auditLogWriter.appendTargetedJson(
+                        connection = connection,
+                        actorUserId = actorUserId,
+                        targetUserId = targetUserId,
+                        action = VENUE_STAFF_MEMBER_REMOVED_ACTION,
+                        entityType = "venue",
+                        entityId = venueId,
+                        payload =
+                            buildJsonObject {
+                                put("oldRole", oldRole)
+                                put("source", source.name)
+                            },
+                    )
                     connection.commit()
                     VenueStaffRemoveResult.Success
                 } catch (e: Exception) {
                     rollbackBestEffort(connection)
-                    logger.warn(
-                        "Failed to remove venue member venueId={} userId={}: {}",
-                        venueId,
-                        userId,
-                        sanitizeTelegramForLog(e.message),
-                    )
-                    logger.debugTelegramException(
-                        e,
-                    ) { "removeMemberWithOwnerGuard exception venueId=$venueId userId=$userId" }
+                    logMutationFailure(VENUE_STAFF_MEMBER_REMOVED_ACTION, venueId, e)
                     VenueStaffRemoveResult.DatabaseError
                 } finally {
                     connection.autoCommit = initialAutoCommit
@@ -251,32 +264,32 @@ class VenueStaffRepository(private val dataSource: DataSource?) {
         }
     }
 
-    private fun loadMembersForOwnerGuard(
+    private fun lockMembershipsForMutation(
         connection: Connection,
         venueId: Long,
-        userId: Long,
-    ): List<VenueStaffMember> {
+        actorUserId: Long,
+        targetUserId: Long,
+    ): List<LockedVenueMembership> {
         return connection.prepareStatement(
             """
-            SELECT user_id, role, created_at, invited_by_user_id
+            SELECT user_id, role
             FROM venue_members
-            WHERE venue_id = ? AND (user_id = ? OR UPPER(role) = 'OWNER')
+            WHERE venue_id = ?
+              AND (user_id IN (?, ?) OR UPPER(role) = 'OWNER')
             ORDER BY user_id
             FOR UPDATE
             """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, venueId)
-            statement.setLong(2, userId)
+            statement.setLong(2, actorUserId)
+            statement.setLong(3, targetUserId)
             statement.executeQuery().use { rs ->
-                val members = mutableListOf<VenueStaffMember>()
+                val members = mutableListOf<LockedVenueMembership>()
                 while (rs.next()) {
                     members.add(
-                        VenueStaffMember(
-                            venueId = venueId,
+                        LockedVenueMembership(
                             userId = rs.getLong("user_id"),
                             role = rs.getString("role"),
-                            createdAt = rs.getTimestamp("created_at").toInstant(),
-                            invitedByUserId = rs.getLong("invited_by_user_id").takeIf { !rs.wasNull() },
                         ),
                     )
                 }
@@ -401,6 +414,25 @@ class VenueStaffRepository(private val dataSource: DataSource?) {
         runCatching { connection.rollback() }
     }
 
+    private fun logMutationFailure(
+        action: String,
+        venueId: Long,
+        error: Exception,
+    ) {
+        val sqlState =
+            generateSequence<Throwable>(error) { it.cause }
+                .filterIsInstance<SQLException>()
+                .firstOrNull()
+                ?.sqlState
+        logger.warn(
+            "Venue staff membership mutation failed action={} venueId={} exceptionClass={} sqlState={}",
+            action,
+            venueId,
+            error::class.java.simpleName,
+            sqlState,
+        )
+    }
+
     private fun <T> rollbackAndReturn(
         connection: Connection,
         block: () -> T,
@@ -409,6 +441,11 @@ class VenueStaffRepository(private val dataSource: DataSource?) {
         return block()
     }
 }
+
+private data class LockedVenueMembership(
+    val userId: Long,
+    val role: String,
+)
 
 data class VenueStaffMember(
     val venueId: Long,
@@ -432,7 +469,12 @@ enum class VenueStaffProfileLinkState {
 }
 
 sealed interface VenueStaffUpdateResult {
-    data class Success(val member: VenueStaffMember) : VenueStaffUpdateResult
+    data class Success(
+        val member: VenueStaffMember,
+        val outcome: VenueStaffMutationOutcome = VenueStaffMutationOutcome.APPLIED,
+    ) : VenueStaffUpdateResult
+
+    data object Forbidden : VenueStaffUpdateResult
 
     data object NotFound : VenueStaffUpdateResult
 
@@ -444,12 +486,27 @@ sealed interface VenueStaffUpdateResult {
 sealed interface VenueStaffRemoveResult {
     data object Success : VenueStaffRemoveResult
 
+    data object Forbidden : VenueStaffRemoveResult
+
     data object NotFound : VenueStaffRemoveResult
 
     data object LastOwner : VenueStaffRemoveResult
 
     data object DatabaseError : VenueStaffRemoveResult
 }
+
+enum class VenueStaffMutationOutcome {
+    APPLIED,
+    NO_OP,
+}
+
+enum class VenueStaffMutationSource {
+    VENUE_MINI_APP,
+    TELEGRAM_BOT,
+}
+
+const val VENUE_STAFF_ROLE_CHANGED_ACTION = "VENUE_STAFF_ROLE_CHANGED"
+const val VENUE_STAFF_MEMBER_REMOVED_ACTION = "VENUE_STAFF_MEMBER_REMOVED"
 
 internal fun normalizeTelegramUsername(raw: String?): String? =
     raw

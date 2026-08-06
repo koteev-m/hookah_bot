@@ -1,5 +1,8 @@
 package com.hookah.platform.backend.telegram
 
+import ch.qos.logback.classic.Logger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import com.hookah.platform.backend.ai.AiAssistantAnswer
 import com.hookah.platform.backend.ai.AiAssistantService
 import com.hookah.platform.backend.ai.AiDraftTextCommand
@@ -65,6 +68,7 @@ import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
 import com.hookah.platform.backend.miniapp.venue.STAFF_CALL_ACK_AUDIT_ACTION
 import com.hookah.platform.backend.miniapp.venue.STAFF_CALL_AUDIT_SOURCE_TELEGRAM_STAFF_CHAT
 import com.hookah.platform.backend.miniapp.venue.STAFF_CALL_DONE_AUDIT_ACTION
+import com.hookah.platform.backend.miniapp.venue.VenueRole
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import com.hookah.platform.backend.miniapp.venue.menu.MenuSemanticType
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuCategory
@@ -91,6 +95,8 @@ import com.hookah.platform.backend.miniapp.venue.staff.StaffInvitePreview
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInvitePreviewResult
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteRepository
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffMember
+import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffMutationSource
+import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffRemoveResult
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffRepository
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffUpdateResult
 import com.hookah.platform.backend.miniapp.venue.tables.VenueTableOwnerSummary
@@ -232,8 +238,10 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.slf4j.LoggerFactory
 import java.sql.Connection
 import java.time.Duration
 import java.time.Instant
@@ -2025,7 +2033,13 @@ class TelegramBotRouterTableTokenTest {
             coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
                 VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
             coEvery {
-                venueStaffRepository.updateRoleWithOwnerGuard(10L, 300L, "MANAGER")
+                venueStaffRepository.updateRoleWithOwnerGuard(
+                    venueId = 10L,
+                    actorUserId = 200L,
+                    targetUserId = 300L,
+                    newRole = VenueRole.MANAGER,
+                    source = VenueStaffMutationSource.TELEGRAM_BOT,
+                )
             } returns
                 VenueStaffUpdateResult.Success(
                     VenueStaffMember(
@@ -2067,13 +2081,28 @@ class TelegramBotRouterTableTokenTest {
                 ),
             )
 
-            coVerify { venueStaffRepository.updateRoleWithOwnerGuard(10L, 300L, "MANAGER") }
+            coVerify {
+                venueStaffRepository.updateRoleWithOwnerGuard(
+                    venueId = 10L,
+                    actorUserId = 200L,
+                    targetUserId = 300L,
+                    newRole = VenueRole.MANAGER,
+                    source = VenueStaffMutationSource.TELEGRAM_BOT,
+                )
+            }
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
                     "✅ Роль обновлена: Manager.",
                     any(),
                 )
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(any(), match { it.contains("300") }, any())
+            }
+            coVerify(exactly = 0) { auditLogRepository.appendJson(any(), any(), any(), any(), any()) }
+            verify(exactly = 0) {
+                auditLogRepository.appendTargetedJson(any(), any(), any(), any(), any(), any(), any())
             }
         }
 
@@ -2124,7 +2153,7 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
-    fun `owner role change prompt for staff shows only manager target`() =
+    fun `owner role change prompt for staff uses privacy safe fallback and shows only manager target`() =
         runBlocking {
             coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
                 VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
@@ -2133,7 +2162,7 @@ class TelegramBotRouterTableTokenTest {
                     VenueAccessRepository.VenueMemberSummary(
                         userId = 300L,
                         role = "STAFF",
-                        username = "operator",
+                        username = null,
                         firstName = null,
                         lastName = null,
                     ),
@@ -2155,7 +2184,10 @@ class TelegramBotRouterTableTokenTest {
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
-                    match { it.contains("сейчас Staff / Оператор смены") },
+                    match {
+                        it.contains("Сотрудник — сейчас Staff / Оператор смены") &&
+                            !it.contains("300")
+                    },
                     match {
                         it is InlineKeyboardMarkup &&
                             it.inlineKeyboard.flatten().any { button ->
@@ -2236,7 +2268,13 @@ class TelegramBotRouterTableTokenTest {
             coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
                 VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
             coEvery {
-                venueStaffRepository.updateRoleWithOwnerGuard(10L, 300L, "STAFF")
+                venueStaffRepository.updateRoleWithOwnerGuard(
+                    venueId = 10L,
+                    actorUserId = 200L,
+                    targetUserId = 300L,
+                    newRole = VenueRole.STAFF,
+                    source = VenueStaffMutationSource.TELEGRAM_BOT,
+                )
             } returns
                 VenueStaffUpdateResult.Success(
                     VenueStaffMember(
@@ -2262,13 +2300,487 @@ class TelegramBotRouterTableTokenTest {
                 ),
             )
 
-            coVerify { venueStaffRepository.updateRoleWithOwnerGuard(10L, 300L, "STAFF") }
+            coVerify {
+                venueStaffRepository.updateRoleWithOwnerGuard(
+                    venueId = 10L,
+                    actorUserId = 200L,
+                    targetUserId = 300L,
+                    newRole = VenueRole.STAFF,
+                    source = VenueStaffMutationSource.TELEGRAM_BOT,
+                )
+            }
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
                     "✅ Роль обновлена: Staff / Оператор смены.",
                     any(),
                 )
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(any(), match { it.contains("300") }, any())
+            }
+            coVerify(exactly = 0) { auditLogRepository.appendJson(any(), any(), any(), any(), any()) }
+            verify(exactly = 0) {
+                auditLogRepository.appendTargetedJson(any(), any(), any(), any(), any(), any(), any())
+            }
+        }
+
+    @Test
+    fun `owner confirmed staff removal uses callback actor and server telegram source`() =
+        runBlocking {
+            val actorUserId = 200L
+            val targetUserId = 908_070_601L
+            coEvery { venueAccessRepository.findVenueMembership(actorUserId, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venueAccessRepository.listVenueMembers(10L) } returns
+                listOf(
+                    VenueAccessRepository.VenueMemberSummary(
+                        userId = targetUserId,
+                        role = "STAFF",
+                        username = "operator",
+                        firstName = null,
+                        lastName = null,
+                    ),
+                )
+            coEvery {
+                venueStaffRepository.removeMemberWithOwnerGuard(
+                    venueId = 10L,
+                    actorUserId = actorUserId,
+                    targetUserId = targetUserId,
+                    source = VenueStaffMutationSource.TELEGRAM_BOT,
+                )
+            } returns VenueStaffRemoveResult.Success
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 9_017,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-staff-remove-success",
+                            from = User(id = actorUserId),
+                            message = Message(messageId = 20, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_staff_remove_confirm:10:$targetUserId",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 1) {
+                venueStaffRepository.removeMemberWithOwnerGuard(
+                    venueId = 10L,
+                    actorUserId = actorUserId,
+                    targetUserId = targetUserId,
+                    source = VenueStaffMutationSource.TELEGRAM_BOT,
+                )
+            }
+            coVerify(exactly = 1) {
+                outboxEnqueuer.enqueueSendMessage(100, "✅ Доступ сотрудника удалён.", any())
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(any(), match { it.contains(targetUserId.toString()) }, any())
+            }
+            coVerify(exactly = 0) { auditLogRepository.appendJson(any(), any(), any(), any(), any()) }
+            verify(exactly = 0) {
+                auditLogRepository.appendTargetedJson(any(), any(), any(), any(), any(), any(), any())
+            }
+        }
+
+    @Test
+    fun `manager and staff direct role and removal callbacks are denied without mutation`() =
+        runBlocking {
+            val targetUserId = 908_070_602L
+            val actors = listOf(201L to "MANAGER", 202L to "STAFF")
+            actors.forEach { (actorUserId, role) ->
+                coEvery { venueAccessRepository.findVenueMembership(actorUserId, 10L) } returns
+                    VenueAccessRepository.VenueMembership(venueId = 10L, role = role)
+
+                router.process(
+                    TelegramUpdate(
+                        updateId = 9_020 + actorUserId,
+                        callbackQuery =
+                            CallbackQuery(
+                                id = "cb-staff-role-denied-$role",
+                                from = User(id = actorUserId),
+                                message = Message(messageId = 20, chat = Chat(id = 100, type = "private")),
+                                data = "owner_venue_staff_role_change_select:10:$targetUserId:manager",
+                            ),
+                    ),
+                )
+                router.process(
+                    TelegramUpdate(
+                        updateId = 9_030 + actorUserId,
+                        callbackQuery =
+                            CallbackQuery(
+                                id = "cb-staff-remove-denied-$role",
+                                from = User(id = actorUserId),
+                                message = Message(messageId = 20, chat = Chat(id = 100, type = "private")),
+                                data = "owner_venue_staff_remove_confirm:10:$targetUserId",
+                            ),
+                    ),
+                )
+            }
+
+            coVerify(exactly = 0) {
+                venueStaffRepository.updateRoleWithOwnerGuard(any(), any(), any(), any(), any())
+            }
+            coVerify(exactly = 0) {
+                venueStaffRepository.removeMemberWithOwnerGuard(any(), any(), any(), any())
+            }
+            coVerify(exactly = 4) {
+                outboxEnqueuer.enqueueSendMessage(100, "Нет доступа к заведению.", any())
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(any(), match { it.contains(targetUserId.toString()) }, any())
+            }
+            coVerify(exactly = 0) { auditLogRepository.appendJson(any(), any(), any(), any(), any()) }
+            verify(exactly = 0) {
+                auditLogRepository.appendTargetedJson(any(), any(), any(), any(), any(), any(), any())
+            }
+        }
+
+    @Test
+    fun `successful removal followed by stale callback does not repeat mutation`() =
+        runBlocking {
+            val actorUserId = 200L
+            val targetUserId = 908_070_603L
+            var targetPresent = true
+            coEvery { venueAccessRepository.findVenueMembership(actorUserId, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venueAccessRepository.listVenueMembers(10L) } answers {
+                if (targetPresent) {
+                    listOf(
+                        VenueAccessRepository.VenueMemberSummary(
+                            userId = targetUserId,
+                            role = "STAFF",
+                            username = "operator",
+                            firstName = null,
+                            lastName = null,
+                        ),
+                    )
+                } else {
+                    emptyList()
+                }
+            }
+            coEvery {
+                venueStaffRepository.removeMemberWithOwnerGuard(
+                    venueId = 10L,
+                    actorUserId = actorUserId,
+                    targetUserId = targetUserId,
+                    source = VenueStaffMutationSource.TELEGRAM_BOT,
+                )
+            } answers {
+                targetPresent = false
+                VenueStaffRemoveResult.Success
+            }
+
+            repeat(2) { attempt ->
+                router.process(
+                    TelegramUpdate(
+                        updateId = 9_040L + attempt,
+                        callbackQuery =
+                            CallbackQuery(
+                                id = "cb-staff-remove-stale-$attempt",
+                                from = User(id = actorUserId),
+                                message = Message(messageId = 20, chat = Chat(id = 100, type = "private")),
+                                data = "owner_venue_staff_remove_confirm:10:$targetUserId",
+                            ),
+                    ),
+                )
+            }
+
+            coVerify(exactly = 1) {
+                venueStaffRepository.removeMemberWithOwnerGuard(
+                    venueId = 10L,
+                    actorUserId = actorUserId,
+                    targetUserId = targetUserId,
+                    source = VenueStaffMutationSource.TELEGRAM_BOT,
+                )
+            }
+            coVerify(exactly = 1) {
+                outboxEnqueuer.enqueueSendMessage(100, "✅ Доступ сотрудника удалён.", any())
+            }
+            coVerify(exactly = 1) {
+                outboxEnqueuer.enqueueSendMessage(100, "Сотрудник не найден или уже удалён.", any())
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(any(), match { it.contains(targetUserId.toString()) }, any())
+            }
+            coVerify(exactly = 0) { auditLogRepository.appendJson(any(), any(), any(), any(), any()) }
+            verify(exactly = 0) {
+                auditLogRepository.appendTargetedJson(any(), any(), any(), any(), any(), any(), any())
+            }
+        }
+
+    @Test
+    fun `thrown staff mutation failures log safe metadata without target or exception message`() =
+        runBlocking {
+            val actorUserId = 200L
+            val targetUserId = 908_070_606L
+            val secretFailureMessage = "target=$targetUserId payload=private-marker"
+            val logAppender = ListAppender<ILoggingEvent>().apply { start() }
+            val routerLogger = LoggerFactory.getLogger(TelegramBotRouter::class.java) as Logger
+            routerLogger.addAppender(logAppender)
+
+            try {
+                coEvery { venueAccessRepository.findVenueMembership(actorUserId, 10L) } returns
+                    VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+                coEvery { venueAccessRepository.listVenueMembers(10L) } returns
+                    listOf(
+                        VenueAccessRepository.VenueMemberSummary(
+                            userId = targetUserId,
+                            role = "STAFF",
+                            username = "operator",
+                            firstName = null,
+                            lastName = null,
+                        ),
+                    )
+                coEvery {
+                    venueStaffRepository.updateRoleWithOwnerGuard(
+                        venueId = 10L,
+                        actorUserId = actorUserId,
+                        targetUserId = targetUserId,
+                        newRole = VenueRole.MANAGER,
+                        source = VenueStaffMutationSource.TELEGRAM_BOT,
+                    )
+                } throws IllegalStateException(secretFailureMessage)
+                coEvery {
+                    venueStaffRepository.removeMemberWithOwnerGuard(
+                        venueId = 10L,
+                        actorUserId = actorUserId,
+                        targetUserId = targetUserId,
+                        source = VenueStaffMutationSource.TELEGRAM_BOT,
+                    )
+                } throws IllegalStateException(secretFailureMessage)
+
+                router.process(
+                    TelegramUpdate(
+                        updateId = 9_052,
+                        callbackQuery =
+                            CallbackQuery(
+                                id = "cb-staff-role-thrown-failure",
+                                from = User(id = actorUserId),
+                                message = Message(messageId = 20, chat = Chat(id = 100, type = "private")),
+                                data = "owner_venue_staff_role_change_select:10:$targetUserId:manager",
+                            ),
+                    ),
+                )
+                router.process(
+                    TelegramUpdate(
+                        updateId = 9_053,
+                        callbackQuery =
+                            CallbackQuery(
+                                id = "cb-staff-remove-thrown-failure",
+                                from = User(id = actorUserId),
+                                message = Message(messageId = 20, chat = Chat(id = 100, type = "private")),
+                                data = "owner_venue_staff_remove_confirm:10:$targetUserId",
+                            ),
+                    ),
+                )
+            } finally {
+                routerLogger.detachAppender(logAppender)
+                logAppender.stop()
+            }
+
+            val mutationLogs =
+                logAppender.list
+                    .map { it.formattedMessage }
+                    .filter { it.startsWith("Venue staff membership mutation failed") }
+            assertEquals(2, mutationLogs.size)
+            assertTrue(mutationLogs.any { it.contains("action=VENUE_STAFF_ROLE_CHANGED") })
+            assertTrue(mutationLogs.any { it.contains("action=VENUE_STAFF_MEMBER_REMOVED") })
+            assertTrue(mutationLogs.all { it.contains("venueId=10") })
+            assertTrue(mutationLogs.all { it.contains("exceptionClass=IllegalStateException") })
+            assertTrue(mutationLogs.none { it.contains(targetUserId.toString()) })
+            assertTrue(mutationLogs.none { it.contains(secretFailureMessage) })
+            assertTrue(mutationLogs.none { it.contains("private-marker") })
+            coVerify(exactly = 2) {
+                outboxEnqueuer.enqueueSendMessage(100, "База недоступна, попробуйте позже.", any())
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(any(), match { it.contains(targetUserId.toString()) }, any())
+            }
+        }
+
+    @Test
+    fun `role and removal audit failure results return safe database error without false success`() =
+        runBlocking {
+            val actorUserId = 200L
+            val targetUserId = 908_070_604L
+            coEvery { venueAccessRepository.findVenueMembership(actorUserId, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venueAccessRepository.listVenueMembers(10L) } returns
+                listOf(
+                    VenueAccessRepository.VenueMemberSummary(
+                        userId = targetUserId,
+                        role = "STAFF",
+                        username = "operator",
+                        firstName = null,
+                        lastName = null,
+                    ),
+                )
+            coEvery {
+                venueStaffRepository.updateRoleWithOwnerGuard(
+                    venueId = 10L,
+                    actorUserId = actorUserId,
+                    targetUserId = targetUserId,
+                    newRole = VenueRole.MANAGER,
+                    source = VenueStaffMutationSource.TELEGRAM_BOT,
+                )
+            } returns VenueStaffUpdateResult.DatabaseError
+            coEvery {
+                venueStaffRepository.removeMemberWithOwnerGuard(
+                    venueId = 10L,
+                    actorUserId = actorUserId,
+                    targetUserId = targetUserId,
+                    source = VenueStaffMutationSource.TELEGRAM_BOT,
+                )
+            } returns VenueStaffRemoveResult.DatabaseError
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 9_050,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-staff-role-audit-failure",
+                            from = User(id = actorUserId),
+                            message = Message(messageId = 20, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_staff_role_change_select:10:$targetUserId:manager",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 9_051,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-staff-remove-audit-failure",
+                            from = User(id = actorUserId),
+                            message = Message(messageId = 20, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_staff_remove_confirm:10:$targetUserId",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 1) {
+                venueStaffRepository.updateRoleWithOwnerGuard(
+                    venueId = 10L,
+                    actorUserId = actorUserId,
+                    targetUserId = targetUserId,
+                    newRole = VenueRole.MANAGER,
+                    source = VenueStaffMutationSource.TELEGRAM_BOT,
+                )
+            }
+            coVerify(exactly = 1) {
+                venueStaffRepository.removeMemberWithOwnerGuard(
+                    venueId = 10L,
+                    actorUserId = actorUserId,
+                    targetUserId = targetUserId,
+                    source = VenueStaffMutationSource.TELEGRAM_BOT,
+                )
+            }
+            coVerify(exactly = 2) {
+                outboxEnqueuer.enqueueSendMessage(100, "База недоступна, попробуйте позже.", any())
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(any(), match { it.startsWith("✅") }, any())
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(any(), match { it.contains(targetUserId.toString()) }, any())
+            }
+            coVerify(exactly = 0) { auditLogRepository.appendJson(any(), any(), any(), any(), any()) }
+            verify(exactly = 0) {
+                auditLogRepository.appendTargetedJson(any(), any(), any(), any(), any(), any(), any())
+            }
+        }
+
+    @Test
+    fun `transactional forbidden race results return safe denial without false success`() =
+        runBlocking {
+            val actorUserId = 200L
+            val targetUserId = 908_070_605L
+            coEvery { venueAccessRepository.findVenueMembership(actorUserId, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venueAccessRepository.listVenueMembers(10L) } returns
+                listOf(
+                    VenueAccessRepository.VenueMemberSummary(
+                        userId = targetUserId,
+                        role = "STAFF",
+                        username = "operator",
+                        firstName = null,
+                        lastName = null,
+                    ),
+                )
+            coEvery {
+                venueStaffRepository.updateRoleWithOwnerGuard(
+                    venueId = 10L,
+                    actorUserId = actorUserId,
+                    targetUserId = targetUserId,
+                    newRole = VenueRole.MANAGER,
+                    source = VenueStaffMutationSource.TELEGRAM_BOT,
+                )
+            } returns VenueStaffUpdateResult.Forbidden
+            coEvery {
+                venueStaffRepository.removeMemberWithOwnerGuard(
+                    venueId = 10L,
+                    actorUserId = actorUserId,
+                    targetUserId = targetUserId,
+                    source = VenueStaffMutationSource.TELEGRAM_BOT,
+                )
+            } returns VenueStaffRemoveResult.Forbidden
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 9_060,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-staff-role-forbidden-race",
+                            from = User(id = actorUserId),
+                            message = Message(messageId = 20, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_staff_role_change_select:10:$targetUserId:manager",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 9_061,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-staff-remove-forbidden-race",
+                            from = User(id = actorUserId),
+                            message = Message(messageId = 20, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_staff_remove_confirm:10:$targetUserId",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 1) {
+                venueStaffRepository.updateRoleWithOwnerGuard(
+                    venueId = 10L,
+                    actorUserId = actorUserId,
+                    targetUserId = targetUserId,
+                    newRole = VenueRole.MANAGER,
+                    source = VenueStaffMutationSource.TELEGRAM_BOT,
+                )
+            }
+            coVerify(exactly = 1) {
+                venueStaffRepository.removeMemberWithOwnerGuard(
+                    venueId = 10L,
+                    actorUserId = actorUserId,
+                    targetUserId = targetUserId,
+                    source = VenueStaffMutationSource.TELEGRAM_BOT,
+                )
+            }
+            coVerify(exactly = 2) {
+                outboxEnqueuer.enqueueSendMessage(100, "Нет доступа к заведению.", any())
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(any(), match { it.startsWith("✅") }, any())
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(any(), match { it.contains(targetUserId.toString()) }, any())
+            }
+            coVerify(exactly = 0) { auditLogRepository.appendJson(any(), any(), any(), any(), any()) }
+            verify(exactly = 0) {
+                auditLogRepository.appendTargetedJson(any(), any(), any(), any(), any(), any(), any())
             }
         }
 

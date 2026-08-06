@@ -583,7 +583,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
         )
     val venueAccessRepository = VenueAccessRepository(dataSource)
     val telegramVenueContextRepository = TelegramVenueContextRepository(dataSource)
-    val venueStaffRepository = VenueStaffRepository(dataSource)
+    val venueStaffRepository = VenueStaffRepository(dataSource, auditLogRepository)
     val venueStaffProfileRepository = VenueStaffProfileRepository(dataSource, json)
     val staffOperationsClock = overrides.staffScheduleClock ?: Clock.systemUTC()
     val venueStaffModuleSettingsRepository =

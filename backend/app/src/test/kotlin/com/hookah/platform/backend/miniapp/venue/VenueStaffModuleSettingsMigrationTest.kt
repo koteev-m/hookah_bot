@@ -51,9 +51,10 @@ class VenueStaffModuleSettingsMigrationTest {
                 venueId
             }
 
-        val migrationResult = flyway(dataSource).migrate()
+        val migrationFlyway = flyway(dataSource, target = "122")
+        val migrationResult = migrationFlyway.migrate()
         assertEquals(1, migrationResult.migrationsExecuted)
-        assertEquals("122", flyway(dataSource).info().current().version.version)
+        assertEquals("122", migrationFlyway.info().current().version.version)
 
         dataSource.connection.use { connection ->
             connection.prepareStatement(

@@ -88,9 +88,10 @@ class PostgresMigrationSmokeTest {
                     venueId
                 }
 
-            val migrationResult = postgresFlyway(dataSource).migrate()
+            val migrationFlyway = postgresFlyway(dataSource, target = "121")
+            val migrationResult = migrationFlyway.migrate()
             assertEquals(1, migrationResult.migrationsExecuted)
-            assertEquals("121", postgresFlyway(dataSource).info().current().version.version)
+            assertEquals("121", migrationFlyway.info().current().version.version)
 
             dataSource.connection.use { connection ->
                 connection.prepareStatement(

@@ -15,6 +15,7 @@ import com.hookah.platform.backend.miniapp.venue.staff.StaffShiftWrite
 import com.hookah.platform.backend.miniapp.venue.staff.StaffTodayShiftMutationResult
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffMember
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffModuleGuard
+import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffMutationSource
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffProfile
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffProfileAccess
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffProfileLinkState
@@ -626,8 +627,18 @@ fun Route.venueStaffRoutes(
                     ?: throw InvalidInputException("userId must be a number")
             val request = call.receive<StaffUpdateRoleRequest>()
             val newRole = parseVenueRole(request.role)
-            when (val result = venueStaffRepository.updateRoleWithOwnerGuard(venueId, targetUserId, newRole.name)) {
+            when (
+                val result =
+                    venueStaffRepository.updateRoleWithOwnerGuard(
+                        venueId = venueId,
+                        actorUserId = requesterId,
+                        targetUserId = targetUserId,
+                        newRole = newRole,
+                        source = VenueStaffMutationSource.VENUE_MINI_APP,
+                    )
+            ) {
                 is VenueStaffUpdateResult.Success -> call.respond(result.member.toDto())
+                VenueStaffUpdateResult.Forbidden -> throw ForbiddenException()
                 VenueStaffUpdateResult.NotFound -> throw NotFoundException()
                 VenueStaffUpdateResult.LastOwner -> throw InvalidInputException("Cannot remove the last owner")
                 VenueStaffUpdateResult.DatabaseError -> throw DatabaseUnavailableException()
@@ -644,8 +655,16 @@ fun Route.venueStaffRoutes(
             val targetUserId =
                 call.parameters["userId"]?.toLongOrNull()
                     ?: throw InvalidInputException("userId must be a number")
-            when (venueStaffRepository.removeMemberWithOwnerGuard(venueId, targetUserId)) {
+            when (
+                venueStaffRepository.removeMemberWithOwnerGuard(
+                    venueId = venueId,
+                    actorUserId = requesterId,
+                    targetUserId = targetUserId,
+                    source = VenueStaffMutationSource.VENUE_MINI_APP,
+                )
+            ) {
                 VenueStaffRemoveResult.Success -> call.respond(StaffRemoveResponse(ok = true))
+                VenueStaffRemoveResult.Forbidden -> throw ForbiddenException()
                 VenueStaffRemoveResult.NotFound -> throw NotFoundException()
                 VenueStaffRemoveResult.LastOwner -> throw InvalidInputException("Cannot remove the last owner")
                 VenueStaffRemoveResult.DatabaseError -> throw DatabaseUnavailableException()

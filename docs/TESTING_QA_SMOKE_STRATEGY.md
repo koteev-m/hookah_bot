@@ -26,6 +26,10 @@ Current practice:
   **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**.
   This closes only promotion status/archive lifecycle audit; broader dangerous-action coverage
   remains partial.
+- Staff role/removal audit is
+  **DANGEROUS ACTION AUDIT SLICE / STAFF ROLE AND REMOVAL AUDIT / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+  Local H2/PostgreSQL, repository, route, Telegram, privacy, rollback and deterministic concurrency
+  gates are green; review, green Actions, staging deploy and bounded staging smoke remain required.
 - Venue Mini App Guest Preview Phase 2.1 is **VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY / DONE / MVP / STAGING-SMOKE-PASSED**. Focused preview/Guest/RBAC/promotion backend tests, compile/lint, Mini App build and deterministic browser smoke `95/95` are green; GitHub Actions were green, staging deploy completed and manual staging smoke passed for the unified contract.
 - Menu shift check is **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**.
   OWNER/MANAGER use an own-venue local draft and one atomic availability batch; Staff individual
@@ -836,38 +840,42 @@ zero-test run or Testcontainers skip is a failed security gate. The ordinary rel
 selector must also execute `VenuePromotionRoutesTest`, `VenuePromotionRepositoryTest` and
 `AuditLogRepositoryTest` with nonzero, non-skipped results.
 
-### STAFF ROLE / REMOVAL AUDIT target-identity privacy gate (future)
+### STAFF ROLE / REMOVAL AUDIT quality gate
 
-This acceptance gate precedes every runtime change for
-`IMPLEMENT_DANGEROUS_ACTION_AUDIT_SLICE_NEXT — STAFF ROLE / REMOVAL AUDIT`.
+Status: **DANGEROUS ACTION AUDIT SLICE / STAFF ROLE AND REMOVAL AUDIT / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
 
-Required read-only precondition:
+The approved privacy decision is: `target_user_id is permitted only as a dedicated internal audit column. It remains prohibited in JSON, logs, errors and client projections.` Actor remains only in
+`audit_log.actor_user_id`; target remains only in nullable `audit_log.target_user_id`. PostgreSQL
+V122 and H2 V123 must expose the exact BIGINT/nullability, named FK to
+`users.telegram_user_id ON DELETE SET NULL` and ordered `(target_user_id, created_at)` index.
 
-- inspect the current runtime/schema and name an existing expressly permitted dedicated target-column
-  audit schema or an existing opaque venue-scoped member reference, including its exact canonical
-  name and source;
-- if neither exists, stop without runtime changes and return
-  `TARGET_AUDIT_IDENTIFIER_DECISION_REQUIRED`. The stop report must list the target identifiers that
-  actually exist, why each is safe or unsafe, the minimum product/schema decision required, and the
-  runtime files not changed. No migration follows automatically; it requires a separate
-  product/schema decision.
+Required automated evidence:
 
-Successful future acceptance must prove:
+- migration tests start from the previous dialect head, preserve an existing row with NULL target,
+  verify exact column/FK/delete rule/index, preserve legacy writer compatibility, store a targeted
+  value and keep the audit row with NULL target after deleting a distinct target-only user;
+- repository tests prove exact applied role/removal audit, same-role/repeated/not-found zero audit,
+  last-owner and stale actor denial, safe payload/logging, and rollback of both mutation and audit;
+- route tests preserve Owner/Manager/Staff/foreign/invalid/status/body behavior, derive actor/source
+  on the server, return safe audit-failure errors and expose no audit target projection;
+- Telegram tests prove Owner role/removal, Manager/Staff denial, success followed by stale callback,
+  audit-failure safety, transactional-Forbidden handling, hardcoded `TELEGRAM_BOT`, no direct router
+  audit call and no target ID in messages or captured mutation logs;
+- real PostgreSQL concurrency tests must deterministically observe both production transactions in
+  the `pg_blocking_pids` chain for the ordered membership `FOR UPDATE`, preserve one Owner and match
+  the sole audit actor/target exactly to the applied winner.
 
-- actor identity is only `audit_log.actor_user_id`, with no actor identity duplicated in
-  `audit_log.payload_json`;
-- target identity uses only the exact existing canonical identifier and source named by the passed
-  gate in its canonical permitted placement; no target field or placeholder is allowed before that
-  decision;
-- payload otherwise contains only `venueId`, `oldRole`, `newRole` only for a role change, and
-  `source`;
-- no `venue_members.user_id`, `users.telegram_user_id`, raw Telegram ID alias such as
-  `targetUserId`, `memberId` or `userRef`, display name, username, phone, invite code/handle/link,
-  or self-made Telegram-ID hash/HMAC appears in payloads, custom logs, error details or custom audit
-  metadata;
-- there is no migration, new hash/HMAC identifier, raw-ID persistence, silent omission of target
-  identity, display-name/username substitute or new member-reference model used to bypass
-  `TARGET_AUDIT_IDENTIFIER_DECISION_REQUIRED`.
+Recorded local evidence: `AuditLogTargetMigrationH2Test` `2/0/0/0`,
+`AuditLogTargetMigrationPostgresTest` `2/0/0/0`, `AuditLogRepositoryTest` `2/0/0/0`,
+`VenueStaffRepositoryTest` `7/0/0/0`, `VenueStaffRoutesTest` `31/0/0/0`,
+`TelegramBotRouterTableTokenTest` `514/0/0/0`, and
+`VenueStaffMutationConcurrencyPostgresTest` `2/0/0/0` (`tests/skipped/failures/errors`). Kotlin
+compile and ktlint, Mini App production build and deterministic browser smoke `136/136` passed.
+
+Both PostgreSQL classes are mandatory CI selectors. Their XML must exist with tests `> 0`,
+`skipped=0`, `failures=0`, `errors=0`; the release-critical selector also requires nonzero XML for
+the repository and route classes. A missing/zero/skipped XML fails the gate. This local result does
+not replace green Actions or the required staging smoke.
 
 ### Promotion Compatibility Policy audit and future quality gate
 

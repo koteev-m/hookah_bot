@@ -24,10 +24,22 @@ fun interface TransactionalAuditLogWriter {
     )
 }
 
+fun interface TransactionalTargetedAuditLogWriter {
+    fun appendTargetedJson(
+        connection: Connection,
+        actorUserId: Long,
+        targetUserId: Long,
+        action: String,
+        entityType: String,
+        entityId: Long?,
+        payload: JsonObject,
+    )
+}
+
 class AuditLogRepository(
     private val dataSource: DataSource?,
     private val json: Json = Json,
-) : TransactionalAuditLogWriter {
+) : TransactionalAuditLogWriter, TransactionalTargetedAuditLogWriter {
     private val logger = LoggerFactory.getLogger(AuditLogRepository::class.java)
 
     suspend fun append(
@@ -118,5 +130,42 @@ class AuditLogRepository(
     ) {
         val payloadJson = json.encodeToString(JsonObject.serializer(), payload)
         append(connection, actorUserId, action, entityType, entityId, payloadJson)
+    }
+
+    override fun appendTargetedJson(
+        connection: Connection,
+        actorUserId: Long,
+        targetUserId: Long,
+        action: String,
+        entityType: String,
+        entityId: Long?,
+        payload: JsonObject,
+    ) {
+        val payloadJson = json.encodeToString(JsonObject.serializer(), payload)
+        connection.prepareStatement(
+            """
+            INSERT INTO audit_log (
+                actor_user_id,
+                target_user_id,
+                action,
+                entity_type,
+                entity_id,
+                payload_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, actorUserId)
+            statement.setLong(2, targetUserId)
+            statement.setString(3, action)
+            statement.setString(4, entityType)
+            if (entityId == null) {
+                statement.setNull(5, Types.BIGINT)
+            } else {
+                statement.setLong(5, entityId)
+            }
+            statement.setString(6, payloadJson)
+            statement.executeUpdate()
+        }
     }
 }

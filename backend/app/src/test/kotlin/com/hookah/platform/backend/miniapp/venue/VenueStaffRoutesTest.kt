@@ -3,6 +3,8 @@ package com.hookah.platform.backend.miniapp.venue
 import com.hookah.platform.backend.api.ApiErrorCodes
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
+import com.hookah.platform.backend.miniapp.venue.staff.VENUE_STAFF_MEMBER_REMOVED_ACTION
+import com.hookah.platform.backend.miniapp.venue.staff.VENUE_STAFF_ROLE_CHANGED_ACTION
 import com.hookah.platform.backend.module
 import com.hookah.platform.backend.telegram.User
 import com.hookah.platform.backend.telegram.db.UserRepository
@@ -645,6 +647,46 @@ class VenueStaffRoutesTest {
             assertApiErrorEnvelope(updateResponse, ApiErrorCodes.FORBIDDEN)
             assertEquals(HttpStatusCode.Forbidden, removeResponse.status)
             assertApiErrorEnvelope(removeResponse, ApiErrorCodes.FORBIDDEN)
+            assertEquals("STAFF", loadVenueMemberRole(jdbcUrl, venueId, targetStaffId))
+            assertTrue(loadStaffMembershipAuditRows(jdbcUrl, venueId).isEmpty())
+        }
+
+    @Test
+    fun `manager and foreign owner cannot mutate staff membership or write audit`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("staff-management-owner-scope-denied")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val ownerId = 1311L
+            val managerId = 1312L
+            val targetStaffId = 1313L
+            val foreignOwnerId = 1314L
+            val venueId = seedVenueMembership(jdbcUrl, ownerId, "OWNER")
+            seedVenueMembership(jdbcUrl, managerId, "MANAGER", venueId)
+            seedVenueMembership(jdbcUrl, targetStaffId, "STAFF", venueId)
+            seedVenueMembership(jdbcUrl, foreignOwnerId, "OWNER")
+            val managerToken = issueToken(config, managerId)
+            val foreignOwnerToken = issueToken(config, foreignOwnerId)
+
+            val responses =
+                listOf(
+                    patchStaffRole(client, venueId, targetStaffId, managerToken, "MANAGER"),
+                    deleteStaffMember(client, venueId, targetStaffId, managerToken),
+                    patchStaffRole(client, venueId, targetStaffId, foreignOwnerToken, "MANAGER"),
+                    deleteStaffMember(client, venueId, targetStaffId, foreignOwnerToken),
+                )
+
+            responses.forEach { response ->
+                assertEquals(HttpStatusCode.Forbidden, response.status)
+                assertApiErrorEnvelope(response, ApiErrorCodes.FORBIDDEN)
+            }
+            assertEquals("STAFF", loadVenueMemberRole(jdbcUrl, venueId, targetStaffId))
+            assertTrue(loadStaffMembershipAuditRows(jdbcUrl, venueId).isEmpty())
         }
 
     @Test
@@ -1214,6 +1256,55 @@ class VenueStaffRoutesTest {
 
             assertEquals(HttpStatusCode.BadRequest, updateResponse.status)
             assertApiErrorEnvelope(updateResponse, ApiErrorCodes.INVALID_INPUT)
+            assertEquals("STAFF", loadVenueMemberRole(jdbcUrl, venueId, staffId))
+            assertTrue(loadStaffMembershipAuditRows(jdbcUrl, venueId).isEmpty())
+        }
+
+    @Test
+    fun `owner role change writes one exact audit and same role remains a no op`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("staff-role-audit")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val ownerId = 3201L
+            val staffId = 3202L
+            val venueId = seedVenueMembership(jdbcUrl, ownerId, "OWNER")
+            seedVenueMembership(jdbcUrl, staffId, "STAFF", venueId)
+            val token = issueToken(config, ownerId)
+
+            val appliedResponse = patchStaffRole(client, venueId, staffId, token, "MANAGER")
+
+            assertEquals(HttpStatusCode.OK, appliedResponse.status)
+            val appliedBody = appliedResponse.bodyAsText()
+            assertEquals("MANAGER", json.decodeFromString(StaffMemberDto.serializer(), appliedBody).role)
+            assertFalse(appliedBody.contains("target_user_id"))
+            assertFalse(appliedBody.contains("targetUserId"))
+            assertEquals("MANAGER", loadVenueMemberRole(jdbcUrl, venueId, staffId))
+
+            val audit = loadStaffMembershipAuditRows(jdbcUrl, venueId).single()
+            assertEquals(ownerId, audit.actorUserId)
+            assertEquals(staffId, audit.targetUserId)
+            assertEquals(VENUE_STAFF_ROLE_CHANGED_ACTION, audit.action)
+            assertEquals("venue", audit.entityType)
+            assertEquals(venueId, audit.entityId)
+            val payload = json.parseToJsonElement(audit.payload).jsonObject
+            assertEquals(setOf("oldRole", "newRole", "source"), payload.keys)
+            assertEquals("STAFF", payload.getValue("oldRole").jsonPrimitive.content)
+            assertEquals("MANAGER", payload.getValue("newRole").jsonPrimitive.content)
+            assertEquals("VENUE_MINI_APP", payload.getValue("source").jsonPrimitive.content)
+            assertFalse(audit.payload.contains(ownerId.toString()))
+            assertFalse(audit.payload.contains(staffId.toString()))
+
+            val noOpResponse = patchStaffRole(client, venueId, staffId, token, "MANAGER")
+
+            assertEquals(HttpStatusCode.OK, noOpResponse.status)
+            assertEquals("MANAGER", json.decodeFromString(StaffMemberDto.serializer(), noOpResponse.bodyAsText()).role)
+            assertEquals(listOf(audit), loadStaffMembershipAuditRows(jdbcUrl, venueId))
         }
 
     @Test
@@ -1245,6 +1336,13 @@ class VenueStaffRoutesTest {
 
             assertEquals(HttpStatusCode.BadRequest, response.status)
             assertApiErrorEnvelope(response, ApiErrorCodes.INVALID_INPUT)
+
+            val removeResponse = deleteStaffMember(client, venueId, ownerId, token)
+
+            assertEquals(HttpStatusCode.BadRequest, removeResponse.status)
+            assertApiErrorEnvelope(removeResponse, ApiErrorCodes.INVALID_INPUT)
+            assertEquals("OWNER", loadVenueMemberRole(jdbcUrl, venueId, ownerId))
+            assertTrue(loadStaffMembershipAuditRows(jdbcUrl, venueId).isEmpty())
         }
 
     @Test
@@ -1317,6 +1415,67 @@ class VenueStaffRoutesTest {
                 }
 
             assertEquals(HttpStatusCode.OK, response.status)
+            val responseBody = response.bodyAsText()
+            assertTrue(json.decodeFromString(StaffRemoveResponse.serializer(), responseBody).ok)
+            assertFalse(responseBody.contains("target_user_id"))
+            assertFalse(responseBody.contains("targetUserId"))
+            assertEquals(null, loadVenueMemberRole(jdbcUrl, venueId, staffId))
+
+            val audit = loadStaffMembershipAuditRows(jdbcUrl, venueId).single()
+            assertEquals(ownerId, audit.actorUserId)
+            assertEquals(staffId, audit.targetUserId)
+            assertEquals(VENUE_STAFF_MEMBER_REMOVED_ACTION, audit.action)
+            assertEquals("venue", audit.entityType)
+            assertEquals(venueId, audit.entityId)
+            val payload = json.parseToJsonElement(audit.payload).jsonObject
+            assertEquals(setOf("oldRole", "source"), payload.keys)
+            assertEquals("STAFF", payload.getValue("oldRole").jsonPrimitive.content)
+            assertEquals("VENUE_MINI_APP", payload.getValue("source").jsonPrimitive.content)
+            assertFalse(audit.payload.contains(ownerId.toString()))
+            assertFalse(audit.payload.contains(staffId.toString()))
+
+            val repeatedResponse = deleteStaffMember(client, venueId, staffId, token)
+
+            assertEquals(HttpStatusCode.NotFound, repeatedResponse.status)
+            assertApiErrorEnvelope(repeatedResponse, ApiErrorCodes.NOT_FOUND)
+            assertEquals(listOf(audit), loadStaffMembershipAuditRows(jdbcUrl, venueId))
+        }
+
+    @Test
+    fun `audit failure returns safe error and rolls back role change and removal`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("staff-membership-audit-failure")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val ownerId = 5101L
+            val roleTargetId = 5102L
+            val removalTargetId = 5103L
+            val venueId = seedVenueMembership(jdbcUrl, ownerId, "OWNER")
+            seedVenueMembership(jdbcUrl, roleTargetId, "STAFF", venueId)
+            seedVenueMembership(jdbcUrl, removalTargetId, "MANAGER", venueId)
+            rejectStaffMembershipAuditWrites(jdbcUrl)
+            val token = issueToken(config, ownerId)
+
+            val roleResponse = patchStaffRole(client, venueId, roleTargetId, token, "MANAGER")
+            val removalResponse = deleteStaffMember(client, venueId, removalTargetId, token)
+
+            assertEquals(HttpStatusCode.ServiceUnavailable, roleResponse.status)
+            assertApiErrorEnvelope(roleResponse, ApiErrorCodes.DATABASE_UNAVAILABLE)
+            assertEquals(HttpStatusCode.ServiceUnavailable, removalResponse.status)
+            assertApiErrorEnvelope(removalResponse, ApiErrorCodes.DATABASE_UNAVAILABLE)
+            assertEquals("STAFF", loadVenueMemberRole(jdbcUrl, venueId, roleTargetId))
+            assertEquals("MANAGER", loadVenueMemberRole(jdbcUrl, venueId, removalTargetId))
+            assertTrue(loadStaffMembershipAuditRows(jdbcUrl, venueId).isEmpty())
+            listOf(roleResponse.bodyAsText(), removalResponse.bodyAsText()).forEach { body ->
+                assertFalse(body.contains("target_user_id"))
+                assertFalse(body.contains("targetUserId"))
+                assertFalse(body.contains("\"ok\":true"))
+            }
         }
 
     @Test
@@ -1849,6 +2008,34 @@ class VenueStaffRoutesTest {
             }
         }
 
+    private suspend fun patchStaffRole(
+        client: HttpClient,
+        venueId: Long,
+        targetUserId: Long,
+        token: String,
+        role: String,
+    ): HttpResponse =
+        client.patch("/api/venue/$venueId/staff/$targetUserId") {
+            headers { append(HttpHeaders.Authorization, "Bearer $token") }
+            contentType(ContentType.Application.Json)
+            setBody(
+                json.encodeToString(
+                    StaffUpdateRoleRequest.serializer(),
+                    StaffUpdateRoleRequest(role = role),
+                ),
+            )
+        }
+
+    private suspend fun deleteStaffMember(
+        client: HttpClient,
+        venueId: Long,
+        targetUserId: Long,
+        token: String,
+    ): HttpResponse =
+        client.delete("/api/venue/$venueId/staff/$targetUserId") {
+            headers { append(HttpHeaders.Authorization, "Bearer $token") }
+        }
+
     private suspend fun postStaffProfile(
         client: HttpClient,
         venueId: Long,
@@ -2054,6 +2241,72 @@ class VenueStaffRoutesTest {
                 }
             }
         }
+
+    private fun loadStaffMembershipAuditRows(
+        jdbcUrl: String,
+        venueId: Long,
+    ): List<StaffMembershipAuditRow> =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT actor_user_id, target_user_id, action, entity_type, entity_id, payload_json
+                FROM audit_log
+                WHERE entity_type = 'venue'
+                  AND entity_id = ?
+                  AND action IN (?, ?)
+                ORDER BY id
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.setString(2, VENUE_STAFF_ROLE_CHANGED_ACTION)
+                statement.setString(3, VENUE_STAFF_MEMBER_REMOVED_ACTION)
+                statement.executeQuery().use { rs ->
+                    buildList {
+                        while (rs.next()) {
+                            add(
+                                StaffMembershipAuditRow(
+                                    actorUserId = rs.getLong("actor_user_id"),
+                                    targetUserId = rs.getLong("target_user_id").takeIf { !rs.wasNull() },
+                                    action = rs.getString("action"),
+                                    entityType = rs.getString("entity_type"),
+                                    entityId = rs.getLong("entity_id").takeIf { !rs.wasNull() },
+                                    payload = rs.getString("payload_json"),
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+    private fun loadVenueMemberRole(
+        jdbcUrl: String,
+        venueId: Long,
+        userId: Long,
+    ): String? =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                "SELECT role FROM venue_members WHERE venue_id = ? AND user_id = ?",
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.setLong(2, userId)
+                statement.executeQuery().use { rs -> if (rs.next()) rs.getString("role") else null }
+            }
+        }
+
+    private fun rejectStaffMembershipAuditWrites(jdbcUrl: String) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.createStatement().use { statement ->
+                statement.execute(
+                    """
+                    ALTER TABLE audit_log
+                    ADD CONSTRAINT reject_staff_membership_audit
+                    CHECK (action NOT IN ('$VENUE_STAFF_ROLE_CHANGED_ACTION', '$VENUE_STAFF_MEMBER_REMOVED_ACTION'))
+                    """.trimIndent(),
+                )
+            }
+        }
+    }
 
     private fun h2DataSource(jdbcUrl: String): JdbcDataSource =
         JdbcDataSource().apply {
@@ -2267,6 +2520,15 @@ class VenueStaffRoutesTest {
         val payload: String,
     )
 
+    private data class StaffMembershipAuditRow(
+        val actorUserId: Long,
+        val targetUserId: Long?,
+        val action: String,
+        val entityType: String,
+        val entityId: Long?,
+        val payload: String,
+    )
+
     @Serializable
     private data class StaffMemberDto(
         val userId: Long,
@@ -2282,6 +2544,11 @@ class VenueStaffRoutesTest {
     @Serializable
     private data class StaffUpdateRoleRequest(
         val role: String,
+    )
+
+    @Serializable
+    private data class StaffRemoveResponse(
+        val ok: Boolean,
     )
 
     @Serializable

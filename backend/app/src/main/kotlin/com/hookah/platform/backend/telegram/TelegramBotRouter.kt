@@ -81,6 +81,7 @@ import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteConfig
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteDeclineResult
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInvitePreviewResult
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteRepository
+import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffMutationSource
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffRemoveResult
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffRepository
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffUpdateResult
@@ -16940,8 +16941,8 @@ class TelegramBotRouter(
         }
         val newRole =
             when (roleKey) {
-                "manager" -> "MANAGER"
-                "staff" -> "STAFF"
+                "manager" -> VenueRole.MANAGER
+                "staff" -> VenueRole.STAFF
                 else -> null
             }
         if (newRole == null) {
@@ -16949,8 +16950,16 @@ class TelegramBotRouter(
             return
         }
         val result =
-            runCatching { venueStaffRepository.updateRoleWithOwnerGuard(venueId, targetUserId, newRole) }
-                .onFailure { logBestEffort("update venue member role via owner staff flow", it) }
+            runCatching {
+                venueStaffRepository.updateRoleWithOwnerGuard(
+                    venueId = venueId,
+                    actorUserId = userId,
+                    targetUserId = targetUserId,
+                    newRole = newRole,
+                    source = VenueStaffMutationSource.TELEGRAM_BOT,
+                )
+            }
+                .onFailure { logVenueStaffMutationFailure("VENUE_STAFF_ROLE_CHANGED", venueId, it) }
                 .getOrElse {
                     enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                     return
@@ -16958,6 +16967,10 @@ class TelegramBotRouter(
         when (result) {
             is VenueStaffUpdateResult.Success ->
                 enqueueMessage(chatId, "✅ Роль обновлена: ${humanizeOwnerVenueStaffRole(result.member.role)}.")
+            VenueStaffUpdateResult.Forbidden -> {
+                enqueueMessage(chatId, "Нет доступа к заведению.")
+                return
+            }
             VenueStaffUpdateResult.NotFound ->
                 enqueueMessage(chatId, "Сотрудник не найден или уже удалён.")
             VenueStaffUpdateResult.LastOwner ->
@@ -17060,8 +17073,15 @@ class TelegramBotRouter(
             return
         }
         val result =
-            runCatching { venueStaffRepository.removeMemberWithOwnerGuard(venueId, targetUserId) }
-                .onFailure { logBestEffort("remove venue member via owner staff flow", it) }
+            runCatching {
+                venueStaffRepository.removeMemberWithOwnerGuard(
+                    venueId = venueId,
+                    actorUserId = userId,
+                    targetUserId = targetUserId,
+                    source = VenueStaffMutationSource.TELEGRAM_BOT,
+                )
+            }
+                .onFailure { logVenueStaffMutationFailure("VENUE_STAFF_MEMBER_REMOVED", venueId, it) }
                 .getOrElse {
                     enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                     return
@@ -17069,6 +17089,10 @@ class TelegramBotRouter(
         when (result) {
             VenueStaffRemoveResult.Success ->
                 enqueueMessage(chatId, "✅ Доступ сотрудника удалён.")
+            VenueStaffRemoveResult.Forbidden -> {
+                enqueueMessage(chatId, "Нет доступа к заведению.")
+                return
+            }
             VenueStaffRemoveResult.NotFound ->
                 enqueueMessage(chatId, "Сотрудник не найден или уже удалён.")
             VenueStaffRemoveResult.LastOwner ->
@@ -25981,7 +26005,7 @@ class TelegramBotRouter(
         if (fullName.isNotBlank()) {
             return fullName
         }
-        return "ID ${member.userId}"
+        return "Сотрудник"
     }
 
     private fun humanizeOwnerVenueStaffRole(role: String): String =
@@ -34852,6 +34876,19 @@ class TelegramBotRouter(
     ) {
         logger.warn("Best-effort {} failed: {}", operation, sanitizeTelegramForLog(throwable.message))
         logger.debugTelegramException(throwable) { "Best-effort exception for $operation" }
+    }
+
+    private fun logVenueStaffMutationFailure(
+        action: String,
+        venueId: Long,
+        throwable: Throwable,
+    ) {
+        logger.warn(
+            "Venue staff membership mutation failed action={} venueId={} exceptionClass={}",
+            action,
+            venueId,
+            throwable::class.java.simpleName,
+        )
     }
 }
 
