@@ -855,6 +855,25 @@ Repeat as Template Phase 1:
 
 Simple Venue Promotions Phase 1 (`DONE / MVP / STAGING-SMOKE-PASSED`; keep in regression):
 
+Current list UX: **VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**.
+
+- `Текущие` is the default accessible tab and shows loaded `DRAFT`, `ACTIVE` and `PAUSED`
+  promotions; `Архив` shows loaded `ARCHIVED` promotions. Tabs have no numeric counts and only one
+  linked tabpanel/list is visible at a time.
+- Pause and activation remain in `Текущие`; confirmed archive uses the existing `DELETE` and moves
+  the authoritatively refreshed card to `Архив`.
+- Ordinary and `STALE` same-venue refresh preserve the selected tab. Venue switch clears old cards,
+  ignores a disposed late response and resets to `Текущие`.
+- Empty copies are exactly `Текущих акций пока нет.` plus
+  `Создайте акцию, чтобы подготовить или опубликовать предложение для гостей.` for current, and
+  `Архивных акций пока нет.` for archive.
+- Mouse plus Arrow/Home/End keyboard focus, `tablist` / `tab` / `tabpanel`, linked ARIA state,
+  archived read-only/no-readiness behavior, Owner/Manager/Staff RBAC, Happy Hours and Gift stay in
+  deterministic regression.
+- The UI partitions only the already loaded response. Existing current/archive collection limit
+  `100` is unchanged; totals, pagination, `hasMore`, cursor, server-side filtering or a
+  separate/lazy archive endpoint remain a future follow-up.
+
 Current lifecycle correction: **PROMOTION LIFECYCLE STATUS AUDIT / P2 UX AND STALE HANDLING FIX IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. The latest lifecycle staging smoke remains failed; rerun it only after independent review, green Actions and deploy.
 
 Preconditions before Guest visibility checks:
@@ -865,7 +884,7 @@ Preconditions before Guest visibility checks:
 - `SUSPENDED_BY_PLATFORM` means `BLOCKED_BY_ENVIRONMENT`, not a promotion regression. Do not
   reactivate the subscription or mutate billing during this smoke.
 
-1. Owner opens Venue Mode → `Акции`, creates a dated draft and sees it in `Черновики`.
+1. Owner opens Venue Mode → `Акции`, creates a dated draft and sees it in `Текущие`.
 2. Draft is absent from Guest venue detail.
 3. Owner activates the promotion; Guest sees title, description, period and optional terms.
 4. Owner pauses it; Guest no longer sees it after refresh.

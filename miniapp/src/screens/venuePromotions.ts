@@ -79,8 +79,14 @@ type PromotionRefs = {
   formError: HTMLParagraphElement
   saveButton: HTMLButtonElement
   cancelButton: HTMLButtonElement
-  list: HTMLDivElement
-  empty: HTMLParagraphElement
+  currentTab: HTMLButtonElement
+  archivedTab: HTMLButtonElement
+  currentPanel: HTMLElement
+  archivedPanel: HTMLElement
+  currentList: HTMLDivElement
+  archivedList: HTMLDivElement
+  currentEmpty: HTMLElement
+  archivedEmpty: HTMLElement
   error: HTMLDivElement
   errorTitle: HTMLHeadingElement
   errorMessage: HTMLParagraphElement
@@ -93,6 +99,8 @@ type PromotionGroup = {
   title: string
   items: VenuePromotionDto[]
 }
+
+type PromotionTab = 'current' | 'archived'
 
 type PromotionLoadResult =
   | { ok: true }
@@ -261,9 +269,59 @@ function buildPromotionsDom(root: HTMLDivElement): PromotionRefs {
     actions
   )
 
-  const list = el('div', { className: 'venue-promotion-groups' }) as HTMLDivElement
-  const empty = el('p', { className: 'venue-empty', text: 'Акций пока нет.' }) as HTMLParagraphElement
-  append(wrapper, header, status, error, formCard, empty, list)
+  const tabs = el('div', { className: 'venue-promotion-tabs' })
+  tabs.setAttribute('role', 'tablist')
+  tabs.setAttribute('aria-label', 'Списки акций')
+  const currentTab = el('button', {
+    id: 'venue-promotions-current-tab',
+    className: 'button-secondary',
+    text: 'Текущие'
+  }) as HTMLButtonElement
+  currentTab.type = 'button'
+  currentTab.setAttribute('role', 'tab')
+  currentTab.setAttribute('aria-controls', 'venue-promotions-current-panel')
+  const archivedTab = el('button', {
+    id: 'venue-promotions-archived-tab',
+    className: 'button-secondary',
+    text: 'Архив'
+  }) as HTMLButtonElement
+  archivedTab.type = 'button'
+  archivedTab.setAttribute('role', 'tab')
+  archivedTab.setAttribute('aria-controls', 'venue-promotions-archived-panel')
+  append(tabs, currentTab, archivedTab)
+
+  const currentPanel = el('section', {
+    id: 'venue-promotions-current-panel',
+    className: 'venue-promotion-panel'
+  })
+  currentPanel.setAttribute('role', 'tabpanel')
+  currentPanel.setAttribute('aria-labelledby', currentTab.id)
+  const currentEmpty = el('div', { className: 'venue-promotion-empty' })
+  append(
+    currentEmpty,
+    el('p', { className: 'venue-empty', text: 'Текущих акций пока нет.' }),
+    el('p', {
+      className: 'venue-empty',
+      text: 'Создайте акцию, чтобы подготовить или опубликовать предложение для гостей.'
+    })
+  )
+  const currentList = el('div', { className: 'venue-promotion-groups' }) as HTMLDivElement
+  append(currentPanel, currentEmpty, currentList)
+
+  const archivedPanel = el('section', {
+    id: 'venue-promotions-archived-panel',
+    className: 'venue-promotion-panel'
+  })
+  archivedPanel.setAttribute('role', 'tabpanel')
+  archivedPanel.setAttribute('aria-labelledby', archivedTab.id)
+  const archivedEmpty = el('p', {
+    className: 'venue-empty',
+    text: 'Архивных акций пока нет.'
+  })
+  const archivedList = el('div', { className: 'venue-promotion-groups' }) as HTMLDivElement
+  append(archivedPanel, archivedEmpty, archivedList)
+
+  append(wrapper, header, status, error, formCard, tabs, currentPanel, archivedPanel)
   root.replaceChildren(wrapper)
 
   return {
@@ -295,8 +353,14 @@ function buildPromotionsDom(root: HTMLDivElement): PromotionRefs {
     formError,
     saveButton,
     cancelButton,
-    list,
-    empty,
+    currentTab,
+    archivedTab,
+    currentPanel,
+    archivedPanel,
+    currentList,
+    archivedList,
+    currentEmpty,
+    archivedEmpty,
     error,
     errorTitle,
     errorMessage,
@@ -438,7 +502,6 @@ function groupPromotions(items: VenuePromotionDto[]): PromotionGroup[] {
   const expired: VenuePromotionDto[] = []
   const drafts: VenuePromotionDto[] = []
   const paused: VenuePromotionDto[] = []
-  const archived: VenuePromotionDto[] = []
 
   items.forEach((item) => {
     if (item.status === 'DRAFT') {
@@ -449,10 +512,7 @@ function groupPromotions(items: VenuePromotionDto[]): PromotionGroup[] {
       paused.push(item)
       return
     }
-    if (item.status === 'ARCHIVED') {
-      archived.push(item)
-      return
-    }
+    if (item.status === 'ARCHIVED') return
     const startsAt = item.startsAt ? new Date(item.startsAt).getTime() : Number.NEGATIVE_INFINITY
     const endsAt = item.endsAt ? new Date(item.endsAt).getTime() : Number.POSITIVE_INFINITY
     if (Number.isFinite(startsAt) && startsAt > now) {
@@ -469,8 +529,7 @@ function groupPromotions(items: VenuePromotionDto[]): PromotionGroup[] {
     { key: 'scheduled', title: 'Запланированы', items: scheduled },
     { key: 'drafts', title: 'Черновики', items: drafts },
     { key: 'paused', title: 'Приостановлены', items: paused },
-    { key: 'expired', title: 'Период завершён', items: expired },
-    { key: 'archived', title: 'Архив', items: archived }
+    { key: 'expired', title: 'Период завершён', items: expired }
   ].filter((group) => group.items.length > 0)
 }
 
@@ -486,6 +545,7 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
   let mutationAbort: AbortController | null = null
   let inFlight = false
   let mutationPending = false
+  let activeTab: PromotionTab = 'current'
   let items: VenuePromotionDto[] = []
   let menuCategories: VenuePromotionMenuCategoryDto[] = []
   let menuItems: VenuePromotionMenuItemDto[] = []
@@ -925,9 +985,39 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
     refs.createButton.disabled = pending
     refs.saveButton.disabled = pending
     refs.cancelButton.disabled = pending
-    refs.list.querySelectorAll('button').forEach((button) => {
-      ;(button as HTMLButtonElement).disabled = pending
+    ;[refs.currentList, refs.archivedList].forEach((list) => {
+      list.querySelectorAll('button').forEach((button) => {
+        ;(button as HTMLButtonElement).disabled = pending
+      })
     })
+  }
+
+  const selectTab = (tab: PromotionTab, focus = false) => {
+    activeTab = tab
+    const currentSelected = tab === 'current'
+    refs.currentTab.setAttribute('aria-selected', String(currentSelected))
+    refs.currentTab.tabIndex = currentSelected ? 0 : -1
+    refs.archivedTab.setAttribute('aria-selected', String(!currentSelected))
+    refs.archivedTab.tabIndex = currentSelected ? -1 : 0
+    refs.currentPanel.hidden = !currentSelected
+    refs.archivedPanel.hidden = currentSelected
+    if (focus) {
+      ;(currentSelected ? refs.currentTab : refs.archivedTab).focus()
+    }
+  }
+
+  const handleTabKeydown = (event: KeyboardEvent) => {
+    let nextTab: PromotionTab | null = null
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+      nextTab = activeTab === 'current' ? 'archived' : 'current'
+    } else if (event.key === 'Home') {
+      nextTab = 'current'
+    } else if (event.key === 'End') {
+      nextTab = 'archived'
+    }
+    if (!nextTab) return
+    event.preventDefault()
+    selectTab(nextTab, true)
   }
 
   const renderCard = (promotion: VenuePromotionDto) => {
@@ -1079,17 +1169,32 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
 
   const renderList = () => {
     cardDisposables.splice(0).forEach((dispose) => dispose())
-    refs.list.replaceChildren()
-    refs.empty.hidden = items.length > 0
-    groupPromotions(items).forEach((group) => {
+    refs.currentList.replaceChildren()
+    refs.archivedList.replaceChildren()
+    const currentItems = items.filter(
+      (promotion) =>
+        promotion.status === 'DRAFT' || promotion.status === 'ACTIVE' || promotion.status === 'PAUSED'
+    )
+    const archivedItems = items.filter((promotion) => promotion.status === 'ARCHIVED')
+    refs.currentEmpty.hidden = currentItems.length > 0
+    refs.archivedEmpty.hidden = archivedItems.length > 0
+    groupPromotions(currentItems).forEach((group) => {
       const section = el('section', { className: 'venue-promotion-group' })
       section.dataset.group = group.key
       section.appendChild(el('h3', { text: group.title }))
       const cards = el('div', { className: 'venue-promotion-list' })
       group.items.forEach((promotion) => cards.appendChild(renderCard(promotion)))
       section.appendChild(cards)
-      refs.list.appendChild(section)
+      refs.currentList.appendChild(section)
     })
+    if (archivedItems.length) {
+      const section = el('section', { className: 'venue-promotion-group' })
+      section.dataset.group = 'archived'
+      const cards = el('div', { className: 'venue-promotion-list' })
+      archivedItems.forEach((promotion) => cards.appendChild(renderCard(promotion)))
+      section.appendChild(cards)
+      refs.archivedList.appendChild(section)
+    }
     setMutationState(mutationPending)
   }
 
@@ -1262,6 +1367,10 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
   }
 
   const disposables = [
+    on(refs.currentTab, 'click', () => selectTab('current')),
+    on(refs.archivedTab, 'click', () => selectTab('archived')),
+    on(refs.currentTab, 'keydown', handleTabKeydown),
+    on(refs.archivedTab, 'keydown', handleTabKeydown),
     on(refs.createButton, 'click', openCreateForm),
     on(refs.cancelButton, 'click', resetForm),
     on(refs.saveButton, 'click', () => void save()),
@@ -1278,6 +1387,7 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
     on(refs.rewardAllowlist, 'change', renderRuleSummary)
   ]
 
+  selectTab('current')
   void load()
 
   return () => {

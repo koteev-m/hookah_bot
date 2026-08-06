@@ -2674,6 +2674,37 @@ input[type="number"] {
   gap: 12px;
 }
 
+.venue-promotion-tabs {
+  display: flex;
+  gap: 8px;
+}
+
+.venue-promotion-tabs button {
+  flex: 1;
+}
+
+.venue-promotion-tabs button[aria-selected="true"] {
+  border-color: #1f2a44;
+  background: #1f2a44;
+  color: #ffffff;
+}
+
+.venue-promotion-tabs button:focus-visible {
+  outline: 3px solid rgba(79, 70, 229, 0.35);
+  outline-offset: 2px;
+}
+
+.venue-promotion-panel,
+.venue-promotion-empty {
+  display: grid;
+  gap: 8px;
+}
+
+.venue-promotion-panel[hidden],
+.venue-promotion-empty[hidden] {
+  display: none;
+}
+
 .venue-promotions-header,
 .venue-promotion-form,
 .venue-promotion-card,

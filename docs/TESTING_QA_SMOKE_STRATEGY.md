@@ -711,6 +711,42 @@ STAFF denial and repository defense-in-depth, cross-surface parity and fresh-ins
 fixed/selectable/skip behavior are covered. This is local evidence only; independent
 review, GitHub Actions and staging remain open.
 
+### Venue Promotions Current/Archived Tabs UX local quality gate
+
+Status: **VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**.
+
+Required deterministic browser regression proves:
+
+- `Текущие` is selected by default and contains only loaded `DRAFT`, `ACTIVE` and `PAUSED`
+  promotions; `Архив` contains only loaded `ARCHIVED` promotions, with no numeric tab counts and
+  only one visible panel/list at a time;
+- pause/activation remain in `Текущие`; confirmed archive sends the existing separate `DELETE`,
+  removes the refreshed card from `Текущие` and exposes it in `Архив`;
+- ordinary same-venue authoritative refresh and `STALE` refresh preserve the selected tab, while
+  venue switch clears old cards, resets to `Текущие` and ignores a disposed late response;
+- current empty copy is `Текущих акций пока нет.` plus
+  `Создайте акцию, чтобы подготовить или опубликовать предложение для гостей.`; archive empty copy
+  is `Архивных акций пока нет.`;
+- `tablist` / `tab` / `tabpanel`, `aria-selected`, linked controls/panels, roving keyboard focus and
+  visible active/focus states remain accessible;
+- archived cards remain read-only without readiness validation; Owner/Manager/Staff RBAC and
+  Happy Hours/Gift management regression remain unchanged.
+
+This is a frontend-only loaded-response UX. The existing backend/API/DTO/repository and per-list
+limit `100` are unchanged. Database-wide totals, pagination, `hasMore`, cursor and server-side
+filtering or a separate/lazy archive endpoint remain future follow-up and are not represented by
+tab counts. Backend selectors are not required when no backend production file changed.
+
+Required local validation:
+
+```bash
+npm --prefix miniapp run build
+CI=1 TZ=UTC MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke
+```
+
+Current local evidence: Mini App production build passed and the full deterministic browser smoke
+passed `136/136`. No backend production file changed, so backend selectors were not rerun.
+
 ### Promotion Lifecycle Status Audit quality gate
 
 Status: **PROMOTION LIFECYCLE STATUS AUDIT / P2 UX AND STALE HANDLING FIX IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
@@ -1276,6 +1312,7 @@ Telegram/staff-chat:
 - Guest Preview Phase 2.1: **VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY / DONE / MVP / STAGING-SMOKE-PASSED**.
 - Menu shift check: **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**; regression
   gates remain active.
+- Venue Promotions Current/Archived Tabs UX: **VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**; independent review, green Actions, deploy and staging UX smoke remain open.
 - Promotion lifecycle status audit: **PROMOTION LIFECYCLE STATUS AUDIT / P2 UX AND STALE HANDLING FIX IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**; the latest staging smoke remains failed, and independent review, green Actions, deploy and a new staging smoke remain open.
 - Staff Operations Slice A:
   `MANAGER PARITY + SHIFT TIME DEFAULTS / DONE / MVP / STAGING-SMOKE-PASSED`.

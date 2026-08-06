@@ -1,4 +1,4 @@
-import { expect, type Page, test } from '@playwright/test'
+import { expect, type Page, type Route, test } from '@playwright/test'
 
 const sessionExpiresAt = Math.floor(Date.now() / 1000) + 3600
 const giftDecisionExpiresAtEpochSeconds = 4_102_444_800
@@ -3373,6 +3373,7 @@ async function mockVenuePromotionsApi(
     archiveStale?: VenuePromotionStaleFixture
     venueId?: number
     accessVenueIds?: number[]
+    promotionsByVenue?: Record<number, VenuePromotionFixture[]>
     promotionListFailureRequests?: number[]
   } = {}
 ) {
@@ -3380,7 +3381,12 @@ async function mockVenuePromotionsApi(
   const venueId = options.venueId ?? 1
   const accessVenueIds = Array.from(new Set([...(options.accessVenueIds ?? []), venueId]))
   const promotionListFailureRequests = new Set(options.promotionListFailureRequests ?? [])
-  let promotions = [...(options.promotions ?? [])]
+  let promotions = [...(options.promotionsByVenue?.[venueId] ?? options.promotions ?? [])]
+  const secondaryPromotions = new Map(
+    accessVenueIds
+      .filter((accessVenueId) => accessVenueId !== venueId)
+      .map((accessVenueId) => [accessVenueId, [...(options.promotionsByVenue?.[accessVenueId] ?? [])]])
+  )
   let nextId = Math.max(0, ...promotions.map((item) => item.id)) + 1
   let nextRuleId = 1001
   const mutations: string[] = []
@@ -3388,8 +3394,63 @@ async function mockVenuePromotionsApi(
   let promotionListRequests = 0
   let statusStaleConsumed = false
   let archiveStaleConsumed = false
+  const promotionListVenueRequests: number[] = []
+  const settledPromotionListVenues: number[] = []
+  const deferredPromotionLists = new Map<number, Array<{ promise: Promise<void>; release: () => void }>>()
   const menuCategories = options.menuCategories ?? [{ id: 20, name: 'Кальяны' }]
   const menuItems = options.menuItems ?? [{ id: 200, name: 'Double Apple', categoryId: 20 }]
+
+  const deferNextPromotionList = (deferredVenueId: number) => {
+    let release = () => undefined
+    const promise = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const queue = deferredPromotionLists.get(deferredVenueId) ?? []
+    queue.push({ promise, release })
+    deferredPromotionLists.set(deferredVenueId, queue)
+    return release
+  }
+
+  const fulfillPromotionList = async (
+    route: Route,
+    responseVenueId: number,
+    responseItems: VenuePromotionFixture[]
+  ) => {
+    promotionListRequests += 1
+    promotionListVenueRequests.push(responseVenueId)
+    if (promotionListFailureRequests.has(promotionListRequests)) {
+      await route.fulfill(
+        jsonResponse(
+          {
+            error: {
+              code: 'DATABASE_UNAVAILABLE',
+              message: 'Сервис временно недоступен.'
+            }
+          },
+          503
+        )
+      )
+      return
+    }
+    const snapshot = JSON.parse(JSON.stringify(responseItems)) as VenuePromotionFixture[]
+    const gate = deferredPromotionLists.get(responseVenueId)?.shift()
+    await gate?.promise
+    try {
+      await route.fulfill(
+        jsonResponse({
+          venueId: responseVenueId,
+          timezone: promotionVenueTimezone,
+          items: snapshot,
+          menuCategories,
+          menuItems
+        })
+      )
+    } catch {
+      // A venue switch aborts the disposed screen request; the late fixture response is intentionally ignored.
+    } finally {
+      settledPromotionListVenues.push(responseVenueId)
+    }
+  }
 
   const toRuleFixture = (
     mutation: VenuePromotionMutationFixture,
@@ -3501,6 +3562,18 @@ async function mockVenuePromotionsApi(
     await route.fulfill(jsonResponse({ items: [] }))
   })
 
+  for (const [secondaryVenueId, secondaryItems] of secondaryPromotions) {
+    await page.route(`**/api/venue/${secondaryVenueId}/promotions**`, async (route) => {
+      const request = route.request()
+      const path = new URL(request.url()).pathname
+      if (path === `/api/venue/${secondaryVenueId}/promotions` && request.method() === 'GET') {
+        await fulfillPromotionList(route, secondaryVenueId, secondaryItems)
+        return
+      }
+      await route.fulfill({ status: 405, contentType: 'application/json', body: JSON.stringify({ error: 'unsupported' }) })
+    })
+  }
+
   await page.route(`**/api/venue/${venueId}/promotions**`, async (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname
@@ -3508,30 +3581,7 @@ async function mockVenuePromotionsApi(
     const itemMatch = path.match(new RegExp(`^/api/venue/${venueId}/promotions/(\\d+)$`))
     const promotionsPath = `/api/venue/${venueId}/promotions`
     if (path === promotionsPath && request.method() === 'GET') {
-      promotionListRequests += 1
-      if (promotionListFailureRequests.has(promotionListRequests)) {
-        await route.fulfill(
-          jsonResponse(
-            {
-              error: {
-                code: 'DATABASE_UNAVAILABLE',
-                message: 'Сервис временно недоступен.'
-              }
-            },
-            503
-          )
-        )
-        return
-      }
-      await route.fulfill(
-        jsonResponse({
-          venueId,
-          timezone: promotionVenueTimezone,
-          items: promotions,
-          menuCategories,
-          menuItems
-        })
-      )
+      await fulfillPromotionList(route, venueId, promotions)
       return
     }
     if (path === promotionsPath && request.method() === 'POST') {
@@ -3650,7 +3700,10 @@ async function mockVenuePromotionsApi(
     getPromotions: () => promotions,
     getMutations: () => mutations,
     getLifecycleRequests: () => lifecycleRequests,
-    getPromotionListRequests: () => promotionListRequests
+    getPromotionListRequests: () => promotionListRequests,
+    getPromotionListVenueRequests: () => promotionListVenueRequests,
+    getSettledPromotionListVenues: () => settledPromotionListVenues,
+    deferNextPromotionList
   }
 }
 
@@ -13480,6 +13533,98 @@ test('venue owner creates edits activates and pauses informational promotion', a
   await expect(page.locator('.guest-venue-promotions')).toContainText('Обновлённое предложение для компаний.')
 })
 
+test('venue promotion tabs separate current and archived cards with accessible keyboard navigation', async ({ page }) => {
+  const referenceInstant = '2030-01-10T12:00:00.000Z'
+  await page.clock.setFixedTime(referenceInstant)
+  await installTelegramWebApp(page, 123456789)
+  await mockVenuePromotionsApi(page, {
+    role: 'OWNER',
+    promotions: [
+      {
+        id: 920,
+        title: 'Черновик во вкладке текущих',
+        description: 'Черновик остаётся текущей акцией.',
+        startsAt: '2030-01-01T00:00:00.000Z',
+        endsAt: '2030-02-01T00:00:00.000Z',
+        status: 'DRAFT'
+      },
+      {
+        id: 921,
+        title: 'Активная акция во вкладке текущих',
+        description: 'Активная акция остаётся текущей.',
+        startsAt: '2030-01-01T00:00:00.000Z',
+        endsAt: '2030-02-01T00:00:00.000Z',
+        status: 'ACTIVE'
+      },
+      {
+        id: 922,
+        title: 'Пауза во вкладке текущих',
+        description: 'Приостановленная акция остаётся текущей.',
+        startsAt: '2030-01-01T00:00:00.000Z',
+        endsAt: '2030-02-01T00:00:00.000Z',
+        status: 'PAUSED'
+      },
+      {
+        id: 923,
+        title: 'Только архивная акция',
+        description: 'Архивная акция показывается отдельно.',
+        startsAt: '2030-01-01T00:00:00.000Z',
+        endsAt: '2030-02-01T00:00:00.000Z',
+        status: 'ARCHIVED'
+      }
+    ]
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Акции', exact: true }).click()
+
+  const tablist = page.getByRole('tablist', { name: 'Списки акций', exact: true })
+  const currentTab = tablist.getByRole('tab', { name: 'Текущие', exact: true })
+  const archivedTab = tablist.getByRole('tab', { name: 'Архив', exact: true })
+  const currentPanel = page.locator('#venue-promotions-current-panel')
+  const archivedPanel = page.locator('#venue-promotions-archived-panel')
+
+  await expect(currentTab).toHaveAttribute('aria-selected', 'true')
+  await expect(currentTab).toHaveAttribute('aria-controls', 'venue-promotions-current-panel')
+  await expect(currentTab).toHaveText('Текущие')
+  await expect(archivedTab).toHaveAttribute('aria-selected', 'false')
+  await expect(archivedTab).toHaveAttribute('aria-controls', 'venue-promotions-archived-panel')
+  await expect(archivedTab).toHaveText('Архив')
+  await expect(currentPanel).toHaveAttribute('aria-labelledby', 'venue-promotions-current-tab')
+  await expect(archivedPanel).toHaveAttribute('aria-labelledby', 'venue-promotions-archived-tab')
+  await expect(currentPanel).toBeVisible()
+  await expect(archivedPanel).toBeHidden()
+  await expect(page.locator('.venue-promotion-panel:visible')).toHaveCount(1)
+  await expect(page.locator('.venue-promotion-groups:visible')).toHaveCount(1)
+  await expect(currentPanel.locator('[data-promotion-id="920"]')).toBeVisible()
+  await expect(currentPanel.locator('[data-promotion-id="921"]')).toBeVisible()
+  await expect(currentPanel.locator('[data-promotion-id="922"]')).toBeVisible()
+  await expect(currentPanel.locator('[data-promotion-id="923"]')).toHaveCount(0)
+
+  await currentTab.focus()
+  await currentTab.press('ArrowRight')
+  await expect(archivedTab).toBeFocused()
+  await expect(archivedTab).toHaveAttribute('aria-selected', 'true')
+  await expect(currentPanel).toBeHidden()
+  await expect(archivedPanel).toBeVisible()
+  await expect(page.locator('.venue-promotion-panel:visible')).toHaveCount(1)
+  await expect(page.locator('.venue-promotion-groups:visible')).toHaveCount(1)
+  await expect(archivedPanel.locator('[data-promotion-id="923"]')).toBeVisible()
+  await expect(archivedPanel.locator('[data-promotion-id="920"]')).toHaveCount(0)
+  await expect(archivedPanel.locator('[data-promotion-id="921"]')).toHaveCount(0)
+  await expect(archivedPanel.locator('[data-promotion-id="922"]')).toHaveCount(0)
+
+  await archivedTab.press('Home')
+  await expect(currentTab).toBeFocused()
+  await expect(currentTab).toHaveAttribute('aria-selected', 'true')
+  await archivedTab.click()
+  await expect(archivedTab).toBeFocused()
+  await expect(archivedTab).toHaveAttribute('aria-selected', 'true')
+  await currentTab.click()
+  await expect(currentTab).toBeFocused()
+  await expect(currentPanel.locator('[data-promotion-id="920"]')).toBeVisible()
+})
+
 test('venue promotion pause and archive use separate confirmed lifecycle requests', async ({ page }) => {
   const referenceInstant = '2030-01-10T12:00:00.000Z'
   await page.clock.setFixedTime(referenceInstant)
@@ -13497,16 +13642,6 @@ test('venue promotion pause and archive use separate confirmed lifecycle request
         status: 'ACTIVE',
         templateType: 'TEXT_ONLY',
         rule: null
-      },
-      {
-        id: 911,
-        title: 'Приостановленная акция для архива',
-        description: 'Проверка отдельного DELETE после подтверждения.',
-        startsAt: '2030-01-01T00:00:00.000Z',
-        endsAt: '2030-02-01T00:00:00.000Z',
-        status: 'PAUSED',
-        templateType: 'TEXT_ONLY',
-        rule: null
       }
     ]
   })
@@ -13515,11 +13650,20 @@ test('venue promotion pause and archive use separate confirmed lifecycle request
   await page.getByRole('button', { name: 'Акции', exact: true }).click()
   await expect.poll(() => api.getPromotionListRequests()).toBe(1)
 
+  const currentTab = page.getByRole('tab', { name: 'Текущие', exact: true })
+  const archivedTab = page.getByRole('tab', { name: 'Архив', exact: true })
+  const currentPanel = page.locator('#venue-promotions-current-panel')
+  const archivedPanel = page.locator('#venue-promotions-archived-panel')
+  await archivedTab.click()
+  await expect(archivedPanel.getByText('Архивных акций пока нет.', { exact: true })).toBeVisible()
+  await expect(currentPanel).toBeHidden()
+  await currentTab.click()
+
   await page
-    .locator('[data-promotion-id="910"]')
+    .locator('#venue-promotions-current-panel [data-promotion-id="910"]')
     .getByRole('button', { name: 'Приостановить', exact: true })
     .click()
-  await expect(page.locator('[data-group="paused"] [data-promotion-id="910"]')).toBeVisible()
+  await expect(currentPanel.locator('[data-group="paused"] [data-promotion-id="910"]')).toBeVisible()
   expect(api.getLifecycleRequests()).toEqual([
     {
       method: 'POST',
@@ -13532,26 +13676,35 @@ test('venue promotion pause and archive use separate confirmed lifecycle request
 
   let dismissedArchive = false
   page.once('dialog', async (dialog) => {
-    expect(dialog.message()).toBe('Архивировать акцию «Приостановленная акция для архива»?')
+    expect(dialog.message()).toBe('Архивировать акцию «Активная акция для паузы»?')
     dismissedArchive = true
     await dialog.dismiss()
   })
   await page
-    .locator('[data-promotion-id="911"]')
+    .locator('#venue-promotions-current-panel [data-promotion-id="910"]')
     .getByRole('button', { name: 'Архивировать', exact: true })
     .click()
   expect(dismissedArchive).toBe(true)
   expect(api.getLifecycleRequests()).toHaveLength(1)
 
   page.once('dialog', async (dialog) => {
-    expect(dialog.message()).toBe('Архивировать акцию «Приостановленная акция для архива»?')
+    expect(dialog.message()).toBe('Архивировать акцию «Активная акция для паузы»?')
     await dialog.accept()
   })
   await page
-    .locator('[data-promotion-id="911"]')
+    .locator('#venue-promotions-current-panel [data-promotion-id="910"]')
     .getByRole('button', { name: 'Архивировать', exact: true })
     .click()
-  await expect(page.locator('[data-group="archived"] [data-promotion-id="911"]')).toBeVisible()
+  await expect(currentPanel.locator('[data-promotion-id="910"]')).toHaveCount(0)
+  await expect(currentPanel.getByText('Текущих акций пока нет.', { exact: true })).toBeVisible()
+  await expect(
+    currentPanel.getByText(
+      'Создайте акцию, чтобы подготовить или опубликовать предложение для гостей.',
+      { exact: true }
+    )
+  ).toBeVisible()
+  await archivedTab.click()
+  await expect(archivedPanel.locator('[data-group="archived"] [data-promotion-id="910"]')).toBeVisible()
   expect(api.getLifecycleRequests()).toEqual([
     {
       method: 'POST',
@@ -13561,8 +13714,8 @@ test('venue promotion pause and archive use separate confirmed lifecycle request
     },
     {
       method: 'DELETE',
-      path: '/api/venue/1/promotions/911',
-      promotionId: 911
+      path: '/api/venue/1/promotions/910',
+      promotionId: 910
     }
   ])
 })
@@ -13632,15 +13785,27 @@ test('venue promotion stale status and archive refresh authoritative state witho
   await expect(page.locator('.venue-select')).toHaveValue('2')
   expect(new URL(page.url()).searchParams.get('venueId')).toBe('2')
 
+  const currentTab = page.getByRole('tab', { name: 'Текущие', exact: true })
+  const archivedTab = page.getByRole('tab', { name: 'Архив', exact: true })
+  const currentPanel = page.locator('#venue-promotions-current-panel')
+  const archivedPanel = page.locator('#venue-promotions-archived-panel')
+  await archivedTab.click()
+  await expect(archivedTab).toHaveAttribute('aria-selected', 'true')
+  await expect(archivedPanel.getByText('Архивных акций пока нет.', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Повторить', exact: true }).click()
   await expect.poll(() => api.getPromotionListRequests()).toBe(3)
-  await expect(page.locator('[data-group="archived"] [data-promotion-id="912"]')).toBeVisible()
+  await expect(archivedTab).toHaveAttribute('aria-selected', 'true')
+  await expect(archivedPanel).toBeVisible()
+  await expect(archivedPanel.locator('[data-group="archived"] [data-promotion-id="912"]')).toBeVisible()
+  await expect(currentPanel).toBeHidden()
   await expect(page.locator('.venue-promotion-form')).toBeHidden()
   await expect(
     page.getByText('Статус акции уже изменился. Обновите список и повторите действие.', { exact: true })
   ).toBeVisible()
   expect(api.getLifecycleRequests()).toHaveLength(1)
 
+  await currentTab.click()
+  await expect(currentTab).toHaveAttribute('aria-selected', 'true')
   page.once('dialog', async (dialog) => {
     expect(dialog.message()).toBe('Архивировать акцию «Конфликт архива»?')
     await dialog.accept()
@@ -13652,7 +13817,8 @@ test('venue promotion stale status and archive refresh authoritative state witho
   await expect(
     page.getByText('Статус акции уже изменился. Обновите список и повторите действие.', { exact: true })
   ).toBeVisible()
-  await expect(page.locator('[data-group="active"] [data-promotion-id="913"]')).toBeVisible()
+  await expect(currentTab).toHaveAttribute('aria-selected', 'true')
+  await expect(currentPanel.locator('[data-group="active"] [data-promotion-id="913"]')).toBeVisible()
   await expect.poll(() => api.getPromotionListRequests()).toBe(4)
   expect(api.getLifecycleRequests()).toEqual([
     {
@@ -13735,7 +13901,16 @@ test('archived gift promotion is read only while active and paused readiness sta
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await page.getByRole('button', { name: 'Акции', exact: true }).click()
 
-  const archivedCard = page.locator('[data-promotion-id="914"]')
+  const currentTab = page.getByRole('tab', { name: 'Текущие', exact: true })
+  const archivedTab = page.getByRole('tab', { name: 'Архив', exact: true })
+  const currentPanel = page.locator('#venue-promotions-current-panel')
+  const archivedPanel = page.locator('#venue-promotions-archived-panel')
+  await expect(currentPanel.locator('[data-promotion-id="914"]')).toHaveCount(0)
+  await expect(currentPanel.locator('[data-promotion-id="915"]')).toBeVisible()
+  await expect(currentPanel.locator('[data-promotion-id="916"]')).toBeVisible()
+
+  await archivedTab.click()
+  const archivedCard = archivedPanel.locator('[data-promotion-id="914"]')
   await expect(archivedCard).toContainText('Архивный подарок')
   await expect(archivedCard).toContainText('Историческое описание подарочной акции.')
   await expect(archivedCard).toContainText('Исторические условия.')
@@ -13749,16 +13924,114 @@ test('archived gift promotion is read only while active and paused readiness sta
   await expect(archivedCard).not.toContainText('перед публикацией')
   await expect(archivedCard).not.toContainText('не настроен')
   await expect(archivedCard.getByRole('button')).toHaveCount(0)
+  await expect(archivedPanel.locator('[data-promotion-id="915"]')).toHaveCount(0)
+  await expect(archivedPanel.locator('[data-promotion-id="916"]')).toHaveCount(0)
 
-  const activeCard = page.locator('[data-promotion-id="915"]')
+  await currentTab.click()
+  const activeCard = currentPanel.locator('[data-promotion-id="915"]')
   await expect(activeCard).toContainText('Нужно исправить перед публикацией')
   await expect(activeCard).toContainText('Добавьте расписание, условие покупки и подарок.')
   await expect(activeCard.getByRole('button', { name: 'Приостановить', exact: true })).toBeVisible()
 
-  const pausedCard = page.locator('[data-promotion-id="916"]')
+  const pausedCard = currentPanel.locator('[data-promotion-id="916"]')
   await expect(pausedCard).toContainText('Нужно исправить перед публикацией')
   await expect(pausedCard).toContainText('Добавьте расписание, условие покупки и подарок.')
   await expect(pausedCard.getByRole('button', { name: 'Опубликовать', exact: true })).toBeVisible()
+})
+
+test('venue promotion tabs reset and ignore a disposed late response on venue switch', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenuePromotionsApi(page, {
+    role: 'OWNER',
+    accessVenueIds: [1, 2],
+    promotionsByVenue: {
+      1: [
+        {
+          id: 930,
+          title: 'Текущая акция первого заведения',
+          description: 'Карточка первого заведения.',
+          startsAt: '2030-01-01T00:00:00.000Z',
+          endsAt: '2030-02-01T00:00:00.000Z',
+          status: 'DRAFT'
+        },
+        {
+          id: 931,
+          title: 'Архив первого заведения',
+          description: 'Архивная карточка первого заведения.',
+          startsAt: '2030-01-01T00:00:00.000Z',
+          endsAt: '2030-02-01T00:00:00.000Z',
+          status: 'ARCHIVED'
+        }
+      ],
+      2: [
+        {
+          id: 940,
+          title: 'Текущая акция второго заведения',
+          description: 'Карточка второго заведения.',
+          startsAt: '2030-01-01T00:00:00.000Z',
+          endsAt: '2030-02-01T00:00:00.000Z',
+          status: 'ACTIVE'
+        },
+        {
+          id: 941,
+          title: 'Архив второго заведения',
+          description: 'Архивная карточка второго заведения.',
+          startsAt: '2030-01-01T00:00:00.000Z',
+          endsAt: '2030-02-01T00:00:00.000Z',
+          status: 'ARCHIVED'
+        }
+      ]
+    }
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Акции', exact: true }).click()
+  const venueSelect = page.locator('.venue-controls select.venue-select')
+  const currentTab = page.getByRole('tab', { name: 'Текущие', exact: true })
+  const archivedTab = page.getByRole('tab', { name: 'Архив', exact: true })
+  const currentPanel = page.locator('#venue-promotions-current-panel')
+  const archivedPanel = page.locator('#venue-promotions-archived-panel')
+
+  await expect(currentPanel.locator('[data-promotion-id="930"]')).toBeVisible()
+  await archivedTab.click()
+  await expect(archivedPanel.locator('[data-promotion-id="931"]')).toBeVisible()
+
+  await venueSelect.selectOption('2')
+  await expect(venueSelect).toHaveValue('2')
+  await expect(currentTab).toHaveAttribute('aria-selected', 'true')
+  await expect(currentPanel.locator('[data-promotion-id="940"]')).toBeVisible()
+  await expect(page.locator('[data-promotion-id="930"]')).toHaveCount(0)
+  await expect(page.locator('[data-promotion-id="931"]')).toHaveCount(0)
+  await archivedTab.click()
+  await expect(archivedPanel.locator('[data-promotion-id="941"]')).toBeVisible()
+
+  const releaseVenueOne = api.deferNextPromotionList(1)
+  const venueOneRequestsBefore = api.getPromotionListVenueRequests().filter((id) => id === 1).length
+  const venueOneSettledBefore = api.getSettledPromotionListVenues().filter((id) => id === 1).length
+  await venueSelect.selectOption('1')
+  await expect
+    .poll(() => api.getPromotionListVenueRequests().filter((id) => id === 1).length)
+    .toBe(venueOneRequestsBefore + 1)
+  await expect(currentTab).toHaveAttribute('aria-selected', 'true')
+  await expect(currentPanel.getByText('Текущих акций пока нет.', { exact: true })).toBeVisible()
+  await expect(page.locator('[data-promotion-id="930"]')).toHaveCount(0)
+  await expect(page.locator('[data-promotion-id="931"]')).toHaveCount(0)
+  await expect(page.locator('[data-promotion-id="940"]')).toHaveCount(0)
+  await expect(page.locator('[data-promotion-id="941"]')).toHaveCount(0)
+
+  await venueSelect.selectOption('2')
+  await expect(currentTab).toHaveAttribute('aria-selected', 'true')
+  await expect(currentPanel.locator('[data-promotion-id="940"]')).toBeVisible()
+  releaseVenueOne()
+  await expect
+    .poll(() => api.getSettledPromotionListVenues().filter((id) => id === 1).length)
+    .toBe(venueOneSettledBefore + 1)
+  await expect(venueSelect).toHaveValue('2')
+  await expect.poll(() => new URL(page.url()).searchParams.get('venueId')).toBe('2')
+  await expect(currentTab).toHaveAttribute('aria-selected', 'true')
+  await expect(currentPanel.locator('[data-promotion-id="940"]')).toBeVisible()
+  await expect(page.locator('[data-promotion-id="930"]')).toHaveCount(0)
+  await expect(page.locator('[data-promotion-id="931"]')).toHaveCount(0)
 })
 
 test('venue owner configures happy hours windows and targets while invalid activation is rejected', async ({ page }) => {
@@ -14042,6 +14315,7 @@ test('venue staff does not see or open promotions section', async ({ page }) => 
     window.location.hash = '#/promotions'
   })
   await expect(page.getByRole('heading', { name: 'Недостаточно прав' })).toBeVisible()
+  await expect(page.getByRole('tablist', { name: 'Списки акций', exact: true })).toHaveCount(0)
 })
 
 test('venue manager can create promotions from the management section', async ({ page }) => {
@@ -14053,6 +14327,10 @@ test('venue manager can create promotions from the management section', async ({
   await expect(page.getByRole('button', { name: 'Акции', exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Акции', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Акции', exact: true })).toBeVisible()
+  const currentTab = page.getByRole('tab', { name: 'Текущие', exact: true })
+  const archivedTab = page.getByRole('tab', { name: 'Архив', exact: true })
+  await archivedTab.click()
+  await expect(archivedTab).toHaveAttribute('aria-selected', 'true')
   await page.getByRole('button', { name: 'Создать акцию' }).click()
   const form = page.locator('.venue-promotion-form')
   await form.getByLabel('Название акции', { exact: true }).fill('Акция менеджера')
@@ -14061,6 +14339,10 @@ test('venue manager can create promotions from the management section', async ({
   await form.getByLabel('Окончание', { exact: true }).fill('2030-05-10T22:00')
   await form.getByRole('button', { name: 'Сохранить черновик' }).click()
   await expect(page.getByText('Черновик акции создан.')).toBeVisible()
+  await expect(archivedTab).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByText('Архивных акций пока нет.', { exact: true })).toBeVisible()
+  await currentTab.click()
+  await expect(page.locator('[data-promotion-id="1"]')).toContainText('Акция менеджера')
   expect(api.getMutations()).toEqual(['create'])
 })
 
