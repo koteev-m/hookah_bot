@@ -1,6 +1,6 @@
 # Testing / QA Smoke Strategy
 
-Дата актуализации: 2026-08-05.
+Дата актуализации: 2026-08-06.
 
 Статус: **current product reference / UPDATED**. This document is the canonical QA/smoke strategy for the Telegram bot + Mini App platform. It consolidates local validation, GitHub Actions expectations, area-specific smoke suites, staging policy, failure reporting and Codex handoff rules. Deployment and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
 
@@ -23,9 +23,9 @@ Current practice:
   `GIFT_WITH_ITEM BOT/MINIAPP PARITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`.
   GitHub Actions and staging cross-surface smoke remain required.
 - Promotion lifecycle status audit is
-  **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
-  It is a bounded status/archive block; independent review, green Actions, deploy and staging
-  Mini App/Telegram smoke remain required before release.
+  **PROMOTION LIFECYCLE STATUS AUDIT / P2 UX AND STALE HANDLING FIX IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+  The latest staging smoke remains failed. Independent review, green Actions, deploy and a new
+  staging Mini App/Telegram smoke remain required before release.
 - Venue Mini App Guest Preview Phase 2.1 is **VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY / DONE / MVP / STAGING-SMOKE-PASSED**. Focused preview/Guest/RBAC/promotion backend tests, compile/lint, Mini App build and deterministic browser smoke `95/95` are green; GitHub Actions were green, staging deploy completed and manual staging smoke passed for the unified contract.
 - Menu shift check is **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**.
   OWNER/MANAGER use an own-venue local draft and one atomic availability batch; Staff individual
@@ -713,7 +713,9 @@ review, GitHub Actions and staging remain open.
 
 ### Promotion Lifecycle Status Audit quality gate
 
-Status: **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+Status: **PROMOTION LIFECYCLE STATUS AUDIT / P2 UX AND STALE HANDLING FIX IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+
+The latest staging smoke remains **FAILED**; local validation does not close or replace that gate.
 
 Required regression proves:
 
@@ -732,9 +734,31 @@ Required regression proves:
   Telegram identity fields, `initData`, secrets or client actor;
 - real PostgreSQL status/status, status/archive and lifecycle/configuration races preserve the
   existing parent-then-rules lock order and produce only committed winner audit evidence;
+- Mini App status/archive returns the existing HTTP success plus authoritative promotion DTO for
+  `APPLIED` and `NO_OP`, while `STALE` returns `409` with code
+  `PROMOTION_LIFECYCLE_STALE`, safe message
+  `Статус акции уже изменился. Обновите список и повторите действие.` and no internal details;
+- Mini App never shows lifecycle success copy for `STALE`, performs one authoritative list refresh
+  without automatically repeating the mutation and preserves the selected venue;
+- archived promotion cards are read-only, expose no unavailable lifecycle actions or publication
+  readiness validation, and do not present an unloaded archived rule as missing configuration;
+- deterministic browser coverage proves one pause click sends one `PAUSED` status request and no
+  `DELETE`, while archive sends one `DELETE` only after the existing explicit confirmation;
 - current Owner/Manager behavior, Staff/foreign denial, API response envelopes, Telegram safe
   errors, Guest active/paused/archived visibility, Happy Hours, Gift, bill and History behavior do
   not regress.
+
+Before repeating the Guest promotion staging smoke:
+
+1. Verify the venue status is `PUBLISHED`.
+2. Verify the subscription is Guest-available.
+3. Open Guest catalog and venue detail successfully before any promotion lifecycle mutation.
+4. If the subscription is `SUSPENDED_BY_PLATFORM`, record Guest visibility as
+   `BLOCKED_BY_ENVIRONMENT`, not as a promotion regression. Do not change subscription or billing
+   state as part of promotion smoke.
+
+Keep the incident promotion archived. Use a replacement promotion created through the normal UI
+for the next lifecycle smoke; no raw SQL recovery or archive restore is part of this gate.
 
 Required focused local selectors:
 
@@ -749,6 +773,11 @@ JAVA_TOOL_OPTIONS=-Dapi.version=1.44 ./gradlew --no-daemon --max-workers=1 :back
 npm --prefix miniapp run build
 CI=1 TZ=UTC MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke
 ```
+
+Current local P2 correction evidence: `VenuePromotionRoutesTest` `11/11`,
+`VenuePromotionRepositoryTest` `35/35`, Kotlin compile and ktlint, Mini App production build and
+the full deterministic browser smoke `134/134` passed. This is local evidence only; the failed
+staging smoke remains open.
 
 `PromotionConfigurationConcurrencyPostgresTest` is a mandatory real-PostgreSQL gate. Its current
 bounded matrix has 10 tests and must report `skipped=0`, `failures=0`, `errors=0`; a missing XML,
@@ -1247,7 +1276,7 @@ Telegram/staff-chat:
 - Guest Preview Phase 2.1: **VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY / DONE / MVP / STAGING-SMOKE-PASSED**.
 - Menu shift check: **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**; regression
   gates remain active.
-- Promotion lifecycle status audit: **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**; independent review, green Actions and staging smoke remain open.
+- Promotion lifecycle status audit: **PROMOTION LIFECYCLE STATUS AUDIT / P2 UX AND STALE HANDLING FIX IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**; the latest staging smoke remains failed, and independent review, green Actions, deploy and a new staging smoke remain open.
 - Staff Operations Slice A:
   `MANAGER PARITY + SHIFT TIME DEFAULTS / DONE / MVP / STAGING-SMOKE-PASSED`.
 - Staff Schedule Phase 1:

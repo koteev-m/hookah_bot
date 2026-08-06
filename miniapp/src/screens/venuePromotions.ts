@@ -94,6 +94,10 @@ type PromotionGroup = {
   items: VenuePromotionDto[]
 }
 
+type PromotionLoadResult =
+  | { ok: true }
+  | { ok: false; error?: ApiErrorInfo }
+
 function buildApiDeps(isDebug: boolean) {
   return { isDebug, getAccessToken, clearSession }
 }
@@ -928,6 +932,8 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
 
   const renderCard = (promotion: VenuePromotionDto) => {
     const card = el('article', { className: 'card venue-promotion-card' })
+    card.dataset.promotionId = String(promotion.id)
+    const isArchived = promotion.status === 'ARCHIVED'
     const heading = el('div', { className: 'venue-promotion-card-heading' })
     append(
       heading,
@@ -950,7 +956,10 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
     if (promotion.terms?.trim()) {
       card.appendChild(el('p', { className: 'venue-promotion-terms', text: `Условия: ${promotion.terms.trim()}` }))
     }
-    if (templateType === 'HAPPY_HOURS_PERCENT' || templateType === 'GIFT_WITH_ITEM') {
+    if (
+      (templateType === 'HAPPY_HOURS_PERCENT' || templateType === 'GIFT_WITH_ITEM') &&
+      (!isArchived || promotion.rule != null)
+    ) {
       const rule = promotion.rule
       const ruleSummary = el('div', { className: 'venue-promotion-card-rule' })
       const windowSummaries = formatWindowSummary(rule?.windows ?? [])
@@ -1013,7 +1022,7 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
         )
       }
       const issues = rule?.validationIssues?.filter(Boolean) ?? []
-      if (!rule?.readyForActivation || issues.length) {
+      if (!isArchived && (!rule?.readyForActivation || issues.length)) {
         ruleSummary.appendChild(
           el('p', {
             className: 'venue-promotion-validation',
@@ -1029,7 +1038,14 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
       }
       card.appendChild(ruleSummary)
     }
-    if (promotion.status !== 'ARCHIVED') {
+    if (isArchived) {
+      card.appendChild(
+        el('p', {
+          className: 'venue-order-sub',
+          text: 'Акция находится в архиве. Изменения и повторная публикация недоступны.'
+        })
+      )
+    } else {
       const actions = el('div', { className: 'venue-inline-actions' })
       const editButton = el('button', {
         className: 'button-secondary button-small',
@@ -1077,12 +1093,13 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
     setMutationState(mutationPending)
   }
 
-  async function load() {
-    if (inFlight || disposed) return
+  async function load(force = false): Promise<PromotionLoadResult> {
+    if (disposed) return { ok: false }
+    if (inFlight && !force) return { ok: false }
     if (!canManage) {
       refs.status.textContent = 'Раздел акций доступен владельцу или менеджеру.'
       refs.createButton.hidden = true
-      return
+      return { ok: false }
     }
     inFlight = true
     refs.status.textContent = 'Загрузка...'
@@ -1091,7 +1108,7 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
     const controller = new AbortController()
     loadAbort = controller
     const result = await venueGetPromotions(backendUrl, venueId, deps, controller.signal)
-    if (disposed || loadAbort !== controller) return
+    if (disposed || loadAbort !== controller) return { ok: false }
     inFlight = false
     loadAbort = null
     if (!result.ok) {
@@ -1099,20 +1116,24 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
       if (result.error.code !== REQUEST_ABORTED_CODE) {
         showError(result.error, () => void load())
       }
-      return
+      return { ok: false, error: result.error }
     }
     timezone = result.data.timezone || timezone
     items = result.data.items.filter((promotion) => promotionTemplateType(promotion) != null)
     menuCategories = result.data.menuCategories ?? []
     menuItems = result.data.menuItems ?? []
     refs.timezoneHint.textContent = `Часовой пояс заведения: ${timezone}`
-    if (!refs.formCard.hidden) {
+    const editedPromotion = editingId == null ? null : items.find((promotion) => promotion.id === editingId)
+    if (editingId != null && (!editedPromotion || editedPromotion.status === 'ARCHIVED')) {
+      resetForm()
+    } else if (!refs.formCard.hidden) {
       renderTargetOptions()
       renderRewardOptions()
       renderRuleSummary()
     }
     refs.status.textContent = ''
     renderList()
+    return { ok: true }
   }
 
   async function save() {
@@ -1131,8 +1152,8 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
         : await venueUpdatePromotion(backendUrl, venueId, editingId, payload, deps, controller.signal)
     if (disposed || mutationAbort !== controller) return
     mutationAbort = null
-    setMutationState(false)
     if (!result.ok) {
+      setMutationState(false)
       refs.status.textContent = ''
       if (result.error.code !== REQUEST_ABORTED_CODE) {
         showError(result.error, () => void save())
@@ -1142,6 +1163,24 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
     const wasCreate = editingId == null
     resetForm()
     await loadAfterMutation(wasCreate ? 'Черновик акции создан.' : 'Изменения сохранены.')
+    setMutationState(false)
+  }
+
+  async function refreshAfterLifecycleStale(error: ApiErrorInfo) {
+    refs.status.textContent = ''
+    const refresh = await load(true)
+    if (disposed) return
+    if (!refresh.ok) {
+      if (refresh.error?.code === REQUEST_ABORTED_CODE) return
+      refs.status.textContent = presentApiError(error, { isDebug, scope: 'venue' }).message
+      if (refresh.error) {
+        showError(refresh.error, () => void refreshAfterLifecycleStale(error))
+      } else {
+        showError(error, () => void refreshAfterLifecycleStale(error))
+      }
+      return
+    }
+    showError(error, () => void refreshAfterLifecycleStale(error))
   }
 
   async function changeStatus(
@@ -1151,6 +1190,7 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
   ) {
     if (mutationPending) return
     setMutationState(true)
+    refs.status.textContent = ''
     button.textContent = status === 'ACTIVE' ? 'Публикуем...' : 'Приостанавливаем...'
     hideError()
     mutationAbort?.abort()
@@ -1166,8 +1206,14 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
     )
     if (disposed || mutationAbort !== controller) return
     mutationAbort = null
-    setMutationState(false)
     if (!result.ok) {
+      if (result.error.code === ApiErrorCodes.PROMOTION_LIFECYCLE_STALE) {
+        await refreshAfterLifecycleStale(result.error)
+        setMutationState(false)
+        renderList()
+        return
+      }
+      setMutationState(false)
       if (result.error.code !== REQUEST_ABORTED_CODE) {
         showError(result.error, () => void changeStatus(promotion, status, button))
       }
@@ -1175,11 +1221,13 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
       return
     }
     await loadAfterMutation(status === 'ACTIVE' ? 'Акция опубликована.' : 'Акция приостановлена.')
+    setMutationState(false)
   }
 
   async function archive(promotion: VenuePromotionDto, button: HTMLButtonElement) {
     if (mutationPending || !window.confirm(`Архивировать акцию «${promotion.title}»?`)) return
     setMutationState(true)
+    refs.status.textContent = ''
     button.textContent = 'Архивируем...'
     hideError()
     mutationAbort?.abort()
@@ -1188,8 +1236,14 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
     const result = await venueArchivePromotion(backendUrl, venueId, promotion.id, deps, controller.signal)
     if (disposed || mutationAbort !== controller) return
     mutationAbort = null
-    setMutationState(false)
     if (!result.ok) {
+      if (result.error.code === ApiErrorCodes.PROMOTION_LIFECYCLE_STALE) {
+        await refreshAfterLifecycleStale(result.error)
+        setMutationState(false)
+        renderList()
+        return
+      }
+      setMutationState(false)
       if (result.error.code !== REQUEST_ABORTED_CODE) {
         showError(result.error, () => void archive(promotion, button))
       }
@@ -1198,12 +1252,12 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
     }
     if (editingId === promotion.id) resetForm()
     await loadAfterMutation('Акция архивирована.')
+    setMutationState(false)
   }
 
   async function loadAfterMutation(successMessage: string) {
-    inFlight = false
-    await load()
-    if (!refs.error.hidden) return
+    const refresh = await load(true)
+    if (!refresh.ok) return
     refs.status.textContent = successMessage
   }
 

@@ -394,6 +394,44 @@ class VenuePromotionRepositoryTest {
         }
 
     @Test
+    fun `lifecycle stale returns authoritative promotion and writes no audit`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("promotion-lifecycle-stale-no-audit")
+            val fixture = seedFixture(jdbcUrl)
+            val promotionRepository = VenuePromotionRepository(dataSource(jdbcUrl))
+            val promotion =
+                promotionRepository.createPromotion(
+                    venueId = fixture.visibleVenueId,
+                    title = "Конкурентное изменение",
+                    description = "Описание",
+                    terms = null,
+                    createdByUserId = OWNER_ID,
+                )
+
+            val stale =
+                assertNotNull(
+                    promotionRepository.mutatePromotionLifecycle(
+                        venueId = fixture.visibleVenueId,
+                        promotionId = promotion.id,
+                        expectedStatus = VenuePromotionStatus.ACTIVE,
+                        targetStatus = VenuePromotionStatus.PAUSED,
+                        actorUserId = OWNER_ID,
+                        source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
+                    ),
+                )
+
+            assertEquals(VenuePromotionLifecycleOutcome.STALE, stale.outcome)
+            assertEquals(promotion.id, stale.promotion.id)
+            assertEquals(VenuePromotionStatus.DRAFT, stale.promotion.status)
+            assertEquals(
+                VenuePromotionStatus.DRAFT,
+                promotionRepository.getPromotionForManagement(fixture.visibleVenueId, promotion.id)?.status,
+            )
+            assertTrue(readPromotionLifecycleAudits(jdbcUrl, promotion.id).isEmpty())
+            assertEquals(0, countPromotionLifecycleAudits(jdbcUrl))
+        }
+
+    @Test
     fun `status audit failure rolls back parent rules timestamps and visibility`() =
         runBlocking {
             val jdbcUrl = migratedJdbcUrl("promotion-lifecycle-status-audit-rollback")

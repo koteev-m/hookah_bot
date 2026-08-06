@@ -6,6 +6,13 @@ import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import com.hookah.platform.backend.module
+import com.hookah.platform.backend.telegram.db.VenuePromotion
+import com.hookah.platform.backend.telegram.db.VenuePromotionLifecycleMutation
+import com.hookah.platform.backend.telegram.db.VenuePromotionLifecycleOutcome
+import com.hookah.platform.backend.telegram.db.VenuePromotionLifecycleSource
+import com.hookah.platform.backend.telegram.db.VenuePromotionRepository
+import com.hookah.platform.backend.telegram.db.VenuePromotionStatus
+import com.hookah.platform.backend.telegram.db.VenuePromotionTemplateType
 import com.hookah.platform.backend.test.assertApiErrorEnvelope
 import io.ktor.client.request.delete
 import io.ktor.client.request.get
@@ -20,6 +27,10 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.server.config.MapApplicationConfig
 import io.ktor.server.testing.testApplication
+import io.mockk.coEvery
+import io.mockk.coVerify
+import io.mockk.mockkConstructor
+import io.mockk.unmockkConstructor
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
@@ -255,6 +266,125 @@ class VenuePromotionRoutesTest {
                 }
             }
         }
+
+    @Test
+    fun `stale status and archive return typed conflict without success audit`() {
+        mockkConstructor(VenuePromotionRepository::class)
+        try {
+            testApplication {
+                val jdbcUrl = buildJdbcUrl("venue-promotion-stale-routes")
+                val config = buildConfig(jdbcUrl)
+                environment { this.config = config }
+                application { module() }
+                val venueId = 1L
+                val createdAt = Instant.parse("2026-08-06T09:00:00Z")
+                val currentStatusPromotion =
+                    VenuePromotion(
+                        id = 9001L,
+                        venueId = venueId,
+                        venueName = "Venue $OWNER_ID",
+                        title = "Статус изменён параллельно",
+                        description = "Описание",
+                        terms = null,
+                        startsAt = Instant.parse("2030-05-10T18:00:00Z"),
+                        endsAt = Instant.parse("2030-05-10T22:00:00Z"),
+                        status = VenuePromotionStatus.DRAFT,
+                        createdByUserId = OWNER_ID,
+                        createdAt = createdAt,
+                        updatedAt = createdAt,
+                        templateType = VenuePromotionTemplateType.TEXT_ONLY,
+                    )
+                val currentArchivePromotion = currentStatusPromotion.copy(id = 9002L)
+
+                coEvery {
+                    anyConstructed<VenuePromotionRepository>()
+                        .getPromotionForManagement(venueId, currentStatusPromotion.id)
+                } returns currentStatusPromotion
+                coEvery {
+                    anyConstructed<VenuePromotionRepository>()
+                        .getPromotionForManagement(venueId, currentArchivePromotion.id)
+                } returns currentArchivePromotion
+                coEvery {
+                    anyConstructed<VenuePromotionRepository>().mutatePromotionLifecycle(
+                        venueId = venueId,
+                        promotionId = currentStatusPromotion.id,
+                        expectedStatus = VenuePromotionStatus.DRAFT,
+                        targetStatus = VenuePromotionStatus.ACTIVE,
+                        actorUserId = OWNER_ID,
+                        source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
+                    )
+                } returns
+                    VenuePromotionLifecycleMutation(
+                        promotion = currentStatusPromotion.copy(status = VenuePromotionStatus.PAUSED),
+                        outcome = VenuePromotionLifecycleOutcome.STALE,
+                    )
+                coEvery {
+                    anyConstructed<VenuePromotionRepository>().mutatePromotionLifecycle(
+                        venueId = venueId,
+                        promotionId = currentArchivePromotion.id,
+                        expectedStatus = VenuePromotionStatus.DRAFT,
+                        targetStatus = VenuePromotionStatus.ARCHIVED,
+                        actorUserId = OWNER_ID,
+                        source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
+                    )
+                } returns
+                    VenuePromotionLifecycleMutation(
+                        promotion = currentArchivePromotion.copy(status = VenuePromotionStatus.PAUSED),
+                        outcome = VenuePromotionLifecycleOutcome.STALE,
+                    )
+
+                client.get("/health")
+                assertEquals(venueId, seedVenueMembership(jdbcUrl, OWNER_ID, "OWNER"))
+                val token = issueToken(config, OWNER_ID)
+
+                val statusResponse =
+                    client.post("/api/venue/$venueId/promotions/${currentStatusPromotion.id}/status") {
+                        authenticated(token)
+                        contentType(ContentType.Application.Json)
+                        setBody("""{"status":"ACTIVE"}""")
+                    }
+                assertEquals(HttpStatusCode.Conflict, statusResponse.status)
+                val statusError =
+                    assertApiErrorEnvelope(statusResponse, ApiErrorCodes.PROMOTION_LIFECYCLE_STALE)
+                assertEquals(PROMOTION_LIFECYCLE_STALE_MESSAGE, statusError.error.message)
+                assertNull(statusError.error.details)
+
+                val archiveResponse =
+                    client.delete("/api/venue/$venueId/promotions/${currentArchivePromotion.id}") {
+                        authenticated(token)
+                    }
+                assertEquals(HttpStatusCode.Conflict, archiveResponse.status)
+                val archiveError =
+                    assertApiErrorEnvelope(archiveResponse, ApiErrorCodes.PROMOTION_LIFECYCLE_STALE)
+                assertEquals(PROMOTION_LIFECYCLE_STALE_MESSAGE, archiveError.error.message)
+                assertNull(archiveError.error.details)
+
+                coVerify(exactly = 1) {
+                    anyConstructed<VenuePromotionRepository>().mutatePromotionLifecycle(
+                        venueId = venueId,
+                        promotionId = currentStatusPromotion.id,
+                        expectedStatus = VenuePromotionStatus.DRAFT,
+                        targetStatus = VenuePromotionStatus.ACTIVE,
+                        actorUserId = OWNER_ID,
+                        source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
+                    )
+                }
+                coVerify(exactly = 1) {
+                    anyConstructed<VenuePromotionRepository>().mutatePromotionLifecycle(
+                        venueId = venueId,
+                        promotionId = currentArchivePromotion.id,
+                        expectedStatus = VenuePromotionStatus.DRAFT,
+                        targetStatus = VenuePromotionStatus.ARCHIVED,
+                        actorUserId = OWNER_ID,
+                        source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
+                    )
+                }
+                assertTrue(loadPromotionAudits(jdbcUrl).isEmpty())
+            }
+        } finally {
+            unmockkConstructor(VenuePromotionRepository::class)
+        }
+    }
 
     @Test
     fun `manager can manage promotions while staff and foreign venue user are denied`() =
@@ -1526,5 +1656,7 @@ class VenuePromotionRoutesTest {
         private const val OWNER_ID = 10101L
         private const val MANAGER_ID = 20202L
         private const val FOREIGN_ID = 30303L
+        private const val PROMOTION_LIFECYCLE_STALE_MESSAGE =
+            "Статус акции уже изменился. Обновите список и повторите действие."
     }
 }

@@ -103,6 +103,11 @@ export function presentApiError(
       message = error.message?.trim() ? error.message : 'Некорректные данные.'
       severity = 'warn'
       break
+    case ApiErrorCodes.PROMOTION_LIFECYCLE_STALE:
+      title = 'Статус акции изменился'
+      message = 'Статус акции уже изменился. Обновите список и повторите действие.'
+      severity = 'warn'
+      break
     case ApiErrorCodes.VENUE_SCHEDULE_NOT_CONFIGURED:
       title = 'Бронирование недоступно'
       message = 'Заведение пока не настроило график бронирования.'

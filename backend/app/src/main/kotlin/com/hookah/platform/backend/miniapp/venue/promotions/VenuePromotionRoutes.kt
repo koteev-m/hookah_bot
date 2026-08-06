@@ -3,6 +3,7 @@ package com.hookah.platform.backend.miniapp.venue.promotions
 import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.NotFoundException
+import com.hookah.platform.backend.api.PromotionLifecycleStaleException
 import com.hookah.platform.backend.miniapp.venue.VenueRole
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepository
 import com.hookah.platform.backend.miniapp.venue.requireUserId
@@ -16,6 +17,7 @@ import com.hookah.platform.backend.telegram.db.PromotionRuleTargetType
 import com.hookah.platform.backend.telegram.db.PromotionWeekdayWindow
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
 import com.hookah.platform.backend.telegram.db.VenuePromotion
+import com.hookah.platform.backend.telegram.db.VenuePromotionLifecycleOutcome
 import com.hookah.platform.backend.telegram.db.VenuePromotionLifecycleSource
 import com.hookah.platform.backend.telegram.db.VenuePromotionRepository
 import com.hookah.platform.backend.telegram.db.VenuePromotionRule
@@ -358,7 +360,7 @@ fun Route.venuePromotionRoutes(
             if (status == VenuePromotionStatus.ACTIVE) {
                 validatePromotionPeriod(current.startsAt, current.endsAt)
             }
-            val updated =
+            val mutation =
                 venuePromotionRepository.mutatePromotionLifecycle(
                     venueId = venueId,
                     promotionId = promotionId,
@@ -366,8 +368,11 @@ fun Route.venuePromotionRoutes(
                     targetStatus = status,
                     actorUserId = userId,
                     source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
-                )?.promotion ?: throw NotFoundException()
-            call.respond(VenuePromotionResponse(updated.toDto(venuePromotionRuleRepository)))
+                ) ?: throw NotFoundException()
+            if (mutation.outcome == VenuePromotionLifecycleOutcome.STALE) {
+                throw PromotionLifecycleStaleException()
+            }
+            call.respond(VenuePromotionResponse(mutation.promotion.toDto(venuePromotionRuleRepository)))
         }
 
         delete("/{promotionId}") {
@@ -382,14 +387,19 @@ fun Route.venuePromotionRoutes(
                 if (current.status == VenuePromotionStatus.ARCHIVED) {
                     current
                 } else {
-                    venuePromotionRepository.mutatePromotionLifecycle(
-                        venueId = venueId,
-                        promotionId = promotionId,
-                        expectedStatus = current.status,
-                        targetStatus = VenuePromotionStatus.ARCHIVED,
-                        actorUserId = userId,
-                        source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
-                    )?.promotion ?: throw NotFoundException()
+                    val mutation =
+                        venuePromotionRepository.mutatePromotionLifecycle(
+                            venueId = venueId,
+                            promotionId = promotionId,
+                            expectedStatus = current.status,
+                            targetStatus = VenuePromotionStatus.ARCHIVED,
+                            actorUserId = userId,
+                            source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
+                        ) ?: throw NotFoundException()
+                    if (mutation.outcome == VenuePromotionLifecycleOutcome.STALE) {
+                        throw PromotionLifecycleStaleException()
+                    }
+                    mutation.promotion
                 }
             call.respond(VenuePromotionResponse(archived.toDto(venuePromotionRuleRepository)))
         }

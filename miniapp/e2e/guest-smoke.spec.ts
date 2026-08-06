@@ -451,6 +451,18 @@ type VenuePromotionMutationFixture = {
   } | null
 }
 
+type VenuePromotionLifecycleRequestFixture = {
+  method: 'POST' | 'DELETE'
+  path: string
+  promotionId: number
+  body?: { status: 'ACTIVE' | 'PAUSED' }
+}
+
+type VenuePromotionStaleFixture = {
+  promotionId: number
+  authoritativeStatus: VenuePromotionFixture['status']
+}
+
 type VenuePromotionRewardItemFixture = {
   menuItemId: number
   name: string
@@ -3357,13 +3369,25 @@ async function mockVenuePromotionsApi(
     nowEpochMs?: number
     menuCategories?: Array<{ id: number; name: string }>
     menuItems?: Array<{ id: number; name: string; categoryId: number }>
+    statusStale?: VenuePromotionStaleFixture
+    archiveStale?: VenuePromotionStaleFixture
+    venueId?: number
+    accessVenueIds?: number[]
+    promotionListFailureRequests?: number[]
   } = {}
 ) {
   const role = options.role ?? 'OWNER'
+  const venueId = options.venueId ?? 1
+  const accessVenueIds = Array.from(new Set([...(options.accessVenueIds ?? []), venueId]))
+  const promotionListFailureRequests = new Set(options.promotionListFailureRequests ?? [])
   let promotions = [...(options.promotions ?? [])]
   let nextId = Math.max(0, ...promotions.map((item) => item.id)) + 1
   let nextRuleId = 1001
   const mutations: string[] = []
+  const lifecycleRequests: VenuePromotionLifecycleRequestFixture[] = []
+  let promotionListRequests = 0
+  let statusStaleConsumed = false
+  let archiveStaleConsumed = false
   const menuCategories = options.menuCategories ?? [{ id: 20, name: 'Кальяны' }]
   const menuItems = options.menuItems ?? [{ id: 200, name: 'Double Apple', categoryId: 20 }]
 
@@ -3416,7 +3440,7 @@ async function mockVenuePromotionsApi(
       jsonResponse({
         venues: [
           {
-            id: 1,
+            id: venueId,
             name: 'Микс',
             city: 'Москва',
             address: 'Пилотная, 1',
@@ -3431,21 +3455,19 @@ async function mockVenuePromotionsApi(
     await route.fulfill(
       jsonResponse({
         userId: 123456789,
-        venues: [
-          {
-            venueId: 1,
-            venueName: 'Микс',
-            venueCity: 'Москва',
-            venueStatus: 'PUBLISHED',
-            role,
-            permissions: role === 'STAFF' ? ['ORDER_QUEUE_VIEW'] : []
-          }
-        ]
+        venues: accessVenueIds.map((accessVenueId) => ({
+          venueId: accessVenueId,
+          venueName: accessVenueId === venueId ? 'Микс' : `Заведение ${accessVenueId}`,
+          venueCity: 'Москва',
+          venueStatus: 'PUBLISHED',
+          role,
+          permissions: role === 'STAFF' ? ['ORDER_QUEUE_VIEW'] : []
+        }))
       })
     )
   })
 
-  await page.route('**/api/guest/venue/1', async (route) => {
+  await page.route(`**/api/guest/venue/${venueId}`, async (route) => {
     const now = options.nowEpochMs ?? Date.now()
     const visiblePromotions = promotions
       .filter(
@@ -3458,7 +3480,7 @@ async function mockVenuePromotionsApi(
     await route.fulfill(
       jsonResponse({
         venue: {
-          id: 1,
+          id: venueId,
           name: 'Микс',
           city: 'Москва',
           address: 'Пилотная, 1',
@@ -3471,23 +3493,39 @@ async function mockVenuePromotionsApi(
     )
   })
 
-  await page.route('**/api/guest/venue/1/info-sections', async (route) => {
-    await route.fulfill(jsonResponse({ venueId: 1, sections: [] }))
+  await page.route(`**/api/guest/venue/${venueId}/info-sections`, async (route) => {
+    await route.fulfill(jsonResponse({ venueId, sections: [] }))
   })
 
-  await page.route('**/api/venue/1/staff-calls**', async (route) => {
+  await page.route(`**/api/venue/${venueId}/staff-calls**`, async (route) => {
     await route.fulfill(jsonResponse({ items: [] }))
   })
 
-  await page.route('**/api/venue/1/promotions**', async (route) => {
+  await page.route(`**/api/venue/${venueId}/promotions**`, async (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname
-    const statusMatch = path.match(/^\/api\/venue\/1\/promotions\/(\d+)\/status$/)
-    const itemMatch = path.match(/^\/api\/venue\/1\/promotions\/(\d+)$/)
-    if (path === '/api/venue/1/promotions' && request.method() === 'GET') {
+    const statusMatch = path.match(new RegExp(`^/api/venue/${venueId}/promotions/(\\d+)/status$`))
+    const itemMatch = path.match(new RegExp(`^/api/venue/${venueId}/promotions/(\\d+)$`))
+    const promotionsPath = `/api/venue/${venueId}/promotions`
+    if (path === promotionsPath && request.method() === 'GET') {
+      promotionListRequests += 1
+      if (promotionListFailureRequests.has(promotionListRequests)) {
+        await route.fulfill(
+          jsonResponse(
+            {
+              error: {
+                code: 'DATABASE_UNAVAILABLE',
+                message: 'Сервис временно недоступен.'
+              }
+            },
+            503
+          )
+        )
+        return
+      }
       await route.fulfill(
         jsonResponse({
-          venueId: 1,
+          venueId,
           timezone: promotionVenueTimezone,
           items: promotions,
           menuCategories,
@@ -3496,7 +3534,7 @@ async function mockVenuePromotionsApi(
       )
       return
     }
-    if (path === '/api/venue/1/promotions' && request.method() === 'POST') {
+    if (path === promotionsPath && request.method() === 'POST') {
       const body = (await request.postDataJSON()) as VenuePromotionMutationFixture
       const normalizedBody = normalizePromotionMutation(body)
       const promotion: VenuePromotionFixture = {
@@ -3513,6 +3551,28 @@ async function mockVenuePromotionsApi(
     if (statusMatch && request.method() === 'POST') {
       const promotionId = Number(statusMatch[1])
       const body = (await request.postDataJSON()) as { status: 'ACTIVE' | 'PAUSED' }
+      lifecycleRequests.push({ method: 'POST', path, promotionId, body })
+      if (
+        options.statusStale?.promotionId === promotionId &&
+        !statusStaleConsumed
+      ) {
+        statusStaleConsumed = true
+        promotions = promotions.map((item) =>
+          item.id === promotionId ? { ...item, status: options.statusStale!.authoritativeStatus } : item
+        )
+        await route.fulfill(
+          jsonResponse(
+            {
+              error: {
+                code: 'PROMOTION_LIFECYCLE_STALE',
+                message: 'Статус акции уже изменился. Обновите список и повторите действие.'
+              }
+            },
+            409
+          )
+        )
+        return
+      }
       const current = promotions.find((item) => item.id === promotionId)
       if (
         body.status === 'ACTIVE' &&
@@ -3556,6 +3616,28 @@ async function mockVenuePromotionsApi(
     }
     if (itemMatch && request.method() === 'DELETE') {
       const promotionId = Number(itemMatch[1])
+      lifecycleRequests.push({ method: 'DELETE', path, promotionId })
+      if (
+        options.archiveStale?.promotionId === promotionId &&
+        !archiveStaleConsumed
+      ) {
+        archiveStaleConsumed = true
+        promotions = promotions.map((item) =>
+          item.id === promotionId ? { ...item, status: options.archiveStale!.authoritativeStatus } : item
+        )
+        await route.fulfill(
+          jsonResponse(
+            {
+              error: {
+                code: 'PROMOTION_LIFECYCLE_STALE',
+                message: 'Статус акции уже изменился. Обновите список и повторите действие.'
+              }
+            },
+            409
+          )
+        )
+        return
+      }
       promotions = promotions.map((item) => (item.id === promotionId ? { ...item, status: 'ARCHIVED' } : item))
       mutations.push('archive')
       await route.fulfill(jsonResponse({ promotion: promotions.find((item) => item.id === promotionId) }))
@@ -3566,7 +3648,9 @@ async function mockVenuePromotionsApi(
 
   return {
     getPromotions: () => promotions,
-    getMutations: () => mutations
+    getMutations: () => mutations,
+    getLifecycleRequests: () => lifecycleRequests,
+    getPromotionListRequests: () => promotionListRequests
   }
 }
 
@@ -13394,6 +13478,287 @@ test('venue owner creates edits activates and pauses informational promotion', a
   await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await page.getByRole('button', { name: 'Открыть карточку' }).click()
   await expect(page.locator('.guest-venue-promotions')).toContainText('Обновлённое предложение для компаний.')
+})
+
+test('venue promotion pause and archive use separate confirmed lifecycle requests', async ({ page }) => {
+  const referenceInstant = '2030-01-10T12:00:00.000Z'
+  await page.clock.setFixedTime(referenceInstant)
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenuePromotionsApi(page, {
+    role: 'OWNER',
+    nowEpochMs: Date.parse(referenceInstant),
+    promotions: [
+      {
+        id: 910,
+        title: 'Активная акция для паузы',
+        description: 'Проверка отдельного status request.',
+        startsAt: '2030-01-01T00:00:00.000Z',
+        endsAt: '2030-02-01T00:00:00.000Z',
+        status: 'ACTIVE',
+        templateType: 'TEXT_ONLY',
+        rule: null
+      },
+      {
+        id: 911,
+        title: 'Приостановленная акция для архива',
+        description: 'Проверка отдельного DELETE после подтверждения.',
+        startsAt: '2030-01-01T00:00:00.000Z',
+        endsAt: '2030-02-01T00:00:00.000Z',
+        status: 'PAUSED',
+        templateType: 'TEXT_ONLY',
+        rule: null
+      }
+    ]
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Акции', exact: true }).click()
+  await expect.poll(() => api.getPromotionListRequests()).toBe(1)
+
+  await page
+    .locator('[data-promotion-id="910"]')
+    .getByRole('button', { name: 'Приостановить', exact: true })
+    .click()
+  await expect(page.locator('[data-group="paused"] [data-promotion-id="910"]')).toBeVisible()
+  expect(api.getLifecycleRequests()).toEqual([
+    {
+      method: 'POST',
+      path: '/api/venue/1/promotions/910/status',
+      promotionId: 910,
+      body: { status: 'PAUSED' }
+    }
+  ])
+  expect(api.getLifecycleRequests().filter((request) => request.method === 'DELETE')).toHaveLength(0)
+
+  let dismissedArchive = false
+  page.once('dialog', async (dialog) => {
+    expect(dialog.message()).toBe('Архивировать акцию «Приостановленная акция для архива»?')
+    dismissedArchive = true
+    await dialog.dismiss()
+  })
+  await page
+    .locator('[data-promotion-id="911"]')
+    .getByRole('button', { name: 'Архивировать', exact: true })
+    .click()
+  expect(dismissedArchive).toBe(true)
+  expect(api.getLifecycleRequests()).toHaveLength(1)
+
+  page.once('dialog', async (dialog) => {
+    expect(dialog.message()).toBe('Архивировать акцию «Приостановленная акция для архива»?')
+    await dialog.accept()
+  })
+  await page
+    .locator('[data-promotion-id="911"]')
+    .getByRole('button', { name: 'Архивировать', exact: true })
+    .click()
+  await expect(page.locator('[data-group="archived"] [data-promotion-id="911"]')).toBeVisible()
+  expect(api.getLifecycleRequests()).toEqual([
+    {
+      method: 'POST',
+      path: '/api/venue/1/promotions/910/status',
+      promotionId: 910,
+      body: { status: 'PAUSED' }
+    },
+    {
+      method: 'DELETE',
+      path: '/api/venue/1/promotions/911',
+      promotionId: 911
+    }
+  ])
+})
+
+test('venue promotion stale status and archive refresh authoritative state without false success', async ({ page }) => {
+  const referenceInstant = '2030-01-10T12:00:00.000Z'
+  await page.clock.setFixedTime(referenceInstant)
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenuePromotionsApi(page, {
+    role: 'OWNER',
+    venueId: 2,
+    accessVenueIds: [1, 2],
+    promotionListFailureRequests: [2],
+    nowEpochMs: Date.parse(referenceInstant),
+    promotions: [
+      {
+        id: 912,
+        title: 'Конфликт статуса',
+        description: 'Сервер уже архивировал акцию.',
+        startsAt: '2030-01-01T00:00:00.000Z',
+        endsAt: '2030-02-01T00:00:00.000Z',
+        status: 'ACTIVE',
+        templateType: 'TEXT_ONLY',
+        rule: null
+      },
+      {
+        id: 913,
+        title: 'Конфликт архива',
+        description: 'Сервер уже активировал акцию.',
+        startsAt: '2030-01-01T00:00:00.000Z',
+        endsAt: '2030-02-01T00:00:00.000Z',
+        status: 'DRAFT',
+        templateType: 'TEXT_ONLY',
+        rule: null
+      }
+    ],
+    statusStale: { promotionId: 912, authoritativeStatus: 'ARCHIVED' },
+    archiveStale: { promotionId: 913, authoritativeStatus: 'ACTIVE' }
+  })
+
+  await page.goto(`?mode=venue&venueId=2#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await expect(page.locator('.venue-select')).toHaveValue('2')
+  await page.getByRole('button', { name: 'Акции', exact: true }).click()
+  await expect.poll(() => api.getPromotionListRequests()).toBe(1)
+
+  const statusConflictCard = page.locator('[data-promotion-id="912"]')
+  await statusConflictCard.getByRole('button', { name: 'Редактировать', exact: true }).click()
+  await expect(page.locator('.venue-promotion-form')).toBeVisible()
+  await statusConflictCard.getByRole('button', { name: 'Приостановить', exact: true }).click()
+  await expect(
+    page.getByText('Статус акции уже изменился. Обновите список и повторите действие.', { exact: true })
+  ).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Сервис временно недоступен', exact: true })).toBeVisible()
+  await expect.poll(() => api.getPromotionListRequests()).toBe(2)
+  expect(api.getLifecycleRequests()).toEqual([
+    {
+      method: 'POST',
+      path: '/api/venue/2/promotions/912/status',
+      promotionId: 912,
+      body: { status: 'PAUSED' }
+    }
+  ])
+  await expect(page.locator('.venue-promotion-form')).toBeVisible()
+  await expect(page.getByText('Акция приостановлена.', { exact: true })).toHaveCount(0)
+  await expect(page.getByText('Акция опубликована.', { exact: true })).toHaveCount(0)
+  await expect(page.getByText('Акция архивирована.', { exact: true })).toHaveCount(0)
+  await expect(page.locator('.venue-select')).toHaveValue('2')
+  expect(new URL(page.url()).searchParams.get('venueId')).toBe('2')
+
+  await page.getByRole('button', { name: 'Повторить', exact: true }).click()
+  await expect.poll(() => api.getPromotionListRequests()).toBe(3)
+  await expect(page.locator('[data-group="archived"] [data-promotion-id="912"]')).toBeVisible()
+  await expect(page.locator('.venue-promotion-form')).toBeHidden()
+  await expect(
+    page.getByText('Статус акции уже изменился. Обновите список и повторите действие.', { exact: true })
+  ).toBeVisible()
+  expect(api.getLifecycleRequests()).toHaveLength(1)
+
+  page.once('dialog', async (dialog) => {
+    expect(dialog.message()).toBe('Архивировать акцию «Конфликт архива»?')
+    await dialog.accept()
+  })
+  await page
+    .locator('[data-promotion-id="913"]')
+    .getByRole('button', { name: 'Архивировать', exact: true })
+    .click()
+  await expect(
+    page.getByText('Статус акции уже изменился. Обновите список и повторите действие.', { exact: true })
+  ).toBeVisible()
+  await expect(page.locator('[data-group="active"] [data-promotion-id="913"]')).toBeVisible()
+  await expect.poll(() => api.getPromotionListRequests()).toBe(4)
+  expect(api.getLifecycleRequests()).toEqual([
+    {
+      method: 'POST',
+      path: '/api/venue/2/promotions/912/status',
+      promotionId: 912,
+      body: { status: 'PAUSED' }
+    },
+    {
+      method: 'DELETE',
+      path: '/api/venue/2/promotions/913',
+      promotionId: 913
+    }
+  ])
+  await expect(page.getByText('Акция приостановлена.', { exact: true })).toHaveCount(0)
+  await expect(page.getByText('Акция опубликована.', { exact: true })).toHaveCount(0)
+  await expect(page.getByText('Акция архивирована.', { exact: true })).toHaveCount(0)
+  await expect(page.locator('.venue-select')).toHaveValue('2')
+  expect(new URL(page.url()).searchParams.get('venueId')).toBe('2')
+})
+
+test('archived gift promotion is read only while active and paused readiness stays visible', async ({ page }) => {
+  const referenceInstant = '2030-01-10T12:00:00.000Z'
+  await page.clock.setFixedTime(referenceInstant)
+  await installTelegramWebApp(page, 123456789)
+  await mockVenuePromotionsApi(page, {
+    role: 'OWNER',
+    nowEpochMs: Date.parse(referenceInstant),
+    promotions: [
+      {
+        id: 914,
+        title: 'Архивный подарок',
+        description: 'Историческое описание подарочной акции.',
+        terms: 'Исторические условия.',
+        startsAt: '2030-01-01T00:00:00.000Z',
+        endsAt: '2030-02-01T00:00:00.000Z',
+        status: 'ARCHIVED',
+        templateType: 'GIFT_WITH_ITEM',
+        rule: null
+      },
+      {
+        id: 915,
+        title: 'Активный подарок с проверкой',
+        description: 'Требует заполнения правила.',
+        startsAt: '2030-01-01T00:00:00.000Z',
+        endsAt: '2030-02-01T00:00:00.000Z',
+        status: 'ACTIVE',
+        templateType: 'GIFT_WITH_ITEM',
+        rule: {
+          id: 1915,
+          version: 1,
+          windows: [],
+          target: null,
+          reward: null,
+          readyForActivation: false,
+          validationIssues: ['Добавьте расписание, условие покупки и подарок.']
+        }
+      },
+      {
+        id: 916,
+        title: 'Приостановленный подарок с проверкой',
+        description: 'Требует заполнения правила.',
+        startsAt: '2030-01-01T00:00:00.000Z',
+        endsAt: '2030-02-01T00:00:00.000Z',
+        status: 'PAUSED',
+        templateType: 'GIFT_WITH_ITEM',
+        rule: {
+          id: 1916,
+          version: 1,
+          windows: [],
+          target: null,
+          reward: null,
+          readyForActivation: false,
+          validationIssues: ['Добавьте расписание, условие покупки и подарок.']
+        }
+      }
+    ]
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Акции', exact: true }).click()
+
+  const archivedCard = page.locator('[data-promotion-id="914"]')
+  await expect(archivedCard).toContainText('Архивный подарок')
+  await expect(archivedCard).toContainText('Историческое описание подарочной акции.')
+  await expect(archivedCard).toContainText('Исторические условия.')
+  await expect(archivedCard).toContainText('2030')
+  await expect(archivedCard).toContainText('Подарок при покупке')
+  await expect(archivedCard).toContainText('Архив')
+  await expect(archivedCard).toContainText(
+    'Акция находится в архиве. Изменения и повторная публикация недоступны.'
+  )
+  await expect(archivedCard).not.toContainText('Нужно исправить перед публикацией')
+  await expect(archivedCard).not.toContainText('перед публикацией')
+  await expect(archivedCard).not.toContainText('не настроен')
+  await expect(archivedCard.getByRole('button')).toHaveCount(0)
+
+  const activeCard = page.locator('[data-promotion-id="915"]')
+  await expect(activeCard).toContainText('Нужно исправить перед публикацией')
+  await expect(activeCard).toContainText('Добавьте расписание, условие покупки и подарок.')
+  await expect(activeCard.getByRole('button', { name: 'Приостановить', exact: true })).toBeVisible()
+
+  const pausedCard = page.locator('[data-promotion-id="916"]')
+  await expect(pausedCard).toContainText('Нужно исправить перед публикацией')
+  await expect(pausedCard).toContainText('Добавьте расписание, условие покупки и подарок.')
+  await expect(pausedCard.getByRole('button', { name: 'Опубликовать', exact: true })).toBeVisible()
 })
 
 test('venue owner configures happy hours windows and targets while invalid activation is rejected', async ({ page }) => {

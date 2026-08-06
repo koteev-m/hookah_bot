@@ -147,6 +147,13 @@ class MenuShiftCheckStaleException :
         message = "Меню изменилось. Обновите проверку и повторите подтверждение.",
     )
 
+class PromotionLifecycleStaleException :
+    ApiException(
+        code = ApiErrorCodes.PROMOTION_LIFECYCLE_STALE,
+        httpStatus = HttpStatusCode.Conflict,
+        message = "Статус акции уже изменился. Обновите список и повторите действие.",
+    )
+
 class StaffProfileLinkConflictException(
     message: String,
     details: JsonObject,

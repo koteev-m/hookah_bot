@@ -1,6 +1,6 @@
 # Mini App Launch Smoke Checklist
 
-Дата: 2026-08-05.
+Дата: 2026-08-06.
 
 Цель: зафиксировать launch smoke/e2e coverage для core Mini App сценариев без изменения бизнес-логики. В `miniapp/package.json` есть `dev`, `build`, `preview` и минимальный browser smoke `e2e:smoke`. Поэтому стратегия на этот шаг гибридная:
 
@@ -854,6 +854,16 @@ Repeat as Template Phase 1:
 - do not use `STAGING-SMOKE-PASSED` until that record is closed.
 
 Simple Venue Promotions Phase 1 (`DONE / MVP / STAGING-SMOKE-PASSED`; keep in regression):
+
+Current lifecycle correction: **PROMOTION LIFECYCLE STATUS AUDIT / P2 UX AND STALE HANDLING FIX IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. The latest lifecycle staging smoke remains failed; rerun it only after independent review, green Actions and deploy.
+
+Preconditions before Guest visibility checks:
+
+- venue status is `PUBLISHED`;
+- subscription is Guest-available;
+- Guest catalog and venue detail open before a lifecycle mutation;
+- `SUSPENDED_BY_PLATFORM` means `BLOCKED_BY_ENVIRONMENT`, not a promotion regression. Do not
+  reactivate the subscription or mutate billing during this smoke.
 
 1. Owner opens Venue Mode → `Акции`, creates a dated draft and sees it in `Черновики`.
 2. Draft is absent from Guest venue detail.
