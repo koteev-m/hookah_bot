@@ -4,6 +4,14 @@
 
 > Historical audit snapshot. Some P0/P1 findings below were fixed after this read-only audit.
 >
+> Current correction as of 2026-08-06: Simple Venue Promotions Phase 1 and Happy Hours Percent
+> remain staging-closed. **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE /
+> MVP / STAGING-SMOKE-PASSED** and **VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / DONE /
+> MVP / STAGING-SMOKE-PASSED** are also closed. Historical rows below that call simple promotions,
+> Venue Mini App promotion management or promotion visibility missing/future are superseded for
+> these bounded scopes. Promotion create/config edit audit, broader dangerous-action audit,
+> Promotion Compatibility Policy and the documented tabs P2 list remain open.
+>
 > Current correction as of 2026-06-03: CORS methods, Mini App staff call `tableSessionId`, fallback WebApp command contract, active order session/tab scoping, Venue Mini App full bill parity, bookings screens, and STAFF close bill/order policy have been addressed in code. Use `docs/UPDATED_PRODUCT_AI_ROADMAP.md` and `docs/audit/MINI_APP_LAUNCH_SMOKE_CHECKLIST.md` for current release status.
 >
 > Current correction as of 2026-06-30: Mini App mutation / operational verification closure pack is CLOSED / code-test verification passed. The old CORS mutation-method, Mini App staff-call `tableSessionId`, Mini App staff-call staff-chat notification, and fallback quick-order payload claims below are stale/superseded by current code and focused regression coverage. No staging smoke is claimed by this correction.

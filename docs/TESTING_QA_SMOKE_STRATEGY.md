@@ -23,9 +23,9 @@ Current practice:
   `GIFT_WITH_ITEM BOT/MINIAPP PARITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`.
   GitHub Actions and staging cross-surface smoke remain required.
 - Promotion lifecycle status audit is
-  **PROMOTION LIFECYCLE STATUS AUDIT / P2 UX AND STALE HANDLING FIX IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
-  The latest staging smoke remains failed. Independent review, green Actions, deploy and a new
-  staging Mini App/Telegram smoke remain required before release.
+  **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**.
+  This closes only promotion status/archive lifecycle audit; broader dangerous-action coverage
+  remains partial.
 - Venue Mini App Guest Preview Phase 2.1 is **VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY / DONE / MVP / STAGING-SMOKE-PASSED**. Focused preview/Guest/RBAC/promotion backend tests, compile/lint, Mini App build and deterministic browser smoke `95/95` are green; GitHub Actions were green, staging deploy completed and manual staging smoke passed for the unified contract.
 - Menu shift check is **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**.
   OWNER/MANAGER use an own-venue local draft and one atomic availability batch; Staff individual
@@ -713,7 +713,7 @@ review, GitHub Actions and staging remain open.
 
 ### Venue Promotions Current/Archived Tabs UX local quality gate
 
-Status: **VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**.
+Status: **VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / DONE / MVP / STAGING-SMOKE-PASSED**.
 
 Required deterministic browser regression proves:
 
@@ -747,11 +747,21 @@ CI=1 TZ=UTC MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke
 Current local evidence: Mini App production build passed and the full deterministic browser smoke
 passed `136/136`. No backend production file changed, so backend selectors were not rerun.
 
+Staging evidence passed for default `Текущие`, current/archive partition with one list visible,
+mouse and keyboard tabs, pause staying current, cancel archive preserving status, confirmed archive
+moving the refreshed card to `Архив`, archived read-only/no-readiness behavior, Owner/Manager
+access, Staff denial, venue-switch isolation and cleanup. Empty-state behavior is additionally
+covered by deterministic automated tests. This does not claim search, counts, pagination or a
+complete dataset beyond the existing at-most-`100` current and at-most-`100` archived response.
+
 ### Promotion Lifecycle Status Audit quality gate
 
-Status: **PROMOTION LIFECYCLE STATUS AUDIT / P2 UX AND STALE HANDLING FIX IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+Status: **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**.
 
-The latest staging smoke remains **FAILED**; local validation does not close or replace that gate.
+Current correction: the repeated staging smoke passed. Preserve the historical first failed smoke:
+pause had applied correctly, a separate archive request followed, and Guest catalog was unavailable
+because the venue subscription was `SUSPENDED_BY_PLATFORM`. Guest availability was restored before
+the repeated Guest smoke; this subscription incident is not a promotion defect.
 
 Required regression proves:
 
@@ -812,14 +822,52 @@ CI=1 TZ=UTC MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke
 
 Current local P2 correction evidence: `VenuePromotionRoutesTest` `11/11`,
 `VenuePromotionRepositoryTest` `35/35`, Kotlin compile and ktlint, Mini App production build and
-the full deterministic browser smoke `134/134` passed. This is local evidence only; the failed
-staging smoke remains open.
+the full deterministic browser smoke `134/134` passed.
+
+Staging evidence passed for Owner Mini App status/archive, Manager status transition, Staff and
+foreign-venue denial, Telegram activate/pause/archive, Mini App ↔ Telegram parity, Happy Hours and
+Gift lifecycle regression, exactly-one audit, no-op without duplicate audit,
+actor/source/action/payload privacy, Guest `ACTIVE`/`PAUSED`/`ARCHIVED` visibility, Guest catalog
+and detail availability throughout the repeated lifecycle check, and cleanup.
 
 `PromotionConfigurationConcurrencyPostgresTest` is a mandatory real-PostgreSQL gate. Its current
 bounded matrix has 10 tests and must report `skipped=0`, `failures=0`, `errors=0`; a missing XML,
 zero-test run or Testcontainers skip is a failed security gate. The ordinary release-critical
 selector must also execute `VenuePromotionRoutesTest`, `VenuePromotionRepositoryTest` and
 `AuditLogRepositoryTest` with nonzero, non-skipped results.
+
+### STAFF ROLE / REMOVAL AUDIT target-identity privacy gate (future)
+
+This acceptance gate precedes every runtime change for
+`IMPLEMENT_DANGEROUS_ACTION_AUDIT_SLICE_NEXT — STAFF ROLE / REMOVAL AUDIT`.
+
+Required read-only precondition:
+
+- inspect the current runtime/schema and name an existing expressly permitted dedicated target-column
+  audit schema or an existing opaque venue-scoped member reference, including its exact canonical
+  name and source;
+- if neither exists, stop without runtime changes and return
+  `TARGET_AUDIT_IDENTIFIER_DECISION_REQUIRED`. The stop report must list the target identifiers that
+  actually exist, why each is safe or unsafe, the minimum product/schema decision required, and the
+  runtime files not changed. No migration follows automatically; it requires a separate
+  product/schema decision.
+
+Successful future acceptance must prove:
+
+- actor identity is only `audit_log.actor_user_id`, with no actor identity duplicated in
+  `audit_log.payload_json`;
+- target identity uses only the exact existing canonical identifier and source named by the passed
+  gate in its canonical permitted placement; no target field or placeholder is allowed before that
+  decision;
+- payload otherwise contains only `venueId`, `oldRole`, `newRole` only for a role change, and
+  `source`;
+- no `venue_members.user_id`, `users.telegram_user_id`, raw Telegram ID alias such as
+  `targetUserId`, `memberId` or `userRef`, display name, username, phone, invite code/handle/link,
+  or self-made Telegram-ID hash/HMAC appears in payloads, custom logs, error details or custom audit
+  metadata;
+- there is no migration, new hash/HMAC identifier, raw-ID persistence, silent omission of target
+  identity, display-name/username substitute or new member-reference model used to bypass
+  `TARGET_AUDIT_IDENTIFIER_DECISION_REQUIRED`.
 
 ### Promotion Compatibility Policy audit and future quality gate
 
@@ -1312,8 +1360,8 @@ Telegram/staff-chat:
 - Guest Preview Phase 2.1: **VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY / DONE / MVP / STAGING-SMOKE-PASSED**.
 - Menu shift check: **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**; regression
   gates remain active.
-- Venue Promotions Current/Archived Tabs UX: **VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**; independent review, green Actions, deploy and staging UX smoke remain open.
-- Promotion lifecycle status audit: **PROMOTION LIFECYCLE STATUS AUDIT / P2 UX AND STALE HANDLING FIX IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**; the latest staging smoke remains failed, and independent review, green Actions, deploy and a new staging smoke remain open.
+- Venue Promotions Current/Archived Tabs UX: **VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / DONE / MVP / STAGING-SMOKE-PASSED**.
+- Promotion lifecycle status audit: **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**; broader dangerous-action coverage remains partial.
 - Staff Operations Slice A:
   `MANAGER PARITY + SHIFT TIME DEFAULTS / DONE / MVP / STAGING-SMOKE-PASSED`.
 - Staff Schedule Phase 1:

@@ -2,7 +2,7 @@
 
 Дата актуализации: 2026-08-06.
 
-Статус: **current product reference / SPEC UPDATED**. Runtime-фичи growth/retention не считаются release-ready, пока для них нет требуемого CI/staging evidence. Guest visit/order history foundation, Post-Visit Feedback MVP, Guest Favorites Phase 1 and Simple Venue Promotions Phase 1 are **DONE / MVP / STAGING-SMOKE-PASSED**. Repeat as Template Phase 1 is **MVP IMPLEMENTED / LOCAL VALIDATION PASSED / DEFERRED MANUAL SMOKE**; its environment-dependent production-readiness gate remains open in [`REPEAT-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#repeat-manual-001), while independent bounded development may continue. Executable Promotions Phase 2 / Happy Hours Percent is **DONE / STAGING-SMOKE-PASSED**. Gift parity is **GIFT_WITH_ITEM BOT/MINIAPP PARITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**; CI and staging evidence remain open. Promotion status/archive audit is **PROMOTION LIFECYCLE STATUS AUDIT / P2 UX AND STALE HANDLING FIX IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**; the latest staging smoke remains failed. Broader retention loops and dangerous-action audit remain partial/future.
+Статус: **current product reference / SPEC UPDATED**. Runtime-фичи growth/retention не считаются release-ready, пока для них нет требуемого CI/staging evidence. Guest visit/order history foundation, Post-Visit Feedback MVP, Guest Favorites Phase 1 and Simple Venue Promotions Phase 1 are **DONE / MVP / STAGING-SMOKE-PASSED**. Repeat as Template Phase 1 is **MVP IMPLEMENTED / LOCAL VALIDATION PASSED / DEFERRED MANUAL SMOKE**; its environment-dependent production-readiness gate remains open in [`REPEAT-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#repeat-manual-001), while independent bounded development may continue. Executable Promotions Phase 2 / Happy Hours Percent is **DONE / STAGING-SMOKE-PASSED**. Gift parity is **GIFT_WITH_ITEM BOT/MINIAPP PARITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**; CI and staging evidence remain open. Promotion lifecycle status/archive audit is **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Venue promotions tabs are **VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / DONE / MVP / STAGING-SMOKE-PASSED**. Broader retention loops and dangerous-action audit remain partial/future.
 
 ## Core Rule
 
@@ -46,13 +46,20 @@ Current implementation is **partial**:
 - Closure evidence includes focused backend favorites tests, `compileKotlin`, `ktlintCheck`, Mini App build, full browser e2e smoke `62/62`, green GitHub Actions and manual staging smoke for catalog/detail/Account, two-user isolation, unavailable filtering/restoration, Bot/Mini App synchronization and both Telegram entrypoints.
 - Booking `SEATED`, order close and table-session close signals exist as foundations for visit history; no-show remains a non-visit booking outcome.
 - Simple Venue Promotions Phase 1 is **DONE / MVP / STAGING-SMOKE-PASSED**. Venue Owner/Manager use the Venue Mini App to list, create, edit, activate, pause and archive informational `TEXT_ONLY` promotions; Staff is hidden and denied server-side. Rule-backed promotion templates remain in their existing Telegram flows and cannot be mutated through this focused API.
-- Venue promotions list tabs UX is **VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**. `Текущие` contains loaded `DRAFT`, `ACTIVE` and `PAUSED` promotions; `Архив` contains loaded `ARCHIVED` promotions. Only one panel is visible, neither tab shows a numeric count, and each panel has its own empty state.
+- Venue promotions list tabs UX is **VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / DONE / MVP / STAGING-SMOKE-PASSED**. `Текущие` contains loaded `DRAFT`, `ACTIVE` and `PAUSED` promotions; `Архив` contains loaded `ARCHIVED` promotions. Only one panel is visible, neither tab shows a numeric count, and each panel has its own empty state.
 - Authoritative same-venue refresh, including `STALE`, preserves the selected tab. Activation and pause stay in `Текущие`; archive moves the refreshed card to `Архив`. Venue/account switch disposes the old request and screen data and resets the new screen to `Текущие`.
+- Tabs implement `tablist`, `tab`, `tabpanel`, `aria-selected`, roving `tabindex`, Arrow Left/Right,
+  Home/End and visible focus styles. Archived cards preserve title, description, terms, period,
+  template and status with neutral archived copy, are read-only, and have no lifecycle actions or
+  publication-readiness validation. A full archived rule-configuration viewer is not implemented.
 - The tabs use the existing management response only. Its existing current/archive collection limit `100` remains unchanged; database-wide totals, pagination, `hasMore`, cursor, server-side filtering or a separate/lazy archive endpoint require separate product evidence and are not implied by this frontend slice.
 - Guest venue detail shows only `ACTIVE` promotions inside their current period after the existing `PUBLISHED` venue and guest/subscription availability checks. Draft, paused, archived, future and expired promotions are not disclosed.
 - Mini App and Telegram reuse the existing `venue_promotions` schema and `VenuePromotionRepository`; no migration, parallel model or discount engine was added. Informational promotions do not change order totals or send marketing notifications.
 - Promotion status/archive writes in Venue Mini App and Telegram now use one authoritative repository transaction. Parent status, currently synchronized rule statuses and exactly one `VENUE_PROMOTION_STATUS_CHANGED` or `VENUE_PROMOTION_ARCHIVED` audit commit together; audit failure rolls the lifecycle write back.
 - Actor and `VENUE_MINI_APP` / `TELEGRAM_BOT` source are server-derived. The safe audit payload is limited to venue/promotion/template identity, old/new status, source and deterministic rule id/version/old/new status rows. No-op, stale/repeated, denied, invalid/not-found and rollback paths create no success audit.
+- Mini App lifecycle `STALE` returns HTTP `409`, code `PROMOTION_LIFECYCLE_STALE` and message
+  `Статус акции уже изменился. Обновите список и повторите действие.`. The client shows no
+  false success, reloads the authoritative list once and never retries the mutation automatically.
 - The Happy Hours percentage Phase 2 slice is **DONE / STAGING-SMOKE-PASSED**. Owner/Manager can configure title, description, terms, parent date range, venue-timezone weekday windows, one item/category target, percentage `1..100` and lifecycle in Venue Mini App; Staff is hidden and denied.
 - Guest Mini App and Telegram route the same current-price cart through `OrdersRepository` and the shared `PromotionRuleEngine`. Preview is side-effect free; submit revalidates time, lifecycle, current menu/option prices and availability, session/tab authorization, persists one immutable application snapshot and is idempotent.
 - Staging smoke covered creation and activation validation, weekday/time windows, item/category targets, current price, selected-option delta, cart preview, submit recalculation, persisted bill/History, no stacking, manual-discount rejection, Owner/Manager/Staff RBAC, Bot/Mini App parity and `TEXT_ONLY` regression.
@@ -312,10 +319,10 @@ Broader Growth smoke remains future:
 - Favorite venues Phase 1: `DONE / MVP / STAGING-SMOKE-PASSED`; favorite menu items/options remain `FUTURE`.
 - Repeat as Template Phase 1: `MVP IMPLEMENTED / LOCAL VALIDATION PASSED / DEFERRED MANUAL SMOKE`; [`REPEAT-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#repeat-manual-001) remains open. Persistent template library remains `FUTURE`.
 - Simple Venue Promotions Phase 1: `DONE / MVP / STAGING-SMOKE-PASSED`.
-- Venue Promotions Current/Archived Tabs UX: `VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / MVP IMPLEMENTED / LOCAL VALIDATION PASSED`.
+- Venue Promotions Current/Archived Tabs UX: `VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / DONE / MVP / STAGING-SMOKE-PASSED`.
 - Executable Promotions Phase 2 / Happy Hours Percent: `DONE / STAGING-SMOKE-PASSED`.
 - Gift parity: `GIFT_WITH_ITEM BOT/MINIAPP PARITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`; CI/staging gate remains open.
-- Promotion lifecycle status audit: `PROMOTION LIFECYCLE STATUS AUDIT / P2 UX AND STALE HANDLING FIX IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`; the latest staging smoke remains failed, and independent review, CI, deploy and a new staging smoke remain open.
+- Promotion lifecycle status audit: `DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE / MVP / STAGING-SMOKE-PASSED`; this closes only status/archive lifecycle audit, not the broader dangerous-action audit.
 - Reviews/post-visit feedback: `DONE / MVP / STAGING-SMOKE-PASSED`.
 - Manual `5/5` public review link CTA: `DONE / MVP`; automated review prompts and public review automation remain `FUTURE / disabled`.
 - Low-rating manual follow-up through exact `VENUE_CHAT`: `DONE / MVP`; Platform feedback analytics dashboard remains `FUTURE`.
@@ -327,9 +334,9 @@ Broader Growth smoke remains future:
 
 Guest Favorites Phase 1 is staging-closed. Repeat as Template Phase 1 is implemented and locally validated, while its environment-dependent smoke remains deferred in [`REPEAT-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#repeat-manual-001). That open feature-specific production-readiness gate does not block an independent bounded runtime block. Read-only code verification also shows that the previously recommended Order Session Tab Core Hardening is already represented by current table-session active-order uniqueness, tab-scoped guest routes and regression coverage; do not reopen it without concrete regression evidence.
 
-Current bounded frontend block: **VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**. It partitions the already loaded management response into mutually exclusive accessible `Текущие` and `Архив` panels without counts and changes no backend, lifecycle, audit, pricing, Happy Hours or Gift contract.
+Closed bounded frontend block: **VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / DONE / MVP / STAGING-SMOKE-PASSED**. It partitions the already loaded management response into mutually exclusive accessible `Текущие` and `Архив` panels without counts and changes no backend, lifecycle, audit, pricing, Happy Hours or Gift contract.
 
-Implemented bounded runtime block: **PROMOTION LIFECYCLE STATUS AUDIT / P2 UX AND STALE HANDLING FIX IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**:
+Closed bounded runtime block: **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**:
 
 - preserves the existing `DRAFT` / `ACTIVE` / `PAUSED` / `ARCHIVED` lifecycle and routes all current Mini App and Telegram status/archive writers through one repository mutation;
 - commits parent status, synchronized rule status and one safe actor-bearing audit on the same JDBC connection and transaction, or rolls them all back;
@@ -342,6 +349,33 @@ Implemented bounded runtime block: **PROMOTION LIFECYCLE STATUS AUDIT / P2 UX AN
 Simple Venue Promotions Phase 1 remains `DONE / MVP / STAGING-SMOKE-PASSED`. The audit slice reuses
 the current schema and repository with no migration. Promotion create/config edit audit and broader
 dangerous-action audit coverage remain future.
+
+Current staging correction: the repeated lifecycle smoke passed for Owner Mini App status/archive,
+Manager transition, Staff and foreign-venue denial, Telegram activate/pause/archive, Mini App ↔
+Telegram parity, Happy Hours and Gift lifecycle regression, exactly-one audit, no-op without a
+duplicate audit, actor/source/action/payload privacy, Guest `ACTIVE`/`PAUSED`/`ARCHIVED` visibility,
+Guest catalog/detail availability and cleanup. Guest availability was restored before the repeated
+Guest smoke. The historical first failed smoke remains relevant: promotion pause succeeded, a
+separate archive request followed, and Guest catalog was unavailable because the subscription was
+`SUSPENDED_BY_PLATFORM`. That subscription incident was environmental and is not a promotion
+defect.
+
+Current tabs staging evidence passed for default `Текущие`, current/archive partition,
+one visible list, mouse and keyboard tabs, pause staying current, archive cancel preserving status,
+confirmed archive moving the card after authoritative refresh, archived read-only/no-readiness
+behavior, Owner/Manager access, Staff denial, venue-switch isolation, automated empty-state
+coverage and cleanup. The management API still returns at most `100` current and `100` archived
+records; no totals, counts, pagination, `hasMore`, cursor or all-cardinality completeness is claimed.
+
+Open P2/future remains unchanged: promotion create/config edit audit, audit payload
+cardinality/summary policy, archived rule configuration viewer, menu price/archive audit,
+`IMPLEMENT_DANGEROUS_ACTION_AUDIT_SLICE_NEXT — STAFF ROLE / REMOVAL AUDIT` (it begins with the
+target-audit-identifier privacy gate and stops before runtime changes if no allowed identifier
+exists; see `docs/SECURITY_RBAC_MATRIX.md` and `docs/UPDATED_PRODUCT_AI_ROADMAP.md`), force-close/
+session audit, broader audit viewer and Promotion Compatibility Policy; plus pre-loading empty-state
+correctness, duplicate promotion-ID reconciliation between current/archive queries, a non-color
+selected-tab indicator, complete ArrowLeft/End/roving-tabindex e2e coverage and pagination/total/
+`hasMore` only when real cardinality requires it.
 
 ## Executable Promotions Phase 2
 

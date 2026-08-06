@@ -4,6 +4,14 @@
 
 > Historical audit snapshot. The P0/P1 list in this file is not the current backlog.
 >
+> Current correction as of 2026-08-06: Simple Venue Promotions Phase 1 and Happy Hours Percent
+> remain staging-closed. **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE /
+> MVP / STAGING-SMOKE-PASSED** and **VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / DONE /
+> MVP / STAGING-SMOKE-PASSED** are now closed. Historical rows that classify simple promotions or
+> Venue Mini App promotion management as future are superseded only for these bounded scopes; the
+> broader dangerous-action audit, promotion create/config edit audit, compatibility policy and tabs
+> P2 follow-ups remain open.
+>
 > Current correction as of 2026-08-05: the historical Platform Owner guest-QR escape gaps below are
 > superseded. **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / DONE / MVP /
 > STAGING-SMOKE-PASSED** is closed with `NO_MIGRATION` after commit/push, green Actions for the

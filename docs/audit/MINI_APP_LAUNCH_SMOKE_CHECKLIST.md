@@ -801,7 +801,7 @@ Use this checklist after any order/session/tab, bill, tab, staff-chat order-card
 
 ## 11. Guest History And Future Growth/Retention Smoke Checklist
 
-Use the History, Feedback, Favorites and Promotions sections after changes to their implemented slices. Current overall status is `SPEC UPDATED / PARTIAL-FUTURE` in `docs/GROWTH_RETENTION.md`, with Guest History Foundation, Post-Visit Feedback MVP, venue-only Guest Favorites Phase 1, Simple Venue Promotions Phase 1 and Happy Hours Percent already `DONE / STAGING-SMOKE-PASSED`. Repeat is locally validated, but its environment-dependent manual scenarios are not passed. Gift parity is `GIFT_WITH_ITEM BOT/MINIAPP PARITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`; keep it in local/CI regression and run independent review and staging smoke before release.
+Use the History, Feedback, Favorites and Promotions sections after changes to their implemented slices. Current overall status is `SPEC UPDATED / PARTIAL-FUTURE` in `docs/GROWTH_RETENTION.md`, with Guest History Foundation, Post-Visit Feedback MVP, venue-only Guest Favorites Phase 1, Simple Venue Promotions Phase 1, Happy Hours Percent, Promotion Lifecycle Status Audit and Venue Promotions Current/Archived Tabs UX already `DONE / STAGING-SMOKE-PASSED`. Repeat is locally validated, but its environment-dependent manual scenarios are not passed. Gift parity is `GIFT_WITH_ITEM BOT/MINIAPP PARITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`; keep it in local/CI regression and run independent review and staging smoke before release.
 
 History regression:
 1. New guest sees empty History state.
@@ -855,7 +855,7 @@ Repeat as Template Phase 1:
 
 Simple Venue Promotions Phase 1 (`DONE / MVP / STAGING-SMOKE-PASSED`; keep in regression):
 
-Current list UX: **VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**.
+Current list UX: **VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / DONE / MVP / STAGING-SMOKE-PASSED**.
 
 - `Текущие` is the default accessible tab and shows loaded `DRAFT`, `ACTIVE` and `PAUSED`
   promotions; `Архив` shows loaded `ARCHIVED` promotions. Tabs have no numeric counts and only one
@@ -874,7 +874,25 @@ Current list UX: **VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / MVP IM
   `100` is unchanged; totals, pagination, `hasMore`, cursor, server-side filtering or a
   separate/lazy archive endpoint remain a future follow-up.
 
-Current lifecycle correction: **PROMOTION LIFECYCLE STATUS AUDIT / P2 UX AND STALE HANDLING FIX IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. The latest lifecycle staging smoke remains failed; rerun it only after independent review, green Actions and deploy.
+Passed staging evidence: default `Текущие`; correct current/archive partition; one list at a
+time; mouse and keyboard tabs; pause staying current; canceled archive preserving status;
+confirmed archive moving the card after authoritative refresh; archived read-only card without
+readiness warning; Owner/Manager access; Staff denial; venue-switch isolation; cleanup. Empty-state
+coverage is confirmed by deterministic automated tests. Search, counts and pagination were not
+part of this smoke.
+
+Current lifecycle correction: **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**.
+
+The repeated lifecycle staging smoke passed for Owner Mini App status/archive, Manager status
+transition, Staff and foreign-venue denial, Telegram activate/pause/archive, Mini App ↔ Telegram
+parity, Happy Hours and Gift lifecycle regression, exactly-one audit, no-op without duplicate audit,
+actor/source/action/payload privacy, Guest `ACTIVE`/`PAUSED`/`ARCHIVED` visibility, Guest catalog
+and detail availability, and cleanup. Guest-available subscription state was restored before the
+repeated Guest smoke.
+
+Historical first failed smoke remains recorded: promotion pause was correct; a separate archive
+request followed; Guest catalog was unavailable because the subscription was
+`SUSPENDED_BY_PLATFORM`. That subscription incident was environmental, not a promotion defect.
 
 Preconditions before Guest visibility checks:
 

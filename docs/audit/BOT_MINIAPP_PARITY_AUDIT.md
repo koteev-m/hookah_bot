@@ -4,6 +4,13 @@
 
 > Historical/partial snapshot. Not source of truth without checking `docs/UPDATED_PRODUCT_AI_ROADMAP.md`, `docs/audit/MINI_APP_LAUNCH_SMOKE_CHECKLIST.md` and current code.
 >
+> Current correction as of 2026-08-06: Simple Venue Promotions Phase 1, Happy Hours Percent,
+> **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE / MVP /
+> STAGING-SMOKE-PASSED** and **VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / DONE / MVP /
+> STAGING-SMOKE-PASSED** supersede historical rows below that call Venue Mini App promotion
+> management missing or Bot-only. This does not claim a dedicated Guest promotions feed, search,
+> pagination, promotion create/config audit or a complete dangerous-action audit.
+>
 > Current correction as of 2026-06-03: several P1 gaps described below were later fixed or changed by product decision. In particular, STAFF close bill/order is allowed in Mini App, manager/owner bill controls exist in Mini App, booking screens exist, guest history/favorites exist, pre-QR guest cards no longer expose structured order menu, and info/photo-menu media is served through backend proxy.
 > Additional correction: STAFF booking management is split from order status updates. STAFF can view bookings and mark arrived/no-show; confirm/cancel/change/message/settings are MANAGER/OWNER-only.
 > Additional correction as of 2026-06-16: Guest/Menu Options & Flavors parity is CLOSED after staging smoke. Guest Bot and Guest Mini App use structured selected options; Venue Mini App supports item-scoped flavor CRUD, item-level and flavor-level stop-list, and hookah-only shared `Добавить базовые вкусы`.
