@@ -2,6 +2,8 @@ package com.hookah.platform.backend.miniapp.venue.menu
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.api.InvalidInputException
+import com.hookah.platform.backend.api.MENU_ITEM_DELETE_BLOCKED_BY_FIXED_REWARD_MESSAGE
+import com.hookah.platform.backend.api.MenuItemDeleteBlockedByFixedRewardException
 import com.hookah.platform.backend.api.MenuShiftCheckStaleException
 import com.hookah.platform.backend.api.NotFoundException
 import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
@@ -455,6 +457,84 @@ class VenueMenuRepositoryTest {
         }
 
     @Test
+    fun `fixed reward blocks repeated item delete without state changes or audit`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("venue-menu-item-delete-fixed-reward")
+            val venueId = seedVenue(jdbcUrl)
+            val repository = VenueMenuRepository(dataSource(jdbcUrl))
+            val fixture = createMenuFixture(repository, venueId)
+            val ruleId =
+                seedGiftRewardRule(
+                    jdbcUrl = jdbcUrl,
+                    venueId = venueId,
+                    primaryRewardItemId = fixture.firstItem.id,
+                    rewardMode = "FIXED_ITEM",
+                    optionItemIds = emptyList(),
+                )
+            val before = readGiftRuleSnapshot(jdbcUrl, ruleId)
+
+            repeat(2) {
+                val error =
+                    assertFailsWith<MenuItemDeleteBlockedByFixedRewardException> {
+                        repository.deleteItem(
+                            venueId = venueId,
+                            itemId = fixture.firstItem.id,
+                            actorUserId = AUDIT_ACTOR_ID,
+                            source = MenuItemDeleteSource.VENUE_MINI_APP,
+                        )
+                    }
+                assertEquals(MENU_ITEM_DELETE_BLOCKED_BY_FIXED_REWARD_MESSAGE, error.message)
+            }
+
+            assertTrue(repository.itemExists(venueId, fixture.firstItem.id))
+            assertEquals(before, readGiftRuleSnapshot(jdbcUrl, ruleId))
+            assertTrue(menuItemDeleteAudits(jdbcUrl).isEmpty())
+            val safeMessage = MENU_ITEM_DELETE_BLOCKED_BY_FIXED_REWARD_MESSAGE
+            assertFalse(safeMessage.contains("Private promotion title"))
+            assertFalse(safeMessage.contains(ruleId.toString()))
+            assertFalse(safeMessage.contains("SQL", ignoreCase = true))
+            assertFalse(safeMessage.contains("telegram", ignoreCase = true))
+        }
+
+    @Test
+    fun `primary choice reward item delete rehomes reward and writes exactly one audit`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("venue-menu-item-delete-choice-primary")
+            val venueId = seedVenue(jdbcUrl)
+            val repository = VenueMenuRepository(dataSource(jdbcUrl))
+            val fixture = createMenuFixture(repository, venueId)
+            val ruleId =
+                seedGiftRewardRule(
+                    jdbcUrl = jdbcUrl,
+                    venueId = venueId,
+                    primaryRewardItemId = fixture.firstItem.id,
+                    rewardMode = "CHOICE_ITEMS",
+                    optionItemIds = listOf(fixture.firstItem.id, fixture.secondItem.id),
+                )
+            val before = readGiftRuleSnapshot(jdbcUrl, ruleId)
+
+            assertTrue(
+                repository.deleteItem(
+                    venueId = venueId,
+                    itemId = fixture.firstItem.id,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuItemDeleteSource.VENUE_MINI_APP,
+                ),
+            )
+
+            assertFalse(repository.itemExists(venueId, fixture.firstItem.id))
+            val after = readGiftRuleSnapshot(jdbcUrl, ruleId)
+            assertEquals(before.version + 1, after.version)
+            assertEquals(before.status, after.status)
+            assertEquals(before.rewardId, after.rewardId)
+            assertEquals("CHOICE_ITEMS", after.rewardMode)
+            assertEquals(fixture.secondItem.id, after.primaryRewardItemId)
+            assertEquals(listOf(fixture.secondItem.id), after.optionItemIds)
+            val audit = menuItemDeleteAudits(jdbcUrl).single()
+            assertAffectedPromotionRules(audit.payload, listOf(ruleId))
+        }
+
+    @Test
     fun `item delete audits exact sorted small promotion rule set and bumps versions`() =
         runBlocking {
             val jdbcUrl = migratedJdbcUrl("venue-menu-item-delete-small-references")
@@ -534,6 +614,15 @@ class VenueMenuRepositoryTest {
             val fixtureRepository = VenueMenuRepository(dataSource(jdbcUrl))
             val fixture = createMenuFixture(fixtureRepository, venueId)
             val ruleIds = seedPromotionRuleReferences(jdbcUrl, venueId, fixture.firstItem.id, 2)
+            val choiceRuleId =
+                seedGiftRewardRule(
+                    jdbcUrl = jdbcUrl,
+                    venueId = venueId,
+                    primaryRewardItemId = fixture.firstItem.id,
+                    rewardMode = "CHOICE_ITEMS",
+                    optionItemIds = listOf(fixture.firstItem.id, fixture.secondItem.id),
+                )
+            val choiceBefore = readGiftRuleSnapshot(jdbcUrl, choiceRuleId)
             val failingAuditWriter =
                 TransactionalAuditLogWriter { _, _, action, _, _, _ ->
                     if (action == MENU_ITEM_DELETED_AUDIT_ACTION) {
@@ -554,6 +643,7 @@ class VenueMenuRepositoryTest {
             assertTrue(fixtureRepository.itemExists(venueId, fixture.firstItem.id))
             assertEquals(ruleIds.associateWith { 1 }, readRuleVersions(jdbcUrl, ruleIds))
             assertEquals(ruleIds.size, countRuleTargets(jdbcUrl, ruleIds))
+            assertEquals(choiceBefore, readGiftRuleSnapshot(jdbcUrl, choiceRuleId))
             assertTrue(menuItemDeleteAudits(jdbcUrl).isEmpty())
         }
 
@@ -565,6 +655,15 @@ class VenueMenuRepositoryTest {
             val repository = VenueMenuRepository(dataSource(jdbcUrl))
             val fixture = createMenuFixture(repository, venueId)
             val ruleIds = seedPromotionRuleReferences(jdbcUrl, venueId, fixture.firstItem.id, 2)
+            val choiceRuleId =
+                seedGiftRewardRule(
+                    jdbcUrl = jdbcUrl,
+                    venueId = venueId,
+                    primaryRewardItemId = fixture.firstItem.id,
+                    rewardMode = "CHOICE_ITEMS",
+                    optionItemIds = listOf(fixture.firstItem.id, fixture.secondItem.id),
+                )
+            val choiceBefore = readGiftRuleSnapshot(jdbcUrl, choiceRuleId)
             DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
                 connection.createStatement().use { statement ->
                     statement.execute(
@@ -589,6 +688,7 @@ class VenueMenuRepositoryTest {
             assertTrue(repository.itemExists(venueId, fixture.firstItem.id))
             assertEquals(ruleIds.associateWith { 1 }, readRuleVersions(jdbcUrl, ruleIds))
             assertEquals(ruleIds.size, countRuleTargets(jdbcUrl, ruleIds))
+            assertEquals(choiceBefore, readGiftRuleSnapshot(jdbcUrl, choiceRuleId))
             assertTrue(menuItemDeleteAudits(jdbcUrl).isEmpty())
         }
 
@@ -757,6 +857,170 @@ class VenueMenuRepositoryTest {
             }
         }
 
+    private fun seedGiftRewardRule(
+        jdbcUrl: String,
+        venueId: Long,
+        primaryRewardItemId: Long,
+        rewardMode: String,
+        optionItemIds: List<Long>,
+    ): Long =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.autoCommit = false
+            try {
+                val promotionId =
+                    connection.prepareStatement(
+                        """
+                        INSERT INTO venue_promotions (
+                            venue_id,
+                            title,
+                            description,
+                            status,
+                            template_type,
+                            created_by_user_id
+                        )
+                        VALUES (?, 'Private promotion title', 'Private promotion config', 'DRAFT',
+                            'GIFT_WITH_ITEM', ?)
+                        """.trimIndent(),
+                        Statement.RETURN_GENERATED_KEYS,
+                    ).use { statement ->
+                        statement.setLong(1, venueId)
+                        statement.setLong(2, AUDIT_ACTOR_ID)
+                        statement.executeUpdate()
+                        statement.generatedKeys.use { keys ->
+                            check(keys.next())
+                            keys.getLong(1)
+                        }
+                    }
+                val ruleId =
+                    connection.prepareStatement(
+                        """
+                        INSERT INTO promotion_rules (
+                            promotion_id,
+                            venue_id,
+                            rule_type,
+                            target_type,
+                            target_value,
+                            executable_target_type,
+                            discount_percent,
+                            status,
+                            priority,
+                            stackable,
+                            max_applications_per_item,
+                            version,
+                            created_by_user_id
+                        )
+                        VALUES (?, ?, 'GIFT_WITH_ITEM', 'CATEGORY_TYPE', 'HOOKAH',
+                            'MENU_ITEM', NULL, 'DRAFT', 100, FALSE, 1, 1, ?)
+                        """.trimIndent(),
+                        Statement.RETURN_GENERATED_KEYS,
+                    ).use { statement ->
+                        statement.setLong(1, promotionId)
+                        statement.setLong(2, venueId)
+                        statement.setLong(3, AUDIT_ACTOR_ID)
+                        statement.executeUpdate()
+                        statement.generatedKeys.use { keys ->
+                            check(keys.next())
+                            keys.getLong(1)
+                        }
+                    }
+                val rewardId =
+                    connection.prepareStatement(
+                        """
+                        INSERT INTO promotion_rule_rewards (
+                            rule_id,
+                            reward_menu_item_id,
+                            reward_mode,
+                            reward_qty,
+                            max_rewards_per_batch
+                        )
+                        VALUES (?, ?, ?, 1, 1)
+                        """.trimIndent(),
+                        Statement.RETURN_GENERATED_KEYS,
+                    ).use { statement ->
+                        statement.setLong(1, ruleId)
+                        statement.setLong(2, primaryRewardItemId)
+                        statement.setString(3, rewardMode)
+                        statement.executeUpdate()
+                        statement.generatedKeys.use { keys ->
+                            check(keys.next())
+                            keys.getLong(1)
+                        }
+                    }
+                optionItemIds.forEach { optionItemId ->
+                    connection.prepareStatement(
+                        """
+                        INSERT INTO promotion_rule_reward_options (reward_id, menu_item_id)
+                        VALUES (?, ?)
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setLong(1, rewardId)
+                        statement.setLong(2, optionItemId)
+                        statement.executeUpdate()
+                    }
+                }
+                connection.commit()
+                ruleId
+            } catch (e: Exception) {
+                connection.rollback()
+                throw e
+            }
+        }
+
+    private fun readGiftRuleSnapshot(
+        jdbcUrl: String,
+        ruleId: Long,
+    ): GiftRuleSnapshot =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            val base =
+                connection.prepareStatement(
+                    """
+                    SELECT
+                        r.version,
+                        r.status,
+                        r.updated_at AS rule_updated_at,
+                        reward.id AS reward_id,
+                        reward.reward_menu_item_id,
+                        reward.reward_mode,
+                        reward.updated_at AS reward_updated_at
+                    FROM promotion_rules r
+                    JOIN promotion_rule_rewards reward ON reward.rule_id = r.id
+                    WHERE r.id = ?
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setLong(1, ruleId)
+                    statement.executeQuery().use { rs ->
+                        check(rs.next())
+                        GiftRuleSnapshot(
+                            version = rs.getInt("version"),
+                            status = rs.getString("status"),
+                            ruleUpdatedAt = rs.getObject("rule_updated_at").toString(),
+                            rewardId = rs.getLong("reward_id"),
+                            primaryRewardItemId = rs.getLong("reward_menu_item_id"),
+                            rewardMode = rs.getString("reward_mode"),
+                            rewardUpdatedAt = rs.getObject("reward_updated_at").toString(),
+                            optionItemIds = emptyList(),
+                        )
+                    }
+                }
+            val optionItemIds =
+                connection.prepareStatement(
+                    """
+                    SELECT menu_item_id
+                    FROM promotion_rule_reward_options
+                    WHERE reward_id = ?
+                    ORDER BY id
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setLong(1, base.rewardId)
+                    statement.executeQuery().use { rs ->
+                        buildList {
+                            while (rs.next()) add(rs.getLong("menu_item_id"))
+                        }
+                    }
+                }
+            base.copy(optionItemIds = optionItemIds)
+        }
+
     private fun readRuleVersions(
         jdbcUrl: String,
         ruleIds: List<Long>,
@@ -919,6 +1183,17 @@ class VenueMenuRepositoryTest {
         val entityType: String,
         val entityId: Long,
         val payload: JsonObject,
+    )
+
+    private data class GiftRuleSnapshot(
+        val version: Int,
+        val status: String,
+        val ruleUpdatedAt: String,
+        val rewardId: Long,
+        val primaryRewardItemId: Long,
+        val rewardMode: String,
+        val rewardUpdatedAt: String,
+        val optionItemIds: List<Long>,
     )
 
     private fun seedVenue(jdbcUrl: String): Long =

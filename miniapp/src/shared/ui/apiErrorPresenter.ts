@@ -108,6 +108,13 @@ export function presentApiError(
       message = 'Статус акции уже изменился. Обновите список и повторите действие.'
       severity = 'warn'
       break
+    case ApiErrorCodes.MENU_ITEM_DELETE_BLOCKED_BY_FIXED_REWARD:
+      title = 'Удаление недоступно'
+      message =
+        'Позицию нельзя удалить: она используется как фиксированный подарок в акции. ' +
+        'Сначала замените подарок или измените акцию, затем повторите удаление.'
+      severity = 'warn'
+      break
     case ApiErrorCodes.VENUE_SCHEDULE_NOT_CONFIGURED:
       title = 'Бронирование недоступно'
       message = 'Заведение пока не настроило график бронирования.'

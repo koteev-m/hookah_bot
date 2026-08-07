@@ -42,7 +42,7 @@ Menu permissions are governed by `docs/SECURITY_RBAC_MATRIX.md`; Venue Mode oper
 | Featured/top-list | Product spec requires featured/top list; implementation evidence is partial. | Venue manually pins items; not paid placement. | Paid placement/boosting belongs to Growth/Platform, not menu featured. |
 | PDF/media | `Фото-меню` exists as a flat info/media section and is separate from structured order menu. Bot OWNER/MANAGER can add image/PDF attachments, delete one and hide/show the whole section. | PDF/photo menu is view-only; no direct order unless item exists in structured menu. | Venue Mini App authoring/upload is missing; direct replace, per-attachment hide and optional subsections remain future. |
 | Shift check | **DONE / MVP / STAGING-SMOKE-PASSED**: OWNER/MANAGER Venue Mini App uses saved menu state, readiness counts, search/filters, local draft, a separate mass-selection mode, confirmation summary and one atomic request. STAFF has no entry/direct permission. | Venue Mode keeps optimistic availability checks, one bounded batch, no-op completion evidence and recoverable stale-state handling. | Keep role/tenant, atomicity, stale-state, Guest availability and Telegram stop-list parity in regression; Telegram shift-check UI and a queryable history table are not part of Phase 1. |
-| Audit logs | `MENU_SHIFT_CHECK_COMPLETED` is atomic for a successful batch. `MENU_ITEM_DELETED` is atomic with item deletion and affected promotion-rule cascades/version bumps; actor/source are server-derived and affected rule ids use a bounded deterministic summary. | Price changes, archive/delete, mass stop-list, media removal, option schema change and Staff stop-list toggles write safe audit. | Item hard delete is locally validated; other menu dangerous-action audit families remain `PARTIAL`. |
+| Audit logs | `MENU_SHIFT_CHECK_COMPLETED` is atomic for a successful batch. `MENU_ITEM_DELETED` is atomic with item deletion and affected promotion-rule cascades/version bumps; actor/source are server-derived and affected rule ids use a bounded deterministic summary. | Price changes, archive/delete, mass stop-list, media removal, option schema change and Staff stop-list toggles write safe audit. | Item hard delete passed functional staging smoke; dependency-guidance polish requires review and repeat smoke. Other menu dangerous-action audit families remain `PARTIAL`. |
 | Telegram vs Mini App parity | Options/flavors parity is smoke-closed; some Telegram owner flows remain richer. | Required menu/stop-list operations are aligned across Bot and Mini App or documented as exceptions. | Keep cross-surface parity smoke for Staff stop-list and selected options. |
 | Staff stop-list permissions | Current docs say STAFF has `MENU_AVAILABILITY_MANAGE` and can toggle item/option availability; STAFF cannot edit structure/prices/options schema. | Recommended MVP: Staff cannot change menu structure/prices; Staff stop-list works only when `staff_stoplist_enabled` or equivalent policy allows it, and is identical in Bot/Mini App. | Current global Staff stop-list permission is acceptable only if intentionally enabled and audited; per-venue toggle remains target/future. |
 
@@ -298,8 +298,9 @@ made available/unavailable and total reviewed item/option counts. Timestamp is s
 existing audit infrastructure. It contains no names, prices, Telegram ids/refs, raw initData,
 comments, customer data or full request body.
 
-Item hard-delete status: **DANGEROUS ACTION AUDIT SLICE / MENU ITEM HARD DELETE AUDIT / MVP
-IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+Item hard-delete status: **DANGEROUS ACTION AUDIT SLICE / MENU ITEM HARD DELETE AUDIT /
+FUNCTIONALLY PASSED ON STAGING / USER GUIDANCE POLISH IMPLEMENTED / REVIEW REQUIRED BEFORE
+COMMIT**.
 
 - One committed delete through the existing Venue Mini App or Telegram management path writes one
   `MENU_ITEM_DELETED` for entity `menu_item` and the item id. Actor is the authenticated user;
@@ -307,6 +308,16 @@ IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
 - The same JDBC transaction loads and rechecks the authoritative promotion-reference snapshot in
   current parent/rule/item lock order, bumps affected rule versions, deletes the item and appends
   audit. Audit/reference/SQL failure rolls everything back; denial, not-found and repeat write none.
+- Confirmation explains that purchase-target and choice-allowlist references are removed
+  automatically, while a fixed-reward dependency blocks deletion until the gift is replaced.
+- After the locked reference recheck and before any write, an authoritative fixed-reward lookup
+  returns HTTP `409` / `MENU_ITEM_DELETE_BLOCKED_BY_FIXED_REWARD`: «Позицию нельзя удалить: она
+  используется как фиксированный подарок в акции. Сначала замените подарок или измените акцию,
+  затем повторите удаление». The item, reward, rule version/status/timestamps and audit remain
+  unchanged, including on repeat.
+- Purchase-target and choice-allowlist deletes retain current cleanup/version changes and exactly
+  one audit. Mini App and Telegram map the same domain result without false success or generic DB
+  copy; choice primary pointers are re-homed deterministically inside the same transaction.
 - Payload allowlist is `venueId`, `itemId`, `categoryId`, `source`, and
   `affectedPromotionRules`. The nested object has exact unique-id count, first 50 sorted ids,
   explicit omitted count and lowercase SHA-256 of UTF-8 `v1:` plus every sorted unique id joined by
@@ -331,9 +342,10 @@ Audit payloads must use safe ids and old/new safe fields only. Do not include ra
 - Shift check: `MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`; keep the passed
   role/tenant, UX, atomicity, stale-state, Guest availability and Telegram parity scenarios in
   regression.
-- Item hard-delete audit: **DANGEROUS ACTION AUDIT SLICE / MENU ITEM HARD DELETE AUDIT / MVP
-  IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. Independent review,
-  green Actions and staging smoke remain; schema verdict is `NO_MIGRATION_EXPECTED`.
+- Item hard-delete audit: **DANGEROUS ACTION AUDIT SLICE / MENU ITEM HARD DELETE AUDIT /
+  FUNCTIONALLY PASSED ON STAGING / USER GUIDANCE POLISH IMPLEMENTED / REVIEW REQUIRED BEFORE
+  COMMIT**. The guidance polish still needs independent review, green Actions, deploy and repeat
+  blocked/allowed staging smoke; schema verdict is `NO_MIGRATION_EXPECTED`.
 - Guest server-side availability validation: `REQUIRED`; current stale/unavailable option rejection is documented as covered for the smoked options/flavors flow, but broader availability validation should stay in regression.
 - Promotions/paid placement remain separate from featured/top-list and follow `docs/GROWTH_RETENTION.md` plus `docs/PLATFORM_COCKPIT.md`.
 
@@ -374,3 +386,9 @@ Audit payloads must use safe ids and old/new safe fields only. Do not include ra
     first-50 sample, omitted count and full-set hash; payload remains below 4096 UTF-8 bytes.
 28. Audit/reference/SQL failure leaves the item, promotion rule/version state and audit unchanged;
     PostgreSQL config/delete contention has a consistent committed winner with no partial state.
+29. Item-delete confirmation explains automatic purchase-target/choice cleanup and the
+    fixed-reward restriction; cancel sends no delete request.
+30. Fixed-reward delete shows the exact safe next step in Mini App and Telegram, keeps all state,
+    writes no success audit and exposes no promotion title/rule id/SQL or PII.
+31. Purchase-target and every choice-allowlist entry, including the stored primary pointer, delete
+    atomically with current version cleanup and exactly one audit.

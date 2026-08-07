@@ -1,6 +1,7 @@
 package com.hookah.platform.backend.miniapp.venue
 
 import com.hookah.platform.backend.api.ApiErrorCodes
+import com.hookah.platform.backend.api.MENU_ITEM_DELETE_BLOCKED_BY_FIXED_REWARD_MESSAGE
 import com.hookah.platform.backend.miniapp.guest.api.MenuResponse
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
@@ -221,6 +222,45 @@ class VenueMenuRoutesTest {
                 assertFalse(audit.payload.toString().contains("999999"))
                 assertFalse(audit.payload.toString().contains("TELEGRAM_BOT"))
             }
+        }
+
+    @Test
+    fun `fixed reward item delete returns safe conflict and leaves state unchanged`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("menu-item-delete-fixed-reward")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val ownerId = 71_101L
+            val venueId = seedVenueWithRole(jdbcUrl, ownerId, "OWNER")
+            val fixture = createShiftCheckFixture(jdbcUrl, venueId)
+            val ruleId = seedFixedRewardRule(jdbcUrl, venueId, fixture.firstItem.id, ownerId)
+            val before = readFixedRewardState(jdbcUrl, ruleId)
+
+            repeat(2) {
+                val response =
+                    client.delete("/api/venue/menu/items/${fixture.firstItem.id}?venueId=$venueId") {
+                        headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config, ownerId)}") }
+                    }
+
+                assertEquals(HttpStatusCode.Conflict, response.status)
+                val error =
+                    assertApiErrorEnvelope(
+                        response,
+                        ApiErrorCodes.MENU_ITEM_DELETE_BLOCKED_BY_FIXED_REWARD,
+                    )
+                assertEquals(MENU_ITEM_DELETE_BLOCKED_BY_FIXED_REWARD_MESSAGE, error.error.message)
+                assertFalse(response.bodyAsText().contains("Private promotion title"))
+                assertFalse(response.bodyAsText().contains("ruleId", ignoreCase = true))
+                assertFalse(response.bodyAsText().contains("promotionId", ignoreCase = true))
+                assertFalse(response.bodyAsText().contains("SQL", ignoreCase = true))
+            }
+
+            assertTrue(menuRepository(jdbcUrl).itemExists(venueId, fixture.firstItem.id))
+            assertEquals(before, readFixedRewardState(jdbcUrl, ruleId))
+            assertTrue(menuItemDeleteAudits(jdbcUrl).isEmpty())
         }
 
     @Test
@@ -1674,6 +1714,129 @@ class VenueMenuRoutesTest {
             }
         }
 
+    private fun seedFixedRewardRule(
+        jdbcUrl: String,
+        venueId: Long,
+        rewardItemId: Long,
+        actorUserId: Long,
+    ): Long =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.autoCommit = false
+            try {
+                val promotionId =
+                    connection.prepareStatement(
+                        """
+                        INSERT INTO venue_promotions (
+                            venue_id,
+                            title,
+                            description,
+                            status,
+                            template_type,
+                            created_by_user_id
+                        )
+                        VALUES (?, 'Private promotion title', 'Private promotion config', 'DRAFT',
+                            'GIFT_WITH_ITEM', ?)
+                        """.trimIndent(),
+                        Statement.RETURN_GENERATED_KEYS,
+                    ).use { statement ->
+                        statement.setLong(1, venueId)
+                        statement.setLong(2, actorUserId)
+                        statement.executeUpdate()
+                        statement.generatedKeys.use { keys ->
+                            check(keys.next())
+                            keys.getLong(1)
+                        }
+                    }
+                val ruleId =
+                    connection.prepareStatement(
+                        """
+                        INSERT INTO promotion_rules (
+                            promotion_id,
+                            venue_id,
+                            rule_type,
+                            target_type,
+                            target_value,
+                            executable_target_type,
+                            discount_percent,
+                            status,
+                            priority,
+                            stackable,
+                            max_applications_per_item,
+                            version,
+                            created_by_user_id
+                        )
+                        VALUES (?, ?, 'GIFT_WITH_ITEM', 'CATEGORY_TYPE', 'HOOKAH',
+                            'MENU_ITEM', NULL, 'DRAFT', 100, FALSE, 1, 1, ?)
+                        """.trimIndent(),
+                        Statement.RETURN_GENERATED_KEYS,
+                    ).use { statement ->
+                        statement.setLong(1, promotionId)
+                        statement.setLong(2, venueId)
+                        statement.setLong(3, actorUserId)
+                        statement.executeUpdate()
+                        statement.generatedKeys.use { keys ->
+                            check(keys.next())
+                            keys.getLong(1)
+                        }
+                    }
+                connection.prepareStatement(
+                    """
+                    INSERT INTO promotion_rule_rewards (
+                        rule_id,
+                        reward_menu_item_id,
+                        reward_mode,
+                        reward_qty,
+                        max_rewards_per_batch
+                    )
+                    VALUES (?, ?, 'FIXED_ITEM', 1, 1)
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setLong(1, ruleId)
+                    statement.setLong(2, rewardItemId)
+                    statement.executeUpdate()
+                }
+                connection.commit()
+                ruleId
+            } catch (e: Exception) {
+                connection.rollback()
+                throw e
+            }
+        }
+
+    private fun readFixedRewardState(
+        jdbcUrl: String,
+        ruleId: Long,
+    ): FixedRewardState =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT
+                    r.version,
+                    r.status,
+                    r.updated_at AS rule_updated_at,
+                    reward.reward_menu_item_id,
+                    reward.reward_mode,
+                    reward.updated_at AS reward_updated_at
+                FROM promotion_rules r
+                JOIN promotion_rule_rewards reward ON reward.rule_id = r.id
+                WHERE r.id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, ruleId)
+                statement.executeQuery().use { rs ->
+                    check(rs.next())
+                    FixedRewardState(
+                        version = rs.getInt("version"),
+                        status = rs.getString("status"),
+                        ruleUpdatedAt = rs.getObject("rule_updated_at").toString(),
+                        rewardMenuItemId = rs.getLong("reward_menu_item_id"),
+                        rewardMode = rs.getString("reward_mode"),
+                        rewardUpdatedAt = rs.getObject("reward_updated_at").toString(),
+                    )
+                }
+            }
+        }
+
     private fun seedVenueWithRole(
         jdbcUrl: String,
         userId: Long,
@@ -1852,6 +2015,15 @@ class VenueMenuRoutesTest {
         val entityType: String,
         val entityId: Long,
         val payload: JsonObject,
+    )
+
+    private data class FixedRewardState(
+        val version: Int,
+        val status: String,
+        val ruleUpdatedAt: String,
+        val rewardMenuItemId: Long,
+        val rewardMode: String,
+        val rewardUpdatedAt: String,
     )
 
     private data class ShiftCheckOptionJson(

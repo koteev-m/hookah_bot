@@ -1,6 +1,7 @@
 package com.hookah.platform.backend.telegram.db
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.api.MenuItemDeleteBlockedByFixedRewardException
 import com.hookah.platform.backend.miniapp.venue.TransactionalAuditLogWriter
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import com.hookah.platform.backend.miniapp.venue.menu.MenuItemDeleteSource
@@ -2982,6 +2983,20 @@ class VenuePromotionRepositoryTest {
             assertEquals("Морс", updatedReward.reward?.rewardMenuItemName)
             assertEquals(PromotionRewardMode.FIXED_ITEM, updatedReward.reward?.rewardMode)
             assertEquals(2, updatedReward.version)
+            assertFailsWith<MenuItemDeleteBlockedByFixedRewardException> {
+                VenueMenuRepository(dataSource(jdbcUrl))
+                    .deleteItem(
+                        fixture.visibleVenueId,
+                        updatedRewardItemId,
+                        OWNER_ID,
+                        MenuItemDeleteSource.VENUE_MINI_APP,
+                    )
+            }
+            val fixedRewardAfterBlockedDelete =
+                assertNotNull(ruleRepository.getRuleForManagement(fixture.visibleVenueId, created.id))
+            assertEquals(2, fixedRewardAfterBlockedDelete.version)
+            assertEquals(PromotionRewardMode.FIXED_ITEM, fixedRewardAfterBlockedDelete.reward?.rewardMode)
+            assertEquals(updatedRewardItemId, fixedRewardAfterBlockedDelete.reward?.rewardMenuItemId)
 
             val choiceReward =
                 assertNotNull(
@@ -3013,19 +3028,19 @@ class VenuePromotionRepositoryTest {
                 setOf(rewardItemId),
                 rewardAfterCascade.reward?.options?.map { it.menuItemId }?.toSet(),
             )
-            assertFailsWith<DatabaseUnavailableException> {
+            assertTrue(
                 VenueMenuRepository(dataSource(jdbcUrl))
                     .deleteItem(
                         fixture.visibleVenueId,
                         rewardItemId,
                         OWNER_ID,
                         MenuItemDeleteSource.VENUE_MINI_APP,
-                    )
-            }
-            assertEquals(
-                4,
-                ruleRepository.getRuleForManagement(fixture.visibleVenueId, created.id)?.version,
+                    ),
             )
+            val rewardAfterLastChoiceDelete =
+                assertNotNull(ruleRepository.getRuleForManagement(fixture.visibleVenueId, created.id))
+            assertEquals(5, rewardAfterLastChoiceDelete.version)
+            assertNull(rewardAfterLastChoiceDelete.reward)
 
             assertFailsWith<IllegalArgumentException> {
                 ruleRepository.createGiftWithItemRule(

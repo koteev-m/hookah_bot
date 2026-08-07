@@ -2,6 +2,7 @@ package com.hookah.platform.backend.miniapp.venue.menu
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.api.InvalidInputException
+import com.hookah.platform.backend.api.MenuItemDeleteBlockedByFixedRewardException
 import com.hookah.platform.backend.api.MenuShiftCheckStaleException
 import com.hookah.platform.backend.api.NotFoundException
 import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
@@ -516,6 +517,9 @@ class VenueMenuRepository(
                         val currentReferences =
                             loadPromotionRulesReferencingItem(connection, venueId, itemId)
                         ensureNoNewPromotionReferences(initialReferences, currentReferences)
+                        if (hasFixedRewardReference(connection, venueId, itemId)) {
+                            throw MenuItemDeleteBlockedByFixedRewardException()
+                        }
                         val auditPayload =
                             buildMenuItemDeleteAuditPayload(
                                 venueId = venueId,
@@ -529,6 +533,7 @@ class VenueMenuRepository(
                         if (auditPayloadBytes >= MENU_ITEM_DELETE_AUDIT_PAYLOAD_MAX_BYTES) {
                             throw SQLException("Menu item delete audit payload exceeds byte budget")
                         }
+                        rehomeChoiceRewardPrimaryReferences(connection, venueId, itemId)
                         bumpPromotionRuleVersions(connection, currentReferences)
                         val deleted =
                             connection.prepareStatement(
@@ -1418,6 +1423,84 @@ class VenueMenuRepository(
             statement.setLong(4, itemId)
             statement.executeQuery().use { rs -> rs.toPromotionRuleReferences() }
         }
+
+    private fun hasFixedRewardReference(
+        connection: Connection,
+        venueId: Long,
+        itemId: Long,
+    ): Boolean =
+        connection.prepareStatement(
+            """
+            SELECT 1
+            FROM promotion_rule_rewards reward
+            JOIN promotion_rules rule ON rule.id = reward.rule_id
+            WHERE rule.venue_id = ?
+              AND reward.reward_menu_item_id = ?
+              AND reward.reward_mode = 'FIXED_ITEM'
+            LIMIT 1
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, itemId)
+            statement.executeQuery().use { rs -> rs.next() }
+        }
+
+    private fun rehomeChoiceRewardPrimaryReferences(
+        connection: Connection,
+        venueId: Long,
+        itemId: Long,
+    ) {
+        val replacements = linkedMapOf<Long, Long?>()
+        connection.prepareStatement(
+            """
+            SELECT reward.id AS reward_id, option.menu_item_id AS replacement_item_id
+            FROM promotion_rule_rewards reward
+            JOIN promotion_rules rule ON rule.id = reward.rule_id
+            LEFT JOIN promotion_rule_reward_options option
+              ON option.reward_id = reward.id
+             AND option.menu_item_id <> ?
+            WHERE rule.venue_id = ?
+              AND reward.reward_menu_item_id = ?
+              AND reward.reward_mode = 'CHOICE_ITEMS'
+            ORDER BY reward.id, option.id
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, itemId)
+            statement.setLong(2, venueId)
+            statement.setLong(3, itemId)
+            statement.executeQuery().use { rs ->
+                while (rs.next()) {
+                    val replacementItemId =
+                        rs.getLong("replacement_item_id").let { value ->
+                            if (rs.wasNull()) null else value
+                        }
+                    replacements.putIfAbsent(rs.getLong("reward_id"), replacementItemId)
+                }
+            }
+        }
+        replacements.forEach { (rewardId, replacementItemId) ->
+            if (replacementItemId == null) {
+                connection.prepareStatement(
+                    "DELETE FROM promotion_rule_rewards WHERE id = ?",
+                ).use { statement ->
+                    statement.setLong(1, rewardId)
+                    statement.executeUpdate()
+                }
+            } else {
+                connection.prepareStatement(
+                    """
+                    UPDATE promotion_rule_rewards
+                    SET reward_menu_item_id = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setLong(1, replacementItemId)
+                    statement.setLong(2, rewardId)
+                    statement.executeUpdate()
+                }
+            }
+        }
+    }
 
     private fun ResultSet.toPromotionRuleReferences(): List<PromotionRuleReference> =
         buildList {

@@ -64,6 +64,17 @@ Preserve these boundaries unless a task explicitly changes them and updates docs
 - QR/table tokens and tab invite tokens are context pointers, not authority.
 - Server-side RBAC is source of truth; UI hiding is convenience only.
 
+## User-facing guidance
+
+For user-facing work:
+- explain non-obvious states, prerequisites, restrictions and consequences;
+- destructive actions must describe important side effects before confirmation;
+- blocked actions must state what happened, a safe reason and the next action;
+- do not rely only on color, hidden controls or generic error text;
+- add guidance for complex settings, empty states and cross-feature dependencies;
+- avoid tooltips or explanatory copy for obvious actions;
+- cover critical guidance and denial copy with tests.
+
 ## Coding Rules
 
 - Kotlin: idiomatic, null-safe, focused changes.

@@ -1360,10 +1360,30 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
             void loadMenu()
           },
           onDeleteItem: async (item) => {
-            if (!window.confirm('Удалить позицию?')) return
+            if (
+              !window.confirm(
+                'Позиция будет удалена из меню.\n\n' +
+                  'Ссылки на неё в условиях акций и списках подарков на выбор будут удалены автоматически.\n\n' +
+                  'Если позиция используется как фиксированный подарок, удалить её нельзя, ' +
+                  'пока подарок не будет заменён в акции.'
+              )
+            ) {
+              return
+            }
             const result = await venueDeleteItem(backendUrl, { venueId, itemId: item.id }, deps)
             if (disposed) return
             if (!result.ok) {
+              if (
+                normalizeErrorCode(result.error) ===
+                ApiErrorCodes.MENU_ITEM_DELETE_BLOCKED_BY_FIXED_REWARD
+              ) {
+                const blockedError = result.error
+                await loadMenu()
+                if (!disposed) {
+                  showError(blockedError)
+                }
+                return
+              }
               showError(result.error)
               return
             }

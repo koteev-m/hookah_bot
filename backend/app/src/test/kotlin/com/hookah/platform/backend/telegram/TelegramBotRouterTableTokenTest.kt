@@ -12,6 +12,8 @@ import com.hookah.platform.backend.ai.AiVenueSummaryType
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.api.InvalidInputException
+import com.hookah.platform.backend.api.MENU_ITEM_DELETE_BLOCKED_BY_FIXED_REWARD_MESSAGE
+import com.hookah.platform.backend.api.MenuItemDeleteBlockedByFixedRewardException
 import com.hookah.platform.backend.miniapp.guest.db.BookingRecord
 import com.hookah.platform.backend.miniapp.guest.db.BookingReminderScheduleResult
 import com.hookah.platform.backend.miniapp.guest.db.BookingStatus
@@ -9025,6 +9027,97 @@ class TelegramBotRouterTableTokenTest {
             }
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(100, "✅ Позиция удалена.", null)
+            }
+        }
+
+    @Test
+    fun `fixed reward item delete sends actionable message without false success`() =
+        runBlocking {
+            val item =
+                VenueMenuItem(
+                    id = 7001L,
+                    venueId = 10L,
+                    categoryId = 501L,
+                    name = "Авторский кальян",
+                    priceMinor = 85_000L,
+                    currency = "RUB",
+                    isAvailable = true,
+                    sortOrder = 10,
+                    options = emptyList(),
+                )
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+            coEvery { venueMenuRepository.getMenu(10L) } returns
+                listOf(
+                    VenueMenuCategory(
+                        id = 501L,
+                        venueId = 10L,
+                        name = "Кальянное меню",
+                        sortOrder = 10,
+                        items = listOf(item),
+                    ),
+                )
+            coEvery {
+                venueMenuRepository.deleteItem(
+                    venueId = 10L,
+                    itemId = 7001L,
+                    actorUserId = 200L,
+                    source = MenuItemDeleteSource.TELEGRAM_BOT,
+                )
+            } throws MenuItemDeleteBlockedByFixedRewardException()
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_281,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-owner-order-menu-item-delete-fixed-reward",
+                            from = User(id = 200L),
+                            message = Message(messageId = 30_004_281, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_order_menu_item_delete:10:501:7001",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 1) {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    MENU_ITEM_DELETE_BLOCKED_BY_FIXED_REWARD_MESSAGE,
+                    null,
+                )
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(100, "✅ Позиция удалена.", null)
+            }
+        }
+
+    @Test
+    fun `staff direct item delete callback is denied before repository mutation`() =
+        runBlocking {
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(202L, 10L) } returns false
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_282,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-staff-order-menu-item-delete",
+                            from = User(id = 202L),
+                            message = Message(messageId = 30_004_282, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_order_menu_item_delete:10:501:7001",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) {
+                venueMenuRepository.deleteItem(
+                    venueId = any(),
+                    itemId = any(),
+                    actorUserId = any(),
+                    source = any(),
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(100, "Нет доступа к заведению.", null)
             }
         }
 

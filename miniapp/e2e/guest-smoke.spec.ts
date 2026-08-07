@@ -6081,11 +6081,15 @@ async function mockVenueMenuApi(
     role?: 'OWNER' | 'MANAGER' | 'STAFF'
     permissions?: string[]
     categories?: VenueMenuCategoryFixture[]
+    deleteItemErrors?: Record<number, ApiErrorFixture>
   } = {}
 ) {
   const role = options.role ?? 'MANAGER'
   const permissions = options.permissions ?? ['MENU_VIEW', 'MENU_MANAGE', 'MENU_AVAILABILITY_MANAGE']
   const categories = options.categories ?? buildDefaultVenueMenu()
+  const deleteItemErrors = options.deleteItemErrors ?? {}
+  const deleteItemRequests: number[] = []
+  let menuCalls = 0
   let createOptionCalls = 0
   let updateOptionCalls = 0
   let deleteOptionCalls = 0
@@ -6154,6 +6158,7 @@ async function mockVenueMenuApi(
   })
 
   await page.route('**/api/venue/menu?**', async (route) => {
+    menuCalls += 1
     await route.fulfill(jsonResponse({ venueId: 1, categories }))
   })
 
@@ -6243,6 +6248,41 @@ async function mockVenueMenuApi(
     }
 
     const itemMatch = url.pathname.match(/\/api\/venue\/menu\/items\/(\d+)$/)
+    if (itemMatch && method === 'DELETE') {
+      const itemId = Number(itemMatch[1])
+      deleteItemRequests.push(itemId)
+      const item = findItem(itemId)
+      if (!permissions.includes('MENU_MANAGE')) {
+        await route.fulfill(
+          jsonResponse({ error: { code: 'FORBIDDEN', message: 'Недостаточно прав.' } }, 403)
+        )
+        return
+      }
+      if (!item) {
+        await route.fulfill(jsonResponse({ error: { code: 'NOT_FOUND', message: 'Позиция не найдена.' } }, 404))
+        return
+      }
+      const error = deleteItemErrors[itemId]
+      if (error) {
+        await route.fulfill(
+          jsonResponse(
+            {
+              error: {
+                code: error.code ?? 'INTERNAL_ERROR',
+                message: error.message ?? 'Не удалось удалить позицию.'
+              }
+            },
+            error.status
+          )
+        )
+        return
+      }
+      categories.forEach((category) => {
+        category.items = category.items.filter((candidate) => candidate.id !== itemId)
+      })
+      await route.fulfill(jsonResponse({ ok: true }))
+      return
+    }
     if (itemMatch && method === 'PATCH') {
       updateItemCalls += 1
       const item = findItem(Number(itemMatch[1]))
@@ -6381,7 +6421,9 @@ async function mockVenueMenuApi(
     getApplyBaseFlavorProfileCalls: () => applyBaseFlavorProfileCalls,
     getCreateItemCalls: () => createItemCalls,
     getUpdateItemCalls: () => updateItemCalls,
-    getItemAvailabilityCalls: () => itemAvailabilityCalls
+    getItemAvailabilityCalls: () => itemAvailabilityCalls,
+    getDeleteItemRequests: () => [...deleteItemRequests],
+    getMenuCalls: () => menuCalls
   }
 }
 
@@ -15203,6 +15245,143 @@ test('venue manager manages menu item flavors from mini app', async ({ page }) =
   expect(api.getApplyBaseFlavorProfileCalls()).toBe(2)
 })
 
+test('venue menu item delete explains dependencies and handles fixed and choice rewards', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const blockedMessage =
+    'Позицию нельзя удалить: она используется как фиксированный подарок в акции. ' +
+    'Сначала замените подарок или измените акцию, затем повторите удаление.'
+  const confirmation =
+    'Позиция будет удалена из меню.\n\n' +
+    'Ссылки на неё в условиях акций и списках подарков на выбор будут удалены автоматически.\n\n' +
+    'Если позиция используется как фиксированный подарок, удалить её нельзя, ' +
+    'пока подарок не будет заменён в акции.'
+  const api = await mockVenueMenuApi(page, {
+    categories: [
+      {
+        id: 30,
+        name: 'Напитки',
+        sortOrder: 0,
+        categoryType: 'DRINK',
+        items: [
+          {
+            id: 310,
+            categoryId: 30,
+            name: 'Фиксированный подарок',
+            priceMinor: 30000,
+            currency: 'RUB',
+            isAvailable: true,
+            sortOrder: 0,
+            effectiveItemType: 'DRINK',
+            options: []
+          },
+          {
+            id: 311,
+            categoryId: 30,
+            name: 'Подарок на выбор',
+            priceMinor: 35000,
+            currency: 'RUB',
+            isAvailable: true,
+            sortOrder: 1,
+            effectiveItemType: 'DRINK',
+            options: []
+          }
+        ]
+      }
+    ],
+    deleteItemErrors: {
+      310: {
+        status: 409,
+        code: 'MENU_ITEM_DELETE_BLOCKED_BY_FIXED_REWARD',
+        message: blockedMessage
+      }
+    }
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+  const editing = page.locator('details.venue-menu-editing')
+  await editing.locator(':scope > summary').click()
+  await editing
+    .locator('details.venue-menu-category[data-category-id="30"] > summary')
+    .click()
+  const fixedItem = page.locator('.venue-menu-item[data-item-id="310"]')
+  const choiceItem = page.locator('.venue-menu-item[data-item-id="311"]')
+  const initialMenuCalls = api.getMenuCalls()
+
+  page.once('dialog', async (dialog) => {
+    expect(dialog.message()).toBe(confirmation)
+    await dialog.accept()
+  })
+  await fixedItem.getByRole('button', { name: 'Удалить', exact: true }).click()
+  await expect.poll(() => api.getMenuCalls()).toBe(initialMenuCalls + 1)
+  await expect(fixedItem).toBeVisible()
+  await expect(page.getByText(blockedMessage, { exact: true })).toBeVisible()
+  await expect(page.getByText('Позиция удалена', { exact: true })).toHaveCount(0)
+  expect(api.getDeleteItemRequests()).toEqual([310])
+
+  page.once('dialog', async (dialog) => {
+    expect(dialog.message()).toBe(confirmation)
+    await dialog.accept()
+  })
+  await choiceItem.getByRole('button', { name: 'Удалить', exact: true }).click()
+  await expect(choiceItem).toHaveCount(0)
+  await expect(page.getByText('Позиция удалена', { exact: true })).toBeVisible()
+  await expect.poll(() => api.getMenuCalls()).toBe(initialMenuCalls + 2)
+  expect(api.getDeleteItemRequests()).toEqual([310, 311])
+})
+
+test('venue menu item delete cancellation sends no request', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const confirmation =
+    'Позиция будет удалена из меню.\n\n' +
+    'Ссылки на неё в условиях акций и списках подарков на выбор будут удалены автоматически.\n\n' +
+    'Если позиция используется как фиксированный подарок, удалить её нельзя, ' +
+    'пока подарок не будет заменён в акции.'
+  const api = await mockVenueMenuApi(page, {
+    categories: [
+      {
+        id: 30,
+        name: 'Напитки',
+        sortOrder: 0,
+        categoryType: 'DRINK',
+        items: [
+          {
+            id: 310,
+            categoryId: 30,
+            name: 'Чай',
+            priceMinor: 30000,
+            currency: 'RUB',
+            isAvailable: true,
+            sortOrder: 0,
+            effectiveItemType: 'DRINK',
+            options: []
+          }
+        ]
+      }
+    ]
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+  const editing = page.locator('details.venue-menu-editing')
+  await editing.locator(':scope > summary').click()
+  await editing
+    .locator('details.venue-menu-category[data-category-id="30"] > summary')
+    .click()
+  const item = page.locator('.venue-menu-item[data-item-id="310"]')
+  const initialMenuCalls = api.getMenuCalls()
+
+  page.once('dialog', async (dialog) => {
+    expect(dialog.message()).toBe(confirmation)
+    await dialog.dismiss()
+  })
+  await item.getByRole('button', { name: 'Удалить', exact: true }).click()
+
+  await expect(item).toBeVisible()
+  expect(api.getDeleteItemRequests()).toEqual([])
+  expect(api.getMenuCalls()).toBe(initialMenuCalls)
+})
+
 test('venue staff sees menu flavors without edit controls', async ({ page }) => {
   await installTelegramWebApp(page, 123456789)
   const api = await mockVenueMenuApi(page, {
@@ -15271,6 +15450,7 @@ test('venue staff sees menu flavors without edit controls', async ({ page }) => 
       exact: true
     })
   ).toBeChecked()
+  expect(api.getDeleteItemRequests()).toEqual([])
 
   await appleOption
     .getByRole('checkbox', {

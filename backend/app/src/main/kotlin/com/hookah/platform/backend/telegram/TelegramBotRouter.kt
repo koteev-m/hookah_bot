@@ -7,6 +7,7 @@ import com.hookah.platform.backend.ai.AiAssistantService
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.api.InvalidInputException
+import com.hookah.platform.backend.api.MenuItemDeleteBlockedByFixedRewardException
 import com.hookah.platform.backend.api.NotFoundException
 import com.hookah.platform.backend.location.VenueLocationDisplay
 import com.hookah.platform.backend.location.buildYandexVenueRouteUrl
@@ -19808,6 +19809,9 @@ class TelegramBotRouter(
                     actorUserId = userId,
                     source = MenuItemDeleteSource.TELEGRAM_BOT,
                 )
+            } catch (e: MenuItemDeleteBlockedByFixedRewardException) {
+                enqueueMessage(chatId, e.message)
+                return
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return

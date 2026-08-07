@@ -147,6 +147,17 @@ class MenuShiftCheckStaleException :
         message = "Меню изменилось. Обновите проверку и повторите подтверждение.",
     )
 
+class MenuItemDeleteBlockedByFixedRewardException :
+    ApiException(
+        code = ApiErrorCodes.MENU_ITEM_DELETE_BLOCKED_BY_FIXED_REWARD,
+        httpStatus = HttpStatusCode.Conflict,
+        message = MENU_ITEM_DELETE_BLOCKED_BY_FIXED_REWARD_MESSAGE,
+    )
+
+const val MENU_ITEM_DELETE_BLOCKED_BY_FIXED_REWARD_MESSAGE =
+    "Позицию нельзя удалить: она используется как фиксированный подарок в акции. " +
+        "Сначала замените подарок или измените акцию, затем повторите удаление."
+
 class PromotionLifecycleStaleException :
     ApiException(
         code = ApiErrorCodes.PROMOTION_LIFECYCLE_STALE,

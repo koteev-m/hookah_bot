@@ -1,6 +1,6 @@
 # Project Status
 
-Last verified: 2026-08-07 at Git `9732f8a` (`HEAD == origin/main`).
+Last verified: 2026-08-07 at Git `b69c0b8` (`HEAD == origin/main` before the current worktree).
 
 ## 1. Purpose and source-of-truth order
 
@@ -17,15 +17,14 @@ network-only GitHub failure, formatting-only commit or temporary local log.
 
 - Overall product, permission parity and dangerous-action audit remain `PARTIAL`; the whole product
   is not declared production-ready.
-- **DANGEROUS ACTION AUDIT SLICE / MENU ITEM HARD DELETE AUDIT / MVP IMPLEMENTED / LOCAL
-  VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+- **DANGEROUS ACTION AUDIT SLICE / MENU ITEM HARD DELETE AUDIT / FUNCTIONALLY PASSED ON STAGING /
+  USER GUIDANCE POLISH IMPLEMENTED / REVIEW REQUIRED BEFORE COMMIT**.
 - **DANGEROUS ACTION AUDIT SLICE / PROMOTION CREATION AUDIT / DONE / MVP /
   STAGING-SMOKE-PASSED**.
 - **PROMOTION EFFECTIVE STATE CLARITY / DONE / MVP / STAGING-SMOKE-PASSED**.
-- The two bounded staging-smoke results above were supplied for this 2026-08-07 handoff. Local
-  `HEAD` equals `origin/main`; current-HEAD GitHub Actions could not be re-queried because the local
-  `gh` token is invalid, so this file makes no new green-Actions claim.
-- This handoff sync is docs-only and needs no staging deploy.
+- Functional staging evidence for the underlying hard-delete/audit behavior was supplied for this
+  handoff. The new dependency-guidance polish is locally implemented only and makes no new green
+  Actions or staging-smoke claim; it requires deploy and repeat blocked/allowed smoke after review.
 
 ## 3. Recently completed blocks
 
@@ -36,7 +35,10 @@ network-only GitHub failure, formatting-only commit or temporary local log.
   contains only venue/item/category ids, source and a bounded deterministic affected-rule summary
   (exact unique count, first 50 sorted ids, omitted count and SHA-256 of the complete sorted set).
   Audit/SQL/reference failure rolls all state back. No migration was added. Independent review,
-  green Actions and staging smoke remain required, so this is not a release-closed block.
+  green Actions and repeat staging smoke remain required, so this is not a release-closed block.
+  The current polish adds an authoritative pre-write fixed-reward conflict with safe next-step copy,
+  preserves target/choice deletion (including deterministic choice-primary re-homing), explains
+  consequences before Mini App confirmation and maps the same result in Telegram.
 - Promotion creation audit: action `VENUE_PROMOTION_CREATED`, entity `venue_promotion`, actor
   server-derived, source `VENUE_MINI_APP` or `TELEGRAM_BOT`. Parent, caller-connection initial rule
   and audit commit in one transaction; one committed parent produces exactly one creation audit.
@@ -65,7 +67,7 @@ and the duplicate `Продлить период` / `Редактировать`
 
 ## 4. Current next bounded block
 
-Verdict: **REVIEW_MENU_ITEM_HARD_DELETE_AUDIT_BEFORE_COMMIT**.
+Verdict: **REVIEW_MENU_ITEM_DELETE_DEPENDENCY_GUIDANCE_BEFORE_COMMIT**.
 
 Implementation is bounded to the existing item hard-delete mutation shared by Venue Mini App and
 the already-existing authenticated Telegram management callback. There is no unaudited overload:
@@ -74,9 +76,10 @@ server context. The exact audit identity is `MENU_ITEM_DELETED` / `menu_item` / 
 
 The transaction obtains and revalidates item/category scope, loads the existing authoritative
 promotion-reference snapshot, locks parents then rules then item in the current order, rechecks
-references, computes the bounded summary, performs current rule version/reference effects, deletes
-the item and appends audit before one commit. Not-found/repeat, denial, SQL/reference/concurrency or
-audit failure writes no success audit and leaves no partial item/rule/version state.
+references, blocks fixed rewards before writes, computes the bounded summary, re-homes any choice
+primary pointer, performs current rule version/reference effects, deletes the item and appends audit
+before one commit. Not-found/repeat, denial, fixed conflict, SQL/reference/concurrency or audit
+failure writes no success audit and leaves no partial item/rule/version state.
 
 The full sorted unique affected rule set is represented by exact count, first 50 sorted ids,
 omitted count and lowercase SHA-256 over UTF-8 `v1:` plus every id joined by comma. The full list is
@@ -90,8 +93,8 @@ Guest order/bill/History redesign, media/R2 and audit viewer.
 
 - P1: Gift With Item parity remains locally validated but still carries its recorded independent
   review/CI/staging release gate in canonical docs.
-- P1: Menu Item Hard Delete Audit is locally validated and still requires independent review,
-  green Actions, staging deploy and bounded Owner/Manager/Staff/foreign/Telegram/audit smoke.
+- P1: Menu Item Delete Dependency Guidance still requires independent review, green Actions,
+  staging deploy and repeat fixed-blocked plus target/choice-allowed Mini App/Telegram smoke.
 - P1 deferred: `REPEAT-MANUAL-001` remains environment-blocked without blocking independent work.
 - P2: exact promotion period boundaries, invalid timestamps, open-screen live refresh and duplicate
   extension/edit actions remain hardening work.
@@ -136,9 +139,12 @@ Selected runtime block, when implemented:
 ./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VenueMenuRepositoryTest*' --console=plain
 ./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VenueMenuRoutesTest*' --console=plain
 ./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VenuePromotionRepositoryTest*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*TelegramBotRouterTableTokenTest*' --console=plain
 JAVA_TOOL_OPTIONS=-Dapi.version=1.44 ./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*PromotionConfigurationConcurrencyPostgresTest*' --console=plain
 ./gradlew --no-daemon --max-workers=1 :backend:app:compileKotlin --console=plain
 ./gradlew --no-daemon --max-workers=1 :backend:app:ktlintCheck --console=plain
+npm --prefix miniapp run build
+CI=1 TZ=UTC MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke
 ```
 
 Then use the canonical QA matrix for Mini App regression, green Actions, staging deploy and bounded
@@ -164,12 +170,13 @@ Owner/Manager/Staff/foreign/audit/privacy smoke.
 2. Read this file, then `PRODUCT_SPEC`, `MENU_OPTIONS_STOPLIST`, `SECURITY_RBAC_MATRIX` and the
    relevant QA section; load historical audits only if evidence requires them.
 3. Verify `HEAD`, worktree and the item-delete call sites/tests against current code.
-4. Independently review the item-delete audit transaction, payload cardinality/privacy and both
-   Mini App/Telegram caller authority before any commit or release action.
+4. Independently review fixed-reward conflict atomicity, target/choice cleanup, Mini App guidance
+   and Telegram denial/success copy before any commit or release action.
 5. Do not touch stash or `scripts/dev/`; do not stage, commit, push or deploy without instruction.
 6. Update this handoff only if stage, blockers or next bounded block changes.
 
 ## 11. Last verified date
 
-2026-08-07. Menu item hard-delete audit implementation and local validation are recorded above;
-independent review, GitHub Actions and staging smoke remain required before release closure.
+2026-08-07. Underlying menu item hard-delete audit functional staging evidence is recorded above;
+the dependency-guidance polish still requires independent review, GitHub Actions, deploy and repeat
+blocked/allowed staging smoke before release closure.
