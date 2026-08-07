@@ -520,6 +520,25 @@ MUST:
 - `REPEAT_TEMPLATE`: repeat uses a saved template and applies it on the next verified table context; it must not create an order without QR/table context, selected tab and current menu/stop-list validation.
 - `POST_VISIT_FEEDBACK`: rating 1-5, tags and optional comment only after a confirmed visit/order close signal. Automated Telegram/worker prompts and public review automation remain disabled/future.
 - `VENUE_PROMOTION`: informational Phase 1 remains `DONE / MVP / STAGING-SMOKE-PASSED`.
+  Promotion creation audit is **DANGEROUS ACTION AUDIT SLICE / PROMOTION CREATION AUDIT / DONE /
+  MVP / STAGING-SMOKE-PASSED**. One committed Mini App or Telegram parent creation writes exactly
+  one `VENUE_PROMOTION_CREATED` for entity `venue_promotion`; actor/source are server-derived, and
+  parent, caller-connection initial rule and audit commit in one transaction. Informational and
+  Telegram Happy Hours/Gift parent-draft creation use `rules=[]`; Mini App Happy Hours/Gift records
+  the actually created initial rule. Banner media is separate. Denial, validation, `afterInsert`,
+  SQL or audit failure writes no success audit, and audit failure rolls back parent and initial
+  rules. The safe payload excludes promotion text/config/prices/media, Telegram PII and unrelated
+  PII. Configuration edit, schedule/target/reward, media/banner audit, Banner retry duplicate-draft
+  UX and broader dangerous-action audit remain future.
+  Promotion effective-state clarity is **PROMOTION EFFECTIVE STATE CLARITY / DONE / MVP /
+  STAGING-SMOKE-PASSED**. Database lifecycle status is not rewritten automatically. UI states are
+  `DRAFT`, `PAUSED`, `ARCHIVED`, `SCHEDULED`, `ACTIVE_NOW`, `EXPIRED`; manual lifecycle states take
+  precedence over time. `ACTIVE` is `Запланирована` before start, `Действует сейчас` inside the
+  inclusive period and `Период завершён` after end. Expired remains in `Текущие`, is Guest-hidden
+  and pricing-ineligible. `Продлить период` reuses update plus authoritative reload; there is no
+  automatic pause/archive, worker, system actor or lifecycle audit. Live time-boundary refresh,
+  invalid-timestamp fail-safe UI, exact-boundary fixtures and duplicate edit-action policy remain
+  future.
   The bounded Happy Hours percentage slice is
   `EXECUTABLE PROMOTIONS PHASE 2 / HAPPY HOURS PERCENT SLICE / DONE / STAGING-SMOKE-PASSED`:
   Owner/Manager configure item/category targets, venue-timezone weekday windows, lifecycle and

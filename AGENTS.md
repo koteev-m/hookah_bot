@@ -29,6 +29,15 @@ If docs conflict, follow the canonical doc for that area and record the conflict
 follow-up. Do not mark `PARTIAL`, `FUTURE` or `needs verification` items as done
 without code/test/smoke evidence.
 
+## Context loading
+
+At the start of a new task:
+1. Read `PROJECT_STATUS.md`.
+2. Read only the canonical docs relevant to the task.
+3. Verify mutable claims against current code, Git and tests.
+4. Do not load historical audit documents unless the task requires them.
+5. Update `PROJECT_STATUS.md` only when the current stage, blockers or next step changes.
+
 ## Workflow
 
 - Inspect relevant docs, routes, repositories, UI screens and tests before editing.

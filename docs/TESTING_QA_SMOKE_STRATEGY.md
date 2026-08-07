@@ -23,9 +23,13 @@ Current practice:
   `GIFT_WITH_ITEM BOT/MINIAPP PARITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`.
   GitHub Actions and staging cross-surface smoke remain required.
 - Promotion creation audit is
-  **DANGEROUS ACTION AUDIT SLICE / PROMOTION CREATION AUDIT / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
-  Focused H2 repository/routes, Telegram router and real PostgreSQL transaction coverage are green;
-  independent review, green Actions and staging smoke remain required.
+  **DANGEROUS ACTION AUDIT SLICE / PROMOTION CREATION AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**.
+  Focused H2 repository/routes, Telegram router and real PostgreSQL transaction coverage remain
+  regression gates; the bounded cross-surface audit/privacy/rollback staging smoke is recorded passed.
+- Promotion effective state clarity is
+  **PROMOTION EFFECTIVE STATE CLARITY / DONE / MVP / STAGING-SMOKE-PASSED**.
+  It changes presentation only: lifecycle status remains authoritative and no automatic lifecycle
+  mutation, worker or audit was added.
 - Promotion lifecycle status audit is
   **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**.
   This closes only promotion status/archive lifecycle audit; broader dangerous-action coverage
@@ -757,7 +761,7 @@ passed `136/136`. No backend production file changed, so backend selectors were 
 
 ### Promotion effective state clarity local quality gate
 
-Status: **PROMOTION EFFECTIVE STATE CLARITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**.
+Status: **PROMOTION EFFECTIVE STATE CLARITY / DONE / MVP / STAGING-SMOKE-PASSED**.
 
 Deterministic browser coverage fixes `Date.now` and proves that the one shared management helper
 labels and groups an in-period `ACTIVE` promotion as `Действует сейчас`, future `ACTIVE` as
@@ -783,6 +787,14 @@ moving the refreshed card to `Архив`, archived read-only/no-readiness behav
 access, Staff denial, venue-switch isolation and cleanup. Empty-state behavior is additionally
 covered by deterministic automated tests. This does not claim search, counts, pagination or a
 complete dataset beyond the existing at-most-`100` current and at-most-`100` archived response.
+
+Current effective-state correction: the bounded staging smoke passed with database lifecycle status
+unchanged. `DRAFT`, `PAUSED` and `ARCHIVED` retain priority over time; `ACTIVE` is `Запланирована`
+before start, `Действует сейчас` inside the inclusive period and `Период завершён` after end.
+Expired remains in `Текущие`, is absent from Guest and ineligible for pricing. `Продлить период`
+uses the existing update plus authoritative reload. No automatic pause/archive, worker, system actor
+or lifecycle audit exists. Live time-boundary refresh, invalid-timestamp fail-safe UI, exact-boundary
+fixtures and the duplicate extension/edit action decision remain future.
 
 ### Promotion Lifecycle Status Audit quality gate
 
@@ -865,6 +877,33 @@ bounded matrix has 10 tests and must report `skipped=0`, `failures=0`, `errors=0
 zero-test run or Testcontainers skip is a failed security gate. The ordinary release-critical
 selector must also execute `VenuePromotionRoutesTest`, `VenuePromotionRepositoryTest` and
 `AuditLogRepositoryTest` with nonzero, non-skipped results.
+
+### Promotion Creation Audit quality gate
+
+Status: **DANGEROUS ACTION AUDIT SLICE / PROMOTION CREATION AUDIT / DONE / MVP /
+STAGING-SMOKE-PASSED**.
+
+Regression must preserve the confirmed contract:
+
+- action `VENUE_PROMOTION_CREATED`, entity `venue_promotion`, server-derived actor and source
+  `VENUE_MINI_APP` or `TELEGRAM_BOT`;
+- parent, caller-connection initial rule and audit use one transaction; one committed parent writes
+  exactly one creation audit;
+- informational creation has `rules=[]`; Mini App Happy Hours/Gift records the actually created
+  initial rule; Telegram Happy Hours/Gift parent-draft creation has `rules=[]`;
+- Banner media persists separately and is not part of the creation payload;
+- denial, validation, `afterInsert`, SQL and audit failure write no success audit; audit failure
+  rolls back parent and initial rules;
+- payload is limited to venue/promotion/template identity, `DRAFT`, source and ordered rule
+  id/version/status rows and contains no promotion text/config/prices/media, Telegram PII or
+  unrelated PII.
+
+Focused repository, route, Telegram and real-PostgreSQL transaction gates must execute with no
+skips, failures or errors. The bounded staging smoke is recorded passed for Mini App and Telegram
+creation parity, informational/Mini App/Telegram rule projections, exactly-one audit, failure
+rollback and payload privacy. This closes only parent creation audit. Configuration edit,
+schedule/target/reward, media/banner, Banner retry duplicate-draft UX and broader dangerous-action
+audit remain future.
 
 ### STAFF ROLE / REMOVAL AUDIT quality gate
 
@@ -1402,7 +1441,8 @@ Telegram/staff-chat:
   gates remain active.
 - Venue Promotions Current/Archived Tabs UX: **VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / DONE / MVP / STAGING-SMOKE-PASSED**.
 - Promotion lifecycle status audit: **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**; broader dangerous-action coverage remains partial.
-- Promotion creation audit: **DANGEROUS ACTION AUDIT SLICE / PROMOTION CREATION AUDIT / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**; the mandatory repository/route/Telegram selectors and 12-test PostgreSQL gate require zero skipped/failures/errors. Configuration edit, media and broader dangerous-action coverage remain open.
+- Promotion creation audit: **DANGEROUS ACTION AUDIT SLICE / PROMOTION CREATION AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**; mandatory repository/route/Telegram and PostgreSQL gates remain regression requirements. Configuration edit, schedule/target/reward, media/banner and broader dangerous-action coverage remain open.
+- Promotion effective state clarity: **PROMOTION EFFECTIVE STATE CLARITY / DONE / MVP / STAGING-SMOKE-PASSED**; time-derived presentation does not rewrite lifecycle state.
 - Staff Operations Slice A:
   `MANAGER PARITY + SHIFT TIME DEFAULTS / DONE / MVP / STAGING-SMOKE-PASSED`.
 - Staff Schedule Phase 1:
