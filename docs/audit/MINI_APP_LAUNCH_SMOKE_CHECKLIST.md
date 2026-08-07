@@ -879,6 +879,16 @@ Current list UX: **VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / DONE /
   `100` is unchanged; totals, pagination, `hasMore`, cursor, server-side filtering or a
   separate/lazy archive endpoint remain a future follow-up.
 
+Promotion effective state clarity: **PROMOTION EFFECTIVE STATE CLARITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**.
+
+- Verify derived badge clarity without a lifecycle rewrite: `ACTIVE` is `Действует сейчас` inside
+  its period, `Запланирована` before start and `Период завершён` after end; `PAUSED`, `DRAFT` and
+  `ARCHIVED` retain their manual lifecycle meaning even with a past end date.
+- An expired active card remains in `Текущие`, is absent from `Архив`, says it is not shown to
+  guests, has `Продлить период` plus edit/archive, and has no `Приостановить`. Saving new dates
+  uses the existing update request and authoritative reload only; no automatic status, archive or
+  audit write is expected.
+
 Passed staging evidence: default `Текущие`; correct current/archive partition; one list at a
 time; mouse and keyboard tabs; pause staying current; canceled archive preserving status;
 confirmed archive moving the card after authoritative refresh; archived read-only card without

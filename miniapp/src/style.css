@@ -2848,6 +2848,27 @@ input[type="number"] {
   white-space: nowrap;
 }
 
+.venue-promotion-status[data-effective-state='ACTIVE_NOW'] {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.venue-promotion-status[data-effective-state='SCHEDULED'] {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.venue-promotion-status[data-effective-state='EXPIRED'] {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.venue-promotion-effective-copy {
+  margin: 0;
+  color: #475569;
+  line-height: 1.45;
+}
+
 .guest-venue-promotion {
   display: grid;
   gap: 6px;

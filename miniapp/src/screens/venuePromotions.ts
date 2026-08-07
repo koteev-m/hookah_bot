@@ -14,7 +14,6 @@ import type {
   VenuePromotionMenuCategoryDto,
   VenuePromotionMenuItemDto,
   VenuePromotionMutationRequest,
-  VenuePromotionStatus,
   VenuePromotionTemplateType,
   VenuePromotionTargetDto,
   VenuePromotionWeekdayWindowDto
@@ -97,10 +96,34 @@ type PromotionRefs = {
 type PromotionGroup = {
   key: string
   title: string
-  items: VenuePromotionDto[]
+  items: PromotionCardItem[]
 }
 
 type PromotionTab = 'current' | 'archived'
+
+type PromotionEffectiveState =
+  | 'DRAFT'
+  | 'PAUSED'
+  | 'ARCHIVED'
+  | 'SCHEDULED'
+  | 'ACTIVE_NOW'
+  | 'EXPIRED'
+
+type PromotionEffectivePresentation = {
+  state: PromotionEffectiveState
+  badge: string
+  groupKey: string
+  groupTitle: string
+  explanatoryCopy?: string
+  canPause: boolean
+  canPublish: boolean
+  canExtend: boolean
+}
+
+type PromotionCardItem = {
+  promotion: VenuePromotionDto
+  effective: PromotionEffectivePresentation
+}
 
 type PromotionLoadResult =
   | { ok: true }
@@ -482,55 +505,102 @@ function toVenueLocalInput(value: string | null | undefined, timezone: string): 
   }
 }
 
-function statusLabel(status: VenuePromotionStatus): string {
-  switch (status) {
+function promotionTime(value: string | null | undefined): number | null {
+  if (!value) return null
+  const timestamp = Date.parse(value)
+  return Number.isFinite(timestamp) ? timestamp : null
+}
+
+function derivePromotionEffectiveState(
+  promotion: VenuePromotionDto,
+  now: number
+): PromotionEffectivePresentation {
+  switch (promotion.status) {
     case 'DRAFT':
-      return 'Черновик'
-    case 'ACTIVE':
-      return 'Активна'
+      return {
+        state: 'DRAFT',
+        badge: 'Черновик',
+        groupKey: 'drafts',
+        groupTitle: 'Черновики',
+        canPause: false,
+        canPublish: true,
+        canExtend: false
+      }
     case 'PAUSED':
-      return 'Приостановлена'
+      return {
+        state: 'PAUSED',
+        badge: 'Приостановлена',
+        groupKey: 'paused',
+        groupTitle: 'Приостановлены',
+        canPause: false,
+        canPublish: true,
+        canExtend: false
+      }
     case 'ARCHIVED':
-      return 'Архив'
+      return {
+        state: 'ARCHIVED',
+        badge: 'Архив',
+        groupKey: 'archived',
+        groupTitle: 'Архив',
+        canPause: false,
+        canPublish: false,
+        canExtend: false
+      }
+    case 'ACTIVE': {
+      const startsAt = promotionTime(promotion.startsAt)
+      const endsAt = promotionTime(promotion.endsAt)
+      if (startsAt != null && startsAt > now) {
+        return {
+          state: 'SCHEDULED',
+          badge: 'Запланирована',
+          groupKey: 'scheduled',
+          groupTitle: 'Запланированы',
+          explanatoryCopy: 'Акция начнёт показываться гостям в указанный период.',
+          canPause: true,
+          canPublish: false,
+          canExtend: false
+        }
+      }
+      if (endsAt != null && endsAt < now) {
+        return {
+          state: 'EXPIRED',
+          badge: 'Период завершён',
+          groupKey: 'expired',
+          groupTitle: 'Период завершён',
+          explanatoryCopy: 'Акция сейчас не показывается гостям. Измените даты, чтобы она снова начала действовать.',
+          canPause: false,
+          canPublish: false,
+          canExtend: true
+        }
+      }
+      return {
+        state: 'ACTIVE_NOW',
+        badge: 'Действует сейчас',
+        groupKey: 'active',
+        groupTitle: 'Действуют сейчас',
+        canPause: true,
+        canPublish: false,
+        canExtend: false
+      }
+    }
   }
 }
 
-function groupPromotions(items: VenuePromotionDto[]): PromotionGroup[] {
-  const now = Date.now()
-  const active: VenuePromotionDto[] = []
-  const scheduled: VenuePromotionDto[] = []
-  const expired: VenuePromotionDto[] = []
-  const drafts: VenuePromotionDto[] = []
-  const paused: VenuePromotionDto[] = []
-
-  items.forEach((item) => {
-    if (item.status === 'DRAFT') {
-      drafts.push(item)
-      return
+function groupPromotions(items: VenuePromotionDto[], now: number): PromotionGroup[] {
+  const groups = new Map<string, PromotionGroup>()
+  items.forEach((promotion) => {
+    const effective = derivePromotionEffectiveState(promotion, now)
+    const group = groups.get(effective.groupKey) ?? {
+      key: effective.groupKey,
+      title: effective.groupTitle,
+      items: []
     }
-    if (item.status === 'PAUSED') {
-      paused.push(item)
-      return
-    }
-    if (item.status === 'ARCHIVED') return
-    const startsAt = item.startsAt ? new Date(item.startsAt).getTime() : Number.NEGATIVE_INFINITY
-    const endsAt = item.endsAt ? new Date(item.endsAt).getTime() : Number.POSITIVE_INFINITY
-    if (Number.isFinite(startsAt) && startsAt > now) {
-      scheduled.push(item)
-    } else if (Number.isFinite(endsAt) && endsAt < now) {
-      expired.push(item)
-    } else {
-      active.push(item)
-    }
+    group.items.push({ promotion, effective })
+    groups.set(group.key, group)
   })
-
-  return [
-    { key: 'active', title: 'Действуют сейчас', items: active },
-    { key: 'scheduled', title: 'Запланированы', items: scheduled },
-    { key: 'drafts', title: 'Черновики', items: drafts },
-    { key: 'paused', title: 'Приостановлены', items: paused },
-    { key: 'expired', title: 'Период завершён', items: expired }
-  ].filter((group) => group.items.length > 0)
+  return ['active', 'scheduled', 'drafts', 'paused', 'expired', 'archived']
+    .map((key) => groups.get(key))
+    .filter((group): group is PromotionGroup => group != null)
 }
 
 export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
@@ -1020,15 +1090,18 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
     selectTab(nextTab, true)
   }
 
-  const renderCard = (promotion: VenuePromotionDto) => {
+  const renderCard = ({ promotion, effective }: PromotionCardItem) => {
     const card = el('article', { className: 'card venue-promotion-card' })
     card.dataset.promotionId = String(promotion.id)
-    const isArchived = promotion.status === 'ARCHIVED'
+    card.dataset.effectiveState = effective.state
+    const isArchived = effective.state === 'ARCHIVED'
     const heading = el('div', { className: 'venue-promotion-card-heading' })
+    const badge = el('span', { className: 'venue-promotion-status', text: effective.badge })
+    badge.dataset.effectiveState = effective.state
     append(
       heading,
       el('h4', { text: promotion.title }),
-      el('span', { className: 'venue-promotion-status', text: statusLabel(promotion.status) })
+      badge
     )
     const period = el('p', {
       className: 'venue-order-sub',
@@ -1036,6 +1109,14 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
     })
     const description = el('p', { text: promotion.description })
     append(card, heading, period, description)
+    if (effective.explanatoryCopy) {
+      card.appendChild(
+        el('p', {
+          className: 'venue-promotion-effective-copy',
+          text: effective.explanatoryCopy
+        })
+      )
+    }
     const templateType = promotionTemplateType(promotion)
     card.appendChild(
       el('p', {
@@ -1137,6 +1218,14 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
       )
     } else {
       const actions = el('div', { className: 'venue-inline-actions' })
+      if (effective.canExtend) {
+        const extendButton = el('button', {
+          className: 'button-secondary button-small',
+          text: 'Продлить период'
+        }) as HTMLButtonElement
+        actions.appendChild(extendButton)
+        cardDisposables.push(on(extendButton, 'click', () => openEditForm(promotion)))
+      }
       const editButton = el('button', {
         className: 'button-secondary button-small',
         text: 'Редактировать'
@@ -1144,17 +1233,19 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
       actions.appendChild(editButton)
       cardDisposables.push(on(editButton, 'click', () => openEditForm(promotion)))
 
-      const nextStatus = promotion.status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE'
-      const statusButton = el('button', {
-        className: 'button-secondary button-small',
-        text: promotion.status === 'ACTIVE' ? 'Приостановить' : 'Опубликовать'
-      }) as HTMLButtonElement
-      actions.appendChild(statusButton)
-      cardDisposables.push(
-        on(statusButton, 'click', () => {
-          void changeStatus(promotion, nextStatus, statusButton)
-        })
-      )
+      if (effective.canPause || effective.canPublish) {
+        const nextStatus = effective.canPause ? 'PAUSED' : 'ACTIVE'
+        const statusButton = el('button', {
+          className: 'button-secondary button-small',
+          text: effective.canPause ? 'Приостановить' : 'Опубликовать'
+        }) as HTMLButtonElement
+        actions.appendChild(statusButton)
+        cardDisposables.push(
+          on(statusButton, 'click', () => {
+            void changeStatus(promotion, nextStatus, statusButton)
+          })
+        )
+      }
 
       const archiveButton = el('button', {
         className: 'button-danger button-small',
@@ -1171,6 +1262,7 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
     cardDisposables.splice(0).forEach((dispose) => dispose())
     refs.currentList.replaceChildren()
     refs.archivedList.replaceChildren()
+    const now = Date.now()
     const currentItems = items.filter(
       (promotion) =>
         promotion.status === 'DRAFT' || promotion.status === 'ACTIVE' || promotion.status === 'PAUSED'
@@ -1178,12 +1270,12 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
     const archivedItems = items.filter((promotion) => promotion.status === 'ARCHIVED')
     refs.currentEmpty.hidden = currentItems.length > 0
     refs.archivedEmpty.hidden = archivedItems.length > 0
-    groupPromotions(currentItems).forEach((group) => {
+    groupPromotions(currentItems, now).forEach((group) => {
       const section = el('section', { className: 'venue-promotion-group' })
       section.dataset.group = group.key
       section.appendChild(el('h3', { text: group.title }))
       const cards = el('div', { className: 'venue-promotion-list' })
-      group.items.forEach((promotion) => cards.appendChild(renderCard(promotion)))
+      group.items.forEach((item) => cards.appendChild(renderCard(item)))
       section.appendChild(cards)
       refs.currentList.appendChild(section)
     })
@@ -1191,7 +1283,9 @@ export function renderVenuePromotionsScreen(options: VenuePromotionsOptions) {
       const section = el('section', { className: 'venue-promotion-group' })
       section.dataset.group = 'archived'
       const cards = el('div', { className: 'venue-promotion-list' })
-      archivedItems.forEach((promotion) => cards.appendChild(renderCard(promotion)))
+      groupPromotions(archivedItems, now)
+        .flatMap((group) => group.items)
+        .forEach((item) => cards.appendChild(renderCard(item)))
       section.appendChild(cards)
       refs.archivedList.appendChild(section)
     }

@@ -755,6 +755,28 @@ CI=1 TZ=UTC MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke
 Current local evidence: Mini App production build passed and the full deterministic browser smoke
 passed `136/136`. No backend production file changed, so backend selectors were not rerun.
 
+### Promotion effective state clarity local quality gate
+
+Status: **PROMOTION EFFECTIVE STATE CLARITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED**.
+
+Deterministic browser coverage fixes `Date.now` and proves that the one shared management helper
+labels and groups an in-period `ACTIVE` promotion as `Действует сейчас`, future `ACTIVE` as
+`Запланирована`, and past-end `ACTIVE` as `Период завершён`. The expired card remains in
+`Текущие`, is absent from `Архив`, has guest-hidden explanatory copy and does not expose
+`Приостановить`; it exposes `Продлить период`, the existing edit form and archive. `PAUSED`,
+`DRAFT` and `ARCHIVED` retain lifecycle precedence even when their period is past. Extending an
+expired period uses only the existing update request and authoritative reload, with no status,
+archive or automatic lifecycle request as fake time advances. Existing pause/archive/`STALE`,
+Happy Hours and Gift smoke remain in the full suite. No backend production file or migration is
+required because Guest and rule application already guard `ACTIVE` plus the current date range.
+
+Required local validation:
+
+```bash
+npm --prefix miniapp run build
+CI=1 TZ=UTC MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke
+```
+
 Staging evidence passed for default `Текущие`, current/archive partition with one list visible,
 mouse and keyboard tabs, pause staying current, cancel archive preserving status, confirmed archive
 moving the refreshed card to `Архив`, archived read-only/no-readiness behavior, Owner/Manager

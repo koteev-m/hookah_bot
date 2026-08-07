@@ -13533,6 +13533,128 @@ test('venue owner creates edits activates and pauses informational promotion', a
   await expect(page.locator('.guest-venue-promotions')).toContainText('Обновлённое предложение для компаний.')
 })
 
+test('venue promotions present derived effective states without lifecycle mutation and extend expired periods', async ({ page }) => {
+  const referenceInstant = '2030-01-10T12:00:00.000Z'
+  await page.clock.setFixedTime(referenceInstant)
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenuePromotionsApi(page, {
+    role: 'OWNER',
+    nowEpochMs: Date.parse(referenceInstant),
+    promotions: [
+      {
+        id: 950,
+        title: 'Действует в текущем периоде',
+        description: 'Показывается гостям сейчас.',
+        startsAt: '2030-01-09T12:00:00.000Z',
+        endsAt: '2030-01-11T12:00:00.000Z',
+        status: 'ACTIVE'
+      },
+      {
+        id: 951,
+        title: 'Будущая акция',
+        description: 'Начнётся позже.',
+        startsAt: '2030-01-11T12:00:00.000Z',
+        endsAt: '2030-01-12T12:00:00.000Z',
+        status: 'ACTIVE'
+      },
+      {
+        id: 952,
+        title: 'Завершённая акция',
+        description: 'Её период уже закончился.',
+        startsAt: '2030-01-01T12:00:00.000Z',
+        endsAt: '2030-01-09T12:00:00.000Z',
+        status: 'ACTIVE'
+      },
+      {
+        id: 953,
+        title: 'Приостановленная завершённая акция',
+        description: 'Manual pause имеет приоритет.',
+        startsAt: '2030-01-01T12:00:00.000Z',
+        endsAt: '2030-01-09T12:00:00.000Z',
+        status: 'PAUSED'
+      },
+      {
+        id: 954,
+        title: 'Черновик с прошедшим периодом',
+        description: 'Draft имеет приоритет.',
+        startsAt: '2030-01-01T12:00:00.000Z',
+        endsAt: '2030-01-09T12:00:00.000Z',
+        status: 'DRAFT'
+      },
+      {
+        id: 955,
+        title: 'Архив с прошедшим периодом',
+        description: 'Archive имеет приоритет.',
+        startsAt: '2030-01-01T12:00:00.000Z',
+        endsAt: '2030-01-09T12:00:00.000Z',
+        status: 'ARCHIVED'
+      }
+    ]
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Акции', exact: true }).click()
+
+  const currentPanel = page.locator('#venue-promotions-current-panel')
+  const archivedPanel = page.locator('#venue-promotions-archived-panel')
+  const activeCard = currentPanel.locator('[data-promotion-id="950"]')
+  await expect(activeCard).toHaveAttribute('data-effective-state', 'ACTIVE_NOW')
+  await expect(activeCard.getByText('Действует сейчас', { exact: true })).toBeVisible()
+  await expect(activeCard.getByText('Период завершён', { exact: true })).toHaveCount(0)
+
+  const scheduledCard = currentPanel.locator('[data-promotion-id="951"]')
+  await expect(scheduledCard).toHaveAttribute('data-effective-state', 'SCHEDULED')
+  await expect(scheduledCard.getByText('Запланирована', { exact: true })).toBeVisible()
+  await expect(scheduledCard).toContainText('Акция начнёт показываться гостям в указанный период.')
+
+  const expiredGroup = currentPanel.locator('[data-group="expired"]')
+  const expiredCard = currentPanel.locator('[data-promotion-id="952"]')
+  await expect(expiredGroup).toBeVisible()
+  await expect(expiredCard).toHaveAttribute('data-effective-state', 'EXPIRED')
+  await expect(expiredCard.getByText('Период завершён', { exact: true })).toBeVisible()
+  await expect(expiredCard.getByText('Активна', { exact: true })).toHaveCount(0)
+  await expect(expiredCard).toContainText('Акция сейчас не показывается гостям. Измените даты, чтобы она снова начала действовать.')
+  await expect(expiredCard.getByRole('button', { name: 'Продлить период', exact: true })).toBeVisible()
+  await expect(expiredCard.getByRole('button', { name: 'Редактировать', exact: true })).toBeVisible()
+  await expect(expiredCard.getByRole('button', { name: 'Архивировать', exact: true })).toBeVisible()
+  await expect(expiredCard.getByRole('button', { name: 'Приостановить', exact: true })).toHaveCount(0)
+
+  const pausedCard = currentPanel.locator('[data-promotion-id="953"]')
+  await expect(pausedCard).toHaveAttribute('data-effective-state', 'PAUSED')
+  await expect(pausedCard.getByText('Приостановлена', { exact: true })).toBeVisible()
+  await expect(pausedCard.getByText('Период завершён', { exact: true })).toHaveCount(0)
+  await expect(currentPanel.locator('[data-group="paused"]')).toContainText('Приостановленная завершённая акция')
+
+  const draftCard = currentPanel.locator('[data-promotion-id="954"]')
+  await expect(draftCard).toHaveAttribute('data-effective-state', 'DRAFT')
+  await expect(draftCard.getByText('Черновик', { exact: true })).toBeVisible()
+  await expect(draftCard.getByText('Период завершён', { exact: true })).toHaveCount(0)
+
+  await page.getByRole('tab', { name: 'Архив', exact: true }).click()
+  const archivedCard = archivedPanel.locator('[data-promotion-id="955"]')
+  await expect(archivedCard).toHaveAttribute('data-effective-state', 'ARCHIVED')
+  await expect(archivedCard.getByText('Архив', { exact: true })).toBeVisible()
+  await expect(archivedCard.getByText('Период завершён', { exact: true })).toHaveCount(0)
+  await expect(archivedPanel.locator('[data-promotion-id="952"]')).toHaveCount(0)
+
+  await page.getByRole('tab', { name: 'Текущие', exact: true }).click()
+  await expiredCard.getByRole('button', { name: 'Продлить период', exact: true }).click()
+  const form = page.locator('.venue-promotion-form')
+  await expect(form.getByRole('heading', { name: 'Редактировать акцию', exact: true })).toBeVisible()
+  await form.getByLabel('Начало', { exact: true }).fill('2030-01-10T14:00')
+  await form.getByLabel('Окончание', { exact: true }).fill('2030-01-11T15:00')
+  await form.getByRole('button', { name: 'Сохранить изменения', exact: true }).click()
+  await expect(page.getByText('Изменения сохранены.', { exact: true })).toBeVisible()
+  const extendedCard = currentPanel.locator('[data-promotion-id="952"]')
+  await expect(extendedCard).toHaveAttribute('data-effective-state', 'ACTIVE_NOW')
+  await expect(extendedCard.getByText('Действует сейчас', { exact: true })).toBeVisible()
+  expect(api.getMutations()).toEqual(['update'])
+  expect(api.getLifecycleRequests()).toEqual([])
+
+  await page.clock.runFor(60_000)
+  expect(api.getLifecycleRequests()).toEqual([])
+})
+
 test('venue promotion tabs separate current and archived cards with accessible keyboard navigation', async ({ page }) => {
   const referenceInstant = '2030-01-10T12:00:00.000Z'
   await page.clock.setFixedTime(referenceInstant)
