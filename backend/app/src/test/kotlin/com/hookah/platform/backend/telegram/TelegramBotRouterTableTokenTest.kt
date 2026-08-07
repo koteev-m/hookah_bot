@@ -19260,6 +19260,7 @@ class TelegramBotRouterTableTokenTest {
                     terms = null,
                     templateType = VenuePromotionTemplateType.TEXT_ONLY,
                     createdByUserId = 200L,
+                    source = VenuePromotionLifecycleSource.TELEGRAM_BOT,
                 )
             } returns created
             coEvery { venuePromotionRepository.getPromotionForManagement(10L, 504L) } returns created
@@ -19352,12 +19353,78 @@ class TelegramBotRouterTableTokenTest {
                     terms = null,
                     templateType = VenuePromotionTemplateType.TEXT_ONLY,
                     createdByUserId = 200L,
+                    source = VenuePromotionLifecycleSource.TELEGRAM_BOT,
                 )
                 outboxEnqueuer.enqueueSendMessage(100, "Акция создана как черновик.", null)
                 outboxEnqueuer.enqueueSendMessage(
                     100,
                     match { it.contains("📣 Акция") && it.contains("Сет") && it.contains("Статус: черновик") },
                     match { it is InlineKeyboardMarkup },
+                )
+            }
+        }
+
+    @Test
+    fun `promotion creation audit failure returns database error without false success`() =
+        runBlocking {
+            val state =
+                DialogState(
+                    state = DialogStateType.VENUE_PROMOTION_WAIT_TERMS,
+                    payload =
+                        mapOf(
+                            "venue_id" to "10",
+                            "title" to "Сет",
+                            "description" to "Кальян и чай",
+                            "template_type" to VenuePromotionTemplateType.TEXT_ONLY.dbValue,
+                        ),
+                )
+            coEvery { dialogStateRepository.get(100L) } returns state
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery {
+                venuePromotionRepository.createPromotion(
+                    venueId = 10L,
+                    title = "Сет",
+                    description = "Кальян и чай",
+                    terms = null,
+                    templateType = VenuePromotionTemplateType.TEXT_ONLY,
+                    createdByUserId = 200L,
+                    source = VenuePromotionLifecycleSource.TELEGRAM_BOT,
+                )
+            } throws DatabaseUnavailableException()
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_007_01,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-promo-audit-failure",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_007, chat = Chat(id = 100L, type = "private")),
+                            data = "vp_terms_skip:10",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 1) {
+                venuePromotionRepository.createPromotion(
+                    venueId = 10L,
+                    title = "Сет",
+                    description = "Кальян и чай",
+                    terms = null,
+                    templateType = VenuePromotionTemplateType.TEXT_ONLY,
+                    createdByUserId = 200L,
+                    source = VenuePromotionLifecycleSource.TELEGRAM_BOT,
+                )
+            }
+            coVerify(exactly = 1) {
+                outboxEnqueuer.enqueueSendMessage(100L, "База недоступна, попробуйте позже.", null)
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    match { it.contains("Акция создана") },
+                    any(),
                 )
             }
         }
@@ -19397,6 +19464,7 @@ class TelegramBotRouterTableTokenTest {
                     terms = null,
                     templateType = VenuePromotionTemplateType.BANNER,
                     createdByUserId = 200L,
+                    source = VenuePromotionLifecycleSource.TELEGRAM_BOT,
                 )
             } returns created
             coEvery {
@@ -20506,6 +20574,7 @@ class TelegramBotRouterTableTokenTest {
                     terms = null,
                     templateType = VenuePromotionTemplateType.GIFT_WITH_ITEM,
                     createdByUserId = 200L,
+                    source = VenuePromotionLifecycleSource.TELEGRAM_BOT,
                 )
             } returns created
             coEvery { venuePromotionRepository.getPromotionForManagement(10L, 530L) } returns created
@@ -20619,6 +20688,7 @@ class TelegramBotRouterTableTokenTest {
                     terms = null,
                     templateType = VenuePromotionTemplateType.GIFT_WITH_ITEM,
                     createdByUserId = 200L,
+                    source = VenuePromotionLifecycleSource.TELEGRAM_BOT,
                 )
                 outboxEnqueuer.enqueueSendMessage(
                     100,
@@ -20937,6 +21007,7 @@ class TelegramBotRouterTableTokenTest {
                     terms = null,
                     templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
                     createdByUserId = 200L,
+                    source = VenuePromotionLifecycleSource.TELEGRAM_BOT,
                 )
             } returns created
             coEvery { venuePromotionRepository.getPromotionForManagement(10L, 507L) } returns created
@@ -20997,6 +21068,7 @@ class TelegramBotRouterTableTokenTest {
                     terms = null,
                     templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
                     createdByUserId = 200L,
+                    source = VenuePromotionLifecycleSource.TELEGRAM_BOT,
                 )
                 outboxEnqueuer.enqueueSendMessage(
                     100,

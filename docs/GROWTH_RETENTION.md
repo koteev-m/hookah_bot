@@ -1,8 +1,8 @@
 # Guest Growth And Retention Model
 
-Дата актуализации: 2026-08-06.
+Дата актуализации: 2026-08-07.
 
-Статус: **current product reference / SPEC UPDATED**. Runtime-фичи growth/retention не считаются release-ready, пока для них нет требуемого CI/staging evidence. Guest visit/order history foundation, Post-Visit Feedback MVP, Guest Favorites Phase 1 and Simple Venue Promotions Phase 1 are **DONE / MVP / STAGING-SMOKE-PASSED**. Repeat as Template Phase 1 is **MVP IMPLEMENTED / LOCAL VALIDATION PASSED / DEFERRED MANUAL SMOKE**; its environment-dependent production-readiness gate remains open in [`REPEAT-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#repeat-manual-001), while independent bounded development may continue. Executable Promotions Phase 2 / Happy Hours Percent is **DONE / STAGING-SMOKE-PASSED**. Gift parity is **GIFT_WITH_ITEM BOT/MINIAPP PARITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**; CI and staging evidence remain open. Promotion lifecycle status/archive audit is **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Venue promotions tabs are **VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / DONE / MVP / STAGING-SMOKE-PASSED**. Broader retention loops and dangerous-action audit remain partial/future.
+Статус: **current product reference / SPEC UPDATED**. Runtime-фичи growth/retention не считаются release-ready, пока для них нет требуемого CI/staging evidence. Guest visit/order history foundation, Post-Visit Feedback MVP, Guest Favorites Phase 1 and Simple Venue Promotions Phase 1 are **DONE / MVP / STAGING-SMOKE-PASSED**. Repeat as Template Phase 1 is **MVP IMPLEMENTED / LOCAL VALIDATION PASSED / DEFERRED MANUAL SMOKE**; its environment-dependent production-readiness gate remains open in [`REPEAT-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#repeat-manual-001), while independent bounded development may continue. Executable Promotions Phase 2 / Happy Hours Percent is **DONE / STAGING-SMOKE-PASSED**. Gift parity is **GIFT_WITH_ITEM BOT/MINIAPP PARITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**; CI and staging evidence remain open. Promotion creation audit is **DANGEROUS ACTION AUDIT SLICE / PROMOTION CREATION AUDIT / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. Promotion lifecycle status/archive audit is **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Venue promotions tabs are **VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / DONE / MVP / STAGING-SMOKE-PASSED**. Promotion configuration edit audit and broader dangerous-action audit remain partial/future.
 
 ## Core Rule
 
@@ -55,6 +55,8 @@ Current implementation is **partial**:
 - The tabs use the existing management response only. Its existing current/archive collection limit `100` remains unchanged; database-wide totals, pagination, `hasMore`, cursor, server-side filtering or a separate/lazy archive endpoint require separate product evidence and are not implied by this frontend slice.
 - Guest venue detail shows only `ACTIVE` promotions inside their current period after the existing `PUBLISHED` venue and guest/subscription availability checks. Draft, paused, archived, future and expired promotions are not disclosed.
 - Mini App and Telegram reuse the existing `venue_promotions` schema and `VenuePromotionRepository`; no migration, parallel model or discount engine was added. Informational promotions do not change order totals or send marketing notifications.
+- Promotion creation audit is **DANGEROUS ACTION AUDIT SLICE / PROMOTION CREATION AUDIT / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. Every successful Mini App or Telegram parent creation routes through one repository transaction and appends exactly one `VENUE_PROMOTION_CREATED` before commit.
+- Parent, Mini App `afterInsert` initial Happy Hours/Gift rule and creation audit share one JDBC connection. The safe payload contains only `venueId`, `promotionId`, `templateType`, `DRAFT` status, server-owned source and deterministic rule id/version/status rows; Telegram currently creates Happy Hours/Gift parent first, so those creation rows correctly use `rules=[]`. Audit failure rolls the entire create transaction back. Banner/media persistence remains separate and out of scope.
 - Promotion status/archive writes in Venue Mini App and Telegram now use one authoritative repository transaction. Parent status, currently synchronized rule statuses and exactly one `VENUE_PROMOTION_STATUS_CHANGED` or `VENUE_PROMOTION_ARCHIVED` audit commit together; audit failure rolls the lifecycle write back.
 - Actor and `VENUE_MINI_APP` / `TELEGRAM_BOT` source are server-derived. The safe audit payload is limited to venue/promotion/template identity, old/new status, source and deterministic rule id/version/old/new status rows. No-op, stale/repeated, denied, invalid/not-found and rollback paths create no success audit.
 - Mini App lifecycle `STALE` returns HTTP `409`, code `PROMOTION_LIFECYCLE_STALE` and message
@@ -323,6 +325,7 @@ Broader Growth smoke remains future:
 - Executable Promotions Phase 2 / Happy Hours Percent: `DONE / STAGING-SMOKE-PASSED`.
 - Gift parity: `GIFT_WITH_ITEM BOT/MINIAPP PARITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`; CI/staging gate remains open.
 - Promotion lifecycle status audit: `DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE / MVP / STAGING-SMOKE-PASSED`; this closes only status/archive lifecycle audit, not the broader dangerous-action audit.
+- Promotion creation audit: `DANGEROUS ACTION AUDIT SLICE / PROMOTION CREATION AUDIT / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`; this closes only committed parent creation audit, not configuration edits, media or broader dangerous-action audit.
 - Reviews/post-visit feedback: `DONE / MVP / STAGING-SMOKE-PASSED`.
 - Manual `5/5` public review link CTA: `DONE / MVP`; automated review prompts and public review automation remain `FUTURE / disabled`.
 - Low-rating manual follow-up through exact `VENUE_CHAT`: `DONE / MVP`; Platform feedback analytics dashboard remains `FUTURE`.
@@ -336,6 +339,8 @@ Guest Favorites Phase 1 is staging-closed. Repeat as Template Phase 1 is impleme
 
 Closed bounded frontend block: **VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / DONE / MVP / STAGING-SMOKE-PASSED**. It partitions the already loaded management response into mutually exclusive accessible `Текущие` and `Архив` panels without counts and changes no backend, lifecycle, audit, pricing, Happy Hours or Gift contract.
 
+Current bounded runtime block: **DANGEROUS ACTION AUDIT SLICE / PROMOTION CREATION AUDIT / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. One `createPromotion` transaction inserts the parent, runs caller-connection `afterInsert`, rereads the parent and ordered rule projection, appends one safe actor-bearing `VENUE_PROMOTION_CREATED`, then commits once. Validation, denial, `afterInsert`, initial-rule, SQL or audit failure produces no success audit and rolls back all create-transaction writes. Configuration edit, schedule/target/reward, media and compatibility audits remain future.
+
 Closed bounded runtime block: **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**:
 
 - preserves the existing `DRAFT` / `ACTIVE` / `PAUSED` / `ARCHIVED` lifecycle and routes all current Mini App and Telegram status/archive writers through one repository mutation;
@@ -347,7 +352,7 @@ Closed bounded runtime block: **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYC
   compatibility/stacking policy.
 
 Simple Venue Promotions Phase 1 remains `DONE / MVP / STAGING-SMOKE-PASSED`. The audit slice reuses
-the current schema and repository with no migration. Promotion create/config edit audit and broader
+the current schema and repository with no migration. Promotion configuration edit audit and broader
 dangerous-action audit coverage remain future.
 
 Current staging correction: the repeated lifecycle smoke passed for Owner Mini App status/archive,
@@ -367,7 +372,7 @@ behavior, Owner/Manager access, Staff denial, venue-switch isolation, automated 
 coverage and cleanup. The management API still returns at most `100` current and `100` archived
 records; no totals, counts, pagination, `hasMore`, cursor or all-cardinality completeness is claimed.
 
-Open P2/future remains unchanged: promotion create/config edit audit, audit payload
+Open P2/future remains unchanged: promotion configuration edit audit, audit payload
 cardinality/summary policy, archived rule configuration viewer, menu price/archive audit,
 `IMPLEMENT_DANGEROUS_ACTION_AUDIT_SLICE_NEXT — STAFF ROLE / REMOVAL AUDIT` (it begins with the
 target-audit-identifier privacy gate and stops before runtime changes if no allowed identifier

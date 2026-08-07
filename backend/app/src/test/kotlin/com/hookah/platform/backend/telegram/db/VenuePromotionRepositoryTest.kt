@@ -32,6 +32,299 @@ import kotlin.test.assertTrue
 
 class VenuePromotionRepositoryTest {
     @Test
+    fun `informational creations append exactly one safe audit each without deduplication`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("promotion-creation-informational-audit")
+            val fixture = seedFixture(jdbcUrl)
+            val repository = VenuePromotionRepository(dataSource(jdbcUrl))
+
+            val created =
+                listOf("Первый приватный заголовок", "Второй приватный заголовок").map { title ->
+                    repository.createPromotion(
+                        venueId = fixture.visibleVenueId,
+                        title = title,
+                        description = "Секретное описание создания",
+                        terms = "Секретные условия создания",
+                        templateType = VenuePromotionTemplateType.TEXT_ONLY,
+                        createdByUserId = OWNER_ID,
+                        source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
+                    )
+                }
+
+            assertEquals(2, created.map { it.id }.distinct().size)
+            val audits = readPromotionCreationAudits(jdbcUrl)
+            assertEquals(2, audits.size)
+            audits.zip(created).forEach { (audit, promotion) ->
+                assertPromotionCreationAudit(
+                    audit = audit,
+                    promotion = promotion,
+                    source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
+                    expectedRules = emptyList(),
+                )
+                val serialized = audit.payload.toString()
+                listOf(
+                    promotion.title,
+                    promotion.description,
+                    promotion.terms.orEmpty(),
+                    "config",
+                    "price",
+                    "reward",
+                    "media",
+                    "username",
+                    "initData",
+                ).filter { it.isNotEmpty() }.forEach { forbidden ->
+                    assertFalse(serialized.contains(forbidden, ignoreCase = true))
+                }
+            }
+        }
+
+    @Test
+    fun `happy hours and gift initial rules are committed in exact creation audits`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("promotion-creation-initial-rule-audit")
+            val fixture = seedFixture(jdbcUrl)
+            val dataSource = dataSource(jdbcUrl)
+            val repository = VenuePromotionRepository(dataSource)
+            val ruleRepository = VenuePromotionRuleRepository(dataSource)
+            val triggerCategoryId =
+                insertMenuCategory(jdbcUrl, fixture.visibleVenueId, "Кальяны", MenuSemanticType.HOOKAH)
+            val triggerItemId =
+                insertMenuItem(jdbcUrl, fixture.visibleVenueId, triggerCategoryId, "Приватный кальян")
+            val rewardCategoryId =
+                insertMenuCategory(jdbcUrl, fixture.visibleVenueId, "Чай", MenuSemanticType.TEA)
+            val rewardItemId =
+                insertMenuItem(jdbcUrl, fixture.visibleVenueId, rewardCategoryId, "Приватный подарок")
+            val windows = listOf(PromotionWeekdayWindow(weekday = 1, startsMinute = 720, endsMinute = 900))
+            var happyRule: VenuePromotionRule? = null
+            var giftRule: VenuePromotionRule? = null
+
+            val happyPromotion =
+                repository.createPromotion(
+                    venueId = fixture.visibleVenueId,
+                    title = "Приватный Happy Hours",
+                    description = "Не для аудита",
+                    terms = "Не для аудита",
+                    templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
+                    createdByUserId = OWNER_ID,
+                    source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
+                    afterInsert = { connection, promotionId ->
+                        happyRule =
+                            ruleRepository.createHappyHoursDraftRule(
+                                connection = connection,
+                                venueId = fixture.visibleVenueId,
+                                promotionId = promotionId,
+                                target =
+                                    HappyHoursRuleTargetInput(
+                                        targetType = PromotionRuleTargetType.MENU_ITEM,
+                                        menuItemId = triggerItemId,
+                                    ),
+                                discountPercent = 37,
+                                weekdayWindows = windows,
+                                createdByUserId = OWNER_ID,
+                            )
+                    },
+                )
+            val giftPromotion =
+                repository.createPromotion(
+                    venueId = fixture.visibleVenueId,
+                    title = "Приватный Gift",
+                    description = "Не для аудита",
+                    terms = "Не для аудита",
+                    templateType = VenuePromotionTemplateType.GIFT_WITH_ITEM,
+                    createdByUserId = OWNER_ID,
+                    source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
+                    afterInsert = { connection, promotionId ->
+                        giftRule =
+                            ruleRepository.createGiftWithItemDraftRule(
+                                connection = connection,
+                                venueId = fixture.visibleVenueId,
+                                promotionId = promotionId,
+                                target =
+                                    HappyHoursRuleTargetInput(
+                                        targetType = PromotionRuleTargetType.MENU_ITEM,
+                                        menuItemId = triggerItemId,
+                                    ),
+                                reward =
+                                    GiftWithItemRewardInput(
+                                        mode = PromotionRewardMode.FIXED_ITEM,
+                                        fixedMenuItemId = rewardItemId,
+                                    ),
+                                weekdayWindows = windows,
+                                createdByUserId = OWNER_ID,
+                            )
+                    },
+                )
+
+            val happyAudit = readPromotionCreationAudits(jdbcUrl, happyPromotion.id).single()
+            val giftAudit = readPromotionCreationAudits(jdbcUrl, giftPromotion.id).single()
+            val committedHappyRule = assertNotNull(happyRule)
+            val committedGiftRule = assertNotNull(giftRule)
+            assertPromotionCreationAudit(
+                audit = happyAudit,
+                promotion = happyPromotion,
+                source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
+                expectedRules =
+                    listOf(
+                        ExpectedCreationAuditRule(
+                            committedHappyRule.id,
+                            committedHappyRule.version,
+                            VenuePromotionStatus.DRAFT,
+                        ),
+                    ),
+            )
+            assertPromotionCreationAudit(
+                audit = giftAudit,
+                promotion = giftPromotion,
+                source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
+                expectedRules =
+                    listOf(
+                        ExpectedCreationAuditRule(
+                            committedGiftRule.id,
+                            committedGiftRule.version,
+                            VenuePromotionStatus.DRAFT,
+                        ),
+                    ),
+            )
+            val payloads = happyAudit.payload.toString() + giftAudit.payload.toString()
+            listOf("37", "Приватный кальян", "Приватный подарок", "720", "900").forEach { forbidden ->
+                assertFalse(payloads.contains(forbidden))
+            }
+        }
+
+    @Test
+    fun `creation audit orders multiple committed rules by rule id`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("promotion-creation-rule-order")
+            val fixture = seedFixture(jdbcUrl)
+            val repository = VenuePromotionRepository(dataSource(jdbcUrl))
+            val insertedRules = mutableListOf<Pair<Long, Int>>()
+            val promotion =
+                repository.createPromotion(
+                    venueId = fixture.visibleVenueId,
+                    title = "Legacy rules",
+                    description = "Ordering",
+                    terms = null,
+                    templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
+                    createdByUserId = OWNER_ID,
+                    source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
+                    afterInsert = { connection, promotionId ->
+                        listOf(2, 1).forEach { version ->
+                            connection.prepareStatement(
+                                """
+                                INSERT INTO promotion_rules (
+                                    promotion_id, venue_id, rule_type, target_type, target_value,
+                                    discount_percent, status, priority, version, created_by_user_id
+                                )
+                                VALUES (?, ?, 'HAPPY_HOURS_PERCENT', 'CATEGORY_TYPE', 'HOOKAH', 10, 'DRAFT', 100, ?, ?)
+                                """.trimIndent(),
+                                Statement.RETURN_GENERATED_KEYS,
+                            ).use { statement ->
+                                statement.setLong(1, promotionId)
+                                statement.setLong(2, fixture.visibleVenueId)
+                                statement.setInt(3, version)
+                                statement.setLong(4, OWNER_ID)
+                                statement.executeUpdate()
+                                statement.generatedKeys.use { keys ->
+                                    assertTrue(keys.next())
+                                    insertedRules += keys.getLong(1) to version
+                                }
+                            }
+                        }
+                    },
+                )
+
+            assertPromotionCreationAudit(
+                audit = readPromotionCreationAudits(jdbcUrl, promotion.id).single(),
+                promotion = promotion,
+                source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
+                expectedRules =
+                    insertedRules.sortedBy { it.first }.map { (ruleId, version) ->
+                        ExpectedCreationAuditRule(ruleId, version, VenuePromotionStatus.DRAFT)
+                    },
+            )
+        }
+
+    @Test
+    fun `after insert and audit failures roll back parent rules and creation audit`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("promotion-creation-rollback")
+            val fixture = seedFixture(jdbcUrl)
+            val dataSource = dataSource(jdbcUrl)
+            val repository = VenuePromotionRepository(dataSource)
+
+            assertFailsWith<IllegalStateException> {
+                repository.createPromotion(
+                    venueId = fixture.visibleVenueId,
+                    title = "afterInsert rollback",
+                    description = "Описание",
+                    terms = null,
+                    createdByUserId = OWNER_ID,
+                    source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
+                    afterInsert = { connection, promotionId ->
+                        insertDraftRuleForCreationTest(connection, fixture.visibleVenueId, promotionId)
+                        throw IllegalStateException("forced afterInsert failure")
+                    },
+                )
+            }
+            assertEquals(0, countRows(jdbcUrl, "venue_promotions"))
+            assertEquals(0, countRows(jdbcUrl, "promotion_rules"))
+            assertTrue(readPromotionCreationAudits(jdbcUrl).isEmpty())
+
+            val failingRepository =
+                VenuePromotionRepository(
+                    dataSource = dataSource,
+                    auditLogWriter = failingAuditLogWriter(),
+                )
+            assertFailsWith<DatabaseUnavailableException> {
+                failingRepository.createPromotion(
+                    venueId = fixture.visibleVenueId,
+                    title = "audit rollback",
+                    description = "Описание",
+                    terms = null,
+                    createdByUserId = OWNER_ID,
+                    source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
+                    afterInsert = { connection, promotionId ->
+                        insertDraftRuleForCreationTest(connection, fixture.visibleVenueId, promotionId)
+                    },
+                )
+            }
+            assertEquals(0, countRows(jdbcUrl, "venue_promotions"))
+            assertEquals(0, countRows(jdbcUrl, "promotion_rules"))
+            assertTrue(readPromotionCreationAudits(jdbcUrl).isEmpty())
+        }
+
+    @Test
+    fun `validation and sql failures create no promotion audit`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("promotion-creation-invalid-no-audit")
+            val fixture = seedFixture(jdbcUrl)
+            val repository = VenuePromotionRepository(dataSource(jdbcUrl))
+
+            assertFailsWith<IllegalArgumentException> {
+                repository.createPromotion(
+                    venueId = fixture.visibleVenueId,
+                    title = " ",
+                    description = "Описание",
+                    terms = null,
+                    createdByUserId = OWNER_ID,
+                    source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
+                )
+            }
+            assertFailsWith<DatabaseUnavailableException> {
+                repository.createPromotion(
+                    venueId = Long.MAX_VALUE,
+                    title = "Foreign key failure",
+                    description = "Описание",
+                    terms = null,
+                    createdByUserId = OWNER_ID,
+                    source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
+                )
+            }
+            assertEquals(0, countRows(jdbcUrl, "venue_promotions"))
+            assertTrue(readPromotionCreationAudits(jdbcUrl).isEmpty())
+        }
+
+    @Test
     fun `management CRUD keeps promotions venue scoped`() =
         runBlocking {
             val jdbcUrl = migratedJdbcUrl("venue-promotions-crud")
@@ -45,6 +338,7 @@ class VenuePromotionRepositoryTest {
                     description = "  Кальян и чай для компании  ",
                     terms = "  До 23:00  ",
                     createdByUserId = OWNER_ID,
+                    source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
                 )
 
             assertEquals("Сет на компанию", created.title)
@@ -114,6 +408,7 @@ class VenuePromotionRepositoryTest {
                     endsAt = Instant.parse("2030-12-31T23:59:59Z"),
                     templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
                     createdByUserId = OWNER_ID,
+                    source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
                 )
             val rule =
                 ruleRepository.createHappyHoursRule(
@@ -226,6 +521,7 @@ class VenuePromotionRepositoryTest {
                     description = "Без правил",
                     terms = null,
                     createdByUserId = OWNER_ID,
+                    source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
                 )
 
             val mutation =
@@ -270,6 +566,7 @@ class VenuePromotionRepositoryTest {
                     terms = null,
                     templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
                     createdByUserId = OWNER_ID,
+                    source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
                 )
             val firstRule =
                 ruleRepository.createHappyHoursRule(
@@ -406,6 +703,7 @@ class VenuePromotionRepositoryTest {
                     description = "Описание",
                     terms = null,
                     createdByUserId = OWNER_ID,
+                    source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
                 )
 
             val stale =
@@ -449,6 +747,7 @@ class VenuePromotionRepositoryTest {
                     endsAt = Instant.parse("2030-12-31T23:59:59Z"),
                     templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
                     createdByUserId = OWNER_ID,
+                    source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
                 )
             val rule =
                 ruleRepository.createHappyHoursRule(
@@ -509,6 +808,7 @@ class VenuePromotionRepositoryTest {
                     terms = null,
                     templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
                     createdByUserId = OWNER_ID,
+                    source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
                 )
             val rule =
                 ruleRepository.createHappyHoursRule(
@@ -558,6 +858,7 @@ class VenuePromotionRepositoryTest {
                     terms = null,
                     templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
                     createdByUserId = OWNER_ID,
+                    source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
                 )
 
             assertEquals(VenuePromotionTemplateType.HAPPY_HOURS_PERCENT, created.templateType)
@@ -582,6 +883,7 @@ class VenuePromotionRepositoryTest {
                     terms = null,
                     templateType = VenuePromotionTemplateType.BANNER,
                     createdByUserId = OWNER_ID,
+                    source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
                 )
 
             val added =
@@ -629,6 +931,7 @@ class VenuePromotionRepositoryTest {
                     terms = null,
                     templateType = VenuePromotionTemplateType.BANNER,
                     createdByUserId = OWNER_ID,
+                    source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
                 )
             assertNotNull(
                 promotionRepository.applyLifecycleForTest(
@@ -695,6 +998,7 @@ class VenuePromotionRepositoryTest {
                     terms = null,
                     templateType = VenuePromotionTemplateType.BANNER,
                     createdByUserId = OWNER_ID,
+                    source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
                 )
             assertNotNull(
                 promotionRepository.applyLifecycleForTest(
@@ -734,6 +1038,7 @@ class VenuePromotionRepositoryTest {
                     terms = null,
                     templateType = VenuePromotionTemplateType.BANNER,
                     createdByUserId = OWNER_ID,
+                    source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
                 )
             assertNotNull(
                 promotionRepository.applyLifecycleForTest(
@@ -792,6 +1097,7 @@ class VenuePromotionRepositoryTest {
                     terms = null,
                     templateType = VenuePromotionTemplateType.TEXT_ONLY,
                     createdByUserId = OWNER_ID,
+                    source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
                 )
             assertNull(
                 placementRepository.createRequest(
@@ -835,6 +1141,7 @@ class VenuePromotionRepositoryTest {
                     description = "Скидка на кальяны",
                     terms = null,
                     createdByUserId = OWNER_ID,
+                    source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
                 )
             assertNotNull(
                 promotionRepository.applyLifecycleForTest(
@@ -1294,6 +1601,7 @@ class VenuePromotionRepositoryTest {
                     description = "20% на кальяны",
                     terms = null,
                     createdByUserId = OWNER_ID,
+                    source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
                 )
 
             assertEquals(
@@ -1317,6 +1625,7 @@ class VenuePromotionRepositoryTest {
                     description = "20% на кальяны",
                     terms = null,
                     createdByUserId = OWNER_ID,
+                    source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
                 )
 
             val created =
@@ -1415,6 +1724,7 @@ class VenuePromotionRepositoryTest {
                     description = "20% на кальяны",
                     terms = null,
                     createdByUserId = OWNER_ID,
+                    source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
                 )
             val rule =
                 ruleRepository.createHappyHoursRule(
@@ -1486,6 +1796,7 @@ class VenuePromotionRepositoryTest {
                     endsAt = Instant.parse("2030-12-31T23:59:59Z"),
                     templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
                     createdByUserId = OWNER_ID,
+                    source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
                 )
             val expectedWindows =
                 listOf(
@@ -1613,6 +1924,7 @@ class VenuePromotionRepositoryTest {
                     endsAt = Instant.parse("2030-12-31T23:59:59Z"),
                     templateType = VenuePromotionTemplateType.GIFT_WITH_ITEM,
                     createdByUserId = OWNER_ID,
+                    source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
                 )
             val windows =
                 listOf(
@@ -1744,6 +2056,7 @@ class VenuePromotionRepositoryTest {
                     endsAt = Instant.parse("2030-12-31T23:59:59Z"),
                     templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
                     createdByUserId = OWNER_ID,
+                    source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
                 )
             val legacyRules =
                 listOf(
@@ -1837,6 +2150,7 @@ class VenuePromotionRepositoryTest {
                     endsAt = Instant.parse("2030-12-31T23:59:59Z"),
                     templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
                     createdByUserId = OWNER_ID,
+                    source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
                 )
             val originalWindows =
                 listOf(
@@ -1948,6 +2262,7 @@ class VenuePromotionRepositoryTest {
                     endsAt = Instant.parse("2030-12-31T23:59:59Z"),
                     templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
                     createdByUserId = OWNER_ID,
+                    source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
                 )
             val categoryRule =
                 ruleRepository.createHappyHoursDraftRule(
@@ -1984,6 +2299,7 @@ class VenuePromotionRepositoryTest {
                     endsAt = Instant.parse("2030-12-31T23:59:59Z"),
                     templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
                     createdByUserId = OWNER_ID,
+                    source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
                 )
             assertFailsWith<IllegalArgumentException> {
                 ruleRepository.createHappyHoursDraftRule(
@@ -2067,6 +2383,7 @@ class VenuePromotionRepositoryTest {
                     terms = null,
                     templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
                     createdByUserId = OWNER_ID,
+                    source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
                 )
             val rule =
                 ruleRepository.createHappyHoursDraftRule(
@@ -2466,6 +2783,7 @@ class VenuePromotionRepositoryTest {
                     description = "20% на кальяны",
                     terms = null,
                     createdByUserId = OWNER_ID,
+                    source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
                 )
             val rule =
                 ruleRepository.createHappyHoursRule(
@@ -2542,6 +2860,7 @@ class VenuePromotionRepositoryTest {
                     terms = null,
                     templateType = VenuePromotionTemplateType.GIFT_WITH_ITEM,
                     createdByUserId = OWNER_ID,
+                    source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
                 )
 
             val created =
@@ -2732,6 +3051,7 @@ class VenuePromotionRepositoryTest {
                     description = "20% на кальяны",
                     terms = null,
                     createdByUserId = OWNER_ID,
+                    source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
                 )
 
             assertFailsWith<IllegalArgumentException> {
@@ -2790,6 +3110,7 @@ class VenuePromotionRepositoryTest {
                     terms = null,
                     templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
                     createdByUserId = OWNER_ID,
+                    source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
                 )
             val rule =
                 ruleRepository.createHappyHoursRule(
@@ -2845,6 +3166,7 @@ class VenuePromotionRepositoryTest {
                     terms = null,
                     templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
                     createdByUserId = OWNER_ID,
+                    source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
                 )
             val rule =
                 ruleRepository.createHappyHoursRule(
@@ -2909,6 +3231,7 @@ class VenuePromotionRepositoryTest {
                     terms = null,
                     templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
                     createdByUserId = OWNER_ID,
+                    source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
                 )
             val happyRule =
                 ruleRepository.createHappyHoursRule(
@@ -2980,6 +3303,7 @@ class VenuePromotionRepositoryTest {
                     terms = null,
                     templateType = VenuePromotionTemplateType.GIFT_WITH_ITEM,
                     createdByUserId = OWNER_ID,
+                    source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
                 )
             val fixedGift =
                 ruleRepository.createGiftWithItemRule(
@@ -3117,6 +3441,49 @@ class VenuePromotionRepositoryTest {
             }
         }
 
+    private fun readPromotionCreationAudits(
+        jdbcUrl: String,
+        promotionId: Long? = null,
+    ): List<PromotionAuditRow> =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT actor_user_id, action, entity_type, entity_id, payload_json
+                FROM audit_log
+                WHERE action = ?
+                  AND (? IS NULL OR entity_id = ?)
+                ORDER BY id
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setString(1, VENUE_PROMOTION_CREATED_ACTION)
+                if (promotionId == null) {
+                    statement.setNull(2, java.sql.Types.BIGINT)
+                    statement.setNull(3, java.sql.Types.BIGINT)
+                } else {
+                    statement.setLong(2, promotionId)
+                    statement.setLong(3, promotionId)
+                }
+                statement.executeQuery().use { resultSet ->
+                    buildList {
+                        while (resultSet.next()) {
+                            add(
+                                PromotionAuditRow(
+                                    actorUserId = resultSet.getLong("actor_user_id"),
+                                    action = resultSet.getString("action"),
+                                    entityType = resultSet.getString("entity_type"),
+                                    entityId = resultSet.getLong("entity_id"),
+                                    payload =
+                                        Json.parseToJsonElement(
+                                            resultSet.getString("payload_json"),
+                                        ).jsonObject,
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
     private fun countPromotionLifecycleAudits(jdbcUrl: String): Int =
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             connection.prepareStatement(
@@ -3182,6 +3549,72 @@ class VenuePromotionRepositoryTest {
             assertEquals(expectedRule.newStatus.dbValue, rule.getValue("newStatus").jsonPrimitive.content)
         }
         assertEquals(expectedRules.map { it.ruleId }.sorted(), expectedRules.map { it.ruleId })
+    }
+
+    private fun assertPromotionCreationAudit(
+        audit: PromotionAuditRow,
+        promotion: VenuePromotion,
+        source: VenuePromotionLifecycleSource,
+        expectedRules: List<ExpectedCreationAuditRule>,
+    ) {
+        assertEquals(OWNER_ID, audit.actorUserId)
+        assertEquals(VENUE_PROMOTION_CREATED_ACTION, audit.action)
+        assertEquals("venue_promotion", audit.entityType)
+        assertEquals(promotion.id, audit.entityId)
+        assertEquals(
+            setOf("venueId", "promotionId", "templateType", "status", "source", "rules"),
+            audit.payload.keys,
+        )
+        assertEquals(promotion.venueId, audit.payload.getValue("venueId").jsonPrimitive.content.toLong())
+        assertEquals(promotion.id, audit.payload.getValue("promotionId").jsonPrimitive.content.toLong())
+        assertEquals(promotion.templateType.dbValue, audit.payload.getValue("templateType").jsonPrimitive.content)
+        assertEquals(VenuePromotionStatus.DRAFT.dbValue, audit.payload.getValue("status").jsonPrimitive.content)
+        assertEquals(source.name, audit.payload.getValue("source").jsonPrimitive.content)
+        val rules = audit.payload.getValue("rules").jsonArray.map { it.jsonObject }
+        assertEquals(expectedRules.size, rules.size)
+        rules.zip(expectedRules).forEach { (rule, expected) ->
+            assertEquals(setOf("ruleId", "version", "status"), rule.keys)
+            assertEquals(expected.ruleId, rule.getValue("ruleId").jsonPrimitive.content.toLong())
+            assertEquals(expected.version, rule.getValue("version").jsonPrimitive.content.toInt())
+            assertEquals(expected.status.dbValue, rule.getValue("status").jsonPrimitive.content)
+        }
+        assertEquals(expectedRules.map { it.ruleId }.sorted(), expectedRules.map { it.ruleId })
+    }
+
+    private fun insertDraftRuleForCreationTest(
+        connection: Connection,
+        venueId: Long,
+        promotionId: Long,
+    ) {
+        connection.prepareStatement(
+            """
+            INSERT INTO promotion_rules (
+                promotion_id, venue_id, rule_type, target_type, target_value,
+                discount_percent, status, priority, version, created_by_user_id
+            )
+            VALUES (?, ?, 'HAPPY_HOURS_PERCENT', 'CATEGORY_TYPE', 'HOOKAH', 10, 'DRAFT', 100, 1, ?)
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, promotionId)
+            statement.setLong(2, venueId)
+            statement.setLong(3, OWNER_ID)
+            statement.executeUpdate()
+        }
+    }
+
+    private fun countRows(
+        jdbcUrl: String,
+        table: String,
+    ): Int {
+        require(table in setOf("venue_promotions", "promotion_rules"))
+        return DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.createStatement().use { statement ->
+                statement.executeQuery("SELECT COUNT(*) FROM $table").use { resultSet ->
+                    assertTrue(resultSet.next())
+                    resultSet.getInt(1)
+                }
+            }
+        }
     }
 
     private fun readLifecycleSnapshot(
@@ -3464,6 +3897,12 @@ class VenuePromotionRepositoryTest {
         val version: Int,
         val oldStatus: VenuePromotionStatus,
         val newStatus: VenuePromotionStatus,
+    )
+
+    private data class ExpectedCreationAuditRule(
+        val ruleId: Long,
+        val version: Int,
+        val status: VenuePromotionStatus,
     )
 
     private data class LifecycleSnapshot(

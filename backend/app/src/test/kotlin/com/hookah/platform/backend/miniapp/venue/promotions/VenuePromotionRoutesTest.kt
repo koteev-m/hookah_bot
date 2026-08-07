@@ -75,7 +75,9 @@ class VenuePromotionRoutesTest {
                           "description": " Информационное предложение ",
                           "terms": " До закрытия ",
                           "startsAt": "2030-05-10T18:00",
-                          "endsAt": "2030-05-10T22:00"
+                          "endsAt": "2030-05-10T22:00",
+                          "actorUserId": $FOREIGN_ID,
+                          "source": "TELEGRAM_BOT"
                         }
                         """.trimIndent(),
                     )
@@ -91,6 +93,14 @@ class VenuePromotionRoutesTest {
             assertEquals("Информационное предложение", created.description)
             assertEquals("До закрытия", created.terms)
             assertEquals("DRAFT", created.status)
+            assertPromotionCreationAudit(
+                row = loadPromotionCreationAudits(jdbcUrl).single(),
+                actorUserId = OWNER_ID,
+                venueId = venueId,
+                promotionId = created.id,
+                templateType = "TEXT_ONLY",
+                source = "VENUE_MINI_APP",
+            )
 
             val listResponse =
                 client.get("/api/venue/$venueId/promotions") {
@@ -414,7 +424,24 @@ class VenuePromotionRoutesTest {
                 ).promotion
             val promotionId = created.id
             assertEquals("HAPPY_HOURS_PERCENT", created.templateType)
-            assertEquals(1, assertNotNull(created.rule).version)
+            val createdRule = assertNotNull(created.rule)
+            assertEquals(1, createdRule.version)
+            assertPromotionCreationAudit(
+                row = loadPromotionCreationAudits(jdbcUrl).single(),
+                actorUserId = MANAGER_ID,
+                venueId = venueId,
+                promotionId = promotionId,
+                templateType = "HAPPY_HOURS_PERCENT",
+                source = "VENUE_MINI_APP",
+                expectedRules =
+                    listOf(
+                        ExpectedCreationAuditRule(
+                            ruleId = createdRule.id,
+                            version = createdRule.version,
+                            status = "DRAFT",
+                        ),
+                    ),
+            )
 
             val updateResponse =
                 client.put("/api/venue/$venueId/promotions/$promotionId") {
@@ -473,6 +500,7 @@ class VenuePromotionRoutesTest {
                     ),
             )
             val auditCountBeforeDenials = loadPromotionAudits(jdbcUrl).size
+            val creationAuditCountBeforeDenials = loadPromotionCreationAudits(jdbcUrl).size
 
             updateMembershipRole(jdbcUrl, venueId, MANAGER_ID, "STAFF")
             val staffResponse =
@@ -555,6 +583,45 @@ class VenuePromotionRoutesTest {
                 }
             assertEquals(HttpStatusCode.Forbidden, crossVenuePromotionResponse.status)
             assertEquals(auditCountBeforeDenials, loadPromotionAudits(jdbcUrl).size)
+            assertEquals(creationAuditCountBeforeDenials, loadPromotionCreationAudits(jdbcUrl).size)
+        }
+
+    @Test
+    fun `creation audit failure returns safe service unavailable and rolls back parent and rule`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("venue-promotion-creation-audit-failure")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venueId = seedVenueMembership(jdbcUrl, OWNER_ID, "OWNER")
+            val categoryId = insertMenuCategory(jdbcUrl, venueId, "Кальяны")
+            val itemId = insertMenuItem(jdbcUrl, venueId, categoryId, "Кальян")
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                connection.createStatement().use { statement ->
+                    statement.execute(
+                        """
+                        ALTER TABLE audit_log
+                        ADD CONSTRAINT reject_promotion_creation_audit
+                        CHECK (action <> 'VENUE_PROMOTION_CREATED')
+                        """.trimIndent(),
+                    )
+                }
+            }
+
+            val response =
+                client.post("/api/venue/$venueId/promotions") {
+                    authenticated(issueToken(config, OWNER_ID))
+                    contentType(ContentType.Application.Json)
+                    setBody(happyHoursBody(menuItemId = itemId))
+                }
+
+            assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
+            assertApiErrorEnvelope(response, ApiErrorCodes.DATABASE_UNAVAILABLE)
+            assertEquals(0, countRows(jdbcUrl, "venue_promotions"))
+            assertEquals(0, countRows(jdbcUrl, "promotion_rules"))
+            assertTrue(loadPromotionCreationAudits(jdbcUrl).isEmpty())
         }
 
     @Test
@@ -1194,6 +1261,12 @@ class VenuePromotionRoutesTest {
         val newStatus: String,
     )
 
+    private data class ExpectedCreationAuditRule(
+        val ruleId: Long,
+        val version: Int,
+        val status: String,
+    )
+
     private data class PromotionRuleLifecycleDbState(
         val ruleId: Long,
         val version: Int,
@@ -1214,6 +1287,7 @@ class VenuePromotionRoutesTest {
                 SELECT actor_user_id, action, entity_type, entity_id, payload_json
                 FROM audit_log
                 WHERE entity_type = 'venue_promotion'
+                  AND action IN ('VENUE_PROMOTION_STATUS_CHANGED', 'VENUE_PROMOTION_ARCHIVED')
                 ORDER BY id
                 """.trimIndent(),
             ).use { statement ->
@@ -1235,6 +1309,82 @@ class VenuePromotionRoutesTest {
                 }
             }
         }
+
+    private fun loadPromotionCreationAudits(jdbcUrl: String): List<PromotionAuditRow> =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT actor_user_id, action, entity_type, entity_id, payload_json
+                FROM audit_log
+                WHERE entity_type = 'venue_promotion'
+                  AND action = 'VENUE_PROMOTION_CREATED'
+                ORDER BY id
+                """.trimIndent(),
+            ).use { statement ->
+                statement.executeQuery().use { rs ->
+                    buildList {
+                        while (rs.next()) {
+                            add(
+                                PromotionAuditRow(
+                                    actorUserId = rs.getLong("actor_user_id"),
+                                    action = rs.getString("action"),
+                                    entityType = rs.getString("entity_type"),
+                                    entityId = rs.getLong("entity_id").let { if (rs.wasNull()) null else it },
+                                    payload = json.parseToJsonElement(rs.getString("payload_json")).jsonObject,
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+    private fun assertPromotionCreationAudit(
+        row: PromotionAuditRow,
+        actorUserId: Long,
+        venueId: Long,
+        promotionId: Long,
+        templateType: String,
+        source: String,
+        expectedRules: List<ExpectedCreationAuditRule> = emptyList(),
+    ) {
+        assertEquals(actorUserId, row.actorUserId)
+        assertEquals("VENUE_PROMOTION_CREATED", row.action)
+        assertEquals("venue_promotion", row.entityType)
+        assertEquals(promotionId, row.entityId)
+        assertEquals(
+            setOf("venueId", "promotionId", "templateType", "status", "source", "rules"),
+            row.payload.keys,
+        )
+        assertEquals(venueId, row.payload.getValue("venueId").jsonPrimitive.long)
+        assertEquals(promotionId, row.payload.getValue("promotionId").jsonPrimitive.long)
+        assertEquals(templateType, row.payload.getValue("templateType").jsonPrimitive.content)
+        assertEquals("DRAFT", row.payload.getValue("status").jsonPrimitive.content)
+        assertEquals(source, row.payload.getValue("source").jsonPrimitive.content)
+        val rules = row.payload.getValue("rules").jsonArray.map { it.jsonObject }
+        assertEquals(expectedRules.size, rules.size)
+        rules.zip(expectedRules).forEach { (rule, expected) ->
+            assertEquals(setOf("ruleId", "version", "status"), rule.keys)
+            assertEquals(expected.ruleId, rule.getValue("ruleId").jsonPrimitive.long)
+            assertEquals(expected.version, rule.getValue("version").jsonPrimitive.content.toInt())
+            assertEquals(expected.status, rule.getValue("status").jsonPrimitive.content)
+        }
+    }
+
+    private fun countRows(
+        jdbcUrl: String,
+        table: String,
+    ): Int {
+        require(table in setOf("venue_promotions", "promotion_rules"))
+        return DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.createStatement().use { statement ->
+                statement.executeQuery("SELECT COUNT(*) FROM $table").use { rs ->
+                    assertTrue(rs.next())
+                    rs.getInt(1)
+                }
+            }
+        }
+    }
 
     private fun assertPromotionAudit(
         row: PromotionAuditRow,

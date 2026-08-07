@@ -9785,6 +9785,7 @@ class TelegramBotRouter(
                             terms = null,
                             templateType = templateType,
                             createdByUserId = userId,
+                            source = VenuePromotionLifecycleSource.TELEGRAM_BOT,
                         )
                     } catch (e: DatabaseUnavailableException) {
                         enqueueMessage(chatId, "База недоступна, попробуйте позже.")
@@ -9809,6 +9810,7 @@ class TelegramBotRouter(
                             terms = null,
                             templateType = templateType,
                             createdByUserId = userId,
+                            source = VenuePromotionLifecycleSource.TELEGRAM_BOT,
                         )
                     } catch (e: DatabaseUnavailableException) {
                         enqueueMessage(chatId, "База недоступна, попробуйте позже.")
@@ -9949,6 +9951,7 @@ class TelegramBotRouter(
                         terms = null,
                         templateType = VenuePromotionTemplateType.BANNER,
                         createdByUserId = userId,
+                        source = VenuePromotionLifecycleSource.TELEGRAM_BOT,
                     )
                 } catch (e: DatabaseUnavailableException) {
                     enqueueMessage(chatId, "База недоступна, попробуйте позже.")
@@ -10065,6 +10068,7 @@ class TelegramBotRouter(
                         terms = normalizedTerms,
                         templateType = templateType,
                         createdByUserId = userId,
+                        source = VenuePromotionLifecycleSource.TELEGRAM_BOT,
                     )
                 } catch (e: DatabaseUnavailableException) {
                     enqueueMessage(chatId, "База недоступна, попробуйте позже.")

@@ -156,6 +156,7 @@ fun Route.venuePromotionRoutes(
                                 endsAt = input.endsAt,
                                 templateType = templateType,
                                 createdByUserId = userId,
+                                source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
                                 afterInsert = { connection, promotionId ->
                                     ruleRepository.createHappyHoursDraftRule(
                                         connection = connection,
@@ -184,6 +185,7 @@ fun Route.venuePromotionRoutes(
                                 endsAt = input.endsAt,
                                 templateType = templateType,
                                 createdByUserId = userId,
+                                source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
                                 afterInsert = { connection, promotionId ->
                                     ruleRepository.createGiftWithItemDraftRule(
                                         connection = connection,
@@ -208,6 +210,7 @@ fun Route.venuePromotionRoutes(
                             endsAt = input.endsAt,
                             templateType = templateType,
                             createdByUserId = userId,
+                            source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
                         )
                 }
             call.respond(VenuePromotionResponse(created.toDto(venuePromotionRuleRepository)))

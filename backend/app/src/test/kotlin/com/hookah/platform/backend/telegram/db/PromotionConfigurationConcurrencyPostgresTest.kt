@@ -443,6 +443,154 @@ class PromotionConfigurationConcurrencyPostgresTest {
         }
 
     @Test
+    fun `promotion creation commits parent initial rule and one exact audit on PostgreSQL`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource)
+                val ruleRepository = VenuePromotionRuleRepository(dataSource)
+                var createdRule: VenuePromotionRule? = null
+                val promotion =
+                    VenuePromotionRepository(dataSource, ruleRepository).createPromotion(
+                        venueId = fixture.venueId,
+                        title = "PostgreSQL creation audit",
+                        description = "Private configuration",
+                        terms = "Private terms",
+                        templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
+                        createdByUserId = USER_ID,
+                        source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
+                        afterInsert = { connection, promotionId ->
+                            createdRule =
+                                ruleRepository.createHappyHoursDraftRule(
+                                    connection = connection,
+                                    venueId = fixture.venueId,
+                                    promotionId = promotionId,
+                                    target =
+                                        HappyHoursRuleTargetInput(
+                                            targetType = PromotionRuleTargetType.MENU_ITEM,
+                                            menuItemId = fixture.itemAId,
+                                        ),
+                                    discountPercent = 25,
+                                    weekdayWindows =
+                                        listOf(
+                                            PromotionWeekdayWindow(
+                                                weekday = MONDAY,
+                                                startsMinute = 12 * 60,
+                                                endsMinute = 14 * 60,
+                                            ),
+                                        ),
+                                    createdByUserId = USER_ID,
+                                )
+                        },
+                    )
+
+                val rule = assertNotNull(createdRule)
+                assertNotNull(
+                    VenuePromotionRepository(dataSource)
+                        .getPromotionForManagement(fixture.venueId, promotion.id),
+                )
+                assertEquals(
+                    rule,
+                    VenuePromotionRuleRepository(dataSource)
+                        .getRuleForManagement(fixture.venueId, rule.id),
+                )
+                val audit = readPromotionCreationAudits(dataSource, promotion.id).single()
+                assertEquals(USER_ID, audit.actorUserId)
+                assertEquals(VENUE_PROMOTION_CREATED_ACTION, audit.action)
+                assertEquals(
+                    setOf("venueId", "promotionId", "templateType", "status", "source", "rules"),
+                    audit.payload.keys,
+                )
+                assertEquals(fixture.venueId, audit.payload.getValue("venueId").jsonPrimitive.content.toLong())
+                assertEquals(promotion.id, audit.payload.getValue("promotionId").jsonPrimitive.content.toLong())
+                assertEquals(
+                    VenuePromotionTemplateType.HAPPY_HOURS_PERCENT.dbValue,
+                    audit.payload.getValue("templateType").jsonPrimitive.content,
+                )
+                assertEquals(VenuePromotionStatus.DRAFT.dbValue, audit.payload.getValue("status").jsonPrimitive.content)
+                assertEquals(
+                    VenuePromotionLifecycleSource.VENUE_MINI_APP.name,
+                    audit.payload.getValue("source").jsonPrimitive.content,
+                )
+                val auditedRule = audit.payload.getValue("rules").jsonArray.single().jsonObject
+                assertEquals(setOf("ruleId", "version", "status"), auditedRule.keys)
+                assertEquals(rule.id, auditedRule.getValue("ruleId").jsonPrimitive.content.toLong())
+                assertEquals(rule.version, auditedRule.getValue("version").jsonPrimitive.content.toInt())
+                assertEquals(rule.status.dbValue, auditedRule.getValue("status").jsonPrimitive.content)
+            }
+        }
+
+    @Test
+    fun `promotion creation audit failure rolls back parent and initial rule on PostgreSQL`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource)
+                val parentCountBefore = countRows(dataSource, "venue_promotions")
+                val ruleCountBefore = countRows(dataSource, "promotion_rules")
+                val auditCountBefore = readPromotionCreationAudits(dataSource).size
+                val realAuditWriter = AuditLogRepository(dataSource)
+                val failingAuditWriter =
+                    TransactionalAuditLogWriter { connection, actorUserId, action, entityType, entityId, payload ->
+                        realAuditWriter.appendJson(
+                            connection = connection,
+                            actorUserId = actorUserId,
+                            action = action,
+                            entityType = entityType,
+                            entityId = entityId,
+                            payload = payload,
+                        )
+                        throw SQLException("Synthetic promotion creation audit failure", "XX999")
+                    }
+                val ruleRepository = VenuePromotionRuleRepository(dataSource)
+                val failingRepository =
+                    VenuePromotionRepository(
+                        dataSource = dataSource,
+                        ruleRepository = ruleRepository,
+                        auditLogWriter = failingAuditWriter,
+                    )
+
+                assertFailsWith<DatabaseUnavailableException> {
+                    failingRepository.createPromotion(
+                        venueId = fixture.venueId,
+                        title = "Must rollback",
+                        description = "Private configuration",
+                        terms = null,
+                        templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
+                        createdByUserId = USER_ID,
+                        source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
+                        afterInsert = { connection, promotionId ->
+                            ruleRepository.createHappyHoursDraftRule(
+                                connection = connection,
+                                venueId = fixture.venueId,
+                                promotionId = promotionId,
+                                target =
+                                    HappyHoursRuleTargetInput(
+                                        targetType = PromotionRuleTargetType.MENU_ITEM,
+                                        menuItemId = fixture.itemAId,
+                                    ),
+                                discountPercent = 25,
+                                weekdayWindows =
+                                    listOf(
+                                        PromotionWeekdayWindow(
+                                            weekday = MONDAY,
+                                            startsMinute = 12 * 60,
+                                            endsMinute = 14 * 60,
+                                        ),
+                                    ),
+                                createdByUserId = USER_ID,
+                            )
+                        },
+                    )
+                }
+
+                assertEquals(parentCountBefore, countRows(dataSource, "venue_promotions"))
+                assertEquals(ruleCountBefore, countRows(dataSource, "promotion_rules"))
+                assertEquals(auditCountBefore, readPromotionCreationAudits(dataSource).size)
+            }
+        }
+
+    @Test
     fun `promotion lifecycle audit failure rolls back status archive rules and timestamps`() =
         runBlocking {
             val database = PostgresTestEnv.createDatabase()
@@ -758,6 +906,7 @@ class PromotionConfigurationConcurrencyPostgresTest {
                 endsAt = PROMOTION_END,
                 templateType = VenuePromotionTemplateType.HAPPY_HOURS_PERCENT,
                 createdByUserId = USER_ID,
+                source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
             )
         val rule =
             ruleRepository.createHappyHoursDraftRule(
@@ -938,6 +1087,7 @@ class PromotionConfigurationConcurrencyPostgresTest {
                 endsAt = PROMOTION_END,
                 templateType = VenuePromotionTemplateType.GIFT_WITH_ITEM,
                 createdByUserId = USER_ID,
+                source = VenuePromotionLifecycleSource.VENUE_MINI_APP,
             )
         ruleRepository.createGiftWithItemDraftRule(
             venueId = base.venueId,
@@ -1168,6 +1318,44 @@ class PromotionConfigurationConcurrencyPostgresTest {
             }
         }
 
+    private fun readPromotionCreationAudits(
+        dataSource: DataSource,
+        promotionId: Long? = null,
+    ): List<PromotionLifecycleAudit> =
+        dataSource.connection.use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT actor_user_id, action, payload_json
+                FROM audit_log
+                WHERE action = ?
+                  AND (? IS NULL OR entity_id = ?)
+                ORDER BY id
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setString(1, VENUE_PROMOTION_CREATED_ACTION)
+                if (promotionId == null) {
+                    statement.setNull(2, java.sql.Types.BIGINT)
+                    statement.setNull(3, java.sql.Types.BIGINT)
+                } else {
+                    statement.setLong(2, promotionId)
+                    statement.setLong(3, promotionId)
+                }
+                statement.executeQuery().use { rs ->
+                    buildList {
+                        while (rs.next()) {
+                            add(
+                                PromotionLifecycleAudit(
+                                    actorUserId = rs.getLong("actor_user_id"),
+                                    action = rs.getString("action"),
+                                    payload = Json.parseToJsonElement(rs.getString("payload_json")).jsonObject,
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
     private fun ordersRepository(
         dataSource: DataSource,
         now: Instant,
@@ -1382,7 +1570,7 @@ class PromotionConfigurationConcurrencyPostgresTest {
         connection: Connection,
         table: String,
     ): Int {
-        require(table in FINANCIAL_TABLES)
+        require(table in FINANCIAL_TABLES + PROMOTION_CREATION_TABLES)
         return connection.prepareStatement("SELECT COUNT(*) FROM $table").use { statement ->
             statement.executeQuery().use { rs ->
                 rs.next()
@@ -1970,5 +2158,6 @@ class PromotionConfigurationConcurrencyPostgresTest {
                 "order_promotion_reward_items",
                 "guest_batch_idempotency",
             )
+        val PROMOTION_CREATION_TABLES = setOf("venue_promotions", "promotion_rules")
     }
 }

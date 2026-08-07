@@ -22,6 +22,10 @@ Current practice:
 - Gift parity is
   `GIFT_WITH_ITEM BOT/MINIAPP PARITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`.
   GitHub Actions and staging cross-surface smoke remain required.
+- Promotion creation audit is
+  **DANGEROUS ACTION AUDIT SLICE / PROMOTION CREATION AUDIT / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+  Focused H2 repository/routes, Telegram router and real PostgreSQL transaction coverage are green;
+  independent review, green Actions and staging smoke remain required.
 - Promotion lifecycle status audit is
   **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**.
   This closes only promotion status/archive lifecycle audit; broader dangerous-action coverage
@@ -1376,6 +1380,7 @@ Telegram/staff-chat:
   gates remain active.
 - Venue Promotions Current/Archived Tabs UX: **VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / DONE / MVP / STAGING-SMOKE-PASSED**.
 - Promotion lifecycle status audit: **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**; broader dangerous-action coverage remains partial.
+- Promotion creation audit: **DANGEROUS ACTION AUDIT SLICE / PROMOTION CREATION AUDIT / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**; the mandatory repository/route/Telegram selectors and 12-test PostgreSQL gate require zero skipped/failures/errors. Configuration edit, media and broader dangerous-action coverage remain open.
 - Staff Operations Slice A:
   `MANAGER PARITY + SHIFT TIME DEFAULTS / DONE / MVP / STAGING-SMOKE-PASSED`.
 - Staff Schedule Phase 1:

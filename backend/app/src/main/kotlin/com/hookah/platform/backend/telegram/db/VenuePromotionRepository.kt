@@ -107,6 +107,7 @@ data class VenuePromotionLifecycleMutation(
 
 const val VENUE_PROMOTION_STATUS_CHANGED_ACTION = "VENUE_PROMOTION_STATUS_CHANGED"
 const val VENUE_PROMOTION_ARCHIVED_ACTION = "VENUE_PROMOTION_ARCHIVED"
+const val VENUE_PROMOTION_CREATED_ACTION = "VENUE_PROMOTION_CREATED"
 
 class VenuePromotionRepository(
     private val dataSource: DataSource?,
@@ -122,6 +123,7 @@ class VenuePromotionRepository(
         endsAt: Instant? = null,
         templateType: VenuePromotionTemplateType = VenuePromotionTemplateType.TEXT_ONLY,
         createdByUserId: Long,
+        source: VenuePromotionLifecycleSource,
         afterInsert: ((Connection, Long) -> Unit)? = null,
     ): VenuePromotion {
         val ds = dataSource ?: throw DatabaseUnavailableException()
@@ -166,6 +168,19 @@ class VenuePromotionRepository(
                         val created =
                             selectPromotion(connection, venueId = venueId, promotionId = id)
                                 ?: throw SQLException("Created venue promotion not found")
+                        val createdRuleStates =
+                            loadPromotionRuleStates(
+                                connection = connection,
+                                venueId = venueId,
+                                promotionId = id,
+                            )
+                        appendCreationAudit(
+                            connection = connection,
+                            actorUserId = createdByUserId,
+                            source = source,
+                            promotion = created,
+                            ruleStates = createdRuleStates,
+                        )
                         connection.commit()
                         created
                     } catch (e: Exception) {
@@ -1023,6 +1038,46 @@ class VenuePromotionRepository(
                     put("templateType", newPromotion.templateType.dbValue)
                     put("oldStatus", oldPromotion.status.dbValue)
                     put("newStatus", newPromotion.status.dbValue)
+                    put("source", source.name)
+                    put("rules", rulesPayload)
+                },
+        )
+    }
+
+    private fun appendCreationAudit(
+        connection: Connection,
+        actorUserId: Long,
+        source: VenuePromotionLifecycleSource,
+        promotion: VenuePromotion,
+        ruleStates: List<PromotionLifecycleRuleState>,
+    ) {
+        if (promotion.status != VenuePromotionStatus.DRAFT) {
+            throw SQLException("Created promotion must be in DRAFT status")
+        }
+        val rulesPayload =
+            buildJsonArray {
+                ruleStates.forEach { rule ->
+                    add(
+                        buildJsonObject {
+                            put("ruleId", rule.ruleId)
+                            put("version", rule.version)
+                            put("status", rule.status.dbValue)
+                        },
+                    )
+                }
+            }
+        auditLogWriter.appendJson(
+            connection = connection,
+            actorUserId = actorUserId,
+            action = VENUE_PROMOTION_CREATED_ACTION,
+            entityType = "venue_promotion",
+            entityId = promotion.id,
+            payload =
+                buildJsonObject {
+                    put("venueId", promotion.venueId)
+                    put("promotionId", promotion.id)
+                    put("templateType", promotion.templateType.dbValue)
+                    put("status", promotion.status.dbValue)
                     put("source", source.name)
                     put("rules", rulesPayload)
                 },
