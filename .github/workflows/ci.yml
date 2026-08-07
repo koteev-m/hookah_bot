@@ -90,6 +90,8 @@ jobs:
             --tests "VenueOrderRoutesTest" \
             --tests "VenuePromotionRoutesTest" \
             --tests "VenuePromotionRepositoryTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepositoryTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.VenueMenuRoutesTest" \
             --tests "AuditLogRepositoryTest" \
             --tests "VenueStaffRoutesTest" \
             --tests "VenueStaffRepositoryTest" \
@@ -120,6 +122,8 @@ jobs:
               "com.hookah.platform.backend.miniapp.venue.VenueOrderRoutesTest",
               "com.hookah.platform.backend.miniapp.venue.promotions.VenuePromotionRoutesTest",
               "com.hookah.platform.backend.telegram.db.VenuePromotionRepositoryTest",
+              "com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepositoryTest",
+              "com.hookah.platform.backend.miniapp.venue.VenueMenuRoutesTest",
               "com.hookah.platform.backend.miniapp.venue.AuditLogRepositoryTest",
               "com.hookah.platform.backend.miniapp.venue.VenueStaffRoutesTest",
               "com.hookah.platform.backend.miniapp.venue.staff.VenueStaffRepositoryTest",
@@ -184,7 +188,7 @@ jobs:
                       "TEST-com.hookah.platform.backend.telegram.db."
                       "PromotionConfigurationConcurrencyPostgresTest.xml"
                   ),
-                  12,
+                  13,
               ),
               (
                   "staff membership concurrency",

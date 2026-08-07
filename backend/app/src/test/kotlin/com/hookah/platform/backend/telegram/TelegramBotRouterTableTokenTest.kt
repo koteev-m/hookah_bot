@@ -70,6 +70,7 @@ import com.hookah.platform.backend.miniapp.venue.STAFF_CALL_AUDIT_SOURCE_TELEGRA
 import com.hookah.platform.backend.miniapp.venue.STAFF_CALL_DONE_AUDIT_ACTION
 import com.hookah.platform.backend.miniapp.venue.VenueRole
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
+import com.hookah.platform.backend.miniapp.venue.menu.MenuItemDeleteSource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuSemanticType
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuCategory
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuItem
@@ -8952,6 +8953,78 @@ class TelegramBotRouterTableTokenTest {
                             }
                     },
                 )
+            }
+        }
+
+    @Test
+    fun `owner order menu item delete uses authenticated actor and Telegram source`() =
+        runBlocking {
+            val item =
+                VenueMenuItem(
+                    id = 7001L,
+                    venueId = 10L,
+                    categoryId = 501L,
+                    name = "Авторский кальян",
+                    priceMinor = 85_000L,
+                    currency = "RUB",
+                    isAvailable = true,
+                    sortOrder = 10,
+                    options = emptyList(),
+                )
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+            coEvery { venueMenuRepository.getMenu(10L) } returnsMany
+                listOf(
+                    listOf(
+                        VenueMenuCategory(
+                            id = 501L,
+                            venueId = 10L,
+                            name = "Кальянное меню",
+                            sortOrder = 10,
+                            items = listOf(item),
+                        ),
+                    ),
+                    listOf(
+                        VenueMenuCategory(
+                            id = 501L,
+                            venueId = 10L,
+                            name = "Кальянное меню",
+                            sortOrder = 10,
+                            items = emptyList(),
+                        ),
+                    ),
+                )
+            coEvery {
+                venueMenuRepository.deleteItem(
+                    venueId = 10L,
+                    itemId = 7001L,
+                    actorUserId = 200L,
+                    source = MenuItemDeleteSource.TELEGRAM_BOT,
+                )
+            } returns true
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_280,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-owner-order-menu-item-delete",
+                            from = User(id = 200L),
+                            message = Message(messageId = 30_004_280, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_order_menu_item_delete:10:501:7001",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 1) {
+                venueMenuRepository.deleteItem(
+                    venueId = 10L,
+                    itemId = 7001L,
+                    actorUserId = 200L,
+                    source = MenuItemDeleteSource.TELEGRAM_BOT,
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(100, "✅ Позиция удалена.", null)
             }
         }
 

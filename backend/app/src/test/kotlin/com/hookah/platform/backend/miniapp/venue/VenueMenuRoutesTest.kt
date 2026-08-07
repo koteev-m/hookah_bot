@@ -4,6 +4,7 @@ import com.hookah.platform.backend.api.ApiErrorCodes
 import com.hookah.platform.backend.miniapp.guest.api.MenuResponse
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
+import com.hookah.platform.backend.miniapp.venue.menu.MENU_ITEM_DELETED_AUDIT_ACTION
 import com.hookah.platform.backend.miniapp.venue.menu.MENU_SHIFT_CHECK_COMPLETED_AUDIT_ACTION
 import com.hookah.platform.backend.miniapp.venue.menu.MenuShiftCheckResponse
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuItem
@@ -30,6 +31,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.h2.jdbcx.JdbcDataSource
 import java.sql.DriverManager
@@ -169,6 +171,124 @@ class VenueMenuRoutesTest {
                 }
 
             assertEquals(HttpStatusCode.OK, deleteCategoryResponse.status)
+        }
+
+    @Test
+    fun `owner and manager item delete derive actor and source and preserve success response`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("menu-item-delete-audit-success")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val ownerId = 71_001L
+            val managerId = 71_002L
+            val venueId = seedVenueWithRole(jdbcUrl, ownerId, "OWNER")
+            seedVenueWithRole(jdbcUrl, managerId, "MANAGER", venueId)
+            val fixture = createShiftCheckFixture(jdbcUrl, venueId)
+
+            val ownerResponse =
+                client.delete(
+                    "/api/venue/menu/items/${fixture.firstItem.id}" +
+                        "?venueId=$venueId&actorUserId=999999&source=TELEGRAM_BOT",
+                ) {
+                    headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config, ownerId)}") }
+                }
+            val managerResponse =
+                client.delete("/api/venue/menu/items/${fixture.secondItem.id}?venueId=$venueId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config, managerId)}") }
+                }
+
+            listOf(ownerResponse, managerResponse).forEach { response ->
+                assertEquals(HttpStatusCode.OK, response.status)
+                assertEquals(
+                    mapOf("ok" to true),
+                    json.parseToJsonElement(response.bodyAsText()).jsonObject
+                        .mapValues { it.value.jsonPrimitive.content.toBoolean() },
+                )
+            }
+            val audits = menuItemDeleteAudits(jdbcUrl)
+            assertEquals(2, audits.size)
+            assertEquals(listOf(ownerId, managerId), audits.map { it.actorUserId })
+            assertEquals(
+                listOf(fixture.firstItem.id, fixture.secondItem.id),
+                audits.map { it.entityId },
+            )
+            audits.forEach { audit ->
+                assertEquals("menu_item", audit.entityType)
+                assertEquals("VENUE_MINI_APP", audit.payload.getValue("source").jsonPrimitive.content)
+                assertFalse(audit.payload.toString().contains("999999"))
+                assertFalse(audit.payload.toString().contains("TELEGRAM_BOT"))
+            }
+        }
+
+    @Test
+    fun `staff foreign and unaffiliated actors cannot delete item or create audit`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("menu-item-delete-audit-denials")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val ownerId = 72_001L
+            val staffId = 72_002L
+            val foreignManagerId = 72_003L
+            val guestId = 72_004L
+            val venueId = seedVenueWithRole(jdbcUrl, ownerId, "OWNER")
+            seedVenueWithRole(jdbcUrl, staffId, "STAFF", venueId)
+            seedVenueWithRole(jdbcUrl, foreignManagerId, "MANAGER")
+            seedUser(jdbcUrl, guestId)
+            val fixture = createShiftCheckFixture(jdbcUrl, venueId)
+
+            listOf(staffId, foreignManagerId, guestId).forEach { actorId ->
+                val response =
+                    client.delete("/api/venue/menu/items/${fixture.firstItem.id}?venueId=$venueId") {
+                        headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config, actorId)}") }
+                    }
+                assertEquals(HttpStatusCode.Forbidden, response.status)
+                assertApiErrorEnvelope(response, ApiErrorCodes.FORBIDDEN)
+            }
+
+            assertTrue(menuRepository(jdbcUrl).itemExists(venueId, fixture.firstItem.id))
+            assertTrue(menuItemDeleteAudits(jdbcUrl).isEmpty())
+        }
+
+    @Test
+    fun `item delete audit failure returns safe error and rolls back delete`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("menu-item-delete-audit-failure")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val ownerId = 73_001L
+            val venueId = seedVenueWithRole(jdbcUrl, ownerId, "OWNER")
+            val fixture = createShiftCheckFixture(jdbcUrl, venueId)
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                connection.createStatement().use { statement ->
+                    statement.execute(
+                        """
+                        ALTER TABLE audit_log
+                        ADD CONSTRAINT reject_menu_item_delete_audit
+                        CHECK (action <> '$MENU_ITEM_DELETED_AUDIT_ACTION')
+                        """.trimIndent(),
+                    )
+                }
+            }
+
+            val response =
+                client.delete("/api/venue/menu/items/${fixture.firstItem.id}?venueId=$venueId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config, ownerId)}") }
+                }
+
+            assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
+            assertApiErrorEnvelope(response, ApiErrorCodes.DATABASE_UNAVAILABLE)
+            assertFalse(response.bodyAsText().contains("MENU_ITEM_DELETED"))
+            assertTrue(menuRepository(jdbcUrl).itemExists(venueId, fixture.firstItem.id))
+            assertTrue(menuItemDeleteAudits(jdbcUrl).isEmpty())
         }
 
     @Test
@@ -1499,6 +1619,61 @@ class VenueMenuRoutesTest {
         return service.issueToken(userId).token
     }
 
+    private fun seedUser(
+        jdbcUrl: String,
+        userId: Long,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                MERGE INTO users (telegram_user_id, username, first_name, last_name)
+                KEY (telegram_user_id)
+                VALUES (?, 'user', 'Test', 'User')
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, userId)
+                statement.executeUpdate()
+            }
+        }
+    }
+
+    private fun menuRepository(jdbcUrl: String): VenueMenuRepository =
+        VenueMenuRepository(
+            JdbcDataSource().apply {
+                setURL(jdbcUrl)
+                user = "sa"
+                password = ""
+            },
+        )
+
+    private fun menuItemDeleteAudits(jdbcUrl: String): List<MenuItemDeleteAuditRow> =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT actor_user_id, entity_type, entity_id, payload_json
+                FROM audit_log
+                WHERE action = ?
+                ORDER BY id
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setString(1, MENU_ITEM_DELETED_AUDIT_ACTION)
+                statement.executeQuery().use { rs ->
+                    buildList {
+                        while (rs.next()) {
+                            add(
+                                MenuItemDeleteAuditRow(
+                                    actorUserId = rs.getLong("actor_user_id"),
+                                    entityType = rs.getString("entity_type"),
+                                    entityId = rs.getLong("entity_id"),
+                                    payload = json.parseToJsonElement(rs.getString("payload_json")).jsonObject,
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
     private fun seedVenueWithRole(
         jdbcUrl: String,
         userId: Long,
@@ -1670,6 +1845,13 @@ class VenueMenuRoutesTest {
         val secondItem: VenueMenuItem,
         val firstOption: VenueMenuOption,
         val secondOption: VenueMenuOption,
+    )
+
+    private data class MenuItemDeleteAuditRow(
+        val actorUserId: Long,
+        val entityType: String,
+        val entityId: Long,
+        val payload: JsonObject,
     )
 
     private data class ShiftCheckOptionJson(

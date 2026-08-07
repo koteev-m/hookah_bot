@@ -3,6 +3,7 @@ package com.hookah.platform.backend.telegram.db
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.miniapp.venue.TransactionalAuditLogWriter
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
+import com.hookah.platform.backend.miniapp.venue.menu.MenuItemDeleteSource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuSemanticType
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepository
 import kotlinx.coroutines.runBlocking
@@ -2817,7 +2818,12 @@ class VenuePromotionRepositoryTest {
             assertTrue(updated.targets.all { it.targetType == PromotionRuleTargetType.MENU_ITEM })
             assertTrue(
                 VenueMenuRepository(dataSource(jdbcUrl))
-                    .deleteItem(fixture.visibleVenueId, ordinaryHookah),
+                    .deleteItem(
+                        fixture.visibleVenueId,
+                        ordinaryHookah,
+                        OWNER_ID,
+                        MenuItemDeleteSource.VENUE_MINI_APP,
+                    ),
             )
             val targetsAfterCascade =
                 assertNotNull(ruleRepository.getRuleForManagement(fixture.visibleVenueId, rule.id))
@@ -2993,7 +2999,12 @@ class VenuePromotionRepositoryTest {
             assertEquals(3, choiceReward.version)
             assertTrue(
                 VenueMenuRepository(dataSource(jdbcUrl))
-                    .deleteItem(fixture.visibleVenueId, updatedRewardItemId),
+                    .deleteItem(
+                        fixture.visibleVenueId,
+                        updatedRewardItemId,
+                        OWNER_ID,
+                        MenuItemDeleteSource.VENUE_MINI_APP,
+                    ),
             )
             val rewardAfterCascade =
                 assertNotNull(ruleRepository.getRuleForManagement(fixture.visibleVenueId, created.id))
@@ -3004,7 +3015,12 @@ class VenuePromotionRepositoryTest {
             )
             assertFailsWith<DatabaseUnavailableException> {
                 VenueMenuRepository(dataSource(jdbcUrl))
-                    .deleteItem(fixture.visibleVenueId, rewardItemId)
+                    .deleteItem(
+                        fixture.visibleVenueId,
+                        rewardItemId,
+                        OWNER_ID,
+                        MenuItemDeleteSource.VENUE_MINI_APP,
+                    )
             }
             assertEquals(
                 4,

@@ -538,6 +538,52 @@ staging deploy completed and manual smoke passed for Owner, Manager, Staff/forei
 accordion UX, mass mode, draft/cancel/venue isolation, atomic/no-op/stale behavior, safe audit,
 Guest availability/stale-cart rejection and Telegram stop-list parity.
 
+### Menu Item Hard Delete Audit quality gate
+
+Status: **DANGEROUS ACTION AUDIT SLICE / MENU ITEM HARD DELETE AUDIT / MVP IMPLEMENTED / LOCAL
+VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+
+Regression must preserve this bounded contract:
+
+- existing authenticated Venue Mini App and Telegram item-delete management callers pass the
+  authenticated actor plus server-owned `VENUE_MINI_APP` / `TELEGRAM_BOT`; request/query/path/
+  callback data never supplies actor or source;
+- Owner/Manager own venue are allowed under current `MENU_MANAGE`; Staff, foreign, unaffiliated and
+  Platform-only without venue authority are denied without item/promotion disclosure or audit;
+- one committed hard delete writes exactly one `MENU_ITEM_DELETED` for `menu_item` / item id in the
+  same JDBC transaction as authoritative promotion-reference recheck, current rule version bumps,
+  reference cascades and item delete; not-found/repeat/reference/SQL/audit/rollback writes none;
+- payload keys are exactly `venueId`, `itemId`, `categoryId`, `source`,
+  `affectedPromotionRules`. The nested keys are `totalCount`, `sampleRuleIds`, `omittedCount`,
+  `sha256`; ids are deduplicated/sorted, sample is the first 50, and lowercase SHA-256 uses UTF-8
+  `v1:` plus the complete sorted set joined by comma. The payload is below 4096 UTF-8 bytes;
+- privacy tests exclude names, prices, media, promotion title/config/schedule/reward, raw request,
+  callback/initData, Telegram fields, secrets and unrelated PII;
+- audit/SQL/reference failure rolls item, promotion state/version and audit back together; existing
+  success/error envelopes remain unchanged;
+- the existing real-PostgreSQL promotion configuration class deterministically covers delete-first
+  parent/rule/item lock order and configuration-first item `NOWAIT` conflict without arbitrary
+  sleep. A committed delete has one audit; a failed delete has none; neither has partial state;
+- existing promotion calculation, Guest order/bill/History snapshots, shift check, category/option
+  mutations and availability policy stay regression-only and unchanged.
+
+Required local commands:
+
+```bash
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VenueMenuRepositoryTest*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VenueMenuRoutesTest*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VenuePromotionRepositoryTest*' --console=plain
+JAVA_TOOL_OPTIONS=-Dapi.version=1.44 ./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*PromotionConfigurationConcurrencyPostgresTest*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:compileKotlin --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:ktlintCheck --console=plain
+npm --prefix miniapp run build
+CI=1 TZ=UTC MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke
+```
+
+`PromotionConfigurationConcurrencyPostgresTest` remains inside the existing mandatory PostgreSQL
+CI step; no new class or decorative workflow is needed. Its XML must exist with tests `> 0`,
+`skipped=0`, `failures=0`, `errors=0`. Schema verdict is `NO_MIGRATION_EXPECTED`.
+
 ## Venue Mini App Media Foundation Future Quality Gate
 
 The canonical future contract is `docs/MEDIA_STORAGE_UPLOAD.md`. Its current verdict is
@@ -873,7 +919,7 @@ actor/source/action/payload privacy, Guest `ACTIVE`/`PAUSED`/`ARCHIVED` visibili
 and detail availability throughout the repeated lifecycle check, and cleanup.
 
 `PromotionConfigurationConcurrencyPostgresTest` is a mandatory real-PostgreSQL gate. Its current
-bounded matrix has 10 tests and must report `skipped=0`, `failures=0`, `errors=0`; a missing XML,
+bounded matrix has 13 tests and must report `skipped=0`, `failures=0`, `errors=0`; a missing XML,
 zero-test run or Testcontainers skip is a failed security gate. The ordinary release-critical
 selector must also execute `VenuePromotionRoutesTest`, `VenuePromotionRepositoryTest` and
 `AuditLogRepositoryTest` with nonzero, non-skipped results.
@@ -1004,7 +1050,7 @@ Current CI jobs:
 
 Expectations:
 - All required jobs must be green before merge/release.
-- `backend-release-critical-routes` has separate required steps. The non-PostgreSQL route/security selector explicitly executes Telegram, resolve, H2 activation/teardown, mutation-coordinator, order, tab, staff-call, shift-extension, support and promotion route/repository/audit classes; its XML assertion fails on a missing/zero/skipped/failing suite. A second step runs `GuestTableContextActivationPostgresTest` and `PromotionConfigurationConcurrencyPostgresTest` with `JAVA_TOOL_OPTIONS=-Dapi.version=1.44`, then independently parses both XML reports. It requires at least 8 activation tests and 10 promotion lifecycle/configuration tests, each with `skipped=0`, `failures=0`, `errors=0`. Docker availability alone is not evidence, and route failure must not silently skip the PostgreSQL gate.
+- `backend-release-critical-routes` has separate required steps. The non-PostgreSQL route/security selector explicitly executes Telegram, resolve, H2 activation/teardown, mutation-coordinator, order, tab, staff-call, shift-extension, support and promotion route/repository/audit classes; its XML assertion fails on a missing/zero/skipped/failing suite. A second step runs `GuestTableContextActivationPostgresTest` and `PromotionConfigurationConcurrencyPostgresTest` with `JAVA_TOOL_OPTIONS=-Dapi.version=1.44`, then independently parses both XML reports. It requires at least 8 activation tests and 12 promotion lifecycle/configuration tests, each with `skipped=0`, `failures=0`, `errors=0`. Docker availability alone is not evidence, and route failure must not silently skip the PostgreSQL gate.
 - If CI is red, first identify the failing job, failing test class, failing test name, assertion/error and first useful stack frame.
 - Do not paste only `Execution failed for task ':backend:app:test'`; inspect XML/test output or CI logs for the actual assertion.
 - External/transient failures should be separated from product regressions. A network/dependency timeout is not the same as a Kotlin compile/test failure.
@@ -1439,6 +1485,9 @@ Telegram/staff-chat:
 - Guest Preview Phase 2.1: **VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY / DONE / MVP / STAGING-SMOKE-PASSED**.
 - Menu shift check: **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**; regression
   gates remain active.
+- Menu item hard-delete audit: **DANGEROUS ACTION AUDIT SLICE / MENU ITEM HARD DELETE AUDIT / MVP
+  IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**; the existing mandatory
+  PostgreSQL configuration class now includes the config/delete race and requires non-skipped XML.
 - Venue Promotions Current/Archived Tabs UX: **VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / DONE / MVP / STAGING-SMOKE-PASSED**.
 - Promotion lifecycle status audit: **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**; broader dangerous-action coverage remains partial.
 - Promotion creation audit: **DANGEROUS ACTION AUDIT SLICE / PROMOTION CREATION AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**; mandatory repository/route/Telegram and PostgreSQL gates remain regression requirements. Configuration edit, schedule/target/reward, media/banner and broader dangerous-action coverage remain open.

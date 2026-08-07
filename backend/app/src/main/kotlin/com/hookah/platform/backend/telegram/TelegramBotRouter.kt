@@ -59,6 +59,7 @@ import com.hookah.platform.backend.miniapp.venue.VenueRole
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import com.hookah.platform.backend.miniapp.venue.appendStaffCallStatusAuditBestEffort
 import com.hookah.platform.backend.miniapp.venue.menu.HookahFlavorProfileService
+import com.hookah.platform.backend.miniapp.venue.menu.MenuItemDeleteSource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuSemanticType
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuCategory
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuItem
@@ -19804,6 +19805,8 @@ class TelegramBotRouter(
                 venueMenuRepository.deleteItem(
                     venueId = venueId,
                     itemId = itemId,
+                    actorUserId = userId,
+                    source = MenuItemDeleteSource.TELEGRAM_BOT,
                 )
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")

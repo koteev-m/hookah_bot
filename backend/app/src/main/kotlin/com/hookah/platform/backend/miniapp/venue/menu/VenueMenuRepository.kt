@@ -5,12 +5,15 @@ import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.MenuShiftCheckStaleException
 import com.hookah.platform.backend.api.NotFoundException
 import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
+import com.hookah.platform.backend.miniapp.venue.TransactionalAuditLogWriter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 import java.sql.Connection
 import java.sql.ResultSet
 import java.sql.SQLException
@@ -19,6 +22,14 @@ import javax.sql.DataSource
 
 internal const val MENU_SHIFT_CHECK_MAX_CHANGES = 500
 const val MENU_SHIFT_CHECK_COMPLETED_AUDIT_ACTION = "MENU_SHIFT_CHECK_COMPLETED"
+const val MENU_ITEM_DELETED_AUDIT_ACTION = "MENU_ITEM_DELETED"
+internal const val MENU_ITEM_DELETE_AFFECTED_RULE_SAMPLE_LIMIT = 50
+internal const val MENU_ITEM_DELETE_AUDIT_PAYLOAD_MAX_BYTES = 4096
+
+enum class MenuItemDeleteSource {
+    VENUE_MINI_APP,
+    TELEGRAM_BOT,
+}
 
 data class VenueMenuCategory(
     val id: Long,
@@ -64,7 +75,10 @@ data class VenueMenuShiftCheckResult(
     val availableOptionCount: Int,
 )
 
-class VenueMenuRepository(private val dataSource: DataSource?) {
+class VenueMenuRepository(
+    private val dataSource: DataSource?,
+    private val auditLogWriter: TransactionalAuditLogWriter = AuditLogRepository(dataSource),
+) {
     suspend fun getMenu(venueId: Long): List<VenueMenuCategory> {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
@@ -469,6 +483,8 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
     suspend fun deleteItem(
         venueId: Long,
         itemId: Long,
+        actorUserId: Long,
+        source: MenuItemDeleteSource,
     ): Boolean {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
@@ -477,16 +493,42 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
                     val originalAutoCommit = connection.autoCommit
                     connection.autoCommit = false
                     try {
+                        val initialCategoryId =
+                            loadItemCategoryId(connection, venueId, itemId)
+                                ?: run {
+                                    connection.commit()
+                                    return@use false
+                                }
                         val initialReferences =
                             loadPromotionRulesReferencingItem(connection, venueId, itemId)
                         lockPromotionRuleReferences(connection, venueId, initialReferences)
-                        if (!lockItemNowait(connection, venueId, itemId)) {
+                        val lockedCategoryId = lockItemForDeleteNowait(connection, venueId, itemId)
+                        if (lockedCategoryId == null) {
                             connection.commit()
                             return@use false
+                        }
+                        if (lockedCategoryId != initialCategoryId) {
+                            throw SQLException(
+                                "Menu item category changed concurrently with deletion",
+                                "40001",
+                            )
                         }
                         val currentReferences =
                             loadPromotionRulesReferencingItem(connection, venueId, itemId)
                         ensureNoNewPromotionReferences(initialReferences, currentReferences)
+                        val auditPayload =
+                            buildMenuItemDeleteAuditPayload(
+                                venueId = venueId,
+                                itemId = itemId,
+                                categoryId = lockedCategoryId,
+                                source = source,
+                                affectedRuleIds = currentReferences.map { it.ruleId },
+                            )
+                        val auditPayloadBytes =
+                            auditPayload.toString().toByteArray(StandardCharsets.UTF_8).size
+                        if (auditPayloadBytes >= MENU_ITEM_DELETE_AUDIT_PAYLOAD_MAX_BYTES) {
+                            throw SQLException("Menu item delete audit payload exceeds byte budget")
+                        }
                         bumpPromotionRuleVersions(connection, currentReferences)
                         val deleted =
                             connection.prepareStatement(
@@ -499,8 +541,22 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
                                 statement.setLong(2, venueId)
                                 statement.executeUpdate() > 0
                             }
+                        if (!deleted) {
+                            throw SQLException(
+                                "Locked menu item disappeared during deletion",
+                                "40001",
+                            )
+                        }
+                        auditLogWriter.appendJson(
+                            connection = connection,
+                            actorUserId = actorUserId,
+                            action = MENU_ITEM_DELETED_AUDIT_ACTION,
+                            entityType = "menu_item",
+                            entityId = itemId,
+                            payload = auditPayload,
+                        )
                         connection.commit()
-                        deleted
+                        true
                     } catch (e: Exception) {
                         connection.rollback()
                         throw e
@@ -1451,14 +1507,33 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
             statement.executeQuery().use { rs -> rs.next() }
         }
 
-    private fun lockItemNowait(
+    private fun loadItemCategoryId(
         connection: Connection,
         venueId: Long,
         itemId: Long,
-    ): Boolean =
+    ): Long? =
         connection.prepareStatement(
             """
-            SELECT id
+            SELECT category_id
+            FROM menu_items
+            WHERE id = ? AND venue_id = ?
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, itemId)
+            statement.setLong(2, venueId)
+            statement.executeQuery().use { rs ->
+                if (rs.next()) rs.getLong("category_id") else null
+            }
+        }
+
+    private fun lockItemForDeleteNowait(
+        connection: Connection,
+        venueId: Long,
+        itemId: Long,
+    ): Long? =
+        connection.prepareStatement(
+            """
+            SELECT category_id
             FROM menu_items
             WHERE id = ? AND venue_id = ?
             FOR UPDATE NOWAIT
@@ -1466,7 +1541,9 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
         ).use { statement ->
             statement.setLong(1, itemId)
             statement.setLong(2, venueId)
-            statement.executeQuery().use { rs -> rs.next() }
+            statement.executeQuery().use { rs ->
+                if (rs.next()) rs.getLong("category_id") else null
+            }
         }
 
     private fun ensureNoNewPromotionReferences(
@@ -1687,6 +1764,53 @@ class VenueMenuRepository(private val dataSource: DataSource?) {
         val itemId: Long,
         val isAvailable: Boolean,
     )
+}
+
+internal fun buildMenuItemDeleteAuditPayload(
+    venueId: Long,
+    itemId: Long,
+    categoryId: Long,
+    source: MenuItemDeleteSource,
+    affectedRuleIds: Iterable<Long>,
+) = buildJsonObject {
+    val sortedUniqueRuleIds = affectedRuleIds.toSet().sorted()
+    val sampleRuleIds = sortedUniqueRuleIds.take(MENU_ITEM_DELETE_AFFECTED_RULE_SAMPLE_LIMIT)
+    val canonicalHashInput = "v1:" + sortedUniqueRuleIds.joinToString(",")
+    val sha256 =
+        MessageDigest
+            .getInstance("SHA-256")
+            .digest(canonicalHashInput.toByteArray(StandardCharsets.UTF_8))
+            .toLowercaseHex()
+
+    put("venueId", venueId)
+    put("itemId", itemId)
+    put("categoryId", categoryId)
+    put("source", source.name)
+    put(
+        "affectedPromotionRules",
+        buildJsonObject {
+            put("totalCount", sortedUniqueRuleIds.size)
+            put(
+                "sampleRuleIds",
+                buildJsonArray {
+                    sampleRuleIds.forEach { add(JsonPrimitive(it)) }
+                },
+            )
+            put("omittedCount", sortedUniqueRuleIds.size - sampleRuleIds.size)
+            put("sha256", sha256)
+        },
+    )
+}
+
+private fun ByteArray.toLowercaseHex(): String {
+    val alphabet = "0123456789abcdef"
+    return buildString(size * 2) {
+        this@toLowercaseHex.forEach { byte ->
+            val value = byte.toInt() and 0xff
+            append(alphabet[value ushr 4])
+            append(alphabet[value and 0x0f])
+        }
+    }
 }
 
 private fun List<Long>.toJsonArray() =

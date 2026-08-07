@@ -5,6 +5,9 @@ import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
 import com.hookah.platform.backend.miniapp.venue.TransactionalAuditLogWriter
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
+import com.hookah.platform.backend.miniapp.venue.menu.MENU_ITEM_DELETED_AUDIT_ACTION
+import com.hookah.platform.backend.miniapp.venue.menu.MenuItemDeleteSource
+import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepository
 import com.hookah.platform.backend.promotions.GiftDecisionCommand
 import com.hookah.platform.backend.promotions.GiftDecisionScopeTokenService
 import com.hookah.platform.backend.promotions.PromotionGiftDecisionAction
@@ -770,6 +773,100 @@ class PromotionConfigurationConcurrencyPostgresTest {
             }
         }
 
+    @Test
+    fun `menu item delete and promotion configuration race has atomic audited winners`() =
+        runBlocking {
+            val deleteWinsDatabase = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(deleteWinsDatabase).use { dataSource ->
+                val fixture = seedFixture(dataSource)
+                val deleteDataSource = HeldMenuDeletePromotionLockDataSource(dataSource)
+                val configurationDataSource = TrackedPromotionMutationDataSource(dataSource)
+
+                val (deleted, edited) =
+                    runWithHeldMenuDeletePromotionLock(
+                        observerDataSource = dataSource,
+                        deleteDataSource = deleteDataSource,
+                        blockedDataSource = configurationDataSource,
+                        deleteAction = {
+                            runBlocking {
+                                VenueMenuRepository(deleteDataSource).deleteItem(
+                                    venueId = fixture.venueId,
+                                    itemId = fixture.itemAId,
+                                    actorUserId = USER_ID,
+                                    source = MenuItemDeleteSource.VENUE_MINI_APP,
+                                )
+                            }
+                        },
+                        blockedAction = {
+                            runBlocking { editToVersionTwo(configurationDataSource, fixture) }
+                        },
+                    )
+
+                assertTrue(deleted)
+                assertNotNull(edited)
+                assertFalse(menuItemExists(dataSource, fixture.itemAId))
+                val finalRule =
+                    assertNotNull(
+                        VenuePromotionRuleRepository(dataSource)
+                            .getRuleForManagement(fixture.venueId, fixture.ruleId),
+                    )
+                assertEquals(3, finalRule.version)
+                assertEquals(listOf(fixture.itemBId), finalRule.targets.map { it.menuItemId })
+                val audit = readMenuItemDeleteAudits(dataSource, fixture.itemAId).single()
+                assertEquals(USER_ID, audit.actorUserId)
+                assertEquals("menu_item", audit.entityType)
+                assertEquals(fixture.itemAId, audit.entityId)
+                assertEquals("VENUE_MINI_APP", audit.payload.getValue("source").jsonPrimitive.content)
+                val affected = audit.payload.getValue("affectedPromotionRules").jsonObject
+                assertEquals(1, affected.getValue("totalCount").jsonPrimitive.content.toInt())
+                assertEquals(
+                    listOf(fixture.ruleId),
+                    affected.getValue("sampleRuleIds").jsonArray.map { it.jsonPrimitive.content.toLong() },
+                )
+                assertEquals(0, affected.getValue("omittedCount").jsonPrimitive.content.toInt())
+            }
+
+            val configurationWinsDatabase = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(configurationWinsDatabase).use { dataSource ->
+                val fixture = seedFixture(dataSource)
+                val configurationDataSource = HeldPromotionConfigurationLockDataSource(dataSource)
+                val deleteDataSource = TrackedMenuDeleteDataSource(dataSource)
+
+                val (edited, deleteFailure) =
+                    runWithHeldConfigurationParentLock(
+                        configurationDataSource = configurationDataSource,
+                        blockedDataSource = deleteDataSource,
+                        configurationAction = {
+                            runBlocking { editToVersionTwo(configurationDataSource, fixture) }
+                        },
+                        blockedAction = {
+                            runCatching {
+                                runBlocking {
+                                    VenueMenuRepository(deleteDataSource).deleteItem(
+                                        venueId = fixture.venueId,
+                                        itemId = fixture.itemBId,
+                                        actorUserId = USER_ID,
+                                        source = MenuItemDeleteSource.VENUE_MINI_APP,
+                                    )
+                                }
+                            }.exceptionOrNull()
+                        },
+                    )
+
+                assertNotNull(edited)
+                assertTrue(deleteFailure is DatabaseUnavailableException)
+                assertTrue(menuItemExists(dataSource, fixture.itemBId))
+                val finalRule =
+                    assertNotNull(
+                        VenuePromotionRuleRepository(dataSource)
+                            .getRuleForManagement(fixture.venueId, fixture.ruleId),
+                    )
+                assertEquals(2, finalRule.version)
+                assertEquals(listOf(fixture.itemBId), finalRule.targets.map { it.menuItemId })
+                assertTrue(readMenuItemDeleteAudits(dataSource, fixture.itemBId).isEmpty())
+            }
+        }
+
     private suspend fun seedFixture(
         dataSource: DataSource,
         activate: Boolean = true,
@@ -1356,6 +1453,39 @@ class PromotionConfigurationConcurrencyPostgresTest {
             }
         }
 
+    private fun readMenuItemDeleteAudits(
+        dataSource: DataSource,
+        itemId: Long,
+    ): List<MenuItemDeleteAudit> =
+        dataSource.connection.use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT actor_user_id, entity_type, entity_id, payload_json
+                FROM audit_log
+                WHERE action = ?
+                  AND entity_id = ?
+                ORDER BY id
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setString(1, MENU_ITEM_DELETED_AUDIT_ACTION)
+                statement.setLong(2, itemId)
+                statement.executeQuery().use { rs ->
+                    buildList {
+                        while (rs.next()) {
+                            add(
+                                MenuItemDeleteAudit(
+                                    actorUserId = rs.getLong("actor_user_id"),
+                                    entityType = rs.getString("entity_type"),
+                                    entityId = rs.getLong("entity_id"),
+                                    payload = Json.parseToJsonElement(rs.getString("payload_json")).jsonObject,
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
     private fun ordersRepository(
         dataSource: DataSource,
         now: Instant,
@@ -1545,6 +1675,23 @@ class PromotionConfigurationConcurrencyPostgresTest {
         dataSource: DataSource,
         table: String,
     ): Int = dataSource.connection.use { connection -> countRows(connection, table) }
+
+    private fun menuItemExists(
+        dataSource: DataSource,
+        itemId: Long,
+    ): Boolean =
+        dataSource.connection.use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT 1
+                FROM menu_items
+                WHERE id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, itemId)
+                statement.executeQuery().use { rs -> rs.next() }
+            }
+        }
 
     private fun countWhere(
         dataSource: DataSource,
@@ -1756,6 +1903,85 @@ class PromotionConfigurationConcurrencyPostgresTest {
         }
     }
 
+    private fun <T, U> runWithHeldMenuDeletePromotionLock(
+        observerDataSource: DataSource,
+        deleteDataSource: HeldMenuDeletePromotionLockDataSource,
+        blockedDataSource: TrackedPromotionMutationDataSource,
+        deleteAction: () -> T,
+        blockedAction: () -> U,
+    ): Pair<T, U> {
+        val executor = Executors.newFixedThreadPool(2)
+        try {
+            val deleteFuture = executor.submit(Callable<T> { deleteAction() })
+            assertTrue(
+                deleteDataSource.parentLockAcquired.await(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                "Menu delete did not acquire the promotion parent lock",
+            )
+
+            val blockedFuture = executor.submit(Callable<U> { blockedAction() })
+            assertTrue(
+                blockedDataSource.mutationAttempted.await(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                "Promotion configuration did not attempt its parent lock",
+            )
+            val deletePid = deleteDataSource.backendPid.get()
+            val blockedPid = blockedDataSource.backendPid.get()
+            assertTrue(deletePid > 0, "Missing PostgreSQL PID for menu delete")
+            assertTrue(blockedPid > 0, "Missing PostgreSQL PID for promotion configuration")
+
+            observerDataSource.connection.use { observer ->
+                val probe =
+                    awaitPostgresBlock(
+                        observer = observer,
+                        blockedPid = blockedPid,
+                        blockerPid = deletePid,
+                        mutationFuture = blockedFuture,
+                    )
+                assertTrue(
+                    probe.blocked,
+                    "PostgreSQL did not report configuration blocked by menu delete. " +
+                        probe.diagnostic,
+                )
+            }
+
+            deleteDataSource.allowDelete.countDown()
+            return deleteFuture.get(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS) to
+                blockedFuture.get(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        } finally {
+            deleteDataSource.allowDelete.countDown()
+            executor.shutdownNow()
+            executor.awaitTermination(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        }
+    }
+
+    private fun <T, U> runWithHeldConfigurationParentLock(
+        configurationDataSource: HeldPromotionConfigurationLockDataSource,
+        blockedDataSource: TrackedMenuDeleteDataSource,
+        configurationAction: () -> T,
+        blockedAction: () -> U,
+    ): Pair<T, U> {
+        val executor = Executors.newFixedThreadPool(2)
+        try {
+            val configurationFuture = executor.submit(Callable<T> { configurationAction() })
+            assertTrue(
+                configurationDataSource.parentLockAcquired.await(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                "Promotion configuration did not reach the new reference write",
+            )
+
+            val blockedFuture = executor.submit(Callable<U> { blockedAction() })
+            assertTrue(
+                blockedDataSource.deleteLockAttempted.await(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                "Menu delete did not attempt its item NOWAIT lock",
+            )
+            val blockedResult = blockedFuture.get(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            configurationDataSource.allowConfiguration.countDown()
+            return configurationFuture.get(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS) to blockedResult
+        } finally {
+            configurationDataSource.allowConfiguration.countDown()
+            executor.shutdownNow()
+            executor.awaitTermination(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        }
+    }
+
     private fun awaitPostgresBlock(
         observer: Connection,
         blockedPid: Int,
@@ -1933,6 +2159,136 @@ class PromotionConfigurationConcurrencyPostgresTest {
         }
     }
 
+    private inner class HeldMenuDeletePromotionLockDataSource(
+        private val delegate: DataSource,
+    ) : DataSource by delegate {
+        val parentLockAcquired = CountDownLatch(1)
+        val allowDelete = CountDownLatch(1)
+        val backendPid = AtomicInteger()
+        private val held = AtomicBoolean()
+
+        override fun getConnection(): Connection = wrap(delegate.connection)
+
+        override fun getConnection(
+            username: String?,
+            password: String?,
+        ): Connection = wrap(delegate.getConnection(username, password))
+
+        private fun wrap(connection: Connection): Connection {
+            backendPid.set(this@PromotionConfigurationConcurrencyPostgresTest.backendPid(connection))
+            return object : Connection by connection {
+                override fun prepareStatement(sql: String): PreparedStatement {
+                    val prepared = connection.prepareStatement(sql)
+                    val normalized = sql.normalizedSql()
+                    if (
+                        normalized.contains("from venue_promotions") &&
+                        !normalized.contains("from venue_promotions p") &&
+                        normalized.contains("for update") &&
+                        held.compareAndSet(false, true)
+                    ) {
+                        return object : PreparedStatement by prepared {
+                            override fun executeQuery(): java.sql.ResultSet {
+                                check(!connection.autoCommit) {
+                                    "Menu delete promotion locks must share the delete transaction"
+                                }
+                                val resultSet = prepared.executeQuery()
+                                parentLockAcquired.countDown()
+                                if (!allowDelete.await(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                                    resultSet.close()
+                                    throw SQLException("Timed out while holding menu delete promotion lock")
+                                }
+                                return resultSet
+                            }
+                        }
+                    }
+                    return prepared
+                }
+            }
+        }
+    }
+
+    private inner class HeldPromotionConfigurationLockDataSource(
+        private val delegate: DataSource,
+    ) : DataSource by delegate {
+        val parentLockAcquired = CountDownLatch(1)
+        val allowConfiguration = CountDownLatch(1)
+        val backendPid = AtomicInteger()
+        private val held = AtomicBoolean()
+
+        override fun getConnection(): Connection = wrap(delegate.connection)
+
+        override fun getConnection(
+            username: String?,
+            password: String?,
+        ): Connection = wrap(delegate.getConnection(username, password))
+
+        private fun wrap(connection: Connection): Connection {
+            backendPid.set(this@PromotionConfigurationConcurrencyPostgresTest.backendPid(connection))
+            return object : Connection by connection {
+                override fun prepareStatement(sql: String): PreparedStatement {
+                    val prepared = connection.prepareStatement(sql)
+                    val normalized = sql.normalizedSql()
+                    if (
+                        normalized.startsWith("insert into promotion_rule_targets") &&
+                        held.compareAndSet(false, true)
+                    ) {
+                        return object : PreparedStatement by prepared {
+                            override fun executeUpdate(): Int {
+                                check(!connection.autoCommit) {
+                                    "Promotion reference write must run in the configuration transaction"
+                                }
+                                val updated = prepared.executeUpdate()
+                                parentLockAcquired.countDown()
+                                if (!allowConfiguration.await(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                                    throw SQLException("Timed out while holding new promotion reference")
+                                }
+                                return updated
+                            }
+                        }
+                    }
+                    return prepared
+                }
+            }
+        }
+    }
+
+    private inner class TrackedMenuDeleteDataSource(
+        private val delegate: DataSource,
+    ) : DataSource by delegate {
+        val deleteLockAttempted = CountDownLatch(1)
+        private val signalled = AtomicBoolean()
+
+        override fun getConnection(): Connection = wrap(delegate.connection)
+
+        override fun getConnection(
+            username: String?,
+            password: String?,
+        ): Connection = wrap(delegate.getConnection(username, password))
+
+        private fun wrap(connection: Connection): Connection {
+            return object : Connection by connection {
+                override fun prepareStatement(sql: String): PreparedStatement {
+                    val prepared = connection.prepareStatement(sql)
+                    val normalized = sql.normalizedSql()
+                    if (
+                        normalized.contains("from menu_items") &&
+                        normalized.contains("for update nowait")
+                    ) {
+                        return object : PreparedStatement by prepared {
+                            override fun executeQuery(): java.sql.ResultSet {
+                                if (signalled.compareAndSet(false, true)) {
+                                    deleteLockAttempted.countDown()
+                                }
+                                return prepared.executeQuery()
+                            }
+                        }
+                    }
+                    return prepared
+                }
+            }
+        }
+    }
+
     private inner class TrackedPromotionMutationDataSource(
         private val delegate: DataSource,
     ) : DataSource by delegate {
@@ -2054,6 +2410,13 @@ class PromotionConfigurationConcurrencyPostgresTest {
     private data class PromotionLifecycleAudit(
         val actorUserId: Long,
         val action: String,
+        val payload: JsonObject,
+    )
+
+    private data class MenuItemDeleteAudit(
+        val actorUserId: Long,
+        val entityType: String,
+        val entityId: Long,
         val payload: JsonObject,
     )
 

@@ -784,6 +784,18 @@ Latest implemented bounded runtime blocks:
    - Venue Mini App and Telegram derive actor/source server-side and use one repository transaction that locks actor, target and every Owner in deterministic user order, rechecks Owner/target/last-owner state, applies the mutation and appends audit on the same connection.
    - Applied role changes write exactly one `VENUE_STAFF_ROLE_CHANGED` with `oldRole/newRole/source`; applied removals write exactly one `VENUE_STAFF_MEMBER_REMOVED` with `oldRole/source`. Entity is `venue` / `venueId`; no target/actor/venue duplicate or unrelated identity is in payload.
    - No-op, repeated/not-found, invalid, denied, stale actor, last-owner, audit failure and rollback write no success audit. Deterministic PostgreSQL contention proves one Owner remains and the sole audit matches the applied winner.
+4. **DANGEROUS ACTION AUDIT SLICE / MENU ITEM HARD DELETE AUDIT / MVP IMPLEMENTED / LOCAL
+   VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+   - Existing Venue Mini App and Telegram menu-management item-delete callers now require the
+     authenticated actor plus server-owned `VENUE_MINI_APP` / `TELEGRAM_BOT`; there is no
+     compile-time unaudited delete overload.
+   - Current promotion parent/rule/item lock order, authoritative reference recheck, affected rule
+     version bumps/reference cascades, item hard delete and exactly one `MENU_ITEM_DELETED` audit
+     share one JDBC transaction. Audit/reference/SQL failure rolls all writes back.
+   - Payload is limited to venue/item/category ids, source and a deterministic bounded affected-rule
+     summary: exact unique count, first 50 sorted ids, omitted count and lowercase SHA-256 over the
+     complete sorted set. It is below 4096 UTF-8 bytes and excludes menu/promotion content,
+     Telegram/request data, secrets and PII. No migration was added.
 
 Current correction: the repeated staging smoke passed across Owner/Manager/Staff/foreign RBAC,
 Mini App and Telegram lifecycle writers, exactly-one/no-op audit behavior, payload privacy, Guest
@@ -795,12 +807,12 @@ repeat; the subscription incident is not a promotion defect.
 Simple Venue Promotions Phase 1 remains **DONE / MVP / STAGING-SMOKE-PASSED**. The
 executable-promotions sections below retain their current implementation and validation status;
 the audit slice changes no lifecycle, promotion calculation, stacking or Guest pricing contract.
-Promotion configuration edit audit, remaining menu price/archive families, QR rotate,
+Promotion configuration edit audit, remaining menu price/category/option/update/availability families, QR rotate,
 force-close/session audit, tab reopen, analytics export, the Promotion Compatibility Policy and a
 broader audit viewer remain future. The overall dangerous-action audit therefore remains partial.
-The next selected bounded block is **IMPLEMENT_MENU_DANGEROUS_ACTION_AUDIT_SLICE_NEXT**, limited to
-the existing Venue Mini App menu-item hard-delete path: one required transactional safe audit, no
-schema change and no price/category/option/availability/Telegram expansion.
+The menu item hard-delete slice is now at the independent-review gate above. Green Actions and a
+bounded staging smoke remain required before it can move to `DONE / STAGING-SMOKE-PASSED`; it does
+not close category/option delete, price/name/type/update, availability, media or broader menu audit.
 
 The staff role/removal slice remains bounded: invites, profile/linkage, Today/Schedule, Platform
 OWNER revoke, menu, order/session and promotion mutations are outside it. Existing membership
@@ -834,9 +846,9 @@ Not selected as implementation right now:
 - remaining backend-backed venue settings slices beyond booking hold, shift extension, public card/location and schedule;
 - remaining guest growth/retention from `docs/GROWTH_RETENTION.md`: Repeat as Template Phase 1 remains locally validated with deferred manual smoke; Simple Venue Promotions Phase 1, Happy Hours Percent, Promotion Creation Audit, Promotion Effective State Clarity, Promotion Lifecycle Status Audit and Venue Promotions Current/Archived Tabs UX are `DONE / STAGING-SMOKE-PASSED`; Gift parity still awaits its recorded independent review, CI and staging gates; promotion configuration edit audit and the Promotion Compatibility Policy remain future; favorite menu items/options, recommendations/frequent items, notification opt-in, favorites-based promotions and loyalty stay future; venue favorites, History and Post-Visit Feedback stay in regression;
 - menu/options/stop-list governance from `docs/MENU_OPTIONS_STOPLIST.md`: keep selected-option
-  snapshots, Guest stale availability validation and the locally validated atomic shift-check
-  contract in regression, and resolve broader menu constructor/media/top-list and remaining audit
-  coverage before calling menu complete;
+  snapshots, Guest stale availability validation, the atomic shift-check contract and the locally
+  validated item hard-delete audit in regression, and resolve broader menu constructor/media/
+  top-list plus category/option/price/update/availability audit before calling menu complete;
 - Venue Mode operating model from `docs/VENUE_OPERATIONS.md`: keep orders, bill/tabs, staff calls, bookings, stop-list, staff-chat source-of-truth policy and role-specific nav/API denial in regression before adding new venue screens;
 - Booking lifecycle model from `docs/BOOKING_LIFECYCLE.md`: keep booking create/list, Venue queue actions, confirmed-only Staff arrival/no-show split, hold/deadline display, booking chat separation, support routing and reminder opt-in behavior in regression before adding preorder/history/loyalty.
 - Telegram fallback/staff-chat model from `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`: keep QR `/start`, fallback order, staff-call, staff-chat link/test/unlink, state-aware booking buttons, callback RBAC and notification allow/deny policy in regression before expanding Telegram shortcuts.
@@ -1044,6 +1056,14 @@ Repeat as Template Phase 1 is `MVP IMPLEMENTED / LOCAL VALIDATION PASSED / DEFER
 its production-readiness gate remains open in
 [`REPEAT-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#repeat-manual-001), but does not block an
 independent bounded block.
+
+Current review-gated bounded block:
+**DANGEROUS ACTION AUDIT SLICE / MENU ITEM HARD DELETE AUDIT / MVP IMPLEMENTED / LOCAL VALIDATION
+PASSED / REVIEW REQUIRED BEFORE COMMIT**. One committed delete through the existing Venue Mini App
+or Telegram management path writes exactly one bounded actor-bearing `MENU_ITEM_DELETED` inside the
+existing promotion-aware transaction. No migration, media/R2, category/option delete, price/update/
+availability audit or new Telegram UX is included. Green Actions and bounded staging smoke remain
+required before release closure.
 
 Latest Staff Operations closures:
 **STAFF IDENTITY LINKING UX + DUPLICATE PREVENTION / DONE / MVP / STAGING-SMOKE-PASSED**;
