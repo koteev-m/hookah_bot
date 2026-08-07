@@ -1,12 +1,17 @@
 # Venue Owner
 
-Дата актуализации: 2026-08-04.
+Дата актуализации: 2026-08-07.
 
 Статус: **current role reference**. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. Этот файл разделяет Telegram bot owner setup flow и Venue Mini App owner panel.
 
 ## Current status
 
 Venue Owner - главный владелец конкретного заведения. Он управляет карточкой, заказным меню, столами/QR, персоналом, staff chat, бронями, сообщениями с гостями, статистикой и операционными заказами. Growth/retention is governed by `docs/GROWTH_RETENTION.md`: Post-Visit Feedback and its public-review/follow-up smoke-fix are closed, while favorites/repeat/promotions and broader retention remain partial/future.
+
+Current staff membership correction: **DANGEROUS ACTION AUDIT SLICE / STAFF ROLE AND REMOVAL
+AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Owner alone changes/removes same-venue memberships
+with last-owner protection and transaction-bound targeted audit. Removal revokes venue access but
+preserves profiles/history/audit; reconnection uses the ordinary Staff invite flow.
 
 Guest communication follows `docs/COMMUNICATION_MODEL.md`: Owner/Manager handle `BOOKING_CHAT`, `VENUE_CHAT` and own-venue `SUPPORT_TICKET`; Staff does not handle support/venue chats; `STAFF_CALL` remains operational. Booking lifecycle, queue, hold/deadline, reminders and booking chat behavior follow `docs/BOOKING_LIFECYCLE.md`. Telegram bot fallback, staff-chat management and callback behavior follow `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. Owner permissions, staff/QR/settings/billing boundaries and dangerous-action expectations are governed by `docs/SECURITY_RBAC_MATRIX.md`. Public staff profiles, today shift and future staff-tip boundaries follow `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. Venue operations are governed by `docs/VENUE_OPERATIONS.md`. Menu/options/stop-list policy follows `docs/MENU_OPTIONS_STOPLIST.md`. Order/session/tab behavior follows `docs/ORDER_SESSION_TAB_CORE.md`. Analytics/KPI rules follow `docs/ANALYTICS_EVENTS.md`. Testing/QA smoke strategy follows `docs/TESTING_QA_SMOKE_STRATEGY.md`. Release/deploy operations follow `docs/DEPLOYMENT_RUNBOOK.md`.
 

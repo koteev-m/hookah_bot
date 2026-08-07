@@ -1,8 +1,8 @@
 # Venue Mode Operations Model
 
-Дата актуализации: 2026-08-04.
+Дата актуализации: 2026-08-07.
 
-Статус: **current product reference / SPEC UPDATED**. Core Venue operations are partly smoke-closed across orders, bill display, staff calls, bookings, confirmed-only booking arrival actions, state-aware staff-chat booking shortcuts, staff-chat, menu options and settings slices. The bounded shift-check slice is **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**. The full Venue Mode implementation is still **PARTIAL / needs verification** for broad dashboard completeness, arbitrary stats, remaining dangerous-action audit coverage, broader settings parity and deep cross-surface e2e.
+Статус: **current product reference / SPEC UPDATED**. Core Venue operations are partly smoke-closed across orders, bill display, staff calls, bookings, confirmed-only booking arrival actions, state-aware staff-chat booking shortcuts, staff-chat, menu options and settings slices. The bounded shift-check slice is **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**. Staff membership mutation audit is **DANGEROUS ACTION AUDIT SLICE / STAFF ROLE AND REMOVAL AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. The full Venue Mode implementation is still **PARTIAL / needs verification** for broad dashboard completeness, arbitrary stats, remaining dangerous-action audit coverage, broader settings parity and deep cross-surface e2e.
 
 ## Core Rule
 
@@ -295,8 +295,8 @@ Target:
 Audit:
 - `STAFF_INVITE_CREATED` / `STAFF_INVITE_REVOKED` in the invite mutation transaction;
 - `STAFF_PROFILE_CREATED` / `UPDATED` / `PUBLISHED` / `HIDDEN` in the profile mutation transaction;
-- role granted;
-- role revoked;
+- applied Owner-authorized role changes write `VENUE_STAFF_ROLE_CHANGED` with targeted audit;
+- applied Owner-authorized membership removals write `VENUE_STAFF_MEMBER_REMOVED` with targeted audit;
 - invite created;
 - invite accepted;
 - owner changed/revoked.
@@ -308,6 +308,9 @@ Current vs target:
 - Platform Owner can invite/revoke Venue Owner with last-owner protection.
 - Manager manages display-only/Staff-linked cards and schedule only. Role changes, membership
   removal/deactivation, Owner/Manager cards, billing and platform settings remain denied.
+- Role change/removal audit is **DANGEROUS ACTION AUDIT SLICE / STAFF ROLE AND REMOVAL AUDIT /
+  DONE / MVP / STAGING-SMOKE-PASSED**. Removing membership revokes venue access but preserves
+  profiles, past shifts/history and audit; reconnection uses the ordinary Staff invite flow.
 
 ## Staff Profiles / Today Shift / Staff Schedule
 

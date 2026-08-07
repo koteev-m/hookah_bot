@@ -27,6 +27,9 @@ Venue media storage/upload source of truth:
 Security/RBAC source of truth:
 - Canonical roles, scopes, permissions, surface parity, dangerous actions and current-vs-target gaps are tracked in `docs/SECURITY_RBAC_MATRIX.md`.
 - Server-side RBAC is the source of truth. UI hiding, Telegram keyboards, QR/table tokens and tab invite tokens are never authority by themselves.
+- Staff membership mutation status is **DANGEROUS ACTION AUDIT SLICE / STAFF ROLE AND REMOVAL
+  AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. This closes only Owner-authorized same-venue role
+  change/removal audit; the broader dangerous-action audit remains partial.
 
 Venue operations source of truth:
 - Canonical Venue Mode operating model for dashboard, orders, batches, tabs/bill, staff calls, bookings, menu/stop-list, tables/QR, staff/invites, staff-chat, settings and stats is tracked in `docs/VENUE_OPERATIONS.md`.
@@ -161,8 +164,9 @@ MUST:
 - Platform Owner sees support tickets but not ordinary `VENUE_CHAT` unless future product policy explicitly changes it.
 SHOULD:
 - Transaction-bound safe audit for staff invite create/revoke and profile create/update/publish/hide,
-  plus existing owner invite/revoke and role changes; never store invite secrets or profile/Telegram
-  PII in audit payloads.
+  plus existing owner invite/revoke. Staff role change/removal already has transaction-bound targeted
+  audit; never store invite secrets or profile/Telegram PII in audit payloads. Profile lifecycle
+  audit remains a separate contract where not already implemented.
 
 ## Block 3 — Entry points & context (QR/deep links)
 MUST:

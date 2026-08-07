@@ -4,6 +4,12 @@
 
 > Historical audit snapshot. The P0/P1 list in this file is not the current backlog.
 >
+> Current correction as of 2026-08-07: **DANGEROUS ACTION AUDIT SLICE / STAFF ROLE AND REMOVAL
+> AUDIT / DONE / MVP / STAGING-SMOKE-PASSED** supersedes pending staff membership-audit status for
+> the bounded Owner-only role/removal contract. It does not close promotion config, menu,
+> force-close/session, audit-viewer or other dangerous-action gaps, and does not make the product
+> production-ready.
+>
 > Current correction as of 2026-08-06: Simple Venue Promotions Phase 1 and Happy Hours Percent
 > remain staging-closed. **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE /
 > MVP / STAGING-SMOKE-PASSED** and **VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / DONE /

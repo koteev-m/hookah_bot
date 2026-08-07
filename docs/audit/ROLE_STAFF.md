@@ -1,12 +1,17 @@
 # Staff
 
-Дата актуализации: 2026-08-04.
+Дата актуализации: 2026-08-07.
 
 Статус: **current role reference**. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. STAFF - операционная роль смены, не management-role.
 
 ## Current status
 
 STAFF может работать с заказами, вызовами, закрытием счёта и операционным stop-list по позициям/вкусам. STAFF не получает финансовые bill-edit права, не управляет структурой/контентом меню, столами, персоналом или настройками и не получает `MENU_SHIFT_CHECK`.
+
+Current staff membership correction: **DANGEROUS ACTION AUDIT SLICE / STAFF ROLE AND REMOVAL
+AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. STAFF cannot change roles or remove memberships;
+direct Mini App/Telegram attempts are denied without a success audit. Removal of the STAFF
+membership revokes venue access but does not delete the staff profile or past shift/history/audit.
 
 Guest communication follows `docs/COMMUNICATION_MODEL.md`: STAFF handles operational `STAFF_CALL` / order flows only. STAFF does not see `Помощь` / `SUPPORT_TICKET`, ordinary `VENUE_CHAT` or Post-Visit Feedback/follow-up. Booking lifecycle and Staff arrival/no-show boundaries follow `docs/BOOKING_LIFECYCLE.md`. Telegram/staff-chat callback behavior follows `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. STAFF permissions, denied scopes and direct-API smoke expectations are governed by `docs/SECURITY_RBAC_MATRIX.md`. Public staff profile, own draft edit and future staff-tip boundaries are governed by `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. Venue operations are governed by `docs/VENUE_OPERATIONS.md`. Menu/stop-list policy follows `docs/MENU_OPTIONS_STOPLIST.md`. Order/session/tab behavior follows `docs/ORDER_SESSION_TAB_CORE.md`. Analytics/KPI rules follow `docs/ANALYTICS_EVENTS.md`. Testing/QA smoke strategy follows `docs/TESTING_QA_SMOKE_STRATEGY.md`. Release/deploy operations follow `docs/DEPLOYMENT_RUNBOOK.md`.
 

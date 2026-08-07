@@ -1,12 +1,16 @@
 # Manager
 
-Дата актуализации: 2026-08-04.
+Дата актуализации: 2026-08-07.
 
 Статус: **current role reference**. Канонический roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`. `ADMIN` в runtime сейчас является legacy alias для `MANAGER`.
 
 ## Current status
 
 Manager - операционная management-роль venue. Manager ведёт смену, заказы, брони, меню/availability и столы в рамках текущих backend permissions. Manager не является Platform Owner и не получает platform-wide права. Growth/retention scope is governed by `docs/GROWTH_RETENTION.md`; Post-Visit Feedback read/follow-up is staging-smoked, while promotions and other growth loops remain partial/future.
+
+Current staff membership correction: **DANGEROUS ACTION AUDIT SLICE / STAFF ROLE AND REMOVAL
+AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Manager cannot change roles or remove memberships;
+direct Mini App/Telegram attempts are denied without a success audit.
 
 Guest communication follows `docs/COMMUNICATION_MODEL.md`: Manager can handle `BOOKING_CHAT`, `VENUE_CHAT` and own-venue `SUPPORT_TICKET`; `STAFF_CALL` remains a separate operational queue. Booking lifecycle and queue rules follow `docs/BOOKING_LIFECYCLE.md`. Telegram bot fallback, staff-chat and callback rules follow `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. Manager permissions, billing denial, cross-venue isolation and dangerous-action boundaries are governed by `docs/SECURITY_RBAC_MATRIX.md`. Public staff profiles, today shift and future staff tips follow `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. Venue operations are governed by `docs/VENUE_OPERATIONS.md`. Menu/stop-list policy follows `docs/MENU_OPTIONS_STOPLIST.md`. Order/session/tab behavior follows `docs/ORDER_SESSION_TAB_CORE.md`. Analytics/KPI rules follow `docs/ANALYTICS_EVENTS.md`. Testing/QA smoke strategy follows `docs/TESTING_QA_SMOKE_STRATEGY.md`. Release/deploy operations follow `docs/DEPLOYMENT_RUNBOOK.md`.
 

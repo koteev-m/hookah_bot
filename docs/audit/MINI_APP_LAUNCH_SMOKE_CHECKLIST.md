@@ -1,6 +1,6 @@
 # Mini App Launch Smoke Checklist
 
-Дата: 2026-08-06.
+Дата: 2026-08-07.
 
 Цель: зафиксировать launch smoke/e2e coverage для core Mini App сценариев без изменения бизнес-логики. В `miniapp/package.json` есть `dev`, `build`, `preview` и минимальный browser smoke `e2e:smoke`. Поэтому стратегия на этот шаг гибридная:
 
@@ -11,6 +11,11 @@
 
 Актуальный scope после последних fix-pack'ов:
 
+- Staff membership mutation audit is **DANGEROUS ACTION AUDIT SLICE / STAFF ROLE AND REMOVAL
+  AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. The bounded Owner/Manager/Staff role, Mini App ↔
+  Telegram parity, last-owner, access-loss, targeted-audit privacy and ordinary-invite cleanup
+  smoke passed. This does not close promotion config, menu, force-close/session or the broader
+  dangerous-action audit.
 - Platform Owner controlled Guest QR test is **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE /
   DONE / MVP / STAGING-SMOKE-PASSED** with `NO_MIGRATION`: green Actions, staging deploy, one
   backend instance and the bounded 15-scenario Telegram role/privacy/exit smoke are complete. The

@@ -4,6 +4,11 @@
 
 > Historical/partial snapshot. Not source of truth without checking `docs/UPDATED_PRODUCT_AI_ROADMAP.md`, `docs/audit/MINI_APP_LAUNCH_SMOKE_CHECKLIST.md` and current code.
 >
+> Current correction as of 2026-08-07: **DANGEROUS ACTION AUDIT SLICE / STAFF ROLE AND REMOVAL
+> AUDIT / DONE / MVP / STAGING-SMOKE-PASSED** supersedes Bot/Mini App staff membership-mutation
+> parity gaps for this bounded contract. Both surfaces derive actor/source server-side and use the
+> same transactional mutation; the broader dangerous-action audit remains partial.
+>
 > Current correction as of 2026-08-06: Simple Venue Promotions Phase 1, Happy Hours Percent,
 > **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE / MVP /
 > STAGING-SMOKE-PASSED** and **VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / DONE / MVP /

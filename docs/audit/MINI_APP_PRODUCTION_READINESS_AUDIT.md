@@ -4,6 +4,13 @@
 
 > Historical audit snapshot. Some P0/P1 findings below were fixed after this read-only audit.
 >
+> Current correction as of 2026-08-07: **DANGEROUS ACTION AUDIT SLICE / STAFF ROLE AND REMOVAL
+> AUDIT / DONE / MVP / STAGING-SMOKE-PASSED** supersedes historical/current-pending claims for
+> Owner-authorized same-venue role change and membership removal. Mini App/Telegram parity,
+> last-owner, access loss, targeted audit privacy and ordinary-invite cleanup passed the bounded
+> smoke. Promotion config, menu, force-close/session and the broader dangerous-action audit remain
+> open; this is not a whole-product production-readiness claim.
+>
 > Current correction as of 2026-08-06: Simple Venue Promotions Phase 1 and Happy Hours Percent
 > remain staging-closed. **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE /
 > MVP / STAGING-SMOKE-PASSED** and **VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / DONE /

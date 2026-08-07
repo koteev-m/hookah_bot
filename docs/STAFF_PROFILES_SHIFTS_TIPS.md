@@ -1,6 +1,6 @@
 # Staff Profiles, Today Shift, Staff Schedule And Staff Tips
 
-Дата актуализации: 2026-08-04.
+Дата актуализации: 2026-08-07.
 
 Статус: **canonical staff visibility/schedule/tips spec**.
 `STAFF PROFILES + TODAY SHIFT PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`.
@@ -10,6 +10,8 @@
 `STAFF SCHEDULE / CANCELED SHIFT RESTORE + BULK ASSIGNMENT / DONE / MVP / STAGING-SMOKE-PASSED`.
 `STAFF OPERATIONS SLICE B / OPTIONAL TEAM AND SCHEDULE MODULE / GUEST MANUAL OR SCHEDULE SOURCE /
 DONE / MVP / STAGING-SMOKE-PASSED`.
+`DANGEROUS ACTION AUDIT SLICE / STAFF ROLE AND REMOVAL AUDIT / DONE / MVP /
+STAGING-SMOKE-PASSED`.
 Green GitHub Actions, staging deploy, PostgreSQL V121 rollout and the bounded manual smoke described
 below are complete for Slice B and the previously closed Staff slices.
 `STAFF_TIP`, photo upload/media picker and staff shift sign-up/chat workflows
@@ -236,6 +238,13 @@ Rules:
 
 ## Staff Access / Pending Invites
 
+- Staff role change/removal is Owner-only for the same venue and is closed as **DANGEROUS ACTION
+  AUDIT SLICE / STAFF ROLE AND REMOVAL AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Mini App and
+  Telegram derive actor/source on the server; applied mutation and targeted audit commit or roll
+  back together, with last-owner protection and no success audit for no-op/denial/not-found/rollback.
+- Removing a `venue_members` row revokes venue access but does not delete a linked staff profile,
+  past shifts/history or audit, and does not merge or clean profiles automatically. A later return
+  uses the ordinary Staff invite flow.
 - Member identity is read from the existing `users` row joined to `venue_members`: trimmed
   `first_name + last_name`, then the existing safe fallback convention, plus nullable normalized
   `username`. Bot message/callback handling and Mini App Telegram authentication already upsert

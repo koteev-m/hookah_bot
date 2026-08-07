@@ -1,6 +1,6 @@
 # Testing / QA Smoke Strategy
 
-Дата актуализации: 2026-08-06.
+Дата актуализации: 2026-08-07.
 
 Статус: **current product reference / UPDATED**. This document is the canonical QA/smoke strategy for the Telegram bot + Mini App platform. It consolidates local validation, GitHub Actions expectations, area-specific smoke suites, staging policy, failure reporting and Codex handoff rules. Deployment and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
 
@@ -27,9 +27,9 @@ Current practice:
   This closes only promotion status/archive lifecycle audit; broader dangerous-action coverage
   remains partial.
 - Staff role/removal audit is
-  **DANGEROUS ACTION AUDIT SLICE / STAFF ROLE AND REMOVAL AUDIT / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+  **DANGEROUS ACTION AUDIT SLICE / STAFF ROLE AND REMOVAL AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**.
   Local H2/PostgreSQL, repository, route, Telegram, privacy, rollback and deterministic concurrency
-  gates are green; review, green Actions, staging deploy and bounded staging smoke remain required.
+  gates are recorded green, and the bounded staging role/parity/privacy smoke is recorded passed.
 - Venue Mini App Guest Preview Phase 2.1 is **VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY / DONE / MVP / STAGING-SMOKE-PASSED**. Focused preview/Guest/RBAC/promotion backend tests, compile/lint, Mini App build and deterministic browser smoke `95/95` are green; GitHub Actions were green, staging deploy completed and manual staging smoke passed for the unified contract.
 - Menu shift check is **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**.
   OWNER/MANAGER use an own-venue local draft and one atomic availability batch; Staff individual
@@ -842,7 +842,7 @@ selector must also execute `VenuePromotionRoutesTest`, `VenuePromotionRepository
 
 ### STAFF ROLE / REMOVAL AUDIT quality gate
 
-Status: **DANGEROUS ACTION AUDIT SLICE / STAFF ROLE AND REMOVAL AUDIT / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+Status: **DANGEROUS ACTION AUDIT SLICE / STAFF ROLE AND REMOVAL AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**.
 
 The approved privacy decision is: `target_user_id is permitted only as a dedicated internal audit column. It remains prohibited in JSON, logs, errors and client projections.` Actor remains only in
 `audit_log.actor_user_id`; target remains only in nullable `audit_log.target_user_id`. PostgreSQL
@@ -872,10 +872,16 @@ Recorded local evidence: `AuditLogTargetMigrationH2Test` `2/0/0/0`,
 `VenueStaffMutationConcurrencyPostgresTest` `2/0/0/0` (`tests/skipped/failures/errors`). Kotlin
 compile and ktlint, Mini App production build and deterministic browser smoke `136/136` passed.
 
-Both PostgreSQL classes are mandatory CI selectors. Their XML must exist with tests `> 0`,
+Both PostgreSQL classes remain mandatory CI selectors. Their XML must exist with tests `> 0`,
 `skipped=0`, `failures=0`, `errors=0`; the release-critical selector also requires nonzero XML for
-the repository and route classes. A missing/zero/skipped XML fails the gate. This local result does
-not replace green Actions or the required staging smoke.
+the repository and route classes. A missing/zero/skipped XML fails the gate.
+
+Recorded bounded staging smoke: Owner changed STAFF to MANAGER and back with reload persistence and
+Manager-only authority; Manager could neither change roles nor remove members; Owner removed the
+test Staff and that user lost venue access; last-owner protection held; Mini App and Telegram gave
+the same result; no-op/repeat created no extra semantic mutation/audit; role-change audit contained
+actor, target, old/new role and source; removal audit contained actor, target, old role and source;
+payload exposed no private identity fields; cleanup used the ordinary Staff invite flow.
 
 ### Promotion Compatibility Policy audit and future quality gate
 
