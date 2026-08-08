@@ -801,8 +801,8 @@ Latest implemented bounded runtime blocks:
      option removes incomplete reward configuration, lifecycle status is not rewritten and fixed
      rewards are never replaced automatically. Green Actions for HEAD `822233c`, staging deploy and
      bounded blocked/allowed smoke are recorded complete.
-5. **DANGEROUS ACTION AUDIT SLICE / MENU CATEGORY HARD DELETE AUDIT / MVP IMPLEMENTED /
-   LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+5. **DANGEROUS ACTION AUDIT SLICE / MENU CATEGORY HARD DELETE AUDIT / DONE / MVP /
+   STAGING-SMOKE-PASSED**.
    - The sole production writer and both current Mini App/Telegram callers require authenticated
      actor plus server-owned source; current Owner/Manager allow, Staff/foreign denial, empty-only
      policy and success/error envelopes are unchanged.
@@ -814,8 +814,9 @@ Latest implemented bounded runtime blocks:
      omitted/full-set-SHA-256 summary below 4096 UTF-8 bytes. Menu/promotion content, request/
      Telegram data, media, secrets and PII are excluded. No migration or new workflow was added.
    - Focused repository/routes/Telegram/promotion tests, deterministic PostgreSQL configuration race
-     `14/14`, compile, lint, Mini App build and Playwright `139/139` pass locally. Independent review,
-     green Actions, staging deploy and bounded staging smoke remain required.
+     `14/14`, compile, lint, Mini App build and Playwright `139/139` remain regression gates. For
+     release HEAD `0e30a9b`, the user-confirmed evidence records green Actions, staging deploy and
+     the bounded 15-scenario role/parity/audit/privacy smoke passed.
 
 Current correction: the repeated staging smoke passed across Owner/Manager/Staff/foreign RBAC,
 Mini App and Telegram lifecycle writers, exactly-one/no-op audit behavior, payload privacy, Guest
@@ -830,9 +831,8 @@ the audit slice changes no lifecycle, promotion calculation, stacking or Guest p
 Promotion configuration edit audit, remaining menu price/option/update/availability families, QR rotate,
 force-close/session audit, tab reopen, analytics export, the Promotion Compatibility Policy and a
 broader audit viewer remain future. The overall dangerous-action audit therefore remains partial.
-The menu item hard-delete slice is release-closed only for its bounded MVP. The category hard-delete
-slice is locally validated but not release-closed; it awaits review, Actions and staging smoke. These
-slices do not close option delete, price/name/type/update, availability, media or broader menu audit.
+The menu item and empty-category hard-delete slices are release-closed only for their bounded MVPs.
+They do not close option delete, price/name/type/update, availability, media or broader menu audit.
 
 The staff role/removal slice remains bounded: invites, profile/linkage, Today/Schedule, Platform
 OWNER revoke, menu, order/session and promotion mutations are outside it. Existing membership
@@ -867,8 +867,8 @@ Not selected as implementation right now:
 - remaining guest growth/retention from `docs/GROWTH_RETENTION.md`: Repeat as Template Phase 1 remains locally validated with deferred manual smoke; Simple Venue Promotions Phase 1, Happy Hours Percent, Promotion Creation Audit, Promotion Effective State Clarity, Promotion Lifecycle Status Audit and Venue Promotions Current/Archived Tabs UX are `DONE / STAGING-SMOKE-PASSED`; Gift parity still awaits its recorded independent review, CI and staging gates; promotion configuration edit audit and the Promotion Compatibility Policy remain future; favorite menu items/options, recommendations/frequent items, notification opt-in, favorites-based promotions and loyalty stay future; venue favorites, History and Post-Visit Feedback stay in regression;
 - menu/options/stop-list governance from `docs/MENU_OPTIONS_STOPLIST.md`: keep selected-option
   snapshots, Guest stale availability validation, the atomic shift-check contract and the
-  staging-smoke-passed item hard-delete audit in regression; independently review/release the locally
-  validated category hard-delete audit, and resolve broader menu constructor/media/top-list plus
+  staging-smoke-passed item and empty-category hard-delete audits in regression, and resolve broader
+  menu constructor/media/top-list plus
   option/price/update/availability audit before calling menu complete;
 - Venue Mode operating model from `docs/VENUE_OPERATIONS.md`: keep orders, bill/tabs, staff calls, bookings, stop-list, staff-chat source-of-truth policy and role-specific nav/API denial in regression before adding new venue screens;
 - Booking lifecycle model from `docs/BOOKING_LIFECYCLE.md`: keep booking create/list, Venue queue actions, confirmed-only Staff arrival/no-show split, hold/deadline display, booking chat separation, support routing and reminder opt-in behavior in regression before adding preorder/history/loyalty.
@@ -1078,15 +1078,161 @@ its production-readiness gate remains open in
 [`REPEAT-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#repeat-manual-001), but does not block an
 independent bounded block.
 
-Current bounded block status: **DANGEROUS ACTION AUDIT SLICE / MENU CATEGORY HARD DELETE AUDIT /
-MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. The only production
-SQL writer remains `VenueMenuRepository.deleteCategory`, called only by the existing Venue Mini App
-route and authenticated Telegram management callback. Both supply server-derived actor/source to
-the required atomic audit contract. Empty-only deletion, promotion cleanup/version effects,
-Owner/Manager allow, Staff/foreign denial, envelopes, privacy, exactly-one/zero-success semantics,
-audit rollback and deterministic PostgreSQL contention pass locally. No migration or new workflow
-was added. Next gate is independent review before commit, followed by green Actions, staging deploy
-and bounded staging smoke; broader Menu and Dangerous Action Audit remain partial.
+Latest release-closed bounded block: **DANGEROUS ACTION AUDIT SLICE / MENU CATEGORY HARD DELETE
+AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Release HEAD `0e30a9b` matches `origin/main`; the
+user-confirmed evidence records green Actions, staging deploy and the bounded 15-scenario
+role/parity/audit/privacy smoke passed. The empty-only deletion, promotion cleanup/version effects,
+Owner/Manager allow, Staff/foreign denial, actor/source derivation, envelopes, privacy,
+exactly-one/zero-success semantics and audit rollback contracts remain regression requirements. No
+migration or new workflow was added, and broader Menu and Dangerous Action Audit remain partial.
+
+### Selected next bounded block
+
+Verdict: **IMPLEMENT_MENU_OPTION_DELETE_AUDIT_NEXT**.
+
+Runtime evidence:
+
+- `VenueMenuRepository.deleteOption(venueId, optionId)` is the sole SQL writer. It currently runs a
+  bare `DELETE FROM menu_item_options` without explicit transaction, actor, source or audit.
+- Production callers are exactly the Venue Mini App direct delete route, Telegram direct flavor
+  delete and Telegram hookah base-profile normalization, which can delete several obsolete options
+  one by one. Mini App uses current `MENU_MANAGE`; both Telegram paths use the current
+  Owner/Manager/legacy-ADMIN-alias guard. Staff and foreign callers are already denied at the
+  surface, but the repository contract does not enforce audit authority.
+- `order_batch_item_options.menu_item_option_id` is `ON DELETE SET NULL`; immutable
+  `option_name_snapshot` and `price_delta_minor_snapshot` preserve historical orders and bills.
+  Current submit resolution accepts only an existing, available option belonging to the item, so a
+  deleted selection in an unfinished cart fails safely rather than silently falling back.
+- No promotion target/reward table stores a menu option id. Option deletion therefore needs no
+  promotion lock, cleanup or rule-version change.
+
+Candidate comparison:
+
+| Candidate | Current evidence | Selection result |
+| --- | --- | --- |
+| Menu option delete audit | One writer, three enumerable production caller patterns, existing order-snapshot FK behavior, no promotion references and no schema gap. | Selected: smallest useful adjacent dangerous-action slice with clear rollback and staging acceptance. |
+| Menu item price audit | Mini App can combine price/name/category/currency/availability in one patch; Telegram has a separate price dialog. Current repository read/update is unaudited and not transaction-bound. | Defer: wider financial and compound-mutation/concurrency contract. |
+| Menu option price audit | Mini App can combine option name/price/availability; Telegram currently renames but has no option-price writer. Price delta affects preview, submit and promotion-adjusted totals. | Defer: financial scope and asymmetric writers need a separate bounded decision. |
+| Promotion configuration edit audit | Parent update plus schedule, category/item targets, rewards and compatibility use several repository paths and lock families. | Defer: choose one configuration family only in a later block. |
+| Force-close/session audit | Current docs and runtime search show no concrete bounded staff force-close mutation path. | Not ready without Guest/session obligations and a production writer. |
+| Notification Consent Foundation | No persisted operational/marketing consent, evidence/version/source or opt-out contract was found. | Spec-first, but less immediately bounded than the existing option writer. |
+| Promotion Compatibility Policy | Existing per-rule compatibility fields do not establish one cross-promotion product policy. | Defer because of high financial blast radius and required product decision. |
+| Menu audit hardening | Fuller rollback snapshots, Telegram negatives and membership-revoke linearization remain useful. | Defer behind the concrete unaudited production option-delete path. |
+
+Exact minimal outcome:
+
+1. Replace the unaudited option delete overload with a required actor/source contract. Sources are
+   server-owned `VENUE_MINI_APP` and `TELEGRAM_BOT`; actor is the authenticated session/callback
+   user and remains in the standard audit actor column.
+2. One transaction locks the authoritative option row in the venue, captures its parent item id,
+   deletes it, allows the existing historical-order FK to become null, appends exactly one
+   `MENU_OPTION_DELETED`, then commits once. Entity is `menu_item_option`; entity id is `optionId`.
+3. Payload keys are exactly `venueId`, `itemId`, `optionId`, `source`. It contains no option/item/
+   category names, price delta, order/cart data, raw request/callback/initData, Telegram identity,
+   media, secrets or unrelated PII.
+4. One committed delete writes one success audit. Missing/repeated, denied, SQL/audit failure and
+   rollback write zero. Audit failure restores both the option and any transaction-local historical
+   FK change; order option name/price snapshots are unchanged.
+5. Mini App direct delete, Telegram direct delete and every option actually removed by Telegram
+   normalization pass the authenticated actor and correct server source. A normalization that
+   removes N options produces N truthful per-option audits. Existing multi-step normalization
+   partial-success semantics are not redesigned.
+6. Mini App and Telegram direct-delete confirmation explain that the option disappears from new
+   ordering, unfinished selections may require refresh/reselection, and historical orders keep
+   their saved option name/price. Cancel performs no mutation/audit.
+
+Explicit out of scope: option create, rename, price and availability audit; item/category delete or
+update changes; atomic batch redesign or create audit for base-profile normalization; promotion
+configuration/version/lifecycle/compatibility; cart/order schema changes; option archive model;
+media/R2; broader audit viewer; dependency viewer; automatic replacements.
+
+Migration/schema verdict: **NO_MIGRATION_EXPECTED**. Existing `audit_log` and
+`order_batch_item_options ... ON DELETE SET NULL` are sufficient.
+
+Likely files:
+
+- `backend/app/src/main/kotlin/com/hookah/platform/backend/miniapp/venue/menu/VenueMenuRepository.kt`;
+- `backend/app/src/main/kotlin/com/hookah/platform/backend/miniapp/venue/menu/VenueMenuRoutes.kt`;
+- `backend/app/src/main/kotlin/com/hookah/platform/backend/telegram/TelegramBotRouter.kt`;
+- `miniapp/src/screens/venueMenu.ts`;
+- existing menu repository/route, Telegram router, Guest order/history and Mini App e2e tests;
+- `PROJECT_STATUS.md` and the smallest relevant menu/RBAC/QA/roadmap current-status surfaces.
+
+Required tests and properties:
+
+- repository success/repeat/exact payload, missing/foreign option, injected audit failure rollback,
+  historical FK null on commit and restored on rollback, immutable name/price snapshots;
+- Owner/Manager Mini App allow with exact actor/source, Staff/foreign/unaffiliated denial before
+  mutation, safe not-found/repeat behavior;
+- Telegram direct delete and normalization pass actor/source, Staff denial, cancel/no false
+  success, N committed normalization deletes produce N audits and preserved custom options produce
+  none;
+- Guest Mini App and Telegram stale selected-option submit reject safely, while already committed
+  order/bill/history still display snapshot name and price;
+- Mini App confirmation/cancel/success/error and Staff-hidden structural control regression;
+- row-lock concurrency produces at most one committed option-delete audit; a concurrent update or
+  parent item delete cannot produce partial option/FK/audit state.
+
+Validation commands:
+
+```bash
+git status --short
+git diff --check
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VenueMenuRepositoryTest*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VenueMenuRoutesTest*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*TelegramBotRouterTableTokenTest*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*GuestOrderRoutesTest*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*GuestVisitRoutesTest*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:compileKotlin --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:ktlintCheck --console=plain
+npm --prefix miniapp run build
+CI=1 TZ=UTC MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke
+```
+
+CI/release/staging gates: all required Actions green for the implementation HEAD; staging deploy
+because backend, Telegram and Mini App behavior changes; bounded Owner/Manager/Staff/foreign direct
+delete, Telegram normalization, exactly-one/repeat/audit-failure/privacy, stale-cart rejection,
+historical-order snapshot and ordinary Guest menu/work-data smoke; cleanup and rollback notes. Do
+not claim the broader Menu audit or product production-ready.
+
+Outcome-first implementation prompt:
+
+```text
+Следуй AGENTS.md. Сначала прочитай PROJECT_STATUS.md, затем только релевантные sections из
+MENU_OPTIONS_STOPLIST, SECURITY_RBAC_MATRIX, TESTING_QA_SMOKE_STRATEGY и
+UPDATED_PRODUCT_AI_ROADMAP. Не читай и не применяй stash, не трогай scripts/dev и Media/R2.
+
+Outcome: реализуй ровно DANGEROUS ACTION AUDIT SLICE / MENU OPTION HARD DELETE AUDIT, сохранив
+текущий hard-delete UX/RBAC и исторические order snapshots. Не объединяй блок с option create,
+rename, price, availability, item/category audit или normalization redesign.
+
+Сделай VenueMenuRepository.deleteOption обязательным actor/source-aware transaction contract.
+Источник только server-derived VENUE_MINI_APP или TELEGRAM_BOT; actor только authenticated current
+user. В transaction: lock authoritative own-venue option, capture itemId, delete option, сохранить
+существующий ON DELETE SET NULL для historical order FK, insert ровно один MENU_OPTION_DELETED
+(entity_type=menu_item_option, entity_id=optionId), один commit. Payload keys ровно venueId, itemId,
+optionId, source. Не включай names, price delta, cart/order data, raw request/callback/initData,
+Telegram identity, media, secrets или PII.
+
+Exactly-one: committed delete -> одна audit row. Missing/repeated, denied, SQL/audit failure и
+rollback -> zero success audit. Audit failure восстанавливает option и historical FK; snapshot name
+и price не меняются. Обнови все production callers: Mini App direct delete, Telegram direct delete
+и каждое фактическое удаление в Telegram base-profile normalization. Для N committed normalization
+deletes должно быть N per-option audits; не переделывай весь normalization в atomic batch.
+
+Обнови Mini App/Telegram direct-delete confirmation: option исчезнет из новых заказов, незавершённый
+выбор может потребовать обновления/повторного выбора, исторические заказы сохраняют snapshot. Cancel
+не вызывает delete/audit. Сохрани Owner/Manager allow и Staff/foreign/unaffiliated denial.
+
+Добавь focused repository/route/Telegram/Mini App/order/history tests: success/repeat/exact payload,
+privacy, RBAC, audit rollback, historical FK/snapshots, stale cart safe rejection, normalization
+caller inventory, cancel/no false success и row-lock concurrency. Migration не добавляй, если
+runtime evidence не опровергнет NO_MIGRATION_EXPECTED; при contradiction остановись и зафиксируй её.
+
+Сначала запускай smallest relevant tests, затем compile/lint, Mini App build/e2e по canonical QA.
+Не stage/commit/push/deploy без отдельной команды. В финале перечисли files, behavior, tests,
+risks, staging need, scripts/dev untouched и git status --short.
+```
 
 Latest Staff Operations closures:
 **STAFF IDENTITY LINKING UX + DUPLICATE PREVENTION / DONE / MVP / STAGING-SMOKE-PASSED**;
