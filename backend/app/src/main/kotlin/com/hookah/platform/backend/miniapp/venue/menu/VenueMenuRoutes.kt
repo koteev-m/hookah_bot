@@ -116,7 +116,13 @@ fun Route.venueMenuRoutes(
             if (venueMenuRepository.categoryHasItems(venueId, categoryId)) {
                 throw InvalidInputException("Category has items")
             }
-            val deleted = venueMenuRepository.deleteCategory(venueId, categoryId)
+            val deleted =
+                venueMenuRepository.deleteCategory(
+                    venueId = venueId,
+                    categoryId = categoryId,
+                    actorUserId = userId,
+                    source = MenuCategoryDeleteSource.VENUE_MINI_APP,
+                )
             if (!deleted) {
                 throw NotFoundException()
             }

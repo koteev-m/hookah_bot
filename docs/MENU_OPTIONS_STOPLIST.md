@@ -42,7 +42,7 @@ Menu permissions are governed by `docs/SECURITY_RBAC_MATRIX.md`; Venue Mode oper
 | Featured/top-list | Product spec requires featured/top list; implementation evidence is partial. | Venue manually pins items; not paid placement. | Paid placement/boosting belongs to Growth/Platform, not menu featured. |
 | PDF/media | `Фото-меню` exists as a flat info/media section and is separate from structured order menu. Bot OWNER/MANAGER can add image/PDF attachments, delete one and hide/show the whole section. | PDF/photo menu is view-only; no direct order unless item exists in structured menu. | Venue Mini App authoring/upload is missing; direct replace, per-attachment hide and optional subsections remain future. |
 | Shift check | **DONE / MVP / STAGING-SMOKE-PASSED**: OWNER/MANAGER Venue Mini App uses saved menu state, readiness counts, search/filters, local draft, a separate mass-selection mode, confirmation summary and one atomic request. STAFF has no entry/direct permission. | Venue Mode keeps optimistic availability checks, one bounded batch, no-op completion evidence and recoverable stale-state handling. | Keep role/tenant, atomicity, stale-state, Guest availability and Telegram stop-list parity in regression; Telegram shift-check UI and a queryable history table are not part of Phase 1. |
-| Audit logs | `MENU_SHIFT_CHECK_COMPLETED` is atomic for a successful batch. `MENU_ITEM_DELETED` is atomic with item deletion and affected promotion-rule cascades/version bumps; actor/source are server-derived and affected rule ids use a bounded deterministic summary. | Price changes, archive/delete, mass stop-list, media removal, option schema change and Staff stop-list toggles write safe audit. | Item hard delete is `DONE / MVP / STAGING-SMOKE-PASSED`. Other menu dangerous-action audit families remain `PARTIAL`; category delete audit is the next bounded block. |
+| Audit logs | `MENU_SHIFT_CHECK_COMPLETED` is atomic for a successful batch. `MENU_ITEM_DELETED` is staging-closed. Empty-category hard delete now has locally validated transaction-bound `MENU_CATEGORY_DELETED`; both delete payloads use the same bounded affected-rule summary and server-derived actor/source. | Price changes, archive/delete, mass stop-list, media removal, option schema change and Staff stop-list toggles write safe audit. | Category hard delete is `MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`; item hard delete is staging-closed. Other menu dangerous-action audit families remain `PARTIAL`. |
 | Telegram vs Mini App parity | Options/flavors parity is smoke-closed; some Telegram owner flows remain richer. | Required menu/stop-list operations are aligned across Bot and Mini App or documented as exceptions. | Keep cross-surface parity smoke for Staff stop-list and selected options. |
 | Staff stop-list permissions | Current docs say STAFF has `MENU_AVAILABILITY_MANAGE` and can toggle item/option availability; STAFF cannot edit structure/prices/options schema. | Recommended MVP: Staff cannot change menu structure/prices; Staff stop-list works only when `staff_stoplist_enabled` or equivalent policy allows it, and is identical in Bot/Mini App. | Current global Staff stop-list permission is acceptable only if intentionally enabled and audited; per-venue toggle remains target/future. |
 
@@ -324,13 +324,35 @@ STAGING-SMOKE-PASSED**.
   explicit omitted count and lowercase SHA-256 of UTF-8 `v1:` plus every sorted unique id joined by
   comma. It never stores the full unbounded list and remains below 4096 UTF-8 bytes.
 - Names, prices, media, promotion titles/configuration/schedules/rewards, raw request/callback/
-  initData, Telegram fields, secrets and unrelated PII are excluded. Category/option delete,
+  initData, Telegram fields, secrets and unrelated PII are excluded. Option delete,
   price/name/type/update, availability/stop-list and media audit are not closed by this slice.
 - Release closure evidence for HEAD `822233c` records green Actions after rerun of one failed
   backend job, staging deploy and passed smoke: Owner/Manager allowed, Staff denied, fixed-reward
   block on Mini App/Telegram with state and zero audit preserved, CHOICE delete with the remaining
   option preserved and exactly one audit, confirmation/cancel behavior, Guest menu/work-data
   regression and ordinary cleanup. No cause is asserted for the initial failed job.
+
+Category hard-delete status: **DANGEROUS ACTION AUDIT SLICE / MENU CATEGORY HARD DELETE AUDIT /
+MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+
+- Only an empty category can be deleted. The existing Mini App and Telegram production callers
+  provide authenticated actor plus server-owned `VENUE_MINI_APP` / `TELEGRAM_BOT`; request/query/
+  callback data cannot provide either audit authority.
+- Authoritative category/venue scope, initial and repeated empty checks, category-reference
+  snapshot/recheck, promotion parent/rule locks, category `NOWAIT` lock, bounded summary, current
+  target cleanup/version bumps, category delete and `MENU_CATEGORY_DELETED` for
+  `menu_category` / category id share one JDBC transaction and commit.
+- A committed delete writes exactly one audit. Non-empty, missing/repeated, denied,
+  reference/concurrency, SQL, audit and rollback paths write zero. Audit failure restores the
+  category, category targets and rule versions/`updated_at`; promotion lifecycle status is unchanged.
+- Payload is exactly `venueId`, `categoryId`, `source`, `affectedPromotionRules`. The nested summary
+  reuses the item-delete contract: unique ascending ids, first 50 sample, exact omitted count and
+  lowercase SHA-256 over UTF-8 `v1:` plus the complete sorted set joined by comma. It is below 4096
+  UTF-8 bytes, stores no full unbounded list and never truncates silently.
+- Names, prices, promotion content/config/schedules/rewards, media, raw request/callback/initData,
+  Telegram identity, secrets and unrelated PII are excluded. Focused H2 suites and deterministic
+  real PostgreSQL config/category-delete race pass locally; the mandatory class/CI minimum is 14.
+  Independent review, green Actions, staging deploy and bounded staging smoke remain required.
 
 Audit payloads must use safe ids and old/new safe fields only. Do not include raw media payloads, raw Telegram file URLs, provider data, secrets, raw initData, guest message text or unrelated PII.
 
@@ -351,9 +373,10 @@ Audit payloads must use safe ids and old/new safe fields only. Do not include ra
 - Item hard-delete audit: **DANGEROUS ACTION AUDIT SLICE / MENU ITEM HARD DELETE AUDIT / DONE / MVP /
   STAGING-SMOKE-PASSED**. The bounded release gates are complete; schema verdict is
   `NO_MIGRATION_EXPECTED`.
-- Next bounded block: category delete audit. Current runtime deletes only empty categories and
-  already keeps promotion-reference cleanup/version bumps inside one locked JDBC transaction, but
-  the two production callers do not supply actor/source and no category-delete audit is written.
+- Category hard-delete audit: **DANGEROUS ACTION AUDIT SLICE / MENU CATEGORY HARD DELETE AUDIT /
+  MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. The existing
+  empty-category-only, RBAC, response and promotion lifecycle contracts are unchanged; no migration
+  was added. This does not close option/price/update/availability/media or broader Menu audit.
 - Guest server-side availability validation: `REQUIRED`; current stale/unavailable option rejection is documented as covered for the smoked options/flavors flow, but broader availability validation should stay in regression.
 - Promotions/paid placement remain separate from featured/top-list and follow `docs/GROWTH_RETENTION.md` plus `docs/PLATFORM_COCKPIT.md`.
 
@@ -400,3 +423,9 @@ Audit payloads must use safe ids and old/new safe fields only. Do not include ra
     writes no success audit and exposes no promotion title/rule id/SQL or PII.
 31. Purchase-target and every choice-allowlist entry, including the stored primary pointer, delete
     atomically with current version cleanup and exactly one audit.
+32. Owner/Manager empty-category delete writes one safe `MENU_CATEGORY_DELETED`; Staff/foreign deny.
+33. Non-empty, missing/repeated and failed category delete writes zero success audit.
+34. Referenced empty-category delete removes targets, bumps rule version, preserves lifecycle status
+    and commits exactly one bounded affected-rule summary.
+35. Audit failure and deterministic promotion config/category-delete contention leave no partial
+    category/target/version/audit state.

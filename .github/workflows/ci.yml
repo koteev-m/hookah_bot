@@ -188,7 +188,7 @@ jobs:
                       "TEST-com.hookah.platform.backend.telegram.db."
                       "PromotionConfigurationConcurrencyPostgresTest.xml"
                   ),
-                  13,
+                  14,
               ),
               (
                   "staff membership concurrency",

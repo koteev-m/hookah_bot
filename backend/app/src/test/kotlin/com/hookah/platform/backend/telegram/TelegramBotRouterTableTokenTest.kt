@@ -72,6 +72,7 @@ import com.hookah.platform.backend.miniapp.venue.STAFF_CALL_AUDIT_SOURCE_TELEGRA
 import com.hookah.platform.backend.miniapp.venue.STAFF_CALL_DONE_AUDIT_ACTION
 import com.hookah.platform.backend.miniapp.venue.VenueRole
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
+import com.hookah.platform.backend.miniapp.venue.menu.MenuCategoryDeleteSource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuItemDeleteSource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuSemanticType
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuCategory
@@ -8955,6 +8956,106 @@ class TelegramBotRouterTableTokenTest {
                             }
                     },
                 )
+            }
+        }
+
+    @Test
+    fun `owner order menu category delete uses authenticated actor and Telegram source`() =
+        runBlocking {
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+            coEvery {
+                venueMenuRepository.deleteCategory(
+                    venueId = 10L,
+                    categoryId = 501L,
+                    actorUserId = 200L,
+                    source = MenuCategoryDeleteSource.TELEGRAM_BOT,
+                )
+            } returns true
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_279,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-owner-order-menu-category-delete",
+                            from = User(id = 200L),
+                            message = Message(messageId = 30_004_279, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_order_menu_section_delete:10:501",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 1) {
+                venueMenuRepository.deleteCategory(
+                    venueId = 10L,
+                    categoryId = 501L,
+                    actorUserId = 200L,
+                    source = MenuCategoryDeleteSource.TELEGRAM_BOT,
+                )
+            }
+            coVerify { outboxEnqueuer.enqueueSendMessage(100, "✅ Раздел удалён.", null) }
+        }
+
+    @Test
+    fun `staff direct category delete callback is denied before repository mutation`() =
+        runBlocking {
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(202L, 10L) } returns false
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_279_1,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-staff-order-menu-category-delete",
+                            from = User(id = 202L),
+                            message = Message(messageId = 30_004_279_1, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_order_menu_section_delete:10:501",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) {
+                venueMenuRepository.deleteCategory(
+                    venueId = any(),
+                    categoryId = any(),
+                    actorUserId = any(),
+                    source = any(),
+                )
+            }
+            coVerify { outboxEnqueuer.enqueueSendMessage(100, "Нет доступа к заведению.", null) }
+        }
+
+    @Test
+    fun `category delete database failure has safe Telegram copy without false success`() =
+        runBlocking {
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+            coEvery {
+                venueMenuRepository.deleteCategory(
+                    venueId = 10L,
+                    categoryId = 501L,
+                    actorUserId = 200L,
+                    source = MenuCategoryDeleteSource.TELEGRAM_BOT,
+                )
+            } throws DatabaseUnavailableException()
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_279_2,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-owner-order-menu-category-delete-failure",
+                            from = User(id = 200L),
+                            message = Message(messageId = 30_004_279_2, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_order_menu_section_delete:10:501",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 1) {
+                outboxEnqueuer.enqueueSendMessage(100, "База недоступна, попробуйте позже.", null)
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(100, "✅ Раздел удалён.", null)
             }
         }
 

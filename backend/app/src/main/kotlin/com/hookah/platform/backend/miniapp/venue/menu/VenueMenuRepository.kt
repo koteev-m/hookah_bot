@@ -24,10 +24,18 @@ import javax.sql.DataSource
 internal const val MENU_SHIFT_CHECK_MAX_CHANGES = 500
 const val MENU_SHIFT_CHECK_COMPLETED_AUDIT_ACTION = "MENU_SHIFT_CHECK_COMPLETED"
 const val MENU_ITEM_DELETED_AUDIT_ACTION = "MENU_ITEM_DELETED"
-internal const val MENU_ITEM_DELETE_AFFECTED_RULE_SAMPLE_LIMIT = 50
-internal const val MENU_ITEM_DELETE_AUDIT_PAYLOAD_MAX_BYTES = 4096
+const val MENU_CATEGORY_DELETED_AUDIT_ACTION = "MENU_CATEGORY_DELETED"
+internal const val MENU_DELETE_AFFECTED_RULE_SAMPLE_LIMIT = 50
+internal const val MENU_DELETE_AUDIT_PAYLOAD_MAX_BYTES = 4096
+internal const val MENU_ITEM_DELETE_AFFECTED_RULE_SAMPLE_LIMIT = MENU_DELETE_AFFECTED_RULE_SAMPLE_LIMIT
+internal const val MENU_ITEM_DELETE_AUDIT_PAYLOAD_MAX_BYTES = MENU_DELETE_AUDIT_PAYLOAD_MAX_BYTES
 
 enum class MenuItemDeleteSource {
+    VENUE_MINI_APP,
+    TELEGRAM_BOT,
+}
+
+enum class MenuCategoryDeleteSource {
     VENUE_MINI_APP,
     TELEGRAM_BOT,
 }
@@ -290,6 +298,8 @@ class VenueMenuRepository(
     suspend fun deleteCategory(
         venueId: Long,
         categoryId: Long,
+        actorUserId: Long,
+        source: MenuCategoryDeleteSource,
     ): Boolean {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
@@ -298,6 +308,10 @@ class VenueMenuRepository(
                     val originalAutoCommit = connection.autoCommit
                     connection.autoCommit = false
                     try {
+                        if (!categoryExists(connection, venueId, categoryId)) {
+                            connection.commit()
+                            return@use false
+                        }
                         if (categoryHasItems(connection, venueId, categoryId)) {
                             connection.commit()
                             return@use false
@@ -316,6 +330,14 @@ class VenueMenuRepository(
                         val currentReferences =
                             loadPromotionRulesReferencingCategory(connection, venueId, categoryId)
                         ensureNoNewPromotionReferences(initialReferences, currentReferences)
+                        val auditPayload =
+                            buildMenuCategoryDeleteAuditPayload(
+                                venueId = venueId,
+                                categoryId = categoryId,
+                                source = source,
+                                affectedRuleIds = currentReferences.map { it.ruleId },
+                            )
+                        ensureMenuDeleteAuditPayloadFits(auditPayload, "Menu category delete")
                         bumpPromotionRuleVersions(connection, currentReferences)
                         val deleted =
                             connection.prepareStatement(
@@ -328,8 +350,22 @@ class VenueMenuRepository(
                                 statement.setLong(2, venueId)
                                 statement.executeUpdate() > 0
                             }
+                        if (!deleted) {
+                            throw SQLException(
+                                "Locked menu category disappeared during deletion",
+                                "40001",
+                            )
+                        }
+                        auditLogWriter.appendJson(
+                            connection = connection,
+                            actorUserId = actorUserId,
+                            action = MENU_CATEGORY_DELETED_AUDIT_ACTION,
+                            entityType = "menu_category",
+                            entityId = categoryId,
+                            payload = auditPayload,
+                        )
                         connection.commit()
-                        deleted
+                        true
                     } catch (e: Exception) {
                         connection.rollback()
                         throw e
@@ -528,11 +564,7 @@ class VenueMenuRepository(
                                 source = source,
                                 affectedRuleIds = currentReferences.map { it.ruleId },
                             )
-                        val auditPayloadBytes =
-                            auditPayload.toString().toByteArray(StandardCharsets.UTF_8).size
-                        if (auditPayloadBytes >= MENU_ITEM_DELETE_AUDIT_PAYLOAD_MAX_BYTES) {
-                            throw SQLException("Menu item delete audit payload exceeds byte budget")
-                        }
+                        ensureMenuDeleteAuditPayloadFits(auditPayload, "Menu item delete")
                         rehomeChoiceRewardPrimaryReferences(connection, venueId, itemId)
                         bumpPromotionRuleVersions(connection, currentReferences)
                         val deleted =
@@ -1856,33 +1888,55 @@ internal fun buildMenuItemDeleteAuditPayload(
     source: MenuItemDeleteSource,
     affectedRuleIds: Iterable<Long>,
 ) = buildJsonObject {
-    val sortedUniqueRuleIds = affectedRuleIds.toSet().sorted()
-    val sampleRuleIds = sortedUniqueRuleIds.take(MENU_ITEM_DELETE_AFFECTED_RULE_SAMPLE_LIMIT)
-    val canonicalHashInput = "v1:" + sortedUniqueRuleIds.joinToString(",")
-    val sha256 =
-        MessageDigest
-            .getInstance("SHA-256")
-            .digest(canonicalHashInput.toByteArray(StandardCharsets.UTF_8))
-            .toLowercaseHex()
-
     put("venueId", venueId)
     put("itemId", itemId)
     put("categoryId", categoryId)
     put("source", source.name)
-    put(
-        "affectedPromotionRules",
-        buildJsonObject {
-            put("totalCount", sortedUniqueRuleIds.size)
-            put(
-                "sampleRuleIds",
-                buildJsonArray {
-                    sampleRuleIds.forEach { add(JsonPrimitive(it)) }
-                },
-            )
-            put("omittedCount", sortedUniqueRuleIds.size - sampleRuleIds.size)
-            put("sha256", sha256)
-        },
-    )
+    put("affectedPromotionRules", buildAffectedPromotionRuleSummary(affectedRuleIds))
+}
+
+internal fun buildMenuCategoryDeleteAuditPayload(
+    venueId: Long,
+    categoryId: Long,
+    source: MenuCategoryDeleteSource,
+    affectedRuleIds: Iterable<Long>,
+) = buildJsonObject {
+    put("venueId", venueId)
+    put("categoryId", categoryId)
+    put("source", source.name)
+    put("affectedPromotionRules", buildAffectedPromotionRuleSummary(affectedRuleIds))
+}
+
+private fun buildAffectedPromotionRuleSummary(affectedRuleIds: Iterable<Long>) =
+    buildJsonObject {
+        val sortedUniqueRuleIds = affectedRuleIds.toSet().sorted()
+        val sampleRuleIds = sortedUniqueRuleIds.take(MENU_DELETE_AFFECTED_RULE_SAMPLE_LIMIT)
+        val canonicalHashInput = "v1:" + sortedUniqueRuleIds.joinToString(",")
+        val sha256 =
+            MessageDigest
+                .getInstance("SHA-256")
+                .digest(canonicalHashInput.toByteArray(StandardCharsets.UTF_8))
+                .toLowercaseHex()
+
+        put("totalCount", sortedUniqueRuleIds.size)
+        put(
+            "sampleRuleIds",
+            buildJsonArray {
+                sampleRuleIds.forEach { add(JsonPrimitive(it)) }
+            },
+        )
+        put("omittedCount", sortedUniqueRuleIds.size - sampleRuleIds.size)
+        put("sha256", sha256)
+    }
+
+private fun ensureMenuDeleteAuditPayloadFits(
+    payload: kotlinx.serialization.json.JsonObject,
+    label: String,
+) {
+    val payloadBytes = payload.toString().toByteArray(StandardCharsets.UTF_8).size
+    if (payloadBytes >= MENU_DELETE_AUDIT_PAYLOAD_MAX_BYTES) {
+        throw SQLException("$label audit payload exceeds byte budget")
+    }
 }
 
 private fun ByteArray.toLowercaseHex(): String {

@@ -5,7 +5,9 @@ import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
 import com.hookah.platform.backend.miniapp.venue.TransactionalAuditLogWriter
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
+import com.hookah.platform.backend.miniapp.venue.menu.MENU_CATEGORY_DELETED_AUDIT_ACTION
 import com.hookah.platform.backend.miniapp.venue.menu.MENU_ITEM_DELETED_AUDIT_ACTION
+import com.hookah.platform.backend.miniapp.venue.menu.MenuCategoryDeleteSource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuItemDeleteSource
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepository
 import com.hookah.platform.backend.promotions.GiftDecisionCommand
@@ -867,6 +869,103 @@ class PromotionConfigurationConcurrencyPostgresTest {
             }
         }
 
+    @Test
+    fun `menu category delete and promotion configuration race has atomic audited winners`() =
+        runBlocking {
+            val deleteWinsDatabase = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(deleteWinsDatabase).use { dataSource ->
+                val fixture = seedFixture(dataSource)
+                val categoryId = insertMenuCategory(dataSource, fixture.venueId, "Delete wins category")
+                assertNotNull(editToCategoryTarget(dataSource, fixture, categoryId))
+                val deleteDataSource = HeldMenuDeletePromotionLockDataSource(dataSource)
+                val configurationDataSource = TrackedPromotionMutationDataSource(dataSource)
+
+                val (deleted, edited) =
+                    runWithHeldMenuDeletePromotionLock(
+                        observerDataSource = dataSource,
+                        deleteDataSource = deleteDataSource,
+                        blockedDataSource = configurationDataSource,
+                        deleteAction = {
+                            runBlocking {
+                                VenueMenuRepository(deleteDataSource).deleteCategory(
+                                    venueId = fixture.venueId,
+                                    categoryId = categoryId,
+                                    actorUserId = USER_ID,
+                                    source = MenuCategoryDeleteSource.VENUE_MINI_APP,
+                                )
+                            }
+                        },
+                        blockedAction = {
+                            runBlocking { editToVersionTwo(configurationDataSource, fixture) }
+                        },
+                    )
+
+                assertTrue(deleted)
+                assertNotNull(edited)
+                assertFalse(menuCategoryExists(dataSource, categoryId))
+                val finalRule =
+                    assertNotNull(
+                        VenuePromotionRuleRepository(dataSource)
+                            .getRuleForManagement(fixture.venueId, fixture.ruleId),
+                    )
+                assertEquals(4, finalRule.version)
+                assertEquals(listOf(fixture.itemBId), finalRule.targets.map { it.menuItemId })
+                val audit = readMenuCategoryDeleteAudits(dataSource, categoryId).single()
+                assertEquals(USER_ID, audit.actorUserId)
+                assertEquals("menu_category", audit.entityType)
+                assertEquals(categoryId, audit.entityId)
+                assertEquals("VENUE_MINI_APP", audit.payload.getValue("source").jsonPrimitive.content)
+                val affected = audit.payload.getValue("affectedPromotionRules").jsonObject
+                assertEquals(1, affected.getValue("totalCount").jsonPrimitive.content.toInt())
+                assertEquals(
+                    listOf(fixture.ruleId),
+                    affected.getValue("sampleRuleIds").jsonArray.map { it.jsonPrimitive.content.toLong() },
+                )
+                assertEquals(0, affected.getValue("omittedCount").jsonPrimitive.content.toInt())
+            }
+
+            val configurationWinsDatabase = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(configurationWinsDatabase).use { dataSource ->
+                val fixture = seedFixture(dataSource)
+                val categoryId = insertMenuCategory(dataSource, fixture.venueId, "Configuration wins category")
+                val configurationDataSource = HeldPromotionConfigurationLockDataSource(dataSource)
+                val deleteDataSource = TrackedMenuDeleteDataSource(dataSource)
+
+                val (edited, deleteFailure) =
+                    runWithHeldConfigurationParentLock(
+                        configurationDataSource = configurationDataSource,
+                        blockedDataSource = deleteDataSource,
+                        configurationAction = {
+                            runBlocking { editToCategoryTarget(configurationDataSource, fixture, categoryId) }
+                        },
+                        blockedAction = {
+                            runCatching {
+                                runBlocking {
+                                    VenueMenuRepository(deleteDataSource).deleteCategory(
+                                        venueId = fixture.venueId,
+                                        categoryId = categoryId,
+                                        actorUserId = USER_ID,
+                                        source = MenuCategoryDeleteSource.VENUE_MINI_APP,
+                                    )
+                                }
+                            }.exceptionOrNull()
+                        },
+                    )
+
+                assertNotNull(edited)
+                assertTrue(deleteFailure is DatabaseUnavailableException)
+                assertTrue(menuCategoryExists(dataSource, categoryId))
+                val finalRule =
+                    assertNotNull(
+                        VenuePromotionRuleRepository(dataSource)
+                            .getRuleForManagement(fixture.venueId, fixture.ruleId),
+                    )
+                assertEquals(2, finalRule.version)
+                assertEquals(listOf(categoryId), finalRule.targets.map { it.menuCategoryId })
+                assertTrue(readMenuCategoryDeleteAudits(dataSource, categoryId).isEmpty())
+            }
+        }
+
     private suspend fun seedFixture(
         dataSource: DataSource,
         activate: Boolean = true,
@@ -1228,6 +1327,36 @@ class PromotionConfigurationConcurrencyPostgresTest {
     private suspend fun editToVersionTwo(
         dataSource: DataSource,
         fixture: PromotionFixture,
+    ): VenuePromotion? =
+        editPromotionTarget(
+            dataSource = dataSource,
+            fixture = fixture,
+            target =
+                HappyHoursRuleTargetInput(
+                    targetType = PromotionRuleTargetType.MENU_ITEM,
+                    menuItemId = fixture.itemBId,
+                ),
+        )
+
+    private suspend fun editToCategoryTarget(
+        dataSource: DataSource,
+        fixture: PromotionFixture,
+        categoryId: Long,
+    ): VenuePromotion? =
+        editPromotionTarget(
+            dataSource = dataSource,
+            fixture = fixture,
+            target =
+                HappyHoursRuleTargetInput(
+                    targetType = PromotionRuleTargetType.MENU_CATEGORY,
+                    menuCategoryId = categoryId,
+                ),
+        )
+
+    private suspend fun editPromotionTarget(
+        dataSource: DataSource,
+        fixture: PromotionFixture,
+        target: HappyHoursRuleTargetInput,
     ): VenuePromotion? {
         val promotionRepository = VenuePromotionRepository(dataSource)
         val ruleRepository = VenuePromotionRuleRepository(dataSource)
@@ -1242,11 +1371,7 @@ class PromotionConfigurationConcurrencyPostgresTest {
                         venueId = fixture.venueId,
                         promotionId = fixture.promotionId,
                         ruleId = fixture.ruleId,
-                        target =
-                            HappyHoursRuleTargetInput(
-                                targetType = PromotionRuleTargetType.MENU_ITEM,
-                                menuItemId = fixture.itemBId,
-                            ),
+                        target = target,
                         discountPercent = 50,
                         weekdayWindows =
                             listOf(
@@ -1456,7 +1581,18 @@ class PromotionConfigurationConcurrencyPostgresTest {
     private fun readMenuItemDeleteAudits(
         dataSource: DataSource,
         itemId: Long,
-    ): List<MenuItemDeleteAudit> =
+    ): List<MenuDeleteAudit> = readMenuDeleteAudits(dataSource, MENU_ITEM_DELETED_AUDIT_ACTION, itemId)
+
+    private fun readMenuCategoryDeleteAudits(
+        dataSource: DataSource,
+        categoryId: Long,
+    ): List<MenuDeleteAudit> = readMenuDeleteAudits(dataSource, MENU_CATEGORY_DELETED_AUDIT_ACTION, categoryId)
+
+    private fun readMenuDeleteAudits(
+        dataSource: DataSource,
+        action: String,
+        entityId: Long,
+    ): List<MenuDeleteAudit> =
         dataSource.connection.use { connection ->
             connection.prepareStatement(
                 """
@@ -1467,13 +1603,13 @@ class PromotionConfigurationConcurrencyPostgresTest {
                 ORDER BY id
                 """.trimIndent(),
             ).use { statement ->
-                statement.setString(1, MENU_ITEM_DELETED_AUDIT_ACTION)
-                statement.setLong(2, itemId)
+                statement.setString(1, action)
+                statement.setLong(2, entityId)
                 statement.executeQuery().use { rs ->
                     buildList {
                         while (rs.next()) {
                             add(
-                                MenuItemDeleteAudit(
+                                MenuDeleteAudit(
                                     actorUserId = rs.getLong("actor_user_id"),
                                     entityType = rs.getString("entity_type"),
                                     entityId = rs.getLong("entity_id"),
@@ -1765,6 +1901,37 @@ class PromotionConfigurationConcurrencyPostgresTest {
             statement.setLong(4, priceMinor)
         }
 
+    private fun insertMenuCategory(
+        dataSource: DataSource,
+        venueId: Long,
+        name: String,
+    ): Long =
+        dataSource.connection.use { connection ->
+            insertReturningId(
+                connection,
+                """
+                INSERT INTO menu_categories (venue_id, name, category_type)
+                VALUES (?, ?, 'HOOKAH')
+                """.trimIndent(),
+            ) { statement ->
+                statement.setLong(1, venueId)
+                statement.setString(2, name)
+            }
+        }
+
+    private fun menuCategoryExists(
+        dataSource: DataSource,
+        categoryId: Long,
+    ): Boolean =
+        dataSource.connection.use { connection ->
+            connection.prepareStatement(
+                "SELECT 1 FROM menu_categories WHERE id = ?",
+            ).use { statement ->
+                statement.setLong(1, categoryId)
+                statement.executeQuery().use { rs -> rs.next() }
+            }
+        }
+
     private fun insertReturningId(
         connection: Connection,
         sql: String,
@@ -1970,7 +2137,7 @@ class PromotionConfigurationConcurrencyPostgresTest {
             val blockedFuture = executor.submit(Callable<U> { blockedAction() })
             assertTrue(
                 blockedDataSource.deleteLockAttempted.await(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS),
-                "Menu delete did not attempt its item NOWAIT lock",
+                "Menu delete did not attempt its entity NOWAIT lock",
             )
             val blockedResult = blockedFuture.get(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             configurationDataSource.allowConfiguration.countDown()
@@ -2229,7 +2396,10 @@ class PromotionConfigurationConcurrencyPostgresTest {
                     val prepared = connection.prepareStatement(sql)
                     val normalized = sql.normalizedSql()
                     if (
-                        normalized.startsWith("insert into promotion_rule_targets") &&
+                        (
+                            normalized.startsWith("insert into promotion_rule_targets") ||
+                                normalized.startsWith("insert into promotion_rule_menu_category_targets")
+                        ) &&
                         held.compareAndSet(false, true)
                     ) {
                         return object : PreparedStatement by prepared {
@@ -2271,7 +2441,10 @@ class PromotionConfigurationConcurrencyPostgresTest {
                     val prepared = connection.prepareStatement(sql)
                     val normalized = sql.normalizedSql()
                     if (
-                        normalized.contains("from menu_items") &&
+                        (
+                            normalized.contains("from menu_items") ||
+                                normalized.contains("from menu_categories")
+                        ) &&
                         normalized.contains("for update nowait")
                     ) {
                         return object : PreparedStatement by prepared {
@@ -2413,7 +2586,7 @@ class PromotionConfigurationConcurrencyPostgresTest {
         val payload: JsonObject,
     )
 
-    private data class MenuItemDeleteAudit(
+    private data class MenuDeleteAudit(
         val actorUserId: Long,
         val entityType: String,
         val entityId: Long,

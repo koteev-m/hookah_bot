@@ -378,6 +378,207 @@ class VenueMenuRepositoryTest {
         }
 
     @Test
+    fun `empty category delete writes one exact safe audit and repeat writes none`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("venue-menu-category-delete-no-references")
+            val venueId = seedVenue(jdbcUrl)
+            val repository = VenueMenuRepository(dataSource(jdbcUrl))
+            val category = repository.createCategory(venueId, "Private category name")
+
+            assertTrue(
+                repository.deleteCategory(
+                    venueId = venueId,
+                    categoryId = category.id,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuCategoryDeleteSource.VENUE_MINI_APP,
+                ),
+            )
+
+            assertFalse(repository.categoryExists(venueId, category.id))
+            val audit = menuCategoryDeleteAudits(jdbcUrl).single()
+            assertEquals(AUDIT_ACTOR_ID, audit.actorUserId)
+            assertEquals(MENU_CATEGORY_DELETED_AUDIT_ACTION, audit.action)
+            assertEquals("menu_category", audit.entityType)
+            assertEquals(category.id, audit.entityId)
+            assertEquals(
+                setOf("venueId", "categoryId", "source", "affectedPromotionRules"),
+                audit.payload.keys,
+            )
+            assertEquals(venueId, audit.payload.longValue("venueId"))
+            assertEquals(category.id, audit.payload.longValue("categoryId"))
+            assertEquals(
+                MenuCategoryDeleteSource.VENUE_MINI_APP.name,
+                audit.payload.getValue("source").jsonPrimitive.content,
+            )
+            assertAffectedPromotionRules(audit.payload, emptyList())
+
+            val serialized = audit.payload.toString()
+            assertFalse(serialized.contains(category.name))
+            listOf(
+                "name",
+                "price",
+                "media",
+                "title",
+                "config",
+                "schedule",
+                "reward",
+                "request",
+                "callback",
+                "initData",
+                "telegram",
+                "secret",
+                "username",
+                "firstName",
+                "lastName",
+                "phone",
+            ).forEach { forbidden ->
+                assertFalse(serialized.contains(forbidden, ignoreCase = true), forbidden)
+            }
+            assertTrue(
+                serialized.toByteArray(StandardCharsets.UTF_8).size < MENU_DELETE_AUDIT_PAYLOAD_MAX_BYTES,
+            )
+
+            repeat(2) {
+                assertFalse(
+                    repository.deleteCategory(
+                        venueId = venueId,
+                        categoryId = category.id,
+                        actorUserId = AUDIT_ACTOR_ID,
+                        source = MenuCategoryDeleteSource.VENUE_MINI_APP,
+                    ),
+                )
+            }
+            assertFalse(
+                repository.deleteCategory(
+                    venueId = venueId,
+                    categoryId = Long.MAX_VALUE,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuCategoryDeleteSource.VENUE_MINI_APP,
+                ),
+            )
+            assertEquals(listOf(audit), menuCategoryDeleteAudits(jdbcUrl))
+        }
+
+    @Test
+    fun `referenced empty category delete cleans targets bumps versions and writes bounded audit`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("venue-menu-category-delete-references")
+            val venueId = seedVenue(jdbcUrl)
+            val repository = VenueMenuRepository(dataSource(jdbcUrl))
+            val category = repository.createCategory(venueId, "Private referenced category")
+            val ruleIds = seedPromotionCategoryReferences(jdbcUrl, venueId, category.id, 73)
+            val before = readRuleSnapshots(jdbcUrl, ruleIds)
+
+            assertTrue(
+                repository.deleteCategory(
+                    venueId = venueId,
+                    categoryId = category.id,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuCategoryDeleteSource.TELEGRAM_BOT,
+                ),
+            )
+
+            assertFalse(repository.categoryExists(venueId, category.id))
+            assertEquals(0, countRuleCategoryTargets(jdbcUrl, ruleIds))
+            val after = readRuleSnapshots(jdbcUrl, ruleIds)
+            ruleIds.forEach { ruleId ->
+                assertEquals(before.getValue(ruleId).version + 1, after.getValue(ruleId).version)
+                assertEquals(before.getValue(ruleId).status, after.getValue(ruleId).status)
+            }
+            val audit = menuCategoryDeleteAudits(jdbcUrl).single()
+            assertEquals(
+                MenuCategoryDeleteSource.TELEGRAM_BOT.name,
+                audit.payload.getValue("source").jsonPrimitive.content,
+            )
+            assertAffectedPromotionRules(audit.payload, ruleIds)
+            val affected = audit.payload.getValue("affectedPromotionRules").jsonObject
+            assertEquals(
+                ruleIds.sorted().take(MENU_DELETE_AFFECTED_RULE_SAMPLE_LIMIT),
+                affected.getValue("sampleRuleIds").jsonArray.map { it.jsonPrimitive.content.toLong() },
+            )
+            assertEquals(23, affected.getValue("omittedCount").jsonPrimitive.int)
+            assertTrue(
+                audit.payload.toString().toByteArray(StandardCharsets.UTF_8).size <
+                    MENU_DELETE_AUDIT_PAYLOAD_MAX_BYTES,
+            )
+            assertFalse(audit.payload.containsKey("affectedPromotionRuleIds"))
+            assertFalse(audit.payload.toString().contains(category.name))
+            assertFalse(audit.payload.toString().contains("Private promotion", ignoreCase = true))
+        }
+
+    @Test
+    fun `non-empty category delete changes no category item promotion version or audit`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("venue-menu-category-delete-non-empty")
+            val venueId = seedVenue(jdbcUrl)
+            val repository = VenueMenuRepository(dataSource(jdbcUrl))
+            val fixture = createMenuFixture(repository, venueId)
+            val categoryId = fixture.firstItem.categoryId
+            val ruleIds = seedPromotionCategoryReferences(jdbcUrl, venueId, categoryId, 2)
+            val before = readRuleSnapshots(jdbcUrl, ruleIds)
+
+            assertFalse(
+                repository.deleteCategory(
+                    venueId = venueId,
+                    categoryId = categoryId,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuCategoryDeleteSource.VENUE_MINI_APP,
+                ),
+            )
+
+            assertTrue(repository.categoryExists(venueId, categoryId))
+            assertTrue(repository.itemExists(venueId, fixture.firstItem.id))
+            assertEquals(ruleIds.size, countRuleCategoryTargets(jdbcUrl, ruleIds))
+            assertEquals(before, readRuleSnapshots(jdbcUrl, ruleIds))
+            assertTrue(menuCategoryDeleteAudits(jdbcUrl).isEmpty())
+        }
+
+    @Test
+    fun `category delete audit failure rolls back category references versions and timestamps`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("venue-menu-category-delete-audit-rollback")
+            val venueId = seedVenue(jdbcUrl)
+            val fixtureRepository = VenueMenuRepository(dataSource(jdbcUrl))
+            val category = fixtureRepository.createCategory(venueId, "Rollback category")
+            val ruleIds = seedPromotionCategoryReferences(jdbcUrl, venueId, category.id, 2)
+            val before = readRuleSnapshots(jdbcUrl, ruleIds)
+            val failingAuditWriter =
+                TransactionalAuditLogWriter { _, _, action, _, _, _ ->
+                    if (action == MENU_CATEGORY_DELETED_AUDIT_ACTION) {
+                        throw SQLException("Synthetic menu category delete audit failure", "XX999")
+                    }
+                }
+            val repository = VenueMenuRepository(dataSource(jdbcUrl), failingAuditWriter)
+
+            assertFailsWith<DatabaseUnavailableException> {
+                repository.deleteCategory(
+                    venueId = venueId,
+                    categoryId = category.id,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuCategoryDeleteSource.VENUE_MINI_APP,
+                )
+            }
+
+            assertTrue(fixtureRepository.categoryExists(venueId, category.id))
+            assertEquals(ruleIds.size, countRuleCategoryTargets(jdbcUrl, ruleIds))
+            assertEquals(before, readRuleSnapshots(jdbcUrl, ruleIds))
+            assertTrue(menuCategoryDeleteAudits(jdbcUrl).isEmpty())
+        }
+
+    @Test
+    fun `category affected promotion summary deduplicates before count sample and hash`() {
+        val payload =
+            buildMenuCategoryDeleteAuditPayload(
+                venueId = 2,
+                categoryId = 4,
+                source = MenuCategoryDeleteSource.VENUE_MINI_APP,
+                affectedRuleIds = listOf(12, 4, 9, 4, 12),
+            )
+
+        assertAffectedPromotionRules(payload, listOf(4, 9, 12))
+    }
+
+    @Test
     fun `item delete without promotion references writes one exact safe audit`() =
         runBlocking {
             val jdbcUrl = migratedJdbcUrl("venue-menu-item-delete-no-references")
@@ -768,6 +969,60 @@ class VenueMenuRepositoryTest {
         itemId: Long,
         count: Int,
     ): List<Long> =
+        seedPromotionRuleReferences(
+            jdbcUrl = jdbcUrl,
+            venueId = venueId,
+            count = count,
+            executableTargetType = "MENU_ITEM",
+        ) { connection, ruleId ->
+            connection.prepareStatement(
+                """
+                INSERT INTO promotion_rule_targets (
+                    rule_id,
+                    target_type,
+                    semantic_type,
+                    menu_item_id
+                )
+                VALUES (?, 'MENU_ITEM', NULL, ?)
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, ruleId)
+                statement.setLong(2, itemId)
+                statement.executeUpdate()
+            }
+        }
+
+    private fun seedPromotionCategoryReferences(
+        jdbcUrl: String,
+        venueId: Long,
+        categoryId: Long,
+        count: Int,
+    ): List<Long> =
+        seedPromotionRuleReferences(
+            jdbcUrl = jdbcUrl,
+            venueId = venueId,
+            count = count,
+            executableTargetType = "MENU_CATEGORY",
+        ) { connection, ruleId ->
+            connection.prepareStatement(
+                """
+                INSERT INTO promotion_rule_menu_category_targets (rule_id, menu_category_id)
+                VALUES (?, ?)
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, ruleId)
+                statement.setLong(2, categoryId)
+                statement.executeUpdate()
+            }
+        }
+
+    private fun seedPromotionRuleReferences(
+        jdbcUrl: String,
+        venueId: Long,
+        count: Int,
+        executableTargetType: String,
+        insertTarget: (java.sql.Connection, Long) -> Unit,
+    ): List<Long> =
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             connection.autoCommit = false
             try {
@@ -817,35 +1072,22 @@ class VenueMenuRepositoryTest {
                                         created_by_user_id
                                     )
                                     VALUES (?, ?, 'HAPPY_HOURS_PERCENT', 'CATEGORY_TYPE', 'HOOKAH',
-                                        'MENU_ITEM', 10, 'DRAFT', ?, FALSE, 1, 1, ?)
+                                        ?, 10, 'DRAFT', ?, FALSE, 1, 1, ?)
                                     """.trimIndent(),
                                     Statement.RETURN_GENERATED_KEYS,
                                 ).use { statement ->
                                     statement.setLong(1, promotionId)
                                     statement.setLong(2, venueId)
-                                    statement.setInt(3, 100 + index)
-                                    statement.setLong(4, AUDIT_ACTOR_ID)
+                                    statement.setString(3, executableTargetType)
+                                    statement.setInt(4, 100 + index)
+                                    statement.setLong(5, AUDIT_ACTOR_ID)
                                     statement.executeUpdate()
                                     statement.generatedKeys.use { keys ->
                                         check(keys.next())
                                         keys.getLong(1)
                                     }
                                 }
-                            connection.prepareStatement(
-                                """
-                                INSERT INTO promotion_rule_targets (
-                                    rule_id,
-                                    target_type,
-                                    semantic_type,
-                                    menu_item_id
-                                )
-                                VALUES (?, 'MENU_ITEM', NULL, ?)
-                                """.trimIndent(),
-                            ).use { statement ->
-                                statement.setLong(1, ruleId)
-                                statement.setLong(2, itemId)
-                                statement.executeUpdate()
-                            }
+                            insertTarget(connection, ruleId)
                             add(ruleId)
                         }
                     }
@@ -1069,7 +1311,71 @@ class VenueMenuRepositoryTest {
         }
     }
 
-    private fun menuItemDeleteAudits(jdbcUrl: String): List<MenuItemDeleteAuditRow> =
+    private fun countRuleCategoryTargets(
+        jdbcUrl: String,
+        ruleIds: List<Long>,
+    ): Int {
+        val placeholders = ruleIds.joinToString(",") { "?" }
+        return DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT COUNT(*)
+                FROM promotion_rule_menu_category_targets
+                WHERE rule_id IN ($placeholders)
+                """.trimIndent(),
+            ).use { statement ->
+                ruleIds.forEachIndexed { index, ruleId -> statement.setLong(index + 1, ruleId) }
+                statement.executeQuery().use { rs ->
+                    check(rs.next())
+                    rs.getInt(1)
+                }
+            }
+        }
+    }
+
+    private fun readRuleSnapshots(
+        jdbcUrl: String,
+        ruleIds: List<Long>,
+    ): Map<Long, RuleSnapshot> {
+        val placeholders = ruleIds.joinToString(",") { "?" }
+        return DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT id, version, status, updated_at
+                FROM promotion_rules
+                WHERE id IN ($placeholders)
+                ORDER BY id
+                """.trimIndent(),
+            ).use { statement ->
+                ruleIds.forEachIndexed { index, ruleId -> statement.setLong(index + 1, ruleId) }
+                statement.executeQuery().use { rs ->
+                    buildMap {
+                        while (rs.next()) {
+                            put(
+                                rs.getLong("id"),
+                                RuleSnapshot(
+                                    version = rs.getInt("version"),
+                                    status = rs.getString("status"),
+                                    updatedAt = rs.getObject("updated_at").toString(),
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun menuItemDeleteAudits(jdbcUrl: String): List<MenuDeleteAuditRow> =
+        menuDeleteAudits(jdbcUrl, MENU_ITEM_DELETED_AUDIT_ACTION)
+
+    private fun menuCategoryDeleteAudits(jdbcUrl: String): List<MenuDeleteAuditRow> =
+        menuDeleteAudits(jdbcUrl, MENU_CATEGORY_DELETED_AUDIT_ACTION)
+
+    private fun menuDeleteAudits(
+        jdbcUrl: String,
+        action: String,
+    ): List<MenuDeleteAuditRow> =
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             connection.prepareStatement(
                 """
@@ -1079,12 +1385,12 @@ class VenueMenuRepositoryTest {
                 ORDER BY id
                 """.trimIndent(),
             ).use { statement ->
-                statement.setString(1, MENU_ITEM_DELETED_AUDIT_ACTION)
+                statement.setString(1, action)
                 statement.executeQuery().use { rs ->
                     buildList {
                         while (rs.next()) {
                             add(
-                                MenuItemDeleteAuditRow(
+                                MenuDeleteAuditRow(
                                     actorUserId = rs.getLong("actor_user_id"),
                                     action = rs.getString("action"),
                                     entityType = rs.getString("entity_type"),
@@ -1177,12 +1483,18 @@ class VenueMenuRepositoryTest {
         val secondOption: VenueMenuOption,
     )
 
-    private data class MenuItemDeleteAuditRow(
+    private data class MenuDeleteAuditRow(
         val actorUserId: Long,
         val action: String,
         val entityType: String,
         val entityId: Long,
         val payload: JsonObject,
+    )
+
+    private data class RuleSnapshot(
+        val version: Int,
+        val status: String,
+        val updatedAt: String,
     )
 
     private data class GiftRuleSnapshot(

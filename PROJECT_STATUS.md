@@ -1,7 +1,7 @@
 # Project Status
 
-Last verified: 2026-08-08 at Git `822233c` (`HEAD == origin/main`; tracked worktree clean before
-this docs-only handoff).
+Last verified: 2026-08-08 at Git `6860eda`; the tracked worktree contains the locally validated
+menu-category hard-delete audit block described below and remains uncommitted for independent review.
 
 ## 1. Purpose and source-of-truth order
 
@@ -20,6 +20,8 @@ network-only GitHub failure, formatting-only commit or temporary local log.
   is not declared production-ready.
 - **DANGEROUS ACTION AUDIT SLICE / MENU ITEM HARD DELETE AUDIT / DONE / MVP /
   STAGING-SMOKE-PASSED**.
+- **DANGEROUS ACTION AUDIT SLICE / MENU CATEGORY HARD DELETE AUDIT / MVP IMPLEMENTED /
+  LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
 - **DANGEROUS ACTION AUDIT SLICE / PROMOTION CREATION AUDIT / DONE / MVP /
   STAGING-SMOKE-PASSED**.
 - **PROMOTION EFFECTIVE STATE CLARITY / DONE / MVP / STAGING-SMOKE-PASSED**.
@@ -44,6 +46,14 @@ network-only GitHub failure, formatting-only commit or temporary local log.
   removes the incomplete reward configuration, lifecycle status is not rewritten and a fixed
   reward is never replaced automatically. Mini App confirmation explains these consequences and
   Mini App/Telegram map the blocked result without false success.
+- Menu category hard-delete audit: **MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED
+  BEFORE COMMIT**. The sole production writer now requires authenticated actor and server-owned
+  source. Scope/empty checks, promotion reference snapshot/recheck, parent/rule/category locks,
+  bounded affected-rule summary, target cleanup/version bumps, category delete and exactly one
+  `MENU_CATEGORY_DELETED` share one transaction. Audit failure rolls category, targets, rule
+  versions/timestamps and audit back together; non-empty, missing/repeated, denied and failed
+  deletes write no success audit. Deterministic PostgreSQL race coverage passes with the mandatory
+  class/CI minimum at 14. No migration was added.
 - Promotion creation audit: action `VENUE_PROMOTION_CREATED`, entity `venue_promotion`, actor
   server-derived, source `VENUE_MINI_APP` or `TELEGRAM_BOT`. Parent, caller-connection initial rule
   and audit commit in one transaction; one committed parent produces exactly one creation audit.
@@ -72,20 +82,18 @@ and the duplicate `Продлить период` / `Редактировать`
 
 ## 4. Current next bounded block
 
-Verdict: **IMPLEMENT_MENU_CATEGORY_DELETE_AUDIT_NEXT**.
+Status: **DANGEROUS ACTION AUDIT SLICE / MENU CATEGORY HARD DELETE AUDIT / MVP IMPLEMENTED /
+LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
 
-Runtime evidence: `VenueMenuRepository.deleteCategory` is the only production SQL writer and is
-called by the existing Venue Mini App route and authenticated Telegram management callback. It
-already refuses non-empty categories, snapshots authoritative category promotion references,
-locks promotion parents then rules then category, rechecks emptiness/references, bumps affected
-rule versions and deletes in one JDBC transaction. It has no actor/source parameter and no audit.
+`VenueMenuRepository.deleteCategory` remains the only production SQL writer and is called only by
+the existing Venue Mini App route and authenticated Telegram management callback. Both pass
+server-derived actor/source into the required audit-aware repository contract. The empty-category-
+only policy, response envelopes, Owner/Manager allow and Staff/foreign denial are unchanged.
+Focused H2 route/repository/Telegram coverage, promotion regression, deterministic real PostgreSQL
+race, compile, lint, Mini App build and Playwright `139/139` passed locally.
 
-Minimal outcome: require server-derived actor plus `VENUE_MINI_APP` / `TELEGRAM_BOT`, and append
-exactly one bounded privacy-safe `MENU_CATEGORY_DELETED` audit inside that existing transaction for
-one committed empty-category delete. Audit failure must roll back reference cleanup, versions and
-category deletion. Non-empty, missing/repeated, denied, reference/concurrency and SQL failure write
-zero success audit. Existing responses, confirmation, RBAC, empty-category-only policy, promotion
-lifecycle and Guest/order snapshots stay unchanged. Schema verdict: `NO_MIGRATION_EXPECTED`.
+Next step: independent review before commit, then green Actions, staging deploy and bounded
+Owner/Manager/Staff/foreign/audit/privacy/Telegram smoke. Schema verdict: `NO_MIGRATION_EXPECTED`.
 
 Out of scope: cascading deletion of non-empty categories, item/option delete audit, item price/name/
 type/update or availability audit, promotion configuration/compatibility changes, order/session
@@ -174,13 +182,13 @@ Owner/Manager/Staff/foreign/audit/privacy smoke.
    relevant QA section; load historical audits only if evidence requires them.
 3. Verify `HEAD`, worktree and every category-delete production caller/SQL writer against current
    code.
-4. Preserve the existing promotion parent/rule/category lock order, empty-category-only contract,
-   response envelopes and item hard-delete regression while adding category audit atomically.
+4. Independently review the preserved promotion parent/rule/category lock order,
+   empty-category-only contract, response envelopes and atomic category audit/rollback evidence.
 5. Do not touch stash or `scripts/dev/`; do not stage, commit, push or deploy without instruction.
 6. Update this handoff only if stage, blockers or next bounded block changes.
 
 ## 11. Last verified date
 
-2026-08-08. Menu item hard-delete audit is release-closed for its bounded MVP after the recorded
-green Actions, staging deploy and passed smoke. The next bounded block is category-delete audit;
+2026-08-08. Menu item hard-delete audit is release-closed for its bounded MVP. Menu category hard
+delete is locally validated and awaits independent review before commit, Actions and staging smoke;
 the broader Menu and Dangerous Action Audit programs remain partial.

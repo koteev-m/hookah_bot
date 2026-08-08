@@ -608,6 +608,42 @@ fixed-reward block without generic DB error; blocked item/reward preserved with 
 audit for the allowed delete; confirmation explained side effects/restriction; cancel sent no delete
 request; Guest menu and working data remained intact; cleanup completed normally.
 
+### Menu Category Hard Delete Audit quality gate
+
+Status: **DANGEROUS ACTION AUDIT SLICE / MENU CATEGORY HARD DELETE AUDIT / MVP IMPLEMENTED /
+LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+
+Regression must preserve this bounded contract:
+
+- the sole repository writer and both existing Mini App/Telegram callers require authenticated
+  actor plus server-owned `VENUE_MINI_APP` / `TELEGRAM_BOT`; client payload/query/callback cannot
+  control actor/source and no unaudited production overload remains;
+- current Owner/Manager own-venue allow and Staff/foreign/unaffiliated denial are unchanged;
+- only empty categories delete; non-empty category/items and promotion state remain unchanged;
+- authoritative scope/empty check, category-reference snapshot/recheck, promotion parent/rule then
+  category locks, bounded summary, current target cleanup/version bump, category delete and exactly
+  one `MENU_CATEGORY_DELETED` commit in one transaction. Missing/repeated, denial, reference/
+  concurrency, SQL, audit and rollback paths write zero success audit;
+- audit failure after production writes restores category, category targets and rule version/
+  `updated_at`, leaves audit absent and preserves lifecycle status;
+- payload keys are exactly `venueId`, `categoryId`, `source`, `affectedPromotionRules`; summary ids
+  are unique/ascending, sample first 50, omitted exact, and lowercase SHA-256 covers UTF-8 `v1:`
+  plus the complete sorted set joined by comma. Payload stays below 4096 UTF-8 bytes, stores no full
+  unbounded list and has no silent truncation;
+- privacy tests exclude names, prices, promotion title/config/schedule/reward, media, raw request/
+  callback/initData, Telegram identity, secrets and unrelated PII;
+- the existing real-PostgreSQL class deterministically covers delete-first parent/rule/category
+  lock order and configuration-first category `NOWAIT` conflict through latches plus `pg_locks`,
+  without arbitrary sleep. Committed delete has one audit; failed delete has none; neither has
+  partial state;
+- item/option delete, price/name/type/update, availability/Shift Check, promotion lifecycle/
+  calculation/compatibility, Telegram UX, audit viewer and media remain unchanged.
+
+Local evidence passed: menu repository/routes, promotion repository, Telegram router, PostgreSQL
+configuration concurrency XML `tests=14 skipped=0 failures=0 errors=0`, compile, lint, Mini App
+build and deterministic Playwright `139/139`. No migration or new workflow was added. Independent
+review, green Actions, staging deploy and bounded role/parity/audit/privacy smoke remain required.
+
 ## Venue Mini App Media Foundation Future Quality Gate
 
 The canonical future contract is `docs/MEDIA_STORAGE_UPLOAD.md`. Its current verdict is
@@ -1081,7 +1117,7 @@ Expectations:
   missing/zero/skipped/failing suite. A second step runs
   `GuestTableContextActivationPostgresTest`, `PromotionConfigurationConcurrencyPostgresTest` and
   `VenueStaffMutationConcurrencyPostgresTest` with `JAVA_TOOL_OPTIONS=-Dapi.version=1.44`, then
-  independently parses all three XML reports. It requires minimums `8 / 13 / 2`, each with
+  independently parses all three XML reports. It requires minimums `8 / 14 / 2`, each with
   `skipped=0`, `failures=0`, `errors=0`. Docker availability alone is not evidence, and route
   failure must not silently skip the PostgreSQL gate.
 - If CI is red, first identify the failing job, failing test class, failing test name, assertion/error and first useful stack frame.
@@ -1520,8 +1556,12 @@ Telegram/staff-chat:
   gates remain active.
 - Menu item hard-delete audit: **DANGEROUS ACTION AUDIT SLICE / MENU ITEM HARD DELETE AUDIT / DONE /
   MVP / STAGING-SMOKE-PASSED**. The existing mandatory PostgreSQL configuration class keeps the
-  config/delete race and non-skipped XML gate. Category/option delete, price/update/availability and
+  config/delete race and non-skipped XML gate. Option delete, price/update/availability and
   the broader audit program remain open.
+- Menu category hard-delete audit: **DANGEROUS ACTION AUDIT SLICE / MENU CATEGORY HARD DELETE AUDIT /
+  MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. H2/route/Telegram/
+  privacy/rollback and PostgreSQL config/delete race gates pass locally; CI minimum is 14. Independent
+  review, Actions and staging smoke remain open; no migration was added.
 - Venue Promotions Current/Archived Tabs UX: **VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / DONE / MVP / STAGING-SMOKE-PASSED**.
 - Promotion lifecycle status audit: **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**; broader dangerous-action coverage remains partial.
 - Promotion creation audit: **DANGEROUS ACTION AUDIT SLICE / PROMOTION CREATION AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**; mandatory repository/route/Telegram and PostgreSQL gates remain regression requirements. Configuration edit, schedule/target/reward, media/banner and broader dangerous-action coverage remain open.

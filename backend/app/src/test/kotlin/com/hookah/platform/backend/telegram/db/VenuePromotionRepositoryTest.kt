@@ -4,6 +4,7 @@ import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.api.MenuItemDeleteBlockedByFixedRewardException
 import com.hookah.platform.backend.miniapp.venue.TransactionalAuditLogWriter
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
+import com.hookah.platform.backend.miniapp.venue.menu.MenuCategoryDeleteSource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuItemDeleteSource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuSemanticType
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepository
@@ -2360,7 +2361,12 @@ class VenuePromotionRepositoryTest {
             )
             assertTrue(
                 VenueMenuRepository(dataSource(jdbcUrl))
-                    .deleteCategory(fixture.visibleVenueId, categoryId),
+                    .deleteCategory(
+                        venueId = fixture.visibleVenueId,
+                        categoryId = categoryId,
+                        actorUserId = OWNER_ID,
+                        source = MenuCategoryDeleteSource.VENUE_MINI_APP,
+                    ),
             )
             val categoryRuleAfterCascade =
                 assertNotNull(ruleRepository.getRuleForManagement(fixture.visibleVenueId, categoryRule.id))

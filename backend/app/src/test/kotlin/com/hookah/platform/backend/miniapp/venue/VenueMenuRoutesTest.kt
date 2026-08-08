@@ -5,6 +5,7 @@ import com.hookah.platform.backend.api.MENU_ITEM_DELETE_BLOCKED_BY_FIXED_REWARD_
 import com.hookah.platform.backend.miniapp.guest.api.MenuResponse
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
+import com.hookah.platform.backend.miniapp.venue.menu.MENU_CATEGORY_DELETED_AUDIT_ACTION
 import com.hookah.platform.backend.miniapp.venue.menu.MENU_ITEM_DELETED_AUDIT_ACTION
 import com.hookah.platform.backend.miniapp.venue.menu.MENU_SHIFT_CHECK_COMPLETED_AUDIT_ACTION
 import com.hookah.platform.backend.miniapp.venue.menu.MenuShiftCheckResponse
@@ -329,6 +330,87 @@ class VenueMenuRoutesTest {
             assertFalse(response.bodyAsText().contains("MENU_ITEM_DELETED"))
             assertTrue(menuRepository(jdbcUrl).itemExists(venueId, fixture.firstItem.id))
             assertTrue(menuItemDeleteAudits(jdbcUrl).isEmpty())
+        }
+
+    @Test
+    fun `owner and manager category delete derive actor and source and preserve success response`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("menu-category-delete-audit-success")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val ownerId = 74_001L
+            val managerId = 74_002L
+            val venueId = seedVenueWithRole(jdbcUrl, ownerId, "OWNER")
+            seedVenueWithRole(jdbcUrl, managerId, "MANAGER", venueId)
+            val repository = menuRepository(jdbcUrl)
+            val ownerCategory = repository.createCategory(venueId, "Owner private category")
+            val managerCategory = repository.createCategory(venueId, "Manager private category")
+
+            val ownerResponse =
+                client.delete(
+                    "/api/venue/menu/categories/${ownerCategory.id}" +
+                        "?venueId=$venueId&actorUserId=999999&source=TELEGRAM_BOT",
+                ) {
+                    headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config, ownerId)}") }
+                }
+            val managerResponse =
+                client.delete("/api/venue/menu/categories/${managerCategory.id}?venueId=$venueId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config, managerId)}") }
+                }
+
+            listOf(ownerResponse, managerResponse).forEach { response ->
+                assertEquals(HttpStatusCode.OK, response.status)
+                assertEquals(
+                    mapOf("ok" to true),
+                    json.parseToJsonElement(response.bodyAsText()).jsonObject
+                        .mapValues { it.value.jsonPrimitive.content.toBoolean() },
+                )
+            }
+            val audits = menuCategoryDeleteAudits(jdbcUrl)
+            assertEquals(listOf(ownerId, managerId), audits.map { it.actorUserId })
+            assertEquals(listOf(ownerCategory.id, managerCategory.id), audits.map { it.entityId })
+            audits.forEach { audit ->
+                assertEquals("menu_category", audit.entityType)
+                assertEquals("VENUE_MINI_APP", audit.payload.getValue("source").jsonPrimitive.content)
+                assertFalse(audit.payload.toString().contains("999999"))
+                assertFalse(audit.payload.toString().contains("TELEGRAM_BOT"))
+            }
+        }
+
+    @Test
+    fun `staff foreign and unaffiliated actors cannot delete category or create audit`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("menu-category-delete-audit-denials")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val ownerId = 75_001L
+            val staffId = 75_002L
+            val foreignManagerId = 75_003L
+            val guestId = 75_004L
+            val venueId = seedVenueWithRole(jdbcUrl, ownerId, "OWNER")
+            seedVenueWithRole(jdbcUrl, staffId, "STAFF", venueId)
+            seedVenueWithRole(jdbcUrl, foreignManagerId, "MANAGER")
+            seedUser(jdbcUrl, guestId)
+            val repository = menuRepository(jdbcUrl)
+            val category = repository.createCategory(venueId, "Protected category")
+
+            listOf(staffId, foreignManagerId, guestId).forEach { actorId ->
+                val response =
+                    client.delete("/api/venue/menu/categories/${category.id}?venueId=$venueId") {
+                        headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config, actorId)}") }
+                    }
+                assertEquals(HttpStatusCode.Forbidden, response.status)
+                assertApiErrorEnvelope(response, ApiErrorCodes.FORBIDDEN)
+            }
+
+            assertTrue(repository.categoryExists(venueId, category.id))
+            assertTrue(menuCategoryDeleteAudits(jdbcUrl).isEmpty())
         }
 
     @Test
@@ -1686,7 +1768,16 @@ class VenueMenuRoutesTest {
             },
         )
 
-    private fun menuItemDeleteAudits(jdbcUrl: String): List<MenuItemDeleteAuditRow> =
+    private fun menuItemDeleteAudits(jdbcUrl: String): List<MenuDeleteAuditRow> =
+        menuDeleteAudits(jdbcUrl, MENU_ITEM_DELETED_AUDIT_ACTION)
+
+    private fun menuCategoryDeleteAudits(jdbcUrl: String): List<MenuDeleteAuditRow> =
+        menuDeleteAudits(jdbcUrl, MENU_CATEGORY_DELETED_AUDIT_ACTION)
+
+    private fun menuDeleteAudits(
+        jdbcUrl: String,
+        action: String,
+    ): List<MenuDeleteAuditRow> =
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             connection.prepareStatement(
                 """
@@ -1696,12 +1787,12 @@ class VenueMenuRoutesTest {
                 ORDER BY id
                 """.trimIndent(),
             ).use { statement ->
-                statement.setString(1, MENU_ITEM_DELETED_AUDIT_ACTION)
+                statement.setString(1, action)
                 statement.executeQuery().use { rs ->
                     buildList {
                         while (rs.next()) {
                             add(
-                                MenuItemDeleteAuditRow(
+                                MenuDeleteAuditRow(
                                     actorUserId = rs.getLong("actor_user_id"),
                                     entityType = rs.getString("entity_type"),
                                     entityId = rs.getLong("entity_id"),
@@ -2010,7 +2101,7 @@ class VenueMenuRoutesTest {
         val secondOption: VenueMenuOption,
     )
 
-    private data class MenuItemDeleteAuditRow(
+    private data class MenuDeleteAuditRow(
         val actorUserId: Long,
         val entityType: String,
         val entityId: Long,
