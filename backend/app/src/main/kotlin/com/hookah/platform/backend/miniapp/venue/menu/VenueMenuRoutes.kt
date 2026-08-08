@@ -374,7 +374,13 @@ fun Route.venueMenuRoutes(
             val optionId =
                 call.parameters["id"]?.toLongOrNull()
                     ?: throw InvalidInputException("optionId must be a number")
-            val deleted = venueMenuRepository.deleteOption(venueId, optionId)
+            val deleted =
+                venueMenuRepository.deleteOption(
+                    venueId = venueId,
+                    optionId = optionId,
+                    actorUserId = userId,
+                    source = MenuOptionDeleteSource.VENUE_MINI_APP,
+                )
             if (!deleted) {
                 throw NotFoundException()
             }

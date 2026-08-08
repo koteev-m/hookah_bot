@@ -20,11 +20,15 @@ import org.flywaydb.core.Flyway
 import org.h2.jdbcx.JdbcDataSource
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
+import java.sql.Connection
 import java.sql.DriverManager
+import java.sql.PreparedStatement
 import java.sql.SQLException
 import java.sql.Statement
 import java.util.HexFormat
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicInteger
+import javax.sql.DataSource
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -375,6 +379,359 @@ class VenueMenuRepositoryTest {
 
             assertTrue(repository.getMenu(venueId).flatMap { it.items }.first().isAvailable)
             assertEquals(0, auditPayloads(jdbcUrl).size)
+        }
+
+    @Test
+    fun `option delete writes one exact safe audit and repeat missing foreign write none`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("venue-menu-option-delete-success")
+            val venueId = seedVenue(jdbcUrl)
+            val foreignVenueId = seedVenue(jdbcUrl)
+            val repository = VenueMenuRepository(dataSource(jdbcUrl))
+            val own = createMenuFixture(repository, venueId)
+            val foreign = createMenuFixture(repository, foreignVenueId)
+
+            assertTrue(
+                repository.deleteOption(
+                    venueId = venueId,
+                    optionId = own.firstOption.id,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuOptionDeleteSource.VENUE_MINI_APP,
+                ),
+            )
+
+            assertFalse(repository.optionExists(venueId, own.firstOption.id))
+            val audit = menuOptionDeleteAudits(jdbcUrl).single()
+            assertMenuOptionDeleteAudit(
+                audit = audit,
+                venueId = venueId,
+                itemId = own.firstItem.id,
+                optionId = own.firstOption.id,
+                actorUserId = AUDIT_ACTOR_ID,
+                source = MenuOptionDeleteSource.VENUE_MINI_APP,
+            )
+            val serialized = audit.payload.toString()
+            assertFalse(serialized.contains(own.firstItem.name))
+            assertFalse(serialized.contains(own.firstOption.name))
+            listOf(
+                "name",
+                "price",
+                "media",
+                "order",
+                "cart",
+                "request",
+                "callback",
+                "initData",
+                "username",
+                "firstName",
+                "lastName",
+                "phone",
+                "secret",
+            ).forEach { forbidden ->
+                assertFalse(serialized.contains(forbidden, ignoreCase = true), forbidden)
+            }
+
+            repeat(2) {
+                assertFalse(
+                    repository.deleteOption(
+                        venueId = venueId,
+                        optionId = own.firstOption.id,
+                        actorUserId = AUDIT_ACTOR_ID,
+                        source = MenuOptionDeleteSource.VENUE_MINI_APP,
+                    ),
+                )
+            }
+            assertFalse(
+                repository.deleteOption(
+                    venueId = venueId,
+                    optionId = Long.MAX_VALUE,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuOptionDeleteSource.VENUE_MINI_APP,
+                ),
+            )
+            assertFalse(
+                repository.deleteOption(
+                    venueId = venueId,
+                    optionId = foreign.firstOption.id,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuOptionDeleteSource.VENUE_MINI_APP,
+                ),
+            )
+            assertTrue(repository.optionExists(foreignVenueId, foreign.firstOption.id))
+            assertEquals(listOf(audit), menuOptionDeleteAudits(jdbcUrl))
+        }
+
+    @Test
+    fun `option delete audit failure after physical delete rolls back option and audit`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("venue-menu-option-delete-audit-rollback")
+            val venueId = seedVenue(jdbcUrl)
+            val dataSource = dataSource(jdbcUrl)
+            val fixtureRepository = VenueMenuRepository(dataSource)
+            val fixture = createMenuFixture(fixtureRepository, venueId)
+            val delegateAuditWriter = AuditLogRepository(dataSource, Json)
+            var deleteObserved = false
+            var auditInsertCompleted = false
+            val failingAuditWriter =
+                TransactionalAuditLogWriter { connection, actorUserId, action, entityType, entityId, payload ->
+                    if (action == MENU_OPTION_DELETED_AUDIT_ACTION) {
+                        deleteObserved = !optionExists(connection, venueId, fixture.firstOption.id)
+                        check(deleteObserved) { "Option delete must happen before its audit insert" }
+                        delegateAuditWriter.appendJson(
+                            connection,
+                            actorUserId,
+                            action,
+                            entityType,
+                            entityId,
+                            payload,
+                        )
+                        auditInsertCompleted = true
+                        throw SQLException("Synthetic menu option delete audit failure", "XX999")
+                    }
+                    delegateAuditWriter.appendJson(
+                        connection,
+                        actorUserId,
+                        action,
+                        entityType,
+                        entityId,
+                        payload,
+                    )
+                }
+            val repository = VenueMenuRepository(dataSource, failingAuditWriter)
+
+            assertFailsWith<DatabaseUnavailableException> {
+                repository.deleteOption(
+                    venueId = venueId,
+                    optionId = fixture.firstOption.id,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuOptionDeleteSource.VENUE_MINI_APP,
+                )
+            }
+
+            assertTrue(deleteObserved)
+            assertTrue(auditInsertCompleted)
+            assertTrue(fixtureRepository.optionExists(venueId, fixture.firstOption.id))
+            assertTrue(menuOptionDeleteAudits(jdbcUrl).isEmpty())
+        }
+
+    @Test
+    fun `normalization preserves current outcome audits every delete and repeat is no-op`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("venue-menu-option-normalization-success")
+            val venueId = seedVenue(jdbcUrl)
+            val repository = VenueMenuRepository(dataSource(jdbcUrl))
+            val fixture = createNormalizationFixture(repository, venueId)
+            val obsoleteOptions =
+                fixture.options.filter { HookahFlavorProfileService.isObsoleteProfileValue(it.name) }
+
+            val result =
+                requireNotNull(
+                    repository.normalizeHookahFlavorProfiles(
+                        venueId = venueId,
+                        itemId = fixture.item.id,
+                        actorUserId = AUDIT_ACTOR_ID,
+                        source = MenuOptionDeleteSource.TELEGRAM_BOT,
+                    ),
+                )
+
+            assertEquals(5, result.removedCount)
+            assertEquals(6, result.addedCount)
+            val normalized = loadItem(repository, venueId, fixture.item.id)
+            assertEquals(
+                listOf(
+                    "Освежающий / мятный",
+                    "Авторский микс",
+                    "Ягодный",
+                    "Фруктовый",
+                    "Цитрусовый",
+                    "Десертный",
+                    "Напиточный",
+                    "Пряный",
+                    "Цветочный",
+                ),
+                normalized.options.map { it.name },
+            )
+            assertEquals((4..12).toList(), normalized.options.map { it.sortOrder })
+            val refreshing = normalized.options.single { it.name == "Освежающий / мятный" }
+            assertEquals(500L, refreshing.priceDeltaMinor)
+            assertFalse(refreshing.isAvailable)
+            val custom = normalized.options.single { it.name == "Авторский микс" }
+            assertEquals(600L, custom.priceDeltaMinor)
+            assertTrue(custom.isAvailable)
+            val berry = normalized.options.single { it.name == "Ягодный" }
+            assertEquals(700L, berry.priceDeltaMinor)
+            assertTrue(berry.isAvailable)
+            normalized.options
+                .filter { it.id !in fixture.options.map(VenueMenuOption::id) }
+                .forEach { created ->
+                    assertEquals(0L, created.priceDeltaMinor)
+                    assertTrue(created.isAvailable)
+                }
+
+            val audits = menuOptionDeleteAudits(jdbcUrl)
+            assertEquals(obsoleteOptions.map { it.id }.sorted(), audits.map { it.entityId })
+            audits.forEach { audit ->
+                assertMenuOptionDeleteAudit(
+                    audit = audit,
+                    venueId = venueId,
+                    itemId = fixture.item.id,
+                    optionId = audit.entityId,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuOptionDeleteSource.TELEGRAM_BOT,
+                )
+            }
+
+            val beforeNoOp = optionRows(jdbcUrl, fixture.item.id)
+            val noOp =
+                requireNotNull(
+                    repository.normalizeHookahFlavorProfiles(
+                        venueId = venueId,
+                        itemId = fixture.item.id,
+                        actorUserId = AUDIT_ACTOR_ID,
+                        source = MenuOptionDeleteSource.TELEGRAM_BOT,
+                    ),
+                )
+            assertEquals(HookahFlavorProfileNormalizationResult(removedCount = 0, addedCount = 0), noOp)
+            assertEquals(beforeNoOp, optionRows(jdbcUrl, fixture.item.id))
+            assertEquals(audits, menuOptionDeleteAudits(jdbcUrl))
+        }
+
+    @Test
+    fun `normalization rechecks current hookah scope before changing options`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("venue-menu-option-normalization-scope")
+            val venueId = seedVenue(jdbcUrl)
+            val repository = VenueMenuRepository(dataSource(jdbcUrl))
+            val fixture = createMenuFixture(repository, venueId)
+            val before = optionRows(jdbcUrl, fixture.firstItem.id)
+
+            assertFailsWith<InvalidInputException> {
+                repository.normalizeHookahFlavorProfiles(
+                    venueId = venueId,
+                    itemId = fixture.firstItem.id,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuOptionDeleteSource.TELEGRAM_BOT,
+                )
+            }
+
+            assertEquals(before, optionRows(jdbcUrl, fixture.firstItem.id))
+            assertTrue(menuOptionDeleteAudits(jdbcUrl).isEmpty())
+        }
+
+    @Test
+    fun `canonical collision guard is hookah scoped and ignores unchanged legacy duplicates`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("venue-menu-option-canonical-collision-scope")
+            val venueId = seedVenue(jdbcUrl)
+            val repository = VenueMenuRepository(dataSource(jdbcUrl))
+            val category = repository.createCategory(venueId, "Ordinary menu")
+            val item =
+                requireNotNull(
+                    repository.createItem(
+                        venueId = venueId,
+                        categoryId = category.id,
+                        name = "Ordinary item",
+                        priceMinor = 100,
+                        currency = "RUB",
+                        isAvailable = true,
+                    ),
+                )
+            val firstCanonical =
+                requireNotNull(
+                    repository.createOption(venueId, item.id, "Ягодный", 10, true),
+                )
+            requireNotNull(repository.createOption(venueId, item.id, "Ягодный", 20, true))
+            requireNotNull(repository.updateCategoryType(venueId, category.id, MenuSemanticType.HOOKAH))
+
+            val priceOnlyUpdate =
+                requireNotNull(
+                    repository.updateOption(
+                        venueId = venueId,
+                        optionId = firstCanonical.id,
+                        name = null,
+                        priceDeltaMinor = 30,
+                        isAvailable = false,
+                    ),
+                )
+            assertEquals("Ягодный", priceOnlyUpdate.name)
+            assertEquals(30L, priceOnlyUpdate.priceDeltaMinor)
+            assertFalse(priceOnlyUpdate.isAvailable)
+
+            assertFailsWith<InvalidInputException> {
+                repository.createOption(venueId, item.id, "Ягодный", 0, true)
+            }
+            val custom = requireNotNull(repository.createOption(venueId, item.id, "Авторский", 0, true))
+            assertFailsWith<InvalidInputException> {
+                repository.updateOption(venueId, custom.id, "Ягодный", null, null)
+            }
+            Unit
+        }
+
+    @Test
+    fun `normalization failure after multiple deletes and creates rolls back all writes`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("venue-menu-option-normalization-write-rollback")
+            val venueId = seedVenue(jdbcUrl)
+            val delegate = dataSource(jdbcUrl)
+            val fixtureRepository = VenueMenuRepository(delegate)
+            val fixture = createNormalizationFixture(fixtureRepository, venueId)
+            val before = optionRows(jdbcUrl, fixture.item.id)
+            val failingDataSource = FailAfterOptionInsertsDataSource(delegate, failOnInsert = 3)
+            val repository = VenueMenuRepository(failingDataSource)
+
+            assertFailsWith<DatabaseUnavailableException> {
+                repository.normalizeHookahFlavorProfiles(
+                    venueId = venueId,
+                    itemId = fixture.item.id,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuOptionDeleteSource.TELEGRAM_BOT,
+                )
+            }
+
+            assertEquals(3, failingDataSource.completedOptionInserts.get())
+            assertEquals(before, optionRows(jdbcUrl, fixture.item.id))
+            assertTrue(menuOptionDeleteAudits(jdbcUrl).isEmpty())
+        }
+
+    @Test
+    fun `normalization nth audit failure rolls back prior audits deletes and creates`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("venue-menu-option-normalization-audit-rollback")
+            val venueId = seedVenue(jdbcUrl)
+            val dataSource = dataSource(jdbcUrl)
+            val fixtureRepository = VenueMenuRepository(dataSource)
+            val fixture = createNormalizationFixture(fixtureRepository, venueId)
+            val before = optionRows(jdbcUrl, fixture.item.id)
+            val delegateAuditWriter = AuditLogRepository(dataSource, Json)
+            var auditAttempts = 0
+            val failingAuditWriter =
+                TransactionalAuditLogWriter { connection, actorUserId, action, entityType, entityId, payload ->
+                    delegateAuditWriter.appendJson(
+                        connection,
+                        actorUserId,
+                        action,
+                        entityType,
+                        entityId,
+                        payload,
+                    )
+                    if (action == MENU_OPTION_DELETED_AUDIT_ACTION && ++auditAttempts == 2) {
+                        throw SQLException("Synthetic second menu option audit failure", "XX999")
+                    }
+                }
+            val repository = VenueMenuRepository(dataSource, failingAuditWriter)
+
+            assertFailsWith<DatabaseUnavailableException> {
+                repository.normalizeHookahFlavorProfiles(
+                    venueId = venueId,
+                    itemId = fixture.item.id,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuOptionDeleteSource.TELEGRAM_BOT,
+                )
+            }
+
+            assertEquals(2, auditAttempts)
+            assertEquals(before, optionRows(jdbcUrl, fixture.item.id))
+            assertTrue(menuOptionDeleteAudits(jdbcUrl).isEmpty())
         }
 
     @Test
@@ -963,6 +1320,58 @@ class VenueMenuRepositoryTest {
         return MenuFixture(firstItem, secondItem, firstOption, secondOption)
     }
 
+    private suspend fun createNormalizationFixture(
+        repository: VenueMenuRepository,
+        venueId: Long,
+    ): NormalizationFixture {
+        val category = repository.createCategory(venueId, "Кальянное меню")
+        repository.updateCategoryType(venueId, category.id, MenuSemanticType.HOOKAH)
+        val item =
+            requireNotNull(
+                repository.createItem(
+                    venueId = venueId,
+                    categoryId = category.id,
+                    name = "Normalization hookah",
+                    priceMinor = 100_000,
+                    currency = "RUB",
+                    isAvailable = true,
+                ),
+            )
+        val specifications =
+            listOf(
+                Triple("Яблоко", 100L, true),
+                Triple("Фруктовые", 200L, true),
+                Triple("Освежающий", 300L, false),
+                Triple("Мятный", 400L, true),
+                Triple("Освежающий / мятный", 500L, false),
+                Triple("Авторский микс", 600L, true),
+                Triple("Ягодный", 700L, true),
+                Triple("Арбуз", 800L, false),
+            )
+        val options =
+            specifications.map { (name, priceDeltaMinor, isAvailable) ->
+                requireNotNull(
+                    repository.createOption(
+                        venueId = venueId,
+                        itemId = item.id,
+                        name = name,
+                        priceDeltaMinor = priceDeltaMinor,
+                        isAvailable = isAvailable,
+                    ),
+                )
+            }
+        return NormalizationFixture(item = item, options = options)
+    }
+
+    private suspend fun loadItem(
+        repository: VenueMenuRepository,
+        venueId: Long,
+        itemId: Long,
+    ): VenueMenuItem =
+        repository.getMenu(venueId)
+            .flatMap { it.items }
+            .single { it.id == itemId }
+
     private fun seedPromotionRuleReferences(
         jdbcUrl: String,
         venueId: Long,
@@ -1372,6 +1781,9 @@ class VenueMenuRepositoryTest {
     private fun menuCategoryDeleteAudits(jdbcUrl: String): List<MenuDeleteAuditRow> =
         menuDeleteAudits(jdbcUrl, MENU_CATEGORY_DELETED_AUDIT_ACTION)
 
+    private fun menuOptionDeleteAudits(jdbcUrl: String): List<MenuDeleteAuditRow> =
+        menuDeleteAudits(jdbcUrl, MENU_OPTION_DELETED_AUDIT_ACTION)
+
     private fun menuDeleteAudits(
         jdbcUrl: String,
         action: String,
@@ -1398,6 +1810,73 @@ class VenueMenuRepositoryTest {
                                     payload =
                                         Json.parseToJsonElement(rs.getString("payload_json"))
                                             .jsonObject,
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+    private fun assertMenuOptionDeleteAudit(
+        audit: MenuDeleteAuditRow,
+        venueId: Long,
+        itemId: Long,
+        optionId: Long,
+        actorUserId: Long,
+        source: MenuOptionDeleteSource,
+    ) {
+        assertEquals(actorUserId, audit.actorUserId)
+        assertEquals(MENU_OPTION_DELETED_AUDIT_ACTION, audit.action)
+        assertEquals("menu_item_option", audit.entityType)
+        assertEquals(optionId, audit.entityId)
+        assertEquals(setOf("venueId", "itemId", "optionId", "source"), audit.payload.keys)
+        assertEquals(venueId, audit.payload.longValue("venueId"))
+        assertEquals(itemId, audit.payload.longValue("itemId"))
+        assertEquals(optionId, audit.payload.longValue("optionId"))
+        assertEquals(source.name, audit.payload.getValue("source").jsonPrimitive.content)
+    }
+
+    private fun optionExists(
+        connection: Connection,
+        venueId: Long,
+        optionId: Long,
+    ): Boolean =
+        connection.prepareStatement(
+            "SELECT 1 FROM menu_item_options WHERE venue_id = ? AND id = ?",
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, optionId)
+            statement.executeQuery().use { rs -> rs.next() }
+        }
+
+    private fun optionRows(
+        jdbcUrl: String,
+        itemId: Long,
+    ): List<OptionRowSnapshot> =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT id, venue_id, item_id, name, price_delta_minor, is_available, sort_order, updated_at
+                FROM menu_item_options
+                WHERE item_id = ?
+                ORDER BY id
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, itemId)
+                statement.executeQuery().use { rs ->
+                    buildList {
+                        while (rs.next()) {
+                            add(
+                                OptionRowSnapshot(
+                                    id = rs.getLong("id"),
+                                    venueId = rs.getLong("venue_id"),
+                                    itemId = rs.getLong("item_id"),
+                                    name = rs.getString("name"),
+                                    priceDeltaMinor = rs.getLong("price_delta_minor"),
+                                    isAvailable = rs.getBoolean("is_available"),
+                                    sortOrder = rs.getInt("sort_order"),
+                                    updatedAt = rs.getObject("updated_at").toString(),
                                 ),
                             )
                         }
@@ -1483,6 +1962,22 @@ class VenueMenuRepositoryTest {
         val secondOption: VenueMenuOption,
     )
 
+    private data class NormalizationFixture(
+        val item: VenueMenuItem,
+        val options: List<VenueMenuOption>,
+    )
+
+    private data class OptionRowSnapshot(
+        val id: Long,
+        val venueId: Long,
+        val itemId: Long,
+        val name: String,
+        val priceDeltaMinor: Long,
+        val isAvailable: Boolean,
+        val sortOrder: Int,
+        val updatedAt: String,
+    )
+
     private data class MenuDeleteAuditRow(
         val actorUserId: Long,
         val action: String,
@@ -1507,6 +2002,42 @@ class VenueMenuRepositoryTest {
         val rewardUpdatedAt: String,
         val optionItemIds: List<Long>,
     )
+
+    private class FailAfterOptionInsertsDataSource(
+        private val delegate: DataSource,
+        private val failOnInsert: Int,
+    ) : DataSource by delegate {
+        val completedOptionInserts = AtomicInteger()
+
+        override fun getConnection(): Connection = wrap(delegate.connection)
+
+        override fun getConnection(
+            username: String?,
+            password: String?,
+        ): Connection = wrap(delegate.getConnection(username, password))
+
+        private fun wrap(connection: Connection): Connection =
+            object : Connection by connection {
+                override fun prepareStatement(
+                    sql: String,
+                    autoGeneratedKeys: Int,
+                ): PreparedStatement {
+                    val statement = connection.prepareStatement(sql, autoGeneratedKeys)
+                    if (!sql.trimStart().startsWith("INSERT INTO menu_item_options", ignoreCase = true)) {
+                        return statement
+                    }
+                    return object : PreparedStatement by statement {
+                        override fun executeUpdate(): Int {
+                            val updated = statement.executeUpdate()
+                            if (completedOptionInserts.incrementAndGet() == failOnInsert) {
+                                throw SQLException("Synthetic option insert failure", "XX999")
+                            }
+                            return updated
+                        }
+                    }
+                }
+            }
+    }
 
     private fun seedVenue(jdbcUrl: String): Long =
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->

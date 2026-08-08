@@ -2,7 +2,7 @@
 
 Дата актуализации: 2026-08-08.
 
-Статус: **current product reference / SPEC UPDATED**. Menu/options/flavors parity is documented as smoke-closed for the structured selected-option flow. The bounded shift-check slice is **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**; menu item and empty-category hard-delete audits are release-closed bounded MVPs. The broader menu constructor, media/top-list governance, remaining audit coverage and permission parity remain **PARTIAL** unless a specific implementation task proves them.
+Статус: **current product reference / SPEC UPDATED**. Menu/options/flavors parity is documented as smoke-closed for the structured selected-option flow. The bounded shift-check slice is **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**; menu item and empty-category hard-delete audits are release-closed bounded MVPs. Menu option hard delete with atomic Telegram base-profile normalization is **MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. The broader menu constructor, media/top-list governance, remaining audit coverage and permission parity remain **PARTIAL** unless a specific implementation task proves them.
 
 ## Core Rule
 
@@ -34,7 +34,7 @@ Menu permissions are governed by `docs/SECURITY_RBAC_MATRIX.md`; Venue Mode oper
 | Category CRUD | Venue menu routes and Mini App menu basics exist; full parity needs verification. | Owner manages category create/edit/reorder/archive; Manager only if product explicitly grants structure management. | Menu constructor implementation remains `PARTIAL`. |
 | Item CRUD | Structured menu items, prices and availability exist; Owner/Manager item editing is documented, Staff denied for structure. Existing Mini App and Telegram item hard delete writes one transaction-bound safe audit. | Owner manages item create/edit/reorder/archive, price, visibility, featured and media. | Item hard-delete audit is `DONE / MVP / STAGING-SMOKE-PASSED`; Manager structure/price scope and the remaining item mutation audit families stay open. |
 | Item availability | Item-level stop-list is documented for OWNER/MANAGER/STAFF operational availability. | Availability toggle is operational state, fast and reversible, with audit for Staff/Manager where implemented. | Per-venue `staff_stoplist_enabled` flag is target/future; current global Staff permission must stay cross-surface consistent. |
-| Option group/value support | Guest/Menu Options & Flavors parity is smoke-closed: item-scoped options/flavors, base profiles and selected-option submit exist. | General `OPTION_GROUP`/`OPTION_VALUE` model supports required single/multi modifiers with min/max validation. | Broader non-hookah modifier UX and DB race/duplicate protection need verification. |
+| Option group/value support | Guest/Menu Options & Flavors parity is smoke-closed: item-scoped options/flavors, base profiles and selected-option submit exist. Atomic base-profile normalization and locked canonical-profile collision checks are locally validated. | General `OPTION_GROUP`/`OPTION_VALUE` model supports required single/multi modifiers with min/max validation. | Broader non-hookah modifier UX and duplicate policy remain separate. |
 | Option/value availability | Item option/flavor stop-list is documented and smoked. | Guest sees only available choices or disabled copy by venue policy; stale submit is rejected. | Keep option ownership and stale availability tests in regression. |
 | Guest menu DTO | Guest Bot and Guest Mini App expose option picker where configured. | DTO includes item visibility/availability, option groups, values, price deltas and human copy without leaking internal media/provider data. | Needs verification before broad modifier expansion. |
 | Order item modifiers/options snapshot | Current docs say selected option id/name/price delta and line preference notes are preserved where implemented. | Snapshot item and selected option names/prices at submit time; later edits never rewrite old bills/history. | Keep cross-channel bill snapshots in regression; multi-option quantities/counts need future design if introduced. |
@@ -42,7 +42,7 @@ Menu permissions are governed by `docs/SECURITY_RBAC_MATRIX.md`; Venue Mode oper
 | Featured/top-list | Product spec requires featured/top list; implementation evidence is partial. | Venue manually pins items; not paid placement. | Paid placement/boosting belongs to Growth/Platform, not menu featured. |
 | PDF/media | `Фото-меню` exists as a flat info/media section and is separate from structured order menu. Bot OWNER/MANAGER can add image/PDF attachments, delete one and hide/show the whole section. | PDF/photo menu is view-only; no direct order unless item exists in structured menu. | Venue Mini App authoring/upload is missing; direct replace, per-attachment hide and optional subsections remain future. |
 | Shift check | **DONE / MVP / STAGING-SMOKE-PASSED**: OWNER/MANAGER Venue Mini App uses saved menu state, readiness counts, search/filters, local draft, a separate mass-selection mode, confirmation summary and one atomic request. STAFF has no entry/direct permission. | Venue Mode keeps optimistic availability checks, one bounded batch, no-op completion evidence and recoverable stale-state handling. | Keep role/tenant, atomicity, stale-state, Guest availability and Telegram stop-list parity in regression; Telegram shift-check UI and a queryable history table are not part of Phase 1. |
-| Audit logs | `MENU_SHIFT_CHECK_COMPLETED` is atomic for a successful batch. `MENU_ITEM_DELETED` and empty-category `MENU_CATEGORY_DELETED` are staging-closed transaction-bound slices with server-derived actor/source. | Price changes, archive/delete, mass stop-list, media removal, option schema change and Staff stop-list toggles write safe audit. | Item and category hard delete are `DONE / MVP / STAGING-SMOKE-PASSED`; option delete is the selected next bounded audit. Other menu dangerous-action audit families remain `PARTIAL`. |
+| Audit logs | `MENU_SHIFT_CHECK_COMPLETED` is atomic for a successful batch. `MENU_ITEM_DELETED` and empty-category `MENU_CATEGORY_DELETED` are staging-closed. `MENU_OPTION_DELETED` direct delete and Telegram normalization are transaction-bound and locally validated with server-derived actor/source. | Price changes, archive/delete, mass stop-list, media removal, option schema change and Staff stop-list toggles write safe audit. | Item/category are staging-closed; option delete awaits review/CI/staging. Other menu dangerous-action audit families remain `PARTIAL`. |
 | Telegram vs Mini App parity | Options/flavors parity is smoke-closed; some Telegram owner flows remain richer. | Required menu/stop-list operations are aligned across Bot and Mini App or documented as exceptions. | Keep cross-surface parity smoke for Staff stop-list and selected options. |
 | Staff stop-list permissions | Current docs say STAFF has `MENU_AVAILABILITY_MANAGE` and can toggle item/option availability; STAFF cannot edit structure/prices/options schema. | Recommended MVP: Staff cannot change menu structure/prices; Staff stop-list works only when `staff_stoplist_enabled` or equivalent policy allows it, and is identical in Bot/Mini App. | Current global Staff stop-list permission is acceptable only if intentionally enabled and audited; per-venue toggle remains target/future. |
 
@@ -354,13 +354,42 @@ DONE / MVP / STAGING-SMOKE-PASSED**.
   user-confirmed evidence records green Actions, staging deploy and the bounded 15-scenario
   role/parity/audit/privacy smoke passed. No migration was added.
 
-Selected next block: **IMPLEMENT_MENU_OPTION_DELETE_AUDIT_NEXT**. The sole option SQL writer is
-called by Venue Mini App direct delete, Telegram direct flavor delete and Telegram base-profile
-normalization. It currently has no actor/source or audit. Historical order option rows already keep
-name/price snapshots and set their live option FK to null on delete; stale cart selections are
-rejected by current submit validation. The bounded implementation must audit each committed option
-delete atomically without expanding into option create/update/price/availability or a normalization
-transaction redesign. Schema verdict: `NO_MIGRATION_EXPECTED`.
+Option hard-delete status: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION HARD DELETE AUDIT / ATOMIC
+BASE-PROFILE NORMALIZATION INCLUDED / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED
+BEFORE COMMIT**.
+
+- The sole option SQL delete writer serves Venue Mini App direct delete, Telegram direct flavor
+  delete and one Telegram single-item base-profile normalization callback. Actor is derived from
+  the authenticated session/callback user; source is server-owned `VENUE_MINI_APP` or
+  `TELEGRAM_BOT`. Body/query/path/callback data cannot set either.
+- Direct delete uses one JDBC transaction: a non-locking parent hint, item lock, item-option locks
+  ascending by option id, final venue/item/option recheck, physical delete, same-connection audit
+  insert and one commit. Missing/repeated/foreign/denied/failed deletes write no success audit.
+- One normalization callback is one repository transaction. After the same stable item-then-option
+  locks and a locked reread, existing product rules determine obsolete standard profiles, preserved
+  custom/current canonical profiles and missing canonical profiles. Obsolete deletes run in stable
+  id order; missing profiles retain existing label/value, zero price delta, available state and
+  ordering semantics. Each physical delete gets one audit; a no-op gets none. No create audit is
+  added.
+- Generic create and actual rename follow the compatible item-then-option lock order. Only a
+  hookah-section create/rename into an existing canonical profile performs the final collision
+  check. Non-hookah duplicates and unchanged-name price/availability updates, including legacy
+  duplicates, keep their prior behavior. This is not a general uniqueness or base-selection rule.
+- Any delete/create/audit failure rolls back the entire direct or normalization operation,
+  including earlier writes and audit rows. No process-local lock, idempotency token or best-effort
+  audit is used.
+- Audit is exactly `MENU_OPTION_DELETED`, entity `menu_item_option`, entity id `optionId`; payload
+  keys are exactly `venueId`, `itemId`, `optionId`, `source`. Names, prices, media, order/cart data,
+  raw request/callback/initData, Telegram identity, secrets and unrelated PII are excluded.
+- Historical order option rows retain immutable name/price snapshots while the live option FK is
+  set to null by the existing `ON DELETE SET NULL`. Deleted selections cannot be newly submitted
+  and receive the current safe validation error. Promotion rules still hold no menu-option id.
+- Owner/Manager own-venue behavior is unchanged; Staff, foreign and unaffiliated users are denied.
+  The pre-existing membership-check/revoke race remains separate P2 hardening.
+
+Schema verdict: **NO_MIGRATION_EXPECTED**. Independent review, green Actions, staging deploy and
+bounded smoke are still required; this does not close option create/update/name/price/availability
+audit or the broader Menu/Dangerous Action Audit.
 
 Audit payloads must use safe ids and old/new safe fields only. Do not include raw media payloads, raw Telegram file URLs, provider data, secrets, raw initData, guest message text or unrelated PII.
 
@@ -385,8 +414,9 @@ Audit payloads must use safe ids and old/new safe fields only. Do not include ra
   DONE / MVP / STAGING-SMOKE-PASSED**. The existing empty-category-only, RBAC, response and
   promotion lifecycle contracts are unchanged; no migration was added. This does not close
   option/price/update/availability/media or broader Menu audit.
-- Option hard-delete audit: **SELECTED NEXT / NOT IMPLEMENTED** under verdict
-  `IMPLEMENT_MENU_OPTION_DELETE_AUDIT_NEXT`; current schema is sufficient.
+- Option hard-delete audit: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION HARD DELETE AUDIT / ATOMIC
+  BASE-PROFILE NORMALIZATION INCLUDED / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED
+  BEFORE COMMIT**. Current schema is sufficient; independent review, Actions and staging remain.
 - Guest server-side availability validation: `REQUIRED`; current stale/unavailable option rejection is documented as covered for the smoked options/flavors flow, but broader availability validation should stay in regression.
 - Promotions/paid placement remain separate from featured/top-list and follow `docs/GROWTH_RETENTION.md` plus `docs/PLATFORM_COCKPIT.md`.
 

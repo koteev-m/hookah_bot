@@ -16,6 +16,8 @@ import com.hookah.platform.backend.miniapp.guest.api.GuestBillRequestResponse
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
+import com.hookah.platform.backend.miniapp.venue.menu.MenuOptionDeleteSource
+import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepository
 import com.hookah.platform.backend.miniapp.venue.orders.OrderWorkflowStatus
 import com.hookah.platform.backend.miniapp.venue.orders.VenueOrdersRepository
 import com.hookah.platform.backend.module
@@ -710,7 +712,7 @@ class GuestOrderRoutesTest {
         }
 
     @Test
-    fun `add-batch with selected option persists snapshot and read models include option`() =
+    fun `selected option snapshot survives hard delete and stale submit is rejected`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("guest-order-selected-option")
             val config = buildConfig(jdbcUrl)
@@ -822,6 +824,77 @@ class GuestOrderRoutesTest {
             assertEquals(260_000L, notification.bill?.grossTotalMinor)
             assertEquals("Ягодный микс", notification.bill?.activeItems?.single()?.selectedOption?.name)
             assertEquals("поменьше холодка", notification.bill?.activeItems?.single()?.preferenceNote)
+
+            assertTrue(
+                VenueMenuRepository(h2DataSource(jdbcUrl)).deleteOption(
+                    venueId = venueId,
+                    optionId = optionId,
+                    actorUserId = TELEGRAM_USER_ID,
+                    source = MenuOptionDeleteSource.VENUE_MINI_APP,
+                ),
+            )
+
+            val deletedOptionSnapshot = assertNotNull(fetchSelectedOptionSnapshot(jdbcUrl, payload.batchId))
+            assertNull(deletedOptionSnapshot.optionId)
+            assertEquals("Ягодный микс", deletedOptionSnapshot.name)
+            assertEquals(30_000L, deletedOptionSnapshot.priceDeltaMinor)
+
+            val activeAfterDeleteResponse =
+                client.get(
+                    "/api/guest/order/active?tableToken=selected-option-token" +
+                        "&tableSessionId=$tableSessionId&tabId=$personalTabId",
+                ) {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.OK, activeAfterDeleteResponse.status)
+            val activeAfterDelete =
+                json.decodeFromString(ActiveOrderResponse.serializer(), activeAfterDeleteResponse.bodyAsText())
+            val activeItemAfterDelete = assertNotNull(activeAfterDelete.order).batches.single().items.single()
+            assertNull(activeItemAfterDelete.selectedOption?.optionId)
+            assertEquals("Ягодный микс", activeItemAfterDelete.selectedOption?.name)
+            assertEquals(30_000L, activeItemAfterDelete.selectedOption?.priceDeltaMinor)
+            assertEquals(130_000L, activeItemAfterDelete.priceMinor)
+            assertEquals(260_000L, activeItemAfterDelete.lineGrossMinor)
+
+            val venueDetailAfterDelete =
+                VenueOrdersRepository(h2DataSource(jdbcUrl))
+                    .loadOrderDetail(venueId = venueId, orderId = payload.orderId)
+            val venueItemAfterDelete = assertNotNull(venueDetailAfterDelete).batches.single().items.single()
+            assertNull(venueItemAfterDelete.selectedOption?.optionId)
+            assertEquals("Ягодный микс", venueItemAfterDelete.selectedOption?.name)
+            assertEquals(30_000L, venueItemAfterDelete.selectedOption?.priceDeltaMinor)
+            assertEquals(130_000L, venueItemAfterDelete.priceMinor)
+
+            val staleSubmitResponse =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(
+                        json.encodeToString(
+                            AddBatchRequest.serializer(),
+                            AddBatchRequest(
+                                tableToken = "selected-option-token",
+                                tableSessionId = tableSessionId,
+                                tabId = personalTabId,
+                                idempotencyKey = "selected-option-deleted",
+                                items =
+                                    listOf(
+                                        AddBatchItemDto(
+                                            itemId = itemId,
+                                            qty = 1,
+                                            selectedOptionId = optionId,
+                                        ),
+                                    ),
+                                comment = null,
+                            ),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.BadRequest, staleSubmitResponse.status)
+            assertApiErrorEnvelope(staleSubmitResponse, ApiErrorCodes.INVALID_INPUT)
+            assertEquals(1, countRows(jdbcUrl, "order_batches"))
+            assertEquals(1, countRows(jdbcUrl, "order_batch_items"))
+            assertEquals(1, countRows(jdbcUrl, "order_batch_item_options"))
         }
 
     @Test

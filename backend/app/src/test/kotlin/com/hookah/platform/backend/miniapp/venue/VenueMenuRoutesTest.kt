@@ -7,6 +7,7 @@ import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.miniapp.venue.menu.MENU_CATEGORY_DELETED_AUDIT_ACTION
 import com.hookah.platform.backend.miniapp.venue.menu.MENU_ITEM_DELETED_AUDIT_ACTION
+import com.hookah.platform.backend.miniapp.venue.menu.MENU_OPTION_DELETED_AUDIT_ACTION
 import com.hookah.platform.backend.miniapp.venue.menu.MENU_SHIFT_CHECK_COMPLETED_AUDIT_ACTION
 import com.hookah.platform.backend.miniapp.venue.menu.MenuShiftCheckResponse
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuItem
@@ -411,6 +412,199 @@ class VenueMenuRoutesTest {
 
             assertTrue(repository.categoryExists(venueId, category.id))
             assertTrue(menuCategoryDeleteAudits(jdbcUrl).isEmpty())
+        }
+
+    @Test
+    fun `owner and manager option delete derive exact actor source payload and preserve response`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("menu-option-delete-audit-success")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val ownerId = 76_001L
+            val managerId = 76_002L
+            val venueId = seedVenueWithRole(jdbcUrl, ownerId, "OWNER")
+            seedVenueWithRole(jdbcUrl, managerId, "MANAGER", venueId)
+            val fixture = createShiftCheckFixture(jdbcUrl, venueId)
+
+            val ownerResponse =
+                client.delete(
+                    "/api/venue/menu/options/${fixture.firstOption.id}" +
+                        "?venueId=$venueId&actorUserId=999999&source=TELEGRAM_BOT",
+                ) {
+                    headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config, ownerId)}") }
+                }
+            val managerResponse =
+                client.delete("/api/venue/menu/options/${fixture.secondOption.id}?venueId=$venueId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config, managerId)}") }
+                }
+
+            listOf(ownerResponse, managerResponse).forEach { response ->
+                assertEquals(HttpStatusCode.OK, response.status)
+                assertEquals(
+                    mapOf("ok" to true),
+                    json.parseToJsonElement(response.bodyAsText()).jsonObject
+                        .mapValues { it.value.jsonPrimitive.content.toBoolean() },
+                )
+            }
+
+            val audits = menuOptionDeleteAudits(jdbcUrl)
+            assertEquals(2, audits.size)
+            assertEquals(listOf(ownerId, managerId), audits.map { it.actorUserId })
+            assertEquals(
+                listOf(fixture.firstOption.id, fixture.secondOption.id),
+                audits.map { it.entityId },
+            )
+            val expectedItemIds = listOf(fixture.firstItem.id, fixture.secondItem.id)
+            audits.forEachIndexed { index, audit ->
+                assertEquals("menu_item_option", audit.entityType)
+                assertEquals(
+                    setOf("venueId", "itemId", "optionId", "source"),
+                    audit.payload.keys,
+                )
+                assertEquals(venueId, audit.payload.getValue("venueId").jsonPrimitive.content.toLong())
+                assertEquals(
+                    expectedItemIds[index],
+                    audit.payload.getValue("itemId").jsonPrimitive.content.toLong(),
+                )
+                assertEquals(
+                    audit.entityId,
+                    audit.payload.getValue("optionId").jsonPrimitive.content.toLong(),
+                )
+                assertEquals(
+                    "VENUE_MINI_APP",
+                    audit.payload.getValue("source").jsonPrimitive.content,
+                )
+                assertFalse(audit.payload.toString().contains("999999"))
+                assertFalse(audit.payload.toString().contains("TELEGRAM_BOT"))
+            }
+        }
+
+    @Test
+    fun `staff foreign and unaffiliated actors cannot delete option or create audit`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("menu-option-delete-audit-denials")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val ownerId = 77_001L
+            val staffId = 77_002L
+            val foreignManagerId = 77_003L
+            val guestId = 77_004L
+            val venueId = seedVenueWithRole(jdbcUrl, ownerId, "OWNER")
+            seedVenueWithRole(jdbcUrl, staffId, "STAFF", venueId)
+            val foreignVenueId = seedVenueWithRole(jdbcUrl, foreignManagerId, "MANAGER")
+            seedUser(jdbcUrl, guestId)
+            val fixture = createShiftCheckFixture(jdbcUrl, venueId)
+            val foreignFixture = createShiftCheckFixture(jdbcUrl, foreignVenueId)
+
+            listOf(staffId, foreignManagerId, guestId).forEach { actorId ->
+                val response =
+                    client.delete(
+                        "/api/venue/menu/options/${fixture.firstOption.id}?venueId=$venueId",
+                    ) {
+                        headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config, actorId)}") }
+                    }
+                assertEquals(HttpStatusCode.Forbidden, response.status)
+                assertApiErrorEnvelope(response, ApiErrorCodes.FORBIDDEN)
+                assertFalse(response.bodyAsText().contains("First option"))
+            }
+
+            val foreignScopeResponse =
+                client.delete(
+                    "/api/venue/menu/options/${fixture.firstOption.id}?venueId=$foreignVenueId",
+                ) {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer ${issueToken(config, foreignManagerId)}")
+                    }
+                }
+            assertEquals(HttpStatusCode.NotFound, foreignScopeResponse.status)
+            assertApiErrorEnvelope(foreignScopeResponse, ApiErrorCodes.NOT_FOUND)
+            assertFalse(foreignScopeResponse.bodyAsText().contains("First option"))
+
+            assertTrue(menuRepository(jdbcUrl).optionExists(venueId, fixture.firstOption.id))
+            assertTrue(menuRepository(jdbcUrl).optionExists(foreignVenueId, foreignFixture.firstOption.id))
+            assertTrue(menuOptionDeleteAudits(jdbcUrl).isEmpty())
+        }
+
+    @Test
+    fun `repeated option delete returns not found without duplicate audit`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("menu-option-delete-audit-repeat")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val ownerId = 78_001L
+            val venueId = seedVenueWithRole(jdbcUrl, ownerId, "OWNER")
+            val fixture = createShiftCheckFixture(jdbcUrl, venueId)
+            val url = "/api/venue/menu/options/${fixture.firstOption.id}?venueId=$venueId"
+
+            val firstResponse =
+                client.delete(url) {
+                    headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config, ownerId)}") }
+                }
+            val repeatedResponse =
+                client.delete(url) {
+                    headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config, ownerId)}") }
+                }
+
+            assertEquals(HttpStatusCode.OK, firstResponse.status)
+            assertEquals(
+                mapOf("ok" to true),
+                json.parseToJsonElement(firstResponse.bodyAsText()).jsonObject
+                    .mapValues { it.value.jsonPrimitive.content.toBoolean() },
+            )
+            assertEquals(HttpStatusCode.NotFound, repeatedResponse.status)
+            assertApiErrorEnvelope(repeatedResponse, ApiErrorCodes.NOT_FOUND)
+            assertFalse(menuRepository(jdbcUrl).optionExists(venueId, fixture.firstOption.id))
+            val audits = menuOptionDeleteAudits(jdbcUrl)
+            assertEquals(1, audits.size)
+            assertEquals(fixture.firstOption.id, audits.single().entityId)
+            assertEquals(ownerId, audits.single().actorUserId)
+        }
+
+    @Test
+    fun `option delete audit failure returns safe error and rolls back delete`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("menu-option-delete-audit-failure")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val ownerId = 79_001L
+            val venueId = seedVenueWithRole(jdbcUrl, ownerId, "OWNER")
+            val fixture = createShiftCheckFixture(jdbcUrl, venueId)
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                connection.createStatement().use { statement ->
+                    statement.execute(
+                        """
+                        ALTER TABLE audit_log
+                        ADD CONSTRAINT reject_menu_option_delete_audit
+                        CHECK (action <> '$MENU_OPTION_DELETED_AUDIT_ACTION')
+                        """.trimIndent(),
+                    )
+                }
+            }
+
+            val response =
+                client.delete(
+                    "/api/venue/menu/options/${fixture.firstOption.id}?venueId=$venueId",
+                ) {
+                    headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config, ownerId)}") }
+                }
+
+            assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
+            assertApiErrorEnvelope(response, ApiErrorCodes.DATABASE_UNAVAILABLE)
+            assertFalse(response.bodyAsText().contains(MENU_OPTION_DELETED_AUDIT_ACTION))
+            assertTrue(menuRepository(jdbcUrl).optionExists(venueId, fixture.firstOption.id))
+            assertTrue(menuOptionDeleteAudits(jdbcUrl).isEmpty())
         }
 
     @Test
@@ -1773,6 +1967,9 @@ class VenueMenuRoutesTest {
 
     private fun menuCategoryDeleteAudits(jdbcUrl: String): List<MenuDeleteAuditRow> =
         menuDeleteAudits(jdbcUrl, MENU_CATEGORY_DELETED_AUDIT_ACTION)
+
+    private fun menuOptionDeleteAudits(jdbcUrl: String): List<MenuDeleteAuditRow> =
+        menuDeleteAudits(jdbcUrl, MENU_OPTION_DELETED_AUDIT_ACTION)
 
     private fun menuDeleteAudits(
         jdbcUrl: String,

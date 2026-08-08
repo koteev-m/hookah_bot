@@ -4,6 +4,10 @@
 
 Статус: **current product reference / UPDATED**. This document is the canonical QA/smoke strategy for the Telegram bot + Mini App platform. It consolidates local validation, GitHub Actions expectations, area-specific smoke suites, staging policy, failure reporting and Codex handoff rules. Deployment and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
 
+Current bounded implementation: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION HARD DELETE AUDIT /
+ATOMIC BASE-PROFILE NORMALIZATION INCLUDED / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW
+REQUIRED BEFORE COMMIT**. This status is local only; Actions, staging deploy and bounded smoke remain.
+
 ## Core Rule
 
 Quality gates must match the blast radius of the change. Do not claim a feature is release-ready from local-only checks when it changes backend runtime, Mini App behavior, Telegram bot, staff-chat, billing/security or migrations. Do not run staging deploy for docs-only changes.
@@ -661,6 +665,71 @@ only these confirmed staging scenarios:
 The existing menu repository/routes, promotion repository, Telegram router, PostgreSQL
 configuration concurrency minimum `tests=14 skipped=0 failures=0 errors=0`, compile, lint, Mini App
 build and Playwright regression gates remain required. No migration or new workflow was added.
+
+### Menu Option Hard Delete Audit And Atomic Normalization quality gate
+
+Status: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION HARD DELETE AUDIT / ATOMIC BASE-PROFILE
+NORMALIZATION INCLUDED / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE
+COMMIT**.
+
+Regression must preserve this bounded contract:
+
+- Mini App and Telegram direct delete pass only the authenticated actor and server-owned source to
+  the one audit-aware repository delete; Owner/Manager own venue succeed while Staff, foreign and
+  unaffiliated actors are denied without a mutation, fact oracle or success audit;
+- authoritative item/option scope, stable item-then-option locks, final reread, direct delete and
+  same-connection `MENU_OPTION_DELETED` insert share one JDBC transaction and commit;
+- one Telegram normalization callback invokes one repository transaction, not N methods with
+  separate connections. Existing custom/current canonical options are preserved, obsolete standard
+  profiles are deleted, missing canonical profiles retain current product fields/order, and each
+  physical delete has exactly one audit;
+- direct audit failure after the delete restores the option. Failure after several normalization
+  deletes/creates or on one of N audit inserts restores the exact initial option set and leaves no
+  partial audits or item state;
+- not-found/repeated direct delete, normalization no-op, denied/foreign/stale/conflicting, SQL/
+  create/audit failure and rollback have zero success audit;
+- audit action/entity are exactly `MENU_OPTION_DELETED`, `menu_item_option`, option id. Payload keys
+  are exactly `venueId`, `itemId`, `optionId`, `source`; names, prices, media, order/cart contents,
+  raw request/callback/initData, Telegram identity, secrets and unrelated PII are forbidden;
+- historical option FK becomes null through the current `ON DELETE SET NULL`, while immutable name/
+  price snapshots remain readable in active/closed order history. New submit with a deleted option
+  receives the current safe validation error and creates no new order rows;
+- `VenueMenuOptionNormalizationConcurrencyPostgresTest` uses production repositories/migrations,
+  independent connections, deterministic latches and an observed `pg_blocking_pids` plus
+  `pg_locks` edge. It covers normalization/normalization, normalization/direct delete,
+  canonical-create/normalization and canonical-update/normalization with no duplicate canonical
+  profiles, partial state or loser audit;
+- hookah-section canonical create and actual rename use the compatible item-then-option lock plus a
+  final collision check. Non-hookah duplicates and unchanged-name price/availability updates,
+  including legacy duplicates, remain allowed. No process lock, idempotency token, unique
+  constraint, migration or new workflow is added.
+
+Required focused local commands are the menu repository/routes, Telegram router, `*GuestOrder*`,
+`*VenueOrder*`, `*GuestVisitRoutesTest*`, compile, ktlint, Mini App build and full Playwright smoke
+selectors listed in the task handoff. The mandatory real-PostgreSQL selector also includes:
+
+```bash
+./gradlew --no-daemon --max-workers=1 :backend:app:test \
+  --tests '*GuestTableContextActivationPostgresTest*' \
+  --tests '*PromotionConfigurationConcurrencyPostgresTest*' \
+  --tests '*VenueStaffMutationConcurrencyPostgresTest*' \
+  --tests 'com.hookah.platform.backend.miniapp.venue.menu.VenueMenuOptionNormalizationConcurrencyPostgresTest' \
+  --console=plain
+```
+
+CI must require exact XML
+`TEST-com.hookah.platform.backend.miniapp.venue.menu.VenueMenuOptionNormalizationConcurrencyPostgresTest.xml`
+with at least 4 tests and exactly zero skipped/failures/errors. Missing/zero/silently skipped XML
+fails the existing mandatory PostgreSQL gate; Docker is mandatory. The changed critical route gate
+also requires `GuestVisitRoutesTest` so the closed-history nullable-reference regression cannot be
+silently omitted.
+
+Recorded local evidence: focused repository, Mini App route, Telegram, Guest order/history, Venue
+order, compile and ktlint selectors passed; the combined mandatory PostgreSQL selector produced
+`8/0/0/0`, `14/0/0/0`, `2/0/0/0`, `4/0/0/0` for its four exact XML classes; Mini App production
+build and Playwright smoke `139/139` passed. Staging deploy and bounded Owner/Manager/Staff/foreign,
+direct/normalization, exactly-one/rollback/privacy/history/stale-selection smoke remain required.
+Schema verdict: **NO_MIGRATION_EXPECTED**.
 
 ## Venue Mini App Media Foundation Future Quality Gate
 
@@ -1579,10 +1648,10 @@ Telegram/staff-chat:
 - Menu category hard-delete audit: **DANGEROUS ACTION AUDIT SLICE / MENU CATEGORY HARD DELETE AUDIT /
   DONE / MVP / STAGING-SMOKE-PASSED**. H2/route/Telegram/privacy/rollback and PostgreSQL
   config/delete race gates remain in regression; CI minimum is 14. No migration was added.
-- Menu option hard-delete audit: **SELECTED NEXT / NOT IMPLEMENTED** under verdict
-  `IMPLEMENT_MENU_OPTION_DELETE_AUDIT_NEXT`. Required future coverage includes every direct and
-  normalization caller, exactly-one/zero-success audit semantics, historical option snapshots,
-  stale-cart rejection, role/tenant denial, privacy and audit-failure rollback.
+- Menu option hard-delete audit: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION HARD DELETE AUDIT /
+  ATOMIC BASE-PROFILE NORMALIZATION INCLUDED / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW
+  REQUIRED BEFORE COMMIT**. Focused local and mandatory PostgreSQL evidence is green; independent
+  review, Actions, staging deploy and bounded smoke remain.
 - Venue Promotions Current/Archived Tabs UX: **VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / DONE / MVP / STAGING-SMOKE-PASSED**.
 - Promotion lifecycle status audit: **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**; broader dangerous-action coverage remains partial.
 - Promotion creation audit: **DANGEROUS ACTION AUDIT SLICE / PROMOTION CREATION AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**; mandatory repository/route/Telegram and PostgreSQL gates remain regression requirements. Configuration edit, schedule/target/reward, media/banner and broader dangerous-action coverage remain open.

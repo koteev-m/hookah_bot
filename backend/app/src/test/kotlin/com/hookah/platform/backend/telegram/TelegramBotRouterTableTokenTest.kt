@@ -72,8 +72,11 @@ import com.hookah.platform.backend.miniapp.venue.STAFF_CALL_AUDIT_SOURCE_TELEGRA
 import com.hookah.platform.backend.miniapp.venue.STAFF_CALL_DONE_AUDIT_ACTION
 import com.hookah.platform.backend.miniapp.venue.VenueRole
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
+import com.hookah.platform.backend.miniapp.venue.menu.BASE_FLAVOR_PROFILE_ALREADY_EXISTS_MESSAGE
+import com.hookah.platform.backend.miniapp.venue.menu.HookahFlavorProfileNormalizationResult
 import com.hookah.platform.backend.miniapp.venue.menu.MenuCategoryDeleteSource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuItemDeleteSource
+import com.hookah.platform.backend.miniapp.venue.menu.MenuOptionDeleteSource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuSemanticType
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuCategory
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuItem
@@ -9646,6 +9649,39 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
+    fun `owner individual base flavor profile race reports existing without false success`() =
+        runBlocking {
+            val missing = hookahMenuCategoryWithOptions(emptyList())
+            val current = hookahMenuCategoryWithOptions(listOf(hookahFlavorOption(1L, "Ягодный")))
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+            coEvery { venueMenuRepository.getMenu(10L) } returnsMany listOf(listOf(missing), listOf(current))
+            coEvery {
+                venueMenuRepository.createOption(10L, 7001L, "Ягодный", 0L, true)
+            } throws InvalidInputException(BASE_FLAVOR_PROFILE_ALREADY_EXISTS_MESSAGE)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_3221,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-owner-order-menu-flavor-profile-race",
+                            from = User(id = 200L),
+                            message = Message(messageId = 30_004_3221, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_item_flavor_p:10:501:7001:0",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 1) { venueMenuRepository.createOption(10L, 7001L, "Ягодный", 0L, true) }
+            coVerify(exactly = 1) {
+                outboxEnqueuer.enqueueSendMessage(100, "Профиль «Ягодный» уже есть в списке.", null)
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(100, "Профиль «Ягодный» добавлен.", null)
+            }
+        }
+
+    @Test
     fun `owner base flavor profiles bulk add skips existing profiles`() =
         runBlocking {
             coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
@@ -9862,7 +9898,10 @@ class TelegramBotRouterTableTokenTest {
                 ),
             )
 
-            coVerify(exactly = 0) { venueMenuRepository.deleteOption(any(), any()) }
+            coVerify(exactly = 0) { venueMenuRepository.deleteOption(any(), any(), any(), any()) }
+            coVerify(exactly = 0) {
+                venueMenuRepository.normalizeHookahFlavorProfiles(any(), any(), any(), any())
+            }
             coVerify(exactly = 0) { venueMenuRepository.createOption(any(), any(), any(), any(), any()) }
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
@@ -9894,7 +9933,6 @@ class TelegramBotRouterTableTokenTest {
                     hookahFlavorOption(7L, "Ягодный"),
                     hookahFlavorOption(8L, "Арбуз"),
                 )
-            val createdProfiles = mutableListOf<String>()
             val after =
                 listOf(
                     hookahFlavorOption(5L, "Освежающий / мятный"),
@@ -9908,12 +9946,14 @@ class TelegramBotRouterTableTokenTest {
                     hookahFlavorOption(106L, "Цветочный"),
                 )
             coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
-            coEvery { venueMenuRepository.deleteOption(10L, any()) } returns true
-            coEvery { venueMenuRepository.createOption(10L, 7001L, any(), 0L, true) } answers {
-                val name = invocation.args[2] as String
-                createdProfiles += name
-                hookahFlavorOption(100L + createdProfiles.size, name)
-            }
+            coEvery {
+                venueMenuRepository.normalizeHookahFlavorProfiles(
+                    venueId = 10L,
+                    itemId = 7001L,
+                    actorUserId = 200L,
+                    source = MenuOptionDeleteSource.TELEGRAM_BOT,
+                )
+            } returns HookahFlavorProfileNormalizationResult(removedCount = 5, addedCount = 6)
             coEvery { venueMenuRepository.getMenu(10L) } returnsMany
                 listOf(
                     listOf(hookahMenuCategoryWithOptions(before)),
@@ -9933,20 +9973,16 @@ class TelegramBotRouterTableTokenTest {
                 ),
             )
 
-            coVerify(exactly = 1) { venueMenuRepository.deleteOption(10L, 1L) }
-            coVerify(exactly = 1) { venueMenuRepository.deleteOption(10L, 2L) }
-            coVerify(exactly = 1) { venueMenuRepository.deleteOption(10L, 3L) }
-            coVerify(exactly = 1) { venueMenuRepository.deleteOption(10L, 4L) }
-            coVerify(exactly = 1) { venueMenuRepository.deleteOption(10L, 8L) }
-            coVerify(exactly = 0) { venueMenuRepository.deleteOption(10L, 5L) }
-            coVerify(exactly = 0) { venueMenuRepository.deleteOption(10L, 6L) }
-            coVerify(exactly = 0) { venueMenuRepository.deleteOption(10L, 7L) }
-            assertEquals(
-                listOf("Фруктовый", "Цитрусовый", "Десертный", "Напиточный", "Пряный", "Цветочный"),
-                createdProfiles,
-            )
-            coVerify(exactly = 0) { venueMenuRepository.createOption(10L, 7001L, "Ягодный", 0L, true) }
-            coVerify(exactly = 0) { venueMenuRepository.createOption(10L, 7001L, "Освежающий / мятный", 0L, true) }
+            coVerify(exactly = 1) {
+                venueMenuRepository.normalizeHookahFlavorProfiles(
+                    venueId = 10L,
+                    itemId = 7001L,
+                    actorUserId = 200L,
+                    source = MenuOptionDeleteSource.TELEGRAM_BOT,
+                )
+            }
+            coVerify(exactly = 0) { venueMenuRepository.deleteOption(any(), any(), any(), any()) }
+            coVerify(exactly = 0) { venueMenuRepository.createOption(any(), any(), any(), any(), any()) }
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
@@ -9980,6 +10016,102 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
+    fun `owner normalize flavor profiles reports database failure without false success`() =
+        runBlocking {
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+            coEvery { venueMenuRepository.getMenu(10L) } returns
+                listOf(
+                    hookahMenuCategoryWithOptions(
+                        listOf(hookahFlavorOption(1L, "Арбуз")),
+                    ),
+                )
+            coEvery {
+                venueMenuRepository.normalizeHookahFlavorProfiles(
+                    venueId = 10L,
+                    itemId = 7001L,
+                    actorUserId = 200L,
+                    source = MenuOptionDeleteSource.TELEGRAM_BOT,
+                )
+            } throws DatabaseUnavailableException()
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_36601,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "private-callback-payload",
+                            from = User(id = 200L, username = "private_username"),
+                            message = Message(messageId = 30_004_36601, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_item_flavors_norm_confirm:10:501:7001",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 1) {
+                venueMenuRepository.normalizeHookahFlavorProfiles(
+                    venueId = 10L,
+                    itemId = 7001L,
+                    actorUserId = 200L,
+                    source = MenuOptionDeleteSource.TELEGRAM_BOT,
+                )
+            }
+            coVerify(exactly = 1) {
+                outboxEnqueuer.enqueueSendMessage(100, "База недоступна, попробуйте позже.", null)
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.startsWith("Готово. Удалено старых вариантов:") },
+                    any(),
+                )
+            }
+        }
+
+    @Test
+    fun `owner normalize flavor profiles reports stale hookah scope without false success`() =
+        runBlocking {
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+            coEvery { venueMenuRepository.getMenu(10L) } returns
+                listOf(hookahMenuCategoryWithOptions(listOf(hookahFlavorOption(1L, "Арбуз"))))
+            coEvery {
+                venueMenuRepository.normalizeHookahFlavorProfiles(
+                    venueId = 10L,
+                    itemId = 7001L,
+                    actorUserId = 200L,
+                    source = MenuOptionDeleteSource.TELEGRAM_BOT,
+                )
+            } throws InvalidInputException("base flavor profiles are available only for hookah items")
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_36602,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "stale-hookah-scope",
+                            from = User(id = 200L),
+                            message = Message(messageId = 30_004_36602, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_item_flavors_norm_confirm:10:501:7001",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 1) {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Профиль вкуса доступен только для раздела «Кальянное меню».",
+                    null,
+                )
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.startsWith("Готово. Удалено старых вариантов:") },
+                    any(),
+                )
+            }
+        }
+
+    @Test
     fun `legacy owner normalize section flavor profiles ask is unavailable and does not mutate data`() =
         runBlocking {
             coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
@@ -9997,7 +10129,10 @@ class TelegramBotRouterTableTokenTest {
                 ),
             )
 
-            coVerify(exactly = 0) { venueMenuRepository.deleteOption(any(), any()) }
+            coVerify(exactly = 0) { venueMenuRepository.deleteOption(any(), any(), any(), any()) }
+            coVerify(exactly = 0) {
+                venueMenuRepository.normalizeHookahFlavorProfiles(any(), any(), any(), any())
+            }
             coVerify(exactly = 0) { venueMenuRepository.createOption(any(), any(), any(), any(), any()) }
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
@@ -10026,7 +10161,10 @@ class TelegramBotRouterTableTokenTest {
                 ),
             )
 
-            coVerify(exactly = 0) { venueMenuRepository.deleteOption(any(), any()) }
+            coVerify(exactly = 0) { venueMenuRepository.deleteOption(any(), any(), any(), any()) }
+            coVerify(exactly = 0) {
+                venueMenuRepository.normalizeHookahFlavorProfiles(any(), any(), any(), any())
+            }
             coVerify(exactly = 0) { venueMenuRepository.createOption(any(), any(), any(), any(), any()) }
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
@@ -10062,7 +10200,10 @@ class TelegramBotRouterTableTokenTest {
                     null,
                 )
             }
-            coVerify(exactly = 0) { venueMenuRepository.deleteOption(any(), any()) }
+            coVerify(exactly = 0) { venueMenuRepository.deleteOption(any(), any(), any(), any()) }
+            coVerify(exactly = 0) {
+                venueMenuRepository.normalizeHookahFlavorProfiles(any(), any(), any(), any())
+            }
             coVerify(exactly = 0) { venueMenuRepository.createOption(any(), any(), any(), any(), any()) }
         }
 
@@ -10091,7 +10232,10 @@ class TelegramBotRouterTableTokenTest {
                     null,
                 )
             }
-            coVerify(exactly = 0) { venueMenuRepository.deleteOption(any(), any()) }
+            coVerify(exactly = 0) { venueMenuRepository.deleteOption(any(), any(), any(), any()) }
+            coVerify(exactly = 0) {
+                venueMenuRepository.normalizeHookahFlavorProfiles(any(), any(), any(), any())
+            }
             coVerify(exactly = 0) { venueMenuRepository.createOption(any(), any(), any(), any(), any()) }
         }
 
@@ -10122,7 +10266,7 @@ class TelegramBotRouterTableTokenTest {
                 ),
             )
 
-            coVerify(exactly = 0) { venueMenuRepository.deleteOption(any(), any()) }
+            coVerify(exactly = 0) { venueMenuRepository.deleteOption(any(), any(), any(), any()) }
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
@@ -10149,7 +10293,14 @@ class TelegramBotRouterTableTokenTest {
                 )
             val after = listOf(hookahFlavorOption(2L, "Ягодный"))
             coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
-            coEvery { venueMenuRepository.deleteOption(10L, 1L) } returns true
+            coEvery {
+                venueMenuRepository.deleteOption(
+                    venueId = 10L,
+                    optionId = 1L,
+                    actorUserId = 200L,
+                    source = MenuOptionDeleteSource.TELEGRAM_BOT,
+                )
+            } returns true
             coEvery { venueMenuRepository.getMenu(10L) } returnsMany
                 listOf(
                     listOf(hookahMenuCategoryWithOptions(before)),
@@ -10169,8 +10320,22 @@ class TelegramBotRouterTableTokenTest {
                 ),
             )
 
-            coVerify(exactly = 1) { venueMenuRepository.deleteOption(10L, 1L) }
-            coVerify(exactly = 0) { venueMenuRepository.deleteOption(10L, 2L) }
+            coVerify(exactly = 1) {
+                venueMenuRepository.deleteOption(
+                    venueId = 10L,
+                    optionId = 1L,
+                    actorUserId = 200L,
+                    source = MenuOptionDeleteSource.TELEGRAM_BOT,
+                )
+            }
+            coVerify(exactly = 0) {
+                venueMenuRepository.deleteOption(
+                    venueId = 10L,
+                    optionId = 2L,
+                    actorUserId = any(),
+                    source = any(),
+                )
+            }
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
@@ -10184,6 +10349,103 @@ class TelegramBotRouterTableTokenTest {
                     match { it.contains("Текущие варианты") && it.contains("Ягодный") && !it.contains("Арбуз") },
                     any(),
                 )
+            }
+        }
+
+    @Test
+    fun `repeated owner flavor delete callback has one successful repository delete`() =
+        runBlocking {
+            val staleMenu =
+                listOf(
+                    hookahMenuCategoryWithOptions(
+                        listOf(
+                            hookahFlavorOption(1L, "Арбуз"),
+                            hookahFlavorOption(2L, "Ягодный"),
+                        ),
+                    ),
+                )
+            val after =
+                listOf(
+                    hookahMenuCategoryWithOptions(
+                        listOf(hookahFlavorOption(2L, "Ягодный")),
+                    ),
+                )
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+            coEvery {
+                venueMenuRepository.deleteOption(
+                    venueId = 10L,
+                    optionId = 1L,
+                    actorUserId = 200L,
+                    source = MenuOptionDeleteSource.TELEGRAM_BOT,
+                )
+            } returnsMany listOf(true, false)
+            coEvery { venueMenuRepository.getMenu(10L) } returnsMany
+                listOf(staleMenu, after, staleMenu, after)
+            val callback =
+                CallbackQuery(
+                    id = "private-repeat-callback-payload",
+                    from = User(id = 200L, username = "private_username"),
+                    message = Message(messageId = 30_004_381, chat = Chat(id = 100, type = "private")),
+                    data = "owner_venue_order_menu_item_option_delete_confirm:10:501:7001:1",
+                )
+
+            router.process(TelegramUpdate(updateId = 10_004_381, callbackQuery = callback))
+            router.process(TelegramUpdate(updateId = 10_004_382, callbackQuery = callback))
+
+            coVerify(exactly = 2) {
+                venueMenuRepository.deleteOption(
+                    venueId = 10L,
+                    optionId = 1L,
+                    actorUserId = 200L,
+                    source = MenuOptionDeleteSource.TELEGRAM_BOT,
+                )
+            }
+            coVerify(exactly = 1) {
+                outboxEnqueuer.enqueueSendMessage(100, "✅ Вкус удалён.", null)
+            }
+            coVerify(exactly = 1) {
+                outboxEnqueuer.enqueueSendMessage(100, "Не удалось удалить вкус. Попробуйте ещё раз.", null)
+            }
+        }
+
+    @Test
+    fun `owner flavor delete database failure has no false success`() =
+        runBlocking {
+            val before =
+                listOf(
+                    hookahMenuCategoryWithOptions(
+                        listOf(hookahFlavorOption(1L, "Арбуз")),
+                    ),
+                )
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+            coEvery { venueMenuRepository.getMenu(10L) } returns before
+            coEvery {
+                venueMenuRepository.deleteOption(
+                    venueId = 10L,
+                    optionId = 1L,
+                    actorUserId = 200L,
+                    source = MenuOptionDeleteSource.TELEGRAM_BOT,
+                )
+            } throws DatabaseUnavailableException()
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_383,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "private-failure-callback-payload",
+                            from = User(id = 200L, username = "private_username"),
+                            message = Message(messageId = 30_004_383, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_order_menu_item_option_delete_confirm:10:501:7001:1",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 1) {
+                outboxEnqueuer.enqueueSendMessage(100, "База недоступна, попробуйте позже.", null)
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(100, "✅ Вкус удалён.", null)
             }
         }
 
@@ -10212,7 +10474,7 @@ class TelegramBotRouterTableTokenTest {
                     null,
                 )
             }
-            coVerify(exactly = 0) { venueMenuRepository.deleteOption(any(), any()) }
+            coVerify(exactly = 0) { venueMenuRepository.deleteOption(any(), any(), any(), any()) }
         }
 
     @Test

@@ -25,6 +25,7 @@ internal const val MENU_SHIFT_CHECK_MAX_CHANGES = 500
 const val MENU_SHIFT_CHECK_COMPLETED_AUDIT_ACTION = "MENU_SHIFT_CHECK_COMPLETED"
 const val MENU_ITEM_DELETED_AUDIT_ACTION = "MENU_ITEM_DELETED"
 const val MENU_CATEGORY_DELETED_AUDIT_ACTION = "MENU_CATEGORY_DELETED"
+const val MENU_OPTION_DELETED_AUDIT_ACTION = "MENU_OPTION_DELETED"
 internal const val MENU_DELETE_AFFECTED_RULE_SAMPLE_LIMIT = 50
 internal const val MENU_DELETE_AUDIT_PAYLOAD_MAX_BYTES = 4096
 internal const val MENU_ITEM_DELETE_AFFECTED_RULE_SAMPLE_LIMIT = MENU_DELETE_AFFECTED_RULE_SAMPLE_LIMIT
@@ -36,6 +37,11 @@ enum class MenuItemDeleteSource {
 }
 
 enum class MenuCategoryDeleteSource {
+    VENUE_MINI_APP,
+    TELEGRAM_BOT,
+}
+
+enum class MenuOptionDeleteSource {
     VENUE_MINI_APP,
     TELEGRAM_BOT,
 }
@@ -82,6 +88,11 @@ data class VenueMenuShiftCheckResult(
     val reviewedOptionCount: Int,
     val availableItemCount: Int,
     val availableOptionCount: Int,
+)
+
+data class HookahFlavorProfileNormalizationResult(
+    val removedCount: Int,
+    val addedCount: Int,
 )
 
 class VenueMenuRepository(
@@ -881,40 +892,36 @@ class VenueMenuRepository(
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    if (!itemExists(connection, venueId, itemId)) {
-                        return@use null
-                    }
-                    val sortOrder = nextOptionSortOrder(connection, venueId, itemId)
-                    val optionId =
-                        connection.prepareStatement(
-                            """
-                            INSERT INTO menu_item_options (
-                                venue_id, item_id, name, price_delta_minor, is_available, sort_order, updated_at
-                            )
-                            VALUES (?, ?, ?, ?, ?, ?, now())
-                            """.trimIndent(),
-                            java.sql.Statement.RETURN_GENERATED_KEYS,
-                        ).use { statement ->
-                            statement.setLong(1, venueId)
-                            statement.setLong(2, itemId)
-                            statement.setString(3, name)
-                            statement.setLong(4, priceDeltaMinor)
-                            statement.setBoolean(5, isAvailable)
-                            statement.setInt(6, sortOrder)
-                            statement.executeUpdate()
-                            statement.generatedKeys.use { rs ->
-                                if (rs.next()) rs.getLong(1) else error("Failed to insert option")
-                            }
+                    val originalAutoCommit = connection.autoCommit
+                    connection.autoCommit = false
+                    try {
+                        val itemScope = lockItemForOptionMutation(connection, venueId, itemId)
+                        if (itemScope == null) {
+                            connection.commit()
+                            return@use null
                         }
-                    VenueMenuOption(
-                        id = optionId,
-                        venueId = venueId,
-                        itemId = itemId,
-                        name = name,
-                        priceDeltaMinor = priceDeltaMinor,
-                        isAvailable = isAvailable,
-                        sortOrder = sortOrder,
-                    )
+                        val lockedOptions = loadItemOptionsForUpdate(connection, venueId, itemId)
+                        if (itemScope.isHookahMenuSection()) {
+                            ensureCanonicalProfileIsUnique(lockedOptions, name)
+                        }
+                        val created =
+                            insertOption(
+                                connection = connection,
+                                venueId = venueId,
+                                itemId = itemId,
+                                name = name,
+                                priceDeltaMinor = priceDeltaMinor,
+                                isAvailable = isAvailable,
+                                sortOrder = lockedOptions.maxOfOrNull { it.sortOrder }?.plus(1) ?: 0,
+                            )
+                        connection.commit()
+                        created
+                    } catch (e: Exception) {
+                        connection.rollback()
+                        throw e
+                    } finally {
+                        connection.autoCommit = originalAutoCommit
+                    }
                 }
             } catch (e: SQLException) {
                 throw DatabaseUnavailableException()
@@ -933,22 +940,61 @@ class VenueMenuRepository(
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    val existing = loadOption(connection, optionId, venueId) ?: return@use null
-                    connection.prepareStatement(
-                        """
-                        UPDATE menu_item_options
-                        SET name = ?, price_delta_minor = ?, is_available = ?, updated_at = now()
-                        WHERE id = ? AND venue_id = ?
-                        """.trimIndent(),
-                    ).use { statement ->
-                        statement.setString(1, name ?: existing.name)
-                        statement.setLong(2, priceDeltaMinor ?: existing.priceDeltaMinor)
-                        statement.setBoolean(3, isAvailable ?: existing.isAvailable)
-                        statement.setLong(4, optionId)
-                        statement.setLong(5, venueId)
-                        statement.executeUpdate()
+                    val originalAutoCommit = connection.autoCommit
+                    connection.autoCommit = false
+                    try {
+                        val itemId = loadOptionItemId(connection, venueId, optionId)
+                        val itemScope = itemId?.let { lockItemForOptionMutation(connection, venueId, it) }
+                        if (itemId == null || itemScope == null) {
+                            connection.commit()
+                            return@use null
+                        }
+                        val lockedOptions = loadItemOptionsForUpdate(connection, venueId, itemId)
+                        val existing = lockedOptions.firstOrNull { it.id == optionId }
+                        if (existing == null) {
+                            connection.commit()
+                            return@use null
+                        }
+                        val updatedName = name ?: existing.name
+                        val changesCanonicalProfile =
+                            name != null &&
+                                HookahFlavorProfileService.normalizeFlavorNameKey(existing.name) !=
+                                HookahFlavorProfileService.normalizeFlavorNameKey(updatedName)
+                        if (itemScope.isHookahMenuSection() && changesCanonicalProfile) {
+                            ensureCanonicalProfileIsUnique(
+                                options = lockedOptions,
+                                name = updatedName,
+                                excludedOptionId = optionId,
+                            )
+                        }
+                        val updated =
+                            connection.prepareStatement(
+                                """
+                                UPDATE menu_item_options
+                                SET name = ?, price_delta_minor = ?, is_available = ?, updated_at = now()
+                                WHERE id = ? AND venue_id = ? AND item_id = ?
+                                """.trimIndent(),
+                            ).use { statement ->
+                                statement.setString(1, updatedName)
+                                statement.setLong(2, priceDeltaMinor ?: existing.priceDeltaMinor)
+                                statement.setBoolean(3, isAvailable ?: existing.isAvailable)
+                                statement.setLong(4, optionId)
+                                statement.setLong(5, venueId)
+                                statement.setLong(6, itemId)
+                                statement.executeUpdate()
+                            }
+                        if (updated != 1) {
+                            throw SQLException("Locked menu option changed during update", "40001")
+                        }
+                        val result = loadOption(connection, optionId, venueId)
+                        connection.commit()
+                        result
+                    } catch (e: Exception) {
+                        connection.rollback()
+                        throw e
+                    } finally {
+                        connection.autoCommit = originalAutoCommit
                     }
-                    loadOption(connection, optionId, venueId)
                 }
             } catch (e: SQLException) {
                 throw DatabaseUnavailableException()
@@ -992,28 +1038,328 @@ class VenueMenuRepository(
     suspend fun deleteOption(
         venueId: Long,
         optionId: Long,
+        actorUserId: Long,
+        source: MenuOptionDeleteSource,
     ): Boolean {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    val deleted =
-                        connection.prepareStatement(
-                            """
-                            DELETE FROM menu_item_options
-                            WHERE id = ? AND venue_id = ?
-                            """.trimIndent(),
-                        ).use { statement ->
-                            statement.setLong(1, optionId)
-                            statement.setLong(2, venueId)
-                            statement.executeUpdate()
+                    val originalAutoCommit = connection.autoCommit
+                    connection.autoCommit = false
+                    try {
+                        val itemId = loadOptionItemId(connection, venueId, optionId)
+                        if (itemId == null || lockItemForOptionMutation(connection, venueId, itemId) == null) {
+                            connection.commit()
+                            return@use false
                         }
-                    deleted > 0
+                        val lockedOption =
+                            loadItemOptionsForUpdate(connection, venueId, itemId)
+                                .firstOrNull { it.id == optionId }
+                        if (lockedOption == null) {
+                            connection.commit()
+                            return@use false
+                        }
+                        deleteLockedOption(connection, venueId, itemId, optionId)
+                        auditMenuOptionDelete(
+                            connection = connection,
+                            venueId = venueId,
+                            itemId = itemId,
+                            optionId = optionId,
+                            actorUserId = actorUserId,
+                            source = source,
+                        )
+                        connection.commit()
+                        true
+                    } catch (e: Exception) {
+                        connection.rollback()
+                        throw e
+                    } finally {
+                        connection.autoCommit = originalAutoCommit
+                    }
                 }
             } catch (e: SQLException) {
                 throw DatabaseUnavailableException()
             }
         }
+    }
+
+    suspend fun normalizeHookahFlavorProfiles(
+        venueId: Long,
+        itemId: Long,
+        actorUserId: Long,
+        source: MenuOptionDeleteSource,
+    ): HookahFlavorProfileNormalizationResult? {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    val originalAutoCommit = connection.autoCommit
+                    connection.autoCommit = false
+                    try {
+                        val itemScope = lockItemForOptionMutation(connection, venueId, itemId)
+                        if (itemScope == null) {
+                            connection.commit()
+                            return@use null
+                        }
+                        if (!itemScope.isHookahMenuSection()) {
+                            throw InvalidInputException("base flavor profiles are available only for hookah items")
+                        }
+                        val lockedOptions = loadItemOptionsForUpdate(connection, venueId, itemId)
+                        val obsoleteOptions =
+                            lockedOptions
+                                .filter { HookahFlavorProfileService.isObsoleteProfileValue(it.name) }
+                                .sortedBy { it.id }
+                        val preservedOptions =
+                            lockedOptions.filterNot { option ->
+                                obsoleteOptions.any { obsolete -> obsolete.id == option.id }
+                            }
+                        val missingProfiles =
+                            HookahFlavorProfileService.missingBaseProfiles(
+                                preservedOptions.map { it.name },
+                            )
+
+                        obsoleteOptions.forEach { option ->
+                            deleteLockedOption(connection, venueId, itemId, option.id)
+                        }
+
+                        var nextSortOrder = preservedOptions.maxOfOrNull { it.sortOrder }?.plus(1) ?: 0
+                        missingProfiles.forEach { profileName ->
+                            insertOption(
+                                connection = connection,
+                                venueId = venueId,
+                                itemId = itemId,
+                                name = profileName,
+                                priceDeltaMinor = 0,
+                                isAvailable = true,
+                                sortOrder = nextSortOrder,
+                            )
+                            nextSortOrder += 1
+                        }
+
+                        obsoleteOptions.forEach { option ->
+                            auditMenuOptionDelete(
+                                connection = connection,
+                                venueId = venueId,
+                                itemId = itemId,
+                                optionId = option.id,
+                                actorUserId = actorUserId,
+                                source = source,
+                            )
+                        }
+                        connection.commit()
+                        HookahFlavorProfileNormalizationResult(
+                            removedCount = obsoleteOptions.size,
+                            addedCount = missingProfiles.size,
+                        )
+                    } catch (e: Exception) {
+                        connection.rollback()
+                        throw e
+                    } finally {
+                        connection.autoCommit = originalAutoCommit
+                    }
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    private fun loadOptionItemId(
+        connection: Connection,
+        venueId: Long,
+        optionId: Long,
+    ): Long? =
+        connection.prepareStatement(
+            """
+            SELECT item_id
+            FROM menu_item_options
+            WHERE id = ? AND venue_id = ?
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, optionId)
+            statement.setLong(2, venueId)
+            statement.executeQuery().use { rs ->
+                if (rs.next()) rs.getLong("item_id") else null
+            }
+        }
+
+    private fun lockItemForOptionMutation(
+        connection: Connection,
+        venueId: Long,
+        itemId: Long,
+    ): OptionItemMutationScope? {
+        val categoryId =
+            connection.prepareStatement(
+                """
+                SELECT category_id
+                FROM menu_items
+                WHERE id = ? AND venue_id = ?
+                FOR UPDATE
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, itemId)
+                statement.setLong(2, venueId)
+                statement.executeQuery().use { rs ->
+                    if (rs.next()) rs.getLong("category_id") else null
+                }
+            } ?: return null
+        return connection.prepareStatement(
+            """
+            SELECT name, category_type
+            FROM menu_categories
+            WHERE id = ? AND venue_id = ?
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, categoryId)
+            statement.setLong(2, venueId)
+            statement.executeQuery().use { rs ->
+                if (!rs.next()) {
+                    throw SQLException("Locked menu item category is missing", "40001")
+                }
+                OptionItemMutationScope(
+                    categoryName = rs.getString("name"),
+                    categoryType = MenuSemanticType.fromDb(rs.getString("category_type")),
+                )
+            }
+        }
+    }
+
+    private fun loadItemOptionsForUpdate(
+        connection: Connection,
+        venueId: Long,
+        itemId: Long,
+    ): List<VenueMenuOption> =
+        connection.prepareStatement(
+            """
+            SELECT id, venue_id, item_id, name, price_delta_minor, is_available, sort_order
+            FROM menu_item_options
+            WHERE venue_id = ? AND item_id = ?
+            ORDER BY id
+            FOR UPDATE
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, itemId)
+            statement.executeQuery().use { rs ->
+                buildList {
+                    while (rs.next()) add(mapOption(rs))
+                }
+            }
+        }
+
+    private fun ensureCanonicalProfileIsUnique(
+        options: List<VenueMenuOption>,
+        name: String,
+        excludedOptionId: Long? = null,
+    ) {
+        if (!HookahFlavorProfileService.isCanonicalProfileValue(name)) {
+            return
+        }
+        val requestedKey = HookahFlavorProfileService.normalizeFlavorNameKey(name)
+        if (
+            options.any { option ->
+                option.id != excludedOptionId &&
+                    HookahFlavorProfileService.normalizeFlavorNameKey(option.name) == requestedKey
+            }
+        ) {
+            throw InvalidInputException(BASE_FLAVOR_PROFILE_ALREADY_EXISTS_MESSAGE)
+        }
+    }
+
+    private data class OptionItemMutationScope(
+        val categoryName: String,
+        val categoryType: MenuSemanticType,
+    ) {
+        fun isHookahMenuSection(): Boolean = HookahFlavorProfileService.isHookahMenuSection(categoryName, categoryType)
+    }
+
+    private fun insertOption(
+        connection: Connection,
+        venueId: Long,
+        itemId: Long,
+        name: String,
+        priceDeltaMinor: Long,
+        isAvailable: Boolean,
+        sortOrder: Int,
+    ): VenueMenuOption {
+        val optionId =
+            connection.prepareStatement(
+                """
+                INSERT INTO menu_item_options (
+                    venue_id, item_id, name, price_delta_minor, is_available, sort_order, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, now())
+                """.trimIndent(),
+                Statement.RETURN_GENERATED_KEYS,
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.setLong(2, itemId)
+                statement.setString(3, name)
+                statement.setLong(4, priceDeltaMinor)
+                statement.setBoolean(5, isAvailable)
+                statement.setInt(6, sortOrder)
+                statement.executeUpdate()
+                statement.generatedKeys.use { rs ->
+                    if (rs.next()) rs.getLong(1) else throw SQLException("Failed to insert menu option")
+                }
+            }
+        return VenueMenuOption(
+            id = optionId,
+            venueId = venueId,
+            itemId = itemId,
+            name = name,
+            priceDeltaMinor = priceDeltaMinor,
+            isAvailable = isAvailable,
+            sortOrder = sortOrder,
+        )
+    }
+
+    private fun deleteLockedOption(
+        connection: Connection,
+        venueId: Long,
+        itemId: Long,
+        optionId: Long,
+    ) {
+        val deleted =
+            connection.prepareStatement(
+                """
+                DELETE FROM menu_item_options
+                WHERE id = ? AND venue_id = ? AND item_id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, optionId)
+                statement.setLong(2, venueId)
+                statement.setLong(3, itemId)
+                statement.executeUpdate()
+            }
+        if (deleted != 1) {
+            throw SQLException("Locked menu option disappeared during deletion", "40001")
+        }
+    }
+
+    private fun auditMenuOptionDelete(
+        connection: Connection,
+        venueId: Long,
+        itemId: Long,
+        optionId: Long,
+        actorUserId: Long,
+        source: MenuOptionDeleteSource,
+    ) {
+        auditLogWriter.appendJson(
+            connection = connection,
+            actorUserId = actorUserId,
+            action = MENU_OPTION_DELETED_AUDIT_ACTION,
+            entityType = "menu_item_option",
+            entityId = optionId,
+            payload =
+                buildMenuOptionDeleteAuditPayload(
+                    venueId = venueId,
+                    itemId = itemId,
+                    optionId = optionId,
+                    source = source,
+                ),
+        )
     }
 
     private fun validateShiftCheckChanges(
@@ -1754,26 +2100,6 @@ class VenueMenuRepository(
         }
     }
 
-    private fun nextOptionSortOrder(
-        connection: Connection,
-        venueId: Long,
-        itemId: Long,
-    ): Int {
-        return connection.prepareStatement(
-            """
-            SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order
-            FROM menu_item_options
-            WHERE venue_id = ? AND item_id = ?
-            """.trimIndent(),
-        ).use { statement ->
-            statement.setLong(1, venueId)
-            statement.setLong(2, itemId)
-            statement.executeQuery().use { rs ->
-                if (rs.next()) rs.getInt("next_order") else 0
-            }
-        }
-    }
-
     private fun countCategories(
         connection: Connection,
         venueId: Long,
@@ -1905,6 +2231,18 @@ internal fun buildMenuCategoryDeleteAuditPayload(
     put("categoryId", categoryId)
     put("source", source.name)
     put("affectedPromotionRules", buildAffectedPromotionRuleSummary(affectedRuleIds))
+}
+
+internal fun buildMenuOptionDeleteAuditPayload(
+    venueId: Long,
+    itemId: Long,
+    optionId: Long,
+    source: MenuOptionDeleteSource,
+) = buildJsonObject {
+    put("venueId", venueId)
+    put("itemId", itemId)
+    put("optionId", optionId)
+    put("source", source.name)
 }
 
 private fun buildAffectedPromotionRuleSummary(affectedRuleIds: Iterable<Long>) =

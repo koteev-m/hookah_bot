@@ -78,6 +78,7 @@ jobs:
           _JAVA_OPTIONS=-Xmx4g ./gradlew --no-daemon --max-workers=1 :backend:app:test \
             --tests "GuestVenueRoutesTest" \
             --tests "GuestOrderRoutesTest" \
+            --tests "GuestVisitRoutesTest" \
             --tests "GuestTableResolveRoutesTest" \
             --tests "GuestTableContextActivationRepositoryTest" \
             --tests "GuestTableContextTeardownRepositoryTest" \
@@ -110,6 +111,7 @@ jobs:
           expected_classes = [
               "com.hookah.platform.backend.miniapp.guest.GuestVenueRoutesTest",
               "com.hookah.platform.backend.miniapp.guest.GuestOrderRoutesTest",
+              "com.hookah.platform.backend.miniapp.guest.GuestVisitRoutesTest",
               "com.hookah.platform.backend.miniapp.guest.GuestTableResolveRoutesTest",
               "com.hookah.platform.backend.miniapp.guest.db.GuestTableContextActivationRepositoryTest",
               "com.hookah.platform.backend.miniapp.guest.db.GuestTableContextTeardownRepositoryTest",
@@ -156,7 +158,7 @@ jobs:
           if problems:
               raise SystemExit("\n".join(problems))
           PY
-      - name: Run mandatory PostgreSQL activation promotion and staff concurrency gates
+      - name: Run mandatory PostgreSQL activation promotion staff and menu concurrency gates
         if: ${{ !cancelled() }}
         run: |
           JAVA_TOOL_OPTIONS=-Dapi.version=1.44 _JAVA_OPTIONS=-Xmx4g \
@@ -164,8 +166,9 @@ jobs:
             --tests "GuestTableContextActivationPostgresTest" \
             --tests "PromotionConfigurationConcurrencyPostgresTest" \
             --tests "VenueStaffMutationConcurrencyPostgresTest" \
+            --tests "VenueMenuOptionNormalizationConcurrencyPostgresTest" \
             --console=plain
-      - name: Assert PostgreSQL activation promotion and staff test results
+      - name: Assert PostgreSQL activation promotion staff and menu test results
         if: ${{ !cancelled() }}
         run: |
           python3 - <<'PY'
@@ -197,6 +200,14 @@ jobs:
                       "VenueStaffMutationConcurrencyPostgresTest.xml"
                   ),
                   2,
+              ),
+              (
+                  "menu option normalization concurrency",
+                  report_dir / (
+                      "TEST-com.hookah.platform.backend.miniapp.venue.menu."
+                      "VenueMenuOptionNormalizationConcurrencyPostgresTest.xml"
+                  ),
+                  4,
               ),
           ]
           problems = []

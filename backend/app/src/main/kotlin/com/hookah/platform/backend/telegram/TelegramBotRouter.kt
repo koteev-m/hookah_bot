@@ -59,9 +59,11 @@ import com.hookah.platform.backend.miniapp.venue.VenuePermissions
 import com.hookah.platform.backend.miniapp.venue.VenueRole
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import com.hookah.platform.backend.miniapp.venue.appendStaffCallStatusAuditBestEffort
+import com.hookah.platform.backend.miniapp.venue.menu.BASE_FLAVOR_PROFILE_ALREADY_EXISTS_MESSAGE
 import com.hookah.platform.backend.miniapp.venue.menu.HookahFlavorProfileService
 import com.hookah.platform.backend.miniapp.venue.menu.MenuCategoryDeleteSource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuItemDeleteSource
+import com.hookah.platform.backend.miniapp.venue.menu.MenuOptionDeleteSource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuSemanticType
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuCategory
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuItem
@@ -763,14 +765,6 @@ class TelegramBotRouter(
     ) {
         val canPublish: Boolean
             get() = nameReady && addressReady && hoursReady && descriptionReady && menuReady
-    }
-
-    private data class FlavorProfileNormalizeResult(
-        val removedCount: Int,
-        val addedCount: Int,
-    ) {
-        val changed: Boolean
-            get() = removedCount > 0 || addedCount > 0
     }
 
     private data class OwnerVenueStopListEntry(
@@ -19018,7 +19012,12 @@ class TelegramBotRouter(
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
             } catch (e: InvalidInputException) {
-                enqueueMessage(chatId, "Профиль вкуса доступен только для раздела «Кальянное меню».")
+                if (e.message == BASE_FLAVOR_PROFILE_ALREADY_EXISTS_MESSAGE) {
+                    enqueueMessage(chatId, "Базовые профили уже изменились. Список обновлён.")
+                    showVenueOwnerOrderMenuItemFlavorsByIds(chatId, userId, venueId, sectionId, itemId)
+                } else {
+                    enqueueMessage(chatId, "Профиль вкуса доступен только для раздела «Кальянное меню».")
+                }
                 return
             }
         enqueueMessage(chatId, "Добавлено профилей: ${result.addedCount}. Уже были в списке: ${result.existingCount}.")
@@ -19120,71 +19119,31 @@ class TelegramBotRouter(
             enqueueMessage(chatId, "Профиль вкуса доступен только для раздела «Кальянное меню».")
             return
         }
-        val result = normalizeHookahFlavorProfilesForItem(chatId = chatId, venueId = venueId, item = item) ?: return
+        val result =
+            try {
+                venueMenuRepository.normalizeHookahFlavorProfiles(
+                    venueId = venueId,
+                    itemId = item.id,
+                    actorUserId = userId,
+                    source = MenuOptionDeleteSource.TELEGRAM_BOT,
+                )
+            } catch (e: DatabaseUnavailableException) {
+                enqueueMessage(chatId, "База недоступна, попробуйте позже.")
+                return
+            } catch (e: InvalidInputException) {
+                enqueueMessage(chatId, "Профиль вкуса доступен только для раздела «Кальянное меню».")
+                return
+            }
+        if (result == null) {
+            enqueueMessage(chatId, "Не удалось добавить базовые профили. Позиция не найдена.")
+            return
+        }
         enqueueMessage(
             chatId,
             "Готово. Удалено старых вариантов: ${result.removedCount}. Добавлено базовых " +
                 "профилей: ${result.addedCount}.",
         )
         showVenueOwnerOrderMenuItemFlavorsByIds(chatId, userId, venueId, sectionId, itemId)
-    }
-
-    private suspend fun normalizeHookahFlavorProfilesForItem(
-        chatId: Long,
-        venueId: Long,
-        item: VenueMenuItem,
-    ): FlavorProfileNormalizeResult? {
-        val obsoleteOptions = item.options.filter { isObsoleteHookahFlavorProfileValue(it.name) }
-        var removedCount = 0
-        obsoleteOptions.forEach { option ->
-            val deleted =
-                try {
-                    venueMenuRepository.deleteOption(
-                        venueId = venueId,
-                        optionId = option.id,
-                    )
-                } catch (e: DatabaseUnavailableException) {
-                    enqueueMessage(chatId, "База недоступна, попробуйте позже.")
-                    return null
-                }
-            if (deleted) {
-                removedCount += 1
-            }
-        }
-
-        val remainingFlavorKeys =
-            item.options
-                .asSequence()
-                .filterNot { isObsoleteHookahFlavorProfileValue(it.name) }
-                .map { normalizeFlavorNameKey(it.name) }
-                .toMutableSet()
-        var addedCount = 0
-        HookahFlavorProfileService.baseProfiles.forEach { profileName ->
-            val key = normalizeFlavorNameKey(profileName)
-            if (key in remainingFlavorKeys) {
-                return@forEach
-            }
-            val created =
-                try {
-                    venueMenuRepository.createOption(
-                        venueId = venueId,
-                        itemId = item.id,
-                        name = profileName,
-                        priceDeltaMinor = 0,
-                        isAvailable = true,
-                    )
-                } catch (e: DatabaseUnavailableException) {
-                    enqueueMessage(chatId, "База недоступна, попробуйте позже.")
-                    return null
-                }
-            if (created == null) {
-                enqueueMessage(chatId, "Не удалось добавить базовые профили. Позиция не найдена.")
-                return null
-            }
-            remainingFlavorKeys += key
-            addedCount += 1
-        }
-        return FlavorProfileNormalizeResult(removedCount = removedCount, addedCount = addedCount)
     }
 
     private suspend fun addStandardOwnerOrderMenuFlavorProfile(
@@ -19235,6 +19194,10 @@ class TelegramBotRouter(
                 )
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
+                return
+            } catch (e: InvalidInputException) {
+                enqueueMessage(chatId, "Профиль «$profileName» уже есть в списке.")
+                showVenueOwnerOrderMenuItemFlavorsByIds(chatId, userId, venueId, sectionId, itemId)
                 return
             }
         if (created == null) {
@@ -19350,6 +19313,9 @@ class TelegramBotRouter(
                 } catch (e: DatabaseUnavailableException) {
                     enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                     return
+                } catch (e: InvalidInputException) {
+                    enqueueMessage(chatId, "Профиль «$normalized» уже есть в списке.")
+                    return
                 }
             if (updated == null || updated.itemId != itemId) {
                 dialogStateRepository.clear(chatId)
@@ -19373,6 +19339,9 @@ class TelegramBotRouter(
                 )
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
+                return
+            } catch (e: InvalidInputException) {
+                enqueueMessage(chatId, "Профиль «$normalized» уже есть в списке.")
                 return
             }
         if (created == null) {
@@ -19514,6 +19483,8 @@ class TelegramBotRouter(
                 venueMenuRepository.deleteOption(
                     venueId = venueId,
                     optionId = optionId,
+                    actorUserId = userId,
+                    source = MenuOptionDeleteSource.TELEGRAM_BOT,
                 )
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
@@ -20034,10 +20005,6 @@ class TelegramBotRouter(
             MenuSemanticType.FOOD -> "Еда"
             MenuSemanticType.OTHER -> "Другое"
         }
-
-    private fun isObsoleteHookahFlavorProfileValue(name: String): Boolean {
-        return HookahFlavorProfileService.isObsoleteProfileValue(name)
-    }
 
     private fun normalizeFlavorNameKey(name: String): String = HookahFlavorProfileService.normalizeFlavorNameKey(name)
 

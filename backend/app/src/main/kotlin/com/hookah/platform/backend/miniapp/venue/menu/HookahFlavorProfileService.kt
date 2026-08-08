@@ -3,6 +3,8 @@ package com.hookah.platform.backend.miniapp.venue.menu
 import com.hookah.platform.backend.api.InvalidInputException
 import java.util.Locale
 
+const val BASE_FLAVOR_PROFILE_ALREADY_EXISTS_MESSAGE = "base flavor profile already exists"
+
 data class HookahBaseFlavorProfileApplyResult(
     val itemId: Long,
     val addedCount: Int,
@@ -68,9 +70,21 @@ object HookahFlavorProfileService {
 
     fun missingBaseProfileCount(existingNames: Iterable<String>): Int = missingBaseProfiles(existingNames).size
 
+    fun isCanonicalProfileValue(name: String): Boolean {
+        val key = normalizeFlavorNameKey(name)
+        return baseProfiles.any { normalizeFlavorNameKey(it) == key }
+    }
+
+    fun isHookahMenuSection(
+        categoryName: String,
+        categoryType: MenuSemanticType,
+    ): Boolean =
+        categoryType == MenuSemanticType.HOOKAH ||
+            categoryName.trim().equals(HOOKAH_SECTION_NAME, ignoreCase = true)
+
     fun isObsoleteProfileValue(name: String): Boolean {
         val trimmed = name.trim()
-        if (baseProfiles.any { normalizeFlavorNameKey(it) == normalizeFlavorNameKey(trimmed) }) {
+        if (isCanonicalProfileValue(trimmed)) {
             return false
         }
         return normalizeFlavorNameKey(trimmed) in obsoleteProfileKeys
@@ -84,8 +98,7 @@ object HookahFlavorProfileService {
         if (effectiveType == MenuSemanticType.HOOKAH) {
             return true
         }
-        return item.itemType == null &&
-            category.name.trim().equals(HOOKAH_SECTION_NAME, ignoreCase = true)
+        return item.itemType == null && isHookahMenuSection(category.name, category.categoryType)
     }
 
     suspend fun applyMissingBaseProfiles(

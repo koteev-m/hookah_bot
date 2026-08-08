@@ -251,6 +251,18 @@ class GuestVisitRoutesTest {
             val sharedMember = 2003L
             val venueId = seedVenueAndUsers(jdbcUrl, guestOne, guestTwo, sharedMember)
             val fixture = seedClosedOrderVisitDetails(jdbcUrl, venueId, guestOne, guestTwo, sharedMember)
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                connection.prepareStatement(
+                    "SELECT menu_item_option_id FROM order_batch_item_options WHERE order_batch_item_id = ?",
+                ).use { statement ->
+                    statement.setLong(1, fixture.guestOneBatchItemId)
+                    statement.executeQuery().use { rs ->
+                        assertTrue(rs.next())
+                        rs.getLong(1)
+                        assertTrue(rs.wasNull())
+                    }
+                }
+            }
             seedGiftPromotionForVisitItem(
                 jdbcUrl = jdbcUrl,
                 venueId = venueId,
@@ -747,6 +759,7 @@ class GuestVisitRoutesTest {
                     }
                 }
             val ownedItem = insertMenuItem(connection, venueId, categoryId, "Owned Hookah", 1000L)
+            val ownedOption = insertMenuOption(connection, venueId, ownedItem, "Ягодный микс", 250L)
             val foreignItem = insertMenuItem(connection, venueId, categoryId, "Foreign Hookah", 2000L)
             val sharedItem = insertMenuItem(connection, venueId, categoryId, "Shared Hookah", 3000L)
             val now = Instant.parse("2030-05-12T18:00:00Z")
@@ -796,7 +809,7 @@ class GuestVisitRoutesTest {
 
             val guestOneBatch = insertBatch(connection, orderId, guestOneTab, null)
             val guestOneBatchItem = insertBatchItem(connection, guestOneBatch, ownedItem, preferenceNote = "покрепче")
-            insertBatchItemOption(connection, guestOneBatchItem, "Ягодный микс", 250L)
+            insertBatchItemOption(connection, guestOneBatchItem, "Ягодный микс", 250L, ownedOption)
             insertGuestBatchIdempotency(
                 connection,
                 venueId,
@@ -821,6 +834,10 @@ class GuestVisitRoutesTest {
 
             val sharedBatch = insertBatch(connection, orderId, sharedTab, guestTwo)
             insertBatchItem(connection, sharedBatch, sharedItem)
+            connection.prepareStatement("DELETE FROM menu_item_options WHERE id = ?").use { statement ->
+                statement.setLong(1, ownedOption)
+                assertEquals(1, statement.executeUpdate())
+            }
 
             ClosedOrderVisitFixture(
                 guestOneVisitId =

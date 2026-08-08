@@ -2,7 +2,7 @@
 
 Дата актуализации: 2026-08-08.
 
-Статус: **current product reference / UPDATED**. Runtime permission parity is **PARTIAL** unless a specific route, test or smoke result is cited by the relevant implementation task. Menu item and empty-category hard-delete audits are **DANGEROUS ACTION AUDIT SLICE / DONE / MVP / STAGING-SMOKE-PASSED** for their bounded contracts. Promotion creation audit is **DANGEROUS ACTION AUDIT SLICE / PROMOTION CREATION AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. The bounded promotion status block is **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Staff role/removal audit is **DANGEROUS ACTION AUDIT SLICE / STAFF ROLE AND REMOVAL AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. These bounded slices do not close broader dangerous-action audit parity. The bounded OWNER/MANAGER menu shift-check permission is **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**. Staff module settings are `STAFF OPERATIONS SLICE B / OPTIONAL TEAM AND SCHEDULE MODULE / GUEST MANUAL OR SCHEDULE SOURCE / DONE / MVP / STAGING-SMOKE-PASSED`; green Actions, staging deploy and the bounded role/privacy smoke are complete without granting Manager broad `VENUE_SETTINGS`. Venue Mode operational surfaces are detailed in `docs/VENUE_OPERATIONS.md`; staff profile/manual-Today/optional-schedule/tips permissions are detailed in `docs/STAFF_PROFILES_SHIFTS_TIPS.md`; booking lifecycle permissions are detailed in `docs/BOOKING_LIFECYCLE.md`; Telegram fallback/staff-chat permissions are detailed in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`; menu/stop-list role policy is detailed in `docs/MENU_OPTIONS_STOPLIST.md`; venue media upload/storage security is detailed in `docs/MEDIA_STORAGE_UPLOAD.md`; validation strategy is detailed in `docs/TESTING_QA_SMOKE_STRATEGY.md`; release/deploy operations are detailed in `docs/DEPLOYMENT_RUNBOOK.md`.
+Статус: **current product reference / UPDATED**. Runtime permission parity is **PARTIAL** unless a specific route, test or smoke result is cited by the relevant implementation task. Menu item and empty-category hard-delete audits are **DANGEROUS ACTION AUDIT SLICE / DONE / MVP / STAGING-SMOKE-PASSED** for their bounded contracts. Menu option hard delete with atomic Telegram base-profile normalization is **MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. Promotion creation audit is **DANGEROUS ACTION AUDIT SLICE / PROMOTION CREATION AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. The bounded promotion status block is **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Staff role/removal audit is **DANGEROUS ACTION AUDIT SLICE / STAFF ROLE AND REMOVAL AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. These bounded slices do not close broader dangerous-action audit parity. The bounded OWNER/MANAGER menu shift-check permission is **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**. Staff module settings are `STAFF OPERATIONS SLICE B / OPTIONAL TEAM AND SCHEDULE MODULE / GUEST MANUAL OR SCHEDULE SOURCE / DONE / MVP / STAGING-SMOKE-PASSED`; green Actions, staging deploy and the bounded role/privacy smoke are complete without granting Manager broad `VENUE_SETTINGS`. Venue Mode operational surfaces are detailed in `docs/VENUE_OPERATIONS.md`; staff profile/manual-Today/optional-schedule/tips permissions are detailed in `docs/STAFF_PROFILES_SHIFTS_TIPS.md`; booking lifecycle permissions are detailed in `docs/BOOKING_LIFECYCLE.md`; Telegram fallback/staff-chat permissions are detailed in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`; menu/stop-list role policy is detailed in `docs/MENU_OPTIONS_STOPLIST.md`; venue media upload/storage security is detailed in `docs/MEDIA_STORAGE_UPLOAD.md`; validation strategy is detailed in `docs/TESTING_QA_SMOKE_STRATEGY.md`; release/deploy operations are detailed in `docs/DEPLOYMENT_RUNBOOK.md`.
 
 Platform Guest QR status: **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / DONE / MVP / STAGING-SMOKE-PASSED**. Schema verdict is `NO_MIGRATION`; commit/push, green Actions for the release HEAD, staging deploy and the bounded real Telegram role/privacy smoke are complete. Broader permission parity and dangerous-action audit coverage remain `PARTIAL`.
 
@@ -155,7 +155,7 @@ These actions require server-side authorization and should require confirmation,
 | Table QR token rotated/exported | Confirmation and audit; old/revoked token must not resolve. |
 | Platform Owner confirms controlled Guest QR test | Exact Platform Owner + exact chat + unexpired opaque pending only; one conditional consume wins, then commit `PLATFORM_GUEST_QR_TEST_CONFIRMED` before atomic Guest context activation. Audit uses standard actor plus safe venue/table/source only and excludes raw token/hash, callback, initData and Telegram PII. It records confirmation only and is not `GUEST_CONTEXT_APPLIED`; final token/venue/table/public-availability/subscription revalidation and all authoritative Guest-state writes share the activation transaction. |
 | Staff chat linked/unlinked/tested | Confirmation for unlink; audit/link evidence without raw secrets. |
-| Menu price changed; category/item archived/deleted; option schema changed; media removed; Staff stop-list toggled; stop-list mass update | Item and empty-category hard delete are staging-closed with transaction-bound `MENU_ITEM_DELETED` / `MENU_CATEGORY_DELETED`; both derive authenticated actor and `VENUE_MINI_APP` / `TELEGRAM_BOT` source server-side. Option delete is selected next and remains unaudited until implemented. Other menu families still require safe old/new audit. Shift-check completion requires explicit confirmation and exactly one `MENU_SHIFT_CHECK_COMPLETED` audit in the same transaction, including no-op completion. |
+| Menu price changed; category/item archived/deleted; option schema changed; media removed; Staff stop-list toggled; stop-list mass update | Item and empty-category hard delete are staging-closed with transaction-bound `MENU_ITEM_DELETED` / `MENU_CATEGORY_DELETED`. Option hard delete and Telegram base-profile normalization now use locally validated transaction-bound `MENU_OPTION_DELETED`; all three derive authenticated actor and `VENUE_MINI_APP` / `TELEGRAM_BOT` source server-side. Other menu families still require safe old/new audit. Shift-check completion requires explicit confirmation and exactly one `MENU_SHIFT_CHECK_COMPLETED` audit in the same transaction, including no-op completion. |
 | Venue media uploaded/replaced/hidden/shown/deleted | OWNER/MANAGER own venue only; strict content validation; audit safe asset/status metadata; never expose source ref, object/path key, Telegram file id or storage credentials. |
 | Promotion lifecycle status changed or promotion archived | Owner/Manager own venue only. Mini App and Telegram use one repository transaction for the locked parent, deterministic rule synchronization and exactly one `VENUE_PROMOTION_STATUS_CHANGED` or `VENUE_PROMOTION_ARCHIVED` audit. Actor and `VENUE_MINI_APP` / `TELEGRAM_BOT` source are server-derived; denial, stale/repeated/no-op, validation failure, audit failure and rollback write no success audit. |
 | Promotion created | Owner/Manager own venue only. Mini App and Telegram pass authenticated actor plus server-owned source to the single repository create transaction. Parent, caller-connection initial rules and exactly one `VENUE_PROMOTION_CREATED` commit or roll back together. Payload is limited to venue/promotion/template identity, `DRAFT`, source and ordered rule id/version/status rows. |
@@ -259,8 +259,45 @@ STAGING-SMOKE-PASSED**.
   the bounded 15-scenario role/parity/audit/privacy smoke passed. No migration was added;
   option/price/update/availability/media and broader audit remain open.
 
+### MENU OPTION HARD DELETE AUDIT contract
+
+Status: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION HARD DELETE AUDIT / ATOMIC BASE-PROFILE
+NORMALIZATION INCLUDED / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE
+COMMIT**.
+
+- Owner/Manager with current own-venue `MENU_MANAGE` remain allowed through Venue Mini App and the
+  existing Telegram guard. Staff, foreign, unaffiliated, Guest and Platform-only users without
+  venue membership remain denied. The legacy Telegram `ADMIN` alias grants no authority beyond its
+  existing Manager compatibility behavior.
+- Mini App actor is the authenticated session subject; Telegram actor is the authenticated
+  callback/message user. Source is server-owned `VENUE_MINI_APP` or `TELEGRAM_BOT`. Actor/source is
+  never accepted from body, query, path or callback data.
+- Direct delete locks the parent item before its option rows, rechecks authoritative venue/item/
+  option scope, deletes and writes the audit through the same JDBC connection before one commit.
+  A non-locking item-id hint avoids an option-then-item deadlock edge.
+- One Telegram base-profile callback executes as one authoritative repository transaction. It locks
+  the item, then option rows ascending by id, rereads the profile set, preserves current canonical
+  and custom options, deletes obsolete standard options and creates missing canonical options using
+  current semantics. Generic create and actual rename use the compatible item-then-option lock;
+  only a hookah-section create/rename into an existing canonical profile is rejected after the
+  locked reread. Non-hookah and unchanged-name updates keep prior behavior. No new role or
+  base-profile selection policy is introduced.
+- Each committed physical option deletion writes exactly one `MENU_OPTION_DELETED` for entity
+  `menu_item_option` / option id. A normalization deleting N options writes N audits; a no-op writes
+  zero. Missing/repeated, denied/foreign, stale/conflicting, SQL/create/audit failure and rollback
+  write zero success audit. One failure rolls back every delete/create/audit in the operation.
+- Payload is exactly `venueId`, `itemId`, `optionId`, `source`. Actor stays in the standard audit
+  actor column. Names, category/item data, prices, media, order/cart contents, raw request/callback/
+  initData, Telegram identity, secrets and unrelated PII are excluded.
+- Existing `ON DELETE SET NULL` keeps historical option name/price snapshots readable; a deleted
+  selection cannot be newly submitted. No promotion option reference, process-local lock,
+  idempotency table or migration is introduced. Schema verdict: **NO_MIGRATION_EXPECTED**.
+- The existing route-check to membership-revoke race is unchanged and remains P2 transaction-bound
+  membership-recheck hardening; the current diff creates no new privilege path. Independent review,
+  green Actions, staging deploy and bounded smoke remain required.
+
 These bounded menu, staff and promotion creation/lifecycle slices do not close the overall dangerous-action audit.
-Promotion configuration edit, remaining menu price/category/option/update/availability audit, QR rotate, force-close/session, tab reopen,
+Promotion configuration edit, remaining menu price/option-update/availability audit, QR rotate, force-close/session, tab reopen,
 analytics export, the Promotion Compatibility Policy and a broader audit viewer remain future.
 
 ## Current Implementation Vs Target
@@ -274,6 +311,7 @@ analytics export, the Promotion Compatibility Policy and a broader audit viewer 
 | Menu shift check | OWNER/MANAGER own-venue `MENU_SHIFT_CHECK`, Staff/foreign denial, bounded input, ownership checks, optimistic stale rejection and transactional audit are staging-smoke-passed. | One authenticated actor confirms one all-or-nothing availability review; the client supplies no actor, owner, names, prices or private metadata. | Keep role/tenant/audit denial in regression. Platform Owner receives no automatic Venue-route authority; Telegram shift-check UI is not part of Phase 1. |
 | Menu item hard-delete audit | **DONE / MVP / STAGING-SMOKE-PASSED**. Venue Mini App and existing Telegram item-delete management paths require authenticated actor plus server-owned source and one transaction-bound `MENU_ITEM_DELETED`. | One committed item delete, related promotion reference cascades/version bumps and exactly one bounded privacy-safe audit commit atomically. | This closes only item hard delete after green Actions, staging deploy and bounded smoke; other menu mutation audit families remain partial. |
 | Menu category hard-delete audit | **DONE / MVP / STAGING-SMOKE-PASSED**. The sole writer and both current callers require server-derived actor/source and one atomic `MENU_CATEGORY_DELETED`. | One committed empty-category delete, promotion target cleanup/version bump and exactly one bounded privacy-safe audit commit atomically. | Release-closed only for this bounded empty-category contract; non-empty cascade and other menu mutation audits remain out of scope. |
+| Menu option hard-delete audit | **MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. Direct Mini App/Telegram delete and atomic Telegram base-profile normalization require server-derived actor/source and one same-transaction `MENU_OPTION_DELETED` per removed row. | One committed physical option delete has one privacy-safe audit; the whole normalization delete/create/audit set commits or rolls back together. | Independent review, Actions and staging remain. Option create/update/price/availability audit and broader dangerous-action coverage remain partial. |
 | Manager/Owner venue isolation | Own-venue RBAC is the product rule. | No cross-venue detail/reply/manage access. | Keep cross-venue tests for support, chats, orders, bookings and settings. |
 | Platform access | Platform Owner can manage platform scope and support tickets; ordinary venue chat is hidden. The bounded confirmed QR test enters the normal public Guest table flow only. Activation is atomic; teardown uses stored context identity and remains possible when token/table/venue/subscription becomes unavailable. | Platform does not bypass ordinary venue RBAC. Explicit Guest context temporarily wins routing only for ordinary Guest actions and is cleared by existing visit exit. Mini App re-entry requires matching chat context and no exit marker. | Controlled QR Phase 1 is staging-smoke-passed and stays in regression; event/audit explorer and analytics exports still need additional privacy gates before broad release. |
 | Dangerous action audit | Several audits exist: owner invite/revoke, billing mark-paid/courtesy, staff-call ACK/DONE, support status/scope, lifecycle/status where implemented. | All dangerous actions write safe actor/target/old-new/reason evidence. | Audit coverage remains `PARTIAL` until menu price, QR rotate, force close, tab reopen and analytics export are verified. |
@@ -445,9 +483,10 @@ analytics export, the Promotion Compatibility Policy and a broader audit viewer 
   DONE / MVP / STAGING-SMOKE-PASSED**. Empty-only policy, Owner/Manager allow, Staff/foreign denial,
   actor/source derivation, atomic rollback, bounded privacy payload and deterministic PostgreSQL
   contention remain regression requirements. No migration was added.
-- Menu option hard delete: **SELECTED NEXT / NOT IMPLEMENTED** under verdict
-  `IMPLEMENT_MENU_OPTION_DELETE_AUDIT_NEXT`; direct Mini App, direct Telegram and Telegram
-  normalization callers must become actor/source-bearing before this gap can close.
+- Menu option hard delete: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION HARD DELETE AUDIT / ATOMIC
+  BASE-PROFILE NORMALIZATION INCLUDED / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED
+  BEFORE COMMIT**. Direct Mini App, direct Telegram and atomic Telegram normalization are
+  actor/source-bearing; independent review, Actions, staging deploy and bounded smoke remain.
 - Dangerous action audit: `PARTIAL` until all listed dangerous actions have verified audit evidence.
 - Controlled Platform Guest QR test: **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / DONE / MVP / STAGING-SMOKE-PASSED**; schema verdict `NO_MIGRATION`, with the bounded role/privacy/exit regression complete.
 - Promotion lifecycle status audit: **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**; configuration/create audit and the broader dangerous-action audit remain future.
