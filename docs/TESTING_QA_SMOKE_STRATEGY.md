@@ -1,6 +1,6 @@
 # Testing / QA Smoke Strategy
 
-Дата актуализации: 2026-08-07.
+Дата актуализации: 2026-08-08.
 
 Статус: **current product reference / UPDATED**. This document is the canonical QA/smoke strategy for the Telegram bot + Mini App platform. It consolidates local validation, GitHub Actions expectations, area-specific smoke suites, staging policy, failure reporting and Codex handoff rules. Deployment and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
 
@@ -43,6 +43,10 @@ Current practice:
   OWNER/MANAGER use an own-venue local draft and one atomic availability batch; Staff individual
   stop-list policy is unchanged. GitHub Actions were green, staging deploy completed and the
   functional/UX manual smoke passed.
+- Menu item hard-delete audit is **DANGEROUS ACTION AUDIT SLICE / MENU ITEM HARD DELETE AUDIT /
+  DONE / MVP / STAGING-SMOKE-PASSED**. Green Actions for release HEAD `822233c`, staging deploy and
+  the bounded Mini App/Telegram blocked/allowed smoke are recorded complete; broader Menu and
+  Dangerous Action Audit coverage remains partial.
 - Catalog search/filter is
   **CATALOG SEARCH AND FILTER PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**. Focused
   `GuestVenueRoutesTest`, backend compile/lint, Mini App build, focused catalog/favorite browser
@@ -540,8 +544,8 @@ Guest availability/stale-cart rejection and Telegram stop-list parity.
 
 ### Menu Item Hard Delete Audit quality gate
 
-Status: **DANGEROUS ACTION AUDIT SLICE / MENU ITEM HARD DELETE AUDIT / FUNCTIONALLY PASSED ON
-STAGING / USER GUIDANCE POLISH IMPLEMENTED / REVIEW REQUIRED BEFORE COMMIT**.
+Status: **DANGEROUS ACTION AUDIT SLICE / MENU ITEM HARD DELETE AUDIT / DONE / MVP /
+STAGING-SMOKE-PASSED**.
 
 Regression must preserve this bounded contract:
 
@@ -595,6 +599,14 @@ CI=1 TZ=UTC MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke
 `PromotionConfigurationConcurrencyPostgresTest` remains inside the existing mandatory PostgreSQL
 CI step; no new class or decorative workflow is needed. Its XML must exist with tests `> 0`,
 `skipped=0`, `failures=0`, `errors=0`. Schema verdict is `NO_MIGRATION_EXPECTED`.
+
+Release closure evidence records fully green Actions after rerun of one failed backend job (without
+asserting an unverified root cause), staging deploy and passed smoke for exactly these scenarios:
+Owner/Manager allowed; Staff denied; Mini App fixed-reward block with actionable copy; Telegram
+fixed-reward block without generic DB error; blocked item/reward preserved with zero
+`MENU_ITEM_DELETED`; allowed CHOICE item removed while the remaining CHOICE item stayed; exactly one
+audit for the allowed delete; confirmation explained side effects/restriction; cancel sent no delete
+request; Guest menu and working data remained intact; cleanup completed normally.
 
 ## Venue Mini App Media Foundation Future Quality Gate
 
@@ -1506,11 +1518,10 @@ Telegram/staff-chat:
 - Guest Preview Phase 2.1: **VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY / DONE / MVP / STAGING-SMOKE-PASSED**.
 - Menu shift check: **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**; regression
   gates remain active.
-- Menu item hard-delete audit: **DANGEROUS ACTION AUDIT SLICE / MENU ITEM HARD DELETE AUDIT /
-  FUNCTIONALLY PASSED ON STAGING / USER GUIDANCE POLISH IMPLEMENTED / REVIEW REQUIRED BEFORE
-  COMMIT**; the guidance polish requires review, green Actions, deploy and repeat fixed-blocked plus
-  target/choice-allowed staging smoke. The existing mandatory PostgreSQL configuration class keeps
-  the config/delete race and non-skipped XML gate.
+- Menu item hard-delete audit: **DANGEROUS ACTION AUDIT SLICE / MENU ITEM HARD DELETE AUDIT / DONE /
+  MVP / STAGING-SMOKE-PASSED**. The existing mandatory PostgreSQL configuration class keeps the
+  config/delete race and non-skipped XML gate. Category/option delete, price/update/availability and
+  the broader audit program remain open.
 - Venue Promotions Current/Archived Tabs UX: **VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / DONE / MVP / STAGING-SMOKE-PASSED**.
 - Promotion lifecycle status audit: **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**; broader dangerous-action coverage remains partial.
 - Promotion creation audit: **DANGEROUS ACTION AUDIT SLICE / PROMOTION CREATION AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**; mandatory repository/route/Telegram and PostgreSQL gates remain regression requirements. Configuration edit, schedule/target/reward, media/banner and broader dangerous-action coverage remain open.
