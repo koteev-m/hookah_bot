@@ -1,8 +1,9 @@
 # Project Status
 
-Last verified: 2026-08-10 at `HEAD 9cf69d5` (`HEAD == origin/main`) with an uncommitted runtime
-implementation. **DANGEROUS ACTION AUDIT SLICE / MENU OPTION RENAME AUDIT / MVP IMPLEMENTED /
-LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+Last verified: 2026-08-10 at `HEAD a5a9daa` (`HEAD == origin/main`) with an uncommitted frontend
+implementation. **VENUE MENU MANAGEMENT UX STABILIZATION / MOBILE RESPONSIVENESS + PRICE INPUT
+ERGONOMICS + CONTEXT PRESERVATION / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED
+BEFORE COMMIT**.
 
 ## 1. Purpose and source-of-truth order
 
@@ -19,9 +20,10 @@ network-only GitHub failure, formatting-only commit or temporary local log.
 
 - Overall product, permission parity and dangerous-action audit remain `PARTIAL`; the whole product
   is not declared production-ready.
-- **DANGEROUS ACTION AUDIT SLICE / MENU OPTION RENAME AUDIT / MVP IMPLEMENTED / LOCAL VALIDATION
-  PASSED / REVIEW REQUIRED BEFORE COMMIT**. Green Actions, staging deploy and bounded staging smoke
-  remain required before release closure.
+- **VENUE MENU MANAGEMENT UX STABILIZATION / MOBILE RESPONSIVENESS + PRICE INPUT ERGONOMICS +
+  CONTEXT PRESERVATION / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE
+  COMMIT**. Green Actions, staging deploy and bounded Venue Menu smoke remain required before
+  release closure.
 - **DANGEROUS ACTION AUDIT SLICE / MENU OPTION HARD DELETE AUDIT / ATOMIC BASE-PROFILE
   NORMALIZATION INCLUDED / DONE / MVP / STAGING-SMOKE-PASSED**.
 - **DANGEROUS ACTION AUDIT SLICE / MENU ITEM HARD DELETE AUDIT / DONE / MVP /
@@ -38,8 +40,8 @@ network-only GitHub failure, formatting-only commit or temporary local log.
 
 ## 3. Recently completed blocks
 
-- Menu option rename audit: **MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE
-  COMMIT**. Mini App compound PATCH and Telegram rename share one transaction-bound repository
+- Menu option rename audit: **DONE / MVP / STAGING-SMOKE-PASSED**. Mini App compound PATCH and
+  Telegram rename share one transaction-bound repository
   writer. A real rename writes one safe `MENU_OPTION_RENAMED`; no-op/non-name/denied/collision/
   failed paths write none, and audit failure restores every co-submitted field. No migration.
 - Menu item hard-delete audit: **DONE / MVP / STAGING-SMOKE-PASSED**. Mini App/Telegram use one
@@ -73,32 +75,30 @@ and the duplicate `Продлить период` / `Редактировать`
 
 ## 4. Current bounded block
 
-Status: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION RENAME AUDIT / MVP IMPLEMENTED / LOCAL
-VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+Status: **VENUE MENU MANAGEMENT UX STABILIZATION / MOBILE RESPONSIVENESS + PRICE INPUT ERGONOMICS +
+CONTEXT PRESERVATION / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
 
-Runtime evidence: `VenueMenuRepository.updateOption` remains the sole option-name SQL writer. Venue Mini
-App compound PATCH and Telegram rename dialog are the two production callers. The repository
-uses one transaction with item then ascending-option locks, DB-current target reread and hookah
-canonical collision recheck. PostgreSQL coverage serializes rename with rename, canonical create,
-atomic normalization and direct delete. Historical orders store immutable option name/price snapshots; a future submit with
-the same live option id resolves current DB values.
+Bounded outcome: the Venue Menu editor uses responsive one-column cards below the narrow-screen
+breakpoint; no menu-management card, form, action or long Russian label may create horizontal
+document overflow. Item actions are grouped as availability/edit, options, then secondary/destructive
+actions. Item and option create/edit price inputs use labelled inline forms: new prices start empty;
+an existing `0` is selected only while the current value remains zero, so first keyboard input and
+paste replace it without reselecting a later edited value; blur-only zero remains unchanged. Current
+minor-unit parsing and server money semantics are unchanged.
 
-Bounded outcome: a real committed name change writes exactly one `MENU_OPTION_RENAMED` for
-`menu_item_option` / option id. Actor is the authenticated Mini App session user or current Telegram
-message user; source is server-owned `VENUE_MINI_APP` / `TELEGRAM_BOT`. Payload is exactly
-`venueId`, `itemId`, `optionId`, `oldName`, `newName`, `source`. Item/options locks, update and audit
-share one transaction; audit failure restores every co-submitted row field. Exact-name no-op,
-missing/repeated, denial/foreign, collision, SQL/audit failure and rollback write zero rename audit.
+Every successful menu mutation takes a category/item/option context snapshot, performs the existing
+authoritative GET, then restores the matching stable DOM anchor, scroll offset and logical focus only
+when no later real user scroll/focus/pointer/keyboard interaction superseded the snapshot. Success is
+announced in a live region owned by the current Menu screen. If a later interaction opens or edits
+another menu form, the authoritative render reopens that current stable-ID form and preserves its
+draft, caret/focus and visible context instead of applying the old mutation anchor. Create responses
+supply stable entity IDs; no name/price heuristic or API change is needed. Failures keep the inline
+values and show an adjacent live error. Screen disposal aborts/ignores late responses and clears
+context/success, so venue/account switches cannot restore old cards, focus, scroll or confirmation
+text.
 
-Preserve the compound Mini App request: name+price+availability may commit together, but this slice
-audits only a real rename. Price/availability-only updates write no rename audit. Telegram actor
-must not come from dialog-state fallback. Product roles, UI/responses, canonical set/normalization,
-historical snapshots and new-order current-value resolution stay unchanged.
-
-Schema verdict: **NO_MIGRATION**. Runtime files are `VenueMenuRepository.kt`, `VenueMenuRoutes.kt`
-and `TelegramBotRouter.kt`; focused repository/routes/Telegram tests, order/history regressions and
-the seven-test PostgreSQL option concurrency suite passed. Full contract and release gates remain
-in `docs/UPDATED_PRODUCT_AI_ROADMAP.md` section 12.
+Schema/backend verdict: **NO_BACKEND_CHANGE / NO_MIGRATION**. RBAC, audits, menu DTO/API semantics,
+normalization, Guest pricing/order snapshots and media remain unchanged.
 
 ## 5. Open blockers and non-blocking risks
 
@@ -115,8 +115,8 @@ in `docs/UPDATED_PRODUCT_AI_ROADMAP.md` section 12.
   an already-authorized mutation is not transaction-linearized. This slice adds no new privilege
   path; transaction-bound membership recheck remains separate hardening.
 - Option create/price/availability and item price/update audit, fuller item-delete rollback snapshot
-  coverage, dependency viewer and automatic fixed-reward replacement remain separate work. This
-  rename slice does not close the broader Menu or Dangerous Action Audit programs.
+  coverage, dependency viewer and automatic fixed-reward replacement remain separate work. This UX
+  stabilization does not close the broader Menu or Dangerous Action Audit programs.
 - Media stash was neither read nor applied during this handoff.
 
 ## 6. Important architecture/data constraints
@@ -151,29 +151,15 @@ git diff --cached --name-only
 Current block validation:
 
 ```bash
-./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VenueMenuRepositoryTest*' --console=plain
-./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VenueMenuRoutesTest*' --console=plain
-./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*TelegramBotRouterTableTokenTest*' --console=plain
-./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*GuestOrderRoutesTest*' --console=plain
-./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*GuestVisitRoutesTest*' --console=plain
-./gradlew --no-daemon --max-workers=1 :backend:app:test \
-  --tests '*GuestTableContextActivationPostgresTest*' \
-  --tests '*PromotionConfigurationConcurrencyPostgresTest*' \
-  --tests '*VenueStaffMutationConcurrencyPostgresTest*' \
-  --tests 'com.hookah.platform.backend.miniapp.venue.menu.VenueMenuOptionNormalizationConcurrencyPostgresTest' \
-  --console=plain
-./gradlew --no-daemon --max-workers=1 :backend:app:compileKotlin --console=plain
-./gradlew --no-daemon --max-workers=1 :backend:app:ktlintCheck --console=plain
 npm --prefix miniapp run build
 CI=1 TZ=UTC MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke
 ```
 
-Then use the canonical QA matrix for green Actions, staging deploy and bounded Mini App/Telegram
-rename RBAC/audit/privacy/concurrency/history smoke.
+Then use the canonical QA matrix for green Actions, staging deploy and bounded Venue Menu responsive,
+price-input, mutation-context, role and venue/account-switch smoke.
 
-Recorded local result: focused repository/routes/Telegram and Guest/order/history selectors,
-`compileKotlin`, `ktlintCheck`, Mini App build and Playwright `139/139` passed. Mandatory PostgreSQL
-XML is `8/0/0/0`, `14/0/0/0`, `2/0/0/0`, `7/0/0/0`.
+Recorded local result: Mini App build and the full deterministic Playwright smoke passed; backend
+production files did not change, so backend selectors were intentionally not run.
 
 ## 9. Canonical document map
 
@@ -194,17 +180,18 @@ XML is `8/0/0/0`, `14/0/0/0`, `2/0/0/0`, `7/0/0/0`.
 1. Check the active Goal/objective and stop on any mismatch required by the new task.
 2. Read this file, then `PRODUCT_SPEC`, `MENU_OPTIONS_STOPLIST`, `SECURITY_RBAC_MATRIX` and the
    relevant QA section; load historical audits only if evidence requires them.
-3. Independently review only the implemented menu-option rename audit diff and its two production
-   callers; preserve the current compound Mini App request.
-4. Re-run required CI, then staging deploy and bounded cross-surface smoke. Preserve direct-delete/
-   normalization, order snapshots, RBAC, item-then-option lock order and payload privacy; do not
-   broaden into option price/create/availability audit.
+3. Independently review the bounded Mini App menu diff and its responsive, price and context e2e
+   assertions; preserve existing compound menu mutation requests and API semantics.
+4. Re-run required CI, then staging deploy and bounded Venue Menu smoke. Preserve direct-delete/
+   normalization, order snapshots, RBAC and payload privacy; do not broaden into a menu audit or
+   media work.
 5. Do not touch stash or `scripts/dev/`; do not stage, commit, push or deploy without instruction.
 6. Update this handoff only if stage, blockers or next bounded block changes.
 
 ## 11. Last verified date
 
-2026-08-10. Menu option rename is locally implemented and validated but requires independent
-review before commit, then green Actions, staging deploy and bounded smoke. Menu item,
-empty-category and option hard-delete audits remain release-closed for their bounded contracts.
-The broader Menu and Dangerous Action Audit programs remain partial.
+2026-08-10. Menu option rename is functionally passed on staging and is not reopened by this frontend
+block. Venue Menu UX stabilization is locally validated but requires independent review before commit,
+then green Actions, staging deploy and bounded smoke. Menu item, empty-category and option hard-delete
+audits remain release-closed for their bounded contracts. The broader Menu and Dangerous Action Audit
+programs remain partial.

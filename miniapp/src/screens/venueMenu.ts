@@ -39,6 +39,7 @@ export type VenueMenuOptions = {
 
 type MenuRefs = {
   status: HTMLParagraphElement
+  success: HTMLParagraphElement
   error: HTMLDivElement
   errorTitle: HTMLHeadingElement
   errorMessage: HTMLParagraphElement
@@ -315,6 +316,11 @@ function buildMenuDom(root: HTMLDivElement, canShiftCheck: boolean): MenuRefs {
   append(editingDetails, editingSummary, editingBody)
 
   const status = el('p', { className: 'status', text: '' })
+  const success = el('p', { className: 'venue-menu-success', text: '' })
+  success.setAttribute('role', 'status')
+  success.setAttribute('aria-live', 'polite')
+  success.setAttribute('aria-atomic', 'true')
+  success.hidden = true
 
   const error = el('div', { className: 'error-card' })
   error.hidden = true
@@ -326,11 +332,12 @@ function buildMenuDom(root: HTMLDivElement, canShiftCheck: boolean): MenuRefs {
 
   const shiftCheck = canShiftCheck ? buildShiftCheckDom() : null
 
-  append(wrapper, title, status, error, editingDetails, shiftCheck?.details)
+  append(wrapper, title, status, success, error, editingDetails, shiftCheck?.details)
   root.replaceChildren(wrapper)
 
   return {
     status,
+    success,
     error,
     errorTitle,
     errorMessage,
@@ -389,8 +396,8 @@ function getOptionCopy(isHookah: boolean) {
     addButton: isHookah ? 'Добавить вкус' : 'Добавить опцию',
     editButton: isHookah ? 'Править вкус' : 'Править опцию',
     deleteButton: isHookah ? 'Удалить вкус' : 'Удалить опцию',
-    namePrompt: isHookah ? 'Название вкуса' : 'Название опции',
-    pricePrompt: isHookah ? 'Доплата к вкусу, ₽' : 'Доплата к опции, ₽',
+    nameLabel: isHookah ? 'Название вкуса' : 'Название опции',
+    priceLabel: isHookah ? 'Доплата к вкусу, ₽' : 'Доплата к опции, ₽',
     deleteConfirm: isHookah ? 'Удалить вкус?' : 'Удалить опцию?',
     emptyText: 'Добавьте вкусы, чтобы гости выбирали их при заказе.',
     addedToast: isHookah ? 'Вкус добавлен' : 'Опция добавлена',
@@ -401,6 +408,92 @@ function getOptionCopy(isHookah: boolean) {
   }
 }
 
+type MutationFailureHandler = (message: string) => void
+
+type MenuMutationHandlers = {
+  onEditItem: (
+    item: VenueMenuItemDto,
+    name: string,
+    priceMinor: number,
+    onFailure?: MutationFailureHandler
+  ) => void
+  onDeleteItem: (item: VenueMenuItemDto, onFailure?: MutationFailureHandler) => void
+  onSetItemAvailability: (
+    item: VenueMenuItemDto,
+    isAvailable: boolean,
+    onFailure?: MutationFailureHandler
+  ) => void
+  onMoveItem: (item: VenueMenuItemDto, direction: 'up' | 'down', onFailure?: MutationFailureHandler) => void
+  onCreateOption: (
+    item: VenueMenuItemDto,
+    name: string,
+    priceDeltaMinor: number,
+    onFailure?: MutationFailureHandler
+  ) => void
+  onApplyBaseFlavorProfiles: (item: VenueMenuItemDto, onFailure?: MutationFailureHandler) => void
+  onEditOption: (
+    option: VenueMenuOptionDto,
+    name: string,
+    priceDeltaMinor: number,
+    onFailure?: MutationFailureHandler
+  ) => void
+  onDeleteOption: (option: VenueMenuOptionDto, onFailure?: MutationFailureHandler) => void
+  onSetOptionAvailability: (
+    option: VenueMenuOptionDto,
+    isAvailable: boolean,
+    onFailure?: MutationFailureHandler
+  ) => void
+}
+
+function buildField(labelText: string, placeholder: string, value = '') {
+  const field = el('label', { className: 'venue-menu-field' })
+  const label = el('span', { className: 'venue-menu-field-label', text: labelText })
+  const input = document.createElement('input')
+  input.className = 'venue-input'
+  input.placeholder = placeholder
+  input.value = value
+  append(field, label, input)
+  return { field, input }
+}
+
+function buildPriceField(labelText: string, placeholder: string, value = '') {
+  const { field, input } = buildField(labelText, placeholder, value)
+  input.inputMode = 'decimal'
+  input.autocomplete = 'off'
+  input.setAttribute('data-menu-price-input', 'true')
+  if (value === '0') {
+    input.addEventListener('focus', () => {
+      if (input.value === '0') input.select()
+    })
+  }
+  return { field, input }
+}
+
+function buildMutationFeedback() {
+  const feedback = el('p', { className: 'venue-menu-mutation-feedback', text: '' })
+  feedback.setAttribute('role', 'status')
+  feedback.setAttribute('aria-live', 'polite')
+  feedback.hidden = true
+  return feedback
+}
+
+function showMutationFeedback(target: HTMLElement, message: string) {
+  target.textContent = message
+  target.hidden = false
+}
+
+function focusConnectedMenuTarget(...targets: Array<HTMLElement | null>) {
+  const target = targets.find((candidate) => candidate?.isConnected)
+  target?.focus({ preventScroll: true })
+}
+
+function focusMenuControl(scope: HTMLElement, control: string, fallbackSelector: string) {
+  focusConnectedMenuTarget(
+    scope.querySelector<HTMLElement>(`[data-menu-control="${control}"]`),
+    scope.querySelector<HTMLElement>(fallbackSelector)
+  )
+}
+
 function renderOptionRow(
   option: VenueMenuOptionDto,
   itemName: string,
@@ -408,76 +501,102 @@ function renderOptionRow(
   canManage: boolean,
   canManageAvailability: boolean,
   copy: ReturnType<typeof getOptionCopy>,
-  handlers: {
-    onEditOption: (option: VenueMenuOptionDto, name: string, priceDeltaMinor: number) => void
-    onDeleteOption: (option: VenueMenuOptionDto) => void
-    onSetOptionAvailability: (option: VenueMenuOptionDto, isAvailable: boolean) => void
-  }
+  handlers: Pick<MenuMutationHandlers, 'onEditOption' | 'onDeleteOption' | 'onSetOptionAvailability'>
 ) {
   const row = el('div', { className: 'venue-menu-option' })
   row.dataset.optionId = String(option.id)
-  const info = el('div', { className: 'venue-menu-option-info' })
-  const name = el('span', { text: option.name })
-  append(info, name)
-  const price = formatOptionPrice(option, currency)
-  if (price) {
-    info.appendChild(el('span', { className: 'venue-menu-item-price', text: price }))
-  }
-  if (!option.isAvailable) {
-    info.appendChild(el('span', { className: 'menu-item-badge', text: 'Стоп-лист' }))
+  const feedback = buildMutationFeedback()
+
+  const renderReadOnly = () => {
+    const info = el('div', { className: 'venue-menu-option-info' })
+    const name = el('span', { text: option.name })
+    name.dataset.menuFocus = 'true'
+    name.tabIndex = -1
+    append(info, name)
+    const price = formatOptionPrice(option, currency)
+    if (price) info.appendChild(el('span', { className: 'venue-menu-item-price', text: price }))
+    if (!option.isAvailable) info.appendChild(el('span', { className: 'menu-item-badge', text: 'Стоп-лист' }))
+
+    const actions = el('div', { className: 'venue-menu-option-actions' })
+    if (canManageAvailability) {
+      const availabilityLabel = el('label', { className: 'venue-menu-option-toggle' })
+      const availabilityInput = document.createElement('input')
+      const availabilityText = el('span', {
+        text: option.isAvailable ? 'Доступен гостям' : 'В стоп-листе'
+      })
+      availabilityInput.type = 'checkbox'
+      availabilityInput.checked = option.isAvailable
+      availabilityInput.dataset.menuControl = 'option-availability'
+      availabilityInput.setAttribute(
+        'aria-label',
+        option.isAvailable
+          ? `Доступен гостям: вариант ${option.name} для ${itemName}`
+          : `В стоп-листе: вариант ${option.name} для ${itemName}`
+      )
+      availabilityInput.addEventListener('change', () => {
+        availabilityInput.disabled = true
+        handlers.onSetOptionAvailability(option, availabilityInput.checked, (message) => {
+          availabilityInput.checked = option.isAvailable
+          availabilityInput.disabled = false
+          showMutationFeedback(feedback, message)
+        })
+      })
+      append(availabilityLabel, availabilityInput, availabilityText)
+      actions.appendChild(availabilityLabel)
+    }
+
+    if (canManage) {
+      const editButton = el('button', { className: 'button-small', text: copy.editButton }) as HTMLButtonElement
+      const deleteButton = el('button', {
+        className: 'button-small button-danger',
+        text: copy.deleteButton
+      }) as HTMLButtonElement
+      editButton.dataset.menuControl = 'option-edit'
+      deleteButton.dataset.menuControl = 'option-delete'
+      editButton.addEventListener('click', renderEditForm)
+      deleteButton.addEventListener('click', () => {
+        if (!window.confirm(copy.deleteConfirm)) return
+        handlers.onDeleteOption(option, (message) => showMutationFeedback(feedback, message))
+      })
+      append(actions, editButton, deleteButton)
+    }
+    row.replaceChildren(info, actions, feedback)
   }
 
-  const actions = el('div', { className: 'venue-menu-option-actions' })
-
-  if (canManageAvailability) {
-    const availabilityLabel = el('label', { className: 'venue-menu-option-toggle' })
-    const availabilityInput = document.createElement('input')
-    const availabilityText = el('span', {
-      text: option.isAvailable ? 'Доступен гостям' : 'В стоп-листе'
+  const renderEditForm = () => {
+    const form = el('form', { className: 'venue-menu-inline-form venue-menu-option-edit-form' })
+    const name = buildField(copy.nameLabel, copy.nameLabel, option.name)
+    const price = buildPriceField(copy.priceLabel, 'Например 150', String(option.priceDeltaMinor / 100))
+    const actions = el('div', { className: 'venue-inline-actions' })
+    const save = el('button', { className: 'button-small', text: 'Сохранить' }) as HTMLButtonElement
+    const cancel = el('button', {
+      className: 'button-small button-secondary',
+      text: 'Отменить'
+    }) as HTMLButtonElement
+    save.type = 'submit'
+    cancel.type = 'button'
+    cancel.addEventListener('click', () => {
+      renderReadOnly()
+      focusMenuControl(row, 'option-edit', '[data-menu-focus="true"]')
     })
-    availabilityInput.type = 'checkbox'
-    availabilityInput.checked = option.isAvailable
-    availabilityInput.setAttribute(
-      'aria-label',
-      option.isAvailable
-        ? `Доступен гостям: вариант ${option.name} для ${itemName}`
-        : `В стоп-листе: вариант ${option.name} для ${itemName}`
-    )
-    availabilityInput.addEventListener('change', () => {
-      availabilityInput.disabled = true
-      handlers.onSetOptionAvailability(option, availabilityInput.checked)
-    })
-    append(availabilityLabel, availabilityInput, availabilityText)
-    actions.appendChild(availabilityLabel)
-  }
-
-  if (canManage) {
-    const editButton = el('button', { className: 'button-small', text: copy.editButton }) as HTMLButtonElement
-    const deleteButton = el('button', { className: 'button-small button-secondary', text: copy.deleteButton }) as HTMLButtonElement
-    editButton.addEventListener('click', () => {
-      const nextName = window.prompt(copy.namePrompt, option.name)
-      if (nextName === null) return
-      const trimmed = nextName.trim()
-      const priceRaw = window.prompt(copy.pricePrompt, String(option.priceDeltaMinor / 100))
-      if (priceRaw === null) return
-      const priceDeltaMinor = parseOptionPriceDeltaMinor(priceRaw)
+    form.addEventListener('submit', (event) => {
+      event.preventDefault()
+      const priceDeltaMinor = parseOptionPriceDeltaMinor(price.input.value)
+      const trimmed = name.input.value.trim()
       if (!trimmed || priceDeltaMinor === null) {
-        showToast('Проверьте название и доплату')
+        showMutationFeedback(feedback, 'Проверьте название и доплату.')
         return
       }
-      handlers.onEditOption(option, trimmed, priceDeltaMinor)
+      feedback.hidden = true
+      handlers.onEditOption(option, trimmed, priceDeltaMinor, (message) => showMutationFeedback(feedback, message))
     })
-    deleteButton.addEventListener('click', () => {
-      if (!window.confirm(copy.deleteConfirm)) return
-      handlers.onDeleteOption(option)
-    })
-    append(actions, editButton, deleteButton)
+    append(form, name.field, price.field, actions)
+    append(actions, save, cancel)
+    row.replaceChildren(form, feedback)
+    name.input.focus()
   }
 
-  append(row, info)
-  if (actions.childElementCount > 0) {
-    row.appendChild(actions)
-  }
+  renderReadOnly()
   return row
 }
 
@@ -485,15 +604,7 @@ function renderItemRow(
   item: VenueMenuItemDto,
   canManage: boolean,
   canManageAvailability: boolean,
-  onEdit: (item: VenueMenuItemDto) => void,
-  onDelete: (item: VenueMenuItemDto) => void,
-  onSetItemAvailability: (item: VenueMenuItemDto, isAvailable: boolean) => void,
-  onMove: (item: VenueMenuItemDto, direction: 'up' | 'down') => void,
-  onCreateOption: (item: VenueMenuItemDto, name: string, priceDeltaMinor: number) => void,
-  onApplyBaseFlavorProfiles: (item: VenueMenuItemDto) => void,
-  onEditOption: (option: VenueMenuOptionDto, name: string, priceDeltaMinor: number) => void,
-  onDeleteOption: (option: VenueMenuOptionDto) => void,
-  onSetOptionAvailability: (option: VenueMenuOptionDto, isAvailable: boolean) => void
+  handlers: MenuMutationHandlers
 ) {
   const itemOptions = getScopedOptions(item)
   const isHookah = isHookahMenuItem(item)
@@ -504,99 +615,189 @@ function renderItemRow(
 
   const row = el('div', { className: 'venue-menu-item' })
   row.dataset.itemId = String(item.id)
-  const info = el('div', { className: 'venue-menu-item-info' })
-  const name = el('strong', { text: item.name })
-  const price = el('span', { className: 'venue-menu-item-price', text: formatPrice(item.priceMinor, item.currency) })
-  append(info, name, price)
-  if (!item.isAvailable) {
-    info.appendChild(el('span', { className: 'menu-item-badge', text: 'Стоп-лист' }))
+  const feedback = buildMutationFeedback()
+
+  const renderReadOnly = () => {
+    const info = el('div', { className: 'venue-menu-item-info' })
+    const price = el('span', {
+      className: 'venue-menu-item-price',
+      text: formatPrice(item.priceMinor, item.currency)
+    })
+    const name = el('strong', { text: item.name })
+    name.dataset.menuFocus = 'true'
+    name.tabIndex = -1
+    name.setAttribute('role', 'heading')
+    name.setAttribute('aria-level', '4')
+    append(info, name, price)
+    if (!item.isAvailable) info.appendChild(el('span', { className: 'menu-item-badge', text: 'Стоп-лист' }))
+
+    const primaryActions = el('div', { className: 'venue-menu-item-actions venue-menu-item-primary-actions' })
+    if (canManageAvailability) {
+      const availabilityLabel = el('label', { className: 'venue-menu-option-toggle' })
+      const availabilityInput = document.createElement('input')
+      const availabilityText = el('span', {
+        text: item.isAvailable ? 'Доступно гостям' : 'В стоп-листе'
+      })
+      availabilityInput.type = 'checkbox'
+      availabilityInput.checked = item.isAvailable
+      availabilityInput.dataset.menuControl = 'item-availability'
+      availabilityInput.setAttribute(
+        'aria-label',
+        item.isAvailable ? `Доступно гостям: ${item.name}` : `В стоп-листе: ${item.name}`
+      )
+      availabilityInput.addEventListener('change', () => {
+        availabilityInput.disabled = true
+        handlers.onSetItemAvailability(item, availabilityInput.checked, (message) => {
+          availabilityInput.checked = item.isAvailable
+          availabilityInput.disabled = false
+          showMutationFeedback(feedback, message)
+        })
+      })
+      append(availabilityLabel, availabilityInput, availabilityText)
+      primaryActions.appendChild(availabilityLabel)
+    }
+    if (canManage) {
+      const editButton = el('button', { className: 'button-small', text: 'Править позицию' }) as HTMLButtonElement
+      editButton.dataset.menuControl = 'item-edit'
+      editButton.addEventListener('click', renderEditForm)
+      primaryActions.appendChild(editButton)
+    }
+
+    const optionSection = shouldRenderOptions
+      ? renderOptionSection()
+      : null
+    const secondaryActions = el('div', { className: 'venue-menu-item-actions venue-menu-item-secondary-actions' })
+    if (canManage) {
+      const upButton = el('button', { className: 'button-small button-secondary', text: '↑' }) as HTMLButtonElement
+      const downButton = el('button', { className: 'button-small button-secondary', text: '↓' }) as HTMLButtonElement
+      const deleteButton = el('button', {
+        className: 'button-small button-danger',
+        text: 'Удалить'
+      }) as HTMLButtonElement
+      upButton.dataset.menuControl = 'item-move-up'
+      downButton.dataset.menuControl = 'item-move-down'
+      deleteButton.dataset.menuControl = 'item-delete'
+      upButton.addEventListener('click', () => handlers.onMoveItem(item, 'up', (message) => showMutationFeedback(feedback, message)))
+      downButton.addEventListener('click', () => handlers.onMoveItem(item, 'down', (message) => showMutationFeedback(feedback, message)))
+      deleteButton.addEventListener('click', () => handlers.onDeleteItem(item, (message) => showMutationFeedback(feedback, message)))
+      append(secondaryActions, upButton, downButton, deleteButton)
+    }
+
+    row.replaceChildren(info, primaryActions)
+    if (optionSection) row.appendChild(optionSection)
+    append(row, secondaryActions, feedback)
   }
-  if (shouldRenderOptions) {
+
+  const renderOptionSection = () => {
     const optionSection = el('div', { className: 'venue-menu-option-section' })
     const optionHeader = el('div', { className: 'venue-menu-option-header' })
-    const optionsTitle = el('span', { className: 'venue-menu-options-title', text: optionCopy.title })
-    optionHeader.appendChild(optionsTitle)
+    optionHeader.appendChild(el('span', { className: 'venue-menu-options-title', text: optionCopy.title }))
+    const addActions = el('div', { className: 'venue-inline-actions' })
     if (canApplyBaseFlavorProfiles) {
       const applyBaseButton = el('button', { className: 'button-small', text: 'Добавить базовые вкусы' }) as HTMLButtonElement
-      applyBaseButton.addEventListener('click', () => {
-        onApplyBaseFlavorProfiles(item)
-      })
-      optionHeader.appendChild(applyBaseButton)
+      applyBaseButton.dataset.menuControl = 'item-add-base-flavors'
+      applyBaseButton.addEventListener('click', () =>
+        handlers.onApplyBaseFlavorProfiles(item, (message) => showMutationFeedback(feedback, message))
+      )
+      addActions.appendChild(applyBaseButton)
     }
+    let addForm: HTMLFormElement | null = null
     if (canAddOptions) {
       const addOptionButton = el('button', { className: 'button-small', text: optionCopy.addButton }) as HTMLButtonElement
+      addOptionButton.type = 'button'
+      addOptionButton.dataset.menuControl = 'item-create-option'
       addOptionButton.addEventListener('click', () => {
-        const nextName = window.prompt(optionCopy.namePrompt, '')
-        if (nextName === null) return
-        const trimmed = nextName.trim()
-        const priceRaw = window.prompt(optionCopy.pricePrompt, '0')
-        if (priceRaw === null) return
-        const priceDeltaMinor = parseOptionPriceDeltaMinor(priceRaw)
-        if (!trimmed || priceDeltaMinor === null) {
-          showToast('Проверьте название и доплату')
+        if (addForm) {
+          addForm.hidden = !addForm.hidden
+          if (!addForm.hidden) addForm.querySelector<HTMLInputElement>('input')?.focus()
           return
         }
-        onCreateOption(item, trimmed, priceDeltaMinor)
+        addForm = el('form', { className: 'venue-menu-inline-form venue-menu-option-create-form' })
+        const name = buildField(optionCopy.nameLabel, optionCopy.nameLabel)
+        const price = buildPriceField(optionCopy.priceLabel, 'Например 150')
+        const formActions = el('div', { className: 'venue-inline-actions' })
+        const save = el('button', { className: 'button-small', text: optionCopy.addButton }) as HTMLButtonElement
+        const cancel = el('button', {
+          className: 'button-small button-secondary',
+          text: 'Отменить'
+        }) as HTMLButtonElement
+        save.type = 'submit'
+        cancel.type = 'button'
+        cancel.addEventListener('click', () => {
+          if (addForm) addForm.hidden = true
+          focusConnectedMenuTarget(
+            addOptionButton,
+            row.querySelector<HTMLElement>('[data-menu-focus="true"]')
+          )
+        })
+        addForm.addEventListener('submit', (event) => {
+          event.preventDefault()
+          const priceDeltaMinor = parseOptionPriceDeltaMinor(price.input.value)
+          const trimmed = name.input.value.trim()
+          if (!trimmed || priceDeltaMinor === null) {
+            showMutationFeedback(feedback, 'Проверьте название и доплату.')
+            return
+          }
+          feedback.hidden = true
+          handlers.onCreateOption(item, trimmed, priceDeltaMinor, (message) => showMutationFeedback(feedback, message))
+        })
+        append(formActions, save, cancel)
+        append(addForm, name.field, price.field, formActions)
+        optionSection.insertBefore(addForm, optionsList)
+        name.input.focus()
       })
-      optionHeader.appendChild(addOptionButton)
+      addActions.appendChild(addOptionButton)
     }
+    if (addActions.childElementCount > 0) optionHeader.appendChild(addActions)
+
     const optionsList = el('div', { className: 'venue-menu-options' })
     if (!itemOptions.length) {
       optionsList.appendChild(el('p', { className: 'venue-empty', text: optionCopy.emptyText }))
     } else {
       itemOptions.forEach((option) => {
         optionsList.appendChild(
-          renderOptionRow(option, item.name, item.currency, canManage, canManageAvailability, optionCopy, {
-            onEditOption,
-            onDeleteOption,
-            onSetOptionAvailability
-          })
+          renderOptionRow(option, item.name, item.currency, canManage, canManageAvailability, optionCopy, handlers)
         )
       })
     }
     append(optionSection, optionHeader, optionsList)
-    info.appendChild(optionSection)
+    return optionSection
   }
 
-  const actions = el('div', { className: 'venue-menu-item-actions' })
-  const editButton = el('button', { className: 'button-small', text: 'Править позицию' }) as HTMLButtonElement
-  const deleteButton = el('button', { className: 'button-small button-secondary', text: 'Удалить' }) as HTMLButtonElement
-  const upButton = el('button', { className: 'button-small button-secondary', text: '↑' }) as HTMLButtonElement
-  const downButton = el('button', { className: 'button-small button-secondary', text: '↓' }) as HTMLButtonElement
-
-  editButton.addEventListener('click', () => onEdit(item))
-  deleteButton.addEventListener('click', () => onDelete(item))
-  upButton.addEventListener('click', () => onMove(item, 'up'))
-  downButton.addEventListener('click', () => onMove(item, 'down'))
-
-  if (canManageAvailability) {
-    const availabilityLabel = el('label', { className: 'venue-menu-option-toggle' })
-    const availabilityInput = document.createElement('input')
-    const availabilityText = el('span', {
-      text: item.isAvailable ? 'Доступно гостям' : 'В стоп-листе'
+  const renderEditForm = () => {
+    const form = el('form', { className: 'venue-menu-inline-form venue-menu-item-edit-form' })
+    const name = buildField('Название позиции', 'Название позиции', item.name)
+    const price = buildPriceField('Цена, ₽', 'Например 350', String(item.priceMinor / 100))
+    const actions = el('div', { className: 'venue-inline-actions' })
+    const save = el('button', { className: 'button-small', text: 'Сохранить' }) as HTMLButtonElement
+    const cancel = el('button', {
+      className: 'button-small button-secondary',
+      text: 'Отменить'
+    }) as HTMLButtonElement
+    save.type = 'submit'
+    cancel.type = 'button'
+    cancel.addEventListener('click', () => {
+      renderReadOnly()
+      focusMenuControl(row, 'item-edit', '[data-menu-focus="true"]')
     })
-    availabilityInput.type = 'checkbox'
-    availabilityInput.checked = item.isAvailable
-    availabilityInput.setAttribute(
-      'aria-label',
-      item.isAvailable ? `Доступно гостям: ${item.name}` : `В стоп-листе: ${item.name}`
-    )
-    availabilityInput.addEventListener('change', () => {
-      availabilityInput.disabled = true
-      onSetItemAvailability(item, availabilityInput.checked)
+    form.addEventListener('submit', (event) => {
+      event.preventDefault()
+      const priceMinor = parsePriceMinor(price.input.value)
+      const trimmed = name.input.value.trim()
+      if (!trimmed || priceMinor === null) {
+        showMutationFeedback(feedback, 'Заполните название и цену.')
+        return
+      }
+      feedback.hidden = true
+      handlers.onEditItem(item, trimmed, priceMinor, (message) => showMutationFeedback(feedback, message))
     })
-    append(availabilityLabel, availabilityInput, availabilityText)
-    actions.appendChild(availabilityLabel)
+    append(actions, save, cancel)
+    append(form, name.field, price.field, actions)
+    row.replaceChildren(form, feedback)
+    name.input.focus()
   }
 
-  if (canManage) {
-    append(actions, editButton, upButton, downButton, deleteButton)
-  }
-  if (actions.childElementCount > 0) {
-    append(row, info, actions)
-  } else {
-    append(row, info)
-  }
+  renderReadOnly()
   return row
 }
 
@@ -607,26 +808,29 @@ function renderCategoryCard(
   expanded: boolean,
   handlers: {
     onExpandedChange: (categoryId: number, expanded: boolean) => void
-    onRename: (category: VenueMenuCategoryDto) => void
-    onDelete: (category: VenueMenuCategoryDto) => void
-    onMoveCategory: (category: VenueMenuCategoryDto, direction: 'up' | 'down') => void
-    onCreateItem: (category: VenueMenuCategoryDto, name: string, priceMinor: number, currency: string) => void
-    onEditItem: (item: VenueMenuItemDto) => void
-    onDeleteItem: (item: VenueMenuItemDto) => void
-    onSetItemAvailability: (item: VenueMenuItemDto, isAvailable: boolean) => void
-    onMoveItem: (item: VenueMenuItemDto, direction: 'up' | 'down') => void
-    onCreateOption: (item: VenueMenuItemDto, name: string, priceDeltaMinor: number) => void
-    onApplyBaseFlavorProfiles: (item: VenueMenuItemDto) => void
-    onEditOption: (option: VenueMenuOptionDto, name: string, priceDeltaMinor: number) => void
-    onDeleteOption: (option: VenueMenuOptionDto) => void
-    onSetOptionAvailability: (option: VenueMenuOptionDto, isAvailable: boolean) => void
-  }
+    onRename: (category: VenueMenuCategoryDto, name: string, onFailure?: MutationFailureHandler) => void
+    onDelete: (category: VenueMenuCategoryDto, onFailure?: MutationFailureHandler) => void
+    onMoveCategory: (
+      category: VenueMenuCategoryDto,
+      direction: 'up' | 'down',
+      onFailure?: MutationFailureHandler
+    ) => void
+    onCreateItem: (
+      category: VenueMenuCategoryDto,
+      name: string,
+      priceMinor: number,
+      currency: string,
+      onFailure?: MutationFailureHandler
+    ) => void
+  } & MenuMutationHandlers
 ) {
   const card = el('details', { className: 'venue-menu-category' })
   card.dataset.categoryId = String(category.id)
   card.open = expanded
   card.addEventListener('toggle', () => handlers.onExpandedChange(category.id, card.open))
   const summary = el('summary', { className: 'venue-menu-category-summary' })
+  summary.dataset.menuControl = 'category-summary'
+  summary.dataset.menuCategorySummary = String(category.id)
   const title = el('span', { className: 'venue-menu-category-title', text: category.name })
   title.setAttribute('role', 'heading')
   title.setAttribute('aria-level', '3')
@@ -639,22 +843,72 @@ function renderCategoryCard(
   const body = el('div', { className: 'venue-menu-category-body' })
   const header = el('div', { className: 'venue-menu-category-toolbar' })
   const controls = el('div', { className: 'venue-inline-actions' })
+  const feedback = buildMutationFeedback()
   const renameButton = el('button', { className: 'button-small', text: 'Переименовать' }) as HTMLButtonElement
-  const deleteButton = el('button', { className: 'button-small button-secondary', text: 'Удалить' }) as HTMLButtonElement
+  const deleteButton = el('button', { className: 'button-small button-danger', text: 'Удалить' }) as HTMLButtonElement
   const upButton = el('button', { className: 'button-small button-secondary', text: '↑' }) as HTMLButtonElement
   const downButton = el('button', { className: 'button-small button-secondary', text: '↓' }) as HTMLButtonElement
+  renameButton.dataset.menuControl = 'category-rename'
+  deleteButton.dataset.menuControl = 'category-delete'
+  upButton.dataset.menuControl = 'category-move-up'
+  downButton.dataset.menuControl = 'category-move-down'
 
-  renameButton.addEventListener('click', () => handlers.onRename(category))
-  deleteButton.addEventListener('click', () => handlers.onDelete(category))
-  upButton.addEventListener('click', () => handlers.onMoveCategory(category, 'up'))
-  downButton.addEventListener('click', () => handlers.onMoveCategory(category, 'down'))
+  let renameForm: HTMLFormElement | null = null
+
+  const list = el('div', { className: 'venue-menu-items' })
+  const showRenameForm = () => {
+    if (renameForm) {
+      renameForm.hidden = false
+      renameForm.querySelector<HTMLInputElement>('input')?.focus()
+      return
+    }
+    renameForm = el('form', { className: 'venue-menu-inline-form venue-menu-category-rename-form' })
+    const name = buildField('Название категории', 'Название категории', category.name)
+    const actions = el('div', { className: 'venue-inline-actions' })
+    const save = el('button', { className: 'button-small', text: 'Сохранить' }) as HTMLButtonElement
+    const cancel = el('button', {
+      className: 'button-small button-secondary',
+      text: 'Отменить'
+    }) as HTMLButtonElement
+    save.type = 'submit'
+    cancel.type = 'button'
+    cancel.addEventListener('click', () => {
+      if (renameForm) renameForm.hidden = true
+      focusConnectedMenuTarget(renameButton, summary)
+    })
+    renameForm.addEventListener('submit', (event) => {
+      event.preventDefault()
+      const trimmed = name.input.value.trim()
+      if (!trimmed) {
+        showMutationFeedback(feedback, 'Имя не может быть пустым.')
+        return
+      }
+      feedback.hidden = true
+      handlers.onRename(category, trimmed, (message) => showMutationFeedback(feedback, message))
+    })
+    append(actions, save, cancel)
+    append(renameForm, name.field, actions)
+    body.insertBefore(renameForm, list)
+    name.input.focus()
+  }
+
+  renameButton.addEventListener('click', showRenameForm)
+  deleteButton.addEventListener('click', () => {
+    if (!window.confirm('Удалить категорию? Она должна быть пустой.')) return
+    handlers.onDelete(category, (message) => showMutationFeedback(feedback, message))
+  })
+  upButton.addEventListener('click', () =>
+    handlers.onMoveCategory(category, 'up', (message) => showMutationFeedback(feedback, message))
+  )
+  downButton.addEventListener('click', () =>
+    handlers.onMoveCategory(category, 'down', (message) => showMutationFeedback(feedback, message))
+  )
 
   if (canManage) {
     append(controls, renameButton, upButton, downButton, deleteButton)
     header.appendChild(controls)
   }
 
-  const list = el('div', { className: 'venue-menu-items' })
   if (!category.items.length) {
     list.appendChild(el('p', { className: 'venue-empty', text: 'Пусто.' }))
   }
@@ -664,43 +918,35 @@ function renderCategoryCard(
         item,
         canManage,
         canManageAvailability,
-        handlers.onEditItem,
-        handlers.onDeleteItem,
-        handlers.onSetItemAvailability,
-          handlers.onMoveItem,
-          handlers.onCreateOption,
-          handlers.onApplyBaseFlavorProfiles,
-          handlers.onEditOption,
-          handlers.onDeleteOption,
-        handlers.onSetOptionAvailability
+        handlers
       )
     )
   })
 
-  const createRow = el('div', { className: 'venue-form-row' })
-  const nameInput = document.createElement('input')
-  nameInput.className = 'venue-input'
-  nameInput.placeholder = 'Название позиции'
-  const priceInput = document.createElement('input')
-  priceInput.className = 'venue-input'
-  priceInput.type = 'text'
-  priceInput.placeholder = 'Цена (например 350)'
+  const createRow = el('form', { className: 'venue-form-row venue-menu-item-create-form' })
+  const name = buildField('Название позиции', 'Название позиции')
+  const price = buildPriceField('Цена, ₽', 'Например 350')
   const currencySelect = document.createElement('select')
   currencySelect.className = 'venue-select'
+  currencySelect.setAttribute('aria-label', 'Валюта новой позиции')
   currencySelect.appendChild(new Option(DEFAULT_CURRENCY, DEFAULT_CURRENCY))
   const createButton = el('button', { className: 'button-small', text: 'Добавить позицию' }) as HTMLButtonElement
-  createButton.addEventListener('click', () => {
-    const priceMinor = parsePriceMinor(priceInput.value)
-    const trimmed = nameInput.value.trim()
+  const createFeedback = buildMutationFeedback()
+  createButton.type = 'submit'
+  createRow.addEventListener('submit', (event) => {
+    event.preventDefault()
+    const priceMinor = parsePriceMinor(price.input.value)
+    const trimmed = name.input.value.trim()
     if (!trimmed || priceMinor === null) {
-      showToast('Заполните название и цену')
+      showMutationFeedback(createFeedback, 'Заполните название и цену.')
       return
     }
-    handlers.onCreateItem(category, trimmed, priceMinor, currencySelect.value)
-    nameInput.value = ''
-    priceInput.value = ''
+    createFeedback.hidden = true
+    handlers.onCreateItem(category, trimmed, priceMinor, currencySelect.value, (message) =>
+      showMutationFeedback(createFeedback, message)
+    )
   })
-  append(createRow, nameInput, priceInput, currencySelect, createButton)
+  append(createRow, name.field, price.field, currencySelect, createButton, createFeedback)
 
   if (canManage) {
     body.appendChild(header)
@@ -709,6 +955,7 @@ function renderCategoryCard(
   if (canManage) {
     body.appendChild(createRow)
   }
+  body.appendChild(feedback)
   append(card, summary, body)
   return card
 }
@@ -728,6 +975,11 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
   let loadAbort: AbortController | null = null
   let confirmAbort: AbortController | null = null
   let loadSeq = 0
+  let interactionGeneration = 0
+  let restoreGeneration = 0
+  let programmaticRestoreDepth = 0
+  let programmaticScrollPosition: { x: number; y: number } | null = null
+  let activeInteractionScrollFrame: number | null = null
   let menu: VenueMenuCategoryDto[] = []
   let shiftFilter: ShiftCheckFilter = 'all'
   let shiftSearch = ''
@@ -748,6 +1000,29 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
 
   const setStatus = (text: string) => {
     refs.status.textContent = text
+  }
+
+  const clearMenuSuccess = () => {
+    programmaticRestoreDepth += 1
+    try {
+      refs.success.textContent = ''
+      refs.success.hidden = true
+      programmaticScrollPosition = { x: window.scrollX, y: window.scrollY }
+    } finally {
+      programmaticRestoreDepth -= 1
+    }
+  }
+
+  const announceMenuSuccess = (context: MenuRestoreContext, text: string) => {
+    if (disposed || context.restoreGeneration !== restoreGeneration) return
+    programmaticRestoreDepth += 1
+    try {
+      refs.success.hidden = false
+      refs.success.textContent = text
+      programmaticScrollPosition = { x: window.scrollX, y: window.scrollY }
+    } finally {
+      programmaticRestoreDepth -= 1
+    }
   }
 
   const hideError = () => {
@@ -789,6 +1064,344 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
       }
     }
     return null
+  }
+
+  type MenuRestoreContext = {
+    interactionGeneration: number
+    restoreGeneration: number
+    categoryId?: number | null
+    itemId?: number | null
+    optionId?: number | null
+    anchorSelector?: string | null
+    anchorTop?: number | null
+    focusSelector?: string | null
+  }
+
+  const categorySummarySelector = (categoryId: number) =>
+    `.venue-menu-category[data-category-id="${categoryId}"] > ` +
+    `summary[data-menu-category-summary="${categoryId}"]`
+
+  const getCategoryIdForItem = (itemId: number) =>
+    menu.find((category) => category.items.some((item) => item.id === itemId))?.id ?? null
+
+  const findMenuAnchor = (context: MenuRestoreContext) => {
+    const selectors = [
+      context.optionId != null ? `.venue-menu-option[data-option-id="${context.optionId}"]` : null,
+      context.itemId != null ? `.venue-menu-item[data-item-id="${context.itemId}"]` : null,
+      context.anchorSelector ?? null,
+      context.categoryId != null ? `.venue-menu-category[data-category-id="${context.categoryId}"]` : null
+    ].filter((selector): selector is string => Boolean(selector))
+    for (const selector of selectors) {
+      const target = refs.categories.querySelector<HTMLElement>(selector)
+      if (target) return { selector, target }
+    }
+    return null
+  }
+
+  const captureMenuContext = (
+    context: Omit<
+      MenuRestoreContext,
+      'interactionGeneration' | 'restoreGeneration' | 'anchorTop'
+    > = {}
+  ) => {
+    restoreGeneration += 1
+    clearMenuSuccess()
+    const categoryId =
+      context.categoryId ??
+      (context.itemId != null ? getCategoryIdForItem(context.itemId) : null) ??
+      (context.optionId != null ? getCategoryIdForItem(findOptionById(context.optionId)?.itemId ?? -1) : null)
+    if (categoryId != null) expandedCategoryIds.add(categoryId)
+    const anchor = findMenuAnchor({
+      ...context,
+      interactionGeneration,
+      restoreGeneration,
+      categoryId
+    })
+    return {
+      ...context,
+      interactionGeneration,
+      restoreGeneration,
+      categoryId,
+      anchorSelector: context.anchorSelector ?? anchor?.selector ?? null,
+      anchorTop: anchor?.target.getBoundingClientRect().top ?? null
+    } satisfies MenuRestoreContext
+  }
+
+  const canRestoreMenuContext = (context?: MenuRestoreContext | null): context is MenuRestoreContext =>
+    Boolean(
+      context &&
+        !disposed &&
+        context.restoreGeneration === restoreGeneration &&
+        context.interactionGeneration === interactionGeneration
+    )
+
+  const restoreMenuContext = (context?: MenuRestoreContext | null) => {
+    if (!canRestoreMenuContext(context)) return
+    if (context.categoryId != null) expandedCategoryIds.add(context.categoryId)
+    const anchor = findMenuAnchor(context)
+    if (!anchor) return
+    if (!canRestoreMenuContext(context)) return
+    programmaticRestoreDepth += 1
+    try {
+      if (context.anchorTop != null) {
+        window.scrollBy({ top: anchor.target.getBoundingClientRect().top - context.anchorTop, behavior: 'auto' })
+      } else {
+        anchor.target.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+      }
+      const focusSelector = context.focusSelector ?? '[data-menu-focus="true"]'
+      const focusTarget = anchor.target.matches(focusSelector)
+        ? anchor.target
+        : anchor.target.querySelector<HTMLElement>(focusSelector)
+      if (focusTarget) focusTarget.focus({ preventScroll: true })
+      programmaticScrollPosition = { x: window.scrollX, y: window.scrollY }
+    } finally {
+      programmaticRestoreDepth -= 1
+    }
+  }
+
+  type MenuFormKind =
+    | 'category-rename'
+    | 'item-create'
+    | 'item-edit'
+    | 'option-create'
+    | 'option-edit'
+
+  type MenuFormControlState = {
+    value: string
+    checked: boolean | null
+    selectionStart: number | null
+    selectionEnd: number | null
+  }
+
+  type MenuActiveInteractionContext = {
+    interactionGeneration: number
+    restoreGeneration: number
+    scrollX: number
+    scrollY: number
+    categoryId: number | null
+    categoryExpanded: boolean | null
+    itemId: number | null
+    optionId: number | null
+    formKind: MenuFormKind | null
+    formControls: MenuFormControlState[]
+    focusedFormControlIndex: number
+    focusedFormButtonIndex: number
+    focusControl: string | null
+  }
+
+  type MenuEditableControl = HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement
+
+  const readMenuEntityId = (node: HTMLElement | null, key: 'categoryId' | 'itemId' | 'optionId') => {
+    const raw = node?.dataset[key]
+    if (!raw) return null
+    const value = Number(raw)
+    return Number.isFinite(value) ? value : null
+  }
+
+  const getMenuFormKind = (form: HTMLFormElement | null): MenuFormKind | null => {
+    if (!form) return null
+    if (form.classList.contains('venue-menu-category-rename-form')) return 'category-rename'
+    if (form.classList.contains('venue-menu-item-create-form')) return 'item-create'
+    if (form.classList.contains('venue-menu-item-edit-form')) return 'item-edit'
+    if (form.classList.contains('venue-menu-option-create-form')) return 'option-create'
+    if (form.classList.contains('venue-menu-option-edit-form')) return 'option-edit'
+    return null
+  }
+
+  const captureActiveMenuInteraction = (): MenuActiveInteractionContext => {
+    const active = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const dynamicActive = active && refs.categories.contains(active) ? active : null
+    const categoryNode = dynamicActive?.closest<HTMLElement>('.venue-menu-category') ?? null
+    const itemNode = dynamicActive?.closest<HTMLElement>('.venue-menu-item') ?? null
+    const optionNode = dynamicActive?.closest<HTMLElement>('.venue-menu-option') ?? null
+    const form = dynamicActive?.closest<HTMLFormElement>('form') ?? null
+    const formKind = getMenuFormKind(form)
+    const formControls = form
+      ? Array.from(form.querySelectorAll<MenuEditableControl>('input, select, textarea'))
+      : []
+    const formButtons = form ? Array.from(form.querySelectorAll<HTMLButtonElement>('button')) : []
+
+    return {
+      interactionGeneration,
+      restoreGeneration,
+      scrollX: window.scrollX,
+      scrollY: window.scrollY,
+      categoryId: readMenuEntityId(categoryNode, 'categoryId'),
+      categoryExpanded: categoryNode instanceof HTMLDetailsElement ? categoryNode.open : null,
+      itemId: readMenuEntityId(itemNode, 'itemId'),
+      optionId: readMenuEntityId(optionNode, 'optionId'),
+      formKind,
+      formControls: formControls.map((control) => ({
+        value: control.value,
+        checked: control instanceof HTMLInputElement ? control.checked : null,
+        selectionStart:
+          control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement
+            ? control.selectionStart
+            : null,
+        selectionEnd:
+          control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement
+            ? control.selectionEnd
+            : null
+      })),
+      focusedFormControlIndex: dynamicActive ? formControls.indexOf(dynamicActive as MenuEditableControl) : -1,
+      focusedFormButtonIndex: dynamicActive ? formButtons.indexOf(dynamicActive as HTMLButtonElement) : -1,
+      focusControl:
+        dynamicActive?.dataset.menuControl ??
+        (dynamicActive?.dataset.menuFocus === 'true' ? 'entity-heading' : null)
+    }
+  }
+
+  const findActiveInteractionScope = (context: MenuActiveInteractionContext) => {
+    if (context.optionId != null) {
+      const option = refs.categories.querySelector<HTMLElement>(
+        `.venue-menu-option[data-option-id="${context.optionId}"]`
+      )
+      if (option) return option
+    }
+    if (context.itemId != null) {
+      const item = refs.categories.querySelector<HTMLElement>(
+        `.venue-menu-item[data-item-id="${context.itemId}"]`
+      )
+      if (item) return item
+    }
+    if (context.categoryId != null) {
+      return refs.categories.querySelector<HTMLElement>(
+        `.venue-menu-category[data-category-id="${context.categoryId}"]`
+      )
+    }
+    return null
+  }
+
+  const restoreActiveMenuInteraction = (context: MenuActiveInteractionContext) => {
+    if (
+      disposed ||
+      context.interactionGeneration !== interactionGeneration ||
+      context.restoreGeneration !== restoreGeneration
+    ) {
+      refs.categories.style.overflowAnchor = ''
+      return
+    }
+    programmaticRestoreDepth += 1
+    try {
+      let scope = findActiveInteractionScope(context)
+      let form: HTMLFormElement | null = null
+      if (scope && context.formKind) {
+        const triggerKey = {
+          'category-rename': 'category-rename',
+          'item-create': null,
+          'item-edit': 'item-edit',
+          'option-create': 'item-create-option',
+          'option-edit': 'option-edit'
+        } satisfies Record<MenuFormKind, string | null>
+        const formSelector = {
+          'category-rename': '.venue-menu-category-rename-form',
+          'item-create': '.venue-menu-item-create-form',
+          'item-edit': '.venue-menu-item-edit-form',
+          'option-create': '.venue-menu-option-create-form',
+          'option-edit': '.venue-menu-option-edit-form'
+        } satisfies Record<MenuFormKind, string>
+        const trigger = triggerKey[context.formKind]
+          ? scope.querySelector<HTMLElement>(`[data-menu-control="${triggerKey[context.formKind]}"]`)
+          : null
+        trigger?.click()
+        scope = findActiveInteractionScope(context)
+        form = scope?.querySelector<HTMLFormElement>(formSelector[context.formKind]) ?? null
+      }
+
+      if (form) {
+        const controls = Array.from(form.querySelectorAll<MenuEditableControl>('input, select, textarea'))
+        const buttons = Array.from(form.querySelectorAll<HTMLButtonElement>('button'))
+        context.formControls.forEach((state, index) => {
+          const control = controls[index]
+          if (!control) return
+          control.value = state.value
+          if (control instanceof HTMLInputElement && state.checked != null) {
+            control.checked = state.checked
+          }
+        })
+        const focusedControl = controls[context.focusedFormControlIndex]
+        const focusedButton = buttons[context.focusedFormButtonIndex]
+        const focusTarget = focusedControl ?? focusedButton ?? null
+        focusTarget?.focus({ preventScroll: true })
+        if (
+          focusedControl &&
+          (focusedControl instanceof HTMLInputElement || focusedControl instanceof HTMLTextAreaElement)
+        ) {
+          const state = context.formControls[context.focusedFormControlIndex]
+          if (state?.selectionStart != null && state.selectionEnd != null) {
+            focusedControl.setSelectionRange(state.selectionStart, state.selectionEnd)
+          }
+        }
+      } else if (scope && context.focusControl) {
+        const focusTarget =
+          context.focusControl === 'entity-heading'
+            ? scope.querySelector<HTMLElement>('[data-menu-focus="true"]')
+            : scope.querySelector<HTMLElement>(`[data-menu-control="${context.focusControl}"]`)
+        focusTarget?.focus({ preventScroll: true })
+      }
+
+      window.scrollTo({ left: context.scrollX, top: context.scrollY, behavior: 'auto' })
+      programmaticScrollPosition = { x: window.scrollX, y: window.scrollY }
+    } finally {
+      programmaticRestoreDepth -= 1
+    }
+    if (activeInteractionScrollFrame != null) {
+      window.cancelAnimationFrame(activeInteractionScrollFrame)
+    }
+    const isCurrentInteraction = () =>
+      !disposed &&
+      context.interactionGeneration === interactionGeneration &&
+      context.restoreGeneration === restoreGeneration
+    let protectedFramesRemaining = 2
+    let stableFrames = 0
+    let remainingFrames = 30
+    const restoreAfterLayout = () => {
+      activeInteractionScrollFrame = window.requestAnimationFrame(() => {
+        if (!isCurrentInteraction()) {
+          activeInteractionScrollFrame = null
+          refs.categories.style.overflowAnchor = ''
+          return
+        }
+        const scrollIsStable =
+          Math.abs(window.scrollX - context.scrollX) <= 0.5 &&
+          Math.abs(window.scrollY - context.scrollY) <= 0.5
+        programmaticRestoreDepth += 1
+        try {
+          window.scrollTo({ left: context.scrollX, top: context.scrollY, behavior: 'auto' })
+          programmaticScrollPosition = { x: window.scrollX, y: window.scrollY }
+        } finally {
+          programmaticRestoreDepth -= 1
+        }
+        if (protectedFramesRemaining > 0) {
+          protectedFramesRemaining -= 1
+          stableFrames = 0
+          if (protectedFramesRemaining === 0) refs.categories.style.overflowAnchor = ''
+        } else {
+          stableFrames = scrollIsStable ? stableFrames + 1 : 0
+        }
+        remainingFrames -= 1
+        if (stableFrames >= 2 || remainingFrames <= 0) {
+          activeInteractionScrollFrame = null
+          refs.categories.style.overflowAnchor = ''
+          return
+        }
+        restoreAfterLayout()
+      })
+    }
+    // Replacing a focused form can trigger browser scroll anchoring across multiple layout frames.
+    restoreAfterLayout()
+  }
+
+  const mutationErrorMessage = (error: ApiErrorInfo) => presentApiError(error, { isDebug, scope: 'venue' }).message
+
+  const reportMutationFailure = (error: ApiErrorInfo, onFailure?: MutationFailureHandler) => {
+    showError(error)
+    onFailure?.(mutationErrorMessage(error))
+  }
+
+  const refreshAfterMutation = async (context: MenuRestoreContext, successMessage: string) => {
+    announceMenuSuccess(context, successMessage)
+    await loadMenu({ restoreContext: context })
   }
 
   const effectiveItemAvailability = (item: VenueMenuItemDto) =>
@@ -1268,39 +1881,41 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
             if (expanded) expandedCategoryIds.add(categoryId)
             else expandedCategoryIds.delete(categoryId)
           },
-          onRename: async (target) => {
-            const nextName = window.prompt('Новое имя категории', target.name)
-            if (!nextName) return
-            const trimmed = nextName.trim()
-            if (!trimmed) {
-              showToast('Имя не может быть пустым')
-              return
-            }
+          onRename: async (target, name, onFailure) => {
+            const summarySelector = categorySummarySelector(target.id)
+            const context = captureMenuContext({
+              categoryId: target.id,
+              anchorSelector: summarySelector,
+              focusSelector: summarySelector
+            })
             const result = await venueUpdateCategory(
               backendUrl,
-              { venueId, categoryId: target.id, body: { name: trimmed } },
+              { venueId, categoryId: target.id, body: { name } },
               deps
             )
             if (disposed) return
             if (!result.ok) {
-              showError(result.error)
+              reportMutationFailure(result.error, onFailure)
               return
             }
-            showToast('Категория обновлена')
-            void loadMenu()
+            await refreshAfterMutation(context, 'Категория обновлена')
           },
-          onDelete: async (target) => {
-            if (!window.confirm('Удалить категорию? Она должна быть пустой.')) return
+          onDelete: async (target, onFailure) => {
+            const targetIndex = menu.findIndex((category) => category.id === target.id)
+            const fallbackCategory = menu[targetIndex + 1] ?? menu[targetIndex - 1] ?? null
+            const context = captureMenuContext({
+              categoryId: fallbackCategory?.id ?? null,
+              focusSelector: ':scope > summary'
+            })
             const result = await venueDeleteCategory(backendUrl, { venueId, categoryId: target.id }, deps)
             if (disposed) return
             if (!result.ok) {
-              showError(result.error)
+              reportMutationFailure(result.error, onFailure)
               return
             }
-            showToast('Категория удалена')
-            void loadMenu()
+            await refreshAfterMutation(context, 'Категория удалена')
           },
-          onMoveCategory: async (target, direction) => {
+          onMoveCategory: async (target, direction, onFailure) => {
             const idx = menu.findIndex((item) => item.id === target.id)
             if (idx < 0) return
             const nextIdx = direction === 'up' ? idx - 1 : idx + 1
@@ -1308,6 +1923,12 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
             const reordered = [...menu]
             const [moved] = reordered.splice(idx, 1)
             reordered.splice(nextIdx, 0, moved)
+            const summarySelector = categorySummarySelector(target.id)
+            const context = captureMenuContext({
+              categoryId: target.id,
+              anchorSelector: summarySelector,
+              focusSelector: summarySelector
+            })
             const result = await venueReorderCategories(
               backendUrl,
               { venueId, body: { categoryIds: reordered.map((item) => item.id) } },
@@ -1315,13 +1936,13 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
             )
             if (disposed) return
             if (!result.ok) {
-              showError(result.error)
+              reportMutationFailure(result.error, onFailure)
               return
             }
-            showToast('Порядок обновлён')
-            void loadMenu()
+            await refreshAfterMutation(context, 'Порядок обновлён')
           },
-          onCreateItem: async (target, name, priceMinor, currency) => {
+          onCreateItem: async (target, name, priceMinor, currency, onFailure) => {
+            const context = captureMenuContext({ categoryId: target.id })
             const result = await venueCreateItem(
               backendUrl,
               { venueId, body: { categoryId: target.id, name, priceMinor, currency, isAvailable: true } },
@@ -1329,37 +1950,33 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
             )
             if (disposed) return
             if (!result.ok) {
-              showError(result.error)
+              reportMutationFailure(result.error, onFailure)
               return
             }
-            showToast('Позиция добавлена')
-            void loadMenu()
+            await refreshAfterMutation(
+              { ...context, itemId: result.data.id, focusSelector: '[data-menu-focus="true"]' },
+              'Позиция добавлена'
+            )
           },
-          onEditItem: async (item) => {
-            const nextName = window.prompt('Название позиции', item.name)
-            if (nextName === null) return
-            const trimmed = nextName.trim()
-            const priceRaw = window.prompt('Цена (например 350)', String(item.priceMinor / 100))
-            if (priceRaw === null) return
-            const priceMinor = parsePriceMinor(priceRaw)
-            if (!trimmed || priceMinor === null) {
-              showToast('Проверьте данные')
-              return
-            }
+          onEditItem: async (item, name, priceMinor, onFailure) => {
+            const context = captureMenuContext({
+              categoryId: item.categoryId,
+              itemId: item.id,
+              focusSelector: '[data-menu-focus="true"]'
+            })
             const result = await venueUpdateItem(
               backendUrl,
-              { venueId, itemId: item.id, body: { name: trimmed, priceMinor, currency: item.currency } },
+              { venueId, itemId: item.id, body: { name, priceMinor, currency: item.currency } },
               deps
             )
             if (disposed) return
             if (!result.ok) {
-              showError(result.error)
+              reportMutationFailure(result.error, onFailure)
               return
             }
-            showToast('Позиция обновлена')
-            void loadMenu()
+            await refreshAfterMutation(context, 'Позиция обновлена')
           },
-          onDeleteItem: async (item) => {
+          onDeleteItem: async (item, onFailure) => {
             if (
               !window.confirm(
                 'Позиция будет удалена из меню.\n\n' +
@@ -1370,6 +1987,10 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
             ) {
               return
             }
+            const context = captureMenuContext({
+              categoryId: item.categoryId,
+              focusSelector: ':scope > summary'
+            })
             const result = await venueDeleteItem(backendUrl, { venueId, itemId: item.id }, deps)
             if (disposed) return
             if (!result.ok) {
@@ -1377,20 +1998,20 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
                 normalizeErrorCode(result.error) ===
                 ApiErrorCodes.MENU_ITEM_DELETE_BLOCKED_BY_FIXED_REWARD
               ) {
-                const blockedError = result.error
-                await loadMenu()
-                if (!disposed) {
-                  showError(blockedError)
-                }
+                reportMutationFailure(result.error, onFailure)
                 return
               }
-              showError(result.error)
+              reportMutationFailure(result.error, onFailure)
               return
             }
-            showToast('Позиция удалена')
-            void loadMenu()
+            await refreshAfterMutation(context, 'Позиция удалена')
           },
-          onSetItemAvailability: async (item, isAvailable) => {
+          onSetItemAvailability: async (item, isAvailable, onFailure) => {
+            const context = captureMenuContext({
+              categoryId: item.categoryId,
+              itemId: item.id,
+              focusSelector: '[data-menu-focus="true"]'
+            })
             const result = await venueSetItemAvailability(
               backendUrl,
               { venueId, itemId: item.id, body: { isAvailable } },
@@ -1398,13 +2019,15 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
             )
             if (disposed) return
             if (!result.ok) {
-              showError(result.error)
+              reportMutationFailure(result.error, onFailure)
               return
             }
-            showToast(isAvailable ? 'Позиция доступна гостям' : 'Позиция в стоп-листе')
-            void loadMenu()
+            await refreshAfterMutation(
+              context,
+              isAvailable ? 'Позиция доступна гостям' : 'Позиция в стоп-листе'
+            )
           },
-          onMoveItem: async (item, direction) => {
+          onMoveItem: async (item, direction, onFailure) => {
             const category = menu.find((cat) => cat.id === item.categoryId)
             if (!category) return
             const idx = category.items.findIndex((it) => it.id === item.id)
@@ -1413,6 +2036,7 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
             const reordered = [...category.items]
             const [moved] = reordered.splice(idx, 1)
             reordered.splice(nextIdx, 0, moved)
+            const context = captureMenuContext({ categoryId: item.categoryId, itemId: item.id })
             const result = await venueReorderItems(
               backendUrl,
               { venueId, body: { categoryId: category.id, itemIds: reordered.map((it) => it.id) } },
@@ -1420,13 +2044,13 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
             )
             if (disposed) return
             if (!result.ok) {
-              showError(result.error)
+              reportMutationFailure(result.error, onFailure)
               return
             }
-            showToast('Порядок позиций обновлён')
-            void loadMenu()
+            await refreshAfterMutation(context, 'Порядок позиций обновлён')
           },
-          onCreateOption: async (item, name, priceDeltaMinor) => {
+          onCreateOption: async (item, name, priceDeltaMinor, onFailure) => {
+            const context = captureMenuContext({ categoryId: item.categoryId, itemId: item.id })
             const result = await venueCreateOption(
               backendUrl,
               { venueId, body: { itemId: item.id, name, priceDeltaMinor, isAvailable: true } },
@@ -1434,23 +2058,37 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
             )
             if (disposed) return
             if (!result.ok) {
-              showError(result.error)
+              reportMutationFailure(result.error, onFailure)
               return
             }
-            showToast(getOptionCopy(isHookahMenuItem(item)).addedToast)
-            void loadMenu()
+            await refreshAfterMutation(
+              { ...context, optionId: result.data.id, focusSelector: '[data-menu-focus="true"]' },
+              getOptionCopy(isHookahMenuItem(item)).addedToast
+            )
           },
-          onApplyBaseFlavorProfiles: async (item) => {
+          onApplyBaseFlavorProfiles: async (item, onFailure) => {
+            const context = captureMenuContext({
+              categoryId: item.categoryId,
+              itemId: item.id,
+              focusSelector: '[data-menu-focus="true"]'
+            })
             const result = await venueApplyBaseFlavorProfiles(backendUrl, { venueId, itemId: item.id }, deps)
             if (disposed) return
             if (!result.ok) {
-              showError(result.error)
+              reportMutationFailure(result.error, onFailure)
               return
             }
-            showToast(`Добавлено вкусов: ${result.data.addedCount}. Уже были: ${result.data.existingCount}.`)
-            void loadMenu()
+            await refreshAfterMutation(
+              context,
+              `Добавлено вкусов: ${result.data.addedCount}. Уже были: ${result.data.existingCount}.`
+            )
           },
-          onEditOption: async (option, name, priceDeltaMinor) => {
+          onEditOption: async (option, name, priceDeltaMinor, onFailure) => {
+            const context = captureMenuContext({
+              itemId: option.itemId,
+              optionId: option.id,
+              focusSelector: '[data-menu-focus="true"]'
+            })
             const result = await venueUpdateOption(
               backendUrl,
               { venueId, optionId: option.id, body: { name, priceDeltaMinor } },
@@ -1458,23 +2096,30 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
             )
             if (disposed) return
             if (!result.ok) {
-              showError(result.error)
+              reportMutationFailure(result.error, onFailure)
               return
             }
-            showToast(getOptionCopyForOption(option).updatedToast)
-            void loadMenu()
+            await refreshAfterMutation(context, getOptionCopyForOption(option).updatedToast)
           },
-          onDeleteOption: async (option) => {
+          onDeleteOption: async (option, onFailure) => {
+            const context = captureMenuContext({
+              itemId: option.itemId,
+              focusSelector: '[data-menu-focus="true"]'
+            })
             const result = await venueDeleteOption(backendUrl, { venueId, optionId: option.id }, deps)
             if (disposed) return
             if (!result.ok) {
-              showError(result.error)
+              reportMutationFailure(result.error, onFailure)
               return
             }
-            showToast(getOptionCopyForOption(option).deletedToast)
-            void loadMenu()
+            await refreshAfterMutation(context, getOptionCopyForOption(option).deletedToast)
           },
-          onSetOptionAvailability: async (option, isAvailable) => {
+          onSetOptionAvailability: async (option, isAvailable, onFailure) => {
+            const context = captureMenuContext({
+              itemId: option.itemId,
+              optionId: option.id,
+              focusSelector: '[data-menu-focus="true"]'
+            })
             const result = await venueSetOptionAvailability(
               backendUrl,
               { venueId, optionId: option.id, body: { isAvailable } },
@@ -1482,12 +2127,11 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
             )
             if (disposed) return
             if (!result.ok) {
-              showError(result.error)
+              reportMutationFailure(result.error, onFailure)
               return
             }
             const copy = getOptionCopyForOption(option)
-            showToast(isAvailable ? copy.enabledToast : copy.disabledToast)
-            void loadMenu()
+            await refreshAfterMutation(context, isAvailable ? copy.enabledToast : copy.disabledToast)
           }
           }
         )
@@ -1497,7 +2141,7 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
   }
 
   const loadMenu = async (
-    options: { rebaseDraft?: boolean; shiftRefresh?: boolean } = {}
+    options: { rebaseDraft?: boolean; shiftRefresh?: boolean; restoreContext?: MenuRestoreContext | null } = {}
   ): Promise<boolean> => {
     if (!canView) {
       refs.categories.replaceChildren(el('p', { className: 'venue-empty', text: 'Недостаточно прав для просмотра меню.' }))
@@ -1527,14 +2171,34 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
     } else {
       rebaseShiftDraft(result.data.categories, previousItemDrafts, previousOptionDrafts)
     }
+    const currentInteractionContext =
+      options.restoreContext && !canRestoreMenuContext(options.restoreContext)
+        ? captureActiveMenuInteraction()
+        : null
+    if (currentInteractionContext) refs.categories.style.overflowAnchor = 'none'
     menu = result.data.categories
     shiftNeedsRefresh = false
+    if (canRestoreMenuContext(options.restoreContext) && options.restoreContext.categoryId != null) {
+      expandedCategoryIds.add(options.restoreContext.categoryId)
+    }
+    if (currentInteractionContext?.categoryId != null && currentInteractionContext.categoryExpanded != null) {
+      if (currentInteractionContext.categoryExpanded) {
+        expandedCategoryIds.add(currentInteractionContext.categoryId)
+      } else {
+        expandedCategoryIds.delete(currentInteractionContext.categoryId)
+      }
+    }
     renderMenu()
     if (refs.shiftCheck && options.shiftRefresh) {
       refs.shiftCheck.status.textContent =
         'Проверка обновлена. Проверьте изменения и подтвердите ещё раз.'
     }
     setStatus(`Обновлено: ${new Date().toLocaleTimeString()}`)
+    if (currentInteractionContext) {
+      restoreActiveMenuInteraction(currentInteractionContext)
+    } else {
+      restoreMenuContext(options.restoreContext)
+    }
     return true
   }
 
@@ -1702,20 +2366,66 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
       showToast('Недостаточно прав')
       return
     }
+    const context = captureMenuContext()
     const result = await venueCreateCategory(backendUrl, { venueId, body: { name } }, deps)
     if (disposed) return
     if (!result.ok) {
-      showError(result.error)
+      reportMutationFailure(result.error)
       return
     }
     refs.createCategoryInput.value = ''
     refs.createCategoryForm.hidden = true
     refs.createCategoryAction.setAttribute('aria-expanded', 'false')
-    showToast('Категория добавлена')
-    void loadMenu()
+    const summarySelector = categorySummarySelector(result.data.id)
+    await refreshAfterMutation(
+      {
+        ...context,
+        categoryId: result.data.id,
+        anchorSelector: summarySelector,
+        focusSelector: summarySelector
+      },
+      'Категория добавлена'
+    )
   }
 
   const disposables: Array<() => void> = []
+  const recordUserInteraction = () => {
+    if (disposed || programmaticRestoreDepth > 0) return
+    if (activeInteractionScrollFrame != null) {
+      window.cancelAnimationFrame(activeInteractionScrollFrame)
+      activeInteractionScrollFrame = null
+      refs.categories.style.overflowAnchor = ''
+    }
+    programmaticScrollPosition = null
+    interactionGeneration += 1
+  }
+  const recordScrollInteraction = () => {
+    if (disposed || programmaticRestoreDepth > 0) return
+    if (activeInteractionScrollFrame != null) return
+    if (
+      programmaticScrollPosition &&
+      Math.abs(window.scrollX - programmaticScrollPosition.x) <= 0.5 &&
+      Math.abs(window.scrollY - programmaticScrollPosition.y) <= 0.5
+    ) {
+      programmaticScrollPosition = null
+      return
+    }
+    recordUserInteraction()
+  }
+  document.addEventListener('pointerdown', recordUserInteraction, true)
+  document.addEventListener('touchstart', recordUserInteraction, { capture: true, passive: true })
+  document.addEventListener('focusin', recordUserInteraction, true)
+  document.addEventListener('keydown', recordUserInteraction, true)
+  window.addEventListener('wheel', recordUserInteraction, { capture: true, passive: true })
+  window.addEventListener('scroll', recordScrollInteraction, { passive: true })
+  disposables.push(() => {
+    document.removeEventListener('pointerdown', recordUserInteraction, true)
+    document.removeEventListener('touchstart', recordUserInteraction, true)
+    document.removeEventListener('focusin', recordUserInteraction, true)
+    document.removeEventListener('keydown', recordUserInteraction, true)
+    window.removeEventListener('wheel', recordUserInteraction, true)
+    window.removeEventListener('scroll', recordScrollInteraction)
+  })
   if (canManage) {
     disposables.push(
       on(refs.createCategoryAction, 'click', () => {
@@ -1849,6 +2559,15 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
   return () => {
     disposed = true
     loadSeq += 1
+    interactionGeneration += 1
+    restoreGeneration += 1
+    programmaticScrollPosition = null
+    if (activeInteractionScrollFrame != null) {
+      window.cancelAnimationFrame(activeInteractionScrollFrame)
+      activeInteractionScrollFrame = null
+    }
+    refs.categories.style.overflowAnchor = ''
+    clearMenuSuccess()
     loadAbort?.abort()
     confirmAbort?.abort()
     loadAbort = null

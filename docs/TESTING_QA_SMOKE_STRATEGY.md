@@ -7,8 +7,8 @@
 Latest release-closed bounded slice: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION HARD DELETE AUDIT /
 ATOMIC BASE-PROFILE NORMALIZATION INCLUDED / DONE / MVP / STAGING-SMOKE-PASSED**. The broader Menu
 and Dangerous Action Audit programs remain partial. Menu option rename is **DANGEROUS ACTION AUDIT
-SLICE / MENU OPTION RENAME AUDIT / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED
-BEFORE COMMIT**; green Actions, staging deploy and bounded smoke remain open.
+SLICE / MENU OPTION RENAME AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**; keep its bounded gates in
+regression.
 
 ## Core Rule
 
@@ -754,8 +754,8 @@ records fully green GitHub Actions, staging deploy and these bounded staging sce
 
 ### Menu Option Rename Audit quality gate
 
-Status: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION RENAME AUDIT / MVP IMPLEMENTED / LOCAL
-VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+Status: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION RENAME AUDIT / DONE / MVP /
+STAGING-SMOKE-PASSED**.
 
 Regression must preserve this bounded contract:
 
@@ -782,11 +782,45 @@ Regression must preserve this bounded contract:
 Focused repository, route, Telegram and Guest/order/history selectors, `compileKotlin`,
 `ktlintCheck`, Mini App build and Playwright `139/139` passed locally. The mandatory PostgreSQL XML
 result is `8/0/0/0`, `14/0/0/0`, `2/0/0/0`, `7/0/0/0`; CI must keep minimums `8 / 14 / 2 / 7`
-with zero skipped/failures/errors. Schema verdict: **NO_MIGRATION_EXPECTED**.
+with zero skipped/failures/errors. Green Actions, staging deploy and bounded cross-surface
+RBAC/audit/privacy/concurrency/history smoke are recorded functionally passed; schema verdict is
+**NO_MIGRATION_EXPECTED**. This does not close option create/price/availability, item mutations, the
+broader Menu/Dangerous Action Audit or any media work.
 
-Green Actions, staging deploy and bounded cross-surface RBAC/audit/privacy/concurrency/history smoke
-remain required. This does not close option create/price/availability, item mutations, the broader
-Menu/Dangerous Action Audit or any media work.
+### Venue Menu Management UX Stabilization quality gate
+
+Status: **VENUE MENU MANAGEMENT UX STABILIZATION / MOBILE RESPONSIVENESS + PRICE INPUT ERGONOMICS +
+CONTEXT PRESERVATION / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+
+Required deterministic browser coverage:
+
+- at 320x700, 360x800, 390x844 and 430x932, `documentElement.scrollWidth <= clientWidth`; the menu
+  editor, cards, labels, inputs and item/option action controls fit their viewport rects without
+  relying on horizontal-overflow masking. The check covers read-only cards plus active add/edit
+  item and option forms, base-flavor actions, availability, submit/cancel and delete controls;
+- long Russian labels wrap; item cards become a clear one-column sequence of identity/price,
+  availability and primary action, options, add action/existing options, then secondary/destructive
+  action; desktop/tablet retains compact multi-column use;
+- all menu price fields have labels and suitable mobile numeric input. New required item price is
+  empty with example placeholder; keyboard `150` renders as `150` and sends the expected minor-unit
+  value. Existing item and option `0` survives focus/blur but keyboard entry and real paste replace
+  it; after the first edit, repeated focus does not reselect the non-zero value. Invalid or empty
+  required input remains safe and actionable;
+- after successful item/option create/update/availability/delete and base-profile mutation, an
+  authoritative menu GET retains the relevant expanded category, stable item/option ID, visible
+  anchor and logical focus when the user has not interacted again. A controlled delayed GET must
+  not steal later manual scroll or focus, while the authoritative data still renders; if the user
+  starts another menu form, its draft, caret/focus and visible context remain current after render.
+  Failure keeps the form values and a nearby live error;
+- mutation success uses a live region owned by the current Menu screen. Venue/account switch
+  disposes that announcement and scoped context, aborts or ignores old reads/mutations and cannot
+  restore old cards, forms, scroll anchors, focus or success text into the new venue;
+- OWNER/MANAGER manage the existing contract; STAFF remains read-only except current individual
+  availability controls, and keyboard/focus accessibility stays available.
+
+Backend production files are intentionally unchanged when create/update responses contain stable IDs;
+no entity may be rediscovered by name/price matching. This gate requires no migration and does not
+alter money, RBAC, audits, option normalization, Guest order snapshots or media.
 
 ## Venue Mini App Media Foundation Future Quality Gate
 
@@ -1710,10 +1744,10 @@ Telegram/staff-chat:
   ATOMIC BASE-PROFILE NORMALIZATION INCLUDED / DONE / MVP / STAGING-SMOKE-PASSED**. Focused local,
   mandatory PostgreSQL, green Actions, staging deploy and the bounded 17-scenario smoke are
   recorded complete; keep the contract in regression.
-- Menu option rename audit: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION RENAME AUDIT / MVP
-  IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. The current seven-test
-  option concurrency XML gate, focused cross-surface tests and privacy/rollback checks are green
-  locally; green Actions, staging deploy and bounded smoke remain required. No migration was added.
+- Menu option rename audit: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION RENAME AUDIT / DONE / MVP /
+  STAGING-SMOKE-PASSED**. The seven-test option concurrency XML gate, focused cross-surface tests,
+  privacy/rollback checks, green Actions, staging deploy and bounded smoke are recorded complete.
+  No migration was added.
 - Venue Promotions Current/Archived Tabs UX: **VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / DONE / MVP / STAGING-SMOKE-PASSED**.
 - Promotion lifecycle status audit: **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**; broader dangerous-action coverage remains partial.
 - Promotion creation audit: **DANGEROUS ACTION AUDIT SLICE / PROMOTION CREATION AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**; mandatory repository/route/Telegram and PostgreSQL gates remain regression requirements. Configuration edit, schedule/target/reward, media/banner and broader dangerous-action coverage remain open.

@@ -1118,6 +1118,32 @@ Use this checklist after menu, option, stop-list, media, featured/top-list, shif
     `MENU_SHIFT_CHECK_COMPLETED` audit in the same transaction.
 23. Venue switching clears draft/selection and old requests; Guest menu plus stale cart
     preview/add-batch use confirmed server availability.
+24. At 320x700, 360x800, 390x844 and 430x932, open collapsed and expanded menu categories with long
+    Russian item and option names. Confirm the document and Menu editor have no horizontal scroll,
+    no right-edge clipping, and item/option availability, `Править позицию`, base-flavor, add,
+    submit/cancel and destructive actions remain fully visible and tappable in read-only plus active
+    add/edit item and option forms.
+25. Confirm a narrow item card reads in order as name/price, availability and primary action,
+    options/flavors and their add action, existing options, then secondary/destructive actions.
+    Verify the empty item/options, loading and error states; desktop/tablet layout remains usable.
+26. New item and option price fields begin empty and have example placeholders. Use the on-screen
+    keyboard to enter `150` and confirm the visible value and request minor units are correct. For
+    existing zero item and option prices, focus/blur without input, type `150`, blur/refocus and
+    continue typing, then paste another value; confirm zero is preserved only without an edit,
+    never becomes `0150`, and a later non-zero value is not reselected on repeated focus.
+27. Scroll to an item, edit its name/price, save and wait for the authoritative refresh. Confirm the
+    same category remains expanded, the changed item stays visible with logical focus, the page does
+    not jump to top and screen-local success feedback is observable. With a controlled delayed GET,
+    manually scroll, open another item/option form and type a draft after save; the authoritative
+    data must render without restoring the stale scroll/focus snapshot, while the current form draft,
+    caret/focus and visible context remain. A separate no-interaction case must still restore
+    normally. Repeat for add/rename/edit/delete option and base flavor profiles; item deletion falls
+    back to its category or nearest safe element.
+28. Force a menu mutation failure. Confirm the user remains at the relevant card, inline values and
+    source entity remain present, an actionable nearby error is announced and no automatic retry
+    occurs. Switch venue/account while a menu read or mutation is late; confirm the old context,
+    form, card and screen-owned `role=status` success copy never appear in the new active screen,
+    including after the old response is released.
 
 ## 15. Venue Mode Operational Smoke Checklist
 
