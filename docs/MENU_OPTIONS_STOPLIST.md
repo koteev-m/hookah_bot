@@ -42,7 +42,7 @@ Menu permissions are governed by `docs/SECURITY_RBAC_MATRIX.md`; Venue Mode oper
 | Featured/top-list | Product spec requires featured/top list; implementation evidence is partial. | Venue manually pins items; not paid placement. | Paid placement/boosting belongs to Growth/Platform, not menu featured. |
 | PDF/media | `Фото-меню` exists as a flat info/media section and is separate from structured order menu. Bot OWNER/MANAGER can add image/PDF attachments, delete one and hide/show the whole section. | PDF/photo menu is view-only; no direct order unless item exists in structured menu. | Venue Mini App authoring/upload is missing; direct replace, per-attachment hide and optional subsections remain future. |
 | Shift check | **DONE / MVP / STAGING-SMOKE-PASSED**: OWNER/MANAGER Venue Mini App uses saved menu state, readiness counts, search/filters, local draft, a separate mass-selection mode, confirmation summary and one atomic request. STAFF has no entry/direct permission. | Venue Mode keeps optimistic availability checks, one bounded batch, no-op completion evidence and recoverable stale-state handling. | Keep role/tenant, atomicity, stale-state, Guest availability and Telegram stop-list parity in regression; Telegram shift-check UI and a queryable history table are not part of Phase 1. |
-| Audit logs | `MENU_SHIFT_CHECK_COMPLETED` is atomic for a successful batch. `MENU_ITEM_DELETED`, empty-category `MENU_CATEGORY_DELETED` and `MENU_OPTION_DELETED` are staging-closed for their bounded contracts. Option rename `MENU_OPTION_RENAMED` is release-closed and transaction-bound across Mini App/Telegram. | Price changes, archive/delete, mass stop-list, media removal, option schema change and Staff stop-list toggles write safe audit. | Option create/price/availability, item update and other menu dangerous-action audit families remain `PARTIAL`. |
+| Audit logs | `MENU_SHIFT_CHECK_COMPLETED` is atomic for a successful batch. `MENU_ITEM_DELETED`, empty-category `MENU_CATEGORY_DELETED` and `MENU_OPTION_DELETED` are staging-closed for their bounded contracts. Option rename `MENU_OPTION_RENAMED` is release-closed; Mini App option price `MENU_OPTION_PRICE_CHANGED` is locally implemented and transaction-bound. | Price changes, archive/delete, mass stop-list, media removal, option schema change and Staff stop-list toggles write safe audit. | The price slice is `MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`; option create/availability, item update and other menu dangerous-action audit families remain `PARTIAL`. |
 | Telegram vs Mini App parity | Options/flavors parity is smoke-closed; some Telegram owner flows remain richer. | Required menu/stop-list operations are aligned across Bot and Mini App or documented as exceptions. | Keep cross-surface parity smoke for Staff stop-list and selected options. |
 | Staff stop-list permissions | Current docs say STAFF has `MENU_AVAILABILITY_MANAGE` and can toggle item/option availability; STAFF cannot edit structure/prices/options schema. | Recommended MVP: Staff cannot change menu structure/prices; Staff stop-list works only when `staff_stoplist_enabled` or equivalent policy allows it, and is identical in Bot/Mini App. | Current global Staff stop-list permission is acceptable only if intentionally enabled and audited; per-venue toggle remains target/future. |
 
@@ -418,10 +418,47 @@ STAGING-SMOKE-PASSED**.
 - Existing hookah-only normalized canonical collision policy, self-exclusion, non-hookah duplicate
   behavior, historical snapshots and current-value resolution for future submit are unchanged.
   Real PostgreSQL coverage serializes rename with rename, normalization, canonical create and
-  direct delete. The seven-test class XML is mandatory with no skipped/failures/errors.
+  direct delete. The class now has nine tests after the price-audit extension; its XML is mandatory
+  with no skipped/failures/errors.
 - Schema verdict: **NO_MIGRATION**. Option create/price/availability audit, item/category mutations,
   new canonical semantics, membership-revoke linearization, promotions, viewer and media remain
   outside this slice. The broader Menu and Dangerous Action Audit programs remain `PARTIAL`.
+
+Option price audit status: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION PRICE AUDIT / MVP
+IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+
+- `VenueMenuRepository.updateOption` remains the only production SQL writer that changes an
+  existing `menu_item_options.price_delta_minor`. The authenticated Venue Mini App compound
+  `PATCH /menu/options/{id}` is the only price caller; Telegram passes no option price. Option create
+  and fixed-zero missing-profile creation remain outside this price-update slice.
+- Mini App actor is the authenticated session subject and source is server-fixed
+  `VENUE_MINI_APP`; body, query, path and client metadata cannot supply either. Owner/Manager keep
+  current own-venue `MENU_MANAGE`; Staff, foreign and unaffiliated actors remain denied.
+- One JDBC transaction takes the non-locking option-to-item hint, locks the item, locks all item
+  options in ascending id, rereads the DB-current target, conditionally checks a real rename
+  collision, applies name/price/availability, writes any rename audit, writes any price audit and
+  commits once. Any SQL/audit failure restores every field, `updated_at` and both audit families.
+- A real committed price change writes exactly one `MENU_OPTION_PRICE_CHANGED` for entity
+  `menu_item_option` / option id. Payload keys are exactly `venueId`, `itemId`, `optionId`,
+  `oldPriceDeltaMinor`, `newPriceDeltaMinor`, `source`; actor stays in the audit actor column.
+  Names, availability, canonical values, promotion/cart/order contents, media, raw request/initData,
+  Telegram fields, secrets and unrelated PII are excluded.
+- Exact-price no-op/retry, name-only, availability-only, denial/foreign/not-found, canonical
+  collision, SQL/audit failure and rollback write zero price audit. Name+price writes one independent
+  rename and one price audit; adding availability remains one atomic update without availability
+  audit. No idempotency token is added.
+- Money validation, integer minor units, zero delta, request/response shape, UI parsing, currency and
+  rounding are unchanged. Checkout reloads the current available option and current delta from the
+  database; client/stale-cart price is not authority. New order rows snapshot the current delta;
+  existing `price_delta_minor_snapshot` rows are never rewritten.
+- The nine-test deterministic PostgreSQL class uses independent connections and observed blocking,
+  with no arbitrary sleep. It proves truthful distinct-price ordering, same-target loser no-op and
+  serialization with rename, direct delete and atomic normalization. Mandatory CI minimum is nine
+  tests with zero skipped/failures/errors. Schema verdict: **NO_MIGRATION**.
+
+This local status does not close option create/availability or item-price audit, the broader Menu or
+Dangerous Action Audit, nor any media/storage work. Green Actions, staging deploy and bounded staging
+smoke remain required after independent review and an authorized commit/push.
 
 Audit payloads must use safe ids and old/new safe fields only. Do not include raw media payloads, raw Telegram file URLs, provider data, secrets, raw initData, guest message text or unrelated PII.
 
@@ -429,7 +466,7 @@ Audit payloads must use safe ids and old/new safe fields only. Do not include ra
 
 - Menu/options/stop-list spec: `UPDATED`.
 - Menu constructor implementation: `PARTIAL` unless route/screen/test evidence proves full coverage.
-- Option modifiers in orders: structured selected-option parity is documented as `CLOSED / staging smoke passed`; broader multi-group modifier model remains `PARTIAL / needs verification`.
+- Option modifiers in orders: structured selected-option parity is documented as `CLOSED / staging smoke passed`; the option-price audit is `MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`; broader multi-group modifier model remains `PARTIAL / needs verification`.
 - Staff stop-list parity: current docs say item/option availability is aligned between Bot and Mini App; per-venue `staff_stoplist_enabled` remains `FUTURE`.
 - Public info-section / Photo-PDF-menu media: `PARTIAL / BOT-FIRST`; Guest rendering and both
   Preview modes work through guarded/scoped proxies, while Venue Mini App upload/manage is

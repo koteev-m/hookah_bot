@@ -207,7 +207,7 @@ jobs:
                       "TEST-com.hookah.platform.backend.miniapp.venue.menu."
                       "VenueMenuOptionNormalizationConcurrencyPostgresTest.xml"
                   ),
-                  7,
+                  9,
               ),
           ]
           problems = []

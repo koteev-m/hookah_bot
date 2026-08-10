@@ -515,6 +515,115 @@ class VenueMenuRepositoryTest {
         }
 
     @Test
+    fun `option price update audits once and same price retries or unrelated fields write none`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("venue-menu-option-price-audit-success")
+            val venueId = seedVenue(jdbcUrl)
+            val repository = VenueMenuRepository(dataSource(jdbcUrl))
+            val fixture = createMenuFixture(repository, venueId)
+            val original = fixture.firstOption
+
+            val updated =
+                requireNotNull(
+                    repository.updateOption(
+                        venueId = venueId,
+                        optionId = original.id,
+                        name = null,
+                        priceDeltaMinor = 125,
+                        isAvailable = null,
+                        actorUserId = AUDIT_ACTOR_ID,
+                        source = MenuOptionRenameSource.VENUE_MINI_APP,
+                    ),
+                )
+
+            assertEquals(125L, updated.priceDeltaMinor)
+            assertEquals(original.name, updated.name)
+            assertEquals(original.isAvailable, updated.isAvailable)
+            val priceAudit = menuOptionPriceChangeAudits(jdbcUrl).single()
+            assertMenuOptionPriceChangeAudit(
+                audit = priceAudit,
+                venueId = venueId,
+                itemId = original.itemId,
+                optionId = original.id,
+                oldPriceDeltaMinor = original.priceDeltaMinor,
+                newPriceDeltaMinor = 125,
+                actorUserId = AUDIT_ACTOR_ID,
+            )
+            val serialized = priceAudit.payload.toString()
+            listOf(
+                "name",
+                "availability",
+                "canonical",
+                "promotion",
+                "cart",
+                "order",
+                "request",
+                "initData",
+                "telegram",
+                "media",
+                "secret",
+                "username",
+                "phone",
+            ).forEach { forbidden ->
+                assertFalse(serialized.contains(forbidden, ignoreCase = true), forbidden)
+            }
+
+            repeat(2) {
+                requireNotNull(
+                    repository.updateOption(
+                        venueId = venueId,
+                        optionId = original.id,
+                        name = null,
+                        priceDeltaMinor = 125,
+                        isAvailable = null,
+                        actorUserId = AUDIT_ACTOR_ID,
+                        source = MenuOptionRenameSource.VENUE_MINI_APP,
+                    ),
+                )
+            }
+            requireNotNull(
+                repository.updateOption(
+                    venueId = venueId,
+                    optionId = original.id,
+                    name = "Name only update",
+                    priceDeltaMinor = null,
+                    isAvailable = null,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuOptionRenameSource.VENUE_MINI_APP,
+                ),
+            )
+            requireNotNull(
+                repository.updateOption(
+                    venueId = venueId,
+                    optionId = original.id,
+                    name = null,
+                    priceDeltaMinor = null,
+                    isAvailable = false,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuOptionRenameSource.VENUE_MINI_APP,
+                ),
+            )
+            assertFailsWith<InvalidInputException> {
+                repository.updateOption(
+                    venueId = venueId,
+                    optionId = original.id,
+                    name = null,
+                    priceDeltaMinor = 130,
+                    isAvailable = null,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuOptionRenameSource.TELEGRAM_BOT,
+                )
+            }
+
+            assertEquals(listOf(priceAudit), menuOptionPriceChangeAudits(jdbcUrl))
+            assertEquals(1, menuOptionRenameAudits(jdbcUrl).size)
+            val saved = loadItem(repository, venueId, original.itemId).options.single { it.id == original.id }
+            assertEquals("Name only update", saved.name)
+            assertEquals(125L, saved.priceDeltaMinor)
+            assertFalse(saved.isAvailable)
+        }
+
+    @Test
     fun `option update audits one real compound rename and no-op non-name missing foreign write none`() =
         runBlocking {
             val jdbcUrl = migratedJdbcUrl("venue-menu-option-rename-success")
@@ -551,6 +660,16 @@ class VenueMenuRepositoryTest {
                 actorUserId = AUDIT_ACTOR_ID,
                 source = MenuOptionRenameSource.VENUE_MINI_APP,
             )
+            val priceAudit = menuOptionPriceChangeAudits(jdbcUrl).single()
+            assertMenuOptionPriceChangeAudit(
+                audit = priceAudit,
+                venueId = venueId,
+                itemId = own.firstItem.id,
+                optionId = own.firstOption.id,
+                oldPriceDeltaMinor = own.firstOption.priceDeltaMinor,
+                newPriceDeltaMinor = renamed.priceDeltaMinor,
+                actorUserId = AUDIT_ACTOR_ID,
+            )
             val serialized = audit.payload.toString()
             listOf(
                 "price",
@@ -572,19 +691,32 @@ class VenueMenuRepositoryTest {
                 assertFalse(serialized.contains(forbidden, ignoreCase = true), forbidden)
             }
 
-            val repeated =
+            val nameAndPrice =
                 requireNotNull(
                     repository.updateOption(
                         venueId = venueId,
                         optionId = own.firstOption.id,
-                        name = renamed.name,
+                        name = "Second compound name",
                         priceDeltaMinor = 130,
                         isAvailable = null,
                         actorUserId = AUDIT_ACTOR_ID,
                         source = MenuOptionRenameSource.VENUE_MINI_APP,
                     ),
                 )
-            assertEquals(130L, repeated.priceDeltaMinor)
+            assertEquals("Second compound name", nameAndPrice.name)
+            assertEquals(130L, nameAndPrice.priceDeltaMinor)
+            assertFalse(nameAndPrice.isAvailable)
+            requireNotNull(
+                repository.updateOption(
+                    venueId = venueId,
+                    optionId = own.firstOption.id,
+                    name = nameAndPrice.name,
+                    priceDeltaMinor = nameAndPrice.priceDeltaMinor,
+                    isAvailable = null,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuOptionRenameSource.VENUE_MINI_APP,
+                ),
+            )
             requireNotNull(
                 repository.updateOption(
                     venueId = venueId,
@@ -623,7 +755,14 @@ class VenueMenuRepositoryTest {
                     it.id == foreign.firstOption.id
                 }
             assertEquals(foreign.firstOption, savedForeign)
-            assertEquals(listOf(audit), menuOptionRenameAudits(jdbcUrl))
+            val renameAudits = menuOptionRenameAudits(jdbcUrl)
+            val priceAudits = menuOptionPriceChangeAudits(jdbcUrl)
+            assertEquals(2, renameAudits.size)
+            assertEquals(2, priceAudits.size)
+            assertEquals(renamed.name, renameAudits[1].payload.getValue("oldName").jsonPrimitive.content)
+            assertEquals(nameAndPrice.name, renameAudits[1].payload.getValue("newName").jsonPrimitive.content)
+            assertEquals(renamed.priceDeltaMinor, priceAudits[1].payload.longValue("oldPriceDeltaMinor"))
+            assertEquals(nameAndPrice.priceDeltaMinor, priceAudits[1].payload.longValue("newPriceDeltaMinor"))
         }
 
     @Test
@@ -650,6 +789,7 @@ class VenueMenuRepositoryTest {
 
             assertEquals(before, optionRows(jdbcUrl, fixture.item.id))
             assertTrue(menuOptionRenameAudits(jdbcUrl).isEmpty())
+            assertTrue(menuOptionPriceChangeAudits(jdbcUrl).isEmpty())
         }
 
     @Test
@@ -702,6 +842,65 @@ class VenueMenuRepositoryTest {
             val restored = loadItem(fixtureRepository, venueId, original.itemId).options.single { it.id == original.id }
             assertEquals(original, restored)
             assertTrue(menuOptionRenameAudits(jdbcUrl).isEmpty())
+            assertTrue(menuOptionPriceChangeAudits(jdbcUrl).isEmpty())
+        }
+
+    @Test
+    fun `price audit failure after compound update restores row timestamp and both audit families`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("venue-menu-option-price-audit-rollback")
+            val venueId = seedVenue(jdbcUrl)
+            val dataSource = dataSource(jdbcUrl)
+            val fixtureRepository = VenueMenuRepository(dataSource)
+            val fixture = createMenuFixture(fixtureRepository, venueId)
+            val original = fixture.firstOption
+            val before = optionRows(jdbcUrl, original.itemId)
+            val delegateAuditWriter = AuditLogRepository(dataSource, Json)
+            var updatedRowObserved = false
+            var renameAuditObserved = false
+            val failingAuditWriter =
+                TransactionalAuditLogWriter { connection, actorUserId, action, entityType, entityId, payload ->
+                    if (action == MENU_OPTION_RENAMED_AUDIT_ACTION) {
+                        renameAuditObserved = true
+                    }
+                    delegateAuditWriter.appendJson(
+                        connection,
+                        actorUserId,
+                        action,
+                        entityType,
+                        entityId,
+                        payload,
+                    )
+                    if (action == MENU_OPTION_PRICE_CHANGED_AUDIT_ACTION) {
+                        val current = loadOptionSnapshot(connection, venueId, original.id)
+                        updatedRowObserved =
+                            current?.name == "Rollback price audit name" &&
+                            current.priceDeltaMinor == 999L &&
+                            !current.isAvailable
+                        check(updatedRowObserved) { "Compound option update must happen before price audit" }
+                        check(renameAuditObserved) { "Rename audit must be appended before price audit" }
+                        throw SQLException("Synthetic menu option price audit failure", "XX999")
+                    }
+                }
+            val repository = VenueMenuRepository(dataSource, failingAuditWriter)
+
+            assertFailsWith<DatabaseUnavailableException> {
+                repository.updateOption(
+                    venueId = venueId,
+                    optionId = original.id,
+                    name = "Rollback price audit name",
+                    priceDeltaMinor = 999,
+                    isAvailable = false,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuOptionRenameSource.VENUE_MINI_APP,
+                )
+            }
+
+            assertTrue(updatedRowObserved)
+            assertTrue(renameAuditObserved)
+            assertEquals(before, optionRows(jdbcUrl, original.itemId))
+            assertTrue(menuOptionRenameAudits(jdbcUrl).isEmpty())
+            assertTrue(menuOptionPriceChangeAudits(jdbcUrl).isEmpty())
         }
 
     @Test
@@ -1988,6 +2187,9 @@ class VenueMenuRepositoryTest {
     private fun menuOptionRenameAudits(jdbcUrl: String): List<MenuDeleteAuditRow> =
         menuDeleteAudits(jdbcUrl, MENU_OPTION_RENAMED_AUDIT_ACTION)
 
+    private fun menuOptionPriceChangeAudits(jdbcUrl: String): List<MenuDeleteAuditRow> =
+        menuDeleteAudits(jdbcUrl, MENU_OPTION_PRICE_CHANGED_AUDIT_ACTION)
+
     private fun menuDeleteAudits(
         jdbcUrl: String,
         action: String,
@@ -2062,6 +2264,38 @@ class VenueMenuRepositoryTest {
         assertEquals(oldName, audit.payload.getValue("oldName").jsonPrimitive.content)
         assertEquals(newName, audit.payload.getValue("newName").jsonPrimitive.content)
         assertEquals(source.name, audit.payload.getValue("source").jsonPrimitive.content)
+    }
+
+    private fun assertMenuOptionPriceChangeAudit(
+        audit: MenuDeleteAuditRow,
+        venueId: Long,
+        itemId: Long,
+        optionId: Long,
+        oldPriceDeltaMinor: Long,
+        newPriceDeltaMinor: Long,
+        actorUserId: Long,
+    ) {
+        assertEquals(actorUserId, audit.actorUserId)
+        assertEquals(MENU_OPTION_PRICE_CHANGED_AUDIT_ACTION, audit.action)
+        assertEquals("menu_item_option", audit.entityType)
+        assertEquals(optionId, audit.entityId)
+        assertEquals(
+            setOf(
+                "venueId",
+                "itemId",
+                "optionId",
+                "oldPriceDeltaMinor",
+                "newPriceDeltaMinor",
+                "source",
+            ),
+            audit.payload.keys,
+        )
+        assertEquals(venueId, audit.payload.longValue("venueId"))
+        assertEquals(itemId, audit.payload.longValue("itemId"))
+        assertEquals(optionId, audit.payload.longValue("optionId"))
+        assertEquals(oldPriceDeltaMinor, audit.payload.longValue("oldPriceDeltaMinor"))
+        assertEquals(newPriceDeltaMinor, audit.payload.longValue("newPriceDeltaMinor"))
+        assertEquals("VENUE_MINI_APP", audit.payload.getValue("source").jsonPrimitive.content)
     }
 
     private fun loadOptionSnapshot(

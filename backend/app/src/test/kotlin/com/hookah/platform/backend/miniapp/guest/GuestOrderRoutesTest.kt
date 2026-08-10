@@ -13,6 +13,7 @@ import com.hookah.platform.backend.miniapp.guest.api.CartPreviewResponse
 import com.hookah.platform.backend.miniapp.guest.api.GiftDecisionDto
 import com.hookah.platform.backend.miniapp.guest.api.GuestBillRequestRequest
 import com.hookah.platform.backend.miniapp.guest.api.GuestBillRequestResponse
+import com.hookah.platform.backend.miniapp.guest.api.MenuResponse
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
@@ -895,6 +896,174 @@ class GuestOrderRoutesTest {
             assertEquals(1, countRows(jdbcUrl, "order_batches"))
             assertEquals(1, countRows(jdbcUrl, "order_batch_items"))
             assertEquals(1, countRows(jdbcUrl, "order_batch_item_options"))
+        }
+
+    @Test
+    fun `stale option price is ignored at submit while prior snapshot stays immutable`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-order-current-option-price")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 32)
+            seedTableToken(jdbcUrl, tableId, "current-option-price-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val categoryId = seedMenuCategory(jdbcUrl, venueId)
+            val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Авторский кальян", priceMinor = 100_000)
+            val optionId =
+                seedMenuOption(
+                    jdbcUrl = jdbcUrl,
+                    venueId = venueId,
+                    itemId = itemId,
+                    name = "Премиальная чаша",
+                    priceDeltaMinor = 30_000,
+                )
+            val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
+            val token = issueToken(config)
+            val items =
+                listOf(
+                    AddBatchItemDto(
+                        itemId = itemId,
+                        qty = 1,
+                        selectedOptionId = optionId,
+                    ),
+                )
+
+            val oldSubmitResponse =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(
+                        json.encodeToString(
+                            AddBatchRequest.serializer(),
+                            AddBatchRequest(
+                                tableToken = "current-option-price-token",
+                                tableSessionId = tableSessionId,
+                                tabId = personalTabId,
+                                idempotencyKey = "current-option-price-old",
+                                items = items,
+                            ),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, oldSubmitResponse.status)
+            val oldSubmit = json.decodeFromString(AddBatchResponse.serializer(), oldSubmitResponse.bodyAsText())
+            assertEquals(30_000L, oldSubmit.pricing.items.single().selectedOptionDeltaMinor)
+            assertEquals(130_000L, oldSubmit.pricing.items.single().priceMinor)
+            val oldSnapshotBeforePriceEdit = assertNotNull(fetchSelectedOptionSnapshot(jdbcUrl, oldSubmit.batchId))
+            assertEquals(
+                SelectedOptionSnapshot(
+                    optionId = optionId,
+                    name = "Премиальная чаша",
+                    priceDeltaMinor = 30_000,
+                ),
+                oldSnapshotBeforePriceEdit,
+            )
+
+            val stalePreviewResponse =
+                client.post("/api/guest/order/preview") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(
+                        json.encodeToString(
+                            CartPreviewRequest.serializer(),
+                            CartPreviewRequest(
+                                tableToken = "current-option-price-token",
+                                tableSessionId = tableSessionId,
+                                tabId = personalTabId,
+                                items = items,
+                            ),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, stalePreviewResponse.status)
+            val stalePreview =
+                json.decodeFromString(CartPreviewResponse.serializer(), stalePreviewResponse.bodyAsText()).preview
+            assertEquals(30_000L, stalePreview.items.single().selectedOptionDeltaMinor)
+            assertEquals(130_000L, stalePreview.items.single().priceMinor)
+
+            updateMenuOptionPrice(jdbcUrl, optionId, priceDeltaMinor = 70_000)
+
+            val currentMenuResponse =
+                client.get("/api/guest/venue/$venueId/menu") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.OK, currentMenuResponse.status)
+            val currentMenu = json.decodeFromString(MenuResponse.serializer(), currentMenuResponse.bodyAsText())
+            val currentOption =
+                currentMenu.categories
+                    .flatMap { it.items }
+                    .single { it.id == itemId }
+                    .options
+                    .single { it.id == optionId }
+            assertEquals(70_000L, currentOption.priceDeltaMinor)
+
+            val currentSubmitResponse =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(
+                        """
+                        {
+                          "tableToken": "current-option-price-token",
+                          "tableSessionId": $tableSessionId,
+                          "tabId": $personalTabId,
+                          "idempotencyKey": "current-option-price-new",
+                          "items": [
+                            {
+                              "itemId": $itemId,
+                              "qty": 1,
+                              "selectedOptionId": $optionId,
+                              "priceDeltaMinor": 1
+                            }
+                          ],
+                          "previewFingerprint": "${stalePreview.pricingFingerprint}"
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, currentSubmitResponse.status)
+            val currentSubmit = json.decodeFromString(AddBatchResponse.serializer(), currentSubmitResponse.bodyAsText())
+            assertTrue(currentSubmit.recalculated)
+            assertEquals(100_000L, currentSubmit.pricing.items.single().baseUnitPriceMinor)
+            assertEquals(70_000L, currentSubmit.pricing.items.single().selectedOptionDeltaMinor)
+            assertEquals(170_000L, currentSubmit.pricing.items.single().priceMinor)
+
+            assertEquals(oldSnapshotBeforePriceEdit, fetchSelectedOptionSnapshot(jdbcUrl, oldSubmit.batchId))
+            assertEquals(
+                SelectedOptionSnapshot(
+                    optionId = optionId,
+                    name = "Премиальная чаша",
+                    priceDeltaMinor = 70_000,
+                ),
+                fetchSelectedOptionSnapshot(jdbcUrl, currentSubmit.batchId),
+            )
+            assertEquals(2, countRows(jdbcUrl, "order_batch_item_options"))
+
+            val activeResponse =
+                client.get(
+                    "/api/guest/order/active?tableToken=current-option-price-token" +
+                        "&tableSessionId=$tableSessionId&tabId=$personalTabId",
+                ) {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.OK, activeResponse.status)
+            val activeOrder =
+                assertNotNull(
+                    json.decodeFromString(ActiveOrderResponse.serializer(), activeResponse.bodyAsText()).order,
+                )
+            val oldOrderItem = activeOrder.batches.single { it.batchId == oldSubmit.batchId }.items.single()
+            assertEquals(30_000L, oldOrderItem.selectedOption?.priceDeltaMinor)
+            assertEquals(130_000L, oldOrderItem.priceMinor)
+            val currentOrderItem = activeOrder.batches.single { it.batchId == currentSubmit.batchId }.items.single()
+            assertEquals(70_000L, currentOrderItem.selectedOption?.priceDeltaMinor)
+            assertEquals(170_000L, currentOrderItem.priceMinor)
         }
 
     @Test
@@ -5566,6 +5735,22 @@ class GuestOrderRoutesTest {
                 statement.setLong(2, itemId)
                 statement.executeUpdate()
             }
+        }
+    }
+
+    private fun updateMenuOptionPrice(
+        jdbcUrl: String,
+        optionId: Long,
+        priceDeltaMinor: Long,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection
+                .prepareStatement("UPDATE menu_item_options SET price_delta_minor = ? WHERE id = ?")
+                .use { statement ->
+                    statement.setLong(1, priceDeltaMinor)
+                    statement.setLong(2, optionId)
+                    assertEquals(1, statement.executeUpdate())
+                }
         }
     }
 

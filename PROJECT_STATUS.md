@@ -1,8 +1,8 @@
 # Project Status
 
-Last verified: 2026-08-10 at `HEAD a62faa5` (`HEAD == origin/main`). **VENUE MENU MANAGEMENT UX
-STABILIZATION / MOBILE RESPONSIVENESS + PRICE INPUT ERGONOMICS + CONTEXT PRESERVATION / DONE / MVP /
-STAGING-SMOKE-PASSED**.
+Last verified: 2026-08-10 at `HEAD 9440b8f` (`HEAD == origin/main` before the current unstaged
+working-tree change). **DANGEROUS ACTION AUDIT SLICE / MENU OPTION PRICE AUDIT / MVP IMPLEMENTED /
+LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
 
 ## 1. Purpose and source-of-truth order
 
@@ -15,6 +15,9 @@ next-block change, P0/P1 blocker change or before a new long task.
 
 - Overall product, permission parity and dangerous-action audit remain `PARTIAL`; no whole product,
   Menu module or UX production-readiness claim is made.
+- **DANGEROUS ACTION AUDIT SLICE / MENU OPTION PRICE AUDIT / MVP IMPLEMENTED / LOCAL VALIDATION
+  PASSED / REVIEW REQUIRED BEFORE COMMIT**. This is an unstaged local implementation; Actions,
+  staging deploy and bounded staging smoke have not run for it.
 - **VENUE MENU MANAGEMENT UX STABILIZATION / MOBILE RESPONSIVENESS + PRICE INPUT ERGONOMICS +
   CONTEXT PRESERVATION / DONE / MVP / STAGING-SMOKE-PASSED**. Only that bounded UX contract is
   closed.
@@ -46,9 +49,10 @@ next-block change, P0/P1 blocker change or before a new long task.
 - Promotion creation/effective-state/lifecycle and staff role/removal audit slices remain closed only
   within their existing no-migration, bounded contracts.
 
-## 4. Next bounded block
+## 4. Current bounded block
 
-Verdict: **IMPLEMENT_MENU_OPTION_PRICE_AUDIT_NEXT**.
+Verdict: **IMPLEMENT_MENU_OPTION_PRICE_AUDIT_NEXT** is implemented locally and requires independent
+review before commit.
 
 Exact outcome: a real committed `menu_item_options.price_delta_minor` change through the existing
 authenticated Venue Mini App compound `PATCH /menu/options/{id}` writes exactly one safe price audit
@@ -62,8 +66,11 @@ Read-only evidence: `VenueMenuRepository.updateOption` is the sole option-price 
 already locks the item then all options before its DB-current update. The Mini App route derives
 actor and `VENUE_MINI_APP`; Telegram has no option-price writer. Checkout resolves the current
 available option and persists `price_delta_minor_snapshot`, so historical orders remain immutable
-while later submits use the DB-current price. **NO_MIGRATION_EXPECTED**, subject to focused
-implementation verification.
+while later submits use the DB-current price. The implementation writes the price audit on the same
+connection after any rename audit and before the one commit; an audit failure restores the complete
+compound row and both audit families. Deterministic PostgreSQL coverage is now nine tests and proves
+truthful price ordering/no-op plus serialization with rename, delete and normalization.
+**NO_MIGRATION**.
 
 ## 5. Open gaps and risks
 
@@ -90,20 +97,25 @@ implementation verification.
   provider data, guest text and unrelated PII.
 - Do not add a second promotion engine or implicitly define cross-promotion compatibility.
 
-## 7. Minimal verification
+## 7. Local verification
 
-Docs-only handoff:
+Passed for the current unstaged slice:
 
 ```bash
-git diff --check
-git status --short
-git diff --stat
-git diff --name-only
-git diff --cached --name-only
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VenueMenuRepositoryTest*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VenueMenuRoutesTest*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*GuestOrder*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*GuestVisit*' --console=plain
+JAVA_TOOL_OPTIONS=-Dapi.version=1.44 ./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VenueMenuOptionNormalizationConcurrencyPostgresTest*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:compileKotlin --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:ktlintCheck --console=plain
+npm --prefix miniapp run build
+CI=1 TZ=UTC MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke
 ```
 
-The closed UX release evidence is recorded in the canonical QA/checklist surfaces. Docs-only work
-does not rerun runtime tests or require a staging deploy.
+The PostgreSQL XML is `9/0/0/0`; Playwright is `152/152`. `git diff --check` passes. Runtime release
+closure still requires independent review, a future authorized commit/push, green Actions, staging
+deploy and bounded staging smoke.
 
 ## 8. Canonical document map
 
@@ -116,19 +128,19 @@ does not rerun runtime tests or require a staging deploy.
 - Current roadmap: `docs/UPDATED_PRODUCT_AI_ROADMAP.md`.
 - Manual smoke checklist: `docs/audit/MINI_APP_LAUNCH_SMOKE_CHECKLIST.md`.
 
-## 9. Start-of-next-task instructions
+## 9. Next action
 
 1. Check active Goal/objective, then read this file and only relevant canonical docs.
-2. For `IMPLEMENT_MENU_OPTION_PRICE_AUDIT_NEXT`, verify writer inventory before editing: Mini App
-   compound option PATCH is in scope; Telegram has no option-price writer.
-3. Preserve name/availability compatibility, item-then-option lock order, canonical normalization,
-   immutable order snapshots, RBAC and audit-payload privacy.
-4. Require focused repository/route/order/history/concurrency tests, Mini App build, green Actions,
-   staging deploy and bounded smoke before closing the future runtime slice.
+2. Independently review the unstaged `IMPLEMENT_MENU_OPTION_PRICE_AUDIT_NEXT` implementation,
+   especially exactly-one/no-op, actor/source, compound rollback, PostgreSQL ordering and immutable
+   order snapshots.
+3. Do not call the slice release-closed until an authorized commit/push has green Actions and the
+   changed runtime has passed staging deploy plus bounded smoke.
+4. Do not select or begin a second audit slice during this review.
 5. Do not touch stash or `scripts/dev/`; do not stage, commit, push or deploy without instruction.
 
 ## 10. Last verified date
 
 2026-08-10. Venue Menu UX stabilization and option rename are release-closed only for their bounded
-contracts. Menu option price audit is the selected next runtime block; the broader Menu and Dangerous
-Action Audit programs remain partial.
+contracts. Menu option price audit is locally implemented and validated but still requires review,
+Actions and staging evidence; the broader Menu and Dangerous Action Audit programs remain partial.

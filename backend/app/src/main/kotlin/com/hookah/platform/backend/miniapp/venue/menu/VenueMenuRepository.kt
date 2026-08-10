@@ -27,6 +27,7 @@ const val MENU_ITEM_DELETED_AUDIT_ACTION = "MENU_ITEM_DELETED"
 const val MENU_CATEGORY_DELETED_AUDIT_ACTION = "MENU_CATEGORY_DELETED"
 const val MENU_OPTION_DELETED_AUDIT_ACTION = "MENU_OPTION_DELETED"
 const val MENU_OPTION_RENAMED_AUDIT_ACTION = "MENU_OPTION_RENAMED"
+const val MENU_OPTION_PRICE_CHANGED_AUDIT_ACTION = "MENU_OPTION_PRICE_CHANGED"
 internal const val MENU_DELETE_AFFECTED_RULE_SAMPLE_LIMIT = 50
 internal const val MENU_DELETE_AUDIT_PAYLOAD_MAX_BYTES = 4096
 internal const val MENU_ITEM_DELETE_AFFECTED_RULE_SAMPLE_LIMIT = MENU_DELETE_AFFECTED_RULE_SAMPLE_LIMIT
@@ -964,7 +965,12 @@ class VenueMenuRepository(
                             return@use null
                         }
                         val updatedName = name ?: existing.name
+                        val updatedPriceDeltaMinor = priceDeltaMinor ?: existing.priceDeltaMinor
                         val isRename = updatedName != existing.name
+                        val isPriceChange = updatedPriceDeltaMinor != existing.priceDeltaMinor
+                        if (isPriceChange && source != MenuOptionRenameSource.VENUE_MINI_APP) {
+                            throw InvalidInputException("Option price changes are available only in Venue Mini App")
+                        }
                         val changesCanonicalProfile =
                             name != null &&
                                 HookahFlavorProfileService.normalizeFlavorNameKey(existing.name) !=
@@ -985,7 +991,7 @@ class VenueMenuRepository(
                                 """.trimIndent(),
                             ).use { statement ->
                                 statement.setString(1, updatedName)
-                                statement.setLong(2, priceDeltaMinor ?: existing.priceDeltaMinor)
+                                statement.setLong(2, updatedPriceDeltaMinor)
                                 statement.setBoolean(3, isAvailable ?: existing.isAvailable)
                                 statement.setLong(4, optionId)
                                 statement.setLong(5, venueId)
@@ -1005,6 +1011,17 @@ class VenueMenuRepository(
                                 newName = updatedName,
                                 actorUserId = actorUserId,
                                 source = source,
+                            )
+                        }
+                        if (isPriceChange) {
+                            auditMenuOptionPriceChange(
+                                connection = connection,
+                                venueId = venueId,
+                                itemId = itemId,
+                                optionId = optionId,
+                                oldPriceDeltaMinor = existing.priceDeltaMinor,
+                                newPriceDeltaMinor = updatedPriceDeltaMinor,
+                                actorUserId = actorUserId,
                             )
                         }
                         val result = loadOption(connection, optionId, venueId)
@@ -1407,6 +1424,32 @@ class VenueMenuRepository(
                     oldName = oldName,
                     newName = newName,
                     source = source,
+                ),
+        )
+    }
+
+    private fun auditMenuOptionPriceChange(
+        connection: Connection,
+        venueId: Long,
+        itemId: Long,
+        optionId: Long,
+        oldPriceDeltaMinor: Long,
+        newPriceDeltaMinor: Long,
+        actorUserId: Long,
+    ) {
+        auditLogWriter.appendJson(
+            connection = connection,
+            actorUserId = actorUserId,
+            action = MENU_OPTION_PRICE_CHANGED_AUDIT_ACTION,
+            entityType = "menu_item_option",
+            entityId = optionId,
+            payload =
+                buildMenuOptionPriceChangeAuditPayload(
+                    venueId = venueId,
+                    itemId = itemId,
+                    optionId = optionId,
+                    oldPriceDeltaMinor = oldPriceDeltaMinor,
+                    newPriceDeltaMinor = newPriceDeltaMinor,
                 ),
         )
     }
@@ -2308,6 +2351,21 @@ internal fun buildMenuOptionRenameAuditPayload(
     put("oldName", oldName)
     put("newName", newName)
     put("source", source.name)
+}
+
+internal fun buildMenuOptionPriceChangeAuditPayload(
+    venueId: Long,
+    itemId: Long,
+    optionId: Long,
+    oldPriceDeltaMinor: Long,
+    newPriceDeltaMinor: Long,
+) = buildJsonObject {
+    put("venueId", venueId)
+    put("itemId", itemId)
+    put("optionId", optionId)
+    put("oldPriceDeltaMinor", oldPriceDeltaMinor)
+    put("newPriceDeltaMinor", newPriceDeltaMinor)
+    put("source", MenuOptionRenameSource.VENUE_MINI_APP.name)
 }
 
 private fun buildAffectedPromotionRuleSummary(affectedRuleIds: Iterable<Long>) =

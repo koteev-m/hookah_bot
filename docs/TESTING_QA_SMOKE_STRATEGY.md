@@ -721,7 +721,7 @@ selectors listed in the task handoff. The mandatory real-PostgreSQL selector als
 
 CI must require exact XML
 `TEST-com.hookah.platform.backend.miniapp.venue.menu.VenueMenuOptionNormalizationConcurrencyPostgresTest.xml`
-with at least 7 tests and exactly zero skipped/failures/errors. Missing/zero/silently skipped XML
+with at least 9 tests and exactly zero skipped/failures/errors. Missing/zero/silently skipped XML
 fails the existing mandatory PostgreSQL gate; Docker is mandatory. The changed critical route gate
 also requires `GuestVisitRoutesTest` so the closed-history nullable-reference regression cannot be
 silently omitted.
@@ -775,17 +775,64 @@ Regression must preserve this bounded contract:
   existing response and atomic field behavior but writes only one rename audit.
 - Existing hookah canonical normalization, self-exclusion, non-hookah duplicate behavior,
   historical order snapshots and future-submit current-value resolution stay unchanged.
-- The seven-test PostgreSQL class deterministically covers rename versus rename, atomic base-profile
-  normalization, canonical create and direct delete in addition to the released normalization
-  regressions. It uses observed blocking/locks and no arbitrary sleep.
+- The nine-test PostgreSQL class deterministically covers rename versus rename, distinct and
+  same-target price updates, atomic base-profile normalization, canonical create and direct delete
+  in addition to the released normalization regressions. It uses observed blocking/locks and no
+  arbitrary sleep.
 
 Focused repository, route, Telegram and Guest/order/history selectors, `compileKotlin`,
 `ktlintCheck`, Mini App build and Playwright `139/139` passed locally. The mandatory PostgreSQL XML
-result is `8/0/0/0`, `14/0/0/0`, `2/0/0/0`, `7/0/0/0`; CI must keep minimums `8 / 14 / 2 / 7`
-with zero skipped/failures/errors. Green Actions, staging deploy and bounded cross-surface
+result recorded for that released rename slice is `8/0/0/0`, `14/0/0/0`, `2/0/0/0`, `7/0/0/0`;
+the current option-class CI minimum is nine after the price-audit extension. Green Actions, staging
+deploy and bounded cross-surface
 RBAC/audit/privacy/concurrency/history smoke are recorded functionally passed; schema verdict is
-**NO_MIGRATION_EXPECTED**. This does not close option create/price/availability, item mutations, the
+**NO_MIGRATION_EXPECTED**. This does not close option create/availability, item mutations, the
 broader Menu/Dangerous Action Audit or any media work.
+
+### Menu Option Price Audit quality gate
+
+Status: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION PRICE AUDIT / MVP IMPLEMENTED / LOCAL
+VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+
+Regression must preserve this bounded contract:
+
+- Owner and current allowed Manager update an own-venue option through the authenticated Mini App;
+  Staff, foreign and unaffiliated actors are denied. Actor is the session subject and source is the
+  server-owned `VENUE_MINI_APP`; actor/source-like body, query, path or client metadata are ignored
+  and cannot influence audit authority. Telegram has no option-price writer.
+- The repository uses the non-locking option-to-item hint, item `FOR UPDATE`, all item options in
+  ascending id `FOR UPDATE`, DB-current target reread, conditional rename collision check, compound
+  name/price/availability update, same-connection rename audit, same-connection price audit and one
+  commit. Any SQL/audit failure restores the full row including `updated_at` and both audit families.
+- One real committed delta change writes exactly one `MENU_OPTION_PRICE_CHANGED` for entity
+  `menu_item_option` / option id. Exact-price no-op/retry, name-only, availability-only, denied,
+  foreign, missing, collision, failed and rolled-back paths write zero price audit.
+- Price-only writes only price audit; name-only keeps exactly one rename audit; availability-only
+  writes neither. Name+price writes one independent audit of each family, and adding availability
+  keeps all fields atomic without adding availability audit. Existing response DTO is unchanged.
+- Price payload keys are exactly `venueId`, `itemId`, `optionId`, `oldPriceDeltaMinor`,
+  `newPriceDeltaMinor`, `source`. Names, availability, canonical values, promotion/cart/order
+  contents, raw request/initData, Telegram fields, media, secrets and unrelated PII are forbidden.
+  Rename payload continues to contain only its existing allowlist.
+- Existing integer/minor-unit validation, zero-delta allowance, request/response/UI parsing,
+  currency and rounding remain unchanged. Stale client/cart price is not authority: submit resolves
+  the current available DB option, persists the current delta snapshot and never rewrites older
+  `price_delta_minor_snapshot` rows.
+- The production Testcontainers PostgreSQL class uses independent connections, deterministic
+  latches and a confirmed blocking edge without arbitrary sleep. Its nine tests prove truthful
+  price-versus-price ordering, same-target loser no-op, price versus rename, direct delete and atomic
+  normalization, plus no partial compound updates or extra loser audits.
+
+Mandatory CI keeps the existing exact selectors/XML for `VenueMenuRepositoryTest`,
+`VenueMenuRoutesTest`, `GuestOrderRoutesTest`, `GuestVisitRoutesTest` and
+`VenueMenuOptionNormalizationConcurrencyPostgresTest`. The option PostgreSQL XML minimum is nine;
+all critical XML must have tests `> 0` and exactly zero skipped/failures/errors.
+
+Recorded local evidence: all four focused repository/route/order/history selectors, the nine-test
+PostgreSQL selector (`9/0/0/0`), `compileKotlin`, `ktlintCheck`, Mini App production build and full
+Playwright smoke `152/152` passed. `git diff --check` passes. No migration or workflow was added.
+Independent review, green Actions, staging deploy and bounded staging smoke are still required; the
+broader Menu/Dangerous Action Audit remains `PARTIAL`.
 
 ### Venue Menu Management UX Stabilization quality gate
 
@@ -1316,7 +1363,7 @@ Expectations:
   `VenueStaffMutationConcurrencyPostgresTest` and
   `VenueMenuOptionNormalizationConcurrencyPostgresTest` with
   `JAVA_TOOL_OPTIONS=-Dapi.version=1.44`, then independently parses all four XML reports. It
-  requires minimums `8 / 14 / 2 / 7`, each with `skipped=0`, `failures=0`, `errors=0`. Docker
+  requires minimums `8 / 14 / 2 / 9`, each with `skipped=0`, `failures=0`, `errors=0`. Docker
   availability alone is not evidence, and route failure must not silently skip the PostgreSQL gate.
 - If CI is red, first identify the failing job, failing test class, failing test name, assertion/error and first useful stack frame.
 - Do not paste only `Execution failed for task ':backend:app:test'`; inspect XML/test output or CI logs for the actual assertion.
@@ -1764,9 +1811,13 @@ Telegram/staff-chat:
   mandatory PostgreSQL, green Actions, staging deploy and the bounded 17-scenario smoke are
   recorded complete; keep the contract in regression.
 - Menu option rename audit: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION RENAME AUDIT / DONE / MVP /
-  STAGING-SMOKE-PASSED**. The seven-test option concurrency XML gate, focused cross-surface tests,
+  STAGING-SMOKE-PASSED**. The now-nine-test option concurrency XML gate, focused cross-surface tests,
   privacy/rollback checks, green Actions, staging deploy and bounded smoke are recorded complete.
   No migration was added.
+- Menu option price audit: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION PRICE AUDIT / MVP
+  IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. Focused
+  repository/route/order/history, nine-test PostgreSQL, build/lint and `152/152` browser checks pass;
+  Actions, staging deploy and bounded smoke remain open. No migration was added.
 - Venue Promotions Current/Archived Tabs UX: **VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / DONE / MVP / STAGING-SMOKE-PASSED**.
 - Promotion lifecycle status audit: **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**; broader dangerous-action coverage remains partial.
 - Promotion creation audit: **DANGEROUS ACTION AUDIT SLICE / PROMOTION CREATION AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**; mandatory repository/route/Telegram and PostgreSQL gates remain regression requirements. Configuration edit, schedule/target/reward, media/banner and broader dangerous-action coverage remain open.

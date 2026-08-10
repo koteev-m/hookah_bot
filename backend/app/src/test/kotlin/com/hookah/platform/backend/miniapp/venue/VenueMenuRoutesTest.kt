@@ -8,6 +8,7 @@ import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.miniapp.venue.menu.MENU_CATEGORY_DELETED_AUDIT_ACTION
 import com.hookah.platform.backend.miniapp.venue.menu.MENU_ITEM_DELETED_AUDIT_ACTION
 import com.hookah.platform.backend.miniapp.venue.menu.MENU_OPTION_DELETED_AUDIT_ACTION
+import com.hookah.platform.backend.miniapp.venue.menu.MENU_OPTION_PRICE_CHANGED_AUDIT_ACTION
 import com.hookah.platform.backend.miniapp.venue.menu.MENU_OPTION_RENAMED_AUDIT_ACTION
 import com.hookah.platform.backend.miniapp.venue.menu.MENU_SHIFT_CHECK_COMPLETED_AUDIT_ACTION
 import com.hookah.platform.backend.miniapp.venue.menu.MenuSemanticType
@@ -652,10 +653,14 @@ class VenueMenuRoutesTest {
                         append(HttpHeaders.Authorization, "Bearer ${issueToken(config, managerId)}")
                         append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
                     }
-                    setBody("""{"name":"Manager renamed option"}""")
+                    setBody("""{"name":"Manager renamed option","priceDeltaMinor":225}""")
                 }
 
             assertEquals(HttpStatusCode.OK, ownerResponse.status)
+            assertEquals(
+                setOf("id", "itemId", "name", "priceDeltaMinor", "isAvailable", "sortOrder"),
+                json.parseToJsonElement(ownerResponse.bodyAsText()).jsonObject.keys,
+            )
             val ownerOption = json.decodeFromString(VenueMenuOptionDto.serializer(), ownerResponse.bodyAsText())
             assertEquals("Owner renamed option", ownerOption.name)
             assertEquals(125L, ownerOption.priceDeltaMinor)
@@ -664,6 +669,10 @@ class VenueMenuRoutesTest {
             assertEquals(
                 "Manager renamed option",
                 json.decodeFromString(VenueMenuOptionDto.serializer(), managerResponse.bodyAsText()).name,
+            )
+            assertEquals(
+                225L,
+                json.decodeFromString(VenueMenuOptionDto.serializer(), managerResponse.bodyAsText()).priceDeltaMinor,
             )
 
             val audits = menuOptionRenameAudits(jdbcUrl)
@@ -694,10 +703,45 @@ class VenueMenuRoutesTest {
                 assertFalse(audit.payload.toString().contains("availability", ignoreCase = true))
                 assertFalse(audit.payload.toString().contains("private request body"))
             }
+            val priceAudits = menuOptionPriceChangeAudits(jdbcUrl)
+            assertEquals(2, priceAudits.size)
+            assertEquals(listOf(ownerId, managerId), priceAudits.map { it.actorUserId })
+            assertEquals(
+                listOf(fixture.firstOption.id, fixture.secondOption.id),
+                priceAudits.map { it.entityId },
+            )
+            assertEquals(
+                listOf(fixture.firstOption.priceDeltaMinor, fixture.secondOption.priceDeltaMinor),
+                priceAudits.map { it.payload.getValue("oldPriceDeltaMinor").jsonPrimitive.content.toLong() },
+            )
+            assertEquals(
+                listOf(125L, 225L),
+                priceAudits.map { it.payload.getValue("newPriceDeltaMinor").jsonPrimitive.content.toLong() },
+            )
+            priceAudits.forEach { audit ->
+                assertEquals("menu_item_option", audit.entityType)
+                assertEquals(
+                    setOf(
+                        "venueId",
+                        "itemId",
+                        "optionId",
+                        "oldPriceDeltaMinor",
+                        "newPriceDeltaMinor",
+                        "source",
+                    ),
+                    audit.payload.keys,
+                )
+                assertEquals("VENUE_MINI_APP", audit.payload.getValue("source").jsonPrimitive.content)
+                assertFalse(audit.payload.toString().contains("999999"))
+                assertFalse(audit.payload.toString().contains("TELEGRAM_BOT"))
+                assertFalse(audit.payload.toString().contains("name", ignoreCase = true))
+                assertFalse(audit.payload.toString().contains("availability", ignoreCase = true))
+                assertFalse(audit.payload.toString().contains("private request body"))
+            }
         }
 
     @Test
-    fun `same name repeat price only and availability only updates write zero rename audit`() =
+    fun `same price retries and availability only write no additional price or rename audit`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("menu-option-rename-audit-noop")
             val config = buildConfig(jdbcUrl)
@@ -714,6 +758,8 @@ class VenueMenuRoutesTest {
             val sameName = patchOption(client, token, url, """{"name":"${fixture.firstOption.name}"}""")
             val repeatedSameName = patchOption(client, token, url, """{"name":"${fixture.firstOption.name}"}""")
             val priceOnly = patchOption(client, token, url, """{"priceDeltaMinor":321}""")
+            val repeatedSamePrice = patchOption(client, token, url, """{"priceDeltaMinor":321}""")
+            val secondRepeatedSamePrice = patchOption(client, token, url, """{"priceDeltaMinor":321}""")
             val availabilityOnly = patchOption(client, token, url, """{"isAvailable":false}""")
             val dedicatedAvailability =
                 patchOption(
@@ -723,7 +769,15 @@ class VenueMenuRoutesTest {
                     """{"isAvailable":true}""",
                 )
 
-            listOf(sameName, repeatedSameName, priceOnly, availabilityOnly, dedicatedAvailability).forEach {
+            listOf(
+                sameName,
+                repeatedSameName,
+                priceOnly,
+                repeatedSamePrice,
+                secondRepeatedSamePrice,
+                availabilityOnly,
+                dedicatedAvailability,
+            ).forEach {
                 assertEquals(HttpStatusCode.OK, it.status)
             }
             val saved =
@@ -735,10 +789,21 @@ class VenueMenuRoutesTest {
             assertEquals(321L, saved.priceDeltaMinor)
             assertTrue(saved.isAvailable)
             assertTrue(menuOptionRenameAudits(jdbcUrl).isEmpty())
+            val priceAudit = menuOptionPriceChangeAudits(jdbcUrl).single()
+            assertEquals(managerId, priceAudit.actorUserId)
+            assertEquals(fixture.firstOption.id, priceAudit.entityId)
+            assertEquals(
+                fixture.firstOption.priceDeltaMinor,
+                priceAudit.payload.getValue("oldPriceDeltaMinor").jsonPrimitive.content.toLong(),
+            )
+            assertEquals(
+                321L,
+                priceAudit.payload.getValue("newPriceDeltaMinor").jsonPrimitive.content.toLong(),
+            )
         }
 
     @Test
-    fun `staff foreign and unaffiliated option rename denials write zero audit`() =
+    fun `staff foreign and unaffiliated compound option denials write zero audit`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("menu-option-rename-audit-denials")
             val config = buildConfig(jdbcUrl)
@@ -762,7 +827,7 @@ class VenueMenuRoutesTest {
                         client,
                         issueToken(config, actorId),
                         "/api/venue/menu/options/${fixture.firstOption.id}?venueId=$venueId",
-                        """{"name":"Denied private rename"}""",
+                        """{"name":"Denied private rename","priceDeltaMinor":999}""",
                     )
                 assertEquals(HttpStatusCode.Forbidden, response.status)
                 assertApiErrorEnvelope(response, ApiErrorCodes.FORBIDDEN)
@@ -772,7 +837,7 @@ class VenueMenuRoutesTest {
                     client,
                     issueToken(config, foreignManagerId),
                     "/api/venue/menu/options/${fixture.firstOption.id}?venueId=$foreignVenueId",
-                    """{"name":"Foreign scope rename"}""",
+                    """{"name":"Foreign scope rename","priceDeltaMinor":999}""",
                 )
             assertEquals(HttpStatusCode.NotFound, foreignScope.status)
             assertApiErrorEnvelope(foreignScope, ApiErrorCodes.NOT_FOUND)
@@ -784,6 +849,7 @@ class VenueMenuRoutesTest {
                     .single { it.id == fixture.firstOption.id }
             assertEquals(fixture.firstOption.name, saved.name)
             assertTrue(menuOptionRenameAudits(jdbcUrl).isEmpty())
+            assertTrue(menuOptionPriceChangeAudits(jdbcUrl).isEmpty())
         }
 
     @Test
@@ -823,10 +889,11 @@ class VenueMenuRoutesTest {
                 repository.getMenu(venueId).flatMap { it.items }.flatMap { it.options }.single { it.id == custom.id }
             assertEquals(custom, saved)
             assertTrue(menuOptionRenameAudits(jdbcUrl).isEmpty())
+            assertTrue(menuOptionPriceChangeAudits(jdbcUrl).isEmpty())
         }
 
     @Test
-    fun `rename audit failure returns safe error and rolls back compound patch`() =
+    fun `price audit failure returns safe error and rolls back compound patch and rename audit`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("menu-option-rename-audit-rollback")
             val config = buildConfig(jdbcUrl)
@@ -842,8 +909,8 @@ class VenueMenuRoutesTest {
                     statement.execute(
                         """
                         ALTER TABLE audit_log
-                        ADD CONSTRAINT reject_menu_option_rename_audit
-                        CHECK (action <> '$MENU_OPTION_RENAMED_AUDIT_ACTION')
+                        ADD CONSTRAINT reject_menu_option_price_audit
+                        CHECK (action <> '$MENU_OPTION_PRICE_CHANGED_AUDIT_ACTION')
                         """.trimIndent(),
                     )
                 }
@@ -860,6 +927,7 @@ class VenueMenuRoutesTest {
             assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
             assertApiErrorEnvelope(response, ApiErrorCodes.DATABASE_UNAVAILABLE)
             assertFalse(response.bodyAsText().contains(MENU_OPTION_RENAMED_AUDIT_ACTION))
+            assertFalse(response.bodyAsText().contains(MENU_OPTION_PRICE_CHANGED_AUDIT_ACTION))
             val saved =
                 menuRepository(jdbcUrl).getMenu(venueId)
                     .flatMap { it.items }
@@ -867,6 +935,7 @@ class VenueMenuRoutesTest {
                     .single { it.id == fixture.firstOption.id }
             assertEquals(fixture.firstOption, saved)
             assertTrue(menuOptionRenameAudits(jdbcUrl).isEmpty())
+            assertTrue(menuOptionPriceChangeAudits(jdbcUrl).isEmpty())
         }
 
     @Test
@@ -2235,6 +2304,9 @@ class VenueMenuRoutesTest {
 
     private fun menuOptionRenameAudits(jdbcUrl: String): List<MenuDeleteAuditRow> =
         menuDeleteAudits(jdbcUrl, MENU_OPTION_RENAMED_AUDIT_ACTION)
+
+    private fun menuOptionPriceChangeAudits(jdbcUrl: String): List<MenuDeleteAuditRow> =
+        menuDeleteAudits(jdbcUrl, MENU_OPTION_PRICE_CHANGED_AUDIT_ACTION)
 
     private suspend fun patchOption(
         client: HttpClient,

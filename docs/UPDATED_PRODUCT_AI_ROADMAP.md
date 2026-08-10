@@ -1099,11 +1099,49 @@ green Actions, staging deploy and the bounded 16-scenario Venue Menu UX smoke pa
 responsive management layout, price-input ergonomics and stable-ID context restoration; it does not
 close the broader Menu or Dangerous Action Audit programs.
 
-Next bounded block: **IMPLEMENT_MENU_OPTION_PRICE_AUDIT_NEXT**. The read-only audit finds one
-authenticated Mini App compound option-price writer already protected by item/ascending-option locks;
-Telegram has no option-price writer. The future slice must preserve immutable order snapshots and
-existing name/availability semantics, use the existing audit table without a migration, and remain
-separate from option create/availability and item price/update audit.
+Current bounded block: **IMPLEMENT_MENU_OPTION_PRICE_AUDIT_NEXT** is implemented locally.
+
+Status: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION PRICE AUDIT / MVP IMPLEMENTED / LOCAL
+VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. This is not release/staging closure and does not
+close the broader Menu or Dangerous Action Audit programs.
+
+Implementation evidence:
+
+- `VenueMenuRepository.updateOption` is the only production SQL writer that changes an existing
+  `menu_item_options.price_delta_minor`. Authenticated Venue Mini App
+  `PATCH /menu/options/{id}` is the only price caller; Telegram supplies `null` price and has no
+  option-price writer. Initial option create and fixed-zero missing-profile creation are unchanged
+  and outside this update slice.
+- The Mini App session subject is the sole actor and `VENUE_MINI_APP` is fixed server-side. Body,
+  query, path and client metadata cannot provide either. Owner/Manager retain current own-venue
+  `MENU_MANAGE`; Staff, foreign and unaffiliated actors remain denied.
+- The existing transaction takes a non-locking option-to-item hint, item `FOR UPDATE`, all item
+  options by ascending id `FOR UPDATE`, rereads the DB-current target, checks canonical collision
+  only for a real name change, applies the compound row update, appends any rename audit, appends any
+  price audit and commits once. Audit/SQL failure restores name, price, availability, `updated_at`
+  and both audit families.
+- One real committed delta change writes exactly one `MENU_OPTION_PRICE_CHANGED`, entity
+  `menu_item_option`, entity id `optionId`. Payload keys are exactly `venueId`, `itemId`, `optionId`,
+  `oldPriceDeltaMinor`, `newPriceDeltaMinor`, `source`. Actor stays in the standard audit column.
+  Names, availability, canonical values, promotion/cart/order data, raw request/initData, Telegram
+  fields, media, secrets and unrelated PII are excluded.
+- Exact-price no-op/retry, name-only, availability-only, denial/foreign/not-found, collision,
+  SQL/audit failure and rollback write zero price audit. Price-only has no rename audit;
+  name+price writes one independent audit of each family; adding availability remains atomic and
+  adds no availability audit. No idempotency token is introduced.
+- Integer minor units, zero delta, existing validation/request/response/UI parsing, currency and
+  rounding are unchanged. Checkout reloads the current available DB option/delta; client/stale-cart
+  price is not authority. New orders snapshot the current delta and historical
+  `price_delta_minor_snapshot` rows remain immutable.
+- Deterministic Testcontainers PostgreSQL coverage is nine tests, uses independent connections and
+  confirmed blocking without arbitrary sleep, and covers price/price, price/rename, direct delete
+  and atomic normalization. Exact XML is `9/0/0/0`; CI minimum is nine. Focused repository, route,
+  Guest order/history and Guest visit selectors, compile, ktlint, Mini App build and Playwright
+  `152/152` pass locally. No workflow or migration was added.
+
+Next action is independent review before any authorized commit/push, then green Actions, staging
+deploy and bounded smoke. Option create/availability, item price/update, Telegram price management,
+membership-recheck hardening, promotion work, viewers and media/storage remain outside this slice.
 
 ### Recent release-closed audit block
 
@@ -1131,7 +1169,7 @@ Runtime evidence:
   Rename does not rewrite history; a not-yet-submitted selection keeps the same option id and is
   resolved at submit against the current name/price/availability.
 
-Candidate comparison:
+Historical candidate comparison that selected the already release-closed rename slice:
 
 | Candidate | Current runtime evidence | Selection result |
 | --- | --- | --- |
@@ -1235,8 +1273,9 @@ then normalization may legitimately produce rename then delete audits, while nor
 winning first yields not-found and zero rename audit. Never log or audit the raw request/dialog
 payload. The pre-existing membership-revoke race remains a separate hardening block.
 
-CI/release/staging gates: all required Actions green for the implementation HEAD, including exact
-PostgreSQL XML minimums `8 / 14 / 2 / 7`; staging deploy is required for repository/route/Telegram
+CI/release/staging gates for that rename release required all Actions green, including the then-current
+PostgreSQL XML minimums `8 / 14 / 2 / 7`; the option-class minimum is now nine after the price-audit
+extension. Staging deploy is required for repository/route/Telegram
 behavior. Bounded smoke must cover Mini App and Telegram Owner/Manager rename, Staff/foreign denial,
 exactly-one/no-op/collision/privacy, normalization serialization/idempotence, historical snapshot,
 new-order current name, compound Mini App update compatibility and cleanup. Do not close option
@@ -1278,12 +1317,13 @@ option-name SQL writer; production callers — PATCH /menu/options/{id} и Teleg
 - historical order snapshot не переписывать; новый submit с тем же valid option id использует
   current DB name/price.
 
-Out of scope: option create/price/availability audit, item mutations, Shift Check, new uniqueness or
+Out of scope for that rename slice: option create/price/availability audit, item mutations, Shift Check, new uniqueness or
 base-option logic, migrations, audit viewer, membership-revoke linearization, promotions, media/R2.
 
 NO_MIGRATION_EXPECTED. Verify focused repository/route/Telegram tests, Mini App RBAC/source,
 Telegram actor/cancel/denial, historical/current-order behavior and deterministic PostgreSQL
-rename concurrency. Mandatory PostgreSQL gate is 8/14/2/7. Re-run focused backend tests, compile,
+rename concurrency. Its historical PostgreSQL gate was 8/14/2/7; the current option-class minimum is
+nine. Re-run focused backend tests, compile,
 ktlint and Mini App build/e2e. После green Actions нужны staging deploy и bounded cross-surface
 audit/privacy/concurrency/history smoke.
 ```

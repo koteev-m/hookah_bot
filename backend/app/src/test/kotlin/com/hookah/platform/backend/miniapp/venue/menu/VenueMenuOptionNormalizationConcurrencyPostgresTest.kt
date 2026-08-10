@@ -231,7 +231,119 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
         }
 
     @Test
-    fun `canonical update and normalization share item lock and preserve updated option`() =
+    fun `concurrent price changes audit truthful locked database transitions`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource)
+                val holderDataSource = HeldItemLockDataSource(dataSource)
+                val waiterDataSource = TrackedItemLockDataSource(dataSource)
+
+                val (firstUpdate, secondUpdate) =
+                    runWithHeldItemLock(
+                        observerDataSource = dataSource,
+                        holderDataSource = holderDataSource,
+                        waiterDataSource = waiterDataSource,
+                        beforeRelease = { assertInitialState(dataSource, fixture) },
+                        holderAction = {
+                            runBlocking {
+                                VenueMenuRepository(holderDataSource).updateOption(
+                                    venueId = fixture.venueId,
+                                    optionId = fixture.customOptionId,
+                                    name = null,
+                                    priceDeltaMinor = 500,
+                                    isAvailable = null,
+                                    actorUserId = FIRST_ACTOR_ID,
+                                    source = MenuOptionRenameSource.VENUE_MINI_APP,
+                                )
+                            }
+                        },
+                        waiterAction = {
+                            runBlocking {
+                                VenueMenuRepository(waiterDataSource).updateOption(
+                                    venueId = fixture.venueId,
+                                    optionId = fixture.customOptionId,
+                                    name = null,
+                                    priceDeltaMinor = 700,
+                                    isAvailable = null,
+                                    actorUserId = SECOND_ACTOR_ID,
+                                    source = MenuOptionRenameSource.VENUE_MINI_APP,
+                                )
+                            }
+                        },
+                    )
+
+                assertEquals(500L, assertNotNull(firstUpdate).priceDeltaMinor)
+                assertEquals(700L, assertNotNull(secondUpdate).priceDeltaMinor)
+                assertEquals(
+                    700L,
+                    readOptions(dataSource, fixture.itemId).single { it.id == fixture.customOptionId }.priceDeltaMinor,
+                )
+                val audits = readPriceAudits(dataSource)
+                assertEquals(2, audits.size)
+                assertPriceAudit(audits[0], fixture, 300, 500, FIRST_ACTOR_ID)
+                assertPriceAudit(audits[1], fixture, 500, 700, SECOND_ACTOR_ID)
+                assertTrue(readRenameAudits(dataSource).isEmpty())
+                assertTrue(readDeleteAudits(dataSource).isEmpty())
+            }
+        }
+
+    @Test
+    fun `concurrent same price has one audited winner and one database current no-op`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource)
+                val holderDataSource = HeldItemLockDataSource(dataSource)
+                val waiterDataSource = TrackedItemLockDataSource(dataSource)
+
+                val (winner, noOp) =
+                    runWithHeldItemLock(
+                        observerDataSource = dataSource,
+                        holderDataSource = holderDataSource,
+                        waiterDataSource = waiterDataSource,
+                        beforeRelease = { assertInitialState(dataSource, fixture) },
+                        holderAction = {
+                            runBlocking {
+                                VenueMenuRepository(holderDataSource).updateOption(
+                                    venueId = fixture.venueId,
+                                    optionId = fixture.customOptionId,
+                                    name = null,
+                                    priceDeltaMinor = 500,
+                                    isAvailable = null,
+                                    actorUserId = FIRST_ACTOR_ID,
+                                    source = MenuOptionRenameSource.VENUE_MINI_APP,
+                                )
+                            }
+                        },
+                        waiterAction = {
+                            runBlocking {
+                                VenueMenuRepository(waiterDataSource).updateOption(
+                                    venueId = fixture.venueId,
+                                    optionId = fixture.customOptionId,
+                                    name = null,
+                                    priceDeltaMinor = 500,
+                                    isAvailable = null,
+                                    actorUserId = SECOND_ACTOR_ID,
+                                    source = MenuOptionRenameSource.VENUE_MINI_APP,
+                                )
+                            }
+                        },
+                    )
+
+                assertEquals(500L, assertNotNull(winner).priceDeltaMinor)
+                assertEquals(500L, assertNotNull(noOp).priceDeltaMinor)
+                val audits = readPriceAudits(dataSource)
+                assertEquals(1, audits.size)
+                assertPriceAudit(audits.single(), fixture, 300, 500, FIRST_ACTOR_ID)
+                assertTrue(audits.none { it.actorUserId == SECOND_ACTOR_ID })
+                assertTrue(readRenameAudits(dataSource).isEmpty())
+                assertTrue(readDeleteAudits(dataSource).isEmpty())
+            }
+        }
+
+    @Test
+    fun `compound price update and normalization share item lock and preserve updated option`() =
         runBlocking {
             val database = PostgresTestEnv.createDatabase()
             PostgresTestEnv.createDataSource(database).use { dataSource ->
@@ -252,7 +364,7 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
                                     venueId = fixture.venueId,
                                     optionId = fixture.customOptionId,
                                     name = profileName,
-                                    priceDeltaMinor = null,
+                                    priceDeltaMinor = 650,
                                     isAvailable = null,
                                     actorUserId = SECOND_ACTOR_ID,
                                     source = MenuOptionRenameSource.VENUE_MINI_APP,
@@ -275,6 +387,7 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
                 val normalizationResult = assertNotNull(normalization)
                 assertEquals(fixture.customOptionId, updatedOption.id)
                 assertEquals(profileName, updatedOption.name)
+                assertEquals(650L, updatedOption.priceDeltaMinor)
                 assertEquals(fixture.obsoleteOptionIds.size, normalizationResult.removedCount)
                 assertEquals(HookahFlavorProfileService.baseProfiles.size - 2, normalizationResult.addedCount)
                 assertNormalizedState(
@@ -292,6 +405,12 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
                         option.id == fixture.customOptionId
                     }
                 assertEquals(profileName, finalUpdatedOption.name)
+                assertEquals(650L, finalUpdatedOption.priceDeltaMinor)
+                assertTrue(
+                    readOptions(dataSource, fixture.itemId)
+                        .filter { it.id !in setOf(fixture.customOptionId, fixture.existingCanonicalOptionId) }
+                        .all { it.priceDeltaMinor == 0L },
+                )
                 assertRenameAudit(
                     dataSource = dataSource,
                     fixture = fixture,
@@ -299,6 +418,13 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
                     expectedNewName = profileName,
                     expectedActorUserId = SECOND_ACTOR_ID,
                     expectedSource = MenuOptionRenameSource.VENUE_MINI_APP,
+                )
+                assertPriceAudit(
+                    audit = readPriceAudits(dataSource).single(),
+                    fixture = fixture,
+                    expectedOldPriceDeltaMinor = 300,
+                    expectedNewPriceDeltaMinor = 650,
+                    expectedActorUserId = SECOND_ACTOR_ID,
                 )
                 assertFailsWith<InvalidInputException> {
                     VenueMenuRepository(dataSource).updateOption(
@@ -321,7 +447,7 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
         }
 
     @Test
-    fun `concurrent renames serialize and audit locked database transitions`() =
+    fun `compound price rename and rename serialize with independent audits`() =
         runBlocking {
             val database = PostgresTestEnv.createDatabase()
             PostgresTestEnv.createDataSource(database).use { dataSource ->
@@ -341,7 +467,7 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
                                     venueId = fixture.venueId,
                                     optionId = fixture.customOptionId,
                                     name = "Первое имя",
-                                    priceDeltaMinor = null,
+                                    priceDeltaMinor = 500,
                                     isAvailable = null,
                                     actorUserId = FIRST_ACTOR_ID,
                                     source = MenuOptionRenameSource.VENUE_MINI_APP,
@@ -363,8 +489,12 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
                         },
                     )
 
-                assertEquals("Первое имя", assertNotNull(firstRename).name)
-                assertEquals("Второе имя", assertNotNull(secondRename).name)
+                val firstRenamedOption = assertNotNull(firstRename)
+                val secondRenamedOption = assertNotNull(secondRename)
+                assertEquals("Первое имя", firstRenamedOption.name)
+                assertEquals("Второе имя", secondRenamedOption.name)
+                assertEquals(500L, firstRenamedOption.priceDeltaMinor)
+                assertEquals(500L, secondRenamedOption.priceDeltaMinor)
                 assertEquals(
                     "Второе имя",
                     readOptions(dataSource, fixture.itemId).single { it.id == fixture.customOptionId }.name,
@@ -386,6 +516,13 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
                     expectedNewName = "Второе имя",
                     expectedActorUserId = SECOND_ACTOR_ID,
                     expectedSource = MenuOptionRenameSource.TELEGRAM_BOT,
+                )
+                assertPriceAudit(
+                    audit = readPriceAudits(dataSource).single(),
+                    fixture = fixture,
+                    expectedOldPriceDeltaMinor = 300,
+                    expectedNewPriceDeltaMinor = 500,
+                    expectedActorUserId = FIRST_ACTOR_ID,
                 )
                 assertTrue(readDeleteAudits(dataSource).isEmpty())
             }
@@ -457,7 +594,7 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
         }
 
     @Test
-    fun `direct delete and rename serialize with not found rename and zero rename audit`() =
+    fun `direct delete and compound price rename serialize with zero loser audits`() =
         runBlocking {
             val database = PostgresTestEnv.createDatabase()
             PostgresTestEnv.createDataSource(database).use { dataSource ->
@@ -487,7 +624,7 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
                                     venueId = fixture.venueId,
                                     optionId = fixture.customOptionId,
                                     name = "Удалённый вариант",
-                                    priceDeltaMinor = null,
+                                    priceDeltaMinor = 700,
                                     isAvailable = null,
                                     actorUserId = SECOND_ACTOR_ID,
                                     source = MenuOptionRenameSource.VENUE_MINI_APP,
@@ -506,6 +643,7 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
                     expectedActorUserId = FIRST_ACTOR_ID,
                 )
                 assertTrue(readRenameAudits(dataSource).isEmpty())
+                assertTrue(readPriceAudits(dataSource).isEmpty())
             }
         }
 
@@ -777,6 +915,8 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
             options.map { option -> option.id }.toSet(),
         )
         assertTrue(readDeleteAudits(dataSource).isEmpty())
+        assertTrue(readRenameAudits(dataSource).isEmpty())
+        assertTrue(readPriceAudits(dataSource).isEmpty())
     }
 
     private fun assertNormalizedState(
@@ -876,6 +1016,25 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
         assertEquals(expectedSource.name, audit.payload.getValue("source").jsonPrimitive.content)
     }
 
+    private fun assertPriceAudit(
+        audit: AuditRow,
+        fixture: Fixture,
+        expectedOldPriceDeltaMinor: Long,
+        expectedNewPriceDeltaMinor: Long,
+        expectedActorUserId: Long,
+    ) {
+        assertEquals(expectedActorUserId, audit.actorUserId)
+        assertEquals("menu_item_option", audit.entityType)
+        assertEquals(fixture.customOptionId, audit.entityId)
+        assertEquals(PRICE_AUDIT_PAYLOAD_KEYS, audit.payload.keys)
+        assertEquals(fixture.venueId, audit.payload.longValue("venueId"))
+        assertEquals(fixture.itemId, audit.payload.longValue("itemId"))
+        assertEquals(fixture.customOptionId, audit.payload.longValue("optionId"))
+        assertEquals(expectedOldPriceDeltaMinor, audit.payload.longValue("oldPriceDeltaMinor"))
+        assertEquals(expectedNewPriceDeltaMinor, audit.payload.longValue("newPriceDeltaMinor"))
+        assertEquals("VENUE_MINI_APP", audit.payload.getValue("source").jsonPrimitive.content)
+    }
+
     private fun readOptions(
         dataSource: DataSource,
         itemId: Long,
@@ -883,7 +1042,7 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
         dataSource.connection.use { connection ->
             connection.prepareStatement(
                 """
-                SELECT id, name
+                SELECT id, name, price_delta_minor
                 FROM menu_item_options
                 WHERE item_id = ?
                 ORDER BY id
@@ -893,7 +1052,13 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
                 statement.executeQuery().use { resultSet ->
                     buildList {
                         while (resultSet.next()) {
-                            add(OptionRow(id = resultSet.getLong("id"), name = resultSet.getString("name")))
+                            add(
+                                OptionRow(
+                                    id = resultSet.getLong("id"),
+                                    name = resultSet.getString("name"),
+                                    priceDeltaMinor = resultSet.getLong("price_delta_minor"),
+                                ),
+                            )
                         }
                     }
                 }
@@ -905,6 +1070,9 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
 
     private fun readRenameAudits(dataSource: DataSource): List<AuditRow> =
         readAudits(dataSource, MENU_OPTION_RENAMED_AUDIT_ACTION)
+
+    private fun readPriceAudits(dataSource: DataSource): List<AuditRow> =
+        readAudits(dataSource, MENU_OPTION_PRICE_CHANGED_AUDIT_ACTION)
 
     private fun readAudits(
         dataSource: DataSource,
@@ -1047,6 +1215,7 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
     private data class OptionRow(
         val id: Long,
         val name: String,
+        val priceDeltaMinor: Long,
     )
 
     private data class AuditRow(
@@ -1069,6 +1238,15 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
 
         val AUDIT_PAYLOAD_KEYS = setOf("venueId", "itemId", "optionId", "source")
         val RENAME_AUDIT_PAYLOAD_KEYS = setOf("venueId", "itemId", "optionId", "oldName", "newName", "source")
+        val PRICE_AUDIT_PAYLOAD_KEYS =
+            setOf(
+                "venueId",
+                "itemId",
+                "optionId",
+                "oldPriceDeltaMinor",
+                "newPriceDeltaMinor",
+                "source",
+            )
         val WHITESPACE = Regex("\\s+")
     }
 }
