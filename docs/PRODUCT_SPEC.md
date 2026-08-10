@@ -310,8 +310,13 @@ D. Venue Mini App option CRUD/flavor-profile parity for OWNER/MANAGER, with STAF
 E. Smoke/docs closure: bot vs Mini App option parity, staff chat/order detail display, unavailable option rejection and money snapshot tests.
 
 Remaining follow-ups after parity closure:
-- Mini App normalize/reset base flavor profiles only if still needed after venue pilots.
-- DB-level duplicate/race protection for base flavor profile apply only if concurrent apply becomes a real operational issue.
+- Application-level item lock, deterministic option-row lock order and DB-current recheck are
+  implemented for guarded canonical create, actual rename and Telegram normalization; one Telegram
+  normalization callback applies one item atomically and prevents duplicate canonical profiles.
+- A DB unique constraint/general option-uniqueness rule is not implemented. The Mini App
+  add-missing-profiles action still performs guarded per-option creates rather than one atomic bulk
+  apply; a DB constraint or Mini App atomic bulk apply remains future only if product/operational
+  evidence requires it.
 - Broad Venue Mini App IA parity with bot sections remains separate. `Работа смены`, `Настройки`,
   read-only `Статистика` and read-only `Предпросмотр для гостя` now have backend-backed screens.
   Guest Preview is **VENUE MINI APP GUEST PREVIEW / PUBLISHED + PRIVATE DRAFT READ-ONLY / DONE /

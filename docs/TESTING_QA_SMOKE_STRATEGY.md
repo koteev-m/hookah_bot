@@ -1,12 +1,12 @@
 # Testing / QA Smoke Strategy
 
-Дата актуализации: 2026-08-08.
+Дата актуализации: 2026-08-09.
 
 Статус: **current product reference / UPDATED**. This document is the canonical QA/smoke strategy for the Telegram bot + Mini App platform. It consolidates local validation, GitHub Actions expectations, area-specific smoke suites, staging policy, failure reporting and Codex handoff rules. Deployment and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
 
-Current bounded implementation: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION HARD DELETE AUDIT /
-ATOMIC BASE-PROFILE NORMALIZATION INCLUDED / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW
-REQUIRED BEFORE COMMIT**. This status is local only; Actions, staging deploy and bounded smoke remain.
+Latest release-closed bounded slice: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION HARD DELETE AUDIT /
+ATOMIC BASE-PROFILE NORMALIZATION INCLUDED / DONE / MVP / STAGING-SMOKE-PASSED**. The broader Menu
+and Dangerous Action Audit programs remain partial.
 
 ## Core Rule
 
@@ -669,8 +669,7 @@ build and Playwright regression gates remain required. No migration or new workf
 ### Menu Option Hard Delete Audit And Atomic Normalization quality gate
 
 Status: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION HARD DELETE AUDIT / ATOMIC BASE-PROFILE
-NORMALIZATION INCLUDED / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE
-COMMIT**.
+NORMALIZATION INCLUDED / DONE / MVP / STAGING-SMOKE-PASSED**.
 
 Regression must preserve this bounded contract:
 
@@ -727,9 +726,28 @@ silently omitted.
 Recorded local evidence: focused repository, Mini App route, Telegram, Guest order/history, Venue
 order, compile and ktlint selectors passed; the combined mandatory PostgreSQL selector produced
 `8/0/0/0`, `14/0/0/0`, `2/0/0/0`, `4/0/0/0` for its four exact XML classes; Mini App production
-build and Playwright smoke `139/139` passed. Staging deploy and bounded Owner/Manager/Staff/foreign,
-direct/normalization, exactly-one/rollback/privacy/history/stale-selection smoke remain required.
-Schema verdict: **NO_MIGRATION_EXPECTED**.
+build and Playwright smoke `139/139` passed. Schema verdict: **NO_MIGRATION_EXPECTED**.
+
+For release HEAD `03ae0af`, which matches `origin/main` at this handoff, the user-confirmed evidence
+records fully green GitHub Actions, staging deploy and these bounded staging scenarios passed:
+
+1. Mini App Owner/Manager direct option delete.
+2. Telegram Owner/Manager direct option delete.
+3. Staff denied.
+4. Foreign/unaffiliated actors denied under the current contract.
+5. Direct delete creates one audit row.
+6. Repeated delete creates no second audit row.
+7. Audit actor/source/entity/payload are correct.
+8. Atomic base-profile normalization completes as one operation.
+9. Obsolete profiles are removed.
+10. Custom options are preserved.
+11. Existing canonical profiles are preserved.
+12. Missing canonical profiles are created.
+13. Repeated normalization creates neither duplicate profiles nor new delete audits.
+14. Historical order retains option name and price snapshots.
+15. A stale cart with the deleted option is rejected safely without a new order row.
+16. Guest menu and ordinary work data remain intact.
+17. Cleanup completed normally.
 
 ## Venue Mini App Media Foundation Future Quality Gate
 
@@ -1202,11 +1220,12 @@ Expectations:
   activation/teardown, mutation-coordinator, order, tab, staff-call, shift-extension, support and
   promotion route/repository/audit classes; its per-class XML assertion fails on a
   missing/zero/skipped/failing suite. A second step runs
-  `GuestTableContextActivationPostgresTest`, `PromotionConfigurationConcurrencyPostgresTest` and
-  `VenueStaffMutationConcurrencyPostgresTest` with `JAVA_TOOL_OPTIONS=-Dapi.version=1.44`, then
-  independently parses all three XML reports. It requires minimums `8 / 14 / 2`, each with
-  `skipped=0`, `failures=0`, `errors=0`. Docker availability alone is not evidence, and route
-  failure must not silently skip the PostgreSQL gate.
+  `GuestTableContextActivationPostgresTest`, `PromotionConfigurationConcurrencyPostgresTest`,
+  `VenueStaffMutationConcurrencyPostgresTest` and
+  `VenueMenuOptionNormalizationConcurrencyPostgresTest` with
+  `JAVA_TOOL_OPTIONS=-Dapi.version=1.44`, then independently parses all four XML reports. It
+  requires minimums `8 / 14 / 2 / 4`, each with `skipped=0`, `failures=0`, `errors=0`. Docker
+  availability alone is not evidence, and route failure must not silently skip the PostgreSQL gate.
 - If CI is red, first identify the failing job, failing test class, failing test name, assertion/error and first useful stack frame.
 - Do not paste only `Execution failed for task ':backend:app:test'`; inspect XML/test output or CI logs for the actual assertion.
 - External/transient failures should be separated from product regressions. A network/dependency timeout is not the same as a Kotlin compile/test failure.
@@ -1649,9 +1668,9 @@ Telegram/staff-chat:
   DONE / MVP / STAGING-SMOKE-PASSED**. H2/route/Telegram/privacy/rollback and PostgreSQL
   config/delete race gates remain in regression; CI minimum is 14. No migration was added.
 - Menu option hard-delete audit: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION HARD DELETE AUDIT /
-  ATOMIC BASE-PROFILE NORMALIZATION INCLUDED / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW
-  REQUIRED BEFORE COMMIT**. Focused local and mandatory PostgreSQL evidence is green; independent
-  review, Actions, staging deploy and bounded smoke remain.
+  ATOMIC BASE-PROFILE NORMALIZATION INCLUDED / DONE / MVP / STAGING-SMOKE-PASSED**. Focused local,
+  mandatory PostgreSQL, green Actions, staging deploy and the bounded 17-scenario smoke are
+  recorded complete; keep the contract in regression.
 - Venue Promotions Current/Archived Tabs UX: **VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / DONE / MVP / STAGING-SMOKE-PASSED**.
 - Promotion lifecycle status audit: **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**; broader dangerous-action coverage remains partial.
 - Promotion creation audit: **DANGEROUS ACTION AUDIT SLICE / PROMOTION CREATION AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**; mandatory repository/route/Telegram and PostgreSQL gates remain regression requirements. Configuration edit, schedule/target/reward, media/banner and broader dangerous-action coverage remain open.
