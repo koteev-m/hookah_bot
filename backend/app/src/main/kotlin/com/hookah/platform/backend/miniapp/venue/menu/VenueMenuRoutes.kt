@@ -349,6 +349,8 @@ fun Route.venueMenuRoutes(
                     name = name,
                     priceDeltaMinor = payload.priceDeltaMinor,
                     isAvailable = payload.isAvailable,
+                    actorUserId = userId,
+                    source = MenuOptionRenameSource.VENUE_MINI_APP,
                 ) ?: throw NotFoundException()
             call.respond(updated.toDto())
         }

@@ -254,6 +254,8 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
                                     name = profileName,
                                     priceDeltaMinor = null,
                                     isAvailable = null,
+                                    actorUserId = SECOND_ACTOR_ID,
+                                    source = MenuOptionRenameSource.VENUE_MINI_APP,
                                 )
                             }
                         },
@@ -290,6 +292,14 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
                         option.id == fixture.customOptionId
                     }
                 assertEquals(profileName, finalUpdatedOption.name)
+                assertRenameAudit(
+                    dataSource = dataSource,
+                    fixture = fixture,
+                    expectedOldName = CUSTOM_OPTION_NAME,
+                    expectedNewName = profileName,
+                    expectedActorUserId = SECOND_ACTOR_ID,
+                    expectedSource = MenuOptionRenameSource.VENUE_MINI_APP,
+                )
                 assertFailsWith<InvalidInputException> {
                     VenueMenuRepository(dataSource).updateOption(
                         venueId = fixture.venueId,
@@ -297,6 +307,8 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
                         name = profileName,
                         priceDeltaMinor = null,
                         isAvailable = null,
+                        actorUserId = SECOND_ACTOR_ID,
+                        source = MenuOptionRenameSource.VENUE_MINI_APP,
                     )
                 }
                 assertDeleteAudits(
@@ -305,6 +317,195 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
                     expectedOptionIds = fixture.obsoleteOptionIds,
                     expectedActorUserId = FIRST_ACTOR_ID,
                 )
+            }
+        }
+
+    @Test
+    fun `concurrent renames serialize and audit locked database transitions`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource)
+                val holderDataSource = HeldItemLockDataSource(dataSource)
+                val waiterDataSource = TrackedItemLockDataSource(dataSource)
+
+                val (firstRename, secondRename) =
+                    runWithHeldItemLock(
+                        observerDataSource = dataSource,
+                        holderDataSource = holderDataSource,
+                        waiterDataSource = waiterDataSource,
+                        beforeRelease = { assertInitialState(dataSource, fixture) },
+                        holderAction = {
+                            runBlocking {
+                                VenueMenuRepository(holderDataSource).updateOption(
+                                    venueId = fixture.venueId,
+                                    optionId = fixture.customOptionId,
+                                    name = "Первое имя",
+                                    priceDeltaMinor = null,
+                                    isAvailable = null,
+                                    actorUserId = FIRST_ACTOR_ID,
+                                    source = MenuOptionRenameSource.VENUE_MINI_APP,
+                                )
+                            }
+                        },
+                        waiterAction = {
+                            runBlocking {
+                                VenueMenuRepository(waiterDataSource).updateOption(
+                                    venueId = fixture.venueId,
+                                    optionId = fixture.customOptionId,
+                                    name = "Второе имя",
+                                    priceDeltaMinor = null,
+                                    isAvailable = null,
+                                    actorUserId = SECOND_ACTOR_ID,
+                                    source = MenuOptionRenameSource.TELEGRAM_BOT,
+                                )
+                            }
+                        },
+                    )
+
+                assertEquals("Первое имя", assertNotNull(firstRename).name)
+                assertEquals("Второе имя", assertNotNull(secondRename).name)
+                assertEquals(
+                    "Второе имя",
+                    readOptions(dataSource, fixture.itemId).single { it.id == fixture.customOptionId }.name,
+                )
+                val audits = readRenameAudits(dataSource)
+                assertEquals(2, audits.size)
+                assertRenameAudit(
+                    audit = audits[0],
+                    fixture = fixture,
+                    expectedOldName = CUSTOM_OPTION_NAME,
+                    expectedNewName = "Первое имя",
+                    expectedActorUserId = FIRST_ACTOR_ID,
+                    expectedSource = MenuOptionRenameSource.VENUE_MINI_APP,
+                )
+                assertRenameAudit(
+                    audit = audits[1],
+                    fixture = fixture,
+                    expectedOldName = "Первое имя",
+                    expectedNewName = "Второе имя",
+                    expectedActorUserId = SECOND_ACTOR_ID,
+                    expectedSource = MenuOptionRenameSource.TELEGRAM_BOT,
+                )
+                assertTrue(readDeleteAudits(dataSource).isEmpty())
+            }
+        }
+
+    @Test
+    fun `canonical rename and create serialize with collision loser and one rename audit`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource)
+                val profileName = HookahFlavorProfileService.baseProfiles.last()
+                val holderDataSource = HeldItemLockDataSource(dataSource)
+                val waiterDataSource = TrackedItemLockDataSource(dataSource)
+
+                val (renamed, createAttempt) =
+                    runWithHeldItemLock(
+                        observerDataSource = dataSource,
+                        holderDataSource = holderDataSource,
+                        waiterDataSource = waiterDataSource,
+                        beforeRelease = { assertInitialState(dataSource, fixture) },
+                        holderAction = {
+                            runBlocking {
+                                VenueMenuRepository(holderDataSource).updateOption(
+                                    venueId = fixture.venueId,
+                                    optionId = fixture.customOptionId,
+                                    name = profileName,
+                                    priceDeltaMinor = null,
+                                    isAvailable = null,
+                                    actorUserId = FIRST_ACTOR_ID,
+                                    source = MenuOptionRenameSource.VENUE_MINI_APP,
+                                )
+                            }
+                        },
+                        waiterAction = {
+                            runCatching {
+                                runBlocking {
+                                    VenueMenuRepository(waiterDataSource).createOption(
+                                        venueId = fixture.venueId,
+                                        itemId = fixture.itemId,
+                                        name = profileName,
+                                        priceDeltaMinor = 0,
+                                        isAvailable = true,
+                                    )
+                                }
+                            }
+                        },
+                    )
+
+                assertEquals(profileName, assertNotNull(renamed).name)
+                assertTrue(createAttempt.exceptionOrNull() is InvalidInputException)
+                assertEquals(
+                    1,
+                    readOptions(dataSource, fixture.itemId).count { option ->
+                        HookahFlavorProfileService.normalizeFlavorNameKey(option.name) ==
+                            HookahFlavorProfileService.normalizeFlavorNameKey(profileName)
+                    },
+                )
+                assertRenameAudit(
+                    dataSource = dataSource,
+                    fixture = fixture,
+                    expectedOldName = CUSTOM_OPTION_NAME,
+                    expectedNewName = profileName,
+                    expectedActorUserId = FIRST_ACTOR_ID,
+                    expectedSource = MenuOptionRenameSource.VENUE_MINI_APP,
+                )
+                assertTrue(readDeleteAudits(dataSource).isEmpty())
+            }
+        }
+
+    @Test
+    fun `direct delete and rename serialize with not found rename and zero rename audit`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource)
+                val holderDataSource = HeldItemLockDataSource(dataSource)
+                val waiterDataSource = TrackedItemLockDataSource(dataSource)
+
+                val (deleted, renamed) =
+                    runWithHeldItemLock(
+                        observerDataSource = dataSource,
+                        holderDataSource = holderDataSource,
+                        waiterDataSource = waiterDataSource,
+                        beforeRelease = { assertInitialState(dataSource, fixture) },
+                        holderAction = {
+                            runBlocking {
+                                VenueMenuRepository(holderDataSource).deleteOption(
+                                    venueId = fixture.venueId,
+                                    optionId = fixture.customOptionId,
+                                    actorUserId = FIRST_ACTOR_ID,
+                                    source = MenuOptionDeleteSource.TELEGRAM_BOT,
+                                )
+                            }
+                        },
+                        waiterAction = {
+                            runBlocking {
+                                VenueMenuRepository(waiterDataSource).updateOption(
+                                    venueId = fixture.venueId,
+                                    optionId = fixture.customOptionId,
+                                    name = "Удалённый вариант",
+                                    priceDeltaMinor = null,
+                                    isAvailable = null,
+                                    actorUserId = SECOND_ACTOR_ID,
+                                    source = MenuOptionRenameSource.VENUE_MINI_APP,
+                                )
+                            }
+                        },
+                    )
+
+                assertTrue(deleted)
+                assertEquals(null, renamed)
+                assertTrue(readOptions(dataSource, fixture.itemId).none { it.id == fixture.customOptionId })
+                assertDeleteAudits(
+                    dataSource = dataSource,
+                    fixture = fixture,
+                    expectedOptionIds = setOf(fixture.customOptionId),
+                    expectedActorUserId = FIRST_ACTOR_ID,
+                )
+                assertTrue(readRenameAudits(dataSource).isEmpty())
             }
         }
 
@@ -636,6 +837,45 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
         }
     }
 
+    private fun assertRenameAudit(
+        dataSource: DataSource,
+        fixture: Fixture,
+        expectedOldName: String,
+        expectedNewName: String,
+        expectedActorUserId: Long,
+        expectedSource: MenuOptionRenameSource,
+    ) {
+        val audit = readRenameAudits(dataSource).single()
+        assertRenameAudit(
+            audit = audit,
+            fixture = fixture,
+            expectedOldName = expectedOldName,
+            expectedNewName = expectedNewName,
+            expectedActorUserId = expectedActorUserId,
+            expectedSource = expectedSource,
+        )
+    }
+
+    private fun assertRenameAudit(
+        audit: AuditRow,
+        fixture: Fixture,
+        expectedOldName: String,
+        expectedNewName: String,
+        expectedActorUserId: Long,
+        expectedSource: MenuOptionRenameSource,
+    ) {
+        assertEquals(expectedActorUserId, audit.actorUserId)
+        assertEquals("menu_item_option", audit.entityType)
+        assertEquals(fixture.customOptionId, audit.entityId)
+        assertEquals(RENAME_AUDIT_PAYLOAD_KEYS, audit.payload.keys)
+        assertEquals(fixture.venueId, audit.payload.longValue("venueId"))
+        assertEquals(fixture.itemId, audit.payload.longValue("itemId"))
+        assertEquals(fixture.customOptionId, audit.payload.longValue("optionId"))
+        assertEquals(expectedOldName, audit.payload.getValue("oldName").jsonPrimitive.content)
+        assertEquals(expectedNewName, audit.payload.getValue("newName").jsonPrimitive.content)
+        assertEquals(expectedSource.name, audit.payload.getValue("source").jsonPrimitive.content)
+    }
+
     private fun readOptions(
         dataSource: DataSource,
         itemId: Long,
@@ -661,6 +901,15 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
         }
 
     private fun readDeleteAudits(dataSource: DataSource): List<AuditRow> =
+        readAudits(dataSource, MENU_OPTION_DELETED_AUDIT_ACTION)
+
+    private fun readRenameAudits(dataSource: DataSource): List<AuditRow> =
+        readAudits(dataSource, MENU_OPTION_RENAMED_AUDIT_ACTION)
+
+    private fun readAudits(
+        dataSource: DataSource,
+        action: String,
+    ): List<AuditRow> =
         dataSource.connection.use { connection ->
             connection.prepareStatement(
                 """
@@ -670,7 +919,7 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
                 ORDER BY id
                 """.trimIndent(),
             ).use { statement ->
-                statement.setString(1, MENU_OPTION_DELETED_AUDIT_ACTION)
+                statement.setString(1, action)
                 statement.executeQuery().use { resultSet ->
                     buildList {
                         while (resultSet.next()) {
@@ -819,6 +1068,7 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
         const val WAIT_TIMEOUT_SECONDS = 30L
 
         val AUDIT_PAYLOAD_KEYS = setOf("venueId", "itemId", "optionId", "source")
+        val RENAME_AUDIT_PAYLOAD_KEYS = setOf("venueId", "itemId", "optionId", "oldName", "newName", "source")
         val WHITESPACE = Regex("\\s+")
     }
 }

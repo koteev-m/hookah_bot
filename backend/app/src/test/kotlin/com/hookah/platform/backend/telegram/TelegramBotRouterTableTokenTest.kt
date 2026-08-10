@@ -77,6 +77,7 @@ import com.hookah.platform.backend.miniapp.venue.menu.HookahFlavorProfileNormali
 import com.hookah.platform.backend.miniapp.venue.menu.MenuCategoryDeleteSource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuItemDeleteSource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuOptionDeleteSource
+import com.hookah.platform.backend.miniapp.venue.menu.MenuOptionRenameSource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuSemanticType
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuCategory
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuItem
@@ -10237,6 +10238,176 @@ class TelegramBotRouterTableTokenTest {
                 venueMenuRepository.normalizeHookahFlavorProfiles(any(), any(), any(), any())
             }
             coVerify(exactly = 0) { venueMenuRepository.createOption(any(), any(), any(), any(), any()) }
+        }
+
+    @Test
+    fun `telegram option rename uses current authenticated actor and server source`() =
+        runBlocking {
+            val before = hookahFlavorOption(1L, "Арбуз")
+            val after = before.copy(name = "Дыня")
+            coEvery { dialogStateRepository.get(100) } returns
+                DialogState(
+                    state = DialogStateType.OWNER_VENUE_ORDER_MENU_WAIT_OPTION_NAME,
+                    payload =
+                        mapOf(
+                            "mode" to "rename",
+                            "venue_id" to "10",
+                            "section_id" to "501",
+                            "item_id" to "7001",
+                            "option_id" to "1",
+                            "owner_user_id" to "200",
+                            "actor_user_id" to "999999",
+                            "source" to "VENUE_MINI_APP",
+                        ),
+                )
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+            coEvery {
+                venueMenuRepository.updateOption(
+                    venueId = 10L,
+                    optionId = 1L,
+                    name = "Дыня",
+                    priceDeltaMinor = null,
+                    isAvailable = null,
+                    actorUserId = 200L,
+                    source = MenuOptionRenameSource.TELEGRAM_BOT,
+                )
+            } returns after
+            coEvery { venueMenuRepository.getMenu(10L) } returns
+                listOf(hookahMenuCategoryWithOptions(listOf(after)))
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_368,
+                    message =
+                        Message(
+                            messageId = 30_004_368,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200L, username = "private_actor"),
+                            text = "Дыня",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 1) {
+                venueMenuRepository.updateOption(
+                    venueId = 10L,
+                    optionId = 1L,
+                    name = "Дыня",
+                    priceDeltaMinor = null,
+                    isAvailable = null,
+                    actorUserId = 200L,
+                    source = MenuOptionRenameSource.TELEGRAM_BOT,
+                )
+            }
+            coVerify { dialogStateRepository.clear(100) }
+            coVerify { outboxEnqueuer.enqueueSendMessage(100, "✅ Вкус переименован.", null) }
+        }
+
+    @Test
+    fun `telegram option rename fails closed for mismatched absent and denied actor`() =
+        runBlocking {
+            val renameState =
+                DialogState(
+                    state = DialogStateType.OWNER_VENUE_ORDER_MENU_WAIT_OPTION_NAME,
+                    payload =
+                        mapOf(
+                            "mode" to "rename",
+                            "venue_id" to "10",
+                            "section_id" to "501",
+                            "item_id" to "7001",
+                            "option_id" to "1",
+                            "owner_user_id" to "200",
+                        ),
+                )
+            coEvery { dialogStateRepository.get(100) } returns renameState
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_369,
+                    message =
+                        Message(
+                            messageId = 30_004_369,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 201L),
+                            text = "Подмена",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_370,
+                    message =
+                        Message(
+                            messageId = 30_004_370,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = null,
+                            text = "Без actor",
+                        ),
+                ),
+            )
+
+            val deniedState = renameState.copy(payload = renameState.payload + ("owner_user_id" to "202"))
+            coEvery { dialogStateRepository.get(100) } returns deniedState
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(202L, 10L) } returns false
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_371,
+                    message =
+                        Message(
+                            messageId = 30_004_371,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 202L),
+                            text = "Нет доступа",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { venueMenuRepository.updateOption(any(), any(), any(), any(), any(), any(), any()) }
+            coVerify(atLeast = 2) {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Не удалось продолжить. Откройте «🍽 Заказное меню» снова.",
+                    null,
+                )
+            }
+            coVerify { outboxEnqueuer.enqueueSendMessage(100, "Нет доступа к заведению.", null) }
+        }
+
+    @Test
+    fun `telegram option rename cancel performs no repository update`() =
+        runBlocking {
+            val option = hookahFlavorOption(1L, "Арбуз")
+            coEvery { dialogStateRepository.get(100) } returns
+                DialogState(
+                    state = DialogStateType.OWNER_VENUE_ORDER_MENU_WAIT_OPTION_NAME,
+                    payload =
+                        mapOf(
+                            "mode" to "rename",
+                            "venue_id" to "10",
+                            "section_id" to "501",
+                            "item_id" to "7001",
+                            "option_id" to "1",
+                            "owner_user_id" to "200",
+                        ),
+                )
+            coEvery { venueMenuRepository.getMenu(10L) } returns
+                listOf(hookahMenuCategoryWithOptions(listOf(option)))
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_372,
+                    message =
+                        Message(
+                            messageId = 30_004_372,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200L),
+                            text = "—",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { venueMenuRepository.updateOption(any(), any(), any(), any(), any(), any(), any()) }
+            coVerify { dialogStateRepository.clear(100) }
         }
 
     @Test

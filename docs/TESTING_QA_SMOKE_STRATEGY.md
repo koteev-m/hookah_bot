@@ -1,12 +1,14 @@
 # Testing / QA Smoke Strategy
 
-Дата актуализации: 2026-08-09.
+Дата актуализации: 2026-08-10.
 
 Статус: **current product reference / UPDATED**. This document is the canonical QA/smoke strategy for the Telegram bot + Mini App platform. It consolidates local validation, GitHub Actions expectations, area-specific smoke suites, staging policy, failure reporting and Codex handoff rules. Deployment and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
 
 Latest release-closed bounded slice: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION HARD DELETE AUDIT /
 ATOMIC BASE-PROFILE NORMALIZATION INCLUDED / DONE / MVP / STAGING-SMOKE-PASSED**. The broader Menu
-and Dangerous Action Audit programs remain partial.
+and Dangerous Action Audit programs remain partial. Menu option rename is **DANGEROUS ACTION AUDIT
+SLICE / MENU OPTION RENAME AUDIT / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED
+BEFORE COMMIT**; green Actions, staging deploy and bounded smoke remain open.
 
 ## Core Rule
 
@@ -696,8 +698,9 @@ Regression must preserve this bounded contract:
 - `VenueMenuOptionNormalizationConcurrencyPostgresTest` uses production repositories/migrations,
   independent connections, deterministic latches and an observed `pg_blocking_pids` plus
   `pg_locks` edge. It covers normalization/normalization, normalization/direct delete,
-  canonical-create/normalization and canonical-update/normalization with no duplicate canonical
-  profiles, partial state or loser audit;
+  canonical-create/normalization, canonical-update/normalization, rename/rename,
+  rename/canonical-create and rename/direct-delete with no duplicate canonical profiles, partial
+  state or loser audit;
 - hookah-section canonical create and actual rename use the compatible item-then-option lock plus a
   final collision check. Non-hookah duplicates and unchanged-name price/availability updates,
   including legacy duplicates, remain allowed. No process lock, idempotency token, unique
@@ -718,14 +721,14 @@ selectors listed in the task handoff. The mandatory real-PostgreSQL selector als
 
 CI must require exact XML
 `TEST-com.hookah.platform.backend.miniapp.venue.menu.VenueMenuOptionNormalizationConcurrencyPostgresTest.xml`
-with at least 4 tests and exactly zero skipped/failures/errors. Missing/zero/silently skipped XML
+with at least 7 tests and exactly zero skipped/failures/errors. Missing/zero/silently skipped XML
 fails the existing mandatory PostgreSQL gate; Docker is mandatory. The changed critical route gate
 also requires `GuestVisitRoutesTest` so the closed-history nullable-reference regression cannot be
 silently omitted.
 
 Recorded local evidence: focused repository, Mini App route, Telegram, Guest order/history, Venue
 order, compile and ktlint selectors passed; the combined mandatory PostgreSQL selector produced
-`8/0/0/0`, `14/0/0/0`, `2/0/0/0`, `4/0/0/0` for its four exact XML classes; Mini App production
+`8/0/0/0`, `14/0/0/0`, `2/0/0/0`, `7/0/0/0` for its four exact XML classes; Mini App production
 build and Playwright smoke `139/139` passed. Schema verdict: **NO_MIGRATION_EXPECTED**.
 
 For release HEAD `03ae0af`, which matches `origin/main` at this handoff, the user-confirmed evidence
@@ -748,6 +751,42 @@ records fully green GitHub Actions, staging deploy and these bounded staging sce
 15. A stale cart with the deleted option is rejected safely without a new order row.
 16. Guest menu and ordinary work data remain intact.
 17. Cleanup completed normally.
+
+### Menu Option Rename Audit quality gate
+
+Status: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION RENAME AUDIT / MVP IMPLEMENTED / LOCAL
+VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+
+Regression must preserve this bounded contract:
+
+- Venue Mini App Owner and current allowed Manager behavior produce one audit for a real rename;
+  Staff, foreign and unaffiliated denial produce zero. Telegram success records the current
+  authenticated message user with server-owned `TELEGRAM_BOT`; absent/mismatched identity fails
+  closed. Neither client surface supplies actor/source.
+- The repository's item lock, ascending option locks, DB-current reread/canonical collision check,
+  compound row update and same-connection audit use one JDBC transaction. Audit failure restores
+  name, price and availability and leaves zero audit.
+- Action/entity are exactly `MENU_OPTION_RENAMED`, `menu_item_option`, option id. Payload keys are
+  exactly `venueId`, `itemId`, `optionId`, `oldName`, `newName`, `source`. Raw request/callback/
+  initData, Telegram identity, prices, availability, canonical values, media and unrelated PII are
+  forbidden.
+- Exact-name no-op/retry, price-only, availability-only, not-found, collision, denial, SQL/audit
+  failure and rollback write zero rename audit. Compound name+price/availability preserves its
+  existing response and atomic field behavior but writes only one rename audit.
+- Existing hookah canonical normalization, self-exclusion, non-hookah duplicate behavior,
+  historical order snapshots and future-submit current-value resolution stay unchanged.
+- The seven-test PostgreSQL class deterministically covers rename versus rename, atomic base-profile
+  normalization, canonical create and direct delete in addition to the released normalization
+  regressions. It uses observed blocking/locks and no arbitrary sleep.
+
+Focused repository, route, Telegram and Guest/order/history selectors, `compileKotlin`,
+`ktlintCheck`, Mini App build and Playwright `139/139` passed locally. The mandatory PostgreSQL XML
+result is `8/0/0/0`, `14/0/0/0`, `2/0/0/0`, `7/0/0/0`; CI must keep minimums `8 / 14 / 2 / 7`
+with zero skipped/failures/errors. Schema verdict: **NO_MIGRATION_EXPECTED**.
+
+Green Actions, staging deploy and bounded cross-surface RBAC/audit/privacy/concurrency/history smoke
+remain required. This does not close option create/price/availability, item mutations, the broader
+Menu/Dangerous Action Audit or any media work.
 
 ## Venue Mini App Media Foundation Future Quality Gate
 
@@ -1224,7 +1263,7 @@ Expectations:
   `VenueStaffMutationConcurrencyPostgresTest` and
   `VenueMenuOptionNormalizationConcurrencyPostgresTest` with
   `JAVA_TOOL_OPTIONS=-Dapi.version=1.44`, then independently parses all four XML reports. It
-  requires minimums `8 / 14 / 2 / 4`, each with `skipped=0`, `failures=0`, `errors=0`. Docker
+  requires minimums `8 / 14 / 2 / 7`, each with `skipped=0`, `failures=0`, `errors=0`. Docker
   availability alone is not evidence, and route failure must not silently skip the PostgreSQL gate.
 - If CI is red, first identify the failing job, failing test class, failing test name, assertion/error and first useful stack frame.
 - Do not paste only `Execution failed for task ':backend:app:test'`; inspect XML/test output or CI logs for the actual assertion.
@@ -1671,6 +1710,10 @@ Telegram/staff-chat:
   ATOMIC BASE-PROFILE NORMALIZATION INCLUDED / DONE / MVP / STAGING-SMOKE-PASSED**. Focused local,
   mandatory PostgreSQL, green Actions, staging deploy and the bounded 17-scenario smoke are
   recorded complete; keep the contract in regression.
+- Menu option rename audit: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION RENAME AUDIT / MVP
+  IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. The current seven-test
+  option concurrency XML gate, focused cross-surface tests and privacy/rollback checks are green
+  locally; green Actions, staging deploy and bounded smoke remain required. No migration was added.
 - Venue Promotions Current/Archived Tabs UX: **VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / DONE / MVP / STAGING-SMOKE-PASSED**.
 - Promotion lifecycle status audit: **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**; broader dangerous-action coverage remains partial.
 - Promotion creation audit: **DANGEROUS ACTION AUDIT SLICE / PROMOTION CREATION AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**; mandatory repository/route/Telegram and PostgreSQL gates remain regression requirements. Configuration edit, schedule/target/reward, media/banner and broader dangerous-action coverage remain open.

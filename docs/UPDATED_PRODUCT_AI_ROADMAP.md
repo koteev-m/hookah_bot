@@ -1,6 +1,6 @@
 # Product + Telegram AI Bots Roadmap
 
-Дата обновления: 2026-08-09.
+Дата обновления: 2026-08-10.
 
 Статус документа: canonical roadmap. Этот файл объединяет актуальный product roadmap, Mini App launch roadmap и Telegram-native AI Bots roadmap. Старые audit-файлы в `docs/audit/` остаются evidence/history, но не являются текущим backlog без сверки с этим roadmap и текущим кодом.
 
@@ -1100,23 +1100,27 @@ The direct-delete, atomic normalization, product-semantics, historical snapshot 
 contracts remain regression requirements. No migration or new product selection logic was added,
 and the broader Menu and Dangerous Action Audit programs remain partial.
 
-Selected next bounded block: **IMPLEMENT_MENU_OPTION_RENAME_AUDIT_NEXT**.
+Current bounded block: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION RENAME AUDIT / MVP
+IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
 
-### Selected next bounded block
+### Implemented bounded block pending review and staging
 
-Verdict: **IMPLEMENT_MENU_OPTION_RENAME_AUDIT_NEXT**.
+Implementation contract: **IMPLEMENT_MENU_OPTION_RENAME_AUDIT_NEXT**, fulfilled locally.
+
+Verdict: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION RENAME AUDIT / MVP IMPLEMENTED / LOCAL
+VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
 
 Runtime evidence:
 
-- `VenueMenuRepository.updateOption` is the sole production option-name SQL writer. Its current
-  transaction already takes a non-locking option-to-item hint, locks the item, locks all item options
-  by ascending id, rereads the target and applies the row update before one commit.
+- `VenueMenuRepository.updateOption` is the sole production option-name SQL writer. Its transaction
+  takes a non-locking option-to-item hint, locks the item, locks all item options by ascending id,
+  rereads the target, applies the row update and appends rename audit before one commit.
 - Production rename callers are exactly Venue Mini App `PATCH /menu/options/{id}` and the Telegram
-  rename dialog. Mini App already derives the authenticated session user; Telegram has the current
-  message user but presently falls back to a dialog-state owner id. The audit actor must use the
-  current authenticated Telegram user and fail closed when it is absent or inconsistent.
+  rename dialog. Mini App derives the authenticated session user; Telegram uses the current message
+  user, requires it to match the persisted dialog owner and fails closed when it is absent or
+  inconsistent. Neither surface accepts audit actor/source from client data.
 - The Mini App request can combine name, price and availability. Telegram rename changes only name;
-  Telegram has no option-price writer. The next slice must audit only a real persisted name change
+  Telegram has no option-price writer. The implemented slice audits only a real persisted name change
   without claiming price/availability audit coverage or changing the existing compound request.
 - Canonical collision protection is already application-level and DB-current: hookah canonical
   create/actual rename and normalization share item-then-option locks. The PostgreSQL normalization
@@ -1173,7 +1177,7 @@ cart/order schema changes; audit/dependency viewer; media/R2.
 Migration/schema verdict: **NO_MIGRATION_EXPECTED**. Existing `audit_log`, bounded names and order
 snapshot columns are sufficient.
 
-Likely implementation surfaces:
+Implementation surfaces:
 
 - `backend/app/src/main/kotlin/com/hookah/platform/backend/miniapp/venue/menu/VenueMenuRepository.kt`;
 - `backend/app/src/main/kotlin/com/hookah/platform/backend/miniapp/venue/menu/VenueMenuRoutes.kt`;
@@ -1181,10 +1185,11 @@ Likely implementation surfaces:
 - `VenueMenuRepositoryTest`, `VenueMenuRoutesTest`, `TelegramBotRouterTableTokenTest` and
   `VenueMenuOptionNormalizationConcurrencyPostgresTest`;
 - Guest order/history regression tests only where needed to prove snapshot/current-name behavior;
-- the smallest relevant menu/RBAC/QA/roadmap docs after implementation. No Mini App TypeScript or
-  workflow change is expected unless verification finds a real contract gap.
+- the smallest relevant menu/RBAC/QA/roadmap docs;
+- the existing CI workflow minimum for the expanded critical PostgreSQL class. No Mini App
+  TypeScript or migration was changed.
 
-Required backend, Mini App and Telegram tests:
+Focused backend, Mini App and Telegram coverage:
 
 - Repository: actual rename/exact payload/exactly one; exact-name no-op; name-null price/
   availability-only zero rename audit; compound update one rename audit; missing/foreign/collision
@@ -1229,20 +1234,25 @@ winning first yields not-found and zero rename audit. Never log or audit the raw
 payload. The pre-existing membership-revoke race remains a separate hardening block.
 
 CI/release/staging gates: all required Actions green for the implementation HEAD, including exact
-PostgreSQL XML minimums `8 / 14 / 2 / 4`; staging deploy is required for repository/route/Telegram
+PostgreSQL XML minimums `8 / 14 / 2 / 7`; staging deploy is required for repository/route/Telegram
 behavior. Bounded smoke must cover Mini App and Telegram Owner/Manager rename, Staff/foreign denial,
 exactly-one/no-op/collision/privacy, normalization serialization/idempotence, historical snapshot,
 new-order current name, compound Mini App update compatibility and cleanup. Do not close option
 price/availability/create audit, the broader Menu/Dangerous Action Audit or the whole product.
 
-Outcome-first implementation prompt:
+Local evidence: focused repository, Venue Mini App routes, Telegram router and Guest/order/history
+selectors passed; `compileKotlin`, `ktlintCheck`, Mini App build and Playwright `139/139` passed.
+Mandatory PostgreSQL XML is `8/0/0/0`, `14/0/0/0`, `2/0/0/0`, `7/0/0/0`.
+
+Implementation contract retained for independent review:
 
 ```text
 Следуй AGENTS.md. Сначала проверь active Goal, затем PROJECT_STATUS.md и только релевантные
 canonical docs. Не читай и не применяй stash; не трогай scripts/dev; не deploy/push/commit/stage.
 
-Outcome: реализовать один bounded DANGEROUS ACTION AUDIT SLICE / MENU OPTION RENAME AUDIT для
-существующих Venue Mini App и Telegram rename paths без изменения product semantics.
+Outcome: independently review реализованный bounded DANGEROUS ACTION AUDIT SLICE /
+MENU OPTION RENAME AUDIT для существующих Venue Mini App и Telegram rename paths без
+изменения product semantics.
 
 Сначала read-only подтверди writer inventory: VenueMenuRepository.updateOption — единственный
 option-name SQL writer; production callers — PATCH /menu/options/{id} и Telegram rename dialog.
@@ -1269,11 +1279,11 @@ option-name SQL writer; production callers — PATCH /menu/options/{id} и Teleg
 Out of scope: option create/price/availability audit, item mutations, Shift Check, new uniqueness or
 base-option logic, migrations, audit viewer, membership-revoke linearization, promotions, media/R2.
 
-NO_MIGRATION_EXPECTED. Измени минимальные repository/route/Telegram/test/docs surfaces. Добавь
-repository, Mini App RBAC/source, Telegram actor/cancel/denial, historical/current-order и
-deterministic PostgreSQL rename-vs-normalization assertions. Сохрани mandatory PostgreSQL gate
-8/14/2/4 и выполни focused backend tests, compile, ktlint, Mini App build/e2e. После green Actions
-нужны staging deploy и bounded cross-surface audit/privacy/concurrency/history smoke.
+NO_MIGRATION_EXPECTED. Verify focused repository/route/Telegram tests, Mini App RBAC/source,
+Telegram actor/cancel/denial, historical/current-order behavior and deterministic PostgreSQL
+rename concurrency. Mandatory PostgreSQL gate is 8/14/2/7. Re-run focused backend tests, compile,
+ktlint and Mini App build/e2e. После green Actions нужны staging deploy и bounded cross-surface
+audit/privacy/concurrency/history smoke.
 ```
 
 Latest Staff Operations closures:

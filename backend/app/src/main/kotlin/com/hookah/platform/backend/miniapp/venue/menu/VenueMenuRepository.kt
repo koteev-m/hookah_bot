@@ -26,6 +26,7 @@ const val MENU_SHIFT_CHECK_COMPLETED_AUDIT_ACTION = "MENU_SHIFT_CHECK_COMPLETED"
 const val MENU_ITEM_DELETED_AUDIT_ACTION = "MENU_ITEM_DELETED"
 const val MENU_CATEGORY_DELETED_AUDIT_ACTION = "MENU_CATEGORY_DELETED"
 const val MENU_OPTION_DELETED_AUDIT_ACTION = "MENU_OPTION_DELETED"
+const val MENU_OPTION_RENAMED_AUDIT_ACTION = "MENU_OPTION_RENAMED"
 internal const val MENU_DELETE_AFFECTED_RULE_SAMPLE_LIMIT = 50
 internal const val MENU_DELETE_AUDIT_PAYLOAD_MAX_BYTES = 4096
 internal const val MENU_ITEM_DELETE_AFFECTED_RULE_SAMPLE_LIMIT = MENU_DELETE_AFFECTED_RULE_SAMPLE_LIMIT
@@ -42,6 +43,11 @@ enum class MenuCategoryDeleteSource {
 }
 
 enum class MenuOptionDeleteSource {
+    VENUE_MINI_APP,
+    TELEGRAM_BOT,
+}
+
+enum class MenuOptionRenameSource {
     VENUE_MINI_APP,
     TELEGRAM_BOT,
 }
@@ -935,6 +941,8 @@ class VenueMenuRepository(
         name: String?,
         priceDeltaMinor: Long?,
         isAvailable: Boolean?,
+        actorUserId: Long,
+        source: MenuOptionRenameSource,
     ): VenueMenuOption? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
@@ -956,6 +964,7 @@ class VenueMenuRepository(
                             return@use null
                         }
                         val updatedName = name ?: existing.name
+                        val isRename = updatedName != existing.name
                         val changesCanonicalProfile =
                             name != null &&
                                 HookahFlavorProfileService.normalizeFlavorNameKey(existing.name) !=
@@ -985,6 +994,18 @@ class VenueMenuRepository(
                             }
                         if (updated != 1) {
                             throw SQLException("Locked menu option changed during update", "40001")
+                        }
+                        if (isRename) {
+                            auditMenuOptionRename(
+                                connection = connection,
+                                venueId = venueId,
+                                itemId = itemId,
+                                optionId = optionId,
+                                oldName = existing.name,
+                                newName = updatedName,
+                                actorUserId = actorUserId,
+                                source = source,
+                            )
                         }
                         val result = loadOption(connection, optionId, venueId)
                         connection.commit()
@@ -1357,6 +1378,34 @@ class VenueMenuRepository(
                     venueId = venueId,
                     itemId = itemId,
                     optionId = optionId,
+                    source = source,
+                ),
+        )
+    }
+
+    private fun auditMenuOptionRename(
+        connection: Connection,
+        venueId: Long,
+        itemId: Long,
+        optionId: Long,
+        oldName: String,
+        newName: String,
+        actorUserId: Long,
+        source: MenuOptionRenameSource,
+    ) {
+        auditLogWriter.appendJson(
+            connection = connection,
+            actorUserId = actorUserId,
+            action = MENU_OPTION_RENAMED_AUDIT_ACTION,
+            entityType = "menu_item_option",
+            entityId = optionId,
+            payload =
+                buildMenuOptionRenameAuditPayload(
+                    venueId = venueId,
+                    itemId = itemId,
+                    optionId = optionId,
+                    oldName = oldName,
+                    newName = newName,
                     source = source,
                 ),
         )
@@ -2242,6 +2291,22 @@ internal fun buildMenuOptionDeleteAuditPayload(
     put("venueId", venueId)
     put("itemId", itemId)
     put("optionId", optionId)
+    put("source", source.name)
+}
+
+internal fun buildMenuOptionRenameAuditPayload(
+    venueId: Long,
+    itemId: Long,
+    optionId: Long,
+    oldName: String,
+    newName: String,
+    source: MenuOptionRenameSource,
+) = buildJsonObject {
+    put("venueId", venueId)
+    put("itemId", itemId)
+    put("optionId", optionId)
+    put("oldName", oldName)
+    put("newName", newName)
     put("source", source.name)
 }
 

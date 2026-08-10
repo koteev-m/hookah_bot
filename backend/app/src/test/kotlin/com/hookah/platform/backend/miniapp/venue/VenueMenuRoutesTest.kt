@@ -8,7 +8,9 @@ import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.miniapp.venue.menu.MENU_CATEGORY_DELETED_AUDIT_ACTION
 import com.hookah.platform.backend.miniapp.venue.menu.MENU_ITEM_DELETED_AUDIT_ACTION
 import com.hookah.platform.backend.miniapp.venue.menu.MENU_OPTION_DELETED_AUDIT_ACTION
+import com.hookah.platform.backend.miniapp.venue.menu.MENU_OPTION_RENAMED_AUDIT_ACTION
 import com.hookah.platform.backend.miniapp.venue.menu.MENU_SHIFT_CHECK_COMPLETED_AUDIT_ACTION
+import com.hookah.platform.backend.miniapp.venue.menu.MenuSemanticType
 import com.hookah.platform.backend.miniapp.venue.menu.MenuShiftCheckResponse
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuItem
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuOption
@@ -605,6 +607,266 @@ class VenueMenuRoutesTest {
             assertFalse(response.bodyAsText().contains(MENU_OPTION_DELETED_AUDIT_ACTION))
             assertTrue(menuRepository(jdbcUrl).optionExists(venueId, fixture.firstOption.id))
             assertTrue(menuOptionDeleteAudits(jdbcUrl).isEmpty())
+        }
+
+    @Test
+    fun `owner and manager option rename derive actor source and compound audit is name only`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("menu-option-rename-audit-success")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val ownerId = 80_001L
+            val managerId = 80_002L
+            val venueId = seedVenueWithRole(jdbcUrl, ownerId, "OWNER")
+            seedVenueWithRole(jdbcUrl, managerId, "MANAGER", venueId)
+            val fixture = createShiftCheckFixture(jdbcUrl, venueId)
+
+            val ownerResponse =
+                client.patch(
+                    "/api/venue/menu/options/${fixture.firstOption.id}" +
+                        "?venueId=$venueId&actorUserId=999999&source=TELEGRAM_BOT",
+                ) {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer ${issueToken(config, ownerId)}")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody(
+                        """
+                        {
+                          "name": "Owner renamed option",
+                          "priceDeltaMinor": 125,
+                          "isAvailable": false,
+                          "actorUserId": 999999,
+                          "source": "TELEGRAM_BOT",
+                          "rawRequest": "private request body"
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            val managerResponse =
+                client.patch("/api/venue/menu/options/${fixture.secondOption.id}?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer ${issueToken(config, managerId)}")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"name":"Manager renamed option"}""")
+                }
+
+            assertEquals(HttpStatusCode.OK, ownerResponse.status)
+            val ownerOption = json.decodeFromString(VenueMenuOptionDto.serializer(), ownerResponse.bodyAsText())
+            assertEquals("Owner renamed option", ownerOption.name)
+            assertEquals(125L, ownerOption.priceDeltaMinor)
+            assertFalse(ownerOption.isAvailable)
+            assertEquals(HttpStatusCode.OK, managerResponse.status)
+            assertEquals(
+                "Manager renamed option",
+                json.decodeFromString(VenueMenuOptionDto.serializer(), managerResponse.bodyAsText()).name,
+            )
+
+            val audits = menuOptionRenameAudits(jdbcUrl)
+            assertEquals(2, audits.size)
+            assertEquals(listOf(ownerId, managerId), audits.map { it.actorUserId })
+            assertEquals(
+                listOf(fixture.firstOption.id, fixture.secondOption.id),
+                audits.map { it.entityId },
+            )
+            assertEquals(
+                listOf(fixture.firstOption.name, fixture.secondOption.name),
+                audits.map { it.payload.getValue("oldName").jsonPrimitive.content },
+            )
+            assertEquals(
+                listOf("Owner renamed option", "Manager renamed option"),
+                audits.map { it.payload.getValue("newName").jsonPrimitive.content },
+            )
+            audits.forEach { audit ->
+                assertEquals("menu_item_option", audit.entityType)
+                assertEquals(
+                    setOf("venueId", "itemId", "optionId", "oldName", "newName", "source"),
+                    audit.payload.keys,
+                )
+                assertEquals("VENUE_MINI_APP", audit.payload.getValue("source").jsonPrimitive.content)
+                assertFalse(audit.payload.toString().contains("999999"))
+                assertFalse(audit.payload.toString().contains("TELEGRAM_BOT"))
+                assertFalse(audit.payload.toString().contains("price", ignoreCase = true))
+                assertFalse(audit.payload.toString().contains("availability", ignoreCase = true))
+                assertFalse(audit.payload.toString().contains("private request body"))
+            }
+        }
+
+    @Test
+    fun `same name repeat price only and availability only updates write zero rename audit`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("menu-option-rename-audit-noop")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val managerId = 81_001L
+            val venueId = seedVenueWithRole(jdbcUrl, managerId, "MANAGER")
+            val fixture = createShiftCheckFixture(jdbcUrl, venueId)
+            val token = issueToken(config, managerId)
+            val url = "/api/venue/menu/options/${fixture.firstOption.id}?venueId=$venueId"
+
+            val sameName = patchOption(client, token, url, """{"name":"${fixture.firstOption.name}"}""")
+            val repeatedSameName = patchOption(client, token, url, """{"name":"${fixture.firstOption.name}"}""")
+            val priceOnly = patchOption(client, token, url, """{"priceDeltaMinor":321}""")
+            val availabilityOnly = patchOption(client, token, url, """{"isAvailable":false}""")
+            val dedicatedAvailability =
+                patchOption(
+                    client,
+                    token,
+                    "/api/venue/menu/options/${fixture.firstOption.id}/availability?venueId=$venueId",
+                    """{"isAvailable":true}""",
+                )
+
+            listOf(sameName, repeatedSameName, priceOnly, availabilityOnly, dedicatedAvailability).forEach {
+                assertEquals(HttpStatusCode.OK, it.status)
+            }
+            val saved =
+                menuRepository(jdbcUrl).getMenu(venueId)
+                    .flatMap { it.items }
+                    .flatMap { it.options }
+                    .single { it.id == fixture.firstOption.id }
+            assertEquals(fixture.firstOption.name, saved.name)
+            assertEquals(321L, saved.priceDeltaMinor)
+            assertTrue(saved.isAvailable)
+            assertTrue(menuOptionRenameAudits(jdbcUrl).isEmpty())
+        }
+
+    @Test
+    fun `staff foreign and unaffiliated option rename denials write zero audit`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("menu-option-rename-audit-denials")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val ownerId = 82_001L
+            val staffId = 82_002L
+            val foreignManagerId = 82_003L
+            val guestId = 82_004L
+            val venueId = seedVenueWithRole(jdbcUrl, ownerId, "OWNER")
+            seedVenueWithRole(jdbcUrl, staffId, "STAFF", venueId)
+            val foreignVenueId = seedVenueWithRole(jdbcUrl, foreignManagerId, "MANAGER")
+            seedUser(jdbcUrl, guestId)
+            val fixture = createShiftCheckFixture(jdbcUrl, venueId)
+
+            listOf(staffId, foreignManagerId, guestId).forEach { actorId ->
+                val response =
+                    patchOption(
+                        client,
+                        issueToken(config, actorId),
+                        "/api/venue/menu/options/${fixture.firstOption.id}?venueId=$venueId",
+                        """{"name":"Denied private rename"}""",
+                    )
+                assertEquals(HttpStatusCode.Forbidden, response.status)
+                assertApiErrorEnvelope(response, ApiErrorCodes.FORBIDDEN)
+            }
+            val foreignScope =
+                patchOption(
+                    client,
+                    issueToken(config, foreignManagerId),
+                    "/api/venue/menu/options/${fixture.firstOption.id}?venueId=$foreignVenueId",
+                    """{"name":"Foreign scope rename"}""",
+                )
+            assertEquals(HttpStatusCode.NotFound, foreignScope.status)
+            assertApiErrorEnvelope(foreignScope, ApiErrorCodes.NOT_FOUND)
+
+            val saved =
+                menuRepository(jdbcUrl).getMenu(venueId)
+                    .flatMap { it.items }
+                    .flatMap { it.options }
+                    .single { it.id == fixture.firstOption.id }
+            assertEquals(fixture.firstOption.name, saved.name)
+            assertTrue(menuOptionRenameAudits(jdbcUrl).isEmpty())
+        }
+
+    @Test
+    fun `canonical rename collision preserves option and writes zero audit`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("menu-option-rename-audit-collision")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val ownerId = 83_001L
+            val venueId = seedVenueWithRole(jdbcUrl, ownerId, "OWNER")
+            val repository = menuRepository(jdbcUrl)
+            val category = repository.createCategory(venueId, "Кальянное меню")
+            repository.updateCategoryType(
+                venueId,
+                category.id,
+                MenuSemanticType.HOOKAH,
+            )
+            val item =
+                requireNotNull(repository.createItem(venueId, category.id, "Hookah", 100_000, "RUB", true))
+            requireNotNull(repository.createOption(venueId, item.id, "Ягодный", 100, true))
+            val custom = requireNotNull(repository.createOption(venueId, item.id, "Авторский", 200, true))
+
+            val response =
+                patchOption(
+                    client,
+                    issueToken(config, ownerId),
+                    "/api/venue/menu/options/${custom.id}?venueId=$venueId",
+                    """{"name":"ЯГОДНЫЙ","priceDeltaMinor":999,"isAvailable":false}""",
+                )
+
+            assertEquals(HttpStatusCode.BadRequest, response.status)
+            assertApiErrorEnvelope(response, ApiErrorCodes.INVALID_INPUT)
+            val saved =
+                repository.getMenu(venueId).flatMap { it.items }.flatMap { it.options }.single { it.id == custom.id }
+            assertEquals(custom, saved)
+            assertTrue(menuOptionRenameAudits(jdbcUrl).isEmpty())
+        }
+
+    @Test
+    fun `rename audit failure returns safe error and rolls back compound patch`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("menu-option-rename-audit-rollback")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val ownerId = 84_001L
+            val venueId = seedVenueWithRole(jdbcUrl, ownerId, "OWNER")
+            val fixture = createShiftCheckFixture(jdbcUrl, venueId)
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                connection.createStatement().use { statement ->
+                    statement.execute(
+                        """
+                        ALTER TABLE audit_log
+                        ADD CONSTRAINT reject_menu_option_rename_audit
+                        CHECK (action <> '$MENU_OPTION_RENAMED_AUDIT_ACTION')
+                        """.trimIndent(),
+                    )
+                }
+            }
+
+            val response =
+                patchOption(
+                    client,
+                    issueToken(config, ownerId),
+                    "/api/venue/menu/options/${fixture.firstOption.id}?venueId=$venueId",
+                    """{"name":"Rollback route name","priceDeltaMinor":999,"isAvailable":false}""",
+                )
+
+            assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
+            assertApiErrorEnvelope(response, ApiErrorCodes.DATABASE_UNAVAILABLE)
+            assertFalse(response.bodyAsText().contains(MENU_OPTION_RENAMED_AUDIT_ACTION))
+            val saved =
+                menuRepository(jdbcUrl).getMenu(venueId)
+                    .flatMap { it.items }
+                    .flatMap { it.options }
+                    .single { it.id == fixture.firstOption.id }
+            assertEquals(fixture.firstOption, saved)
+            assertTrue(menuOptionRenameAudits(jdbcUrl).isEmpty())
         }
 
     @Test
@@ -1970,6 +2232,23 @@ class VenueMenuRoutesTest {
 
     private fun menuOptionDeleteAudits(jdbcUrl: String): List<MenuDeleteAuditRow> =
         menuDeleteAudits(jdbcUrl, MENU_OPTION_DELETED_AUDIT_ACTION)
+
+    private fun menuOptionRenameAudits(jdbcUrl: String): List<MenuDeleteAuditRow> =
+        menuDeleteAudits(jdbcUrl, MENU_OPTION_RENAMED_AUDIT_ACTION)
+
+    private suspend fun patchOption(
+        client: HttpClient,
+        token: String,
+        url: String,
+        body: String,
+    ): HttpResponse =
+        client.patch(url) {
+            headers {
+                append(HttpHeaders.Authorization, "Bearer $token")
+                append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+            }
+            setBody(body)
+        }
 
     private fun menuDeleteAudits(
         jdbcUrl: String,
