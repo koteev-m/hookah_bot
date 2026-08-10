@@ -790,7 +790,7 @@ broader Menu/Dangerous Action Audit or any media work.
 ### Venue Menu Management UX Stabilization quality gate
 
 Status: **VENUE MENU MANAGEMENT UX STABILIZATION / MOBILE RESPONSIVENESS + PRICE INPUT ERGONOMICS +
-CONTEXT PRESERVATION / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+CONTEXT PRESERVATION / DONE / MVP / STAGING-SMOKE-PASSED**.
 
 Required deterministic browser coverage:
 
@@ -821,6 +821,25 @@ Required deterministic browser coverage:
 Backend production files are intentionally unchanged when create/update responses contain stable IDs;
 no entity may be rediscovered by name/price matching. This gate requires no migration and does not
 alter money, RBAC, audits, option normalization, Guest order snapshots or media.
+
+Recorded bounded staging smoke evidence (user-confirmed for release HEAD `a62faa5`):
+
+1. Mobile menu cards and actions fit the Telegram Mini App viewport.
+2. Expanded item/options/forms create no horizontal overflow.
+3. A new price field accepts `150`, not `0150`.
+4. An existing zero is replaced correctly by the first input.
+5. Repeated focus preserves an entered non-zero value.
+6. An item mutation preserves category/item/scroll/focus context.
+7. An option mutation preserves item/option context.
+8. Category create returns focus to the new category summary.
+9. Category rename returns focus to the same summary.
+10. Category reorder returns focus to the moved category.
+11. Cancelling inline forms returns logical focus.
+12. Manual scroll/focus during reload is not overwritten.
+13. Old-venue success does not appear in a new venue.
+14. Old-account success/state does not appear after an account switch.
+15. Guest menu and working data remain intact.
+16. Cleanup completes normally.
 
 ## Venue Mini App Media Foundation Future Quality Gate
 

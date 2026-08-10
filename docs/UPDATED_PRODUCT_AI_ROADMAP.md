@@ -1092,23 +1092,25 @@ its production-readiness gate remains open in
 [`REPEAT-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#repeat-manual-001), but does not block an
 independent bounded block.
 
-Latest release-closed bounded block: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION HARD DELETE AUDIT /
-ATOMIC BASE-PROFILE NORMALIZATION INCLUDED / DONE / MVP / STAGING-SMOKE-PASSED**. Release HEAD
-`03ae0af` matches `origin/main`; the user-confirmed evidence records fully green Actions, staging
-deploy and the bounded 17-scenario role/parity/audit/history/stale-cart/normalization smoke passed.
-The direct-delete, atomic normalization, product-semantics, historical snapshot and stale-selection
-contracts remain regression requirements. No migration or new product selection logic was added,
-and the broader Menu and Dangerous Action Audit programs remain partial.
+Latest release-closed bounded block: **VENUE MENU MANAGEMENT UX STABILIZATION / MOBILE
+RESPONSIVENESS + PRICE INPUT ERGONOMICS + CONTEXT PRESERVATION / DONE / MVP /
+STAGING-SMOKE-PASSED**. Release HEAD `a62faa5` matches `origin/main`; user-confirmed evidence records
+green Actions, staging deploy and the bounded 16-scenario Venue Menu UX smoke passed. This closes only
+responsive management layout, price-input ergonomics and stable-ID context restoration; it does not
+close the broader Menu or Dangerous Action Audit programs.
 
-Current bounded block: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION RENAME AUDIT / MVP
-IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+Next bounded block: **IMPLEMENT_MENU_OPTION_PRICE_AUDIT_NEXT**. The read-only audit finds one
+authenticated Mini App compound option-price writer already protected by item/ascending-option locks;
+Telegram has no option-price writer. The future slice must preserve immutable order snapshots and
+existing name/availability semantics, use the existing audit table without a migration, and remain
+separate from option create/availability and item price/update audit.
 
-### Implemented bounded block pending review and staging
+### Recent release-closed audit block
 
-Implementation contract: **IMPLEMENT_MENU_OPTION_RENAME_AUDIT_NEXT**, fulfilled locally.
+Implementation contract: **IMPLEMENT_MENU_OPTION_RENAME_AUDIT_NEXT**, fulfilled and release-closed.
 
-Verdict: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION RENAME AUDIT / MVP IMPLEMENTED / LOCAL
-VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+Verdict: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION RENAME AUDIT / DONE / MVP /
+STAGING-SMOKE-PASSED**.
 
 Runtime evidence:
 

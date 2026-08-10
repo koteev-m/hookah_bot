@@ -439,19 +439,22 @@ Audit payloads must use safe ids and old/new safe fields only. Do not include ra
 - Shift check: `MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`; keep the passed
   role/tenant, UX, atomicity, stale-state, Guest availability and Telegram parity scenarios in
   regression.
-- Venue Menu management UX stabilization: **MOBILE RESPONSIVENESS + PRICE INPUT ERGONOMICS +
-  CONTEXT PRESERVATION / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE
-  COMMIT**. The management editor has no horizontal overflow at narrow Telegram Mini App widths;
+- Venue Menu management UX stabilization: **VENUE MENU MANAGEMENT UX STABILIZATION / MOBILE
+  RESPONSIVENESS + PRICE INPUT ERGONOMICS + CONTEXT PRESERVATION / DONE / MVP /
+  STAGING-SMOKE-PASSED**. The management editor has no horizontal overflow at narrow Telegram Mini App widths;
   item/option cards and action groups stack or wrap inside their cards, while long Russian labels
   remain readable. New item/option price fields are empty with examples, and an existing zero price
   is selected only while its current value is zero, so first typing or paste replaces it without
   reselecting a later edited value. Successful create/update/delete/base-profile mutations preserve
   the current category/item/option anchor through the authoritative reload only when no later user
-  scroll/focus/input supersedes that snapshot. A later active menu form is instead reopened by its
-  stable category/item/option ID with its current draft and focus preserved. Success is announced by
-  the current screen's live region; failure keeps local form values. Context and success are
-  discarded on venue/account switch. This changes no server money, RBAC, audit, normalization,
-  Guest ordering or DTO contract.
+  scroll/focus/pointer/touch/wheel/keyboard interaction or later mutation supersedes that snapshot.
+  A later active menu form is instead reopened by its stable category/item/option ID with its current
+  draft and focus preserved; no name/price heuristic is used. Category create, rename and reorder
+  focus the native stable-`categoryId` summary, including an empty category; cancel restores the
+  relevant item/option/add-option/category-rename trigger or summary without a mutation request.
+  Success is announced by the current screen's live region; failure keeps local form values. Context
+  and success are discarded on venue/account switch. This changes no server money, RBAC, audit,
+  normalization, Guest ordering or DTO contract.
 - Item hard-delete audit: **DANGEROUS ACTION AUDIT SLICE / MENU ITEM HARD DELETE AUDIT / DONE / MVP /
   STAGING-SMOKE-PASSED**. The bounded release gates are complete; schema verdict is
   `NO_MIGRATION_EXPECTED`.

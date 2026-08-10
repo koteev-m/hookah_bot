@@ -1145,6 +1145,28 @@ Use this checklist after menu, option, stop-list, media, featured/top-list, shif
     form, card and screen-owned `role=status` success copy never appear in the new active screen,
     including after the old response is released.
 
+Current bounded closure record: **VENUE MENU MANAGEMENT UX STABILIZATION / MOBILE RESPONSIVENESS +
+PRICE INPUT ERGONOMICS + CONTEXT PRESERVATION / DONE / MVP / STAGING-SMOKE-PASSED**. For release
+HEAD `a62faa5`, user-confirmed evidence records green GitHub Actions, staging deploy and only the
+following passed bounded smoke scenarios:
+
+1. Mobile menu cards and actions fit the Telegram Mini App viewport.
+2. Expanded item/options/forms create no horizontal overflow.
+3. A new price field accepts `150`, not `0150`.
+4. An existing zero is replaced correctly by the first input.
+5. Repeated focus preserves an entered non-zero value.
+6. An item mutation preserves category/item/scroll/focus context.
+7. An option mutation preserves item/option context.
+8. Category create returns focus to the new category summary.
+9. Category rename returns focus to the same summary.
+10. Category reorder returns focus to the moved category.
+11. Cancelling inline forms returns logical focus.
+12. Manual scroll/focus during reload is not overwritten.
+13. Old-venue success does not appear in a new venue.
+14. Old-account success/state does not appear after an account switch.
+15. Guest menu and working data remain intact.
+16. Cleanup completes normally.
+
 ## 15. Venue Mode Operational Smoke Checklist
 
 Use this checklist after Venue Mode dashboard, orders, bills/tabs, staff calls, bookings, menu/stop-list, tables/QR, staff/invites, staff-chat, settings, stats or role-navigation changes. Canonical model: `docs/VENUE_OPERATIONS.md`.
