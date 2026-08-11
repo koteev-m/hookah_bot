@@ -356,7 +356,7 @@ STAGING-SMOKE-PASSED**.
   name, price, availability, `updated_at` and all audit families.
 - Current integer/minor-unit and validation rules remain unchanged. Checkout ignores stale client
   price, reloads the current available option/delta and persists a new immutable snapshot; existing
-  order snapshots are not rewritten. The mandatory deterministic PostgreSQL class now has 15
+  order snapshots are not rewritten. The shared mandatory deterministic PostgreSQL class now has 20
   tests with zero skips/failures/errors. Schema verdict: **NO_MIGRATION**.
 
 ### MENU OPTION AVAILABILITY AUDIT contract
@@ -384,8 +384,33 @@ STAGING-SMOKE-PASSED**.
   cardinality/payload with zero per-option availability audits. No permission, order schema,
   membership-linearization or migration change is included.
 
+### MENU ITEM AVAILABILITY AUDIT contract
+
+Status: **DANGEROUS ACTION AUDIT SLICE / MENU ITEM AVAILABILITY AUDIT / MVP IMPLEMENTED /
+LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+
+- Direct Mini App and Telegram item availability retain `MENU_AVAILABILITY_MANAGE` for current
+  Owner/Manager/Staff. Compound item PATCH remains Owner/Manager `MENU_MANAGE`; Staff cannot use it
+  to change availability, price, name or type. Shift Check retains Owner/Manager-only authority.
+- Actor is only the authenticated Mini App session subject or current authenticated Telegram user.
+  Source is a server-owned enum, `VENUE_MINI_APP` or `TELEGRAM_BOT`; body/query/path/callback data
+  cannot override actor/source or enter the audit.
+- Direct and compound changes share the item `FOR UPDATE` transaction, DB-current reread,
+  real-delta comparison, conditional update, same-connection audit, result reread and one commit.
+  Audit failure restores availability, `updated_at`, compound fields and every transaction audit row.
+- One real committed individual delta writes `MENU_ITEM_AVAILABILITY_CHANGED` for entity
+  `menu_item` / item id. Payload keys are exactly `venueId`, `itemId`, `oldIsAvailable`,
+  `newIsAvailable`, `source`; actor stays only in the standard audit actor column.
+- Item/category names, prices, currency, description/type, option/promotion/cart/order contents,
+  raw request/initData, Telegram identity/update/callback, media, secrets and PII are forbidden.
+  Same-state/repeat, metadata-only, denial, foreign/not-found, stale/collision, SQL/audit failure
+  and rollback write zero audit. Direct no-op preserves `updated_at`.
+- Shift Check does not call the direct audit-aware helper and keeps exactly one existing aggregate
+  audit with zero per-item availability audits for common, individual, mixed and no-op success.
+  No item metadata/price audit, order/idempotency, permission, media or migration change is included.
+
 These bounded menu, staff and promotion creation/lifecycle slices do not close the overall dangerous-action audit.
-Promotion configuration edit, remaining option create and item price/update audit, QR rotate, force-close/session, tab reopen,
+Promotion configuration edit, remaining option create and item price/name/type audit, QR rotate, force-close/session, tab reopen,
 analytics export, the Promotion Compatibility Policy and a broader audit viewer remain future.
 
 ## Current Implementation Vs Target
@@ -403,9 +428,10 @@ analytics export, the Promotion Compatibility Policy and a broader audit viewer 
 | Menu option rename audit | **DONE / MVP / STAGING-SMOKE-PASSED**. Venue Mini App compound PATCH and Telegram rename use the sole transaction-bound repository writer with server-derived actor/source. | One committed real rename writes exactly one privacy-safe `MENU_OPTION_RENAMED`; no-op/denial/collision/failure writes zero and audit failure restores every co-submitted field. | Option create and broader dangerous-action audit stay partial. |
 | Menu option price audit | **DANGEROUS ACTION AUDIT SLICE / MENU OPTION PRICE AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. The authenticated Mini App price path uses the existing locked compound transaction and server-derived actor/source. | One real committed delta change writes exactly one privacy-safe `MENU_OPTION_PRICE_CHANGED`; no-op/denial/collision/failure/rollback writes zero and audit failure restores every co-submitted field/audit. | Release-closed only for this bounded contract. Option create, item price/update and broader dangerous-action coverage stay partial. |
 | Menu option availability audit | **DONE / MVP / STAGING-SMOKE-PASSED**. Authenticated Mini App direct/compound and Telegram individual paths use one locked repository transaction with server-derived actor/source. | One real committed individual delta writes one allowlisted `MENU_OPTION_AVAILABILITY_CHANGED`; no-op/denial/failure/rollback writes zero. | Shift Check is excluded and retains its one batch audit. |
+| Menu item availability audit | **MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. Authenticated Mini App direct/compound and Telegram individual paths use one item-locked transaction with server-derived actor/source. | One real committed individual delta writes one allowlisted `MENU_ITEM_AVAILABILITY_CHANGED`; no-op/denial/failure/rollback writes zero. | Shift Check is aggregate-only. Item price/name/type and broader Menu audit remain open. |
 | Manager/Owner venue isolation | Own-venue RBAC is the product rule. | No cross-venue detail/reply/manage access. | Keep cross-venue tests for support, chats, orders, bookings and settings. |
 | Platform access | Platform Owner can manage platform scope and support tickets; ordinary venue chat is hidden. The bounded confirmed QR test enters the normal public Guest table flow only. Activation is atomic; teardown uses stored context identity and remains possible when token/table/venue/subscription becomes unavailable. | Platform does not bypass ordinary venue RBAC. Explicit Guest context temporarily wins routing only for ordinary Guest actions and is cleared by existing visit exit. Mini App re-entry requires matching chat context and no exit marker. | Controlled QR Phase 1 is staging-smoke-passed and stays in regression; event/audit explorer and analytics exports still need additional privacy gates before broad release. |
-| Dangerous action audit | Several audits exist: owner invite/revoke, billing mark-paid/courtesy, staff-call ACK/DONE, support status/scope, lifecycle/status, bounded menu hard deletes, released option rename/price and locally implemented option availability. | All dangerous actions write safe actor/target/old-new/reason evidence. | Audit coverage remains `PARTIAL` until option create, item price/update, QR rotate, force close, tab reopen, promotion configuration and analytics export are verified. |
+| Dangerous action audit | Several audits exist: owner invite/revoke, billing mark-paid/courtesy, staff-call ACK/DONE, support status/scope, lifecycle/status, bounded menu hard deletes, released option audits and locally implemented item availability. | All dangerous actions write safe actor/target/old-new/reason evidence. | Audit coverage remains `PARTIAL` until option create, item price/name/type, QR rotate, force close, tab reopen, promotion configuration and analytics export are verified. |
 | Staff role/removal audit | **DANGEROUS ACTION AUDIT SLICE / STAFF ROLE AND REMOVAL AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Venue Mini App and Telegram use one locked transaction and targeted audit column for applied Owner-authorized mutations. | Exactly one safe audit row for an applied role change/removal; zero for no-op, denial, last-owner, not-found and rollback. | Local H2/PostgreSQL repository/routes/Telegram/concurrency/privacy evidence and the bounded staging role/parity/privacy smoke are recorded passed. Promotion config, menu price/archive, force-close/session, audit viewer and other dangerous actions remain partial. |
 | Promotion lifecycle status audit | **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Mini App status/archive routes and Telegram activate/pause/archive callbacks pass authenticated actor plus server-owned source to one repository mutation. Parent status, synchronized rule statuses and one audit row share one JDBC connection and transaction; an audit failure rolls every lifecycle write back. | A committed real transition writes exactly one action: `VENUE_PROMOTION_STATUS_CHANGED` or `VENUE_PROMOTION_ARCHIVED`. Payload contains only `venueId`, `promotionId`, `templateType`, old/new status, source and deterministic rule id/version/old/new status rows; actor stays in the standard audit actor column. | This closes only lifecycle status/archive. Promotion configuration edit and the wider dangerous-action audit remain future; no-op, stale, repeated archive, denial, invalid/not-found and rollback paths have no success audit. Owner/Manager/Staff/foreign RBAC, Telegram/Mini App parity and payload privacy passed staging smoke. |
 | Promotion creation audit | **DANGEROUS ACTION AUDIT SLICE / PROMOTION CREATION AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Mini App and Telegram pass only authenticated/current actor and server-owned source to one required repository contract. | One committed parent writes exactly one `VENUE_PROMOTION_CREATED` for entity `venue_promotion`; parent, Mini App initial rule and audit share one JDBC connection/transaction. Informational and Telegram Happy Hours/Gift parent-draft creation use `rules=[]`; Mini App Happy Hours/Gift records the actually created initial rule. Payload contains only `venueId`, `promotionId`, `templateType`, `status=DRAFT`, source and ordered rule id/version/status rows. | Staff/foreign/invalid/validation/`afterInsert`/SQL/rollback paths write no success audit; audit failure rolls back parent and initial rules and yields no false Mini App/Telegram success. Promotion text/config/prices/media, Telegram PII and unrelated PII are excluded. Configuration edit, schedule/target/reward, media/banner, Banner retry duplicate-draft UX and broader dangerous-action audit remain open. |
@@ -601,6 +627,10 @@ analytics export, the Promotion Compatibility Policy and a broader audit viewer 
 - Menu option availability audit: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION AVAILABILITY AUDIT /
   DONE / MVP / STAGING-SMOKE-PASSED**. Current roles, actor/source privacy, atomic rollback, Shift
   Check exclusion and PostgreSQL contention remain regression coverage. No migration was added.
+- Menu item availability audit: **DANGEROUS ACTION AUDIT SLICE / MENU ITEM AVAILABILITY AUDIT /
+  MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. Direct
+  Owner/Manager/Staff authority, compound Owner/Manager-only authority, server actor/source,
+  transaction rollback and Shift Check aggregate-only exclusion are locally proven. No migration.
 - Dangerous action audit: `PARTIAL` until all listed dangerous actions have verified audit evidence.
 - Controlled Platform Guest QR test: **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / DONE / MVP / STAGING-SMOKE-PASSED**; schema verdict `NO_MIGRATION`, with the bounded role/privacy/exit regression complete.
 - Promotion lifecycle status audit: **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**; configuration/create audit and the broader dangerous-action audit remain future.

@@ -186,15 +186,12 @@ fun Route.venueMenuRoutes(
                     priceMinor = payload.priceMinor,
                     currency = currency,
                     isAvailable = payload.isAvailable,
+                    actorUserId = userId,
+                    source = MenuItemAvailabilitySource.VENUE_MINI_APP,
+                    itemType = itemType,
+                    itemTypeSpecified = payload.itemType != null,
                 ) ?: throw NotFoundException()
-            val typed =
-                if (payload.itemType != null) {
-                    venueMenuRepository.updateItemType(venueId, itemId, itemType)
-                        ?: throw NotFoundException()
-                } else {
-                    updated
-                }
-            call.respond(typed.toDtoWithCategory(resolveCategoryForItem(venueMenuRepository, venueId, typed)))
+            call.respond(updated.toDtoWithCategory(resolveCategoryForItem(venueMenuRepository, venueId, updated)))
         }
 
         delete("/menu/items/{id}") {
@@ -226,7 +223,13 @@ fun Route.venueMenuRoutes(
                     ?: throw InvalidInputException("itemId must be a number")
             val payload = call.receive<AvailabilityRequest>()
             val updated =
-                venueMenuRepository.setItemAvailability(venueId, itemId, payload.isAvailable)
+                venueMenuRepository.setItemAvailability(
+                    venueId = venueId,
+                    itemId = itemId,
+                    isAvailable = payload.isAvailable,
+                    actorUserId = userId,
+                    source = MenuItemAvailabilitySource.VENUE_MINI_APP,
+                )
                     ?: throw NotFoundException()
             call.respond(updated.toDto())
         }

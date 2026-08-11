@@ -29,12 +29,18 @@ const val MENU_OPTION_DELETED_AUDIT_ACTION = "MENU_OPTION_DELETED"
 const val MENU_OPTION_RENAMED_AUDIT_ACTION = "MENU_OPTION_RENAMED"
 const val MENU_OPTION_PRICE_CHANGED_AUDIT_ACTION = "MENU_OPTION_PRICE_CHANGED"
 const val MENU_OPTION_AVAILABILITY_CHANGED_AUDIT_ACTION = "MENU_OPTION_AVAILABILITY_CHANGED"
+const val MENU_ITEM_AVAILABILITY_CHANGED_AUDIT_ACTION = "MENU_ITEM_AVAILABILITY_CHANGED"
 internal const val MENU_DELETE_AFFECTED_RULE_SAMPLE_LIMIT = 50
 internal const val MENU_DELETE_AUDIT_PAYLOAD_MAX_BYTES = 4096
 internal const val MENU_ITEM_DELETE_AFFECTED_RULE_SAMPLE_LIMIT = MENU_DELETE_AFFECTED_RULE_SAMPLE_LIMIT
 internal const val MENU_ITEM_DELETE_AUDIT_PAYLOAD_MAX_BYTES = MENU_DELETE_AUDIT_PAYLOAD_MAX_BYTES
 
 enum class MenuItemDeleteSource {
+    VENUE_MINI_APP,
+    TELEGRAM_BOT,
+}
+
+enum class MenuItemAvailabilitySource {
     VENUE_MINI_APP,
     TELEGRAM_BOT,
 }
@@ -507,33 +513,95 @@ class VenueMenuRepository(
         priceMinor: Long?,
         currency: String?,
         isAvailable: Boolean?,
+        actorUserId: Long,
+        source: MenuItemAvailabilitySource,
+        itemType: MenuSemanticType? = null,
+        itemTypeSpecified: Boolean = false,
     ): VenueMenuItem? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    val existing = loadItem(connection, itemId, venueId) ?: return@use null
-                    val newCategoryId = categoryId ?: existing.categoryId
-                    if (newCategoryId != existing.categoryId && !categoryExists(connection, venueId, newCategoryId)) {
-                        return@use null
+                    val originalAutoCommit = connection.autoCommit
+                    connection.autoCommit = false
+                    try {
+                        val existing = loadItemForUpdate(connection, itemId, venueId)
+                        if (existing == null) {
+                            connection.commit()
+                            return@use null
+                        }
+                        if (!categoryExists(connection, venueId, existing.categoryId)) {
+                            throw SQLException("Locked menu item category is missing", "40001")
+                        }
+                        val updatedCategoryId = categoryId ?: existing.categoryId
+                        if (!categoryExists(connection, venueId, updatedCategoryId)) {
+                            connection.commit()
+                            return@use null
+                        }
+                        val updatedName = name ?: existing.name
+                        val updatedPriceMinor = priceMinor ?: existing.priceMinor
+                        val updatedCurrency = currency ?: existing.currency
+                        val updatedIsAvailable = isAvailable ?: existing.isAvailable
+                        val updatedItemType = if (itemTypeSpecified) itemType else existing.itemType
+                        val isAvailabilityChange = updatedIsAvailable != existing.isAvailable
+                        val hasChanges =
+                            updatedCategoryId != existing.categoryId ||
+                                updatedName != existing.name ||
+                                updatedPriceMinor != existing.priceMinor ||
+                                updatedCurrency != existing.currency ||
+                                isAvailabilityChange ||
+                                updatedItemType != existing.itemType
+                        if (!hasChanges) {
+                            connection.commit()
+                            return@use existing
+                        }
+                        val updated =
+                            connection.prepareStatement(
+                                """
+                                UPDATE menu_items
+                                SET category_id = ?, name = ?, price_minor = ?, currency = ?,
+                                    is_available = ?, item_type = ?, updated_at = now()
+                                WHERE id = ? AND venue_id = ? AND is_available = ?
+                                """.trimIndent(),
+                            ).use { statement ->
+                                statement.setLong(1, updatedCategoryId)
+                                statement.setString(2, updatedName)
+                                statement.setLong(3, updatedPriceMinor)
+                                statement.setString(4, updatedCurrency)
+                                statement.setBoolean(5, updatedIsAvailable)
+                                if (updatedItemType == null) {
+                                    statement.setNull(6, java.sql.Types.VARCHAR)
+                                } else {
+                                    statement.setString(6, updatedItemType.dbValue)
+                                }
+                                statement.setLong(7, itemId)
+                                statement.setLong(8, venueId)
+                                statement.setBoolean(9, existing.isAvailable)
+                                statement.executeUpdate()
+                            }
+                        if (updated != 1) {
+                            throw SQLException("Locked menu item changed during update", "40001")
+                        }
+                        if (isAvailabilityChange) {
+                            auditMenuItemAvailabilityChange(
+                                connection = connection,
+                                venueId = venueId,
+                                itemId = itemId,
+                                oldIsAvailable = existing.isAvailable,
+                                newIsAvailable = updatedIsAvailable,
+                                actorUserId = actorUserId,
+                                source = source,
+                            )
+                        }
+                        val result = loadItem(connection, itemId, venueId)
+                        connection.commit()
+                        result
+                    } catch (e: Exception) {
+                        connection.rollback()
+                        throw e
+                    } finally {
+                        connection.autoCommit = originalAutoCommit
                     }
-                    connection.prepareStatement(
-                        """
-                        UPDATE menu_items
-                        SET category_id = ?, name = ?, price_minor = ?, currency = ?, is_available = ?, updated_at = now()
-                        WHERE id = ? AND venue_id = ?
-                        """.trimIndent(),
-                    ).use { statement ->
-                        statement.setLong(1, newCategoryId)
-                        statement.setString(2, name ?: existing.name)
-                        statement.setLong(3, priceMinor ?: existing.priceMinor)
-                        statement.setString(4, currency ?: existing.currency)
-                        statement.setBoolean(5, isAvailable ?: existing.isAvailable)
-                        statement.setLong(6, itemId)
-                        statement.setLong(7, venueId)
-                        statement.executeUpdate()
-                    }
-                    loadItem(connection, itemId, venueId)
                 }
             } catch (e: SQLException) {
                 throw DatabaseUnavailableException()
@@ -672,28 +740,63 @@ class VenueMenuRepository(
         venueId: Long,
         itemId: Long,
         isAvailable: Boolean,
+        actorUserId: Long,
+        source: MenuItemAvailabilitySource,
     ): VenueMenuItem? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    val updated =
-                        connection.prepareStatement(
-                            """
-                            UPDATE menu_items
-                            SET is_available = ?, updated_at = now()
-                            WHERE id = ? AND venue_id = ?
-                            """.trimIndent(),
-                        ).use { statement ->
-                            statement.setBoolean(1, isAvailable)
-                            statement.setLong(2, itemId)
-                            statement.setLong(3, venueId)
-                            statement.executeUpdate()
+                    val originalAutoCommit = connection.autoCommit
+                    connection.autoCommit = false
+                    try {
+                        val existing = loadItemForUpdate(connection, itemId, venueId)
+                        if (existing == null) {
+                            connection.commit()
+                            return@use null
                         }
-                    if (updated == 0) {
-                        return@use null
+                        if (!categoryExists(connection, venueId, existing.categoryId)) {
+                            throw SQLException("Locked menu item category is missing", "40001")
+                        }
+                        if (existing.isAvailable == isAvailable) {
+                            connection.commit()
+                            return@use existing
+                        }
+                        val updated =
+                            connection.prepareStatement(
+                                """
+                                UPDATE menu_items
+                                SET is_available = ?, updated_at = now()
+                                WHERE id = ? AND venue_id = ? AND is_available = ?
+                                """.trimIndent(),
+                            ).use { statement ->
+                                statement.setBoolean(1, isAvailable)
+                                statement.setLong(2, itemId)
+                                statement.setLong(3, venueId)
+                                statement.setBoolean(4, existing.isAvailable)
+                                statement.executeUpdate()
+                            }
+                        if (updated != 1) {
+                            throw SQLException("Locked menu item changed during availability update", "40001")
+                        }
+                        auditMenuItemAvailabilityChange(
+                            connection = connection,
+                            venueId = venueId,
+                            itemId = itemId,
+                            oldIsAvailable = existing.isAvailable,
+                            newIsAvailable = isAvailable,
+                            actorUserId = actorUserId,
+                            source = source,
+                        )
+                        val result = loadItem(connection, itemId, venueId)
+                        connection.commit()
+                        result
+                    } catch (e: Exception) {
+                        connection.rollback()
+                        throw e
+                    } finally {
+                        connection.autoCommit = originalAutoCommit
                     }
-                    loadItem(connection, itemId, venueId)
                 }
             } catch (e: SQLException) {
                 throw DatabaseUnavailableException()
@@ -1544,6 +1647,32 @@ class VenueMenuRepository(
         )
     }
 
+    private fun auditMenuItemAvailabilityChange(
+        connection: Connection,
+        venueId: Long,
+        itemId: Long,
+        oldIsAvailable: Boolean,
+        newIsAvailable: Boolean,
+        actorUserId: Long,
+        source: MenuItemAvailabilitySource,
+    ) {
+        auditLogWriter.appendJson(
+            connection = connection,
+            actorUserId = actorUserId,
+            action = MENU_ITEM_AVAILABILITY_CHANGED_AUDIT_ACTION,
+            entityType = "menu_item",
+            entityId = itemId,
+            payload =
+                buildMenuItemAvailabilityChangeAuditPayload(
+                    venueId = venueId,
+                    itemId = itemId,
+                    oldIsAvailable = oldIsAvailable,
+                    newIsAvailable = newIsAvailable,
+                    source = source,
+                ),
+        )
+    }
+
     private fun validateShiftCheckChanges(
         itemChanges: List<MenuShiftCheckItemChange>,
         optionChanges: List<MenuShiftCheckOptionChange>,
@@ -1857,6 +1986,27 @@ class VenueMenuRepository(
             SELECT id, venue_id, category_id, name, price_minor, currency, is_available, sort_order, item_type
             FROM menu_items
             WHERE id = ? AND venue_id = ?
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, itemId)
+            statement.setLong(2, venueId)
+            statement.executeQuery().use { rs ->
+                if (rs.next()) mapItem(rs) else null
+            }
+        }
+    }
+
+    private fun loadItemForUpdate(
+        connection: Connection,
+        itemId: Long,
+        venueId: Long,
+    ): VenueMenuItem? {
+        return connection.prepareStatement(
+            """
+            SELECT id, venue_id, category_id, name, price_minor, currency, is_available, sort_order, item_type
+            FROM menu_items
+            WHERE id = ? AND venue_id = ?
+            FOR UPDATE
             """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, itemId)
@@ -2472,6 +2622,20 @@ internal fun buildMenuOptionAvailabilityChangeAuditPayload(
     put("oldIsAvailable", oldIsAvailable)
     put("newIsAvailable", newIsAvailable)
     put("source", source)
+}
+
+internal fun buildMenuItemAvailabilityChangeAuditPayload(
+    venueId: Long,
+    itemId: Long,
+    oldIsAvailable: Boolean,
+    newIsAvailable: Boolean,
+    source: MenuItemAvailabilitySource,
+) = buildJsonObject {
+    put("venueId", venueId)
+    put("itemId", itemId)
+    put("oldIsAvailable", oldIsAvailable)
+    put("newIsAvailable", newIsAvailable)
+    put("source", source.name)
 }
 
 private fun buildAffectedPromotionRuleSummary(affectedRuleIds: Iterable<Long>) =

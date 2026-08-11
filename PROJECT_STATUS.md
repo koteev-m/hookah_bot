@@ -1,6 +1,7 @@
 # Project Status
 
-Last verified: 2026-08-11. Current release `bd5395b` equals `origin/main`.
+Last verified: 2026-08-11. Implementation base `26c7418` equalled `origin/main` before the current
+unstaged working-tree changes.
 
 ## 1. Purpose and source-of-truth order
 
@@ -18,6 +19,8 @@ next-block change, P0/P1 blocker change or before a new long task.
   STAGING-SMOKE-PASSED**.
 - **DANGEROUS ACTION AUDIT SLICE / MENU OPTION AVAILABILITY AUDIT / DONE / MVP /
   STAGING-SMOKE-PASSED**.
+- **DANGEROUS ACTION AUDIT SLICE / MENU ITEM AVAILABILITY AUDIT / MVP IMPLEMENTED /
+  LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
 - Menu option price audit and Venue Menu management UX stabilization remain separately
   `DONE / MVP / STAGING-SMOKE-PASSED` for their bounded contracts.
 
@@ -39,16 +42,21 @@ next-block change, P0/P1 blocker change or before a new long task.
   audit; Staff retains direct availability authority only, while compound PATCH remains Owner/Manager.
   Shift Check retains one aggregate `MENU_SHIFT_CHECK_COMPLETED` and no per-option availability
   audits. Audit failure rolls back the mutation.
+- Menu item availability audit: authenticated direct Mini App and Telegram changes plus an
+  availability delta inside Owner/Manager compound item PATCH write exactly one transaction-bound
+  `MENU_ITEM_AVAILABILITY_CHANGED` with server-derived actor/source. Same-state requests write no
+  audit and do not change `updated_at`; Staff keeps direct availability only. Shift Check remains
+  aggregate-only, and an audit failure rolls back the item mutation and timestamp.
 
-## 4. Selected next bounded block
+## 4. Current bounded block
 
-Verdict: **IMPLEMENT_MENU_ITEM_AVAILABILITY_AUDIT_NEXT**.
+Contract: **IMPLEMENT_MENU_ITEM_AVAILABILITY_AUDIT_NEXT**.
 
-Read-only runtime audit found unaudited item-availability writes in the direct and compound Venue
-Mini App paths plus Telegram Owner/Manager/Staff stop-list callbacks. Item availability has an
-existing Guest stale-cart rejection contract, so the next slice can add safe mutation evidence without
-a new domain engine. It must keep Shift Check as its current aggregate-only audit path and leave price
-and non-price metadata untouched.
+Verdict: **DANGEROUS ACTION AUDIT SLICE / MENU ITEM AVAILABILITY AUDIT / MVP IMPLEMENTED /
+LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. Production writer inventory, focused
+repository/routes/Telegram/Guest tests and deterministic PostgreSQL contention coverage are green.
+No item price/name/type/category/currency/description/media or option-availability audit scope was
+added; Shift Check still writes only its existing aggregate audit. No migration was added.
 
 ## 5. Open gaps and risks
 
@@ -77,8 +85,10 @@ and non-price metadata untouched.
 
 ## 7. Release and staging evidence
 
-The user confirmed fully green GitHub Actions for current release `bd5395b`, staging deploy and the
-bounded staging smoke. GitHub CLI has an invalid local token, so no CLI Actions result is recorded.
+The current item-availability audit slice has local validation only. Independent review, green
+GitHub Actions, staging deploy and bounded staging smoke are still required before release closure.
+The user previously confirmed green Actions, staging deploy and bounded smoke for the earlier Guest
+stale-cart release block.
 The confirmed smoke covers only: clear `ITEM / UNAVAILABLE` and `ITEM / REMOVED` reasons; exact-line
 `Удалить и выбрать другую`; preservation of other lines; recalculation before Menu navigation; no
 automatic replacement or order submission; in-cart `Удалить из корзины`; independent multiple issues;
@@ -97,14 +107,12 @@ topology verification.
 
 ## 9. Next action
 
-Implement only the selected menu-item availability audit slice: direct and compound Mini App plus
-Telegram writers, server-derived actor/source, one audit per real committed delta, no-op zero audit,
-atomic rollback, Staff direct-availability authority and Shift Check aggregate-only preservation.
-Require focused backend, Telegram, Mini App and PostgreSQL contention coverage, then green CI,
-staging deploy and a bounded smoke before any release closure. Do not include item price,
-rename/metadata, option create, cart-hardening, media/R2, stash or `scripts/dev/`.
+Independently review the bounded menu-item availability audit diff, then require green CI, staging
+deploy and a bounded Mini App/Telegram/Guest smoke before release closure. Do not expand review into
+item price/rename/metadata, option create/availability, cart hardening, media/R2, stash or
+`scripts/dev/`.
 
 ## 10. Last verified date
 
-2026-08-11. The three listed release blocks are staging-smoke-passed only for their stated contracts.
+2026-08-11. The item availability audit is local-validation-passed, not release-closed.
 Stash was not read, applied, changed, deleted or renamed; `scripts/dev/` was not touched.

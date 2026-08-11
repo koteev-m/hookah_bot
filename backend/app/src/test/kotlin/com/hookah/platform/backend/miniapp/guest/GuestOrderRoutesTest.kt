@@ -3171,7 +3171,7 @@ class GuestOrderRoutesTest {
         }
 
     @Test
-    fun `idempotent replay keeps persisted pricing for promoted and regular lines after menu edit`() =
+    fun `idempotent replay keeps pricing snapshots after menu edit and availability change`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("guest-order-promo-mixed-replay-snapshot")
             val config = buildConfig(jdbcUrl)
@@ -3241,6 +3241,7 @@ class GuestOrderRoutesTest {
 
             updateMenuItemNameAndPrice(jdbcUrl, promotedItemId, "Новый кальян", 9_000L)
             updateMenuItemNameAndPrice(jdbcUrl, regularItemId, "Новый чай", 8_000L)
+            setMenuItemAvailability(jdbcUrl, promotedItemId, isAvailable = false)
 
             val replayResponse =
                 client.post("/api/guest/order/add-batch") {

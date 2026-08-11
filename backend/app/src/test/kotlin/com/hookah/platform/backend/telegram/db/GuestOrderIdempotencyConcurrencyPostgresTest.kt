@@ -9,7 +9,9 @@ import com.hookah.platform.backend.miniapp.guest.db.GuestOrderTransactionCoordin
 import com.hookah.platform.backend.miniapp.guest.db.GuestTabsRepository
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
+import com.hookah.platform.backend.miniapp.venue.menu.MENU_ITEM_AVAILABILITY_CHANGED_AUDIT_ACTION
 import com.hookah.platform.backend.miniapp.venue.menu.MENU_ITEM_DELETED_AUDIT_ACTION
+import com.hookah.platform.backend.miniapp.venue.menu.MenuItemAvailabilitySource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuItemDeleteSource
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepository
 import com.hookah.platform.backend.test.PostgresTestEnv
@@ -197,6 +199,8 @@ class GuestOrderIdempotencyConcurrencyPostgresTest {
                                 venueId = fixture.venueId,
                                 itemId = fixture.itemId,
                                 isAvailable = false,
+                                actorUserId = AVAILABILITY_ACTOR_ID,
+                                source = MenuItemAvailabilitySource.VENUE_MINI_APP,
                             )
                         },
                     )
@@ -208,8 +212,9 @@ class GuestOrderIdempotencyConcurrencyPostgresTest {
                     CartMenuSelectionReason.UNAVAILABLE,
                 )
                 assertNotEquals(submitDataSource.backendPid.get(), writerDataSource.backendPid.get())
-                assertEquals(before, readSnapshot(dataSource))
+                assertEquals(before.copy(auditRows = before.auditRows + 1), readSnapshot(dataSource))
                 assertFalse(loadMenuItemAvailability(dataSource, fixture.itemId))
+                assertEquals(1, countMenuItemAvailabilityAudits(dataSource, fixture.itemId))
             } finally {
                 submitDataSource.allowMenuLock.countDown()
                 shutdown(executor)
@@ -274,6 +279,8 @@ class GuestOrderIdempotencyConcurrencyPostgresTest {
                     venueId = fixture.venueId,
                     itemId = fixture.itemId,
                     isAvailable = false,
+                    actorUserId = AVAILABILITY_ACTOR_ID,
+                    source = MenuItemAvailabilitySource.VENUE_MINI_APP,
                 )
             }
             val before = readSnapshot(dataSource)
@@ -484,6 +491,7 @@ class GuestOrderIdempotencyConcurrencyPostgresTest {
         dataSource.connection.use { connection ->
             insertUser(connection, USER_ID)
             insertUser(connection, DELETE_ACTOR_ID)
+            insertUser(connection, AVAILABILITY_ACTOR_ID)
             val venueId = insertVenue(connection)
             val primaryTableId = insertTable(connection, venueId, tableNumber = 1)
             val primarySessionId = insertSession(connection, venueId, primaryTableId)
@@ -880,6 +888,23 @@ class GuestOrderIdempotencyConcurrencyPostgresTest {
             }
         }
 
+    private fun countMenuItemAvailabilityAudits(
+        dataSource: DataSource,
+        itemId: Long,
+    ): Int =
+        dataSource.connection.use { connection ->
+            connection.prepareStatement(
+                "SELECT COUNT(*) FROM audit_log WHERE action = ? AND entity_id = ?",
+            ).use { statement ->
+                statement.setString(1, MENU_ITEM_AVAILABILITY_CHANGED_AUDIT_ACTION)
+                statement.setLong(2, itemId)
+                statement.executeQuery().use { resultSet ->
+                    assertTrue(resultSet.next())
+                    resultSet.getInt(1)
+                }
+            }
+        }
+
     private fun countPrimaryPersonalTabs(
         dataSource: DataSource,
         fixture: Fixture,
@@ -1104,6 +1129,7 @@ class GuestOrderIdempotencyConcurrencyPostgresTest {
     private companion object {
         const val USER_ID = 9_310_001L
         const val DELETE_ACTOR_ID = 9_310_002L
+        const val AVAILABILITY_ACTOR_ID = 9_310_003L
         const val CART_LINE_REF = "concurrency-line"
         const val COMMENT = "  concurrency comment  "
         const val EXACT_RETRY_KEY = "concurrent-exact-retry"

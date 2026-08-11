@@ -152,6 +152,7 @@ class VenueMenuRepositoryTest {
             assertFalse(firstAudit.toString().contains(fixture.secondOption.name))
             assertFalse(firstAudit.toString().contains("price", ignoreCase = true))
             assertFalse(firstAudit.toString().contains("telegram", ignoreCase = true))
+            assertTrue(menuItemAvailabilityChangeAudits(jdbcUrl).isEmpty())
             assertTrue(menuOptionAvailabilityChangeAudits(jdbcUrl).isEmpty())
 
             val noOp =
@@ -168,6 +169,7 @@ class VenueMenuRepositoryTest {
             assertEquals(2, auditPayloads(jdbcUrl).size)
             assertEquals(0, noOpAudit.getValue("changedItemCount").jsonPrimitive.int)
             assertEquals(0, noOpAudit.getValue("changedOptionCount").jsonPrimitive.int)
+            assertTrue(menuItemAvailabilityChangeAudits(jdbcUrl).isEmpty())
             assertTrue(menuOptionAvailabilityChangeAudits(jdbcUrl).isEmpty())
         }
 
@@ -352,6 +354,7 @@ class VenueMenuRepositoryTest {
                     .isAvailable,
             )
             assertEquals(0, auditPayloads(jdbcUrl).size)
+            assertTrue(menuItemAvailabilityChangeAudits(jdbcUrl).isEmpty())
             assertEquals(individualAuditsBeforeShiftCheck, menuOptionAvailabilityChangeAudits(jdbcUrl))
         }
 
@@ -388,6 +391,269 @@ class VenueMenuRepositoryTest {
 
             assertTrue(repository.getMenu(venueId).flatMap { it.items }.first().isAvailable)
             assertEquals(0, auditPayloads(jdbcUrl).size)
+            assertTrue(menuItemAvailabilityChangeAudits(jdbcUrl).isEmpty())
+        }
+
+    @Test
+    fun `direct item availability writes exact audits and no-op missing foreign write none`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("venue-menu-item-availability-audit-success")
+            val venueId = seedVenue(jdbcUrl)
+            val foreignVenueId = seedVenue(jdbcUrl)
+            val repository = VenueMenuRepository(dataSource(jdbcUrl))
+            val own = createMenuFixture(repository, venueId)
+            val foreign = createMenuFixture(repository, foreignVenueId)
+            val original = own.firstItem
+            val foreignBefore = itemRow(jdbcUrl, foreign.firstItem.id)
+
+            val disabled =
+                requireNotNull(
+                    repository.setItemAvailability(
+                        venueId = venueId,
+                        itemId = original.id,
+                        isAvailable = false,
+                        actorUserId = AUDIT_ACTOR_ID,
+                        source = MenuItemAvailabilitySource.VENUE_MINI_APP,
+                    ),
+                )
+            assertFalse(disabled.isAvailable)
+            val disabledAudit = menuItemAvailabilityChangeAudits(jdbcUrl).single()
+            assertMenuItemAvailabilityChangeAudit(
+                audit = disabledAudit,
+                venueId = venueId,
+                itemId = original.id,
+                oldIsAvailable = true,
+                newIsAvailable = false,
+                actorUserId = AUDIT_ACTOR_ID,
+                source = MenuItemAvailabilitySource.VENUE_MINI_APP,
+            )
+            val afterDisable = itemRow(jdbcUrl, original.id)
+
+            repeat(2) {
+                val noOp =
+                    requireNotNull(
+                        repository.setItemAvailability(
+                            venueId = venueId,
+                            itemId = original.id,
+                            isAvailable = false,
+                            actorUserId = AUDIT_ACTOR_ID,
+                            source = MenuItemAvailabilitySource.TELEGRAM_BOT,
+                        ),
+                    )
+                assertFalse(noOp.isAvailable)
+            }
+            assertEquals(afterDisable, itemRow(jdbcUrl, original.id))
+            assertEquals(listOf(disabledAudit), menuItemAvailabilityChangeAudits(jdbcUrl))
+
+            val enabled =
+                requireNotNull(
+                    repository.setItemAvailability(
+                        venueId = venueId,
+                        itemId = original.id,
+                        isAvailable = true,
+                        actorUserId = AUDIT_ACTOR_ID,
+                        source = MenuItemAvailabilitySource.TELEGRAM_BOT,
+                    ),
+                )
+            assertTrue(enabled.isAvailable)
+            val audits = menuItemAvailabilityChangeAudits(jdbcUrl)
+            assertEquals(2, audits.size)
+            assertMenuItemAvailabilityChangeAudit(
+                audit = audits[1],
+                venueId = venueId,
+                itemId = original.id,
+                oldIsAvailable = false,
+                newIsAvailable = true,
+                actorUserId = AUDIT_ACTOR_ID,
+                source = MenuItemAvailabilitySource.TELEGRAM_BOT,
+            )
+
+            assertNull(
+                repository.setItemAvailability(
+                    venueId = venueId,
+                    itemId = Long.MAX_VALUE,
+                    isAvailable = false,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuItemAvailabilitySource.VENUE_MINI_APP,
+                ),
+            )
+            assertNull(
+                repository.setItemAvailability(
+                    venueId = venueId,
+                    itemId = foreign.firstItem.id,
+                    isAvailable = false,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuItemAvailabilitySource.VENUE_MINI_APP,
+                ),
+            )
+            assertEquals(foreignBefore, itemRow(jdbcUrl, foreign.firstItem.id))
+            assertEquals(audits, menuItemAvailabilityChangeAudits(jdbcUrl))
+            audits.forEach { audit ->
+                val serialized = audit.payload.toString()
+                listOf(
+                    "name",
+                    "price",
+                    "currency",
+                    "description",
+                    "type",
+                    "option",
+                    "promotion",
+                    "cart",
+                    "order",
+                    "request",
+                    "initData",
+                    "telegramUserId",
+                    "updateId",
+                    "callbackData",
+                    "media",
+                    "secret",
+                    "username",
+                    "phone",
+                ).forEach { forbidden ->
+                    assertFalse(serialized.contains(forbidden, ignoreCase = true), forbidden)
+                }
+            }
+        }
+
+    @Test
+    fun `compound item update audits only real availability deltas`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("venue-menu-item-availability-compound")
+            val venueId = seedVenue(jdbcUrl)
+            val repository = VenueMenuRepository(dataSource(jdbcUrl))
+            val fixture = createMenuFixture(repository, venueId)
+
+            val availabilityOnly =
+                requireNotNull(
+                    repository.updateItem(
+                        venueId = venueId,
+                        itemId = fixture.firstItem.id,
+                        categoryId = null,
+                        name = null,
+                        priceMinor = null,
+                        currency = null,
+                        isAvailable = false,
+                        actorUserId = AUDIT_ACTOR_ID,
+                        source = MenuItemAvailabilitySource.VENUE_MINI_APP,
+                    ),
+                )
+            assertFalse(availabilityOnly.isAvailable)
+
+            val metadataAndAvailability =
+                requireNotNull(
+                    repository.updateItem(
+                        venueId = venueId,
+                        itemId = fixture.secondItem.id,
+                        categoryId = null,
+                        name = "Compound item metadata",
+                        priceMinor = 77_700,
+                        currency = "RUB",
+                        isAvailable = false,
+                        actorUserId = AUDIT_ACTOR_ID,
+                        source = MenuItemAvailabilitySource.VENUE_MINI_APP,
+                        itemType = MenuSemanticType.DRINK,
+                        itemTypeSpecified = true,
+                    ),
+                )
+            assertEquals("Compound item metadata", metadataAndAvailability.name)
+            assertEquals(77_700L, metadataAndAvailability.priceMinor)
+            assertEquals(MenuSemanticType.DRINK, metadataAndAvailability.itemType)
+            assertFalse(metadataAndAvailability.isAvailable)
+
+            val metadataOnly =
+                requireNotNull(
+                    repository.updateItem(
+                        venueId = venueId,
+                        itemId = fixture.secondItem.id,
+                        categoryId = null,
+                        name = "Metadata only after availability",
+                        priceMinor = null,
+                        currency = null,
+                        isAvailable = false,
+                        actorUserId = AUDIT_ACTOR_ID,
+                        source = MenuItemAvailabilitySource.VENUE_MINI_APP,
+                    ),
+                )
+            assertEquals("Metadata only after availability", metadataOnly.name)
+            assertFalse(metadataOnly.isAvailable)
+
+            repeat(2) {
+                requireNotNull(
+                    repository.updateItem(
+                        venueId = venueId,
+                        itemId = fixture.secondItem.id,
+                        categoryId = null,
+                        name = metadataOnly.name,
+                        priceMinor = metadataOnly.priceMinor,
+                        currency = metadataOnly.currency,
+                        isAvailable = false,
+                        actorUserId = AUDIT_ACTOR_ID,
+                        source = MenuItemAvailabilitySource.VENUE_MINI_APP,
+                    ),
+                )
+            }
+
+            val audits = menuItemAvailabilityChangeAudits(jdbcUrl)
+            assertEquals(listOf(fixture.firstItem.id, fixture.secondItem.id), audits.map { it.entityId })
+            audits.forEach { audit ->
+                assertEquals(
+                    setOf("venueId", "itemId", "oldIsAvailable", "newIsAvailable", "source"),
+                    audit.payload.keys,
+                )
+                assertEquals("true", audit.payload.getValue("oldIsAvailable").jsonPrimitive.content)
+                assertEquals("false", audit.payload.getValue("newIsAvailable").jsonPrimitive.content)
+            }
+            assertTrue(menuOptionRenameAudits(jdbcUrl).isEmpty())
+            assertTrue(menuOptionPriceChangeAudits(jdbcUrl).isEmpty())
+            assertTrue(menuOptionAvailabilityChangeAudits(jdbcUrl).isEmpty())
+        }
+
+    @Test
+    fun `item availability audit failure restores compound fields timestamp and audit row`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("venue-menu-item-availability-audit-rollback")
+            val venueId = seedVenue(jdbcUrl)
+            val dataSource = dataSource(jdbcUrl)
+            val fixtureRepository = VenueMenuRepository(dataSource)
+            val original = createMenuFixture(fixtureRepository, venueId).firstItem
+            val before = itemRow(jdbcUrl, original.id)
+            val delegateAuditWriter = AuditLogRepository(dataSource, Json)
+            var updatedRowObserved = false
+            val failingAuditWriter =
+                TransactionalAuditLogWriter { connection, actorUserId, action, entityType, entityId, payload ->
+                    delegateAuditWriter.appendJson(connection, actorUserId, action, entityType, entityId, payload)
+                    if (action == MENU_ITEM_AVAILABILITY_CHANGED_AUDIT_ACTION) {
+                        val current = itemRow(connection, original.id)
+                        updatedRowObserved =
+                            current?.name == "Rollback item metadata" &&
+                            current.priceMinor == 999L &&
+                            current.itemType == MenuSemanticType.DRINK.dbValue &&
+                            !current.isAvailable
+                        check(updatedRowObserved) { "Compound item update must happen before availability audit" }
+                        throw SQLException("Synthetic menu item availability audit failure", "XX999")
+                    }
+                }
+            val repository = VenueMenuRepository(dataSource, failingAuditWriter)
+
+            assertFailsWith<DatabaseUnavailableException> {
+                repository.updateItem(
+                    venueId = venueId,
+                    itemId = original.id,
+                    categoryId = null,
+                    name = "Rollback item metadata",
+                    priceMinor = 999,
+                    currency = "RUB",
+                    isAvailable = false,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuItemAvailabilitySource.VENUE_MINI_APP,
+                    itemType = MenuSemanticType.DRINK,
+                    itemTypeSpecified = true,
+                )
+            }
+
+            assertTrue(updatedRowObserved)
+            assertEquals(before, itemRow(jdbcUrl, original.id))
+            assertTrue(menuItemAvailabilityChangeAudits(jdbcUrl).isEmpty())
         }
 
     @Test
@@ -2473,6 +2739,9 @@ class VenueMenuRepositoryTest {
     private fun menuOptionAvailabilityChangeAudits(jdbcUrl: String): List<MenuDeleteAuditRow> =
         menuDeleteAudits(jdbcUrl, MENU_OPTION_AVAILABILITY_CHANGED_AUDIT_ACTION)
 
+    private fun menuItemAvailabilityChangeAudits(jdbcUrl: String): List<MenuDeleteAuditRow> =
+        menuDeleteAudits(jdbcUrl, MENU_ITEM_AVAILABILITY_CHANGED_AUDIT_ACTION)
+
     private fun menuDeleteAudits(
         jdbcUrl: String,
         action: String,
@@ -2607,6 +2876,30 @@ class VenueMenuRepositoryTest {
         assertEquals(source, audit.payload.getValue("source").jsonPrimitive.content)
     }
 
+    private fun assertMenuItemAvailabilityChangeAudit(
+        audit: MenuDeleteAuditRow,
+        venueId: Long,
+        itemId: Long,
+        oldIsAvailable: Boolean,
+        newIsAvailable: Boolean,
+        actorUserId: Long,
+        source: MenuItemAvailabilitySource,
+    ) {
+        assertEquals(actorUserId, audit.actorUserId)
+        assertEquals(MENU_ITEM_AVAILABILITY_CHANGED_AUDIT_ACTION, audit.action)
+        assertEquals("menu_item", audit.entityType)
+        assertEquals(itemId, audit.entityId)
+        assertEquals(
+            setOf("venueId", "itemId", "oldIsAvailable", "newIsAvailable", "source"),
+            audit.payload.keys,
+        )
+        assertEquals(venueId, audit.payload.longValue("venueId"))
+        assertEquals(itemId, audit.payload.longValue("itemId"))
+        assertEquals(oldIsAvailable, audit.payload.getValue("oldIsAvailable").jsonPrimitive.content.toBoolean())
+        assertEquals(newIsAvailable, audit.payload.getValue("newIsAvailable").jsonPrimitive.content.toBoolean())
+        assertEquals(source.name, audit.payload.getValue("source").jsonPrimitive.content)
+    }
+
     private fun loadOptionSnapshot(
         connection: Connection,
         venueId: Long,
@@ -2682,6 +2975,47 @@ class VenueMenuRepositoryTest {
                             )
                         }
                     }
+                }
+            }
+        }
+
+    private fun itemRow(
+        jdbcUrl: String,
+        itemId: Long,
+    ): ItemRowSnapshot =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            requireNotNull(itemRow(connection, itemId))
+        }
+
+    private fun itemRow(
+        connection: Connection,
+        itemId: Long,
+    ): ItemRowSnapshot? =
+        connection.prepareStatement(
+            """
+            SELECT id, venue_id, category_id, name, price_minor, currency, is_available,
+                   sort_order, item_type, updated_at
+            FROM menu_items
+            WHERE id = ?
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, itemId)
+            statement.executeQuery().use { rs ->
+                if (!rs.next()) {
+                    null
+                } else {
+                    ItemRowSnapshot(
+                        id = rs.getLong("id"),
+                        venueId = rs.getLong("venue_id"),
+                        categoryId = rs.getLong("category_id"),
+                        name = rs.getString("name"),
+                        priceMinor = rs.getLong("price_minor"),
+                        currency = rs.getString("currency"),
+                        isAvailable = rs.getBoolean("is_available"),
+                        sortOrder = rs.getInt("sort_order"),
+                        itemType = rs.getString("item_type"),
+                        updatedAt = rs.getObject("updated_at").toString(),
+                    )
                 }
             }
         }
@@ -2776,6 +3110,19 @@ class VenueMenuRepositoryTest {
         val priceDeltaMinor: Long,
         val isAvailable: Boolean,
         val sortOrder: Int,
+        val updatedAt: String,
+    )
+
+    private data class ItemRowSnapshot(
+        val id: Long,
+        val venueId: Long,
+        val categoryId: Long,
+        val name: String,
+        val priceMinor: Long,
+        val currency: String,
+        val isAvailable: Boolean,
+        val sortOrder: Int,
+        val itemType: String?,
         val updatedAt: String,
     )
 

@@ -27,6 +27,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class VenueMenuOptionNormalizationConcurrencyPostgresTest {
@@ -1021,9 +1022,323 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
             }
         }
 
+    @Test
+    fun `item direct availability writers serialize with one database current audit`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource)
+                val optionsBefore = readOptions(dataSource, fixture.itemId)
+                val holderDataSource = HeldItemLockDataSource(dataSource)
+                val waiterDataSource = TrackedItemLockDataSource(dataSource)
+
+                val (winner, noOp) =
+                    runWithHeldItemLock(
+                        observerDataSource = dataSource,
+                        holderDataSource = holderDataSource,
+                        waiterDataSource = waiterDataSource,
+                        beforeRelease = { assertInitialItemState(dataSource, fixture) },
+                        holderAction = {
+                            runBlocking {
+                                VenueMenuRepository(holderDataSource).setItemAvailability(
+                                    venueId = fixture.venueId,
+                                    itemId = fixture.itemId,
+                                    isAvailable = false,
+                                    actorUserId = FIRST_ACTOR_ID,
+                                    source = MenuItemAvailabilitySource.VENUE_MINI_APP,
+                                )
+                            }
+                        },
+                        waiterAction = {
+                            runBlocking {
+                                VenueMenuRepository(waiterDataSource).setItemAvailability(
+                                    venueId = fixture.venueId,
+                                    itemId = fixture.itemId,
+                                    isAvailable = false,
+                                    actorUserId = SECOND_ACTOR_ID,
+                                    source = MenuItemAvailabilitySource.TELEGRAM_BOT,
+                                )
+                            }
+                        },
+                    )
+
+                assertFalse(assertNotNull(winner).isAvailable)
+                assertFalse(assertNotNull(noOp).isAvailable)
+                assertFalse(assertNotNull(readItem(dataSource, fixture.itemId)).isAvailable)
+                assertEquals(optionsBefore, readOptions(dataSource, fixture.itemId))
+                assertItemAvailabilityAudit(
+                    audit = readItemAvailabilityAudits(dataSource).single(),
+                    fixture = fixture,
+                    oldIsAvailable = true,
+                    newIsAvailable = false,
+                    actorUserId = FIRST_ACTOR_ID,
+                    source = MenuItemAvailabilitySource.VENUE_MINI_APP,
+                )
+                assertTrue(readShiftCheckAudits(dataSource).isEmpty())
+                assertEquals(1, countAuditRows(dataSource))
+            }
+        }
+
+    @Test
+    fun `item direct availability and compound patch serialize truthful audits`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource)
+                val optionsBefore = readOptions(dataSource, fixture.itemId)
+                val holderDataSource = HeldItemLockDataSource(dataSource)
+                val waiterDataSource = TrackedItemLockDataSource(dataSource)
+
+                val (direct, compound) =
+                    runWithHeldItemLock(
+                        observerDataSource = dataSource,
+                        holderDataSource = holderDataSource,
+                        waiterDataSource = waiterDataSource,
+                        beforeRelease = { assertInitialItemState(dataSource, fixture) },
+                        holderAction = {
+                            runBlocking {
+                                VenueMenuRepository(holderDataSource).setItemAvailability(
+                                    venueId = fixture.venueId,
+                                    itemId = fixture.itemId,
+                                    isAvailable = false,
+                                    actorUserId = FIRST_ACTOR_ID,
+                                    source = MenuItemAvailabilitySource.TELEGRAM_BOT,
+                                )
+                            }
+                        },
+                        waiterAction = {
+                            runBlocking {
+                                VenueMenuRepository(waiterDataSource).updateItem(
+                                    venueId = fixture.venueId,
+                                    itemId = fixture.itemId,
+                                    categoryId = null,
+                                    name = COMPOUND_ITEM_NAME,
+                                    priceMinor = null,
+                                    currency = null,
+                                    isAvailable = true,
+                                    actorUserId = SECOND_ACTOR_ID,
+                                    source = MenuItemAvailabilitySource.VENUE_MINI_APP,
+                                )
+                            }
+                        },
+                    )
+
+                assertFalse(assertNotNull(direct).isAvailable)
+                val compoundResult = assertNotNull(compound)
+                assertTrue(compoundResult.isAvailable)
+                assertEquals(COMPOUND_ITEM_NAME, compoundResult.name)
+                val finalItem = assertNotNull(readItem(dataSource, fixture.itemId))
+                assertTrue(finalItem.isAvailable)
+                assertEquals(COMPOUND_ITEM_NAME, finalItem.name)
+                assertEquals(optionsBefore, readOptions(dataSource, fixture.itemId))
+                val audits = readItemAvailabilityAudits(dataSource)
+                assertEquals(2, audits.size)
+                assertItemAvailabilityAudit(
+                    audit = audits[0],
+                    fixture = fixture,
+                    oldIsAvailable = true,
+                    newIsAvailable = false,
+                    actorUserId = FIRST_ACTOR_ID,
+                    source = MenuItemAvailabilitySource.TELEGRAM_BOT,
+                )
+                assertItemAvailabilityAudit(
+                    audit = audits[1],
+                    fixture = fixture,
+                    oldIsAvailable = false,
+                    newIsAvailable = true,
+                    actorUserId = SECOND_ACTOR_ID,
+                    source = MenuItemAvailabilitySource.VENUE_MINI_APP,
+                )
+                assertTrue(readShiftCheckAudits(dataSource).isEmpty())
+                assertEquals(2, countAuditRows(dataSource))
+            }
+        }
+
+    @Test
+    fun `item direct availability commits before shift check stale without batch item audit`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource)
+                val optionsBefore = readOptions(dataSource, fixture.itemId)
+                val holderDataSource = HeldItemLockDataSource(dataSource)
+                val waiterDataSource = TrackedItemLockDataSource(dataSource)
+
+                val (direct, shiftAttempt) =
+                    runWithHeldItemLock(
+                        observerDataSource = dataSource,
+                        holderDataSource = holderDataSource,
+                        waiterDataSource = waiterDataSource,
+                        beforeRelease = { assertInitialItemState(dataSource, fixture) },
+                        holderAction = {
+                            runBlocking {
+                                VenueMenuRepository(holderDataSource).setItemAvailability(
+                                    venueId = fixture.venueId,
+                                    itemId = fixture.itemId,
+                                    isAvailable = false,
+                                    actorUserId = FIRST_ACTOR_ID,
+                                    source = MenuItemAvailabilitySource.VENUE_MINI_APP,
+                                )
+                            }
+                        },
+                        waiterAction = {
+                            runCatching {
+                                runBlocking {
+                                    VenueMenuRepository(waiterDataSource).completeShiftCheck(
+                                        venueId = fixture.venueId,
+                                        actorUserId = SECOND_ACTOR_ID,
+                                        itemChanges =
+                                            listOf(
+                                                MenuShiftCheckItemChange(
+                                                    itemId = fixture.itemId,
+                                                    expectedIsAvailable = true,
+                                                    desiredIsAvailable = false,
+                                                ),
+                                            ),
+                                        optionChanges = emptyList(),
+                                        auditLogRepository = AuditLogRepository(waiterDataSource, Json),
+                                    )
+                                }
+                            }
+                        },
+                    )
+
+                assertFalse(assertNotNull(direct).isAvailable)
+                assertTrue(shiftAttempt.exceptionOrNull() is MenuShiftCheckStaleException)
+                assertFalse(assertNotNull(readItem(dataSource, fixture.itemId)).isAvailable)
+                assertEquals(optionsBefore, readOptions(dataSource, fixture.itemId))
+                assertItemAvailabilityAudit(
+                    audit = readItemAvailabilityAudits(dataSource).single(),
+                    fixture = fixture,
+                    oldIsAvailable = true,
+                    newIsAvailable = false,
+                    actorUserId = FIRST_ACTOR_ID,
+                    source = MenuItemAvailabilitySource.VENUE_MINI_APP,
+                )
+                assertTrue(readShiftCheckAudits(dataSource).isEmpty())
+                assertEquals(1, countAuditRows(dataSource))
+            }
+        }
+
+    @Test
+    fun `item shift check commits before direct availability with only direct item audit`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource)
+                val optionsBefore = readOptions(dataSource, fixture.itemId)
+                val holderDataSource = HeldItemLockDataSource(dataSource)
+                val waiterDataSource = TrackedItemLockDataSource(dataSource)
+
+                val (shift, direct) =
+                    runWithHeldItemLock(
+                        observerDataSource = dataSource,
+                        holderDataSource = holderDataSource,
+                        waiterDataSource = waiterDataSource,
+                        beforeRelease = { assertInitialItemState(dataSource, fixture) },
+                        holderAction = {
+                            runBlocking {
+                                VenueMenuRepository(holderDataSource).completeShiftCheck(
+                                    venueId = fixture.venueId,
+                                    actorUserId = FIRST_ACTOR_ID,
+                                    itemChanges =
+                                        listOf(
+                                            MenuShiftCheckItemChange(
+                                                itemId = fixture.itemId,
+                                                expectedIsAvailable = true,
+                                                desiredIsAvailable = false,
+                                            ),
+                                        ),
+                                    optionChanges = emptyList(),
+                                    auditLogRepository = AuditLogRepository(holderDataSource, Json),
+                                )
+                            }
+                        },
+                        waiterAction = {
+                            runBlocking {
+                                VenueMenuRepository(waiterDataSource).setItemAvailability(
+                                    venueId = fixture.venueId,
+                                    itemId = fixture.itemId,
+                                    isAvailable = true,
+                                    actorUserId = SECOND_ACTOR_ID,
+                                    source = MenuItemAvailabilitySource.TELEGRAM_BOT,
+                                )
+                            }
+                        },
+                    )
+
+                assertEquals(1, shift.changedItemCount)
+                assertEquals(0, shift.changedOptionCount)
+                assertTrue(assertNotNull(direct).isAvailable)
+                assertTrue(assertNotNull(readItem(dataSource, fixture.itemId)).isAvailable)
+                assertEquals(optionsBefore, readOptions(dataSource, fixture.itemId))
+                assertItemAvailabilityAudit(
+                    audit = readItemAvailabilityAudits(dataSource).single(),
+                    fixture = fixture,
+                    oldIsAvailable = false,
+                    newIsAvailable = true,
+                    actorUserId = SECOND_ACTOR_ID,
+                    source = MenuItemAvailabilitySource.TELEGRAM_BOT,
+                )
+                assertEquals(1, readShiftCheckAudits(dataSource).size)
+                assertEquals(2, countAuditRows(dataSource))
+            }
+        }
+
+    @Test
+    fun `item delete commits before direct availability without partial state`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource)
+                val holderDataSource = HeldItemDeleteLockDataSource(dataSource)
+                val waiterDataSource = TrackedItemLockDataSource(dataSource)
+
+                val (deleted, direct) =
+                    runWithHeldItemDeleteLock(
+                        observerDataSource = dataSource,
+                        holderDataSource = holderDataSource,
+                        waiterDataSource = waiterDataSource,
+                        beforeRelease = { assertInitialItemState(dataSource, fixture) },
+                        holderAction = {
+                            runBlocking {
+                                VenueMenuRepository(holderDataSource).deleteItem(
+                                    venueId = fixture.venueId,
+                                    itemId = fixture.itemId,
+                                    actorUserId = FIRST_ACTOR_ID,
+                                    source = MenuItemDeleteSource.VENUE_MINI_APP,
+                                )
+                            }
+                        },
+                        waiterAction = {
+                            runBlocking {
+                                VenueMenuRepository(waiterDataSource).setItemAvailability(
+                                    venueId = fixture.venueId,
+                                    itemId = fixture.itemId,
+                                    isAvailable = false,
+                                    actorUserId = SECOND_ACTOR_ID,
+                                    source = MenuItemAvailabilitySource.TELEGRAM_BOT,
+                                )
+                            }
+                        },
+                    )
+
+                assertTrue(deleted)
+                assertNull(direct)
+                assertNull(readItem(dataSource, fixture.itemId))
+                assertTrue(readOptions(dataSource, fixture.itemId).isEmpty())
+                assertTrue(readItemAvailabilityAudits(dataSource).isEmpty())
+                val deleteAudit = readItemDeleteAudits(dataSource).single()
+                assertEquals(FIRST_ACTOR_ID, deleteAudit.actorUserId)
+                assertEquals("menu_item", deleteAudit.entityType)
+                assertEquals(fixture.itemId, deleteAudit.entityId)
+                assertEquals(1, countAuditRows(dataSource))
+            }
+        }
+
     private fun <T, U> runWithHeldItemLock(
         observerDataSource: DataSource,
-        holderDataSource: HeldItemLockDataSource,
+        holderDataSource: HeldItemLockCoordinator,
         waiterDataSource: TrackedItemLockDataSource,
         beforeRelease: () -> Unit,
         holderAction: () -> T,
@@ -1072,6 +1387,23 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
             executor.awaitTermination(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         }
     }
+
+    private fun <T, U> runWithHeldItemDeleteLock(
+        observerDataSource: DataSource,
+        holderDataSource: HeldItemDeleteLockDataSource,
+        waiterDataSource: TrackedItemLockDataSource,
+        beforeRelease: () -> Unit,
+        holderAction: () -> T,
+        waiterAction: () -> U,
+    ): Pair<T, U> =
+        runWithHeldItemLock(
+            observerDataSource = observerDataSource,
+            holderDataSource = holderDataSource,
+            waiterDataSource = waiterDataSource,
+            beforeRelease = beforeRelease,
+            holderAction = holderAction,
+            waiterAction = waiterAction,
+        )
 
     private fun awaitPostgresBlock(
         observer: Connection,
@@ -1295,6 +1627,19 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
         assertTrue(readShiftCheckAudits(dataSource).isEmpty())
     }
 
+    private fun assertInitialItemState(
+        dataSource: DataSource,
+        fixture: Fixture,
+    ) {
+        assertInitialState(dataSource, fixture)
+        val item = assertNotNull(readItem(dataSource, fixture.itemId))
+        assertEquals(INITIAL_ITEM_NAME, item.name)
+        assertTrue(item.isAvailable)
+        assertTrue(readItemAvailabilityAudits(dataSource).isEmpty())
+        assertTrue(readItemDeleteAudits(dataSource).isEmpty())
+        assertEquals(0, countAuditRows(dataSource))
+    }
+
     private fun assertNormalizedState(
         dataSource: DataSource,
         fixture: Fixture,
@@ -1431,6 +1776,47 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
         assertEquals(source.name, audit.payload.getValue("source").jsonPrimitive.content)
     }
 
+    private fun assertItemAvailabilityAudit(
+        audit: AuditRow,
+        fixture: Fixture,
+        oldIsAvailable: Boolean,
+        newIsAvailable: Boolean,
+        actorUserId: Long,
+        source: MenuItemAvailabilitySource,
+    ) {
+        assertEquals(actorUserId, audit.actorUserId)
+        assertEquals("menu_item", audit.entityType)
+        assertEquals(fixture.itemId, audit.entityId)
+        assertEquals(ITEM_AVAILABILITY_AUDIT_PAYLOAD_KEYS, audit.payload.keys)
+        assertEquals(fixture.venueId, audit.payload.longValue("venueId"))
+        assertEquals(fixture.itemId, audit.payload.longValue("itemId"))
+        assertEquals(oldIsAvailable.toString(), audit.payload.getValue("oldIsAvailable").jsonPrimitive.content)
+        assertEquals(newIsAvailable.toString(), audit.payload.getValue("newIsAvailable").jsonPrimitive.content)
+        assertEquals(source.name, audit.payload.getValue("source").jsonPrimitive.content)
+    }
+
+    private fun readItem(
+        dataSource: DataSource,
+        itemId: Long,
+    ): ItemRow? =
+        dataSource.connection.use { connection ->
+            connection.prepareStatement(
+                "SELECT name, is_available FROM menu_items WHERE id = ?",
+            ).use { statement ->
+                statement.setLong(1, itemId)
+                statement.executeQuery().use { resultSet ->
+                    if (resultSet.next()) {
+                        ItemRow(
+                            name = resultSet.getString("name"),
+                            isAvailable = resultSet.getBoolean("is_available"),
+                        )
+                    } else {
+                        null
+                    }
+                }
+            }
+        }
+
     private fun readOptions(
         dataSource: DataSource,
         itemId: Long,
@@ -1474,6 +1860,12 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
     private fun readAvailabilityAudits(dataSource: DataSource): List<AuditRow> =
         readAudits(dataSource, MENU_OPTION_AVAILABILITY_CHANGED_AUDIT_ACTION)
 
+    private fun readItemAvailabilityAudits(dataSource: DataSource): List<AuditRow> =
+        readAudits(dataSource, MENU_ITEM_AVAILABILITY_CHANGED_AUDIT_ACTION)
+
+    private fun readItemDeleteAudits(dataSource: DataSource): List<AuditRow> =
+        readAudits(dataSource, MENU_ITEM_DELETED_AUDIT_ACTION)
+
     private fun readShiftCheckAudits(dataSource: DataSource): List<AuditRow> =
         readAudits(dataSource, MENU_SHIFT_CHECK_COMPLETED_AUDIT_ACTION)
 
@@ -1508,6 +1900,16 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
             }
         }
 
+    private fun countAuditRows(dataSource: DataSource): Int =
+        dataSource.connection.use { connection ->
+            connection.createStatement().use { statement ->
+                statement.executeQuery("SELECT COUNT(*) FROM audit_log").use { resultSet ->
+                    assertTrue(resultSet.next())
+                    resultSet.getInt(1)
+                }
+            }
+        }
+
     private fun JsonObject.longValue(key: String): Long = getValue(key).jsonPrimitive.content.toLong()
 
     private fun backendPid(connection: Connection): Int =
@@ -1525,17 +1927,30 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
             !normalized.contains("nowait")
     }
 
+    private fun String.isItemDeleteMutationLock(): Boolean {
+        val normalized = normalizedSql()
+        return normalized.contains("from menu_items") &&
+            normalized.contains("for update nowait")
+    }
+
     private fun String.normalizedSql(): String =
         trim()
             .replace(WHITESPACE, " ")
             .lowercase()
 
+    private interface HeldItemLockCoordinator {
+        val itemLockAcquired: CountDownLatch
+        val allowMutation: CountDownLatch
+        val backendPid: AtomicInteger
+    }
+
     private inner class HeldItemLockDataSource(
         private val delegate: DataSource,
-    ) : DataSource by delegate {
-        val itemLockAcquired = CountDownLatch(1)
-        val allowMutation = CountDownLatch(1)
-        val backendPid = AtomicInteger()
+    ) : DataSource by delegate,
+        HeldItemLockCoordinator {
+        override val itemLockAcquired = CountDownLatch(1)
+        override val allowMutation = CountDownLatch(1)
+        override val backendPid = AtomicInteger()
         private val held = AtomicBoolean()
 
         override fun getConnection(): Connection = wrap(delegate.connection)
@@ -1561,6 +1976,49 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
                                 if (!allowMutation.await(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
                                     resultSet.close()
                                     throw SQLException("Timed out while holding menu option item lock")
+                                }
+                                return resultSet
+                            }
+                        }
+                    }
+                    return prepared
+                }
+            }
+        }
+    }
+
+    private inner class HeldItemDeleteLockDataSource(
+        private val delegate: DataSource,
+    ) : DataSource by delegate,
+        HeldItemLockCoordinator {
+        override val itemLockAcquired = CountDownLatch(1)
+        override val allowMutation = CountDownLatch(1)
+        override val backendPid = AtomicInteger()
+        private val held = AtomicBoolean()
+
+        override fun getConnection(): Connection = wrap(delegate.connection)
+
+        override fun getConnection(
+            username: String?,
+            password: String?,
+        ): Connection = wrap(delegate.getConnection(username, password))
+
+        private fun wrap(connection: Connection): Connection {
+            backendPid.set(this@VenueMenuOptionNormalizationConcurrencyPostgresTest.backendPid(connection))
+            return object : Connection by connection {
+                override fun prepareStatement(sql: String): PreparedStatement {
+                    val prepared = connection.prepareStatement(sql)
+                    if (sql.isItemDeleteMutationLock() && held.compareAndSet(false, true)) {
+                        return object : PreparedStatement by prepared {
+                            override fun executeQuery(): ResultSet {
+                                check(!connection.autoCommit) {
+                                    "Menu item delete lock must be held inside the production transaction"
+                                }
+                                val resultSet = prepared.executeQuery()
+                                itemLockAcquired.countDown()
+                                if (!allowMutation.await(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                                    resultSet.close()
+                                    throw SQLException("Timed out while holding menu item delete lock")
                                 }
                                 return resultSet
                             }
@@ -1622,6 +2080,11 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
         val isAvailable: Boolean,
     )
 
+    private data class ItemRow(
+        val name: String,
+        val isAvailable: Boolean,
+    )
+
     private data class AuditRow(
         val actorUserId: Long,
         val entityType: String,
@@ -1637,6 +2100,8 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
     private companion object {
         const val FIRST_ACTOR_ID = 97_001L
         const val SECOND_ACTOR_ID = 97_002L
+        const val INITIAL_ITEM_NAME = "Concurrency hookah"
+        const val COMPOUND_ITEM_NAME = "Concurrency compound item"
         const val CUSTOM_OPTION_NAME = "Авторский микс"
         const val WAIT_TIMEOUT_SECONDS = 30L
 
@@ -1653,6 +2118,8 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
             )
         val AVAILABILITY_AUDIT_PAYLOAD_KEYS =
             setOf("venueId", "itemId", "optionId", "oldIsAvailable", "newIsAvailable", "source")
+        val ITEM_AVAILABILITY_AUDIT_PAYLOAD_KEYS =
+            setOf("venueId", "itemId", "oldIsAvailable", "newIsAvailable", "source")
         val WHITESPACE = Regex("\\s+")
     }
 }

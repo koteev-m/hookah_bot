@@ -9,6 +9,10 @@ normalization, option rename and **DANGEROUS ACTION AUDIT SLICE / MENU OPTION PR
 MVP / STAGING-SMOKE-PASSED**. The broader Menu and Dangerous Action Audit programs remain partial;
 keep each bounded gate in regression.
 
+Current local-review block: **DANGEROUS ACTION AUDIT SLICE / MENU ITEM AVAILABILITY AUDIT /
+MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. Independent review,
+green Actions, staging deploy and bounded cross-surface smoke remain required.
+
 ## Core Rule
 
 Quality gates must match the blast radius of the change. Do not claim a feature is release-ready from local-only checks when it changes backend runtime, Mini App behavior, Telegram bot, staff-chat, billing/security or migrations. Do not run staging deploy for docs-only changes.
@@ -877,13 +881,55 @@ Required regression coverage:
 - Testcontainers PostgreSQL production migrations/repository, independent connections, deterministic
   latches and observed blocking without arbitrary sleep for direct/direct, direct/compound, both
   direct/Shift Check orders, direct/delete and direct/normalization. XML is exactly required,
-  tests `>= 15`, skipped/failures/errors zero.
+  tests `>= 20` in the shared extended class, skipped/failures/errors zero.
 
 Required local commands are the focused `VenueMenuRepositoryTest`, `VenueMenuRoutesTest`,
 `TelegramBotRouterTableTokenTest`, `GuestOrderRoutesTest`, `*MenuShiftCheck*`,
 `VenueMenuOptionNormalizationConcurrencyPostgresTest`, compile, ktlint, Mini App build and full e2e
 smoke selectors documented in the current implementation handoff. No workflow or migration is added;
-the existing mandatory PostgreSQL CI gate minimum is raised to 15.
+the existing mandatory PostgreSQL CI gate minimum is now 20 after the item-availability extension.
+
+### Menu Item Availability Audit quality gate
+
+Status: **DANGEROUS ACTION AUDIT SLICE / MENU ITEM AVAILABILITY AUDIT / MVP IMPLEMENTED /
+LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+
+Required regression coverage:
+
+- inventory every `menu_items.is_available` writer/caller: Mini App direct and compound, all
+  Telegram detail/root stop-list callbacks, Shift Check common/individual/mixed, create, delete and
+  any system/legacy/direct SQL path; create has no old value and Shift Check stays aggregate-only;
+- direct Owner/Manager/Staff allow under `MENU_AVAILABILITY_MANAGE`; compound item PATCH remains
+  Owner/Manager `MENU_MANAGE`; Staff compound and Shift Check are denied under current runtime RBAC;
+- Mini App session subject and current Telegram callback user are the only actors; source is fixed
+  server-side to `VENUE_MINI_APP` / `TELEGRAM_BOT`, never accepted from client input;
+- true→false and false→true each persist exactly one `MENU_ITEM_AVAILABILITY_CHANGED` with entity
+  `menu_item` / item id and exact payload keys `venueId`, `itemId`, `oldIsAvailable`,
+  `newIsAvailable`, `source`; privacy denylist covers item/category metadata, prices/currency,
+  options/promotions/cart/order, request/initData, Telegram identity/update, media, secrets and PII;
+- same-state/repeated, metadata-only, denial, foreign/not-found, stale/collision, SQL/audit failure
+  and rollback write zero item audit; direct no-op leaves `updated_at` unchanged;
+- availability-only and metadata+availability compound PATCH write one availability audit only;
+  all co-submitted fields and audit rows commit or roll back together, without item metadata audits;
+- audit failure after the SQL update restores availability, `updated_at`, compound fields and all
+  audit rows; route and Telegram surfaces return no false success;
+- common, individual, mixed and no-op Shift Check success writes exactly one existing
+  `MENU_SHIFT_CHECK_COMPLETED` and zero item availability audits; stale/failure writes no success;
+- Guest disabled item returns `ITEM / UNAVAILABLE`, stale preview remains read-only, stale submit
+  creates no authoritative order writes, re-enable recovers, neighboring lines and immutable
+  historical name/price snapshots remain intact, and payload-bound idempotency is unchanged;
+- Testcontainers PostgreSQL uses production migrations/repositories, independent connections,
+  deterministic latches and an observed real blocking edge without arbitrary sleep for item
+  direct/direct, direct/compound, both direct/Shift Check orders and delete/direct. Guest
+  availability-vs-submit remains a separate required PostgreSQL edge.
+
+Mandatory CI selectors remain `VenueMenuRepositoryTest`, `VenueMenuRoutesTest`,
+`TelegramBotRouterTableTokenTest`, `GuestOrderRoutesTest`, the Shift Check cases embedded in the
+first two classes, `VenueMenuOptionNormalizationConcurrencyPostgresTest`,
+`GuestOrderIdempotencyConcurrencyPostgresTest` and full Mini App smoke. Exact local XML is
+repository `36/0/0/0`, routes `31/0/0/0`, Telegram `535/0/0/0`, Guest routes `61/0/0/0`, menu
+PostgreSQL `20/0/0/0` and Guest PostgreSQL `9/0/0/0`. Existing CI parsing must fail missing/zero,
+skipped, failures or errors. No new workflow or migration is allowed.
 
 ### Guest Cart Stale Menu Selection Recovery quality gate
 
@@ -1939,16 +1985,20 @@ Telegram/staff-chat:
   mandatory PostgreSQL, green Actions, staging deploy and the bounded 17-scenario smoke are
   recorded complete; keep the contract in regression.
 - Menu option rename audit: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION RENAME AUDIT / DONE / MVP /
-  STAGING-SMOKE-PASSED**. The now-15-test option concurrency XML gate, focused cross-surface tests,
+  STAGING-SMOKE-PASSED**. The now-20-test shared menu concurrency XML gate, focused cross-surface tests,
   privacy/rollback checks, green Actions, staging deploy and bounded smoke are recorded complete.
   No migration was added.
 - Menu option price audit: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION PRICE AUDIT / DONE / MVP /
-  STAGING-SMOKE-PASSED**. Focused repository/route/order/history, current 15-test PostgreSQL, build/lint
+  STAGING-SMOKE-PASSED**. Focused repository/route/order/history, current 20-test shared PostgreSQL, build/lint
   and `152/152` browser checks remain regression evidence; user-confirmed green Actions, staging
   deploy and bounded smoke close only this contract. No migration was added.
 - Menu option availability audit: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION AVAILABILITY AUDIT /
   DONE / MVP / STAGING-SMOKE-PASSED**. Keep actor/source, exact-one/no-op, rollback and Shift Check
   aggregate-only behavior in regression.
+- Menu item availability audit: **DANGEROUS ACTION AUDIT SLICE / MENU ITEM AVAILABILITY AUDIT /
+  MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. Focused
+  repository/routes/Telegram/Guest and deterministic PostgreSQL gates are green; review, CI,
+  staging deploy and bounded smoke remain open. No migration was added.
 - Guest cart stale menu recovery: **GUEST CART STALE MENU SELECTION RECOVERY / REMOVED OR UNAVAILABLE
   ITEMS AND OPTIONS / PAYLOAD-BOUND IDEMPOTENCY + ATOMIC REJECTION / DONE / MVP /
   STAGING-SMOKE-PASSED**; **ITEM-LEVEL ACTION AND COPY POLISH / DONE / MVP /

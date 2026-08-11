@@ -62,7 +62,7 @@
 - Order/session/tab core docs are current in `docs/ORDER_SESSION_TAB_CORE.md`: `TABLE_SESSION`, `ACTIVE_TABLE_ORDER`, `ORDER_BATCH`, `TAB`, bill/request/close flow, privacy boundaries and visit-history foundation are `SPEC UPDATED`. Current runtime docs say table-session/tab scoping, Guest History Foundation and Post-Visit Feedback MVP are staging-smoke-passed, while Repeat Phase 1 is locally validated with deferred environment-dependent manual smoke; force-close policy/audit, loyalty/preorder and broader analytics remain partial/future.
 - Analytics/events docs are current in `docs/ANALYTICS_EVENTS.md`: analytics events, audit/event boundaries, KPI formulas, role dashboards and payload privacy rules are `SPEC UPDATED`; implementation and Platform dashboards remain partial/future unless specific events are verified.
 - Security/RBAC docs are current in `docs/SECURITY_RBAC_MATRIX.md`: roles, scopes, permissions, surface parity, dangerous actions, auth/trust boundaries and security smoke checklist are `UPDATED`; permission parity and dangerous-action audit coverage remain partial unless specific route tests/smoke evidence exists. `ADMIN` is a legacy compatibility alias to `MANAGER`, not a product role.
-- Menu/options/stop-list docs are current in `docs/MENU_OPTIONS_STOPLIST.md`: structured menu terms, option/modifier snapshots, media/PDF boundaries, featured/top-list, stop-list, shift check, availability validation and menu permissions are `SPEC UPDATED`. Selected-option parity and Menu Item Hard Delete Audit are smoke-closed; the bounded OWNER/MANAGER shift-check slice is `MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`; broader menu constructor/media/top-list and remaining audit coverage remain partial/future.
+- Menu/options/stop-list docs are current in `docs/MENU_OPTIONS_STOPLIST.md`: structured menu terms, option/modifier snapshots, media/PDF boundaries, featured/top-list, stop-list, shift check, availability validation and menu permissions are `SPEC UPDATED`. Selected-option parity and Menu Item Hard Delete Audit are smoke-closed; the bounded OWNER/MANAGER shift-check slice is `MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`; Menu Item Availability Audit is `MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`; broader menu constructor/media/top-list and remaining audit coverage remain partial/future.
 - Venue info-section media storage/upload is canonical in `docs/MEDIA_STORAGE_UPLOAD.md`: current
   Telegram-`file_id` architecture, hybrid asset model, security/lifecycle contract and bounded
   Venue Mini App slice are specified; runtime remains missing and verdict is
@@ -841,7 +841,7 @@ repeat; the subscription incident is not a promotion defect.
 Simple Venue Promotions Phase 1 remains **DONE / MVP / STAGING-SMOKE-PASSED**. The
 executable-promotions sections below retain their current implementation and validation status;
 the audit slice changes no lifecycle, promotion calculation, stacking or Guest pricing contract.
-Promotion configuration edit audit, remaining menu create/price/update/availability families, QR rotate,
+Promotion configuration edit audit, remaining menu create and item price/name/type families, QR rotate,
 force-close/session audit, tab reopen, analytics export, the Promotion Compatibility Policy and a
 broader audit viewer remain future. The overall dangerous-action audit therefore remains partial.
 The menu item, empty-category and option hard-delete slices are release-closed only for their
@@ -882,8 +882,8 @@ Not selected as implementation right now:
 - menu/options/stop-list governance from `docs/MENU_OPTIONS_STOPLIST.md`: keep selected-option
   snapshots, Guest stale availability validation, the atomic shift-check contract and the
   staging-smoke-passed item, empty-category and option hard-delete audits in regression, and resolve
-  broader menu constructor/media/top-list plus
-  option/price/update/availability audit before calling menu complete;
+  broader menu constructor/media/top-list plus option create and item price/name/type audit before
+  calling menu complete; item availability still needs independent review/CI/staging closure;
 - Venue Mode operating model from `docs/VENUE_OPERATIONS.md`: keep orders, bill/tabs, staff calls, bookings, stop-list, staff-chat source-of-truth policy and role-specific nav/API denial in regression before adding new venue screens;
 - Booking lifecycle model from `docs/BOOKING_LIFECYCLE.md`: keep booking create/list, Venue queue actions, confirmed-only Staff arrival/no-show split, hold/deadline display, booking chat separation, support routing and reminder opt-in behavior in regression before adding preorder/history/loyalty.
 - Telegram fallback/staff-chat model from `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`: keep QR `/start`, fallback order, staff-call, staff-chat link/test/unlink, state-aware booking buttons, callback RBAC and notification allow/deny policy in regression before expanding Telegram shortcuts.
@@ -1135,8 +1135,8 @@ Implementation evidence:
   `price_delta_minor_snapshot` rows remain immutable.
 - Deterministic Testcontainers PostgreSQL coverage is nine tests, uses independent connections and
   confirmed blocking without arbitrary sleep, and covers price/price, price/rename, direct delete
-  and atomic normalization. Its release XML was `9/0/0/0`; the current availability extension raises
-  the class and CI minimum to 15. Focused repository, route,
+  and atomic normalization. Its release XML was `9/0/0/0`; the current availability extensions raise
+  the shared class and CI minimum to 20. Focused repository, route,
   Guest order/history and Guest visit selectors, compile, ktlint, Mini App build and Playwright
   `152/152` pass locally. No workflow or migration was added.
 
@@ -1178,10 +1178,54 @@ Implementation evidence:
 - Testcontainers PostgreSQL uses production migrations/repositories, independent connections,
   deterministic latches and an observed blocking edge without arbitrary sleep. It covers
   direct/direct, direct/compound, both direct/Shift Check orders, direct/delete and
-  direct/normalization; exact XML is `15/0/0/0` and the existing CI minimum is 15.
+  direct/normalization; the shared extended XML is `20/0/0/0` and the existing CI minimum is 20.
 - Disabled new-order/stale-cart rejection, re-enable behavior and immutable historical snapshots
   remain current regression behavior. No option-create/item audit, price/name/canonical/promotion,
   order-schema, permission, media/R2 or migration change was added. **NO_MIGRATION_EXPECTED**.
+
+Implementation contract: **IMPLEMENT_MENU_ITEM_AVAILABILITY_AUDIT_NEXT**, fulfilled locally and
+awaiting independent review.
+
+Current bounded audit block: **DANGEROUS ACTION AUDIT SLICE / MENU ITEM AVAILABILITY AUDIT /
+MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+
+Implementation evidence:
+
+- Production `menu_items.is_available` writers/callers were inventoried. Individual authenticated
+  writers are Mini App direct availability, Mini App compound item PATCH and all Telegram
+  Owner/Manager/Staff detail/root stop-list callbacks. Shift Check owns a separate batch writer;
+  create supplies initial state, delete removes the row and no internal/system/legacy runtime or
+  second direct SQL writer exists outside `VenueMenuRepository`.
+- `setItemAvailability` has no unaudited overload. Direct and compound paths use one connection with
+  `autoCommit=false`, authoritative item/venue/category scope, item `FOR UPDATE`, DB-current reread,
+  real-delta comparison, conditional update, same-connection audit, result reread and one commit.
+  Compound item type and other current fields now share that transaction without adding metadata
+  audit families. Audit failure restores fields, availability, `updated_at` and every audit row.
+- One real committed individual delta writes `MENU_ITEM_AVAILABILITY_CHANGED`, entity `menu_item`,
+  item id. Payload keys are exactly `venueId`, `itemId`, `oldIsAvailable`, `newIsAvailable`,
+  `source`. Actor is only the authenticated Mini App session subject/current Telegram callback user;
+  source is server-owned `VENUE_MINI_APP` / `TELEGRAM_BOT`.
+- Item/category names, prices/currency, description/type, option/promotion/cart/order contents, raw
+  request/initData, Telegram identity/update/callback, media, secrets and PII are excluded.
+  Same-state/repeat, metadata-only, denial, foreign/not-found, stale/collision, SQL/audit failure and
+  rollback write zero audit; direct no-op preserves `updated_at`.
+- Direct Owner/Manager/Staff retain `MENU_AVAILABILITY_MANAGE`; compound item PATCH remains current
+  Owner/Manager `MENU_MANAGE`; Shift Check remains Owner/Manager-only. Staff receives no compound
+  price/name/type authority.
+- Shift Check never invokes the individual helper. Common, individual, mixed and no-op success retain
+  exactly one existing `MENU_SHIFT_CHECK_COMPLETED` and zero per-item availability audits;
+  stale/failure writes no success audit. Existing payload and RBAC are unchanged.
+- Guest disabled-item `ITEM / UNAVAILABLE`, read-only preview, zero-write stale submit, re-enable
+  recovery, neighboring cart lines, payload-bound idempotency and immutable historical name/price
+  snapshots remain green. Availability changes do not rewrite order snapshots.
+- Testcontainers PostgreSQL uses production migrations/repositories, independent connections,
+  deterministic latches and an observed real blocking edge without arbitrary sleep. Item coverage is
+  direct/direct, direct/compound, both direct/Shift Check orders and delete/direct; Guest
+  availability-vs-submit remains green. Shared menu XML/CI minimum is `20/0/0/0`; Guest concurrency
+  XML is `9/0/0/0`. No new workflow was added and missing/zero/skipped/failure/error remain fatal.
+- Item price/name/type/description/category/currency/media, option availability/create, promotion,
+  cart hardening, membership linearization and broader Menu/Dangerous Action Audit remain outside
+  this slice. **NO_MIGRATION_EXPECTED**.
 
 ### Recent release-closed audit block
 
