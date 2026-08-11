@@ -149,10 +149,9 @@ Confirmed:
 Remaining:
 
 - repeat this smoke after any additional release batch;
-- Guest cart stale-menu recovery is **GUEST CART STALE MENU SELECTION RECOVERY / REMOVED OR
-  UNAVAILABLE ITEMS AND OPTIONS / PAYLOAD-BOUND IDEMPOTENCY + ATOMIC REJECTION / MVP IMPLEMENTED /
-  LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. The previous option availability audit
-  remains **FUNCTIONALLY PASSED ON STAGING / GENERAL
+- Guest cart stale-menu recovery is **GUEST CART STALE MENU SELECTION RECOVERY / ITEM-LEVEL ACTION
+  AND COPY POLISH / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. The
+  previous option availability audit remains **FUNCTIONALLY PASSED ON STAGING / GENERAL
   CART RECOVERY FOLLOW-UP REQUIRED** until a focused real item/option removed/unavailable smoke is
   repeated after review, green Actions and staging deploy;
 - Menu Shift Check Phase 1 is staging-smoke-passed; keep the Owner/Manager/Staff/foreign,
@@ -1101,13 +1100,22 @@ Use this checklist after menu, option, stop-list, media, featured/top-list, shif
 4. Owner toggles item unavailable; guest cannot order it.
 5. Owner toggles option value unavailable; guest cannot select/order it.
 6. Guest stale cart recovery is checked before submit:
-   - normal item removal is `ITEM / REMOVED`; item stop-list is `ITEM / UNAVAILABLE`, retry keeps the
-     issue before re-enable, the current mutable item cache names the line when available, and
-     line-scoped removal recalculates;
+   - normal item removal is `ITEM / REMOVED` with `Позиции «{itemName}» больше нет в меню. Удалите её
+     из корзины, чтобы продолжить заказ.`; item stop-list is `ITEM / UNAVAILABLE` with `Позиция
+     «{itemName}» временно недоступна. Чтобы продолжить заказ, удалите её из корзины и выберите другую
+     позицию.`; missing-name fallbacks are `Одной из позиций больше нет в меню. Удалите её из
+     корзины, чтобы продолжить заказ.` and `Одна из позиций временно недоступна. Чтобы продолжить
+     заказ, удалите её из корзины и выберите другую позицию.`;
+   - item `Удалить и выбрать другую` removes only the exact affected line, authoritatively
+     recalculates the remaining cart, opens the existing Guest menu without automatic selection and
+     focuses its heading. Item `Удалить из корзины` stays in cart and focuses the next line or cart
+     heading. Old `Вернуться в меню` is absent, actions are line-specific for accessibility, and retry
+     remains secondary;
    - selected option removal is `OPTION / REMOVED`; option stop-list is `OPTION / UNAVAILABLE`, the
      current picker excludes it, replacement preserves quantity/note and restores submit;
    - an unavailable item plus removed option and one valid line show both warnings, delete nothing
-     automatically, and keep submit blocked until both are fixed;
+     automatically, keep every unrelated line, and keep submit blocked until both are fixed; removing
+     one item line preserves the other warning;
    - foreign selection, database/network error or malformed response stays generic. Final submit
      with any unresolved issue leaves the full before/after session/exit/tab/member/context/dialog/
      order/batch/line/selected-option/idempotency/analytics/outbox snapshot unchanged for ordinary

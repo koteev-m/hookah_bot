@@ -1316,7 +1316,9 @@ async function mockGuestApi(
     catalogVenues?: GuestCatalogVenueFixture[]
     cartPreview?: CartPreviewFixture
     cartPreviewResolver?: (request: CartPreviewRequestFixture) => CartPreviewFixture
-    cartPreviewResponseResolver?: (request: CartPreviewRequestFixture) => CartPreviewResponseFixture
+    cartPreviewResponseResolver?: (
+      request: CartPreviewRequestFixture
+    ) => CartPreviewResponseFixture | Promise<CartPreviewResponseFixture>
     addBatchResponse?: AddBatchResponseFixture
     addBatchResponseResolver?: (
       request: AddBatchPayload
@@ -2035,7 +2037,7 @@ async function mockGuestApi(
     const body = (await route.request().postDataJSON()) as CartPreviewRequestFixture
     previewRequests.push(body)
     if (options.cartPreviewResponseResolver) {
-      const response = options.cartPreviewResponseResolver(body)
+      const response = await options.cartPreviewResponseResolver(body)
       if ('error' in response) {
         await route.fulfill({
           status: response.error.status,
@@ -8537,6 +8539,7 @@ for (const scenario of [
       await expect(page.locator('.cart-line-warning')).toHaveCount(0)
       await expect(page.getByRole('button', { name: /Выбрать другой вариант/ })).toHaveCount(0)
       await expect(page.getByRole('button', { name: 'Вернуться в меню', exact: true })).toHaveCount(0)
+      await expect(page.getByText('Удалить и выбрать другую', { exact: true })).toHaveCount(0)
       await expect(page.locator('.cart-item')).toHaveCount(1)
       if (requestCount < 3) {
         await submitError.getByRole('button', { name: 'Повторить', exact: true }).click()
@@ -8627,7 +8630,154 @@ test('guest cart stale option correction rotates the prior submit key', async ({
   expect(api.getAddBatchRequests()[1].idempotencyKey).not.toBe(staleKey)
 })
 
-test('guest cart explains a removed item and removes only the affected line', async ({ page }) => {
+for (const scenario of [
+  {
+    reason: 'UNAVAILABLE' as const,
+    label: 'unavailable',
+    copy:
+      'Позиция «Вода» временно недоступна. Чтобы продолжить заказ, удалите её из корзины и выберите другую позицию.'
+  },
+  {
+    reason: 'REMOVED' as const,
+    label: 'removed',
+    copy: 'Позиции «Вода» больше нет в меню. Удалите её из корзины, чтобы продолжить заказ.'
+  }
+]) {
+  test(`guest cart removes an ${scenario.label} item before opening the menu`, async ({ page }) => {
+    await installTelegramWebApp(page, 123456789)
+    let releaseRemainingCartPreview: () => void = () => undefined
+    const remainingCartPreviewGate = new Promise<void>((resolve) => {
+      releaseRemainingCartPreview = resolve
+    })
+    let holdRemainingCartPreview = true
+    const api = await mockGuestApi(page, {
+      menuCategories: [
+        {
+          id: 21,
+          name: 'Напитки',
+          categoryType: 'DRINK',
+          items: [
+            {
+              id: 211,
+              name: 'Вода',
+              priceMinor: 20000,
+              currency: 'RUB',
+              isAvailable: true,
+              effectiveItemType: 'DRINK'
+            },
+            {
+              id: 212,
+              name: 'Чай',
+              priceMinor: 30000,
+              currency: 'RUB',
+              isAvailable: true,
+              effectiveItemType: 'DRINK'
+            }
+          ]
+        }
+      ],
+      cartPreviewResponseResolver: async (request) => {
+        const isRemainingCartPreview =
+          request.items.length === 1 && request.items[0].itemId === 212 && request.items[0].qty === 1
+        if (isRemainingCartPreview && holdRemainingCartPreview) {
+          await remainingCartPreviewGate
+          holdRemainingCartPreview = false
+        }
+        return { preview: buildStaleRecoveryPreview(request) }
+      },
+      addBatchResponseResolver: (request) => {
+        const affectedLine = request.items.find((line) => line.itemId === 211)
+        if (!affectedLine) {
+          return submittedBatchResponse(request)
+        }
+        return {
+          error: {
+            status: 409,
+            code: 'CART_MENU_SELECTION_UNAVAILABLE',
+            message: 'Корзину нужно обновить.',
+            details: {
+              issues: [
+                {
+                  cartLineRef: affectedLine.cartLineRef,
+                  itemId: 211,
+                  optionId: null,
+                  selectionKind: 'ITEM',
+                  reason: scenario.reason
+                }
+              ]
+            }
+          }
+        }
+      }
+    })
+
+    await page.goto(
+      `?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`
+    )
+    await page.getByRole('button', { name: /Напитки/ }).click()
+    await page.locator('.menu-item').filter({ hasText: 'Вода' }).getByRole('button', { name: 'Добавить' }).click()
+    await page.locator('.menu-item').filter({ hasText: 'Чай' }).getByRole('button', { name: 'Добавить' }).click()
+    await page.getByRole('button', { name: 'Корзина (2)' }).click()
+    await page.getByRole('button', { name: 'Отправить', exact: true }).click()
+    await expect.poll(() => api.getAddBatchRequests()).toHaveLength(1)
+    const staleKey = api.getAddBatchRequests()[0].idempotencyKey
+
+    const waterLine = page.locator('.cart-item').filter({ hasText: 'Вода' })
+    const teaLine = page.locator('.cart-item').filter({ hasText: 'Чай' })
+    const warning = waterLine.locator('.cart-line-warning')
+    await expect(warning.locator('p')).toHaveText(scenario.copy)
+    await expect(warning.getByRole('button', { name: 'Вернуться в меню', exact: true })).toHaveCount(0)
+    await expect(warning.getByRole('button', { name: /Выбрать другой вариант/ })).toHaveCount(0)
+    await expect(page.locator('.cart-item')).toHaveCount(2)
+    await expect(page.getByRole('button', { name: 'Отправить', exact: true })).toBeDisabled()
+    const retry = page.getByRole('button', { name: 'Повторить расчёт' })
+    await expect(retry).toHaveClass(/button-secondary/)
+    const primaryAction = warning.getByRole('button', {
+      name: 'Удалить «Вода» и выбрать другую позицию',
+      exact: true
+    })
+    await expect(primaryAction).toHaveText('Удалить и выбрать другую')
+    await expect(
+      warning.getByRole('button', { name: 'Удалить «Вода» из корзины', exact: true })
+    ).toHaveText('Удалить из корзины')
+
+    const previewsBeforeRecovery = api.getPreviewRequests().length
+    await primaryAction.click()
+    await expect.poll(() => api.getPreviewRequests().length).toBeGreaterThan(previewsBeforeRecovery)
+    expect(
+      api.getPreviewRequests().slice(previewsBeforeRecovery).some(
+        (request) => request.items.length === 1 && request.items[0].itemId === 212 && request.items[0].qty === 1
+      )
+    ).toBe(true)
+    await expect(page).toHaveURL(/#\/cart$/)
+    await expect(teaLine).toBeFocused()
+    releaseRemainingCartPreview()
+    await expect(page).toHaveURL(/#\/venue\/1$/)
+    const guestMenuHeading = page.locator('.venue-header h3')
+    await expect(guestMenuHeading).toBeFocused()
+    await expect(page.locator('.menu-category-button').filter({ hasText: 'Напитки' })).toBeVisible()
+    await expect(page.locator('.menu-item')).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Корзина (1)' })).toBeVisible()
+
+    await page.getByRole('button', { name: 'Корзина (1)' }).click()
+    await expect(waterLine).toHaveCount(0)
+    await expect(teaLine).toBeVisible()
+    await expect(
+      page.getByRole('button', { name: 'Удалить «Вода» и выбрать другую позицию', exact: true })
+    ).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Удалить «Вода» из корзины', exact: true })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Отправить', exact: true })).toBeEnabled()
+    expect(api.getAddBatchRequests()).toHaveLength(1)
+    await page.getByRole('button', { name: 'Отправить', exact: true }).click()
+    await expect.poll(() => api.getAddBatchRequests()).toHaveLength(2)
+    expect(api.getAddBatchRequests()[1].idempotencyKey).not.toBe(staleKey)
+    expect(api.getAddBatchRequests()[1].items).toEqual([
+      expect.objectContaining({ itemId: 212, qty: 1 })
+    ])
+  })
+}
+
+test('guest cart removes a removed item in place and recalculates the remaining line', async ({ page }) => {
   await installTelegramWebApp(page, 123456789)
   const menuCategories: GuestMenuCategory[] = [
     {
@@ -8694,22 +8844,39 @@ test('guest cart explains a removed item and removes only the affected line', as
   const teaLine = page.locator('.cart-item').filter({ hasText: 'Чай' })
   const warning = waterLine.locator('.cart-line-warning')
   await expect(warning).toHaveAttribute('role', 'alert')
-  await expect(warning).toContainText('Позиции «Вода» больше нет в меню.')
-  await expect(warning).toContainText('Выберите другую позицию или удалите её из корзины.')
+  await expect(warning.locator('p')).toHaveText(
+    'Позиции «Вода» больше нет в меню. Удалите её из корзины, чтобы продолжить заказ.'
+  )
   await expect(waterLine).toHaveAttribute('aria-describedby', /cart-line-warning-/)
   await expect(teaLine).toBeVisible()
+  await expect(warning.getByRole('button', { name: 'Вернуться в меню', exact: true })).toHaveCount(0)
+  await expect(
+    warning.getByRole('button', { name: 'Удалить «Вода» и выбрать другую позицию', exact: true })
+  ).toHaveText('Удалить и выбрать другую')
   await expect(page.getByText('Не удалось рассчитать корзину. Повторите попытку.')).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Отправить' })).toBeDisabled()
   expect(api.getAddBatchRequests()).toHaveLength(0)
 
-  await warning.getByRole('button', { name: 'Удалить из корзины: Вода' }).click()
+  const previewsBeforeRemoval = api.getPreviewRequests().length
+  await warning.getByRole('button', { name: 'Удалить «Вода» из корзины', exact: true }).click()
+  await expect(page).toHaveURL(/#\/cart$/)
   await expect(waterLine).toHaveCount(0)
   await expect(teaLine).toBeVisible()
   await expect(teaLine).toBeFocused()
+  await expect(
+    page.getByRole('button', { name: 'Удалить «Вода» и выбрать другую позицию', exact: true })
+  ).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Удалить «Вода» из корзины', exact: true })).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Отправить' })).toBeEnabled()
-  await expect.poll(() => api.getPreviewRequests().at(-1)?.items).toEqual([
-    expect.objectContaining({ itemId: 212, qty: 1 })
-  ])
+  await expect.poll(() => api.getPreviewRequests().length).toBeGreaterThan(previewsBeforeRemoval)
+  expect(
+    api.getPreviewRequests().slice(previewsBeforeRemoval).some(
+      (request) => request.items.length === 1 && request.items[0].itemId === 212 && request.items[0].qty === 1
+    )
+  ).toBe(true)
+  const totalRow = page.locator('.cart-preview-card .order-bill-total')
+  await expect(totalRow).toContainText('К оплате')
+  await expect(totalRow).toContainText('300')
 })
 
 test('guest cart keeps an unavailable-item warning across retry and recovers after re-enable', async ({ page }) => {
@@ -8772,17 +8939,27 @@ test('guest cart keeps an unavailable-item warning across retry and recovers aft
   await page.getByRole('button', { name: 'Корзина (1)' }).click()
 
   const warning = page.locator('.cart-line-warning')
-  await expect(warning).toContainText('Позиция «Вода» временно недоступна.')
+  const unavailableCopy =
+    'Позиция «Вода» временно недоступна. Чтобы продолжить заказ, удалите её из корзины и выберите другую позицию.'
+  await expect(warning.locator('p')).toHaveText(unavailableCopy)
+  await expect(warning.getByRole('button', { name: 'Вернуться в меню', exact: true })).toHaveCount(0)
+  await expect(
+    warning.getByRole('button', { name: 'Удалить «Вода» и выбрать другую позицию', exact: true })
+  ).toHaveText('Удалить и выбрать другую')
+  await expect(
+    warning.getByRole('button', { name: 'Удалить «Вода» из корзины', exact: true })
+  ).toHaveText('Удалить из корзины')
   const retry = page.getByRole('button', { name: 'Повторить расчёт' })
+  await expect(retry).toHaveClass(/button-secondary/)
   await retry.click()
-  await expect(warning).toContainText('Позиция «Вода» временно недоступна.')
+  await expect(warning.locator('p')).toHaveText(unavailableCopy)
 
   responseMode = 'generic'
   const requestsBeforeGenericFailure = api.getPreviewRequests().length
   await retry.click()
   await expect.poll(() => api.getPreviewRequests().length).toBeGreaterThan(requestsBeforeGenericFailure)
   await expect(page.getByText('Не удалось обновить расчёт. Исправьте отмеченные позиции или повторите проверку.')).toBeVisible()
-  await expect(warning).toContainText('Позиция «Вода» временно недоступна.')
+  await expect(warning.locator('p')).toHaveText(unavailableCopy)
   await expect(page.getByText('Не удалось рассчитать корзину. Повторите попытку.')).toHaveCount(0)
 
   responseMode = 'available'
@@ -8872,6 +9049,8 @@ for (const scenario of [
     const warning = staleLine.locator('.cart-line-warning')
     await expect(warning).toContainText(scenario.copy)
     await expect(warning).toContainText('Выберите другой вариант или удалите позицию из корзины.')
+    await expect(warning.getByText('Удалить и выбрать другую', { exact: true })).toHaveCount(0)
+    await expect(warning.getByText(/Чтобы продолжить заказ, удалите её из корзины/)).toHaveCount(0)
     await expect(page.getByRole('button', { name: 'Отправить' })).toBeDisabled()
 
     await staleLine.locator('.qty-input').fill('2')
@@ -8993,19 +9172,34 @@ test('guest cart renders all deterministic line issues and keeps the remaining i
   const waterLine = page.locator('.cart-item').filter({ hasText: 'Вода' })
   const hookahLine = page.locator('.cart-item').filter({ hasText: 'Кальян' })
   const teaLine = page.locator('.cart-item').filter({ hasText: 'Чай' })
-  await expect(waterLine.locator('.cart-line-warning')).toContainText('временно недоступна')
+  await expect(waterLine.locator('.cart-line-warning p')).toHaveText(
+    'Позиция «Вода» временно недоступна. Чтобы продолжить заказ, удалите её из корзины и выберите другую позицию.'
+  )
   await expect(hookahLine.locator('.cart-line-warning')).toContainText('больше нет в меню')
   await expect(teaLine.locator('.cart-line-warning')).toHaveCount(0)
   await expect(page.locator('.cart-item')).toHaveCount(3)
   await expect(page.getByRole('button', { name: 'Отправить' })).toBeDisabled()
   expect(api.getAddBatchRequests()).toHaveLength(0)
 
-  await waterLine.locator('.cart-line-warning').getByRole('button', { name: 'Удалить из корзины: Вода' }).click()
+  await waterLine
+    .locator('.cart-line-warning')
+    .getByRole('button', { name: 'Удалить «Вода» из корзины', exact: true })
+    .click()
   await expect(waterLine).toHaveCount(0)
   await expect(teaLine).toBeVisible()
   await expect(hookahLine.locator('.cart-line-warning')).toContainText('больше нет в меню')
   await expect(page.locator('.cart-line-warning[role="alert"]')).toHaveCount(1)
   await expect(page.getByRole('button', { name: 'Отправить' })).toBeDisabled()
+  expect(api.getAddBatchRequests()).toHaveLength(0)
+
+  await hookahLine
+    .locator('.cart-line-warning')
+    .getByRole('button', { name: 'Удалить из корзины: Кальян', exact: true })
+    .click()
+  await expect(hookahLine).toHaveCount(0)
+  await expect(teaLine).toBeFocused()
+  await expect(page.locator('.cart-line-warning')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Отправить' })).toBeEnabled()
   expect(api.getAddBatchRequests()).toHaveLength(0)
 })
 

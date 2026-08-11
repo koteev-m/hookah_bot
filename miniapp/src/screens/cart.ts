@@ -337,12 +337,12 @@ function cartMenuSelectionIssueCopy(issue: CartMenuSelectionIssue, line: CartLin
   if (issue.selectionKind === 'ITEM') {
     if (issue.reason === 'REMOVED') {
       return itemName
-        ? `Позиции «${itemName}» больше нет в меню. Выберите другую позицию или удалите её из корзины.`
-        : 'Одной из позиций больше нет в меню. Выберите другую позицию или удалите её из корзины.'
+        ? `Позиции «${itemName}» больше нет в меню. Удалите её из корзины, чтобы продолжить заказ.`
+        : 'Одной из позиций больше нет в меню. Удалите её из корзины, чтобы продолжить заказ.'
     }
     return itemName
-      ? `Позиция «${itemName}» временно недоступна. Выберите другую позицию или удалите её из корзины.`
-      : 'Одна из позиций временно недоступна. Выберите другую позицию или удалите её из корзины.'
+      ? `Позиция «${itemName}» временно недоступна. Чтобы продолжить заказ, удалите её из корзины и выберите другую позицию.`
+      : 'Одна из позиций временно недоступна. Чтобы продолжить заказ, удалите её из корзины и выберите другую позицию.'
   }
   if (issue.reason === 'REMOVED') {
     return itemName && optionName
@@ -581,7 +581,53 @@ export function renderCartScreen(options: CartScreenOptions) {
   let giftDisposables: Array<() => void> = []
   let pendingFocusLineRef = options.initialFocusLineRef ?? null
   let focusCartHeading = false
+  let pendingItemMenuRecovery: {
+    venueId: number | null
+    tableSessionId: number | null
+    tableToken: string | null
+    tabId: number | null
+    cartMutationSignature: string
+    previewFingerprint: string | null
+  } | null = null
   const disposables: Array<() => void> = []
+
+  const focusGuestMenuHeading = () => {
+    let remainingFrames = 3
+    const focusHeading = () => {
+      const heading = document.querySelector<HTMLElement>('.venue-screen .venue-header h3')
+      if (heading) {
+        heading.tabIndex = -1
+        heading.focus()
+        return
+      }
+      remainingFrames -= 1
+      if (remainingFrames > 0) {
+        window.requestAnimationFrame(focusHeading)
+      }
+    }
+    window.requestAnimationFrame(focusHeading)
+  }
+
+  const finishItemMenuRecovery = (completedPreviewFingerprint: string | null) => {
+    const pending = pendingItemMenuRecovery
+    if (!pending) {
+      return
+    }
+    if (
+      pending.venueId !== tableSnapshot.venueId ||
+      pending.tableSessionId !== tableSnapshot.tableSessionId ||
+      pending.tableToken !== tableSnapshot.tableToken ||
+      pending.tabId !== (getSelectedTab()?.id ?? null) ||
+      pending.cartMutationSignature !== cartMutationSignature ||
+      pending.previewFingerprint !== completedPreviewFingerprint
+    ) {
+      pendingItemMenuRecovery = null
+      return
+    }
+    pendingItemMenuRecovery = null
+    onNavigateMenu()
+    focusGuestMenuHeading()
+  }
 
   const parseJoinTokenFromLocation = () => {
     const search = new URLSearchParams(window.location.search)
@@ -698,6 +744,7 @@ export function renderCartScreen(options: CartScreenOptions) {
     tabState.selectedTabId = tabId
     setSelectedGuestTabId(tableSnapshot.tableSessionId, tabId)
     if (previousTabId !== tabId) {
+      pendingItemMenuRecovery = null
       resetSubmitIdempotency()
     }
     if (previousTabId != null && previousTabId !== tabId) {
@@ -1350,6 +1397,7 @@ export function renderCartScreen(options: CartScreenOptions) {
       }
       if (applyMenuSelectionError(result.error)) {
         updateSubmitState()
+        finishItemMenuRecovery(fingerprint)
         return
       }
       previewData = null
@@ -1392,6 +1440,7 @@ export function renderCartScreen(options: CartScreenOptions) {
     previewMessage = ''
     clearCartMenuSelectionIssues()
     updateSubmitState()
+    finishItemMenuRecovery(fingerprint)
   }
 
   const scheduleCartPreview = () => {
@@ -1413,6 +1462,9 @@ export function renderCartScreen(options: CartScreenOptions) {
       return
     }
     const fingerprint = buildPreviewFingerprint(tableToken, tableSessionId, selectedTab.id)
+    if (pendingItemMenuRecovery && pendingItemMenuRecovery.previewFingerprint !== fingerprint) {
+      pendingItemMenuRecovery = null
+    }
     if (
       fingerprint === previewFingerprint &&
       (previewLoading || previewTimer !== null || previewData != null || previewFailed)
@@ -1535,7 +1587,12 @@ export function renderCartScreen(options: CartScreenOptions) {
       append(qtyControls, minusButton, qtyInput, plusButton)
 
       const removeButton = el('button', { className: 'button-small cart-remove', text: 'Удалить' }) as HTMLButtonElement
-      const itemName = safeItemName(line.itemId) ?? 'позиция'
+      const storedItemName = safeItemName(line.itemId)
+      const itemName = storedItemName ?? 'позиция'
+      const duplicateItemLineSuffix =
+        storedItemName && lines.filter((candidate) => safeItemName(candidate.itemId) === storedItemName).length > 1
+          ? `, строка ${lineIndex + 1}`
+          : ''
       removeButton.setAttribute('aria-label', `Удалить из корзины: ${itemName}`)
       append(controls, qtyControls, removeButton)
       const issue = cartSnapshot.menuSelectionIssues.get(line.key)
@@ -1569,20 +1626,57 @@ export function renderCartScreen(options: CartScreenOptions) {
         } else if (issue?.selectionKind === 'ITEM') {
           const menuButton = el('button', {
             className: 'button-small',
-            text: 'Вернуться в меню'
+            text: 'Удалить и выбрать другую'
           }) as HTMLButtonElement
+          menuButton.setAttribute(
+            'aria-label',
+            storedItemName
+              ? `Удалить «${storedItemName}» и выбрать другую позицию${duplicateItemLineSuffix}`
+              : `Удалить позицию ${lineIndex + 1} и выбрать другую позицию`
+          )
           recoveryActions.appendChild(menuButton)
-          itemDisposables.push(on(menuButton, 'click', onNavigateMenu))
+          itemDisposables.push(
+            on(menuButton, 'click', () => {
+              setMessage('')
+              pendingFocusLineRef = lines[lineIndex + 1]?.key ?? null
+              focusCartHeading = pendingFocusLineRef == null
+              const result = setCartLineQty(line.key, 0)
+              if (!result.ok) {
+                return
+              }
+              pendingItemMenuRecovery = {
+                venueId: tableSnapshot.venueId,
+                tableSessionId: tableSnapshot.tableSessionId,
+                tableToken: tableSnapshot.tableToken,
+                tabId: getSelectedTab()?.id ?? null,
+                cartMutationSignature,
+                previewFingerprint: cartSnapshot.items.size ? previewFingerprint : null
+              }
+              if (!cartSnapshot.items.size) {
+                finishItemMenuRecovery(null)
+              }
+            })
+          )
         }
         const recoveryRemoveButton = el('button', {
           className: 'button-small button-secondary',
           text: 'Удалить из корзины'
         }) as HTMLButtonElement
-        recoveryRemoveButton.setAttribute('aria-label', `Удалить из корзины: ${itemName}`)
+        recoveryRemoveButton.setAttribute(
+          'aria-label',
+          issue?.selectionKind === 'ITEM'
+            ? storedItemName
+              ? `Удалить «${storedItemName}» из корзины${duplicateItemLineSuffix}`
+              : `Удалить позицию ${lineIndex + 1} из корзины`
+            : `Удалить из корзины: ${itemName}`
+        )
         recoveryActions.appendChild(recoveryRemoveButton)
         itemDisposables.push(
           on(recoveryRemoveButton, 'click', () => {
-            pendingFocusLineRef = lines[lineIndex + 1]?.key ?? lines[lineIndex - 1]?.key ?? null
+            pendingFocusLineRef =
+              issue?.selectionKind === 'ITEM'
+                ? lines[lineIndex + 1]?.key ?? null
+                : lines[lineIndex + 1]?.key ?? lines[lineIndex - 1]?.key ?? null
             focusCartHeading = pendingFocusLineRef == null
             setCartLineQty(line.key, 0)
           })
@@ -2141,6 +2235,12 @@ export function renderCartScreen(options: CartScreenOptions) {
 
   const cartSubscription = subscribeCart((snapshot) => {
     const nextMutationSignature = cartBusinessMutationSignature(snapshot)
+    if (
+      pendingItemMenuRecovery &&
+      pendingItemMenuRecovery.cartMutationSignature !== nextMutationSignature
+    ) {
+      pendingItemMenuRecovery = null
+    }
     if (nextMutationSignature !== cartMutationSignature) {
       cartMutationSignature = nextMutationSignature
       resetSubmitIdempotency()
@@ -2157,6 +2257,14 @@ export function renderCartScreen(options: CartScreenOptions) {
   const tableSubscription = subscribeTable((snapshot) => {
     const previousTableSessionId = tableSnapshot.tableSessionId
     const previousVenueId = tableSnapshot.venueId
+    if (
+      pendingItemMenuRecovery &&
+      (pendingItemMenuRecovery.tableSessionId !== snapshot.tableSessionId ||
+        pendingItemMenuRecovery.venueId !== snapshot.venueId ||
+        pendingItemMenuRecovery.tableToken !== snapshot.tableToken)
+    ) {
+      pendingItemMenuRecovery = null
+    }
     tableSnapshot = snapshot
     if (
       (previousTableSessionId != null && snapshot.tableSessionId !== previousTableSessionId) ||
@@ -2207,6 +2315,7 @@ export function renderCartScreen(options: CartScreenOptions) {
 
   return () => {
     disposed = true
+    pendingItemMenuRecovery = null
     submitAbort?.abort()
     tabsAbort?.abort()
     tabActionAbort?.abort()

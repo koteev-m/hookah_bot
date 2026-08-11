@@ -1,9 +1,8 @@
 # Project Status
 
-Last verified: 2026-08-11 at base `HEAD 96ffb3a` (`HEAD == origin/main`) with an uncommitted bounded
-implementation. **GUEST CART STALE MENU SELECTION RECOVERY / REMOVED OR UNAVAILABLE ITEMS AND
-OPTIONS / PAYLOAD-BOUND IDEMPOTENCY + ATOMIC REJECTION / MVP IMPLEMENTED / LOCAL VALIDATION PASSED /
-REVIEW REQUIRED BEFORE COMMIT**.
+Last verified: 2026-08-11 at base `HEAD f748c12` (`HEAD == origin/main`) with an uncommitted bounded
+UX follow-up. **GUEST CART STALE MENU SELECTION RECOVERY / ITEM-LEVEL ACTION AND COPY POLISH / MVP
+IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
 
 ## 1. Purpose and source-of-truth order
 
@@ -16,16 +15,17 @@ next-block change, P0/P1 blocker change or before a new long task.
 
 - Overall product, permission parity and dangerous-action audit remain `PARTIAL`; no whole product,
   Menu module or UX production-readiness claim is made.
-- **GUEST CART STALE MENU SELECTION RECOVERY / REMOVED OR UNAVAILABLE ITEMS AND OPTIONS /
-  PAYLOAD-BOUND IDEMPOTENCY + ATOMIC REJECTION / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW
-  REQUIRED BEFORE COMMIT**. This closes no release gate before independent review, green Actions,
-  replacement of every order-writing backend instance, staging deploy and focused smoke.
+- **GUEST CART STALE MENU SELECTION RECOVERY / ITEM-LEVEL ACTION AND COPY POLISH / MVP IMPLEMENTED /
+  LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. This closes no release gate before
+  independent review, green Actions, replacement of every order-writing backend instance, staging
+  deploy and focused smoke.
 - Menu option availability audit remains **FUNCTIONALLY PASSED ON STAGING / GENERAL CART RECOVERY
   FOLLOW-UP REQUIRED** until the new focused recovery smoke is repeated.
 - **DANGEROUS ACTION AUDIT SLICE / MENU OPTION PRICE AUDIT / DONE / MVP /
   STAGING-SMOKE-PASSED**. This closes only the authenticated Venue Mini App existing-option price
   mutation and its documented money/order/audit contract.
-- Current base HEAD `96ffb3a` equals `origin/main`; the stale-cart recovery changes are uncommitted.
+- Current base HEAD `f748c12` equals `origin/main`; only the item-level action/copy polish is
+  uncommitted.
 - **VENUE MENU MANAGEMENT UX STABILIZATION / MOBILE RESPONSIVENESS + PRICE INPUT ERGONOMICS +
   CONTEXT PRESERVATION / DONE / MVP / STAGING-SMOKE-PASSED** remains closed only for that bounded UX
   contract.
@@ -53,9 +53,8 @@ next-block change, P0/P1 blocker change or before a new long task.
 
 ## 4. Current bounded block
 
-Verdict: **GUEST CART STALE MENU SELECTION RECOVERY / REMOVED OR UNAVAILABLE ITEMS AND OPTIONS /
-PAYLOAD-BOUND IDEMPOTENCY + ATOMIC REJECTION / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW
-REQUIRED BEFORE COMMIT**.
+Verdict: **GUEST CART STALE MENU SELECTION RECOVERY / ITEM-LEVEL ACTION AND COPY POLISH / MVP
+IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
 
 Guest preview `POST /api/guest/order/preview` and final submit `POST /api/guest/order/add-batch` now
 share one repository validation for item existence, expected venue/category scope, current item
@@ -68,12 +67,16 @@ reason/details are not authority.
 
 Mini App sends its existing stable `CartLine.key`, keeps every affected line visible, blocks
 totals/submit, and shows line-specific actions. Option names are retained on the cart line; item names
-come from the current mutable item cache and therefore are not an immutable cart snapshot. Item
-recovery is `Вернуться в меню` plus removal of only that line; no second item-replacement engine was
-introduced. Option recovery reuses the current DB-current picker, excludes stale choices, preserves
-quantity and preference note and clears the warning only after successful server recalculation.
-Retry preserves typed issues and can recover after re-enable; unknown/network/database failures stay
-generic.
+come from the current mutable item cache and therefore are not an immutable cart snapshot. Typed
+`ITEM / REMOVED` and `ITEM / UNAVAILABLE` now have distinct mandatory-removal copy.
+`Удалить и выбрать другую` removes only that line, invalidates only its issue, rotates the existing
+business-payload idempotency lifecycle, waits for authoritative recalculation of the remaining cart,
+then opens the existing Guest menu without choosing a replacement automatically. `Удалить из
+корзины` performs the same exact-line removal and recalculation while staying in the cart and moving
+focus to the next line or cart heading. Other valid and problematic lines remain; submit stays blocked
+while any issue remains. Option recovery is unchanged: it reuses the current DB-current picker,
+excludes stale choices and preserves quantity/note. Retry remains secondary; no second item/domain
+replacement engine was introduced.
 
 The specialized recovery paths for `CART_MENU_SELECTION_UNAVAILABLE`,
 `ORDER_IDEMPOTENCY_PAYLOAD_MISMATCH` and `ORDER_IDEMPOTENCY_REPLAY_UNVERIFIABLE` require exact HTTP
@@ -113,9 +116,10 @@ paths are unchanged; no new CI workflow was added.
 
 ## 5. Open gaps and risks
 
-- No P0/P1 implementation blocker remains in this bounded local diff. The exact CI-equivalent
-  route/security, PostgreSQL and migration gates are green locally. Independent review, green
-  Actions, all-writer binary rollout, staging deploy and focused real item/option
+- No P0/P1 implementation blocker remains in this bounded local diff. Mini App build, the focused
+  item-recovery pack and full browser smoke are green locally; the committed backend contract and its
+  exact CI-equivalent route/security, PostgreSQL and migration gates remain unchanged. Independent
+  review, green Actions, all-writer binary rollout, staging deploy and focused real item/option
   removed/unavailable plus retry/conflict smoke remain release gates.
 - Keep P2/future: opaque cart-line identity, replacement merge semantics, issue owner
   tuple/generation, immutable item-name cart snapshot, live-region deduplication, error-size
@@ -153,11 +157,11 @@ Current stale-cart recovery local evidence: the exact route/security gate discov
 `1114/1114` tests with `0` skipped, failures or errors; exact `GuestOrderRoutesTest` is `61/0/0/0`,
 fingerprint repository coverage is `7/0/0/0`, and PostgreSQL concurrency is `9/0/0/0`. The current
 migration gate is green at `2/0/0/0` for each H2/PostgreSQL audit and fingerprint suite. Compile and
-ktlint are green; Mini App build is green; the strict non-`409` browser pack is `3/3` across all nine
-code/status combinations, and full browser smoke is `167/167`; `git diff --check` is green. The
-existing CI workflow selects the exact route, fingerprint, migration and concurrency XML with
-fail-closed minima. Independent review, green Actions, all-writer rollout, staging deploy and focused
-smoke remain required.
+ktlint remain green from the committed backend block. Mini App build is green; the item-level recovery
+pack is `7/7`, the strict non-`409` browser pack remains covered, and full browser smoke is `169/169`;
+`git diff --check` is green. The existing CI workflow selects the exact route, fingerprint, migration
+and concurrency XML with fail-closed minima. Independent review, green Actions, all-writer rollout,
+staging deploy and focused smoke remain required.
 
 ## 8. Canonical document map
 
@@ -171,12 +175,12 @@ smoke remain required.
 
 ## 9. Next action
 
-Independently review only the bounded stale-cart recovery diff, then run green Actions, staging deploy
-and the focused item/option removed/unavailable smoke. Do not expand into item-replacement engine,
-audits, permissions, additional migrations, media/R2, stash or `scripts/dev/`.
+Independently review only the bounded item-level action/copy diff, then run green Actions, staging
+deploy and the focused item/option removed/unavailable smoke. Do not expand into item-replacement
+engine, audits, permissions, additional migrations, media/R2, stash or `scripts/dev/`.
 
 ## 10. Last verified date
 
-2026-08-11. Stale-cart recovery is local-review-ready only for its bounded contract; Menu and
-Dangerous Action Audit programs remain partial. Stash was not read/applied/changed and `scripts/dev/`
-was not touched.
+2026-08-11. Item-level cart recovery polish is local-review-ready only for its bounded contract; Menu
+and Dangerous Action Audit programs remain partial. Stash was not read/applied/changed and
+`scripts/dev/` was not touched.

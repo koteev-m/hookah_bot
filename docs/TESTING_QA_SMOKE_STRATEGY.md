@@ -887,10 +887,10 @@ the existing mandatory PostgreSQL CI gate minimum is raised to 15.
 
 ### Guest Cart Stale Menu Selection Recovery quality gate
 
-Status: **GUEST CART STALE MENU SELECTION RECOVERY / REMOVED OR UNAVAILABLE ITEMS AND OPTIONS /
-PAYLOAD-BOUND IDEMPOTENCY + ATOMIC REJECTION / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW
-REQUIRED BEFORE COMMIT**. Schema verdict: approved additive PostgreSQL `V123` / H2 `V124` nullable
-`request_fingerprint VARCHAR(80)`; no backfill or global unique constraint.
+Status: **GUEST CART STALE MENU SELECTION RECOVERY / ITEM-LEVEL ACTION AND COPY POLISH / MVP
+IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. Schema verdict remains the
+approved additive PostgreSQL `V123` / H2 `V124` nullable `request_fingerprint VARCHAR(80)`; no
+backfill or global unique constraint.
 
 Required regression coverage:
 
@@ -926,8 +926,15 @@ Required regression coverage:
 - deterministic PostgreSQL races cover exact retries, exact versus mismatch, concurrent new key,
   different tab/session scope, menu writer versus submit, stale rejection versus context creation and
   legacy lazy-upgrade without arbitrary sleeps or partial state;
-- item recovery keeps the line and offers Menu plus line-scoped removal; option recovery reuses the
-  current picker, excludes the stale option and preserves quantity/note until successful preview;
+- `ITEM / UNAVAILABLE` renders the exact mandatory-removal copy and `ITEM / REMOVED` renders its
+  distinct exact copy; the old `Вернуться в меню` action is absent;
+- item `Удалить и выбрать другую` deletes only the affected line, rotates the existing business
+  payload/key lifecycle, authoritatively recalculates the remaining cart, opens the existing Guest
+  menu without automatic selection and focuses its heading. Item `Удалить из корзины` stays in cart,
+  recalculates and focuses the next line or cart heading. Both actions have line-specific accessible
+  names and remove the old warning/actions from the accessibility tree;
+- option recovery remains unchanged: it reuses the current picker, excludes the stale option and
+  preserves quantity/note until successful preview;
 - multiple issues are rendered on their exact lines; fixing one preserves every valid/remaining
   line and keeps submit blocked; retry preserves deterministic state and can recover after re-enable;
 - line warnings are textual live regions, actions have line-specific accessible names, option-picker
@@ -1940,11 +1947,11 @@ Telegram/staff-chat:
   deploy and bounded smoke close only this contract. No migration was added.
 - Menu option availability audit: **FUNCTIONALLY PASSED ON STAGING / GENERAL CART RECOVERY FOLLOW-UP
   REQUIRED** until the focused stale-cart recovery smoke is repeated.
-- Guest cart stale menu recovery: **GUEST CART STALE MENU SELECTION RECOVERY / REMOVED OR UNAVAILABLE
-  ITEMS AND OPTIONS / PAYLOAD-BOUND IDEMPOTENCY + ATOMIC REJECTION / MVP IMPLEMENTED / LOCAL
-  VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. Exact route/repository/migration/PostgreSQL
-  concurrency and browser checks are local evidence; review, CI, all-writer rollout, deploy and
-  focused staging smoke remain open. PostgreSQL `V123` / H2 `V124` are additive and nullable.
+- Guest cart stale menu recovery: **GUEST CART STALE MENU SELECTION RECOVERY / ITEM-LEVEL ACTION AND
+  COPY POLISH / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. Exact
+  route/repository/migration/PostgreSQL concurrency and `169/169` browser checks are local evidence;
+  review, CI, all-writer rollout, deploy and focused staging smoke remain open. PostgreSQL `V123` /
+  H2 `V124` are additive and nullable.
 - Venue Promotions Current/Archived Tabs UX: **VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / DONE / MVP / STAGING-SMOKE-PASSED**.
 - Promotion lifecycle status audit: **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**; broader dangerous-action coverage remains partial.
 - Promotion creation audit: **DANGEROUS ACTION AUDIT SLICE / PROMOTION CREATION AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**; mandatory repository/route/Telegram and PostgreSQL gates remain regression requirements. Configuration edit, schedule/target/reward, media/banner and broader dangerous-action coverage remain open.
