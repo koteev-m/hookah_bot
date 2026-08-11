@@ -1,14 +1,13 @@
 # Testing / QA Smoke Strategy
 
-Дата актуализации: 2026-08-10.
+Дата актуализации: 2026-08-11.
 
 Статус: **current product reference / UPDATED**. This document is the canonical QA/smoke strategy for the Telegram bot + Mini App platform. It consolidates local validation, GitHub Actions expectations, area-specific smoke suites, staging policy, failure reporting and Codex handoff rules. Deployment and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
 
-Latest release-closed bounded slice: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION HARD DELETE AUDIT /
-ATOMIC BASE-PROFILE NORMALIZATION INCLUDED / DONE / MVP / STAGING-SMOKE-PASSED**. The broader Menu
-and Dangerous Action Audit programs remain partial. Menu option rename is **DANGEROUS ACTION AUDIT
-SLICE / MENU OPTION RENAME AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**; keep its bounded gates in
-regression.
+Latest release-closed bounded menu audit blocks: option hard delete with atomic base-profile
+normalization, option rename and **DANGEROUS ACTION AUDIT SLICE / MENU OPTION PRICE AUDIT / DONE /
+MVP / STAGING-SMOKE-PASSED**. The broader Menu and Dangerous Action Audit programs remain partial;
+keep each bounded gate in regression.
 
 ## Core Rule
 
@@ -791,8 +790,8 @@ broader Menu/Dangerous Action Audit or any media work.
 
 ### Menu Option Price Audit quality gate
 
-Status: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION PRICE AUDIT / MVP IMPLEMENTED / LOCAL
-VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+Status: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION PRICE AUDIT / DONE / MVP /
+STAGING-SMOKE-PASSED**.
 
 Regression must preserve this bounded contract:
 
@@ -828,11 +827,25 @@ Mandatory CI keeps the existing exact selectors/XML for `VenueMenuRepositoryTest
 `VenueMenuOptionNormalizationConcurrencyPostgresTest`. The option PostgreSQL XML minimum is nine;
 all critical XML must have tests `> 0` and exactly zero skipped/failures/errors.
 
-Recorded local evidence: all four focused repository/route/order/history selectors, the nine-test
+Recorded automated evidence: all four focused repository/route/order/history selectors, the nine-test
 PostgreSQL selector (`9/0/0/0`), `compileKotlin`, `ktlintCheck`, Mini App production build and full
 Playwright smoke `152/152` passed. `git diff --check` passes. No migration or workflow was added.
-Independent review, green Actions, staging deploy and bounded staging smoke are still required; the
-broader Menu/Dangerous Action Audit remains `PARTIAL`.
+For current release HEAD `0489a2f`, the user confirmed fully green GitHub Actions, staging deploy and
+only this bounded staging smoke:
+
+1. Price-only change succeeds.
+2. Price-only change creates one `MENU_OPTION_PRICE_CHANGED`.
+3. Price-only change creates no `MENU_OPTION_RENAMED`.
+4. Repeating the same price creates no new price audit.
+5. Name plus price saves atomically.
+6. Name plus price creates one rename audit and one price audit.
+7. A stale client price is not authority at checkout.
+8. The server applies the current price or safely requires reconfirmation.
+9. The working menu and data remain intact.
+10. Cleanup completes normally.
+
+Existing and new order snapshot preservation is confirmed automated coverage only; it is not asserted
+as a separate staging smoke scenario. The broader Menu/Dangerous Action Audit remains `PARTIAL`.
 
 ### Venue Menu Management UX Stabilization quality gate
 
@@ -1814,10 +1827,10 @@ Telegram/staff-chat:
   STAGING-SMOKE-PASSED**. The now-nine-test option concurrency XML gate, focused cross-surface tests,
   privacy/rollback checks, green Actions, staging deploy and bounded smoke are recorded complete.
   No migration was added.
-- Menu option price audit: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION PRICE AUDIT / MVP
-  IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. Focused
-  repository/route/order/history, nine-test PostgreSQL, build/lint and `152/152` browser checks pass;
-  Actions, staging deploy and bounded smoke remain open. No migration was added.
+- Menu option price audit: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION PRICE AUDIT / DONE / MVP /
+  STAGING-SMOKE-PASSED**. Focused repository/route/order/history, nine-test PostgreSQL, build/lint
+  and `152/152` browser checks remain regression evidence; user-confirmed green Actions, staging
+  deploy and bounded smoke close only this contract. No migration was added.
 - Venue Promotions Current/Archived Tabs UX: **VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / DONE / MVP / STAGING-SMOKE-PASSED**.
 - Promotion lifecycle status audit: **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**; broader dangerous-action coverage remains partial.
 - Promotion creation audit: **DANGEROUS ACTION AUDIT SLICE / PROMOTION CREATION AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**; mandatory repository/route/Telegram and PostgreSQL gates remain regression requirements. Configuration edit, schedule/target/reward, media/banner and broader dangerous-action coverage remain open.

@@ -1,6 +1,6 @@
 # Product + Telegram AI Bots Roadmap
 
-Дата обновления: 2026-08-10.
+Дата обновления: 2026-08-11.
 
 Статус документа: canonical roadmap. Этот файл объединяет актуальный product roadmap, Mini App launch roadmap и Telegram-native AI Bots roadmap. Старые audit-файлы в `docs/audit/` остаются evidence/history, но не являются текущим backlog без сверки с этим roadmap и текущим кодом.
 
@@ -1099,11 +1099,11 @@ green Actions, staging deploy and the bounded 16-scenario Venue Menu UX smoke pa
 responsive management layout, price-input ergonomics and stable-ID context restoration; it does not
 close the broader Menu or Dangerous Action Audit programs.
 
-Current bounded block: **IMPLEMENT_MENU_OPTION_PRICE_AUDIT_NEXT** is implemented locally.
-
-Status: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION PRICE AUDIT / MVP IMPLEMENTED / LOCAL
-VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. This is not release/staging closure and does not
-close the broader Menu or Dangerous Action Audit programs.
+Latest release-closed audit block: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION PRICE AUDIT / DONE /
+MVP / STAGING-SMOKE-PASSED**. Current release HEAD `0489a2f` equals `origin/main`; the user confirmed
+fully green GitHub Actions, staging deploy and bounded smoke. This closes only the authenticated Venue
+Mini App existing-option price mutation; it does not close the broader Menu or Dangerous Action Audit
+programs.
 
 Implementation evidence:
 
@@ -1139,9 +1139,27 @@ Implementation evidence:
   Guest order/history and Guest visit selectors, compile, ktlint, Mini App build and Playwright
   `152/152` pass locally. No workflow or migration was added.
 
-Next action is independent review before any authorized commit/push, then green Actions, staging
-deploy and bounded smoke. Option create/availability, item price/update, Telegram price management,
+User-confirmed bounded smoke covers price-only success; one price audit and no rename audit; no extra
+audit on same-price save; atomic name+price with one rename and one price audit; authoritative current
+server pricing or safe reconfirmation at order submit; intact working menu/data; and routine cleanup.
+Historical order-snapshot preservation remains confirmed automated coverage only, not a separate
+staging scenario. Option create/availability, item price/update, Telegram price management,
 membership-recheck hardening, promotion work, viewers and media/storage remain outside this slice.
+
+Current bounded block: **IMPLEMENT_MENU_OPTION_AVAILABILITY_AUDIT_NEXT**.
+
+Read-only runtime evidence: direct `setOptionAvailability` is an unaudited individual writer for the
+Mini App availability endpoint and Telegram Owner/Manager/Staff stop-list callbacks; Mini App compound
+`updateOption` can co-submit availability. Individual availability uses current `MENU_AVAILABILITY_MANAGE`
+authority, while compound PATCH remains Owner/Manager `MENU_MANAGE`. Batch Shift Check is separately
+locked/CAS-protected and already writes exactly one `MENU_SHIFT_CHECK_COMPLETED`, so the next slice
+must not append a second per-option audit for that batch.
+
+Bounded outcome: one real committed individual option availability change writes exactly one safe
+`MENU_OPTION_AVAILABILITY_CHANGED`, with authenticated actor and server-owned `VENUE_MINI_APP` or
+`TELEGRAM_BOT` source, in the mutation transaction. Same-state, denied, foreign/not-found and failed
+or rolled-back requests write none. Do not change option create, item availability, price, rename,
+Shift Check audit cardinality, permissions, order logic, media or schema. **NO_MIGRATION_EXPECTED**.
 
 ### Recent release-closed audit block
 
