@@ -63,6 +63,7 @@ import com.hookah.platform.backend.miniapp.venue.menu.BASE_FLAVOR_PROFILE_ALREAD
 import com.hookah.platform.backend.miniapp.venue.menu.HookahFlavorProfileService
 import com.hookah.platform.backend.miniapp.venue.menu.MenuCategoryDeleteSource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuItemDeleteSource
+import com.hookah.platform.backend.miniapp.venue.menu.MenuOptionAvailabilitySource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuOptionDeleteSource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuOptionRenameSource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuSemanticType
@@ -19400,6 +19401,8 @@ class TelegramBotRouter(
                     venueId = venueId,
                     optionId = optionId,
                     isAvailable = isAvailable,
+                    actorUserId = userId,
+                    source = MenuOptionAvailabilitySource.TELEGRAM_BOT,
                 )
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
@@ -19952,6 +19955,8 @@ class TelegramBotRouter(
                     venueId = venueId,
                     optionId = optionId,
                     isAvailable = true,
+                    actorUserId = userId,
+                    source = MenuOptionAvailabilitySource.TELEGRAM_BOT,
                 )
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
@@ -24746,6 +24751,8 @@ class TelegramBotRouter(
                     venueId = venueId,
                     optionId = optionId,
                     isAvailable = isAvailable,
+                    actorUserId = userId,
+                    source = MenuOptionAvailabilitySource.TELEGRAM_BOT,
                 )
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
@@ -24837,6 +24844,8 @@ class TelegramBotRouter(
                     venueId = venueId,
                     optionId = optionId,
                     isAvailable = true,
+                    actorUserId = userId,
+                    source = MenuOptionAvailabilitySource.TELEGRAM_BOT,
                 )
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")

@@ -1,6 +1,8 @@
 package com.hookah.platform.backend.miniapp.venue.menu
 
 import com.hookah.platform.backend.api.InvalidInputException
+import com.hookah.platform.backend.api.MenuShiftCheckStaleException
+import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
 import com.hookah.platform.backend.test.PostgresTestEnv
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
@@ -647,6 +649,378 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
             }
         }
 
+    @Test
+    fun `direct availability writers serialize with one database current winner audit`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource)
+                val holderDataSource = HeldItemLockDataSource(dataSource)
+                val waiterDataSource = TrackedItemLockDataSource(dataSource)
+
+                val (winner, noOp) =
+                    runWithHeldItemLock(
+                        observerDataSource = dataSource,
+                        holderDataSource = holderDataSource,
+                        waiterDataSource = waiterDataSource,
+                        beforeRelease = { assertInitialState(dataSource, fixture) },
+                        holderAction = {
+                            runBlocking {
+                                VenueMenuRepository(holderDataSource).setOptionAvailability(
+                                    fixture.venueId,
+                                    fixture.customOptionId,
+                                    true,
+                                    FIRST_ACTOR_ID,
+                                    MenuOptionAvailabilitySource.VENUE_MINI_APP,
+                                )
+                            }
+                        },
+                        waiterAction = {
+                            runBlocking {
+                                VenueMenuRepository(waiterDataSource).setOptionAvailability(
+                                    fixture.venueId,
+                                    fixture.customOptionId,
+                                    true,
+                                    SECOND_ACTOR_ID,
+                                    MenuOptionAvailabilitySource.TELEGRAM_BOT,
+                                )
+                            }
+                        },
+                    )
+
+                assertTrue(assertNotNull(winner).isAvailable)
+                assertTrue(assertNotNull(noOp).isAvailable)
+                assertTrue(
+                    readOptions(dataSource, fixture.itemId)
+                        .single { it.id == fixture.customOptionId }
+                        .isAvailable,
+                )
+                assertAvailabilityAudit(
+                    audit = readAvailabilityAudits(dataSource).single(),
+                    fixture = fixture,
+                    oldIsAvailable = false,
+                    newIsAvailable = true,
+                    actorUserId = FIRST_ACTOR_ID,
+                    source = MenuOptionAvailabilitySource.VENUE_MINI_APP,
+                )
+            }
+        }
+
+    @Test
+    fun `direct availability and compound patch serialize truthful independent audits`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource)
+                val holderDataSource = HeldItemLockDataSource(dataSource)
+                val waiterDataSource = TrackedItemLockDataSource(dataSource)
+
+                val (direct, compound) =
+                    runWithHeldItemLock(
+                        observerDataSource = dataSource,
+                        holderDataSource = holderDataSource,
+                        waiterDataSource = waiterDataSource,
+                        beforeRelease = { assertInitialState(dataSource, fixture) },
+                        holderAction = {
+                            runBlocking {
+                                VenueMenuRepository(holderDataSource).setOptionAvailability(
+                                    fixture.venueId,
+                                    fixture.customOptionId,
+                                    true,
+                                    FIRST_ACTOR_ID,
+                                    MenuOptionAvailabilitySource.TELEGRAM_BOT,
+                                )
+                            }
+                        },
+                        waiterAction = {
+                            runBlocking {
+                                VenueMenuRepository(waiterDataSource).updateOption(
+                                    venueId = fixture.venueId,
+                                    optionId = fixture.customOptionId,
+                                    name = "Compound availability winner",
+                                    priceDeltaMinor = null,
+                                    isAvailable = false,
+                                    actorUserId = SECOND_ACTOR_ID,
+                                    source = MenuOptionRenameSource.VENUE_MINI_APP,
+                                )
+                            }
+                        },
+                    )
+
+                assertTrue(assertNotNull(direct).isAvailable)
+                assertFalse(assertNotNull(compound).isAvailable)
+                val final = readOptions(dataSource, fixture.itemId).single { it.id == fixture.customOptionId }
+                assertEquals("Compound availability winner", final.name)
+                assertFalse(final.isAvailable)
+                val audits = readAvailabilityAudits(dataSource)
+                assertEquals(2, audits.size)
+                assertAvailabilityAudit(
+                    audits[0],
+                    fixture,
+                    false,
+                    true,
+                    FIRST_ACTOR_ID,
+                    MenuOptionAvailabilitySource.TELEGRAM_BOT,
+                )
+                assertAvailabilityAudit(
+                    audits[1],
+                    fixture,
+                    true,
+                    false,
+                    SECOND_ACTOR_ID,
+                    MenuOptionAvailabilitySource.VENUE_MINI_APP,
+                )
+                assertRenameAudit(
+                    dataSource,
+                    fixture,
+                    CUSTOM_OPTION_NAME,
+                    "Compound availability winner",
+                    SECOND_ACTOR_ID,
+                    MenuOptionRenameSource.VENUE_MINI_APP,
+                )
+                assertTrue(readPriceAudits(dataSource).isEmpty())
+            }
+        }
+
+    @Test
+    fun `direct availability commits before shift check stale conflict without per option batch audit`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource)
+                val holderDataSource = HeldItemLockDataSource(dataSource)
+                val waiterDataSource = TrackedItemLockDataSource(dataSource)
+
+                val (direct, shiftAttempt) =
+                    runWithHeldItemLock(
+                        observerDataSource = dataSource,
+                        holderDataSource = holderDataSource,
+                        waiterDataSource = waiterDataSource,
+                        beforeRelease = { assertInitialState(dataSource, fixture) },
+                        holderAction = {
+                            runBlocking {
+                                VenueMenuRepository(holderDataSource).setOptionAvailability(
+                                    fixture.venueId,
+                                    fixture.customOptionId,
+                                    true,
+                                    FIRST_ACTOR_ID,
+                                    MenuOptionAvailabilitySource.VENUE_MINI_APP,
+                                )
+                            }
+                        },
+                        waiterAction = {
+                            runCatching {
+                                runBlocking {
+                                    VenueMenuRepository(waiterDataSource).completeShiftCheck(
+                                        venueId = fixture.venueId,
+                                        actorUserId = SECOND_ACTOR_ID,
+                                        itemChanges = emptyList(),
+                                        optionChanges =
+                                            listOf(
+                                                MenuShiftCheckOptionChange(
+                                                    optionId = fixture.customOptionId,
+                                                    itemId = fixture.itemId,
+                                                    expectedIsAvailable = false,
+                                                    desiredIsAvailable = true,
+                                                ),
+                                            ),
+                                        auditLogRepository = AuditLogRepository(waiterDataSource, Json),
+                                    )
+                                }
+                            }
+                        },
+                    )
+
+                assertTrue(assertNotNull(direct).isAvailable)
+                assertTrue(shiftAttempt.exceptionOrNull() is MenuShiftCheckStaleException)
+                assertAvailabilityAudit(
+                    readAvailabilityAudits(dataSource).single(),
+                    fixture,
+                    false,
+                    true,
+                    FIRST_ACTOR_ID,
+                    MenuOptionAvailabilitySource.VENUE_MINI_APP,
+                )
+                assertTrue(readShiftCheckAudits(dataSource).isEmpty())
+            }
+        }
+
+    @Test
+    fun `shift check commits before direct availability truthful reread without per option batch audit`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource)
+                val holderDataSource = HeldItemLockDataSource(dataSource)
+                val waiterDataSource = TrackedItemLockDataSource(dataSource)
+
+                val (shift, direct) =
+                    runWithHeldItemLock(
+                        observerDataSource = dataSource,
+                        holderDataSource = holderDataSource,
+                        waiterDataSource = waiterDataSource,
+                        beforeRelease = { assertInitialState(dataSource, fixture) },
+                        holderAction = {
+                            runBlocking {
+                                VenueMenuRepository(holderDataSource).completeShiftCheck(
+                                    venueId = fixture.venueId,
+                                    actorUserId = FIRST_ACTOR_ID,
+                                    itemChanges = emptyList(),
+                                    optionChanges =
+                                        listOf(
+                                            MenuShiftCheckOptionChange(
+                                                optionId = fixture.customOptionId,
+                                                itemId = fixture.itemId,
+                                                expectedIsAvailable = false,
+                                                desiredIsAvailable = true,
+                                            ),
+                                        ),
+                                    auditLogRepository = AuditLogRepository(holderDataSource, Json),
+                                )
+                            }
+                        },
+                        waiterAction = {
+                            runBlocking {
+                                VenueMenuRepository(waiterDataSource).setOptionAvailability(
+                                    fixture.venueId,
+                                    fixture.customOptionId,
+                                    false,
+                                    SECOND_ACTOR_ID,
+                                    MenuOptionAvailabilitySource.TELEGRAM_BOT,
+                                )
+                            }
+                        },
+                    )
+
+                assertEquals(1, shift.changedOptionCount)
+                assertFalse(assertNotNull(direct).isAvailable)
+                assertFalse(
+                    readOptions(dataSource, fixture.itemId)
+                        .single { it.id == fixture.customOptionId }
+                        .isAvailable,
+                )
+                assertAvailabilityAudit(
+                    readAvailabilityAudits(dataSource).single(),
+                    fixture,
+                    true,
+                    false,
+                    SECOND_ACTOR_ID,
+                    MenuOptionAvailabilitySource.TELEGRAM_BOT,
+                )
+                assertEquals(1, readShiftCheckAudits(dataSource).size)
+            }
+        }
+
+    @Test
+    fun `direct availability and direct delete share item lock without partial state`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource)
+                val holderDataSource = HeldItemLockDataSource(dataSource)
+                val waiterDataSource = TrackedItemLockDataSource(dataSource)
+
+                val (direct, deleted) =
+                    runWithHeldItemLock(
+                        observerDataSource = dataSource,
+                        holderDataSource = holderDataSource,
+                        waiterDataSource = waiterDataSource,
+                        beforeRelease = { assertInitialState(dataSource, fixture) },
+                        holderAction = {
+                            runBlocking {
+                                VenueMenuRepository(holderDataSource).setOptionAvailability(
+                                    fixture.venueId,
+                                    fixture.customOptionId,
+                                    true,
+                                    FIRST_ACTOR_ID,
+                                    MenuOptionAvailabilitySource.VENUE_MINI_APP,
+                                )
+                            }
+                        },
+                        waiterAction = {
+                            runBlocking {
+                                VenueMenuRepository(waiterDataSource).deleteOption(
+                                    fixture.venueId,
+                                    fixture.customOptionId,
+                                    SECOND_ACTOR_ID,
+                                    MenuOptionDeleteSource.TELEGRAM_BOT,
+                                )
+                            }
+                        },
+                    )
+
+                assertTrue(assertNotNull(direct).isAvailable)
+                assertTrue(deleted)
+                assertTrue(readOptions(dataSource, fixture.itemId).none { it.id == fixture.customOptionId })
+                assertAvailabilityAudit(
+                    readAvailabilityAudits(dataSource).single(),
+                    fixture,
+                    false,
+                    true,
+                    FIRST_ACTOR_ID,
+                    MenuOptionAvailabilitySource.VENUE_MINI_APP,
+                )
+                assertDeleteAudits(dataSource, fixture, setOf(fixture.customOptionId), SECOND_ACTOR_ID)
+            }
+        }
+
+    @Test
+    fun `direct availability and normalization share item lock and preserve current option state`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource)
+                val holderDataSource = HeldItemLockDataSource(dataSource)
+                val waiterDataSource = TrackedItemLockDataSource(dataSource)
+
+                val (direct, normalization) =
+                    runWithHeldItemLock(
+                        observerDataSource = dataSource,
+                        holderDataSource = holderDataSource,
+                        waiterDataSource = waiterDataSource,
+                        beforeRelease = { assertInitialState(dataSource, fixture) },
+                        holderAction = {
+                            runBlocking {
+                                VenueMenuRepository(holderDataSource).setOptionAvailability(
+                                    fixture.venueId,
+                                    fixture.customOptionId,
+                                    true,
+                                    FIRST_ACTOR_ID,
+                                    MenuOptionAvailabilitySource.TELEGRAM_BOT,
+                                )
+                            }
+                        },
+                        waiterAction = {
+                            runBlocking {
+                                VenueMenuRepository(waiterDataSource).normalizeHookahFlavorProfiles(
+                                    fixture.venueId,
+                                    fixture.itemId,
+                                    SECOND_ACTOR_ID,
+                                    MenuOptionDeleteSource.TELEGRAM_BOT,
+                                )
+                            }
+                        },
+                    )
+
+                assertTrue(assertNotNull(direct).isAvailable)
+                assertNotNull(normalization)
+                assertTrue(
+                    readOptions(dataSource, fixture.itemId)
+                        .single { it.id == fixture.customOptionId }
+                        .isAvailable,
+                )
+                assertAvailabilityAudit(
+                    readAvailabilityAudits(dataSource).single(),
+                    fixture,
+                    false,
+                    true,
+                    FIRST_ACTOR_ID,
+                    MenuOptionAvailabilitySource.TELEGRAM_BOT,
+                )
+                assertDeleteAudits(dataSource, fixture, fixture.obsoleteOptionIds, SECOND_ACTOR_ID)
+            }
+        }
+
     private fun <T, U> runWithHeldItemLock(
         observerDataSource: DataSource,
         holderDataSource: HeldItemLockDataSource,
@@ -917,6 +1291,8 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
         assertTrue(readDeleteAudits(dataSource).isEmpty())
         assertTrue(readRenameAudits(dataSource).isEmpty())
         assertTrue(readPriceAudits(dataSource).isEmpty())
+        assertTrue(readAvailabilityAudits(dataSource).isEmpty())
+        assertTrue(readShiftCheckAudits(dataSource).isEmpty())
     }
 
     private fun assertNormalizedState(
@@ -1035,6 +1411,26 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
         assertEquals("VENUE_MINI_APP", audit.payload.getValue("source").jsonPrimitive.content)
     }
 
+    private fun assertAvailabilityAudit(
+        audit: AuditRow,
+        fixture: Fixture,
+        oldIsAvailable: Boolean,
+        newIsAvailable: Boolean,
+        actorUserId: Long,
+        source: MenuOptionAvailabilitySource,
+    ) {
+        assertEquals(actorUserId, audit.actorUserId)
+        assertEquals("menu_item_option", audit.entityType)
+        assertEquals(fixture.customOptionId, audit.entityId)
+        assertEquals(AVAILABILITY_AUDIT_PAYLOAD_KEYS, audit.payload.keys)
+        assertEquals(fixture.venueId, audit.payload.longValue("venueId"))
+        assertEquals(fixture.itemId, audit.payload.longValue("itemId"))
+        assertEquals(fixture.customOptionId, audit.payload.longValue("optionId"))
+        assertEquals(oldIsAvailable.toString(), audit.payload.getValue("oldIsAvailable").jsonPrimitive.content)
+        assertEquals(newIsAvailable.toString(), audit.payload.getValue("newIsAvailable").jsonPrimitive.content)
+        assertEquals(source.name, audit.payload.getValue("source").jsonPrimitive.content)
+    }
+
     private fun readOptions(
         dataSource: DataSource,
         itemId: Long,
@@ -1042,7 +1438,7 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
         dataSource.connection.use { connection ->
             connection.prepareStatement(
                 """
-                SELECT id, name, price_delta_minor
+                SELECT id, name, price_delta_minor, is_available
                 FROM menu_item_options
                 WHERE item_id = ?
                 ORDER BY id
@@ -1057,6 +1453,7 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
                                     id = resultSet.getLong("id"),
                                     name = resultSet.getString("name"),
                                     priceDeltaMinor = resultSet.getLong("price_delta_minor"),
+                                    isAvailable = resultSet.getBoolean("is_available"),
                                 ),
                             )
                         }
@@ -1073,6 +1470,12 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
 
     private fun readPriceAudits(dataSource: DataSource): List<AuditRow> =
         readAudits(dataSource, MENU_OPTION_PRICE_CHANGED_AUDIT_ACTION)
+
+    private fun readAvailabilityAudits(dataSource: DataSource): List<AuditRow> =
+        readAudits(dataSource, MENU_OPTION_AVAILABILITY_CHANGED_AUDIT_ACTION)
+
+    private fun readShiftCheckAudits(dataSource: DataSource): List<AuditRow> =
+        readAudits(dataSource, MENU_SHIFT_CHECK_COMPLETED_AUDIT_ACTION)
 
     private fun readAudits(
         dataSource: DataSource,
@@ -1216,6 +1619,7 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
         val id: Long,
         val name: String,
         val priceDeltaMinor: Long,
+        val isAvailable: Boolean,
     )
 
     private data class AuditRow(
@@ -1247,6 +1651,8 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
                 "newPriceDeltaMinor",
                 "source",
             )
+        val AVAILABILITY_AUDIT_PAYLOAD_KEYS =
+            setOf("venueId", "itemId", "optionId", "oldIsAvailable", "newIsAvailable", "source")
         val WHITESPACE = Regex("\\s+")
     }
 }

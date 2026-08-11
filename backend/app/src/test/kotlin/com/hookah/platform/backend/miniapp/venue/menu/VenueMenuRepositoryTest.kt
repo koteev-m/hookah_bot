@@ -73,7 +73,7 @@ class VenueMenuRepositoryTest {
         }
 
     @Test
-    fun `shift check applies item and option changes and audits no-op completion`() =
+    fun `MenuShiftCheck applies item and option changes and audits no-op completion`() =
         runBlocking {
             val jdbcUrl = migratedJdbcUrl("venue-menu-shift-check-success")
             val venueId = seedVenue(jdbcUrl)
@@ -121,7 +121,6 @@ class VenueMenuRepositoryTest {
                     .single { it.id == fixture.secondOption.id }
                     .isAvailable,
             )
-
             val firstAudit = auditPayloads(jdbcUrl).single()
             assertEquals(
                 setOf(
@@ -153,6 +152,7 @@ class VenueMenuRepositoryTest {
             assertFalse(firstAudit.toString().contains(fixture.secondOption.name))
             assertFalse(firstAudit.toString().contains("price", ignoreCase = true))
             assertFalse(firstAudit.toString().contains("telegram", ignoreCase = true))
+            assertTrue(menuOptionAvailabilityChangeAudits(jdbcUrl).isEmpty())
 
             val noOp =
                 repository.completeShiftCheck(
@@ -168,10 +168,11 @@ class VenueMenuRepositoryTest {
             assertEquals(2, auditPayloads(jdbcUrl).size)
             assertEquals(0, noOpAudit.getValue("changedItemCount").jsonPrimitive.int)
             assertEquals(0, noOpAudit.getValue("changedOptionCount").jsonPrimitive.int)
+            assertTrue(menuOptionAvailabilityChangeAudits(jdbcUrl).isEmpty())
         }
 
     @Test
-    fun `shift check rejects duplicate missing foreign mismatched and oversized ids without writes or audit`() =
+    fun `MenuShiftCheck rejects duplicate missing foreign mismatched and oversized ids without writes or audit`() =
         runBlocking {
             val jdbcUrl = migratedJdbcUrl("venue-menu-shift-check-invalid")
             val venueId = seedVenue(jdbcUrl)
@@ -306,7 +307,7 @@ class VenueMenuRepositoryTest {
         }
 
     @Test
-    fun `stale expected availability rejects the whole shift check`() =
+    fun `MenuShiftCheck stale expected availability rejects the whole batch`() =
         runBlocking {
             val jdbcUrl = migratedJdbcUrl("venue-menu-shift-check-stale")
             val venueId = seedVenue(jdbcUrl)
@@ -314,7 +315,14 @@ class VenueMenuRepositoryTest {
             val repository = VenueMenuRepository(dataSource)
             val auditRepository = AuditLogRepository(dataSource, Json)
             val fixture = createMenuFixture(repository, venueId)
-            repository.setOptionAvailability(venueId, fixture.secondOption.id, false)
+            repository.setOptionAvailability(
+                venueId = venueId,
+                optionId = fixture.secondOption.id,
+                isAvailable = false,
+                actorUserId = AUDIT_ACTOR_ID,
+                source = MenuOptionAvailabilitySource.VENUE_MINI_APP,
+            )
+            val individualAuditsBeforeShiftCheck = menuOptionAvailabilityChangeAudits(jdbcUrl)
 
             assertFailsWith<MenuShiftCheckStaleException> {
                 repository.completeShiftCheck(
@@ -344,10 +352,11 @@ class VenueMenuRepositoryTest {
                     .isAvailable,
             )
             assertEquals(0, auditPayloads(jdbcUrl).size)
+            assertEquals(individualAuditsBeforeShiftCheck, menuOptionAvailabilityChangeAudits(jdbcUrl))
         }
 
     @Test
-    fun `audit failure rolls back shift check availability writes`() =
+    fun `MenuShiftCheck audit failure rolls back availability writes`() =
         runBlocking {
             val jdbcUrl = migratedJdbcUrl("venue-menu-shift-check-audit-rollback")
             val venueId = seedVenue(jdbcUrl)
@@ -515,6 +524,198 @@ class VenueMenuRepositoryTest {
         }
 
     @Test
+    fun `direct option availability writes exact audits and no-op missing foreign write none`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("venue-menu-option-availability-audit-success")
+            val venueId = seedVenue(jdbcUrl)
+            val foreignVenueId = seedVenue(jdbcUrl)
+            val repository = VenueMenuRepository(dataSource(jdbcUrl))
+            val own = createMenuFixture(repository, venueId)
+            val foreign = createMenuFixture(repository, foreignVenueId)
+            val original = own.firstOption
+
+            val disabled =
+                requireNotNull(
+                    repository.setOptionAvailability(
+                        venueId = venueId,
+                        optionId = original.id,
+                        isAvailable = false,
+                        actorUserId = AUDIT_ACTOR_ID,
+                        source = MenuOptionAvailabilitySource.VENUE_MINI_APP,
+                    ),
+                )
+            assertFalse(disabled.isAvailable)
+            val disabledAudit = menuOptionAvailabilityChangeAudits(jdbcUrl).single()
+            assertMenuOptionAvailabilityChangeAudit(
+                audit = disabledAudit,
+                venueId = venueId,
+                itemId = original.itemId,
+                optionId = original.id,
+                oldIsAvailable = true,
+                newIsAvailable = false,
+                actorUserId = AUDIT_ACTOR_ID,
+                source = MenuOptionAvailabilitySource.VENUE_MINI_APP.name,
+            )
+            val afterDisable = optionRows(jdbcUrl, original.itemId)
+
+            repeat(2) {
+                val noOp =
+                    requireNotNull(
+                        repository.setOptionAvailability(
+                            venueId = venueId,
+                            optionId = original.id,
+                            isAvailable = false,
+                            actorUserId = AUDIT_ACTOR_ID,
+                            source = MenuOptionAvailabilitySource.TELEGRAM_BOT,
+                        ),
+                    )
+                assertFalse(noOp.isAvailable)
+            }
+            assertEquals(afterDisable, optionRows(jdbcUrl, original.itemId))
+            assertEquals(listOf(disabledAudit), menuOptionAvailabilityChangeAudits(jdbcUrl))
+
+            val enabled =
+                requireNotNull(
+                    repository.setOptionAvailability(
+                        venueId = venueId,
+                        optionId = original.id,
+                        isAvailable = true,
+                        actorUserId = AUDIT_ACTOR_ID,
+                        source = MenuOptionAvailabilitySource.TELEGRAM_BOT,
+                    ),
+                )
+            assertTrue(enabled.isAvailable)
+            val audits = menuOptionAvailabilityChangeAudits(jdbcUrl)
+            assertEquals(2, audits.size)
+            assertMenuOptionAvailabilityChangeAudit(
+                audit = audits[1],
+                venueId = venueId,
+                itemId = original.itemId,
+                optionId = original.id,
+                oldIsAvailable = false,
+                newIsAvailable = true,
+                actorUserId = AUDIT_ACTOR_ID,
+                source = MenuOptionAvailabilitySource.TELEGRAM_BOT.name,
+            )
+
+            assertNull(
+                repository.setOptionAvailability(
+                    venueId = venueId,
+                    optionId = Long.MAX_VALUE,
+                    isAvailable = false,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuOptionAvailabilitySource.VENUE_MINI_APP,
+                ),
+            )
+            assertNull(
+                repository.setOptionAvailability(
+                    venueId = venueId,
+                    optionId = foreign.firstOption.id,
+                    isAvailable = false,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuOptionAvailabilitySource.VENUE_MINI_APP,
+                ),
+            )
+            assertEquals(
+                foreign.firstOption,
+                loadItem(repository, foreignVenueId, foreign.firstItem.id).options.first(),
+            )
+            assertEquals(audits, menuOptionAvailabilityChangeAudits(jdbcUrl))
+            audits.forEach { audit ->
+                val serialized = audit.payload.toString()
+                listOf(
+                    "name",
+                    "price",
+                    "canonical",
+                    "promotion",
+                    "cart",
+                    "order",
+                    "request",
+                    "initData",
+                    "media",
+                    "secret",
+                    "username",
+                    "phone",
+                ).forEach { forbidden ->
+                    assertFalse(serialized.contains(forbidden, ignoreCase = true), forbidden)
+                }
+            }
+        }
+
+    @Test
+    fun `compound option updates audit every changed family exactly once`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("venue-menu-option-availability-compound-families")
+            val venueId = seedVenue(jdbcUrl)
+            val repository = VenueMenuRepository(dataSource(jdbcUrl))
+            val fixture = createMenuFixture(repository, venueId)
+            val availabilityOnly = fixture.firstOption
+            val nameAndAvailability = fixture.secondOption
+            val priceAndAvailability =
+                requireNotNull(repository.createOption(venueId, fixture.firstItem.id, "Price family", 30, true))
+            val allFields =
+                requireNotNull(repository.createOption(venueId, fixture.firstItem.id, "All families", 40, true))
+
+            requireNotNull(
+                repository.updateOption(
+                    venueId,
+                    availabilityOnly.id,
+                    null,
+                    null,
+                    false,
+                    AUDIT_ACTOR_ID,
+                    MenuOptionRenameSource.VENUE_MINI_APP,
+                ),
+            )
+            requireNotNull(
+                repository.updateOption(
+                    venueId,
+                    nameAndAvailability.id,
+                    "Name and availability",
+                    null,
+                    false,
+                    AUDIT_ACTOR_ID,
+                    MenuOptionRenameSource.VENUE_MINI_APP,
+                ),
+            )
+            requireNotNull(
+                repository.updateOption(
+                    venueId,
+                    priceAndAvailability.id,
+                    null,
+                    35,
+                    false,
+                    AUDIT_ACTOR_ID,
+                    MenuOptionRenameSource.VENUE_MINI_APP,
+                ),
+            )
+            requireNotNull(
+                repository.updateOption(
+                    venueId,
+                    allFields.id,
+                    "All families changed",
+                    45,
+                    false,
+                    AUDIT_ACTOR_ID,
+                    MenuOptionRenameSource.VENUE_MINI_APP,
+                ),
+            )
+
+            assertEquals(
+                listOf(availabilityOnly.id, nameAndAvailability.id, priceAndAvailability.id, allFields.id),
+                menuOptionAvailabilityChangeAudits(jdbcUrl).map { it.entityId },
+            )
+            assertEquals(
+                listOf(nameAndAvailability.id, allFields.id),
+                menuOptionRenameAudits(jdbcUrl).map { it.entityId },
+            )
+            assertEquals(
+                listOf(priceAndAvailability.id, allFields.id),
+                menuOptionPriceChangeAudits(jdbcUrl).map { it.entityId },
+            )
+        }
+
+    @Test
     fun `option price update audits once and same price retries or unrelated fields write none`() =
         runBlocking {
             val jdbcUrl = migratedJdbcUrl("venue-menu-option-price-audit-success")
@@ -617,6 +818,17 @@ class VenueMenuRepositoryTest {
 
             assertEquals(listOf(priceAudit), menuOptionPriceChangeAudits(jdbcUrl))
             assertEquals(1, menuOptionRenameAudits(jdbcUrl).size)
+            val availabilityAudit = menuOptionAvailabilityChangeAudits(jdbcUrl).single()
+            assertMenuOptionAvailabilityChangeAudit(
+                audit = availabilityAudit,
+                venueId = venueId,
+                itemId = original.itemId,
+                optionId = original.id,
+                oldIsAvailable = true,
+                newIsAvailable = false,
+                actorUserId = AUDIT_ACTOR_ID,
+                source = MenuOptionAvailabilitySource.VENUE_MINI_APP.name,
+            )
             val saved = loadItem(repository, venueId, original.itemId).options.single { it.id == original.id }
             assertEquals("Name only update", saved.name)
             assertEquals(125L, saved.priceDeltaMinor)
@@ -757,12 +969,22 @@ class VenueMenuRepositoryTest {
             assertEquals(foreign.firstOption, savedForeign)
             val renameAudits = menuOptionRenameAudits(jdbcUrl)
             val priceAudits = menuOptionPriceChangeAudits(jdbcUrl)
+            val availabilityAudits = menuOptionAvailabilityChangeAudits(jdbcUrl)
             assertEquals(2, renameAudits.size)
             assertEquals(2, priceAudits.size)
+            assertEquals(2, availabilityAudits.size)
             assertEquals(renamed.name, renameAudits[1].payload.getValue("oldName").jsonPrimitive.content)
             assertEquals(nameAndPrice.name, renameAudits[1].payload.getValue("newName").jsonPrimitive.content)
             assertEquals(renamed.priceDeltaMinor, priceAudits[1].payload.longValue("oldPriceDeltaMinor"))
             assertEquals(nameAndPrice.priceDeltaMinor, priceAudits[1].payload.longValue("newPriceDeltaMinor"))
+            assertEquals(
+                false,
+                availabilityAudits[1].payload.getValue("oldIsAvailable").jsonPrimitive.content.toBoolean(),
+            )
+            assertEquals(
+                true,
+                availabilityAudits[1].payload.getValue("newIsAvailable").jsonPrimitive.content.toBoolean(),
+            )
         }
 
     @Test
@@ -790,6 +1012,7 @@ class VenueMenuRepositoryTest {
             assertEquals(before, optionRows(jdbcUrl, fixture.item.id))
             assertTrue(menuOptionRenameAudits(jdbcUrl).isEmpty())
             assertTrue(menuOptionPriceChangeAudits(jdbcUrl).isEmpty())
+            assertTrue(menuOptionAvailabilityChangeAudits(jdbcUrl).isEmpty())
         }
 
     @Test
@@ -843,6 +1066,7 @@ class VenueMenuRepositoryTest {
             assertEquals(original, restored)
             assertTrue(menuOptionRenameAudits(jdbcUrl).isEmpty())
             assertTrue(menuOptionPriceChangeAudits(jdbcUrl).isEmpty())
+            assertTrue(menuOptionAvailabilityChangeAudits(jdbcUrl).isEmpty())
         }
 
     @Test
@@ -901,6 +1125,62 @@ class VenueMenuRepositoryTest {
             assertEquals(before, optionRows(jdbcUrl, original.itemId))
             assertTrue(menuOptionRenameAudits(jdbcUrl).isEmpty())
             assertTrue(menuOptionPriceChangeAudits(jdbcUrl).isEmpty())
+            assertTrue(menuOptionAvailabilityChangeAudits(jdbcUrl).isEmpty())
+        }
+
+    @Test
+    fun `availability audit failure after compound update restores row timestamp and all audit families`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("venue-menu-option-availability-audit-rollback")
+            val venueId = seedVenue(jdbcUrl)
+            val dataSource = dataSource(jdbcUrl)
+            val fixtureRepository = VenueMenuRepository(dataSource)
+            val original = createMenuFixture(fixtureRepository, venueId).firstOption
+            val before = optionRows(jdbcUrl, original.itemId)
+            val delegateAuditWriter = AuditLogRepository(dataSource, Json)
+            val observedActions = mutableListOf<String>()
+            var updatedRowObserved = false
+            val failingAuditWriter =
+                TransactionalAuditLogWriter { connection, actorUserId, action, entityType, entityId, payload ->
+                    observedActions += action
+                    delegateAuditWriter.appendJson(connection, actorUserId, action, entityType, entityId, payload)
+                    if (action == MENU_OPTION_AVAILABILITY_CHANGED_AUDIT_ACTION) {
+                        val current = loadOptionSnapshot(connection, venueId, original.id)
+                        updatedRowObserved =
+                            current?.name == "Rollback availability audit name" &&
+                            current.priceDeltaMinor == 999L &&
+                            !current.isAvailable
+                        check(updatedRowObserved) { "Compound option update must happen before availability audit" }
+                        throw SQLException("Synthetic menu option availability audit failure", "XX999")
+                    }
+                }
+            val repository = VenueMenuRepository(dataSource, failingAuditWriter)
+
+            assertFailsWith<DatabaseUnavailableException> {
+                repository.updateOption(
+                    venueId = venueId,
+                    optionId = original.id,
+                    name = "Rollback availability audit name",
+                    priceDeltaMinor = 999,
+                    isAvailable = false,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuOptionRenameSource.VENUE_MINI_APP,
+                )
+            }
+
+            assertTrue(updatedRowObserved)
+            assertEquals(
+                listOf(
+                    MENU_OPTION_RENAMED_AUDIT_ACTION,
+                    MENU_OPTION_PRICE_CHANGED_AUDIT_ACTION,
+                    MENU_OPTION_AVAILABILITY_CHANGED_AUDIT_ACTION,
+                ),
+                observedActions,
+            )
+            assertEquals(before, optionRows(jdbcUrl, original.itemId))
+            assertTrue(menuOptionRenameAudits(jdbcUrl).isEmpty())
+            assertTrue(menuOptionPriceChangeAudits(jdbcUrl).isEmpty())
+            assertTrue(menuOptionAvailabilityChangeAudits(jdbcUrl).isEmpty())
         }
 
     @Test
@@ -2190,6 +2470,9 @@ class VenueMenuRepositoryTest {
     private fun menuOptionPriceChangeAudits(jdbcUrl: String): List<MenuDeleteAuditRow> =
         menuDeleteAudits(jdbcUrl, MENU_OPTION_PRICE_CHANGED_AUDIT_ACTION)
 
+    private fun menuOptionAvailabilityChangeAudits(jdbcUrl: String): List<MenuDeleteAuditRow> =
+        menuDeleteAudits(jdbcUrl, MENU_OPTION_AVAILABILITY_CHANGED_AUDIT_ACTION)
+
     private fun menuDeleteAudits(
         jdbcUrl: String,
         action: String,
@@ -2296,6 +2579,32 @@ class VenueMenuRepositoryTest {
         assertEquals(oldPriceDeltaMinor, audit.payload.longValue("oldPriceDeltaMinor"))
         assertEquals(newPriceDeltaMinor, audit.payload.longValue("newPriceDeltaMinor"))
         assertEquals("VENUE_MINI_APP", audit.payload.getValue("source").jsonPrimitive.content)
+    }
+
+    private fun assertMenuOptionAvailabilityChangeAudit(
+        audit: MenuDeleteAuditRow,
+        venueId: Long,
+        itemId: Long,
+        optionId: Long,
+        oldIsAvailable: Boolean,
+        newIsAvailable: Boolean,
+        actorUserId: Long,
+        source: String,
+    ) {
+        assertEquals(actorUserId, audit.actorUserId)
+        assertEquals(MENU_OPTION_AVAILABILITY_CHANGED_AUDIT_ACTION, audit.action)
+        assertEquals("menu_item_option", audit.entityType)
+        assertEquals(optionId, audit.entityId)
+        assertEquals(
+            setOf("venueId", "itemId", "optionId", "oldIsAvailable", "newIsAvailable", "source"),
+            audit.payload.keys,
+        )
+        assertEquals(venueId, audit.payload.longValue("venueId"))
+        assertEquals(itemId, audit.payload.longValue("itemId"))
+        assertEquals(optionId, audit.payload.longValue("optionId"))
+        assertEquals(oldIsAvailable, audit.payload.getValue("oldIsAvailable").jsonPrimitive.content.toBoolean())
+        assertEquals(newIsAvailable, audit.payload.getValue("newIsAvailable").jsonPrimitive.content.toBoolean())
+        assertEquals(source, audit.payload.getValue("source").jsonPrimitive.content)
     }
 
     private fun loadOptionSnapshot(

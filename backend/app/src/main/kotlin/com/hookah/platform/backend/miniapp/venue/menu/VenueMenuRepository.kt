@@ -28,6 +28,7 @@ const val MENU_CATEGORY_DELETED_AUDIT_ACTION = "MENU_CATEGORY_DELETED"
 const val MENU_OPTION_DELETED_AUDIT_ACTION = "MENU_OPTION_DELETED"
 const val MENU_OPTION_RENAMED_AUDIT_ACTION = "MENU_OPTION_RENAMED"
 const val MENU_OPTION_PRICE_CHANGED_AUDIT_ACTION = "MENU_OPTION_PRICE_CHANGED"
+const val MENU_OPTION_AVAILABILITY_CHANGED_AUDIT_ACTION = "MENU_OPTION_AVAILABILITY_CHANGED"
 internal const val MENU_DELETE_AFFECTED_RULE_SAMPLE_LIMIT = 50
 internal const val MENU_DELETE_AUDIT_PAYLOAD_MAX_BYTES = 4096
 internal const val MENU_ITEM_DELETE_AFFECTED_RULE_SAMPLE_LIMIT = MENU_DELETE_AFFECTED_RULE_SAMPLE_LIMIT
@@ -49,6 +50,11 @@ enum class MenuOptionDeleteSource {
 }
 
 enum class MenuOptionRenameSource {
+    VENUE_MINI_APP,
+    TELEGRAM_BOT,
+}
+
+enum class MenuOptionAvailabilitySource {
     VENUE_MINI_APP,
     TELEGRAM_BOT,
 }
@@ -966,8 +972,10 @@ class VenueMenuRepository(
                         }
                         val updatedName = name ?: existing.name
                         val updatedPriceDeltaMinor = priceDeltaMinor ?: existing.priceDeltaMinor
+                        val updatedIsAvailable = isAvailable ?: existing.isAvailable
                         val isRename = updatedName != existing.name
                         val isPriceChange = updatedPriceDeltaMinor != existing.priceDeltaMinor
+                        val isAvailabilityChange = updatedIsAvailable != existing.isAvailable
                         if (isPriceChange && source != MenuOptionRenameSource.VENUE_MINI_APP) {
                             throw InvalidInputException("Option price changes are available only in Venue Mini App")
                         }
@@ -992,7 +1000,7 @@ class VenueMenuRepository(
                             ).use { statement ->
                                 statement.setString(1, updatedName)
                                 statement.setLong(2, updatedPriceDeltaMinor)
-                                statement.setBoolean(3, isAvailable ?: existing.isAvailable)
+                                statement.setBoolean(3, updatedIsAvailable)
                                 statement.setLong(4, optionId)
                                 statement.setLong(5, venueId)
                                 statement.setLong(6, itemId)
@@ -1024,6 +1032,18 @@ class VenueMenuRepository(
                                 actorUserId = actorUserId,
                             )
                         }
+                        if (isAvailabilityChange) {
+                            auditMenuOptionAvailabilityChange(
+                                connection = connection,
+                                venueId = venueId,
+                                itemId = itemId,
+                                optionId = optionId,
+                                oldIsAvailable = existing.isAvailable,
+                                newIsAvailable = updatedIsAvailable,
+                                actorUserId = actorUserId,
+                                source = source.name,
+                            )
+                        }
                         val result = loadOption(connection, optionId, venueId)
                         connection.commit()
                         result
@@ -1044,28 +1064,70 @@ class VenueMenuRepository(
         venueId: Long,
         optionId: Long,
         isAvailable: Boolean,
+        actorUserId: Long,
+        source: MenuOptionAvailabilitySource,
     ): VenueMenuOption? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    val updated =
-                        connection.prepareStatement(
-                            """
-                            UPDATE menu_item_options
-                            SET is_available = ?, updated_at = now()
-                            WHERE id = ? AND venue_id = ?
-                            """.trimIndent(),
-                        ).use { statement ->
-                            statement.setBoolean(1, isAvailable)
-                            statement.setLong(2, optionId)
-                            statement.setLong(3, venueId)
-                            statement.executeUpdate()
+                    val originalAutoCommit = connection.autoCommit
+                    connection.autoCommit = false
+                    try {
+                        val itemId = loadOptionItemId(connection, venueId, optionId)
+                        val itemScope = itemId?.let { lockItemForOptionMutation(connection, venueId, it) }
+                        if (itemId == null || itemScope == null) {
+                            connection.commit()
+                            return@use null
                         }
-                    if (updated == 0) {
-                        return@use null
+                        val existing =
+                            loadItemOptionsForUpdate(connection, venueId, itemId)
+                                .firstOrNull { it.id == optionId }
+                        if (existing == null) {
+                            connection.commit()
+                            return@use null
+                        }
+                        if (existing.isAvailable == isAvailable) {
+                            connection.commit()
+                            return@use existing
+                        }
+                        val updated =
+                            connection.prepareStatement(
+                                """
+                                UPDATE menu_item_options
+                                SET is_available = ?, updated_at = now()
+                                WHERE id = ? AND venue_id = ? AND item_id = ? AND is_available = ?
+                                """.trimIndent(),
+                            ).use { statement ->
+                                statement.setBoolean(1, isAvailable)
+                                statement.setLong(2, optionId)
+                                statement.setLong(3, venueId)
+                                statement.setLong(4, itemId)
+                                statement.setBoolean(5, existing.isAvailable)
+                                statement.executeUpdate()
+                            }
+                        if (updated != 1) {
+                            throw SQLException("Locked menu option changed during availability update", "40001")
+                        }
+                        auditMenuOptionAvailabilityChange(
+                            connection = connection,
+                            venueId = venueId,
+                            itemId = itemId,
+                            optionId = optionId,
+                            oldIsAvailable = existing.isAvailable,
+                            newIsAvailable = isAvailable,
+                            actorUserId = actorUserId,
+                            source = source.name,
+                        )
+                        val result = loadOption(connection, optionId, venueId)
+                        connection.commit()
+                        result
+                    } catch (e: Exception) {
+                        connection.rollback()
+                        throw e
+                    } finally {
+                        connection.autoCommit = originalAutoCommit
                     }
-                    loadOption(connection, optionId, venueId)
                 }
             } catch (e: SQLException) {
                 throw DatabaseUnavailableException()
@@ -1450,6 +1512,34 @@ class VenueMenuRepository(
                     optionId = optionId,
                     oldPriceDeltaMinor = oldPriceDeltaMinor,
                     newPriceDeltaMinor = newPriceDeltaMinor,
+                ),
+        )
+    }
+
+    private fun auditMenuOptionAvailabilityChange(
+        connection: Connection,
+        venueId: Long,
+        itemId: Long,
+        optionId: Long,
+        oldIsAvailable: Boolean,
+        newIsAvailable: Boolean,
+        actorUserId: Long,
+        source: String,
+    ) {
+        auditLogWriter.appendJson(
+            connection = connection,
+            actorUserId = actorUserId,
+            action = MENU_OPTION_AVAILABILITY_CHANGED_AUDIT_ACTION,
+            entityType = "menu_item_option",
+            entityId = optionId,
+            payload =
+                buildMenuOptionAvailabilityChangeAuditPayload(
+                    venueId = venueId,
+                    itemId = itemId,
+                    optionId = optionId,
+                    oldIsAvailable = oldIsAvailable,
+                    newIsAvailable = newIsAvailable,
+                    source = source,
                 ),
         )
     }
@@ -2366,6 +2456,22 @@ internal fun buildMenuOptionPriceChangeAuditPayload(
     put("oldPriceDeltaMinor", oldPriceDeltaMinor)
     put("newPriceDeltaMinor", newPriceDeltaMinor)
     put("source", MenuOptionRenameSource.VENUE_MINI_APP.name)
+}
+
+internal fun buildMenuOptionAvailabilityChangeAuditPayload(
+    venueId: Long,
+    itemId: Long,
+    optionId: Long,
+    oldIsAvailable: Boolean,
+    newIsAvailable: Boolean,
+    source: String,
+) = buildJsonObject {
+    put("venueId", venueId)
+    put("itemId", itemId)
+    put("optionId", optionId)
+    put("oldIsAvailable", oldIsAvailable)
+    put("newIsAvailable", newIsAvailable)
+    put("source", source)
 }
 
 private fun buildAffectedPromotionRuleSummary(affectedRuleIds: Iterable<Long>) =

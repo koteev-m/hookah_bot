@@ -1175,6 +1175,29 @@ class GuestOrderRoutesTest {
             assertEquals(HttpStatusCode.BadRequest, tooLongNoteResponse.status)
             assertApiErrorEnvelope(tooLongNoteResponse, ApiErrorCodes.INVALID_INPUT)
             assertEquals(0, countRows(jdbcUrl, "order_batch_item_options"))
+
+            setMenuOptionAvailability(jdbcUrl, unavailableOptionId, isAvailable = true)
+            val reEnabledResponse =
+                postAddBatchRequest(
+                    request =
+                        AddBatchRequest(
+                            tableToken = "option-reject-token",
+                            tableSessionId = tableSessionId,
+                            tabId = personalTabId,
+                            idempotencyKey = "option-re-enabled-success",
+                            items =
+                                listOf(
+                                    AddBatchItemDto(
+                                        itemId = itemId,
+                                        qty = 1,
+                                        selectedOptionId = unavailableOptionId,
+                                    ),
+                                ),
+                            comment = null,
+                        ),
+                )
+            assertEquals(HttpStatusCode.OK, reEnabledResponse.status)
+            assertEquals(1, countRows(jdbcUrl, "order_batch_item_options"))
         }
 
     @Test

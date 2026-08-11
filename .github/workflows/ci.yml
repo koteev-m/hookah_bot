@@ -202,12 +202,12 @@ jobs:
                   2,
               ),
               (
-                  "menu option normalization concurrency",
+                  "menu option mutation concurrency",
                   report_dir / (
                       "TEST-com.hookah.platform.backend.miniapp.venue.menu."
                       "VenueMenuOptionNormalizationConcurrencyPostgresTest.xml"
                   ),
-                  9,
+                  15,
               ),
           ]
           problems = []

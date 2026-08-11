@@ -7,6 +7,7 @@ import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.miniapp.venue.menu.MENU_CATEGORY_DELETED_AUDIT_ACTION
 import com.hookah.platform.backend.miniapp.venue.menu.MENU_ITEM_DELETED_AUDIT_ACTION
+import com.hookah.platform.backend.miniapp.venue.menu.MENU_OPTION_AVAILABILITY_CHANGED_AUDIT_ACTION
 import com.hookah.platform.backend.miniapp.venue.menu.MENU_OPTION_DELETED_AUDIT_ACTION
 import com.hookah.platform.backend.miniapp.venue.menu.MENU_OPTION_PRICE_CHANGED_AUDIT_ACTION
 import com.hookah.platform.backend.miniapp.venue.menu.MENU_OPTION_RENAMED_AUDIT_ACTION
@@ -611,7 +612,7 @@ class VenueMenuRoutesTest {
         }
 
     @Test
-    fun `owner and manager option rename derive actor source and compound audit is name only`() =
+    fun `owner and manager compound option patch derives actor source and audits changed families`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("menu-option-rename-audit-success")
             val config = buildConfig(jdbcUrl)
@@ -738,6 +739,170 @@ class VenueMenuRoutesTest {
                 assertFalse(audit.payload.toString().contains("availability", ignoreCase = true))
                 assertFalse(audit.payload.toString().contains("private request body"))
             }
+            val availabilityAudit = menuOptionAvailabilityChangeAudits(jdbcUrl).single()
+            assertEquals(ownerId, availabilityAudit.actorUserId)
+            assertEquals("menu_item_option", availabilityAudit.entityType)
+            assertEquals(fixture.firstOption.id, availabilityAudit.entityId)
+            assertEquals(
+                setOf("venueId", "itemId", "optionId", "oldIsAvailable", "newIsAvailable", "source"),
+                availabilityAudit.payload.keys,
+            )
+            assertEquals("true", availabilityAudit.payload.getValue("oldIsAvailable").jsonPrimitive.content)
+            assertEquals("false", availabilityAudit.payload.getValue("newIsAvailable").jsonPrimitive.content)
+            assertEquals("VENUE_MINI_APP", availabilityAudit.payload.getValue("source").jsonPrimitive.content)
+            assertFalse(availabilityAudit.payload.toString().contains("999999"))
+            assertFalse(availabilityAudit.payload.toString().contains("TELEGRAM_BOT"))
+            assertFalse(availabilityAudit.payload.toString().contains("private request body"))
+        }
+
+    @Test
+    fun `owner manager and staff direct availability derive actor source while denied actors write none`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("menu-option-availability-audit-rbac")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val ownerId = 80_101L
+            val managerId = 80_102L
+            val staffId = 80_103L
+            val foreignManagerId = 80_104L
+            val unaffiliatedId = 80_105L
+            val venueId = seedVenueWithRole(jdbcUrl, ownerId, "OWNER")
+            seedVenueWithRole(jdbcUrl, managerId, "MANAGER", venueId)
+            seedVenueWithRole(jdbcUrl, staffId, "STAFF", venueId)
+            val foreignVenueId = seedVenueWithRole(jdbcUrl, foreignManagerId, "MANAGER")
+            seedUser(jdbcUrl, unaffiliatedId)
+            val fixture = createShiftCheckFixture(jdbcUrl, venueId)
+            val thirdOption =
+                requireNotNull(
+                    menuRepository(jdbcUrl).createOption(
+                        venueId = venueId,
+                        itemId = fixture.firstItem.id,
+                        name = "Third private option",
+                        priceDeltaMinor = 30,
+                        isAvailable = true,
+                    ),
+                )
+            val actorOptions =
+                listOf(
+                    ownerId to fixture.firstOption,
+                    managerId to fixture.secondOption,
+                    staffId to thirdOption,
+                )
+
+            actorOptions.forEachIndexed { index, (actorId, option) ->
+                val response =
+                    patchOption(
+                        client,
+                        issueToken(config, actorId),
+                        "/api/venue/menu/options/${option.id}/availability" +
+                            "?venueId=$venueId&actorUserId=999999&source=TELEGRAM_BOT",
+                        """
+                        {
+                          "isAvailable": false,
+                          "actorUserId": 999999,
+                          "source": "TELEGRAM_BOT",
+                          "callbackData": "private callback $index"
+                        }
+                        """.trimIndent(),
+                    )
+                assertEquals(HttpStatusCode.OK, response.status)
+                assertFalse(json.decodeFromString(VenueMenuOptionDto.serializer(), response.bodyAsText()).isAvailable)
+            }
+            val repeatedNoOp =
+                patchOption(
+                    client,
+                    issueToken(config, staffId),
+                    "/api/venue/menu/options/${thirdOption.id}/availability?venueId=$venueId",
+                    """{"isAvailable":false}""",
+                )
+            assertEquals(HttpStatusCode.OK, repeatedNoOp.status)
+
+            listOf(foreignManagerId, unaffiliatedId).forEach { deniedId ->
+                val denied =
+                    patchOption(
+                        client,
+                        issueToken(config, deniedId),
+                        "/api/venue/menu/options/${fixture.firstOption.id}/availability?venueId=$venueId",
+                        """{"isAvailable":true}""",
+                    )
+                assertEquals(HttpStatusCode.Forbidden, denied.status)
+                assertApiErrorEnvelope(denied, ApiErrorCodes.FORBIDDEN)
+            }
+            val foreignScope =
+                patchOption(
+                    client,
+                    issueToken(config, foreignManagerId),
+                    "/api/venue/menu/options/${fixture.firstOption.id}/availability?venueId=$foreignVenueId",
+                    """{"isAvailable":true}""",
+                )
+            assertEquals(HttpStatusCode.NotFound, foreignScope.status)
+            assertApiErrorEnvelope(foreignScope, ApiErrorCodes.NOT_FOUND)
+
+            val audits = menuOptionAvailabilityChangeAudits(jdbcUrl)
+            assertEquals(listOf(ownerId, managerId, staffId), audits.map { it.actorUserId })
+            assertEquals(actorOptions.map { it.second.id }, audits.map { it.entityId })
+            audits.forEach { audit ->
+                assertEquals("menu_item_option", audit.entityType)
+                assertEquals(
+                    setOf("venueId", "itemId", "optionId", "oldIsAvailable", "newIsAvailable", "source"),
+                    audit.payload.keys,
+                )
+                assertEquals("true", audit.payload.getValue("oldIsAvailable").jsonPrimitive.content)
+                assertEquals("false", audit.payload.getValue("newIsAvailable").jsonPrimitive.content)
+                assertEquals("VENUE_MINI_APP", audit.payload.getValue("source").jsonPrimitive.content)
+                assertFalse(audit.payload.toString().contains("999999"))
+                assertFalse(audit.payload.toString().contains("TELEGRAM_BOT"))
+                assertFalse(audit.payload.toString().contains("private callback"))
+                assertFalse(audit.payload.toString().contains("price", ignoreCase = true))
+                assertFalse(audit.payload.toString().contains("name", ignoreCase = true))
+            }
+        }
+
+    @Test
+    fun `direct availability audit failure returns safe error and rolls back row`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("menu-option-availability-audit-rollback")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val ownerId = 80_201L
+            val venueId = seedVenueWithRole(jdbcUrl, ownerId, "OWNER")
+            val fixture = createShiftCheckFixture(jdbcUrl, venueId)
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                connection.createStatement().use { statement ->
+                    statement.execute(
+                        """
+                        ALTER TABLE audit_log
+                        ADD CONSTRAINT reject_menu_option_availability_audit
+                        CHECK (action <> '$MENU_OPTION_AVAILABILITY_CHANGED_AUDIT_ACTION')
+                        """.trimIndent(),
+                    )
+                }
+            }
+
+            val response =
+                patchOption(
+                    client,
+                    issueToken(config, ownerId),
+                    "/api/venue/menu/options/${fixture.firstOption.id}/availability?venueId=$venueId",
+                    """{"isAvailable":false}""",
+                )
+
+            assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
+            assertApiErrorEnvelope(response, ApiErrorCodes.DATABASE_UNAVAILABLE)
+            assertFalse(response.bodyAsText().contains(MENU_OPTION_AVAILABILITY_CHANGED_AUDIT_ACTION))
+            val saved =
+                menuRepository(jdbcUrl).getMenu(venueId)
+                    .flatMap { it.items }
+                    .flatMap { it.options }
+                    .single { it.id == fixture.firstOption.id }
+            assertEquals(fixture.firstOption, saved)
+            assertTrue(menuOptionAvailabilityChangeAudits(jdbcUrl).isEmpty())
         }
 
     @Test
@@ -768,6 +933,13 @@ class VenueMenuRoutesTest {
                     "/api/venue/menu/options/${fixture.firstOption.id}/availability?venueId=$venueId",
                     """{"isAvailable":true}""",
                 )
+            val repeatedDedicatedAvailability =
+                patchOption(
+                    client,
+                    token,
+                    "/api/venue/menu/options/${fixture.firstOption.id}/availability?venueId=$venueId",
+                    """{"isAvailable":true}""",
+                )
 
             listOf(
                 sameName,
@@ -777,6 +949,7 @@ class VenueMenuRoutesTest {
                 secondRepeatedSamePrice,
                 availabilityOnly,
                 dedicatedAvailability,
+                repeatedDedicatedAvailability,
             ).forEach {
                 assertEquals(HttpStatusCode.OK, it.status)
             }
@@ -799,6 +972,12 @@ class VenueMenuRoutesTest {
             assertEquals(
                 321L,
                 priceAudit.payload.getValue("newPriceDeltaMinor").jsonPrimitive.content.toLong(),
+            )
+            val availabilityAudits = menuOptionAvailabilityChangeAudits(jdbcUrl)
+            assertEquals(2, availabilityAudits.size)
+            assertEquals(
+                listOf("false", "true"),
+                availabilityAudits.map { it.payload.getValue("newIsAvailable").jsonPrimitive.content },
             )
         }
 
@@ -827,7 +1006,7 @@ class VenueMenuRoutesTest {
                         client,
                         issueToken(config, actorId),
                         "/api/venue/menu/options/${fixture.firstOption.id}?venueId=$venueId",
-                        """{"name":"Denied private rename","priceDeltaMinor":999}""",
+                        """{"name":"Denied private rename","priceDeltaMinor":999,"isAvailable":false}""",
                     )
                 assertEquals(HttpStatusCode.Forbidden, response.status)
                 assertApiErrorEnvelope(response, ApiErrorCodes.FORBIDDEN)
@@ -850,6 +1029,7 @@ class VenueMenuRoutesTest {
             assertEquals(fixture.firstOption.name, saved.name)
             assertTrue(menuOptionRenameAudits(jdbcUrl).isEmpty())
             assertTrue(menuOptionPriceChangeAudits(jdbcUrl).isEmpty())
+            assertTrue(menuOptionAvailabilityChangeAudits(jdbcUrl).isEmpty())
         }
 
     @Test
@@ -890,6 +1070,7 @@ class VenueMenuRoutesTest {
             assertEquals(custom, saved)
             assertTrue(menuOptionRenameAudits(jdbcUrl).isEmpty())
             assertTrue(menuOptionPriceChangeAudits(jdbcUrl).isEmpty())
+            assertTrue(menuOptionAvailabilityChangeAudits(jdbcUrl).isEmpty())
         }
 
     @Test
@@ -936,6 +1117,7 @@ class VenueMenuRoutesTest {
             assertEquals(fixture.firstOption, saved)
             assertTrue(menuOptionRenameAudits(jdbcUrl).isEmpty())
             assertTrue(menuOptionPriceChangeAudits(jdbcUrl).isEmpty())
+            assertTrue(menuOptionAvailabilityChangeAudits(jdbcUrl).isEmpty())
         }
 
     @Test
@@ -1913,6 +2095,7 @@ class VenueMenuRoutesTest {
             assertEquals(2, audits.size)
             assertTrue(audits.all { it.getValue("changedItemCount").jsonPrimitive.int == 0 })
             assertTrue(audits.all { it.getValue("changedOptionCount").jsonPrimitive.int == 0 })
+            assertTrue(menuOptionAvailabilityChangeAudits(jdbcUrl).isEmpty())
         }
 
     @Test
@@ -2012,6 +2195,7 @@ class VenueMenuRoutesTest {
             assertFalse(audit.toString().contains(fixture.secondOption.name))
             assertFalse(audit.toString().contains("price", ignoreCase = true))
             assertFalse(audit.toString().contains("telegram", ignoreCase = true))
+            assertTrue(menuOptionAvailabilityChangeAudits(jdbcUrl).isEmpty())
         }
 
     @Test
@@ -2241,6 +2425,7 @@ class VenueMenuRoutesTest {
                 status = HttpStatusCode.Conflict,
                 code = ApiErrorCodes.MENU_SHIFT_CHECK_STALE,
             )
+            assertTrue(menuOptionAvailabilityChangeAudits(jdbcUrl).isEmpty())
         }
 
     private fun buildJdbcUrl(prefix: String): String {
@@ -2307,6 +2492,9 @@ class VenueMenuRoutesTest {
 
     private fun menuOptionPriceChangeAudits(jdbcUrl: String): List<MenuDeleteAuditRow> =
         menuDeleteAudits(jdbcUrl, MENU_OPTION_PRICE_CHANGED_AUDIT_ACTION)
+
+    private fun menuOptionAvailabilityChangeAudits(jdbcUrl: String): List<MenuDeleteAuditRow> =
+        menuDeleteAudits(jdbcUrl, MENU_OPTION_AVAILABILITY_CHANGED_AUDIT_ACTION)
 
     private suspend fun patchOption(
         client: HttpClient,

@@ -1127,15 +1127,16 @@ Implementation evidence:
   fields, media, secrets and unrelated PII are excluded.
 - Exact-price no-op/retry, name-only, availability-only, denial/foreign/not-found, collision,
   SQL/audit failure and rollback write zero price audit. Price-only has no rename audit;
-  name+price writes one independent audit of each family; adding availability remains atomic and
-  adds no availability audit. No idempotency token is introduced.
+  name+price writes one independent audit of each family. A real availability delta now adds its
+  independent availability audit through the current bounded block. No idempotency token is introduced.
 - Integer minor units, zero delta, existing validation/request/response/UI parsing, currency and
   rounding are unchanged. Checkout reloads the current available DB option/delta; client/stale-cart
   price is not authority. New orders snapshot the current delta and historical
   `price_delta_minor_snapshot` rows remain immutable.
 - Deterministic Testcontainers PostgreSQL coverage is nine tests, uses independent connections and
   confirmed blocking without arbitrary sleep, and covers price/price, price/rename, direct delete
-  and atomic normalization. Exact XML is `9/0/0/0`; CI minimum is nine. Focused repository, route,
+  and atomic normalization. Its release XML was `9/0/0/0`; the current availability extension raises
+  the class and CI minimum to 15. Focused repository, route,
   Guest order/history and Guest visit selectors, compile, ktlint, Mini App build and Playwright
   `152/152` pass locally. No workflow or migration was added.
 
@@ -1143,23 +1144,43 @@ User-confirmed bounded smoke covers price-only success; one price audit and no r
 audit on same-price save; atomic name+price with one rename and one price audit; authoritative current
 server pricing or safe reconfirmation at order submit; intact working menu/data; and routine cleanup.
 Historical order-snapshot preservation remains confirmed automated coverage only, not a separate
-staging scenario. Option create/availability, item price/update, Telegram price management,
+staging scenario. Option create, item price/update, Telegram price management,
 membership-recheck hardening, promotion work, viewers and media/storage remain outside this slice.
 
-Current bounded block: **IMPLEMENT_MENU_OPTION_AVAILABILITY_AUDIT_NEXT**.
+Implementation contract: **IMPLEMENT_MENU_OPTION_AVAILABILITY_AUDIT_NEXT**, fulfilled locally.
 
-Read-only runtime evidence: direct `setOptionAvailability` is an unaudited individual writer for the
-Mini App availability endpoint and Telegram Owner/Manager/Staff stop-list callbacks; Mini App compound
-`updateOption` can co-submit availability. Individual availability uses current `MENU_AVAILABILITY_MANAGE`
-authority, while compound PATCH remains Owner/Manager `MENU_MANAGE`. Batch Shift Check is separately
-locked/CAS-protected and already writes exactly one `MENU_SHIFT_CHECK_COMPLETED`, so the next slice
-must not append a second per-option audit for that batch.
+Current bounded block: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION AVAILABILITY AUDIT / MVP
+IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
 
-Bounded outcome: one real committed individual option availability change writes exactly one safe
-`MENU_OPTION_AVAILABILITY_CHANGED`, with authenticated actor and server-owned `VENUE_MINI_APP` or
-`TELEGRAM_BOT` source, in the mutation transaction. Same-state, denied, foreign/not-found and failed
-or rolled-back requests write none. Do not change option create, item availability, price, rename,
-Shift Check audit cardinality, permissions, order logic, media or schema. **NO_MIGRATION_EXPECTED**.
+Implementation evidence:
+
+- Production `menu_item_options.is_available` writers were inventoried: direct Mini App, compound
+  Mini App, four Telegram stop-list repository call sites and Shift Check updates; option create and
+  normalization only insert defaults/preserve rows. No internal/legacy/direct SQL production writer
+  exists outside `VenueMenuRepository`.
+- `setOptionAvailability` has no unaudited overload. It accepts authenticated actor/server source and
+  owns item lock → ascending option locks → DB-current reread → real-delta update → same-connection
+  audit → one commit. Compound PATCH appends independent rename, price and availability audits in its
+  existing transaction. Audit failure restores name, price, availability, `updated_at` and all audits.
+- One real committed individual delta writes `MENU_OPTION_AVAILABILITY_CHANGED`, entity
+  `menu_item_option`, option id. Payload keys are exactly `venueId`, `itemId`, `optionId`,
+  `oldIsAvailable`, `newIsAvailable`, `source`. Actor is only session subject/current callback user;
+  source is server-owned `VENUE_MINI_APP` / `TELEGRAM_BOT`. Request/callback/Telegram identity,
+  names, prices, canonical/promotion/order/cart/media/secret/PII data are excluded.
+- Direct Owner/Manager/Staff keep `MENU_AVAILABILITY_MANAGE`; compound Owner/Manager keeps
+  `MENU_MANAGE`; Shift Check permission/lifecycle is unchanged. Same-state/repeat, name-only,
+  price-only, denial, foreign/not-found, collision, SQL/audit failure and rollback write zero
+  availability audit. No idempotency token was added.
+- Shift Check never invokes the individual audit writer and retains only one
+  `MENU_SHIFT_CHECK_COMPLETED` on success, including mixed/no-op behavior. Stale/failure writes no
+  success audit. Existing payload/cardinality is unchanged.
+- Testcontainers PostgreSQL uses production migrations/repositories, independent connections,
+  deterministic latches and an observed blocking edge without arbitrary sleep. It covers
+  direct/direct, direct/compound, both direct/Shift Check orders, direct/delete and
+  direct/normalization; exact XML is `15/0/0/0` and the existing CI minimum is 15.
+- Disabled new-order/stale-cart rejection, re-enable behavior and immutable historical snapshots
+  remain current regression behavior. No option-create/item audit, price/name/canonical/promotion,
+  order-schema, permission, media/R2 or migration change was added. **NO_MIGRATION_EXPECTED**.
 
 ### Recent release-closed audit block
 

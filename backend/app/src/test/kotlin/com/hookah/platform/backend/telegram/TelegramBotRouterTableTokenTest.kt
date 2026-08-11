@@ -76,6 +76,7 @@ import com.hookah.platform.backend.miniapp.venue.menu.BASE_FLAVOR_PROFILE_ALREAD
 import com.hookah.platform.backend.miniapp.venue.menu.HookahFlavorProfileNormalizationResult
 import com.hookah.platform.backend.miniapp.venue.menu.MenuCategoryDeleteSource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuItemDeleteSource
+import com.hookah.platform.backend.miniapp.venue.menu.MenuOptionAvailabilitySource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuOptionDeleteSource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuOptionRenameSource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuSemanticType
@@ -10930,7 +10931,13 @@ class TelegramBotRouterTableTokenTest {
                 venueMenuRepository.setItemAvailability(10L, 7001L, false)
             } returns item.copy(isAvailable = false)
             coEvery {
-                venueMenuRepository.setOptionAvailability(10L, 8001L, false)
+                venueMenuRepository.setOptionAvailability(
+                    10L,
+                    8001L,
+                    false,
+                    200L,
+                    MenuOptionAvailabilitySource.TELEGRAM_BOT,
+                )
             } returns option.copy(isAvailable = false)
 
             router.process(
@@ -10959,7 +10966,15 @@ class TelegramBotRouterTableTokenTest {
             )
 
             coVerify(exactly = 1) { venueMenuRepository.setItemAvailability(10L, 7001L, false) }
-            coVerify(exactly = 1) { venueMenuRepository.setOptionAvailability(10L, 8001L, false) }
+            coVerify(exactly = 1) {
+                venueMenuRepository.setOptionAvailability(
+                    10L,
+                    8001L,
+                    false,
+                    200L,
+                    MenuOptionAvailabilitySource.TELEGRAM_BOT,
+                )
+            }
             coVerify(exactly = 0) {
                 outboxEnqueuer.enqueueSendMessage(100, "Стоп-лист доступен менеджеру или владельцу.", null)
             }
@@ -11005,7 +11020,13 @@ class TelegramBotRouterTableTokenTest {
                 venueMenuRepository.setItemAvailability(10L, 7001L, false)
             } returns item.copy(isAvailable = false)
             coEvery {
-                venueMenuRepository.setOptionAvailability(10L, 8001L, false)
+                venueMenuRepository.setOptionAvailability(
+                    10L,
+                    8001L,
+                    false,
+                    200L,
+                    MenuOptionAvailabilitySource.TELEGRAM_BOT,
+                )
             } returns option.copy(isAvailable = false)
 
             router.process(
@@ -11034,9 +11055,209 @@ class TelegramBotRouterTableTokenTest {
             )
 
             coVerify(exactly = 1) { venueMenuRepository.setItemAvailability(10L, 7001L, false) }
-            coVerify(exactly = 1) { venueMenuRepository.setOptionAvailability(10L, 8001L, false) }
+            coVerify(exactly = 1) {
+                venueMenuRepository.setOptionAvailability(
+                    10L,
+                    8001L,
+                    false,
+                    200L,
+                    MenuOptionAvailabilitySource.TELEGRAM_BOT,
+                )
+            }
             coVerify(exactly = 0) {
                 outboxEnqueuer.enqueueSendMessage(100, "Стоп-лист доступен менеджеру или владельцу.", null)
+            }
+        }
+
+    @Test
+    fun `owner and manager option callbacks pass current actor and telegram source including no-op`() =
+        runBlocking {
+            val option =
+                VenueMenuOption(
+                    id = 8001L,
+                    venueId = 10L,
+                    itemId = 7001L,
+                    name = "Private callback option",
+                    priceDeltaMinor = 0L,
+                    isAvailable = false,
+                    sortOrder = 10,
+                )
+            val item =
+                VenueMenuItem(
+                    id = 7001L,
+                    venueId = 10L,
+                    categoryId = 501L,
+                    name = "Hookah",
+                    priceMinor = 85_000L,
+                    currency = "RUB",
+                    isAvailable = true,
+                    sortOrder = 10,
+                    options = listOf(option),
+                )
+            val category =
+                VenueMenuCategory(
+                    id = 501L,
+                    venueId = 10L,
+                    name = "Кальянное меню",
+                    sortOrder = 10,
+                    items = listOf(item),
+                )
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venueAccessRepository.findVenueMembership(201L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery { venueMenuRepository.getMenu(10L) } returns listOf(category)
+            coEvery {
+                venueMenuRepository.setOptionAvailability(
+                    10L,
+                    8001L,
+                    false,
+                    200L,
+                    MenuOptionAvailabilitySource.TELEGRAM_BOT,
+                )
+            } returns option
+            coEvery {
+                venueMenuRepository.setOptionAvailability(
+                    10L,
+                    8001L,
+                    false,
+                    201L,
+                    MenuOptionAvailabilitySource.TELEGRAM_BOT,
+                )
+            } returns option
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_40,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-owner-option-stop-noop-private-payload",
+                            from = User(id = 200L),
+                            message = Message(messageId = 30_004_40, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_order_menu_item_option_stop:10:501:7001:8001",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_41,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-manager-option-stop-noop-private-payload",
+                            from = User(id = 201L),
+                            message = Message(messageId = 30_004_41, chat = Chat(id = 100, type = "private")),
+                            data = "staff_venue_stoplist_option_stop:10:501:7001:8001",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 1) {
+                venueMenuRepository.setOptionAvailability(
+                    10L,
+                    8001L,
+                    false,
+                    200L,
+                    MenuOptionAvailabilitySource.TELEGRAM_BOT,
+                )
+            }
+            coVerify(exactly = 1) {
+                venueMenuRepository.setOptionAvailability(
+                    10L,
+                    8001L,
+                    false,
+                    201L,
+                    MenuOptionAvailabilitySource.TELEGRAM_BOT,
+                )
+            }
+        }
+
+    @Test
+    fun `denied telegram option callback never reaches availability writer`() =
+        runBlocking {
+            coEvery { venueAccessRepository.findVenueMembership(201L, 10L) } returns null
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(201L, 10L) } returns false
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_42,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-denied-option-private-payload",
+                            from = User(id = 201L),
+                            message = Message(messageId = 30_004_42, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_order_menu_item_option_stop:10:501:7001:8001",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) {
+                venueMenuRepository.setOptionAvailability(any(), any(), any(), any(), any())
+            }
+            coVerify { outboxEnqueuer.enqueueSendMessage(100, "Нет доступа к заведению.", null) }
+        }
+
+    @Test
+    fun `telegram availability audit database failure has no false success`() =
+        runBlocking {
+            val option =
+                VenueMenuOption(
+                    id = 8001L,
+                    venueId = 10L,
+                    itemId = 7001L,
+                    name = "Private callback option",
+                    priceDeltaMinor = 0L,
+                    isAvailable = true,
+                    sortOrder = 10,
+                )
+            val item =
+                VenueMenuItem(
+                    id = 7001L,
+                    venueId = 10L,
+                    categoryId = 501L,
+                    name = "Hookah",
+                    priceMinor = 85_000L,
+                    currency = "RUB",
+                    isAvailable = true,
+                    sortOrder = 10,
+                    options = listOf(option),
+                )
+            val category =
+                VenueMenuCategory(
+                    id = 501L,
+                    venueId = 10L,
+                    name = "Кальянное меню",
+                    sortOrder = 10,
+                    items = listOf(item),
+                )
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { venueMenuRepository.getMenu(10L) } returns listOf(category)
+            coEvery {
+                venueMenuRepository.setOptionAvailability(
+                    10L,
+                    8001L,
+                    false,
+                    200L,
+                    MenuOptionAvailabilitySource.TELEGRAM_BOT,
+                )
+            } throws DatabaseUnavailableException()
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_43,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-audit-failure-private-payload",
+                            from = User(id = 200L),
+                            message = Message(messageId = 30_004_43, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_order_menu_item_option_stop:10:501:7001:8001",
+                        ),
+                ),
+            )
+
+            coVerify { outboxEnqueuer.enqueueSendMessage(100, "База недоступна, попробуйте позже.", null) }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(100, "✅ Вкус добавлен в стоп-лист.", null)
             }
         }
 

@@ -364,7 +364,13 @@ fun Route.venueMenuRoutes(
                     ?: throw InvalidInputException("optionId must be a number")
             val payload = call.receive<AvailabilityRequest>()
             val updated =
-                venueMenuRepository.setOptionAvailability(venueId, optionId, payload.isAvailable)
+                venueMenuRepository.setOptionAvailability(
+                    venueId = venueId,
+                    optionId = optionId,
+                    isAvailable = payload.isAvailable,
+                    actorUserId = userId,
+                    source = MenuOptionAvailabilitySource.VENUE_MINI_APP,
+                )
                     ?: throw NotFoundException()
             call.respond(updated.toDto())
         }

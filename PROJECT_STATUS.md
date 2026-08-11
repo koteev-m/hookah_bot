@@ -1,7 +1,8 @@
 # Project Status
 
-Last verified: 2026-08-11 at `HEAD 0489a2f` (`HEAD == origin/main`). **DANGEROUS ACTION AUDIT SLICE /
-MENU OPTION PRICE AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**.
+Last verified: 2026-08-11 at base `HEAD c39c854` (`HEAD == origin/main`) with an uncommitted bounded
+implementation. **DANGEROUS ACTION AUDIT SLICE / MENU OPTION AVAILABILITY AUDIT / MVP IMPLEMENTED /
+LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
 
 ## 1. Purpose and source-of-truth order
 
@@ -14,6 +15,9 @@ next-block change, P0/P1 blocker change or before a new long task.
 
 - Overall product, permission parity and dangerous-action audit remain `PARTIAL`; no whole product,
   Menu module or UX production-readiness claim is made.
+- **DANGEROUS ACTION AUDIT SLICE / MENU OPTION AVAILABILITY AUDIT / MVP IMPLEMENTED / LOCAL
+  VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. This closes no release gate before independent
+  review, green Actions, staging deploy and bounded smoke.
 - **DANGEROUS ACTION AUDIT SLICE / MENU OPTION PRICE AUDIT / DONE / MVP /
   STAGING-SMOKE-PASSED**. This closes only the authenticated Venue Mini App existing-option price
   mutation and its documented money/order/audit contract.
@@ -26,6 +30,10 @@ next-block change, P0/P1 blocker change or before a new long task.
 
 ## 3. Recently completed blocks
 
+- Menu option availability audit is locally implemented for individual authenticated Mini App,
+  compound Mini App and Telegram stop-list mutations. Every committed real delta writes one
+  transaction-bound safe audit; direct no-op and Shift Check write no per-option availability audit.
+  The mandatory PostgreSQL class is `15/0/0/0`. Independent review and release gates remain open.
 - Menu option price audit: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION PRICE AUDIT / DONE / MVP /
   STAGING-SMOKE-PASSED**. `VenueMenuRepository.updateOption` is the sole existing-option price SQL
   writer. Authenticated Mini App actor and server-owned `VENUE_MINI_APP` source enter one transaction:
@@ -44,23 +52,22 @@ next-block change, P0/P1 blocker change or before a new long task.
 
 ## 4. Current bounded block
 
-Verdict: **IMPLEMENT_MENU_OPTION_AVAILABILITY_AUDIT_NEXT**.
+Verdict: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION AVAILABILITY AUDIT / MVP IMPLEMENTED / LOCAL
+VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
 
-Exact outcome: audit only real individual existing-option availability changes through the present
-Mini App direct availability route, Mini App compound option PATCH and Telegram Owner/Manager/Staff
-stop-list callbacks. Each committed real change writes one safe `MENU_OPTION_AVAILABILITY_CHANGED` in
-the mutation transaction with server-derived actor and `VENUE_MINI_APP` or `TELEGRAM_BOT` source;
-same-state, denial, foreign/not-found, audit/SQL failure and rollback write zero. Existing batch
-Shift Check keeps exactly its one `MENU_SHIFT_CHECK_COMPLETED` and writes no per-option availability
-audit. No item availability audit, option create, pricing, rename, schema or product-permission
-change is included. **NO_MIGRATION_EXPECTED**.
+`VenueMenuRepository.setOptionAvailability` now requires actor/source and owns one transaction:
+non-locking option-to-item hint, authoritative item lock, all item options by ascending id, DB-current
+reread, real-delta update, same-connection audit and one commit. `updateOption` appends independent
+rename, price and availability audits for only the field families that actually changed, and all row
+fields, `updated_at` and audits roll back together on failure.
 
-Read-only evidence: `setOptionAvailability` is the direct unaudited writer used by both clients;
-`updateOption` can co-submit availability from the Mini App. The direct Mini App route and Telegram
-callbacks require `MENU_AVAILABILITY_MANAGE`, which current Owner, Manager and Staff roles have;
-compound PATCH remains `MENU_MANAGE` for Owner/Manager. Shift Check separately locks sorted item and
-option rows, compares expected availability and writes its batch audit. This makes individual
-availability audit useful, bounded and non-financial while preserving the released batch contract.
+Mini App actor is the authenticated session subject and Telegram actor is the current callback user;
+sources are server-fixed `VENUE_MINI_APP` / `TELEGRAM_BOT`. Availability payload keys are exactly
+`venueId`, `itemId`, `optionId`, `oldIsAvailable`, `newIsAvailable`, `source`. Direct availability keeps
+current Owner/Manager/Staff `MENU_AVAILABILITY_MANAGE`; compound PATCH remains Owner/Manager
+`MENU_MANAGE`. Shift Check retains only its single `MENU_SHIFT_CHECK_COMPLETED`, including mixed,
+no-op and stale behavior. No item audit, option-create audit, permission, money/name, order schema,
+media or migration change was added.
 
 ## 5. Open gaps and risks
 
@@ -89,10 +96,10 @@ availability audit useful, bounded and non-financial while preserving the releas
 
 ## 7. Release and validation state
 
-Price-audit release closure is user-confirmed for current HEAD: green Actions, staging deploy and the
-bounded smoke listed above. This docs-only handoff ran no runtime tests and does not make a release
-claim for the selected availability slice. Its future runtime change requires focused backend and
-Telegram/Mini App tests, green Actions, staging deploy and bounded smoke before closure.
+Price-audit release closure remains user-confirmed for its release HEAD. Availability-audit local
+evidence includes focused repository, route, Telegram and Guest order selectors, deterministic
+Testcontainers PostgreSQL `15/0/0/0`, compile/lint, Mini App build and full browser smoke. Green
+Actions, independent review, staging deploy and bounded smoke remain required before release closure.
 
 ## 8. Canonical document map
 
@@ -106,11 +113,11 @@ Telegram/Mini App tests, green Actions, staging deploy and bounded smoke before 
 
 ## 9. Next action
 
-Implement only **IMPLEMENT_MENU_OPTION_AVAILABILITY_AUDIT_NEXT**: one transaction-bound safe audit
-for each real individual option availability mutation, without duplicate Shift Check audit. Do not
-touch price, option create, item availability, migrations, media/R2, stash or `scripts/dev/`.
+Independently review only the bounded option-availability audit diff, then run green Actions and the
+bounded staging smoke before release closure. Do not expand into option create, item availability,
+permissions, migrations, media/R2, stash or `scripts/dev/`.
 
 ## 10. Last verified date
 
-2026-08-11. Menu option price audit is release-closed only for its bounded contract; Menu and
-Dangerous Action Audit programs remain partial. The next bounded block is option availability audit.
+2026-08-11. Menu option availability audit is local-review-ready only for its bounded contract; Menu
+and Dangerous Action Audit programs remain partial.
