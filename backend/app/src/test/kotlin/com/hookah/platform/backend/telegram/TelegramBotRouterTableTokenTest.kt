@@ -33428,7 +33428,9 @@ class TelegramBotRouterTableTokenTest {
             }
             @Suppress("UNCHECKED_CAST")
             val mutation =
-                invocation.args[9] as (Connection, ConfirmedPlatformGuestMutationContext) -> Any?
+                invocation.args
+                    .filterIsInstance<Function2<*, *, *>>()
+                    .single() as (Connection, ConfirmedPlatformGuestMutationContext) -> Any?
             PlatformGuestTableMutationResult.Applied(
                 context = confirmed,
                 value = mutation(connection, confirmed),

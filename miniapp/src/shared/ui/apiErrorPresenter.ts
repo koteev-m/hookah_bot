@@ -103,6 +103,27 @@ export function presentApiError(
       message = error.message?.trim() ? error.message : 'Некорректные данные.'
       severity = 'warn'
       break
+    case ApiErrorCodes.ORDER_IDEMPOTENCY_PAYLOAD_MISMATCH:
+      if (error.status !== 409) {
+        break
+      }
+      title = 'Корзина изменилась'
+      message =
+        'Этот ключ отправки уже использован для другого состава заказа. ' +
+        'Обновите корзину и отправьте заказ ещё раз.'
+      severity = 'warn'
+      actions.push({ label: 'Повторить', kind: 'primary', onClick: noop })
+      break
+    case ApiErrorCodes.ORDER_IDEMPOTENCY_REPLAY_UNVERIFIABLE:
+      if (error.status !== 409) {
+        break
+      }
+      title = 'Проверьте активный заказ'
+      message =
+        'Не удалось безопасно повторить старую отправку. ' +
+        'Проверьте активный заказ и отправьте корзину заново только при необходимости.'
+      severity = 'warn'
+      break
     case ApiErrorCodes.PROMOTION_LIFECYCLE_STALE:
       title = 'Статус акции изменился'
       message = 'Статус акции уже изменился. Обновите список и повторите действие.'

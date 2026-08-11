@@ -149,6 +149,12 @@ Confirmed:
 Remaining:
 
 - repeat this smoke after any additional release batch;
+- Guest cart stale-menu recovery is **GUEST CART STALE MENU SELECTION RECOVERY / REMOVED OR
+  UNAVAILABLE ITEMS AND OPTIONS / PAYLOAD-BOUND IDEMPOTENCY + ATOMIC REJECTION / MVP IMPLEMENTED /
+  LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. The previous option availability audit
+  remains **FUNCTIONALLY PASSED ON STAGING / GENERAL
+  CART RECOVERY FOLLOW-UP REQUIRED** until a focused real item/option removed/unavailable smoke is
+  repeated after review, green Actions and staging deploy;
 - Menu Shift Check Phase 1 is staging-smoke-passed; keep the Owner/Manager/Staff/foreign,
   two-accordion UX, atomicity/stale/audit, Guest availability and Telegram stop-list parity cases
   below in regression;
@@ -1094,44 +1100,75 @@ Use this checklist after menu, option, stop-list, media, featured/top-list, shif
 3. Owner creates an option group and option values.
 4. Owner toggles item unavailable; guest cannot order it.
 5. Owner toggles option value unavailable; guest cannot select/order it.
-6. Guest has item in cart, then item becomes unavailable; submit is rejected with safe stale-availability copy.
-7. Price changes after order do not alter existing order snapshot.
-8. Archived item remains visible in old order history/bill snapshot.
-9. Manager can or cannot edit price according to the current product policy.
-10. Manager can toggle stop-list if policy allows.
-11. Staff cannot edit menu structure or price.
-12. Staff stop-list behavior is identical in Telegram Bot and Venue Mini App according to current policy.
-13. Stop-list actions write audit where implemented.
-14. Mass availability update requires confirmation/audit.
-15. Guest menu hides or greys unavailable items/options based on venue policy.
-16. Staff-chat does not become source of truth for menu edits.
-17. Telegram callback actions verify role and venue scope server-side.
-18. OWNER/MANAGER open the own-venue shift-check block; STAFF has no entry/direct access and a
+6. Guest stale cart recovery is checked before submit:
+   - normal item removal is `ITEM / REMOVED`; item stop-list is `ITEM / UNAVAILABLE`, retry keeps the
+     issue before re-enable, the current mutable item cache names the line when available, and
+     line-scoped removal recalculates;
+   - selected option removal is `OPTION / REMOVED`; option stop-list is `OPTION / UNAVAILABLE`, the
+     current picker excludes it, replacement preserves quantity/note and restores submit;
+   - an unavailable item plus removed option and one valid line show both warnings, delete nothing
+     automatically, and keep submit blocked until both are fixed;
+   - foreign selection, database/network error or malformed response stays generic. Final submit
+     with any unresolved issue leaves the full before/after session/exit/tab/member/context/dialog/
+     order/batch/line/selected-option/idempotency/analytics/outbox snapshot unchanged for ordinary
+     Guest and exact Platform Owner.
+7. Payload-bound idempotency and atomic submit:
+   - exact retry returns the same committed batch and sends no duplicate analytics/outbox/staff
+     notification, including after the selected option is later removed or unavailable;
+   - changed quantity/item/option/note/comment/tab/actor in the same table session returns HTTP `409`
+     `ORDER_IDEMPOTENCY_PAYLOAD_MISMATCH`; same key in another table session is independent;
+   - reconstructable legacy `NULL` fingerprint can be verified/lazily upgraded, while lost option ID
+     or multiple ambiguous physical legacy rows in one logical session/key namespace return
+     `ORDER_IDEMPOTENCY_REPLAY_UNVERIFIABLE` and require an explicit active-order check or explicit
+     new submit;
+   - failures after session touch, personal-tab/member ensure, batch write or idempotency insert roll
+     back the full snapshot; deterministic PostgreSQL races create no duplicate or partial state;
+   - before rollout closure all order-writing backend instances run the new binary. Mixed old/new
+     writers are migration-compatible only, because an old writer may still create a `NULL` row.
+   - an exact in-screen network retry keeps the same key; any business or
+     account/venue/table-session/tab change rotates it, while server price, availability and pricing
+     fingerprint alone do not. Mismatch keeps the cart and creates a new key only on the next
+     explicit submit. Legacy unverifiable recovery offers `Проверить активный заказ` and
+     `Отправить как новый заказ`; neither conflict path resends automatically. If cart B changes
+     while payload A is in flight, A's success never clears or navigates away from B; B remains for a
+     separate explicit submit.
+8. Price changes after order do not alter existing order snapshot.
+9. Archived item remains visible in old order history/bill snapshot.
+10. Manager can or cannot edit price according to the current product policy.
+11. Manager can toggle stop-list if policy allows.
+12. Staff cannot edit menu structure or price.
+13. Staff stop-list behavior is identical in Telegram Bot and Venue Mini App according to current policy.
+14. Stop-list actions write audit where implemented.
+15. Mass availability update requires confirmation/audit.
+16. Guest menu hides or greys unavailable items/options based on venue policy.
+17. Staff-chat does not become source of truth for menu edits.
+18. Telegram callback actions verify role and venue scope server-side.
+19. OWNER/MANAGER open the own-venue shift-check block; STAFF has no entry/direct access and a
     foreign venue user is denied.
-19. Category counts, search, unavailable/dirty filters, selection and category/item/option mass
+20. Category counts, search, unavailable/dirty filters, selection and category/item/option mass
     actions are correct and remain local until confirmation.
-20. Cancel sends no mutation/audit; one confirm sends one bounded batch; no-op confirm writes one
+21. Cancel sends no mutation/audit; one confirm sends one bounded batch; no-op confirm writes one
     audit with zero changed counts.
-21. Duplicate, missing, foreign, ownership-mismatched, oversized or stale input applies no partial
+22. Duplicate, missing, foreign, ownership-mismatched, oversized or stale input applies no partial
     writes and creates no completion audit.
-22. Mixed success writes item/option changes and exactly one safe
+23. Mixed success writes item/option changes and exactly one safe
     `MENU_SHIFT_CHECK_COMPLETED` audit in the same transaction.
-23. Venue switching clears draft/selection and old requests; Guest menu plus stale cart
+24. Venue switching clears draft/selection and old requests; Guest menu plus stale cart
     preview/add-batch use confirmed server availability.
-24. At 320x700, 360x800, 390x844 and 430x932, open collapsed and expanded menu categories with long
+25. At 320x700, 360x800, 390x844 and 430x932, open collapsed and expanded menu categories with long
     Russian item and option names. Confirm the document and Menu editor have no horizontal scroll,
     no right-edge clipping, and item/option availability, `Править позицию`, base-flavor, add,
     submit/cancel and destructive actions remain fully visible and tappable in read-only plus active
     add/edit item and option forms.
-25. Confirm a narrow item card reads in order as name/price, availability and primary action,
+26. Confirm a narrow item card reads in order as name/price, availability and primary action,
     options/flavors and their add action, existing options, then secondary/destructive actions.
     Verify the empty item/options, loading and error states; desktop/tablet layout remains usable.
-26. New item and option price fields begin empty and have example placeholders. Use the on-screen
+27. New item and option price fields begin empty and have example placeholders. Use the on-screen
     keyboard to enter `150` and confirm the visible value and request minor units are correct. For
     existing zero item and option prices, focus/blur without input, type `150`, blur/refocus and
     continue typing, then paste another value; confirm zero is preserved only without an edit,
     never becomes `0150`, and a later non-zero value is not reselected on repeated focus.
-27. Scroll to an item, edit its name/price, save and wait for the authoritative refresh. Confirm the
+28. Scroll to an item, edit its name/price, save and wait for the authoritative refresh. Confirm the
     same category remains expanded, the changed item stays visible with logical focus, the page does
     not jump to top and screen-local success feedback is observable. With a controlled delayed GET,
     manually scroll, open another item/option form and type a draft after save; the authoritative
@@ -1139,7 +1176,7 @@ Use this checklist after menu, option, stop-list, media, featured/top-list, shif
     caret/focus and visible context remain. A separate no-interaction case must still restore
     normally. Repeat for add/rename/edit/delete option and base flavor profiles; item deletion falls
     back to its category or nearest safe element.
-28. Force a menu mutation failure. Confirm the user remains at the relevant card, inline values and
+29. Force a menu mutation failure. Confirm the user remains at the relevant card, inline values and
     source entity remain present, an actionable nearby error is announced and no automatic retry
     occurs. Switch venue/account while a menu read or mutation is late; confirm the old context,
     form, card and screen-owned `role=status` success copy never appear in the new active screen,

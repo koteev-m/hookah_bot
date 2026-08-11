@@ -94,6 +94,7 @@ data class AddBatchRequest(
 
 @Serializable
 data class AddBatchItemDto(
+    val cartLineRef: String? = null,
     val itemId: Long,
     val qty: Int,
     val selectedOptionId: Long? = null,

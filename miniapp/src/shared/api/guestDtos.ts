@@ -346,10 +346,23 @@ export type JoinTabRequest = {
 }
 
 export type AddBatchItemDto = {
+  cartLineRef?: string | null
   itemId: number
   qty: number
   selectedOptionId?: number | null
   preferenceNote?: string | null
+}
+
+export type CartMenuSelectionKind = 'ITEM' | 'OPTION'
+
+export type CartMenuSelectionReason = 'REMOVED' | 'UNAVAILABLE'
+
+export type CartMenuSelectionIssue = {
+  cartLineRef: string
+  itemId: number
+  optionId: number | null
+  selectionKind: CartMenuSelectionKind
+  reason: CartMenuSelectionReason
 }
 
 export type AddBatchResponse = {

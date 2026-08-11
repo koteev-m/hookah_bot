@@ -3,6 +3,7 @@ import { normalizeErrorCode } from '../shared/api/errorMapping'
 import { guestAddBatch, guestCreateSharedTab, guestCreateTabInvite, guestGetTabs, guestJoinTab, guestPreviewCart } from '../shared/api/guestApi'
 import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
 import type {
+  CartMenuSelectionIssue,
   CartPreviewDto,
   CreateTabInviteResponse,
   GiftDecisionAction,
@@ -13,12 +14,14 @@ import type {
 } from '../shared/api/guestDtos'
 import {
   addToCart,
+  clearCartMenuSelectionIssues,
   clearMismatchedCartGiftDecisionOwner,
   clearExpiredCartGiftDecision,
   clearCart,
   getCartSnapshot,
   reconcileCartGiftDecisionScope,
   removeCartLine,
+  setCartMenuSelectionIssues,
   setCartCommentDraft,
   setCartGiftDecision,
   setCartLineQty,
@@ -44,15 +47,22 @@ const MAX_ITEM_QTY = 50
 const MAX_COMMENT_LENGTH = 500
 const MAX_TAB_TOKEN_LENGTH = 128
 const GIFT_DECISION_STALE_MESSAGE = 'Корзина изменилась. Проверьте подарок ещё раз.'
+const CART_CHANGED_DURING_SUBMIT_MESSAGE =
+  'Заказ отправлен. Изменения, внесённые во время отправки, сохранены в корзине. ' +
+  'Проверьте их и нажмите «Отправить» для нового заказа.'
 
 type CartScreenOptions = {
   root: HTMLDivElement | null
   backendUrl: string
   isDebug: boolean
   onNavigateOrder: () => void
+  onNavigateMenu: () => void
+  onNavigateOptionReplacement: (cartLineRef: string) => void
+  initialFocusLineRef?: string | null
 }
 
 type CartRefs = {
+  heading: HTMLHeadingElement
   items: HTMLDivElement
   emptyState: HTMLParagraphElement
   previewCard: HTMLDivElement
@@ -128,6 +138,7 @@ function buildCartDom(root: HTMLDivElement): CartRefs {
   const wrapper = el('div', { className: 'cart-screen' })
   const header = el('div', { className: 'card' })
   const title = el('h3', { text: 'Корзина' })
+  title.tabIndex = -1
   const tableHint = el('p', { className: 'cart-hint', text: '' })
   tableHint.hidden = true
   append(header, title, tableHint)
@@ -208,6 +219,7 @@ function buildCartDom(root: HTMLDivElement): CartRefs {
   root.replaceChildren(wrapper)
 
   return {
+    heading: title,
     items,
     emptyState,
     previewCard,
@@ -253,9 +265,93 @@ function renderErrorActions(container: HTMLElement, actions: ApiErrorAction[]) {
 function formatItemTitle(itemId: number): string {
   const meta = getItemMeta(itemId)
   if (!meta) {
-    return String(itemId)
+    return 'Позиция'
   }
   return meta.name
+}
+
+function safeItemName(itemId: number): string | null {
+  return getItemMeta(itemId)?.name?.trim() || null
+}
+
+function parseCartMenuSelectionIssues(
+  error: ApiErrorInfo,
+  snapshot: ReturnType<typeof getCartSnapshot>
+): CartMenuSelectionIssue[] | null {
+  if (error.status !== 409 || error.code !== ApiErrorCodes.CART_MENU_SELECTION_UNAVAILABLE) {
+    return null
+  }
+  const details = error.details
+  if (!details || typeof details !== 'object' || !Array.isArray((details as { issues?: unknown }).issues)) {
+    return null
+  }
+  const rawIssues = (details as { issues: unknown[] }).issues
+  if (!rawIssues.length) {
+    return null
+  }
+  const seenRefs = new Set<string>()
+  const issues: CartMenuSelectionIssue[] = []
+  for (const rawIssue of rawIssues) {
+    if (!rawIssue || typeof rawIssue !== 'object') {
+      return null
+    }
+    const value = rawIssue as Partial<CartMenuSelectionIssue>
+    const cartLineRef = typeof value.cartLineRef === 'string' ? value.cartLineRef : ''
+    const itemId = Number(value.itemId)
+    const optionId = value.optionId == null ? null : Number(value.optionId)
+    if (
+      !cartLineRef ||
+      seenRefs.has(cartLineRef) ||
+      !Number.isSafeInteger(itemId) ||
+      itemId <= 0 ||
+      (optionId != null && (!Number.isSafeInteger(optionId) || optionId <= 0)) ||
+      !['ITEM', 'OPTION'].includes(value.selectionKind ?? '') ||
+      !['REMOVED', 'UNAVAILABLE'].includes(value.reason ?? '')
+    ) {
+      return null
+    }
+    const line = snapshot.items.get(cartLineRef)
+    if (
+      !line ||
+      line.itemId !== itemId ||
+      (value.selectionKind === 'OPTION' && (optionId == null || line.selectedOptionId !== optionId)) ||
+      (value.selectionKind === 'ITEM' && optionId != null && line.selectedOptionId !== optionId)
+    ) {
+      return null
+    }
+    seenRefs.add(cartLineRef)
+    issues.push({
+      cartLineRef,
+      itemId,
+      optionId,
+      selectionKind: value.selectionKind as CartMenuSelectionIssue['selectionKind'],
+      reason: value.reason as CartMenuSelectionIssue['reason']
+    })
+  }
+  return issues
+}
+
+function cartMenuSelectionIssueCopy(issue: CartMenuSelectionIssue, line: CartLine): string {
+  const itemName = safeItemName(line.itemId)
+  const optionName = formatCartLineOptionName(line)?.trim() || null
+  if (issue.selectionKind === 'ITEM') {
+    if (issue.reason === 'REMOVED') {
+      return itemName
+        ? `Позиции «${itemName}» больше нет в меню. Выберите другую позицию или удалите её из корзины.`
+        : 'Одной из позиций больше нет в меню. Выберите другую позицию или удалите её из корзины.'
+    }
+    return itemName
+      ? `Позиция «${itemName}» временно недоступна. Выберите другую позицию или удалите её из корзины.`
+      : 'Одна из позиций временно недоступна. Выберите другую позицию или удалите её из корзины.'
+  }
+  if (issue.reason === 'REMOVED') {
+    return itemName && optionName
+      ? `Выбранного варианта «${optionName}» для позиции «${itemName}» больше нет в меню. Выберите другой вариант или удалите позицию из корзины.`
+      : 'Выбранного варианта больше нет в меню. Выберите другой вариант или удалите позицию из корзины.'
+  }
+  return itemName && optionName
+    ? `Выбранный вариант «${optionName}» для позиции «${itemName}» временно недоступен. Выберите другой вариант или удалите позицию из корзины.`
+    : 'Выбранный вариант временно недоступен. Выберите другой вариант или удалите позицию из корзины.'
 }
 
 function formatItemPrice(itemId: number): string | null {
@@ -373,11 +469,62 @@ function compareCartRequestItems(
   left: { itemId: number; selectedOptionId?: number | null; preferenceNote?: string | null },
   right: { itemId: number; selectedOptionId?: number | null; preferenceNote?: string | null }
 ): number {
+  const leftNote = left.preferenceNote?.trim() ?? ''
+  const rightNote = right.preferenceNote?.trim() ?? ''
   return (
     left.itemId - right.itemId ||
     (left.selectedOptionId ?? 0) - (right.selectedOptionId ?? 0) ||
-    (left.preferenceNote ?? '').localeCompare(right.preferenceNote ?? '')
+    (leftNote < rightNote ? -1 : leftNote > rightNote ? 1 : 0)
   )
+}
+
+type SubmitBusinessLine = {
+  itemId: number
+  qty: number
+  selectedOptionId?: number | null
+  preferenceNote?: string | null
+}
+
+function canonicalSubmitLines(items: Iterable<SubmitBusinessLine>) {
+  return Array.from(items)
+    .map((item) => ({
+      itemId: item.itemId,
+      selectedOptionId: item.selectedOptionId ?? null,
+      preferenceNote: item.preferenceNote?.trim() || null,
+      qty: item.qty
+    }))
+    .sort(compareCartRequestItems)
+    .map((item) => [
+      item.itemId,
+      item.selectedOptionId ?? 'base',
+      item.preferenceNote,
+      item.qty
+    ])
+}
+
+function cartBusinessMutationSignature(snapshot: ReturnType<typeof getCartSnapshot>) {
+  return JSON.stringify({
+    comment: snapshot.commentDraft.trim() || null,
+    items: canonicalSubmitLines(snapshot.items.values())
+  })
+}
+
+function buildCanonicalSubmitFingerprint(
+  accountId: number | null,
+  venueId: number | null,
+  tableSessionId: number,
+  tabId: number,
+  comment: string | null,
+  items: Iterable<SubmitBusinessLine>
+) {
+  return JSON.stringify({
+    accountId,
+    venueId,
+    tableSessionId,
+    tabId,
+    comment: comment?.trim() || null,
+    items: canonicalSubmitLines(items)
+  })
 }
 
 function isLoyaltyDiscount(ruleType: string | null | undefined, label: string) {
@@ -391,7 +538,7 @@ function appendPreviewRow(container: HTMLElement, label: string, value: string, 
 }
 
 export function renderCartScreen(options: CartScreenOptions) {
-  const { root, backendUrl, isDebug, onNavigateOrder } = options
+  const { root, backendUrl, isDebug, onNavigateOrder, onNavigateMenu, onNavigateOptionReplacement } = options
   if (!root) return () => undefined
 
   const refs = buildCartDom(root)
@@ -405,6 +552,7 @@ export function renderCartScreen(options: CartScreenOptions) {
   let lastSubmitFingerprint: string | null = null
   let lastSubmitIdempotencyKey: string | null = null
   let cartSnapshot = getCartSnapshot()
+  let cartMutationSignature = cartBusinessMutationSignature(cartSnapshot)
   let tableSnapshot = getTableContext()
   const currentTelegramUserId = getTelegramContext().telegramUserId
   const tabState: TabSelectionState = {
@@ -431,6 +579,8 @@ export function renderCartScreen(options: CartScreenOptions) {
   let pendingGiftSelectionId: number | null = null
   let itemDisposables: Array<() => void> = []
   let giftDisposables: Array<() => void> = []
+  let pendingFocusLineRef = options.initialFocusLineRef ?? null
+  let focusCartHeading = false
   const disposables: Array<() => void> = []
 
   const parseJoinTokenFromLocation = () => {
@@ -503,18 +653,31 @@ export function renderCartScreen(options: CartScreenOptions) {
     refs.submitErrorDetails.replaceChildren()
   }
 
-  const showSubmitError = (error: ApiErrorInfo) => {
+  const applyMenuSelectionError = (error: ApiErrorInfo): boolean => {
+    const issues = parseCartMenuSelectionIssues(error, cartSnapshot)
+    if (!issues) {
+      return false
+    }
+    previewData = null
+    previewFailed = true
+    previewMessage = 'Некоторые позиции в корзине нужно обновить.'
+    setCartMenuSelectionIssues(issues)
+    hideSubmitError()
+    return true
+  }
+
+  const showSubmitError = (error: ApiErrorInfo, actionOverrides?: ApiErrorAction[]) => {
     const presentation = presentApiError(error, { isDebug, scope: 'table' })
     refs.submitErrorTitle.textContent = presentation.title
     refs.submitErrorMessage.textContent = presentation.message
     refs.submitError.dataset.severity = presentation.severity
-    const actions = presentation.actions.map((action) => {
+    const actions = (actionOverrides ?? presentation.actions).map((action) => {
       if (action.label === 'Повторить') {
         return { ...action, onClick: () => void handleSubmit() }
       }
       return action
     })
-    if (!actions.length) {
+    if (!actions.length && actionOverrides == null) {
       actions.push({ label: 'Повторить', onClick: () => void handleSubmit() })
     }
     renderErrorActions(refs.submitErrorActions, actions)
@@ -534,6 +697,9 @@ export function renderCartScreen(options: CartScreenOptions) {
     const previousTabId = tabState.selectedTabId
     tabState.selectedTabId = tabId
     setSelectedGuestTabId(tableSnapshot.tableSessionId, tabId)
+    if (previousTabId !== tabId) {
+      resetSubmitIdempotency()
+    }
     if (previousTabId != null && previousTabId !== tabId) {
       setCartGiftDecision(null)
       return
@@ -770,6 +936,7 @@ export function renderCartScreen(options: CartScreenOptions) {
   const buildPreviewItems = () =>
     Array.from(cartSnapshot.items.values())
       .map((line) => ({
+        cartLineRef: line.key,
         itemId: line.itemId,
         qty: line.qty,
         ...(line.selectedOptionId != null ? { selectedOptionId: line.selectedOptionId } : {}),
@@ -784,6 +951,7 @@ export function renderCartScreen(options: CartScreenOptions) {
       tabId,
       comment: cartSnapshot.commentDraft.trim() || null,
       items: buildPreviewItems().map((item) => [
+        item.cartLineRef,
         item.itemId,
         item.selectedOptionId ?? null,
         item.preferenceNote ?? null,
@@ -1180,9 +1348,15 @@ export function renderCartScreen(options: CartScreenOptions) {
         renderCartPreview()
         return
       }
+      if (applyMenuSelectionError(result.error)) {
+        updateSubmitState()
+        return
+      }
       previewData = null
       previewFailed = true
-      previewMessage = 'Не удалось рассчитать корзину. Повторите попытку.'
+      previewMessage = cartSnapshot.menuSelectionIssues.size
+        ? 'Не удалось обновить расчёт. Исправьте отмеченные позиции или повторите проверку.'
+        : 'Не удалось рассчитать корзину. Повторите попытку.'
       updateSubmitState()
       return
     }
@@ -1216,6 +1390,7 @@ export function renderCartScreen(options: CartScreenOptions) {
     }
     previewData = preview
     previewMessage = ''
+    clearCartMenuSelectionIssues()
     updateSubmitState()
   }
 
@@ -1261,6 +1436,8 @@ export function renderCartScreen(options: CartScreenOptions) {
 
   const updateSubmitState = () => {
     const hasItems = cartSnapshot.items.size > 0
+    const hasUnresolvedMenuSelections =
+      cartSnapshot.menuSelectionIssues.size > 0 || cartSnapshot.pendingValidationLineRefs.size > 0
     const tableReady = isTableReady()
     const selectedTab = getSelectedTab()
     scheduleCartPreview()
@@ -1272,7 +1449,9 @@ export function renderCartScreen(options: CartScreenOptions) {
       if (previewLoading || previewTimer !== null) {
         previewDisabledReason = 'Дождитесь расчёта корзины.'
       } else if (!previewData) {
-        previewDisabledReason = 'Повторите расчёт корзины перед отправкой.'
+        previewDisabledReason = hasUnresolvedMenuSelections
+          ? 'Исправьте отмеченные позиции и дождитесь успешного расчёта.'
+          : 'Повторите расчёт корзины перед отправкой.'
       } else if (giftDecisionRequired(previewData)) {
         previewDisabledReason = 'Добавьте подарок или выберите «Пропустить подарок».'
       }
@@ -1291,28 +1470,48 @@ export function renderCartScreen(options: CartScreenOptions) {
       previewData == null ||
       previewLoading ||
       previewTimer !== null ||
+      hasUnresolvedMenuSelections ||
       giftDecisionRequired(previewData)
-    refs.chatButton.disabled = isSubmitting || isChatSending || !hasItems || !tableReady
+    refs.chatButton.disabled = isSubmitting || isChatSending || !hasItems || !tableReady || hasUnresolvedMenuSelections
     updateTabsUi()
   }
 
   const renderItems = () => {
+    const previouslyFocusedLineRef =
+      document.activeElement instanceof HTMLElement && document.activeElement.classList.contains('cart-item')
+        ? document.activeElement.dataset.cartLineRef ?? null
+        : null
     itemDisposables.forEach((dispose) => dispose())
     itemDisposables = []
     refs.items.replaceChildren()
     if (cartSnapshot.items.size === 0) {
       refs.items.appendChild(refs.emptyState)
+      if (focusCartHeading) {
+        focusCartHeading = false
+        window.requestAnimationFrame(() => refs.heading.focus())
+      }
       return
     }
-    for (const line of cartSnapshot.items.values()) {
+    if (cartSnapshot.menuSelectionIssues.size > 1) {
+      const summary = el('p', {
+        className: 'cart-menu-issue-summary',
+        text: 'Некоторые позиции в корзине нужно обновить.'
+      })
+      summary.setAttribute('role', 'alert')
+      refs.items.appendChild(summary)
+    }
+    const lines = Array.from(cartSnapshot.items.values())
+    lines.forEach((line, lineIndex) => {
       const row = el('div', { className: 'cart-item' })
+      row.dataset.cartLineRef = line.key
+      row.tabIndex = -1
       const info = el('div', { className: 'cart-item-info' })
       const name = el('strong', { text: formatItemTitle(line.itemId) })
       const optionName = formatCartLineOptionName(line)
       const priceText = formatCartLinePrice(line) ?? formatItemPrice(line.itemId)
       append(info, name)
       if (optionName) {
-        info.appendChild(el('span', { className: 'cart-item-option', text: `Вкус: ${optionName}` }))
+        info.appendChild(el('span', { className: 'cart-item-option', text: `Вариант: ${optionName}` }))
       }
       if (line.preferenceNote) {
         info.appendChild(el('span', { className: 'cart-item-option', text: `Пожелание: ${line.preferenceNote}` }))
@@ -1336,7 +1535,62 @@ export function renderCartScreen(options: CartScreenOptions) {
       append(qtyControls, minusButton, qtyInput, plusButton)
 
       const removeButton = el('button', { className: 'button-small cart-remove', text: 'Удалить' }) as HTMLButtonElement
+      const itemName = safeItemName(line.itemId) ?? 'позиция'
+      removeButton.setAttribute('aria-label', `Удалить из корзины: ${itemName}`)
       append(controls, qtyControls, removeButton)
+      const issue = cartSnapshot.menuSelectionIssues.get(line.key)
+      const isPendingValidation = cartSnapshot.pendingValidationLineRefs.has(line.key)
+      if (issue || isPendingValidation) {
+        row.classList.add('cart-item-menu-issue')
+        const warning = el('div', { className: 'cart-line-warning' })
+        warning.id = `cart-line-warning-${lineIndex + 1}`
+        warning.setAttribute('role', issue ? 'alert' : 'status')
+        warning.appendChild(
+          el('strong', {
+            text: issue ? 'Требуется обновление' : 'Проверяем новый вариант'
+          })
+        )
+        warning.appendChild(
+          el('p', {
+            text: issue
+              ? cartMenuSelectionIssueCopy(issue, line)
+              : 'Новый вариант будет подтверждён после успешного расчёта корзины.'
+          })
+        )
+        const recoveryActions = el('div', { className: 'cart-line-warning-actions' })
+        if (issue?.selectionKind === 'OPTION') {
+          const replaceButton = el('button', {
+            className: 'button-small',
+            text: 'Выбрать другой вариант'
+          }) as HTMLButtonElement
+          replaceButton.setAttribute('aria-label', `Выбрать другой вариант для позиции ${itemName}`)
+          recoveryActions.appendChild(replaceButton)
+          itemDisposables.push(on(replaceButton, 'click', () => onNavigateOptionReplacement(line.key)))
+        } else if (issue?.selectionKind === 'ITEM') {
+          const menuButton = el('button', {
+            className: 'button-small',
+            text: 'Вернуться в меню'
+          }) as HTMLButtonElement
+          recoveryActions.appendChild(menuButton)
+          itemDisposables.push(on(menuButton, 'click', onNavigateMenu))
+        }
+        const recoveryRemoveButton = el('button', {
+          className: 'button-small button-secondary',
+          text: 'Удалить из корзины'
+        }) as HTMLButtonElement
+        recoveryRemoveButton.setAttribute('aria-label', `Удалить из корзины: ${itemName}`)
+        recoveryActions.appendChild(recoveryRemoveButton)
+        itemDisposables.push(
+          on(recoveryRemoveButton, 'click', () => {
+            pendingFocusLineRef = lines[lineIndex + 1]?.key ?? lines[lineIndex - 1]?.key ?? null
+            focusCartHeading = pendingFocusLineRef == null
+            setCartLineQty(line.key, 0)
+          })
+        )
+        warning.appendChild(recoveryActions)
+        info.appendChild(warning)
+        row.setAttribute('aria-describedby', warning.id)
+      }
       append(row, info, controls)
       refs.items.appendChild(row)
 
@@ -1359,6 +1613,8 @@ export function renderCartScreen(options: CartScreenOptions) {
         }),
         on(removeButton, 'click', () => {
           setMessage('')
+          pendingFocusLineRef = lines[lineIndex + 1]?.key ?? lines[lineIndex - 1]?.key ?? null
+          focusCartHeading = pendingFocusLineRef == null
           setCartLineQty(line.key, 0)
         }),
         on(qtyInput, 'change', () => {
@@ -1379,6 +1635,24 @@ export function renderCartScreen(options: CartScreenOptions) {
           }
         })
       )
+    })
+    const focusLineRef = pendingFocusLineRef ?? previouslyFocusedLineRef
+    if (focusLineRef) {
+      const target = refs.items.querySelector<HTMLElement>(
+        `.cart-item[data-cart-line-ref="${CSS.escape(focusLineRef)}"]`
+      )
+      if (target) {
+        window.requestAnimationFrame(() => {
+          if (!target.isConnected) return
+          target.focus()
+          if (pendingFocusLineRef === focusLineRef) {
+            pendingFocusLineRef = null
+          }
+        })
+      }
+    } else if (focusCartHeading) {
+      focusCartHeading = false
+      window.requestAnimationFrame(() => refs.heading.focus())
     }
   }
 
@@ -1429,29 +1703,13 @@ export function renderCartScreen(options: CartScreenOptions) {
   const buildSubmitItems = () =>
     Array.from(cartSnapshot.items.values())
       .map((line) => ({
+        cartLineRef: line.key,
         itemId: line.itemId,
         qty: line.qty,
         ...(line.selectedOptionId != null ? { selectedOptionId: line.selectedOptionId } : {}),
         ...(line.preferenceNote ? { preferenceNote: line.preferenceNote } : {})
       }))
       .sort(compareCartRequestItems)
-
-  const buildSubmitFingerprint = (
-    tableToken: string,
-    tableSessionId: number,
-    tabId: number,
-    comment: string | null,
-    items: Array<{ itemId: number; qty: number; selectedOptionId?: number | null; preferenceNote?: string | null }>,
-    giftDecision: GiftDecisionDto | null
-  ) =>
-    JSON.stringify({
-      tableToken,
-      tableSessionId,
-      tabId,
-      comment,
-      items: items.map((item) => [item.itemId, item.selectedOptionId ?? null, item.preferenceNote ?? null, item.qty]),
-      giftDecision: giftDecisionKey(giftDecision)
-    })
 
   const generateIdempotencyKey = () =>
     globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
@@ -1496,13 +1754,13 @@ export function renderCartScreen(options: CartScreenOptions) {
     const deps = buildApiDeps(isDebug)
     const items = buildSubmitItems()
     const giftDecision = cartSnapshot.giftDecision
-    const fingerprint = buildSubmitFingerprint(
-      tableToken,
+    const fingerprint = buildCanonicalSubmitFingerprint(
+      currentTelegramUserId,
+      tableSnapshot.venueId,
       validation.tableSessionId,
       validation.tabId,
       validation.comment,
-      items,
-      giftDecision
+      items
     )
     const payload = {
       tableToken,
@@ -1537,6 +1795,35 @@ export function renderCartScreen(options: CartScreenOptions) {
         updateSubmitState()
         return
       }
+      if (applyMenuSelectionError(result.error)) {
+        updateSubmitState()
+        return
+      }
+      if (result.error.status === 409 && code === ApiErrorCodes.ORDER_IDEMPOTENCY_PAYLOAD_MISMATCH) {
+        resetSubmitIdempotency()
+        showSubmitError(result.error)
+        updateSubmitState()
+        return
+      }
+      if (result.error.status === 409 && code === ApiErrorCodes.ORDER_IDEMPOTENCY_REPLAY_UNVERIFIABLE) {
+        showSubmitError(result.error, [
+          {
+            label: 'Проверить активный заказ',
+            kind: 'secondary',
+            onClick: onNavigateOrder
+          },
+          {
+            label: 'Отправить как новый заказ',
+            kind: 'primary',
+            onClick: () => {
+              resetSubmitIdempotency()
+              void handleSubmit()
+            }
+          }
+        ])
+        updateSubmitState()
+        return
+      }
       showSubmitError(result.error)
       updateSubmitState()
       return
@@ -1567,6 +1854,24 @@ export function renderCartScreen(options: CartScreenOptions) {
       return
     }
     const wasRecalculated = result.data.recalculated === true
+    const currentTableSessionId = tableSnapshot.tableSessionId
+    const currentTabId = getSelectedTab()?.id ?? null
+    const currentFingerprint =
+      currentTableSessionId != null && currentTabId != null
+        ? buildCanonicalSubmitFingerprint(
+            getTelegramContext().telegramUserId,
+            tableSnapshot.venueId,
+            currentTableSessionId,
+            currentTabId,
+            refs.commentInput.value.trim() || null,
+            cartSnapshot.items.values()
+          )
+        : null
+    if (currentFingerprint !== fingerprint) {
+      setMessage(CART_CHANGED_DURING_SUBMIT_MESSAGE)
+      updateSubmitState()
+      return
+    }
     clearCart()
     refs.commentInput.value = ''
     refs.commentCounter.textContent = `0/${MAX_COMMENT_LENGTH}`
@@ -1835,6 +2140,11 @@ export function renderCartScreen(options: CartScreenOptions) {
   )
 
   const cartSubscription = subscribeCart((snapshot) => {
+    const nextMutationSignature = cartBusinessMutationSignature(snapshot)
+    if (nextMutationSignature !== cartMutationSignature) {
+      cartMutationSignature = nextMutationSignature
+      resetSubmitIdempotency()
+    }
     cartSnapshot = snapshot
     if (refs.commentInput.value !== snapshot.commentDraft) {
       refs.commentInput.value = snapshot.commentDraft
@@ -1853,6 +2163,9 @@ export function renderCartScreen(options: CartScreenOptions) {
       (previousVenueId != null && snapshot.venueId !== previousVenueId)
     ) {
       setCartGiftDecision(null)
+    }
+    if (snapshot.tableSessionId !== previousTableSessionId || snapshot.venueId !== previousVenueId) {
+      resetSubmitIdempotency()
     }
     if (snapshot.tableSessionId !== previousTableSessionId) {
       tabActionAbort?.abort()

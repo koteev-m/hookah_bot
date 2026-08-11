@@ -849,8 +849,8 @@ as a separate staging smoke scenario. The broader Menu/Dangerous Action Audit re
 
 ### Menu Option Availability Audit quality gate
 
-Status: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION AVAILABILITY AUDIT / MVP IMPLEMENTED / LOCAL
-VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+Status: **FUNCTIONALLY PASSED ON STAGING / GENERAL CART RECOVERY FOLLOW-UP REQUIRED** until the
+focused stale-cart recovery smoke is repeated.
 
 Required regression coverage:
 
@@ -884,6 +884,75 @@ Required local commands are the focused `VenueMenuRepositoryTest`, `VenueMenuRou
 `VenueMenuOptionNormalizationConcurrencyPostgresTest`, compile, ktlint, Mini App build and full e2e
 smoke selectors documented in the current implementation handoff. No workflow or migration is added;
 the existing mandatory PostgreSQL CI gate minimum is raised to 15.
+
+### Guest Cart Stale Menu Selection Recovery quality gate
+
+Status: **GUEST CART STALE MENU SELECTION RECOVERY / REMOVED OR UNAVAILABLE ITEMS AND OPTIONS /
+PAYLOAD-BOUND IDEMPOTENCY + ATOMIC REJECTION / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW
+REQUIRED BEFORE COMMIT**. Schema verdict: approved additive PostgreSQL `V123` / H2 `V124` nullable
+`request_fingerprint VARCHAR(80)`; no backfill or global unique constraint.
+
+Required regression coverage:
+
+- preview and final add-batch share the same authoritative item existence, venue/category scope,
+  item availability, option existence, option ownership and option availability validation;
+- exact HTTP `409` / `CART_MENU_SELECTION_UNAVAILABLE` returns all deterministic own-cart issues as
+  `cartLineRef`, requested ids, `ITEM|OPTION` and `REMOVED|UNAVAILABLE`; foreign selections remain
+  generic and malformed/unknown/database failures never receive stale-menu copy;
+- preview is read-only for ordinary Guest and exact Platform Owner;
+- removed/unavailable item and option preview/submit paths leave unchanged snapshots of table
+  session timestamps, exits, tabs/memberships, chat context/dialog state, orders, batches, lines,
+  selected options, idempotency, analytics and outbox; a corrected cart uses current authoritative
+  prices and snapshots;
+- final submit uses one connection/transaction for authoritative context locks, session-scoped
+  idempotency, deterministic item/option locks, final validation, session touch, personal-tab ensure,
+  order state, fingerprint and analytics. Injected failures after session touch, tab/member ensure,
+  batch write and idempotency insert roll back the same expanded snapshot;
+- canonical fingerprint `v1` covers actor/venue/table session/tab, normalized comment and sorted
+  normalized merged `itemId / BASE-or-optionId / note / quantity` lines. It excludes key,
+  `cartLineRef`, client order/prices/fingerprints, availability, names and display fields;
+- an exact in-screen network retry keeps its key; item/option/note/quantity/comment or
+  account/venue/table-session/tab mutation rotates it. Server price/availability/pricing-fingerprint
+  change alone does not. Mismatch keeps the cart and creates a new key only on the next explicit
+  submit; legacy unverifiable recovery exposes active-order review and explicit new-submit actions,
+  with no automatic resend. A delayed success for submitted payload A cannot clear a business-
+  mutated cart B; B remains for a separate explicit submit with a new key;
+- exact retry and equivalent line order return one committed batch before current menu/gift
+  validation; quantity/item/option/note/comment/tab/actor mismatches in one table session conflict;
+  the same key in another table session is independent;
+- reconstructable legacy `NULL` rows exact-replay or mismatch safely and may lazy-upgrade; lost
+  option identity or multiple ambiguous physical rows in one logical session/key namespace are
+  `ORDER_IDEMPOTENCY_REPLAY_UNVERIFIABLE` with no new operation;
+- deterministic PostgreSQL races cover exact retries, exact versus mismatch, concurrent new key,
+  different tab/session scope, menu writer versus submit, stale rejection versus context creation and
+  legacy lazy-upgrade without arbitrary sleeps or partial state;
+- item recovery keeps the line and offers Menu plus line-scoped removal; option recovery reuses the
+  current picker, excludes the stale option and preserves quantity/note until successful preview;
+- multiple issues are rendered on their exact lines; fixing one preserves every valid/remaining
+  line and keeps submit blocked; retry preserves deterministic state and can recover after re-enable;
+- line warnings are textual live regions, actions have line-specific accessible names, option-picker
+  focus and post-delete/post-replacement focus are deterministic.
+
+Mandatory local commands:
+
+```bash
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests 'GuestOrderRoutesTest' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests 'GuestOrderIdempotencyFingerprintTest' --console=plain
+JAVA_TOOL_OPTIONS=-Dapi.version=1.44 ./gradlew --no-daemon --max-workers=1 :backend:app:test --tests 'GuestOrderIdempotencyConcurrencyPostgresTest' --console=plain
+JAVA_TOOL_OPTIONS=-Dapi.version=1.44 ./gradlew --no-daemon --max-workers=1 :backend:app:test --tests 'GuestBatchIdempotencyFingerprintMigrationH2Test' --tests 'GuestBatchIdempotencyFingerprintMigrationPostgresTest' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:compileKotlin --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:ktlintCheck --console=plain
+npm --prefix miniapp run build
+CI=1 TZ=UTC MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke
+git diff --check
+```
+
+The existing workflow must select `GuestOrderRoutesTest` (minimum 59),
+`GuestOrderIdempotencyFingerprintTest` (minimum 7),
+`GuestOrderIdempotencyConcurrencyPostgresTest` and both fingerprint migration suites. Their exact
+JUnit XML files must exist, meet the declared minima (`9` for concurrency and `2` per migration),
+and report zero
+skipped/failures/errors; a missing/zero/skipped/failing XML fails the gate. No workflow is added.
 
 ### Venue Menu Management UX Stabilization quality gate
 
@@ -1411,11 +1480,11 @@ Expectations:
   promotion route/repository/audit classes; its per-class XML assertion fails on a
   missing/zero/skipped/failing suite. A second step runs
   `GuestTableContextActivationPostgresTest`, `PromotionConfigurationConcurrencyPostgresTest`,
-  `VenueStaffMutationConcurrencyPostgresTest` and
-  `VenueMenuOptionNormalizationConcurrencyPostgresTest` with
-  `JAVA_TOOL_OPTIONS=-Dapi.version=1.44`, then independently parses all four XML reports. It
-  requires minimums `8 / 14 / 2 / 15`, each with `skipped=0`, `failures=0`, `errors=0`. Docker
-  availability alone is not evidence, and route failure must not silently skip the PostgreSQL gate.
+  `VenueStaffMutationConcurrencyPostgresTest`, `VenueMenuOptionNormalizationConcurrencyPostgresTest`
+  and `GuestOrderIdempotencyConcurrencyPostgresTest` with `JAVA_TOOL_OPTIONS=-Dapi.version=1.44`,
+  then independently parses all five XML reports. It requires minimums `8 / 14 / 2 / 15 / 9`, each
+  with `skipped=0`, `failures=0`, `errors=0`. Docker availability alone is not evidence, and route
+  failure must not silently skip the PostgreSQL gate.
 - If CI is red, first identify the failing job, failing test class, failing test name, assertion/error and first useful stack frame.
 - Do not paste only `Execution failed for task ':backend:app:test'`; inspect XML/test output or CI logs for the actual assertion.
 - External/transient failures should be separated from product regressions. A network/dependency timeout is not the same as a Kotlin compile/test failure.
@@ -1869,10 +1938,13 @@ Telegram/staff-chat:
   STAGING-SMOKE-PASSED**. Focused repository/route/order/history, current 15-test PostgreSQL, build/lint
   and `152/152` browser checks remain regression evidence; user-confirmed green Actions, staging
   deploy and bounded smoke close only this contract. No migration was added.
-- Menu option availability audit: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION AVAILABILITY AUDIT /
-  MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. Focused cross-surface,
-  order and current 15-test PostgreSQL gates are local evidence; review, CI, deploy and smoke remain
-  open. No migration was added.
+- Menu option availability audit: **FUNCTIONALLY PASSED ON STAGING / GENERAL CART RECOVERY FOLLOW-UP
+  REQUIRED** until the focused stale-cart recovery smoke is repeated.
+- Guest cart stale menu recovery: **GUEST CART STALE MENU SELECTION RECOVERY / REMOVED OR UNAVAILABLE
+  ITEMS AND OPTIONS / PAYLOAD-BOUND IDEMPOTENCY + ATOMIC REJECTION / MVP IMPLEMENTED / LOCAL
+  VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. Exact route/repository/migration/PostgreSQL
+  concurrency and browser checks are local evidence; review, CI, all-writer rollout, deploy and
+  focused staging smoke remain open. PostgreSQL `V123` / H2 `V124` are additive and nullable.
 - Venue Promotions Current/Archived Tabs UX: **VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / DONE / MVP / STAGING-SMOKE-PASSED**.
 - Promotion lifecycle status audit: **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**; broader dangerous-action coverage remains partial.
 - Promotion creation audit: **DANGEROUS ACTION AUDIT SLICE / PROMOTION CREATION AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**; mandatory repository/route/Telegram and PostgreSQL gates remain regression requirements. Configuration edit, schedule/target/reward, media/banner and broader dangerous-action coverage remain open.

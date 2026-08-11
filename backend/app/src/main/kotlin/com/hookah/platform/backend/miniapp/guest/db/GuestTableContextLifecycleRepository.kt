@@ -327,6 +327,7 @@ class GuestTableContextLifecycleRepository(
         expectedSessionId: Long? = null,
         ttl: Duration,
         now: Instant = Instant.now(),
+        touchSessionBeforeMutation: Boolean = true,
         mutation: (Connection, ConfirmedPlatformGuestMutationContext) -> T,
     ): PlatformGuestTableMutationResult<T> =
         mutationTransaction { connection ->
@@ -422,20 +423,24 @@ class GuestTableContextLifecycleRepository(
             if (tableSessionRepository.hasUserExit(connection, actorUserId, tableSession.id)) {
                 return@mutationTransaction PlatformGuestTableMutationResult.Denied
             }
-            val touchedSession =
-                tableSessionRepository.touchActiveSession(
-                    connection = connection,
-                    tableSessionId = tableSession.id,
-                    venueId = venueId,
-                    tableId = tableId,
-                    ttl = ttl,
-                    now = now,
-                ) ?: return@mutationTransaction PlatformGuestTableMutationResult.Denied
+            val mutationSession =
+                if (touchSessionBeforeMutation) {
+                    tableSessionRepository.touchActiveSession(
+                        connection = connection,
+                        tableSessionId = tableSession.id,
+                        venueId = venueId,
+                        tableId = tableId,
+                        ttl = ttl,
+                        now = now,
+                    ) ?: return@mutationTransaction PlatformGuestTableMutationResult.Denied
+                } else {
+                    tableSession
+                }
             val confirmedContext =
                 ConfirmedPlatformGuestMutationContext(
                     identity = stored.toIdentity(),
                     context = tableState.context,
-                    tableSession = touchedSession,
+                    tableSession = mutationSession,
                     venueStatus = VenueStatus.PUBLISHED,
                     subscriptionStatus = subscriptionStatus,
                 )

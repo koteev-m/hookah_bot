@@ -52,6 +52,8 @@ import com.hookah.platform.backend.miniapp.guest.TableSessionConfig
 import com.hookah.platform.backend.miniapp.guest.db.GuestBookingRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestFavoritesRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestMenuRepository
+import com.hookah.platform.backend.miniapp.guest.db.GuestOrderContextCheckpoint
+import com.hookah.platform.backend.miniapp.guest.db.GuestOrderTransactionCoordinator
 import com.hookah.platform.backend.miniapp.guest.db.GuestTableContextLifecycleRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestTabsRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
@@ -127,6 +129,7 @@ import com.hookah.platform.backend.telegram.TelegramUpdate
 import com.hookah.platform.backend.telegram.buildWebAppUrl
 import com.hookah.platform.backend.telegram.db.ChatContextRepository
 import com.hookah.platform.backend.telegram.db.DialogStateRepository
+import com.hookah.platform.backend.telegram.db.GuestOrderWriteCheckpoint
 import com.hookah.platform.backend.telegram.db.IdempotencyRepository
 import com.hookah.platform.backend.telegram.db.LoyaltyRepository
 import com.hookah.platform.backend.telegram.db.OrdersRepository
@@ -262,6 +265,8 @@ internal data class ModuleOverrides(
     val venueLocationProvider: VenueLocationProvider? = null,
     val staffScheduleClock: Clock? = null,
     val afterPlatformGuestTeardown: (suspend (chatId: Long, actorUserId: Long) -> Unit)? = null,
+    val guestOrderContextCheckpoint: (GuestOrderContextCheckpoint) -> Unit = {},
+    val guestOrderWriteCheckpoint: (GuestOrderWriteCheckpoint) -> Unit = {},
 )
 
 private fun ApplicationCall.isApiRequest(): Boolean {
@@ -393,6 +398,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
             venuePromotionRuleRepository = venuePromotionRuleRepository,
             loyaltyRepository = loyaltyRepository,
             giftDecisionScopeTokenService = giftDecisionScopeTokenService,
+            guestOrderWriteCheckpoint = overrides.guestOrderWriteCheckpoint,
         )
     val venueOrdersRepository =
         VenueOrdersRepository(
@@ -419,6 +425,13 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
             guestTabsRepository = guestTabsRepository,
             chatContextRepository = chatContextRepository,
             dialogStateRepository = dialogStateRepository,
+        )
+    val guestOrderTransactionCoordinator =
+        GuestOrderTransactionCoordinator(
+            dataSource = dataSource,
+            tableTokenRepository = tableTokenRepository,
+            subscriptionRepository = subscriptionRepository,
+            tableSessionRepository = tableSessionRepository,
         )
     val aiAssistantService =
         AiAssistantService(
@@ -1170,6 +1183,8 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                         venueOrdersRepository = venueOrdersRepository,
                         platformOwnerUserId = platformConfig.ownerUserId,
                         guestTableContextLifecycleRepository = guestTableContextLifecycleRepository,
+                        guestOrderTransactionCoordinator = guestOrderTransactionCoordinator,
+                        guestOrderContextCheckpoint = overrides.guestOrderContextCheckpoint,
                     )
                     guestBookingRoutes(
                         guestVenueRepository = guestVenueRepository,

@@ -1,6 +1,6 @@
 import { getItemMeta, type ItemMeta, updateItemCache } from './itemCache'
 import { getTelegramContext } from '../telegram'
-import type { GiftDecisionDto } from '../api/guestDtos'
+import type { CartMenuSelectionIssue, GiftDecisionDto, MenuItemOptionDto } from '../api/guestDtos'
 
 export type CartLineOptionInput = {
   selectedOptionId?: number | null
@@ -30,6 +30,8 @@ export type CartSnapshot = {
   distinctCount: number
   commentDraft: string
   giftDecision: GiftDecisionDto | null
+  menuSelectionIssues: Map<string, CartMenuSelectionIssue>
+  pendingValidationLineRefs: Set<string>
 }
 
 export type CartGiftDecisionContext = {
@@ -90,6 +92,8 @@ let commentDraft = ''
 let giftDecision: GiftDecisionDto | null = null
 let giftDecisionDraft: ScopedGiftDecisionDraft | null = null
 let pendingGiftDecisionDraft: ScopedGiftDecisionDraft | null = null
+let menuSelectionIssues = new Map<string, CartMenuSelectionIssue>()
+let pendingValidationLineRefs = new Set<string>()
 let activeTableToken: string | null = null
 let activeDraftStorageKey: string | null = null
 let activeDraftUserPart: string | null = null
@@ -188,6 +192,11 @@ function clearGiftDecisionDraft(): void {
   giftDecision = null
   giftDecisionDraft = null
   pendingGiftDecisionDraft = null
+}
+
+function clearMenuSelectionRecoveryState(): void {
+  menuSelectionIssues = new Map()
+  pendingValidationLineRefs = new Set()
 }
 
 export function buildCartLineKey(itemId: number, selectedOptionId?: number | null, preferenceNote?: string | null): string {
@@ -461,7 +470,11 @@ function buildSnapshot(): CartSnapshot {
     totalQty,
     distinctCount: items.size,
     commentDraft,
-    giftDecision: giftDecision ? { ...giftDecision } : null
+    giftDecision: giftDecision ? { ...giftDecision } : null,
+    menuSelectionIssues: new Map(
+      Array.from(menuSelectionIssues.entries()).map(([key, issue]) => [key, { ...issue }])
+    ),
+    pendingValidationLineRefs: new Set(pendingValidationLineRefs)
   }
 }
 
@@ -498,6 +511,7 @@ export function setCartTableToken(tableToken: string | null): void {
     totalQty = 0
     commentDraft = ''
     clearGiftDecisionDraft()
+    clearMenuSelectionRecoveryState()
     notify()
     return
   }
@@ -507,6 +521,7 @@ export function setCartTableToken(tableToken: string | null): void {
   giftDecision = null
   giftDecisionDraft = null
   pendingGiftDecisionDraft = restoredDraft.pendingGiftDecisionDraft
+  clearMenuSelectionRecoveryState()
   if (restoredDraft.itemMeta.length > 0) {
     updateItemCache(restoredDraft.itemMeta)
   }
@@ -597,6 +612,8 @@ export function removeCartLine(lineKey: string): void {
   const nextQty = normalizeQty(currentLine.qty - 1)
   if (nextQty === 0) {
     items.delete(lineKey)
+    menuSelectionIssues.delete(lineKey)
+    pendingValidationLineRefs.delete(lineKey)
   } else {
     items.set(lineKey, { ...currentLine, qty: nextQty })
   }
@@ -636,6 +653,8 @@ export function setCartLineQty(
   }
   if (nextQty === 0) {
     items.delete(lineKey)
+    menuSelectionIssues.delete(lineKey)
+    pendingValidationLineRefs.delete(lineKey)
   } else {
     items.set(
       lineKey,
@@ -657,6 +676,60 @@ export function setCartLineQty(
   persistActiveDraft()
   notify()
   return { ok: true }
+}
+
+export function replaceCartLineOption(
+  lineKey: string,
+  option: Pick<MenuItemOptionDto, 'id' | 'name' | 'priceDeltaMinor'>,
+  preferenceNote?: string | null
+): { ok: true; lineKey: string } | { ok: false; reason: 'missing' | 'invalid' | 'conflict' } {
+  const currentLine = items.get(lineKey)
+  if (!currentLine) {
+    return { ok: false, reason: 'missing' }
+  }
+  if (!Number.isSafeInteger(option.id) || option.id <= 0 || !option.name.trim()) {
+    return { ok: false, reason: 'invalid' }
+  }
+  const nextPreferenceNote = normalizePreferenceNote(preferenceNote ?? currentLine.preferenceNote)
+  const nextKey = buildCartLineKey(currentLine.itemId, option.id, nextPreferenceNote)
+  if (nextKey !== lineKey && items.has(nextKey)) {
+    return { ok: false, reason: 'conflict' }
+  }
+  const nextLine = buildLine(
+    currentLine.itemId,
+    currentLine.qty,
+    {
+      selectedOptionId: option.id,
+      selectedOptionName: option.name,
+      priceDeltaMinor: option.priceDeltaMinor,
+      preferenceNote: nextPreferenceNote
+    },
+    currentLine
+  )
+  items.delete(lineKey)
+  menuSelectionIssues.delete(lineKey)
+  pendingValidationLineRefs.delete(lineKey)
+  items.set(nextKey, nextLine)
+  pendingValidationLineRefs.add(nextKey)
+  clearGiftDecisionDraft()
+  updateTotals()
+  persistActiveDraft()
+  notify()
+  return { ok: true, lineKey: nextKey }
+}
+
+export function setCartMenuSelectionIssues(issues: CartMenuSelectionIssue[]): void {
+  menuSelectionIssues = new Map(issues.map((issue) => [issue.cartLineRef, { ...issue }]))
+  pendingValidationLineRefs = new Set()
+  notify()
+}
+
+export function clearCartMenuSelectionIssues(): void {
+  if (!menuSelectionIssues.size && !pendingValidationLineRefs.size) {
+    return
+  }
+  clearMenuSelectionRecoveryState()
+  notify()
 }
 
 export function setCartCommentDraft(value: string): void {
@@ -782,6 +855,7 @@ export function clearCart(): void {
   totalQty = 0
   commentDraft = ''
   clearGiftDecisionDraft()
+  clearMenuSelectionRecoveryState()
   persistActiveDraft()
   notify()
 }

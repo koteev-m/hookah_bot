@@ -316,6 +316,20 @@ class VenueSettingsRepository(private val dataSource: DataSource?) {
             } catch (e: SQLException) {
                 throw DatabaseUnavailableException()
             }
+        return resolvePromotionZoneId(venueId, raw, fallback)
+    }
+
+    fun resolvePromotionZoneId(
+        connection: Connection,
+        venueId: Long,
+        fallback: ZoneId,
+    ): ZoneId = resolvePromotionZoneId(venueId, selectSettings(connection, venueId)?.timezone, fallback)
+
+    private fun resolvePromotionZoneId(
+        venueId: Long,
+        raw: String?,
+        fallback: ZoneId,
+    ): ZoneId {
         val timezone = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return fallback
         return runCatching { ZoneId.of(timezone) }
             .getOrElse {

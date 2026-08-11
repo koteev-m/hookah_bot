@@ -677,6 +677,42 @@ input[type="number"] {
   background: #f8fafc;
 }
 
+.cart-item-menu-issue {
+  border-color: #c2410c;
+  background: #fff7ed;
+}
+
+.cart-menu-issue-summary {
+  margin: 0 0 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid #c2410c;
+  border-radius: 10px;
+  background: #fff7ed;
+  color: #7c2d12;
+  font-weight: 700;
+}
+
+.cart-line-warning {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.55rem;
+  padding: 0.65rem;
+  border-left: 4px solid #c2410c;
+  border-radius: 6px;
+  background: #ffedd5;
+  color: #7c2d12;
+}
+
+.cart-line-warning p {
+  margin: 0;
+}
+
+.cart-line-warning-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
 .cart-item-info {
   display: grid;
   gap: 0.2rem;

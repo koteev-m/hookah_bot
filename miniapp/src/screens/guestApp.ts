@@ -49,6 +49,7 @@ type Route = {
   venueId: number | null
   threadId: number | null
   openStaffCall: boolean
+  cartLineRef: string | null
 }
 
 type GuestRefs = {
@@ -84,13 +85,13 @@ function resolveRoute(): Route {
   const rawHash = window.location.hash.replace(/^#/, '')
   const cleaned = rawHash.startsWith('/') ? rawHash.slice(1) : rawHash
   if (!cleaned) {
-    return { name: 'catalog', venueId: null, threadId: null, openStaffCall: false }
+    return { name: 'catalog', venueId: null, threadId: null, openStaffCall: false, cartLineRef: null }
   }
   const [pathPart, queryPart] = cleaned.split('?')
   const segments = pathPart.split('/').filter(Boolean)
   const route = segments[0] as RouteName | undefined
   if (!route || !['catalog', 'venue', 'cart', 'order', 'bookings', 'account', 'messages', 'support'].includes(route)) {
-    return { name: 'catalog', venueId: null, threadId: null, openStaffCall: false }
+    return { name: 'catalog', venueId: null, threadId: null, openStaffCall: false, cartLineRef: null }
   }
   if (route === 'venue') {
     const venueIdFromPath = parsePositiveInt(segments[1])
@@ -100,7 +101,8 @@ function resolveRoute(): Route {
       name: 'venue',
       venueId: venueIdFromPath ?? venueIdFromQuery ?? null,
       threadId: null,
-      openStaffCall: params.get('staff') === '1'
+      openStaffCall: params.get('staff') === '1',
+      cartLineRef: params.get('cartLineRef')?.trim() || null
     }
   }
   if (route === 'bookings' || route === 'messages' || route === 'support') {
@@ -109,10 +111,21 @@ function resolveRoute(): Route {
       name: route,
       venueId: parsePositiveInt(params.get('venueId')) ?? parsePositiveInt(params.get('venue_id')) ?? null,
       threadId: parsePositiveInt(params.get('threadId')) ?? parsePositiveInt(params.get('thread_id')) ?? null,
-      openStaffCall: false
+      openStaffCall: false,
+      cartLineRef: null
     }
   }
-  return { name: route, venueId: null, threadId: null, openStaffCall: false }
+  if (route === 'cart') {
+    const params = new URLSearchParams(queryPart ?? '')
+    return {
+      name: route,
+      venueId: null,
+      threadId: null,
+      openStaffCall: false,
+      cartLineRef: params.get('focusLineRef')?.trim() || null
+    }
+  }
+  return { name: route, venueId: null, threadId: null, openStaffCall: false, cartLineRef: null }
 }
 
 function resolveRouteNameFromHash(hash: string | null | undefined): RouteName | null {
@@ -238,6 +251,7 @@ function renderRouteContent(
         isDebug,
         venueId: route.venueId,
         openStaffCall: route.openStaffCall,
+        replaceCartLineRef: route.cartLineRef,
         onBookVenue: (venueId) => {
           window.location.hash = `#/bookings?venueId=${venueId}`
         },
@@ -246,7 +260,18 @@ function renderRouteContent(
         }
       })
     case 'cart':
-      return renderCartScreen({ root: screenRoot, backendUrl, isDebug, onNavigateOrder })
+      return renderCartScreen({
+        root: screenRoot,
+        backendUrl,
+        isDebug,
+        onNavigateOrder,
+        initialFocusLineRef: route.cartLineRef,
+        onNavigateMenu: () => onNavigateMenu(tableSnapshot.venueId),
+        onNavigateOptionReplacement: (cartLineRef) => {
+          if (!tableSnapshot.venueId) return
+          window.location.hash = `#/venue/${tableSnapshot.venueId}?cartLineRef=${encodeURIComponent(cartLineRef)}`
+        }
+      })
     case 'order':
       return renderOrderScreen({ root: screenRoot, backendUrl, isDebug, onNavigateMenu })
     case 'bookings':

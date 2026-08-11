@@ -1,6 +1,6 @@
 # Deployment / Runbook / Operations
 
-Дата актуализации: 2026-08-04.
+Дата актуализации: 2026-08-11.
 
 Статус: **current operations reference / UPDATED**. This document is the canonical deploy, release and operations runbook for the Telegram bot + Mini App platform. Use it together with `docs/TESTING_QA_SMOKE_STRATEGY.md` for validation scope, `docs/STAGING_DEPLOYMENT.md` for one-VPS staging details, `docs/OPERATIONS.md` for metrics/queue incident basics and `docs/MIGRATION_POLICY.md` for Flyway policy.
 
@@ -167,6 +167,25 @@ Rules:
 - Avoid destructive migrations without retention/archive decision.
 - Billing/subscription state changes require audit and cannot be silently reversed.
 - If backup/restore commands are unknown for the environment, mark rollback as **RUNBOOK GAP** before release.
+
+### Guest Order Payload-Bound Idempotency Rollout Boundary
+
+This planned rollout for additive PostgreSQL V123 / H2 V124 has not been executed in production:
+
+1. Require green GitHub Actions on the exact release HEAD.
+2. Apply the additive migration; if Flyway runs during startup, confirm from deploy logs that it
+   completes before order-writing traffic is accepted.
+3. Start only the new backend binary.
+4. Drain or replace every order-writing backend instance.
+5. Confirm exactly one staging backend remains and that it runs the new binary.
+6. After cutover, old order writers are prohibited because they can create rows with
+   `request_fingerprint NULL`.
+7. Mixed old/new binaries are allowed only as a brief migration-compatible transition, never as the
+   completed rollout state.
+8. After new fingerprint rows exist, rollback to the old binary does not damage their data, but it
+   semantically loses payload validation for idempotency reuse.
+9. After real order traffic, prefer a forward fix over old-binary rollback.
+10. Before UI or release smoke, verify that no old order-writing instance remains.
 
 ### Staff Operations Slice B Rollout Boundary
 

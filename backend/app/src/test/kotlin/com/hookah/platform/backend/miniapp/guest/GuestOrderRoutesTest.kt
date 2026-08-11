@@ -2,6 +2,7 @@ package com.hookah.platform.backend.miniapp.guest
 
 import com.hookah.platform.backend.ModuleOverrides
 import com.hookah.platform.backend.api.ApiErrorCodes
+import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.miniapp.guest.api.ActiveOrderResponse
 import com.hookah.platform.backend.miniapp.guest.api.AddBatchItemDto
 import com.hookah.platform.backend.miniapp.guest.api.AddBatchRecalculationResponse
@@ -14,6 +15,7 @@ import com.hookah.platform.backend.miniapp.guest.api.GiftDecisionDto
 import com.hookah.platform.backend.miniapp.guest.api.GuestBillRequestRequest
 import com.hookah.platform.backend.miniapp.guest.api.GuestBillRequestResponse
 import com.hookah.platform.backend.miniapp.guest.api.MenuResponse
+import com.hookah.platform.backend.miniapp.guest.db.GuestOrderContextCheckpoint
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
@@ -39,6 +41,7 @@ import com.hookah.platform.backend.telegram.StaffBillRequestNotification
 import com.hookah.platform.backend.telegram.StaffChatNotificationResult
 import com.hookah.platform.backend.telegram.StaffChatNotifier
 import com.hookah.platform.backend.telegram.db.GiftDecisionRequiredException
+import com.hookah.platform.backend.telegram.db.GuestOrderWriteCheckpoint
 import com.hookah.platform.backend.telegram.db.OrderBatchItemInput
 import com.hookah.platform.backend.telegram.db.OrdersRepository
 import com.hookah.platform.backend.telegram.db.PromotionApplicationRepository
@@ -51,6 +54,7 @@ import io.ktor.client.request.get
 import io.ktor.client.request.headers
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
+import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
@@ -59,12 +63,19 @@ import io.ktor.http.contentType
 import io.ktor.server.config.MapApplicationConfig
 import io.ktor.server.testing.testApplication
 import io.mockk.coEvery
+import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import org.h2.jdbcx.JdbcDataSource
 import java.sql.DriverManager
+import java.sql.SQLException
 import java.sql.Statement
 import java.sql.Timestamp
 import java.time.Clock
@@ -74,8 +85,10 @@ import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.temporal.ChronoUnit
 import java.util.UUID
+import javax.sql.DataSource
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -85,6 +98,53 @@ import kotlin.test.fail
 class GuestOrderRoutesTest {
     private val json = Json { ignoreUnknownKeys = true }
     private val appEnv = "test"
+    private val persistenceSnapshotTables =
+        listOf(
+            "table_sessions",
+            "guest_table_session_exits",
+            "tab",
+            "tab_member",
+            "telegram_chat_context",
+            "telegram_dialog_state",
+            "orders",
+            "order_batches",
+            "order_batch_items",
+            "order_batch_item_options",
+            "guest_batch_idempotency",
+            "analytics_events",
+            "telegram_outbox",
+        )
+
+    private data class ExpectedCartMenuIssue(
+        val cartLineRef: String,
+        val itemId: Long,
+        val optionId: Long?,
+        val selectionKind: String,
+        val reason: String,
+    )
+
+    @Test
+    fun `cart preview database failure remains generic database unavailable`() {
+        runBlocking {
+            val dataSource = mockk<DataSource>()
+            every { dataSource.connection } throws SQLException("database offline")
+
+            assertFailsWith<DatabaseUnavailableException> {
+                OrdersRepository(dataSource).previewGuestOrderBatch(
+                    venueId = 1L,
+                    userId = TELEGRAM_USER_ID,
+                    items =
+                        listOf(
+                            OrderBatchItemInput(
+                                cartLineRef = "db-error-line",
+                                itemId = 1L,
+                                qty = 1,
+                            ),
+                        ),
+                )
+            }
+        }
+    }
 
     @Test
     fun `active returns null when no active order`() =
@@ -119,7 +179,7 @@ class GuestOrderRoutesTest {
         }
 
     @Test
-    fun `add-batch with same idempotency key returns same batch`() =
+    fun `add-batch exact replay returns same batch and changed payload conflicts without writes`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("guest-order-add")
             val config = buildConfig(jdbcUrl)
@@ -155,8 +215,24 @@ class GuestOrderRoutesTest {
                     setBody(json.encodeToString(AddBatchRequest.serializer(), request))
                 }
             val firstPayload = json.decodeFromString(AddBatchResponse.serializer(), firstResponse.bodyAsText())
+            assertEquals(HttpStatusCode.OK, firstResponse.status)
+            val committedSnapshot = persistenceSnapshot(jdbcUrl)
 
             val secondResponse =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(json.encodeToString(AddBatchRequest.serializer(), request))
+                }
+            val secondPayload = json.decodeFromString(AddBatchResponse.serializer(), secondResponse.bodyAsText())
+
+            assertEquals(HttpStatusCode.OK, secondResponse.status)
+            assertEquals(firstPayload.orderId, secondPayload.orderId)
+            assertEquals(firstPayload.batchId, secondPayload.batchId)
+            assertEquals(committedSnapshot, persistenceSnapshot(jdbcUrl))
+
+            val mismatchSnapshot = persistenceSnapshot(jdbcUrl)
+            val mismatchResponse =
                 client.post("/api/guest/order/add-batch") {
                     contentType(ContentType.Application.Json)
                     headers { append(HttpHeaders.Authorization, "Bearer $token") }
@@ -170,12 +246,18 @@ class GuestOrderRoutesTest {
                         ),
                     )
                 }
-            val secondPayload = json.decodeFromString(AddBatchResponse.serializer(), secondResponse.bodyAsText())
-
-            assertEquals(HttpStatusCode.OK, firstResponse.status)
-            assertEquals(HttpStatusCode.OK, secondResponse.status)
-            assertEquals(firstPayload.orderId, secondPayload.orderId)
-            assertEquals(firstPayload.batchId, secondPayload.batchId)
+            assertEquals(HttpStatusCode.Conflict, mismatchResponse.status)
+            val mismatchError =
+                assertApiErrorEnvelope(
+                    mismatchResponse,
+                    ApiErrorCodes.ORDER_IDEMPOTENCY_PAYLOAD_MISMATCH,
+                )
+            assertEquals(
+                "Этот ключ отправки уже использован для другого состава заказа. " +
+                    "Обновите корзину и отправьте заказ ещё раз.",
+                mismatchError.error.message,
+            )
+            assertEquals(mismatchSnapshot, persistenceSnapshot(jdbcUrl))
 
             val activeResponse =
                 client.get(
@@ -199,7 +281,311 @@ class GuestOrderRoutesTest {
             assertEquals(200L, activeItem.lineGrossMinor)
             assertEquals(200L, order.grossTotalMinor)
             assertEquals(200L, order.finalPayableTotalMinor)
+            assertEquals(1, countRows(jdbcUrl, "orders"))
+            assertEquals(1, countRows(jdbcUrl, "order_batches"))
+            assertEquals(1, countRows(jdbcUrl, "order_batch_items"))
+            assertEquals(1, countRows(jdbcUrl, "guest_batch_idempotency"))
             assertEquals(1, countAnalyticsEvents(jdbcUrl, "batch_created", venueId))
+        }
+
+    @Test
+    fun `legacy replay with lost selected option id is unverifiable without writes`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-order-legacy-lost-option-replay")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 9)
+            val tableToken = "legacy-lost-option-token"
+            seedTableToken(jdbcUrl, tableId, tableToken)
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val categoryId = seedMenuCategory(jdbcUrl, venueId)
+            val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Legacy option item")
+            val optionId = seedMenuOption(jdbcUrl, venueId, itemId, "Legacy deleted option")
+            val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
+            val token = issueToken(config)
+            val idempotencyKey = "legacy-lost-option-replay-key"
+            val request =
+                AddBatchRequest(
+                    tableToken = tableToken,
+                    tableSessionId = tableSessionId,
+                    tabId = personalTabId,
+                    idempotencyKey = idempotencyKey,
+                    items =
+                        listOf(
+                            AddBatchItemDto(
+                                itemId = itemId,
+                                qty = 2,
+                                selectedOptionId = optionId,
+                                preferenceNote = "поменьше льда",
+                            ),
+                        ),
+                    comment = "Legacy replay",
+                )
+
+            val createdResponse =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(json.encodeToString(AddBatchRequest.serializer(), request))
+                }
+            assertEquals(HttpStatusCode.OK, createdResponse.status)
+            val created = json.decodeFromString(AddBatchResponse.serializer(), createdResponse.bodyAsText())
+
+            deleteRow(jdbcUrl, "menu_item_options", optionId)
+            assertNull(assertNotNull(fetchSelectedOptionSnapshot(jdbcUrl, created.batchId)).optionId)
+            clearGuestBatchRequestFingerprint(jdbcUrl, tableSessionId, idempotencyKey)
+            val beforeReplay = persistenceSnapshot(jdbcUrl)
+
+            val replayResponse =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(json.encodeToString(AddBatchRequest.serializer(), request))
+                }
+
+            assertEquals(HttpStatusCode.Conflict, replayResponse.status)
+            val replayError =
+                assertApiErrorEnvelope(
+                    replayResponse,
+                    ApiErrorCodes.ORDER_IDEMPOTENCY_REPLAY_UNVERIFIABLE,
+                )
+            assertEquals(
+                "Не удалось безопасно повторить старую отправку. " +
+                    "Проверьте активный заказ и отправьте корзину заново только при необходимости.",
+                replayError.error.message,
+            )
+            assertEquals(beforeReplay, persistenceSnapshot(jdbcUrl))
+        }
+
+    @Test
+    fun `platform owner payload mismatch returns conflict without writes or notification`() =
+        testApplication {
+            val ownerUserId = 9_900_137L
+            val jdbcUrl = buildJdbcUrl("guest-order-platform-idempotency-mismatch")
+            val config = buildConfig(jdbcUrl, platformOwnerId = ownerUserId)
+            val staffChatNotifier: StaffChatNotifier = mockk()
+            val notifications = mutableListOf<NewBatchNotification>()
+            coEvery { staffChatNotifier.notifyNewBatchNow(any()) } answers {
+                notifications += invocation.args[0] as NewBatchNotification
+                StaffChatNotificationResult.SENT_OR_QUEUED
+            }
+
+            environment { this.config = config }
+            application {
+                moduleWithOverrides(
+                    ModuleOverrides(staffChatNotifier = staffChatNotifier),
+                )
+            }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 137)
+            val tableToken = "platform-idempotency-mismatch-token"
+            seedTableToken(jdbcUrl, tableId, tableToken)
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val categoryId = seedMenuCategory(jdbcUrl, venueId)
+            val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Platform mismatch item")
+            val optionId = seedMenuOption(jdbcUrl, venueId, itemId, "Platform mismatch option")
+            val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, ownerUserId)
+            seedConfirmedPlatformGuestContext(
+                jdbcUrl = jdbcUrl,
+                chatId = 7_700_137L,
+                userId = ownerUserId,
+                venueId = venueId,
+                tableId = tableId,
+                tableToken = tableToken,
+            )
+            val token = issueToken(config, ownerUserId)
+            val request =
+                AddBatchRequest(
+                    tableToken = tableToken,
+                    tableSessionId = tableSessionId,
+                    tabId = personalTabId,
+                    idempotencyKey = "platform-idempotency-mismatch-key",
+                    items =
+                        listOf(
+                            AddBatchItemDto(
+                                cartLineRef = "platform-mismatch-line",
+                                itemId = itemId,
+                                qty = 1,
+                                selectedOptionId = optionId,
+                                preferenceNote = "покрепче",
+                            ),
+                        ),
+                    comment = "Platform baseline",
+                )
+
+            suspend fun submit(payload: AddBatchRequest): HttpResponse =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(json.encodeToString(AddBatchRequest.serializer(), payload))
+                }
+
+            val createdResponse = submit(request)
+            assertEquals(HttpStatusCode.OK, createdResponse.status)
+            val created = json.decodeFromString(AddBatchResponse.serializer(), createdResponse.bodyAsText())
+            assertEquals(1, notifications.size)
+            assertEquals(created.batchId, notifications.single().batchId)
+            notifications.clear()
+
+            val beforeConflict = persistenceSnapshot(jdbcUrl)
+            assertExpandedPlatformOrderSnapshot(beforeConflict, ownerUserId, tableToken)
+            assertTrue(
+                beforeConflict
+                    .getValue("guest_batch_idempotency")
+                    .single()
+                    .contains("request_fingerprint=v1:"),
+            )
+            val mismatchResponse =
+                submit(
+                    request.copy(
+                        items =
+                            listOf(
+                                AddBatchItemDto(
+                                    cartLineRef = "platform-mismatch-line",
+                                    itemId = itemId,
+                                    qty = 3,
+                                    selectedOptionId = optionId,
+                                    preferenceNote = "покрепче",
+                                ),
+                            ),
+                        comment = "Platform changed payload",
+                    ),
+                )
+
+            assertEquals(HttpStatusCode.Conflict, mismatchResponse.status)
+            val mismatchError =
+                assertApiErrorEnvelope(
+                    mismatchResponse,
+                    ApiErrorCodes.ORDER_IDEMPOTENCY_PAYLOAD_MISMATCH,
+                )
+            assertEquals(
+                "Этот ключ отправки уже использован для другого состава заказа. " +
+                    "Обновите корзину и отправьте заказ ещё раз.",
+                mismatchError.error.message,
+            )
+            assertEquals(beforeConflict, persistenceSnapshot(jdbcUrl))
+            assertTrue(notifications.isEmpty())
+        }
+
+    @Test
+    fun `platform owner unverifiable legacy replay returns conflict without writes or notification`() =
+        testApplication {
+            val ownerUserId = 9_900_138L
+            val jdbcUrl = buildJdbcUrl("guest-order-platform-legacy-unverifiable")
+            val config = buildConfig(jdbcUrl, platformOwnerId = ownerUserId)
+            val staffChatNotifier: StaffChatNotifier = mockk()
+            val notifications = mutableListOf<NewBatchNotification>()
+            coEvery { staffChatNotifier.notifyNewBatchNow(any()) } answers {
+                notifications += invocation.args[0] as NewBatchNotification
+                StaffChatNotificationResult.SENT_OR_QUEUED
+            }
+
+            environment { this.config = config }
+            application {
+                moduleWithOverrides(
+                    ModuleOverrides(staffChatNotifier = staffChatNotifier),
+                )
+            }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 138)
+            val tableToken = "platform-legacy-unverifiable-token"
+            seedTableToken(jdbcUrl, tableId, tableToken)
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val categoryId = seedMenuCategory(jdbcUrl, venueId)
+            val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Platform legacy item")
+            val optionId = seedMenuOption(jdbcUrl, venueId, itemId, "Platform deleted option")
+            val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, ownerUserId)
+            seedConfirmedPlatformGuestContext(
+                jdbcUrl = jdbcUrl,
+                chatId = 7_700_138L,
+                userId = ownerUserId,
+                venueId = venueId,
+                tableId = tableId,
+                tableToken = tableToken,
+            )
+            val token = issueToken(config, ownerUserId)
+            val idempotencyKey = "platform-legacy-unverifiable-key"
+            val request =
+                AddBatchRequest(
+                    tableToken = tableToken,
+                    tableSessionId = tableSessionId,
+                    tabId = personalTabId,
+                    idempotencyKey = idempotencyKey,
+                    items =
+                        listOf(
+                            AddBatchItemDto(
+                                cartLineRef = "platform-legacy-line",
+                                itemId = itemId,
+                                qty = 2,
+                                selectedOptionId = optionId,
+                                preferenceNote = "меньше льда",
+                            ),
+                        ),
+                    comment = "Platform legacy replay",
+                )
+
+            suspend fun submit(): HttpResponse =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(json.encodeToString(AddBatchRequest.serializer(), request))
+                }
+
+            val createdResponse = submit()
+            assertEquals(HttpStatusCode.OK, createdResponse.status)
+            val created = json.decodeFromString(AddBatchResponse.serializer(), createdResponse.bodyAsText())
+            assertEquals(1, notifications.size)
+            assertEquals(created.batchId, notifications.single().batchId)
+            notifications.clear()
+
+            deleteRow(jdbcUrl, "menu_item_options", optionId)
+            assertNull(assertNotNull(fetchSelectedOptionSnapshot(jdbcUrl, created.batchId)).optionId)
+            clearGuestBatchRequestFingerprint(jdbcUrl, tableSessionId, idempotencyKey)
+            val beforeReplay = persistenceSnapshot(jdbcUrl)
+            assertExpandedPlatformOrderSnapshot(beforeReplay, ownerUserId, tableToken)
+            assertTrue(
+                beforeReplay
+                    .getValue("guest_batch_idempotency")
+                    .single()
+                    .contains("request_fingerprint=<NULL>"),
+            )
+            assertTrue(
+                beforeReplay
+                    .getValue("order_batch_item_options")
+                    .single()
+                    .contains("menu_item_option_id=<NULL>"),
+            )
+
+            val replayResponse = submit()
+
+            assertEquals(HttpStatusCode.Conflict, replayResponse.status)
+            val replayError =
+                assertApiErrorEnvelope(
+                    replayResponse,
+                    ApiErrorCodes.ORDER_IDEMPOTENCY_REPLAY_UNVERIFIABLE,
+                )
+            assertEquals(
+                "Не удалось безопасно повторить старую отправку. " +
+                    "Проверьте активный заказ и отправьте корзину заново только при необходимости.",
+                replayError.error.message,
+            )
+            assertEquals(beforeReplay, persistenceSnapshot(jdbcUrl))
+            assertTrue(notifications.isEmpty())
         }
 
     @Test
@@ -1270,6 +1656,554 @@ class GuestOrderRoutesTest {
         }
 
     @Test
+    fun `cart preview returns all exact stale menu issues and recovers with current selections`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-cart-menu-selection-issues-preview")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 133)
+            seedTableToken(jdbcUrl, tableId, "cart-menu-issues-preview-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val categoryId = seedMenuCategory(jdbcUrl, venueId)
+            val removedItemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Удалённая вода")
+            val unavailableItemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Вода без газа")
+            val removedOptionItemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Кальян с удалённым вариантом")
+            val removedOptionId =
+                seedMenuOption(jdbcUrl, venueId, removedOptionItemId, "Удалённый вариант")
+            val replacementOptionId =
+                seedMenuOption(jdbcUrl, venueId, removedOptionItemId, "Актуальный вариант", priceDeltaMinor = 50)
+            val unavailableOptionItemId =
+                seedMenuItem(jdbcUrl, venueId, categoryId, "Кальян с недоступным вариантом")
+            val unavailableOptionId =
+                seedMenuOption(jdbcUrl, venueId, unavailableOptionItemId, "Недоступный вариант")
+            val validItemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Чай")
+            val foreignOwnerItemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Другой кальян")
+            val foreignOptionId = seedMenuOption(jdbcUrl, venueId, foreignOwnerItemId, "Чужой вариант")
+            val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
+            val token = issueToken(config)
+
+            deleteRow(jdbcUrl, "menu_item_options", removedOptionId)
+            deleteRow(jdbcUrl, "menu_items", removedItemId)
+            setMenuItemAvailability(jdbcUrl, unavailableItemId, isAvailable = false)
+            setMenuOptionAvailability(jdbcUrl, unavailableOptionId, isAvailable = false)
+
+            suspend fun preview(items: List<AddBatchItemDto>): HttpResponse =
+                client.post("/api/guest/order/preview") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(
+                        json.encodeToString(
+                            CartPreviewRequest.serializer(),
+                            CartPreviewRequest(
+                                tableToken = "cart-menu-issues-preview-token",
+                                tableSessionId = tableSessionId,
+                                tabId = personalTabId,
+                                items = items,
+                            ),
+                        ),
+                    )
+                }
+
+            val stalePreviewSnapshot = persistenceSnapshot(jdbcUrl)
+            val allIssuesResponse =
+                preview(
+                    listOf(
+                        AddBatchItemDto(cartLineRef = "removed-item", itemId = removedItemId, qty = 1),
+                        AddBatchItemDto(cartLineRef = "unavailable-item", itemId = unavailableItemId, qty = 1),
+                        AddBatchItemDto(
+                            cartLineRef = "removed-option",
+                            itemId = removedOptionItemId,
+                            qty = 2,
+                            selectedOptionId = removedOptionId,
+                            preferenceNote = "покрепче",
+                        ),
+                        AddBatchItemDto(
+                            cartLineRef = "unavailable-option",
+                            itemId = unavailableOptionItemId,
+                            qty = 1,
+                            selectedOptionId = unavailableOptionId,
+                        ),
+                        AddBatchItemDto(cartLineRef = "valid-line", itemId = validItemId, qty = 1),
+                    ),
+                )
+            assertCartMenuSelectionIssues(
+                allIssuesResponse,
+                listOf(
+                    ExpectedCartMenuIssue("removed-item", removedItemId, null, "ITEM", "REMOVED"),
+                    ExpectedCartMenuIssue("unavailable-item", unavailableItemId, null, "ITEM", "UNAVAILABLE"),
+                    ExpectedCartMenuIssue("removed-option", removedOptionItemId, removedOptionId, "OPTION", "REMOVED"),
+                    ExpectedCartMenuIssue(
+                        "unavailable-option",
+                        unavailableOptionItemId,
+                        unavailableOptionId,
+                        "OPTION",
+                        "UNAVAILABLE",
+                    ),
+                ),
+            )
+            assertEquals(stalePreviewSnapshot, persistenceSnapshot(jdbcUrl))
+
+            val foreignResponse =
+                preview(
+                    listOf(
+                        AddBatchItemDto(
+                            cartLineRef = "foreign-option",
+                            itemId = unavailableOptionItemId,
+                            qty = 1,
+                            selectedOptionId = foreignOptionId,
+                        ),
+                    ),
+                )
+            assertEquals(HttpStatusCode.BadRequest, foreignResponse.status)
+            assertApiErrorEnvelope(foreignResponse, ApiErrorCodes.INVALID_INPUT)
+            assertNoCartMenuSelectionIssues(foreignResponse)
+
+            val removedItemWithForeignOptionResponse =
+                preview(
+                    listOf(
+                        AddBatchItemDto(
+                            cartLineRef = "removed-item-foreign-option",
+                            itemId = removedItemId,
+                            qty = 1,
+                            selectedOptionId = foreignOptionId,
+                        ),
+                    ),
+                )
+            assertEquals(HttpStatusCode.BadRequest, removedItemWithForeignOptionResponse.status)
+            assertApiErrorEnvelope(removedItemWithForeignOptionResponse, ApiErrorCodes.INVALID_INPUT)
+            assertNoCartMenuSelectionIssues(removedItemWithForeignOptionResponse)
+
+            setMenuItemAvailability(jdbcUrl, unavailableItemId, isAvailable = true)
+            val reEnabledItemResponse =
+                preview(
+                    listOf(
+                        AddBatchItemDto(cartLineRef = "unavailable-item", itemId = unavailableItemId, qty = 1),
+                    ),
+                )
+            assertEquals(HttpStatusCode.OK, reEnabledItemResponse.status)
+
+            setMenuOptionAvailability(jdbcUrl, unavailableOptionId, isAvailable = true)
+            val reEnabledOptionResponse =
+                preview(
+                    listOf(
+                        AddBatchItemDto(
+                            cartLineRef = "unavailable-option",
+                            itemId = unavailableOptionItemId,
+                            qty = 1,
+                            selectedOptionId = unavailableOptionId,
+                        ),
+                    ),
+                )
+            assertEquals(HttpStatusCode.OK, reEnabledOptionResponse.status)
+
+            val replacementResponse =
+                preview(
+                    listOf(
+                        AddBatchItemDto(
+                            cartLineRef = "replacement-option",
+                            itemId = removedOptionItemId,
+                            qty = 2,
+                            selectedOptionId = replacementOptionId,
+                            preferenceNote = "покрепче",
+                        ),
+                    ),
+                )
+            assertEquals(HttpStatusCode.OK, replacementResponse.status)
+            val replacementPreview =
+                json.decodeFromString(CartPreviewResponse.serializer(), replacementResponse.bodyAsText()).preview
+            assertEquals(replacementOptionId, replacementPreview.items.single().selectedOption?.optionId)
+            assertEquals(2, replacementPreview.items.single().qty)
+            assertEquals("покрепче", replacementPreview.items.single().preferenceNote)
+
+            assertEquals(0, countRows(jdbcUrl, "orders"))
+            assertEquals(0, countRows(jdbcUrl, "order_batches"))
+            assertEquals(0, countRows(jdbcUrl, "order_batch_items"))
+            assertEquals(0, countRows(jdbcUrl, "order_batch_item_options"))
+        }
+
+    @Test
+    fun `submit rejects every exact stale menu state without writes and accepts corrected current cart`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-cart-menu-selection-issues-submit")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 134)
+            seedTableToken(jdbcUrl, tableId, "cart-menu-issues-submit-token")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val categoryId = seedMenuCategory(jdbcUrl, venueId)
+            val removedItemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Удалённая позиция")
+            val unavailableItemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Стоп-лист позиция")
+            val removedOptionItemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Удалённая option")
+            val removedOptionId = seedMenuOption(jdbcUrl, venueId, removedOptionItemId, "Удалённый вариант")
+            val unavailableOptionItemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Стоп-лист option")
+            val unavailableOptionId =
+                seedMenuOption(jdbcUrl, venueId, unavailableOptionItemId, "Недоступный вариант")
+            val correctedItemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Текущая позиция", priceMinor = 123)
+            val correctedOptionId =
+                seedMenuOption(jdbcUrl, venueId, correctedItemId, "Текущий вариант", priceDeltaMinor = 7)
+            val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
+            val token = issueToken(config)
+
+            deleteRow(jdbcUrl, "menu_item_options", removedOptionId)
+            deleteRow(jdbcUrl, "menu_items", removedItemId)
+            setMenuItemAvailability(jdbcUrl, unavailableItemId, isAvailable = false)
+            setMenuOptionAvailability(jdbcUrl, unavailableOptionId, isAvailable = false)
+
+            suspend fun submit(
+                idempotencyKey: String,
+                item: AddBatchItemDto,
+            ): HttpResponse =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(
+                        json.encodeToString(
+                            AddBatchRequest.serializer(),
+                            AddBatchRequest(
+                                tableToken = "cart-menu-issues-submit-token",
+                                tableSessionId = tableSessionId,
+                                tabId = personalTabId,
+                                idempotencyKey = idempotencyKey,
+                                items = listOf(item),
+                            ),
+                        ),
+                    )
+                }
+
+            val staleSubmissions =
+                listOf(
+                    Triple(
+                        "submit-removed-item",
+                        AddBatchItemDto(cartLineRef = "removed-item", itemId = removedItemId, qty = 1),
+                        ExpectedCartMenuIssue("removed-item", removedItemId, null, "ITEM", "REMOVED"),
+                    ),
+                    Triple(
+                        "submit-unavailable-item",
+                        AddBatchItemDto(cartLineRef = "unavailable-item", itemId = unavailableItemId, qty = 1),
+                        ExpectedCartMenuIssue("unavailable-item", unavailableItemId, null, "ITEM", "UNAVAILABLE"),
+                    ),
+                    Triple(
+                        "submit-removed-option",
+                        AddBatchItemDto(
+                            cartLineRef = "removed-option",
+                            itemId = removedOptionItemId,
+                            qty = 1,
+                            selectedOptionId = removedOptionId,
+                        ),
+                        ExpectedCartMenuIssue(
+                            "removed-option",
+                            removedOptionItemId,
+                            removedOptionId,
+                            "OPTION",
+                            "REMOVED",
+                        ),
+                    ),
+                    Triple(
+                        "submit-unavailable-option",
+                        AddBatchItemDto(
+                            cartLineRef = "unavailable-option",
+                            itemId = unavailableOptionItemId,
+                            qty = 1,
+                            selectedOptionId = unavailableOptionId,
+                        ),
+                        ExpectedCartMenuIssue(
+                            "unavailable-option",
+                            unavailableOptionItemId,
+                            unavailableOptionId,
+                            "OPTION",
+                            "UNAVAILABLE",
+                        ),
+                    ),
+                )
+            staleSubmissions.forEach { (idempotencyKey, item, issue) ->
+                val before = persistenceSnapshot(jdbcUrl)
+                assertCartMenuSelectionIssues(submit(idempotencyKey, item), listOf(issue))
+                assertEquals(before, persistenceSnapshot(jdbcUrl))
+            }
+
+            val correctedResponse =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(
+                        """
+                        {
+                          "tableToken": "cart-menu-issues-submit-token",
+                          "tableSessionId": $tableSessionId,
+                          "tabId": $personalTabId,
+                          "idempotencyKey": "submit-corrected-current-cart",
+                          "selectionKind": "ITEM",
+                          "reason": "REMOVED",
+                          "details": { "issues": [] },
+                          "items": [
+                            {
+                              "cartLineRef": "corrected-line",
+                              "itemId": $correctedItemId,
+                              "qty": 2,
+                              "selectedOptionId": $correctedOptionId,
+                              "selectionKind": "OPTION",
+                              "reason": "UNAVAILABLE"
+                            }
+                          ]
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, correctedResponse.status)
+            val corrected = json.decodeFromString(AddBatchResponse.serializer(), correctedResponse.bodyAsText())
+            assertTrue(corrected.submitted)
+            assertEquals(130L, corrected.pricing.items.single().priceMinor)
+            assertEquals(260L, corrected.pricing.items.single().lineGrossMinor)
+            assertEquals(correctedOptionId, corrected.pricing.items.single().selectedOption?.optionId)
+            assertEquals(1, countRows(jdbcUrl, "orders"))
+            assertEquals(1, countRows(jdbcUrl, "order_batches"))
+            assertEquals(1, countRows(jdbcUrl, "order_batch_items"))
+            assertEquals(1, countRows(jdbcUrl, "order_batch_item_options"))
+            assertEquals(1, countRows(jdbcUrl, "guest_batch_idempotency"))
+        }
+
+    @Test
+    fun `platform owner submit rejects all stale menu states without persistent writes`() =
+        testApplication {
+            val ownerUserId = 9_900_134L
+            val jdbcUrl = buildJdbcUrl("guest-cart-menu-selection-issues-platform-submit")
+            val config = buildConfig(jdbcUrl, platformOwnerId = ownerUserId)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 135)
+            val tableToken = "platform-cart-menu-issues-submit-token"
+            seedTableToken(jdbcUrl, tableId, tableToken)
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val categoryId = seedMenuCategory(jdbcUrl, venueId)
+            val removedItemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Platform removed item")
+            val unavailableItemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Platform unavailable item")
+            val removedOptionItemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Platform removed option item")
+            val removedOptionId =
+                seedMenuOption(jdbcUrl, venueId, removedOptionItemId, "Platform removed option")
+            val unavailableOptionItemId =
+                seedMenuItem(jdbcUrl, venueId, categoryId, "Platform unavailable option item")
+            val unavailableOptionId =
+                seedMenuOption(jdbcUrl, venueId, unavailableOptionItemId, "Platform unavailable option")
+            val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, ownerUserId)
+            seedConfirmedPlatformGuestContext(
+                jdbcUrl = jdbcUrl,
+                chatId = 7_700_135L,
+                userId = ownerUserId,
+                venueId = venueId,
+                tableId = tableId,
+                tableToken = tableToken,
+            )
+            val token = issueToken(config, ownerUserId)
+
+            deleteRow(jdbcUrl, "menu_item_options", removedOptionId)
+            deleteRow(jdbcUrl, "menu_items", removedItemId)
+            setMenuItemAvailability(jdbcUrl, unavailableItemId, isAvailable = false)
+            setMenuOptionAvailability(jdbcUrl, unavailableOptionId, isAvailable = false)
+
+            suspend fun submit(
+                idempotencyKey: String,
+                item: AddBatchItemDto,
+            ): HttpResponse =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(
+                        json.encodeToString(
+                            AddBatchRequest.serializer(),
+                            AddBatchRequest(
+                                tableToken = tableToken,
+                                tableSessionId = tableSessionId,
+                                tabId = personalTabId,
+                                idempotencyKey = idempotencyKey,
+                                items = listOf(item),
+                            ),
+                        ),
+                    )
+                }
+
+            suspend fun preview(item: AddBatchItemDto): HttpResponse =
+                client.post("/api/guest/order/preview") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(
+                        json.encodeToString(
+                            CartPreviewRequest.serializer(),
+                            CartPreviewRequest(
+                                tableToken = tableToken,
+                                tableSessionId = tableSessionId,
+                                tabId = personalTabId,
+                                items = listOf(item),
+                            ),
+                        ),
+                    )
+                }
+
+            val staleSubmissions =
+                listOf(
+                    Triple(
+                        "platform-submit-removed-item",
+                        AddBatchItemDto(cartLineRef = "removed-item", itemId = removedItemId, qty = 1),
+                        ExpectedCartMenuIssue("removed-item", removedItemId, null, "ITEM", "REMOVED"),
+                    ),
+                    Triple(
+                        "platform-submit-unavailable-item",
+                        AddBatchItemDto(cartLineRef = "unavailable-item", itemId = unavailableItemId, qty = 1),
+                        ExpectedCartMenuIssue("unavailable-item", unavailableItemId, null, "ITEM", "UNAVAILABLE"),
+                    ),
+                    Triple(
+                        "platform-submit-removed-option",
+                        AddBatchItemDto(
+                            cartLineRef = "removed-option",
+                            itemId = removedOptionItemId,
+                            qty = 1,
+                            selectedOptionId = removedOptionId,
+                        ),
+                        ExpectedCartMenuIssue(
+                            "removed-option",
+                            removedOptionItemId,
+                            removedOptionId,
+                            "OPTION",
+                            "REMOVED",
+                        ),
+                    ),
+                    Triple(
+                        "platform-submit-unavailable-option",
+                        AddBatchItemDto(
+                            cartLineRef = "unavailable-option",
+                            itemId = unavailableOptionItemId,
+                            qty = 1,
+                            selectedOptionId = unavailableOptionId,
+                        ),
+                        ExpectedCartMenuIssue(
+                            "unavailable-option",
+                            unavailableOptionItemId,
+                            unavailableOptionId,
+                            "OPTION",
+                            "UNAVAILABLE",
+                        ),
+                    ),
+                )
+            staleSubmissions.forEach { (idempotencyKey, item, issue) ->
+                val beforePreview = persistenceSnapshot(jdbcUrl)
+                assertCartMenuSelectionIssues(preview(item), listOf(issue))
+                assertEquals(beforePreview, persistenceSnapshot(jdbcUrl))
+                val before = persistenceSnapshot(jdbcUrl)
+                assertCartMenuSelectionIssues(submit(idempotencyKey, item), listOf(issue))
+                assertEquals(before, persistenceSnapshot(jdbcUrl))
+            }
+        }
+
+    @Test
+    fun `submit failure checkpoints roll back context tab order and idempotency writes`() {
+        data class FailureCase(
+            val name: String,
+            val contextCheckpoint: GuestOrderContextCheckpoint? = null,
+            val writeCheckpoint: GuestOrderWriteCheckpoint? = null,
+        )
+
+        val failures =
+            listOf(
+                FailureCase(
+                    name = "after-session-touch",
+                    contextCheckpoint = GuestOrderContextCheckpoint.AFTER_SESSION_TOUCH,
+                ),
+                FailureCase(
+                    name = "after-personal-tab-ensure",
+                    contextCheckpoint = GuestOrderContextCheckpoint.AFTER_PERSONAL_TAB_ENSURE,
+                ),
+                FailureCase(
+                    name = "after-order-batch-write",
+                    writeCheckpoint = GuestOrderWriteCheckpoint.AFTER_ORDER_BATCH_WRITE,
+                ),
+                FailureCase(
+                    name = "after-idempotency-write",
+                    writeCheckpoint = GuestOrderWriteCheckpoint.AFTER_IDEMPOTENCY_WRITE,
+                ),
+            )
+
+        failures.forEach { failure ->
+            testApplication {
+                val jdbcUrl = buildJdbcUrl("guest-order-rollback-${failure.name}")
+                val config = buildConfig(jdbcUrl)
+
+                environment { this.config = config }
+                application {
+                    moduleWithOverrides(
+                        ModuleOverrides(
+                            guestOrderContextCheckpoint = { checkpoint ->
+                                if (checkpoint == failure.contextCheckpoint) {
+                                    throw SQLException("Injected ${failure.name}")
+                                }
+                            },
+                            guestOrderWriteCheckpoint = { checkpoint ->
+                                if (checkpoint == failure.writeCheckpoint) {
+                                    throw SQLException("Injected ${failure.name}")
+                                }
+                            },
+                        ),
+                    )
+                }
+
+                client.get("/health")
+
+                val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+                val tableId = seedTable(jdbcUrl, venueId, 136)
+                val tableToken = "rollback-${failure.name}-token"
+                seedTableToken(jdbcUrl, tableId, tableToken)
+                seedSubscription(jdbcUrl, venueId, "ACTIVE")
+                val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+                val categoryId = seedMenuCategory(jdbcUrl, venueId)
+                val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Rollback item")
+                val sharedTabId = seedSharedTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
+                val token = issueToken(config)
+                val before = persistenceSnapshot(jdbcUrl)
+
+                val response =
+                    client.post("/api/guest/order/add-batch") {
+                        contentType(ContentType.Application.Json)
+                        headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                        setBody(
+                            json.encodeToString(
+                                AddBatchRequest.serializer(),
+                                AddBatchRequest(
+                                    tableToken = tableToken,
+                                    tableSessionId = tableSessionId,
+                                    tabId = sharedTabId,
+                                    idempotencyKey = "rollback-${failure.name}",
+                                    items = listOf(AddBatchItemDto(itemId = itemId, qty = 1)),
+                                ),
+                            ),
+                        )
+                    }
+
+                assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
+                assertApiErrorEnvelope(response, ApiErrorCodes.DATABASE_UNAVAILABLE)
+                assertEquals(before, persistenceSnapshot(jdbcUrl))
+            }
+        }
+    }
+
+    @Test
     fun `cart preview keeps same item with different selected options as separate lines`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("guest-order-option-preview")
@@ -1413,7 +2347,7 @@ class GuestOrderRoutesTest {
         }
 
     @Test
-    fun `add-batch idempotency replay still invokes staff chat notifier for recovery dedupe`() =
+    fun `add-batch idempotency replay does not send duplicate staff notification`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("guest-order-staff-chat-replay")
             val config = buildConfig(jdbcUrl)
@@ -1471,10 +2405,9 @@ class GuestOrderRoutesTest {
             assertEquals(HttpStatusCode.OK, secondResponse.status)
             assertEquals(firstPayload.orderId, secondPayload.orderId)
             assertEquals(firstPayload.batchId, secondPayload.batchId)
-            assertEquals(2, notifications.size)
-            assertEquals(firstPayload.batchId, notifications[0].batchId)
-            assertEquals(firstPayload.batchId, notifications[1].batchId)
-            assertEquals(1_000, notifications[1].bill?.finalPayableTotalMinor)
+            assertEquals(1, notifications.size)
+            assertEquals(firstPayload.batchId, notifications.single().batchId)
+            assertEquals(1_000, notifications.single().bill?.finalPayableTotalMinor)
         }
 
     @Test
@@ -2205,9 +3138,9 @@ class GuestOrderRoutesTest {
             assertEquals(submitted.pricing.grossTotalMinor, replay.pricing.grossTotalMinor)
             assertEquals(submitted.pricing.promoDiscountTotalMinor, replay.pricing.promoDiscountTotalMinor)
             assertEquals(submitted.pricing.finalPayableTotalMinor, replay.pricing.finalPayableTotalMinor)
-            assertEquals(2, notifications.size)
-            assertEquals(submitted.pricing.finalPayableTotalMinor, notifications.last().totalPayableMinor)
-            assertEquals(submitted.pricing.currency, notifications.last().totalCurrency)
+            assertEquals(1, notifications.size)
+            assertEquals(submitted.pricing.finalPayableTotalMinor, notifications.single().totalPayableMinor)
+            assertEquals(submitted.pricing.currency, notifications.single().totalCurrency)
             assertEquals(1, countPromotionApplications(jdbcUrl))
             assertEquals(1, countPromotionAdjustments(jdbcUrl))
 
@@ -4909,6 +5842,85 @@ class GuestOrderRoutesTest {
         return "jdbc:h2:mem:$dbName;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1"
     }
 
+    private fun persistenceSnapshot(jdbcUrl: String): Map<String, List<String>> {
+        return DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            val existingTables =
+                buildSet {
+                    connection.metaData.getTables(null, null, null, arrayOf("TABLE")).use { resultSet ->
+                        while (resultSet.next()) {
+                            resultSet.getString("TABLE_NAME")?.lowercase()?.let(::add)
+                        }
+                    }
+                }
+            persistenceSnapshotTables
+                .filter { it in existingTables }
+                .associateWith { table ->
+                    connection.prepareStatement("SELECT * FROM $table").use { statement ->
+                        statement.executeQuery().use { resultSet ->
+                            val metadata = resultSet.metaData
+                            buildList {
+                                while (resultSet.next()) {
+                                    add(
+                                        (1..metadata.columnCount)
+                                            .map { columnIndex ->
+                                                val column = metadata.getColumnLabel(columnIndex).lowercase()
+                                                "$column=${canonicalJdbcValue(resultSet.getObject(columnIndex))}"
+                                            }
+                                            .sorted()
+                                            .joinToString(separator = "|"),
+                                    )
+                                }
+                            }.sorted()
+                        }
+                    }
+                }
+        }
+    }
+
+    private fun assertExpandedPlatformOrderSnapshot(
+        snapshot: Map<String, List<String>>,
+        ownerUserId: Long,
+        tableToken: String,
+    ) {
+        assertEquals(persistenceSnapshotTables.toSet(), snapshot.keys)
+        val tableSession = snapshot.getValue("table_sessions").single()
+        assertTrue(tableSession.contains("last_activity_at="))
+        assertTrue(tableSession.contains("expires_at="))
+        assertTrue(snapshot.getValue("guest_table_session_exits").isEmpty())
+        assertEquals(1, snapshot.getValue("tab").size)
+        assertEquals(1, snapshot.getValue("tab_member").size)
+        val context = snapshot.getValue("telegram_chat_context").single()
+        assertTrue(context.contains("user_id=$ownerUserId"))
+        assertTrue(context.contains("table_token=$tableToken"))
+        val dialog = snapshot.getValue("telegram_dialog_state").single()
+        assertTrue(dialog.contains("state=BOT_MENU_CART_WAIT_COMMENT"))
+        assertEquals(1, snapshot.getValue("orders").size)
+        assertEquals(1, snapshot.getValue("order_batches").size)
+        assertEquals(1, snapshot.getValue("order_batch_items").size)
+        assertEquals(1, snapshot.getValue("order_batch_item_options").size)
+        assertEquals(1, snapshot.getValue("guest_batch_idempotency").size)
+        assertEquals(1, snapshot.getValue("analytics_events").size)
+        assertTrue(snapshot.getValue("telegram_outbox").isEmpty())
+    }
+
+    private fun canonicalJdbcValue(value: Any?): String =
+        when (value) {
+            null -> "<NULL>"
+            is ByteArray -> java.util.Base64.getEncoder().encodeToString(value)
+            is Timestamp -> value.toInstant().toString()
+            is java.sql.Date -> value.toLocalDate().toString()
+            is java.sql.Time -> value.toLocalTime().toString()
+            is java.time.OffsetDateTime -> value.toInstant().toString()
+            is java.time.ZonedDateTime -> value.toInstant().toString()
+            is java.time.Instant -> value.toString()
+            is java.sql.Clob -> value.getSubString(1, value.length().toInt())
+            is java.sql.Blob ->
+                java.util.Base64
+                    .getEncoder()
+                    .encodeToString(value.getBytes(1, value.length().toInt()))
+            else -> value.toString()
+        }
+
     private fun buildConfig(
         jdbcUrl: String,
         platformOwnerId: Long? = null,
@@ -5030,6 +6042,70 @@ class GuestOrderRoutesTest {
             ).use { statement ->
                 statement.setString(1, token)
                 statement.setLong(2, tableId)
+                statement.executeUpdate()
+            }
+        }
+    }
+
+    private fun seedConfirmedPlatformGuestContext(
+        jdbcUrl: String,
+        chatId: Long,
+        userId: Long,
+        venueId: Long,
+        tableId: Long,
+        tableToken: String,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.createStatement().use { statement ->
+                statement.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS telegram_chat_context (
+                        chat_id BIGINT PRIMARY KEY,
+                        user_id BIGINT NOT NULL,
+                        venue_id BIGINT NULL,
+                        table_id BIGINT NULL,
+                        table_token VARCHAR(64) NULL,
+                        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        CONSTRAINT fk_test_chat_context_user
+                            FOREIGN KEY (user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE,
+                        CONSTRAINT fk_test_chat_context_venue
+                            FOREIGN KEY (venue_id) REFERENCES venues(id) ON DELETE SET NULL,
+                        CONSTRAINT fk_test_chat_context_table
+                            FOREIGN KEY (table_id) REFERENCES venue_tables(id) ON DELETE SET NULL
+                    )
+                    """.trimIndent(),
+                )
+            }
+            connection.prepareStatement(
+                """
+                INSERT INTO telegram_chat_context (
+                    chat_id,
+                    user_id,
+                    venue_id,
+                    table_id,
+                    table_token,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, chatId)
+                statement.setLong(2, userId)
+                statement.setLong(3, venueId)
+                statement.setLong(4, tableId)
+                statement.setString(5, tableToken)
+                statement.setTimestamp(6, Timestamp.from(Instant.now()))
+                statement.executeUpdate()
+            }
+            connection.prepareStatement(
+                """
+                INSERT INTO telegram_dialog_state (chat_id, state, payload, updated_at)
+                VALUES (?, 'BOT_MENU_CART_WAIT_COMMENT', ?, ?)
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, chatId)
+                statement.setString(2, "{\"cart\":\"keep\"}")
+                statement.setTimestamp(3, Timestamp.from(Instant.now()))
                 statement.executeUpdate()
             }
         }
@@ -5851,6 +6927,71 @@ class GuestOrderRoutesTest {
                 statement.executeUpdate()
             }
         }
+    }
+
+    private fun deleteRow(
+        jdbcUrl: String,
+        tableName: String,
+        id: Long,
+    ) {
+        require(tableName == "menu_items" || tableName == "menu_item_options")
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement("DELETE FROM $tableName WHERE id = ?").use { statement ->
+                statement.setLong(1, id)
+                assertEquals(1, statement.executeUpdate())
+            }
+        }
+    }
+
+    private fun clearGuestBatchRequestFingerprint(
+        jdbcUrl: String,
+        tableSessionId: Long,
+        idempotencyKey: String,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                UPDATE guest_batch_idempotency
+                SET request_fingerprint = NULL
+                WHERE table_session_id = ?
+                  AND idempotency_key = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, tableSessionId)
+                statement.setString(2, idempotencyKey)
+                assertEquals(1, statement.executeUpdate())
+            }
+        }
+    }
+
+    private suspend fun assertCartMenuSelectionIssues(
+        response: HttpResponse,
+        expected: List<ExpectedCartMenuIssue>,
+    ) {
+        assertEquals(HttpStatusCode.Conflict, response.status)
+        val root = json.parseToJsonElement(response.bodyAsText()).jsonObject
+        val error = assertNotNull(root["error"]?.jsonObject)
+        assertEquals(ApiErrorCodes.CART_MENU_SELECTION_UNAVAILABLE, error["code"]?.jsonPrimitive?.content)
+        val issues = assertNotNull(error["details"]?.jsonObject?.get("issues")?.jsonArray)
+        val actual =
+            issues.map { issueElement ->
+                val issue = issueElement.jsonObject
+                ExpectedCartMenuIssue(
+                    cartLineRef = assertNotNull(issue["cartLineRef"]?.jsonPrimitive?.content),
+                    itemId = assertNotNull(issue["itemId"]?.jsonPrimitive?.longOrNull),
+                    optionId = issue["optionId"]?.jsonPrimitive?.longOrNull,
+                    selectionKind = assertNotNull(issue["selectionKind"]?.jsonPrimitive?.content),
+                    reason = assertNotNull(issue["reason"]?.jsonPrimitive?.content),
+                )
+            }
+        assertEquals(expected, actual)
+    }
+
+    private suspend fun assertNoCartMenuSelectionIssues(response: HttpResponse) {
+        val root = json.parseToJsonElement(response.bodyAsText()).jsonObject
+        val error = assertNotNull(root["error"]?.jsonObject)
+        val details = error["details"]
+        assertTrue(details == null || !details.toString().contains("\"issues\""))
     }
 
     private fun editPromotionRuleAndMenuAfterApplication(

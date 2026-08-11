@@ -69,6 +69,7 @@ internal suspend fun <T> requireConfirmedPlatformGuestMutation(
     expectedTableId: Long? = null,
     expectedTableSessionId: Long? = null,
     ttl: Duration?,
+    touchSessionBeforeMutation: Boolean = true,
     mutation: (Connection, ConfirmedPlatformGuestMutationContext) -> T,
 ): T {
     val resolvedTtl = ttl ?: throw DatabaseUnavailableException()
@@ -82,6 +83,7 @@ internal suspend fun <T> requireConfirmedPlatformGuestMutation(
             expectedTableId = expectedTableId,
             expectedSessionId = expectedTableSessionId,
             ttl = resolvedTtl,
+            touchSessionBeforeMutation = touchSessionBeforeMutation,
             mutation = mutation,
         ) ?: PlatformGuestTableMutationResult.DatabaseUnavailable
     return when (result) {

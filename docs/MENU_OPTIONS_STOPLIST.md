@@ -2,7 +2,7 @@
 
 Дата актуализации: 2026-08-11.
 
-Статус: **current product reference / SPEC UPDATED**. Menu/options/flavors parity is documented as smoke-closed for the structured selected-option flow. The bounded shift-check slice is **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**; menu item, empty-category and option hard-delete audits are release-closed bounded MVPs. Menu option hard delete includes atomic Telegram base-profile normalization and is **DONE / MVP / STAGING-SMOKE-PASSED**. Menu option rename audit is **DANGEROUS ACTION AUDIT SLICE / MENU OPTION RENAME AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Menu option price audit is **DANGEROUS ACTION AUDIT SLICE / MENU OPTION PRICE AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Menu option availability audit is **DANGEROUS ACTION AUDIT SLICE / MENU OPTION AVAILABILITY AUDIT / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. The broader menu constructor, media/top-list governance, remaining audit coverage and permission parity remain **PARTIAL** unless a specific implementation task proves them.
+Статус: **current product reference / SPEC UPDATED**. Guest stale-menu cart recovery is **GUEST CART STALE MENU SELECTION RECOVERY / REMOVED OR UNAVAILABLE ITEMS AND OPTIONS / PAYLOAD-BOUND IDEMPOTENCY + ATOMIC REJECTION / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. Menu/options/flavors parity is documented as smoke-closed for the structured selected-option flow. The bounded shift-check slice is **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**; menu item, empty-category and option hard-delete audits are release-closed bounded MVPs. Menu option hard delete includes atomic Telegram base-profile normalization and is **DONE / MVP / STAGING-SMOKE-PASSED**. Menu option rename audit is **DANGEROUS ACTION AUDIT SLICE / MENU OPTION RENAME AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Menu option price audit is **DANGEROUS ACTION AUDIT SLICE / MENU OPTION PRICE AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Menu option availability audit remains **FUNCTIONALLY PASSED ON STAGING / GENERAL CART RECOVERY FOLLOW-UP REQUIRED** until the new focused recovery smoke is repeated. The broader menu constructor, media/top-list governance, remaining audit coverage and permission parity remain **PARTIAL** unless a specific implementation task proves them.
 
 ## Core Rule
 
@@ -35,7 +35,7 @@ Menu permissions are governed by `docs/SECURITY_RBAC_MATRIX.md`; Venue Mode oper
 | Item CRUD | Structured menu items, prices and availability exist; Owner/Manager item editing is documented, Staff denied for structure. Existing Mini App and Telegram item hard delete writes one transaction-bound safe audit. | Owner manages item create/edit/reorder/archive, price, visibility, featured and media. | Item hard-delete audit is `DONE / MVP / STAGING-SMOKE-PASSED`; Manager structure/price scope and the remaining item mutation audit families stay open. |
 | Item availability | Item-level stop-list is documented for OWNER/MANAGER/STAFF operational availability. | Availability toggle is operational state, fast and reversible, with audit for Staff/Manager where implemented. | Per-venue `staff_stoplist_enabled` flag is target/future; current global Staff permission must stay cross-surface consistent. |
 | Option group/value support | Guest/Menu Options & Flavors parity is smoke-closed: item-scoped options/flavors, base profiles and selected-option submit exist. Atomic Telegram base-profile normalization and application-level locked canonical-profile collision checks are release-closed for their bounded contract. | General `OPTION_GROUP`/`OPTION_VALUE` model supports required single/multi modifiers with min/max validation. | Broader non-hookah modifier UX, DB-level uniqueness and Mini App atomic bulk apply remain separate. |
-| Option/value availability | Item option/flavor stop-list is documented and smoked. | Guest sees only available choices or disabled copy by venue policy; stale submit is rejected. | Keep option ownership and stale availability tests in regression. |
+| Option/value availability | Item option/flavor stop-list is documented and smoked. Preview/submit now identify own-cart removed/unavailable item or option lines with a typed server contract. | Guest sees only available choices or disabled copy by venue policy; stale preview/submit is rejected with actionable line recovery. | Keep option ownership, foreign-selection privacy, all-issues and stale availability tests in regression. |
 | Guest menu DTO | Guest Bot and Guest Mini App expose option picker where configured. | DTO includes item visibility/availability, option groups, values, price deltas and human copy without leaking internal media/provider data. | Needs verification before broad modifier expansion. |
 | Order item modifiers/options snapshot | Current docs say selected option id/name/price delta and line preference notes are preserved where implemented. | Snapshot item and selected option names/prices at submit time; later edits never rewrite old bills/history. | Keep cross-channel bill snapshots in regression; multi-option quantities/counts need future design if introduced. |
 | Photos/descriptions | Current structured menu item repositories/DTOs/rendering do not expose item photos, thumbnails or descriptions. The DB has a legacy `menu_items.description` column, but current Bot/Venue/Guest menu paths do not read or write it. | Item photos can be shown in structured menu; descriptions are guest-safe. | Structured menu-item media/description is `MISSING / FUTURE`; do not infer support from working info-section media. |
@@ -63,7 +63,18 @@ Menu permissions are governed by `docs/SECURITY_RBAC_MATRIX.md`; Venue Mode oper
   - required options are selected;
   - `min_select` / `max_select` / single-vs-multi rules are valid;
   - item and option prices are snapshotted server-side.
-- If item/option availability changes between cart and submit, guest copy should be safe: `Позиция или выбранный вариант больше недоступны. Удалите из корзины или выберите замену.`
+- Deterministic own-cart failures use HTTP `409`, code `CART_MENU_SELECTION_UNAVAILABLE` and
+  `details.issues[]` with the current stable client cart-line reference `cartLineRef`, requested
+  `itemId`, nullable requested `optionId`,
+  `selectionKind=ITEM|OPTION` and `reason=REMOVED|UNAVAILABLE`. The server collects all such issues
+  in request order. `cartLineRef` is not yet an opaque identity. The client maps only this exact
+  typed contract and never infers a reason from HTTP status or message text.
+- Selected option names may be retained on the cart line. Item names shown in recovery copy come
+  from the current mutable item cache and are not an immutable cart snapshot; generic copy is used
+  when the cache has no name. Foreign venue/item/option ownership stays generic `INVALID_INPUT`.
+- Item recovery is `Вернуться в меню` plus line-scoped removal because no safe in-place item
+  replacement engine exists. Option recovery reuses the current option picker; removed/unavailable
+  options are absent, and quantity/note survive a valid replacement.
 - Suggested replacements are future/optional and must not silently substitute an item or option.
 - Executable promotions use the same server-owned item/option availability and current-price
   validation at preview and submit. A selected option may affect the eligible line amount, but it
@@ -466,8 +477,8 @@ contract, not a separately confirmed staging scenario.
 This closes only the bounded price-audit contract. Option create and item-price audit,
 the broader Menu or Dangerous Action Audit, and all media/storage work remain open.
 
-Option availability audit status: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION AVAILABILITY AUDIT /
-MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+Option availability audit status: **FUNCTIONALLY PASSED ON STAGING / GENERAL CART RECOVERY FOLLOW-UP
+REQUIRED** until the focused stale-cart recovery smoke is repeated.
 
 - Individual existing-option production paths are direct Venue Mini App availability, compound
   Venue Mini App option PATCH and Telegram Owner/Manager/Staff stop-list callbacks. Direct paths keep
@@ -539,9 +550,16 @@ Audit payloads must use safe ids and old/new safe fields only. Do not include ra
   STAGING-SMOKE-PASSED**. Focused backend, PostgreSQL lock, compile/lint, Mini App build and
   Playwright `139/139` were green locally for that release slice; its bounded cross-surface staging
   smoke is recorded passed.
-- Option availability audit: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION AVAILABILITY AUDIT / MVP
-  IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. Independent review,
-  green Actions, staging deploy and bounded smoke remain open; no migration was added.
+- Option availability audit: **FUNCTIONALLY PASSED ON STAGING / GENERAL CART RECOVERY FOLLOW-UP
+  REQUIRED** until the focused stale-cart recovery smoke is repeated.
+- Guest cart stale menu recovery: **GUEST CART STALE MENU SELECTION RECOVERY / REMOVED OR UNAVAILABLE
+  ITEMS AND OPTIONS / PAYLOAD-BOUND IDEMPOTENCY + ATOMIC REJECTION / MVP IMPLEMENTED / LOCAL
+  VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. It is category-agnostic, uses all
+  server-owned issues, shares preview/submit validation, makes preview read-only and keeps final
+  submit validation plus context/order writes in one transaction. PostgreSQL `V123` / H2 `V124`
+  add only nullable `request_fingerprint`; raw request/canonical JSON is not stored,
+  `response_snapshot` is not repurposed, and there is no bulk backfill or global unique constraint.
+  Review, CI, all-writer rollout, staging deploy and focused smoke remain open.
 - Guest server-side availability validation: `REQUIRED`; current stale/unavailable option rejection is documented as covered for the smoked options/flavors flow, but broader availability validation should stay in regression.
 - Promotions/paid placement remain separate from featured/top-list and follow `docs/GROWTH_RETENTION.md` plus `docs/PLATFORM_COCKPIT.md`.
 
@@ -552,7 +570,16 @@ Audit payloads must use safe ids and old/new safe fields only. Do not include ra
 3. Owner creates an option group and option values.
 4. Owner toggles item unavailable; guest cannot order it.
 5. Owner toggles option value unavailable; guest cannot select/order it.
-6. Guest has item in cart, then item becomes unavailable; submit is rejected safely.
+6. Guest stale cart recovery is verified before submit:
+   - removed/unavailable item preview and submit identify that exact line; expanded before/after
+     snapshots cover session timestamps, exits, tabs/memberships, context/dialog, order state,
+     idempotency, analytics and outbox,
+     retry keeps the issue until re-enable, and removal affects only that line;
+   - removed/unavailable selected option uses the retained cart-line option name where present and
+     generic `вариант` copy otherwise; the current picker excludes it, and valid replacement keeps
+     quantity/note;
+   - one unavailable item plus one removed option renders both lines; fixing one keeps the other
+     warning and valid lines, and no line is deleted automatically.
 7. Price changes after order do not alter existing order snapshot.
 8. Archived item remains visible in old order history/bill snapshot.
 9. Manager can/cannot edit price according to final policy.

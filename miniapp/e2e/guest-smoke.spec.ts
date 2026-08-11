@@ -71,6 +71,7 @@ type ApiErrorFixture = {
   status: number
   code?: string
   message?: string
+  details?: unknown
 }
 
 type TableSessionEndResponseFixture = {
@@ -531,6 +532,8 @@ type AddBatchResponseFixture = {
   recalculated: boolean
 }
 
+type AddBatchRouteResponseFixture = AddBatchResponseFixture | { error: ApiErrorFixture }
+
 type BillingInvoiceFixture = {
   id: number
   periodStart: string
@@ -641,6 +644,7 @@ type SupportMessageFixture = {
 }
 
 type AddBatchItemPayload = {
+  cartLineRef?: string
   itemId: number
   qty: number
   selectedOptionId?: number | null
@@ -655,6 +659,10 @@ type CartPreviewRequestFixture = {
   items: AddBatchItemPayload[]
   comment?: string | null
 }
+
+type CartPreviewResponseFixture =
+  | { preview: CartPreviewFixture }
+  | { error: ApiErrorFixture }
 
 type GuestTableScopeFixture = {
   venueId: number
@@ -1142,6 +1150,45 @@ function buildDefaultGuestMenu(): GuestMenuCategory[] {
   ]
 }
 
+function buildStaleRecoveryPreview(request: CartPreviewRequestFixture): CartPreviewFixture {
+  const items = request.items.map((line) => {
+    const unitPriceMinor = line.itemId === 200 ? 150000 : line.itemId === 211 ? 20000 : 30000
+    return {
+      itemId: line.itemId,
+      name: line.itemId === 200 ? 'Кальян' : line.itemId === 211 ? 'Вода' : 'Чай',
+      qty: line.qty,
+      selectedOption:
+        line.selectedOptionId == null
+          ? null
+          : {
+              optionId: line.selectedOptionId,
+              name: line.selectedOptionId === 302 ? 'Цитрус' : 'Ягодный',
+              priceDeltaMinor: 0
+            },
+      preferenceNote: line.preferenceNote ?? null,
+      priceMinor: unitPriceMinor,
+      currency: 'RUB',
+      lineGrossMinor: unitPriceMinor * line.qty,
+      discountMinor: 0,
+      linePayableMinor: unitPriceMinor * line.qty,
+      isPromotionReward: false
+    }
+  })
+  const grossTotalMinor = items.reduce((sum, item) => sum + item.lineGrossMinor, 0)
+  return {
+    grossTotalMinor,
+    promoDiscountTotalMinor: 0,
+    loyaltyDiscountTotalMinor: 0,
+    finalPayableTotalMinor: grossTotalMinor,
+    currency: 'RUB',
+    discounts: [],
+    items,
+    pricingFingerprint: `stale-recovery:${JSON.stringify(request.items)}`,
+    cartFingerprint: `stale-recovery:${request.tableSessionId}:${request.tabId}:${JSON.stringify(request.items)}`,
+    giftOffer: { status: 'NO_GIFT' }
+  }
+}
+
 function buildGuestBooking(overrides: Partial<GuestBookingFixture> = {}): GuestBookingFixture {
   return {
     bookingId: 501,
@@ -1269,8 +1316,11 @@ async function mockGuestApi(
     catalogVenues?: GuestCatalogVenueFixture[]
     cartPreview?: CartPreviewFixture
     cartPreviewResolver?: (request: CartPreviewRequestFixture) => CartPreviewFixture
+    cartPreviewResponseResolver?: (request: CartPreviewRequestFixture) => CartPreviewResponseFixture
     addBatchResponse?: AddBatchResponseFixture
-    addBatchResponseResolver?: (request: AddBatchPayload) => AddBatchResponseFixture
+    addBatchResponseResolver?: (
+      request: AddBatchPayload
+    ) => AddBatchRouteResponseFixture | Promise<AddBatchRouteResponseFixture>
     tableScope?: GuestTableScopeFixture
     tabs?: GuestTabFixture[]
   } = {}
@@ -1279,7 +1329,7 @@ async function mockGuestApi(
   let restoreContext = options.restoreContext ?? null
   let extensionOptions = options.extensionOptions ?? buildShiftExtensionOptions()
   let extensionOptionsError = options.extensionOptionsError ?? null
-  const menuCategories = options.menuCategories ?? buildDefaultGuestMenu()
+  let menuCategories = options.menuCategories ?? buildDefaultGuestMenu()
   let bookings = options.bookings ?? []
   let bookingCreateError = options.bookingCreateError ?? null
   let tableSessionEndResponse =
@@ -1984,6 +2034,25 @@ async function mockGuestApi(
   await page.route('**/api/guest/order/preview', async (route) => {
     const body = (await route.request().postDataJSON()) as CartPreviewRequestFixture
     previewRequests.push(body)
+    if (options.cartPreviewResponseResolver) {
+      const response = options.cartPreviewResponseResolver(body)
+      if ('error' in response) {
+        await route.fulfill({
+          status: response.error.status,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            error: {
+              code: response.error.code,
+              message: response.error.message,
+              details: response.error.details
+            }
+          })
+        })
+      } else {
+        await route.fulfill(jsonResponse(response))
+      }
+      return
+    }
     if (options.cartPreviewResolver) {
       await route.fulfill(jsonResponse({ preview: options.cartPreviewResolver(body) }))
       return
@@ -2017,7 +2086,23 @@ async function mockGuestApi(
     addBatchRequests.push(body)
     submittedOrderItems = body.items
     if (options.addBatchResponseResolver) {
-      await route.fulfill(jsonResponse(options.addBatchResponseResolver(body)))
+      const response = await options.addBatchResponseResolver(body)
+      if ('error' in response) {
+        await route.fulfill({
+          status: response.error.status,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            error: {
+              code: response.error.code,
+              message: response.error.message,
+              details: response.error.details
+            },
+            requestId: 'e2e-order-idempotency-request'
+          })
+        })
+      } else {
+        await route.fulfill(jsonResponse(response))
+      }
       return
     }
     if (options.addBatchResponse) {
@@ -2193,6 +2278,9 @@ async function mockGuestApi(
     },
     setCartPreview: (preview: CartPreviewFixture | null) => {
       cartPreview = preview
+    },
+    setMenuCategories: (categories: GuestMenuCategory[]) => {
+      menuCategories = categories
     },
     setTableScope: (scope: GuestTableScopeFixture) => {
       tableScope = scope
@@ -7933,7 +8021,7 @@ test('guest repeats eligible history lines into the current cart only after conf
   expect(api.getAddBatchRequests()).toHaveLength(0)
 
   await page.getByRole('button', { name: 'Перейти в корзину' }).click()
-  const repeatedLine = page.locator('.cart-item').filter({ hasText: 'Вкус: Ягодный' })
+  const repeatedLine = page.locator('.cart-item').filter({ hasText: 'Вариант: Ягодный' })
   await expect(repeatedLine).toContainText('Пожелание: покрепче')
   await expect(repeatedLine.locator('input')).toHaveValue('2')
   expect(api.getAddBatchRequests()).toHaveLength(0)
@@ -8153,7 +8241,7 @@ test('guest cart uses current item and option prices and drops a paused promotio
   await page.getByRole('button', { name: 'Добавить в корзину' }).click()
   await page.getByRole('button', { name: 'Корзина (1)' }).click()
 
-  const cartLine = page.locator('.cart-item').filter({ hasText: 'Вкус: Ягодный' })
+  const cartLine = page.locator('.cart-item').filter({ hasText: 'Вариант: Ягодный' })
   await expect(cartLine).toContainText(/1[\s\u00a0]100,00\s*₽/)
   const previewCard = page.locator('.cart-preview-card')
   await expect(previewCard).toContainText('Сумма до скидок')
@@ -8164,7 +8252,9 @@ test('guest cart uses current item and option prices and drops a paused promotio
   await expect(promotedLine).toContainText(/Акция «Счастливые часы».*−800,00\s*₽/)
   await expect(promotedLine).toContainText(/К оплате.*800,00\s*₽/)
   await expect.poll(() => api.getPreviewRequests()).toHaveLength(1)
-  expect(api.getPreviewRequests()[0].items).toEqual([{ itemId: 200, qty: 1, selectedOptionId: 301 }])
+  expect(api.getPreviewRequests()[0].items).toEqual([
+    expect.objectContaining({ itemId: 200, qty: 1, selectedOptionId: 301, cartLineRef: expect.any(String) })
+  ])
   expect(api.getAddBatchRequests()).toHaveLength(0)
 
   api.setPromotions([])
@@ -8172,6 +8262,771 @@ test('guest cart uses current item and option prices and drops a paused promotio
   await expect(page.locator('.toast')).toHaveText('Условия акции изменились. Итог корзины пересчитан.')
   expect(api.getAddBatchRequests()).toHaveLength(1)
   expect(api.getAddBatchRequests()[0].previewFingerprint).toBe('happy-hours-preview-v3')
+})
+
+function submittedBatchResponse(request: AddBatchPayload): AddBatchResponseFixture {
+  return {
+    submitted: true,
+    orderId: 900,
+    batchId: 444,
+    pricing: buildStaleRecoveryPreview(request),
+    recalculated: false
+  }
+}
+
+async function openDefaultGuestCart(page: Page) {
+  await page.goto(
+    `?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`
+  )
+  await page.getByRole('button', { name: /Кальянное меню/ }).click()
+  await page.getByRole('button', { name: 'Добавить' }).click()
+  await page.getByRole('button', { name: 'Корзина (1)' }).click()
+  await expect(page.getByRole('button', { name: 'Отправить', exact: true })).toBeEnabled()
+}
+
+test('guest cart idempotency preserves the key for an exact network retry', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  let attempts = 0
+  const api = await mockGuestApi(page, {
+    addBatchResponseResolver: (request) => {
+      attempts += 1
+      return attempts === 1
+        ? {
+            error: {
+              status: 503,
+              code: 'DATABASE_UNAVAILABLE',
+              message: 'Временная ошибка базы данных.'
+            }
+          }
+        : submittedBatchResponse(request)
+    }
+  })
+  await openDefaultGuestCart(page)
+
+  await page.getByRole('button', { name: 'Отправить', exact: true }).click()
+  const submitError = page.locator('.error-card')
+  await expect(submitError).toContainText('Сервис временно недоступен')
+  await expect.poll(() => api.getAddBatchRequests()).toHaveLength(1)
+  const firstKey = api.getAddBatchRequests()[0].idempotencyKey
+  expect(firstKey).toBeTruthy()
+
+  await submitError.getByRole('button', { name: 'Повторить' }).click()
+  await expect.poll(() => api.getAddBatchRequests()).toHaveLength(2)
+  expect(api.getAddBatchRequests()[1].idempotencyKey).toBe(firstKey)
+})
+
+test('guest cart preserves a business mutation made while submit response is in flight', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  let releaseFirstResponse!: () => void
+  let markFirstRequestStarted!: () => void
+  const firstResponseGate = new Promise<void>((resolve) => {
+    releaseFirstResponse = resolve
+  })
+  const firstRequestStarted = new Promise<void>((resolve) => {
+    markFirstRequestStarted = resolve
+  })
+  let attempts = 0
+  const api = await mockGuestApi(page, {
+    addBatchResponseResolver: async (request) => {
+      attempts += 1
+      if (attempts === 1) {
+        markFirstRequestStarted()
+        await firstResponseGate
+      }
+      return submittedBatchResponse(request)
+    }
+  })
+  await openDefaultGuestCart(page)
+  const send = page.getByRole('button', { name: 'Отправить', exact: true })
+
+  await send.click()
+  await firstRequestStarted
+  const firstKey = api.getAddBatchRequests()[0].idempotencyKey
+  const quantityInput = page.locator('.cart-item .qty-input')
+  await quantityInput.fill('2')
+  await quantityInput.press('Enter')
+  await expect.poll(() => api.getPreviewRequests().at(-1)?.items[0]?.qty).toBe(2)
+
+  releaseFirstResponse()
+  await expect(
+    page.getByText(
+      'Заказ отправлен. Изменения, внесённые во время отправки, сохранены в корзине. Проверьте их и нажмите «Отправить» для нового заказа.'
+    )
+  ).toBeVisible()
+  await expect(quantityInput).toHaveValue('2')
+  await expect(page.locator('.cart-item')).toHaveCount(1)
+  await expect.poll(() => api.getAddBatchRequests()).toHaveLength(1)
+  await expect(send).toBeEnabled()
+
+  await send.click()
+  await expect.poll(() => api.getAddBatchRequests()).toHaveLength(2)
+  expect(api.getAddBatchRequests()[1].idempotencyKey).not.toBe(firstKey)
+  await expect(page).toHaveURL(/#\/order$/)
+})
+
+test('guest cart idempotency rotates the key after quantity and normalized comment mutations', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  let attempts = 0
+  const api = await mockGuestApi(page, {
+    addBatchResponseResolver: (request) => {
+      attempts += 1
+      return attempts < 3
+        ? {
+            error: {
+              status: 503,
+              code: 'DATABASE_UNAVAILABLE',
+              message: 'Временная ошибка базы данных.'
+            }
+          }
+        : submittedBatchResponse(request)
+    }
+  })
+  await openDefaultGuestCart(page)
+  const send = page.getByRole('button', { name: 'Отправить', exact: true })
+
+  await send.click()
+  await expect.poll(() => api.getAddBatchRequests()).toHaveLength(1)
+  const quantityInput = page.locator('.cart-item .qty-input')
+  await quantityInput.fill('2')
+  await quantityInput.press('Enter')
+  await expect.poll(() => api.getPreviewRequests().at(-1)?.items[0]?.qty).toBe(2)
+  await expect(send).toBeEnabled()
+
+  await send.click()
+  await expect.poll(() => api.getAddBatchRequests()).toHaveLength(2)
+  const comment = page.getByPlaceholder('Комментарий к заказу')
+  await comment.fill('  у окна  ')
+  await expect.poll(() => api.getPreviewRequests().at(-1)?.comment).toBe('у окна')
+  await expect(send).toBeEnabled()
+
+  await send.click()
+  await expect.poll(() => api.getAddBatchRequests()).toHaveLength(3)
+  const keys = api.getAddBatchRequests().map((request) => request.idempotencyKey)
+  expect(keys[0]).toBeTruthy()
+  expect(keys[1]).not.toBe(keys[0])
+  expect(keys[2]).not.toBe(keys[1])
+})
+
+test('guest cart idempotency mismatch keeps the cart and uses a new key only after explicit retry', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  let attempts = 0
+  const api = await mockGuestApi(page, {
+    addBatchResponseResolver: (request) => {
+      attempts += 1
+      return attempts === 1
+        ? {
+            error: {
+              status: 409,
+              code: 'ORDER_IDEMPOTENCY_PAYLOAD_MISMATCH',
+              message:
+                'Этот ключ отправки уже использован для другого состава заказа. Обновите корзину и отправьте заказ ещё раз.'
+            }
+          }
+        : submittedBatchResponse(request)
+    }
+  })
+  await openDefaultGuestCart(page)
+
+  await page.getByRole('button', { name: 'Отправить', exact: true }).click()
+  const submitError = page.locator('.error-card')
+  await expect(submitError).toContainText('Этот ключ отправки уже использован для другого состава заказа.')
+  await expect(page.locator('.cart-item')).toHaveCount(1)
+  await expect.poll(() => api.getAddBatchRequests()).toHaveLength(1)
+  const conflictingKey = api.getAddBatchRequests()[0].idempotencyKey
+
+  await submitError.getByRole('button', { name: 'Повторить' }).click()
+  await expect.poll(() => api.getAddBatchRequests()).toHaveLength(2)
+  expect(api.getAddBatchRequests()[1].idempotencyKey).not.toBe(conflictingKey)
+})
+
+test('guest cart unverifiable replay waits for an explicit safe recovery action', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  let attempts = 0
+  const api = await mockGuestApi(page, {
+    addBatchResponseResolver: (request) => {
+      attempts += 1
+      return attempts === 1
+        ? {
+            error: {
+              status: 409,
+              code: 'ORDER_IDEMPOTENCY_REPLAY_UNVERIFIABLE',
+              message:
+                'Не удалось безопасно повторить старую отправку. Проверьте активный заказ и отправьте корзину заново только при необходимости.'
+            }
+          }
+        : submittedBatchResponse(request)
+    }
+  })
+  await openDefaultGuestCart(page)
+
+  await page.getByRole('button', { name: 'Отправить', exact: true }).click()
+  const submitError = page.locator('.error-card')
+  await expect(submitError).toContainText('Не удалось безопасно повторить старую отправку.')
+  await expect(submitError.getByRole('button', { name: 'Проверить активный заказ' })).toBeVisible()
+  await expect(submitError.getByRole('button', { name: 'Отправить как новый заказ' })).toBeVisible()
+  await expect(page.locator('.cart-item')).toHaveCount(1)
+  await expect.poll(() => api.getAddBatchRequests()).toHaveLength(1)
+  const unverifiableKey = api.getAddBatchRequests()[0].idempotencyKey
+
+  await submitError.getByRole('button', { name: 'Отправить как новый заказ' }).click()
+  await expect.poll(() => api.getAddBatchRequests()).toHaveLength(2)
+  expect(api.getAddBatchRequests()[1].idempotencyKey).not.toBe(unverifiableKey)
+})
+
+for (const scenario of [
+  {
+    code: 'CART_MENU_SELECTION_UNAVAILABLE',
+    label: 'stale menu selection'
+  },
+  {
+    code: 'ORDER_IDEMPOTENCY_PAYLOAD_MISMATCH',
+    label: 'idempotency payload mismatch'
+  },
+  {
+    code: 'ORDER_IDEMPOTENCY_REPLAY_UNVERIFIABLE',
+    label: 'unverifiable idempotency replay'
+  }
+]) {
+  test(`guest cart keeps ${scenario.label} generic for non-conflict HTTP statuses`, async ({ page }) => {
+    await installTelegramWebApp(page, 123456789)
+    let attempts = 0
+    const servedStatuses: number[] = []
+    const api = await mockGuestApi(page, {
+      addBatchResponseResolver: (request) => {
+        const status = attempts === 0 ? 400 : attempts === 1 ? 422 : 500
+        attempts += 1
+        servedStatuses.push(status)
+        const line = request.items[0]
+        return {
+          error: {
+            status,
+            code: scenario.code,
+            message: 'Конфликтный код не соответствует HTTP-статусу.',
+            details:
+              scenario.code === 'CART_MENU_SELECTION_UNAVAILABLE'
+                ? {
+                    issues: [
+                      {
+                        cartLineRef: line.cartLineRef,
+                        itemId: line.itemId,
+                        optionId: null,
+                        selectionKind: 'ITEM',
+                        reason: 'UNAVAILABLE'
+                      }
+                    ]
+                  }
+                : undefined
+          }
+        }
+      }
+    })
+    await openDefaultGuestCart(page)
+
+    const submitError = page.locator('.error-card')
+    await page.getByRole('button', { name: 'Отправить', exact: true }).click()
+    for (let requestCount = 1; requestCount <= 3; requestCount += 1) {
+      await expect.poll(() => api.getAddBatchRequests()).toHaveLength(requestCount)
+      await expect(submitError).toBeVisible()
+      await expect(submitError.getByRole('heading', { name: 'Ошибка', exact: true })).toBeVisible()
+      await expect(submitError).toContainText('Попробуйте ещё раз.')
+      await expect(submitError).not.toContainText('Конфликтный код не соответствует HTTP-статусу.')
+      await expect(submitError.getByRole('button')).toHaveCount(1)
+      await expect(submitError.getByRole('button', { name: 'Повторить', exact: true })).toBeVisible()
+      await expect(submitError.getByRole('button', { name: 'Проверить активный заказ' })).toHaveCount(0)
+      await expect(submitError.getByRole('button', { name: 'Отправить как новый заказ' })).toHaveCount(0)
+      await expect(page.locator('.cart-line-warning')).toHaveCount(0)
+      await expect(page.getByRole('button', { name: /Выбрать другой вариант/ })).toHaveCount(0)
+      await expect(page.getByRole('button', { name: 'Вернуться в меню', exact: true })).toHaveCount(0)
+      await expect(page.locator('.cart-item')).toHaveCount(1)
+      if (requestCount < 3) {
+        await submitError.getByRole('button', { name: 'Повторить', exact: true }).click()
+      }
+    }
+
+    expect(servedStatuses).toEqual([400, 422, 500])
+    const keys = api.getAddBatchRequests().map((request) => request.idempotencyKey)
+    expect(keys[0]).toBeTruthy()
+    expect(keys.every((key) => key === keys[0])).toBe(true)
+  })
+}
+
+test('guest cart stale option correction rotates the prior submit key', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const menu = (includeStaleOption: boolean): GuestMenuCategory[] => [
+    {
+      id: 20,
+      name: 'Кальянное меню',
+      categoryType: 'HOOKAH',
+      items: [
+        {
+          id: 200,
+          name: 'Кальян',
+          priceMinor: 150000,
+          currency: 'RUB',
+          isAvailable: true,
+          effectiveItemType: 'HOOKAH',
+          options: [
+            ...(includeStaleOption
+              ? [{ id: 301, name: 'Ягодный', priceDeltaMinor: 0, isAvailable: true }]
+              : []),
+            { id: 302, name: 'Цитрус', priceDeltaMinor: 0, isAvailable: true }
+          ]
+        }
+      ]
+    }
+  ]
+  let attempts = 0
+  const api = await mockGuestApi(page, {
+    menuCategories: menu(true),
+    cartPreviewResolver: buildStaleRecoveryPreview,
+    addBatchResponseResolver: (request) => {
+      attempts += 1
+      const line = request.items[0]
+      return attempts === 1
+        ? {
+            error: {
+              status: 409,
+              code: 'CART_MENU_SELECTION_UNAVAILABLE',
+              message: 'Корзину нужно обновить.',
+              details: {
+                issues: [
+                  {
+                    cartLineRef: line.cartLineRef,
+                    itemId: line.itemId,
+                    optionId: line.selectedOptionId,
+                    selectionKind: 'OPTION',
+                    reason: 'UNAVAILABLE'
+                  }
+                ]
+              }
+            }
+          }
+        : submittedBatchResponse(request)
+    }
+  })
+  await page.goto(
+    `?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`
+  )
+  await page.getByRole('button', { name: /Кальянное меню/ }).click()
+  await page.getByRole('button', { name: 'Выбрать' }).click()
+  await page.getByRole('button', { name: /Ягодный/ }).click()
+  await page.getByRole('button', { name: 'Добавить в корзину' }).click()
+  await page.getByRole('button', { name: 'Корзина (1)' }).click()
+  await page.getByRole('button', { name: 'Отправить', exact: true }).click()
+  await expect.poll(() => api.getAddBatchRequests()).toHaveLength(1)
+  const staleKey = api.getAddBatchRequests()[0].idempotencyKey
+
+  api.setMenuCategories(menu(false))
+  await page.getByRole('button', { name: 'Выбрать другой вариант для позиции Кальян' }).click()
+  await page.getByRole('button', { name: /Цитрус/ }).click()
+  await page.getByRole('button', { name: 'Сохранить новый вариант' }).click()
+  await expect(page.getByRole('button', { name: 'Отправить', exact: true })).toBeEnabled()
+  await page.getByRole('button', { name: 'Отправить', exact: true }).click()
+
+  await expect.poll(() => api.getAddBatchRequests()).toHaveLength(2)
+  expect(api.getAddBatchRequests()[1].idempotencyKey).not.toBe(staleKey)
+})
+
+test('guest cart explains a removed item and removes only the affected line', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const menuCategories: GuestMenuCategory[] = [
+    {
+      id: 21,
+      name: 'Напитки',
+      categoryType: 'DRINK',
+      items: [
+        {
+          id: 211,
+          name: 'Вода',
+          priceMinor: 20000,
+          currency: 'RUB',
+          isAvailable: true,
+          effectiveItemType: 'DRINK'
+        },
+        {
+          id: 212,
+          name: 'Чай',
+          priceMinor: 30000,
+          currency: 'RUB',
+          isAvailable: true,
+          effectiveItemType: 'DRINK'
+        }
+      ]
+    }
+  ]
+  const api = await mockGuestApi(page, {
+    menuCategories,
+    cartPreviewResponseResolver: (request) => {
+      const removedLine = request.items.find((line) => line.itemId === 211)
+      if (!removedLine) {
+        return { preview: buildStaleRecoveryPreview(request) }
+      }
+      return {
+        error: {
+          status: 409,
+          code: 'CART_MENU_SELECTION_UNAVAILABLE',
+          message: 'Корзину нужно обновить.',
+          details: {
+            issues: [
+              {
+                cartLineRef: removedLine.cartLineRef,
+                itemId: 211,
+                optionId: null,
+                selectionKind: 'ITEM',
+                reason: 'REMOVED'
+              }
+            ]
+          }
+        }
+      }
+    }
+  })
+
+  await page.goto(
+    `?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`
+  )
+  await page.getByRole('button', { name: /Напитки/ }).click()
+  await page.locator('.menu-item').filter({ hasText: 'Вода' }).getByRole('button', { name: 'Добавить' }).click()
+  await page.locator('.menu-item').filter({ hasText: 'Чай' }).getByRole('button', { name: 'Добавить' }).click()
+  await page.getByRole('button', { name: 'Корзина (2)' }).click()
+
+  const waterLine = page.locator('.cart-item').filter({ hasText: 'Вода' })
+  const teaLine = page.locator('.cart-item').filter({ hasText: 'Чай' })
+  const warning = waterLine.locator('.cart-line-warning')
+  await expect(warning).toHaveAttribute('role', 'alert')
+  await expect(warning).toContainText('Позиции «Вода» больше нет в меню.')
+  await expect(warning).toContainText('Выберите другую позицию или удалите её из корзины.')
+  await expect(waterLine).toHaveAttribute('aria-describedby', /cart-line-warning-/)
+  await expect(teaLine).toBeVisible()
+  await expect(page.getByText('Не удалось рассчитать корзину. Повторите попытку.')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Отправить' })).toBeDisabled()
+  expect(api.getAddBatchRequests()).toHaveLength(0)
+
+  await warning.getByRole('button', { name: 'Удалить из корзины: Вода' }).click()
+  await expect(waterLine).toHaveCount(0)
+  await expect(teaLine).toBeVisible()
+  await expect(teaLine).toBeFocused()
+  await expect(page.getByRole('button', { name: 'Отправить' })).toBeEnabled()
+  await expect.poll(() => api.getPreviewRequests().at(-1)?.items).toEqual([
+    expect.objectContaining({ itemId: 212, qty: 1 })
+  ])
+})
+
+test('guest cart keeps an unavailable-item warning across retry and recovers after re-enable', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  let responseMode: 'unavailable' | 'generic' | 'available' = 'unavailable'
+  const api = await mockGuestApi(page, {
+    menuCategories: [
+      {
+        id: 21,
+        name: 'Напитки',
+        categoryType: 'DRINK',
+        items: [
+          {
+            id: 211,
+            name: 'Вода',
+            priceMinor: 20000,
+            currency: 'RUB',
+            isAvailable: true,
+            effectiveItemType: 'DRINK'
+          }
+        ]
+      }
+    ],
+    cartPreviewResponseResolver: (request) => {
+      if (responseMode === 'available') {
+        return { preview: buildStaleRecoveryPreview(request) }
+      }
+      if (responseMode === 'generic') {
+        return {
+          error: { status: 503, code: 'DATABASE_UNAVAILABLE', message: 'Временная ошибка базы данных.' }
+        }
+      }
+      const line = request.items[0]
+      return {
+        error: {
+          status: 409,
+          code: 'CART_MENU_SELECTION_UNAVAILABLE',
+          message: 'Корзину нужно обновить.',
+          details: {
+            issues: [
+              {
+                cartLineRef: line.cartLineRef,
+                itemId: 211,
+                optionId: null,
+                selectionKind: 'ITEM',
+                reason: 'UNAVAILABLE'
+              }
+            ]
+          }
+        }
+      }
+    }
+  })
+
+  await page.goto(
+    `?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`
+  )
+  await page.getByRole('button', { name: /Напитки/ }).click()
+  await page.getByRole('button', { name: 'Добавить' }).click()
+  await page.getByRole('button', { name: 'Корзина (1)' }).click()
+
+  const warning = page.locator('.cart-line-warning')
+  await expect(warning).toContainText('Позиция «Вода» временно недоступна.')
+  const retry = page.getByRole('button', { name: 'Повторить расчёт' })
+  await retry.click()
+  await expect(warning).toContainText('Позиция «Вода» временно недоступна.')
+
+  responseMode = 'generic'
+  const requestsBeforeGenericFailure = api.getPreviewRequests().length
+  await retry.click()
+  await expect.poll(() => api.getPreviewRequests().length).toBeGreaterThan(requestsBeforeGenericFailure)
+  await expect(page.getByText('Не удалось обновить расчёт. Исправьте отмеченные позиции или повторите проверку.')).toBeVisible()
+  await expect(warning).toContainText('Позиция «Вода» временно недоступна.')
+  await expect(page.getByText('Не удалось рассчитать корзину. Повторите попытку.')).toHaveCount(0)
+
+  responseMode = 'available'
+  await retry.click()
+  await expect(warning).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Отправить' })).toBeEnabled()
+  await expect(page.locator('.cart-preview-card')).toBeVisible()
+  expect(api.getAddBatchRequests()).toHaveLength(0)
+})
+
+for (const scenario of [
+  {
+    reason: 'REMOVED' as const,
+    label: 'removed',
+    copy: 'Выбранного варианта «Ягодный» для позиции «Кальян» больше нет в меню.'
+  },
+  {
+    reason: 'UNAVAILABLE' as const,
+    label: 'unavailable',
+    copy: 'Выбранный вариант «Ягодный» для позиции «Кальян» временно недоступен.'
+  }
+]) {
+  test(`guest cart replaces an ${scenario.label} option through the current option picker`, async ({ page }) => {
+    await installTelegramWebApp(page, 123456789)
+    const currentMenu = (includeStaleOption: boolean): GuestMenuCategory[] => [
+      {
+        id: 20,
+        name: 'Кальянное меню',
+        categoryType: 'HOOKAH',
+        items: [
+          {
+            id: 200,
+            name: 'Кальян',
+            priceMinor: 150000,
+            currency: 'RUB',
+            isAvailable: true,
+            effectiveItemType: 'HOOKAH',
+            options: [
+              ...(includeStaleOption
+                ? [{ id: 301, name: 'Ягодный', priceDeltaMinor: 0, isAvailable: true }]
+                : []),
+              { id: 302, name: 'Цитрус', priceDeltaMinor: 0, isAvailable: true }
+            ]
+          }
+        ]
+      }
+    ]
+    const api = await mockGuestApi(page, {
+      menuCategories: currentMenu(true),
+      cartPreviewResponseResolver: (request) => {
+        const staleLine = request.items.find((line) => line.selectedOptionId === 301)
+        if (!staleLine) {
+          return { preview: buildStaleRecoveryPreview(request) }
+        }
+        return {
+          error: {
+            status: 409,
+            code: 'CART_MENU_SELECTION_UNAVAILABLE',
+            message: 'Корзину нужно обновить.',
+            details: {
+              issues: [
+                {
+                  cartLineRef: staleLine.cartLineRef,
+                  itemId: 200,
+                  optionId: 301,
+                  selectionKind: 'OPTION',
+                  reason: scenario.reason
+                }
+              ]
+            }
+          }
+        }
+      }
+    })
+
+    await page.goto(
+      `?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`
+    )
+    await page.getByRole('button', { name: /Кальянное меню/ }).click()
+    await page.getByRole('button', { name: 'Выбрать' }).click()
+    await page.getByRole('button', { name: /Ягодный/ }).click()
+    await page.getByLabel('Пожелания к приготовлению').fill('покрепче')
+    await page.getByRole('button', { name: 'Добавить в корзину' }).click()
+    await page.getByRole('button', { name: 'Корзина (1)' }).click()
+
+    const staleLine = page.locator('.cart-item').filter({ hasText: 'Вариант: Ягодный' })
+    const warning = staleLine.locator('.cart-line-warning')
+    await expect(warning).toContainText(scenario.copy)
+    await expect(warning).toContainText('Выберите другой вариант или удалите позицию из корзины.')
+    await expect(page.getByRole('button', { name: 'Отправить' })).toBeDisabled()
+
+    await staleLine.locator('.qty-input').fill('2')
+    await staleLine.locator('.qty-input').press('Enter')
+    api.setMenuCategories(currentMenu(false))
+    const replaceButton = warning.getByRole('button', { name: 'Выбрать другой вариант для позиции Кальян' })
+    await replaceButton.click()
+
+    await expect(page.getByRole('heading', { name: 'Выберите вкус' })).toBeVisible()
+    await expect(page.getByRole('button', { name: /Ягодный/ })).toHaveCount(0)
+    const replacement = page.getByRole('button', { name: /Цитрус/ })
+    await expect(replacement).toBeVisible()
+    await expect(replacement).toBeFocused()
+    await replacement.click()
+    const note = page.getByLabel('Пожелания к приготовлению')
+    await expect(note).toHaveValue('покрепче')
+    await expect(note).toBeFocused()
+    await page.getByRole('button', { name: 'Сохранить новый вариант' }).click()
+
+    const correctedLine = page.locator('.cart-item').filter({ hasText: 'Вариант: Цитрус' })
+    await expect(correctedLine).toBeVisible()
+    await expect(correctedLine).toContainText('Пожелание: покрепче')
+    await expect(correctedLine.locator('.qty-input')).toHaveValue('2')
+    await expect(correctedLine.locator('.cart-line-warning')).toHaveCount(0)
+    await expect(correctedLine).toBeFocused()
+    await expect(page.getByRole('button', { name: 'Отправить' })).toBeEnabled()
+    await expect.poll(() => api.getPreviewRequests().at(-1)?.items[0]).toEqual(
+      expect.objectContaining({ itemId: 200, qty: 2, selectedOptionId: 302, preferenceNote: 'покрепче' })
+    )
+  })
+}
+
+test('guest cart renders all deterministic line issues and keeps the remaining issue after one fix', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockGuestApi(page, {
+    menuCategories: [
+      {
+        id: 20,
+        name: 'Меню',
+        categoryType: 'OTHER',
+        items: [
+          {
+            id: 200,
+            name: 'Кальян',
+            priceMinor: 150000,
+            currency: 'RUB',
+            isAvailable: true,
+            effectiveItemType: 'HOOKAH',
+            options: [{ id: 301, name: 'Ягодный', priceDeltaMinor: 0, isAvailable: true }]
+          },
+          {
+            id: 211,
+            name: 'Вода',
+            priceMinor: 20000,
+            currency: 'RUB',
+            isAvailable: true,
+            effectiveItemType: 'DRINK'
+          },
+          {
+            id: 212,
+            name: 'Чай',
+            priceMinor: 30000,
+            currency: 'RUB',
+            isAvailable: true,
+            effectiveItemType: 'DRINK'
+          }
+        ]
+      }
+    ],
+    cartPreviewResponseResolver: (request) => {
+      const issues: Array<Record<string, unknown>> = []
+      const unavailableItem = request.items.find((line) => line.itemId === 211)
+      const removedOption = request.items.find((line) => line.itemId === 200 && line.selectedOptionId === 301)
+      if (unavailableItem) {
+        issues.push({
+          cartLineRef: unavailableItem.cartLineRef,
+          itemId: 211,
+          optionId: null,
+          selectionKind: 'ITEM',
+          reason: 'UNAVAILABLE'
+        })
+      }
+      if (removedOption) {
+        issues.push({
+          cartLineRef: removedOption.cartLineRef,
+          itemId: 200,
+          optionId: 301,
+          selectionKind: 'OPTION',
+          reason: 'REMOVED'
+        })
+      }
+      return issues.length
+        ? {
+            error: {
+              status: 409,
+              code: 'CART_MENU_SELECTION_UNAVAILABLE',
+              message: 'Корзину нужно обновить.',
+              details: { issues }
+            }
+          }
+        : { preview: buildStaleRecoveryPreview(request) }
+    }
+  })
+
+  await page.goto(
+    `?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`
+  )
+  await page.locator('.menu-category-button').filter({ hasText: 'Меню' }).click()
+  await page.locator('.menu-item').filter({ hasText: 'Вода' }).getByRole('button', { name: 'Добавить' }).click()
+  await page.locator('.menu-item').filter({ hasText: 'Чай' }).getByRole('button', { name: 'Добавить' }).click()
+  await page.locator('.menu-item').filter({ hasText: 'Кальян' }).getByRole('button', { name: 'Выбрать' }).click()
+  await page.getByRole('button', { name: /Ягодный/ }).click()
+  await page.getByRole('button', { name: 'Добавить в корзину' }).click()
+  await page.getByRole('button', { name: 'Корзина (3)' }).click()
+
+  await expect(
+    page.getByRole('alert').filter({ hasText: 'Некоторые позиции в корзине нужно обновить.' })
+  ).toBeVisible()
+  const waterLine = page.locator('.cart-item').filter({ hasText: 'Вода' })
+  const hookahLine = page.locator('.cart-item').filter({ hasText: 'Кальян' })
+  const teaLine = page.locator('.cart-item').filter({ hasText: 'Чай' })
+  await expect(waterLine.locator('.cart-line-warning')).toContainText('временно недоступна')
+  await expect(hookahLine.locator('.cart-line-warning')).toContainText('больше нет в меню')
+  await expect(teaLine.locator('.cart-line-warning')).toHaveCount(0)
+  await expect(page.locator('.cart-item')).toHaveCount(3)
+  await expect(page.getByRole('button', { name: 'Отправить' })).toBeDisabled()
+  expect(api.getAddBatchRequests()).toHaveLength(0)
+
+  await waterLine.locator('.cart-line-warning').getByRole('button', { name: 'Удалить из корзины: Вода' }).click()
+  await expect(waterLine).toHaveCount(0)
+  await expect(teaLine).toBeVisible()
+  await expect(hookahLine.locator('.cart-line-warning')).toContainText('больше нет в меню')
+  await expect(page.locator('.cart-line-warning[role="alert"]')).toHaveCount(1)
+  await expect(page.getByRole('button', { name: 'Отправить' })).toBeDisabled()
+  expect(api.getAddBatchRequests()).toHaveLength(0)
+})
+
+test('guest cart keeps unknown preview failures generic', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page, {
+    cartPreviewResponseResolver: () => ({
+      error: { status: 503, code: 'DATABASE_UNAVAILABLE', message: 'Временная ошибка базы данных.' }
+    })
+  })
+
+  await page.goto(
+    `?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`
+  )
+  await page.getByRole('button', { name: /Кальянное меню/ }).click()
+  await page.getByRole('button', { name: 'Добавить' }).click()
+  await page.getByRole('button', { name: 'Корзина (1)' }).click()
+
+  await expect(page.getByText('Не удалось рассчитать корзину. Повторите попытку.')).toBeVisible()
+  await expect(page.locator('.cart-line-warning')).toHaveCount(0)
+  await expect(page.getByText(/больше нет в меню|временно недоступ/)).toHaveCount(0)
 })
 
 test('guest cart requires explicit fixed gift accept and clears the decision after a cart mutation', async ({ page }) => {
@@ -9335,10 +10190,10 @@ test('guest mini app uses context-aware placeholder and submits structured selec
   await expect(page.getByRole('button', { name: 'Корзина (5)' })).toBeVisible()
   await page.getByRole('button', { name: 'Корзина (5)' }).click()
 
-  const appleLines = page.locator('.cart-item').filter({ hasText: 'Вкус: Яблоко' })
+  const appleLines = page.locator('.cart-item').filter({ hasText: 'Вариант: Яблоко' })
   const appleLine = page.locator('.cart-item').filter({ hasText: 'Пожелание: поменьше холодка' })
   const appleNoMintLine = page.locator('.cart-item').filter({ hasText: 'Пожелание: без мяты' })
-  const mintLine = page.locator('.cart-item').filter({ hasText: 'Вкус: Мята' })
+  const mintLine = page.locator('.cart-item').filter({ hasText: 'Вариант: Мята' })
   await expect(appleLines).toHaveCount(3)
   await expect(appleLine).toHaveCount(1)
   await expect(appleNoMintLine).toHaveCount(1)
@@ -9366,10 +10221,15 @@ test('guest mini app uses context-aware placeholder and submits structured selec
   expect(submittedItems).toHaveLength(4)
   expect(submittedItems).toEqual(
     expect.arrayContaining([
-      { itemId: 210, qty: 1, selectedOptionId: 301 },
-      { itemId: 210, qty: 2, selectedOptionId: 301, preferenceNote: 'поменьше холодка' },
-      { itemId: 210, qty: 1, selectedOptionId: 301, preferenceNote: 'без мяты' },
-      { itemId: 210, qty: 1, selectedOptionId: 302 }
+      expect.objectContaining({ itemId: 210, qty: 1, selectedOptionId: 301 }),
+      expect.objectContaining({
+        itemId: 210,
+        qty: 2,
+        selectedOptionId: 301,
+        preferenceNote: 'поменьше холодка'
+      }),
+      expect.objectContaining({ itemId: 210, qty: 1, selectedOptionId: 301, preferenceNote: 'без мяты' }),
+      expect.objectContaining({ itemId: 210, qty: 1, selectedOptionId: 302 })
     ])
   )
 })

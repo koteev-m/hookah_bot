@@ -1,8 +1,8 @@
 # Order / Session / Tab Core Model
 
-Дата актуализации: 2026-08-05.
+Дата актуализации: 2026-08-11.
 
-Статус: **current product reference / SPEC UPDATED**. Этот документ фиксирует product model для QR table context, active table order, order batches, personal/shared tabs, bill/request/close flow, visit-history foundation and privacy boundaries. Platform test status is **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / DONE / MVP / STAGING-SMOKE-PASSED**, schema verdict `NO_MIGRATION`; the bounded Telegram/session/privacy smoke is complete. Runtime status is mixed: the old table-only active-order risk and Guest History Foundation MVP are documented as closed in current audit notes, while force-close policy, some DB-level uniqueness nuances, repeat/feedback/loyalty/preorder and broader analytics remain future/partial.
+Статус: **current product reference / SPEC UPDATED**. Этот документ фиксирует product model для QR table context, active table order, order batches, personal/shared tabs, bill/request/close flow, visit-history foundation and privacy boundaries. Guest stale-menu cart recovery is **GUEST CART STALE MENU SELECTION RECOVERY / REMOVED OR UNAVAILABLE ITEMS AND OPTIONS / PAYLOAD-BOUND IDEMPOTENCY + ATOMIC REJECTION / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. Platform test status is **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / DONE / MVP / STAGING-SMOKE-PASSED**; the bounded Telegram/session/privacy smoke is complete. Runtime status is mixed: the old table-only active-order risk and Guest History Foundation MVP are documented as closed in current audit notes, while force-close policy, some DB-level uniqueness nuances, repeat/feedback/loyalty/preorder and broader analytics remain future/partial.
 
 Analytics/event semantics for this core are defined in `docs/ANALYTICS_EVENTS.md`. Role, scope and trust-boundary decisions are defined in `docs/SECURITY_RBAC_MATRIX.md`. Structured menu, option/modifier and stop-list rules are defined in `docs/MENU_OPTIONS_STOPLIST.md`. Venue operational surfaces are defined in `docs/VENUE_OPERATIONS.md`. Booking seated/no-show lifecycle inputs are defined in `docs/BOOKING_LIFECYCLE.md`. Telegram fallback order and staff-chat behavior are defined in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. Testing/smoke strategy is defined in `docs/TESTING_QA_SMOKE_STRATEGY.md`. Release/deploy and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
 
@@ -33,9 +33,30 @@ The active order belongs to a verified table session/visit, not to a physical ta
 - Guest active order view is scoped by `tableSessionId` + selected/current `tabId`.
 - Venue queue may group by physical table, but order detail must preserve session, batches and tabs.
 - One physical table can have sequential visits; old visit/order state must not leak into a new visit.
-- Batch creation is idempotent by client idempotency key.
+- Guest Mini App batch idempotency is scoped to `tableSessionId + idempotencyKey`; the same key in a
+  different table session is an independent operation. Within one session, actor, venue, tab,
+  normalized comment and canonical normalized lines are payload-bound by a versioned server SHA-256
+  fingerprint.
+- Exact replay returns the already committed batch before current menu/gift validation and produces
+  no duplicate order, batch, analytics, outbox or staff notification. Reuse with a different
+  fingerprint fails closed as `ORDER_IDEMPOTENCY_PAYLOAD_MISMATCH`.
+- Mini App keeps the key for an exact in-screen network retry, rotates it after business or
+  account/venue/table-session/tab mutation, and ignores server-only price/availability/pricing-
+  fingerprint changes. Mismatch keeps the cart and creates a new key only on explicit retry;
+  unverifiable legacy replay offers active-order review or an explicit new submit and never resends
+  automatically. A success for an older in-flight payload acknowledges that committed order but does
+  not clear or navigate away from a newer cart mutation.
+- A legacy idempotency row with a `NULL` fingerprint is reconstructed only from unambiguous immutable
+  committed facts. Missing option identity or another required component fails closed as
+  `ORDER_IDEMPOTENCY_REPLAY_UNVERIFIABLE`; multiple physical legacy rows in one logical session/key
+  namespace are likewise unverifiable. Mutable menu names/prices are never used to guess identity.
+- The additive fingerprint column stores only `v1:<sha256>`; raw request/canonical JSON is not stored,
+  `response_snapshot` is not repurposed, legacy rows are not bulk-backfilled and table-session scope
+  is not widened by a global unique constraint.
 - Item name, price, selected options/flavors and price deltas are snapshotted at order time according to `docs/MENU_OPTIONS_STOPLIST.md`.
-- Stop-listed or unavailable items/options are rejected server-side at preview/submit.
+- Removed, stop-listed or otherwise unavailable items/options are rejected by the same server-owned
+  validation at preview and submit. Deterministic own-venue stale selections use typed line issues;
+  foreign item/venue/option ownership remains generic and discloses no existence detail.
 - Executable promotion eligibility, prices and adjustments are server-owned and recalculated at
   preview and final submit; clients never submit trusted discount amounts.
 - A promotion does not mutate menu base price. Its name, rule identity/version, original amount,
@@ -54,7 +75,8 @@ The active order belongs to a verified table session/visit, not to a physical ta
 | `TABLE_SESSION` | QR resolve and table session creation exist. Exact Platform Owner controlled test reuses this same Guest engine only after explicit confirm; prompt/cancel/audit failure create or touch no session, and activation late failures roll back session/context/exit/dialog together. Guest exit is user-scoped through `guest_table_session_exits`, uses saved context for teardown without current token/venue/table/subscription availability, and does not close a shared physical session for all guests. TTL cleanup exists. | Session represents the active venue/table visit context and has explicit close/expire/staff close semantics. | Staff force-close reason/audit and a product-level visit timeline need a dedicated future task if not already implemented. |
 | Active order lookup | Current docs state the old active-order-by-`table_id` risk is closed: active order is scoped by `table_session_id`; H2 mirrors PostgreSQL active-order uniqueness. | One active `ACTIVE_TABLE_ORDER` per current `table_session_id`/visit. | Keep regression smoke for sequential visits at same table. Do not re-open without new code/smoke evidence. |
 | Guest active order endpoint | Current docs state active order view uses `tableSessionId`/`tabId`, human `Заказ №...`, selected account label and selected-tab totals. | Guest sees only selected personal/shared tab context for the active session. | Keep privacy regression for two guests and shared tab membership. |
-| Order batch creation | `add-batch` exists; idempotency key does not duplicate batch; selected options and line notes are snapshotted where implemented. | Every batch belongs to active order + tab and records source `miniapp` / `bot_fallback`. | Source naming and analytics event completeness need verification before analytics work. |
+| Order batch creation | `add-batch` uses payload-bound, table-session-scoped idempotency. New rows store `v1:<sha256>`; exact replay bypasses new-operation validation, mismatch conflicts, and reconstructable legacy rows may be lazily upgraded. Selected options and line notes are snapshotted where implemented. | Every batch belongs to active order + tab and records source `miniapp` / `bot_fallback`. | PostgreSQL `V123` / H2 `V124` are additive and nullable. All order-writing instances must run the new binary before rollout closure; old writers can still create legacy `NULL` rows. Global uniqueness across sessions remains intentionally out of scope. |
+| Guest stale cart recovery | Preview is read-only. Final submit locks authoritative context, session, idempotency and menu rows, validates, then touches session/ensures personal tab and creates order state in one transaction. The server returns all deterministic own-cart issues as `CART_MENU_SELECTION_UNAVAILABLE`; ordinary Guest and exact Platform Owner rejection leave the expanded persistence snapshot unchanged. | Guest sees each affected line and an exact removal/reselection action; current menu state and prices remain authoritative. | Item copy currently uses a mutable item cache, not an immutable cart name snapshot. Local validation is green; independent review, CI, all-writer rollout, staging deploy and focused staging smoke remain open. In-place item replacement is intentionally not introduced. |
 | Tab membership and visibility | Personal/shared tabs and membership checks exist; current docs note H2 mirrors active personal-tab uniqueness while PostgreSQL still permits active `PERSONAL` tabs with `owner_user_id NULL` at schema level. | Personal tab is owner-only; shared tab requires explicit join/consent; every batch has `tab_id`. | PostgreSQL nullable-owner DB nuance and shared-tab DB uniqueness remain follow-ups if product needs DB-level enforcement beyond repository idempotency. |
 | Full bill | Guest/Venue/Bot bill identity parity is staging-smoked; Venue detail shows included/excluded/discount/service-charge context and human tab labels. | Bill is backend-owned, shows batches/tabs/service charges and does not expose raw technical ids as primary labels. | Keep money snapshot and role-denial regression. |
 | Display order number | Human `Заказ №<display_number>` is used on Guest/Venue/Bot surfaces where present. | Human display number is primary for operators and guests; raw DB ids stay internal/secondary. | No DB uniqueness constraint for display number is documented; keep venue-local day semantics explicit. |
@@ -68,6 +90,11 @@ The active order belongs to a verified table session/visit, not to a physical ta
 - `Мой заказ` / `Мой счёт` shows the guest's personal tab or joined shared tab, not every guest's personal bill at the physical table.
 - `Дозаказать` creates a new `ORDER_BATCH` in the current active order/session and current selected tab.
 - Growth `Повторить как шаблон` must not create an order without active table context, selected tab and current menu/stop-list validation.
+- A stale item line remains visible with `Вернуться в меню` and line-scoped removal; navigation does
+  not delete it. A stale option line reuses the current item option picker and preserves quantity and
+  preference note until a successful authoritative preview clears the warning.
+- Unknown, network, database, pricing, venue, table or session failures retain generic retry UX and
+  are never inferred as stale-menu reasons by HTTP status or message text.
 - Account `История` shows completed visits/orders only: closed-order visits, booking-only `SEATED` visits and merged same-real-visit records where dedup applies. Cancelled/no-show/expired/pending/changed bookings are hidden as visits.
 - History detail opens the current guest's closed order detail, tolerates legacy missing optional fields such as `promotionDiscounts`, options and notes, and keeps the safe error copy `Не удалось загрузить детали истории.` for real 404/errors.
 - History detail has `← Назад к истории`; Telegram BackButton inside detail returns to the History list, not app home.
@@ -166,6 +193,11 @@ Use the canonical event envelope, naming convention and privacy rules from `docs
 ## Roadmap Status
 
 - Order/session/tab core spec: `UPDATED`.
+- Guest cart stale menu recovery: **GUEST CART STALE MENU SELECTION RECOVERY / REMOVED OR UNAVAILABLE
+  ITEMS AND OPTIONS / PAYLOAD-BOUND IDEMPOTENCY + ATOMIC REJECTION / MVP IMPLEMENTED / LOCAL
+  VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**; preview/submit parity, expanded zero-write
+  rejection and rollback are local evidence. PostgreSQL `V123` and H2 `V124` add nullable
+  `request_fingerprint` without backfill or global uniqueness.
 - Runtime active-order table-only risk: documented as closed in current audit/roadmap; keep in regression.
 - Guest History Foundation MVP: `DONE / STAGING-SMOKE-PASSED`; keep privacy, terminal-status filtering, legacy closed-order detail compatibility, BackButton/list return and merge/dedup behavior in regression.
 - Remaining runtime status: `PARTIAL` for staff force-close policy/audit, some DB-level uniqueness nuances, repeat template, post-visit feedback, loyalty/preorder `visit_count` and broader analytics events.

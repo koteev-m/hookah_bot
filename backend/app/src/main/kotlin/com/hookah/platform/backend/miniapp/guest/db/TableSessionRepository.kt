@@ -299,24 +299,35 @@ class TableSessionRepository(
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    connection.prepareStatement(
-                        """
-                        SELECT id, venue_id, table_id, started_at, last_activity_at, expires_at, ended_at, status
-                        FROM table_sessions
-                        WHERE id = ?
-                          AND venue_id = ?
-                          AND table_id = ?
-                        """.trimIndent(),
-                    ).use { statement ->
-                        statement.setLong(1, tableSessionId)
-                        statement.setLong(2, venueId)
-                        statement.setLong(3, tableId)
-                        statement.executeQuery().use { rs -> if (rs.next()) rs.toRecord() else null }
-                    }
+                    findSessionForTable(connection, tableSessionId, venueId, tableId)
                 }
             } catch (e: SQLException) {
                 throw DatabaseUnavailableException()
             }
+        }
+    }
+
+    fun findSessionForTable(
+        connection: Connection,
+        tableSessionId: Long,
+        venueId: Long,
+        tableId: Long,
+        forUpdate: Boolean = false,
+    ): TableSessionRecord? {
+        val lockClause = if (forUpdate) " FOR UPDATE" else ""
+        return connection.prepareStatement(
+            """
+            SELECT id, venue_id, table_id, started_at, last_activity_at, expires_at, ended_at, status
+            FROM table_sessions
+            WHERE id = ?
+              AND venue_id = ?
+              AND table_id = ?$lockClause
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, tableSessionId)
+            statement.setLong(2, venueId)
+            statement.setLong(3, tableId)
+            statement.executeQuery().use { rs -> if (rs.next()) rs.toRecord() else null }
         }
     }
 

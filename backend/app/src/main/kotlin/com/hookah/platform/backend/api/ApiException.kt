@@ -1,7 +1,12 @@
 package com.hookah.platform.backend.api
 
 import io.ktor.http.HttpStatusCode
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 sealed class ApiException(
     val code: String,
@@ -153,6 +158,75 @@ class MenuItemDeleteBlockedByFixedRewardException :
         httpStatus = HttpStatusCode.Conflict,
         message = MENU_ITEM_DELETE_BLOCKED_BY_FIXED_REWARD_MESSAGE,
     )
+
+enum class CartMenuSelectionKind {
+    ITEM,
+    OPTION,
+}
+
+enum class CartMenuSelectionReason {
+    REMOVED,
+    UNAVAILABLE,
+}
+
+data class CartMenuSelectionIssue(
+    val cartLineRef: String,
+    val itemId: Long,
+    val optionId: Long?,
+    val selectionKind: CartMenuSelectionKind,
+    val reason: CartMenuSelectionReason,
+)
+
+class CartMenuSelectionUnavailableException(
+    val issues: List<CartMenuSelectionIssue>,
+) : ApiException(
+        code = ApiErrorCodes.CART_MENU_SELECTION_UNAVAILABLE,
+        httpStatus = HttpStatusCode.Conflict,
+        message = "Некоторые позиции в корзине нужно обновить.",
+        details = cartMenuSelectionUnavailableDetails(issues),
+    ) {
+    init {
+        require(issues.isNotEmpty())
+    }
+}
+
+class OrderIdempotencyPayloadMismatchException :
+    ApiException(
+        code = ApiErrorCodes.ORDER_IDEMPOTENCY_PAYLOAD_MISMATCH,
+        httpStatus = HttpStatusCode.Conflict,
+        message =
+            "Этот ключ отправки уже использован для другого состава заказа. " +
+                "Обновите корзину и отправьте заказ ещё раз.",
+    )
+
+class OrderIdempotencyReplayUnverifiableException :
+    ApiException(
+        code = ApiErrorCodes.ORDER_IDEMPOTENCY_REPLAY_UNVERIFIABLE,
+        httpStatus = HttpStatusCode.Conflict,
+        message =
+            "Не удалось безопасно повторить старую отправку. " +
+                "Проверьте активный заказ и отправьте корзину заново только при необходимости.",
+    )
+
+private fun cartMenuSelectionUnavailableDetails(issues: List<CartMenuSelectionIssue>): JsonObject =
+    buildJsonObject {
+        put(
+            "issues",
+            buildJsonArray {
+                issues.forEach { issue ->
+                    add(
+                        buildJsonObject {
+                            put("cartLineRef", issue.cartLineRef)
+                            put("itemId", issue.itemId)
+                            put("optionId", issue.optionId?.let(::JsonPrimitive) ?: JsonNull)
+                            put("selectionKind", issue.selectionKind.name)
+                            put("reason", issue.reason.name)
+                        },
+                    )
+                }
+            },
+        )
+    }
 
 const val MENU_ITEM_DELETE_BLOCKED_BY_FIXED_REWARD_MESSAGE =
     "Позицию нельзя удалить: она используется как фиксированный подарок в акции. " +

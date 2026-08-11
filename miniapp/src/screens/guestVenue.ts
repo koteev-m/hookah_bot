@@ -35,7 +35,13 @@ import type {
 } from '../shared/api/venueDtos'
 import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
 import { updateItemCache } from '../shared/state/itemCache'
-import { addToCart, getCartSnapshot, removeFromCart, subscribeCart } from '../shared/state/cartStore'
+import {
+  addToCart,
+  getCartSnapshot,
+  removeFromCart,
+  replaceCartLineOption,
+  subscribeCart
+} from '../shared/state/cartStore'
 import {
   getTableContext,
   subscribe as subscribeTable,
@@ -61,6 +67,7 @@ type VenueScreenOptions = {
   isDebug: boolean
   venueId: number | null
   openStaffCall?: boolean
+  replaceCartLineRef?: string | null
   onBookVenue?: (venueId: number) => void
   onAskVenue?: (venueId: number) => void
   readOnlyPreview?: boolean
@@ -899,6 +906,8 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
   let selectedService: 'shift-extension' | null = null
   let selectedOptionItemId: number | null = null
   let selectedOptionChoice: MenuItemOptionDto | null = null
+  let replaceCartLineRef = options.replaceCartLineRef?.trim() || null
+  let replacementInitialized = false
   let latestCategories: MenuCategoryDto[] = []
   let shiftExtensionAvailability: GuestShiftExtensionAvailability = {
     visible: false,
@@ -1468,6 +1477,9 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
       noteInput.type = 'text'
       noteInput.maxLength = MAX_ITEM_PREFERENCE_NOTE_LENGTH
       noteInput.placeholder = optionCopy.notePlaceholder
+      if (replaceCartLineRef) {
+        noteInput.value = getCartSnapshot().items.get(replaceCartLineRef)?.preferenceNote ?? ''
+      }
       append(noteField, noteText, noteInput)
       const helper = el('p', {
         className: 'menu-option-note-helper',
@@ -1478,7 +1490,10 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
         className: 'button-small button-secondary',
         text: optionCopy.backToChoice
       }) as HTMLButtonElement
-      const addButton = el('button', { className: 'button-small', text: 'Добавить в корзину' }) as HTMLButtonElement
+      const addButton = el('button', {
+        className: 'button-small',
+        text: replaceCartLineRef ? 'Сохранить новый вариант' : 'Добавить в корзину'
+      }) as HTMLButtonElement
       const backHandler = () => {
         selectedOptionChoice = null
         renderMenu(categories)
@@ -1488,14 +1503,26 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
           setMessage(resolveTableHint(tableSnapshot) ?? 'Сначала отсканируйте QR')
           return
         }
-        const result = addToCart(item.id, {
-          selectedOptionId: selectedOption.id,
-          selectedOptionName: selectedOption.name,
-          priceDeltaMinor: selectedOption.priceDeltaMinor,
-          preferenceNote: noteInput.value
-        })
+        const result = replaceCartLineRef
+          ? replaceCartLineOption(replaceCartLineRef, selectedOption, noteInput.value)
+          : addToCart(item.id, {
+              selectedOptionId: selectedOption.id,
+              selectedOptionName: selectedOption.name,
+              priceDeltaMinor: selectedOption.priceDeltaMinor,
+              preferenceNote: noteInput.value
+            })
         if (!result.ok) {
-          setMessage(result.reason === 'limit' ? 'Лимит: не более 50 позиций в корзине.' : 'Не удалось добавить позицию.')
+          setMessage(
+            result.reason === 'limit'
+              ? 'Лимит: не более 50 позиций в корзине.'
+              : result.reason === 'conflict'
+                ? 'Такой вариант уже есть в корзине. Выберите другой вариант или удалите проблемную позицию.'
+                : 'Не удалось обновить позицию. Вернитесь в корзину и повторите.'
+          )
+          return
+        }
+        if (replaceCartLineRef && 'lineKey' in result) {
+          window.location.hash = `#/cart?focusLineRef=${encodeURIComponent(result.lineKey)}`
           return
         }
         selectedOptionItemId = null
@@ -1512,6 +1539,9 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
       })
       append(actions, backButton, addButton)
       append(section, noteField, helper, actions)
+      if (replaceCartLineRef) {
+        window.requestAnimationFrame(() => noteInput.focus())
+      }
       return section
     }
 
@@ -1540,6 +1570,9 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
       section.appendChild(el('p', { className: 'status', text: 'Для этой позиции сейчас нет доступных вариантов.' }))
     } else {
       section.appendChild(optionList)
+      if (replaceCartLineRef) {
+        window.requestAnimationFrame(() => optionList.querySelector<HTMLButtonElement>('button')?.focus())
+      }
     }
     return section
   }
@@ -1909,6 +1942,22 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
         const menuData = detailsResult.data as MenuResponse
         const categories = menuData.categories ?? []
         latestCategories = categories
+        if (replaceCartLineRef && !replacementInitialized) {
+          replacementInitialized = true
+          const replacementLine = getCartSnapshot().items.get(replaceCartLineRef)
+          const replacementCategory = replacementLine
+            ? categories.find((category) => category.items.some((item) => item.id === replacementLine.itemId)) ?? null
+            : null
+          const replacementItem = replacementCategory?.items.find((item) => item.id === replacementLine?.itemId) ?? null
+          if (replacementLine && replacementCategory && replacementItem?.isAvailable) {
+            selectedCategoryId = replacementCategory.id
+            selectedOptionItemId = replacementItem.id
+            selectedOptionChoice = null
+          } else {
+            replaceCartLineRef = null
+            setMessage('Позиция больше недоступна для выбора варианта. Вернитесь в корзину и удалите её или выберите другую позицию.')
+          }
+        }
         if (!categories.some((category) => category.id === selectedCategoryId)) {
           selectedCategoryId = null
           selectedOptionItemId = null
