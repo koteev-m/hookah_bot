@@ -2,7 +2,7 @@
 
 Дата актуализации: 2026-08-11.
 
-Статус: **current product reference / SPEC UPDATED**. Guest stale-menu cart recovery is **GUEST CART STALE MENU SELECTION RECOVERY / REMOVED OR UNAVAILABLE ITEMS AND OPTIONS / PAYLOAD-BOUND IDEMPOTENCY + ATOMIC REJECTION / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. Menu/options/flavors parity is documented as smoke-closed for the structured selected-option flow. The bounded shift-check slice is **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**; menu item, empty-category and option hard-delete audits are release-closed bounded MVPs. Menu option hard delete includes atomic Telegram base-profile normalization and is **DONE / MVP / STAGING-SMOKE-PASSED**. Menu option rename audit is **DANGEROUS ACTION AUDIT SLICE / MENU OPTION RENAME AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Menu option price audit is **DANGEROUS ACTION AUDIT SLICE / MENU OPTION PRICE AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Menu option availability audit remains **FUNCTIONALLY PASSED ON STAGING / GENERAL CART RECOVERY FOLLOW-UP REQUIRED** until the new focused recovery smoke is repeated. The broader menu constructor, media/top-list governance, remaining audit coverage and permission parity remain **PARTIAL** unless a specific implementation task proves them.
+Статус: **current product reference / SPEC UPDATED**. Guest stale-menu cart recovery is **GUEST CART STALE MENU SELECTION RECOVERY / REMOVED OR UNAVAILABLE ITEMS AND OPTIONS / PAYLOAD-BOUND IDEMPOTENCY + ATOMIC REJECTION / DONE / MVP / STAGING-SMOKE-PASSED**; its **ITEM-LEVEL ACTION AND COPY POLISH / DONE / MVP / STAGING-SMOKE-PASSED**. Menu/options/flavors parity is documented as smoke-closed for the structured selected-option flow. The bounded shift-check slice is **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**; menu item, empty-category and option hard-delete audits are release-closed bounded MVPs. Menu option hard delete includes atomic Telegram base-profile normalization and is **DONE / MVP / STAGING-SMOKE-PASSED**. Menu option rename audit is **DANGEROUS ACTION AUDIT SLICE / MENU OPTION RENAME AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Menu option price audit is **DANGEROUS ACTION AUDIT SLICE / MENU OPTION PRICE AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Menu option availability audit is **DANGEROUS ACTION AUDIT SLICE / MENU OPTION AVAILABILITY AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. The broader menu constructor, media/top-list governance, remaining audit coverage and permission parity remain **PARTIAL** unless a specific implementation task proves them.
 
 ## Core Rule
 
@@ -477,8 +477,8 @@ contract, not a separately confirmed staging scenario.
 This closes only the bounded price-audit contract. Option create and item-price audit,
 the broader Menu or Dangerous Action Audit, and all media/storage work remain open.
 
-Option availability audit status: **FUNCTIONALLY PASSED ON STAGING / GENERAL CART RECOVERY FOLLOW-UP
-REQUIRED** until the focused stale-cart recovery smoke is repeated.
+Option availability audit status: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION AVAILABILITY AUDIT /
+DONE / MVP / STAGING-SMOKE-PASSED**.
 
 - Individual existing-option production paths are direct Venue Mini App availability, compound
   Venue Mini App option PATCH and Telegram Owner/Manager/Staff stop-list callbacks. Direct paths keep
@@ -509,7 +509,7 @@ Audit payloads must use safe ids and old/new safe fields only. Do not include ra
 
 - Menu/options/stop-list spec: `UPDATED`.
 - Menu constructor implementation: `PARTIAL` unless route/screen/test evidence proves full coverage.
-- Option modifiers in orders: structured selected-option parity is documented as `CLOSED / staging smoke passed`; option price is release-closed and option availability audit is locally review-ready; broader multi-group modifier model remains `PARTIAL / needs verification`.
+- Option modifiers in orders: structured selected-option parity is documented as `CLOSED / staging smoke passed`; option price and option availability audits are release-closed; broader multi-group modifier model remains `PARTIAL / needs verification`.
 - Staff stop-list parity: current docs say item/option availability is aligned between Bot and Mini App; per-venue `staff_stoplist_enabled` remains `FUTURE`.
 - Public info-section / Photo-PDF-menu media: `PARTIAL / BOT-FIRST`; Guest rendering and both
   Preview modes work through guarded/scoped proxies, while Venue Mini App upload/manage is
@@ -550,16 +550,16 @@ Audit payloads must use safe ids and old/new safe fields only. Do not include ra
   STAGING-SMOKE-PASSED**. Focused backend, PostgreSQL lock, compile/lint, Mini App build and
   Playwright `139/139` were green locally for that release slice; its bounded cross-surface staging
   smoke is recorded passed.
-- Option availability audit: **FUNCTIONALLY PASSED ON STAGING / GENERAL CART RECOVERY FOLLOW-UP
-  REQUIRED** until the focused stale-cart recovery smoke is repeated.
+- Option availability audit: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION AVAILABILITY AUDIT / DONE /
+  MVP / STAGING-SMOKE-PASSED**.
 - Guest cart stale menu recovery: **GUEST CART STALE MENU SELECTION RECOVERY / REMOVED OR UNAVAILABLE
-  ITEMS AND OPTIONS / PAYLOAD-BOUND IDEMPOTENCY + ATOMIC REJECTION / MVP IMPLEMENTED / LOCAL
-  VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. It is category-agnostic, uses all
-  server-owned issues, shares preview/submit validation, makes preview read-only and keeps final
-  submit validation plus context/order writes in one transaction. PostgreSQL `V123` / H2 `V124`
-  add only nullable `request_fingerprint`; raw request/canonical JSON is not stored,
-  `response_snapshot` is not repurposed, and there is no bulk backfill or global unique constraint.
-  Review, CI, all-writer rollout, staging deploy and focused smoke remain open.
+  ITEMS AND OPTIONS / PAYLOAD-BOUND IDEMPOTENCY + ATOMIC REJECTION / DONE / MVP /
+  STAGING-SMOKE-PASSED**; **ITEM-LEVEL ACTION AND COPY POLISH / DONE / MVP /
+  STAGING-SMOKE-PASSED**. It is category-agnostic, uses all server-owned issues, shares
+  preview/submit validation, makes preview read-only and keeps final submit validation plus
+  context/order writes in one transaction. PostgreSQL `V123` / H2 `V124` add only nullable
+  `request_fingerprint`; raw request/canonical JSON is not stored, `response_snapshot` is not
+  repurposed, and there is no bulk backfill or global unique constraint.
 - Guest server-side availability validation: `REQUIRED`; current stale/unavailable option rejection is documented as covered for the smoked options/flavors flow, but broader availability validation should stay in regression.
 - Promotions/paid placement remain separate from featured/top-list and follow `docs/GROWTH_RETENTION.md` plus `docs/PLATFORM_COCKPIT.md`.
 

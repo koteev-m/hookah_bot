@@ -849,8 +849,8 @@ as a separate staging smoke scenario. The broader Menu/Dangerous Action Audit re
 
 ### Menu Option Availability Audit quality gate
 
-Status: **FUNCTIONALLY PASSED ON STAGING / GENERAL CART RECOVERY FOLLOW-UP REQUIRED** until the
-focused stale-cart recovery smoke is repeated.
+Status: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION AVAILABILITY AUDIT / DONE / MVP /
+STAGING-SMOKE-PASSED**.
 
 Required regression coverage:
 
@@ -887,9 +887,10 @@ the existing mandatory PostgreSQL CI gate minimum is raised to 15.
 
 ### Guest Cart Stale Menu Selection Recovery quality gate
 
-Status: **GUEST CART STALE MENU SELECTION RECOVERY / ITEM-LEVEL ACTION AND COPY POLISH / MVP
-IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. Schema verdict remains the
-approved additive PostgreSQL `V123` / H2 `V124` nullable `request_fingerprint VARCHAR(80)`; no
+Status: **GUEST CART STALE MENU SELECTION RECOVERY / REMOVED OR UNAVAILABLE ITEMS AND OPTIONS /
+PAYLOAD-BOUND IDEMPOTENCY + ATOMIC REJECTION / DONE / MVP / STAGING-SMOKE-PASSED**;
+**ITEM-LEVEL ACTION AND COPY POLISH / DONE / MVP / STAGING-SMOKE-PASSED**. Schema contract remains
+the additive PostgreSQL `V123` / H2 `V124` nullable `request_fingerprint VARCHAR(80)` with no
 backfill or global unique constraint.
 
 Required regression coverage:
@@ -1945,13 +1946,16 @@ Telegram/staff-chat:
   STAGING-SMOKE-PASSED**. Focused repository/route/order/history, current 15-test PostgreSQL, build/lint
   and `152/152` browser checks remain regression evidence; user-confirmed green Actions, staging
   deploy and bounded smoke close only this contract. No migration was added.
-- Menu option availability audit: **FUNCTIONALLY PASSED ON STAGING / GENERAL CART RECOVERY FOLLOW-UP
-  REQUIRED** until the focused stale-cart recovery smoke is repeated.
-- Guest cart stale menu recovery: **GUEST CART STALE MENU SELECTION RECOVERY / ITEM-LEVEL ACTION AND
-  COPY POLISH / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. Exact
-  route/repository/migration/PostgreSQL concurrency and `169/169` browser checks are local evidence;
-  review, CI, all-writer rollout, deploy and focused staging smoke remain open. PostgreSQL `V123` /
-  H2 `V124` are additive and nullable.
+- Menu option availability audit: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION AVAILABILITY AUDIT /
+  DONE / MVP / STAGING-SMOKE-PASSED**. Keep actor/source, exact-one/no-op, rollback and Shift Check
+  aggregate-only behavior in regression.
+- Guest cart stale menu recovery: **GUEST CART STALE MENU SELECTION RECOVERY / REMOVED OR UNAVAILABLE
+  ITEMS AND OPTIONS / PAYLOAD-BOUND IDEMPOTENCY + ATOMIC REJECTION / DONE / MVP /
+  STAGING-SMOKE-PASSED**; **ITEM-LEVEL ACTION AND COPY POLISH / DONE / MVP /
+  STAGING-SMOKE-PASSED**. Exact route/repository/migration/PostgreSQL concurrency and `169/169`
+  browser checks remain regression evidence. The user confirmed green Actions, staging deploy and
+  only the bounded smoke recorded in the launch checklist; this does not independently verify
+  rollout topology.
 - Venue Promotions Current/Archived Tabs UX: **VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / DONE / MVP / STAGING-SMOKE-PASSED**.
 - Promotion lifecycle status audit: **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**; broader dangerous-action coverage remains partial.
 - Promotion creation audit: **DANGEROUS ACTION AUDIT SLICE / PROMOTION CREATION AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**; mandatory repository/route/Telegram and PostgreSQL gates remain regression requirements. Configuration edit, schedule/target/reward, media/banner and broader dangerous-action coverage remain open.

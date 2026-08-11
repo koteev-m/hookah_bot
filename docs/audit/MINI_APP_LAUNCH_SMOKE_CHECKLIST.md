@@ -149,11 +149,19 @@ Confirmed:
 Remaining:
 
 - repeat this smoke after any additional release batch;
-- Guest cart stale-menu recovery is **GUEST CART STALE MENU SELECTION RECOVERY / ITEM-LEVEL ACTION
-  AND COPY POLISH / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. The
-  previous option availability audit remains **FUNCTIONALLY PASSED ON STAGING / GENERAL
-  CART RECOVERY FOLLOW-UP REQUIRED** until a focused real item/option removed/unavailable smoke is
-  repeated after review, green Actions and staging deploy;
+- Current release `bd5395b` is **GUEST CART STALE MENU SELECTION RECOVERY / REMOVED OR UNAVAILABLE
+  ITEMS AND OPTIONS / PAYLOAD-BOUND IDEMPOTENCY + ATOMIC REJECTION / DONE / MVP /
+  STAGING-SMOKE-PASSED** and **ITEM-LEVEL ACTION AND COPY POLISH / DONE / MVP /
+  STAGING-SMOKE-PASSED**. The user confirmed green Actions, staging deploy and only this bounded
+  smoke: clear `ITEM / UNAVAILABLE` and `ITEM / REMOVED` reasons; `Удалить и выбрать другую` removes
+  the affected line while preserving other lines; cart recalculation precedes Guest Menu navigation;
+  no replacement is selected and no order submitted automatically; `Удалить из корзины` stays in
+  cart; multiple issues remain after one is fixed; `OPTION / REMOVED` and `OPTION / UNAVAILABLE`
+  recovery do not regress; working Guest cart/menu data remains intact; cleanup completes normally.
+  This entry makes no independent assertion about migration `V123` or backend rollout topology;
+- Menu option availability audit is **DANGEROUS ACTION AUDIT SLICE / MENU OPTION AVAILABILITY AUDIT /
+  DONE / MVP / STAGING-SMOKE-PASSED**; retain direct writer actor/source, exact-one/no-op, rollback
+  and Shift Check aggregate-only behavior in regression;
 - Menu Shift Check Phase 1 is staging-smoke-passed; keep the Owner/Manager/Staff/foreign,
   two-accordion UX, atomicity/stale/audit, Guest availability and Telegram stop-list parity cases
   below in regression;

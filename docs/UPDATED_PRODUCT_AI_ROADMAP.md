@@ -1147,10 +1147,11 @@ Historical order-snapshot preservation remains confirmed automated coverage only
 staging scenario. Option create, item price/update, Telegram price management,
 membership-recheck hardening, promotion work, viewers and media/storage remain outside this slice.
 
-Implementation contract: **IMPLEMENT_MENU_OPTION_AVAILABILITY_AUDIT_NEXT**, fulfilled locally.
+Implementation contract: **IMPLEMENT_MENU_OPTION_AVAILABILITY_AUDIT_NEXT**, fulfilled and
+release-closed.
 
-Current bounded block: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION AVAILABILITY AUDIT / MVP
-IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+Recent release-closed audit block: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION AVAILABILITY AUDIT /
+DONE / MVP / STAGING-SMOKE-PASSED**.
 
 Implementation evidence:
 
