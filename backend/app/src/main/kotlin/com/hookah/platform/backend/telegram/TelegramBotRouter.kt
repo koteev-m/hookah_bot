@@ -63,6 +63,7 @@ import com.hookah.platform.backend.miniapp.venue.menu.BASE_FLAVOR_PROFILE_ALREAD
 import com.hookah.platform.backend.miniapp.venue.menu.HookahFlavorProfileService
 import com.hookah.platform.backend.miniapp.venue.menu.MenuCategoryDeleteSource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuItemAvailabilitySource
+import com.hookah.platform.backend.miniapp.venue.menu.MenuItemCreateSource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuItemDeleteSource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuOptionAvailabilitySource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuOptionCreateSource
@@ -18633,17 +18634,16 @@ class TelegramBotRouter(
             return
         }
         val (venueId, sectionId) = parsed
-        val category =
-            loadOwnerOrderMenuCategory(chatId, venueId, sectionId) ?: run {
-                enqueueMessage(chatId, "Раздел не найден.")
-                return
-            }
         val hasAccess =
             runCatching { venueAccessRepository.hasVenueAdminOrOwner(userId, venueId) }
                 .onFailure { logBestEffort("check venue owner access on order menu item add", it) }
                 .getOrDefault(false)
         if (!hasAccess) {
             enqueueMessage(chatId, "Нет доступа к заведению.")
+            return
+        }
+        loadOwnerOrderMenuCategory(chatId, venueId, sectionId) ?: run {
+            enqueueMessage(chatId, "Раздел не найден.")
             return
         }
         dialogStateRepository.set(
@@ -18669,8 +18669,15 @@ class TelegramBotRouter(
     ) {
         val venueId = state.payload["venue_id"]?.toLongOrNull()
         val sectionId = state.payload["section_id"]?.toLongOrNull()
-        val ownerUserId = (from?.id ?: state.payload["owner_user_id"]?.toLongOrNull())
-        if (venueId == null || sectionId == null || ownerUserId == null) {
+        val currentUserId = from?.id
+        val dialogOwnerUserId = state.payload["owner_user_id"]?.toLongOrNull()
+        if (
+            venueId == null ||
+            sectionId == null ||
+            currentUserId == null ||
+            dialogOwnerUserId == null ||
+            currentUserId != dialogOwnerUserId
+        ) {
             dialogStateRepository.clear(chatId)
             enqueueMessage(chatId, "Не удалось продолжить. Откройте «🍽 Заказное меню» снова.")
             return
@@ -18679,7 +18686,7 @@ class TelegramBotRouter(
         if (input == "-" || input == "—") {
             dialogStateRepository.clear(chatId)
             enqueueMessage(chatId, "Добавление позиции отменено.")
-            showVenueOwnerOrderMenuSectionByIds(chatId, ownerUserId, venueId, sectionId)
+            showVenueOwnerOrderMenuSectionByIds(chatId, currentUserId, venueId, sectionId)
             return
         }
         val normalized = normalizeVenueConnectionRequiredField(input, maxLength = 120)
@@ -18688,7 +18695,7 @@ class TelegramBotRouter(
             return
         }
         val hasAccess =
-            runCatching { venueAccessRepository.hasVenueAdminOrOwner(ownerUserId, venueId) }
+            runCatching { venueAccessRepository.hasVenueAdminOrOwner(currentUserId, venueId) }
                 .onFailure { logBestEffort("check venue owner access on add item name", it) }
                 .getOrDefault(false)
         if (!hasAccess) {
@@ -18704,7 +18711,7 @@ class TelegramBotRouter(
                     mapOf(
                         "venue_id" to venueId.toString(),
                         "section_id" to sectionId.toString(),
-                        "owner_user_id" to ownerUserId.toString(),
+                        "owner_user_id" to currentUserId.toString(),
                         "item_name" to normalized,
                     ),
             ),
@@ -18720,9 +18727,17 @@ class TelegramBotRouter(
     ) {
         val venueId = state.payload["venue_id"]?.toLongOrNull()
         val sectionId = state.payload["section_id"]?.toLongOrNull()
-        val ownerUserId = (from?.id ?: state.payload["owner_user_id"]?.toLongOrNull())
+        val currentUserId = from?.id
+        val dialogOwnerUserId = state.payload["owner_user_id"]?.toLongOrNull()
         val itemName = state.payload["item_name"]?.trim()
-        if (venueId == null || sectionId == null || ownerUserId == null || itemName.isNullOrBlank()) {
+        if (
+            venueId == null ||
+            sectionId == null ||
+            currentUserId == null ||
+            dialogOwnerUserId == null ||
+            currentUserId != dialogOwnerUserId ||
+            itemName.isNullOrBlank()
+        ) {
             dialogStateRepository.clear(chatId)
             enqueueMessage(chatId, "Не удалось продолжить. Откройте «🍽 Заказное меню» снова.")
             return
@@ -18733,7 +18748,7 @@ class TelegramBotRouter(
             return
         }
         val hasAccess =
-            runCatching { venueAccessRepository.hasVenueAdminOrOwner(ownerUserId, venueId) }
+            runCatching { venueAccessRepository.hasVenueAdminOrOwner(currentUserId, venueId) }
                 .onFailure { logBestEffort("check venue owner access on add item price", it) }
                 .getOrDefault(false)
         if (!hasAccess) {
@@ -18750,6 +18765,8 @@ class TelegramBotRouter(
                     priceMinor = priceRub * 100,
                     currency = "RUB",
                     isAvailable = true,
+                    actorUserId = currentUserId,
+                    source = MenuItemCreateSource.TELEGRAM_BOT,
                 )
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
@@ -18758,12 +18775,12 @@ class TelegramBotRouter(
         if (created == null) {
             dialogStateRepository.clear(chatId)
             enqueueMessage(chatId, "Не удалось добавить позицию. Раздел не найден.")
-            showVenueOwnerOrderMenuRootByVenueId(chatId, ownerUserId, venueId)
+            showVenueOwnerOrderMenuRootByVenueId(chatId, currentUserId, venueId)
             return
         }
         dialogStateRepository.clear(chatId)
         enqueueMessage(chatId, "✅ Позиция добавлена. Теперь можно настроить цену, наличие и вкусы/варианты.")
-        showVenueOwnerOrderMenuItemByIds(chatId, ownerUserId, venueId, sectionId, created.id)
+        showVenueOwnerOrderMenuItemByIds(chatId, currentUserId, venueId, sectionId, created.id)
     }
 
     private suspend fun showVenueOwnerOrderMenuItem(

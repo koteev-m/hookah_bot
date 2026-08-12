@@ -58,6 +58,8 @@ class VenueMenuRepositoryTest {
                     priceMinor = 110_000,
                     currency = "RUB",
                     isAvailable = true,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuItemCreateSource.VENUE_MINI_APP,
                 )
             assertNull(item?.itemType)
 
@@ -70,6 +72,192 @@ class VenueMenuRepositoryTest {
 
             val resetItem = repository.updateItemType(venueId, inheritedItem.id, null)
             assertNull(resetItem?.itemType)
+        }
+
+    @Test
+    fun `item create preserves semantics and writes one exact safe audit per physical duplicate row`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("venue-menu-item-create-success")
+            val venueId = seedVenue(jdbcUrl)
+            val repository = VenueMenuRepository(dataSource(jdbcUrl))
+            val category = repository.createCategory(venueId, "Private category name")
+            val duplicateName = "Private callback initData @username secret item"
+
+            val first =
+                requireNotNull(
+                    repository.createItem(
+                        venueId = venueId,
+                        categoryId = category.id,
+                        name = duplicateName,
+                        priceMinor = 123_456,
+                        currency = "RUB",
+                        isAvailable = false,
+                        actorUserId = AUDIT_ACTOR_ID,
+                        source = MenuItemCreateSource.VENUE_MINI_APP,
+                    ),
+                )
+            val second =
+                requireNotNull(
+                    repository.createItem(
+                        venueId = venueId,
+                        categoryId = category.id,
+                        name = duplicateName,
+                        priceMinor = 654_321,
+                        currency = "USD",
+                        isAvailable = true,
+                        actorUserId = AUDIT_ACTOR_ID,
+                        source = MenuItemCreateSource.TELEGRAM_BOT,
+                        itemType = MenuSemanticType.DRINK,
+                    ),
+                )
+
+            val persistedItems = repository.getMenu(venueId).single().items
+            assertEquals(listOf(first, second), persistedItems)
+            assertEquals(listOf(0, 1), persistedItems.map(VenueMenuItem::sortOrder))
+            assertEquals(listOf(123_456L, 654_321L), persistedItems.map(VenueMenuItem::priceMinor))
+            assertEquals(listOf("RUB", "USD"), persistedItems.map(VenueMenuItem::currency))
+            assertEquals(listOf(false, true), persistedItems.map(VenueMenuItem::isAvailable))
+            assertEquals(listOf(category.id, category.id), persistedItems.map(VenueMenuItem::categoryId))
+            assertEquals(listOf(null, MenuSemanticType.DRINK), persistedItems.map(VenueMenuItem::itemType))
+            assertTrue(persistedItems.all { it.options.isEmpty() })
+
+            val audits = menuItemCreateAudits(jdbcUrl)
+            assertEquals(2, audits.size)
+            assertMenuItemCreateAudit(
+                audit = audits[0],
+                venueId = venueId,
+                itemId = first.id,
+                actorUserId = AUDIT_ACTOR_ID,
+                source = MenuItemCreateSource.VENUE_MINI_APP,
+            )
+            assertMenuItemCreateAudit(
+                audit = audits[1],
+                venueId = venueId,
+                itemId = second.id,
+                actorUserId = AUDIT_ACTOR_ID,
+                source = MenuItemCreateSource.TELEGRAM_BOT,
+            )
+            audits.forEach { audit ->
+                assertFalse(audit.payload.toString().contains(duplicateName))
+            }
+        }
+
+    @Test
+    fun `item create missing or foreign category writes neither item nor audit`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("venue-menu-item-create-invalid-scope")
+            val venueId = seedVenue(jdbcUrl)
+            val foreignVenueId = seedVenue(jdbcUrl)
+            val repository = VenueMenuRepository(dataSource(jdbcUrl))
+            val category = repository.createCategory(venueId, "Own category")
+
+            assertNull(
+                repository.createItem(
+                    venueId = venueId,
+                    categoryId = Long.MAX_VALUE,
+                    name = "Missing category item",
+                    priceMinor = 100,
+                    currency = "RUB",
+                    isAvailable = true,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuItemCreateSource.VENUE_MINI_APP,
+                ),
+            )
+            assertNull(
+                repository.createItem(
+                    venueId = foreignVenueId,
+                    categoryId = category.id,
+                    name = "Foreign category item",
+                    priceMinor = 200,
+                    currency = "RUB",
+                    isAvailable = true,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuItemCreateSource.TELEGRAM_BOT,
+                ),
+            )
+
+            assertTrue(repository.getMenu(venueId).single().items.isEmpty())
+            assertTrue(repository.getMenu(foreignVenueId).isEmpty())
+            assertTrue(menuItemCreateAudits(jdbcUrl).isEmpty())
+        }
+
+    @Test
+    fun `item create audit failure after insert rolls back item audit and category snapshot`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("venue-menu-item-create-audit-rollback")
+            val venueId = seedVenue(jdbcUrl)
+            val dataSource = dataSource(jdbcUrl)
+            val fixtureRepository = VenueMenuRepository(dataSource)
+            val category = fixtureRepository.createCategory(venueId, "Rollback category")
+            val existingItem =
+                requireNotNull(
+                    fixtureRepository.createItem(
+                        venueId = venueId,
+                        categoryId = category.id,
+                        name = "Existing unrelated item",
+                        priceMinor = 100,
+                        currency = "RUB",
+                        isAvailable = true,
+                        actorUserId = AUDIT_ACTOR_ID,
+                        source = MenuItemCreateSource.VENUE_MINI_APP,
+                    ),
+                )
+            val beforeMenu = fixtureRepository.getMenu(venueId)
+            val beforeAudits = menuItemCreateAudits(jdbcUrl)
+            assertEquals(existingItem.id, beforeAudits.single().entityId)
+            val delegateAuditWriter = AuditLogRepository(dataSource, Json)
+            var insertedRowObserved = false
+            var transactionObserved = false
+            var auditInsertObserved = false
+            val failingAuditWriter =
+                TransactionalAuditLogWriter { connection, actorUserId, action, entityType, entityId, payload ->
+                    if (action == MENU_ITEM_CREATED_AUDIT_ACTION) {
+                        transactionObserved = !connection.autoCommit
+                        val insertedItemId = requireNotNull(entityId)
+                        val inserted = itemRow(connection, insertedItemId)
+                        insertedRowObserved =
+                            inserted != null &&
+                            inserted.venueId == venueId &&
+                            inserted.categoryId == category.id &&
+                            inserted.name == "Rollback private item"
+                        check(transactionObserved) { "Item create audit must run inside the repository transaction" }
+                        check(insertedRowObserved) { "Item insert must happen before its create audit" }
+                        delegateAuditWriter.appendJson(
+                            connection,
+                            actorUserId,
+                            action,
+                            entityType,
+                            insertedItemId,
+                            payload,
+                        )
+                        auditInsertObserved = auditExists(connection, action, insertedItemId)
+                        check(auditInsertObserved) { "Item create audit insert must execute before failure" }
+                        throw SQLException("Synthetic menu item create audit failure", "XX999")
+                    }
+                    delegateAuditWriter.appendJson(connection, actorUserId, action, entityType, entityId, payload)
+                }
+            val repository = VenueMenuRepository(dataSource, failingAuditWriter)
+
+            assertFailsWith<DatabaseUnavailableException> {
+                repository.createItem(
+                    venueId = venueId,
+                    categoryId = category.id,
+                    name = "Rollback private item",
+                    priceMinor = 999_999,
+                    currency = "USD",
+                    isAvailable = false,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuItemCreateSource.TELEGRAM_BOT,
+                    itemType = MenuSemanticType.DRINK,
+                )
+            }
+
+            assertTrue(transactionObserved)
+            assertTrue(insertedRowObserved)
+            assertTrue(auditInsertObserved)
+            assertEquals(beforeMenu, fixtureRepository.getMenu(venueId))
+            assertEquals(beforeAudits, menuItemCreateAudits(jdbcUrl))
+            assertEquals(existingItem, loadItem(fixtureRepository, venueId, existingItem.id))
         }
 
     @Test
@@ -673,6 +861,8 @@ class VenueMenuRepositoryTest {
                         priceMinor = 500,
                         currency = "RUB",
                         isAvailable = true,
+                        actorUserId = AUDIT_ACTOR_ID,
+                        source = MenuItemCreateSource.VENUE_MINI_APP,
                     ),
                 )
 
@@ -762,6 +952,8 @@ class VenueMenuRepositoryTest {
                         priceMinor = 100_000,
                         currency = "RUB",
                         isAvailable = true,
+                        actorUserId = AUDIT_ACTOR_ID,
+                        source = MenuItemCreateSource.VENUE_MINI_APP,
                     ),
                 )
 
@@ -821,6 +1013,8 @@ class VenueMenuRepositoryTest {
                         priceMinor = 100,
                         currency = "RUB",
                         isAvailable = true,
+                        actorUserId = AUDIT_ACTOR_ID,
+                        source = MenuItemCreateSource.VENUE_MINI_APP,
                     ),
                 )
             val delegateAuditWriter = AuditLogRepository(dataSource, Json)
@@ -881,6 +1075,8 @@ class VenueMenuRepositoryTest {
                         priceMinor = 100_000,
                         currency = "RUB",
                         isAvailable = true,
+                        actorUserId = AUDIT_ACTOR_ID,
+                        source = MenuItemCreateSource.VENUE_MINI_APP,
                     ),
                 )
             val canonical =
@@ -986,6 +1182,8 @@ class VenueMenuRepositoryTest {
                         priceMinor = 100_000,
                         currency = "RUB",
                         isAvailable = true,
+                        actorUserId = AUDIT_ACTOR_ID,
+                        source = MenuItemCreateSource.VENUE_MINI_APP,
                     ),
                 )
             requireNotNull(
@@ -1981,6 +2179,8 @@ class VenueMenuRepositoryTest {
                         priceMinor = 100,
                         currency = "RUB",
                         isAvailable = true,
+                        actorUserId = AUDIT_ACTOR_ID,
+                        source = MenuItemCreateSource.VENUE_MINI_APP,
                     ),
                 )
             val firstCanonical =
@@ -2707,6 +2907,8 @@ class VenueMenuRepositoryTest {
                     priceMinor = 100,
                     currency = "RUB",
                     isAvailable = true,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuItemCreateSource.VENUE_MINI_APP,
                 ),
             )
         val secondItem =
@@ -2718,6 +2920,8 @@ class VenueMenuRepositoryTest {
                     priceMinor = 200,
                     currency = "RUB",
                     isAvailable = true,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuItemCreateSource.VENUE_MINI_APP,
                 ),
             )
         val firstOption =
@@ -2762,6 +2966,8 @@ class VenueMenuRepositoryTest {
                     priceMinor = 100_000,
                     currency = "RUB",
                     isAvailable = true,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuItemCreateSource.VENUE_MINI_APP,
                 ),
             )
         val specifications =
@@ -3213,6 +3419,9 @@ class VenueMenuRepositoryTest {
     private fun menuOptionDeleteAudits(jdbcUrl: String): List<MenuDeleteAuditRow> =
         menuDeleteAudits(jdbcUrl, MENU_OPTION_DELETED_AUDIT_ACTION)
 
+    private fun menuItemCreateAudits(jdbcUrl: String): List<MenuDeleteAuditRow> =
+        menuDeleteAudits(jdbcUrl, MENU_ITEM_CREATED_AUDIT_ACTION)
+
     private fun menuOptionCreateAudits(jdbcUrl: String): List<MenuDeleteAuditRow> =
         menuDeleteAudits(jdbcUrl, MENU_OPTION_CREATED_AUDIT_ACTION)
 
@@ -3261,6 +3470,23 @@ class VenueMenuRepositoryTest {
                 }
             }
         }
+
+    private fun assertMenuItemCreateAudit(
+        audit: MenuDeleteAuditRow,
+        venueId: Long,
+        itemId: Long,
+        actorUserId: Long,
+        source: MenuItemCreateSource,
+    ) {
+        assertEquals(actorUserId, audit.actorUserId)
+        assertEquals(MENU_ITEM_CREATED_AUDIT_ACTION, audit.action)
+        assertEquals("menu_item", audit.entityType)
+        assertEquals(itemId, audit.entityId)
+        assertEquals(setOf("venueId", "itemId", "source"), audit.payload.keys)
+        assertEquals(venueId, audit.payload.longValue("venueId"))
+        assertEquals(itemId, audit.payload.longValue("itemId"))
+        assertEquals(source.name, audit.payload.getValue("source").jsonPrimitive.content)
+    }
 
     private fun assertMenuOptionDeleteAudit(
         audit: MenuDeleteAuditRow,
@@ -3537,6 +3763,26 @@ class VenueMenuRepositoryTest {
                         updatedAt = rs.getObject("updated_at").toString(),
                     )
                 }
+            }
+        }
+
+    private fun auditExists(
+        connection: Connection,
+        action: String,
+        entityId: Long,
+    ): Boolean =
+        connection.prepareStatement(
+            """
+            SELECT COUNT(*)
+            FROM audit_log
+            WHERE action = ? AND entity_id = ?
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setString(1, action)
+            statement.setLong(2, entityId)
+            statement.executeQuery().use { rs ->
+                check(rs.next())
+                rs.getInt(1) == 1
             }
         }
 

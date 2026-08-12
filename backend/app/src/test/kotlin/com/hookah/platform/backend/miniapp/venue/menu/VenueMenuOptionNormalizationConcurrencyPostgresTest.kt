@@ -1,8 +1,10 @@
 package com.hookah.platform.backend.miniapp.venue.menu
 
+import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.MenuShiftCheckStaleException
 import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
+import com.hookah.platform.backend.miniapp.venue.TransactionalAuditLogWriter
 import com.hookah.platform.backend.test.PostgresTestEnv
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
@@ -16,6 +18,7 @@ import java.sql.SQLException
 import java.sql.Statement
 import java.util.concurrent.Callable
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ExecutionException
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
@@ -1836,6 +1839,513 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
             }
         }
 
+    @Test
+    fun `concurrent mini app item creates serialize with one audit per committed item`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource)
+                val initialItems = readMenuItems(dataSource, fixture.venueId, fixture.categoryId)
+                val holderDataSource = HeldCategoryLockDataSource(dataSource)
+                val waiterDataSource = TrackedCategoryLockDataSource(dataSource)
+
+                val (first, second) =
+                    runWithHeldCategoryLock(
+                        observerDataSource = dataSource,
+                        holderDataSource = holderDataSource,
+                        waiterDataSource = waiterDataSource,
+                        beforeRelease = {
+                            assertEquals(initialItems, readMenuItems(dataSource, fixture.venueId, fixture.categoryId))
+                            assertTrue(readMenuItemCreateAudits(dataSource).isEmpty())
+                        },
+                        holderAction = {
+                            runBlocking {
+                                VenueMenuRepository(holderDataSource).createItem(
+                                    venueId = fixture.venueId,
+                                    categoryId = fixture.categoryId,
+                                    name = FIRST_ITEM_CREATE_NAME,
+                                    priceMinor = 120_000,
+                                    currency = "RUB",
+                                    isAvailable = true,
+                                    actorUserId = FIRST_ACTOR_ID,
+                                    source = MenuItemCreateSource.VENUE_MINI_APP,
+                                    itemType = MenuSemanticType.HOOKAH,
+                                )
+                            }
+                        },
+                        waiterAction = {
+                            runBlocking {
+                                VenueMenuRepository(waiterDataSource).createItem(
+                                    venueId = fixture.venueId,
+                                    categoryId = fixture.categoryId,
+                                    name = SECOND_ITEM_CREATE_NAME,
+                                    priceMinor = 130_000,
+                                    currency = "RUB",
+                                    isAvailable = true,
+                                    actorUserId = SECOND_ACTOR_ID,
+                                    source = MenuItemCreateSource.VENUE_MINI_APP,
+                                    itemType = MenuSemanticType.HOOKAH,
+                                )
+                            }
+                        },
+                    )
+
+                val firstItem = assertNotNull(first)
+                val secondItem = assertNotNull(second)
+                assertFalse(firstItem.id == secondItem.id)
+                assertEquals(initialItems.maxOf { it.sortOrder } + 1, firstItem.sortOrder)
+                assertEquals(firstItem.sortOrder + 1, secondItem.sortOrder)
+                assertMenuItemCreateCardinality(
+                    dataSource = dataSource,
+                    fixture = fixture,
+                    initialItemIds = initialItems.map { it.id }.toSet(),
+                    expected =
+                        listOf(
+                            ExpectedItemCreateAudit(
+                                firstItem.id,
+                                FIRST_ACTOR_ID,
+                                MenuItemCreateSource.VENUE_MINI_APP,
+                            ),
+                            ExpectedItemCreateAudit(
+                                secondItem.id,
+                                SECOND_ACTOR_ID,
+                                MenuItemCreateSource.VENUE_MINI_APP,
+                            ),
+                        ),
+                )
+            }
+        }
+
+    @Test
+    fun `mini app and telegram item creates serialize with server sources`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource)
+                val initialItems = readMenuItems(dataSource, fixture.venueId, fixture.categoryId)
+                val holderDataSource = HeldCategoryLockDataSource(dataSource)
+                val waiterDataSource = TrackedCategoryLockDataSource(dataSource)
+
+                val (miniApp, telegram) =
+                    runWithHeldCategoryLock(
+                        observerDataSource = dataSource,
+                        holderDataSource = holderDataSource,
+                        waiterDataSource = waiterDataSource,
+                        beforeRelease = {
+                            assertEquals(initialItems, readMenuItems(dataSource, fixture.venueId, fixture.categoryId))
+                            assertTrue(readMenuItemCreateAudits(dataSource).isEmpty())
+                        },
+                        holderAction = {
+                            runBlocking {
+                                VenueMenuRepository(holderDataSource).createItem(
+                                    venueId = fixture.venueId,
+                                    categoryId = fixture.categoryId,
+                                    name = FIRST_ITEM_CREATE_NAME,
+                                    priceMinor = 120_000,
+                                    currency = "RUB",
+                                    isAvailable = true,
+                                    actorUserId = FIRST_ACTOR_ID,
+                                    source = MenuItemCreateSource.VENUE_MINI_APP,
+                                    itemType = MenuSemanticType.HOOKAH,
+                                )
+                            }
+                        },
+                        waiterAction = {
+                            runBlocking {
+                                VenueMenuRepository(waiterDataSource).createItem(
+                                    venueId = fixture.venueId,
+                                    categoryId = fixture.categoryId,
+                                    name = SECOND_ITEM_CREATE_NAME,
+                                    priceMinor = 130_000,
+                                    currency = "RUB",
+                                    isAvailable = true,
+                                    actorUserId = SECOND_ACTOR_ID,
+                                    source = MenuItemCreateSource.TELEGRAM_BOT,
+                                    itemType = MenuSemanticType.HOOKAH,
+                                )
+                            }
+                        },
+                    )
+
+                val miniAppItem = assertNotNull(miniApp)
+                val telegramItem = assertNotNull(telegram)
+                assertMenuItemCreateCardinality(
+                    dataSource = dataSource,
+                    fixture = fixture,
+                    initialItemIds = initialItems.map { it.id }.toSet(),
+                    expected =
+                        listOf(
+                            ExpectedItemCreateAudit(
+                                miniAppItem.id,
+                                FIRST_ACTOR_ID,
+                                MenuItemCreateSource.VENUE_MINI_APP,
+                            ),
+                            ExpectedItemCreateAudit(
+                                telegramItem.id,
+                                SECOND_ACTOR_ID,
+                                MenuItemCreateSource.TELEGRAM_BOT,
+                            ),
+                        ),
+                )
+            }
+        }
+
+    @Test
+    fun `item create category lock makes concurrent category delete fail without partial state`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource)
+                val emptyCategoryId = insertEmptyCategory(dataSource, fixture.venueId)
+                val holderDataSource = HeldCategoryLockDataSource(dataSource)
+                val deleteDataSource = TrackedCategoryDeleteLockDataSource(dataSource)
+                val executor = Executors.newFixedThreadPool(2)
+                val createFuture =
+                    executor.submit(
+                        Callable {
+                            runBlocking {
+                                VenueMenuRepository(holderDataSource).createItem(
+                                    venueId = fixture.venueId,
+                                    categoryId = emptyCategoryId,
+                                    name = FIRST_ITEM_CREATE_NAME,
+                                    priceMinor = 120_000,
+                                    currency = "RUB",
+                                    isAvailable = true,
+                                    actorUserId = FIRST_ACTOR_ID,
+                                    source = MenuItemCreateSource.VENUE_MINI_APP,
+                                    itemType = MenuSemanticType.HOOKAH,
+                                )
+                            }
+                        },
+                    )
+                try {
+                    assertTrue(
+                        holderDataSource.categoryLockAcquired.await(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                        "Production item create did not acquire the category lock",
+                    )
+                    val deleteFuture =
+                        executor.submit(
+                            Callable {
+                                runBlocking {
+                                    VenueMenuRepository(deleteDataSource).deleteCategory(
+                                        venueId = fixture.venueId,
+                                        categoryId = emptyCategoryId,
+                                        actorUserId = SECOND_ACTOR_ID,
+                                        source = MenuCategoryDeleteSource.TELEGRAM_BOT,
+                                    )
+                                }
+                            },
+                        )
+                    assertTrue(
+                        deleteDataSource.categoryDeleteLockAttempted.await(
+                            WAIT_TIMEOUT_SECONDS,
+                            TimeUnit.SECONDS,
+                        ),
+                        "Concurrent category delete did not attempt its production NOWAIT lock",
+                    )
+                    assertTrue(holderDataSource.backendPid.get() > 0)
+                    assertTrue(deleteDataSource.backendPid.get() > 0)
+                    assertFalse(holderDataSource.backendPid.get() == deleteDataSource.backendPid.get())
+                    val deleteFailure =
+                        assertFailsWith<ExecutionException> {
+                            deleteFuture.get(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                        }
+                    assertTrue(deleteFailure.cause is DatabaseUnavailableException)
+                    assertTrue(categoryExists(dataSource, fixture.venueId, emptyCategoryId))
+                    assertTrue(readMenuItems(dataSource, fixture.venueId, emptyCategoryId).isEmpty())
+                    assertTrue(readMenuItemCreateAudits(dataSource).isEmpty())
+
+                    holderDataSource.allowMutation.countDown()
+                    val created = assertNotNull(createFuture.get(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS))
+                    assertTrue(categoryExists(dataSource, fixture.venueId, emptyCategoryId))
+                    assertEquals(
+                        listOf(created.id),
+                        readMenuItems(dataSource, fixture.venueId, emptyCategoryId).map { it.id },
+                    )
+                    assertMenuItemCreateAudits(
+                        dataSource = dataSource,
+                        fixture = fixture,
+                        expected =
+                            listOf(
+                                ExpectedItemCreateAudit(
+                                    created.id,
+                                    FIRST_ACTOR_ID,
+                                    MenuItemCreateSource.VENUE_MINI_APP,
+                                ),
+                            ),
+                    )
+                    assertTrue(readAudits(dataSource, MENU_CATEGORY_DELETED_AUDIT_ACTION).isEmpty())
+                } finally {
+                    holderDataSource.allowMutation.countDown()
+                    executor.shutdownNow()
+                    executor.awaitTermination(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                }
+            }
+        }
+
+    @Test
+    fun `item create and reorder serialize on category lock with current sort outcome`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource)
+                val initialItems = readMenuItems(dataSource, fixture.venueId, fixture.categoryId)
+                val holderDataSource = HeldCategoryLockDataSource(dataSource)
+                val waiterDataSource = TrackedCategoryLockDataSource(dataSource)
+
+                val (created, reordered) =
+                    runWithHeldCategoryLock(
+                        observerDataSource = dataSource,
+                        holderDataSource = holderDataSource,
+                        waiterDataSource = waiterDataSource,
+                        beforeRelease = {
+                            assertEquals(initialItems, readMenuItems(dataSource, fixture.venueId, fixture.categoryId))
+                            assertTrue(readMenuItemCreateAudits(dataSource).isEmpty())
+                        },
+                        holderAction = {
+                            runBlocking {
+                                VenueMenuRepository(holderDataSource).createItem(
+                                    venueId = fixture.venueId,
+                                    categoryId = fixture.categoryId,
+                                    name = FIRST_ITEM_CREATE_NAME,
+                                    priceMinor = 120_000,
+                                    currency = "RUB",
+                                    isAvailable = true,
+                                    actorUserId = FIRST_ACTOR_ID,
+                                    source = MenuItemCreateSource.VENUE_MINI_APP,
+                                    itemType = MenuSemanticType.HOOKAH,
+                                )
+                            }
+                        },
+                        waiterAction = {
+                            runBlocking {
+                                VenueMenuRepository(waiterDataSource).reorderItems(
+                                    venueId = fixture.venueId,
+                                    categoryId = fixture.categoryId,
+                                    itemIds = listOf(fixture.itemId),
+                                )
+                            }
+                        },
+                    )
+
+                val createdItem = assertNotNull(created)
+                assertTrue(reordered)
+                val committedItems = readMenuItems(dataSource, fixture.venueId, fixture.categoryId)
+                assertEquals(0, committedItems.single { it.id == fixture.itemId }.sortOrder)
+                assertEquals(initialItems.maxOf { it.sortOrder } + 1, createdItem.sortOrder)
+                assertEquals(createdItem.sortOrder, committedItems.single { it.id == createdItem.id }.sortOrder)
+                assertMenuItemCreateCardinality(
+                    dataSource = dataSource,
+                    fixture = fixture,
+                    initialItemIds = initialItems.map { it.id }.toSet(),
+                    expected =
+                        listOf(
+                            ExpectedItemCreateAudit(
+                                createdItem.id,
+                                FIRST_ACTOR_ID,
+                                MenuItemCreateSource.VENUE_MINI_APP,
+                            ),
+                        ),
+                )
+            }
+        }
+
+    @Test
+    fun `concurrent audit failure rolls back inserted item before valid create commits`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource)
+                val initialItems = readMenuItems(dataSource, fixture.venueId, fixture.categoryId)
+                val initialOptions = readOptions(dataSource, fixture.itemId)
+                val auditReached = CountDownLatch(1)
+                val allowAuditFailure = CountDownLatch(1)
+                val failedItemId = java.util.concurrent.atomic.AtomicLong()
+                val failingPid = AtomicInteger()
+                val realAuditWriter = AuditLogRepository(dataSource, Json)
+                val failingAuditWriter =
+                    TransactionalAuditLogWriter { connection, actorUserId, action, entityType, entityId, payload ->
+                        val insertedItemId = entityId ?: throw SQLException("Missing item id in create audit")
+                        if (connection.autoCommit || action != MENU_ITEM_CREATED_AUDIT_ACTION) {
+                            throw SQLException("Item create audit was not called in the production transaction")
+                        }
+                        if (!rowExists(connection, "menu_items", insertedItemId)) {
+                            throw SQLException("Physical menu item insert was not visible before audit")
+                        }
+                        realAuditWriter.appendJson(
+                            connection = connection,
+                            actorUserId = actorUserId,
+                            action = action,
+                            entityType = entityType,
+                            entityId = entityId,
+                            payload = payload,
+                        )
+                        if (!auditExists(connection, action, insertedItemId)) {
+                            throw SQLException("Connection-aware audit insert was not visible")
+                        }
+                        failedItemId.set(insertedItemId)
+                        failingPid.set(backendPid(connection))
+                        auditReached.countDown()
+                        if (!allowAuditFailure.await(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                            throw SQLException("Timed out before injected audit failure")
+                        }
+                        throw SQLException("Injected same-connection item create audit failure")
+                    }
+                val waiterDataSource = TrackedCategoryLockDataSource(dataSource)
+                val executor = Executors.newFixedThreadPool(2)
+                val failedFuture =
+                    executor.submit(
+                        Callable {
+                            runBlocking {
+                                VenueMenuRepository(dataSource, failingAuditWriter).createItem(
+                                    venueId = fixture.venueId,
+                                    categoryId = fixture.categoryId,
+                                    name = FAILED_ITEM_CREATE_NAME,
+                                    priceMinor = 140_000,
+                                    currency = "RUB",
+                                    isAvailable = true,
+                                    actorUserId = FIRST_ACTOR_ID,
+                                    source = MenuItemCreateSource.VENUE_MINI_APP,
+                                    itemType = MenuSemanticType.HOOKAH,
+                                )
+                            }
+                        },
+                    )
+                try {
+                    assertTrue(
+                        auditReached.await(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                        "Injected writer did not observe the physical item and audit inserts",
+                    )
+                    val validFuture =
+                        executor.submit(
+                            Callable {
+                                runBlocking {
+                                    VenueMenuRepository(waiterDataSource).createItem(
+                                        venueId = fixture.venueId,
+                                        categoryId = fixture.categoryId,
+                                        name = SECOND_ITEM_CREATE_NAME,
+                                        priceMinor = 130_000,
+                                        currency = "RUB",
+                                        isAvailable = true,
+                                        actorUserId = SECOND_ACTOR_ID,
+                                        source = MenuItemCreateSource.TELEGRAM_BOT,
+                                        itemType = MenuSemanticType.HOOKAH,
+                                    )
+                                }
+                            },
+                        )
+                    assertTrue(
+                        waiterDataSource.categoryLockAttempted.await(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                        "Valid concurrent create did not attempt the category lock",
+                    )
+                    val holderPid = failingPid.get()
+                    val waiterPid = waiterDataSource.backendPid.get()
+                    assertTrue(holderPid > 0)
+                    assertTrue(waiterPid > 0)
+                    assertFalse(holderPid == waiterPid)
+                    dataSource.connection.use { observer ->
+                        val observation =
+                            awaitPostgresBlock(
+                                observer = observer,
+                                blockedPid = waiterPid,
+                                blockerPid = holderPid,
+                                waiterFuture = validFuture,
+                            )
+                        assertTrue(
+                            observation.blocked,
+                            "PostgreSQL did not report audit-failure transaction blocking valid create. " +
+                                observation.diagnostic,
+                        )
+                    }
+                    assertEquals(initialItems, readMenuItems(dataSource, fixture.venueId, fixture.categoryId))
+                    assertTrue(readMenuItemCreateAudits(dataSource).isEmpty())
+
+                    allowAuditFailure.countDown()
+                    val failure =
+                        assertFailsWith<ExecutionException> {
+                            failedFuture.get(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                        }
+                    assertTrue(failure.cause is DatabaseUnavailableException)
+                    val validItem = assertNotNull(validFuture.get(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS))
+                    assertNull(
+                        readMenuItems(dataSource, fixture.venueId, fixture.categoryId)
+                            .find { it.id == failedItemId.get() },
+                    )
+                    assertEquals(initialOptions, readOptions(dataSource, fixture.itemId))
+                    assertMenuItemCreateCardinality(
+                        dataSource = dataSource,
+                        fixture = fixture,
+                        initialItemIds = initialItems.map { it.id }.toSet(),
+                        expected =
+                            listOf(
+                                ExpectedItemCreateAudit(
+                                    validItem.id,
+                                    SECOND_ACTOR_ID,
+                                    MenuItemCreateSource.TELEGRAM_BOT,
+                                ),
+                            ),
+                    )
+                    assertEquals(1, countAuditRows(dataSource))
+                } finally {
+                    allowAuditFailure.countDown()
+                    executor.shutdownNow()
+                    executor.awaitTermination(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                }
+            }
+        }
+
+    private fun <T, U> runWithHeldCategoryLock(
+        observerDataSource: DataSource,
+        holderDataSource: HeldCategoryLockCoordinator,
+        waiterDataSource: TrackedCategoryLockDataSource,
+        beforeRelease: () -> Unit,
+        holderAction: () -> T,
+        waiterAction: () -> U,
+    ): Pair<T, U> {
+        val executor = Executors.newFixedThreadPool(2)
+        val holderFuture = executor.submit(Callable<T> { holderAction() })
+        try {
+            assertTrue(
+                holderDataSource.categoryLockAcquired.await(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                "Production lock holder did not acquire the menu category lock",
+            )
+            val waiterFuture = executor.submit(Callable<U> { waiterAction() })
+            assertTrue(
+                waiterDataSource.categoryLockAttempted.await(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                "Competing production mutation did not attempt the menu category lock",
+            )
+
+            val holderPid = holderDataSource.backendPid.get()
+            val waiterPid = waiterDataSource.backendPid.get()
+            assertTrue(holderPid > 0, "Missing PostgreSQL PID for category-lock holder")
+            assertTrue(waiterPid > 0, "Missing PostgreSQL PID for category-lock waiter")
+            assertFalse(holderPid == waiterPid, "Production mutations must use independent connections")
+
+            observerDataSource.connection.use { observer ->
+                val observation =
+                    awaitPostgresBlock(
+                        observer = observer,
+                        blockedPid = waiterPid,
+                        blockerPid = holderPid,
+                        waiterFuture = waiterFuture,
+                    )
+                assertTrue(
+                    observation.blocked,
+                    "PostgreSQL did not report the expected category-lock blocking edge. " +
+                        observation.diagnostic,
+                )
+            }
+            beforeRelease()
+            holderDataSource.allowMutation.countDown()
+            return holderFuture.get(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS) to
+                waiterFuture.get(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        } finally {
+            holderDataSource.allowMutation.countDown()
+            executor.shutdownNow()
+            executor.awaitTermination(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        }
+    }
+
     private fun <T, U> runWithHeldItemLock(
         observerDataSource: DataSource,
         holderDataSource: HeldItemLockCoordinator,
@@ -2044,6 +2554,7 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
                 connection.commit()
                 Fixture(
                     venueId = venueId,
+                    categoryId = categoryId,
                     itemId = itemId,
                     obsoleteOptionIds = setOf(appleId, grapeId),
                     customOptionId = customId,
@@ -2055,6 +2566,20 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
             } finally {
                 connection.autoCommit = originalAutoCommit
             }
+        }
+
+    private fun insertEmptyCategory(
+        dataSource: DataSource,
+        venueId: Long,
+    ): Long =
+        dataSource.connection.use { connection ->
+            insertReturningId(
+                connection,
+                """
+                INSERT INTO menu_categories (venue_id, name, category_type)
+                VALUES (?, 'Empty create concurrency category', 'HOOKAH')
+                """.trimIndent(),
+            ) { statement -> statement.setLong(1, venueId) }
         }
 
     private fun insertUser(
@@ -2359,6 +2884,113 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
         assertEquals(source.name, audit.payload.getValue("source").jsonPrimitive.content)
     }
 
+    private fun assertMenuItemCreateCardinality(
+        dataSource: DataSource,
+        fixture: Fixture,
+        initialItemIds: Set<Long>,
+        expected: List<ExpectedItemCreateAudit>,
+    ) {
+        val committedItemIds =
+            readMenuItems(dataSource, fixture.venueId, fixture.categoryId)
+                .map { it.id }
+                .filterNot { it in initialItemIds }
+                .toSet()
+        val audits = readMenuItemCreateAudits(dataSource)
+        assertEquals(committedItemIds.size, audits.size)
+        assertEquals(committedItemIds, audits.map { it.entityId }.toSet())
+        assertEquals(audits.size, audits.map { it.entityId }.distinct().size)
+        assertMenuItemCreateAudits(dataSource, fixture, expected)
+    }
+
+    private fun assertMenuItemCreateAudits(
+        dataSource: DataSource,
+        fixture: Fixture,
+        expected: List<ExpectedItemCreateAudit>,
+    ) {
+        val audits = readMenuItemCreateAudits(dataSource)
+        assertEquals(expected.size, audits.size)
+        expected.forEachIndexed { index, expectedAudit ->
+            val audit = audits[index]
+            assertEquals(expectedAudit.actorUserId, audit.actorUserId)
+            assertEquals("menu_item", audit.entityType)
+            assertEquals(expectedAudit.itemId, audit.entityId)
+            assertEquals(ITEM_CREATE_AUDIT_PAYLOAD_KEYS, audit.payload.keys)
+            assertEquals(fixture.venueId, audit.payload.longValue("venueId"))
+            assertEquals(expectedAudit.itemId, audit.payload.longValue("itemId"))
+            assertEquals(expectedAudit.source.name, audit.payload.getValue("source").jsonPrimitive.content)
+        }
+    }
+
+    private fun categoryExists(
+        dataSource: DataSource,
+        venueId: Long,
+        categoryId: Long,
+    ): Boolean =
+        dataSource.connection.use { connection ->
+            connection.prepareStatement(
+                "SELECT 1 FROM menu_categories WHERE id = ? AND venue_id = ?",
+            ).use { statement ->
+                statement.setLong(1, categoryId)
+                statement.setLong(2, venueId)
+                statement.executeQuery().use { it.next() }
+            }
+        }
+
+    private fun rowExists(
+        connection: Connection,
+        table: String,
+        entityId: Long,
+    ): Boolean =
+        connection.prepareStatement("SELECT 1 FROM $table WHERE id = ?").use { statement ->
+            statement.setLong(1, entityId)
+            statement.executeQuery().use { it.next() }
+        }
+
+    private fun auditExists(
+        connection: Connection,
+        action: String,
+        entityId: Long,
+    ): Boolean =
+        connection.prepareStatement(
+            "SELECT 1 FROM audit_log WHERE action = ? AND entity_id = ?",
+        ).use { statement ->
+            statement.setString(1, action)
+            statement.setLong(2, entityId)
+            statement.executeQuery().use { it.next() }
+        }
+
+    private fun readMenuItems(
+        dataSource: DataSource,
+        venueId: Long,
+        categoryId: Long,
+    ): List<MenuItemRow> =
+        dataSource.connection.use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT id, name, sort_order
+                FROM menu_items
+                WHERE venue_id = ? AND category_id = ?
+                ORDER BY id
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.setLong(2, categoryId)
+                statement.executeQuery().use { resultSet ->
+                    buildList {
+                        while (resultSet.next()) {
+                            add(
+                                MenuItemRow(
+                                    id = resultSet.getLong("id"),
+                                    name = resultSet.getString("name"),
+                                    sortOrder = resultSet.getInt("sort_order"),
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
     private fun readItem(
         dataSource: DataSource,
         itemId: Long,
@@ -2433,6 +3065,9 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
     private fun readItemDeleteAudits(dataSource: DataSource): List<AuditRow> =
         readAudits(dataSource, MENU_ITEM_DELETED_AUDIT_ACTION)
 
+    private fun readMenuItemCreateAudits(dataSource: DataSource): List<AuditRow> =
+        readAudits(dataSource, MENU_ITEM_CREATED_AUDIT_ACTION)
+
     private fun readShiftCheckAudits(dataSource: DataSource): List<AuditRow> =
         readAudits(dataSource, MENU_SHIFT_CHECK_COMPLETED_AUDIT_ACTION)
 
@@ -2500,6 +3135,19 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
             normalized.contains("for update nowait")
     }
 
+    private fun String.isCategoryOrderMutationLock(): Boolean {
+        val normalized = normalizedSql()
+        return normalized.contains("from menu_categories") &&
+            normalized.contains("for update") &&
+            !normalized.contains("nowait")
+    }
+
+    private fun String.isCategoryDeleteMutationLock(): Boolean {
+        val normalized = normalizedSql()
+        return normalized.contains("from menu_categories") &&
+            normalized.contains("for update nowait")
+    }
+
     private fun String.normalizedSql(): String =
         trim()
             .replace(WHITESPACE, " ")
@@ -2509,6 +3157,125 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
         val itemLockAcquired: CountDownLatch
         val allowMutation: CountDownLatch
         val backendPid: AtomicInteger
+    }
+
+    private interface HeldCategoryLockCoordinator {
+        val categoryLockAcquired: CountDownLatch
+        val allowMutation: CountDownLatch
+        val backendPid: AtomicInteger
+    }
+
+    private inner class HeldCategoryLockDataSource(
+        private val delegate: DataSource,
+    ) : DataSource by delegate,
+        HeldCategoryLockCoordinator {
+        override val categoryLockAcquired = CountDownLatch(1)
+        override val allowMutation = CountDownLatch(1)
+        override val backendPid = AtomicInteger()
+        private val held = AtomicBoolean()
+
+        override fun getConnection(): Connection = wrap(delegate.connection)
+
+        override fun getConnection(
+            username: String?,
+            password: String?,
+        ): Connection = wrap(delegate.getConnection(username, password))
+
+        private fun wrap(connection: Connection): Connection {
+            backendPid.set(this@VenueMenuOptionNormalizationConcurrencyPostgresTest.backendPid(connection))
+            return object : Connection by connection {
+                override fun prepareStatement(sql: String): PreparedStatement {
+                    val prepared = connection.prepareStatement(sql)
+                    if (sql.isCategoryOrderMutationLock() && held.compareAndSet(false, true)) {
+                        return object : PreparedStatement by prepared {
+                            override fun executeQuery(): ResultSet {
+                                check(!connection.autoCommit) {
+                                    "Menu category lock must be held inside the production transaction"
+                                }
+                                val resultSet = prepared.executeQuery()
+                                categoryLockAcquired.countDown()
+                                if (!allowMutation.await(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                                    resultSet.close()
+                                    throw SQLException("Timed out while holding menu category lock")
+                                }
+                                return resultSet
+                            }
+                        }
+                    }
+                    return prepared
+                }
+            }
+        }
+    }
+
+    private inner class TrackedCategoryLockDataSource(
+        private val delegate: DataSource,
+    ) : DataSource by delegate {
+        val categoryLockAttempted = CountDownLatch(1)
+        val backendPid = AtomicInteger()
+        private val signalled = AtomicBoolean()
+
+        override fun getConnection(): Connection = wrap(delegate.connection)
+
+        override fun getConnection(
+            username: String?,
+            password: String?,
+        ): Connection = wrap(delegate.getConnection(username, password))
+
+        private fun wrap(connection: Connection): Connection {
+            backendPid.set(this@VenueMenuOptionNormalizationConcurrencyPostgresTest.backendPid(connection))
+            return object : Connection by connection {
+                override fun prepareStatement(sql: String): PreparedStatement {
+                    val prepared = connection.prepareStatement(sql)
+                    if (sql.isCategoryOrderMutationLock()) {
+                        return object : PreparedStatement by prepared {
+                            override fun executeQuery(): ResultSet {
+                                if (signalled.compareAndSet(false, true)) {
+                                    categoryLockAttempted.countDown()
+                                }
+                                return prepared.executeQuery()
+                            }
+                        }
+                    }
+                    return prepared
+                }
+            }
+        }
+    }
+
+    private inner class TrackedCategoryDeleteLockDataSource(
+        private val delegate: DataSource,
+    ) : DataSource by delegate {
+        val categoryDeleteLockAttempted = CountDownLatch(1)
+        val backendPid = AtomicInteger()
+        private val signalled = AtomicBoolean()
+
+        override fun getConnection(): Connection = wrap(delegate.connection)
+
+        override fun getConnection(
+            username: String?,
+            password: String?,
+        ): Connection = wrap(delegate.getConnection(username, password))
+
+        private fun wrap(connection: Connection): Connection {
+            backendPid.set(this@VenueMenuOptionNormalizationConcurrencyPostgresTest.backendPid(connection))
+            return object : Connection by connection {
+                override fun prepareStatement(sql: String): PreparedStatement {
+                    val prepared = connection.prepareStatement(sql)
+                    if (sql.isCategoryDeleteMutationLock()) {
+                        return object : PreparedStatement by prepared {
+                            override fun executeQuery(): ResultSet {
+                                if (signalled.compareAndSet(false, true)) {
+                                    categoryDeleteLockAttempted.countDown()
+                                }
+                                return prepared.executeQuery()
+                            }
+                        }
+                    }
+                    return prepared
+                }
+            }
+        }
     }
 
     private inner class HeldItemLockDataSource(
@@ -2634,6 +3401,7 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
 
     private data class Fixture(
         val venueId: Long,
+        val categoryId: Long,
         val itemId: Long,
         val obsoleteOptionIds: Set<Long>,
         val customOptionId: Long,
@@ -2655,6 +3423,12 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
         val isAvailable: Boolean,
     )
 
+    private data class MenuItemRow(
+        val id: Long,
+        val name: String,
+        val sortOrder: Int,
+    )
+
     private data class AuditRow(
         val actorUserId: Long,
         val entityType: String,
@@ -2666,6 +3440,12 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
         val optionId: Long,
         val actorUserId: Long,
         val source: MenuOptionCreateSource,
+    )
+
+    private data class ExpectedItemCreateAudit(
+        val itemId: Long,
+        val actorUserId: Long,
+        val source: MenuItemCreateSource,
     )
 
     private data class PostgresBlockObservation(
@@ -2681,6 +3461,9 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
         const val CUSTOM_OPTION_NAME = "Авторский микс"
         const val FIRST_CUSTOM_CREATE_NAME = "Авторский цитрус"
         const val SECOND_CUSTOM_CREATE_NAME = "Авторская ягода"
+        const val FIRST_ITEM_CREATE_NAME = "Concurrency item one"
+        const val SECOND_ITEM_CREATE_NAME = "Concurrency item two"
+        const val FAILED_ITEM_CREATE_NAME = "Concurrency item rolled back"
         const val WAIT_TIMEOUT_SECONDS = 30L
 
         val AUDIT_PAYLOAD_KEYS = setOf("venueId", "itemId", "optionId", "source")
@@ -2698,6 +3481,7 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
             setOf("venueId", "itemId", "optionId", "oldIsAvailable", "newIsAvailable", "source")
         val ITEM_AVAILABILITY_AUDIT_PAYLOAD_KEYS =
             setOf("venueId", "itemId", "oldIsAvailable", "newIsAvailable", "source")
+        val ITEM_CREATE_AUDIT_PAYLOAD_KEYS = setOf("venueId", "itemId", "source")
         val WHITESPACE = Regex("\\s+")
     }
 }

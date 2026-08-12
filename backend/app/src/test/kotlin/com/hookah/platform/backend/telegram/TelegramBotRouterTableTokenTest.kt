@@ -70,13 +70,16 @@ import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
 import com.hookah.platform.backend.miniapp.venue.STAFF_CALL_ACK_AUDIT_ACTION
 import com.hookah.platform.backend.miniapp.venue.STAFF_CALL_AUDIT_SOURCE_TELEGRAM_STAFF_CHAT
 import com.hookah.platform.backend.miniapp.venue.STAFF_CALL_DONE_AUDIT_ACTION
+import com.hookah.platform.backend.miniapp.venue.TransactionalAuditLogWriter
 import com.hookah.platform.backend.miniapp.venue.VenueRole
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import com.hookah.platform.backend.miniapp.venue.menu.BASE_FLAVOR_PROFILE_ALREADY_EXISTS_MESSAGE
 import com.hookah.platform.backend.miniapp.venue.menu.HookahBaseFlavorProfileApplyResult
 import com.hookah.platform.backend.miniapp.venue.menu.HookahFlavorProfileNormalizationResult
+import com.hookah.platform.backend.miniapp.venue.menu.MENU_ITEM_CREATED_AUDIT_ACTION
 import com.hookah.platform.backend.miniapp.venue.menu.MenuCategoryDeleteSource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuItemAvailabilitySource
+import com.hookah.platform.backend.miniapp.venue.menu.MenuItemCreateSource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuItemDeleteSource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuOptionAvailabilitySource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuOptionCreateSource
@@ -247,7 +250,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import org.flywaydb.core.Flyway
+import org.h2.jdbcx.JdbcDataSource
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -255,12 +262,15 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.slf4j.LoggerFactory
 import java.sql.Connection
+import java.sql.SQLException
+import java.sql.Statement
 import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.ZoneId
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 import com.hookah.platform.backend.telegram.db.OrderServiceChargeDetails as TelegramOrderServiceChargeDetails
 
@@ -328,6 +338,7 @@ class TelegramBotRouterTableTokenTest {
         platformGuestQrCallbackTagFactory: () -> String = {
             "pgqr${platformGuestQrCallbackTagSequence.incrementAndGet().toString().padStart(8, '0')}"
         },
+        venueMenuRepositoryOverride: VenueMenuRepository = venueMenuRepository,
     ): TelegramBotRouter =
         TelegramBotRouter(
             config =
@@ -359,7 +370,7 @@ class TelegramBotRouterTableTokenTest {
             venueRepository = venueRepository,
             venueBookingHoursRepository = venueBookingHoursRepository,
             venueMenuSectionImagesRepository = venueMenuSectionImagesRepository,
-            venueMenuRepository = venueMenuRepository,
+            venueMenuRepository = venueMenuRepositoryOverride,
             venueTableRepository = venueTableRepository,
             venueAccessRepository = venueAccessRepository,
             venueContextRepository = venueContextRepository,
@@ -8772,7 +8783,18 @@ class TelegramBotRouterTableTokenTest {
     fun `owner order menu add item flow saves item and returns to section`() =
         runBlocking {
             coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
-            coEvery { venueMenuRepository.createItem(10L, 501L, "Авторский кальян", 85_000L, "RUB", true) } returns
+            coEvery {
+                venueMenuRepository.createItem(
+                    venueId = 10L,
+                    categoryId = 501L,
+                    name = "Авторский кальян",
+                    priceMinor = 85_000L,
+                    currency = "RUB",
+                    isAvailable = true,
+                    actorUserId = 200L,
+                    source = MenuItemCreateSource.TELEGRAM_BOT,
+                )
+            } returns
                 VenueMenuItem(
                     id = 7001L,
                     venueId = 10L,
@@ -8864,8 +8886,20 @@ class TelegramBotRouterTableTokenTest {
                     },
                 )
             }
-            coVerify {
-                venueMenuRepository.createItem(10L, 501L, "Авторский кальян", 85_000L, "RUB", true)
+            coVerify(exactly = 1) {
+                venueMenuRepository.createItem(
+                    venueId = 10L,
+                    categoryId = 501L,
+                    name = "Авторский кальян",
+                    priceMinor = 85_000L,
+                    currency = "RUB",
+                    isAvailable = true,
+                    actorUserId = 200L,
+                    source = MenuItemCreateSource.TELEGRAM_BOT,
+                )
+            }
+            coVerify(exactly = 0) {
+                auditLogRepository.appendJson(any(), MENU_ITEM_CREATED_AUDIT_ACTION, any(), any(), any())
             }
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
@@ -8896,6 +8930,362 @@ class TelegramBotRouterTableTokenTest {
                             }
                     },
                 )
+            }
+        }
+
+    @Test
+    fun `manager order menu add item uses current actor and telegram source despite dialog spoof fields`() =
+        runBlocking {
+            val created =
+                VenueMenuItem(
+                    id = 7002L,
+                    venueId = 10L,
+                    categoryId = 501L,
+                    name = "Manager private message item",
+                    priceMinor = 90_000L,
+                    currency = "RUB",
+                    isAvailable = true,
+                    sortOrder = 11,
+                    options = emptyList(),
+                )
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(201L, 10L) } returns true
+            coEvery { dialogStateRepository.get(100) } returns
+                DialogState(
+                    state = DialogStateType.OWNER_VENUE_ORDER_MENU_WAIT_ITEM_PRICE,
+                    payload =
+                        mapOf(
+                            "venue_id" to "10",
+                            "section_id" to "501",
+                            "owner_user_id" to "201",
+                            "item_name" to created.name,
+                            "actor_user_id" to "999999",
+                            "source" to "VENUE_MINI_APP",
+                            "callback_data" to "private callback payload",
+                        ),
+                )
+            coEvery {
+                venueMenuRepository.createItem(
+                    venueId = 10L,
+                    categoryId = 501L,
+                    name = created.name,
+                    priceMinor = 90_000L,
+                    currency = "RUB",
+                    isAvailable = true,
+                    actorUserId = 201L,
+                    source = MenuItemCreateSource.TELEGRAM_BOT,
+                )
+            } returns created
+            coEvery { venueMenuRepository.getMenu(10L) } returns
+                listOf(
+                    VenueMenuCategory(
+                        id = 501L,
+                        venueId = 10L,
+                        name = "Кальянное меню",
+                        sortOrder = 10,
+                        items = listOf(created),
+                    ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_28,
+                    message =
+                        Message(
+                            messageId = 20_004_28,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 201L, username = "private_manager_username"),
+                            text = "900",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 1) {
+                venueMenuRepository.createItem(
+                    venueId = 10L,
+                    categoryId = 501L,
+                    name = created.name,
+                    priceMinor = 90_000L,
+                    currency = "RUB",
+                    isAvailable = true,
+                    actorUserId = 201L,
+                    source = MenuItemCreateSource.TELEGRAM_BOT,
+                )
+            }
+            coVerify(exactly = 1) { dialogStateRepository.clear(100) }
+            coVerify(exactly = 1) {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "✅ Позиция добавлена. Теперь можно настроить цену, наличие и вкусы/варианты.",
+                    null,
+                )
+            }
+            coVerify(exactly = 0) {
+                auditLogRepository.appendJson(any(), MENU_ITEM_CREATED_AUDIT_ACTION, any(), any(), any())
+            }
+        }
+
+    @Test
+    fun `staff and foreign item add callbacks are denied before menu facts are loaded`() =
+        runBlocking {
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(300L, 10L) } returns false
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(301L, 10L) } returns false
+
+            listOf(300L, 301L).forEachIndexed { index, actorUserId ->
+                router.process(
+                    TelegramUpdate(
+                        updateId = 10_004_29L + index.toLong(),
+                        callbackQuery =
+                            CallbackQuery(
+                                id = "cb-owner-order-menu-item-add-denied-$actorUserId",
+                                from = User(id = actorUserId),
+                                message =
+                                    Message(
+                                        messageId = 30_004_29L + index.toLong(),
+                                        chat = Chat(id = 100, type = "private"),
+                                    ),
+                                data = "owner_venue_order_menu_item_add:10:501",
+                            ),
+                    ),
+                )
+            }
+
+            coVerify(exactly = 1) { venueAccessRepository.hasVenueAdminOrOwner(300L, 10L) }
+            coVerify(exactly = 1) { venueAccessRepository.hasVenueAdminOrOwner(301L, 10L) }
+            coVerify(exactly = 0) { venueMenuRepository.getMenu(any()) }
+            coVerify(exactly = 0) { dialogStateRepository.set(any(), any()) }
+            coVerify(exactly = 2) { outboxEnqueuer.enqueueSendMessage(100, "Нет доступа к заведению.", null) }
+        }
+
+    @Test
+    fun `item add dialog fails closed for mismatched and absent persisted actor`() =
+        runBlocking {
+            val state =
+                DialogState(
+                    state = DialogStateType.OWNER_VENUE_ORDER_MENU_WAIT_ITEM_PRICE,
+                    payload =
+                        mapOf(
+                            "venue_id" to "10",
+                            "section_id" to "501",
+                            "owner_user_id" to "200",
+                            "item_name" to "Private item name",
+                        ),
+                )
+            coEvery { dialogStateRepository.get(100) } returnsMany
+                listOf(
+                    state,
+                    state.copy(payload = state.payload - "owner_user_id"),
+                    state,
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_31,
+                    message =
+                        Message(
+                            messageId = 20_004_31,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 201L),
+                            text = "850",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_32,
+                    message =
+                        Message(
+                            messageId = 20_004_32,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200L),
+                            text = "850",
+                        ),
+                ),
+            )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_32_1,
+                    message =
+                        Message(
+                            messageId = 20_004_32_1,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = null,
+                            text = "850",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { venueAccessRepository.hasVenueAdminOrOwner(any(), any()) }
+            coVerify(exactly = 0) {
+                venueMenuRepository.createItem(
+                    venueId = any(),
+                    categoryId = any(),
+                    name = any(),
+                    priceMinor = any(),
+                    currency = any(),
+                    isAvailable = any(),
+                    actorUserId = any(),
+                    source = any(),
+                )
+            }
+            coVerify(exactly = 3) { dialogStateRepository.clear(100) }
+            coVerify(exactly = 3) {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Не удалось продолжить. Откройте «🍽 Заказное меню» снова.",
+                    null,
+                )
+            }
+        }
+
+    @Test
+    fun `item add audit failure after physical insert rolls back and dialog can retry safely`() =
+        runBlocking {
+            val dataSource = migratedTelegramMenuDataSource()
+            val venueId = seedTelegramMenuAuditVenue(dataSource, actorUserId = 200L)
+            val fixtureRepository = VenueMenuRepository(dataSource)
+            val category = fixtureRepository.createCategory(venueId, "Private category name")
+            val delegateAuditWriter = AuditLogRepository(dataSource, Json)
+            var createAuditAttempts = 0
+            var insertedItemObserved = false
+            var insertedAuditObserved = false
+            val failingOnceAuditWriter =
+                TransactionalAuditLogWriter { connection, actorUserId, action, entityType, entityId, payload ->
+                    delegateAuditWriter.appendJson(connection, actorUserId, action, entityType, entityId, payload)
+                    if (action == MENU_ITEM_CREATED_AUDIT_ACTION) {
+                        createAuditAttempts += 1
+                        insertedItemObserved =
+                            connection.prepareStatement(
+                                "SELECT COUNT(*) FROM menu_items WHERE id = ? AND venue_id = ? AND category_id = ?",
+                            ).use { statement ->
+                                statement.setLong(1, requireNotNull(entityId))
+                                statement.setLong(2, venueId)
+                                statement.setLong(3, category.id)
+                                statement.executeQuery().use { rows ->
+                                    rows.next()
+                                    rows.getInt(1) == 1
+                                }
+                            }
+                        insertedAuditObserved =
+                            connection.prepareStatement(
+                                "SELECT COUNT(*) FROM audit_log WHERE action = ? AND entity_id = ?",
+                            ).use { statement ->
+                                statement.setString(1, MENU_ITEM_CREATED_AUDIT_ACTION)
+                                statement.setLong(2, requireNotNull(entityId))
+                                statement.executeQuery().use { rows ->
+                                    rows.next()
+                                    rows.getInt(1) == 1
+                                }
+                            }
+                        if (createAuditAttempts == 1) {
+                            throw SQLException("Synthetic Telegram menu item create audit failure", "XX999")
+                        }
+                    }
+                }
+            val realRepository = VenueMenuRepository(dataSource, failingOnceAuditWriter)
+            val integrationRouter =
+                routerWithWebAppPublicUrl(
+                    webAppPublicUrl = null,
+                    venueMenuRepositoryOverride = realRepository,
+                )
+            val privateItemName = "Private message item @username initData secret"
+            val dialogState =
+                DialogState(
+                    state = DialogStateType.OWNER_VENUE_ORDER_MENU_WAIT_ITEM_PRICE,
+                    payload =
+                        mapOf(
+                            "venue_id" to venueId.toString(),
+                            "section_id" to category.id.toString(),
+                            "owner_user_id" to "200",
+                            "item_name" to privateItemName,
+                            "actor_user_id" to "999999",
+                            "source" to "VENUE_MINI_APP",
+                            "callback_data" to "private callback payload",
+                        ),
+                )
+            coEvery { dialogStateRepository.get(100) } returns dialogState
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, venueId) } returns true
+
+            integrationRouter.process(
+                TelegramUpdate(
+                    updateId = 10_004_33,
+                    message =
+                        Message(
+                            messageId = 20_004_33,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200L, username = "private_actor_username"),
+                            text = "850",
+                        ),
+                ),
+            )
+
+            assertTrue(insertedItemObserved)
+            assertTrue(insertedAuditObserved)
+            assertEquals(1, createAuditAttempts)
+            assertEquals(0, countRows(dataSource, "menu_items"))
+            assertEquals(0, countRows(dataSource, "audit_log", MENU_ITEM_CREATED_AUDIT_ACTION))
+            coVerify(exactly = 0) { dialogStateRepository.clear(100) }
+            coVerify(exactly = 1) {
+                outboxEnqueuer.enqueueSendMessage(100, "База недоступна, попробуйте позже.", null)
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "✅ Позиция добавлена. Теперь можно настроить цену, наличие и вкусы/варианты.",
+                    null,
+                )
+            }
+
+            integrationRouter.process(
+                TelegramUpdate(
+                    updateId = 10_004_34,
+                    message =
+                        Message(
+                            messageId = 20_004_34,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200L, username = "private_actor_username"),
+                            text = "850",
+                        ),
+                ),
+            )
+
+            assertEquals(2, createAuditAttempts)
+            assertEquals(1, countRows(dataSource, "menu_items"))
+            assertEquals(1, countRows(dataSource, "audit_log", MENU_ITEM_CREATED_AUDIT_ACTION))
+            val persistedItemId =
+                dataSource.connection.use { connection ->
+                    connection.prepareStatement("SELECT id FROM menu_items WHERE venue_id = ?").use { statement ->
+                        statement.setLong(1, venueId)
+                        statement.executeQuery().use { rows ->
+                            rows.next()
+                            rows.getLong(1)
+                        }
+                    }
+                }
+            val audit = loadTelegramMenuItemCreateAudit(dataSource)
+            assertEquals(200L, audit.actorUserId)
+            assertEquals(MENU_ITEM_CREATED_AUDIT_ACTION, audit.action)
+            assertEquals("menu_item", audit.entityType)
+            assertEquals(persistedItemId, audit.entityId)
+            assertEquals(setOf("venueId", "itemId", "source"), audit.payload.keys)
+            assertEquals(venueId.toString(), audit.payload.getValue("venueId").jsonPrimitive.content)
+            assertEquals(persistedItemId.toString(), audit.payload.getValue("itemId").jsonPrimitive.content)
+            assertEquals(
+                MenuItemCreateSource.TELEGRAM_BOT.name,
+                audit.payload.getValue("source").jsonPrimitive.content,
+            )
+            assertFalse(audit.payload.toString().contains(privateItemName))
+            assertFalse(audit.payload.toString().contains("private_actor_username"))
+            assertFalse(audit.payload.toString().contains("private callback payload"))
+            coVerify(exactly = 1) { dialogStateRepository.clear(100) }
+            coVerify(exactly = 1) {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "✅ Позиция добавлена. Теперь можно настроить цену, наличие и вкусы/варианты.",
+                    null,
+                )
+            }
+            coVerify(exactly = 0) {
+                auditLogRepository.appendJson(any(), MENU_ITEM_CREATED_AUDIT_ACTION, any(), any(), any())
             }
         }
 
@@ -34710,6 +35100,108 @@ class TelegramBotRouterTableTokenTest {
             totalMinor = 300_000,
             currency = "RUB",
         )
+
+    private fun migratedTelegramMenuDataSource(): JdbcDataSource {
+        val jdbcUrl =
+            "jdbc:h2:mem:telegram-menu-item-create-${UUID.randomUUID()};MODE=PostgreSQL;" +
+                "DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE"
+        Flyway
+            .configure()
+            .dataSource(jdbcUrl, "sa", "")
+            .locations("classpath:db/migration/h2")
+            .load()
+            .migrate()
+        return JdbcDataSource().apply {
+            setURL(jdbcUrl)
+            user = "sa"
+            password = ""
+        }
+    }
+
+    private fun seedTelegramMenuAuditVenue(
+        dataSource: JdbcDataSource,
+        actorUserId: Long,
+    ): Long =
+        dataSource.connection.use { connection ->
+            connection.prepareStatement(
+                """
+                MERGE INTO users (telegram_user_id, username, first_name, last_name)
+                KEY (telegram_user_id)
+                VALUES (?, 'telegram-menu-audit-actor', 'Menu', 'Actor')
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, actorUserId)
+                statement.executeUpdate()
+            }
+            connection.prepareStatement(
+                """
+                INSERT INTO venues (name, city, address, status)
+                VALUES ('Mix', 'Москва', 'Тверская, 1', ?)
+                """.trimIndent(),
+                Statement.RETURN_GENERATED_KEYS,
+            ).use { statement ->
+                statement.setString(1, VenueStatus.PUBLISHED.dbValue)
+                statement.executeUpdate()
+                statement.generatedKeys.use { keys ->
+                    keys.next()
+                    keys.getLong(1)
+                }
+            }
+        }
+
+    private fun countRows(
+        dataSource: JdbcDataSource,
+        table: String,
+        action: String? = null,
+    ): Int =
+        dataSource.connection.use { connection ->
+            val sql =
+                if (action == null) {
+                    "SELECT COUNT(*) FROM $table"
+                } else {
+                    "SELECT COUNT(*) FROM $table WHERE action = ?"
+                }
+            connection.prepareStatement(sql).use { statement ->
+                if (action != null) {
+                    statement.setString(1, action)
+                }
+                statement.executeQuery().use { rows ->
+                    rows.next()
+                    rows.getInt(1)
+                }
+            }
+        }
+
+    private fun loadTelegramMenuItemCreateAudit(dataSource: JdbcDataSource): TelegramMenuItemCreateAudit =
+        dataSource.connection.use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT actor_user_id, action, entity_type, entity_id, payload_json
+                FROM audit_log
+                WHERE action = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setString(1, MENU_ITEM_CREATED_AUDIT_ACTION)
+                statement.executeQuery().use { rows ->
+                    rows.next()
+                    TelegramMenuItemCreateAudit(
+                        actorUserId = rows.getLong("actor_user_id"),
+                        action = rows.getString("action"),
+                        entityType = rows.getString("entity_type"),
+                        entityId = rows.getLong("entity_id"),
+                        payload = Json.parseToJsonElement(rows.getString("payload_json")).jsonObject,
+                    )
+                }
+            }
+        }
+
+    private data class TelegramMenuItemCreateAudit(
+        val actorUserId: Long,
+        val action: String,
+        val entityType: String,
+        val entityId: Long,
+        val payload: JsonObject,
+    )
 
     private fun ReplyMarkup?.hasSingleWebAppButton(expectedUrl: String): Boolean {
         val button = (this as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten()?.singleOrNull() ?: return false

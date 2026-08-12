@@ -148,6 +148,8 @@ fun Route.venueMenuRoutes(
                     priceMinor = payload.priceMinor,
                     currency = currency,
                     isAvailable = payload.isAvailable,
+                    actorUserId = userId,
+                    source = MenuItemCreateSource.VENUE_MINI_APP,
                     itemType = itemType,
                 ) ?: throw InvalidInputException("categoryId is invalid")
             call.respond(created.toDtoWithCategory(resolveCategoryForItem(venueMenuRepository, venueId, created)))

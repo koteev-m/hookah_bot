@@ -31,6 +31,7 @@ const val MENU_OPTION_RENAMED_AUDIT_ACTION = "MENU_OPTION_RENAMED"
 const val MENU_OPTION_PRICE_CHANGED_AUDIT_ACTION = "MENU_OPTION_PRICE_CHANGED"
 const val MENU_OPTION_AVAILABILITY_CHANGED_AUDIT_ACTION = "MENU_OPTION_AVAILABILITY_CHANGED"
 const val MENU_ITEM_AVAILABILITY_CHANGED_AUDIT_ACTION = "MENU_ITEM_AVAILABILITY_CHANGED"
+const val MENU_ITEM_CREATED_AUDIT_ACTION = "MENU_ITEM_CREATED"
 internal const val MENU_DELETE_AFFECTED_RULE_SAMPLE_LIMIT = 50
 internal const val MENU_DELETE_AUDIT_PAYLOAD_MAX_BYTES = 4096
 internal const val MENU_ITEM_DELETE_AFFECTED_RULE_SAMPLE_LIMIT = MENU_DELETE_AFFECTED_RULE_SAMPLE_LIMIT
@@ -42,6 +43,11 @@ enum class MenuItemDeleteSource {
 }
 
 enum class MenuItemAvailabilitySource {
+    VENUE_MINI_APP,
+    TELEGRAM_BOT,
+}
+
+enum class MenuItemCreateSource {
     VENUE_MINI_APP,
     TELEGRAM_BOT,
 }
@@ -455,55 +461,59 @@ class VenueMenuRepository(
         priceMinor: Long,
         currency: String,
         isAvailable: Boolean,
+        actorUserId: Long,
+        source: MenuItemCreateSource,
         itemType: MenuSemanticType? = null,
     ): VenueMenuItem? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    if (!categoryExists(connection, venueId, categoryId)) {
-                        return@use null
-                    }
-                    val sortOrder = nextItemSortOrder(connection, venueId, categoryId)
-                    val itemId =
-                        connection.prepareStatement(
-                            """
-                            INSERT INTO menu_items (
-                                venue_id, category_id, name, price_minor, currency, is_available, sort_order, item_type, updated_at
-                            )
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, now())
-                            """.trimIndent(),
-                            java.sql.Statement.RETURN_GENERATED_KEYS,
-                        ).use { statement ->
-                            statement.setLong(1, venueId)
-                            statement.setLong(2, categoryId)
-                            statement.setString(3, name)
-                            statement.setLong(4, priceMinor)
-                            statement.setString(5, currency)
-                            statement.setBoolean(6, isAvailable)
-                            statement.setInt(7, sortOrder)
-                            if (itemType == null) {
-                                statement.setNull(8, java.sql.Types.VARCHAR)
-                            } else {
-                                statement.setString(8, itemType.dbValue)
-                            }
-                            statement.executeUpdate()
-                            statement.generatedKeys.use { rs ->
-                                if (rs.next()) rs.getLong(1) else error("Failed to insert item")
-                            }
+                    val originalAutoCommit = connection.autoCommit
+                    connection.autoCommit = false
+                    try {
+                        if (!categoryExists(connection, venueId, categoryId)) {
+                            connection.commit()
+                            return@use null
                         }
-                    VenueMenuItem(
-                        id = itemId,
-                        venueId = venueId,
-                        categoryId = categoryId,
-                        name = name,
-                        priceMinor = priceMinor,
-                        currency = currency,
-                        isAvailable = isAvailable,
-                        sortOrder = sortOrder,
-                        itemType = itemType,
-                        options = emptyList(),
-                    )
+                        if (!lockCategoryForItemOrderMutation(connection, venueId, categoryId)) {
+                            connection.commit()
+                            return@use null
+                        }
+                        if (!categoryExists(connection, venueId, categoryId)) {
+                            throw SQLException("Locked menu category disappeared", "40001")
+                        }
+                        val sortOrder = nextItemSortOrder(connection, venueId, categoryId)
+                        val itemId =
+                            insertItem(
+                                connection = connection,
+                                venueId = venueId,
+                                categoryId = categoryId,
+                                name = name,
+                                priceMinor = priceMinor,
+                                currency = currency,
+                                isAvailable = isAvailable,
+                                sortOrder = sortOrder,
+                                itemType = itemType,
+                            )
+                        auditMenuItemCreate(
+                            connection = connection,
+                            venueId = venueId,
+                            itemId = itemId,
+                            actorUserId = actorUserId,
+                            source = source,
+                        )
+                        val created =
+                            loadItem(connection, itemId, venueId)
+                                ?: throw SQLException("Inserted menu item disappeared", "40001")
+                        connection.commit()
+                        created
+                    } catch (e: Exception) {
+                        connection.rollback()
+                        throw e
+                    } finally {
+                        connection.autoCommit = originalAutoCommit
+                    }
                 }
             } catch (e: SQLException) {
                 throw DatabaseUnavailableException()
@@ -856,9 +866,10 @@ class VenueMenuRepository(
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
+                    val originalAutoCommit = connection.autoCommit
                     connection.autoCommit = false
                     try {
-                        if (!categoryExists(connection, venueId, categoryId)) {
+                        if (!lockCategoryForItemOrderMutation(connection, venueId, categoryId)) {
                             connection.rollback()
                             return@use false
                         }
@@ -874,7 +885,7 @@ class VenueMenuRepository(
                         connection.rollback()
                         throw e
                     } finally {
-                        connection.autoCommit = true
+                        connection.autoCommit = originalAutoCommit
                     }
                 }
             } catch (e: SQLException) {
@@ -1622,6 +1633,44 @@ class VenueMenuRepository(
         val itemType: MenuSemanticType?,
     )
 
+    private fun insertItem(
+        connection: Connection,
+        venueId: Long,
+        categoryId: Long,
+        name: String,
+        priceMinor: Long,
+        currency: String,
+        isAvailable: Boolean,
+        sortOrder: Int,
+        itemType: MenuSemanticType?,
+    ): Long =
+        connection.prepareStatement(
+            """
+            INSERT INTO menu_items (
+                venue_id, category_id, name, price_minor, currency, is_available, sort_order, item_type, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, now())
+            """.trimIndent(),
+            Statement.RETURN_GENERATED_KEYS,
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, categoryId)
+            statement.setString(3, name)
+            statement.setLong(4, priceMinor)
+            statement.setString(5, currency)
+            statement.setBoolean(6, isAvailable)
+            statement.setInt(7, sortOrder)
+            if (itemType == null) {
+                statement.setNull(8, java.sql.Types.VARCHAR)
+            } else {
+                statement.setString(8, itemType.dbValue)
+            }
+            statement.executeUpdate()
+            statement.generatedKeys.use { rs ->
+                if (rs.next()) rs.getLong(1) else throw SQLException("Failed to insert menu item")
+            }
+        }
+
     private fun insertOption(
         connection: Connection,
         venueId: Long,
@@ -1684,6 +1733,28 @@ class VenueMenuRepository(
         if (deleted != 1) {
             throw SQLException("Locked menu option disappeared during deletion", "40001")
         }
+    }
+
+    private fun auditMenuItemCreate(
+        connection: Connection,
+        venueId: Long,
+        itemId: Long,
+        actorUserId: Long,
+        source: MenuItemCreateSource,
+    ) {
+        auditLogWriter.appendJson(
+            connection = connection,
+            actorUserId = actorUserId,
+            action = MENU_ITEM_CREATED_AUDIT_ACTION,
+            entityType = "menu_item",
+            entityId = itemId,
+            payload =
+                buildMenuItemCreateAuditPayload(
+                    venueId = venueId,
+                    itemId = itemId,
+                    source = source,
+                ),
+        )
     }
 
     private fun auditMenuOptionDelete(
@@ -2469,6 +2540,24 @@ class VenueMenuRepository(
             statement.executeQuery().use { rs -> rs.next() }
         }
 
+    private fun lockCategoryForItemOrderMutation(
+        connection: Connection,
+        venueId: Long,
+        categoryId: Long,
+    ): Boolean =
+        connection.prepareStatement(
+            """
+            SELECT id
+            FROM menu_categories
+            WHERE id = ? AND venue_id = ?
+            FOR UPDATE
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, categoryId)
+            statement.setLong(2, venueId)
+            statement.executeQuery().use { rs -> rs.next() }
+        }
+
     private fun loadItemCategoryId(
         connection: Connection,
         venueId: Long,
@@ -2720,6 +2809,16 @@ internal fun buildMenuItemDeleteAuditPayload(
     put("categoryId", categoryId)
     put("source", source.name)
     put("affectedPromotionRules", buildAffectedPromotionRuleSummary(affectedRuleIds))
+}
+
+internal fun buildMenuItemCreateAuditPayload(
+    venueId: Long,
+    itemId: Long,
+    source: MenuItemCreateSource,
+) = buildJsonObject {
+    put("venueId", venueId)
+    put("itemId", itemId)
+    put("source", source.name)
 }
 
 internal fun buildMenuCategoryDeleteAuditPayload(

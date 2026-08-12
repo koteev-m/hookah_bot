@@ -7,7 +7,9 @@
 Latest release-closed bounded menu audit blocks: option hard delete with atomic base-profile
 normalization, option rename, option price and **DANGEROUS ACTION AUDIT SLICE / MENU ITEM
 AVAILABILITY AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. The broader Menu and Dangerous Action
-Audit programs remain partial; keep each bounded gate in regression.
+Audit programs remain partial; keep each bounded gate in regression. Current local-only block:
+**DANGEROUS ACTION AUDIT SLICE / MENU ITEM CREATE AUDIT / MVP IMPLEMENTED / LOCAL VALIDATION PASSED /
+REVIEW REQUIRED BEFORE COMMIT**.
 
 ## Core Rule
 
@@ -827,6 +829,64 @@ token is invalid. Confirmed staging smoke only:
 
 No rollback/failure injection or concurrency case is claimed as staging smoke. The broader
 Menu/Dangerous Action Audit remains `PARTIAL`.
+
+### Menu Item Create Audit quality gate
+
+Status: **DANGEROUS ACTION AUDIT SLICE / MENU ITEM CREATE AUDIT / MVP IMPLEMENTED / LOCAL
+VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+
+Required regression coverage:
+
+- writer inventory proves one production `INSERT INTO menu_items` behind required
+  `VenueMenuRepository.createItem`, exactly two authenticated callers (Mini App POST and Telegram
+  add-item dialog), no automatic option insert and no internal/system/legacy runtime writer. Staging
+  seed SQL is operational only;
+- Owner/Manager own-venue create succeeds on both surfaces; Staff, foreign, unaffiliated and
+  Platform-only actors are denied. Legacy `ADMIN` remains Manager-compatible. Permission is checked
+  before category facts. Mini App actor is the session subject; Telegram actor is the present current
+  user matching persisted dialog owner. Client/dialog actor/source fields are ignored;
+- one repository-owned connection uses `autoCommit=false`, authoritative category scope, category
+  `FOR UPDATE`, scope recheck, existing `MAX(sort_order)+1`, item insert, generated id,
+  same-connection audit, item reread and one commit. Reorder shares the category lock. Audit failure
+  after observable item and audit inserts restores item/category/audit snapshots and surfaces safe
+  `503 DATABASE_UNAVAILABLE`/Telegram retry state without false success;
+- one committed item row writes exactly one `MENU_ITEM_CREATED`, entity `menu_item`, item id. Payload
+  keys are exactly `venueId`, `itemId`, `source`; actor is only the standard actor field. Item name,
+  price, currency, availability, type, category id/name, description, sort, media, options,
+  promotions, cart/order, raw request/initData/Telegram content, secrets and PII are absent;
+- each independent create, including equal names, remains a separate item plus audit. Denial,
+  invalid input/scope, not-found, SQL/audit failure and rollback produce zero. No idempotency token,
+  unique constraint, migration or business-default/DTO/form/dialog change is introduced;
+- Testcontainers PostgreSQL uses production migrations/repositories, independent connections/PIDs,
+  deterministic latches and real `pg_blocking_pids` / `pg_locks` evidence without sleep. It covers
+  Mini/Mini, Mini/Telegram, create/category-delete `NOWAIT`, create/reorder shared lock and one
+  concurrent post-insert audit failure. Committed item count equals create-audit count and no
+  unaudited item survives rollback.
+
+Mandatory CI selectors are exact `VenueMenuRepositoryTest`, `VenueMenuRoutesTest`,
+`TelegramBotRouterTableTokenTest`, `VenueMenuOptionNormalizationConcurrencyPostgresTest` and full
+Mini App smoke. Current minima are respectively `44`, `40`, `542`, `31`; exact JUnit XML must exist
+with zero skipped/failures/errors. The PostgreSQL job retains `JAVA_TOOL_OPTIONS=-Dapi.version=1.44`.
+No new workflow replaces these gates.
+
+Recorded local evidence: repository `44/0/0/0`, routes `40/0/0/0`, Telegram `542/0/0/0`,
+PostgreSQL `31/0/0/0`, `compileKotlin`, `ktlintCheck`, Mini App production build and Playwright
+`169/169`. `git diff --check` and clean-scope status remain final handoff gates. Schema verdict:
+**NO_MIGRATION_EXPECTED**.
+
+After independent review and green Actions, staging requires a bounded smoke only:
+
+1. Owner Mini App create commits one item and one `VENUE_MINI_APP` audit.
+2. Manager Mini App create commits one item and one audit; Staff/foreign direct requests are denied.
+3. Owner Telegram dialog creates one item with current actor and one `TELEGRAM_BOT` audit.
+4. Manager Telegram dialog creates one item; mismatched/absent dialog actor and Staff are denied.
+5. Audit payload has only `venueId`, `itemId`, `source` and no item/Telegram/PII content.
+6. Repeating a valid create makes a second physical item and a second audit; no options appear.
+7. Existing category/menu/Guest reads and ordinary cleanup remain intact.
+
+Failure injection and concurrency stay automated evidence, not staging actions. This does not close
+item price/name/type/category/description/currency audits, category/option create, Guest order/cart,
+promotions, media or the broader Menu/Dangerous Action Audit.
 
 ### Menu Option Rename Audit quality gate
 
@@ -2076,6 +2136,11 @@ Telegram/staff-chat:
   route/security `1137`, PostgreSQL `26/0/0/0`, compile/ktlint, Mini App build and Playwright
   `169/169` are automated evidence; user-confirmed Actions, staging deploy and bounded smoke close
   only this contract. No migration.
+- Menu item create audit: **DANGEROUS ACTION AUDIT SLICE / MENU ITEM CREATE AUDIT / MVP IMPLEMENTED /
+  LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. Repository `44/0/0/0`, routes
+  `40/0/0/0`, Telegram `542/0/0/0`, shared PostgreSQL `31/0/0/0`, compile/ktlint, Mini App build and
+  Playwright `169/169` are local evidence. Review, Actions, staging deploy and bounded smoke remain;
+  no migration.
 - Menu option rename audit: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION RENAME AUDIT / DONE / MVP /
   STAGING-SMOKE-PASSED**. The now-26-test shared menu concurrency XML gate, focused cross-surface tests,
   privacy/rollback checks, green Actions, staging deploy and bounded smoke are recorded complete.

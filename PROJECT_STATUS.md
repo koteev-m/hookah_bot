@@ -1,11 +1,12 @@
 # Project Status
 
-Last verified: 2026-08-12. Current release HEAD
-`0e592ffddfe5114cd027a600823e6da5f8c6d5f7` equals `origin/main`. The user confirmed fully green
-GitHub Actions, staging deploy and the bounded Menu Option Create Audit smoke. Local GitHub CLI
-cannot independently verify Actions because its active token is invalid. The worktree has only the
-pre-existing untracked `scripts/dev/` directory; stash was not read or changed and `scripts/dev/`
-was not touched.
+Last verified: 2026-08-12. The current implementation worktree is based on
+`e8010b323bbf21722ac548472411a186ee0a49e0`, which equalled `origin/main` before changes. Current
+bounded status: **DANGEROUS ACTION AUDIT SLICE / MENU ITEM CREATE AUDIT / MVP IMPLEMENTED / LOCAL
+VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. The prior Menu Option Create Audit release
+remains user-confirmed green in Actions, staging and bounded smoke. The worktree contains only this
+bounded implementation/docs/CI change plus the pre-existing untracked `scripts/dev/` directory;
+stash was not read or changed and `scripts/dev/` was not touched.
 
 ## 1. Purpose and source-of-truth order
 
@@ -27,6 +28,8 @@ next-block change, P0/P1 blocker change or before a new long task.
   STAGING-SMOKE-PASSED**.
 - **DANGEROUS ACTION AUDIT SLICE / MENU OPTION CREATE AUDIT / DONE / MVP /
   STAGING-SMOKE-PASSED**.
+- **DANGEROUS ACTION AUDIT SLICE / MENU ITEM CREATE AUDIT / MVP IMPLEMENTED / LOCAL VALIDATION
+  PASSED / REVIEW REQUIRED BEFORE COMMIT**.
 - Menu option price audit and Venue Menu management UX stabilization remain separately
   `DONE / MVP / STAGING-SMOKE-PASSED` for their bounded contracts.
 
@@ -52,35 +55,44 @@ next-block change, P0/P1 blocker change or before a new long task.
   add-missing-base-profiles; Telegram canonical direct, custom dialog, add-missing-base-profiles and
   normalization. The single private repository SQL writer commits each physical option insert with
   exactly one private `MENU_OPTION_CREATED`; no authenticated internal/system/legacy writer exists.
+- Menu item create audit is locally implemented for the only two authenticated production callers:
+  Venue Mini App direct create and the Telegram Owner/Manager add-item dialog. The sole production
+  SQL writer now locks the venue-scoped category, preserves current `MAX(sort_order)+1` semantics,
+  inserts the item, writes one safe `MENU_ITEM_CREATED`, rereads the item and commits once. Audit
+  failure rolls back the physical item and audit; item creation still creates no options.
 
 ## 4. Current bounded block
 
 Contract: **IMPLEMENT_MENU_ITEM_CREATE_AUDIT_NEXT**.
 
-Read-only runtime inventory finds one unaudited physical `INSERT INTO menu_items` writer,
-`VenueMenuRepository.createItem`, with exactly two authenticated production callers: Venue Mini App
-`POST /menu/items` and the Telegram Owner/Manager add-item dialog. Both are own-venue
-Owner/Manager paths; legacy `ADMIN` remains Manager-compatible, while Staff, foreign,
-unaffiliated and Platform-only actors lack venue authority. Item creation currently inserts one item
-with its initial category/name/price/currency/availability/type/sort state and creates no options.
+Status: **DANGEROUS ACTION AUDIT SLICE / MENU ITEM CREATE AUDIT / MVP IMPLEMENTED / LOCAL
+VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
 
-The bounded outcome is a same-transaction, exactly-one private item-create audit for a committed
-physical item only, with server-derived actor/source, authoritative venue/category scope and a
-privacy-safe payload. Item price, name/type/category/description/currency update audits, option
-creation, promotion/order behavior, category seeding and membership-revoke linearization are
-outside this next slice. Expected schema verdict: **NO_MIGRATION_EXPECTED**, subject to
-implementation verification.
+Verified runtime inventory has one physical production `INSERT INTO menu_items`, the private insert
+helper behind required `VenueMenuRepository.createItem`, and exactly two authenticated production
+callers: Venue Mini App `POST /menu/items` and the Telegram Owner/Manager add-item dialog. The
+operational staging seed is not an authenticated runtime writer. Item creation creates no options.
 
-The implementation must add focused repository, route/security, Telegram and Mini App coverage;
-use a deterministic PostgreSQL contention test if the final repository transaction needs serialized
-category/sort allocation. Release remains gated by focused local validation, green Actions, staging
-deploy and bounded cross-surface smoke.
+Owner/Manager keep own-venue authority; legacy `ADMIN` remains Manager-compatible. Staff, foreign,
+unaffiliated and Platform-only actors are denied. Mini App uses the authenticated session subject and
+fixed `VENUE_MINI_APP`; Telegram requires the current user to equal the persisted dialog owner and
+uses fixed `TELEGRAM_BOT`. Telegram now checks authority before category facts.
+
+The repository owns one JDBC transaction and connection: authoritative category scope, blocking
+category-row lock, scope recheck, current `MAX(sort_order)+1`, physical insert, generated id,
+same-connection `MENU_ITEM_CREATED`, item reread and one commit. Reorder uses the same category lock.
+Exact audit payload keys are `venueId`, `itemId`, `source`; actor stays only in the standard field.
+No migration, idempotency token, unique constraint, option creation or business-default change was
+added. Release remains gated by independent review, green Actions, staging deploy and bounded
+cross-surface smoke.
 
 ## 5. Open gaps and risks
 
 - Keep separate: menu item price audit; item name/type/category/description/currency audit families;
   menu category create audit; transaction-bound membership-revoke linearization; audit/dependency
   viewer; promotion configuration edit audit; and force-close/session audit.
+- P0/P1 for this bounded worktree: no known implementation blocker; independent review, green
+  Actions and staging smoke remain required before release.
 - Keep separate cart hardening: duplicate-name cart E2E, opaque cart-line identity, option
   replacement merge semantics, issue owner tuple/generation, immutable cart item-name snapshot,
   live-region deduplication and error-response size hardening.
@@ -108,7 +120,7 @@ deploy and bounded cross-surface smoke.
 
 ## 7. Release and staging evidence
 
-- Current release HEAD and `origin/main` are both `0e592ff`. The user confirmed fully green GitHub
+- The prior option-create release HEAD `0e592ff` had user-confirmed fully green GitHub
   Actions, staging deploy and bounded smoke for the option-create slice; the invalid local GitHub
   CLI token prevents independent run verification. No migration was added.
 - Confirmed staging smoke only: Owner Mini App direct create produced one
@@ -118,9 +130,11 @@ deploy and bounded cross-surface smoke.
   bulk wrote zero rows/audits. Normalization restored one missing profile with one create audit and
   then repeated as a zero-row/zero-audit no-op. Audit payload contained no names, prices,
   availability or PII; the working Guest menu was intact and cleanup completed normally.
-- Automated/local/CI contract evidence, not staging smoke: repository `41`, routes `37`, Telegram
-  `538`, route/security `1137`, PostgreSQL concurrency `26` and Mini App E2E `169`; direct, bulk and
-  normalization rollback, canonical uniqueness and deterministic locking are covered. No migration.
+- Current item-create local evidence, not staging smoke: repository `44/0/0/0`, routes `40/0/0/0`,
+  Telegram `542/0/0/0`, PostgreSQL concurrency `31/0/0/0`, backend compile/ktlint, Mini App build and
+  full Playwright `169/169`. It covers exact-one independent/duplicate-name creates, exact payload
+  privacy, real post-insert audit rollback, Mini/Mini, Mini/Telegram, create/category-delete,
+  create/reorder and concurrent audit-failure outcomes. No migration.
 
 ## 8. Canonical document map
 
@@ -133,14 +147,14 @@ deploy and bounded cross-surface smoke.
 
 ## 9. Next action
 
-Implement only `IMPLEMENT_MENU_ITEM_CREATE_AUDIT_NEXT`: first inventory all item-create writers,
-then make the two authenticated paths and one physical insert transaction-bound with an exactly-one
-privacy-safe audit. Do not expand into item price/name/type/category/description/currency updates,
-options, cart, promotions, media/R2, stash or `scripts/dev/` work.
+Independently review `IMPLEMENT_MENU_ITEM_CREATE_AUDIT_NEXT`, then run the existing required CI gates.
+If green, deploy to staging and execute a bounded Owner/Manager Mini App + Telegram create/RBAC/
+privacy smoke before changing this slice to release-closed. Do not expand into item price/name/type/
+category/description/currency updates, options, cart, promotions, media/R2, stash or `scripts/dev/`.
 
 ## 10. Last verified date
 
-2026-08-12. **DANGEROUS ACTION AUDIT SLICE / MENU OPTION CREATE AUDIT / DONE / MVP /
-STAGING-SMOKE-PASSED** closes only its bounded contract. It does not close the Menu Audit, the
-Dangerous Action Audit, all option mutations or overall product readiness. No migration was added.
+2026-08-12. **DANGEROUS ACTION AUDIT SLICE / MENU ITEM CREATE AUDIT / MVP IMPLEMENTED / LOCAL
+VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT** closes no release/staging gate yet and does not
+close the Menu Audit, Dangerous Action Audit or overall product readiness. No migration was added.
 Stash was not read, applied, changed, deleted or renamed; `scripts/dev/` was not touched.
