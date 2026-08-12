@@ -1,17 +1,13 @@
 # Testing / QA Smoke Strategy
 
-Дата актуализации: 2026-08-11.
+Дата актуализации: 2026-08-12.
 
 Статус: **current product reference / UPDATED**. This document is the canonical QA/smoke strategy for the Telegram bot + Mini App platform. It consolidates local validation, GitHub Actions expectations, area-specific smoke suites, staging policy, failure reporting and Codex handoff rules. Deployment and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
 
 Latest release-closed bounded menu audit blocks: option hard delete with atomic base-profile
-normalization, option rename and **DANGEROUS ACTION AUDIT SLICE / MENU OPTION PRICE AUDIT / DONE /
-MVP / STAGING-SMOKE-PASSED**. The broader Menu and Dangerous Action Audit programs remain partial;
-keep each bounded gate in regression.
-
-Current local-review block: **DANGEROUS ACTION AUDIT SLICE / MENU ITEM AVAILABILITY AUDIT /
-MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. Independent review,
-green Actions, staging deploy and bounded cross-surface smoke remain required.
+normalization, option rename, option price and **DANGEROUS ACTION AUDIT SLICE / MENU ITEM
+AVAILABILITY AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. The broader Menu and Dangerous Action
+Audit programs remain partial; keep each bounded gate in regression.
 
 ## Core Rule
 
@@ -891,8 +887,16 @@ the existing mandatory PostgreSQL CI gate minimum is now 20 after the item-avail
 
 ### Menu Item Availability Audit quality gate
 
-Status: **DANGEROUS ACTION AUDIT SLICE / MENU ITEM AVAILABILITY AUDIT / MVP IMPLEMENTED /
-LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+Status: **DANGEROUS ACTION AUDIT SLICE / MENU ITEM AVAILABILITY AUDIT / DONE / MVP /
+STAGING-SMOKE-PASSED**.
+
+Release closure evidence is bounded: the user confirmed green Actions for current release HEAD
+`db08916`, a staging deploy and this smoke only—Owner toggles a test item off/on with truthful audit;
+Staff changes availability but cannot compound-edit name/price/type; Telegram toggle works with
+`TELEGRAM_BOT`; Shift Check changes availability, writes one aggregate audit and no per-item audit;
+Guest cannot order an unavailable item, can order after re-enable, and working menu/cart plus normal
+cleanup remain intact. GitHub CLI could not independently query Actions because its active token is
+invalid. This is not staging evidence for failure injection, raw SQL or other unobserved scenarios.
 
 Required regression coverage:
 
@@ -930,6 +934,10 @@ first two classes, `VenueMenuOptionNormalizationConcurrencyPostgresTest`,
 repository `36/0/0/0`, routes `31/0/0/0`, Telegram `535/0/0/0`, Guest routes `61/0/0/0`, menu
 PostgreSQL `20/0/0/0` and Guest PostgreSQL `9/0/0/0`. Existing CI parsing must fail missing/zero,
 skipped, failures or errors. No new workflow or migration is allowed.
+
+Non-blocking future hardening, not a release defect: assert raw `updated_at` before/after an injected
+availability-audit failure; and hold the item lock while a real PostgreSQL Guest submit reaches an
+observed `pg_blocking_pids` / `pg_locks` wait, then assert an allowed serial outcome.
 
 ### Guest Cart Stale Menu Selection Recovery quality gate
 
@@ -1996,9 +2004,10 @@ Telegram/staff-chat:
   DONE / MVP / STAGING-SMOKE-PASSED**. Keep actor/source, exact-one/no-op, rollback and Shift Check
   aggregate-only behavior in regression.
 - Menu item availability audit: **DANGEROUS ACTION AUDIT SLICE / MENU ITEM AVAILABILITY AUDIT /
-  MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. Focused
-  repository/routes/Telegram/Guest and deterministic PostgreSQL gates are green; review, CI,
-  staging deploy and bounded smoke remain open. No migration was added.
+  DONE / MVP / STAGING-SMOKE-PASSED**. Focused repository/routes/Telegram/Guest and deterministic
+  PostgreSQL gates remain regression evidence; user-confirmed Actions, staging deploy and bounded
+  smoke close only this contract. GitHub CLI did not independently query Actions because its active
+  token is invalid. No migration was added.
 - Guest cart stale menu recovery: **GUEST CART STALE MENU SELECTION RECOVERY / REMOVED OR UNAVAILABLE
   ITEMS AND OPTIONS / PAYLOAD-BOUND IDEMPOTENCY + ATOMIC REJECTION / DONE / MVP /
   STAGING-SMOKE-PASSED**; **ITEM-LEVEL ACTION AND COPY POLISH / DONE / MVP /

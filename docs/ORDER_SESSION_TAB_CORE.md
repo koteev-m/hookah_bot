@@ -1,11 +1,11 @@
 # Order / Session / Tab Core Model
 
-Дата актуализации: 2026-08-11.
+Дата актуализации: 2026-08-12.
 
 Статус: **current product reference / SPEC UPDATED**. Этот документ фиксирует product model для QR table context, active table order, order batches, personal/shared tabs, bill/request/close flow, visit-history foundation and privacy boundaries. Guest stale-menu cart recovery is **GUEST CART STALE MENU SELECTION RECOVERY / REMOVED OR UNAVAILABLE ITEMS AND OPTIONS / PAYLOAD-BOUND IDEMPOTENCY + ATOMIC REJECTION / DONE / MVP / STAGING-SMOKE-PASSED**; its item-level action and copy polish is **DONE / MVP / STAGING-SMOKE-PASSED**. Platform test status is **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / DONE / MVP / STAGING-SMOKE-PASSED**; the bounded Telegram/session/privacy smoke is complete. Runtime status is mixed: the old table-only active-order risk and Guest History Foundation MVP are documented as closed in current audit notes, while force-close policy, some DB-level uniqueness nuances, repeat/feedback/loyalty/preorder and broader analytics remain future/partial.
 
 The adjacent mutation status is **DANGEROUS ACTION AUDIT SLICE / MENU ITEM AVAILABILITY AUDIT /
-MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**; it preserves every
+DONE / MVP / STAGING-SMOKE-PASSED**; it preserves every
 Guest order/session/tab and historical snapshot invariant in this document.
 
 Analytics/event semantics for this core are defined in `docs/ANALYTICS_EVENTS.md`. Role, scope and trust-boundary decisions are defined in `docs/SECURITY_RBAC_MATRIX.md`. Structured menu, option/modifier and stop-list rules are defined in `docs/MENU_OPTIONS_STOPLIST.md`. Venue operational surfaces are defined in `docs/VENUE_OPERATIONS.md`. Booking seated/no-show lifecycle inputs are defined in `docs/BOOKING_LIFECYCLE.md`. Telegram fallback order and staff-chat behavior are defined in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. Testing/smoke strategy is defined in `docs/TESTING_QA_SMOKE_STRATEGY.md`. Release/deploy and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
@@ -104,7 +104,7 @@ The active order belongs to a verified table session/visit, not to a physical ta
   authoritative preview.
 - Unknown, network, database, pricing, venue, table or session failures retain generic retry UX and
   are never inferred as stale-menu reasons by HTTP status or message text.
-- The locally validated menu-item availability audit slice does not change Guest authority or order
+- The release-closed menu-item availability audit slice does not change Guest authority or order
   semantics. A disabled item still yields typed `ITEM / UNAVAILABLE`; preview remains read-only and
   stale submit writes no session/tab/order/idempotency state. Re-enable restores authoritative
   recovery. Direct availability mutation and submit serialize on the production item lock, while
