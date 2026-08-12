@@ -47,6 +47,7 @@ class VenueBookingRoutesTest {
                     "api.session.issuer" to "hookah",
                     "api.session.audience" to "miniapp",
                     "api.session.ttlSeconds" to "3600",
+                    "billing.subscription.intervalSeconds" to "0",
                 )
 
             environment { this.config = config }
@@ -463,6 +464,7 @@ class VenueBookingRoutesTest {
                     "api.session.issuer" to "hookah",
                     "api.session.audience" to "miniapp",
                     "api.session.ttlSeconds" to "3600",
+                    "billing.subscription.intervalSeconds" to "0",
                 )
 
             environment { this.config = config }
@@ -689,6 +691,7 @@ class VenueBookingRoutesTest {
                     "api.session.issuer" to "hookah",
                     "api.session.audience" to "miniapp",
                     "api.session.ttlSeconds" to "3600",
+                    "billing.subscription.intervalSeconds" to "0",
                 )
 
             environment { this.config = config }
@@ -1243,6 +1246,7 @@ class VenueBookingRoutesTest {
                     "api.session.issuer" to "hookah",
                     "api.session.audience" to "miniapp",
                     "api.session.ttlSeconds" to "3600",
+                    "billing.subscription.intervalSeconds" to "0",
                 )
 
             environment { this.config = config }
@@ -1404,6 +1408,7 @@ class VenueBookingRoutesTest {
                     "api.session.issuer" to "hookah",
                     "api.session.audience" to "miniapp",
                     "api.session.ttlSeconds" to "3600",
+                    "billing.subscription.intervalSeconds" to "0",
                 )
 
             environment { this.config = config }
@@ -1540,6 +1545,7 @@ class VenueBookingRoutesTest {
                     "api.session.issuer" to "hookah",
                     "api.session.audience" to "miniapp",
                     "api.session.ttlSeconds" to "3600",
+                    "billing.subscription.intervalSeconds" to "0",
                 )
 
             environment { this.config = config }
@@ -1677,6 +1683,7 @@ class VenueBookingRoutesTest {
                     "api.session.issuer" to "hookah",
                     "api.session.audience" to "miniapp",
                     "api.session.ttlSeconds" to "3600",
+                    "billing.subscription.intervalSeconds" to "0",
                     "booking.reminders.enabled" to "true",
                 )
 
