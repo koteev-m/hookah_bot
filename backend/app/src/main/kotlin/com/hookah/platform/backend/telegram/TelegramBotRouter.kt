@@ -65,6 +65,7 @@ import com.hookah.platform.backend.miniapp.venue.menu.MenuCategoryDeleteSource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuItemAvailabilitySource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuItemDeleteSource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuOptionAvailabilitySource
+import com.hookah.platform.backend.miniapp.venue.menu.MenuOptionCreateSource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuOptionDeleteSource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuOptionRenameSource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuSemanticType
@@ -18998,19 +18999,22 @@ class TelegramBotRouter(
             enqueueMessage(chatId, "Нет доступа к заведению.")
             return
         }
-        val (category, item) = loadOwnerOrderMenuItem(chatId, venueId, sectionId, itemId) ?: return
+        val (category, _) = loadOwnerOrderMenuItem(chatId, venueId, sectionId, itemId) ?: return
         if (!isHookahMenuSection(category)) {
             enqueueMessage(chatId, "Профиль вкуса доступен только для раздела «Кальянное меню».")
             return
         }
         val result =
             try {
-                HookahFlavorProfileService.applyMissingBaseProfiles(
-                    venueMenuRepository = venueMenuRepository,
+                venueMenuRepository.applyMissingBaseProfiles(
                     venueId = venueId,
-                    category = category,
-                    item = item,
-                )
+                    itemId = itemId,
+                    actorUserId = userId,
+                    source = MenuOptionCreateSource.TELEGRAM_BOT,
+                ) ?: run {
+                    enqueueMessage(chatId, "Не удалось добавить базовые профили. Позиция не найдена.")
+                    return
+                }
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
@@ -19128,7 +19132,8 @@ class TelegramBotRouter(
                     venueId = venueId,
                     itemId = item.id,
                     actorUserId = userId,
-                    source = MenuOptionDeleteSource.TELEGRAM_BOT,
+                    deleteSource = MenuOptionDeleteSource.TELEGRAM_BOT,
+                    createSource = MenuOptionCreateSource.TELEGRAM_BOT,
                 )
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
@@ -19194,6 +19199,8 @@ class TelegramBotRouter(
                     name = profileName,
                     priceDeltaMinor = 0,
                     isAvailable = true,
+                    actorUserId = userId,
+                    source = MenuOptionCreateSource.TELEGRAM_BOT,
                 )
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
@@ -19349,6 +19356,8 @@ class TelegramBotRouter(
                     name = normalized,
                     priceDeltaMinor = 0,
                     isAvailable = true,
+                    actorUserId = currentUserId,
+                    source = MenuOptionCreateSource.TELEGRAM_BOT,
                 )
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")

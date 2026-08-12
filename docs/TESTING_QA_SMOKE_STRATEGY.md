@@ -720,8 +720,9 @@ selectors listed in the task handoff. The mandatory real-PostgreSQL selector als
 
 CI must require exact XML
 `TEST-com.hookah.platform.backend.miniapp.venue.menu.VenueMenuOptionNormalizationConcurrencyPostgresTest.xml`
-with at least 9 tests and exactly zero skipped/failures/errors. Missing/zero/silently skipped XML
-fails the existing mandatory PostgreSQL gate; Docker is mandatory. The changed critical route gate
+with at least 26 tests and exactly zero skipped/failures/errors. The original hard-delete release
+evidence predates later extensions; missing/zero/silently skipped XML fails the current mandatory
+PostgreSQL gate and Docker is mandatory. The changed critical route gate
 also requires `GuestVisitRoutesTest` so the closed-history nullable-reference regression cannot be
 silently omitted.
 
@@ -751,6 +752,56 @@ records fully green GitHub Actions, staging deploy and these bounded staging sce
 16. Guest menu and ordinary work data remain intact.
 17. Cleanup completed normally.
 
+### Menu Option Create Audit quality gate
+
+Status: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION CREATE AUDIT / MVP IMPLEMENTED /
+LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+
+Required regression coverage:
+
+- inventory the sole private production `INSERT INTO menu_item_options` writer and all six
+  authenticated callers: Mini App direct/bulk; Telegram canonical direct, custom dialog, bulk and
+  normalization. No internal/system/legacy writer or unaudited compatibility overload may exist;
+- Owner/Manager own-venue success and Staff/foreign/unaffiliated denial on both surfaces. Actor is
+  only the Mini App session subject or current authenticated Telegram callback/message user;
+  source is server-fixed `VENUE_MINI_APP` / `TELEGRAM_BOT` and cannot come from client/dialog data;
+- direct create uses one connection with `autoCommit=false`, authoritative item/category scope,
+  item `FOR UPDATE`, option rows `ORDER BY id FOR UPDATE`, DB-current collision recheck, insert,
+  generated id, same-connection audit, reread and one commit. Audit failure removes the inserted row
+  and produces a safe 503/no false success;
+- one add-missing-base-profiles action locks/plans/inserts/audits in one repository transaction and
+  canonical order. N committed inserts produce N audits; N=0 produces neither. Any later insert or
+  audit failure restores the exact initial option and audit snapshots, preserving custom/current
+  canonical rows plus existing price/availability/sort behavior;
+- Telegram normalization preserves obsolete deletes, custom/current canonical rows and existing
+  delete audits while adding one create audit per physically inserted missing profile. Delete,
+  create and both audit families share one transaction; injected failure after multiple writes
+  restores the complete pre-operation option/audit snapshots;
+- action/entity are exactly `MENU_OPTION_CREATED`, `menu_item_option`, option id. Payload keys are
+  exactly `venueId`, `itemId`, `optionId`, `source`. Names/profile values, price/availability,
+  item/category names, promotion/cart/order data, raw request/initData/callback/update, Telegram
+  identity, media, secrets and PII are forbidden in audit and logs;
+- denial, foreign/not-found, canonical collision, duplicate/no-op, insert/audit failure, rollback
+  and concurrent loser write zero create audit; no idempotency token is introduced;
+- Testcontainers PostgreSQL uses production migrations/repositories, independent connections/PIDs,
+  deterministic barriers and observed `pg_blocking_pids` / `pg_locks` edges without arbitrary
+  sleep. Coverage includes same-canonical and different-custom direct/direct, direct/bulk,
+  bulk/bulk, direct/normalization, bulk/normalization, rename/create collision and delete/create;
+  audit count equals committed physical insert count with no duplicate canonical or partial state.
+
+Mandatory CI selectors are `VenueMenuRepositoryTest`, `VenueMenuRoutesTest`,
+`TelegramBotRouterTableTokenTest`,
+`VenueMenuOptionNormalizationConcurrencyPostgresTest` and full Mini App smoke. Exact XML must exist,
+have tests `> 0`, and have zero skipped/failures/errors; the PostgreSQL XML minimum is 26. No new
+workflow may replace or silently skip these gates.
+
+Recorded local evidence (`tests/skipped/failures/errors`): repository `41/0/0/0`, routes
+`37/0/0/0`, Telegram `538/0/0/0`, PostgreSQL `26/0/0/0`; `compileKotlin`, `ktlintCheck`, Mini App
+production build and full deterministic Playwright `169/169` passed. `git diff --check` remains a
+handoff gate. Schema verdict: **NO_MIGRATION_EXPECTED**. Independent review, green Actions, staging
+deploy and bounded smoke are still required; the broader Menu/Dangerous Action Audit remains
+`PARTIAL`.
+
 ### Menu Option Rename Audit quality gate
 
 Status: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION RENAME AUDIT / DONE / MVP /
@@ -774,7 +825,7 @@ Regression must preserve this bounded contract:
   existing response and atomic field behavior but writes only one rename audit.
 - Existing hookah canonical normalization, self-exclusion, non-hookah duplicate behavior,
   historical order snapshots and future-submit current-value resolution stay unchanged.
-- The current 15-test PostgreSQL class retains deterministic rename versus rename, distinct and
+- The current 26-test PostgreSQL class retains deterministic rename versus rename, distinct and
   same-target price updates, atomic base-profile normalization, canonical create and direct delete
   in addition to the released normalization regressions. It uses observed blocking/locks and no
   arbitrary sleep.
@@ -782,7 +833,7 @@ Regression must preserve this bounded contract:
 Focused repository, route, Telegram and Guest/order/history selectors, `compileKotlin`,
 `ktlintCheck`, Mini App build and Playwright `139/139` passed locally. The mandatory PostgreSQL XML
 result recorded for that released rename slice is `8/0/0/0`, `14/0/0/0`, `2/0/0/0`, `7/0/0/0`;
-the current option-class CI minimum is 15 after the availability-audit extension. Green Actions, staging
+the current option-class CI minimum is 26 after the create-audit extension. Green Actions, staging
 deploy and bounded cross-surface
 RBAC/audit/privacy/concurrency/history smoke are recorded functionally passed; schema verdict is
 **NO_MIGRATION_EXPECTED**. That rename slice does not itself close option create or availability,
@@ -818,13 +869,13 @@ Regression must preserve this bounded contract:
   the current available DB option, persists the current delta snapshot and never rewrites older
   `price_delta_minor_snapshot` rows.
 - The production Testcontainers PostgreSQL class uses independent connections, deterministic
-  latches and a confirmed blocking edge without arbitrary sleep. Its current 15 tests prove truthful
+  latches and a confirmed blocking edge without arbitrary sleep. Its current 26 tests prove truthful
   price-versus-price ordering, same-target loser no-op, price versus rename, direct delete and atomic
   normalization, plus no partial compound updates or extra loser audits.
 
 Mandatory CI keeps the existing exact selectors/XML for `VenueMenuRepositoryTest`,
 `VenueMenuRoutesTest`, `GuestOrderRoutesTest`, `GuestVisitRoutesTest` and
-`VenueMenuOptionNormalizationConcurrencyPostgresTest`. The option PostgreSQL XML minimum is 15;
+`VenueMenuOptionNormalizationConcurrencyPostgresTest`. The option PostgreSQL XML minimum is 26;
 all critical XML must have tests `> 0` and exactly zero skipped/failures/errors.
 
 Recorded automated evidence: all four focused repository/route/order/history selectors, the nine-test
@@ -877,13 +928,13 @@ Required regression coverage:
 - Testcontainers PostgreSQL production migrations/repository, independent connections, deterministic
   latches and observed blocking without arbitrary sleep for direct/direct, direct/compound, both
   direct/Shift Check orders, direct/delete and direct/normalization. XML is exactly required,
-  tests `>= 20` in the shared extended class, skipped/failures/errors zero.
+  tests `>= 26` in the shared extended class, skipped/failures/errors zero.
 
 Required local commands are the focused `VenueMenuRepositoryTest`, `VenueMenuRoutesTest`,
 `TelegramBotRouterTableTokenTest`, `GuestOrderRoutesTest`, `*MenuShiftCheck*`,
 `VenueMenuOptionNormalizationConcurrencyPostgresTest`, compile, ktlint, Mini App build and full e2e
 smoke selectors documented in the current implementation handoff. No workflow or migration is added;
-the existing mandatory PostgreSQL CI gate minimum is now 20 after the item-availability extension.
+the existing mandatory PostgreSQL CI gate minimum is now 26 after the create-audit extension.
 
 ### Menu Item Availability Audit quality gate
 
@@ -932,7 +983,8 @@ Mandatory CI selectors remain `VenueMenuRepositoryTest`, `VenueMenuRoutesTest`,
 first two classes, `VenueMenuOptionNormalizationConcurrencyPostgresTest`,
 `GuestOrderIdempotencyConcurrencyPostgresTest` and full Mini App smoke. Exact local XML is
 repository `36/0/0/0`, routes `31/0/0/0`, Telegram `535/0/0/0`, Guest routes `61/0/0/0`, menu
-PostgreSQL `20/0/0/0` and Guest PostgreSQL `9/0/0/0`. Existing CI parsing must fail missing/zero,
+PostgreSQL `20/0/0/0` and Guest PostgreSQL `9/0/0/0` for that release slice; the current shared
+menu minimum is 26. Existing CI parsing must fail missing/zero,
 skipped, failures or errors. No new workflow or migration is allowed.
 
 Non-blocking future hardening, not a release defect: assert raw `updated_at` before/after an injected
@@ -1544,7 +1596,7 @@ Expectations:
   `GuestTableContextActivationPostgresTest`, `PromotionConfigurationConcurrencyPostgresTest`,
   `VenueStaffMutationConcurrencyPostgresTest`, `VenueMenuOptionNormalizationConcurrencyPostgresTest`
   and `GuestOrderIdempotencyConcurrencyPostgresTest` with `JAVA_TOOL_OPTIONS=-Dapi.version=1.44`,
-  then independently parses all five XML reports. It requires minimums `8 / 14 / 2 / 15 / 9`, each
+  then independently parses all five XML reports. It requires minimums `8 / 14 / 2 / 26 / 9`, each
   with `skipped=0`, `failures=0`, `errors=0`. Docker availability alone is not evidence, and route
   failure must not silently skip the PostgreSQL gate.
 - If CI is red, first identify the failing job, failing test class, failing test name, assertion/error and first useful stack frame.
@@ -1992,8 +2044,12 @@ Telegram/staff-chat:
   ATOMIC BASE-PROFILE NORMALIZATION INCLUDED / DONE / MVP / STAGING-SMOKE-PASSED**. Focused local,
   mandatory PostgreSQL, green Actions, staging deploy and the bounded 17-scenario smoke are
   recorded complete; keep the contract in regression.
+- Menu option create audit: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION CREATE AUDIT /
+  MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. Repository
+  `41/0/0/0`, routes `37/0/0/0`, Telegram `538/0/0/0`, PostgreSQL `26/0/0/0`, compile/ktlint,
+  Mini App build and Playwright `169/169` pass locally; CI and staging remain open. No migration.
 - Menu option rename audit: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION RENAME AUDIT / DONE / MVP /
-  STAGING-SMOKE-PASSED**. The now-20-test shared menu concurrency XML gate, focused cross-surface tests,
+  STAGING-SMOKE-PASSED**. The now-26-test shared menu concurrency XML gate, focused cross-surface tests,
   privacy/rollback checks, green Actions, staging deploy and bounded smoke are recorded complete.
   No migration was added.
 - Menu option price audit: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION PRICE AUDIT / DONE / MVP /

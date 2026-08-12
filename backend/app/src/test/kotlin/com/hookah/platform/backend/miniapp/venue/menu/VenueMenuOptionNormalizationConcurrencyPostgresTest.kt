@@ -52,7 +52,8 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
                                     venueId = fixture.venueId,
                                     itemId = fixture.itemId,
                                     actorUserId = FIRST_ACTOR_ID,
-                                    source = MenuOptionDeleteSource.TELEGRAM_BOT,
+                                    deleteSource = MenuOptionDeleteSource.TELEGRAM_BOT,
+                                    createSource = MenuOptionCreateSource.TELEGRAM_BOT,
                                 )
                             }
                         },
@@ -62,7 +63,8 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
                                     venueId = fixture.venueId,
                                     itemId = fixture.itemId,
                                     actorUserId = SECOND_ACTOR_ID,
-                                    source = MenuOptionDeleteSource.TELEGRAM_BOT,
+                                    deleteSource = MenuOptionDeleteSource.TELEGRAM_BOT,
+                                    createSource = MenuOptionCreateSource.TELEGRAM_BOT,
                                 )
                             }
                         },
@@ -91,6 +93,20 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
                     expectedOptionIds = fixture.obsoleteOptionIds,
                     expectedActorUserId = FIRST_ACTOR_ID,
                 )
+                val options = readOptions(dataSource, fixture.itemId)
+                assertCreateAudits(
+                    dataSource = dataSource,
+                    fixture = fixture,
+                    expected =
+                        profileOptionIds(options, HookahFlavorProfileService.baseProfiles.drop(1)).map { optionId ->
+                            ExpectedCreateAudit(
+                                optionId = optionId,
+                                actorUserId = FIRST_ACTOR_ID,
+                                source = MenuOptionCreateSource.TELEGRAM_BOT,
+                            )
+                        },
+                )
+                assertCommittedCreateAuditCardinality(dataSource, fixture)
             }
         }
 
@@ -116,7 +132,8 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
                                     venueId = fixture.venueId,
                                     itemId = fixture.itemId,
                                     actorUserId = FIRST_ACTOR_ID,
-                                    source = MenuOptionDeleteSource.TELEGRAM_BOT,
+                                    deleteSource = MenuOptionDeleteSource.TELEGRAM_BOT,
+                                    createSource = MenuOptionCreateSource.TELEGRAM_BOT,
                                 )
                             }
                         },
@@ -177,6 +194,8 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
                                     name = profileName,
                                     priceDeltaMinor = 0,
                                     isAvailable = true,
+                                    actorUserId = FIRST_ACTOR_ID,
+                                    source = MenuOptionCreateSource.VENUE_MINI_APP,
                                 )
                             }
                         },
@@ -185,8 +204,9 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
                                 VenueMenuRepository(waiterDataSource).normalizeHookahFlavorProfiles(
                                     venueId = fixture.venueId,
                                     itemId = fixture.itemId,
-                                    actorUserId = FIRST_ACTOR_ID,
-                                    source = MenuOptionDeleteSource.TELEGRAM_BOT,
+                                    actorUserId = SECOND_ACTOR_ID,
+                                    deleteSource = MenuOptionDeleteSource.TELEGRAM_BOT,
+                                    createSource = MenuOptionCreateSource.TELEGRAM_BOT,
                                 )
                             }
                         },
@@ -222,14 +242,488 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
                         name = profileName,
                         priceDeltaMinor = 0,
                         isAvailable = true,
+                        actorUserId = SECOND_ACTOR_ID,
+                        source = MenuOptionCreateSource.TELEGRAM_BOT,
                     )
                 }
                 assertDeleteAudits(
                     dataSource = dataSource,
                     fixture = fixture,
                     expectedOptionIds = fixture.obsoleteOptionIds,
+                    expectedActorUserId = SECOND_ACTOR_ID,
+                )
+                val normalizationCreatedIds =
+                    profileOptionIds(
+                        options = readOptions(dataSource, fixture.itemId),
+                        profileNames =
+                            HookahFlavorProfileService.baseProfiles.filterNot { profile ->
+                                profile == HookahFlavorProfileService.baseProfiles.first() || profile == profileName
+                            },
+                    )
+                assertCreateAudits(
+                    dataSource = dataSource,
+                    fixture = fixture,
+                    expected =
+                        listOf(
+                            ExpectedCreateAudit(
+                                optionId = createdOption.id,
+                                actorUserId = FIRST_ACTOR_ID,
+                                source = MenuOptionCreateSource.VENUE_MINI_APP,
+                            ),
+                        ) +
+                            normalizationCreatedIds.map { optionId ->
+                                ExpectedCreateAudit(
+                                    optionId = optionId,
+                                    actorUserId = SECOND_ACTOR_ID,
+                                    source = MenuOptionCreateSource.TELEGRAM_BOT,
+                                )
+                            },
+                )
+                assertCommittedCreateAuditCardinality(dataSource, fixture)
+            }
+        }
+
+    @Test
+    fun `concurrent direct creates of same canonical profile have one audited winner`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource)
+                val profileName = HookahFlavorProfileService.baseProfiles.last()
+                val holderDataSource = HeldItemLockDataSource(dataSource)
+                val waiterDataSource = TrackedItemLockDataSource(dataSource)
+
+                val (winner, loser) =
+                    runWithHeldItemLock(
+                        observerDataSource = dataSource,
+                        holderDataSource = holderDataSource,
+                        waiterDataSource = waiterDataSource,
+                        beforeRelease = { assertInitialState(dataSource, fixture) },
+                        holderAction = {
+                            runBlocking {
+                                VenueMenuRepository(holderDataSource).createOption(
+                                    venueId = fixture.venueId,
+                                    itemId = fixture.itemId,
+                                    name = profileName,
+                                    priceDeltaMinor = 0,
+                                    isAvailable = true,
+                                    actorUserId = FIRST_ACTOR_ID,
+                                    source = MenuOptionCreateSource.VENUE_MINI_APP,
+                                )
+                            }
+                        },
+                        waiterAction = {
+                            runCatching {
+                                runBlocking {
+                                    VenueMenuRepository(waiterDataSource).createOption(
+                                        venueId = fixture.venueId,
+                                        itemId = fixture.itemId,
+                                        name = profileName,
+                                        priceDeltaMinor = 0,
+                                        isAvailable = true,
+                                        actorUserId = SECOND_ACTOR_ID,
+                                        source = MenuOptionCreateSource.TELEGRAM_BOT,
+                                    )
+                                }
+                            }
+                        },
+                    )
+
+                val created = assertNotNull(winner)
+                assertEquals(profileName, created.name)
+                assertTrue(loser.exceptionOrNull() is InvalidInputException)
+                assertEquals(
+                    1,
+                    readOptions(dataSource, fixture.itemId).count { option ->
+                        HookahFlavorProfileService.normalizeFlavorNameKey(option.name) ==
+                            HookahFlavorProfileService.normalizeFlavorNameKey(profileName)
+                    },
+                )
+                assertCreateAudits(
+                    dataSource = dataSource,
+                    fixture = fixture,
+                    expected =
+                        listOf(
+                            ExpectedCreateAudit(
+                                optionId = created.id,
+                                actorUserId = FIRST_ACTOR_ID,
+                                source = MenuOptionCreateSource.VENUE_MINI_APP,
+                            ),
+                        ),
+                )
+                assertCommittedCreateAuditCardinality(dataSource, fixture)
+                assertEquals(1, countAuditRows(dataSource))
+            }
+        }
+
+    @Test
+    fun `concurrent direct creates of different custom options both commit with matching audits`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource)
+                val holderDataSource = HeldItemLockDataSource(dataSource)
+                val waiterDataSource = TrackedItemLockDataSource(dataSource)
+
+                val (first, second) =
+                    runWithHeldItemLock(
+                        observerDataSource = dataSource,
+                        holderDataSource = holderDataSource,
+                        waiterDataSource = waiterDataSource,
+                        beforeRelease = { assertInitialState(dataSource, fixture) },
+                        holderAction = {
+                            runBlocking {
+                                VenueMenuRepository(holderDataSource).createOption(
+                                    venueId = fixture.venueId,
+                                    itemId = fixture.itemId,
+                                    name = FIRST_CUSTOM_CREATE_NAME,
+                                    priceDeltaMinor = 111,
+                                    isAvailable = true,
+                                    actorUserId = FIRST_ACTOR_ID,
+                                    source = MenuOptionCreateSource.VENUE_MINI_APP,
+                                )
+                            }
+                        },
+                        waiterAction = {
+                            runBlocking {
+                                VenueMenuRepository(waiterDataSource).createOption(
+                                    venueId = fixture.venueId,
+                                    itemId = fixture.itemId,
+                                    name = SECOND_CUSTOM_CREATE_NAME,
+                                    priceDeltaMinor = 222,
+                                    isAvailable = false,
+                                    actorUserId = SECOND_ACTOR_ID,
+                                    source = MenuOptionCreateSource.TELEGRAM_BOT,
+                                )
+                            }
+                        },
+                    )
+
+                val firstCreated = assertNotNull(first)
+                val secondCreated = assertNotNull(second)
+                assertFalse(firstCreated.id == secondCreated.id)
+                assertEquals(
+                    setOf(FIRST_CUSTOM_CREATE_NAME, SECOND_CUSTOM_CREATE_NAME),
+                    readOptions(dataSource, fixture.itemId)
+                        .filter { option -> option.id in setOf(firstCreated.id, secondCreated.id) }
+                        .map { option -> option.name }
+                        .toSet(),
+                )
+                assertCreateAudits(
+                    dataSource = dataSource,
+                    fixture = fixture,
+                    expected =
+                        listOf(
+                            ExpectedCreateAudit(
+                                optionId = firstCreated.id,
+                                actorUserId = FIRST_ACTOR_ID,
+                                source = MenuOptionCreateSource.VENUE_MINI_APP,
+                            ),
+                            ExpectedCreateAudit(
+                                optionId = secondCreated.id,
+                                actorUserId = SECOND_ACTOR_ID,
+                                source = MenuOptionCreateSource.TELEGRAM_BOT,
+                            ),
+                        ),
+                )
+                assertCommittedCreateAuditCardinality(dataSource, fixture)
+                assertEquals(2, countAuditRows(dataSource))
+            }
+        }
+
+    @Test
+    fun `direct canonical create and base profile bulk serialize without duplicate profile`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource)
+                val profileName = HookahFlavorProfileService.baseProfiles.last()
+                val holderDataSource = HeldItemLockDataSource(dataSource)
+                val waiterDataSource = TrackedItemLockDataSource(dataSource)
+
+                val (direct, bulk) =
+                    runWithHeldItemLock(
+                        observerDataSource = dataSource,
+                        holderDataSource = holderDataSource,
+                        waiterDataSource = waiterDataSource,
+                        beforeRelease = { assertInitialState(dataSource, fixture) },
+                        holderAction = {
+                            runBlocking {
+                                VenueMenuRepository(holderDataSource).createOption(
+                                    venueId = fixture.venueId,
+                                    itemId = fixture.itemId,
+                                    name = profileName,
+                                    priceDeltaMinor = 0,
+                                    isAvailable = true,
+                                    actorUserId = FIRST_ACTOR_ID,
+                                    source = MenuOptionCreateSource.VENUE_MINI_APP,
+                                )
+                            }
+                        },
+                        waiterAction = {
+                            runBlocking {
+                                VenueMenuRepository(waiterDataSource).applyMissingBaseProfiles(
+                                    venueId = fixture.venueId,
+                                    itemId = fixture.itemId,
+                                    actorUserId = SECOND_ACTOR_ID,
+                                    source = MenuOptionCreateSource.TELEGRAM_BOT,
+                                )
+                            }
+                        },
+                    )
+
+                val directCreated = assertNotNull(direct)
+                val bulkResult = assertNotNull(bulk)
+                assertEquals(HookahFlavorProfileService.baseProfiles.size - 2, bulkResult.addedCount)
+                assertEquals(2, bulkResult.existingCount)
+                val options = readOptions(dataSource, fixture.itemId)
+                assertCanonicalProfilesUnique(options)
+                assertTrue(fixture.initialOptionIds.all { optionId -> options.any { it.id == optionId } })
+                val bulkCreatedIds =
+                    profileOptionIds(
+                        options = options,
+                        profileNames =
+                            HookahFlavorProfileService.baseProfiles.drop(1).filterNot { profile ->
+                                profile == profileName
+                            },
+                    )
+                assertCreateAudits(
+                    dataSource = dataSource,
+                    fixture = fixture,
+                    expected =
+                        listOf(
+                            ExpectedCreateAudit(
+                                optionId = directCreated.id,
+                                actorUserId = FIRST_ACTOR_ID,
+                                source = MenuOptionCreateSource.VENUE_MINI_APP,
+                            ),
+                        ) +
+                            bulkCreatedIds.map { optionId ->
+                                ExpectedCreateAudit(
+                                    optionId = optionId,
+                                    actorUserId = SECOND_ACTOR_ID,
+                                    source = MenuOptionCreateSource.TELEGRAM_BOT,
+                                )
+                            },
+                )
+                assertCommittedCreateAuditCardinality(dataSource, fixture)
+                assertTrue(readDeleteAudits(dataSource).isEmpty())
+            }
+        }
+
+    @Test
+    fun `concurrent base profile bulk operations have one audited writer and one no-op`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource)
+                val holderDataSource = HeldItemLockDataSource(dataSource)
+                val waiterDataSource = TrackedItemLockDataSource(dataSource)
+
+                val (winner, noOp) =
+                    runWithHeldItemLock(
+                        observerDataSource = dataSource,
+                        holderDataSource = holderDataSource,
+                        waiterDataSource = waiterDataSource,
+                        beforeRelease = { assertInitialState(dataSource, fixture) },
+                        holderAction = {
+                            runBlocking {
+                                VenueMenuRepository(holderDataSource).applyMissingBaseProfiles(
+                                    venueId = fixture.venueId,
+                                    itemId = fixture.itemId,
+                                    actorUserId = FIRST_ACTOR_ID,
+                                    source = MenuOptionCreateSource.VENUE_MINI_APP,
+                                )
+                            }
+                        },
+                        waiterAction = {
+                            runBlocking {
+                                VenueMenuRepository(waiterDataSource).applyMissingBaseProfiles(
+                                    venueId = fixture.venueId,
+                                    itemId = fixture.itemId,
+                                    actorUserId = SECOND_ACTOR_ID,
+                                    source = MenuOptionCreateSource.TELEGRAM_BOT,
+                                )
+                            }
+                        },
+                    )
+
+                val winnerResult = assertNotNull(winner)
+                val noOpResult = assertNotNull(noOp)
+                assertEquals(HookahFlavorProfileService.baseProfiles.size - 1, winnerResult.addedCount)
+                assertEquals(1, winnerResult.existingCount)
+                assertEquals(0, noOpResult.addedCount)
+                assertEquals(HookahFlavorProfileService.baseProfiles.size, noOpResult.existingCount)
+                val options = readOptions(dataSource, fixture.itemId)
+                assertCanonicalProfilesUnique(options)
+                assertTrue(fixture.initialOptionIds.all { optionId -> options.any { it.id == optionId } })
+                assertCreateAudits(
+                    dataSource = dataSource,
+                    fixture = fixture,
+                    expected =
+                        profileOptionIds(options, HookahFlavorProfileService.baseProfiles.drop(1)).map { optionId ->
+                            ExpectedCreateAudit(
+                                optionId = optionId,
+                                actorUserId = FIRST_ACTOR_ID,
+                                source = MenuOptionCreateSource.VENUE_MINI_APP,
+                            )
+                        },
+                )
+                assertCommittedCreateAuditCardinality(dataSource, fixture)
+                assertTrue(readCreateAudits(dataSource).none { audit -> audit.actorUserId == SECOND_ACTOR_ID })
+                assertTrue(readDeleteAudits(dataSource).isEmpty())
+            }
+        }
+
+    @Test
+    fun `base profile bulk and normalization serialize with no duplicate create audits`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource)
+                val holderDataSource = HeldItemLockDataSource(dataSource)
+                val waiterDataSource = TrackedItemLockDataSource(dataSource)
+
+                val (bulk, normalization) =
+                    runWithHeldItemLock(
+                        observerDataSource = dataSource,
+                        holderDataSource = holderDataSource,
+                        waiterDataSource = waiterDataSource,
+                        beforeRelease = { assertInitialState(dataSource, fixture) },
+                        holderAction = {
+                            runBlocking {
+                                VenueMenuRepository(holderDataSource).applyMissingBaseProfiles(
+                                    venueId = fixture.venueId,
+                                    itemId = fixture.itemId,
+                                    actorUserId = FIRST_ACTOR_ID,
+                                    source = MenuOptionCreateSource.VENUE_MINI_APP,
+                                )
+                            }
+                        },
+                        waiterAction = {
+                            runBlocking {
+                                VenueMenuRepository(waiterDataSource).normalizeHookahFlavorProfiles(
+                                    venueId = fixture.venueId,
+                                    itemId = fixture.itemId,
+                                    actorUserId = SECOND_ACTOR_ID,
+                                    deleteSource = MenuOptionDeleteSource.TELEGRAM_BOT,
+                                    createSource = MenuOptionCreateSource.TELEGRAM_BOT,
+                                )
+                            }
+                        },
+                    )
+
+                assertEquals(HookahFlavorProfileService.baseProfiles.size - 1, assertNotNull(bulk).addedCount)
+                assertEquals(
+                    HookahFlavorProfileNormalizationResult(
+                        removedCount = fixture.obsoleteOptionIds.size,
+                        addedCount = 0,
+                    ),
+                    assertNotNull(normalization),
+                )
+                assertNormalizedState(
+                    dataSource = dataSource,
+                    fixture = fixture,
+                    expectedPreservedIds = setOf(fixture.existingCanonicalOptionId, fixture.customOptionId),
+                    expectedNonCanonicalNames = setOf(CUSTOM_OPTION_NAME),
+                )
+                val options = readOptions(dataSource, fixture.itemId)
+                assertCreateAudits(
+                    dataSource = dataSource,
+                    fixture = fixture,
+                    expected =
+                        profileOptionIds(options, HookahFlavorProfileService.baseProfiles.drop(1)).map { optionId ->
+                            ExpectedCreateAudit(
+                                optionId = optionId,
+                                actorUserId = FIRST_ACTOR_ID,
+                                source = MenuOptionCreateSource.VENUE_MINI_APP,
+                            )
+                        },
+                )
+                assertDeleteAudits(
+                    dataSource = dataSource,
+                    fixture = fixture,
+                    expectedOptionIds = fixture.obsoleteOptionIds,
+                    expectedActorUserId = SECOND_ACTOR_ID,
+                )
+                assertCommittedCreateAuditCardinality(dataSource, fixture)
+                assertTrue(readCreateAudits(dataSource).none { audit -> audit.actorUserId == SECOND_ACTOR_ID })
+            }
+        }
+
+    @Test
+    fun `direct delete and create of same canonical profile serialize without partial state`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource)
+                val profileName = HookahFlavorProfileService.baseProfiles.first()
+                val holderDataSource = HeldItemLockDataSource(dataSource)
+                val waiterDataSource = TrackedItemLockDataSource(dataSource)
+
+                val (deleted, created) =
+                    runWithHeldItemLock(
+                        observerDataSource = dataSource,
+                        holderDataSource = holderDataSource,
+                        waiterDataSource = waiterDataSource,
+                        beforeRelease = { assertInitialState(dataSource, fixture) },
+                        holderAction = {
+                            runBlocking {
+                                VenueMenuRepository(holderDataSource).deleteOption(
+                                    venueId = fixture.venueId,
+                                    optionId = fixture.existingCanonicalOptionId,
+                                    actorUserId = FIRST_ACTOR_ID,
+                                    source = MenuOptionDeleteSource.TELEGRAM_BOT,
+                                )
+                            }
+                        },
+                        waiterAction = {
+                            runBlocking {
+                                VenueMenuRepository(waiterDataSource).createOption(
+                                    venueId = fixture.venueId,
+                                    itemId = fixture.itemId,
+                                    name = profileName,
+                                    priceDeltaMinor = 0,
+                                    isAvailable = true,
+                                    actorUserId = SECOND_ACTOR_ID,
+                                    source = MenuOptionCreateSource.VENUE_MINI_APP,
+                                )
+                            }
+                        },
+                    )
+
+                assertTrue(deleted)
+                val createdOption = assertNotNull(created)
+                assertFalse(createdOption.id == fixture.existingCanonicalOptionId)
+                val options = readOptions(dataSource, fixture.itemId)
+                assertTrue(options.none { option -> option.id == fixture.existingCanonicalOptionId })
+                assertEquals(
+                    1,
+                    options.count { option ->
+                        HookahFlavorProfileService.normalizeFlavorNameKey(option.name) ==
+                            HookahFlavorProfileService.normalizeFlavorNameKey(profileName)
+                    },
+                )
+                assertDeleteAudits(
+                    dataSource = dataSource,
+                    fixture = fixture,
+                    expectedOptionIds = setOf(fixture.existingCanonicalOptionId),
                     expectedActorUserId = FIRST_ACTOR_ID,
                 )
+                assertCreateAudits(
+                    dataSource = dataSource,
+                    fixture = fixture,
+                    expected =
+                        listOf(
+                            ExpectedCreateAudit(
+                                optionId = createdOption.id,
+                                actorUserId = SECOND_ACTOR_ID,
+                                source = MenuOptionCreateSource.VENUE_MINI_APP,
+                            ),
+                        ),
+                )
+                assertCommittedCreateAuditCardinality(dataSource, fixture)
+                assertEquals(2, countAuditRows(dataSource))
             }
         }
 
@@ -380,7 +874,8 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
                                     venueId = fixture.venueId,
                                     itemId = fixture.itemId,
                                     actorUserId = FIRST_ACTOR_ID,
-                                    source = MenuOptionDeleteSource.TELEGRAM_BOT,
+                                    deleteSource = MenuOptionDeleteSource.TELEGRAM_BOT,
+                                    createSource = MenuOptionCreateSource.TELEGRAM_BOT,
                                 )
                             }
                         },
@@ -569,6 +1064,8 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
                                         name = profileName,
                                         priceDeltaMinor = 0,
                                         isAvailable = true,
+                                        actorUserId = SECOND_ACTOR_ID,
+                                        source = MenuOptionCreateSource.TELEGRAM_BOT,
                                     )
                                 }
                             }
@@ -592,6 +1089,8 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
                     expectedActorUserId = FIRST_ACTOR_ID,
                     expectedSource = MenuOptionRenameSource.VENUE_MINI_APP,
                 )
+                assertTrue(readCreateAudits(dataSource).isEmpty())
+                assertCommittedCreateAuditCardinality(dataSource, fixture)
                 assertTrue(readDeleteAudits(dataSource).isEmpty())
             }
         }
@@ -998,6 +1497,7 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
                                     fixture.itemId,
                                     SECOND_ACTOR_ID,
                                     MenuOptionDeleteSource.TELEGRAM_BOT,
+                                    MenuOptionCreateSource.TELEGRAM_BOT,
                                 )
                             }
                         },
@@ -1617,9 +2117,10 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
     ) {
         val options = readOptions(dataSource, fixture.itemId)
         assertEquals(
-            fixture.obsoleteOptionIds + fixture.customOptionId + fixture.existingCanonicalOptionId,
+            fixture.initialOptionIds,
             options.map { option -> option.id }.toSet(),
         )
+        assertTrue(readCreateAudits(dataSource).isEmpty())
         assertTrue(readDeleteAudits(dataSource).isEmpty())
         assertTrue(readRenameAudits(dataSource).isEmpty())
         assertTrue(readPriceAudits(dataSource).isEmpty())
@@ -1670,6 +2171,69 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
                 .map { option -> option.name }
                 .toSet(),
         )
+    }
+
+    private fun assertCanonicalProfilesUnique(options: List<OptionRow>) {
+        HookahFlavorProfileService.baseProfiles.forEach { profileName ->
+            val profileKey = HookahFlavorProfileService.normalizeFlavorNameKey(profileName)
+            assertEquals(
+                1,
+                options.count { option ->
+                    HookahFlavorProfileService.normalizeFlavorNameKey(option.name) == profileKey
+                },
+                "Canonical profile $profileKey must exist exactly once",
+            )
+        }
+    }
+
+    private fun profileOptionIds(
+        options: List<OptionRow>,
+        profileNames: List<String>,
+    ): List<Long> =
+        profileNames.map { profileName ->
+            val profileKey = HookahFlavorProfileService.normalizeFlavorNameKey(profileName)
+            options.single { option ->
+                HookahFlavorProfileService.normalizeFlavorNameKey(option.name) == profileKey
+            }.id
+        }
+
+    private fun assertCreateAudits(
+        dataSource: DataSource,
+        fixture: Fixture,
+        expected: List<ExpectedCreateAudit>,
+    ) {
+        val audits = readCreateAudits(dataSource)
+        assertEquals(expected.size, audits.size)
+        assertEquals(expected.map { it.optionId }, audits.map { it.entityId })
+        expected.forEachIndexed { index, expectedAudit ->
+            val audit = audits[index]
+            assertEquals(expectedAudit.actorUserId, audit.actorUserId)
+            assertEquals("menu_item_option", audit.entityType)
+            assertEquals(expectedAudit.optionId, audit.entityId)
+            assertEquals(AUDIT_PAYLOAD_KEYS, audit.payload.keys)
+            assertEquals(fixture.venueId, audit.payload.longValue("venueId"))
+            assertEquals(fixture.itemId, audit.payload.longValue("itemId"))
+            assertEquals(expectedAudit.optionId, audit.payload.longValue("optionId"))
+            assertEquals(
+                expectedAudit.source.name,
+                audit.payload.getValue("source").jsonPrimitive.content,
+            )
+        }
+    }
+
+    private fun assertCommittedCreateAuditCardinality(
+        dataSource: DataSource,
+        fixture: Fixture,
+    ) {
+        val committedCreateIds =
+            readOptions(dataSource, fixture.itemId)
+                .map { option -> option.id }
+                .filterNot { optionId -> optionId in fixture.initialOptionIds }
+                .toSet()
+        val createAudits = readCreateAudits(dataSource)
+        assertEquals(committedCreateIds.size, createAudits.size)
+        assertEquals(committedCreateIds, createAudits.map { audit -> audit.entityId }.toSet())
+        assertEquals(createAudits.size, createAudits.map { audit -> audit.entityId }.distinct().size)
     }
 
     private fun assertDeleteAudits(
@@ -1850,6 +2414,9 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
 
     private fun readDeleteAudits(dataSource: DataSource): List<AuditRow> =
         readAudits(dataSource, MENU_OPTION_DELETED_AUDIT_ACTION)
+
+    private fun readCreateAudits(dataSource: DataSource): List<AuditRow> =
+        readAudits(dataSource, MENU_OPTION_CREATED_AUDIT_ACTION)
 
     private fun readRenameAudits(dataSource: DataSource): List<AuditRow> =
         readAudits(dataSource, MENU_OPTION_RENAMED_AUDIT_ACTION)
@@ -2073,6 +2640,9 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
         val existingCanonicalOptionId: Long,
     )
 
+    private val Fixture.initialOptionIds: Set<Long>
+        get() = obsoleteOptionIds + customOptionId + existingCanonicalOptionId
+
     private data class OptionRow(
         val id: Long,
         val name: String,
@@ -2092,6 +2662,12 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
         val payload: JsonObject,
     )
 
+    private data class ExpectedCreateAudit(
+        val optionId: Long,
+        val actorUserId: Long,
+        val source: MenuOptionCreateSource,
+    )
+
     private data class PostgresBlockObservation(
         val blocked: Boolean,
         val diagnostic: String,
@@ -2103,6 +2679,8 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
         const val INITIAL_ITEM_NAME = "Concurrency hookah"
         const val COMPOUND_ITEM_NAME = "Concurrency compound item"
         const val CUSTOM_OPTION_NAME = "Авторский микс"
+        const val FIRST_CUSTOM_CREATE_NAME = "Авторский цитрус"
+        const val SECOND_CUSTOM_CREATE_NAME = "Авторская ягода"
         const val WAIT_TIMEOUT_SECONDS = 30L
 
         val AUDIT_PAYLOAD_KEYS = setOf("venueId", "itemId", "optionId", "source")

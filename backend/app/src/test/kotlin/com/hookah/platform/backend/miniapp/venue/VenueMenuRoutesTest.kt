@@ -9,10 +9,12 @@ import com.hookah.platform.backend.miniapp.venue.menu.MENU_CATEGORY_DELETED_AUDI
 import com.hookah.platform.backend.miniapp.venue.menu.MENU_ITEM_AVAILABILITY_CHANGED_AUDIT_ACTION
 import com.hookah.platform.backend.miniapp.venue.menu.MENU_ITEM_DELETED_AUDIT_ACTION
 import com.hookah.platform.backend.miniapp.venue.menu.MENU_OPTION_AVAILABILITY_CHANGED_AUDIT_ACTION
+import com.hookah.platform.backend.miniapp.venue.menu.MENU_OPTION_CREATED_AUDIT_ACTION
 import com.hookah.platform.backend.miniapp.venue.menu.MENU_OPTION_DELETED_AUDIT_ACTION
 import com.hookah.platform.backend.miniapp.venue.menu.MENU_OPTION_PRICE_CHANGED_AUDIT_ACTION
 import com.hookah.platform.backend.miniapp.venue.menu.MENU_OPTION_RENAMED_AUDIT_ACTION
 import com.hookah.platform.backend.miniapp.venue.menu.MENU_SHIFT_CHECK_COMPLETED_AUDIT_ACTION
+import com.hookah.platform.backend.miniapp.venue.menu.MenuOptionCreateSource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuSemanticType
 import com.hookah.platform.backend.miniapp.venue.menu.MenuShiftCheckResponse
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuItem
@@ -613,6 +615,273 @@ class VenueMenuRoutesTest {
         }
 
     @Test
+    fun `owner and manager option create derive exact actor source payload and preserve response dto`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("menu-option-create-audit-success")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val ownerId = 79_011L
+            val managerId = 79_012L
+            val venueId = seedVenueWithRole(jdbcUrl, ownerId, "OWNER")
+            seedVenueWithRole(jdbcUrl, managerId, "MANAGER", venueId)
+            val item = createHookahMenuItem(jdbcUrl, venueId, "Create audit item")
+
+            val ownerResponse =
+                client.post(
+                    "/api/venue/menu/options?venueId=$venueId&actorUserId=999999&source=TELEGRAM_BOT",
+                ) {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer ${issueToken(config, ownerId)}")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody(
+                        """
+                        {
+                          "itemId": ${item.id},
+                          "name": "Private owner option",
+                          "priceDeltaMinor": 125,
+                          "isAvailable": false,
+                          "actorUserId": 999999,
+                          "source": "TELEGRAM_BOT",
+                          "callbackData": "private callback payload"
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            val managerResponse =
+                client.post("/api/venue/menu/options?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer ${issueToken(config, managerId)}")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody(
+                        """
+                        {
+                          "itemId": ${item.id},
+                          "name": "Ягодный",
+                          "priceDeltaMinor": 0,
+                          "isAvailable": true
+                        }
+                        """.trimIndent(),
+                    )
+                }
+
+            val responses = listOf(ownerResponse, managerResponse)
+            responses.forEach { response ->
+                assertEquals(HttpStatusCode.OK, response.status)
+                assertEquals(
+                    setOf("id", "itemId", "name", "priceDeltaMinor", "isAvailable", "sortOrder"),
+                    json.parseToJsonElement(response.bodyAsText()).jsonObject.keys,
+                )
+            }
+            val created =
+                responses.map { response ->
+                    json.decodeFromString(VenueMenuOptionDto.serializer(), response.bodyAsText())
+                }
+            assertEquals(listOf("Private owner option", "Ягодный"), created.map { it.name })
+            assertEquals(listOf(125L, 0L), created.map { it.priceDeltaMinor })
+            assertEquals(listOf(false, true), created.map { it.isAvailable })
+
+            val audits = menuOptionCreateAudits(jdbcUrl)
+            assertEquals(listOf(ownerId, managerId), audits.map { it.actorUserId })
+            assertEquals(created.map { it.id }, audits.map { it.entityId })
+            audits.forEach { audit ->
+                assertEquals("menu_item_option", audit.entityType)
+                assertEquals(
+                    setOf("venueId", "itemId", "optionId", "source"),
+                    audit.payload.keys,
+                )
+                assertEquals(venueId, audit.payload.getValue("venueId").jsonPrimitive.content.toLong())
+                assertEquals(item.id, audit.payload.getValue("itemId").jsonPrimitive.content.toLong())
+                assertEquals(audit.entityId, audit.payload.getValue("optionId").jsonPrimitive.content.toLong())
+                assertEquals("VENUE_MINI_APP", audit.payload.getValue("source").jsonPrimitive.content)
+                assertFalse(audit.payload.toString().contains("Private owner option"))
+                assertFalse(audit.payload.toString().contains("Ягодный"))
+                assertFalse(audit.payload.toString().contains("999999"))
+                assertFalse(audit.payload.toString().contains("TELEGRAM_BOT"))
+                assertFalse(audit.payload.toString().contains("callback", ignoreCase = true))
+                assertFalse(audit.payload.toString().contains("price", ignoreCase = true))
+                assertFalse(audit.payload.toString().contains("availability", ignoreCase = true))
+            }
+        }
+
+    @Test
+    fun `staff foreign and unaffiliated option create denials write zero row and audit`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("menu-option-create-audit-denials")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val ownerId = 79_021L
+            val staffId = 79_022L
+            val foreignManagerId = 79_023L
+            val unaffiliatedId = 79_024L
+            val venueId = seedVenueWithRole(jdbcUrl, ownerId, "OWNER")
+            seedVenueWithRole(jdbcUrl, staffId, "STAFF", venueId)
+            seedVenueWithRole(jdbcUrl, foreignManagerId, "MANAGER")
+            seedUser(jdbcUrl, unaffiliatedId)
+            val item = createHookahMenuItem(jdbcUrl, venueId, "Protected create item")
+
+            listOf(staffId, foreignManagerId, unaffiliatedId).forEach { actorId ->
+                val response =
+                    client.post("/api/venue/menu/options?venueId=$venueId") {
+                        headers {
+                            append(HttpHeaders.Authorization, "Bearer ${issueToken(config, actorId)}")
+                            append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                        }
+                        setBody(
+                            """{"itemId":${item.id},"name":"Private denied option","isAvailable":true}""",
+                        )
+                    }
+                assertEquals(HttpStatusCode.Forbidden, response.status)
+                assertApiErrorEnvelope(response, ApiErrorCodes.FORBIDDEN)
+                assertFalse(response.bodyAsText().contains("Private denied option"))
+            }
+
+            assertTrue(menuRepository(jdbcUrl).getMenu(venueId).single().items.single().options.isEmpty())
+            assertTrue(menuOptionCreateAudits(jdbcUrl).isEmpty())
+        }
+
+    @Test
+    fun `canonical option create collision writes no additional row or audit`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("menu-option-create-audit-collision")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val ownerId = 79_031L
+            val venueId = seedVenueWithRole(jdbcUrl, ownerId, "OWNER")
+            val item = createHookahMenuItem(jdbcUrl, venueId, "Canonical collision item")
+            val token = issueToken(config, ownerId)
+
+            val first = postOption(client, token, venueId, item.id, "Ягодный")
+            assertEquals(HttpStatusCode.OK, first.status)
+            val auditBefore = menuOptionCreateAudits(jdbcUrl)
+            assertEquals(1, auditBefore.size)
+
+            val collision = postOption(client, token, venueId, item.id, "  ягодный  ")
+
+            assertEquals(HttpStatusCode.BadRequest, collision.status)
+            assertApiErrorEnvelope(collision, ApiErrorCodes.INVALID_INPUT)
+            assertEquals(1, menuRepository(jdbcUrl).getMenu(venueId).single().items.single().options.size)
+            assertEquals(auditBefore, menuOptionCreateAudits(jdbcUrl))
+        }
+
+    @Test
+    fun `option create audit failure returns safe error and rolls back option`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("menu-option-create-audit-failure")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val ownerId = 79_041L
+            val venueId = seedVenueWithRole(jdbcUrl, ownerId, "OWNER")
+            val item = createHookahMenuItem(jdbcUrl, venueId, "Create rollback item")
+            rejectMenuOptionCreateAudits(jdbcUrl, "reject_menu_option_create_audit")
+
+            val response = postOption(client, issueToken(config, ownerId), venueId, item.id, "Private rollback option")
+
+            assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
+            assertApiErrorEnvelope(response, ApiErrorCodes.DATABASE_UNAVAILABLE)
+            assertFalse(response.bodyAsText().contains(MENU_OPTION_CREATED_AUDIT_ACTION))
+            assertFalse(response.bodyAsText().contains("Private rollback option"))
+            assertTrue(menuRepository(jdbcUrl).getMenu(venueId).single().items.single().options.isEmpty())
+            assertTrue(menuOptionCreateAudits(jdbcUrl).isEmpty())
+        }
+
+    @Test
+    fun `manager base profile bulk create audits exact cardinality actor source and repeat no-op`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("menu-base-profile-create-audit-cardinality")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val managerId = 79_051L
+            val venueId = seedVenueWithRole(jdbcUrl, managerId, "MANAGER")
+            val item = createHookahMenuItem(jdbcUrl, venueId, "Bulk create item")
+            val url =
+                "/api/venue/menu/items/${item.id}/base-flavor-profiles" +
+                    "?venueId=$venueId&actorUserId=999999&source=TELEGRAM_BOT"
+
+            val first =
+                client.post(url) {
+                    headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config, managerId)}") }
+                }
+            assertEquals(HttpStatusCode.OK, first.status)
+            val applied =
+                json.decodeFromString(ApplyBaseFlavorProfilesResponse.serializer(), first.bodyAsText())
+            assertEquals(8, applied.addedCount)
+            assertEquals(0, applied.existingCount)
+
+            val auditsAfterFirst = menuOptionCreateAudits(jdbcUrl)
+            assertEquals(8, auditsAfterFirst.size)
+            assertEquals(applied.options.map { it.id }, auditsAfterFirst.map { it.entityId })
+            auditsAfterFirst.forEach { audit ->
+                assertEquals(managerId, audit.actorUserId)
+                assertEquals("menu_item_option", audit.entityType)
+                assertEquals(setOf("venueId", "itemId", "optionId", "source"), audit.payload.keys)
+                assertEquals(venueId, audit.payload.getValue("venueId").jsonPrimitive.content.toLong())
+                assertEquals(item.id, audit.payload.getValue("itemId").jsonPrimitive.content.toLong())
+                assertEquals(audit.entityId, audit.payload.getValue("optionId").jsonPrimitive.content.toLong())
+                assertEquals("VENUE_MINI_APP", audit.payload.getValue("source").jsonPrimitive.content)
+                assertFalse(audit.payload.toString().contains("999999"))
+                assertFalse(audit.payload.toString().contains("TELEGRAM_BOT"))
+                assertFalse(audit.payload.toString().contains("name", ignoreCase = true))
+                assertFalse(audit.payload.toString().contains("price", ignoreCase = true))
+            }
+
+            val repeated =
+                client.post(url) {
+                    headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config, managerId)}") }
+                }
+            assertEquals(HttpStatusCode.OK, repeated.status)
+            val noOp =
+                json.decodeFromString(ApplyBaseFlavorProfilesResponse.serializer(), repeated.bodyAsText())
+            assertEquals(0, noOp.addedCount)
+            assertEquals(8, noOp.existingCount)
+            assertEquals(auditsAfterFirst, menuOptionCreateAudits(jdbcUrl))
+        }
+
+    @Test
+    fun `base profile create audit failure returns safe error and rolls back bulk`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("menu-base-profile-create-audit-failure")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val ownerId = 79_061L
+            val venueId = seedVenueWithRole(jdbcUrl, ownerId, "OWNER")
+            val item = createHookahMenuItem(jdbcUrl, venueId, "Bulk rollback item")
+            rejectMenuOptionCreateAudits(jdbcUrl, "reject_menu_base_profile_create_audit")
+
+            val response =
+                client.post(
+                    "/api/venue/menu/items/${item.id}/base-flavor-profiles?venueId=$venueId",
+                ) {
+                    headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config, ownerId)}") }
+                }
+
+            assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
+            assertApiErrorEnvelope(response, ApiErrorCodes.DATABASE_UNAVAILABLE)
+            assertFalse(response.bodyAsText().contains(MENU_OPTION_CREATED_AUDIT_ACTION))
+            assertTrue(menuRepository(jdbcUrl).getMenu(venueId).single().items.single().options.isEmpty())
+            assertTrue(menuOptionCreateAudits(jdbcUrl).isEmpty())
+        }
+
+    @Test
     fun `owner manager and staff direct item availability derive actor source while denied and no-op write none`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("menu-item-availability-audit-rbac")
@@ -1072,6 +1341,8 @@ class VenueMenuRoutesTest {
                         name = "Third private option",
                         priceDeltaMinor = 30,
                         isAvailable = true,
+                        actorUserId = ownerId,
+                        source = MenuOptionCreateSource.VENUE_MINI_APP,
                     ),
                 )
             val actorOptions =
@@ -1341,8 +1612,29 @@ class VenueMenuRoutesTest {
             )
             val item =
                 requireNotNull(repository.createItem(venueId, category.id, "Hookah", 100_000, "RUB", true))
-            requireNotNull(repository.createOption(venueId, item.id, "Ягодный", 100, true))
-            val custom = requireNotNull(repository.createOption(venueId, item.id, "Авторский", 200, true))
+            requireNotNull(
+                repository.createOption(
+                    venueId,
+                    item.id,
+                    "Ягодный",
+                    100,
+                    true,
+                    ownerId,
+                    MenuOptionCreateSource.VENUE_MINI_APP,
+                ),
+            )
+            val custom =
+                requireNotNull(
+                    repository.createOption(
+                        venueId,
+                        item.id,
+                        "Авторский",
+                        200,
+                        true,
+                        ownerId,
+                        MenuOptionCreateSource.VENUE_MINI_APP,
+                    ),
+                )
 
             val response =
                 patchOption(
@@ -2779,6 +3071,9 @@ class VenueMenuRoutesTest {
     private fun menuOptionDeleteAudits(jdbcUrl: String): List<MenuDeleteAuditRow> =
         menuDeleteAudits(jdbcUrl, MENU_OPTION_DELETED_AUDIT_ACTION)
 
+    private fun menuOptionCreateAudits(jdbcUrl: String): List<MenuDeleteAuditRow> =
+        menuDeleteAudits(jdbcUrl, MENU_OPTION_CREATED_AUDIT_ACTION)
+
     private fun menuOptionRenameAudits(jdbcUrl: String): List<MenuDeleteAuditRow> =
         menuDeleteAudits(jdbcUrl, MENU_OPTION_RENAMED_AUDIT_ACTION)
 
@@ -2818,6 +3113,88 @@ class VenueMenuRoutesTest {
             }
             setBody(body)
         }
+
+    private suspend fun postOption(
+        client: HttpClient,
+        token: String,
+        venueId: Long,
+        itemId: Long,
+        name: String,
+    ): HttpResponse =
+        client.post("/api/venue/menu/options?venueId=$venueId") {
+            headers {
+                append(HttpHeaders.Authorization, "Bearer $token")
+                append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+            }
+            setBody(
+                """
+                {
+                  "itemId": $itemId,
+                  "name": "$name",
+                  "priceDeltaMinor": 0,
+                  "isAvailable": true
+                }
+                """.trimIndent(),
+            )
+        }
+
+    private suspend fun createHookahMenuItem(
+        jdbcUrl: String,
+        venueId: Long,
+        name: String,
+    ): VenueMenuItem {
+        val repository = menuRepository(jdbcUrl)
+        val category = repository.createCategory(venueId, "$name category", MenuSemanticType.HOOKAH)
+        return requireNotNull(
+            repository.createItem(
+                venueId = venueId,
+                categoryId = category.id,
+                name = name,
+                priceMinor = 100,
+                currency = "RUB",
+                isAvailable = true,
+            ),
+        )
+    }
+
+    private fun rejectMenuOptionCreateAudits(
+        jdbcUrl: String,
+        constraintName: String,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.createStatement().use { statement ->
+                statement.execute(
+                    """
+                    ALTER TABLE audit_log
+                    ADD CONSTRAINT $constraintName
+                    CHECK (action <> '$MENU_OPTION_CREATED_AUDIT_ACTION')
+                    """.trimIndent(),
+                )
+            }
+        }
+    }
+
+    private fun clearSetupOptionCreateAudits(
+        jdbcUrl: String,
+        optionIds: List<Long>,
+    ) {
+        check(optionIds.size == 2)
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                DELETE FROM audit_log
+                WHERE action = ?
+                  AND entity_type = 'menu_item_option'
+                  AND entity_id IN (?, ?)
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setString(1, MENU_OPTION_CREATED_AUDIT_ACTION)
+                statement.setLong(2, optionIds[0])
+                statement.setLong(3, optionIds[1])
+                statement.executeUpdate()
+            }
+        }
+    }
 
     private fun menuDeleteAudits(
         jdbcUrl: String,
@@ -3094,6 +3471,8 @@ class VenueMenuRoutesTest {
                     name = "First option",
                     priceDeltaMinor = 10,
                     isAvailable = true,
+                    actorUserId = TELEGRAM_USER_ID,
+                    source = MenuOptionCreateSource.VENUE_MINI_APP,
                 ),
             )
         val secondOption =
@@ -3104,8 +3483,11 @@ class VenueMenuRoutesTest {
                     name = "Second private option name",
                     priceDeltaMinor = 20,
                     isAvailable = true,
+                    actorUserId = TELEGRAM_USER_ID,
+                    source = MenuOptionCreateSource.VENUE_MINI_APP,
                 ),
             )
+        clearSetupOptionCreateAudits(jdbcUrl, listOf(firstOption.id, secondOption.id))
         return ShiftCheckFixture(firstItem, secondItem, firstOption, secondOption)
     }
 

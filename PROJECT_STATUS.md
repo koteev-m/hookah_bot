@@ -1,8 +1,9 @@
 # Project Status
 
-Last verified: 2026-08-12. Current release HEAD `db08916db099738f7979625ed67ec1bc19934009`
-equals `origin/main`; the pre-docs Git check was clean apart from the pre-existing untracked
-`scripts/dev/` directory.
+Last verified: 2026-08-12. The pre-implementation Git baseline HEAD
+`8ec4280830b9734ff04bcd23efd6631944f4154d` equalled `origin/main`. The current worktree contains
+the bounded implementation under review plus the pre-existing untracked `scripts/dev/` directory;
+stash was not read or changed and `scripts/dev/` was not touched.
 
 ## 1. Purpose and source-of-truth order
 
@@ -22,6 +23,8 @@ next-block change, P0/P1 blocker change or before a new long task.
   STAGING-SMOKE-PASSED**.
 - **DANGEROUS ACTION AUDIT SLICE / MENU ITEM AVAILABILITY AUDIT / DONE / MVP /
   STAGING-SMOKE-PASSED**.
+- **DANGEROUS ACTION AUDIT SLICE / MENU OPTION CREATE AUDIT / MVP IMPLEMENTED /
+  LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. This is not staging-closed.
 - Menu option price audit and Venue Menu management UX stabilization remain separately
   `DONE / MVP / STAGING-SMOKE-PASSED` for their bounded contracts.
 
@@ -43,23 +46,42 @@ next-block change, P0/P1 blocker change or before a new long task.
   `MENU_ITEM_AVAILABILITY_CHANGED` with server-derived actor/source. Same-state requests write no
   audit and preserve `updated_at`; Staff keeps direct availability only. Shift Check remains
   aggregate-only, and an audit failure rolls back the item mutation, timestamp and audit row.
+- Menu option create audit is implemented locally for six authenticated flows: Mini App direct and
+  add-missing-base-profiles; Telegram canonical direct, custom dialog, add-missing-base-profiles and
+  normalization. One private repository SQL writer serves them all; no internal/system/legacy
+  production create writer exists. Review, CI and staging evidence are still required.
 
-## 4. Next bounded block
+## 4. Current bounded block
 
 Contract: **IMPLEMENT_MENU_OPTION_CREATE_AUDIT_NEXT**.
 
-The unaudited physical `createOption` paths are the Mini App create route, Telegram individual create
-and base-profile creation. The current base-profile bulk helper invokes one create transaction per
-profile, while normalization already performs missing-profile inserts in one transaction. The next
-slice must make the required audit atomic and preserve one audit per physical created row; it must not
-expand into option rename/price/availability, item mutations, Shift Check or a new domain engine.
-Schema verdict: **NO_MIGRATION_EXPECTED**.
+`VenueMenuRepository.insertOption` is the only production `INSERT INTO menu_item_options` writer.
+Direct `createOption`, atomic `applyMissingBaseProfiles` and atomic
+`normalizeHookahFlavorProfiles` own their JDBC transactions; there is no unaudited compatibility
+overload. Direct create locks the DB-authoritative item and option rows, rechecks a canonical
+collision, inserts, appends audit on the same connection, rereads and commits once. One bulk user
+operation computes its DB-current missing-profile plan and commits N inserts plus N audits once.
+Normalization preserves its delete contract and commits deterministic deletes, missing creates,
+delete audits and create audits together.
+
+Every physically committed option writes exactly one `MENU_OPTION_CREATED` for entity
+`menu_item_option` / option id. Payload keys are exactly `venueId`, `itemId`, `optionId`, `source`;
+actor is the authenticated Mini App session subject or current authenticated Telegram user, and
+source is server-owned `VENUE_MINI_APP` or `TELEGRAM_BOT`. Denial, foreign/not-found, collision,
+duplicate/no-op, SQL/audit failure, rollback and concurrent loser write zero create audits. Payload
+and logs exclude option/profile content, price/availability, raw request/initData/callback/update,
+Telegram identity, promotion/cart/order/media data, secrets and unrelated PII.
+
+Local bounded evidence is repository `41/0/0/0`, routes `37/0/0/0`, Telegram `538/0/0/0` and
+real-PostgreSQL menu concurrency `26/0/0/0` (`tests/skipped/failures/errors`); `compileKotlin`,
+`ktlintCheck`, Mini App production build and full Playwright `169/169` passed. Schema verdict:
+**NO_MIGRATION_EXPECTED**.
 
 ## 5. Open gaps and risks
 
-- Keep separate: menu option create audit (next), menu item price audit, menu item metadata/name/type
-  audit, transaction-bound membership-revoke linearization, audit/dependency viewer, promotion
-  configuration edit audit and force-close/session audit.
+- Keep separate: remaining option-create review/CI/staging gates, menu item price audit, menu item
+  metadata/name/type audit, transaction-bound membership-revoke linearization, audit/dependency
+  viewer, promotion configuration edit audit and force-close/session audit.
 - Keep separate cart hardening: duplicate-name cart E2E, opaque cart-line identity, option
   replacement merge semantics, issue owner tuple/generation, immutable cart item-name snapshot,
   live-region deduplication and error-response size hardening.
@@ -87,13 +109,12 @@ Schema verdict: **NO_MIGRATION_EXPECTED**.
 
 ## 7. Release and staging evidence
 
-- Release Git evidence: current HEAD and `origin/main` are both `db08916`; the five most recent
-  commits identify this HEAD as `Add menu item availability audit`. `git diff --check` passed before
-  docs changes.
-- GitHub CLI could not query Actions because its active token is invalid. The user confirmed fully
-  green GitHub Actions for this current release HEAD; this is user-confirmed, not independently
-  verified by this handoff.
-- The user also confirmed the staging deploy and only this bounded staging smoke: (1) Owner toggles a
+- Git baseline evidence: before this bounded implementation, current HEAD and `origin/main` were
+  both `8ec4280`. No commit, push, deploy or staging smoke is claimed for the option-create slice.
+- GitHub CLI previously could not query Actions because its active token was invalid. The earlier
+  user-confirmed green Actions evidence belongs to the release-closed item-availability slice, not
+  this option-create implementation.
+- The earlier user-confirmed staging evidence covers only this item-availability smoke: (1) Owner toggles a
   test item off/on; (2) each real toggle creates truthful item-availability audit; (3) Staff changes
   availability only; (4) Staff cannot compound-edit name, price or type; (5) Telegram toggle works;
   (6) its audit source is `TELEGRAM_BOT`; (7) Shift Check changes availability by its own contract;
@@ -114,13 +135,14 @@ Schema verdict: **NO_MIGRATION_EXPECTED**.
 
 ## 9. Next action
 
-Implement only `IMPLEMENT_MENU_OPTION_CREATE_AUDIT_NEXT`: inventory and route all physical option
-creates through an actor/source-aware, transaction-bound audit contract; make base-profile bulk
-creation atomic before adding per-row audit evidence. Do not expand into price, metadata, item,
-cart, promotion, media/R2, stash or `scripts/dev/` work.
+Independently review `IMPLEMENT_MENU_OPTION_CREATE_AUDIT_NEXT`, verify the exact CI selectors/XML
+including the menu PostgreSQL minimum of 26, then require green Actions, staging deploy and bounded
+cross-surface smoke before release closure. Do not
+expand into price, metadata, item, cart, promotion, media/R2, stash or `scripts/dev/` work.
 
 ## 10. Last verified date
 
-2026-08-12. The Menu Item Availability Audit is release-closed only for its bounded contract; it does
-not close all item mutations, the Menu Audit, the Dangerous Action Audit or overall product readiness.
-Stash was not read, applied, changed, deleted or renamed; `scripts/dev/` was not touched.
+2026-08-12. Menu Option Create Audit is locally implemented only for its bounded contract; it does
+not close the Menu Audit, the Dangerous Action Audit or overall product readiness, and it has no
+staging evidence yet. No migration was added. Stash was not read, applied, changed, deleted or
+renamed; `scripts/dev/` was not touched.

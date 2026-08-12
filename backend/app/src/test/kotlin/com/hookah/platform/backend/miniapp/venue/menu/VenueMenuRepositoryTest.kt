@@ -657,6 +657,376 @@ class VenueMenuRepositoryTest {
         }
 
     @Test
+    fun `direct custom option create persists one exact privacy safe audit and missing foreign write none`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("venue-menu-option-create-custom")
+            val venueId = seedVenue(jdbcUrl)
+            val foreignVenueId = seedVenue(jdbcUrl)
+            val repository = VenueMenuRepository(dataSource(jdbcUrl))
+            val category = repository.createCategory(venueId, "Private category")
+            val item =
+                requireNotNull(
+                    repository.createItem(
+                        venueId = venueId,
+                        categoryId = category.id,
+                        name = "Private item",
+                        priceMinor = 500,
+                        currency = "RUB",
+                        isAvailable = true,
+                    ),
+                )
+
+            val created =
+                requireNotNull(
+                    repository.createOption(
+                        venueId = venueId,
+                        itemId = item.id,
+                        name = "Private initData callback option @username secret",
+                        priceDeltaMinor = 987_654,
+                        isAvailable = false,
+                        actorUserId = AUDIT_ACTOR_ID,
+                        source = MenuOptionCreateSource.VENUE_MINI_APP,
+                    ),
+                )
+
+            assertEquals(created, loadItem(repository, venueId, item.id).options.single())
+            val audit = menuOptionCreateAudits(jdbcUrl).single()
+            assertMenuOptionCreateAudit(
+                audit = audit,
+                venueId = venueId,
+                itemId = item.id,
+                optionId = created.id,
+                actorUserId = AUDIT_ACTOR_ID,
+                source = MenuOptionCreateSource.VENUE_MINI_APP,
+            )
+            val serialized = audit.payload.toString()
+            listOf(
+                "name",
+                "price",
+                "availability",
+                "canonical",
+                "promotion",
+                "cart",
+                "order",
+                "request",
+                "callback",
+                "initData",
+                "telegram",
+                "media",
+                "secret",
+                "username",
+                "phone",
+            ).forEach { forbidden ->
+                assertFalse(serialized.contains(forbidden, ignoreCase = true), forbidden)
+            }
+
+            assertNull(
+                repository.createOption(
+                    venueId = venueId,
+                    itemId = Long.MAX_VALUE,
+                    name = "Missing",
+                    priceDeltaMinor = 0,
+                    isAvailable = true,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuOptionCreateSource.VENUE_MINI_APP,
+                ),
+            )
+            assertNull(
+                repository.createOption(
+                    venueId = foreignVenueId,
+                    itemId = item.id,
+                    name = "Foreign",
+                    priceDeltaMinor = 0,
+                    isAvailable = true,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuOptionCreateSource.VENUE_MINI_APP,
+                ),
+            )
+            assertEquals(listOf(audit), menuOptionCreateAudits(jdbcUrl))
+        }
+
+    @Test
+    fun `direct canonical option create audits once and collision creates neither row nor audit`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("venue-menu-option-create-canonical")
+            val venueId = seedVenue(jdbcUrl)
+            val repository = VenueMenuRepository(dataSource(jdbcUrl))
+            val category = repository.createCategory(venueId, "Кальянное меню")
+            requireNotNull(repository.updateCategoryType(venueId, category.id, MenuSemanticType.HOOKAH))
+            val item =
+                requireNotNull(
+                    repository.createItem(
+                        venueId = venueId,
+                        categoryId = category.id,
+                        name = "Кальян",
+                        priceMinor = 100_000,
+                        currency = "RUB",
+                        isAvailable = true,
+                    ),
+                )
+
+            val created =
+                requireNotNull(
+                    repository.createOption(
+                        venueId = venueId,
+                        itemId = item.id,
+                        name = "Ягодный",
+                        priceDeltaMinor = 0,
+                        isAvailable = true,
+                        actorUserId = AUDIT_ACTOR_ID,
+                        source = MenuOptionCreateSource.TELEGRAM_BOT,
+                    ),
+                )
+            val beforeCollision = optionRows(jdbcUrl, item.id)
+            val audit = menuOptionCreateAudits(jdbcUrl).single()
+            assertMenuOptionCreateAudit(
+                audit = audit,
+                venueId = venueId,
+                itemId = item.id,
+                optionId = created.id,
+                actorUserId = AUDIT_ACTOR_ID,
+                source = MenuOptionCreateSource.TELEGRAM_BOT,
+            )
+
+            assertFailsWith<InvalidInputException> {
+                repository.createOption(
+                    venueId = venueId,
+                    itemId = item.id,
+                    name = "  ЯГОДНЫЙ ",
+                    priceDeltaMinor = 999,
+                    isAvailable = false,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuOptionCreateSource.TELEGRAM_BOT,
+                )
+            }
+
+            assertEquals(beforeCollision, optionRows(jdbcUrl, item.id))
+            assertEquals(listOf(audit), menuOptionCreateAudits(jdbcUrl))
+        }
+
+    @Test
+    fun `direct option create audit failure after insert rolls back row and audit`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("venue-menu-option-create-audit-rollback")
+            val venueId = seedVenue(jdbcUrl)
+            val dataSource = dataSource(jdbcUrl)
+            val fixtureRepository = VenueMenuRepository(dataSource)
+            val category = fixtureRepository.createCategory(venueId, "Options")
+            val item =
+                requireNotNull(
+                    fixtureRepository.createItem(
+                        venueId = venueId,
+                        categoryId = category.id,
+                        name = "Item",
+                        priceMinor = 100,
+                        currency = "RUB",
+                        isAvailable = true,
+                    ),
+                )
+            val delegateAuditWriter = AuditLogRepository(dataSource, Json)
+            var insertedRowObserved = false
+            var auditInsertCompleted = false
+            val failingAuditWriter =
+                TransactionalAuditLogWriter { connection, actorUserId, action, entityType, entityId, payload ->
+                    if (action == MENU_OPTION_CREATED_AUDIT_ACTION) {
+                        insertedRowObserved = optionExists(connection, venueId, requireNotNull(entityId))
+                        check(insertedRowObserved) { "Option insert must happen before its create audit" }
+                        delegateAuditWriter.appendJson(
+                            connection,
+                            actorUserId,
+                            action,
+                            entityType,
+                            entityId,
+                            payload,
+                        )
+                        auditInsertCompleted = true
+                        throw SQLException("Synthetic menu option create audit failure", "XX999")
+                    }
+                    delegateAuditWriter.appendJson(connection, actorUserId, action, entityType, entityId, payload)
+                }
+            val repository = VenueMenuRepository(dataSource, failingAuditWriter)
+
+            assertFailsWith<DatabaseUnavailableException> {
+                repository.createOption(
+                    venueId = venueId,
+                    itemId = item.id,
+                    name = "Rollback private option",
+                    priceDeltaMinor = 999,
+                    isAvailable = false,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuOptionCreateSource.VENUE_MINI_APP,
+                )
+            }
+
+            assertTrue(insertedRowObserved)
+            assertTrue(auditInsertCompleted)
+            assertTrue(loadItem(fixtureRepository, venueId, item.id).options.isEmpty())
+            assertTrue(menuOptionCreateAudits(jdbcUrl).isEmpty())
+        }
+
+    @Test
+    fun `atomic base profiles create missing rows and audits preserving existing options then repeat no-op`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("venue-menu-option-create-base-profiles")
+            val venueId = seedVenue(jdbcUrl)
+            val repository = VenueMenuRepository(dataSource(jdbcUrl))
+            val category = repository.createCategory(venueId, "Кальянное меню")
+            requireNotNull(repository.updateCategoryType(venueId, category.id, MenuSemanticType.HOOKAH))
+            val item =
+                requireNotNull(
+                    repository.createItem(
+                        venueId = venueId,
+                        categoryId = category.id,
+                        name = "Кальян",
+                        priceMinor = 100_000,
+                        currency = "RUB",
+                        isAvailable = true,
+                    ),
+                )
+            val canonical =
+                requireNotNull(
+                    repository.createOption(
+                        venueId,
+                        item.id,
+                        "Ягодный",
+                        700,
+                        false,
+                        AUDIT_ACTOR_ID,
+                        MenuOptionCreateSource.VENUE_MINI_APP,
+                    ),
+                )
+            val custom =
+                requireNotNull(
+                    repository.createOption(
+                        venueId,
+                        item.id,
+                        "Авторский",
+                        600,
+                        false,
+                        AUDIT_ACTOR_ID,
+                        MenuOptionCreateSource.VENUE_MINI_APP,
+                    ),
+                )
+            val baselineAudits = menuOptionCreateAudits(jdbcUrl)
+
+            val result =
+                requireNotNull(
+                    repository.applyMissingBaseProfiles(
+                        venueId = venueId,
+                        itemId = item.id,
+                        actorUserId = AUDIT_ACTOR_ID,
+                        source = MenuOptionCreateSource.TELEGRAM_BOT,
+                    ),
+                )
+
+            assertEquals(7, result.addedCount)
+            assertEquals(1, result.existingCount)
+            assertEquals(
+                listOf("Ягодный", "Авторский") + HookahFlavorProfileService.baseProfiles.drop(1),
+                result.options.map { it.name },
+            )
+            assertEquals(canonical, result.options.single { it.id == canonical.id })
+            assertEquals(custom, result.options.single { it.id == custom.id })
+            assertEquals(1, result.options.count { it.name.equals("Ягодный", ignoreCase = true) })
+            result.options
+                .filter { it.id !in setOf(canonical.id, custom.id) }
+                .forEach { created ->
+                    assertEquals(0L, created.priceDeltaMinor)
+                    assertTrue(created.isAvailable)
+                }
+            val createdAudits = menuOptionCreateAudits(jdbcUrl).drop(baselineAudits.size)
+            assertEquals(7, createdAudits.size)
+            assertEquals(
+                result.options.filter { it.id !in setOf(canonical.id, custom.id) }.map { it.id },
+                createdAudits.map { it.entityId },
+            )
+            createdAudits.forEach { audit ->
+                assertMenuOptionCreateAudit(
+                    audit = audit,
+                    venueId = venueId,
+                    itemId = item.id,
+                    optionId = audit.entityId,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuOptionCreateSource.TELEGRAM_BOT,
+                )
+            }
+
+            val beforeNoOpRows = optionRows(jdbcUrl, item.id)
+            val beforeNoOpAudits = menuOptionCreateAudits(jdbcUrl)
+            val noOp =
+                requireNotNull(
+                    repository.applyMissingBaseProfiles(
+                        venueId = venueId,
+                        itemId = item.id,
+                        actorUserId = AUDIT_ACTOR_ID,
+                        source = MenuOptionCreateSource.TELEGRAM_BOT,
+                    ),
+                )
+            assertEquals(0, noOp.addedCount)
+            assertEquals(HookahFlavorProfileService.baseProfiles.size, noOp.existingCount)
+            assertEquals(beforeNoOpRows, optionRows(jdbcUrl, item.id))
+            assertEquals(beforeNoOpAudits, menuOptionCreateAudits(jdbcUrl))
+        }
+
+    @Test
+    fun `atomic base profiles partial audit failure restores full option and audit snapshots`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("venue-menu-option-create-base-profiles-audit-rollback")
+            val venueId = seedVenue(jdbcUrl)
+            val dataSource = dataSource(jdbcUrl)
+            val fixtureRepository = VenueMenuRepository(dataSource)
+            val category = fixtureRepository.createCategory(venueId, "Кальянное меню")
+            requireNotNull(fixtureRepository.updateCategoryType(venueId, category.id, MenuSemanticType.HOOKAH))
+            val item =
+                requireNotNull(
+                    fixtureRepository.createItem(
+                        venueId = venueId,
+                        categoryId = category.id,
+                        name = "Кальян",
+                        priceMinor = 100_000,
+                        currency = "RUB",
+                        isAvailable = true,
+                    ),
+                )
+            requireNotNull(
+                fixtureRepository.createOption(
+                    venueId,
+                    item.id,
+                    "Авторский",
+                    321,
+                    false,
+                    AUDIT_ACTOR_ID,
+                    MenuOptionCreateSource.VENUE_MINI_APP,
+                ),
+            )
+            val beforeRows = optionRows(jdbcUrl, item.id)
+            val beforeAudits = menuOptionCreateAudits(jdbcUrl)
+            val delegateAuditWriter = AuditLogRepository(dataSource, Json)
+            var createAuditAttempts = 0
+            val failingAuditWriter =
+                TransactionalAuditLogWriter { connection, actorUserId, action, entityType, entityId, payload ->
+                    delegateAuditWriter.appendJson(connection, actorUserId, action, entityType, entityId, payload)
+                    if (action == MENU_OPTION_CREATED_AUDIT_ACTION && ++createAuditAttempts == 3) {
+                        throw SQLException("Synthetic third base profile create audit failure", "XX999")
+                    }
+                }
+            val repository = VenueMenuRepository(dataSource, failingAuditWriter)
+
+            assertFailsWith<DatabaseUnavailableException> {
+                repository.applyMissingBaseProfiles(
+                    venueId = venueId,
+                    itemId = item.id,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuOptionCreateSource.VENUE_MINI_APP,
+                )
+            }
+
+            assertEquals(3, createAuditAttempts)
+            assertEquals(beforeRows, optionRows(jdbcUrl, item.id))
+            assertEquals(beforeAudits, menuOptionCreateAudits(jdbcUrl))
+        }
+
+    @Test
     fun `option delete writes one exact safe audit and repeat missing foreign write none`() =
         runBlocking {
             val jdbcUrl = migratedJdbcUrl("venue-menu-option-delete-success")
@@ -918,9 +1288,29 @@ class VenueMenuRepositoryTest {
             val availabilityOnly = fixture.firstOption
             val nameAndAvailability = fixture.secondOption
             val priceAndAvailability =
-                requireNotNull(repository.createOption(venueId, fixture.firstItem.id, "Price family", 30, true))
+                requireNotNull(
+                    repository.createOption(
+                        venueId,
+                        fixture.firstItem.id,
+                        "Price family",
+                        30,
+                        true,
+                        AUDIT_ACTOR_ID,
+                        MenuOptionCreateSource.VENUE_MINI_APP,
+                    ),
+                )
             val allFields =
-                requireNotNull(repository.createOption(venueId, fixture.firstItem.id, "All families", 40, true))
+                requireNotNull(
+                    repository.createOption(
+                        venueId,
+                        fixture.firstItem.id,
+                        "All families",
+                        40,
+                        true,
+                        AUDIT_ACTOR_ID,
+                        MenuOptionCreateSource.VENUE_MINI_APP,
+                    ),
+                )
 
             requireNotNull(
                 repository.updateOption(
@@ -1458,6 +1848,7 @@ class VenueMenuRepositoryTest {
             val fixture = createNormalizationFixture(repository, venueId)
             val obsoleteOptions =
                 fixture.options.filter { HookahFlavorProfileService.isObsoleteProfileValue(it.name) }
+            val baselineCreateAudits = menuOptionCreateAudits(jdbcUrl)
 
             val result =
                 requireNotNull(
@@ -1465,7 +1856,8 @@ class VenueMenuRepositoryTest {
                         venueId = venueId,
                         itemId = fixture.item.id,
                         actorUserId = AUDIT_ACTOR_ID,
-                        source = MenuOptionDeleteSource.TELEGRAM_BOT,
+                        deleteSource = MenuOptionDeleteSource.TELEGRAM_BOT,
+                        createSource = MenuOptionCreateSource.TELEGRAM_BOT,
                     ),
                 )
 
@@ -1515,20 +1907,37 @@ class VenueMenuRepositoryTest {
                     source = MenuOptionDeleteSource.TELEGRAM_BOT,
                 )
             }
+            val createdOptions = normalized.options.filter { it.id !in fixture.options.map(VenueMenuOption::id) }
+            val createAudits = menuOptionCreateAudits(jdbcUrl).drop(baselineCreateAudits.size)
+            assertEquals(6, createAudits.size)
+            assertEquals(createdOptions.map { it.id }, createAudits.map { it.entityId })
+            createAudits.forEach { audit ->
+                assertMenuOptionCreateAudit(
+                    audit = audit,
+                    venueId = venueId,
+                    itemId = fixture.item.id,
+                    optionId = audit.entityId,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuOptionCreateSource.TELEGRAM_BOT,
+                )
+            }
 
             val beforeNoOp = optionRows(jdbcUrl, fixture.item.id)
+            val beforeNoOpCreateAudits = menuOptionCreateAudits(jdbcUrl)
             val noOp =
                 requireNotNull(
                     repository.normalizeHookahFlavorProfiles(
                         venueId = venueId,
                         itemId = fixture.item.id,
                         actorUserId = AUDIT_ACTOR_ID,
-                        source = MenuOptionDeleteSource.TELEGRAM_BOT,
+                        deleteSource = MenuOptionDeleteSource.TELEGRAM_BOT,
+                        createSource = MenuOptionCreateSource.TELEGRAM_BOT,
                     ),
                 )
             assertEquals(HookahFlavorProfileNormalizationResult(removedCount = 0, addedCount = 0), noOp)
             assertEquals(beforeNoOp, optionRows(jdbcUrl, fixture.item.id))
             assertEquals(audits, menuOptionDeleteAudits(jdbcUrl))
+            assertEquals(beforeNoOpCreateAudits, menuOptionCreateAudits(jdbcUrl))
         }
 
     @Test
@@ -1539,18 +1948,21 @@ class VenueMenuRepositoryTest {
             val repository = VenueMenuRepository(dataSource(jdbcUrl))
             val fixture = createMenuFixture(repository, venueId)
             val before = optionRows(jdbcUrl, fixture.firstItem.id)
+            val beforeCreateAudits = menuOptionCreateAudits(jdbcUrl)
 
             assertFailsWith<InvalidInputException> {
                 repository.normalizeHookahFlavorProfiles(
                     venueId = venueId,
                     itemId = fixture.firstItem.id,
                     actorUserId = AUDIT_ACTOR_ID,
-                    source = MenuOptionDeleteSource.TELEGRAM_BOT,
+                    deleteSource = MenuOptionDeleteSource.TELEGRAM_BOT,
+                    createSource = MenuOptionCreateSource.TELEGRAM_BOT,
                 )
             }
 
             assertEquals(before, optionRows(jdbcUrl, fixture.firstItem.id))
             assertTrue(menuOptionDeleteAudits(jdbcUrl).isEmpty())
+            assertEquals(beforeCreateAudits, menuOptionCreateAudits(jdbcUrl))
         }
 
     @Test
@@ -1573,9 +1985,27 @@ class VenueMenuRepositoryTest {
                 )
             val firstCanonical =
                 requireNotNull(
-                    repository.createOption(venueId, item.id, "Ягодный", 10, true),
+                    repository.createOption(
+                        venueId,
+                        item.id,
+                        "Ягодный",
+                        10,
+                        true,
+                        AUDIT_ACTOR_ID,
+                        MenuOptionCreateSource.VENUE_MINI_APP,
+                    ),
                 )
-            requireNotNull(repository.createOption(venueId, item.id, "Ягодный", 20, true))
+            requireNotNull(
+                repository.createOption(
+                    venueId,
+                    item.id,
+                    "Ягодный",
+                    20,
+                    true,
+                    AUDIT_ACTOR_ID,
+                    MenuOptionCreateSource.VENUE_MINI_APP,
+                ),
+            )
             requireNotNull(repository.updateCategoryType(venueId, category.id, MenuSemanticType.HOOKAH))
 
             val priceOnlyUpdate =
@@ -1595,9 +2025,28 @@ class VenueMenuRepositoryTest {
             assertFalse(priceOnlyUpdate.isAvailable)
 
             assertFailsWith<InvalidInputException> {
-                repository.createOption(venueId, item.id, "Ягодный", 0, true)
+                repository.createOption(
+                    venueId,
+                    item.id,
+                    "Ягодный",
+                    0,
+                    true,
+                    AUDIT_ACTOR_ID,
+                    MenuOptionCreateSource.VENUE_MINI_APP,
+                )
             }
-            val custom = requireNotNull(repository.createOption(venueId, item.id, "Авторский", 0, true))
+            val custom =
+                requireNotNull(
+                    repository.createOption(
+                        venueId,
+                        item.id,
+                        "Авторский",
+                        0,
+                        true,
+                        AUDIT_ACTOR_ID,
+                        MenuOptionCreateSource.VENUE_MINI_APP,
+                    ),
+                )
             assertFailsWith<InvalidInputException> {
                 repository.updateOption(
                     venueId = venueId,
@@ -1622,6 +2071,7 @@ class VenueMenuRepositoryTest {
             val fixtureRepository = VenueMenuRepository(delegate)
             val fixture = createNormalizationFixture(fixtureRepository, venueId)
             val before = optionRows(jdbcUrl, fixture.item.id)
+            val beforeCreateAudits = menuOptionCreateAudits(jdbcUrl)
             val failingDataSource = FailAfterOptionInsertsDataSource(delegate, failOnInsert = 3)
             val repository = VenueMenuRepository(failingDataSource)
 
@@ -1630,17 +2080,19 @@ class VenueMenuRepositoryTest {
                     venueId = venueId,
                     itemId = fixture.item.id,
                     actorUserId = AUDIT_ACTOR_ID,
-                    source = MenuOptionDeleteSource.TELEGRAM_BOT,
+                    deleteSource = MenuOptionDeleteSource.TELEGRAM_BOT,
+                    createSource = MenuOptionCreateSource.TELEGRAM_BOT,
                 )
             }
 
             assertEquals(3, failingDataSource.completedOptionInserts.get())
             assertEquals(before, optionRows(jdbcUrl, fixture.item.id))
             assertTrue(menuOptionDeleteAudits(jdbcUrl).isEmpty())
+            assertEquals(beforeCreateAudits, menuOptionCreateAudits(jdbcUrl))
         }
 
     @Test
-    fun `normalization nth audit failure rolls back prior audits deletes and creates`() =
+    fun `normalization create audit failure after delete audits rolls back full option and audit snapshots`() =
         runBlocking {
             val jdbcUrl = migratedJdbcUrl("venue-menu-option-normalization-audit-rollback")
             val venueId = seedVenue(jdbcUrl)
@@ -1648,10 +2100,15 @@ class VenueMenuRepositoryTest {
             val fixtureRepository = VenueMenuRepository(dataSource)
             val fixture = createNormalizationFixture(fixtureRepository, venueId)
             val before = optionRows(jdbcUrl, fixture.item.id)
+            val beforeDeleteAudits = menuOptionDeleteAudits(jdbcUrl)
+            val beforeCreateAudits = menuOptionCreateAudits(jdbcUrl)
             val delegateAuditWriter = AuditLogRepository(dataSource, Json)
-            var auditAttempts = 0
+            val observedActions = mutableListOf<String>()
+            var createAuditAttempts = 0
+            var normalizedRowsObserved = false
             val failingAuditWriter =
                 TransactionalAuditLogWriter { connection, actorUserId, action, entityType, entityId, payload ->
+                    observedActions += action
                     delegateAuditWriter.appendJson(
                         connection,
                         actorUserId,
@@ -1660,8 +2117,20 @@ class VenueMenuRepositoryTest {
                         entityId,
                         payload,
                     )
-                    if (action == MENU_OPTION_DELETED_AUDIT_ACTION && ++auditAttempts == 2) {
-                        throw SQLException("Synthetic second menu option audit failure", "XX999")
+                    if (action == MENU_OPTION_CREATED_AUDIT_ACTION) {
+                        createAuditAttempts += 1
+                        normalizedRowsObserved =
+                            optionNames(connection, fixture.item.id).let { names ->
+                                names.size == 9 &&
+                                    names.none(HookahFlavorProfileService::isObsoleteProfileValue) &&
+                                    HookahFlavorProfileService.missingBaseProfiles(names).isEmpty()
+                            }
+                        check(normalizedRowsObserved) {
+                            "All normalization deletes and creates must precede create audits"
+                        }
+                        if (createAuditAttempts == 2) {
+                            throw SQLException("Synthetic second create audit failure", "XX999")
+                        }
                     }
                 }
             val repository = VenueMenuRepository(dataSource, failingAuditWriter)
@@ -1671,13 +2140,21 @@ class VenueMenuRepositoryTest {
                     venueId = venueId,
                     itemId = fixture.item.id,
                     actorUserId = AUDIT_ACTOR_ID,
-                    source = MenuOptionDeleteSource.TELEGRAM_BOT,
+                    deleteSource = MenuOptionDeleteSource.TELEGRAM_BOT,
+                    createSource = MenuOptionCreateSource.TELEGRAM_BOT,
                 )
             }
 
-            assertEquals(2, auditAttempts)
+            assertEquals(
+                List(5) { MENU_OPTION_DELETED_AUDIT_ACTION } +
+                    List(2) { MENU_OPTION_CREATED_AUDIT_ACTION },
+                observedActions,
+            )
+            assertEquals(2, createAuditAttempts)
+            assertTrue(normalizedRowsObserved)
             assertEquals(before, optionRows(jdbcUrl, fixture.item.id))
-            assertTrue(menuOptionDeleteAudits(jdbcUrl).isEmpty())
+            assertEquals(beforeDeleteAudits, menuOptionDeleteAudits(jdbcUrl))
+            assertEquals(beforeCreateAudits, menuOptionCreateAudits(jdbcUrl))
         }
 
     @Test
@@ -2251,6 +2728,8 @@ class VenueMenuRepositoryTest {
                     name = "First option",
                     priceDeltaMinor = 10,
                     isAvailable = true,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuOptionCreateSource.VENUE_MINI_APP,
                 ),
             )
         val secondOption =
@@ -2261,6 +2740,8 @@ class VenueMenuRepositoryTest {
                     name = "Second private option name",
                     priceDeltaMinor = 20,
                     isAvailable = true,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuOptionCreateSource.VENUE_MINI_APP,
                 ),
             )
         return MenuFixture(firstItem, secondItem, firstOption, secondOption)
@@ -2303,6 +2784,8 @@ class VenueMenuRepositoryTest {
                         name = name,
                         priceDeltaMinor = priceDeltaMinor,
                         isAvailable = isAvailable,
+                        actorUserId = AUDIT_ACTOR_ID,
+                        source = MenuOptionCreateSource.VENUE_MINI_APP,
                     ),
                 )
             }
@@ -2730,6 +3213,9 @@ class VenueMenuRepositoryTest {
     private fun menuOptionDeleteAudits(jdbcUrl: String): List<MenuDeleteAuditRow> =
         menuDeleteAudits(jdbcUrl, MENU_OPTION_DELETED_AUDIT_ACTION)
 
+    private fun menuOptionCreateAudits(jdbcUrl: String): List<MenuDeleteAuditRow> =
+        menuDeleteAudits(jdbcUrl, MENU_OPTION_CREATED_AUDIT_ACTION)
+
     private fun menuOptionRenameAudits(jdbcUrl: String): List<MenuDeleteAuditRow> =
         menuDeleteAudits(jdbcUrl, MENU_OPTION_RENAMED_AUDIT_ACTION)
 
@@ -2786,6 +3272,25 @@ class VenueMenuRepositoryTest {
     ) {
         assertEquals(actorUserId, audit.actorUserId)
         assertEquals(MENU_OPTION_DELETED_AUDIT_ACTION, audit.action)
+        assertEquals("menu_item_option", audit.entityType)
+        assertEquals(optionId, audit.entityId)
+        assertEquals(setOf("venueId", "itemId", "optionId", "source"), audit.payload.keys)
+        assertEquals(venueId, audit.payload.longValue("venueId"))
+        assertEquals(itemId, audit.payload.longValue("itemId"))
+        assertEquals(optionId, audit.payload.longValue("optionId"))
+        assertEquals(source.name, audit.payload.getValue("source").jsonPrimitive.content)
+    }
+
+    private fun assertMenuOptionCreateAudit(
+        audit: MenuDeleteAuditRow,
+        venueId: Long,
+        itemId: Long,
+        optionId: Long,
+        actorUserId: Long,
+        source: MenuOptionCreateSource,
+    ) {
+        assertEquals(actorUserId, audit.actorUserId)
+        assertEquals(MENU_OPTION_CREATED_AUDIT_ACTION, audit.action)
         assertEquals("menu_item_option", audit.entityType)
         assertEquals(optionId, audit.entityId)
         assertEquals(setOf("venueId", "itemId", "optionId", "source"), audit.payload.keys)
@@ -2942,6 +3447,21 @@ class VenueMenuRepositoryTest {
             statement.setLong(1, venueId)
             statement.setLong(2, optionId)
             statement.executeQuery().use { rs -> rs.next() }
+        }
+
+    private fun optionNames(
+        connection: Connection,
+        itemId: Long,
+    ): List<String> =
+        connection.prepareStatement(
+            "SELECT name FROM menu_item_options WHERE item_id = ? ORDER BY sort_order, id",
+        ).use { statement ->
+            statement.setLong(1, itemId)
+            statement.executeQuery().use { rs ->
+                buildList {
+                    while (rs.next()) add(rs.getString("name"))
+                }
+            }
         }
 
     private fun optionRows(

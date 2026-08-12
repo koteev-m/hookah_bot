@@ -1,6 +1,5 @@
 package com.hookah.platform.backend.miniapp.venue.menu
 
-import com.hookah.platform.backend.api.InvalidInputException
 import java.util.Locale
 
 const val BASE_FLAVOR_PROFILE_ALREADY_EXISTS_MESSAGE = "base flavor profile already exists"
@@ -99,76 +98,5 @@ object HookahFlavorProfileService {
             return true
         }
         return item.itemType == null && isHookahMenuSection(category.name, category.categoryType)
-    }
-
-    suspend fun applyMissingBaseProfiles(
-        venueMenuRepository: VenueMenuRepository,
-        venueId: Long,
-        itemId: Long,
-    ): HookahBaseFlavorProfileApplyResult {
-        val (category, item) = loadItem(venueMenuRepository, venueId, itemId)
-        val result =
-            applyMissingBaseProfiles(
-                venueMenuRepository = venueMenuRepository,
-                venueId = venueId,
-                category = category,
-                item = item,
-            )
-        val refreshed = loadItem(venueMenuRepository, venueId, itemId).second
-        return result.copy(options = refreshed.options)
-    }
-
-    suspend fun applyMissingBaseProfiles(
-        venueMenuRepository: VenueMenuRepository,
-        venueId: Long,
-        category: VenueMenuCategory,
-        item: VenueMenuItem,
-    ): HookahBaseFlavorProfileApplyResult {
-        if (!isHookahFlavorProfileItem(category, item)) {
-            throw InvalidInputException("base flavor profiles are available only for hookah items")
-        }
-
-        val existingKeys = item.options.map { normalizeFlavorNameKey(it.name) }.toMutableSet()
-        var existingCount = 0
-        val createdOptions = mutableListOf<VenueMenuOption>()
-
-        baseProfiles.forEach { profileName ->
-            val key = normalizeFlavorNameKey(profileName)
-            if (key in existingKeys) {
-                existingCount += 1
-                return@forEach
-            }
-            val created =
-                venueMenuRepository.createOption(
-                    venueId = venueId,
-                    itemId = item.id,
-                    name = profileName,
-                    priceDeltaMinor = 0,
-                    isAvailable = true,
-                ) ?: throw InvalidInputException("itemId is invalid")
-            existingKeys += key
-            createdOptions += created
-        }
-
-        return HookahBaseFlavorProfileApplyResult(
-            itemId = item.id,
-            addedCount = createdOptions.size,
-            existingCount = existingCount,
-            options = item.options + createdOptions,
-        )
-    }
-
-    private suspend fun loadItem(
-        venueMenuRepository: VenueMenuRepository,
-        venueId: Long,
-        itemId: Long,
-    ): Pair<VenueMenuCategory, VenueMenuItem> {
-        venueMenuRepository.getMenu(venueId).forEach { category ->
-            val item = category.items.firstOrNull { it.id == itemId }
-            if (item != null) {
-                return category to item
-            }
-        }
-        throw InvalidInputException("itemId is invalid")
     }
 }

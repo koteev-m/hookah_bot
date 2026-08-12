@@ -2,7 +2,7 @@
 
 Дата актуализации: 2026-08-12.
 
-Статус: **current product reference / SPEC UPDATED**. Guest stale-menu cart recovery is **GUEST CART STALE MENU SELECTION RECOVERY / REMOVED OR UNAVAILABLE ITEMS AND OPTIONS / PAYLOAD-BOUND IDEMPOTENCY + ATOMIC REJECTION / DONE / MVP / STAGING-SMOKE-PASSED**; its **ITEM-LEVEL ACTION AND COPY POLISH / DONE / MVP / STAGING-SMOKE-PASSED**. Menu/options/flavors parity is documented as smoke-closed for the structured selected-option flow. The bounded shift-check slice is **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**; menu item, empty-category and option hard-delete audits are release-closed bounded MVPs. Menu option hard delete includes atomic Telegram base-profile normalization and is **DONE / MVP / STAGING-SMOKE-PASSED**. Menu option rename audit is **DANGEROUS ACTION AUDIT SLICE / MENU OPTION RENAME AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Menu option price audit is **DANGEROUS ACTION AUDIT SLICE / MENU OPTION PRICE AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Menu option availability audit is **DANGEROUS ACTION AUDIT SLICE / MENU OPTION AVAILABILITY AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Menu item availability audit is **DANGEROUS ACTION AUDIT SLICE / MENU ITEM AVAILABILITY AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. The broader menu constructor, media/top-list governance, remaining audit coverage and permission parity remain **PARTIAL** unless a specific implementation task proves them.
+Статус: **current product reference / SPEC UPDATED**. Guest stale-menu cart recovery is **GUEST CART STALE MENU SELECTION RECOVERY / REMOVED OR UNAVAILABLE ITEMS AND OPTIONS / PAYLOAD-BOUND IDEMPOTENCY + ATOMIC REJECTION / DONE / MVP / STAGING-SMOKE-PASSED**; its **ITEM-LEVEL ACTION AND COPY POLISH / DONE / MVP / STAGING-SMOKE-PASSED**. Menu/options/flavors parity is documented as smoke-closed for the structured selected-option flow. The bounded shift-check slice is **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**; menu item, empty-category and option hard-delete audits are release-closed bounded MVPs. Menu option hard delete includes atomic Telegram base-profile normalization and is **DONE / MVP / STAGING-SMOKE-PASSED**. Menu option rename audit is **DANGEROUS ACTION AUDIT SLICE / MENU OPTION RENAME AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Menu option price audit is **DANGEROUS ACTION AUDIT SLICE / MENU OPTION PRICE AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Menu option availability audit is **DANGEROUS ACTION AUDIT SLICE / MENU OPTION AVAILABILITY AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Menu item availability audit is **DANGEROUS ACTION AUDIT SLICE / MENU ITEM AVAILABILITY AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Menu option create audit is **DANGEROUS ACTION AUDIT SLICE / MENU OPTION CREATE AUDIT / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT** and is not staging-closed. The broader menu constructor, media/top-list governance, remaining audit coverage and permission parity remain **PARTIAL** unless a specific implementation task proves them.
 
 ## Core Rule
 
@@ -42,7 +42,7 @@ Menu permissions are governed by `docs/SECURITY_RBAC_MATRIX.md`; Venue Mode oper
 | Featured/top-list | Product spec requires featured/top list; implementation evidence is partial. | Venue manually pins items; not paid placement. | Paid placement/boosting belongs to Growth/Platform, not menu featured. |
 | PDF/media | `Фото-меню` exists as a flat info/media section and is separate from structured order menu. Bot OWNER/MANAGER can add image/PDF attachments, delete one and hide/show the whole section. | PDF/photo menu is view-only; no direct order unless item exists in structured menu. | Venue Mini App authoring/upload is missing; direct replace, per-attachment hide and optional subsections remain future. |
 | Shift check | **DONE / MVP / STAGING-SMOKE-PASSED**: OWNER/MANAGER Venue Mini App uses saved menu state, readiness counts, search/filters, local draft, a separate mass-selection mode, confirmation summary and one atomic request. STAFF has no entry/direct permission. | Venue Mode keeps optimistic availability checks, one bounded batch, no-op completion evidence and recoverable stale-state handling. | Keep role/tenant, atomicity, stale-state, Guest availability and Telegram stop-list parity in regression; Telegram shift-check UI and a queryable history table are not part of Phase 1. |
-| Audit logs | `MENU_SHIFT_CHECK_COMPLETED` is atomic for a successful batch. Hard-delete, option bounded audits and item availability are release-closed. Individual item availability writes `MENU_ITEM_AVAILABILITY_CHANGED`. | Price changes, archive/delete, mass stop-list, media removal, option schema change and Staff stop-list toggles write safe audit. | Option create, item price/name/type and other menu audit families remain `PARTIAL`. |
+| Audit logs | `MENU_SHIFT_CHECK_COMPLETED` is atomic for a successful batch. Hard-delete, released option mutation audits and item availability are release-closed. Option create is locally implemented with one transaction-bound `MENU_OPTION_CREATED` per physical insert. | Price changes, archive/delete, mass stop-list, media removal, option schema change and Staff stop-list toggles write safe audit. | Option-create review/CI/staging, item price/name/type and other menu audit families remain open; the broader audit stays `PARTIAL`. |
 | Telegram vs Mini App parity | Options/flavors parity is smoke-closed; some Telegram owner flows remain richer. | Required menu/stop-list operations are aligned across Bot and Mini App or documented as exceptions. | Keep cross-surface parity smoke for Staff stop-list and selected options. |
 | Staff stop-list permissions | Current docs say STAFF has `MENU_AVAILABILITY_MANAGE` and can toggle item/option availability; STAFF cannot edit structure/prices/options schema. | Recommended MVP: Staff cannot change menu structure/prices; Staff stop-list works only when `staff_stoplist_enabled` or equivalent policy allows it, and is identical in Bot/Mini App. | Current global Staff stop-list permission is acceptable only if intentionally enabled and audited; per-venue toggle remains target/future. |
 
@@ -379,8 +379,8 @@ BASE-PROFILE NORMALIZATION INCLUDED / DONE / MVP / STAGING-SMOKE-PASSED**.
   locks and a locked reread, existing product rules determine obsolete standard profiles, preserved
   custom/current canonical profiles and missing canonical profiles. Obsolete deletes run in stable
   id order; missing profiles retain existing label/value, zero price delta, available state and
-  ordering semantics. Each physical delete gets one audit; a no-op gets none. No create audit is
-  added.
+  ordering semantics. Each physical delete keeps one delete audit; under the separate create-audit
+  slice, each physically inserted missing profile also gets one create audit. A no-op gets neither.
 - The canonical flavor-profile set and its labels are unchanged. Custom options and current
   canonical profiles are preserved; only obsolete standard profiles are removed and missing
   profiles are created under the previous contract. Existing option price/availability is not
@@ -406,8 +406,62 @@ BASE-PROFILE NORMALIZATION INCLUDED / DONE / MVP / STAGING-SMOKE-PASSED**.
   role/parity/audit/history/stale-cart/normalization smoke passed, including ordinary cleanup.
 
 Schema verdict: **NO_MIGRATION_EXPECTED**. This closes only option hard delete plus the included
-atomic normalization contract; it does not close option create/price/availability audit
-or the broader Menu/Dangerous Action Audit.
+atomic normalization contract. Option create has the separate locally implemented gate below;
+option price/availability and the broader Menu/Dangerous Action Audit are not closed by hard delete.
+
+Option create audit status: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION CREATE AUDIT /
+MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+
+Production create-writer inventory:
+
+| Caller | Surface | Authenticated actor | Permission | Source | Repository method | Transaction owner | Physical inserts | Create audits | Coverage |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `POST /menu/options` | Venue Mini App direct | Session subject | Owner/Manager `MENU_MANAGE` | `VENUE_MINI_APP` | `createOption` | Repository | 0 or 1; success is 1 | Equal to committed inserts | Repository/routes |
+| `POST /menu/items/{id}/base-flavor-profiles` | Venue Mini App bulk | Session subject | Owner/Manager `MENU_MANAGE` | `VENUE_MINI_APP` | `applyMissingBaseProfiles` | Repository | N missing | N | Repository/routes |
+| Standard-profile callback | Telegram direct canonical | Current callback user | Existing Owner/Manager guard | `TELEGRAM_BOT` | `createOption` | Repository | 0 or 1; success is 1 | Equal to committed inserts | Repository/Telegram/PostgreSQL |
+| Add-flavor dialog | Telegram direct custom | Current message user matching dialog owner | Existing Owner/Manager guard | `TELEGRAM_BOT` | `createOption` | Repository | 0 or 1; success is 1 | Equal to committed inserts | Repository/Telegram/PostgreSQL |
+| Add-all-standard callback | Telegram bulk | Current callback user | Existing Owner/Manager guard | `TELEGRAM_BOT` | `applyMissingBaseProfiles` | Repository | N missing | N | Repository/Telegram/PostgreSQL |
+| Normalize callback | Telegram normalization | Current callback user | Existing Owner/Manager guard | `TELEGRAM_BOT` | `normalizeHookahFlavorProfiles` | Repository | N missing, plus independent deletes | N create audits | Repository/Telegram/PostgreSQL |
+
+`VenueMenuRepository.insertOption` is the single private production SQL writer containing
+`INSERT INTO menu_item_options`. No authenticated internal/system/legacy production create writer
+or second direct SQL writer exists. `HookahFlavorProfileService` is a pure canonical-profile
+planner/helper and opens no authoritative transaction.
+
+- Direct create uses one JDBC connection with `autoCommit=false`: DB-authoritative venue/item/
+  category scope, item `FOR UPDATE`, option rows `ORDER BY id FOR UPDATE`, DB-current canonical
+  collision recheck, physical insert, generated id, same-connection create audit, result reread and
+  one commit. Audit failure restores the insert; success is returned only after commit.
+- One add-missing-base-profiles action uses one repository transaction. It locks the same item and
+  option rows, plans from DB-current names, inserts only missing profiles in canonical order and
+  appends one audit per insert. Custom and current canonical options are preserved; existing price,
+  availability and sort behavior are not reset. N=0 writes neither rows nor audits; any insert or
+  audit failure restores the full pre-operation snapshot.
+- Telegram normalization keeps one repository transaction and deterministic delete/create/audit
+  order. Obsolete standard profiles are deleted, custom/current canonical profiles are preserved,
+  missing profiles are inserted, and existing `MENU_OPTION_DELETED` plus new
+  `MENU_OPTION_CREATED` rows commit together. Failure after earlier deletes, creates or either audit
+  family rolls the whole option and audit snapshots back; an already-normal state creates nothing.
+- A committed physical insert writes exactly one action `MENU_OPTION_CREATED`, entity type
+  `menu_item_option`, entity id `optionId`. Payload keys are exactly `venueId`, `itemId`, `optionId`,
+  `source`; actor stays in the audit actor column. Mini App session and current Telegram user are
+  the only actor sources, and surface fixes source server-side. Body/query/path/callback/dialog data
+  cannot set actor/source.
+- Names, price delta, availability, canonical profile value, item/category names, promotions,
+  cart/order contents, raw request/initData/callback/update, Telegram identity, media, secrets and
+  unrelated PII are excluded from audit and failure logs. Denial, foreign/unaffiliated/not-found,
+  canonical collision, duplicate/no-op, insert/audit failure, rollback and concurrent loser write
+  zero create audits; no idempotency token is added.
+- Local evidence is repository `41/0/0/0`, routes `37/0/0/0`, Telegram `538/0/0/0` and
+  Testcontainers PostgreSQL `26/0/0/0` (`tests/skipped/failures/errors`), plus passed
+  `compileKotlin` and `ktlintCheck`. The PostgreSQL class uses production migrations/repositories,
+  independent connections, deterministic barriers and observed blocking, and its mandatory CI
+  minimum is now 26. Mini App production build and full Playwright `169/169` also passed;
+  independent review, green Actions, staging deploy and bounded smoke are still required. Schema
+  verdict: **NO_MIGRATION_EXPECTED**; no workflow was added.
+
+This closes no broader Menu/Dangerous Action Audit program and does not change rename, price,
+availability, item, Shift Check, Guest cart/order, promotions or media behavior.
 
 Option rename status: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION RENAME AUDIT / DONE / MVP /
 STAGING-SMOKE-PASSED**.
@@ -429,9 +483,10 @@ STAGING-SMOKE-PASSED**.
 - Existing hookah-only normalized canonical collision policy, self-exclusion, non-hookah duplicate
   behavior, historical snapshots and current-value resolution for future submit are unchanged.
   Real PostgreSQL coverage serializes rename with rename, normalization, canonical create and
-  direct delete. The class now has 15 tests after the availability-audit extension; its XML is mandatory
-  with no skipped/failures/errors.
-- Schema verdict: **NO_MIGRATION**. Option create audit, item/category mutations,
+  direct delete. The shared class now has 26 tests after the create-audit extension; its XML is
+  mandatory with no skipped/failures/errors.
+- Schema verdict: **NO_MIGRATION**. Option create audit is tracked by its separate local gate;
+  item/category mutations,
   new canonical semantics, membership-revoke linearization, promotions, viewer and media remain
   outside this slice. The broader Menu and Dangerous Action Audit programs remain `PARTIAL`.
 
@@ -462,9 +517,9 @@ STAGING-SMOKE-PASSED**.
   rounding are unchanged. Checkout reloads the current available option and current delta from the
   database; client/stale-cart price is not authority. New order rows snapshot the current delta;
   existing `price_delta_minor_snapshot` rows are never rewritten.
-- The current 15-test deterministic PostgreSQL class uses independent connections and observed blocking,
+- The current 26-test deterministic PostgreSQL class uses independent connections and observed blocking,
   with no arbitrary sleep. It proves truthful distinct-price ordering, same-target loser no-op and
-  serialization with rename, direct delete and atomic normalization. Mandatory CI minimum is 15
+  serialization with rename, direct delete and atomic normalization. Mandatory CI minimum is 26
   tests with zero skipped/failures/errors. Schema verdict: **NO_MIGRATION**.
 
 Release evidence for current release HEAD `0489a2f`: the user confirmed fully green GitHub Actions,
@@ -474,8 +529,9 @@ audit of each family; server-authoritative current price or safe reconfirmation 
 working menu/data; and routine cleanup. Historical order-snapshot preservation remains an automated
 contract, not a separately confirmed staging scenario.
 
-This closes only the bounded price-audit contract. Option create and item-price audit,
-the broader Menu or Dangerous Action Audit, and all media/storage work remain open.
+This closes only the bounded price-audit contract. Option create is separately implemented locally
+and still needs review/CI/staging; item-price audit, the broader Menu or Dangerous Action Audit, and
+all media/storage work remain open.
 
 Option availability audit status: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION AVAILABILITY AUDIT /
 DONE / MVP / STAGING-SMOKE-PASSED**.
@@ -501,8 +557,8 @@ DONE / MVP / STAGING-SMOKE-PASSED**.
   promotions, order schema and media are unchanged.
 - Testcontainers PostgreSQL uses independent connections and deterministic latches with an observed
   blocking edge for direct/direct, direct/compound, both direct/Shift Check orders, direct/delete and
-  direct/normalization. The shared PostgreSQL class and CI minimum are now `20/0/0/0` after the
-  item-availability extension. **NO_MIGRATION_EXPECTED**.
+  direct/normalization. The shared PostgreSQL class and CI minimum are now `26/0/0/0` after the
+  create-audit extension. **NO_MIGRATION_EXPECTED**.
 
 Item availability audit status: **DANGEROUS ACTION AUDIT SLICE / MENU ITEM AVAILABILITY AUDIT /
 DONE / MVP / STAGING-SMOKE-PASSED**.
@@ -530,7 +586,7 @@ DONE / MVP / STAGING-SMOKE-PASSED**.
   per-item audits. Its batch writer does not invoke the direct helper.
 - Testcontainers PostgreSQL covers item direct/direct, direct/compound, both direct/Shift Check
   orders and delete/direct with independent connections, deterministic latches and an observed
-  blocking edge. The shared class XML and CI minimum are `20/0/0/0`. Guest submit contention,
+  blocking edge. The shared class XML and CI minimum are `26/0/0/0`. Guest submit contention,
   unavailable typed rejection, zero-write stale carts, re-enable recovery and immutable snapshots
   remain green. **NO_MIGRATION_EXPECTED**.
 
@@ -540,7 +596,7 @@ Audit payloads must use safe ids and old/new safe fields only. Do not include ra
 
 - Menu/options/stop-list spec: `UPDATED`.
 - Menu constructor implementation: `PARTIAL` unless route/screen/test evidence proves full coverage.
-- Option modifiers in orders: structured selected-option parity is documented as `CLOSED / staging smoke passed`; option price and option availability audits are release-closed; broader multi-group modifier model remains `PARTIAL / needs verification`.
+- Option modifiers in orders: structured selected-option parity is documented as `CLOSED / staging smoke passed`; option price and option availability audits are release-closed; option create audit is locally implemented and awaits review/CI/staging; broader multi-group modifier model remains `PARTIAL / needs verification`.
 - Staff stop-list parity: current docs say item/option availability is aligned between Bot and Mini App; per-venue `staff_stoplist_enabled` remains `FUTURE`.
 - Public info-section / Photo-PDF-menu media: `PARTIAL / BOT-FIRST`; Guest rendering and both
   Preview modes work through guarded/scoped proxies, while Venue Mini App upload/manage is
@@ -577,6 +633,10 @@ Audit payloads must use safe ids and old/new safe fields only. Do not include ra
   BASE-PROFILE NORMALIZATION INCLUDED / DONE / MVP / STAGING-SMOKE-PASSED**. Current schema is
   sufficient; keep direct-delete, normalization, RBAC, audit, history and stale-cart scenarios in
   regression.
+- Option create audit: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION CREATE AUDIT / MVP IMPLEMENTED /
+  LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. Exact writer inventory, atomic direct/
+  bulk/normalization behavior, per-insert audit cardinality, RBAC/privacy and 26-test PostgreSQL gate
+  are recorded above. Mini App build and Playwright `169/169` passed; CI and staging are not yet claimed.
 - Option rename audit: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION RENAME AUDIT / DONE / MVP /
   STAGING-SMOKE-PASSED**. Focused backend, PostgreSQL lock, compile/lint, Mini App build and
   Playwright `139/139` were green locally for that release slice; its bounded cross-surface staging

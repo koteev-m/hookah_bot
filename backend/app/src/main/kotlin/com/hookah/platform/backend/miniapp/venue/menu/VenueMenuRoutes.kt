@@ -269,11 +269,12 @@ fun Route.venueMenuRoutes(
                 call.parameters["id"]?.toLongOrNull()
                     ?: throw InvalidInputException("itemId must be a number")
             val result =
-                HookahFlavorProfileService.applyMissingBaseProfiles(
-                    venueMenuRepository = venueMenuRepository,
+                venueMenuRepository.applyMissingBaseProfiles(
                     venueId = venueId,
                     itemId = itemId,
-                )
+                    actorUserId = userId,
+                    source = MenuOptionCreateSource.VENUE_MINI_APP,
+                ) ?: throw InvalidInputException("itemId is invalid")
             call.respond(
                 ApplyBaseFlavorProfilesResponse(
                     itemId = result.itemId,
@@ -325,6 +326,8 @@ fun Route.venueMenuRoutes(
                     name = name,
                     priceDeltaMinor = payload.priceDeltaMinor,
                     isAvailable = payload.isAvailable,
+                    actorUserId = userId,
+                    source = MenuOptionCreateSource.VENUE_MINI_APP,
                 ) ?: throw InvalidInputException("itemId is invalid")
             call.respond(created.toDto())
         }

@@ -26,6 +26,7 @@ const val MENU_SHIFT_CHECK_COMPLETED_AUDIT_ACTION = "MENU_SHIFT_CHECK_COMPLETED"
 const val MENU_ITEM_DELETED_AUDIT_ACTION = "MENU_ITEM_DELETED"
 const val MENU_CATEGORY_DELETED_AUDIT_ACTION = "MENU_CATEGORY_DELETED"
 const val MENU_OPTION_DELETED_AUDIT_ACTION = "MENU_OPTION_DELETED"
+const val MENU_OPTION_CREATED_AUDIT_ACTION = "MENU_OPTION_CREATED"
 const val MENU_OPTION_RENAMED_AUDIT_ACTION = "MENU_OPTION_RENAMED"
 const val MENU_OPTION_PRICE_CHANGED_AUDIT_ACTION = "MENU_OPTION_PRICE_CHANGED"
 const val MENU_OPTION_AVAILABILITY_CHANGED_AUDIT_ACTION = "MENU_OPTION_AVAILABILITY_CHANGED"
@@ -51,6 +52,11 @@ enum class MenuCategoryDeleteSource {
 }
 
 enum class MenuOptionDeleteSource {
+    VENUE_MINI_APP,
+    TELEGRAM_BOT,
+}
+
+enum class MenuOptionCreateSource {
     VENUE_MINI_APP,
     TELEGRAM_BOT,
 }
@@ -1003,6 +1009,8 @@ class VenueMenuRepository(
         name: String,
         priceDeltaMinor: Long,
         isAvailable: Boolean,
+        actorUserId: Long,
+        source: MenuOptionCreateSource,
     ): VenueMenuOption? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
@@ -1020,7 +1028,7 @@ class VenueMenuRepository(
                         if (itemScope.isHookahMenuSection()) {
                             ensureCanonicalProfileIsUnique(lockedOptions, name)
                         }
-                        val created =
+                        val inserted =
                             insertOption(
                                 connection = connection,
                                 venueId = venueId,
@@ -1030,8 +1038,88 @@ class VenueMenuRepository(
                                 isAvailable = isAvailable,
                                 sortOrder = lockedOptions.maxOfOrNull { it.sortOrder }?.plus(1) ?: 0,
                             )
+                        auditMenuOptionCreate(
+                            connection = connection,
+                            venueId = venueId,
+                            itemId = itemId,
+                            optionId = inserted.id,
+                            actorUserId = actorUserId,
+                            source = source,
+                        )
+                        val created =
+                            loadOption(connection, inserted.id, venueId)
+                                ?: throw SQLException("Inserted menu option is missing", "40001")
                         connection.commit()
                         created
+                    } catch (e: Exception) {
+                        connection.rollback()
+                        throw e
+                    } finally {
+                        connection.autoCommit = originalAutoCommit
+                    }
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    suspend fun applyMissingBaseProfiles(
+        venueId: Long,
+        itemId: Long,
+        actorUserId: Long,
+        source: MenuOptionCreateSource,
+    ): HookahBaseFlavorProfileApplyResult? {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    val originalAutoCommit = connection.autoCommit
+                    connection.autoCommit = false
+                    try {
+                        val itemScope = lockItemForOptionMutation(connection, venueId, itemId)
+                        if (itemScope == null) {
+                            connection.commit()
+                            return@use null
+                        }
+                        if (!itemScope.isHookahFlavorProfileItem()) {
+                            throw InvalidInputException("base flavor profiles are available only for hookah items")
+                        }
+                        val lockedOptions = loadItemOptionsForUpdate(connection, venueId, itemId)
+                        val missingProfiles =
+                            HookahFlavorProfileService.missingBaseProfiles(
+                                lockedOptions.map { it.name },
+                            )
+                        var nextSortOrder = lockedOptions.maxOfOrNull { it.sortOrder }?.plus(1) ?: 0
+                        missingProfiles.forEach { profileName ->
+                            val created =
+                                insertOption(
+                                    connection = connection,
+                                    venueId = venueId,
+                                    itemId = itemId,
+                                    name = profileName,
+                                    priceDeltaMinor = 0,
+                                    isAvailable = true,
+                                    sortOrder = nextSortOrder,
+                                )
+                            auditMenuOptionCreate(
+                                connection = connection,
+                                venueId = venueId,
+                                itemId = itemId,
+                                optionId = created.id,
+                                actorUserId = actorUserId,
+                                source = source,
+                            )
+                            nextSortOrder += 1
+                        }
+                        val options = loadItemOptions(connection, venueId, itemId)
+                        connection.commit()
+                        HookahBaseFlavorProfileApplyResult(
+                            itemId = itemId,
+                            addedCount = missingProfiles.size,
+                            existingCount = HookahFlavorProfileService.baseProfiles.size - missingProfiles.size,
+                            options = options,
+                        )
                     } catch (e: Exception) {
                         connection.rollback()
                         throw e
@@ -1291,7 +1379,8 @@ class VenueMenuRepository(
         venueId: Long,
         itemId: Long,
         actorUserId: Long,
-        source: MenuOptionDeleteSource,
+        deleteSource: MenuOptionDeleteSource,
+        createSource: MenuOptionCreateSource,
     ): HookahFlavorProfileNormalizationResult? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
@@ -1327,18 +1416,21 @@ class VenueMenuRepository(
                         }
 
                         var nextSortOrder = preservedOptions.maxOfOrNull { it.sortOrder }?.plus(1) ?: 0
-                        missingProfiles.forEach { profileName ->
-                            insertOption(
-                                connection = connection,
-                                venueId = venueId,
-                                itemId = itemId,
-                                name = profileName,
-                                priceDeltaMinor = 0,
-                                isAvailable = true,
-                                sortOrder = nextSortOrder,
-                            )
-                            nextSortOrder += 1
-                        }
+                        val createdOptions =
+                            missingProfiles.map { profileName ->
+                                val created =
+                                    insertOption(
+                                        connection = connection,
+                                        venueId = venueId,
+                                        itemId = itemId,
+                                        name = profileName,
+                                        priceDeltaMinor = 0,
+                                        isAvailable = true,
+                                        sortOrder = nextSortOrder,
+                                    )
+                                nextSortOrder += 1
+                                created
+                            }
 
                         obsoleteOptions.forEach { option ->
                             auditMenuOptionDelete(
@@ -1347,7 +1439,17 @@ class VenueMenuRepository(
                                 itemId = itemId,
                                 optionId = option.id,
                                 actorUserId = actorUserId,
-                                source = source,
+                                source = deleteSource,
+                            )
+                        }
+                        createdOptions.forEach { option ->
+                            auditMenuOptionCreate(
+                                connection = connection,
+                                venueId = venueId,
+                                itemId = itemId,
+                                optionId = option.id,
+                                actorUserId = actorUserId,
+                                source = createSource,
                             )
                         }
                         connection.commit()
@@ -1392,10 +1494,10 @@ class VenueMenuRepository(
         venueId: Long,
         itemId: Long,
     ): OptionItemMutationScope? {
-        val categoryId =
+        val itemReference =
             connection.prepareStatement(
                 """
-                SELECT category_id
+                SELECT category_id, item_type
                 FROM menu_items
                 WHERE id = ? AND venue_id = ?
                 FOR UPDATE
@@ -1404,7 +1506,14 @@ class VenueMenuRepository(
                 statement.setLong(1, itemId)
                 statement.setLong(2, venueId)
                 statement.executeQuery().use { rs ->
-                    if (rs.next()) rs.getLong("category_id") else null
+                    if (rs.next()) {
+                        OptionItemCategoryReference(
+                            categoryId = rs.getLong("category_id"),
+                            itemType = MenuSemanticType.nullableFromDb(rs.getString("item_type")),
+                        )
+                    } else {
+                        null
+                    }
                 }
             } ?: return null
         return connection.prepareStatement(
@@ -1414,7 +1523,7 @@ class VenueMenuRepository(
             WHERE id = ? AND venue_id = ?
             """.trimIndent(),
         ).use { statement ->
-            statement.setLong(1, categoryId)
+            statement.setLong(1, itemReference.categoryId)
             statement.setLong(2, venueId)
             statement.executeQuery().use { rs ->
                 if (!rs.next()) {
@@ -1423,10 +1532,33 @@ class VenueMenuRepository(
                 OptionItemMutationScope(
                     categoryName = rs.getString("name"),
                     categoryType = MenuSemanticType.fromDb(rs.getString("category_type")),
+                    itemType = itemReference.itemType,
                 )
             }
         }
     }
+
+    private fun loadItemOptions(
+        connection: Connection,
+        venueId: Long,
+        itemId: Long,
+    ): List<VenueMenuOption> =
+        connection.prepareStatement(
+            """
+            SELECT id, venue_id, item_id, name, price_delta_minor, is_available, sort_order
+            FROM menu_item_options
+            WHERE venue_id = ? AND item_id = ?
+            ORDER BY sort_order, id
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, itemId)
+            statement.executeQuery().use { rs ->
+                buildList {
+                    while (rs.next()) add(mapOption(rs))
+                }
+            }
+        }
 
     private fun loadItemOptionsForUpdate(
         connection: Connection,
@@ -1473,9 +1605,22 @@ class VenueMenuRepository(
     private data class OptionItemMutationScope(
         val categoryName: String,
         val categoryType: MenuSemanticType,
+        val itemType: MenuSemanticType?,
     ) {
         fun isHookahMenuSection(): Boolean = HookahFlavorProfileService.isHookahMenuSection(categoryName, categoryType)
+
+        fun isHookahFlavorProfileItem(): Boolean =
+            itemType == MenuSemanticType.HOOKAH ||
+                (
+                    itemType == null &&
+                        HookahFlavorProfileService.isHookahMenuSection(categoryName, categoryType)
+                )
     }
+
+    private data class OptionItemCategoryReference(
+        val categoryId: Long,
+        val itemType: MenuSemanticType?,
+    )
 
     private fun insertOption(
         connection: Connection,
@@ -1557,6 +1702,30 @@ class VenueMenuRepository(
             entityId = optionId,
             payload =
                 buildMenuOptionDeleteAuditPayload(
+                    venueId = venueId,
+                    itemId = itemId,
+                    optionId = optionId,
+                    source = source,
+                ),
+        )
+    }
+
+    private fun auditMenuOptionCreate(
+        connection: Connection,
+        venueId: Long,
+        itemId: Long,
+        optionId: Long,
+        actorUserId: Long,
+        source: MenuOptionCreateSource,
+    ) {
+        auditLogWriter.appendJson(
+            connection = connection,
+            actorUserId = actorUserId,
+            action = MENU_OPTION_CREATED_AUDIT_ACTION,
+            entityType = "menu_item_option",
+            entityId = optionId,
+            payload =
+                buildMenuOptionCreateAuditPayload(
                     venueId = venueId,
                     itemId = itemId,
                     optionId = optionId,
@@ -2570,6 +2739,18 @@ internal fun buildMenuOptionDeleteAuditPayload(
     itemId: Long,
     optionId: Long,
     source: MenuOptionDeleteSource,
+) = buildJsonObject {
+    put("venueId", venueId)
+    put("itemId", itemId)
+    put("optionId", optionId)
+    put("source", source.name)
+}
+
+internal fun buildMenuOptionCreateAuditPayload(
+    venueId: Long,
+    itemId: Long,
+    optionId: Long,
+    source: MenuOptionCreateSource,
 ) = buildJsonObject {
     put("venueId", venueId)
     put("itemId", itemId)

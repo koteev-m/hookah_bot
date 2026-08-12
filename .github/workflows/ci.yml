@@ -218,7 +218,7 @@ jobs:
                       "TEST-com.hookah.platform.backend.miniapp.venue.menu."
                       "VenueMenuOptionNormalizationConcurrencyPostgresTest.xml"
                   ),
-                  20,
+                  26,
               ),
               (
                   "guest order idempotency concurrency",
