@@ -754,8 +754,8 @@ records fully green GitHub Actions, staging deploy and these bounded staging sce
 
 ### Menu Option Create Audit quality gate
 
-Status: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION CREATE AUDIT / MVP IMPLEMENTED /
-LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+Status: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION CREATE AUDIT / DONE / MVP /
+STAGING-SMOKE-PASSED**.
 
 Required regression coverage:
 
@@ -795,12 +795,38 @@ Mandatory CI selectors are `VenueMenuRepositoryTest`, `VenueMenuRoutesTest`,
 have tests `> 0`, and have zero skipped/failures/errors; the PostgreSQL XML minimum is 26. No new
 workflow may replace or silently skip these gates.
 
-Recorded local evidence (`tests/skipped/failures/errors`): repository `41/0/0/0`, routes
-`37/0/0/0`, Telegram `538/0/0/0`, PostgreSQL `26/0/0/0`; `compileKotlin`, `ktlintCheck`, Mini App
-production build and full deterministic Playwright `169/169` passed. `git diff --check` remains a
-handoff gate. Schema verdict: **NO_MIGRATION_EXPECTED**. Independent review, green Actions, staging
-deploy and bounded smoke are still required; the broader Menu/Dangerous Action Audit remains
-`PARTIAL`.
+Automated/local/CI contract evidence (`tests/skipped/failures/errors` where recorded): repository
+`41/0/0/0`, routes `37/0/0/0`, Telegram `538/0/0/0`, route/security `1137`, PostgreSQL
+`26/0/0/0` and Mini App E2E `169/169`; `compileKotlin`, `ktlintCheck` and the Mini App production
+build passed. Direct, bulk and normalization full rollback, no duplicate canonical rows and
+deterministic locking are automated coverage, not manual staging smoke. `git diff --check` remains a
+handoff gate. Schema verdict: **NO_MIGRATION_EXPECTED**.
+
+For current release HEAD `0e592ff`, the user confirmed fully green GitHub Actions, staging deploy
+and this bounded smoke. Local GitHub CLI did not independently verify Actions because its active
+token is invalid. Confirmed staging smoke only:
+
+1. Owner created one option through the Mini App.
+2. Exactly one `MENU_OPTION_CREATED` was created.
+3. The Mini App audit source was `VENUE_MINI_APP`.
+4. Manager created one option through Telegram.
+5. Exactly one `MENU_OPTION_CREATED` was created.
+6. The Telegram audit source was `TELEGRAM_BOT`.
+7. Staff did not receive permission to create options.
+8. Bulk add-missing-base-profiles added only missing profiles.
+9. Its create-audit count equalled the number of physically created profiles.
+10. Custom options remained preserved.
+11. Existing canonical profiles and their price and availability were not reset.
+12. A repeated bulk wrote zero options and zero create audits.
+13. Normalization restored a missing profile.
+14. The restored profile wrote exactly one create audit.
+15. A repeated normalization wrote zero options and zero create audits.
+16. Audit payload contained no names, prices, availability or PII.
+17. The working Guest menu was not damaged.
+18. Cleanup completed normally.
+
+No rollback/failure injection or concurrency case is claimed as staging smoke. The broader
+Menu/Dangerous Action Audit remains `PARTIAL`.
 
 ### Menu Option Rename Audit quality gate
 
@@ -836,8 +862,9 @@ result recorded for that released rename slice is `8/0/0/0`, `14/0/0/0`, `2/0/0/
 the current option-class CI minimum is 26 after the create-audit extension. Green Actions, staging
 deploy and bounded cross-surface
 RBAC/audit/privacy/concurrency/history smoke are recorded functionally passed; schema verdict is
-**NO_MIGRATION_EXPECTED**. That rename slice does not itself close option create or availability,
-which has the separate local gate below; item mutations, broader audit and media remain open.
+**NO_MIGRATION_EXPECTED**. That rename slice does not itself close option create or availability;
+option create has its separate release-closed contract, while item mutations, broader audit and
+media remain open.
 
 ### Menu Option Price Audit quality gate
 
@@ -2044,10 +2071,11 @@ Telegram/staff-chat:
   ATOMIC BASE-PROFILE NORMALIZATION INCLUDED / DONE / MVP / STAGING-SMOKE-PASSED**. Focused local,
   mandatory PostgreSQL, green Actions, staging deploy and the bounded 17-scenario smoke are
   recorded complete; keep the contract in regression.
-- Menu option create audit: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION CREATE AUDIT /
-  MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. Repository
-  `41/0/0/0`, routes `37/0/0/0`, Telegram `538/0/0/0`, PostgreSQL `26/0/0/0`, compile/ktlint,
-  Mini App build and Playwright `169/169` pass locally; CI and staging remain open. No migration.
+- Menu option create audit: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION CREATE AUDIT / DONE / MVP /
+  STAGING-SMOKE-PASSED**. Repository `41/0/0/0`, routes `37/0/0/0`, Telegram `538/0/0/0`,
+  route/security `1137`, PostgreSQL `26/0/0/0`, compile/ktlint, Mini App build and Playwright
+  `169/169` are automated evidence; user-confirmed Actions, staging deploy and bounded smoke close
+  only this contract. No migration.
 - Menu option rename audit: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION RENAME AUDIT / DONE / MVP /
   STAGING-SMOKE-PASSED**. The now-26-test shared menu concurrency XML gate, focused cross-surface tests,
   privacy/rollback checks, green Actions, staging deploy and bounded smoke are recorded complete.
