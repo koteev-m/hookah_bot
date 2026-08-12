@@ -2,7 +2,7 @@
 
 Дата актуализации: 2026-08-12.
 
-Статус: **current product reference / SPEC UPDATED**. Guest stale-menu cart recovery is **GUEST CART STALE MENU SELECTION RECOVERY / REMOVED OR UNAVAILABLE ITEMS AND OPTIONS / PAYLOAD-BOUND IDEMPOTENCY + ATOMIC REJECTION / DONE / MVP / STAGING-SMOKE-PASSED**; its **ITEM-LEVEL ACTION AND COPY POLISH / DONE / MVP / STAGING-SMOKE-PASSED**. Menu/options/flavors parity is documented as smoke-closed for the structured selected-option flow. The bounded shift-check slice is **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**; menu item, empty-category and option hard-delete audits are release-closed bounded MVPs. Menu option hard delete includes atomic Telegram base-profile normalization and is **DONE / MVP / STAGING-SMOKE-PASSED**. Menu option rename audit is **DANGEROUS ACTION AUDIT SLICE / MENU OPTION RENAME AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Menu option price audit is **DANGEROUS ACTION AUDIT SLICE / MENU OPTION PRICE AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Menu option availability audit is **DANGEROUS ACTION AUDIT SLICE / MENU OPTION AVAILABILITY AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Menu item availability audit is **DANGEROUS ACTION AUDIT SLICE / MENU ITEM AVAILABILITY AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Menu option create audit is **DANGEROUS ACTION AUDIT SLICE / MENU OPTION CREATE AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Menu item create audit is **DANGEROUS ACTION AUDIT SLICE / MENU ITEM CREATE AUDIT / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. The broader menu constructor, media/top-list governance, remaining audit coverage and permission parity remain **PARTIAL** unless a specific implementation task proves them.
+Статус: **current product reference / SPEC UPDATED**. Guest stale-menu cart recovery is **GUEST CART STALE MENU SELECTION RECOVERY / REMOVED OR UNAVAILABLE ITEMS AND OPTIONS / PAYLOAD-BOUND IDEMPOTENCY + ATOMIC REJECTION / DONE / MVP / STAGING-SMOKE-PASSED**; its **ITEM-LEVEL ACTION AND COPY POLISH / DONE / MVP / STAGING-SMOKE-PASSED**. Menu/options/flavors parity is documented as smoke-closed for the structured selected-option flow. The bounded shift-check slice is **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**; menu item, empty-category and option hard-delete audits are release-closed bounded MVPs. Menu option hard delete includes atomic Telegram base-profile normalization and is **DONE / MVP / STAGING-SMOKE-PASSED**. Menu option rename audit is **DANGEROUS ACTION AUDIT SLICE / MENU OPTION RENAME AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Menu option price audit is **DANGEROUS ACTION AUDIT SLICE / MENU OPTION PRICE AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Menu option availability audit is **DANGEROUS ACTION AUDIT SLICE / MENU OPTION AVAILABILITY AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Menu item availability audit is **DANGEROUS ACTION AUDIT SLICE / MENU ITEM AVAILABILITY AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Menu option create audit is **DANGEROUS ACTION AUDIT SLICE / MENU OPTION CREATE AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Menu item create audit is **DANGEROUS ACTION AUDIT SLICE / MENU ITEM CREATE AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. The broader menu constructor, media/top-list governance, remaining audit coverage and permission parity remain **PARTIAL** unless a specific implementation task proves them.
 
 ## Core Rule
 
@@ -32,7 +32,7 @@ Menu permissions are governed by `docs/SECURITY_RBAC_MATRIX.md`; Venue Mode oper
 | Area | Current implementation from docs | Target product model | Gap / risk / future note |
 | --- | --- | --- | --- |
 | Category CRUD | Venue menu routes and Mini App menu basics exist; full parity needs verification. | Owner manages category create/edit/reorder/archive; Manager only if product explicitly grants structure management. | Menu constructor implementation remains `PARTIAL`. |
-| Item CRUD | Structured menu items, prices and availability exist; Owner/Manager item editing is documented, Staff denied for structure. Existing Mini App and Telegram item hard delete writes one transaction-bound safe audit; item create is locally implemented with one audit per committed row. | Owner manages item create/edit/reorder/archive, price, visibility, featured and media. | Item hard-delete audit is `DONE / MVP / STAGING-SMOKE-PASSED`; item-create audit awaits review/CI/staging, while price/name/type/category/description/currency audit families stay open. |
+| Item CRUD | Structured menu items, prices and availability exist; Owner/Manager item editing is documented, Staff denied for structure. Existing Mini App and Telegram item hard delete and item create each write one transaction-bound safe audit per committed physical row. | Owner manages item create/edit/reorder/archive, price, visibility, featured and media. | Item hard-delete and item-create audits are `DONE / MVP / STAGING-SMOKE-PASSED`; price/name/type/category/description/currency audit families stay open. |
 | Item availability | Owner/Manager/Staff direct Mini App and Telegram changes write one transaction-bound safe audit per real delta; Owner/Manager compound PATCH audits only its availability delta. | Availability toggle is operational state, fast and reversible, with safe actor/source evidence. | Release-closed only for this bounded audit contract. Per-venue `staff_stoplist_enabled` stays future. |
 | Option group/value support | Guest/Menu Options & Flavors parity is smoke-closed: item-scoped options/flavors, base profiles and selected-option submit exist. Atomic Telegram base-profile normalization and application-level locked canonical-profile collision checks are release-closed for their bounded contract. | General `OPTION_GROUP`/`OPTION_VALUE` model supports required single/multi modifiers with min/max validation. | Broader non-hookah modifier UX, DB-level uniqueness and Mini App atomic bulk apply remain separate. |
 | Option/value availability | Item option/flavor stop-list is documented and smoked. Preview/submit now identify own-cart removed/unavailable item or option lines with a typed server contract. | Guest sees only available choices or disabled copy by venue policy; stale preview/submit is rejected with actionable line recovery. | Keep option ownership, foreign-selection privacy, all-issues and stale availability tests in regression. |
@@ -42,7 +42,7 @@ Menu permissions are governed by `docs/SECURITY_RBAC_MATRIX.md`; Venue Mode oper
 | Featured/top-list | Product spec requires featured/top list; implementation evidence is partial. | Venue manually pins items; not paid placement. | Paid placement/boosting belongs to Growth/Platform, not menu featured. |
 | PDF/media | `Фото-меню` exists as a flat info/media section and is separate from structured order menu. Bot OWNER/MANAGER can add image/PDF attachments, delete one and hide/show the whole section. | PDF/photo menu is view-only; no direct order unless item exists in structured menu. | Venue Mini App authoring/upload is missing; direct replace, per-attachment hide and optional subsections remain future. |
 | Shift check | **DONE / MVP / STAGING-SMOKE-PASSED**: OWNER/MANAGER Venue Mini App uses saved menu state, readiness counts, search/filters, local draft, a separate mass-selection mode, confirmation summary and one atomic request. STAFF has no entry/direct permission. | Venue Mode keeps optimistic availability checks, one bounded batch, no-op completion evidence and recoverable stale-state handling. | Keep role/tenant, atomicity, stale-state, Guest availability and Telegram stop-list parity in regression; Telegram shift-check UI and a queryable history table are not part of Phase 1. |
-| Audit logs | `MENU_SHIFT_CHECK_COMPLETED` is atomic for a successful batch. Hard-delete, released option mutation audits, item availability and option create are release-closed. Item create is locally validated as one transaction-bound `MENU_ITEM_CREATED` per physical insert. | Price changes, archive/delete, mass stop-list, media removal, option schema change and Staff stop-list toggles write safe audit. | Item create awaits review/CI/staging; item price/name/type/category/description/currency and other menu audit families remain open. The broader audit stays `PARTIAL`. |
+| Audit logs | `MENU_SHIFT_CHECK_COMPLETED` is atomic for a successful batch. Hard-delete, released option mutation audits, item availability, option create and item create are release-closed. Item create writes one transaction-bound `MENU_ITEM_CREATED` per physical insert. | Price changes, archive/delete, mass stop-list, media removal, option schema change and Staff stop-list toggles write safe audit. | Item price/name/type/category/description/currency and other menu audit families remain open. The broader audit stays `PARTIAL`. |
 | Telegram vs Mini App parity | Options/flavors parity is smoke-closed; some Telegram owner flows remain richer. | Required menu/stop-list operations are aligned across Bot and Mini App or documented as exceptions. | Keep cross-surface parity smoke for Staff stop-list and selected options. |
 | Staff stop-list permissions | Current docs say STAFF has `MENU_AVAILABILITY_MANAGE` and can toggle item/option availability; STAFF cannot edit structure/prices/options schema. | Recommended MVP: Staff cannot change menu structure/prices; Staff stop-list works only when `staff_stoplist_enabled` or equivalent policy allows it, and is identical in Bot/Mini App. | Current global Staff stop-list permission is acceptable only if intentionally enabled and audited; per-venue toggle remains target/future. |
 
@@ -455,9 +455,10 @@ planner/helper and opens no authoritative transaction.
 - Automated/local/CI contract evidence is repository `41/0/0/0`, routes `37/0/0/0`, Telegram
   `538/0/0/0`, route/security `1137`, Testcontainers PostgreSQL `26/0/0/0` and Mini App E2E
   `169/169`; full direct/bulk/normalization rollback, no duplicate canonical rows and deterministic
-  locking are automated evidence, not manual staging smoke. The PostgreSQL class uses production
-  migrations/repositories, independent connections, deterministic barriers and observed blocking;
-  its mandatory CI minimum is 26. `compileKotlin`, `ktlintCheck` and the Mini App production build
+  locking are automated evidence, not manual staging smoke. The option-create release recorded 26
+  PostgreSQL tests; the shared current XML gate is now 31 after item-create coverage. The class uses
+  production migrations/repositories, independent connections, deterministic barriers and observed blocking;
+  `compileKotlin`, `ktlintCheck` and the Mini App production build
   also passed. No workflow or migration was added.
 - For current release HEAD `0e592ff`, the user confirmed fully green GitHub Actions, staging deploy
   and bounded smoke. Local GitHub CLI did not independently verify Actions because its active token
@@ -471,8 +472,8 @@ planner/helper and opens no authoritative transaction.
 This closes no broader Menu/Dangerous Action Audit program and does not change rename, price,
 availability, item, Shift Check, Guest cart/order, promotions or media behavior.
 
-Item create audit status: **DANGEROUS ACTION AUDIT SLICE / MENU ITEM CREATE AUDIT / MVP
-IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+Item create audit status: **DANGEROUS ACTION AUDIT SLICE / MENU ITEM CREATE AUDIT / DONE / MVP /
+STAGING-SMOKE-PASSED**.
 
 Production writer inventory:
 
@@ -504,15 +505,52 @@ unaudited production overload exists. Item creation does not create options.
   options, promotions, cart/order, raw request/initData, Telegram payload/identity, secrets and PII
   are excluded from the audit and new logs. Existing initial values, DTOs, form/dialog behavior and
   absence of automatic option creation are unchanged.
-- Local evidence is repository `44/0/0/0`, routes `40/0/0/0`, Telegram `542/0/0/0`, Testcontainers
+- Automated evidence is repository `44/0/0/0`, routes `40/0/0/0`, Telegram `542/0/0/0`, Testcontainers
   PostgreSQL `31/0/0/0`, compile/ktlint, Mini App build and full Playwright `169/169`. Deterministic
   PostgreSQL coverage uses independent PIDs/latches and observed blocking for Mini/Mini,
   Mini/Telegram, create/reorder and concurrent audit failure; create/category-delete verifies the
   current `NOWAIT` loser. Committed item count equals create-audit count and rollback leaves no
-  unaudited item. **NO_MIGRATION_EXPECTED**; review, Actions, staging deploy and bounded smoke remain.
+  unaudited item. User-confirmed GitHub Actions, staging deploy and bounded Owner/Manager/Staff/
+  duplicate-name/privacy/Guest-menu smoke passed; cleanup completed normally. **NO_MIGRATION_EXPECTED**.
 
 This closes no item update, option/category create, Guest cart/order, promotions, media or broader
 Menu/Dangerous Action Audit contract.
+
+### Current full Menu Management mutation inventory
+
+Verified at current HEAD `4d3ef651c2a3e12b6f018ddea43bd63da4d7c4b0`. `VenueMenuRepository` is the
+only main-source production SQL owner for `menu_categories`, `menu_items` and `menu_item_options`.
+Migration, test and staging seed SQL are not authenticated runtime writers. `ADMIN` remains the legacy
+Manager alias; Mini App `MENU_MANAGE` and Telegram `hasVenueAdminOrOwner` allow Owner/Manager only,
+unless a row below says availability.
+
+| Entity/family | Operation and physical SQL writer | Mini App / Telegram caller | Actor, permission, source | Current transaction and locks | Audit, no-op and rollback | PostgreSQL / surface status |
+| --- | --- | --- | --- | --- | --- | --- |
+| Category | Create: `createCategory` / direct `INSERT INTO menu_categories` | `POST /menu/categories`; add-section dialog; owner-menu default seeding | Session or Telegram owner/manager; repository currently receives no actor/source | Autocommit; `MAX(sort_order)+1`; no serialization lock | No audit; manual duplicate names insert; default seed skips names from its read; statement failure only | No category-create contention/audit coverage; remaining |
+| Category | Rename: `updateCategory` / direct `UPDATE name` | `PATCH /menu/categories/{id}`; rename dialog | Owner/Manager; no repository actor/source | Autocommit; no lock | No audit; same name still writes timestamp; SQL failure is statement-local | Route/Telegram path exists, no focused PostgreSQL audit coverage; remaining |
+| Category | Semantic type: `updateCategoryType` / direct `UPDATE category_type` | Same Mini App PATCH; Telegram type callback | Owner/Manager; no repository actor/source | Autocommit; no lock | No audit; same type writes timestamp | H2/read coverage only; remaining |
+| Category | Reorder: `updateCategoryOrder` / batch `UPDATE sort_order` | `POST /menu/reorder/categories`; no Telegram caller | Mini App Owner/Manager; no source | Repository transaction; membership/count only, no row lock | No audit; valid same/partial list writes; batch failure rolls back | No direct PostgreSQL reorder/audit coverage; remaining |
+| Category | Hard delete: `deleteCategory` / `DELETE` | Mini App delete; Telegram callback | Server actor/source; Owner/Manager | One transaction; promotion locks then category `NOWAIT` | `MENU_CATEGORY_DELETED`; missing/non-empty/lock loser zero; audit failure rolls back | Repository/routes/Telegram/PostgreSQL; closed |
+| Item | Create: private `insertItem` via `createItem` / `INSERT` | Mini App POST; Telegram add-item dialog | Server actor/source; Owner/Manager | One transaction; category `FOR UPDATE` | `MENU_ITEM_CREATED`; one row/one audit; duplicate names independent; audit failure rolls back | Repository/routes/Telegram/31-test PostgreSQL; closed |
+| Item | Metadata/commercial PATCH: `updateItem` / compound `UPDATE` | Mini App PATCH; Telegram rename and price dialogs | Server actor/source supplied, Owner/Manager | One transaction; item `FOR UPDATE`, category existence checks | Only availability is audited; exact no-op returns existing; SQL or availability-audit failure rolls back all fields | Compound availability PostgreSQL coverage; metadata/price/move audit gap remains |
+| Item | Telegram semantic type: `updateItemType` / direct `UPDATE item_type` | No dedicated Mini App caller (its PATCH uses `updateItem`); Telegram type callback | Owner/Manager; no repository actor/source | Autocommit; no lock | No audit; same type writes timestamp | No focused PostgreSQL audit coverage; remaining |
+| Item | Availability: `setItemAvailability` / `UPDATE is_available` | Mini App direct/PATCH; Telegram stop-list | Server actor/source; Owner/Manager/Staff direct, Owner/Manager compound | One transaction; item `FOR UPDATE` | `MENU_ITEM_AVAILABILITY_CHANGED`; DB-current no-op; audit failure rolls back | Repository/routes/Telegram/PostgreSQL; closed |
+| Item | Reorder: `updateItemOrder` / batch `UPDATE sort_order` | `POST /menu/reorder/items`; no Telegram caller | Mini App Owner/Manager; no source | One transaction; category `FOR UPDATE`, count check | No audit; valid same list writes; batch failure rolls back | Create/reorder lock coverage exists, but no reorder audit coverage; remaining |
+| Item | Hard delete: `deleteItem` / `DELETE` | Mini App delete; Telegram callback | Server actor/source; Owner/Manager | One transaction; promotion locks and item `NOWAIT` | `MENU_ITEM_DELETED`; missing/blocked/lock loser zero; audit failure rolls back | Repository/routes/Telegram/PostgreSQL; closed |
+| Option | Create: private `insertOption` via direct, base-profile bulk and normalization | Mini App direct/bulk; Telegram direct/dialog/bulk/normalization | Server actor/source; Owner/Manager | Item lock and option rows in one transaction | `MENU_OPTION_CREATED`; duplicate canonical/no-op/failure rules are closed | Repository/routes/Telegram/31-test PostgreSQL; closed |
+| Option | Rename/price/compound availability: `updateOption` / compound `UPDATE` | Mini App PATCH; Telegram rename (price is Mini App only) | Server actor/source; Owner/Manager | One transaction; item and options ordered by id | Separate released audits and rollback for each real changed family | Repository/routes/Telegram/PostgreSQL; closed |
+| Option | Direct availability / delete: `setOptionAvailability`, `deleteLockedOption` | Mini App direct; Telegram stop-list/delete | Server actor/source; availability includes Staff | Item/options lock transaction | Released availability/delete audit; exact no-op/rollback | Repository/routes/Telegram/PostgreSQL; closed |
+| Option batch | Base-profile apply and normalization | Mini App apply; Telegram apply/normalization | Server actor/source; Owner/Manager | One item/options transaction | Per-row create/delete audits; empty plan is no-op; full rollback | Repository/Telegram/PostgreSQL; closed |
+| Batch | Shift Check: `completeShiftCheck` / item+option batch updates | Mini App only; no Telegram Shift Check UI | Owner/Manager only; server actor | One transaction; item/option `FOR UPDATE` | One aggregate `MENU_SHIFT_CHECK_COMPLETED`, including successful no-op; rollback on stale/failure | Repository/routes/PostgreSQL; closed |
+
+No option reorder/sort SQL writer or other production menu mutation caller exists. The current remaining
+contract is therefore one closure epic, not a second backlog.
+
+For that epic, safe payloads are exact: category/item rename uses `venueId`, entity id and `source`
+only; category/item type adds finite old/new type; item price/currency adds old/new authoritative DB
+values; item move adds old/new category ids; reorder adds scope, count and deterministic old/new
+ordered-id hashes. Names, description, raw request/initData/Telegram payload, media and PII remain
+excluded; hashes replace potentially unbounded order lists.
 
 Option rename status: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION RENAME AUDIT / DONE / MVP /
 STAGING-SMOKE-PASSED**.
@@ -534,7 +572,7 @@ STAGING-SMOKE-PASSED**.
 - Existing hookah-only normalized canonical collision policy, self-exclusion, non-hookah duplicate
   behavior, historical snapshots and current-value resolution for future submit are unchanged.
   Real PostgreSQL coverage serializes rename with rename, normalization, canonical create and
-  direct delete. The shared class now has 26 tests after the create-audit extension; its XML is
+  direct delete. The shared class now has 31 tests after the item-create extension; its XML is
   mandatory with no skipped/failures/errors.
 - Schema verdict: **NO_MIGRATION**. Option create audit is tracked by its separate release-closed contract;
   item/category mutations,
@@ -568,9 +606,10 @@ STAGING-SMOKE-PASSED**.
   rounding are unchanged. Checkout reloads the current available option and current delta from the
   database; client/stale-cart price is not authority. New order rows snapshot the current delta;
   existing `price_delta_minor_snapshot` rows are never rewritten.
-- The current 26-test deterministic PostgreSQL class uses independent connections and observed blocking,
+- The option-price release recorded 26 deterministic PostgreSQL tests; the shared current class has 31
+  after item-create coverage and uses independent connections and observed blocking,
   with no arbitrary sleep. It proves truthful distinct-price ordering, same-target loser no-op and
-  serialization with rename, direct delete and atomic normalization. Mandatory CI minimum is 26
+  serialization with rename, direct delete and atomic normalization. The current mandatory CI minimum is 31
   tests with zero skipped/failures/errors. Schema verdict: **NO_MIGRATION**.
 
 Release evidence for current release HEAD `0489a2f`: the user confirmed fully green GitHub Actions,
@@ -608,8 +647,8 @@ DONE / MVP / STAGING-SMOKE-PASSED**.
   promotions, order schema and media are unchanged.
 - Testcontainers PostgreSQL uses independent connections and deterministic latches with an observed
   blocking edge for direct/direct, direct/compound, both direct/Shift Check orders, direct/delete and
-  direct/normalization. The shared PostgreSQL class and CI minimum are now `26/0/0/0` after the
-  create-audit extension. **NO_MIGRATION_EXPECTED**.
+  direct/normalization. The shared PostgreSQL class and CI minimum are now `31/0/0/0` after the
+  item-create extension. **NO_MIGRATION_EXPECTED**.
 
 Item availability audit status: **DANGEROUS ACTION AUDIT SLICE / MENU ITEM AVAILABILITY AUDIT /
 DONE / MVP / STAGING-SMOKE-PASSED**.
@@ -637,7 +676,7 @@ DONE / MVP / STAGING-SMOKE-PASSED**.
   per-item audits. Its batch writer does not invoke the direct helper.
 - Testcontainers PostgreSQL covers item direct/direct, direct/compound, both direct/Shift Check
   orders and delete/direct with independent connections, deterministic latches and an observed
-  blocking edge. The shared class XML and CI minimum are `26/0/0/0`. Guest submit contention,
+  blocking edge. The shared class XML and current CI minimum are `31/0/0/0`. Guest submit contention,
   unavailable typed rejection, zero-write stale carts, re-enable recovery and immutable snapshots
   remain green. **NO_MIGRATION_EXPECTED**.
 
@@ -686,12 +725,12 @@ Audit payloads must use safe ids and old/new safe fields only. Do not include ra
   regression.
 - Option create audit: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION CREATE AUDIT / DONE / MVP /
   STAGING-SMOKE-PASSED**. Exact writer inventory, atomic direct/bulk/normalization behavior,
-  per-insert audit cardinality, RBAC/privacy, automated 26-test PostgreSQL gate and the bounded
-  cross-surface staging smoke are recorded above. This closes no other menu-create or update family.
-- Item create audit: **DANGEROUS ACTION AUDIT SLICE / MENU ITEM CREATE AUDIT / MVP IMPLEMENTED /
-  LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. One writer/two callers, atomic
-  item+audit rollback, RBAC/dialog actor binding, privacy, real PostgreSQL contention and no-migration
-  evidence are recorded above; independent review, CI and staging remain open.
+  per-insert audit cardinality, RBAC/privacy, historical 26-test evidence and the current shared
+  31-test PostgreSQL gate are recorded above. This closes no other menu-create or update family.
+- Item create audit: **DANGEROUS ACTION AUDIT SLICE / MENU ITEM CREATE AUDIT / DONE / MVP /
+  STAGING-SMOKE-PASSED**. One writer/two callers, atomic item+audit rollback, RBAC/dialog actor
+  binding, privacy, real PostgreSQL contention and no-migration evidence are recorded above; the
+  user-confirmed green Actions, staging deploy and bounded smoke close this contract only.
 - Option rename audit: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION RENAME AUDIT / DONE / MVP /
   STAGING-SMOKE-PASSED**. Focused backend, PostgreSQL lock, compile/lint, Mini App build and
   Playwright `139/139` were green locally for that release slice; its bounded cross-surface staging

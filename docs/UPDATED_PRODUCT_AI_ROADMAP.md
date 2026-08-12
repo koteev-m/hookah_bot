@@ -62,7 +62,7 @@
 - Order/session/tab core docs are current in `docs/ORDER_SESSION_TAB_CORE.md`: `TABLE_SESSION`, `ACTIVE_TABLE_ORDER`, `ORDER_BATCH`, `TAB`, bill/request/close flow, privacy boundaries and visit-history foundation are `SPEC UPDATED`. Current runtime docs say table-session/tab scoping, Guest History Foundation and Post-Visit Feedback MVP are staging-smoke-passed, while Repeat Phase 1 is locally validated with deferred environment-dependent manual smoke; force-close policy/audit, loyalty/preorder and broader analytics remain partial/future.
 - Analytics/events docs are current in `docs/ANALYTICS_EVENTS.md`: analytics events, audit/event boundaries, KPI formulas, role dashboards and payload privacy rules are `SPEC UPDATED`; implementation and Platform dashboards remain partial/future unless specific events are verified.
 - Security/RBAC docs are current in `docs/SECURITY_RBAC_MATRIX.md`: roles, scopes, permissions, surface parity, dangerous actions, auth/trust boundaries and security smoke checklist are `UPDATED`; permission parity and dangerous-action audit coverage remain partial unless specific route tests/smoke evidence exists. `ADMIN` is a legacy compatibility alias to `MANAGER`, not a product role.
-- Menu/options/stop-list docs are current in `docs/MENU_OPTIONS_STOPLIST.md`: structured menu terms, option/modifier snapshots, media/PDF boundaries, featured/top-list, stop-list, shift check, availability validation and menu permissions are `SPEC UPDATED`. Selected-option parity and Menu Item Hard Delete Audit are smoke-closed; the bounded OWNER/MANAGER shift-check slice is `MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`; Menu Item Availability Audit is `DANGEROUS ACTION AUDIT SLICE / MENU ITEM AVAILABILITY AUDIT / DONE / MVP / STAGING-SMOKE-PASSED`; Menu Option Create Audit is `DANGEROUS ACTION AUDIT SLICE / MENU OPTION CREATE AUDIT / DONE / MVP / STAGING-SMOKE-PASSED`; Menu Item Create Audit is `DANGEROUS ACTION AUDIT SLICE / MENU ITEM CREATE AUDIT / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`; broader menu constructor/media/top-list and remaining audit coverage remain partial/future.
+- Menu/options/stop-list docs are current in `docs/MENU_OPTIONS_STOPLIST.md`: structured menu terms, option/modifier snapshots, media/PDF boundaries, featured/top-list, stop-list, shift check, availability validation and menu permissions are `SPEC UPDATED`. Selected-option parity and Menu Item Hard Delete Audit are smoke-closed; the bounded OWNER/MANAGER shift-check slice is `MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`; Menu Item Availability Audit is `DANGEROUS ACTION AUDIT SLICE / MENU ITEM AVAILABILITY AUDIT / DONE / MVP / STAGING-SMOKE-PASSED`; Menu Option Create Audit is `DANGEROUS ACTION AUDIT SLICE / MENU OPTION CREATE AUDIT / DONE / MVP / STAGING-SMOKE-PASSED`; Menu Item Create Audit is `DANGEROUS ACTION AUDIT SLICE / MENU ITEM CREATE AUDIT / DONE / MVP / STAGING-SMOKE-PASSED`; broader menu constructor/media/top-list and remaining audit coverage remain partial/future.
 - Venue info-section media storage/upload is canonical in `docs/MEDIA_STORAGE_UPLOAD.md`: current
   Telegram-`file_id` architecture, hybrid asset model, security/lifecycle contract and bounded
   Venue Mini App slice are specified; runtime remains missing and verdict is
@@ -881,9 +881,11 @@ Not selected as implementation right now:
 - remaining guest growth/retention from `docs/GROWTH_RETENTION.md`: Repeat as Template Phase 1 remains locally validated with deferred manual smoke; Simple Venue Promotions Phase 1, Happy Hours Percent, Promotion Creation Audit, Promotion Effective State Clarity, Promotion Lifecycle Status Audit and Venue Promotions Current/Archived Tabs UX are `DONE / STAGING-SMOKE-PASSED`; Gift parity still awaits its recorded independent review, CI and staging gates; promotion configuration edit audit and the Promotion Compatibility Policy remain future; favorite menu items/options, recommendations/frequent items, notification opt-in, favorites-based promotions and loyalty stay future; venue favorites, History and Post-Visit Feedback stay in regression;
 - menu/options/stop-list governance from `docs/MENU_OPTIONS_STOPLIST.md`: keep selected-option
   snapshots, Guest stale availability validation, the atomic shift-check contract and the
-  staging-smoke-passed item availability, item/empty-category/option hard-delete and option-create
-  audits in regression, and resolve broader menu constructor/media/top-list, implement the selected
-  menu item create audit, then keep item price/name/type audit separate before calling menu complete;
+  staging-smoke-passed item availability, item/empty-category/option hard-delete, option-create and
+  item-create audits in regression. The verified next slice is
+  `IMPLEMENT_MENU_MANAGEMENT_CLOSURE_EPIC_NEXT`: the existing category create/rename/type/reorder and
+  item rename/price-currency/type/category-move/reorder writers only, with no migration or product
+  semantic change; broader constructor/media/top-list remains separate;
 - Venue Mode operating model from `docs/VENUE_OPERATIONS.md`: keep orders, bill/tabs, staff calls, bookings, stop-list, staff-chat source-of-truth policy and role-specific nav/API denial in regression before adding new venue screens;
 - Booking lifecycle model from `docs/BOOKING_LIFECYCLE.md`: keep booking create/list, Venue queue actions, confirmed-only Staff arrival/no-show split, hold/deadline display, booking chat separation, support routing and reminder opt-in behavior in regression before adding preorder/history/loyalty.
 - Telegram fallback/staff-chat model from `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`: keep QR `/start`, fallback order, staff-call, staff-chat link/test/unlink, state-aware booking buttons, callback RBAC and notification allow/deny policy in regression before expanding Telegram shortcuts.
@@ -1247,7 +1249,8 @@ DONE / MVP / STAGING-SMOKE-PASSED**.
   promotion/cart/order/media, secrets and PII are excluded.
 - Automated/local/CI contract evidence is repository `41/0/0/0`, routes `37/0/0/0`, Telegram
   `538/0/0/0`, route/security `1137`, PostgreSQL concurrency `26/0/0/0`, compile, ktlint, Mini App
-  build and full Playwright `169/169`. The CI PostgreSQL minimum is 26; full direct/bulk/
+  build and full Playwright `169/169`. This is historical option-create evidence; the current shared
+  CI PostgreSQL minimum is 31 after item-create coverage. Full direct/bulk/
   normalization rollback, canonical uniqueness and deterministic locking are automated evidence.
   **NO_MIGRATION_EXPECTED**; no new workflow. For current release HEAD `0e592ff`, the user confirmed
   green Actions, staging deploy and the bounded 18-scenario smoke recorded in the QA strategy.
@@ -1258,8 +1261,8 @@ DONE / MVP / STAGING-SMOKE-PASSED**.
 
 Implementation contract: **IMPLEMENT_MENU_ITEM_CREATE_AUDIT_NEXT**.
 
-Verdict: **DANGEROUS ACTION AUDIT SLICE / MENU ITEM CREATE AUDIT / MVP IMPLEMENTED / LOCAL
-VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+Verdict: **DANGEROUS ACTION AUDIT SLICE / MENU ITEM CREATE AUDIT / DONE / MVP /
+STAGING-SMOKE-PASSED**.
 
 - Runtime inventory confirms the sole production `INSERT INTO menu_items` in the private helper
   behind required `VenueMenuRepository.createItem`, called only by authenticated Venue Mini App
@@ -1279,16 +1282,17 @@ VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
   price/currency/availability/type/category/description/sort, media/options/promotion/cart/order,
   request/initData/Telegram content, secrets and PII are excluded. Duplicate-name creates remain
   separate; no idempotency, uniqueness, migration or business-default/API/UI change was added.
-- Local evidence is repository `44/0/0/0`, routes `40/0/0/0`, Telegram `542/0/0/0`, Testcontainers
+- Automated evidence is repository `44/0/0/0`, routes `40/0/0/0`, Telegram `542/0/0/0`, Testcontainers
   PostgreSQL `31/0/0/0`, compile/ktlint, Mini App build and full Playwright `169/169`. PostgreSQL
   evidence uses production migrations/repositories, independent PIDs, latches and real blocking for
   Mini/Mini, Mini/Telegram, create/reorder and concurrent audit failure, plus deterministic
   create/category-delete `NOWAIT`. CI minima are updated in the existing workflow; no new workflow.
   **NO_MIGRATION_EXPECTED**.
-- Independent review, green Actions, staging deploy and bounded cross-surface smoke are still
-  required. Item price/name/type/category/description/currency audits, category/option create,
-  membership revoke, Guest cart/order, promotions, media/R2 and broader audit closure stay outside.
-  Stash remains unread and untouched; `scripts/dev/` remains untouched.
+- User-confirmed green Actions, staging deploy and bounded cross-surface smoke passed: Owner Mini App
+  create, Manager Telegram create, Staff denial, duplicate-name distinct rows/audits, intact item
+  order and Guest menu, payload privacy and cleanup. Item price/name/type/category/description/currency
+  audits, category/option create, membership revoke, Guest cart/order, promotions, media/R2 and broader
+  audit closure stay outside. Stash remains unread and untouched; `scripts/dev/` remains untouched.
 
 ### Recent release-closed audit block
 
