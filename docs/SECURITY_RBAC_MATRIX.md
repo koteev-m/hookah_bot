@@ -14,7 +14,7 @@ ACTION AUDIT SLICE / MENU ITEM CREATE AUDIT / DONE / MVP / STAGING-SMOKE-PASSED*
 category/item management closure is **VENUE MENU MANAGEMENT / EXISTING-CONTRACT AUDIT AND
 TRANSACTION CLOSURE / DONE / MVP / STAGING-SMOKE-PASSED**; it grants no new role or cross-venue
 authority. Shared initial menu bootstrap is **VENUE MENU ONBOARDING / SHARED INITIAL MENU
-BOOTSTRAP / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT** and grants
+BOOTSTRAP / DONE / MVP / STAGING-SMOKE-PASSED** and grants
 no new role, Platform or cross-venue authority. Venue Mode, staff, booking,
 Telegram fallback, menu, media,
 QA and deploy source-of-truth documents remain linked below; no bounded closure grants broad new
@@ -540,8 +540,8 @@ STAGING-SMOKE-PASSED**.
 
 ### Shared initial menu bootstrap
 
-Status: **VENUE MENU ONBOARDING / SHARED INITIAL MENU BOOTSTRAP / MVP IMPLEMENTED / LOCAL
-VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+Status: **VENUE MENU ONBOARDING / SHARED INITIAL MENU BOOTSTRAP / DONE / MVP /
+STAGING-SMOKE-PASSED**.
 
 - Authenticated Owner and Manager with current own-venue `MENU_MANAGE` may call the explicit Mini
   App bootstrap mutation or enter the existing Telegram menu root. Staff, foreign, unaffiliated and
@@ -559,6 +559,46 @@ VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
 - Exact defaults are `Кальянное меню`, `Напитки`, `Кухня`, all explicitly `OTHER`. Existing menu
   rows are preserved and no items/options/flavors are created. Schema verdict is
   `NO_MIGRATION_EXPECTED`.
+- User-confirmed green Actions, staging deploy and bounded smoke cover Mini App-first and
+  Telegram-first parity, repeat with zero duplicate rows/audits, partial/custom preservation, Staff
+  denial, approval remaining non-seeding and cleanup. This evidence grants no broader onboarding or
+  venue authority.
+
+### Platform & Venue Onboarding / Ownership Cockpit authority contract
+
+| Actor | Own memberships | Connection requests | Platform requests/owners/venues | Decisions and owner assignment |
+| --- | --- | --- | --- | --- |
+| Venue Owner | Read every own active membership and safe venue card. | Create/read/edit/cancel only own request through a server-derived user id; see only own contact/comment. | No Platform-wide access. | None. Approval does not seed a menu. |
+| Manager | Existing own-venue operational access only. | None; hidden controls are not authority. | None. | None. |
+| Staff | Existing own-venue operational access only. | None; hidden controls are not authority. | None. | None. |
+| Platform Owner | No automatic ordinary Venue-route bypass. | Read all requests including applicant contact/comment needed for review. | Read all venues, active OWNER memberships and safe user identity aggregates. | Explicit approve/reject/commercial/create-new-DRAFT-and-link and OWNER assignment/revoke under Platform RBAC and audit policy. |
+| Guest/unaffiliated/foreign | None. | None, including no request-status oracle. | None. | None. |
+
+Required implementation rules:
+
+- Venue Owner request routes resolve the applicant only from the validated Mini App session;
+  Telegram resolves the current authenticated message/callback user. Request owner id, actor,
+  source and linked venue are not accepted as client authority. Every own-request lookup includes
+  the server-derived user predicate.
+- Platform routes require exact `PlatformOwnerIdResolver` authorization before request, owner or
+  venue facts. Manager/Staff membership never implies Platform authority. Approval/rejection,
+  commercial changes, create/link and owner membership changes are explicit POST actions; GET/list
+  remains read-only.
+- The owner list aggregates active `venue_members(role=OWNER)`. Multiple owners per venue and
+  multiple venues per user are normal. `venue_owner_accounts.primary_owner_user_id` is a commercial
+  account/quota field, not an operational primary-owner membership and must not be exposed as one.
+- Applicant contact/comment is restricted to the same applicant and Platform Owner. Owner workspace
+  identity uses only current platform-safe display name/username plus necessary opaque/internal id;
+  raw Telegram update/initData, phone/private provider fields, callback/message payloads, secrets and
+  unrelated PII are forbidden.
+- Both Mini Apps and Telegram call one backend application/orchestration contract. Sequential repeat
+  returns the active `PENDING` or `APPROVED`-unlinked request; simultaneous duplicate submission and
+  create/link retry must resolve server-side without trusting client idempotency or emitting false
+  success. Current states remain `PENDING`, `APPROVED`, `REJECTED`, `CANCELLED`; `NEEDS_INFO` requires
+  a separate product/schema decision.
+- Dangerous Platform decisions preserve or add bounded audit evidence with server-derived actor and
+  source, stable target ids and safe old/new state. A failed mutation must not emit a success audit;
+  route/Telegram adapters must not write duplicate audits around the shared service.
 
 These bounded menu, staff and promotion creation/lifecycle slices do not close the overall dangerous-action audit.
 Promotion configuration edit, QR rotate, force-close/session, tab reopen, analytics export, the
@@ -583,7 +623,8 @@ Promotion Compatibility Policy and a broader audit viewer remain open.
 | Menu option availability audit | **DONE / MVP / STAGING-SMOKE-PASSED**. Authenticated Mini App direct/compound and Telegram individual paths use one locked repository transaction with server-derived actor/source. | One real committed individual delta writes one allowlisted `MENU_OPTION_AVAILABILITY_CHANGED`; no-op/denial/failure/rollback writes zero. | Shift Check is excluded and retains its one batch audit. |
 | Menu item availability audit | **DANGEROUS ACTION AUDIT SLICE / MENU ITEM AVAILABILITY AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Authenticated Mini App direct/compound and Telegram individual paths use one item-locked transaction with server-derived actor/source. | One real committed individual delta writes one allowlisted `MENU_ITEM_AVAILABILITY_CHANGED`; no-op/denial/failure/rollback writes zero. | Shift Check is aggregate-only; item metadata actions are covered by the separate local closure. |
 | Venue Menu Management existing-contract closure | **DONE / MVP / STAGING-SMOKE-PASSED**. Owner/Manager own-venue only; Staff/foreign/unaffiliated/Platform-only denied; actor/source are server-derived on Mini App and Telegram with strict dialog-owner binding. | Nine existing category/item families write exact privacy-safe same-transaction audits; exact no-op and rollback write zero, compound item deltas commit atomically, and reorders require the complete authoritative set. | No role/API/UX/schema expansion. User-confirmed green Actions, staging deploy and consolidated smoke close this bounded slice; broader Menu/Dangerous Action Audit stays `PARTIAL`. |
-| Shared initial menu bootstrap | **MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. Explicit Mini App mutation and Telegram root share one missing-only seed; GET and approval/linking remain non-seeding. | Owner/Manager own venue only; session/current-user actor and server-owned surface source; Staff/foreign/unaffiliated/Platform-only denied. | Review, green Actions and staging smoke remain required; no migration or wider onboarding authority. |
+| Shared initial menu bootstrap | **DONE / MVP / STAGING-SMOKE-PASSED**. Explicit Mini App mutation and Telegram root share one missing-only seed; GET and approval/linking remain non-seeding. | Owner/Manager own venue only; session/current-user actor and server-owned surface source; Staff/foreign/unaffiliated/Platform-only denied. | Release-closed only for this bootstrap; no migration or wider onboarding authority. |
+| Onboarding / ownership cockpit | Telegram-only request intake/decisions and venue-centric Platform Mini App are current; the next epic adds shared request adapters and owner aggregation. | Venue Owner only own memberships/requests; Platform Owner all venues/owners/requests; Manager/Staff no application authority; all actors server-derived. | `NO_MIGRATION_EXPECTED`; direct role/tenant/privacy, repeat/concurrency and audit tests are mandatory before release. |
 | Manager/Owner venue isolation | Own-venue RBAC is the product rule. | No cross-venue detail/reply/manage access. | Keep cross-venue tests for support, chats, orders, bookings and settings. |
 | Platform access | Platform Owner can manage platform scope and support tickets; ordinary venue chat is hidden. The bounded confirmed QR test enters the normal public Guest table flow only. Activation is atomic; teardown uses stored context identity and remains possible when token/table/venue/subscription becomes unavailable. | Platform does not bypass ordinary venue RBAC. Explicit Guest context temporarily wins routing only for ordinary Guest actions and is cleared by existing visit exit. Mini App re-entry requires matching chat context and no exit marker. | Controlled QR Phase 1 is staging-smoke-passed and stays in regression; event/audit explorer and analytics exports still need additional privacy gates before broad release. |
 | Dangerous action audit | Several audits exist, including the release-closed menu slices and the nine-family Menu Management closure. | All dangerous actions write safe actor/target/old-new/reason evidence. | Audit coverage remains `PARTIAL`; description/media/archive, QR rotate, force close, tab reopen, promotion configuration and analytics export remain open. |

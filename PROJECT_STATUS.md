@@ -1,117 +1,114 @@
 # Project Status
 
-Last verified: 2026-08-13. Active Goal is the objective in
-`/Users/maksimmartynov/.codex/attachments/e9d0953e-4f84-42ee-8a88-f5c2e81d718a/goal-objective.md`.
-It is the bounded shared initial-menu bootstrap, not Media/R2.
+Last verified: 2026-08-13. There is no live Goal object. The saved objective in
+`/Users/maksimmartynov/.codex/attachments/e9d0953e-4f84-42ee-8a88-f5c2e81d718a/goal-objective.md`
+is `IMPLEMENT_SHARED_INITIAL_MENU_BOOTSTRAP_NEXT`, not Media Upload, R2, object storage or staff
+photo upload.
 
 ## 1. Current stage
 
-**VENUE MENU ONBOARDING / SHARED INITIAL MENU BOOTSTRAP / MVP IMPLEMENTED / LOCAL VALIDATION
-PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+**VENUE MENU ONBOARDING / SHARED INITIAL MENU BOOTSTRAP / DONE / MVP /
+STAGING-SMOKE-PASSED**.
 
-This status applies only to the shared initial structured-menu bootstrap. It does not mark the
-whole onboarding flow, broader menu constructor/media/top-list work, permission parity or the
-overall product production-ready. The previously release-closed Venue Menu Management transaction/
-audit closure and its regression contracts remain unchanged.
+The user confirmed green GitHub Actions for the release HEAD, staging deploy and the bounded
+cross-surface smoke: Mini App-first and Telegram-first bootstrap parity, repeat with no duplicate
+rows/audits, partial/custom menu preservation, Staff denial, approval remaining non-seeding and
+successful cleanup. The exact defaults, transaction/audit/privacy contract and local automated
+evidence remain canonical in `docs/MENU_OPTIONS_STOPLIST.md` and
+`docs/TESTING_QA_SMOKE_STRATEGY.md`. This closes only shared initial-menu bootstrap, not broader
+onboarding, menu constructor/media/top-list, permission parity or the whole product.
 
-## 2. Verified current flow and shared defaults
+Schema verdict: **NO_MIGRATION_EXPECTED**.
 
-Platform approval, venue linking and Owner assignment still grant access without creating menu
-categories. The ordinary authenticated Mini App menu GET remains a pure read. Physical creation of
-missing defaults happens on the first qualifying authenticated Owner/Manager management entry
-through the explicit Mini App mutation or the existing Telegram `🍽 Заказное меню` root. Either
-surface may invoke bootstrap again; a complete menu makes those repeated calls exact no-ops.
+## 2. Current P2/P3 index
 
-Both surfaces use the same internal seed source in `VenueMenuRepository.kt`, in this exact order:
+Every open P2/P3 has one stable ID and one canonical owner section containing area, evidence, risk,
+minimal fix, required trigger/release boundary and status. `OPEN` entries are not release blockers
+until their stated trigger; `IN_NEXT_EPIC` entries become gates for that epic; `DONE` requires
+recorded implementation or docs evidence. This file is only the current index and must not duplicate
+the full finding.
 
-1. `Кальянное меню` — `MenuSemanticType.OTHER`;
-2. `Напитки` — `MenuSemanticType.OTHER`;
-3. `Кухня` — `MenuSemanticType.OTHER`.
+| ID | Canonical owner | Status | Required boundary |
+| --- | --- | --- | --- |
+| `MENU-CONC-001` | `docs/TESTING_QA_SMOKE_STRATEGY.md` | `OPEN` | Before the next item move/update concurrency change or affected Menu release. |
+| `MENU-TEST-002` | `docs/TESTING_QA_SMOKE_STRATEGY.md` | `OPEN` | With the next category writer/audit/concurrency change. |
+| `BOOTSTRAP-QA-001` | `docs/TESTING_QA_SMOKE_STRATEGY.md` | `DONE` | Docs-only handoff: current shared PostgreSQL minimum is synchronized to `44`. |
+| `BOOTSTRAP-TEST-002` | `docs/TESTING_QA_SMOKE_STRATEGY.md` | `IN_NEXT_EPIC` | Required by the next onboarding epic before runtime release. |
+| `OWNERSHIP-MODEL-001` | `docs/UPDATED_PRODUCT_AI_ROADMAP.md` | `IN_NEXT_EPIC` | Ownership Cockpit API/UI contract and tests. |
 
-The shared source creates categories only. It creates no items, options, flavors or base profiles.
+## 3. Read-only product/runtime inventory
 
-## 3. Repository, API and client behavior
+### Venue Owner
 
-`VenueMenuRepository.createMissingCategories` remains the single bootstrap writer. One repository-
-owned JDBC transaction acquires the existing venue category-order lock, rereads current categories,
-matches trimmed lowercase names, appends only missing defaults after the current maximum order,
-writes one `MENU_CATEGORY_CREATED` audit for each physical insert, rereads the authoritative menu
-and commits once. Existing category ids, names, semantic types, order, timestamps, items and options
-are not rewritten. A complete menu is an exact row/timestamp/audit no-op; any insert or audit failure
-rolls back all bootstrap rows and audits.
+- A first or additional venue application is currently Telegram-only through
+  `🤝 Добавить свою кальянную`; the dialog writes `venue_connection_requests` with venue name,
+  city, contact and optional comment. The Venue Mini App has no self-service application route or
+  screen.
+- The actual request states are `PENDING`, `APPROVED`, `REJECTED`, `CANCELLED`; there is no
+  `NEEDS_INFO`. Normal repeated submit checks `findActiveUnlinkedByUser`: an existing `PENDING` or
+  approved-but-unlinked request is shown instead of creating another. Pending can be edited or
+  cancelled; approved-unlinked can be closed. Historical rejected/cancelled requests are not a
+  current self-service list.
+- `/api/venue/me` returns all active venue memberships. The header selector in `venueApp.ts` is
+  shown when more than one venue is available, persists `venueId`, and derives the allowed set from
+  the server response. The model supports multiple venues per user and multiple OWNER memberships
+  per venue.
+- Approval alone only changes the request state. The existing Telegram create-and-link path
+  separately creates a new `DRAFT` venue, grants OWNER membership, applies commercial state and
+  links the request; it has no current existing-venue chooser.
+  The venue appears in `/api/venue/me` and the existing selector after the next authoritative access
+  reload. Shared menu bootstrap then works from either qualifying first management surface.
 
-Mini App adds authenticated `POST /api/venue/menu/bootstrap?venueId=...`. It requires current
-own-venue `MENU_MANAGE`, derives actor from the session subject, fixes source to `VENUE_MINI_APP`,
-ignores actor/source spoof fields and returns only `{venueId}`. Owner and Manager are allowed; Staff,
-foreign, unaffiliated and Platform-only actors are denied before mutation. The route writes no
-second audit and the existing safe database-failure contract returns `503`.
+### Platform Owner
 
-On each Owner/Manager menu screen mount the Mini App awaits the mutation, then performs exactly one
-authoritative GET before rendering menu data. A bootstrap failure uses the existing actionable
-manual retry without an automatic loop or false empty-menu success. After bootstrap succeeds, a
-failed-GET retry repeats only GET. Staff/read-only entry sends no bootstrap mutation. Existing abort,
-disposed-screen, sequence, focus/interaction restoration and venue/account switch protections ignore
-late responses from stale contexts.
+- Platform Mini App can list venues, directly create a `DRAFT` venue, open venue detail, see all
+  active OWNER memberships, search a user, assign/revoke OWNER, invite an owner and manage existing
+  lifecycle/commercial panels. The list is venue-centric; backend summary includes city, owner count
+  and subscription summary, while current TypeScript/list presentation omits city and owner names.
+- Top-level routes are currently venues plus separate create/onboarding/placements/support/analytics
+  screens. `Подключение` is informational only: connection request intake, approve/reject,
+  commercial terms and create/link remain in Telegram and have no Platform Mini App API/UI.
+- There is no owner-centric list, owner drill-down or owners workspace. Owner identities are visible
+  only after opening a venue; the venue row shows only an owner count. Telegram has `Кальянные`,
+  `Заявки на подключение` and a displayed `Клиенты / Лимиты` section; `Владельцы` remains a handled
+  alias, not a full membership-based owners cockpit.
 
-The Telegram root now imports the same seed source and keeps its existing Owner/Manager guard,
-current authenticated Telegram actor, server-owned `TELEGRAM_BOT` source and success/failure copy.
-Repeat remains a repository no-op and database/audit failure returns before success UI.
+## 4. Ownership data-model findings
 
-## 4. Audit, privacy and concurrency
+- Operational venue access is authoritative in active `venue_members(role=OWNER)`: multiple owners
+  per venue and multiple venues per user are valid.
+- `venues.owner_account_id` and `venue_owner_accounts.primary_owner_user_id` represent one
+  commercial quota/account relationship. They do not designate a primary operational OWNER
+  membership. Existing Telegram code selecting the minimum OWNER user id for quota display is a
+  heuristic, not product authority; the new UI must not expose it as `primary owner`.
+- Owners list/count/status aggregation can be built from existing `users`, `venue_members` and
+  `venues`. The bounded cockpit needs no schema migration and must keep current commercial-account
+  assignment/quota behavior separate from membership presentation.
 
-Every inserted default uses action `MENU_CATEGORY_CREATED`, entity type `menu_category` and the new
-category id. Payload keys remain exactly `venueId`, `categoryId`, `source`; actor is stored only in
-the standard actor column. Category names/types, raw request, initData, Telegram update/callback/
-identity, media, secrets and unrelated PII are excluded.
+## 5. Next implementation epic
 
-The existing ordinary category create, bootstrap and category reorder operations share the same
-venue-scoped category-order lock and compatible lock order. Deterministic Testcontainers PostgreSQL
-coverage proves Mini App vs Telegram bootstrap, Mini App vs Mini App bootstrap, bootstrap vs ordinary
-create, bootstrap vs reorder and partial-audit-failure rollback with independent connections/PIDs,
-latches and observed `pg_blocking_pids`/`pg_locks`. Final defaults are unique and committed insert
-cardinality equals create-audit cardinality.
+Verdict: **IMPLEMENT_PLATFORM_ONBOARDING_OWNERSHIP_COCKPIT_NEXT**.
 
-## 5. Local validation evidence
+Bounded outcome: one shared onboarding application/orchestration contract serves Telegram and new
+Mini App adapters; Venue Owner receives `Мои заведения`, own request states and `Добавить заведение`;
+Platform Owner receives top-level `Заявки`, `Кальянные`, `Владельцы`. Venue list gains city and an
+all-owner summary, Owners is membership-aggregated with search/filter and drill-down, and Requests
+supports current pending/detail/approve/reject/create-new-DRAFT-and-link semantics with existing
+RBAC/audit.
+Do not add `NEEDS_INFO`, a primary-owner concept, a second onboarding engine or client-selected
+actor/owner authority.
 
-Focused JUnit XML is green: repository `54/0/0/0`, Mini App routes `46/0/0/0`, Telegram
-`551/0/0/0`, onboarding/connection `18/0/0/0` and menu PostgreSQL concurrency `44/0/0/0`.
-The exact current route/security selector passed `1190/0/0/0`. The exact five-suite PostgreSQL
-selector passed `77/0/0/0` with minimum vector `8 / 14 / 2 / 44 / 9`.
+Explicitly out of scope: billing redesign, support, analytics, media/R2, menu changes, a new venue
+lifecycle, commercial owner-account transfer/redesign, Telegram Stars/provider work and unrelated
+Platform navigation redesign. Migration verdict: **NO_MIGRATION_EXPECTED**.
 
-Standalone `compileKotlin`, `ktlintCheck`, Mini App production build and full Playwright smoke
-`176/176` passed. The seven new deterministic browser tests cover empty-first bootstrap, repeat,
-partial/custom preservation, bootstrap and subsequent GET failure/retry, delayed venue switch,
-delayed account replacement and Staff no-mutation behavior. `git diff --check` is clean.
+The full implementation contract, likely files, tests, CI/release gates, consolidated staging smoke
+and ready implementation prompt are canonical in `docs/UPDATED_PRODUCT_AI_ROADMAP.md`; product
+surface rules are in `docs/PLATFORM_COCKPIT.md`; authority/privacy rules are in
+`docs/SECURITY_RBAC_MATRIX.md`.
 
-Only the existing route/security CI gate changed: it now requires onboarding/connection XML with a
-minimum of `18` while retaining the existing repository `51 -> 54`, routes `43 -> 46`, Telegram
-`549 -> 551` and menu PostgreSQL `40 -> 44` minima. No workflow was added. The blocking CI coverage
-gap is fixed locally; the next short independent review, green Actions and staging smoke remain
-required before release.
+## 6. Worktree constraints
 
-## 6. Release and schema verdict
-
-**NO_MIGRATION_EXPECTED**. No migration, SYSTEM actor, approval transaction redesign, default
-semantic-type change, new menu/onboarding engine or UI redesign was required. This local result is
-not release or production evidence.
-
-Because backend, Mini App and Telegram runtime behavior changed, staging deploy and a bounded
-cross-surface smoke are required only after independent review, commit and green GitHub Actions.
-No deploy was performed in this task.
-
-## 7. Remaining work
-
-The blocking CI coverage gap is fixed locally. The next short independent review remains required
-before commit; then green Actions, staging deploy and smoke for Owner/Manager/Staff,
-Mini App-first/Telegram-first parity, no-op/audit privacy and an existing-menu venue remain release
-gates.
-
-Broader onboarding automation, menu constructor/archive/description/media/top-list, per-venue Staff
-stop-list policy, permission parity and the wider Dangerous Action Audit remain P2/future or partial
-according to their canonical documents. Media/R2 was not opened by this task.
-
-## 8. Worktree constraints
-
-Do not stage, commit, push, deploy or apply/read/change stash in this task. The pre-existing
-untracked `scripts/dev/` area remains untouched and must not be staged. Final handoff must include
-the exact validation results and `git status --short`.
+This handoff is docs-only. Runtime/backend, Mini App, tests, CI and migrations are untouched. Do not
+stage, commit, push, deploy or read/apply/change stash. The pre-existing untracked `scripts/dev/`
+area remains untouched and must not be staged.

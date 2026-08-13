@@ -12,8 +12,8 @@ Audit programs remain partial; keep each bounded gate in regression. Menu item c
 STAGING-SMOKE-PASSED**. The current category/item management closure is **VENUE MENU MANAGEMENT /
 EXISTING-CONTRACT AUDIT AND TRANSACTION CLOSURE / DONE / MVP / STAGING-SMOKE-PASSED**. This
 completes only its bounded release gates. Shared initial menu bootstrap is **VENUE MENU ONBOARDING /
-SHARED INITIAL MENU BOOTSTRAP / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE
-COMMIT**; Actions and staging evidence are not yet claimed.
+SHARED INITIAL MENU BOOTSTRAP / DONE / MVP / STAGING-SMOKE-PASSED**; user-confirmed green Actions,
+staging deploy and the bounded cross-surface smoke close only that bootstrap slice.
 
 ## Core Rule
 
@@ -33,7 +33,8 @@ Current practice:
 - Local broad Gradle wildcards can hit heap/runtime limits; prefer focused selectors first.
 - Manual real Telegram/staff-chat smoke remains required for bot/staff-chat behavior changes.
 - Shared initial menu bootstrap has green focused backend, deterministic PostgreSQL, production
-  Mini App build and full Playwright evidence. It remains review/Actions/staging gated.
+  Mini App build and full Playwright evidence. User-confirmed green Actions, staging deploy and
+  consolidated Mini App-first/Telegram-first smoke close the bounded release.
 - Guest Favorites Phase 1 is `DONE / MVP / STAGING-SMOKE-PASSED`: focused backend favorites tests, `compileKotlin`, `ktlintCheck`, Mini App build and full e2e smoke `62/62` passed locally; GitHub Actions were green and manual staging smoke covered Mini App, Telegram parity, isolation and availability restoration.
 - Repeat as Template Phase 1 is `MVP IMPLEMENTED / LOCAL VALIDATION PASSED / DEFERRED MANUAL SMOKE`. Its environment-dependent production-readiness scenarios remain `BLOCKED_BY_ENVIRONMENT` in [`REPEAT-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#repeat-manual-001); this does not mark them passed or block independent bounded development.
 - Simple Venue Promotions Phase 1 is `DONE / MVP / STAGING-SMOKE-PASSED`: GitHub Actions
@@ -809,7 +810,7 @@ Required regression coverage:
 Mandatory CI selectors are `VenueMenuRepositoryTest`, `VenueMenuRoutesTest`,
 `TelegramBotRouterTableTokenTest`,
 `VenueMenuOptionNormalizationConcurrencyPostgresTest` and full Mini App smoke. Exact XML must exist,
-have tests `> 0`, and have zero skipped/failures/errors; the shared current PostgreSQL XML minimum is 40. No new
+have tests `> 0`, and have zero skipped/failures/errors; the shared current PostgreSQL XML minimum is 44. No new
 workflow may replace or silently skip these gates.
 
 Automated/local/CI contract evidence (`tests/skipped/failures/errors` where recorded): repository
@@ -881,7 +882,7 @@ Required regression coverage:
 Mandatory CI selectors are exact `VenueMenuRepositoryTest`, `VenueMenuRoutesTest`,
 `TelegramBotRouterTableTokenTest`, `VenueMenuOptionNormalizationConcurrencyPostgresTest` and full
 Mini App smoke. That item-create release recorded minima `44`, `40`, `542`, `31`; current shared
-Menu Management minima are repository `51`, routes `43`, Telegram `549` and PostgreSQL `40`. Exact JUnit XML must exist
+Menu Management minima are repository `51`, routes `43`, Telegram `549`; the current shared PostgreSQL minimum is `44`. Exact JUnit XML must exist
 with zero skipped/failures/errors. The PostgreSQL job retains `JAVA_TOOL_OPTIONS=-Dapi.version=1.44`.
 No new workflow replaces these gates.
 
@@ -927,11 +928,13 @@ Required regression coverage:
   update-vs-Telegram type, move-vs-source/destination reorder, item reorder-vs-create/delete and
   compound/reorder audit-failure rollback. No arbitrary sleep is evidence.
 
-Mandatory focused counts are repository `51`, routes `43`, Telegram `549`, Guest routes `61` and
-menu PostgreSQL `40`, each with exact JUnit XML and `skipped=0`, `failures=0`, `errors=0`. The
+For that Menu Management release, mandatory focused counts were repository `51`, routes `43`,
+Telegram `549`, Guest routes `61` and menu PostgreSQL `40`, each with exact JUnit XML and
+`skipped=0`, `failures=0`, `errors=0`. The
 existing CI route/security and five-suite PostgreSQL parsers must fail missing, zero/below-minimum,
-skipped, failed or errored XML; Docker and full Mini App smoke remain mandatory. Current PostgreSQL
-minimum vector is `8 / 14 / 2 / 40 / 9`. No workflow or migration is added.
+skipped, failed or errored XML; Docker and full Mini App smoke remain mandatory. That release's
+recorded PostgreSQL minimum vector was `8 / 14 / 2 / 40 / 9`; the current shared minimum is recorded
+in the bootstrap gate below. No workflow or migration is added.
 
 Mandatory local commands include the focused repository/routes/Telegram/Guest selectors, the exact
 current route/security selector, the exact five-class PostgreSQL selector with
@@ -947,10 +950,10 @@ five-suite PostgreSQL `73/0/0/0` with vector `8 / 14 / 2 / 40 / 9`. Standalone `
 `ktlintCheck`, Mini App production build and full Playwright `169/169` passed. No skipped, failures
 or errors were accepted.
 
-### Shared Initial Menu Bootstrap local quality gate
+### Shared Initial Menu Bootstrap release quality gate
 
-Status: **VENUE MENU ONBOARDING / SHARED INITIAL MENU BOOTSTRAP / MVP IMPLEMENTED / LOCAL
-VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+Status: **VENUE MENU ONBOARDING / SHARED INITIAL MENU BOOTSTRAP / DONE / MVP /
+STAGING-SMOKE-PASSED**.
 
 Required regression coverage:
 
@@ -976,13 +979,79 @@ passed `1190/0/0/0`; the exact five-suite PostgreSQL selector passed `77/0/0/0` 
 `8 / 14 / 2 / 44 / 9`. Standalone `compileKotlin`, `ktlintCheck`, Mini App production build and full
 Playwright `176/176` passed. All accepted XML has zero skipped, failures and errors.
 
-The existing route/security gate now also requires onboarding/connection XML with a minimum of `18`;
+The existing route/security gate also requires onboarding/connection XML with a minimum of `18`;
 repository `54`, routes `46`, Telegram `551` and menu PostgreSQL `44` minima are retained. Missing,
 below-minimum, skipped, failed or errored XML still fails the existing gates. No workflow or migration
-is added. The blocking CI coverage gap is fixed locally, but the next short independent review, green
-Actions, staging deploy and a bounded Owner/Manager/Staff, Mini App/Telegram parity, existing-menu,
-audit/no-op/privacy smoke are still required. This local gate does not mark the whole onboarding flow
-or product production-ready.
+was added. The user confirmed green GitHub Actions for the release HEAD, staging deploy, Mini
+App-first and Telegram-first parity, repeat with zero duplicate rows/audits, partial/custom menu
+preservation, Staff denial, approval remaining non-seeding and successful cleanup. Failure injection
+and deterministic contention remain automated evidence rather than staging operations. This closes
+only the shared bootstrap and does not mark broader onboarding or the product production-ready.
+
+### Current P2/P3 finding process and registry
+
+Every unresolved P2/P3 must have one stable ID and one canonical entry with: area, observed evidence,
+user/runtime risk, smallest sufficient fix, the trigger or release boundary that makes it required,
+and status. `PROJECT_STATUS.md` carries only the short current index. Status meanings are: `OPEN`
+(accepted, not yet inside an active release boundary), `IN_NEXT_EPIC` (mandatory for that bounded
+epic), `BLOCKED` (external decision/evidence named in the entry) and `DONE` (fix plus required evidence
+recorded). Do not close a finding from intent, a code comment or an unrelated green suite.
+
+#### MENU-CONC-001
+
+- Area: structured-menu item move/update concurrency.
+- Evidence: `VenueMenuRepository.updateItem` reads a non-locking source-category hint before it locks
+  the hinted and requested categories. A concurrent committed move can make the later authoritative
+  item category differ from that hint, and the method returns `null` through the not-found contract
+  rather than a retryable serialization/conflict outcome.
+- Risk: a valid same-venue item can be reported as absent during relocation contention, producing a
+  false user-facing not-found and discouraging a safe retry.
+- Minimal fix: after deterministic category/item locking, reread authoritative item scope and map a
+  detected relocation race to the existing retryable conflict/service contract; preserve foreign-
+  venue privacy and real not-found behavior.
+- Required trigger/release boundary: before the next item move/update concurrency change or any Menu
+  release that changes those locks/outcomes.
+- Status: `OPEN`.
+
+#### MENU-TEST-002
+
+- Area: category create/seed/compound/reorder rollback tests.
+- Evidence: current rollback coverage verifies restored final state, but category create, default
+  seed, compound update and reorder cases do not all assert the intermediate business/audit snapshot
+  from the same JDBC connection immediately before the injected failure.
+- Risk: a hook can fire before the intended writer/audit boundary and still yield a green final
+  rollback assertion, weakening proof that partially written state was actually rolled back.
+- Minimal fix: add same-connection pre-failure assertions for the expected row/order/timestamp and
+  audit delta, then throw and retain the existing post-rollback independent-connection assertions.
+- Required trigger/release boundary: with the next category writer, transaction/audit or concurrency
+  test change; no standalone runtime release is required.
+- Status: `OPEN`.
+
+#### BOOTSTRAP-QA-001
+
+- Area: shared menu PostgreSQL CI/docs gate.
+- Evidence: `.github/workflows/ci.yml` and the release XML contract require `44`, while several QA
+  sentences still called `40` the current shared minimum after the bootstrap cases were added.
+- Risk: a handoff could select too few cases or treat a below-current XML result as acceptable.
+- Minimal fix: current/shared/mandatory references use `44` and vector `8 / 14 / 2 / 44 / 9`;
+  explicitly historical Menu Management results may retain their recorded `40`.
+- Required trigger/release boundary: this docs-only release handoff.
+- Status: `DONE`.
+
+#### BOOTSTRAP-TEST-002
+
+- Area: Telegram onboarding-entry regression.
+- Evidence: connection-flow tests prove approval and linking perform zero category writes and assert
+  that `owner_venue_onboarding_entry` is emitted, but no direct test dispatches that callback and
+  proves the callback path itself has zero category writers.
+- Risk: callback routing could later seed categories or bypass the explicit first-management-entry
+  contract without failing the approval/linking tests.
+- Minimal fix: dispatch `owner_venue_onboarding_entry` for a linked Owner in
+  `TelegramBotRouterVenueConnectionRequestFlowTest`, assert the expected venue card/onboarding
+  response and verify zero `createMissingCategories` calls/audits.
+- Required trigger/release boundary: mandatory in `PLATFORM & VENUE ONBOARDING / OWNERSHIP COCKPIT`
+  before runtime release.
+- Status: `IN_NEXT_EPIC`.
 
 ### Menu Option Rename Audit quality gate
 
@@ -1007,7 +1076,7 @@ Regression must preserve this bounded contract:
   existing response and atomic field behavior but writes only one rename audit.
 - Existing hookah canonical normalization, self-exclusion, non-hookah duplicate behavior,
   historical order snapshots and future-submit current-value resolution stay unchanged.
-- The option-rename release recorded 26 PostgreSQL tests; the shared current 40-test class retains deterministic rename versus rename, distinct and
+- The option-rename release recorded 26 PostgreSQL tests; the shared current 44-test class retains deterministic rename versus rename, distinct and
   same-target price updates, atomic base-profile normalization, canonical create and direct delete
   in addition to the released normalization regressions. It uses observed blocking/locks and no
   arbitrary sleep.
@@ -1015,7 +1084,7 @@ Regression must preserve this bounded contract:
 Focused repository, route, Telegram and Guest/order/history selectors, `compileKotlin`,
 `ktlintCheck`, Mini App build and Playwright `139/139` passed locally. The mandatory PostgreSQL XML
 result recorded for that released rename slice is `8/0/0/0`, `14/0/0/0`, `2/0/0/0`, `7/0/0/0`;
-the current option-class CI minimum is 40 after the Menu Management closure. Green Actions, staging
+the current option-class CI minimum is 44 after the shared bootstrap closure. Green Actions, staging
 deploy and bounded cross-surface
 RBAC/audit/privacy/concurrency/history smoke are recorded functionally passed; schema verdict is
 **NO_MIGRATION_EXPECTED**. That rename slice does not itself close option create or availability;
@@ -1052,13 +1121,13 @@ Regression must preserve this bounded contract:
   the current available DB option, persists the current delta snapshot and never rewrites older
   `price_delta_minor_snapshot` rows.
 - The production Testcontainers PostgreSQL class uses independent connections, deterministic
-  latches and a confirmed blocking edge without arbitrary sleep. Its current 40 tests prove truthful
+  latches and a confirmed blocking edge without arbitrary sleep. Its current 44 tests prove truthful
   price-versus-price ordering, same-target loser no-op, price versus rename, direct delete and atomic
   normalization, plus no partial compound updates or extra loser audits.
 
 Mandatory CI keeps the existing exact selectors/XML for `VenueMenuRepositoryTest`,
 `VenueMenuRoutesTest`, `GuestOrderRoutesTest`, `GuestVisitRoutesTest` and
-`VenueMenuOptionNormalizationConcurrencyPostgresTest`. The option PostgreSQL XML minimum is 40;
+`VenueMenuOptionNormalizationConcurrencyPostgresTest`. The current option PostgreSQL XML minimum is 44;
 all critical XML must have tests `> 0` and exactly zero skipped/failures/errors.
 
 Recorded automated evidence: all four focused repository/route/order/history selectors, the nine-test
@@ -1117,7 +1186,7 @@ Required local commands are the focused `VenueMenuRepositoryTest`, `VenueMenuRou
 `TelegramBotRouterTableTokenTest`, `GuestOrderRoutesTest`, `*MenuShiftCheck*`,
 `VenueMenuOptionNormalizationConcurrencyPostgresTest`, compile, ktlint, Mini App build and full e2e
 smoke selectors documented in the current implementation handoff. No workflow or migration is added;
-the existing mandatory PostgreSQL CI gate minimum is now 40 after the Menu Management closure.
+the existing mandatory PostgreSQL CI gate minimum is now 44 after the shared bootstrap closure.
 
 ### Menu Item Availability Audit quality gate
 
@@ -1167,7 +1236,7 @@ first two classes, `VenueMenuOptionNormalizationConcurrencyPostgresTest`,
 `GuestOrderIdempotencyConcurrencyPostgresTest` and full Mini App smoke. Exact local XML is
 repository `36/0/0/0`, routes `31/0/0/0`, Telegram `535/0/0/0`, Guest routes `61/0/0/0`, menu
 PostgreSQL `20/0/0/0` and Guest PostgreSQL `9/0/0/0` for that release slice; the current shared
-menu minimum is 40. Existing CI parsing must fail missing/zero,
+menu minimum is 44. Existing CI parsing must fail missing/zero,
 skipped, failures or errors. No new workflow or migration is allowed.
 
 Non-blocking future hardening, not a release defect: assert raw `updated_at` before/after an injected
@@ -1779,7 +1848,7 @@ Expectations:
   `GuestTableContextActivationPostgresTest`, `PromotionConfigurationConcurrencyPostgresTest`,
   `VenueStaffMutationConcurrencyPostgresTest`, `VenueMenuOptionNormalizationConcurrencyPostgresTest`
   and `GuestOrderIdempotencyConcurrencyPostgresTest` with `JAVA_TOOL_OPTIONS=-Dapi.version=1.44`,
-  then independently parses all five XML reports. It requires minimums `8 / 14 / 2 / 40 / 9`, each
+  then independently parses all five XML reports. It requires minimums `8 / 14 / 2 / 44 / 9`, each
   with `skipped=0`, `failures=0`, `errors=0`. Docker availability alone is not evidence, and route
   failure must not silently skip the PostgreSQL gate.
 - If CI is red, first identify the failing job, failing test class, failing test name, assertion/error and first useful stack frame.
@@ -2241,7 +2310,7 @@ Telegram/staff-chat:
   `40`; user-confirmed green Actions, staging deploy and consolidated smoke are complete. No
   migration.
 - Menu option rename audit: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION RENAME AUDIT / DONE / MVP /
-  STAGING-SMOKE-PASSED**. The current 40-test shared menu concurrency XML gate, focused cross-surface tests,
+  STAGING-SMOKE-PASSED**. The current 44-test shared menu concurrency XML gate, focused cross-surface tests,
   privacy/rollback checks, green Actions, staging deploy and bounded smoke are recorded complete.
   No migration was added.
 - Menu option price audit: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION PRICE AUDIT / DONE / MVP /

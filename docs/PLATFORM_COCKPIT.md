@@ -1,6 +1,6 @@
 # Platform Cockpit Model
 
-Дата актуализации: 2026-08-05.
+Дата актуализации: 2026-08-13.
 
 Статус: **current product reference** for Platform Mode. Platform guest QR status is **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / DONE / MVP / STAGING-SMOKE-PASSED**, schema verdict `NO_MIGRATION`; commit/push, green Actions for the release HEAD, staging deploy and the bounded real Telegram smoke are complete. This does not make the whole product production-ready or close broader Platform/Guest parity. Use this document together with `docs/UPDATED_PRODUCT_AI_ROADMAP.md`, `docs/COMMUNICATION_MODEL.md`, `docs/SECURITY_RBAC_MATRIX.md` and `docs/ANALYTICS_EVENTS.md` before opening new Platform, billing, support or analytics tasks.
 
@@ -13,7 +13,7 @@ Ordinary venue operations such as orders, staff calls, booking queues, menu/stop
 | Area | Current implementation status | Product rule |
 | --- | --- | --- |
 | Venues | Platform Mini App can list/open venue details and run implemented lifecycle actions. | Platform cockpit is the source of truth for marketplace-level venue state. |
-| Onboarding requests | Telegram bot remains the richer surface for request intake, approval and commercial terms. Mini App is partial. | Requests should become a backend-backed Platform cockpit queue before they are promised as Mini App parity. |
+| Onboarding requests | Request intake and owner status/details are Telegram-only. Platform approve/reject, commercial terms and create/link are also Telegram-only; the Platform Mini App `Подключение` screen is informational. | Telegram and both Mini Apps must use one backend application/orchestration contract; no second onboarding engine. |
 | Owner / access | Owner invite, accepted Telegram deep links, active OWNER membership list and last-owner-safe OWNER revoke are smoke-passed. | Runtime venue ownership is `venue_members(role=OWNER)`, not legacy owner linkage alone. |
 | Billing / subscriptions / invoices | Manual/fake billing cockpit, subscription overview, invoice ensure, manual mark-paid, next-period invoice and courtesy days are staging-smoked. | GET overviews are read-only; money/state mutations require explicit POST actions and audit. |
 | Support Center | Support Tickets MVP is smoke-passed for `SUPPORT_TICKET`, including platform-only and venue-transferred tickets. | Platform sees support tickets, not ordinary `VENUE_CHAT`. |
@@ -134,6 +134,105 @@ Safety rules:
 - Prefer safe aggregate metrics and opaque ids unless an operator needs a specific entity id for support.
 - Client events are lower-trust UX diagnostics and must not drive money, access, billing, order state or venue lifecycle.
 
+## Platform & Venue Onboarding / Ownership Cockpit
+
+Read-only runtime inventory verdict: **IMPLEMENT_PLATFORM_ONBOARDING_OWNERSHIP_COCKPIT_NEXT**.
+
+### Exact current behavior
+
+Venue Owner currently submits the first or an additional venue request only in Telegram through
+`🤝 Добавить свою кальянную`. The dialog stores only the current domain fields: venue name, city,
+contact and optional comment. The applicant can view the active request, edit/cancel `PENDING`, or
+close `APPROVED` while it remains unlinked. The state model is exactly `PENDING`, `APPROVED`,
+`REJECTED`, `CANCELLED`; `NEEDS_INFO` does not exist. A normal repeated flow checks
+`findActiveUnlinkedByUser` before insert and shows an existing pending or approved-unlinked request,
+but the check and insert have no database uniqueness guard for a simultaneous double submit.
+
+Venue Mini App has no request API, `Мои заведения` workspace or `Добавить заведение`. Its
+`/api/venue/me` response already returns every active membership, and the current header selector
+uses that authoritative set; it is visible for multiple venues and persists the selected `venueId`.
+Approval alone remains non-seeding and does not create/link a venue. After the separate Platform
+create-new-DRAFT-and-link flow grants OWNER membership, the venue becomes available on the next `/api/venue/me`
+load and therefore appears in the existing selector. Shared initial menu bootstrap is independent
+of whether the first qualifying management entry is Mini App or Telegram.
+
+Platform Mini App already has a venue-centric list, direct `DRAFT` venue create and existing venue
+detail. Detail returns every active OWNER membership and supports user search, OWNER assignment,
+invite and last-owner-safe revoke. Backend venue summaries contain name, city, status, owner count
+and subscription summary; current TypeScript/list UI omits city and shows only the count, not owner
+names. Current top-level routing is venues plus separate create, informational onboarding,
+placements, support and analytics screens. There is no connection-request API/UI, owners list,
+owner detail or owner drill-down.
+
+Telegram Platform Mode provides connection requests and `Кальянные`; the displayed owner-related
+section is `Клиенты / Лимиты`, while `Владельцы` is still accepted as an alias. It is a commercial
+quota/account flow, not a general membership-based owner workspace. Approve changes only request
+status. Commercial terms and create/link are separate; current creation may leave a DRAFT venue for
+manual recovery if later OWNER assignment, subscription application or request linking fails.
+
+### Bounded target contract
+
+Venue Owner Mini App receives `Мои заведения`: current venue cards, entry to the existing selector,
+`Добавить заведение`, own request list/detail and submission/edit/cancel through the same domain
+contract as Telegram. Expose only the actual four states and explain approved-but-unlinked state.
+Sequential repeat returns the active request rather than creating another; implementation must also
+serialize or safely conflict a simultaneous duplicate without relying on the client. After linking,
+the next authoritative access refresh adds the venue card and selector option. Telegram remains a
+supported adapter of the same backend service.
+
+Platform Mini App receives one top-level onboarding/ownership workspace with:
+
+1. `Заявки`: pending/actionable list, detail, approve/reject, commercial terms and current
+   create-new-DRAFT-and-link action; no existing-venue chooser is implied;
+2. `Кальянные`: name, city, lifecycle status, existing subscription/onboarding summary when present,
+   all-owner count/names and transition to the existing venue detail;
+3. `Владельцы`: safe platform-visible identity, venue count, counts by venue status, linked venues,
+   search/filter and owner detail → venue list → existing venue detail.
+
+Existing placements, support, analytics and billing capabilities stay reachable and unchanged;
+this epic does not redesign them. Request decisions and create/link must use the same server-side
+orchestration, state transitions, recovery/idempotency rules and audit policy from both Telegram and
+Mini App. Approval remains non-seeding and no menu writer is added.
+
+### API, repository and UI inventory
+
+- Reuse `VenueConnectionRequestRepository` for the request record/state and add authenticated
+  Venue-own and Platform-wide route adapters; do not duplicate its SQL in route or UI code.
+- Reuse `/api/venue/me`, `VenueRoutes.kt`, `venueApi.ts` and `venueApp.ts` for membership cards,
+  selector refresh and the owner workspace.
+- Reuse `PlatformRoutes.kt`, `PlatformVenueRoutes.kt`, `PlatformVenueRepository`,
+  `PlatformVenueMemberRepository`, `PlatformUserRepository` and `VenueOwnerAccountRepository` for
+  venue/member/user/commercial facts. Extract the Telegram request decision/create-link sequence
+  from `TelegramBotRouter.kt` into one backend service used by both surfaces.
+- Extend `platformApi.ts`, `platformDtos.ts`, `platformApp.ts`, `platformVenuesList.ts` and
+  `platformVenueDetail.ts`; add narrowly named request/owner screens only where existing screen
+  composition cannot express the workspace.
+
+### Ownership, RBAC and privacy
+
+Operational ownership is every active `venue_members(role=OWNER)` row. Multiple owners per venue
+and multiple venues per owner are valid and must be displayed without choosing a primary owner.
+`venue_owner_accounts.primary_owner_user_id` is commercial quota/account ownership, not an
+operational primary membership. The Telegram minimum-user-id quota lookup is only a current
+heuristic and must not become API or UI semantics.
+
+Venue Owner reads only own memberships and requests; Manager/Staff receive no application
+authority. Platform Owner reads all venues, owners and requests. Actor comes from validated server
+session/current Telegram user; owner user id, request owner, linked venue and audit actor/source are
+never client-controlled. Applicant contact/comment stays visible only to that applicant and exact
+Platform Owner scope. Platform owner identity may use current allowlisted display name/username and
+opaque/internal id; do not expose raw Telegram payload/initData, phone/private fields, secrets or
+unrelated PII. Approve/reject/create/link and owner assignment remain explicit, audit-aware dangerous
+actions with safe bounded payloads.
+
+### Scope and migration verdict
+
+Owner aggregation is an existing `users` + active `venue_members` + `venues` query. Request states,
+link field, membership and commercial account tables already exist. **NO_MIGRATION_EXPECTED**.
+Adding `NEEDS_INFO`, inventing primary-owner membership, commercial-account transfer/redesign, a new
+venue lifecycle, billing/support/analytics/media/R2/menu work and a broad navigation redesign are
+explicitly out of scope.
+
 ## Platform Smoke Checklist
 
 Use this as the Platform-specific part of release smoke:
@@ -168,7 +267,8 @@ Use this as the Platform-specific part of release smoke:
 
 ## Open Platform Gaps
 
-- Onboarding request cockpit in Mini App is still partial compared with Telegram bot.
+- `PLATFORM & VENUE ONBOARDING / OWNERSHIP COCKPIT` is the next bounded epic: both Mini Apps lack
+  the shared request workspace and Platform Mode lacks an owner-centric workspace.
 - Placements cockpit is future/partial.
 - Paid placement/promotion boosting is future and must follow `docs/GROWTH_RETENTION.md`: visible ad labels, moderation, billing and analytics are required before launch.
 - Platform analytics dashboard is future.
