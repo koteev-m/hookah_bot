@@ -1,8 +1,8 @@
 # Menu / Options / Stop-List Model
 
-Дата актуализации: 2026-08-12.
+Дата актуализации: 2026-08-13.
 
-Статус: **current product reference / SPEC UPDATED**. Guest stale-menu cart recovery is **GUEST CART STALE MENU SELECTION RECOVERY / REMOVED OR UNAVAILABLE ITEMS AND OPTIONS / PAYLOAD-BOUND IDEMPOTENCY + ATOMIC REJECTION / DONE / MVP / STAGING-SMOKE-PASSED**; its **ITEM-LEVEL ACTION AND COPY POLISH / DONE / MVP / STAGING-SMOKE-PASSED**. Menu/options/flavors parity is documented as smoke-closed for the structured selected-option flow. The bounded shift-check and earlier menu audit slices remain release-closed. The current category/item closure is **VENUE MENU MANAGEMENT / EXISTING-CONTRACT AUDIT AND TRANSACTION CLOSURE / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. The broader menu constructor, media/top-list governance, non-menu audit coverage and permission parity remain **PARTIAL** unless a specific implementation task proves them.
+Статус: **current product reference / SPEC UPDATED**. Guest stale-menu cart recovery is **GUEST CART STALE MENU SELECTION RECOVERY / REMOVED OR UNAVAILABLE ITEMS AND OPTIONS / PAYLOAD-BOUND IDEMPOTENCY + ATOMIC REJECTION / DONE / MVP / STAGING-SMOKE-PASSED**; its **ITEM-LEVEL ACTION AND COPY POLISH / DONE / MVP / STAGING-SMOKE-PASSED**. Menu/options/flavors parity is documented as smoke-closed for the structured selected-option flow. The bounded shift-check and earlier menu audit slices remain release-closed. The current category/item closure is **VENUE MENU MANAGEMENT / EXISTING-CONTRACT AUDIT AND TRANSACTION CLOSURE / DONE / MVP / STAGING-SMOKE-PASSED**. The broader menu constructor, media/top-list governance, non-menu audit coverage and permission parity remain **PARTIAL** unless a specific implementation task proves them.
 
 ## Core Rule
 
@@ -13,6 +13,20 @@ in `docs/MEDIA_STORAGE_UPLOAD.md`. Structured menu-item and option/flavor media 
 first slice.
 
 Menu permissions are governed by `docs/SECURITY_RBAC_MATRIX.md`; Venue Mode operational surfaces are governed by `docs/VENUE_OPERATIONS.md`; order/session/tab and snapshot rules are governed by `docs/ORDER_SESSION_TAB_CORE.md`; Telegram callback/staff-chat rules are governed by `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`; analytics/audit event names are governed by `docs/ANALYTICS_EVENTS.md`; validation strategy is governed by `docs/TESTING_QA_SMOKE_STRATEGY.md`; release/deploy operations are governed by `docs/DEPLOYMENT_RUNBOOK.md`.
+
+## Initial menu bootstrap (next bounded work; not implemented)
+
+Current approval and venue-linking paths do not create categories. The first authenticated
+Owner/Manager Telegram open of `🍽 Заказное меню` calls the atomic, missing-only default-category
+transaction for `Кальянное меню`, `Напитки` and `Кухня`; a repeated open creates no duplicate row or
+audit. The authenticated Mini App menu GET remains a pure view read and can show an empty menu when
+it is opened first.
+
+The next candidate is a shared explicit bootstrap used by that Telegram entry and an
+Owner/Manager-only Mini App pre-management mutation. It must reuse the existing repository
+transaction with the current surface actor/source, never mutate GET or the Platform approval flow,
+and append only missing categories. Existing names, types and order remain untouched; no hookah
+items, options or flavor profiles are created automatically.
 
 ## Terms
 
@@ -31,8 +45,8 @@ Menu permissions are governed by `docs/SECURITY_RBAC_MATRIX.md`; Venue Mode oper
 
 | Area | Current implementation from docs | Target product model | Gap / risk / future note |
 | --- | --- | --- | --- |
-| Category CRUD | Existing create/rename/type/reorder paths are transaction-bound and locally audited; delete remains release-closed. | Owner/Manager manage existing own-venue category structure; Staff is denied. | Existing-contract closure awaits review/Actions/staging; broader constructor/archive/media remains `PARTIAL`. |
-| Item CRUD | Existing create/delete/rename/price-currency/type/category-move/reorder paths are transaction-bound and audited; Staff remains denied for structure. | Owner/Manager manage item structure/commercial fields; featured/media remain separate. | Existing-contract closure is locally implemented; description/media/featured and broader constructor work stay future. |
+| Category CRUD | Existing create/rename/type/reorder paths are transaction-bound and release-closed; delete remains release-closed. | Owner/Manager manage existing own-venue category structure; Staff is denied. | Broader constructor/archive/media remains `PARTIAL`; initial cross-surface bootstrap is the next bounded candidate. |
+| Item CRUD | Existing create/delete/rename/price-currency/type/category-move/reorder paths are transaction-bound and audited; Staff remains denied for structure. | Owner/Manager manage item structure/commercial fields; featured/media remain separate. | Existing-contract closure is release-closed; description/media/featured and broader constructor work stay future. |
 | Item availability | Owner/Manager/Staff direct Mini App and Telegram changes write one transaction-bound safe audit per real delta; Owner/Manager compound PATCH audits only its availability delta. | Availability toggle is operational state, fast and reversible, with safe actor/source evidence. | Release-closed only for this bounded audit contract. Per-venue `staff_stoplist_enabled` stays future. |
 | Option group/value support | Guest/Menu Options & Flavors parity is smoke-closed: item-scoped options/flavors, base profiles and selected-option submit exist. Atomic Telegram base-profile normalization and application-level locked canonical-profile collision checks are release-closed for their bounded contract. | General `OPTION_GROUP`/`OPTION_VALUE` model supports required single/multi modifiers with min/max validation. | Broader non-hookah modifier UX, DB-level uniqueness and Mini App atomic bulk apply remain separate. |
 | Option/value availability | Item option/flavor stop-list is documented and smoked. Preview/submit now identify own-cart removed/unavailable item or option lines with a typed server contract. | Guest sees only available choices or disabled copy by venue policy; stale preview/submit is rejected with actionable line recovery. | Keep option ownership, foreign-selection privacy, all-issues and stale availability tests in regression. |
@@ -42,7 +56,7 @@ Menu permissions are governed by `docs/SECURITY_RBAC_MATRIX.md`; Venue Mode oper
 | Featured/top-list | Product spec requires featured/top list; implementation evidence is partial. | Venue manually pins items; not paid placement. | Paid placement/boosting belongs to Growth/Platform, not menu featured. |
 | PDF/media | `Фото-меню` exists as a flat info/media section and is separate from structured order menu. Bot OWNER/MANAGER can add image/PDF attachments, delete one and hide/show the whole section. | PDF/photo menu is view-only; no direct order unless item exists in structured menu. | Venue Mini App authoring/upload is missing; direct replace, per-attachment hide and optional subsections remain future. |
 | Shift check | **DONE / MVP / STAGING-SMOKE-PASSED**: OWNER/MANAGER Venue Mini App uses saved menu state, readiness counts, search/filters, local draft, a separate mass-selection mode, confirmation summary and one atomic request. STAFF has no entry/direct permission. | Venue Mode keeps optimistic availability checks, one bounded batch, no-op completion evidence and recoverable stale-state handling. | Keep role/tenant, atomicity, stale-state, Guest availability and Telegram stop-list parity in regression; Telegram shift-check UI and a queryable history table are not part of Phase 1. |
-| Audit logs | Existing release-closed actions remain intact; nine category/item management actions are locally transaction-bound with exact-one/no-op/rollback rules. | All dangerous mutations write privacy-safe server-derived actor/source evidence. | Review/Actions/staging remain for the local closure; description/media/archive and the broader audit stay `PARTIAL`. |
+| Audit logs | Existing release-closed actions remain intact; nine category/item management actions are transaction-bound with exact-one/no-op/rollback rules. | All dangerous mutations write privacy-safe server-derived actor/source evidence. | Description/media/archive and the broader audit stay `PARTIAL`. |
 | Telegram vs Mini App parity | Options/flavors parity is smoke-closed; some Telegram owner flows remain richer. | Required menu/stop-list operations are aligned across Bot and Mini App or documented as exceptions. | Keep cross-surface parity smoke for Staff stop-list and selected options. |
 | Staff stop-list permissions | Current docs say STAFF has `MENU_AVAILABILITY_MANAGE` and can toggle item/option availability; STAFF cannot edit structure/prices/options schema. | Recommended MVP: Staff cannot change menu structure/prices; Staff stop-list works only when `staff_stoplist_enabled` or equivalent policy allows it, and is identical in Bot/Mini App. | Current global Staff stop-list permission is acceptable only if intentionally enabled and audited; per-venue toggle remains target/future. |
 
@@ -522,8 +536,8 @@ the broader Menu/Dangerous Action Audit remain outside it.
 Verified against the current working tree based on HEAD `5542cc2`. `VenueMenuRepository` remains the
 only main-source production SQL owner for `menu_categories`, `menu_items` and `menu_item_options`;
 migration, test and staging seed SQL are not authenticated runtime writers. The bounded closure
-status is **VENUE MENU MANAGEMENT / EXISTING-CONTRACT AUDIT AND TRANSACTION CLOSURE / MVP
-IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. `ADMIN` remains only
+status is **VENUE MENU MANAGEMENT / EXISTING-CONTRACT AUDIT AND TRANSACTION CLOSURE / DONE / MVP /
+STAGING-SMOKE-PASSED**. `ADMIN` remains only
 the legacy Manager-compatible alias.
 
 | Entity/family | Operation and physical SQL writer | Mini App / Telegram caller | Actor, permission, source | Current transaction and locks | Audit, no-op and rollback | PostgreSQL / surface status |
@@ -760,11 +774,11 @@ Audit payloads must use safe ids and old/new safe fields only. Do not include ra
   MVP / STAGING-SMOKE-PASSED**. That release slice alone did not close item metadata audits; the
   current existing-contract closure implements them locally. The broader Menu/Dangerous Action
   Audit remains partial.
-- Venue Menu Management existing-contract closure: **MVP IMPLEMENTED / LOCAL VALIDATION PASSED /
-  REVIEW REQUIRED BEFORE COMMIT**. Repository `51`, routes `43`, Telegram `549`, Guest `61`, menu
+- Venue Menu Management existing-contract closure: **DONE / MVP / STAGING-SMOKE-PASSED**. Repository
+  `51`, routes `43`, Telegram `549`, Guest `61`, menu
   PostgreSQL `40`, exact route/security `1164`, exact five-suite PostgreSQL `73`, compile/lint/build
-  and Playwright `169/169` passed locally. Green Actions and staging deploy/smoke remain open; no
-  migration.
+  and Playwright `169/169` passed locally. The user confirmed fully green Actions, staging deploy
+  and consolidated Menu Management smoke; no migration.
 - Guest cart stale menu recovery: **GUEST CART STALE MENU SELECTION RECOVERY / REMOVED OR UNAVAILABLE
   ITEMS AND OPTIONS / PAYLOAD-BOUND IDEMPOTENCY + ATOMIC REJECTION / DONE / MVP /
   STAGING-SMOKE-PASSED**; **ITEM-LEVEL ACTION AND COPY POLISH / DONE / MVP /

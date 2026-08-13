@@ -1,6 +1,6 @@
 # Testing / QA Smoke Strategy
 
-Дата актуализации: 2026-08-12.
+Дата актуализации: 2026-08-13.
 
 Статус: **current product reference / UPDATED**. This document is the canonical QA/smoke strategy for the Telegram bot + Mini App platform. It consolidates local validation, GitHub Actions expectations, area-specific smoke suites, staging policy, failure reporting and Codex handoff rules. Deployment and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
 
@@ -9,9 +9,9 @@ normalization, option rename, option price and **DANGEROUS ACTION AUDIT SLICE / 
 AVAILABILITY AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. The broader Menu and Dangerous Action
 Audit programs remain partial; keep each bounded gate in regression. Menu item create is
 **DANGEROUS ACTION AUDIT SLICE / MENU ITEM CREATE AUDIT / DONE / MVP /
-STAGING-SMOKE-PASSED**. The current category/item management closure is **MVP IMPLEMENTED / LOCAL
-VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**; green Actions and staging smoke remain
-release gates.
+STAGING-SMOKE-PASSED**. The current category/item management closure is **VENUE MENU MANAGEMENT /
+EXISTING-CONTRACT AUDIT AND TRANSACTION CLOSURE / DONE / MVP / STAGING-SMOKE-PASSED**. This
+completes only its bounded release gates.
 
 ## Core Rule
 
@@ -897,8 +897,8 @@ promotions and the broader Menu/Dangerous Action Audit remain outside it.
 
 ### Venue Menu Management existing-contract closure quality gate
 
-Status: **VENUE MENU MANAGEMENT / EXISTING-CONTRACT AUDIT AND TRANSACTION CLOSURE / MVP
-IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+Status: **VENUE MENU MANAGEMENT / EXISTING-CONTRACT AUDIT AND TRANSACTION CLOSURE / DONE / MVP /
+STAGING-SMOKE-PASSED**.
 
 Required regression coverage:
 
@@ -932,15 +932,21 @@ minimum vector is `8 / 14 / 2 / 40 / 9`. No workflow or migration is added.
 Mandatory local commands include the focused repository/routes/Telegram/Guest selectors, the exact
 current route/security selector, the exact five-class PostgreSQL selector with
 `JAVA_TOOL_OPTIONS=-Dapi.version=1.44`, `compileKotlin`, `ktlintCheck`, Mini App production build,
-full Playwright smoke, `git diff --check` and `git status --short`. Runtime changes still require
-green Actions, staging deploy and bounded manual smoke before release; local validation alone does
-not make the product production-ready.
+full Playwright smoke, `git diff --check` and `git status --short`. The user confirmed green Actions,
+staging deploy and the consolidated manual Menu Management smoke for this release. Future runtime
+changes still require their own green Actions, staging deploy and bounded manual smoke; this local
+evidence does not make the overall product production-ready.
 
 Recorded local validation: repository `51/0/0/0`, routes `43/0/0/0`, Telegram `549/0/0/0`, Guest
 routes `61/0/0/0`, exact route/security `1164/0/0/0`, menu PostgreSQL `40/0/0/0`, and exact
 five-suite PostgreSQL `73/0/0/0` with vector `8 / 14 / 2 / 40 / 9`. Standalone `compileKotlin`,
 `ktlintCheck`, Mini App production build and full Playwright `169/169` passed. No skipped, failures
 or errors were accepted.
+
+Initial cross-surface menu bootstrap is not part of this release. Its future gate must prove that an
+Owner/Manager explicit Mini App mutation and the Telegram root share the same missing-only atomic
+transaction, preserve an existing menu unchanged, create and audit only the defaults that are
+missing, create zero on repeat, and never turn the ordinary menu GET into a mutation.
 
 ### Menu Option Rename Audit quality gate
 
@@ -2194,10 +2200,10 @@ Telegram/staff-chat:
   STAGING-SMOKE-PASSED**. Repository `44/0/0/0`, routes `40/0/0/0`, Telegram `542/0/0/0`, shared
   PostgreSQL `31/0/0/0`, compile/ktlint, Mini App build and Playwright `169/169` are automated
   evidence; user-confirmed Actions, staging deploy and bounded smoke are complete; no migration.
-- Venue Menu Management existing-contract closure: **MVP IMPLEMENTED / LOCAL VALIDATION PASSED /
-  REVIEW REQUIRED BEFORE COMMIT**. Current mandatory minima are repository `51`, routes
-  `43`, Telegram `549`, Guest routes `61` and shared PostgreSQL `40`; green Actions and staging
-  deploy/smoke remain open. No migration.
+- Venue Menu Management existing-contract closure: **DONE / MVP / STAGING-SMOKE-PASSED**. Mandatory
+  minima are repository `51`, routes `43`, Telegram `549`, Guest routes `61` and shared PostgreSQL
+  `40`; user-confirmed green Actions, staging deploy and consolidated smoke are complete. No
+  migration.
 - Menu option rename audit: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION RENAME AUDIT / DONE / MVP /
   STAGING-SMOKE-PASSED**. The current 40-test shared menu concurrency XML gate, focused cross-surface tests,
   privacy/rollback checks, green Actions, staging deploy and bounded smoke are recorded complete.

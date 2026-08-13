@@ -1,6 +1,6 @@
 # Product + Telegram AI Bots Roadmap
 
-Дата обновления: 2026-08-12.
+Дата обновления: 2026-08-13.
 
 Статус документа: canonical roadmap. Этот файл объединяет актуальный product roadmap, Mini App launch roadmap и Telegram-native AI Bots roadmap. Старые audit-файлы в `docs/audit/` остаются evidence/history, но не являются текущим backlog без сверки с этим roadmap и текущим кодом.
 
@@ -62,7 +62,7 @@
 - Order/session/tab core docs are current in `docs/ORDER_SESSION_TAB_CORE.md`: `TABLE_SESSION`, `ACTIVE_TABLE_ORDER`, `ORDER_BATCH`, `TAB`, bill/request/close flow, privacy boundaries and visit-history foundation are `SPEC UPDATED`. Current runtime docs say table-session/tab scoping, Guest History Foundation and Post-Visit Feedback MVP are staging-smoke-passed, while Repeat Phase 1 is locally validated with deferred environment-dependent manual smoke; force-close policy/audit, loyalty/preorder and broader analytics remain partial/future.
 - Analytics/events docs are current in `docs/ANALYTICS_EVENTS.md`: analytics events, audit/event boundaries, KPI formulas, role dashboards and payload privacy rules are `SPEC UPDATED`; implementation and Platform dashboards remain partial/future unless specific events are verified.
 - Security/RBAC docs are current in `docs/SECURITY_RBAC_MATRIX.md`: roles, scopes, permissions, surface parity, dangerous actions, auth/trust boundaries and security smoke checklist are `UPDATED`; permission parity and dangerous-action audit coverage remain partial unless specific route tests/smoke evidence exists. `ADMIN` is a legacy compatibility alias to `MANAGER`, not a product role.
-- Menu/options/stop-list docs are current in `docs/MENU_OPTIONS_STOPLIST.md`: structured menu terms, option/modifier snapshots, media/PDF boundaries, featured/top-list, stop-list, shift check, availability validation and menu permissions are `SPEC UPDATED`. Selected-option parity and the previously bounded menu audit slices remain smoke-closed. The existing category create/rename/type/reorder and item rename/price-currency/type/category-move/reorder closure is **MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**; broader constructor/media/top-list and non-menu dangerous-action coverage remain partial/future.
+- Menu/options/stop-list docs are current in `docs/MENU_OPTIONS_STOPLIST.md`: structured menu terms, option/modifier snapshots, media/PDF boundaries, featured/top-list, stop-list, shift check, availability validation and menu permissions are `SPEC UPDATED`. Selected-option parity and the previously bounded menu audit slices remain smoke-closed. The existing category create/rename/type/reorder and item rename/price-currency/type/category-move/reorder closure is **VENUE MENU MANAGEMENT / EXISTING-CONTRACT AUDIT AND TRANSACTION CLOSURE / DONE / MVP / STAGING-SMOKE-PASSED**; broader constructor/media/top-list and non-menu dangerous-action coverage remain partial/future.
 - Venue info-section media storage/upload is canonical in `docs/MEDIA_STORAGE_UPLOAD.md`: current
   Telegram-`file_id` architecture, hybrid asset model, security/lifecycle contract and bounded
   Venue Mini App slice are specified; runtime remains missing and verdict is
@@ -1258,12 +1258,12 @@ DONE / MVP / STAGING-SMOKE-PASSED**.
   Local GitHub CLI did not independently verify Actions because its active token is invalid. The
   broader Menu/Dangerous Action Audit stays `PARTIAL`.
 
-### Current local Menu Management closure
+### Release-closed Menu Management existing-contract closure
 
 Implementation contract: **IMPLEMENT_MENU_MANAGEMENT_CLOSURE_EPIC_NEXT**.
 
-Verdict: **VENUE MENU MANAGEMENT / EXISTING-CONTRACT AUDIT AND TRANSACTION CLOSURE / MVP
-IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+Verdict: **VENUE MENU MANAGEMENT / EXISTING-CONTRACT AUDIT AND TRANSACTION CLOSURE / DONE / MVP /
+STAGING-SMOKE-PASSED**.
 
 - Inventory found one production SQL owner, `VenueMenuRepository`, and no extra authenticated
   writer. The bounded families are category create/rename/type/reorder and item
@@ -1290,9 +1290,25 @@ IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
 - Local evidence is repository `51/0/0/0`, Mini App routes `43/0/0/0`, Telegram `549/0/0/0`, Guest
   order/history `61/0/0/0`, exact route/security `1164/0/0/0`, menu PostgreSQL `40/0/0/0` and exact
   five-suite PostgreSQL `73/0/0/0`. The real matrix uses independent PIDs, deterministic barriers
-  and observed locks. Compile, ktlint, Mini App build and full Playwright `169/169` passed. Green
-  Actions, independent review and staging deploy/smoke remain mandatory before release; the overall
+  and observed locks. Compile, ktlint, Mini App build and full Playwright `169/169` passed. The user
+  confirmed green Actions, staging deploy and consolidated Menu Management smoke. The overall
   product and broader Dangerous Action Audit remain `PARTIAL`.
+
+### Next bounded candidate: shared initial menu bootstrap
+
+Implementation verdict: **IMPLEMENT_SHARED_INITIAL_MENU_BOOTSTRAP_NEXT** (not implemented).
+
+- Current approval/linking only grants access. The Telegram Owner/Manager `🍽 Заказное меню` root
+  lazily calls the atomic missing-only category seed, whereas the authenticated Mini App menu GET is
+  a pure read and can show an empty menu before Telegram is opened.
+- Reuse `VenueMenuRepository.createMissingCategories` behind one shared bootstrap contract. Telegram
+  passes the current Telegram user and `TELEGRAM_BOT`; an explicit Owner/Manager Mini App
+  pre-management mutation passes the authenticated session user and `VENUE_MINI_APP`. Do not put a
+  mutation in GET or the Platform approval transaction, and do not invent a system actor.
+- Preserve existing categories exactly: append only missing defaults, do not rename/retype/reorder
+  existing rows, do not create duplicates, and create no menu items, options or flavor profiles.
+  Each inserted category retains one `MENU_CATEGORY_CREATED` audit; repeat is zero audit and any
+  insert/audit failure rolls back the whole bootstrap. No migration is expected.
 
 ### Current implemented bounded block
 

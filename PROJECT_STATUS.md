@@ -1,13 +1,13 @@
 # Project Status
 
-Last verified: 2026-08-12. Active Goal is the objective in
+Last verified: 2026-08-13. Active Goal is the objective in
 `/Users/maksimmartynov/.codex/attachments/b3a604ea-adda-4635-9f79-7937180caa97/goal-objective.md`.
 It is the bounded Menu Management transaction/audit closure, not media/R2.
 
 ## 1. Current stage
 
-**VENUE MENU MANAGEMENT / EXISTING-CONTRACT AUDIT AND TRANSACTION CLOSURE / MVP IMPLEMENTED /
-LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+**VENUE MENU MANAGEMENT / EXISTING-CONTRACT AUDIT AND TRANSACTION CLOSURE / DONE / MVP /
+STAGING-SMOKE-PASSED**.
 
 This status applies only to the existing category/item management writers. The overall product,
 broader menu constructor/media/top-list work, permission parity and Dangerous Action Audit remain
@@ -68,7 +68,7 @@ Guest menu/new orders use current values; historical name/price snapshots remain
 Pricing, currency/minor units, promotion, stale-cart/idempotency, DTO/status and UX semantics did
 not change.
 
-## 5. Local evidence
+## 5. Local and release evidence
 
 Green XML records repository `51/0/0/0`, Mini App routes `43/0/0/0`, Telegram `549/0/0/0`, Guest
 order/history `61/0/0/0` and real Testcontainers PostgreSQL menu concurrency `40/0/0/0`. The exact
@@ -82,15 +82,34 @@ Standalone `compileKotlin`, `ktlintCheck`, Mini App production build and full Pl
 Telegram `549` and menu PostgreSQL `40`; missing/zero/below-minimum/skipped/failing XML still fails
 the existing mandatory gates. Final `git diff --check` and status are the handoff-only checks.
 
+The user confirmed the release gates: GitHub Actions are fully green, the staging deploy completed
+and the consolidated Menu Management smoke passed. That smoke covered category create/rename/type/
+reorder; item rename/price/type/category move/reorder; Telegram mutation; Staff denial for
+structure/commercial changes; exactly-one/no-op audits and payload privacy; current Guest menu data;
+immutable historical order snapshots; and normal cleanup.
+
 ## 6. Release and schema verdict
 
 **NO_MIGRATION_EXPECTED**. No new workflow, schema, unique constraint, ordering engine, API or
-product feature was added. Independent review, green GitHub Actions, staging deploy and bounded
-manual smoke are still required before release; local evidence must not be described as production
-readiness.
+product feature was added. The confirmed Actions, staging deploy and bounded smoke complete this
+release for the stated closure. This is not a claim that the overall product, broader menu
+constructor, media/top-list or Dangerous Action Audit is production-ready.
 
-## 7. Worktree constraints
+## 7. Next bounded initial-menu-bootstrap finding (not implemented)
+
+Approval and venue linking currently grant access but do not seed `menu_categories`. The first
+authenticated Owner/Manager Telegram open of `🍽 Заказное меню` atomically creates only the missing
+`Кальянное меню`, `Напитки` and `Кухня` categories; a Mini App menu GET is deliberately read-only and
+can therefore render an empty menu before that Telegram action.
+
+The selected next candidate is a shared explicit initial-menu bootstrap: reuse the existing
+missing-only repository transaction from the Telegram root and from an Owner/Manager Mini App
+pre-management mutation, never from GET or the Platform approval flow. It must retain the
+current-user actor and surface-owned source, append only missing defaults without renaming or
+reordering existing categories, and create no items, flavors or options.
+
+## 8. Worktree constraints
 
 Do not stage, commit, push, deploy or apply/read/change stash in this task. The pre-existing
 untracked `scripts/dev/` area remains untouched and must not be staged. Final handoff must include
-the exact validation results, remaining release gates and `git status --short`.
+the exact validation results and `git status --short`.
