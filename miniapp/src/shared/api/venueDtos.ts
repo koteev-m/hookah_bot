@@ -802,6 +802,10 @@ export type VenueMenuResponse = {
   categories: VenueMenuCategoryDto[]
 }
 
+export type VenueMenuBootstrapResponse = {
+  venueId: number
+}
+
 export type VenueMenuShiftCheckItemChangeRequest = {
   itemId: number
   expectedIsAvailable: boolean

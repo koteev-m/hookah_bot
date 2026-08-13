@@ -3,6 +3,7 @@ import { clearSession, getAccessToken } from '../shared/api/auth'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
 import {
   venueApplyBaseFlavorProfiles,
+  venueBootstrapMenu,
   venueCreateCategory,
   venueCreateItem,
   venueCreateOption,
@@ -965,6 +966,7 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
   if (!root) return () => undefined
   const canView = access.permissions.includes('MENU_VIEW')
   const canManage = access.permissions.includes('MENU_MANAGE')
+  const canBootstrap = canManage && (access.role === 'OWNER' || access.role === 'MANAGER')
   const canManageAvailability = access.permissions.includes('MENU_AVAILABILITY_MANAGE')
   const canShiftCheck =
     canView && access.role !== 'STAFF' && access.permissions.includes('MENU_SHIFT_CHECK')
@@ -975,6 +977,7 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
   let loadAbort: AbortController | null = null
   let confirmAbort: AbortController | null = null
   let loadSeq = 0
+  let bootstrapCompleted = !canBootstrap
   let interactionGeneration = 0
   let restoreGeneration = 0
   let programmaticRestoreDepth = 0
@@ -2155,6 +2158,27 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
     const controller = new AbortController()
     loadAbort = controller
     const seq = ++loadSeq
+    if (!bootstrapCompleted) {
+      const bootstrapResult = await venueBootstrapMenu(backendUrl, venueId, deps, controller.signal)
+      if (disposed || loadSeq !== seq) return false
+      if (!bootstrapResult.ok && bootstrapResult.error.code === REQUEST_ABORTED_CODE) {
+        loadAbort = null
+        return false
+      }
+      if (!bootstrapResult.ok) {
+        loadAbort = null
+        showError(bootstrapResult.error)
+        setStatus('')
+        return false
+      }
+      if (bootstrapResult.data.venueId !== venueId) {
+        loadAbort = null
+        showError({ status: 500, code: ApiErrorCodes.INTERNAL_ERROR, message: '' })
+        setStatus('')
+        return false
+      }
+      bootstrapCompleted = true
+    }
     const result = await venueGetMenu(backendUrl, venueId, deps, controller.signal)
     if (disposed || loadSeq !== seq) return false
     loadAbort = null

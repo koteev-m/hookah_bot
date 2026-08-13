@@ -61,8 +61,8 @@ import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import com.hookah.platform.backend.miniapp.venue.appendStaffCallStatusAuditBestEffort
 import com.hookah.platform.backend.miniapp.venue.menu.BASE_FLAVOR_PROFILE_ALREADY_EXISTS_MESSAGE
 import com.hookah.platform.backend.miniapp.venue.menu.HookahFlavorProfileService
+import com.hookah.platform.backend.miniapp.venue.menu.INITIAL_VENUE_MENU_CATEGORY_SEEDS
 import com.hookah.platform.backend.miniapp.venue.menu.MenuCategoryDeleteSource
-import com.hookah.platform.backend.miniapp.venue.menu.MenuCategorySeed
 import com.hookah.platform.backend.miniapp.venue.menu.MenuItemAvailabilitySource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuItemCreateSource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuItemDeleteSource
@@ -18084,16 +18084,10 @@ class TelegramBotRouter(
         userId: Long,
         venueId: Long,
     ): List<VenueMenuCategory>? {
-        val requiredDefaults =
-            listOf(
-                MenuCategorySeed("Кальянное меню"),
-                MenuCategorySeed("Напитки"),
-                MenuCategorySeed("Кухня"),
-            )
         return try {
             venueMenuRepository.createMissingCategories(
                 venueId = venueId,
-                seeds = requiredDefaults,
+                seeds = INITIAL_VENUE_MENU_CATEGORY_SEEDS,
                 actorUserId = userId,
                 source = MenuItemAvailabilitySource.TELEGRAM_BOT,
             )

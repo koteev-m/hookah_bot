@@ -29,6 +29,7 @@ import com.hookah.platform.backend.miniapp.venue.menu.MenuItemCreateSource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuOptionCreateSource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuSemanticType
 import com.hookah.platform.backend.miniapp.venue.menu.MenuShiftCheckResponse
+import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuBootstrapResponse
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuItem
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuOption
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepository
@@ -194,6 +195,151 @@ class VenueMenuRoutesTest {
                 }
 
             assertEquals(HttpStatusCode.OK, deleteCategoryResponse.status)
+        }
+
+    @Test
+    fun `owner and manager bootstrap exact shared defaults with authenticated actor and read only get`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("menu-bootstrap-success")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val ownerId = 68_101L
+            val managerId = 68_102L
+            val ownerVenueId = seedVenueWithRole(jdbcUrl, ownerId, "OWNER")
+            val managerVenueId = seedVenueWithRole(jdbcUrl, managerId, "MANAGER")
+            val emptyVenueId = seedVenueWithRole(jdbcUrl, ownerId, "OWNER")
+
+            val readOnlyGet =
+                client.get("/api/venue/menu?venueId=$emptyVenueId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config, ownerId)}") }
+                }
+            assertEquals(HttpStatusCode.OK, readOnlyGet.status)
+            val readOnlyJson = json.parseToJsonElement(readOnlyGet.bodyAsText()).jsonObject
+            assertEquals(setOf("venueId", "categories"), readOnlyJson.keys)
+            assertTrue(readOnlyJson.getValue("categories").jsonArray.isEmpty())
+            assertTrue(menuDeleteAudits(jdbcUrl, MENU_CATEGORY_CREATED_AUDIT_ACTION).isEmpty())
+
+            listOf(ownerId to ownerVenueId, managerId to managerVenueId).forEach { (actorId, venueId) ->
+                val response =
+                    client.post(
+                        "/api/venue/menu/bootstrap?venueId=$venueId" +
+                            "&actorUserId=999999&source=TELEGRAM_BOT",
+                    ) {
+                        headers {
+                            append(HttpHeaders.Authorization, "Bearer ${issueToken(config, actorId)}")
+                            append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                        }
+                        setBody("""{"actorUserId":999999,"source":"TELEGRAM_BOT","rawRequest":"private"}""")
+                    }
+                assertEquals(HttpStatusCode.OK, response.status)
+                val raw = json.parseToJsonElement(response.bodyAsText()).jsonObject
+                assertEquals(setOf("venueId"), raw.keys)
+                assertEquals(
+                    venueId,
+                    json.decodeFromString(VenueMenuBootstrapResponse.serializer(), response.bodyAsText()).venueId,
+                )
+
+                val categories = menuRepository(jdbcUrl).getMenu(venueId)
+                assertEquals(
+                    listOf("Кальянное меню", "Напитки", "Кухня"),
+                    categories.map { it.name },
+                )
+                assertEquals(listOf(0, 1, 2), categories.map { it.sortOrder })
+                assertTrue(categories.all { it.categoryType == MenuSemanticType.OTHER })
+                assertTrue(categories.flatMap { it.items }.isEmpty())
+
+                val repeat =
+                    client.post("/api/venue/menu/bootstrap?venueId=$venueId") {
+                        headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config, actorId)}") }
+                    }
+                assertEquals(HttpStatusCode.OK, repeat.status)
+            }
+
+            val audits = menuDeleteAudits(jdbcUrl, MENU_CATEGORY_CREATED_AUDIT_ACTION)
+            assertEquals(
+                listOf(ownerId, ownerId, ownerId, managerId, managerId, managerId),
+                audits.map { it.actorUserId },
+            )
+            audits.forEach { audit ->
+                assertEquals("menu_category", audit.entityType)
+                assertEquals(setOf("venueId", "categoryId", "source"), audit.payload.keys)
+                assertEquals("VENUE_MINI_APP", audit.payload.getValue("source").jsonPrimitive.content)
+                assertFalse(audit.payload.toString().contains("999999"))
+                assertFalse(audit.payload.toString().contains("TELEGRAM_BOT"))
+                assertFalse(audit.payload.toString().contains("private"))
+            }
+            assertTrue(menuRepository(jdbcUrl).getMenu(emptyVenueId).isEmpty())
+        }
+
+    @Test
+    fun `bootstrap denies staff foreign unaffiliated and platform only before creating categories`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("menu-bootstrap-rbac")
+            val platformOwnerId = 68_205L
+            val config = buildConfig(jdbcUrl, platformOwnerId)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val ownerId = 68_201L
+            val staffId = 68_202L
+            val foreignManagerId = 68_203L
+            val unaffiliatedId = 68_204L
+            val venueId = seedVenueWithRole(jdbcUrl, ownerId, "OWNER")
+            seedVenueWithRole(jdbcUrl, staffId, "STAFF", venueId)
+            seedVenueWithRole(jdbcUrl, foreignManagerId, "MANAGER")
+            seedUser(jdbcUrl, unaffiliatedId)
+            seedUser(jdbcUrl, platformOwnerId)
+
+            listOf(staffId, foreignManagerId, unaffiliatedId, platformOwnerId).forEach { actorId ->
+                val response =
+                    client.post("/api/venue/menu/bootstrap?venueId=$venueId") {
+                        headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config, actorId)}") }
+                    }
+                assertEquals(HttpStatusCode.Forbidden, response.status)
+                assertApiErrorEnvelope(response, ApiErrorCodes.FORBIDDEN)
+            }
+
+            assertTrue(menuRepository(jdbcUrl).getMenu(venueId).isEmpty())
+            assertTrue(menuDeleteAudits(jdbcUrl, MENU_CATEGORY_CREATED_AUDIT_ACTION).isEmpty())
+        }
+
+    @Test
+    fun `bootstrap audit failure returns safe 503 and rolls back every default`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("menu-bootstrap-audit-rollback")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val ownerId = 68_301L
+            val venueId = seedVenueWithRole(jdbcUrl, ownerId, "OWNER")
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                connection.createStatement().use { statement ->
+                    statement.execute(
+                        """
+                        ALTER TABLE audit_log
+                        ADD CONSTRAINT reject_menu_bootstrap_audit
+                        CHECK (action <> '$MENU_CATEGORY_CREATED_AUDIT_ACTION')
+                        """.trimIndent(),
+                    )
+                }
+            }
+
+            val response =
+                client.post("/api/venue/menu/bootstrap?venueId=$venueId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config, ownerId)}") }
+                }
+
+            assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
+            assertApiErrorEnvelope(response, ApiErrorCodes.DATABASE_UNAVAILABLE)
+            assertFalse(response.bodyAsText().contains("Кальянное меню"))
+            assertTrue(menuRepository(jdbcUrl).getMenu(venueId).isEmpty())
+            assertTrue(menuDeleteAudits(jdbcUrl, MENU_CATEGORY_CREATED_AUDIT_ACTION).isEmpty())
         }
 
     @Test

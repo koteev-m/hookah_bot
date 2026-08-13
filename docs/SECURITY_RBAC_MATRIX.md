@@ -13,7 +13,9 @@ MENU OPTION CREATE AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Menu item create
 ACTION AUDIT SLICE / MENU ITEM CREATE AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. The existing
 category/item management closure is **VENUE MENU MANAGEMENT / EXISTING-CONTRACT AUDIT AND
 TRANSACTION CLOSURE / DONE / MVP / STAGING-SMOKE-PASSED**; it grants no new role or cross-venue
-authority. Venue Mode, staff, booking,
+authority. Shared initial menu bootstrap is **VENUE MENU ONBOARDING / SHARED INITIAL MENU
+BOOTSTRAP / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT** and grants
+no new role, Platform or cross-venue authority. Venue Mode, staff, booking,
 Telegram fallback, menu, media,
 QA and deploy source-of-truth documents remain linked below; no bounded closure grants broad new
 authority or closes full permission parity.
@@ -536,6 +538,28 @@ STAGING-SMOKE-PASSED**.
 - This release closes only the listed existing Menu Management writers. Broader menu constructor,
   description/media/top-list, other dangerous actions and permission parity remain `PARTIAL`.
 
+### Shared initial menu bootstrap
+
+Status: **VENUE MENU ONBOARDING / SHARED INITIAL MENU BOOTSTRAP / MVP IMPLEMENTED / LOCAL
+VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+
+- Authenticated Owner and Manager with current own-venue `MENU_MANAGE` may call the explicit Mini
+  App bootstrap mutation or enter the existing Telegram menu root. Staff, foreign, unaffiliated and
+  Platform-only actors are denied before any bootstrap write; hidden UI grants no authority.
+- Mini App derives actor only from its authenticated session subject and fixes source to
+  `VENUE_MINI_APP`. Telegram uses the current authenticated user and `TELEGRAM_BOT`. Body, query,
+  path, initData, update, callback and message fields cannot override actor or source.
+- Platform approval, linking and Owner assignment remain non-seeding, and the ordinary menu GET
+  remains read-only. The mutation returns only `{venueId}`; it exposes no membership or category
+  detail and appends no route-side audit.
+- Every physically missing default uses the existing transaction-bound `MENU_CATEGORY_CREATED` /
+  `menu_category` / category-id contract. Payload keys are only `venueId`, `categoryId`, `source`;
+  actor stays in the standard actor column. Names, types, raw requests, Telegram data, media,
+  secrets and unrelated PII remain excluded. No-op, denial and rollback write zero audit.
+- Exact defaults are `Кальянное меню`, `Напитки`, `Кухня`, all explicitly `OTHER`. Existing menu
+  rows are preserved and no items/options/flavors are created. Schema verdict is
+  `NO_MIGRATION_EXPECTED`.
+
 These bounded menu, staff and promotion creation/lifecycle slices do not close the overall dangerous-action audit.
 Promotion configuration edit, QR rotate, force-close/session, tab reopen, analytics export, the
 Promotion Compatibility Policy and a broader audit viewer remain open.
@@ -559,6 +583,7 @@ Promotion Compatibility Policy and a broader audit viewer remain open.
 | Menu option availability audit | **DONE / MVP / STAGING-SMOKE-PASSED**. Authenticated Mini App direct/compound and Telegram individual paths use one locked repository transaction with server-derived actor/source. | One real committed individual delta writes one allowlisted `MENU_OPTION_AVAILABILITY_CHANGED`; no-op/denial/failure/rollback writes zero. | Shift Check is excluded and retains its one batch audit. |
 | Menu item availability audit | **DANGEROUS ACTION AUDIT SLICE / MENU ITEM AVAILABILITY AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Authenticated Mini App direct/compound and Telegram individual paths use one item-locked transaction with server-derived actor/source. | One real committed individual delta writes one allowlisted `MENU_ITEM_AVAILABILITY_CHANGED`; no-op/denial/failure/rollback writes zero. | Shift Check is aggregate-only; item metadata actions are covered by the separate local closure. |
 | Venue Menu Management existing-contract closure | **DONE / MVP / STAGING-SMOKE-PASSED**. Owner/Manager own-venue only; Staff/foreign/unaffiliated/Platform-only denied; actor/source are server-derived on Mini App and Telegram with strict dialog-owner binding. | Nine existing category/item families write exact privacy-safe same-transaction audits; exact no-op and rollback write zero, compound item deltas commit atomically, and reorders require the complete authoritative set. | No role/API/UX/schema expansion. User-confirmed green Actions, staging deploy and consolidated smoke close this bounded slice; broader Menu/Dangerous Action Audit stays `PARTIAL`. |
+| Shared initial menu bootstrap | **MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. Explicit Mini App mutation and Telegram root share one missing-only seed; GET and approval/linking remain non-seeding. | Owner/Manager own venue only; session/current-user actor and server-owned surface source; Staff/foreign/unaffiliated/Platform-only denied. | Review, green Actions and staging smoke remain required; no migration or wider onboarding authority. |
 | Manager/Owner venue isolation | Own-venue RBAC is the product rule. | No cross-venue detail/reply/manage access. | Keep cross-venue tests for support, chats, orders, bookings and settings. |
 | Platform access | Platform Owner can manage platform scope and support tickets; ordinary venue chat is hidden. The bounded confirmed QR test enters the normal public Guest table flow only. Activation is atomic; teardown uses stored context identity and remains possible when token/table/venue/subscription becomes unavailable. | Platform does not bypass ordinary venue RBAC. Explicit Guest context temporarily wins routing only for ordinary Guest actions and is cleared by existing visit exit. Mini App re-entry requires matching chat context and no exit marker. | Controlled QR Phase 1 is staging-smoke-passed and stays in regression; event/audit explorer and analytics exports still need additional privacy gates before broad release. |
 | Dangerous action audit | Several audits exist, including the release-closed menu slices and the nine-family Menu Management closure. | All dangerous actions write safe actor/target/old-new/reason evidence. | Audit coverage remains `PARTIAL`; description/media/archive, QR rotate, force close, tab reopen, promotion configuration and analytics export remain open. |

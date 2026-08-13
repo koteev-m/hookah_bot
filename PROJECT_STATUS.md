@@ -1,112 +1,114 @@
 # Project Status
 
 Last verified: 2026-08-13. Active Goal is the objective in
-`/Users/maksimmartynov/.codex/attachments/b3a604ea-adda-4635-9f79-7937180caa97/goal-objective.md`.
-It is the bounded Menu Management transaction/audit closure, not media/R2.
+`/Users/maksimmartynov/.codex/attachments/e9d0953e-4f84-42ee-8a88-f5c2e81d718a/goal-objective.md`.
+It is the bounded shared initial-menu bootstrap, not Media/R2.
 
 ## 1. Current stage
 
-**VENUE MENU MANAGEMENT / EXISTING-CONTRACT AUDIT AND TRANSACTION CLOSURE / DONE / MVP /
-STAGING-SMOKE-PASSED**.
+**VENUE MENU ONBOARDING / SHARED INITIAL MENU BOOTSTRAP / MVP IMPLEMENTED / LOCAL VALIDATION
+PASSED / REVIEW REQUIRED BEFORE COMMIT**.
 
-This status applies only to the existing category/item management writers. The overall product,
-broader menu constructor/media/top-list work, permission parity and Dangerous Action Audit remain
-`PARTIAL`. Previously release-closed menu create/delete/availability/option/normalization/Shift
-Check, Guest stale-cart/idempotency and Venue Menu UX contracts remain unchanged.
+This status applies only to the shared initial structured-menu bootstrap. It does not mark the
+whole onboarding flow, broader menu constructor/media/top-list work, permission parity or the
+overall product production-ready. The previously release-closed Venue Menu Management transaction/
+audit closure and its regression contracts remain unchanged.
 
-## 2. Verified writer inventory and scope
+## 2. Verified current flow and shared defaults
 
-`VenueMenuRepository` is still the sole main-source production SQL owner for `menu_categories`,
-`menu_items` and `menu_item_options`; no additional authenticated runtime writer was found.
-Migration/test/staging seed SQL is not a production writer. This closure contains exactly nine
-families:
+Platform approval, venue linking and Owner assignment still grant access without creating menu
+categories. The ordinary authenticated Mini App menu GET remains a pure read. Physical creation of
+missing defaults happens on the first qualifying authenticated Owner/Manager management entry
+through the explicit Mini App mutation or the existing Telegram `🍽 Заказное меню` root. Either
+surface may invoke bootstrap again; a complete menu makes those repeated calls exact no-ops.
 
-1. category create, including authenticated Telegram default seeding;
-2. category rename;
-3. category semantic type;
-4. category reorder;
-5. item rename;
-6. item price/currency;
-7. item semantic type;
-8. item category move;
-9. item reorder.
+Both surfaces use the same internal seed source in `VenueMenuRepository.kt`, in this exact order:
 
-No option reorder writer exists. No scope, lock-order, authority, financial, API/UX or seeding stop
-rule was triggered.
+1. `Кальянное меню` — `MenuSemanticType.OTHER`;
+2. `Напитки` — `MenuSemanticType.OTHER`;
+3. `Кухня` — `MenuSemanticType.OTHER`.
 
-## 3. Implemented transaction and audit contract
+The shared source creates categories only. It creates no items, options, flavors or base profiles.
 
-The nine actions are `MENU_CATEGORY_CREATED`, `MENU_CATEGORY_RENAMED`,
-`MENU_CATEGORY_TYPE_CHANGED`, `MENU_CATEGORIES_REORDERED`, `MENU_ITEM_RENAMED`,
-`MENU_ITEM_PRICE_CHANGED`, `MENU_ITEM_TYPE_CHANGED`, `MENU_ITEM_CATEGORY_MOVED` and
-`MENU_ITEMS_REORDERED`.
+## 3. Repository, API and client behavior
 
-Each operation uses one repository-owned JDBC connection/transaction: deterministic ordering/category
-locks, authoritative reread, real-delta calculation, business mutation, same-connection audit rows,
-authoritative result reread and one commit. Exact no-op writes no family audit and preserves
-`updated_at`; any SQL/audit failure rolls back every field, order/timestamp and audit row. Compound
-item PATCH can atomically emit one truthful audit for each real rename, price/currency, type, move
-and existing availability delta.
+`VenueMenuRepository.createMissingCategories` remains the single bootstrap writer. One repository-
+owned JDBC transaction acquires the existing venue category-order lock, rereads current categories,
+matches trimmed lowercase names, appends only missing defaults after the current maximum order,
+writes one `MENU_CATEGORY_CREATED` audit for each physical insert, rereads the authoritative menu
+and commits once. Existing category ids, names, semantic types, order, timestamps, items and options
+are not rewritten. A complete menu is an exact row/timestamp/audit no-op; any insert or audit failure
+rolls back all bootstrap rows and audits.
 
-Category default seeding is one atomic operation with one create audit per physically missing row
-and zero on repeat. Reorders require the exact authoritative set and store count plus deterministic
-old/new SHA-256 order hashes, never full id arrays. Move locks source/destination categories in
-ascending id before the item; item reorder locks category then authoritative items by ascending id.
+Mini App adds authenticated `POST /api/venue/menu/bootstrap?venueId=...`. It requires current
+own-venue `MENU_MANAGE`, derives actor from the session subject, fixes source to `VENUE_MINI_APP`,
+ignores actor/source spoof fields and returns only `{venueId}`. Owner and Manager are allowed; Staff,
+foreign, unaffiliated and Platform-only actors are denied before mutation. The route writes no
+second audit and the existing safe database-failure contract returns `503`.
 
-## 4. Authority, privacy and compatibility
+On each Owner/Manager menu screen mount the Mini App awaits the mutation, then performs exactly one
+authoritative GET before rendering menu data. A bootstrap failure uses the existing actionable
+manual retry without an automatic loop or false empty-menu success. After bootstrap succeeds, a
+failed-GET retry repeats only GET. Staff/read-only entry sends no bootstrap mutation. Existing abort,
+disposed-screen, sequence, focus/interaction restoration and venue/account switch protections ignore
+late responses from stale contexts.
 
-Owner/Manager own-venue authority is unchanged; legacy `ADMIN` remains only Manager-compatible.
-Staff, foreign, unaffiliated and Platform-only actors are denied structure/commercial writes before
-entity facts. Mini App actor is the authenticated session subject and source is `VENUE_MINI_APP`.
-Telegram actor is the current user, must equal persisted dialog owner for dialog continuations, and
-source is `TELEGRAM_BOT`. Routes/router append no duplicate audit.
+The Telegram root now imports the same seed source and keeps its existing Owner/Manager guard,
+current authenticated Telegram actor, server-owned `TELEGRAM_BOT` source and success/failure copy.
+Repeat remains a repository no-op and database/audit failure returns before success UI.
 
-Payloads contain only allowlisted ids/source, authoritative finite old/new type or price/currency
-values, and bounded reorder counts/hashes. Names, raw requests/initData/Telegram data, media,
-option/promotion/cart/order contents, secrets, PII and full reorder arrays are excluded. Current
-Guest menu/new orders use current values; historical name/price snapshots remain immutable.
-Pricing, currency/minor units, promotion, stale-cart/idempotency, DTO/status and UX semantics did
-not change.
+## 4. Audit, privacy and concurrency
 
-## 5. Local and release evidence
+Every inserted default uses action `MENU_CATEGORY_CREATED`, entity type `menu_category` and the new
+category id. Payload keys remain exactly `venueId`, `categoryId`, `source`; actor is stored only in
+the standard actor column. Category names/types, raw request, initData, Telegram update/callback/
+identity, media, secrets and unrelated PII are excluded.
 
-Green XML records repository `51/0/0/0`, Mini App routes `43/0/0/0`, Telegram `549/0/0/0`, Guest
-order/history `61/0/0/0` and real Testcontainers PostgreSQL menu concurrency `40/0/0/0`. The exact
-route/security selector passed `1164/0/0/0`; the exact five-suite PostgreSQL selector passed
-`73/0/0/0` with minimum vector `8 / 14 / 2 / 40 / 9`. The menu matrix contains all ten required
-management schedules with independent connections/PIDs, deterministic latches and observed
-`pg_blocking_pids`/`pg_locks` evidence.
+The existing ordinary category create, bootstrap and category reorder operations share the same
+venue-scoped category-order lock and compatible lock order. Deterministic Testcontainers PostgreSQL
+coverage proves Mini App vs Telegram bootstrap, Mini App vs Mini App bootstrap, bootstrap vs ordinary
+create, bootstrap vs reorder and partial-audit-failure rollback with independent connections/PIDs,
+latches and observed `pg_blocking_pids`/`pg_locks`. Final defaults are unique and committed insert
+cardinality equals create-audit cardinality.
+
+## 5. Local validation evidence
+
+Focused JUnit XML is green: repository `54/0/0/0`, Mini App routes `46/0/0/0`, Telegram
+`551/0/0/0`, onboarding/connection `18/0/0/0` and menu PostgreSQL concurrency `44/0/0/0`.
+The exact current route/security selector passed `1190/0/0/0`. The exact five-suite PostgreSQL
+selector passed `77/0/0/0` with minimum vector `8 / 14 / 2 / 44 / 9`.
 
 Standalone `compileKotlin`, `ktlintCheck`, Mini App production build and full Playwright smoke
-`169/169` passed. Existing CI minima have been raised to Guest `61`, repository `51`, routes `43`,
-Telegram `549` and menu PostgreSQL `40`; missing/zero/below-minimum/skipped/failing XML still fails
-the existing mandatory gates. Final `git diff --check` and status are the handoff-only checks.
+`176/176` passed. The seven new deterministic browser tests cover empty-first bootstrap, repeat,
+partial/custom preservation, bootstrap and subsequent GET failure/retry, delayed venue switch,
+delayed account replacement and Staff no-mutation behavior. `git diff --check` is clean.
 
-The user confirmed the release gates: GitHub Actions are fully green, the staging deploy completed
-and the consolidated Menu Management smoke passed. That smoke covered category create/rename/type/
-reorder; item rename/price/type/category move/reorder; Telegram mutation; Staff denial for
-structure/commercial changes; exactly-one/no-op audits and payload privacy; current Guest menu data;
-immutable historical order snapshots; and normal cleanup.
+Only the existing route/security CI gate changed: it now requires onboarding/connection XML with a
+minimum of `18` while retaining the existing repository `51 -> 54`, routes `43 -> 46`, Telegram
+`549 -> 551` and menu PostgreSQL `40 -> 44` minima. No workflow was added. The blocking CI coverage
+gap is fixed locally; the next short independent review, green Actions and staging smoke remain
+required before release.
 
 ## 6. Release and schema verdict
 
-**NO_MIGRATION_EXPECTED**. No new workflow, schema, unique constraint, ordering engine, API or
-product feature was added. The confirmed Actions, staging deploy and bounded smoke complete this
-release for the stated closure. This is not a claim that the overall product, broader menu
-constructor, media/top-list or Dangerous Action Audit is production-ready.
+**NO_MIGRATION_EXPECTED**. No migration, SYSTEM actor, approval transaction redesign, default
+semantic-type change, new menu/onboarding engine or UI redesign was required. This local result is
+not release or production evidence.
 
-## 7. Next bounded initial-menu-bootstrap finding (not implemented)
+Because backend, Mini App and Telegram runtime behavior changed, staging deploy and a bounded
+cross-surface smoke are required only after independent review, commit and green GitHub Actions.
+No deploy was performed in this task.
 
-Approval and venue linking currently grant access but do not seed `menu_categories`. The first
-authenticated Owner/Manager Telegram open of `🍽 Заказное меню` atomically creates only the missing
-`Кальянное меню`, `Напитки` and `Кухня` categories; a Mini App menu GET is deliberately read-only and
-can therefore render an empty menu before that Telegram action.
+## 7. Remaining work
 
-The selected next candidate is a shared explicit initial-menu bootstrap: reuse the existing
-missing-only repository transaction from the Telegram root and from an Owner/Manager Mini App
-pre-management mutation, never from GET or the Platform approval flow. It must retain the
-current-user actor and surface-owned source, append only missing defaults without renaming or
-reordering existing categories, and create no items, flavors or options.
+The blocking CI coverage gap is fixed locally. The next short independent review remains required
+before commit; then green Actions, staging deploy and smoke for Owner/Manager/Staff,
+Mini App-first/Telegram-first parity, no-op/audit privacy and an existing-menu venue remain release
+gates.
+
+Broader onboarding automation, menu constructor/archive/description/media/top-list, per-venue Staff
+stop-list policy, permission parity and the wider Dangerous Action Audit remain P2/future or partial
+according to their canonical documents. Media/R2 was not opened by this task.
 
 ## 8. Worktree constraints
 

@@ -76,6 +76,7 @@ import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import com.hookah.platform.backend.miniapp.venue.menu.BASE_FLAVOR_PROFILE_ALREADY_EXISTS_MESSAGE
 import com.hookah.platform.backend.miniapp.venue.menu.HookahBaseFlavorProfileApplyResult
 import com.hookah.platform.backend.miniapp.venue.menu.HookahFlavorProfileNormalizationResult
+import com.hookah.platform.backend.miniapp.venue.menu.INITIAL_VENUE_MENU_CATEGORY_SEEDS
 import com.hookah.platform.backend.miniapp.venue.menu.MENU_ITEM_CREATED_AUDIT_ACTION
 import com.hookah.platform.backend.miniapp.venue.menu.MenuCategoryDeleteSource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuItemAvailabilitySource
@@ -8719,14 +8720,15 @@ class TelegramBotRouterTableTokenTest {
                     venueId = 10L,
                     seeds =
                         match { seeds ->
-                            seeds.map { it.name } == listOf("Кальянное меню", "Напитки", "Кухня")
+                            seeds == INITIAL_VENUE_MENU_CATEGORY_SEEDS &&
+                                seeds.all { it.categoryType == MenuSemanticType.OTHER }
                         },
                     actorUserId = 200L,
                     source = MenuItemAvailabilitySource.TELEGRAM_BOT,
                 )
             }
             coVerify(exactly = 0) {
-                venueMenuRepository.createCategory(any(), any(), any(), any())
+                venueMenuRepository.createCategory(any(), any(), any(), any(), any())
             }
         }
 
@@ -8770,8 +8772,90 @@ class TelegramBotRouterTableTokenTest {
                     any(),
                 )
             }
-            coVerify(exactly = 0) { venueMenuRepository.createCategory(any(), any(), any(), any()) }
+            coVerify(exactly = 0) {
+                venueMenuRepository.createCategory(any(), any(), any(), any(), any())
+            }
             coVerify(exactly = 0) { auditLogRepository.appendJson(any(), any(), any(), any(), any()) }
+        }
+
+    @Test
+    fun `manager repeated menu root uses shared defaults current actor and telegram source`() =
+        runBlocking {
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(201L, 10L) } returns true
+
+            repeat(2) { index ->
+                router.process(
+                    TelegramUpdate(
+                        updateId = 10_004_12L + index,
+                        callbackQuery =
+                            CallbackQuery(
+                                id = "cb-manager-menu-root-$index",
+                                from = User(id = 201L),
+                                message =
+                                    Message(
+                                        messageId = 20_004_12L + index,
+                                        chat = Chat(id = 100, type = "private"),
+                                    ),
+                                data = "owner_venue_order_menu_root:10",
+                            ),
+                    ),
+                )
+            }
+
+            coVerify(exactly = 2) {
+                venueMenuRepository.createMissingCategories(
+                    venueId = 10L,
+                    seeds = INITIAL_VENUE_MENU_CATEGORY_SEEDS,
+                    actorUserId = 201L,
+                    source = MenuItemAvailabilitySource.TELEGRAM_BOT,
+                )
+            }
+            coVerify(exactly = 2) {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.startsWith("🍽 Заказное меню") },
+                    any(),
+                )
+            }
+            coVerify(exactly = 0) { auditLogRepository.appendJson(any(), any(), any(), any(), any()) }
+        }
+
+    @Test
+    fun `staff and foreign menu roots are denied before default bootstrap`() =
+        runBlocking {
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(300L, 10L) } returns false
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(301L, 10L) } returns false
+
+            listOf(300L, 301L).forEachIndexed { index, actorUserId ->
+                router.process(
+                    TelegramUpdate(
+                        updateId = 10_004_20L + index,
+                        callbackQuery =
+                            CallbackQuery(
+                                id = "cb-denied-menu-root-$actorUserId",
+                                from = User(id = actorUserId),
+                                message =
+                                    Message(
+                                        messageId = 20_004_20L + index,
+                                        chat = Chat(id = 100, type = "private"),
+                                    ),
+                                data = "owner_venue_order_menu_root:10",
+                            ),
+                    ),
+                )
+            }
+
+            coVerify(exactly = 1) { venueAccessRepository.hasVenueAdminOrOwner(300L, 10L) }
+            coVerify(exactly = 1) { venueAccessRepository.hasVenueAdminOrOwner(301L, 10L) }
+            coVerify(exactly = 0) {
+                venueMenuRepository.createMissingCategories(10L, any(), 300L, MenuItemAvailabilitySource.TELEGRAM_BOT)
+            }
+            coVerify(exactly = 0) {
+                venueMenuRepository.createMissingCategories(10L, any(), 301L, MenuItemAvailabilitySource.TELEGRAM_BOT)
+            }
+            coVerify(exactly = 2) {
+                outboxEnqueuer.enqueueSendMessage(100, "Нет доступа к заведению.", null)
+            }
         }
 
     @Test

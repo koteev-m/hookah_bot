@@ -2,7 +2,7 @@
 
 Дата актуализации: 2026-08-13.
 
-Статус: **current product reference / SPEC UPDATED**. Guest stale-menu cart recovery is **GUEST CART STALE MENU SELECTION RECOVERY / REMOVED OR UNAVAILABLE ITEMS AND OPTIONS / PAYLOAD-BOUND IDEMPOTENCY + ATOMIC REJECTION / DONE / MVP / STAGING-SMOKE-PASSED**; its **ITEM-LEVEL ACTION AND COPY POLISH / DONE / MVP / STAGING-SMOKE-PASSED**. Menu/options/flavors parity is documented as smoke-closed for the structured selected-option flow. The bounded shift-check and earlier menu audit slices remain release-closed. The current category/item closure is **VENUE MENU MANAGEMENT / EXISTING-CONTRACT AUDIT AND TRANSACTION CLOSURE / DONE / MVP / STAGING-SMOKE-PASSED**. The broader menu constructor, media/top-list governance, non-menu audit coverage and permission parity remain **PARTIAL** unless a specific implementation task proves them.
+Статус: **current product reference / SPEC UPDATED**. Guest stale-menu cart recovery is **GUEST CART STALE MENU SELECTION RECOVERY / REMOVED OR UNAVAILABLE ITEMS AND OPTIONS / PAYLOAD-BOUND IDEMPOTENCY + ATOMIC REJECTION / DONE / MVP / STAGING-SMOKE-PASSED**; its **ITEM-LEVEL ACTION AND COPY POLISH / DONE / MVP / STAGING-SMOKE-PASSED**. Menu/options/flavors parity is documented as smoke-closed for the structured selected-option flow. The bounded shift-check and earlier menu audit slices remain release-closed. The current category/item closure is **VENUE MENU MANAGEMENT / EXISTING-CONTRACT AUDIT AND TRANSACTION CLOSURE / DONE / MVP / STAGING-SMOKE-PASSED**. Shared initial menu bootstrap is **VENUE MENU ONBOARDING / SHARED INITIAL MENU BOOTSTRAP / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. The broader menu constructor, media/top-list governance, non-menu audit coverage and permission parity remain **PARTIAL** unless a specific implementation task proves them.
 
 ## Core Rule
 
@@ -14,19 +14,26 @@ first slice.
 
 Menu permissions are governed by `docs/SECURITY_RBAC_MATRIX.md`; Venue Mode operational surfaces are governed by `docs/VENUE_OPERATIONS.md`; order/session/tab and snapshot rules are governed by `docs/ORDER_SESSION_TAB_CORE.md`; Telegram callback/staff-chat rules are governed by `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`; analytics/audit event names are governed by `docs/ANALYTICS_EVENTS.md`; validation strategy is governed by `docs/TESTING_QA_SMOKE_STRATEGY.md`; release/deploy operations are governed by `docs/DEPLOYMENT_RUNBOOK.md`.
 
-## Initial menu bootstrap (next bounded work; not implemented)
+## Shared initial menu bootstrap
 
-Current approval and venue-linking paths do not create categories. The first authenticated
-Owner/Manager Telegram open of `🍽 Заказное меню` calls the atomic, missing-only default-category
-transaction for `Кальянное меню`, `Напитки` and `Кухня`; a repeated open creates no duplicate row or
-audit. The authenticated Mini App menu GET remains a pure view read and can show an empty menu when
-it is opened first.
+Status: **VENUE MENU ONBOARDING / SHARED INITIAL MENU BOOTSTRAP / MVP IMPLEMENTED / LOCAL
+VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
 
-The next candidate is a shared explicit bootstrap used by that Telegram entry and an
-Owner/Manager-only Mini App pre-management mutation. It must reuse the existing repository
-transaction with the current surface actor/source, never mutate GET or the Platform approval flow,
-and append only missing categories. Existing names, types and order remain untouched; no hookah
-items, options or flavor profiles are created automatically.
+Approval, venue linking and Owner assignment remain non-seeding. The authenticated menu GET remains
+a pure read. The explicit Owner/Manager Mini App management entry calls
+`POST /api/venue/menu/bootstrap`, awaits its bounded `{venueId}` response and then performs one
+authoritative GET; the existing Telegram `🍽 Заказное меню` root uses the same shared seed source.
+Mini App derives the actor from the session and fixes `VENUE_MINI_APP`; Telegram uses the current
+authenticated user and `TELEGRAM_BOT`. Staff, foreign, unaffiliated and Platform-only actors do not
+gain management authority.
+
+The exact shared seed is `Кальянное меню`, `Напитки`, `Кухня`, in that order, with every new row
+explicitly `MenuSemanticType.OTHER`. `VenueMenuRepository.createMissingCategories` appends only
+normalized-name-missing defaults after the existing maximum order in one category-order-locked
+transaction. Existing ids, names, types, order, timestamps, items and options remain unchanged;
+complete/repeated bootstrap writes zero rows and audits. One physical insert writes one existing
+privacy-safe `MENU_CATEGORY_CREATED` audit, and any insert/audit failure rolls the complete bootstrap
+back. No items, options, flavors or base profiles are seeded. No migration is required.
 
 ## Terms
 
@@ -45,7 +52,7 @@ items, options or flavor profiles are created automatically.
 
 | Area | Current implementation from docs | Target product model | Gap / risk / future note |
 | --- | --- | --- | --- |
-| Category CRUD | Existing create/rename/type/reorder paths are transaction-bound and release-closed; delete remains release-closed. | Owner/Manager manage existing own-venue category structure; Staff is denied. | Broader constructor/archive/media remains `PARTIAL`; initial cross-surface bootstrap is the next bounded candidate. |
+| Category CRUD | Existing create/rename/type/reorder paths are transaction-bound and release-closed; delete remains release-closed. Shared missing-only initial bootstrap is locally implemented for Mini App and Telegram. | Owner/Manager manage existing own-venue category structure; Staff is denied. | Bootstrap still requires review, Actions and staging smoke; broader constructor/archive/media remains `PARTIAL`. |
 | Item CRUD | Existing create/delete/rename/price-currency/type/category-move/reorder paths are transaction-bound and audited; Staff remains denied for structure. | Owner/Manager manage item structure/commercial fields; featured/media remain separate. | Existing-contract closure is release-closed; description/media/featured and broader constructor work stay future. |
 | Item availability | Owner/Manager/Staff direct Mini App and Telegram changes write one transaction-bound safe audit per real delta; Owner/Manager compound PATCH audits only its availability delta. | Availability toggle is operational state, fast and reversible, with safe actor/source evidence. | Release-closed only for this bounded audit contract. Per-venue `staff_stoplist_enabled` stays future. |
 | Option group/value support | Guest/Menu Options & Flavors parity is smoke-closed: item-scoped options/flavors, base profiles and selected-option submit exist. Atomic Telegram base-profile normalization and application-level locked canonical-profile collision checks are release-closed for their bounded contract. | General `OPTION_GROUP`/`OPTION_VALUE` model supports required single/multi modifiers with min/max validation. | Broader non-hookah modifier UX, DB-level uniqueness and Mini App atomic bulk apply remain separate. |

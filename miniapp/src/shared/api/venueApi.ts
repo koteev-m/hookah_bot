@@ -32,6 +32,7 @@ import type {
   VenueTableTokenRotateResponse,
   VenueTablesResponse,
   VenueMenuCategoryDto,
+  VenueMenuBootstrapResponse,
   VenueMenuItemDto,
   VenueMenuOptionDto,
   VenueMenuResponse,
@@ -358,6 +359,21 @@ export async function venueGetMenu(
     backendUrl,
     `/api/venue/menu?${search.toString()}`,
     { signal },
+    deps
+  )
+}
+
+export async function venueBootstrapMenu(
+  backendUrl: string,
+  venueId: number,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  const search = new URLSearchParams({ venueId: String(venueId) })
+  return requestApi<VenueMenuBootstrapResponse>(
+    backendUrl,
+    `/api/venue/menu/bootstrap?${search.toString()}`,
+    { method: 'POST', signal },
     deps
   )
 }

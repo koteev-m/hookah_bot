@@ -98,6 +98,7 @@ jobs:
             --tests "VenueStaffRoutesTest" \
             --tests "VenueStaffRepositoryTest" \
             --tests "PlatformVenueRoutesTest" \
+            --tests "com.hookah.platform.backend.telegram.TelegramBotRouterVenueConnectionRequestFlowTest" \
             --tests "TelegramBotRouterTableTokenTest" \
             --tests "TelegramKeyboardsTest" \
             --console=plain
@@ -132,15 +133,17 @@ jobs:
               "com.hookah.platform.backend.miniapp.venue.VenueStaffRoutesTest",
               "com.hookah.platform.backend.miniapp.venue.staff.VenueStaffRepositoryTest",
               "com.hookah.platform.backend.platform.PlatformVenueRoutesTest",
+              "com.hookah.platform.backend.telegram.TelegramBotRouterVenueConnectionRequestFlowTest",
               "com.hookah.platform.backend.telegram.TelegramBotRouterTableTokenTest",
               "com.hookah.platform.backend.telegram.TelegramKeyboardsTest",
           ]
           required_minimums = {
               "com.hookah.platform.backend.miniapp.guest.GuestOrderRoutesTest": 61,
               "com.hookah.platform.backend.telegram.db.GuestOrderIdempotencyFingerprintTest": 7,
-              "com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepositoryTest": 51,
-              "com.hookah.platform.backend.miniapp.venue.VenueMenuRoutesTest": 43,
-              "com.hookah.platform.backend.telegram.TelegramBotRouterTableTokenTest": 549,
+              "com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepositoryTest": 54,
+              "com.hookah.platform.backend.miniapp.venue.VenueMenuRoutesTest": 46,
+              "com.hookah.platform.backend.telegram.TelegramBotRouterVenueConnectionRequestFlowTest": 18,
+              "com.hookah.platform.backend.telegram.TelegramBotRouterTableTokenTest": 551,
           }
           totals = {key: 0 for key in ("tests", "skipped", "failures", "errors")}
           problems = []
@@ -221,7 +224,7 @@ jobs:
                       "TEST-com.hookah.platform.backend.miniapp.venue.menu."
                       "VenueMenuOptionNormalizationConcurrencyPostgresTest.xml"
                   ),
-                  40,
+                  44,
               ),
               (
                   "guest order idempotency concurrency",

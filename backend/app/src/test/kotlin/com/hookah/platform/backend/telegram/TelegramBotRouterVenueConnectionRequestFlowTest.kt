@@ -10,6 +10,7 @@ import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
 import com.hookah.platform.backend.miniapp.subscription.SubscriptionStatus
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
+import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepository
 import com.hookah.platform.backend.platform.PlatformEffectivePrice
 import com.hookah.platform.backend.platform.PlatformOwnerAssignmentResult
 import com.hookah.platform.backend.platform.PlatformPriceScheduleItem
@@ -758,6 +759,7 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
             val venueRepository: VenueRepository = mockk()
             val venueBookingHoursRepository: VenueBookingHoursRepository = mockk(relaxed = true)
             val venueMenuSectionImagesRepository: VenueMenuSectionImagesRepository = mockk(relaxed = true)
+            val venueMenuRepository: VenueMenuRepository = mockk(relaxed = true)
             val venueAccessRepository: VenueAccessRepository = mockk()
             val subscriptionRepository: SubscriptionRepository = mockk()
             val guestMenuRepository: GuestMenuRepository = mockk()
@@ -803,6 +805,7 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
                     venueRepository = venueRepository,
                     venueBookingHoursRepository = venueBookingHoursRepository,
                     venueMenuSectionImagesRepository = venueMenuSectionImagesRepository,
+                    venueMenuRepository = venueMenuRepository,
                     venueAccessRepository = venueAccessRepository,
                     subscriptionRepository = subscriptionRepository,
                     guestMenuRepository = guestMenuRepository,
@@ -834,6 +837,10 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
                     6001L,
                     VenueConnectionRequestRepository.STATUS_APPROVED,
                 )
+            }
+            coVerify(exactly = 0) { venueMenuRepository.createMissingCategories(any(), any(), any(), any()) }
+            coVerify(exactly = 0) {
+                venueMenuRepository.createCategory(any(), any(), any(), any(), any())
             }
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
@@ -869,6 +876,7 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
             val venueRepository: VenueRepository = mockk()
             val venueBookingHoursRepository: VenueBookingHoursRepository = mockk(relaxed = true)
             val venueMenuSectionImagesRepository: VenueMenuSectionImagesRepository = mockk(relaxed = true)
+            val venueMenuRepository: VenueMenuRepository = mockk(relaxed = true)
             val venueAccessRepository: VenueAccessRepository = mockk()
             val subscriptionRepository: SubscriptionRepository = mockk()
             val guestMenuRepository: GuestMenuRepository = mockk()
@@ -1056,6 +1064,7 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
                     venueRepository = venueRepository,
                     venueBookingHoursRepository = venueBookingHoursRepository,
                     venueMenuSectionImagesRepository = venueMenuSectionImagesRepository,
+                    venueMenuRepository = venueMenuRepository,
                     venueAccessRepository = venueAccessRepository,
                     subscriptionRepository = subscriptionRepository,
                     guestMenuRepository = guestMenuRepository,
@@ -1124,6 +1133,10 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
                     requestId = 7001L,
                     venueId = 9001L,
                 )
+            }
+            coVerify(exactly = 0) { venueMenuRepository.createMissingCategories(any(), any(), any(), any()) }
+            coVerify(exactly = 0) {
+                venueMenuRepository.createCategory(any(), any(), any(), any(), any())
             }
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(

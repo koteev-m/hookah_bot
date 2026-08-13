@@ -6058,6 +6058,30 @@ function buildDefaultVenueMenu(): VenueMenuCategoryFixture[] {
   ]
 }
 
+const initialVenueMenuCategorySeeds = ['Кальянное меню', 'Напитки', 'Кухня'] as const
+
+function appendMissingInitialVenueMenuCategories(
+  categories: VenueMenuCategoryFixture[],
+  allocateId: () => number
+) {
+  const existingNames = new Set(
+    categories.map((category) => category.name.trim().toLocaleLowerCase('ru-RU'))
+  )
+  let nextSortOrder = Math.max(-1, ...categories.map((category) => category.sortOrder)) + 1
+  initialVenueMenuCategorySeeds.forEach((name) => {
+    const normalizedName = name.trim().toLocaleLowerCase('ru-RU')
+    if (existingNames.has(normalizedName)) return
+    existingNames.add(normalizedName)
+    categories.push({
+      id: allocateId(),
+      name,
+      sortOrder: nextSortOrder++,
+      categoryType: 'OTHER',
+      items: []
+    })
+  })
+}
+
 function buildMenuShiftCheckFixture(
   idOffset = 0,
   nameSuffix = ''
@@ -6172,6 +6196,9 @@ async function mockVenueMenuApi(
     permissions?: string[]
     categories?: VenueMenuCategoryFixture[]
     otherAccountCategories?: VenueMenuCategoryFixture[]
+    bootstrapSeedsDefaults?: boolean
+    bootstrapErrors?: ApiErrorFixture[]
+    menuErrors?: ApiErrorFixture[]
     deleteItemErrors?: Record<number, ApiErrorFixture>
     updateItemErrors?: Record<number, ApiErrorFixture>
   } = {}
@@ -6182,6 +6209,8 @@ async function mockVenueMenuApi(
   const otherAccountCategories = options.otherAccountCategories ?? categories
   const deleteItemErrors = options.deleteItemErrors ?? {}
   const updateItemErrors = options.updateItemErrors ?? {}
+  const bootstrapErrors = [...(options.bootstrapErrors ?? [])]
+  const menuErrors = [...(options.menuErrors ?? [])]
   const createCategoryRequests: Array<{ name: string }> = []
   const updateCategoryRequests: Array<{ categoryId: number; name: string }> = []
   const reorderCategoryRequests: number[][] = []
@@ -6192,9 +6221,13 @@ async function mockVenueMenuApi(
   const createOptionRequests: Array<{ itemId: number; name: string; priceDeltaMinor: number }> = []
   const updateOptionRequests: Array<{ optionId: number; name?: string | null; priceDeltaMinor?: number | null }> = []
   const deferredMenuLoads: Array<{ promise: Promise<void>; release: () => void }> = []
+  const deferredBootstrapLoads: Array<{ promise: Promise<void>; release: () => void }> = []
   const venueMeUserIds: number[] = []
+  const bootstrapRequests: Array<{ venueId: number; otherAccount: boolean }> = []
   let menuCalls = 0
   let settledMenuCalls = 0
+  let bootstrapCalls = 0
+  let settledBootstrapCalls = 0
   let createOptionCalls = 0
   let updateOptionCalls = 0
   let deleteOptionCalls = 0
@@ -6248,6 +6281,14 @@ async function mockVenueMenuApi(
     deferredMenuLoads.push({ promise, release })
     return release
   }
+  const deferNextMenuBootstrap = () => {
+    let release = () => undefined
+    const promise = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    deferredBootstrapLoads.push({ promise, release })
+    return release
+  }
 
   updateAllMissingBaseFlavorProfilesCount()
 
@@ -6275,6 +6316,50 @@ async function mockVenueMenuApi(
     )
   })
 
+  await page.route('**/api/venue/menu/bootstrap?**', async (route) => {
+    const request = route.request()
+    const venueId = Number(new URL(request.url()).searchParams.get('venueId'))
+    const otherAccount = new URL(page.url()).searchParams.get('smokeUser') === 'other'
+    bootstrapCalls += 1
+    bootstrapRequests.push({ venueId, otherAccount })
+    const gate = deferredBootstrapLoads.shift()
+    await gate?.promise
+    try {
+      if (request.method() !== 'POST' || venueId !== 1) {
+        await route.fulfill(
+          jsonResponse({ error: { code: 'NOT_FOUND', message: 'Меню не найдено.' } }, 404)
+        )
+        return
+      }
+      const queuedError = bootstrapErrors.shift()
+      if (queuedError) {
+        await route.fulfill(
+          jsonResponse(
+            {
+              error: {
+                code: queuedError.code ?? 'DATABASE_UNAVAILABLE',
+                message: queuedError.message ?? 'Меню временно недоступно.'
+              }
+            },
+            queuedError.status
+          )
+        )
+        return
+      }
+      if (options.bootstrapSeedsDefaults) {
+        appendMissingInitialVenueMenuCategories(
+          otherAccount ? otherAccountCategories : categories,
+          () => nextCategoryId++
+        )
+      }
+      await route.fulfill(jsonResponse({ venueId }))
+    } catch {
+      // A disposed menu screen aborts its bootstrap during venue or account switching.
+    } finally {
+      settledBootstrapCalls += 1
+    }
+  })
+
   await page.route('**/api/venue/menu?**', async (route) => {
     menuCalls += 1
     const responseCategories =
@@ -6285,6 +6370,21 @@ async function mockVenueMenuApi(
     const gate = deferredMenuLoads.shift()
     await gate?.promise
     try {
+      const queuedError = menuErrors.shift()
+      if (queuedError) {
+        await route.fulfill(
+          jsonResponse(
+            {
+              error: {
+                code: queuedError.code ?? 'DATABASE_UNAVAILABLE',
+                message: queuedError.message ?? 'Меню временно недоступно.'
+              }
+            },
+            queuedError.status
+          )
+        )
+        return
+      }
       await route.fulfill(jsonResponse({ venueId: 1, categories: snapshot }))
     } catch {
       // A disposed menu screen aborts its own request during venue or account switching.
@@ -6654,8 +6754,12 @@ async function mockVenueMenuApi(
     getDeleteItemRequests: () => [...deleteItemRequests],
     getMenuCalls: () => menuCalls,
     getSettledMenuCalls: () => settledMenuCalls,
+    getBootstrapCalls: () => bootstrapCalls,
+    getSettledBootstrapCalls: () => settledBootstrapCalls,
+    getBootstrapRequests: () => [...bootstrapRequests],
     getVenueMeUserIds: () => [...venueMeUserIds],
-    deferNextMenuLoad
+    deferNextMenuLoad,
+    deferNextMenuBootstrap
   }
 }
 
@@ -6664,6 +6768,7 @@ async function mockVenueMenuShiftCheckApi(
   options: {
     accesses?: VenueMenuShiftCheckAccessFixture[]
     shiftCheckErrors?: ApiErrorFixture[]
+    bootstrapSeedsDefaults?: boolean
   } = {}
 ) {
   const accesses =
@@ -6682,6 +6787,8 @@ async function mockVenueMenuShiftCheckApi(
   const categoriesByVenue = new Map(accesses.map((access) => [access.venueId, access.categories]))
   const shiftCheckErrors = [...(options.shiftCheckErrors ?? [])]
   const shiftCheckRequests: Array<{ venueId: number; body: VenueMenuShiftCheckRequestFixture }> = []
+  const bootstrapRequests: number[] = []
+  const settledBootstrapRequests: number[] = []
   const menuRequests: number[] = []
   const settledMenuRequests: number[] = []
   let itemAvailabilityCalls = 0
@@ -6692,6 +6799,8 @@ async function mockVenueMenuShiftCheckApi(
     release: () => void
   }
   const deferredMenuResponses = new Map<number, DeferredMenuResponse[]>()
+  const deferredBootstrapResponses = new Map<number, DeferredMenuResponse[]>()
+  let nextBootstrapCategoryId = 8000
   const cloneCategories = (categories: VenueMenuCategoryFixture[]) =>
     JSON.parse(JSON.stringify(categories)) as VenueMenuCategoryFixture[]
   const allItems = (venueId: number) =>
@@ -6750,6 +6859,16 @@ async function mockVenueMenuShiftCheckApi(
     deferredMenuResponses.set(venueId, queue)
     return release
   }
+  const deferNextMenuBootstrap = (venueId: number) => {
+    let release = () => undefined
+    const promise = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const queue = deferredBootstrapResponses.get(venueId) ?? []
+    queue.push({ promise, release })
+    deferredBootstrapResponses.set(venueId, queue)
+    return release
+  }
 
   await page.route('**/api/auth/telegram', async (route) => {
     await route.fulfill(jsonResponse({ token: 'e2e-session-token', expiresAtEpochSeconds: sessionExpiresAt }))
@@ -6762,6 +6881,36 @@ async function mockVenueMenuShiftCheckApi(
         venues: accesses.map(({ categories: _categories, ...access }) => access)
       })
     )
+  })
+
+  await page.route('**/api/venue/menu/bootstrap?**', async (route) => {
+    const request = route.request()
+    const venueId = Number(new URL(request.url()).searchParams.get('venueId'))
+    const access = accesses.find((candidate) => candidate.venueId === venueId)
+    if (
+      request.method() !== 'POST' ||
+      !access ||
+      (access.role !== 'OWNER' && access.role !== 'MANAGER') ||
+      !access.permissions.includes('MENU_MANAGE')
+    ) {
+      await route.fulfill(
+        errorEnvelope({ status: 403, code: 'FORBIDDEN', message: 'Недостаточно прав.' })
+      )
+      return
+    }
+    bootstrapRequests.push(venueId)
+    const gate = deferredBootstrapResponses.get(venueId)?.shift()
+    await gate?.promise
+    try {
+      if (options.bootstrapSeedsDefaults) {
+        appendMissingInitialVenueMenuCategories(access.categories, () => nextBootstrapCategoryId++)
+      }
+      await route.fulfill(jsonResponse({ venueId }))
+    } catch {
+      // A venue switch aborts the disposed screen bootstrap; the late response is intentionally ignored.
+    } finally {
+      settledBootstrapRequests.push(venueId)
+    }
   })
 
   await page.route('**/api/venue/menu?**', async (route) => {
@@ -6899,6 +7048,8 @@ async function mockVenueMenuShiftCheckApi(
 
   return {
     getCategories: (venueId = 1) => categoriesByVenue.get(venueId) ?? [],
+    getBootstrapRequests: () => [...bootstrapRequests],
+    getSettledBootstrapRequests: () => [...settledBootstrapRequests],
     getMenuRequests: () => [...menuRequests],
     getSettledMenuRequests: () => [...settledMenuRequests],
     getShiftCheckRequests: () => [...shiftCheckRequests],
@@ -6908,6 +7059,7 @@ async function mockVenueMenuShiftCheckApi(
       shiftCheckErrors.push(error)
     },
     deferNextMenuLoad,
+    deferNextMenuBootstrap,
     setItemAvailability: (venueId: number, itemId: number, isAvailable: boolean) => {
       const item = findItem(venueId, itemId)
       if (item) item.isAvailable = isAvailable
@@ -15708,6 +15860,314 @@ test('venue manager can create promotions from the management section', async ({
   await currentTab.click()
   await expect(page.locator('[data-promotion-id="1"]')).toContainText('Акция менеджера')
   expect(api.getMutations()).toEqual(['create'])
+})
+
+test('venue menu bootstraps an empty venue before the first authoritative display', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueMenuApi(page, {
+    role: 'MANAGER',
+    categories: [],
+    bootstrapSeedsDefaults: true
+  })
+  const releaseBootstrap = api.deferNextMenuBootstrap()
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.evaluate(() => {
+    document.body.dataset.menuEmptySeen = 'false'
+    const observer = new MutationObserver((records) => {
+      const emptyWasAdded = records.some((record) =>
+        Array.from(record.addedNodes).some((node) => {
+          if (!(node instanceof Element)) return false
+          const candidates = [
+            ...(node.matches('.venue-empty') ? [node] : []),
+            ...Array.from(node.querySelectorAll('.venue-empty'))
+          ]
+          return candidates.some((candidate) => candidate.textContent?.trim() === 'Категории не найдены.')
+        })
+      )
+      if (emptyWasAdded) document.body.dataset.menuEmptySeen = 'true'
+    })
+    observer.observe(document.body, { childList: true, subtree: true })
+  })
+
+  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+  await expect.poll(() => api.getBootstrapCalls()).toBe(1)
+  expect(api.getMenuCalls()).toBe(0)
+  await expect(page.locator('.venue-menu-category-title')).toHaveCount(0)
+  await expect(page.getByText('Категории не найдены.', { exact: true })).toHaveCount(0)
+
+  releaseBootstrap()
+
+  await expect(page.locator('.venue-menu-category-title')).toHaveText([
+    'Кальянное меню',
+    'Напитки',
+    'Кухня'
+  ])
+  expect(api.getMenuCalls()).toBe(1)
+  expect(
+    api.getCategories().map(({ name, sortOrder, categoryType, items }) => ({
+      name,
+      sortOrder,
+      categoryType,
+      itemCount: items.length
+    }))
+  ).toEqual([
+    { name: 'Кальянное меню', sortOrder: 0, categoryType: 'OTHER', itemCount: 0 },
+    { name: 'Напитки', sortOrder: 1, categoryType: 'OTHER', itemCount: 0 },
+    { name: 'Кухня', sortOrder: 2, categoryType: 'OTHER', itemCount: 0 }
+  ])
+  await expect(page.locator('body')).toHaveAttribute('data-menu-empty-seen', 'false')
+})
+
+test('venue menu repeats bootstrap on a new screen mount without duplicate categories', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueMenuApi(page, { categories: [], bootstrapSeedsDefaults: true })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+  await expect(page.locator('.venue-menu-category-title')).toHaveText([
+    'Кальянное меню',
+    'Напитки',
+    'Кухня'
+  ])
+
+  await page.getByRole('button', { name: 'Обзор', exact: true }).click()
+  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+
+  await expect.poll(() => api.getBootstrapCalls()).toBe(2)
+  await expect.poll(() => api.getMenuCalls()).toBe(2)
+  await expect(page.locator('.venue-menu-category-title')).toHaveText([
+    'Кальянное меню',
+    'Напитки',
+    'Кухня'
+  ])
+  expect(api.getCategories().map((category) => category.name)).toEqual([
+    'Кальянное меню',
+    'Напитки',
+    'Кухня'
+  ])
+  expect(new Set(api.getCategories().map((category) => category.name)).size).toBe(3)
+})
+
+test('venue menu bootstrap preserves a partial custom menu and appends only missing defaults', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const categories: VenueMenuCategoryFixture[] = [
+    {
+      id: 71,
+      name: 'Авторское меню',
+      sortOrder: 4,
+      categoryType: 'FOOD',
+      items: []
+    },
+    {
+      id: 72,
+      name: 'Напитки',
+      sortOrder: 9,
+      categoryType: 'DRINK',
+      items: []
+    }
+  ]
+  const existingSnapshot = JSON.parse(JSON.stringify(categories)) as VenueMenuCategoryFixture[]
+  const api = await mockVenueMenuApi(page, { categories, bootstrapSeedsDefaults: true })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+
+  await expect(page.locator('.venue-menu-category-title')).toHaveText([
+    'Авторское меню',
+    'Напитки',
+    'Кальянное меню',
+    'Кухня'
+  ])
+  expect(api.getCategories().slice(0, 2)).toEqual(existingSnapshot)
+  expect(
+    api.getCategories().slice(2).map(({ name, sortOrder, categoryType, items }) => ({
+      name,
+      sortOrder,
+      categoryType,
+      itemCount: items.length
+    }))
+  ).toEqual([
+    { name: 'Кальянное меню', sortOrder: 10, categoryType: 'OTHER', itemCount: 0 },
+    { name: 'Кухня', sortOrder: 11, categoryType: 'OTHER', itemCount: 0 }
+  ])
+})
+
+test('venue menu keeps bootstrap failure retryable without a false empty-menu success', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueMenuApi(page, {
+    categories: [],
+    bootstrapSeedsDefaults: true,
+    bootstrapErrors: [
+      { status: 503, code: 'DATABASE_UNAVAILABLE', message: 'private database detail' }
+    ],
+    menuErrors: [
+      { status: 503, code: 'DATABASE_UNAVAILABLE', message: 'private menu read detail' }
+    ]
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+
+  const errorCard = page.locator('.venue-menu-builder > .error-card')
+  await expect(errorCard.getByRole('heading', { name: 'Сервис временно недоступен' })).toBeVisible()
+  await expect(errorCard.getByText('Попробуйте чуть позже.', { exact: true })).toBeVisible()
+  await expect(errorCard).not.toContainText('private database detail')
+  await expect(page.getByText('Категории не найдены.', { exact: true })).toHaveCount(0)
+  expect(api.getBootstrapCalls()).toBe(1)
+  expect(api.getMenuCalls()).toBe(0)
+
+  await errorCard.getByRole('button', { name: 'Повторить', exact: true }).click()
+
+  await expect.poll(() => api.getBootstrapCalls()).toBe(2)
+  await expect.poll(() => api.getMenuCalls()).toBe(1)
+  await expect(errorCard.getByRole('heading', { name: 'Сервис временно недоступен' })).toBeVisible()
+  await expect(errorCard).not.toContainText('private menu read detail')
+  await expect(page.getByText('Категории не найдены.', { exact: true })).toHaveCount(0)
+
+  await errorCard.getByRole('button', { name: 'Повторить', exact: true }).click()
+
+  expect(api.getBootstrapCalls()).toBe(2)
+  await expect.poll(() => api.getMenuCalls()).toBe(2)
+  await expect(page.locator('.venue-menu-category-title')).toHaveText([
+    'Кальянное меню',
+    'Напитки',
+    'Кухня'
+  ])
+  await expect(errorCard).toBeHidden()
+})
+
+test('venue menu ignores a delayed bootstrap response after a venue switch', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const permissions = ['MENU_VIEW', 'MENU_MANAGE', 'MENU_AVAILABILITY_MANAGE']
+  const api = await mockVenueMenuShiftCheckApi(page, {
+    bootstrapSeedsDefaults: true,
+    accesses: [
+      {
+        venueId: 1,
+        venueName: 'Микс',
+        venueCity: 'Москва',
+        venueStatus: 'PUBLISHED',
+        role: 'MANAGER',
+        permissions,
+        categories: [
+          { id: 70, name: 'Только старое заведение', sortOrder: 0, categoryType: 'OTHER', items: [] }
+        ]
+      },
+      {
+        venueId: 2,
+        venueName: 'Дым',
+        venueCity: 'Казань',
+        venueStatus: 'PUBLISHED',
+        role: 'MANAGER',
+        permissions,
+        categories: [
+          { id: 80, name: 'Только новое заведение', sortOrder: 0, categoryType: 'OTHER', items: [] }
+        ]
+      }
+    ]
+  })
+  const releaseOldBootstrap = api.deferNextMenuBootstrap(1)
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+  await expect.poll(() => api.getBootstrapRequests()).toEqual([1])
+  const venueSelect = page.locator('.venue-controls select.venue-select')
+
+  await venueSelect.selectOption('2')
+
+  await expect.poll(() => api.getBootstrapRequests()).toEqual([1, 2])
+  await expect(page.locator('.venue-menu-category-title')).toHaveText([
+    'Только новое заведение',
+    'Кальянное меню',
+    'Напитки',
+    'Кухня'
+  ])
+  await expect(page.getByText('Только старое заведение', { exact: true })).toHaveCount(0)
+  expect(api.getMenuRequests()).toEqual([2])
+
+  releaseOldBootstrap()
+  await expect
+    .poll(() => api.getSettledBootstrapRequests().filter((venueId) => venueId === 1).length)
+    .toBe(1)
+  await expect(venueSelect).toHaveValue('2')
+  await expect(page.locator('.venue-menu-category-title')).toHaveText([
+    'Только новое заведение',
+    'Кальянное меню',
+    'Напитки',
+    'Кухня'
+  ])
+  await expect(page.getByText('Только старое заведение', { exact: true })).toHaveCount(0)
+  expect(api.getMenuRequests()).toEqual([2])
+})
+
+test('venue menu ignores a delayed bootstrap response after an account replacement', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueMenuApi(page, {
+    categories: [
+      { id: 70, name: 'Только старый аккаунт', sortOrder: 0, categoryType: 'OTHER', items: [] }
+    ],
+    otherAccountCategories: [
+      { id: 80, name: 'Только новый аккаунт', sortOrder: 0, categoryType: 'OTHER', items: [] }
+    ],
+    bootstrapSeedsDefaults: true
+  })
+  const releaseOldBootstrap = api.deferNextMenuBootstrap()
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+  await expect.poll(() => api.getBootstrapCalls()).toBe(1)
+
+  await page.evaluate(
+    ({ userId, initData }) => {
+      window.localStorage.setItem('__e2e_telegram_user_id', String(userId))
+      window.localStorage.setItem('__e2e_telegram_init_data', initData)
+    },
+    { userId: 987654321, initData: otherMockInitData }
+  )
+  await page.goto(`?mode=venue&smokeUser=other#tgWebAppData=${encodeURIComponent(otherMockInitData)}`)
+  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+
+  await expect.poll(() => api.getBootstrapCalls()).toBe(2)
+  await expect(page.locator('.venue-menu-category-title')).toHaveText([
+    'Только новый аккаунт',
+    'Кальянное меню',
+    'Напитки',
+    'Кухня'
+  ])
+  await expect(page.getByText('Только старый аккаунт', { exact: true })).toHaveCount(0)
+  expect(api.getMenuCalls()).toBe(1)
+
+  const settledBeforeRelease = api.getSettledBootstrapCalls()
+  releaseOldBootstrap()
+  await expect.poll(() => api.getSettledBootstrapCalls()).toBe(settledBeforeRelease + 1)
+  await expect(page.locator('.venue-menu-category-title')).toHaveText([
+    'Только новый аккаунт',
+    'Кальянное меню',
+    'Напитки',
+    'Кухня'
+  ])
+  await expect(page.getByText('Только старый аккаунт', { exact: true })).toHaveCount(0)
+  expect(api.getMenuCalls()).toBe(1)
+})
+
+test('venue staff reads the menu without sending the bootstrap mutation', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueMenuApi(page, {
+    role: 'STAFF',
+    permissions: ['MENU_VIEW', 'MENU_AVAILABILITY_MANAGE'],
+    categories: buildDefaultVenueMenu(),
+    bootstrapSeedsDefaults: true
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+
+  await expect(page.locator('.venue-menu-category-title')).toHaveText(['Кальянное меню'])
+  expect(api.getBootstrapCalls()).toBe(0)
+  expect(api.getMenuCalls()).toBe(1)
+  await expect(page.getByRole('button', { name: 'Добавить категорию' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Добавить позицию' })).toHaveCount(0)
 })
 
 test('venue manager drafts cancels and atomically confirms one menu shift check batch', async ({ page }) => {

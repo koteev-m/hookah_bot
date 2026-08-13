@@ -9,6 +9,11 @@ data class VenueMenuResponse(
 )
 
 @Serializable
+data class VenueMenuBootstrapResponse(
+    val venueId: Long,
+)
+
+@Serializable
 data class VenueMenuCategoryDto(
     val id: Long,
     val name: String,

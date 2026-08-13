@@ -69,6 +69,22 @@ data class MenuCategorySeed(
     val categoryType: MenuSemanticType = MenuSemanticType.OTHER,
 )
 
+internal val INITIAL_VENUE_MENU_CATEGORY_SEEDS =
+    listOf(
+        MenuCategorySeed(
+            name = "Кальянное меню",
+            categoryType = MenuSemanticType.OTHER,
+        ),
+        MenuCategorySeed(
+            name = "Напитки",
+            categoryType = MenuSemanticType.OTHER,
+        ),
+        MenuCategorySeed(
+            name = "Кухня",
+            categoryType = MenuSemanticType.OTHER,
+        ),
+    )
+
 enum class MenuCategoryDeleteSource {
     VENUE_MINI_APP,
     TELEGRAM_BOT,

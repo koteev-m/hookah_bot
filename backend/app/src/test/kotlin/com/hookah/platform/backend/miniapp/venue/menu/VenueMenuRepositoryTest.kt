@@ -341,12 +341,7 @@ class VenueMenuRepositoryTest {
                         throw SQLException("Synthetic mid-seed audit failure", "XX999")
                     }
                 }
-            val seeds =
-                listOf(
-                    MenuCategorySeed("Кальянное меню"),
-                    MenuCategorySeed("Напитки"),
-                    MenuCategorySeed("Кухня"),
-                )
+            val seeds = INITIAL_VENUE_MENU_CATEGORY_SEEDS
 
             assertFailsWith<DatabaseUnavailableException> {
                 VenueMenuRepository(ds, failingWriter).createMissingCategories(
@@ -369,6 +364,8 @@ class VenueMenuRepositoryTest {
                 )
             assertEquals(seeds.map { it.name }, seeded.map { it.name })
             assertEquals(listOf(0, 1, 2), seeded.map { it.sortOrder })
+            assertTrue(seeded.all { it.categoryType == MenuSemanticType.OTHER })
+            assertTrue(seeded.all { it.items.isEmpty() })
             val audits = menuDeleteAudits(jdbcUrl, MENU_CATEGORY_CREATED_AUDIT_ACTION)
             assertEquals(3, audits.size)
             assertTrue(audits.all { it.actorUserId == AUDIT_ACTOR_ID })
@@ -390,6 +387,219 @@ class VenueMenuRepositoryTest {
                 )
             assertEquals(seeded, repeated)
             assertEquals(3, menuDeleteAudits(jdbcUrl, MENU_CATEGORY_CREATED_AUDIT_ACTION).size)
+        }
+
+    @Test
+    fun `default category seed appends only missing defaults preserving custom normalized and complete rows`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("venue-menu-default-seed-preservation")
+            val venueId = seedVenue(jdbcUrl)
+            val repository = VenueMenuRepository(dataSource(jdbcUrl))
+            val custom =
+                repository.createCategory(
+                    venueId = venueId,
+                    name = "Авторское",
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuItemAvailabilitySource.VENUE_MINI_APP,
+                    categoryType = MenuSemanticType.FOOD,
+                )
+            val existingDrink =
+                repository.createCategory(
+                    venueId = venueId,
+                    name = "  напитки  ",
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuItemAvailabilitySource.VENUE_MINI_APP,
+                    categoryType = MenuSemanticType.DRINK,
+                )
+            val existingHookah =
+                repository.createCategory(
+                    venueId = venueId,
+                    name = "Кальянное меню",
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuItemAvailabilitySource.VENUE_MINI_APP,
+                    categoryType = MenuSemanticType.HOOKAH,
+                )
+            val item =
+                requireNotNull(
+                    repository.createItem(
+                        venueId = venueId,
+                        categoryId = existingHookah.id,
+                        name = "Существующий кальян",
+                        priceMinor = 1_000,
+                        currency = "RUB",
+                        isAvailable = true,
+                        actorUserId = AUDIT_ACTOR_ID,
+                        source = MenuItemCreateSource.VENUE_MINI_APP,
+                    ),
+                )
+            val option =
+                requireNotNull(
+                    repository.createOption(
+                        venueId = venueId,
+                        itemId = item.id,
+                        name = "Авторский вкус",
+                        priceDeltaMinor = 100,
+                        isAvailable = false,
+                        actorUserId = AUDIT_ACTOR_ID,
+                        source = MenuOptionCreateSource.VENUE_MINI_APP,
+                    ),
+                )
+            val rowsBefore = categoryRows(jdbcUrl, venueId)
+            val menuBefore = repository.getMenu(venueId)
+            val setupAuditCount = menuDeleteAudits(jdbcUrl, MENU_CATEGORY_CREATED_AUDIT_ACTION).size
+
+            val bootstrapped =
+                repository.createMissingCategories(
+                    venueId = venueId,
+                    seeds = INITIAL_VENUE_MENU_CATEGORY_SEEDS,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuItemAvailabilitySource.VENUE_MINI_APP,
+                )
+
+            assertEquals(
+                listOf("Авторское", "  напитки  ", "Кальянное меню", "Кухня"),
+                bootstrapped.map { it.name },
+            )
+            assertEquals(listOf(0, 1, 2, 3), bootstrapped.map { it.sortOrder })
+            assertEquals(rowsBefore, categoryRows(jdbcUrl, venueId).take(rowsBefore.size))
+            assertEquals(MenuSemanticType.FOOD, bootstrapped.single { it.id == custom.id }.categoryType)
+            assertEquals(MenuSemanticType.DRINK, bootstrapped.single { it.id == existingDrink.id }.categoryType)
+            assertEquals(MenuSemanticType.HOOKAH, bootstrapped.single { it.id == existingHookah.id }.categoryType)
+            assertEquals(MenuSemanticType.OTHER, bootstrapped.last().categoryType)
+            assertEquals(
+                listOf(item.copy(options = listOf(option))),
+                bootstrapped.single { it.id == existingHookah.id }.items,
+            )
+            assertTrue(bootstrapped.last().items.isEmpty())
+            val bootstrapAudits =
+                menuDeleteAudits(jdbcUrl, MENU_CATEGORY_CREATED_AUDIT_ACTION).drop(setupAuditCount)
+            assertEquals(1, bootstrapAudits.size)
+            assertEquals(AUDIT_ACTOR_ID, bootstrapAudits.single().actorUserId)
+            assertEquals("VENUE_MINI_APP", bootstrapAudits.single().payload.getValue("source").jsonPrimitive.content)
+            assertEquals(setOf("venueId", "categoryId", "source"), bootstrapAudits.single().payload.keys)
+
+            val rowsAfterBootstrap = categoryRows(jdbcUrl, venueId)
+            val repeated =
+                repository.createMissingCategories(
+                    venueId = venueId,
+                    seeds = INITIAL_VENUE_MENU_CATEGORY_SEEDS,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuItemAvailabilitySource.TELEGRAM_BOT,
+                )
+            assertEquals(bootstrapped, repeated)
+            assertEquals(rowsAfterBootstrap, categoryRows(jdbcUrl, venueId))
+            assertEquals(1, menuDeleteAudits(jdbcUrl, MENU_CATEGORY_CREATED_AUDIT_ACTION).size - setupAuditCount)
+            assertEquals(menuBefore.flatMap { it.items }, repeated.flatMap { it.items })
+        }
+
+    @Test
+    fun `partial default category seed preserves custom and drinks then appends two missing defaults`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("venue-menu-default-seed-partial")
+            val venueId = seedVenue(jdbcUrl)
+            val repository = VenueMenuRepository(dataSource(jdbcUrl))
+            val custom =
+                repository.createCategory(
+                    venueId = venueId,
+                    name = "Авторские миксы",
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuItemAvailabilitySource.VENUE_MINI_APP,
+                    categoryType = MenuSemanticType.HOOKAH,
+                )
+            val drinks =
+                repository.createCategory(
+                    venueId = venueId,
+                    name = "Напитки",
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuItemAvailabilitySource.VENUE_MINI_APP,
+                    categoryType = MenuSemanticType.DRINK,
+                )
+            val rowsBefore = categoryRows(jdbcUrl, venueId)
+            val setupAuditCount = menuDeleteAudits(jdbcUrl, MENU_CATEGORY_CREATED_AUDIT_ACTION).size
+
+            val result =
+                repository.createMissingCategories(
+                    venueId = venueId,
+                    seeds = INITIAL_VENUE_MENU_CATEGORY_SEEDS,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuItemAvailabilitySource.VENUE_MINI_APP,
+                )
+
+            assertEquals(
+                listOf("Авторские миксы", "Напитки", "Кальянное меню", "Кухня"),
+                result.map { it.name },
+            )
+            assertEquals(listOf(0, 1, 2, 3), result.map { it.sortOrder })
+            assertEquals(rowsBefore, categoryRows(jdbcUrl, venueId).take(rowsBefore.size))
+            assertEquals(MenuSemanticType.HOOKAH, result.single { it.id == custom.id }.categoryType)
+            assertEquals(MenuSemanticType.DRINK, result.single { it.id == drinks.id }.categoryType)
+            assertEquals(
+                listOf(MenuSemanticType.OTHER, MenuSemanticType.OTHER),
+                result.drop(2).map { it.categoryType },
+            )
+            val bootstrapAudits =
+                menuDeleteAudits(jdbcUrl, MENU_CATEGORY_CREATED_AUDIT_ACTION).drop(setupAuditCount)
+            assertEquals(2, bootstrapAudits.size)
+            assertEquals(result.drop(2).map { it.id }, bootstrapAudits.map { it.entityId })
+            assertTrue(bootstrapAudits.all { it.actorUserId == AUDIT_ACTOR_ID })
+            assertTrue(
+                bootstrapAudits.all {
+                    it.payload.keys == setOf("venueId", "categoryId", "source") &&
+                        it.payload.getValue("source").jsonPrimitive.content == "VENUE_MINI_APP"
+                },
+            )
+            assertTrue(result.flatMap { it.items }.isEmpty())
+        }
+
+    @Test
+    fun `complete default category seed is a row timestamp and audit no-op preserving existing types`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("venue-menu-default-seed-complete")
+            val venueId = seedVenue(jdbcUrl)
+            val repository = VenueMenuRepository(dataSource(jdbcUrl))
+            val existing =
+                listOf(
+                    repository.createCategory(
+                        venueId,
+                        "Кальянное меню",
+                        AUDIT_ACTOR_ID,
+                        MenuItemAvailabilitySource.VENUE_MINI_APP,
+                        MenuSemanticType.HOOKAH,
+                    ),
+                    repository.createCategory(
+                        venueId,
+                        "Напитки",
+                        AUDIT_ACTOR_ID,
+                        MenuItemAvailabilitySource.VENUE_MINI_APP,
+                        MenuSemanticType.DRINK,
+                    ),
+                    repository.createCategory(
+                        venueId,
+                        "Кухня",
+                        AUDIT_ACTOR_ID,
+                        MenuItemAvailabilitySource.VENUE_MINI_APP,
+                        MenuSemanticType.FOOD,
+                    ),
+                )
+            val rowsBefore = categoryRows(jdbcUrl, venueId)
+            val auditsBefore = menuDeleteAudits(jdbcUrl, MENU_CATEGORY_CREATED_AUDIT_ACTION)
+
+            val result =
+                repository.createMissingCategories(
+                    venueId = venueId,
+                    seeds = INITIAL_VENUE_MENU_CATEGORY_SEEDS,
+                    actorUserId = AUDIT_ACTOR_ID,
+                    source = MenuItemAvailabilitySource.TELEGRAM_BOT,
+                )
+
+            assertEquals(existing, result)
+            assertEquals(
+                listOf(MenuSemanticType.HOOKAH, MenuSemanticType.DRINK, MenuSemanticType.FOOD),
+                result.map { it.categoryType },
+            )
+            assertEquals(rowsBefore, categoryRows(jdbcUrl, venueId))
+            assertEquals(auditsBefore, menuDeleteAudits(jdbcUrl, MENU_CATEGORY_CREATED_AUDIT_ACTION))
+            assertTrue(result.flatMap { it.items }.isEmpty())
         }
 
     @Test

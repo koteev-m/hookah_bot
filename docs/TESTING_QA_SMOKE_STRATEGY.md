@@ -11,7 +11,9 @@ Audit programs remain partial; keep each bounded gate in regression. Menu item c
 **DANGEROUS ACTION AUDIT SLICE / MENU ITEM CREATE AUDIT / DONE / MVP /
 STAGING-SMOKE-PASSED**. The current category/item management closure is **VENUE MENU MANAGEMENT /
 EXISTING-CONTRACT AUDIT AND TRANSACTION CLOSURE / DONE / MVP / STAGING-SMOKE-PASSED**. This
-completes only its bounded release gates.
+completes only its bounded release gates. Shared initial menu bootstrap is **VENUE MENU ONBOARDING /
+SHARED INITIAL MENU BOOTSTRAP / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE
+COMMIT**; Actions and staging evidence are not yet claimed.
 
 ## Core Rule
 
@@ -30,6 +32,8 @@ Current practice:
 - CI is split into smaller backend jobs, Mini App build/e2e, compose and Docker image checks.
 - Local broad Gradle wildcards can hit heap/runtime limits; prefer focused selectors first.
 - Manual real Telegram/staff-chat smoke remains required for bot/staff-chat behavior changes.
+- Shared initial menu bootstrap has green focused backend, deterministic PostgreSQL, production
+  Mini App build and full Playwright evidence. It remains review/Actions/staging gated.
 - Guest Favorites Phase 1 is `DONE / MVP / STAGING-SMOKE-PASSED`: focused backend favorites tests, `compileKotlin`, `ktlintCheck`, Mini App build and full e2e smoke `62/62` passed locally; GitHub Actions were green and manual staging smoke covered Mini App, Telegram parity, isolation and availability restoration.
 - Repeat as Template Phase 1 is `MVP IMPLEMENTED / LOCAL VALIDATION PASSED / DEFERRED MANUAL SMOKE`. Its environment-dependent production-readiness scenarios remain `BLOCKED_BY_ENVIRONMENT` in [`REPEAT-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#repeat-manual-001); this does not mark them passed or block independent bounded development.
 - Simple Venue Promotions Phase 1 is `DONE / MVP / STAGING-SMOKE-PASSED`: GitHub Actions
@@ -943,10 +947,42 @@ five-suite PostgreSQL `73/0/0/0` with vector `8 / 14 / 2 / 40 / 9`. Standalone `
 `ktlintCheck`, Mini App production build and full Playwright `169/169` passed. No skipped, failures
 or errors were accepted.
 
-Initial cross-surface menu bootstrap is not part of this release. Its future gate must prove that an
-Owner/Manager explicit Mini App mutation and the Telegram root share the same missing-only atomic
-transaction, preserve an existing menu unchanged, create and audit only the defaults that are
-missing, create zero on repeat, and never turn the ordinary menu GET into a mutation.
+### Shared Initial Menu Bootstrap local quality gate
+
+Status: **VENUE MENU ONBOARDING / SHARED INITIAL MENU BOOTSTRAP / MVP IMPLEMENTED / LOCAL
+VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+
+Required regression coverage:
+
+- repository empty/partial/normalized/complete cases prove exact `Кальянное меню`, `Напитки`,
+  `Кухня` order with explicit `OTHER`, preservation of existing/custom rows and items/options,
+  one audit per physical insert, repeat row/timestamp/audit no-op, privacy and full rollback;
+- Mini App routes prove Owner/Manager own-venue success, Staff/foreign/unaffiliated/Platform-only
+  denial, ignored actor/source spoofing, bounded `{venueId}`, safe `503`, no duplicate route audit
+  and an unchanged read-only GET;
+- Telegram proves the shared seed source, current actor, `TELEGRAM_BOT`, repeat no-op, denial and
+  failure without false success; onboarding/connection tests prove approval/linking alone seed zero;
+- deterministic Testcontainers PostgreSQL proves Mini App vs Telegram, Mini App vs Mini App,
+  bootstrap vs ordinary category create, bootstrap vs reorder and partial audit failure. It uses
+  production migrations/repository, independent connections/PIDs, latches and observed
+  `pg_blocking_pids`/`pg_locks`, with no arbitrary sleep as evidence;
+- deterministic Playwright proves empty-first mutation-before-GET with no empty flash, repeat,
+  partial/custom preservation, actionable bootstrap and GET retry, stale venue/account response
+  isolation and Staff no-mutation/no-new-authority behavior.
+
+Recorded local evidence is repository `54/0/0/0`, routes `46/0/0/0`, Telegram `551/0/0/0`,
+onboarding/connection `18/0/0/0` and menu PostgreSQL `44/0/0/0`. The exact route/security selector
+passed `1190/0/0/0`; the exact five-suite PostgreSQL selector passed `77/0/0/0` with vector
+`8 / 14 / 2 / 44 / 9`. Standalone `compileKotlin`, `ktlintCheck`, Mini App production build and full
+Playwright `176/176` passed. All accepted XML has zero skipped, failures and errors.
+
+The existing route/security gate now also requires onboarding/connection XML with a minimum of `18`;
+repository `54`, routes `46`, Telegram `551` and menu PostgreSQL `44` minima are retained. Missing,
+below-minimum, skipped, failed or errored XML still fails the existing gates. No workflow or migration
+is added. The blocking CI coverage gap is fixed locally, but the next short independent review, green
+Actions, staging deploy and a bounded Owner/Manager/Staff, Mini App/Telegram parity, existing-menu,
+audit/no-op/privacy smoke are still required. This local gate does not mark the whole onboarding flow
+or product production-ready.
 
 ### Menu Option Rename Audit quality gate
 

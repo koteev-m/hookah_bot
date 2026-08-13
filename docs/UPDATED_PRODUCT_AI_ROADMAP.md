@@ -22,7 +22,7 @@
 
 > Market launch требует production-ready Telegram bot + Mini App core. AI входит в продукт как assistant layer. Telegram Guest Mode, Telegram Business / Secretary Bots, Managed branded bots и Bot-to-Bot agents не являются обязательными для первого запуска.
 
-Текущий фокус перед пилотом: product P0/P1 закрыт по уже принятым M1-M9b.3 блокам, staging smoke, CI release validation, deploy/runbook hardening and minimal Guest Mini App browser smoke зелёные. M9a Deployment SSH Reliability Hardening is CLOSED / staging smoke passed: standard deploy remains supported, opt-in ControlMaster deploy is validated as a release-reliability workaround, and the exact SSH/network root cause remains unconfirmed. M9b Venue Working Hours and Date Exceptions Mini App Parity, M9b.1 range/rejection-copy improvements, M9b.2 exception save/list UX and M9b.3 date-range editing are CLOSED / staging smoke passed. Platform Owner Invite / ADMIN Semantics Hardening, Platform Venue OWNER Revocation, H2/PostgreSQL active-order + personal-tab uniqueness fidelity, Mini App mutation / operational verification closure pack, Staff Call Lifecycle ACK/DONE audit hardening, Staff-call guest-visible CANCELLED finishing patch, Guest Table Context UX Cleanup / Feature-gated Extension Module, Guest Table Session Exit / Expiry UX, Guest Bill / Display-Number / Full-Bill Parity, Guest Bill Request / Payment Method UX, Staff Chat Noise Reduction / Table Activity Card, hookah preparation placeholder polish, Platform Billing Cockpit / Owner Payment UX, Platform Billing Renewal / Advance Invoice / Courtesy Days, Staff/Manager invite deep-link sharing polish, Guest Communication UX / Support Tickets MVP, Booking Arrival Guard / Staff-Chat Booking Buttons, Guest History Foundation, Post-Visit Feedback MVP, Guest Favorites Phase 1 and Catalog Search and Filter Phase 1 are CLOSED. Guest Favorites Phase 1 is **DONE / MVP / STAGING-SMOKE-PASSED** for venue favorites only, including Telegram Profile/Catalog parity and source-aware Back navigation. Catalog Search and Filter Phase 1 is **CATALOG SEARCH AND FILTER PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**. Next bounded milestone should be selected from the remaining launch backlog; do not reopen these closed slices without new smoke or code evidence. Scope не расширяем в сторону Telegram-native AI surfaces до готовности Mini App и public-safe tools.
+Текущий фокус перед пилотом: product P0/P1 закрыт по уже принятым M1-M9b.3 блокам, staging smoke, CI release validation, deploy/runbook hardening and minimal Guest Mini App browser smoke зелёные. M9a Deployment SSH Reliability Hardening is CLOSED / staging smoke passed: standard deploy remains supported, opt-in ControlMaster deploy is validated as a release-reliability workaround, and the exact SSH/network root cause remains unconfirmed. M9b Venue Working Hours and Date Exceptions Mini App Parity, M9b.1 range/rejection-copy improvements, M9b.2 exception save/list UX and M9b.3 date-range editing are CLOSED / staging smoke passed. Platform Owner Invite / ADMIN Semantics Hardening, Platform Venue OWNER Revocation, H2/PostgreSQL active-order + personal-tab uniqueness fidelity, Mini App mutation / operational verification closure pack, Staff Call Lifecycle ACK/DONE audit hardening, Staff-call guest-visible CANCELLED finishing patch, Guest Table Context UX Cleanup / Feature-gated Extension Module, Guest Table Session Exit / Expiry UX, Guest Bill / Display-Number / Full-Bill Parity, Guest Bill Request / Payment Method UX, Staff Chat Noise Reduction / Table Activity Card, hookah preparation placeholder polish, Platform Billing Cockpit / Owner Payment UX, Platform Billing Renewal / Advance Invoice / Courtesy Days, Staff/Manager invite deep-link sharing polish, Guest Communication UX / Support Tickets MVP, Booking Arrival Guard / Staff-Chat Booking Buttons, Guest History Foundation, Post-Visit Feedback MVP, Guest Favorites Phase 1 and Catalog Search and Filter Phase 1 are CLOSED. Guest Favorites Phase 1 is **DONE / MVP / STAGING-SMOKE-PASSED** for venue favorites only, including Telegram Profile/Catalog parity and source-aware Back navigation. Catalog Search and Filter Phase 1 is **CATALOG SEARCH AND FILTER PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**. The current bounded milestone is **VENUE MENU ONBOARDING / SHARED INITIAL MENU BOOTSTRAP / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**; do not reopen closed slices without new smoke or code evidence. Scope не расширяем в сторону Telegram-native AI surfaces до готовности Mini App и public-safe tools.
 
 Актуальный post-fix snapshot:
 
@@ -1294,21 +1294,34 @@ STAGING-SMOKE-PASSED**.
   confirmed green Actions, staging deploy and consolidated Menu Management smoke. The overall
   product and broader Dangerous Action Audit remain `PARTIAL`.
 
-### Next bounded candidate: shared initial menu bootstrap
+### Current bounded block: shared initial menu bootstrap
 
-Implementation verdict: **IMPLEMENT_SHARED_INITIAL_MENU_BOOTSTRAP_NEXT** (not implemented).
+Implementation contract: **IMPLEMENT_SHARED_INITIAL_MENU_BOOTSTRAP_NEXT**.
 
-- Current approval/linking only grants access. The Telegram Owner/Manager `🍽 Заказное меню` root
-  lazily calls the atomic missing-only category seed, whereas the authenticated Mini App menu GET is
-  a pure read and can show an empty menu before Telegram is opened.
-- Reuse `VenueMenuRepository.createMissingCategories` behind one shared bootstrap contract. Telegram
-  passes the current Telegram user and `TELEGRAM_BOT`; an explicit Owner/Manager Mini App
-  pre-management mutation passes the authenticated session user and `VENUE_MINI_APP`. Do not put a
-  mutation in GET or the Platform approval transaction, and do not invent a system actor.
-- Preserve existing categories exactly: append only missing defaults, do not rename/retype/reorder
-  existing rows, do not create duplicates, and create no menu items, options or flavor profiles.
-  Each inserted category retains one `MENU_CATEGORY_CREATED` audit; repeat is zero audit and any
-  insert/audit failure rolls back the whole bootstrap. No migration is expected.
+Verdict: **VENUE MENU ONBOARDING / SHARED INITIAL MENU BOOTSTRAP / MVP IMPLEMENTED / LOCAL
+VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+
+- Approval/linking still grants access without seeding and the authenticated menu GET remains a pure
+  read. Owner/Manager Mini App now calls an explicit bootstrap mutation before one authoritative GET;
+  the existing Telegram `🍽 Заказное меню` root imports the same shared seed source.
+- Exact defaults are `Кальянное меню`, `Напитки`, `Кухня`, in that order and all explicitly
+  `MenuSemanticType.OTHER`. `VenueMenuRepository.createMissingCategories` keeps the existing
+  category-order lock/transaction/audit contract, appends only normalized-name-missing rows and
+  preserves every existing row, item and option. Complete/repeat is a row/timestamp/audit no-op;
+  any insert/audit failure rolls the whole bootstrap back.
+- Mini App actor is the authenticated session subject and source is `VENUE_MINI_APP`; Telegram actor
+  is the current authenticated user and source is `TELEGRAM_BOT`. Owner/Manager own venue are
+  allowed; Staff, foreign, unaffiliated and Platform-only actors are denied. Payload remains only
+  `venueId`, `categoryId`, `source`; no names/types/raw requests/Telegram data/PII enter audit.
+- Local evidence is repository `54`, routes `46`, Telegram `551`, onboarding/connection `18`, menu
+  PostgreSQL `44`, exact route/security `1190`, exact five-suite PostgreSQL `77` with vector
+  `8 / 14 / 2 / 44 / 9`, compile/ktlint/build and full Playwright `176/176`, all green with no
+  accepted skip/failure/error. Seven new deterministic E2E scenarios cover empty, repeat, partial,
+  retry, venue/account switch and Staff no-mutation behavior.
+- No migration, SYSTEM actor, approval redesign, default-type change, new onboarding engine or UI
+  redesign was required. The blocking CI coverage gap is fixed locally, but the next short
+  independent review, green Actions and staging smoke remain release gates; this does not close
+  broader onboarding, menu constructor/media/top-list or the overall product.
 
 ### Current implemented bounded block
 

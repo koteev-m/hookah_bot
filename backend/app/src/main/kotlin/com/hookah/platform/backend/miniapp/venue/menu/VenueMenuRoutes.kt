@@ -58,6 +58,19 @@ fun Route.venueMenuRoutes(
             )
         }
 
+        post("/menu/bootstrap") {
+            val userId = call.requireUserId()
+            val venueId = call.requireVenueId()
+            ensureMenuManage(venueAccessRepository, userId, venueId)
+            venueMenuRepository.createMissingCategories(
+                venueId = venueId,
+                seeds = INITIAL_VENUE_MENU_CATEGORY_SEEDS,
+                actorUserId = userId,
+                source = MenuItemAvailabilitySource.VENUE_MINI_APP,
+            )
+            call.respond(VenueMenuBootstrapResponse(venueId = venueId))
+        }
+
         post("/menu/categories") {
             val userId = call.requireUserId()
             val venueId = call.requireVenueId()
