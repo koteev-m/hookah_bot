@@ -9,7 +9,9 @@ normalization, option rename, option price and **DANGEROUS ACTION AUDIT SLICE / 
 AVAILABILITY AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. The broader Menu and Dangerous Action
 Audit programs remain partial; keep each bounded gate in regression. Menu item create is
 **DANGEROUS ACTION AUDIT SLICE / MENU ITEM CREATE AUDIT / DONE / MVP /
-STAGING-SMOKE-PASSED**.
+STAGING-SMOKE-PASSED**. The current category/item management closure is **MVP IMPLEMENTED / LOCAL
+VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**; green Actions and staging smoke remain
+release gates.
 
 ## Core Rule
 
@@ -803,7 +805,7 @@ Required regression coverage:
 Mandatory CI selectors are `VenueMenuRepositoryTest`, `VenueMenuRoutesTest`,
 `TelegramBotRouterTableTokenTest`,
 `VenueMenuOptionNormalizationConcurrencyPostgresTest` and full Mini App smoke. Exact XML must exist,
-have tests `> 0`, and have zero skipped/failures/errors; the shared current PostgreSQL XML minimum is 31. No new
+have tests `> 0`, and have zero skipped/failures/errors; the shared current PostgreSQL XML minimum is 40. No new
 workflow may replace or silently skip these gates.
 
 Automated/local/CI contract evidence (`tests/skipped/failures/errors` where recorded): repository
@@ -874,7 +876,8 @@ Required regression coverage:
 
 Mandatory CI selectors are exact `VenueMenuRepositoryTest`, `VenueMenuRoutesTest`,
 `TelegramBotRouterTableTokenTest`, `VenueMenuOptionNormalizationConcurrencyPostgresTest` and full
-Mini App smoke. Current minima are respectively `44`, `40`, `542`, `31`; exact JUnit XML must exist
+Mini App smoke. That item-create release recorded minima `44`, `40`, `542`, `31`; current shared
+Menu Management minima are repository `51`, routes `43`, Telegram `549` and PostgreSQL `40`. Exact JUnit XML must exist
 with zero skipped/failures/errors. The PostgreSQL job retains `JAVA_TOOL_OPTIONS=-Dapi.version=1.44`.
 No new workflow replaces these gates.
 
@@ -888,9 +891,56 @@ Manager Telegram create, Staff denial, exactly-one safe audits, duplicate-name s
 intact item order and working Guest menu, privacy and cleanup. The contract intentionally claims no
 extra staging scenario; failure injection and concurrency remain automated evidence.
 
-This does not close
-item price/name/type/category/description/currency audits, category/option create, Guest order/cart,
-promotions, media or the broader Menu/Dangerous Action Audit.
+That item-create release alone did not close item update audits. They are now implemented by the
+separate local Menu Management closure below; description/media, Guest order/cart expansion,
+promotions and the broader Menu/Dangerous Action Audit remain outside it.
+
+### Venue Menu Management existing-contract closure quality gate
+
+Status: **VENUE MENU MANAGEMENT / EXISTING-CONTRACT AUDIT AND TRANSACTION CLOSURE / MVP
+IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+
+Required regression coverage:
+
+- inventory proves `VenueMenuRepository` is the sole production SQL owner and that only the existing
+  category create/rename/type/reorder and item rename/price-currency/type/category-move/reorder
+  families are in scope; previously closed menu families remain green;
+- repository tests assert all nine exact actions/payloads, one per real family delta, no-op timestamp
+  stability, duplicate-name semantics, price-only/currency-only/combined cardinality, atomic default
+  seeding, exact-set/hash reorders, compound five-family audit cardinality, privacy and rollback;
+- Mini App tests prove Owner/Manager success, Staff/foreign/unaffiliated/Platform-only denial before
+  entity facts, ignored actor/source spoofing, unchanged DTO/status, safe `503` and no route-side
+  duplicate audit. Mini App source is always `VENUE_MINI_APP`;
+- Telegram tests prove Owner and Manager category create/rename/type parity, authenticated atomic
+  default seeding, item rename/price/type, Staff/foreign denial, current-user/dialog-owner equality,
+  `TELEGRAM_BOT`, retry preservation and no false success/dialog clear on database/audit failure;
+- Guest/order regression proves current menu and new order batches use current authoritative
+  name/price while existing order/bill/history snapshots remain immutable; pricing, promotions,
+  stale-cart and idempotency behavior do not change;
+- the 40-case Testcontainers PostgreSQL class uses production migrations/repositories, independent
+  connections/PIDs, deterministic latches and real `pg_blocking_pids`/`pg_locks` evidence. It covers
+  create-vs-seed, category update-vs-reorder, category reorder-vs-item create, compound item
+  update-vs-Telegram type, move-vs-source/destination reorder, item reorder-vs-create/delete and
+  compound/reorder audit-failure rollback. No arbitrary sleep is evidence.
+
+Mandatory focused counts are repository `51`, routes `43`, Telegram `549`, Guest routes `61` and
+menu PostgreSQL `40`, each with exact JUnit XML and `skipped=0`, `failures=0`, `errors=0`. The
+existing CI route/security and five-suite PostgreSQL parsers must fail missing, zero/below-minimum,
+skipped, failed or errored XML; Docker and full Mini App smoke remain mandatory. Current PostgreSQL
+minimum vector is `8 / 14 / 2 / 40 / 9`. No workflow or migration is added.
+
+Mandatory local commands include the focused repository/routes/Telegram/Guest selectors, the exact
+current route/security selector, the exact five-class PostgreSQL selector with
+`JAVA_TOOL_OPTIONS=-Dapi.version=1.44`, `compileKotlin`, `ktlintCheck`, Mini App production build,
+full Playwright smoke, `git diff --check` and `git status --short`. Runtime changes still require
+green Actions, staging deploy and bounded manual smoke before release; local validation alone does
+not make the product production-ready.
+
+Recorded local validation: repository `51/0/0/0`, routes `43/0/0/0`, Telegram `549/0/0/0`, Guest
+routes `61/0/0/0`, exact route/security `1164/0/0/0`, menu PostgreSQL `40/0/0/0`, and exact
+five-suite PostgreSQL `73/0/0/0` with vector `8 / 14 / 2 / 40 / 9`. Standalone `compileKotlin`,
+`ktlintCheck`, Mini App production build and full Playwright `169/169` passed. No skipped, failures
+or errors were accepted.
 
 ### Menu Option Rename Audit quality gate
 
@@ -915,7 +965,7 @@ Regression must preserve this bounded contract:
   existing response and atomic field behavior but writes only one rename audit.
 - Existing hookah canonical normalization, self-exclusion, non-hookah duplicate behavior,
   historical order snapshots and future-submit current-value resolution stay unchanged.
-- The option-rename release recorded 26 PostgreSQL tests; the shared current 31-test class retains deterministic rename versus rename, distinct and
+- The option-rename release recorded 26 PostgreSQL tests; the shared current 40-test class retains deterministic rename versus rename, distinct and
   same-target price updates, atomic base-profile normalization, canonical create and direct delete
   in addition to the released normalization regressions. It uses observed blocking/locks and no
   arbitrary sleep.
@@ -923,7 +973,7 @@ Regression must preserve this bounded contract:
 Focused repository, route, Telegram and Guest/order/history selectors, `compileKotlin`,
 `ktlintCheck`, Mini App build and Playwright `139/139` passed locally. The mandatory PostgreSQL XML
 result recorded for that released rename slice is `8/0/0/0`, `14/0/0/0`, `2/0/0/0`, `7/0/0/0`;
-the current option-class CI minimum is 31 after the item-create extension. Green Actions, staging
+the current option-class CI minimum is 40 after the Menu Management closure. Green Actions, staging
 deploy and bounded cross-surface
 RBAC/audit/privacy/concurrency/history smoke are recorded functionally passed; schema verdict is
 **NO_MIGRATION_EXPECTED**. That rename slice does not itself close option create or availability;
@@ -960,13 +1010,13 @@ Regression must preserve this bounded contract:
   the current available DB option, persists the current delta snapshot and never rewrites older
   `price_delta_minor_snapshot` rows.
 - The production Testcontainers PostgreSQL class uses independent connections, deterministic
-  latches and a confirmed blocking edge without arbitrary sleep. Its current 31 tests prove truthful
+  latches and a confirmed blocking edge without arbitrary sleep. Its current 40 tests prove truthful
   price-versus-price ordering, same-target loser no-op, price versus rename, direct delete and atomic
   normalization, plus no partial compound updates or extra loser audits.
 
 Mandatory CI keeps the existing exact selectors/XML for `VenueMenuRepositoryTest`,
 `VenueMenuRoutesTest`, `GuestOrderRoutesTest`, `GuestVisitRoutesTest` and
-`VenueMenuOptionNormalizationConcurrencyPostgresTest`. The option PostgreSQL XML minimum is 31;
+`VenueMenuOptionNormalizationConcurrencyPostgresTest`. The option PostgreSQL XML minimum is 40;
 all critical XML must have tests `> 0` and exactly zero skipped/failures/errors.
 
 Recorded automated evidence: all four focused repository/route/order/history selectors, the nine-test
@@ -1019,13 +1069,13 @@ Required regression coverage:
 - Testcontainers PostgreSQL production migrations/repository, independent connections, deterministic
   latches and observed blocking without arbitrary sleep for direct/direct, direct/compound, both
   direct/Shift Check orders, direct/delete and direct/normalization. XML is exactly required,
-  tests `>= 31` in the shared extended class, skipped/failures/errors zero.
+  tests `>= 40` in the shared extended class, skipped/failures/errors zero.
 
 Required local commands are the focused `VenueMenuRepositoryTest`, `VenueMenuRoutesTest`,
 `TelegramBotRouterTableTokenTest`, `GuestOrderRoutesTest`, `*MenuShiftCheck*`,
 `VenueMenuOptionNormalizationConcurrencyPostgresTest`, compile, ktlint, Mini App build and full e2e
 smoke selectors documented in the current implementation handoff. No workflow or migration is added;
-the existing mandatory PostgreSQL CI gate minimum is now 31 after the item-create extension.
+the existing mandatory PostgreSQL CI gate minimum is now 40 after the Menu Management closure.
 
 ### Menu Item Availability Audit quality gate
 
@@ -1075,7 +1125,7 @@ first two classes, `VenueMenuOptionNormalizationConcurrencyPostgresTest`,
 `GuestOrderIdempotencyConcurrencyPostgresTest` and full Mini App smoke. Exact local XML is
 repository `36/0/0/0`, routes `31/0/0/0`, Telegram `535/0/0/0`, Guest routes `61/0/0/0`, menu
 PostgreSQL `20/0/0/0` and Guest PostgreSQL `9/0/0/0` for that release slice; the current shared
-menu minimum is 31. Existing CI parsing must fail missing/zero,
+menu minimum is 40. Existing CI parsing must fail missing/zero,
 skipped, failures or errors. No new workflow or migration is allowed.
 
 Non-blocking future hardening, not a release defect: assert raw `updated_at` before/after an injected
@@ -1152,7 +1202,7 @@ CI=1 TZ=UTC MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke
 git diff --check
 ```
 
-The existing workflow must select `GuestOrderRoutesTest` (minimum 59),
+The existing workflow must select `GuestOrderRoutesTest` (minimum 61),
 `GuestOrderIdempotencyFingerprintTest` (minimum 7),
 `GuestOrderIdempotencyConcurrencyPostgresTest` and both fingerprint migration suites. Their exact
 JUnit XML files must exist, meet the declared minima (`9` for concurrency and `2` per migration),
@@ -1687,7 +1737,7 @@ Expectations:
   `GuestTableContextActivationPostgresTest`, `PromotionConfigurationConcurrencyPostgresTest`,
   `VenueStaffMutationConcurrencyPostgresTest`, `VenueMenuOptionNormalizationConcurrencyPostgresTest`
   and `GuestOrderIdempotencyConcurrencyPostgresTest` with `JAVA_TOOL_OPTIONS=-Dapi.version=1.44`,
-  then independently parses all five XML reports. It requires minimums `8 / 14 / 2 / 31 / 9`, each
+  then independently parses all five XML reports. It requires minimums `8 / 14 / 2 / 40 / 9`, each
   with `skipped=0`, `failures=0`, `errors=0`. Docker availability alone is not evidence, and route
   failure must not silently skip the PostgreSQL gate.
 - If CI is red, first identify the failing job, failing test class, failing test name, assertion/error and first useful stack frame.
@@ -2144,8 +2194,12 @@ Telegram/staff-chat:
   STAGING-SMOKE-PASSED**. Repository `44/0/0/0`, routes `40/0/0/0`, Telegram `542/0/0/0`, shared
   PostgreSQL `31/0/0/0`, compile/ktlint, Mini App build and Playwright `169/169` are automated
   evidence; user-confirmed Actions, staging deploy and bounded smoke are complete; no migration.
+- Venue Menu Management existing-contract closure: **MVP IMPLEMENTED / LOCAL VALIDATION PASSED /
+  REVIEW REQUIRED BEFORE COMMIT**. Current mandatory minima are repository `51`, routes
+  `43`, Telegram `549`, Guest routes `61` and shared PostgreSQL `40`; green Actions and staging
+  deploy/smoke remain open. No migration.
 - Menu option rename audit: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION RENAME AUDIT / DONE / MVP /
-  STAGING-SMOKE-PASSED**. The current 31-test shared menu concurrency XML gate, focused cross-surface tests,
+  STAGING-SMOKE-PASSED**. The current 40-test shared menu concurrency XML gate, focused cross-surface tests,
   privacy/rollback checks, green Actions, staging deploy and bounded smoke are recorded complete.
   No migration was added.
 - Menu option price audit: **DANGEROUS ACTION AUDIT SLICE / MENU OPTION PRICE AUDIT / DONE / MVP /

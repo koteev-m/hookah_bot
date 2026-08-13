@@ -62,7 +62,7 @@
 - Order/session/tab core docs are current in `docs/ORDER_SESSION_TAB_CORE.md`: `TABLE_SESSION`, `ACTIVE_TABLE_ORDER`, `ORDER_BATCH`, `TAB`, bill/request/close flow, privacy boundaries and visit-history foundation are `SPEC UPDATED`. Current runtime docs say table-session/tab scoping, Guest History Foundation and Post-Visit Feedback MVP are staging-smoke-passed, while Repeat Phase 1 is locally validated with deferred environment-dependent manual smoke; force-close policy/audit, loyalty/preorder and broader analytics remain partial/future.
 - Analytics/events docs are current in `docs/ANALYTICS_EVENTS.md`: analytics events, audit/event boundaries, KPI formulas, role dashboards and payload privacy rules are `SPEC UPDATED`; implementation and Platform dashboards remain partial/future unless specific events are verified.
 - Security/RBAC docs are current in `docs/SECURITY_RBAC_MATRIX.md`: roles, scopes, permissions, surface parity, dangerous actions, auth/trust boundaries and security smoke checklist are `UPDATED`; permission parity and dangerous-action audit coverage remain partial unless specific route tests/smoke evidence exists. `ADMIN` is a legacy compatibility alias to `MANAGER`, not a product role.
-- Menu/options/stop-list docs are current in `docs/MENU_OPTIONS_STOPLIST.md`: structured menu terms, option/modifier snapshots, media/PDF boundaries, featured/top-list, stop-list, shift check, availability validation and menu permissions are `SPEC UPDATED`. Selected-option parity and Menu Item Hard Delete Audit are smoke-closed; the bounded OWNER/MANAGER shift-check slice is `MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`; Menu Item Availability Audit is `DANGEROUS ACTION AUDIT SLICE / MENU ITEM AVAILABILITY AUDIT / DONE / MVP / STAGING-SMOKE-PASSED`; Menu Option Create Audit is `DANGEROUS ACTION AUDIT SLICE / MENU OPTION CREATE AUDIT / DONE / MVP / STAGING-SMOKE-PASSED`; Menu Item Create Audit is `DANGEROUS ACTION AUDIT SLICE / MENU ITEM CREATE AUDIT / DONE / MVP / STAGING-SMOKE-PASSED`; broader menu constructor/media/top-list and remaining audit coverage remain partial/future.
+- Menu/options/stop-list docs are current in `docs/MENU_OPTIONS_STOPLIST.md`: structured menu terms, option/modifier snapshots, media/PDF boundaries, featured/top-list, stop-list, shift check, availability validation and menu permissions are `SPEC UPDATED`. Selected-option parity and the previously bounded menu audit slices remain smoke-closed. The existing category create/rename/type/reorder and item rename/price-currency/type/category-move/reorder closure is **MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**; broader constructor/media/top-list and non-menu dangerous-action coverage remain partial/future.
 - Venue info-section media storage/upload is canonical in `docs/MEDIA_STORAGE_UPLOAD.md`: current
   Telegram-`file_id` architecture, hybrid asset model, security/lifecycle contract and bounded
   Venue Mini App slice are specified; runtime remains missing and verdict is
@@ -841,7 +841,7 @@ repeat; the subscription incident is not a promotion defect.
 Simple Venue Promotions Phase 1 remains **DONE / MVP / STAGING-SMOKE-PASSED**. The
 executable-promotions sections below retain their current implementation and validation status;
 the audit slice changes no lifecycle, promotion calculation, stacking or Guest pricing contract.
-Promotion configuration edit audit, menu item create/price/name/type families, QR rotate,
+Promotion configuration edit audit, QR rotate,
 force-close/session audit, tab reopen, analytics export, the Promotion Compatibility Policy and a
 broader audit viewer remain future. The overall dangerous-action audit therefore remains partial.
 The menu item, empty-category and option hard-delete slices are release-closed only for their
@@ -882,10 +882,11 @@ Not selected as implementation right now:
 - menu/options/stop-list governance from `docs/MENU_OPTIONS_STOPLIST.md`: keep selected-option
   snapshots, Guest stale availability validation, the atomic shift-check contract and the
   staging-smoke-passed item availability, item/empty-category/option hard-delete, option-create and
-  item-create audits in regression. The verified next slice is
-  `IMPLEMENT_MENU_MANAGEMENT_CLOSURE_EPIC_NEXT`: the existing category create/rename/type/reorder and
-  item rename/price-currency/type/category-move/reorder writers only, with no migration or product
-  semantic change; broader constructor/media/top-list remains separate;
+  item-create audits in regression. `IMPLEMENT_MENU_MANAGEMENT_CLOSURE_EPIC_NEXT` is now locally
+  implemented for the existing category create/rename/type/reorder and item
+  rename/price-currency/type/category-move/reorder writers only. It remains review/Actions/staging
+  gated, adds no migration or product semantic change, and keeps broader constructor/media/top-list
+  separate;
 - Venue Mode operating model from `docs/VENUE_OPERATIONS.md`: keep orders, bill/tabs, staff calls, bookings, stop-list, staff-chat source-of-truth policy and role-specific nav/API denial in regression before adding new venue screens;
 - Booking lifecycle model from `docs/BOOKING_LIFECYCLE.md`: keep booking create/list, Venue queue actions, confirmed-only Staff arrival/no-show split, hold/deadline display, booking chat separation, support routing and reminder opt-in behavior in regression before adding preorder/history/loyalty.
 - Telegram fallback/staff-chat model from `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`: keep QR `/start`, fallback order, staff-call, staff-chat link/test/unlink, state-aware booking buttons, callback RBAC and notification allow/deny policy in regression before expanding Telegram shortcuts.
@@ -1250,12 +1251,48 @@ DONE / MVP / STAGING-SMOKE-PASSED**.
 - Automated/local/CI contract evidence is repository `41/0/0/0`, routes `37/0/0/0`, Telegram
   `538/0/0/0`, route/security `1137`, PostgreSQL concurrency `26/0/0/0`, compile, ktlint, Mini App
   build and full Playwright `169/169`. This is historical option-create evidence; the current shared
-  CI PostgreSQL minimum is 31 after item-create coverage. Full direct/bulk/
+  CI PostgreSQL minimum is 40 after Menu Management closure coverage. Full direct/bulk/
   normalization rollback, canonical uniqueness and deterministic locking are automated evidence.
   **NO_MIGRATION_EXPECTED**; no new workflow. For current release HEAD `0e592ff`, the user confirmed
   green Actions, staging deploy and the bounded 18-scenario smoke recorded in the QA strategy.
   Local GitHub CLI did not independently verify Actions because its active token is invalid. The
   broader Menu/Dangerous Action Audit stays `PARTIAL`.
+
+### Current local Menu Management closure
+
+Implementation contract: **IMPLEMENT_MENU_MANAGEMENT_CLOSURE_EPIC_NEXT**.
+
+Verdict: **VENUE MENU MANAGEMENT / EXISTING-CONTRACT AUDIT AND TRANSACTION CLOSURE / MVP
+IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+
+- Inventory found one production SQL owner, `VenueMenuRepository`, and no extra authenticated
+  writer. The bounded families are category create/rename/type/reorder and item
+  rename/price-currency/type/category-move/reorder. Existing delete, create, availability, option,
+  normalization, Shift Check, cart/idempotency and Menu UX release contracts remain unchanged.
+- The nine new actions are `MENU_CATEGORY_CREATED`, `MENU_CATEGORY_RENAMED`,
+  `MENU_CATEGORY_TYPE_CHANGED`, `MENU_CATEGORIES_REORDERED`, `MENU_ITEM_RENAMED`,
+  `MENU_ITEM_PRICE_CHANGED`, `MENU_ITEM_TYPE_CHANGED`, `MENU_ITEM_CATEGORY_MOVED` and
+  `MENU_ITEMS_REORDERED`. Actor is the authenticated session/current Telegram user and source is
+  fixed server-side. Owner/Manager own-venue access remains allowed; Staff, foreign, unaffiliated
+  and Platform-only access remains denied before entity facts.
+- Each operation now uses one repository connection/transaction with deterministic category/item
+  locks, a DB-current reread, exact deltas, mutation, same-connection audit rows, authoritative
+  result reread and one commit. Exact no-op preserves timestamps and writes zero family audit;
+  failure rolls back every business field, order/timestamp and audit. Compound item PATCH can write
+  one truthful audit for each of rename, price/currency, type, move and existing availability.
+- Telegram default-category seeding is atomic, writes one create audit for each physically missing
+  row and zero on repeat. Reorders validate the full authoritative set and store only count plus
+  deterministic old/new order hashes. Audit payloads exclude names, raw requests/initData/callbacks,
+  media, option/promotion/cart/order contents, secrets, PII and full id arrays.
+- Existing integer-minor price/currency rules, Guest current-value reload, immutable historical
+  order/bill snapshots, promotion calculations, stale-cart/idempotency, API and UX contracts are
+  preserved. No schema change is required: **NO_MIGRATION_EXPECTED**.
+- Local evidence is repository `51/0/0/0`, Mini App routes `43/0/0/0`, Telegram `549/0/0/0`, Guest
+  order/history `61/0/0/0`, exact route/security `1164/0/0/0`, menu PostgreSQL `40/0/0/0` and exact
+  five-suite PostgreSQL `73/0/0/0`. The real matrix uses independent PIDs, deterministic barriers
+  and observed locks. Compile, ktlint, Mini App build and full Playwright `169/169` passed. Green
+  Actions, independent review and staging deploy/smoke remain mandatory before release; the overall
+  product and broader Dangerous Action Audit remain `PARTIAL`.
 
 ### Current implemented bounded block
 
@@ -1290,9 +1327,11 @@ STAGING-SMOKE-PASSED**.
   **NO_MIGRATION_EXPECTED**.
 - User-confirmed green Actions, staging deploy and bounded cross-surface smoke passed: Owner Mini App
   create, Manager Telegram create, Staff denial, duplicate-name distinct rows/audits, intact item
-  order and Guest menu, payload privacy and cleanup. Item price/name/type/category/description/currency
-  audits, category/option create, membership revoke, Guest cart/order, promotions, media/R2 and broader
-  audit closure stay outside. Stash remains unread and untouched; `scripts/dev/` remains untouched.
+  order and Guest menu, payload privacy and cleanup. That item-create slice alone excluded item
+  update audits; the separate local Menu Management closure above now covers the existing
+  name/price-currency/type/category-move/reorder writers. Description/media, membership revoke,
+  Guest cart/order, promotions, media/R2 and broader audit closure stay outside. Stash remains
+  unread and untouched; `scripts/dev/` remains untouched.
 
 ### Recent release-closed audit block
 
@@ -1322,10 +1361,10 @@ Runtime evidence:
 
 Historical candidate comparison that selected the already release-closed rename slice:
 
-| Candidate | Current runtime evidence | Selection result |
+| Candidate | Runtime evidence at that historical selection | Selection result |
 | --- | --- | --- |
 | Menu option price audit | Mini App can combine name/price/availability; Telegram has no option-price writer. Current `updateOption` is locked/transactional, but delta changes preview, submit and promotion-adjusted totals. | Defer: asymmetric financial scope and current-order behavior make it riskier. |
-| Menu item price audit | Mini App has a compound patch; Telegram has a separate price dialog. `updateItem` currently reads then updates without the option-style lock/audit transaction, and item price has the widest order/promotion blast radius. | Defer: broader two-surface financial/concurrency contract. |
+| Menu item price audit | Mini App had a compound patch and Telegram a separate price dialog; at that selection point `updateItem` lacked the later locked audit contract. | Deferred then; now covered by the separate local Menu Management closure above. |
 | Menu option rename audit | Two concrete callers share one already locked repository writer; historical snapshots exist and canonical collision/normalization serialization is implemented. | **Selected:** smallest valuable cross-surface dangerous-action gap with low financial/security risk. |
 | Menu option availability audit | Mini App plus several Owner/Manager/Staff Telegram callbacks use immediate `setOptionAvailability`; atomic Shift Check has separate batch audit semantics. | Defer: Staff authority, no-op handling and duplicate-audit boundaries with Shift Check need a wider slice. |
 | Promotion configuration edit audit | Parent text/period, schedules, purchase targets, rewards and compatibility use multiple mutation/lock families. | Defer until exactly one family is selected; larger than rename. |

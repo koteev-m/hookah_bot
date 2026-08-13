@@ -66,7 +66,14 @@ fun Route.venueMenuRoutes(
             val name = payload.name.trim()
             validateName(name)
             val categoryType = payload.categoryType?.let { parseMenuSemanticType(it) }
-            val created = venueMenuRepository.createCategory(venueId, name, categoryType ?: MenuSemanticType.OTHER)
+            val created =
+                venueMenuRepository.createCategory(
+                    venueId = venueId,
+                    name = name,
+                    actorUserId = userId,
+                    source = MenuItemAvailabilitySource.VENUE_MINI_APP,
+                    categoryType = categoryType ?: MenuSemanticType.OTHER,
+                )
             call.respond(created.toDto())
         }
 
@@ -87,20 +94,15 @@ fun Route.venueMenuRoutes(
             }
             val categoryType = payload.categoryType?.let { parseMenuSemanticType(it) }
             val updated =
-                if (name != null) {
-                    venueMenuRepository.updateCategory(venueId, categoryId, name)
-                } else {
-                    venueMenuRepository.getMenu(venueId).firstOrNull { it.id == categoryId }
-                }
-                    ?: throw NotFoundException()
-            val typed =
-                if (categoryType != null) {
-                    venueMenuRepository.updateCategoryType(venueId, categoryId, categoryType)
-                        ?: throw NotFoundException()
-                } else {
-                    updated
-                }
-            call.respond(typed.toDto())
+                venueMenuRepository.updateCategory(
+                    venueId = venueId,
+                    categoryId = categoryId,
+                    name = name,
+                    categoryType = categoryType,
+                    actorUserId = userId,
+                    source = MenuItemAvailabilitySource.VENUE_MINI_APP,
+                ) ?: throw NotFoundException()
+            call.respond(updated.toDto())
         }
 
         delete("/menu/categories/{id}") {
@@ -293,7 +295,13 @@ fun Route.venueMenuRoutes(
             ensureMenuManage(venueAccessRepository, userId, venueId)
             val payload = call.receive<ReorderCategoriesRequest>()
             validateUniqueIds(payload.categoryIds, "categoryIds")
-            val success = venueMenuRepository.reorderCategories(venueId, payload.categoryIds)
+            val success =
+                venueMenuRepository.reorderCategories(
+                    venueId = venueId,
+                    categoryIds = payload.categoryIds,
+                    actorUserId = userId,
+                    source = MenuItemAvailabilitySource.VENUE_MINI_APP,
+                )
             if (!success) {
                 throw InvalidInputException("categoryIds must belong to venue")
             }
@@ -306,7 +314,14 @@ fun Route.venueMenuRoutes(
             ensureMenuManage(venueAccessRepository, userId, venueId)
             val payload = call.receive<ReorderItemsRequest>()
             validateUniqueIds(payload.itemIds, "itemIds")
-            val success = venueMenuRepository.reorderItems(venueId, payload.categoryId, payload.itemIds)
+            val success =
+                venueMenuRepository.reorderItems(
+                    venueId = venueId,
+                    categoryId = payload.categoryId,
+                    itemIds = payload.itemIds,
+                    actorUserId = userId,
+                    source = MenuItemAvailabilitySource.VENUE_MINI_APP,
+                )
             if (!success) {
                 throw InvalidInputException("itemIds must belong to category")
             }

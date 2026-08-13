@@ -9,6 +9,7 @@ import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
 import com.hookah.platform.backend.miniapp.venue.TransactionalAuditLogWriter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -19,6 +20,7 @@ import java.sql.Connection
 import java.sql.ResultSet
 import java.sql.SQLException
 import java.sql.Statement
+import java.util.Locale
 import javax.sql.DataSource
 
 internal const val MENU_SHIFT_CHECK_MAX_CHANGES = 500
@@ -32,10 +34,20 @@ const val MENU_OPTION_PRICE_CHANGED_AUDIT_ACTION = "MENU_OPTION_PRICE_CHANGED"
 const val MENU_OPTION_AVAILABILITY_CHANGED_AUDIT_ACTION = "MENU_OPTION_AVAILABILITY_CHANGED"
 const val MENU_ITEM_AVAILABILITY_CHANGED_AUDIT_ACTION = "MENU_ITEM_AVAILABILITY_CHANGED"
 const val MENU_ITEM_CREATED_AUDIT_ACTION = "MENU_ITEM_CREATED"
+const val MENU_CATEGORY_CREATED_AUDIT_ACTION = "MENU_CATEGORY_CREATED"
+const val MENU_CATEGORY_RENAMED_AUDIT_ACTION = "MENU_CATEGORY_RENAMED"
+const val MENU_CATEGORY_TYPE_CHANGED_AUDIT_ACTION = "MENU_CATEGORY_TYPE_CHANGED"
+const val MENU_CATEGORIES_REORDERED_AUDIT_ACTION = "MENU_CATEGORIES_REORDERED"
+const val MENU_ITEM_RENAMED_AUDIT_ACTION = "MENU_ITEM_RENAMED"
+const val MENU_ITEM_PRICE_CHANGED_AUDIT_ACTION = "MENU_ITEM_PRICE_CHANGED"
+const val MENU_ITEM_TYPE_CHANGED_AUDIT_ACTION = "MENU_ITEM_TYPE_CHANGED"
+const val MENU_ITEM_CATEGORY_MOVED_AUDIT_ACTION = "MENU_ITEM_CATEGORY_MOVED"
+const val MENU_ITEMS_REORDERED_AUDIT_ACTION = "MENU_ITEMS_REORDERED"
 internal const val MENU_DELETE_AFFECTED_RULE_SAMPLE_LIMIT = 50
 internal const val MENU_DELETE_AUDIT_PAYLOAD_MAX_BYTES = 4096
 internal const val MENU_ITEM_DELETE_AFFECTED_RULE_SAMPLE_LIMIT = MENU_DELETE_AFFECTED_RULE_SAMPLE_LIMIT
 internal const val MENU_ITEM_DELETE_AUDIT_PAYLOAD_MAX_BYTES = MENU_DELETE_AUDIT_PAYLOAD_MAX_BYTES
+internal const val MENU_CATEGORY_ORDER_LOCK_NAMESPACE = 0x4D454E5500000000L
 
 enum class MenuItemDeleteSource {
     VENUE_MINI_APP,
@@ -51,6 +63,11 @@ enum class MenuItemCreateSource {
     VENUE_MINI_APP,
     TELEGRAM_BOT,
 }
+
+data class MenuCategorySeed(
+    val name: String,
+    val categoryType: MenuSemanticType = MenuSemanticType.OTHER,
+)
 
 enum class MenuCategoryDeleteSource {
     VENUE_MINI_APP,
@@ -265,38 +282,101 @@ class VenueMenuRepository(
     suspend fun createCategory(
         venueId: Long,
         name: String,
+        actorUserId: Long,
+        source: MenuItemAvailabilitySource,
         categoryType: MenuSemanticType = MenuSemanticType.OTHER,
     ): VenueMenuCategory {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    val sortOrder = nextCategorySortOrder(connection, venueId)
-                    val categoryId =
-                        connection.prepareStatement(
-                            """
-                            INSERT INTO menu_categories (venue_id, name, sort_order, category_type, updated_at)
-                            VALUES (?, ?, ?, ?, now())
-                            """.trimIndent(),
-                            java.sql.Statement.RETURN_GENERATED_KEYS,
-                        ).use { statement ->
-                            statement.setLong(1, venueId)
-                            statement.setString(2, name)
-                            statement.setInt(3, sortOrder)
-                            statement.setString(4, categoryType.dbValue)
-                            statement.executeUpdate()
-                            statement.generatedKeys.use { rs ->
-                                if (rs.next()) rs.getLong(1) else error("Failed to insert category")
+                    val originalAutoCommit = connection.autoCommit
+                    connection.autoCommit = false
+                    try {
+                        lockMenuCategoryOrderScope(connection, venueId)
+                        val lockedCategories = loadCategoriesForUpdate(connection, venueId)
+                        val categoryId =
+                            insertCategory(
+                                connection = connection,
+                                venueId = venueId,
+                                name = name,
+                                sortOrder = (lockedCategories.maxOfOrNull { it.sortOrder } ?: -1) + 1,
+                                categoryType = categoryType,
+                            )
+                        auditMenuCategoryCreated(
+                            connection = connection,
+                            venueId = venueId,
+                            categoryId = categoryId,
+                            actorUserId = actorUserId,
+                            source = source,
+                        )
+                        val created =
+                            loadCategory(connection, categoryId, venueId)
+                                ?: throw SQLException("Inserted menu category disappeared", "40001")
+                        connection.commit()
+                        created
+                    } catch (e: Exception) {
+                        connection.rollback()
+                        throw e
+                    } finally {
+                        connection.autoCommit = originalAutoCommit
+                    }
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    suspend fun createMissingCategories(
+        venueId: Long,
+        seeds: List<MenuCategorySeed>,
+        actorUserId: Long,
+        source: MenuItemAvailabilitySource,
+    ): List<VenueMenuCategory> {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    val originalAutoCommit = connection.autoCommit
+                    connection.autoCommit = false
+                    try {
+                        lockMenuCategoryOrderScope(connection, venueId)
+                        val lockedCategories = loadCategoriesForUpdate(connection, venueId)
+                        val existingNames =
+                            lockedCategories
+                                .map { it.name.trim().lowercase(Locale.ROOT) }
+                                .toMutableSet()
+                        var nextSortOrder = (lockedCategories.maxOfOrNull { it.sortOrder } ?: -1) + 1
+                        seeds.forEach { seed ->
+                            val normalizedName = seed.name.trim().lowercase(Locale.ROOT)
+                            if (existingNames.add(normalizedName)) {
+                                val categoryId =
+                                    insertCategory(
+                                        connection = connection,
+                                        venueId = venueId,
+                                        name = seed.name,
+                                        sortOrder = nextSortOrder++,
+                                        categoryType = seed.categoryType,
+                                    )
+                                auditMenuCategoryCreated(
+                                    connection = connection,
+                                    venueId = venueId,
+                                    categoryId = categoryId,
+                                    actorUserId = actorUserId,
+                                    source = source,
+                                )
                             }
                         }
-                    VenueMenuCategory(
-                        id = categoryId,
-                        venueId = venueId,
-                        name = name,
-                        sortOrder = sortOrder,
-                        categoryType = categoryType,
-                        items = emptyList(),
-                    )
+                        val result = loadMenu(connection, venueId)
+                        connection.commit()
+                        result
+                    } catch (e: Exception) {
+                        connection.rollback()
+                        throw e
+                    } finally {
+                        connection.autoCommit = originalAutoCommit
+                    }
                 }
             } catch (e: SQLException) {
                 throw DatabaseUnavailableException()
@@ -307,29 +387,79 @@ class VenueMenuRepository(
     suspend fun updateCategory(
         venueId: Long,
         categoryId: Long,
-        name: String,
+        name: String?,
+        categoryType: MenuSemanticType?,
+        actorUserId: Long,
+        source: MenuItemAvailabilitySource,
     ): VenueMenuCategory? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    val updated =
-                        connection.prepareStatement(
-                            """
-                            UPDATE menu_categories
-                            SET name = ?, updated_at = now()
-                            WHERE id = ? AND venue_id = ?
-                            """.trimIndent(),
-                        ).use { statement ->
-                            statement.setString(1, name)
-                            statement.setLong(2, categoryId)
-                            statement.setLong(3, venueId)
-                            statement.executeUpdate()
+                    val originalAutoCommit = connection.autoCommit
+                    connection.autoCommit = false
+                    try {
+                        val existing = loadCategoryForUpdate(connection, categoryId, venueId)
+                        if (existing == null) {
+                            connection.commit()
+                            return@use null
                         }
-                    if (updated == 0) {
-                        return@use null
+                        val updatedName = name ?: existing.name
+                        val updatedCategoryType = categoryType ?: existing.categoryType
+                        val isRename = updatedName != existing.name
+                        val isTypeChange = updatedCategoryType != existing.categoryType
+                        if (!isRename && !isTypeChange) {
+                            connection.commit()
+                            return@use existing
+                        }
+                        val updated =
+                            connection.prepareStatement(
+                                """
+                                UPDATE menu_categories
+                                SET name = ?, category_type = ?, updated_at = now()
+                                WHERE id = ? AND venue_id = ?
+                                """.trimIndent(),
+                            ).use { statement ->
+                                statement.setString(1, updatedName)
+                                statement.setString(2, updatedCategoryType.dbValue)
+                                statement.setLong(3, categoryId)
+                                statement.setLong(4, venueId)
+                                statement.executeUpdate()
+                            }
+                        if (updated != 1) {
+                            throw SQLException("Locked menu category changed during update", "40001")
+                        }
+                        if (isRename) {
+                            auditMenuCategoryRenamed(
+                                connection = connection,
+                                venueId = venueId,
+                                categoryId = categoryId,
+                                actorUserId = actorUserId,
+                                source = source,
+                            )
+                        }
+                        if (isTypeChange) {
+                            auditMenuCategoryTypeChanged(
+                                connection = connection,
+                                venueId = venueId,
+                                categoryId = categoryId,
+                                oldCategoryType = existing.categoryType,
+                                newCategoryType = updatedCategoryType,
+                                actorUserId = actorUserId,
+                                source = source,
+                            )
+                        }
+                        val result =
+                            loadCategory(connection, categoryId, venueId)
+                                ?: throw SQLException("Updated menu category disappeared", "40001")
+                        connection.commit()
+                        result
+                    } catch (e: Exception) {
+                        connection.rollback()
+                        throw e
+                    } finally {
+                        connection.autoCommit = originalAutoCommit
                     }
-                    loadCategory(connection, categoryId, venueId)
                 }
             } catch (e: SQLException) {
                 throw DatabaseUnavailableException()
@@ -414,39 +544,6 @@ class VenueMenuRepository(
                     } finally {
                         connection.autoCommit = originalAutoCommit
                     }
-                }
-            } catch (e: SQLException) {
-                throw DatabaseUnavailableException()
-            }
-        }
-    }
-
-    suspend fun updateCategoryType(
-        venueId: Long,
-        categoryId: Long,
-        categoryType: MenuSemanticType,
-    ): VenueMenuCategory? {
-        val ds = dataSource ?: throw DatabaseUnavailableException()
-        return withContext(Dispatchers.IO) {
-            try {
-                ds.connection.use { connection ->
-                    val updated =
-                        connection.prepareStatement(
-                            """
-                            UPDATE menu_categories
-                            SET category_type = ?, updated_at = now()
-                            WHERE id = ? AND venue_id = ?
-                            """.trimIndent(),
-                        ).use { statement ->
-                            statement.setString(1, categoryType.dbValue)
-                            statement.setLong(2, categoryId)
-                            statement.setLong(3, venueId)
-                            statement.executeUpdate()
-                        }
-                    if (updated == 0) {
-                        return@use null
-                    }
-                    loadCategory(connection, categoryId, venueId)
                 }
             } catch (e: SQLException) {
                 throw DatabaseUnavailableException()
@@ -541,32 +638,42 @@ class VenueMenuRepository(
                     val originalAutoCommit = connection.autoCommit
                     connection.autoCommit = false
                     try {
+                        val sourceCategoryHint = loadItemCategoryId(connection, venueId, itemId)
+                        if (sourceCategoryHint == null) {
+                            connection.commit()
+                            return@use null
+                        }
+                        val requestedCategoryId = categoryId ?: sourceCategoryHint
+                        val categoryIdsToLock = listOf(sourceCategoryHint, requestedCategoryId).distinct().sorted()
+                        val lockedCategoryIds =
+                            lockCategoriesByIdForUpdate(
+                                connection = connection,
+                                venueId = venueId,
+                                categoryIds = categoryIdsToLock,
+                            )
+                        if (lockedCategoryIds != categoryIdsToLock) {
+                            connection.commit()
+                            return@use null
+                        }
                         val existing = loadItemForUpdate(connection, itemId, venueId)
-                        if (existing == null) {
+                        if (existing == null || existing.categoryId != sourceCategoryHint) {
                             connection.commit()
                             return@use null
                         }
-                        if (!categoryExists(connection, venueId, existing.categoryId)) {
-                            throw SQLException("Locked menu item category is missing", "40001")
-                        }
-                        val updatedCategoryId = categoryId ?: existing.categoryId
-                        if (!categoryExists(connection, venueId, updatedCategoryId)) {
-                            connection.commit()
-                            return@use null
-                        }
+                        val updatedCategoryId = requestedCategoryId
                         val updatedName = name ?: existing.name
                         val updatedPriceMinor = priceMinor ?: existing.priceMinor
                         val updatedCurrency = currency ?: existing.currency
                         val updatedIsAvailable = isAvailable ?: existing.isAvailable
                         val updatedItemType = if (itemTypeSpecified) itemType else existing.itemType
+                        val isRename = updatedName != existing.name
+                        val isPriceChange =
+                            updatedPriceMinor != existing.priceMinor || updatedCurrency != existing.currency
+                        val isTypeChange = updatedItemType != existing.itemType
+                        val isCategoryMove = updatedCategoryId != existing.categoryId
                         val isAvailabilityChange = updatedIsAvailable != existing.isAvailable
                         val hasChanges =
-                            updatedCategoryId != existing.categoryId ||
-                                updatedName != existing.name ||
-                                updatedPriceMinor != existing.priceMinor ||
-                                updatedCurrency != existing.currency ||
-                                isAvailabilityChange ||
-                                updatedItemType != existing.itemType
+                            isRename || isPriceChange || isTypeChange || isCategoryMove || isAvailabilityChange
                         if (!hasChanges) {
                             connection.commit()
                             return@use existing
@@ -577,7 +684,7 @@ class VenueMenuRepository(
                                 UPDATE menu_items
                                 SET category_id = ?, name = ?, price_minor = ?, currency = ?,
                                     is_available = ?, item_type = ?, updated_at = now()
-                                WHERE id = ? AND venue_id = ? AND is_available = ?
+                                WHERE id = ? AND venue_id = ? AND category_id = ? AND is_available = ?
                                 """.trimIndent(),
                             ).use { statement ->
                                 statement.setLong(1, updatedCategoryId)
@@ -592,11 +699,56 @@ class VenueMenuRepository(
                                 }
                                 statement.setLong(7, itemId)
                                 statement.setLong(8, venueId)
-                                statement.setBoolean(9, existing.isAvailable)
+                                statement.setLong(9, existing.categoryId)
+                                statement.setBoolean(10, existing.isAvailable)
                                 statement.executeUpdate()
                             }
                         if (updated != 1) {
                             throw SQLException("Locked menu item changed during update", "40001")
+                        }
+                        if (isRename) {
+                            auditMenuItemRenamed(
+                                connection = connection,
+                                venueId = venueId,
+                                itemId = itemId,
+                                actorUserId = actorUserId,
+                                source = source,
+                            )
+                        }
+                        if (isPriceChange) {
+                            auditMenuItemPriceChanged(
+                                connection = connection,
+                                venueId = venueId,
+                                itemId = itemId,
+                                oldPriceMinor = existing.priceMinor,
+                                newPriceMinor = updatedPriceMinor,
+                                oldCurrency = existing.currency,
+                                newCurrency = updatedCurrency,
+                                actorUserId = actorUserId,
+                                source = source,
+                            )
+                        }
+                        if (isTypeChange) {
+                            auditMenuItemTypeChanged(
+                                connection = connection,
+                                venueId = venueId,
+                                itemId = itemId,
+                                oldItemType = existing.itemType,
+                                newItemType = updatedItemType,
+                                actorUserId = actorUserId,
+                                source = source,
+                            )
+                        }
+                        if (isCategoryMove) {
+                            auditMenuItemCategoryMoved(
+                                connection = connection,
+                                venueId = venueId,
+                                itemId = itemId,
+                                oldCategoryId = existing.categoryId,
+                                newCategoryId = updatedCategoryId,
+                                actorUserId = actorUserId,
+                                source = source,
+                            )
                         }
                         if (isAvailabilityChange) {
                             auditMenuItemAvailabilityChange(
@@ -719,38 +871,22 @@ class VenueMenuRepository(
         venueId: Long,
         itemId: Long,
         itemType: MenuSemanticType?,
-    ): VenueMenuItem? {
-        val ds = dataSource ?: throw DatabaseUnavailableException()
-        return withContext(Dispatchers.IO) {
-            try {
-                ds.connection.use { connection ->
-                    val updated =
-                        connection.prepareStatement(
-                            """
-                            UPDATE menu_items
-                            SET item_type = ?, updated_at = now()
-                            WHERE id = ? AND venue_id = ?
-                            """.trimIndent(),
-                        ).use { statement ->
-                            if (itemType == null) {
-                                statement.setNull(1, java.sql.Types.VARCHAR)
-                            } else {
-                                statement.setString(1, itemType.dbValue)
-                            }
-                            statement.setLong(2, itemId)
-                            statement.setLong(3, venueId)
-                            statement.executeUpdate()
-                        }
-                    if (updated == 0) {
-                        return@use null
-                    }
-                    loadItem(connection, itemId, venueId)
-                }
-            } catch (e: SQLException) {
-                throw DatabaseUnavailableException()
-            }
-        }
-    }
+        actorUserId: Long,
+        source: MenuItemAvailabilitySource,
+    ): VenueMenuItem? =
+        updateItem(
+            venueId = venueId,
+            itemId = itemId,
+            categoryId = null,
+            name = null,
+            priceMinor = null,
+            currency = null,
+            isAvailable = null,
+            actorUserId = actorUserId,
+            source = source,
+            itemType = itemType,
+            itemTypeSpecified = true,
+        )
 
     suspend fun setItemAvailability(
         venueId: Long,
@@ -823,29 +959,58 @@ class VenueMenuRepository(
     suspend fun reorderCategories(
         venueId: Long,
         categoryIds: List<Long>,
+        actorUserId: Long,
+        source: MenuItemAvailabilitySource,
     ): Boolean {
-        if (categoryIds.isEmpty()) {
-            return false
-        }
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
+                    val originalAutoCommit = connection.autoCommit
                     connection.autoCommit = false
                     try {
-                        val valid = countCategories(connection, venueId, categoryIds) == categoryIds.size
-                        if (!valid) {
+                        lockMenuCategoryOrderScope(connection, venueId)
+                        val lockedCategories = loadCategoriesForUpdate(connection, venueId)
+                        val oldOrder =
+                            lockedCategories
+                                .sortedWith(compareBy<VenueMenuCategory> { it.sortOrder }.thenBy { it.id })
+                                .map { it.id }
+                        val isExactSet =
+                            categoryIds.size == oldOrder.size &&
+                                categoryIds.toSet().size == categoryIds.size &&
+                                categoryIds.toSet() == oldOrder.toSet()
+                        if (!isExactSet) {
                             connection.rollback()
                             return@use false
                         }
+                        if (categoryIds == oldOrder) {
+                            connection.commit()
+                            return@use true
+                        }
                         updateCategoryOrder(connection, venueId, categoryIds)
+                        auditMenuCategoriesReordered(
+                            connection = connection,
+                            venueId = venueId,
+                            categoryCount = categoryIds.size,
+                            oldOrder = oldOrder,
+                            newOrder = categoryIds,
+                            actorUserId = actorUserId,
+                            source = source,
+                        )
+                        val persistedOrder =
+                            loadCategoriesForUpdate(connection, venueId)
+                                .sortedWith(compareBy<VenueMenuCategory> { it.sortOrder }.thenBy { it.id })
+                                .map { it.id }
+                        if (persistedOrder != categoryIds) {
+                            throw SQLException("Menu category order did not persist", "40001")
+                        }
                         connection.commit()
                         true
                     } catch (e: Exception) {
                         connection.rollback()
                         throw e
                     } finally {
-                        connection.autoCommit = true
+                        connection.autoCommit = originalAutoCommit
                     }
                 }
             } catch (e: SQLException) {
@@ -858,10 +1023,9 @@ class VenueMenuRepository(
         venueId: Long,
         categoryId: Long,
         itemIds: List<Long>,
+        actorUserId: Long,
+        source: MenuItemAvailabilitySource,
     ): Boolean {
-        if (itemIds.isEmpty()) {
-            return false
-        }
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
@@ -873,12 +1037,41 @@ class VenueMenuRepository(
                             connection.rollback()
                             return@use false
                         }
-                        val valid = countItems(connection, venueId, categoryId, itemIds) == itemIds.size
-                        if (!valid) {
+                        val lockedItems = loadItemsForUpdate(connection, venueId, categoryId)
+                        val oldOrder =
+                            lockedItems
+                                .sortedWith(compareBy<VenueMenuItem> { it.sortOrder }.thenBy { it.id })
+                                .map { it.id }
+                        val isExactSet =
+                            itemIds.size == oldOrder.size &&
+                                itemIds.toSet().size == itemIds.size &&
+                                itemIds.toSet() == oldOrder.toSet()
+                        if (!isExactSet) {
                             connection.rollback()
                             return@use false
                         }
-                        updateItemOrder(connection, venueId, itemIds)
+                        if (itemIds == oldOrder) {
+                            connection.commit()
+                            return@use true
+                        }
+                        updateItemOrder(connection, venueId, categoryId, itemIds)
+                        auditMenuItemsReordered(
+                            connection = connection,
+                            venueId = venueId,
+                            categoryId = categoryId,
+                            itemCount = itemIds.size,
+                            oldOrder = oldOrder,
+                            newOrder = itemIds,
+                            actorUserId = actorUserId,
+                            source = source,
+                        )
+                        val persistedOrder =
+                            loadItemsForUpdate(connection, venueId, categoryId)
+                                .sortedWith(compareBy<VenueMenuItem> { it.sortOrder }.thenBy { it.id })
+                                .map { it.id }
+                        if (persistedOrder != itemIds) {
+                            throw SQLException("Menu item order did not persist", "40001")
+                        }
                         connection.commit()
                         true
                     } catch (e: Exception) {
@@ -1633,6 +1826,30 @@ class VenueMenuRepository(
         val itemType: MenuSemanticType?,
     )
 
+    private fun insertCategory(
+        connection: Connection,
+        venueId: Long,
+        name: String,
+        sortOrder: Int,
+        categoryType: MenuSemanticType,
+    ): Long =
+        connection.prepareStatement(
+            """
+            INSERT INTO menu_categories (venue_id, name, sort_order, category_type, updated_at)
+            VALUES (?, ?, ?, ?, now())
+            """.trimIndent(),
+            Statement.RETURN_GENERATED_KEYS,
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setString(2, name)
+            statement.setInt(3, sortOrder)
+            statement.setString(4, categoryType.dbValue)
+            statement.executeUpdate()
+            statement.generatedKeys.use { rs ->
+                if (rs.next()) rs.getLong(1) else throw SQLException("Failed to insert menu category")
+            }
+        }
+
     private fun insertItem(
         connection: Connection,
         venueId: Long,
@@ -1733,6 +1950,212 @@ class VenueMenuRepository(
         if (deleted != 1) {
             throw SQLException("Locked menu option disappeared during deletion", "40001")
         }
+    }
+
+    private fun auditMenuCategoryCreated(
+        connection: Connection,
+        venueId: Long,
+        categoryId: Long,
+        actorUserId: Long,
+        source: MenuItemAvailabilitySource,
+    ) {
+        auditLogWriter.appendJson(
+            connection = connection,
+            actorUserId = actorUserId,
+            action = MENU_CATEGORY_CREATED_AUDIT_ACTION,
+            entityType = "menu_category",
+            entityId = categoryId,
+            payload = buildMenuCategoryCreatedAuditPayload(venueId, categoryId, source),
+        )
+    }
+
+    private fun auditMenuCategoryRenamed(
+        connection: Connection,
+        venueId: Long,
+        categoryId: Long,
+        actorUserId: Long,
+        source: MenuItemAvailabilitySource,
+    ) {
+        auditLogWriter.appendJson(
+            connection = connection,
+            actorUserId = actorUserId,
+            action = MENU_CATEGORY_RENAMED_AUDIT_ACTION,
+            entityType = "menu_category",
+            entityId = categoryId,
+            payload = buildMenuCategoryRenamedAuditPayload(venueId, categoryId, source),
+        )
+    }
+
+    private fun auditMenuCategoryTypeChanged(
+        connection: Connection,
+        venueId: Long,
+        categoryId: Long,
+        oldCategoryType: MenuSemanticType,
+        newCategoryType: MenuSemanticType,
+        actorUserId: Long,
+        source: MenuItemAvailabilitySource,
+    ) {
+        auditLogWriter.appendJson(
+            connection = connection,
+            actorUserId = actorUserId,
+            action = MENU_CATEGORY_TYPE_CHANGED_AUDIT_ACTION,
+            entityType = "menu_category",
+            entityId = categoryId,
+            payload =
+                buildMenuCategoryTypeChangedAuditPayload(
+                    venueId,
+                    categoryId,
+                    oldCategoryType,
+                    newCategoryType,
+                    source,
+                ),
+        )
+    }
+
+    private fun auditMenuCategoriesReordered(
+        connection: Connection,
+        venueId: Long,
+        categoryCount: Int,
+        oldOrder: List<Long>,
+        newOrder: List<Long>,
+        actorUserId: Long,
+        source: MenuItemAvailabilitySource,
+    ) {
+        auditLogWriter.appendJson(
+            connection = connection,
+            actorUserId = actorUserId,
+            action = MENU_CATEGORIES_REORDERED_AUDIT_ACTION,
+            entityType = "venue",
+            entityId = venueId,
+            payload =
+                buildMenuCategoriesReorderedAuditPayload(
+                    venueId,
+                    categoryCount,
+                    oldOrder,
+                    newOrder,
+                    source,
+                ),
+        )
+    }
+
+    private fun auditMenuItemRenamed(
+        connection: Connection,
+        venueId: Long,
+        itemId: Long,
+        actorUserId: Long,
+        source: MenuItemAvailabilitySource,
+    ) {
+        auditLogWriter.appendJson(
+            connection = connection,
+            actorUserId = actorUserId,
+            action = MENU_ITEM_RENAMED_AUDIT_ACTION,
+            entityType = "menu_item",
+            entityId = itemId,
+            payload = buildMenuItemRenamedAuditPayload(venueId, itemId, source),
+        )
+    }
+
+    private fun auditMenuItemPriceChanged(
+        connection: Connection,
+        venueId: Long,
+        itemId: Long,
+        oldPriceMinor: Long,
+        newPriceMinor: Long,
+        oldCurrency: String,
+        newCurrency: String,
+        actorUserId: Long,
+        source: MenuItemAvailabilitySource,
+    ) {
+        auditLogWriter.appendJson(
+            connection = connection,
+            actorUserId = actorUserId,
+            action = MENU_ITEM_PRICE_CHANGED_AUDIT_ACTION,
+            entityType = "menu_item",
+            entityId = itemId,
+            payload =
+                buildMenuItemPriceChangedAuditPayload(
+                    venueId,
+                    itemId,
+                    oldPriceMinor,
+                    newPriceMinor,
+                    oldCurrency,
+                    newCurrency,
+                    source,
+                ),
+        )
+    }
+
+    private fun auditMenuItemTypeChanged(
+        connection: Connection,
+        venueId: Long,
+        itemId: Long,
+        oldItemType: MenuSemanticType?,
+        newItemType: MenuSemanticType?,
+        actorUserId: Long,
+        source: MenuItemAvailabilitySource,
+    ) {
+        auditLogWriter.appendJson(
+            connection = connection,
+            actorUserId = actorUserId,
+            action = MENU_ITEM_TYPE_CHANGED_AUDIT_ACTION,
+            entityType = "menu_item",
+            entityId = itemId,
+            payload = buildMenuItemTypeChangedAuditPayload(venueId, itemId, oldItemType, newItemType, source),
+        )
+    }
+
+    private fun auditMenuItemCategoryMoved(
+        connection: Connection,
+        venueId: Long,
+        itemId: Long,
+        oldCategoryId: Long,
+        newCategoryId: Long,
+        actorUserId: Long,
+        source: MenuItemAvailabilitySource,
+    ) {
+        auditLogWriter.appendJson(
+            connection = connection,
+            actorUserId = actorUserId,
+            action = MENU_ITEM_CATEGORY_MOVED_AUDIT_ACTION,
+            entityType = "menu_item",
+            entityId = itemId,
+            payload =
+                buildMenuItemCategoryMovedAuditPayload(
+                    venueId,
+                    itemId,
+                    oldCategoryId,
+                    newCategoryId,
+                    source,
+                ),
+        )
+    }
+
+    private fun auditMenuItemsReordered(
+        connection: Connection,
+        venueId: Long,
+        categoryId: Long,
+        itemCount: Int,
+        oldOrder: List<Long>,
+        newOrder: List<Long>,
+        actorUserId: Long,
+        source: MenuItemAvailabilitySource,
+    ) {
+        auditLogWriter.appendJson(
+            connection = connection,
+            actorUserId = actorUserId,
+            action = MENU_ITEMS_REORDERED_AUDIT_ACTION,
+            entityType = "menu_category",
+            entityId = categoryId,
+            payload =
+                buildMenuItemsReorderedAuditPayload(
+                    venueId,
+                    categoryId,
+                    itemCount,
+                    oldOrder,
+                    newOrder,
+                    source,
+                ),
+        )
     }
 
     private fun auditMenuItemCreate(
@@ -2216,6 +2639,47 @@ class VenueMenuRepository(
         }
     }
 
+    private fun loadCategoryForUpdate(
+        connection: Connection,
+        categoryId: Long,
+        venueId: Long,
+    ): VenueMenuCategory? =
+        connection.prepareStatement(
+            """
+            SELECT id, venue_id, name, sort_order, category_type
+            FROM menu_categories
+            WHERE id = ? AND venue_id = ?
+            FOR UPDATE
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, categoryId)
+            statement.setLong(2, venueId)
+            statement.executeQuery().use { rs ->
+                if (rs.next()) mapCategory(rs) else null
+            }
+        }
+
+    private fun loadCategoriesForUpdate(
+        connection: Connection,
+        venueId: Long,
+    ): List<VenueMenuCategory> =
+        connection.prepareStatement(
+            """
+            SELECT id, venue_id, name, sort_order, category_type
+            FROM menu_categories
+            WHERE venue_id = ?
+            ORDER BY id
+            FOR UPDATE
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.executeQuery().use { rs ->
+                buildList {
+                    while (rs.next()) add(mapCategory(rs))
+                }
+            }
+        }
+
     private fun loadItem(
         connection: Connection,
         itemId: Long,
@@ -2256,6 +2720,29 @@ class VenueMenuRepository(
             }
         }
     }
+
+    private fun loadItemsForUpdate(
+        connection: Connection,
+        venueId: Long,
+        categoryId: Long,
+    ): List<VenueMenuItem> =
+        connection.prepareStatement(
+            """
+            SELECT id, venue_id, category_id, name, price_minor, currency, is_available, sort_order, item_type
+            FROM menu_items
+            WHERE venue_id = ? AND category_id = ?
+            ORDER BY id
+            FOR UPDATE
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, categoryId)
+            statement.executeQuery().use { rs ->
+                buildList {
+                    while (rs.next()) add(mapItem(rs))
+                }
+            }
+        }
 
     private fun loadOption(
         connection: Connection,
@@ -2540,6 +3027,74 @@ class VenueMenuRepository(
             statement.executeQuery().use { rs -> rs.next() }
         }
 
+    private fun lockMenuCategoryOrderScope(
+        connection: Connection,
+        venueId: Long,
+    ) {
+        if (connection.metaData.databaseProductName.equals("PostgreSQL", ignoreCase = true)) {
+            connection.prepareStatement("SELECT pg_advisory_xact_lock(?)").use { statement ->
+                statement.setLong(1, MENU_CATEGORY_ORDER_LOCK_NAMESPACE xor venueId)
+                statement.executeQuery().use { rs ->
+                    if (!rs.next()) throw SQLException("Failed to acquire menu category order lock")
+                }
+            }
+            if (!venueExists(connection, venueId)) {
+                throw SQLException("Menu category venue does not exist")
+            }
+            return
+        }
+        val venueExists =
+            connection.prepareStatement(
+                """
+                SELECT id
+                FROM venues
+                WHERE id = ?
+                FOR UPDATE
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.executeQuery().use { rs -> rs.next() }
+            }
+        if (!venueExists) throw SQLException("Menu category venue does not exist")
+    }
+
+    private fun venueExists(
+        connection: Connection,
+        venueId: Long,
+    ): Boolean =
+        connection.prepareStatement("SELECT 1 FROM venues WHERE id = ?").use { statement ->
+            statement.setLong(1, venueId)
+            statement.executeQuery().use { resultSet -> resultSet.next() }
+        }
+
+    private fun lockCategoriesByIdForUpdate(
+        connection: Connection,
+        venueId: Long,
+        categoryIds: List<Long>,
+    ): List<Long> {
+        if (categoryIds.isEmpty()) return emptyList()
+        val placeholders = categoryIds.joinToString(",") { "?" }
+        return connection.prepareStatement(
+            """
+            SELECT id
+            FROM menu_categories
+            WHERE venue_id = ? AND id IN ($placeholders)
+            ORDER BY id
+            FOR UPDATE
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            categoryIds.forEachIndexed { index, categoryId ->
+                statement.setLong(index + 2, categoryId)
+            }
+            statement.executeQuery().use { rs ->
+                buildList {
+                    while (rs.next()) add(rs.getLong("id"))
+                }
+            }
+        }
+    }
+
     private fun lockCategoryForItemOrderMutation(
         connection: Connection,
         venueId: Long,
@@ -2763,19 +3318,21 @@ class VenueMenuRepository(
     private fun updateItemOrder(
         connection: Connection,
         venueId: Long,
+        categoryId: Long,
         itemIds: List<Long>,
     ) {
         connection.prepareStatement(
             """
             UPDATE menu_items
             SET sort_order = ?, updated_at = now()
-            WHERE venue_id = ? AND id = ?
+            WHERE venue_id = ? AND category_id = ? AND id = ?
             """.trimIndent(),
         ).use { statement ->
             itemIds.forEachIndexed { index, id ->
                 statement.setInt(1, index)
                 statement.setLong(2, venueId)
-                statement.setLong(3, id)
+                statement.setLong(3, categoryId)
+                statement.setLong(4, id)
                 statement.addBatch()
             }
             statement.executeBatch()
@@ -2795,6 +3352,134 @@ class VenueMenuRepository(
         val itemId: Long,
         val isAvailable: Boolean,
     )
+}
+
+internal fun buildMenuCategoryCreatedAuditPayload(
+    venueId: Long,
+    categoryId: Long,
+    source: MenuItemAvailabilitySource,
+) = buildJsonObject {
+    put("venueId", venueId)
+    put("categoryId", categoryId)
+    put("source", source.name)
+}
+
+internal fun buildMenuCategoryRenamedAuditPayload(
+    venueId: Long,
+    categoryId: Long,
+    source: MenuItemAvailabilitySource,
+) = buildJsonObject {
+    put("venueId", venueId)
+    put("categoryId", categoryId)
+    put("source", source.name)
+}
+
+internal fun buildMenuCategoryTypeChangedAuditPayload(
+    venueId: Long,
+    categoryId: Long,
+    oldCategoryType: MenuSemanticType,
+    newCategoryType: MenuSemanticType,
+    source: MenuItemAvailabilitySource,
+) = buildJsonObject {
+    put("venueId", venueId)
+    put("categoryId", categoryId)
+    put("oldCategoryType", oldCategoryType.dbValue)
+    put("newCategoryType", newCategoryType.dbValue)
+    put("source", source.name)
+}
+
+internal fun buildMenuCategoriesReorderedAuditPayload(
+    venueId: Long,
+    categoryCount: Int,
+    oldOrder: List<Long>,
+    newOrder: List<Long>,
+    source: MenuItemAvailabilitySource,
+) = buildJsonObject {
+    put("venueId", venueId)
+    put("categoryCount", categoryCount)
+    put("oldOrderSha256", menuOrderSha256(oldOrder))
+    put("newOrderSha256", menuOrderSha256(newOrder))
+    put("source", source.name)
+}
+
+internal fun buildMenuItemRenamedAuditPayload(
+    venueId: Long,
+    itemId: Long,
+    source: MenuItemAvailabilitySource,
+) = buildJsonObject {
+    put("venueId", venueId)
+    put("itemId", itemId)
+    put("source", source.name)
+}
+
+internal fun buildMenuItemPriceChangedAuditPayload(
+    venueId: Long,
+    itemId: Long,
+    oldPriceMinor: Long,
+    newPriceMinor: Long,
+    oldCurrency: String,
+    newCurrency: String,
+    source: MenuItemAvailabilitySource,
+) = buildJsonObject {
+    put("venueId", venueId)
+    put("itemId", itemId)
+    put("oldPriceMinor", oldPriceMinor)
+    put("newPriceMinor", newPriceMinor)
+    put("oldCurrency", oldCurrency)
+    put("newCurrency", newCurrency)
+    put("source", source.name)
+}
+
+internal fun buildMenuItemTypeChangedAuditPayload(
+    venueId: Long,
+    itemId: Long,
+    oldItemType: MenuSemanticType?,
+    newItemType: MenuSemanticType?,
+    source: MenuItemAvailabilitySource,
+) = buildJsonObject {
+    put("venueId", venueId)
+    put("itemId", itemId)
+    put("oldItemType", oldItemType?.let { JsonPrimitive(it.dbValue) } ?: JsonNull)
+    put("newItemType", newItemType?.let { JsonPrimitive(it.dbValue) } ?: JsonNull)
+    put("source", source.name)
+}
+
+internal fun buildMenuItemCategoryMovedAuditPayload(
+    venueId: Long,
+    itemId: Long,
+    oldCategoryId: Long,
+    newCategoryId: Long,
+    source: MenuItemAvailabilitySource,
+) = buildJsonObject {
+    put("venueId", venueId)
+    put("itemId", itemId)
+    put("oldCategoryId", oldCategoryId)
+    put("newCategoryId", newCategoryId)
+    put("source", source.name)
+}
+
+internal fun buildMenuItemsReorderedAuditPayload(
+    venueId: Long,
+    categoryId: Long,
+    itemCount: Int,
+    oldOrder: List<Long>,
+    newOrder: List<Long>,
+    source: MenuItemAvailabilitySource,
+) = buildJsonObject {
+    put("venueId", venueId)
+    put("categoryId", categoryId)
+    put("itemCount", itemCount)
+    put("oldOrderSha256", menuOrderSha256(oldOrder))
+    put("newOrderSha256", menuOrderSha256(newOrder))
+    put("source", source.name)
+}
+
+internal fun menuOrderSha256(ids: List<Long>): String {
+    val canonicalHashInput = "v1:" + ids.joinToString(",")
+    return MessageDigest
+        .getInstance("SHA-256")
+        .digest(canonicalHashInput.toByteArray(StandardCharsets.UTF_8))
+        .toLowercaseHex()
 }
 
 internal fun buildMenuItemDeleteAuditPayload(

@@ -1652,8 +1652,16 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
                     actorUserId = SECOND_ACTOR_ID,
                     source = MenuItemAvailabilitySource.VENUE_MINI_APP,
                 )
+                val renameAudit = readAudits(dataSource, MENU_ITEM_RENAMED_AUDIT_ACTION).single()
+                assertEquals(SECOND_ACTOR_ID, renameAudit.actorUserId)
+                assertEquals("menu_item", renameAudit.entityType)
+                assertEquals(fixture.itemId, renameAudit.entityId)
+                assertEquals(
+                    setOf("venueId", "itemId", "source"),
+                    renameAudit.payload.keys,
+                )
                 assertTrue(readShiftCheckAudits(dataSource).isEmpty())
-                assertEquals(2, countAuditRows(dataSource))
+                assertEquals(3, countAuditRows(dataSource))
             }
         }
 
@@ -1836,6 +1844,449 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
                 assertEquals("menu_item", deleteAudit.entityType)
                 assertEquals(fixture.itemId, deleteAudit.entityId)
                 assertEquals(1, countAuditRows(dataSource))
+            }
+        }
+
+    @Test
+    fun `category create and default seed serialize on venue order scope with truthful audits`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource)
+                val holderDataSource =
+                    HeldCategoryLockDataSource(dataSource) { sql -> sql.isMenuCategoryOrderScopeLock() }
+                val waiterDataSource =
+                    TrackedCategoryLockDataSource(dataSource) { sql -> sql.isMenuCategoryOrderScopeLock() }
+
+                val (created, seeded) =
+                    runWithHeldCategoryLock(
+                        observerDataSource = dataSource,
+                        holderDataSource = holderDataSource,
+                        waiterDataSource = waiterDataSource,
+                        beforeRelease = {
+                            assertEquals(
+                                listOf("Кальянное меню"),
+                                readMenuCategories(dataSource, fixture.venueId).map { it.name },
+                            )
+                            assertTrue(readAudits(dataSource, MENU_CATEGORY_CREATED_AUDIT_ACTION).isEmpty())
+                        },
+                        holderAction = {
+                            runBlocking {
+                                VenueMenuRepository(holderDataSource).createCategory(
+                                    venueId = fixture.venueId,
+                                    name = "Напитки",
+                                    actorUserId = FIRST_ACTOR_ID,
+                                    source = MenuItemAvailabilitySource.VENUE_MINI_APP,
+                                )
+                            }
+                        },
+                        waiterAction = {
+                            runBlocking {
+                                VenueMenuRepository(waiterDataSource).createMissingCategories(
+                                    venueId = fixture.venueId,
+                                    seeds =
+                                        listOf(
+                                            MenuCategorySeed("Кальянное меню"),
+                                            MenuCategorySeed("Напитки"),
+                                            MenuCategorySeed("Кухня"),
+                                        ),
+                                    actorUserId = SECOND_ACTOR_ID,
+                                    source = MenuItemAvailabilitySource.TELEGRAM_BOT,
+                                )
+                            }
+                        },
+                    )
+
+                val kitchen = seeded.single { it.name == "Кухня" }
+                val categories = readMenuCategories(dataSource, fixture.venueId)
+                assertEquals(listOf("Кальянное меню", "Напитки", "Кухня"), categories.map { it.name })
+                assertEquals(listOf(0, 1, 2), categories.map { it.sortOrder })
+                assertEquals(created.id, categories[1].id)
+                assertEquals(kitchen.id, categories[2].id)
+                val audits = readAudits(dataSource, MENU_CATEGORY_CREATED_AUDIT_ACTION)
+                assertEquals(2, audits.size)
+                val directAudit = audits.single { it.entityId == created.id }
+                assertEquals(FIRST_ACTOR_ID, directAudit.actorUserId)
+                assertEquals("VENUE_MINI_APP", directAudit.payload.getValue("source").jsonPrimitive.content)
+                val seedAudit = audits.single { it.entityId == kitchen.id }
+                assertEquals(SECOND_ACTOR_ID, seedAudit.actorUserId)
+                assertEquals("TELEGRAM_BOT", seedAudit.payload.getValue("source").jsonPrimitive.content)
+                assertEquals(2, countAuditRows(dataSource))
+            }
+        }
+
+    @Test
+    fun `category compound update and category reorder serialize with committed hashes`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource)
+                val secondCategoryId = insertCategory(dataSource, fixture.venueId, "Напитки", 1)
+                val oldOrder = listOf(fixture.categoryId, secondCategoryId)
+                val newOrder = oldOrder.reversed()
+                val holderDataSource = HeldCategoryLockDataSource(dataSource)
+                val waiterDataSource = TrackedCategoryLockDataSource(dataSource)
+
+                val (updated, reordered) =
+                    runWithHeldCategoryLock(
+                        observerDataSource = dataSource,
+                        holderDataSource = holderDataSource,
+                        waiterDataSource = waiterDataSource,
+                        beforeRelease = {
+                            assertEquals(oldOrder, readMenuCategories(dataSource, fixture.venueId).map { it.id })
+                            assertEquals(0, countAuditRows(dataSource))
+                        },
+                        holderAction = {
+                            runBlocking {
+                                VenueMenuRepository(holderDataSource).updateCategory(
+                                    venueId = fixture.venueId,
+                                    categoryId = fixture.categoryId,
+                                    name = "Обновлённый раздел",
+                                    categoryType = MenuSemanticType.DRINK,
+                                    actorUserId = FIRST_ACTOR_ID,
+                                    source = MenuItemAvailabilitySource.VENUE_MINI_APP,
+                                )
+                            }
+                        },
+                        waiterAction = {
+                            runBlocking {
+                                VenueMenuRepository(waiterDataSource).reorderCategories(
+                                    venueId = fixture.venueId,
+                                    categoryIds = newOrder,
+                                    actorUserId = SECOND_ACTOR_ID,
+                                    source = MenuItemAvailabilitySource.VENUE_MINI_APP,
+                                )
+                            }
+                        },
+                    )
+
+                assertEquals("Обновлённый раздел", assertNotNull(updated).name)
+                assertEquals(MenuSemanticType.DRINK, updated.categoryType)
+                assertTrue(reordered)
+                val categories = readMenuCategories(dataSource, fixture.venueId)
+                assertEquals(newOrder, categories.map { it.id })
+                assertEquals("Обновлённый раздел", categories.single { it.id == fixture.categoryId }.name)
+                assertEquals("DRINK", categories.single { it.id == fixture.categoryId }.categoryType)
+                assertEquals(1, readAudits(dataSource, MENU_CATEGORY_RENAMED_AUDIT_ACTION).size)
+                val typeAudit = readAudits(dataSource, MENU_CATEGORY_TYPE_CHANGED_AUDIT_ACTION).single()
+                assertEquals("HOOKAH", typeAudit.payload.getValue("oldCategoryType").jsonPrimitive.content)
+                assertEquals("DRINK", typeAudit.payload.getValue("newCategoryType").jsonPrimitive.content)
+                val reorderAudit = readAudits(dataSource, MENU_CATEGORIES_REORDERED_AUDIT_ACTION).single()
+                assertEquals(SECOND_ACTOR_ID, reorderAudit.actorUserId)
+                assertEquals("VENUE_MINI_APP", reorderAudit.payload.getValue("source").jsonPrimitive.content)
+                assertEquals(
+                    menuOrderSha256(oldOrder),
+                    reorderAudit.payload.getValue("oldOrderSha256").jsonPrimitive.content,
+                )
+                assertEquals(
+                    menuOrderSha256(newOrder),
+                    reorderAudit.payload.getValue("newOrderSha256").jsonPrimitive.content,
+                )
+                assertEquals(3, countAuditRows(dataSource))
+            }
+        }
+
+    @Test
+    fun `category reorder and item create serialize with authoritative category and item state`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource)
+                val secondCategoryId = insertCategory(dataSource, fixture.venueId, "Кухня", 1)
+                val oldOrder = listOf(fixture.categoryId, secondCategoryId)
+                val newOrder = oldOrder.reversed()
+                val initialItems = readMenuItems(dataSource, fixture.venueId, fixture.categoryId)
+                val holderDataSource = HeldCategoryLockDataSource(dataSource)
+                val waiterDataSource = TrackedCategoryLockDataSource(dataSource)
+
+                val (reordered, created) =
+                    runWithHeldCategoryLock(
+                        observerDataSource = dataSource,
+                        holderDataSource = holderDataSource,
+                        waiterDataSource = waiterDataSource,
+                        beforeRelease = {
+                            assertEquals(oldOrder, readMenuCategories(dataSource, fixture.venueId).map { it.id })
+                            assertEquals(initialItems, readMenuItems(dataSource, fixture.venueId, fixture.categoryId))
+                            assertEquals(0, countAuditRows(dataSource))
+                        },
+                        holderAction = {
+                            runBlocking {
+                                VenueMenuRepository(holderDataSource).reorderCategories(
+                                    venueId = fixture.venueId,
+                                    categoryIds = newOrder,
+                                    actorUserId = FIRST_ACTOR_ID,
+                                    source = MenuItemAvailabilitySource.VENUE_MINI_APP,
+                                )
+                            }
+                        },
+                        waiterAction = {
+                            runBlocking {
+                                VenueMenuRepository(waiterDataSource).createItem(
+                                    venueId = fixture.venueId,
+                                    categoryId = fixture.categoryId,
+                                    name = SECOND_ITEM_CREATE_NAME,
+                                    priceMinor = 130_000,
+                                    currency = "RUB",
+                                    isAvailable = true,
+                                    actorUserId = SECOND_ACTOR_ID,
+                                    source = MenuItemCreateSource.TELEGRAM_BOT,
+                                    itemType = MenuSemanticType.HOOKAH,
+                                )
+                            }
+                        },
+                    )
+
+                assertTrue(reordered)
+                val createdItem = assertNotNull(created)
+                assertEquals(newOrder, readMenuCategories(dataSource, fixture.venueId).map { it.id })
+                assertEquals(initialItems.maxOf { it.sortOrder } + 1, createdItem.sortOrder)
+                assertEquals(
+                    initialItems.map { it.id } + createdItem.id,
+                    readItemOrder(dataSource, fixture.venueId, fixture.categoryId),
+                )
+                val reorderAudit = readAudits(dataSource, MENU_CATEGORIES_REORDERED_AUDIT_ACTION).single()
+                assertEquals(
+                    menuOrderSha256(oldOrder),
+                    reorderAudit.payload.getValue("oldOrderSha256").jsonPrimitive.content,
+                )
+                assertEquals(
+                    menuOrderSha256(newOrder),
+                    reorderAudit.payload.getValue("newOrderSha256").jsonPrimitive.content,
+                )
+                val createAudit = readMenuItemCreateAudits(dataSource).single()
+                assertEquals(createdItem.id, createAudit.entityId)
+                assertEquals(SECOND_ACTOR_ID, createAudit.actorUserId)
+                assertEquals("TELEGRAM_BOT", createAudit.payload.getValue("source").jsonPrimitive.content)
+                assertEquals(2, countAuditRows(dataSource))
+            }
+        }
+
+    @Test
+    fun `compound item update and telegram item type serialize truthful transitions`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource)
+                val original = assertNotNull(readFullItem(dataSource, fixture.itemId))
+                val holderDataSource = HeldCategoryLockDataSource(dataSource)
+                val waiterDataSource = TrackedCategoryLockDataSource(dataSource)
+
+                val (compound, telegramType) =
+                    runWithHeldCategoryLock(
+                        observerDataSource = dataSource,
+                        holderDataSource = holderDataSource,
+                        waiterDataSource = waiterDataSource,
+                        beforeRelease = {
+                            assertEquals(original, readFullItem(dataSource, fixture.itemId))
+                            assertEquals(0, countAuditRows(dataSource))
+                        },
+                        holderAction = {
+                            runBlocking {
+                                VenueMenuRepository(holderDataSource).updateItem(
+                                    venueId = fixture.venueId,
+                                    itemId = fixture.itemId,
+                                    categoryId = null,
+                                    name = COMPOUND_ITEM_NAME,
+                                    priceMinor = 120_000,
+                                    currency = "RUB",
+                                    isAvailable = false,
+                                    actorUserId = FIRST_ACTOR_ID,
+                                    source = MenuItemAvailabilitySource.VENUE_MINI_APP,
+                                    itemType = MenuSemanticType.DRINK,
+                                    itemTypeSpecified = true,
+                                )
+                            }
+                        },
+                        waiterAction = {
+                            runBlocking {
+                                VenueMenuRepository(waiterDataSource).updateItemType(
+                                    venueId = fixture.venueId,
+                                    itemId = fixture.itemId,
+                                    itemType = MenuSemanticType.TEA,
+                                    actorUserId = SECOND_ACTOR_ID,
+                                    source = MenuItemAvailabilitySource.TELEGRAM_BOT,
+                                )
+                            }
+                        },
+                    )
+
+                val compoundResult = assertNotNull(compound)
+                assertEquals(MenuSemanticType.DRINK, compoundResult.itemType)
+                val telegramResult = assertNotNull(telegramType)
+                assertEquals(MenuSemanticType.TEA, telegramResult.itemType)
+                val committed = assertNotNull(readFullItem(dataSource, fixture.itemId))
+                assertEquals(COMPOUND_ITEM_NAME, committed.name)
+                assertEquals(120_000L, committed.priceMinor)
+                assertEquals("RUB", committed.currency)
+                assertFalse(committed.isAvailable)
+                assertEquals("TEA", committed.itemType)
+                assertEquals(1, readAudits(dataSource, MENU_ITEM_RENAMED_AUDIT_ACTION).size)
+                assertEquals(1, readAudits(dataSource, MENU_ITEM_PRICE_CHANGED_AUDIT_ACTION).size)
+                assertEquals(1, readItemAvailabilityAudits(dataSource).size)
+                val typeAudits = readAudits(dataSource, MENU_ITEM_TYPE_CHANGED_AUDIT_ACTION)
+                assertEquals(2, typeAudits.size)
+                assertEquals(FIRST_ACTOR_ID, typeAudits[0].actorUserId)
+                assertEquals("HOOKAH", typeAudits[0].payload.getValue("oldItemType").jsonPrimitive.content)
+                assertEquals("DRINK", typeAudits[0].payload.getValue("newItemType").jsonPrimitive.content)
+                assertEquals(SECOND_ACTOR_ID, typeAudits[1].actorUserId)
+                assertEquals("DRINK", typeAudits[1].payload.getValue("oldItemType").jsonPrimitive.content)
+                assertEquals("TEA", typeAudits[1].payload.getValue("newItemType").jsonPrimitive.content)
+                assertEquals("TELEGRAM_BOT", typeAudits[1].payload.getValue("source").jsonPrimitive.content)
+                assertEquals(5, countAuditRows(dataSource))
+            }
+        }
+
+    @Test
+    fun `item move waits for source category reorder and preserves both committed audits`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource)
+                val secondSourceItemId =
+                    insertMenuItem(dataSource, fixture.venueId, fixture.categoryId, "Second source item", 1)
+                val destinationCategoryId = insertCategory(dataSource, fixture.venueId, "Destination", 1)
+                val oldOrder = listOf(fixture.itemId, secondSourceItemId)
+                val newOrder = oldOrder.reversed()
+                val holderDataSource = HeldCategoryLockDataSource(dataSource)
+                val waiterDataSource = TrackedCategoryLockDataSource(dataSource)
+
+                val (reordered, moved) =
+                    runWithHeldCategoryLock(
+                        observerDataSource = dataSource,
+                        holderDataSource = holderDataSource,
+                        waiterDataSource = waiterDataSource,
+                        beforeRelease = {
+                            assertEquals(oldOrder, readItemOrder(dataSource, fixture.venueId, fixture.categoryId))
+                            assertEquals(fixture.categoryId, readFullItem(dataSource, fixture.itemId)?.categoryId)
+                            assertEquals(0, countAuditRows(dataSource))
+                        },
+                        holderAction = {
+                            runBlocking {
+                                VenueMenuRepository(holderDataSource).reorderItems(
+                                    venueId = fixture.venueId,
+                                    categoryId = fixture.categoryId,
+                                    itemIds = newOrder,
+                                    actorUserId = FIRST_ACTOR_ID,
+                                    source = MenuItemAvailabilitySource.VENUE_MINI_APP,
+                                )
+                            }
+                        },
+                        waiterAction = {
+                            runBlocking {
+                                VenueMenuRepository(waiterDataSource).updateItem(
+                                    venueId = fixture.venueId,
+                                    itemId = fixture.itemId,
+                                    categoryId = destinationCategoryId,
+                                    name = null,
+                                    priceMinor = null,
+                                    currency = null,
+                                    isAvailable = null,
+                                    actorUserId = SECOND_ACTOR_ID,
+                                    source = MenuItemAvailabilitySource.VENUE_MINI_APP,
+                                )
+                            }
+                        },
+                    )
+
+                assertTrue(reordered)
+                assertEquals(destinationCategoryId, assertNotNull(moved).categoryId)
+                assertEquals(listOf(secondSourceItemId), readItemOrder(dataSource, fixture.venueId, fixture.categoryId))
+                assertEquals(listOf(fixture.itemId), readItemOrder(dataSource, fixture.venueId, destinationCategoryId))
+                val reorderAudit = readAudits(dataSource, MENU_ITEMS_REORDERED_AUDIT_ACTION).single()
+                assertEquals(
+                    menuOrderSha256(oldOrder),
+                    reorderAudit.payload.getValue("oldOrderSha256").jsonPrimitive.content,
+                )
+                assertEquals(
+                    menuOrderSha256(newOrder),
+                    reorderAudit.payload.getValue("newOrderSha256").jsonPrimitive.content,
+                )
+                val moveAudit = readAudits(dataSource, MENU_ITEM_CATEGORY_MOVED_AUDIT_ACTION).single()
+                assertEquals(fixture.categoryId, moveAudit.payload.longValue("oldCategoryId"))
+                assertEquals(destinationCategoryId, moveAudit.payload.longValue("newCategoryId"))
+                assertEquals(SECOND_ACTOR_ID, moveAudit.actorUserId)
+                assertEquals("VENUE_MINI_APP", moveAudit.payload.getValue("source").jsonPrimitive.content)
+                assertEquals(2, countAuditRows(dataSource))
+            }
+        }
+
+    @Test
+    fun `item move serializes with destination category reorder and preserves relative order`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource)
+                val destinationCategoryId = insertCategory(dataSource, fixture.venueId, "Destination", 1)
+                val firstDestinationItemId =
+                    insertMenuItem(dataSource, fixture.venueId, destinationCategoryId, "Destination one", 0)
+                val secondDestinationItemId =
+                    insertMenuItem(dataSource, fixture.venueId, destinationCategoryId, "Destination two", 1)
+                val oldOrder = listOf(firstDestinationItemId, secondDestinationItemId)
+                val newOrder = oldOrder.reversed()
+                val holderDataSource = HeldCategoryLockDataSource(dataSource)
+                val waiterDataSource = TrackedCategoryLockDataSource(dataSource)
+
+                val (reordered, moved) =
+                    runWithHeldCategoryLock(
+                        observerDataSource = dataSource,
+                        holderDataSource = holderDataSource,
+                        waiterDataSource = waiterDataSource,
+                        beforeRelease = {
+                            assertEquals(oldOrder, readItemOrder(dataSource, fixture.venueId, destinationCategoryId))
+                            assertEquals(fixture.categoryId, readFullItem(dataSource, fixture.itemId)?.categoryId)
+                            assertEquals(0, countAuditRows(dataSource))
+                        },
+                        holderAction = {
+                            runBlocking {
+                                VenueMenuRepository(holderDataSource).reorderItems(
+                                    venueId = fixture.venueId,
+                                    categoryId = destinationCategoryId,
+                                    itemIds = newOrder,
+                                    actorUserId = FIRST_ACTOR_ID,
+                                    source = MenuItemAvailabilitySource.VENUE_MINI_APP,
+                                )
+                            }
+                        },
+                        waiterAction = {
+                            runBlocking {
+                                VenueMenuRepository(waiterDataSource).updateItem(
+                                    venueId = fixture.venueId,
+                                    itemId = fixture.itemId,
+                                    categoryId = destinationCategoryId,
+                                    name = null,
+                                    priceMinor = null,
+                                    currency = null,
+                                    isAvailable = null,
+                                    actorUserId = SECOND_ACTOR_ID,
+                                    source = MenuItemAvailabilitySource.VENUE_MINI_APP,
+                                )
+                            }
+                        },
+                    )
+
+                assertTrue(reordered)
+                assertEquals(destinationCategoryId, assertNotNull(moved).categoryId)
+                val finalDestinationOrder =
+                    readItemOrder(dataSource, fixture.venueId, destinationCategoryId)
+                assertEquals(
+                    setOf(fixture.itemId, firstDestinationItemId, secondDestinationItemId),
+                    finalDestinationOrder.toSet(),
+                )
+                assertEquals(newOrder, finalDestinationOrder.filter { it in oldOrder.toSet() })
+                val reorderAudit = readAudits(dataSource, MENU_ITEMS_REORDERED_AUDIT_ACTION).single()
+                assertEquals(
+                    menuOrderSha256(oldOrder),
+                    reorderAudit.payload.getValue("oldOrderSha256").jsonPrimitive.content,
+                )
+                assertEquals(
+                    menuOrderSha256(newOrder),
+                    reorderAudit.payload.getValue("newOrderSha256").jsonPrimitive.content,
+                )
+                val moveAudit = readAudits(dataSource, MENU_ITEM_CATEGORY_MOVED_AUDIT_ACTION).single()
+                assertEquals(fixture.categoryId, moveAudit.payload.longValue("oldCategoryId"))
+                assertEquals(destinationCategoryId, moveAudit.payload.longValue("newCategoryId"))
+                assertEquals("VENUE_MINI_APP", moveAudit.payload.getValue("source").jsonPrimitive.content)
+                assertEquals(2, countAuditRows(dataSource))
             }
         }
 
@@ -2123,13 +2574,15 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
                                     venueId = fixture.venueId,
                                     categoryId = fixture.categoryId,
                                     itemIds = listOf(fixture.itemId),
+                                    actorUserId = SECOND_ACTOR_ID,
+                                    source = MenuItemAvailabilitySource.VENUE_MINI_APP,
                                 )
                             }
                         },
                     )
 
                 val createdItem = assertNotNull(created)
-                assertTrue(reordered)
+                assertFalse(reordered)
                 val committedItems = readMenuItems(dataSource, fixture.venueId, fixture.categoryId)
                 assertEquals(0, committedItems.single { it.id == fixture.itemId }.sortOrder)
                 assertEquals(initialItems.maxOf { it.sortOrder } + 1, createdItem.sortOrder)
@@ -2147,6 +2600,344 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
                             ),
                         ),
                 )
+                assertTrue(readAudits(dataSource, MENU_ITEMS_REORDERED_AUDIT_ACTION).isEmpty())
+            }
+        }
+
+    @Test
+    fun `item delete and item reorder serialize with exact set loser and no reorder audit`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource)
+                val secondItemId =
+                    insertMenuItem(dataSource, fixture.venueId, fixture.categoryId, "Delete race survivor", 1)
+                val preDeleteOrder = listOf(fixture.itemId, secondItemId)
+                val holderDataSource = HeldItemDeleteLockDataSource(dataSource)
+                val waiterDataSource = TrackedItemLockDataSource(dataSource)
+
+                val (deleted, reordered) =
+                    runWithHeldItemDeleteLock(
+                        observerDataSource = dataSource,
+                        holderDataSource = holderDataSource,
+                        waiterDataSource = waiterDataSource,
+                        beforeRelease = {
+                            assertEquals(preDeleteOrder, readItemOrder(dataSource, fixture.venueId, fixture.categoryId))
+                            assertEquals(0, countAuditRows(dataSource))
+                        },
+                        holderAction = {
+                            runBlocking {
+                                VenueMenuRepository(holderDataSource).deleteItem(
+                                    venueId = fixture.venueId,
+                                    itemId = fixture.itemId,
+                                    actorUserId = FIRST_ACTOR_ID,
+                                    source = MenuItemDeleteSource.TELEGRAM_BOT,
+                                )
+                            }
+                        },
+                        waiterAction = {
+                            runBlocking {
+                                VenueMenuRepository(waiterDataSource).reorderItems(
+                                    venueId = fixture.venueId,
+                                    categoryId = fixture.categoryId,
+                                    itemIds = preDeleteOrder.reversed(),
+                                    actorUserId = SECOND_ACTOR_ID,
+                                    source = MenuItemAvailabilitySource.VENUE_MINI_APP,
+                                )
+                            }
+                        },
+                    )
+
+                assertTrue(deleted)
+                assertFalse(reordered)
+                assertNull(readFullItem(dataSource, fixture.itemId))
+                assertEquals(listOf(secondItemId), readItemOrder(dataSource, fixture.venueId, fixture.categoryId))
+                val deleteAudit = readItemDeleteAudits(dataSource).single()
+                assertEquals(FIRST_ACTOR_ID, deleteAudit.actorUserId)
+                assertEquals("TELEGRAM_BOT", deleteAudit.payload.getValue("source").jsonPrimitive.content)
+                assertTrue(readAudits(dataSource, MENU_ITEMS_REORDERED_AUDIT_ACTION).isEmpty())
+                assertEquals(1, countAuditRows(dataSource))
+            }
+        }
+
+    @Test
+    fun `compound item later audit failure rolls back all deltas and earlier audits`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource)
+                val destinationCategoryId = insertCategory(dataSource, fixture.venueId, "Rollback destination", 1)
+                val original = assertNotNull(readFullItem(dataSource, fixture.itemId))
+                val originalOptions = readOptions(dataSource, fixture.itemId)
+                val auditReached = CountDownLatch(1)
+                val allowAuditFailure = CountDownLatch(1)
+                val failingPid = AtomicInteger()
+                val realAuditWriter = AuditLogRepository(dataSource, Json)
+                val failingAuditWriter =
+                    TransactionalAuditLogWriter { connection, actorUserId, action, entityType, entityId, payload ->
+                        realAuditWriter.appendJson(
+                            connection = connection,
+                            actorUserId = actorUserId,
+                            action = action,
+                            entityType = entityType,
+                            entityId = entityId,
+                            payload = payload,
+                        )
+                        if (action == MENU_ITEM_AVAILABILITY_CHANGED_AUDIT_ACTION) {
+                            val mutated = readFullItem(connection, fixture.itemId)
+                            if (
+                                mutated == null ||
+                                mutated.categoryId != destinationCategoryId ||
+                                mutated.name != "Rolled back compound name" ||
+                                mutated.priceMinor != 145_000L ||
+                                mutated.currency != "USD" ||
+                                mutated.isAvailable ||
+                                mutated.itemType != "DRINK"
+                            ) {
+                                throw SQLException("Compound item mutation was not visible before its audits")
+                            }
+                            val expectedActions =
+                                listOf(
+                                    MENU_ITEM_RENAMED_AUDIT_ACTION,
+                                    MENU_ITEM_PRICE_CHANGED_AUDIT_ACTION,
+                                    MENU_ITEM_TYPE_CHANGED_AUDIT_ACTION,
+                                    MENU_ITEM_CATEGORY_MOVED_AUDIT_ACTION,
+                                    MENU_ITEM_AVAILABILITY_CHANGED_AUDIT_ACTION,
+                                )
+                            if (
+                                countAuditRows(connection) != expectedActions.size ||
+                                readAuditActions(connection, fixture.itemId) != expectedActions
+                            ) {
+                                throw SQLException("Compound item audits were not visible on the writer connection")
+                            }
+                            failingPid.set(backendPid(connection))
+                            auditReached.countDown()
+                            if (!allowAuditFailure.await(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                                throw SQLException("Timed out before injected compound item audit failure")
+                            }
+                            throw SQLException("Injected final compound item audit failure")
+                        }
+                    }
+                val waiterDataSource = TrackedCategoryLockDataSource(dataSource)
+                val executor = Executors.newFixedThreadPool(2)
+                val failedFuture =
+                    executor.submit(
+                        Callable {
+                            runBlocking {
+                                VenueMenuRepository(dataSource, failingAuditWriter).updateItem(
+                                    venueId = fixture.venueId,
+                                    itemId = fixture.itemId,
+                                    categoryId = destinationCategoryId,
+                                    name = "Rolled back compound name",
+                                    priceMinor = 145_000,
+                                    currency = "USD",
+                                    isAvailable = false,
+                                    actorUserId = FIRST_ACTOR_ID,
+                                    source = MenuItemAvailabilitySource.VENUE_MINI_APP,
+                                    itemType = MenuSemanticType.DRINK,
+                                    itemTypeSpecified = true,
+                                )
+                            }
+                        },
+                    )
+                try {
+                    assertTrue(
+                        auditReached.await(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                        "Injected writer did not reach the final compound item audit",
+                    )
+                    val waiterFuture =
+                        executor.submit(
+                            Callable {
+                                runBlocking {
+                                    VenueMenuRepository(waiterDataSource).updateItemType(
+                                        venueId = fixture.venueId,
+                                        itemId = fixture.itemId,
+                                        itemType = MenuSemanticType.HOOKAH,
+                                        actorUserId = SECOND_ACTOR_ID,
+                                        source = MenuItemAvailabilitySource.TELEGRAM_BOT,
+                                    )
+                                }
+                            },
+                        )
+                    assertTrue(
+                        waiterDataSource.categoryLockAttempted.await(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                        "Telegram type writer did not attempt the category lock",
+                    )
+                    val holderPid = failingPid.get()
+                    val waiterPid = waiterDataSource.backendPid.get()
+                    assertTrue(holderPid > 0)
+                    assertTrue(waiterPid > 0)
+                    assertFalse(holderPid == waiterPid)
+                    dataSource.connection.use { observer ->
+                        val observation =
+                            awaitPostgresBlock(
+                                observer = observer,
+                                blockedPid = waiterPid,
+                                blockerPid = holderPid,
+                                waiterFuture = waiterFuture,
+                            )
+                        assertTrue(
+                            observation.blocked,
+                            "PostgreSQL did not report compound audit-failure blocking edge. " +
+                                observation.diagnostic,
+                        )
+                    }
+                    assertEquals(original, readFullItem(dataSource, fixture.itemId))
+                    assertEquals(originalOptions, readOptions(dataSource, fixture.itemId))
+                    assertEquals(0, countAuditRows(dataSource))
+
+                    allowAuditFailure.countDown()
+                    val failure =
+                        assertFailsWith<ExecutionException> {
+                            failedFuture.get(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                        }
+                    assertTrue(failure.cause is DatabaseUnavailableException)
+                    assertNotNull(waiterFuture.get(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS))
+                    assertEquals(original, readFullItem(dataSource, fixture.itemId))
+                    assertEquals(originalOptions, readOptions(dataSource, fixture.itemId))
+                    assertEquals(0, countAuditRows(dataSource))
+                } finally {
+                    allowAuditFailure.countDown()
+                    executor.shutdownNow()
+                    executor.awaitTermination(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                }
+            }
+        }
+
+    @Test
+    fun `item reorder audit failure rolls back order before concurrent create commits`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource)
+                val secondItemId =
+                    insertMenuItem(dataSource, fixture.venueId, fixture.categoryId, "Reorder rollback item", 1)
+                val originalOrder = listOf(fixture.itemId, secondItemId)
+                val originalStates = originalOrder.map { itemId -> assertNotNull(readFullItem(dataSource, itemId)) }
+                val auditReached = CountDownLatch(1)
+                val allowAuditFailure = CountDownLatch(1)
+                val failingPid = AtomicInteger()
+                val realAuditWriter = AuditLogRepository(dataSource, Json)
+                val failingAuditWriter =
+                    TransactionalAuditLogWriter { connection, actorUserId, action, entityType, entityId, payload ->
+                        realAuditWriter.appendJson(
+                            connection = connection,
+                            actorUserId = actorUserId,
+                            action = action,
+                            entityType = entityType,
+                            entityId = entityId,
+                            payload = payload,
+                        )
+                        if (action == MENU_ITEMS_REORDERED_AUDIT_ACTION) {
+                            if (
+                                readItemOrder(connection, fixture.venueId, fixture.categoryId) !=
+                                originalOrder.reversed()
+                            ) {
+                                throw SQLException("Item reorder mutation was not visible before its audit")
+                            }
+                            if (
+                                countAuditRows(connection) != 1 ||
+                                readAuditActions(connection, fixture.categoryId) !=
+                                listOf(MENU_ITEMS_REORDERED_AUDIT_ACTION)
+                            ) {
+                                throw SQLException("Item reorder audit was not visible on the writer connection")
+                            }
+                            failingPid.set(backendPid(connection))
+                            auditReached.countDown()
+                            if (!allowAuditFailure.await(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                                throw SQLException("Timed out before injected item reorder audit failure")
+                            }
+                            throw SQLException("Injected item reorder audit failure")
+                        }
+                    }
+                val waiterDataSource = TrackedCategoryLockDataSource(dataSource)
+                val executor = Executors.newFixedThreadPool(2)
+                val failedFuture =
+                    executor.submit(
+                        Callable {
+                            runBlocking {
+                                VenueMenuRepository(dataSource, failingAuditWriter).reorderItems(
+                                    venueId = fixture.venueId,
+                                    categoryId = fixture.categoryId,
+                                    itemIds = originalOrder.reversed(),
+                                    actorUserId = FIRST_ACTOR_ID,
+                                    source = MenuItemAvailabilitySource.VENUE_MINI_APP,
+                                )
+                            }
+                        },
+                    )
+                try {
+                    assertTrue(
+                        auditReached.await(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                        "Injected writer did not reach the item reorder audit",
+                    )
+                    val createFuture =
+                        executor.submit(
+                            Callable {
+                                runBlocking {
+                                    VenueMenuRepository(waiterDataSource).createItem(
+                                        venueId = fixture.venueId,
+                                        categoryId = fixture.categoryId,
+                                        name = SECOND_ITEM_CREATE_NAME,
+                                        priceMinor = 130_000,
+                                        currency = "RUB",
+                                        isAvailable = true,
+                                        actorUserId = SECOND_ACTOR_ID,
+                                        source = MenuItemCreateSource.TELEGRAM_BOT,
+                                        itemType = MenuSemanticType.HOOKAH,
+                                    )
+                                }
+                            },
+                        )
+                    assertTrue(
+                        waiterDataSource.categoryLockAttempted.await(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                        "Concurrent item create did not attempt the category lock",
+                    )
+                    val holderPid = failingPid.get()
+                    val waiterPid = waiterDataSource.backendPid.get()
+                    assertTrue(holderPid > 0)
+                    assertTrue(waiterPid > 0)
+                    assertFalse(holderPid == waiterPid)
+                    dataSource.connection.use { observer ->
+                        val observation =
+                            awaitPostgresBlock(
+                                observer = observer,
+                                blockedPid = waiterPid,
+                                blockerPid = holderPid,
+                                waiterFuture = createFuture,
+                            )
+                        assertTrue(
+                            observation.blocked,
+                            "PostgreSQL did not report reorder audit-failure blocking create. " +
+                                observation.diagnostic,
+                        )
+                    }
+                    assertEquals(originalOrder, readItemOrder(dataSource, fixture.venueId, fixture.categoryId))
+                    assertEquals(originalStates, originalOrder.map { assertNotNull(readFullItem(dataSource, it)) })
+                    assertEquals(0, countAuditRows(dataSource))
+
+                    allowAuditFailure.countDown()
+                    val failure =
+                        assertFailsWith<ExecutionException> {
+                            failedFuture.get(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                        }
+                    assertTrue(failure.cause is DatabaseUnavailableException)
+                    val created = assertNotNull(createFuture.get(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS))
+                    assertEquals(
+                        originalOrder + created.id,
+                        readItemOrder(dataSource, fixture.venueId, fixture.categoryId),
+                    )
+                    assertEquals(originalStates, originalOrder.map { assertNotNull(readFullItem(dataSource, it)) })
+                    assertTrue(readAudits(dataSource, MENU_ITEMS_REORDERED_AUDIT_ACTION).isEmpty())
+                    val createAudit = readMenuItemCreateAudits(dataSource).single()
+                    assertEquals(created.id, createAudit.entityId)
+                    assertEquals(SECOND_ACTOR_ID, createAudit.actorUserId)
+                    assertEquals(1, countAuditRows(dataSource))
+                } finally {
+                    allowAuditFailure.countDown()
+                    executor.shutdownNow()
+                    executor.awaitTermination(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                }
             }
         }
 
@@ -2571,15 +3362,51 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
     private fun insertEmptyCategory(
         dataSource: DataSource,
         venueId: Long,
+    ): Long = insertCategory(dataSource, venueId, "Empty create concurrency category", 1)
+
+    private fun insertCategory(
+        dataSource: DataSource,
+        venueId: Long,
+        name: String,
+        sortOrder: Int,
     ): Long =
         dataSource.connection.use { connection ->
             insertReturningId(
                 connection,
                 """
-                INSERT INTO menu_categories (venue_id, name, category_type)
-                VALUES (?, 'Empty create concurrency category', 'HOOKAH')
+                INSERT INTO menu_categories (venue_id, name, sort_order, category_type)
+                VALUES (?, ?, ?, 'HOOKAH')
                 """.trimIndent(),
-            ) { statement -> statement.setLong(1, venueId) }
+            ) { statement ->
+                statement.setLong(1, venueId)
+                statement.setString(2, name)
+                statement.setInt(3, sortOrder)
+            }
+        }
+
+    private fun insertMenuItem(
+        dataSource: DataSource,
+        venueId: Long,
+        categoryId: Long,
+        name: String,
+        sortOrder: Int,
+    ): Long =
+        dataSource.connection.use { connection ->
+            insertReturningId(
+                connection,
+                """
+                INSERT INTO menu_items (
+                    venue_id, category_id, name, price_minor, currency,
+                    is_available, sort_order, item_type
+                )
+                VALUES (?, ?, ?, 100000, 'RUB', TRUE, ?, 'HOOKAH')
+                """.trimIndent(),
+            ) { statement ->
+                statement.setLong(1, venueId)
+                statement.setLong(2, categoryId)
+                statement.setString(3, name)
+                statement.setInt(4, sortOrder)
+            }
         }
 
     private fun insertUser(
@@ -2991,6 +3818,108 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
             }
         }
 
+    private fun readItemOrder(
+        dataSource: DataSource,
+        venueId: Long,
+        categoryId: Long,
+    ): List<Long> =
+        dataSource.connection.use { connection ->
+            readItemOrder(connection, venueId, categoryId)
+        }
+
+    private fun readItemOrder(
+        connection: Connection,
+        venueId: Long,
+        categoryId: Long,
+    ): List<Long> =
+        connection.prepareStatement(
+            """
+            SELECT id
+            FROM menu_items
+            WHERE venue_id = ? AND category_id = ?
+            ORDER BY sort_order, id
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, categoryId)
+            statement.executeQuery().use { resultSet ->
+                buildList {
+                    while (resultSet.next()) add(resultSet.getLong("id"))
+                }
+            }
+        }
+
+    private fun readMenuCategories(
+        dataSource: DataSource,
+        venueId: Long,
+    ): List<MenuCategoryRow> =
+        dataSource.connection.use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT id, name, sort_order, category_type
+                FROM menu_categories
+                WHERE venue_id = ?
+                ORDER BY sort_order, id
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.executeQuery().use { resultSet ->
+                    buildList {
+                        while (resultSet.next()) {
+                            add(
+                                MenuCategoryRow(
+                                    id = resultSet.getLong("id"),
+                                    name = resultSet.getString("name"),
+                                    sortOrder = resultSet.getInt("sort_order"),
+                                    categoryType = resultSet.getString("category_type"),
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+    private fun readFullItem(
+        dataSource: DataSource,
+        itemId: Long,
+    ): FullItemRow? =
+        dataSource.connection.use { connection ->
+            readFullItem(connection, itemId)
+        }
+
+    private fun readFullItem(
+        connection: Connection,
+        itemId: Long,
+    ): FullItemRow? =
+        connection.prepareStatement(
+            """
+            SELECT id, category_id, name, price_minor, currency, is_available,
+                   item_type, sort_order, updated_at
+            FROM menu_items
+            WHERE id = ?
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, itemId)
+            statement.executeQuery().use { resultSet ->
+                if (!resultSet.next()) {
+                    null
+                } else {
+                    FullItemRow(
+                        id = resultSet.getLong("id"),
+                        categoryId = resultSet.getLong("category_id"),
+                        name = resultSet.getString("name"),
+                        priceMinor = resultSet.getLong("price_minor"),
+                        currency = resultSet.getString("currency"),
+                        isAvailable = resultSet.getBoolean("is_available"),
+                        itemType = resultSet.getString("item_type"),
+                        sortOrder = resultSet.getInt("sort_order"),
+                        updatedAtMillis = resultSet.getTimestamp("updated_at").time,
+                    )
+                }
+            }
+        }
+
     private fun readItem(
         dataSource: DataSource,
         itemId: Long,
@@ -3104,10 +4033,28 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
 
     private fun countAuditRows(dataSource: DataSource): Int =
         dataSource.connection.use { connection ->
-            connection.createStatement().use { statement ->
-                statement.executeQuery("SELECT COUNT(*) FROM audit_log").use { resultSet ->
-                    assertTrue(resultSet.next())
-                    resultSet.getInt(1)
+            countAuditRows(connection)
+        }
+
+    private fun countAuditRows(connection: Connection): Int =
+        connection.createStatement().use { statement ->
+            statement.executeQuery("SELECT COUNT(*) FROM audit_log").use { resultSet ->
+                assertTrue(resultSet.next())
+                resultSet.getInt(1)
+            }
+        }
+
+    private fun readAuditActions(
+        connection: Connection,
+        entityId: Long,
+    ): List<String> =
+        connection.prepareStatement(
+            "SELECT action FROM audit_log WHERE entity_id = ? ORDER BY id",
+        ).use { statement ->
+            statement.setLong(1, entityId)
+            statement.executeQuery().use { resultSet ->
+                buildList {
+                    while (resultSet.next()) add(resultSet.getString("action"))
                 }
             }
         }
@@ -3142,6 +4089,9 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
             !normalized.contains("nowait")
     }
 
+    private fun String.isMenuCategoryOrderScopeLock(): Boolean =
+        normalizedSql().startsWith("select pg_advisory_xact_lock(")
+
     private fun String.isCategoryDeleteMutationLock(): Boolean {
         val normalized = normalizedSql()
         return normalized.contains("from menu_categories") &&
@@ -3167,6 +4117,7 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
 
     private inner class HeldCategoryLockDataSource(
         private val delegate: DataSource,
+        private val lockPredicate: (String) -> Boolean = { it.isCategoryOrderMutationLock() },
     ) : DataSource by delegate,
         HeldCategoryLockCoordinator {
         override val categoryLockAcquired = CountDownLatch(1)
@@ -3186,7 +4137,7 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
             return object : Connection by connection {
                 override fun prepareStatement(sql: String): PreparedStatement {
                     val prepared = connection.prepareStatement(sql)
-                    if (sql.isCategoryOrderMutationLock() && held.compareAndSet(false, true)) {
+                    if (lockPredicate(sql) && held.compareAndSet(false, true)) {
                         return object : PreparedStatement by prepared {
                             override fun executeQuery(): ResultSet {
                                 check(!connection.autoCommit) {
@@ -3210,6 +4161,7 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
 
     private inner class TrackedCategoryLockDataSource(
         private val delegate: DataSource,
+        private val lockPredicate: (String) -> Boolean = { it.isCategoryOrderMutationLock() },
     ) : DataSource by delegate {
         val categoryLockAttempted = CountDownLatch(1)
         val backendPid = AtomicInteger()
@@ -3227,7 +4179,7 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
             return object : Connection by connection {
                 override fun prepareStatement(sql: String): PreparedStatement {
                     val prepared = connection.prepareStatement(sql)
-                    if (sql.isCategoryOrderMutationLock()) {
+                    if (lockPredicate(sql)) {
                         return object : PreparedStatement by prepared {
                             override fun executeQuery(): ResultSet {
                                 if (signalled.compareAndSet(false, true)) {
@@ -3427,6 +4379,25 @@ class VenueMenuOptionNormalizationConcurrencyPostgresTest {
         val id: Long,
         val name: String,
         val sortOrder: Int,
+    )
+
+    private data class MenuCategoryRow(
+        val id: Long,
+        val name: String,
+        val sortOrder: Int,
+        val categoryType: String,
+    )
+
+    private data class FullItemRow(
+        val id: Long,
+        val categoryId: Long,
+        val name: String,
+        val priceMinor: Long,
+        val currency: String,
+        val isAvailable: Boolean,
+        val itemType: String?,
+        val sortOrder: Int,
+        val updatedAtMillis: Long,
     )
 
     private data class AuditRow(

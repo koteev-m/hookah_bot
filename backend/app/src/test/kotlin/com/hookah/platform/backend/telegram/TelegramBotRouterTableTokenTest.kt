@@ -502,7 +502,25 @@ class TelegramBotRouterTableTokenTest {
             )
         }
         coEvery { venueMenuRepository.getMenu(any()) } returns emptyList()
-        coEvery { venueMenuRepository.createCategory(any(), any()) } answers
+        coEvery {
+            venueMenuRepository.createMissingCategories(any(), any(), any(), any())
+        } answers {
+            val venueId = invocation.args[0] as Long
+
+            @Suppress("UNCHECKED_CAST")
+            val seeds = invocation.args[1] as List<com.hookah.platform.backend.miniapp.venue.menu.MenuCategorySeed>
+            seeds.mapIndexed { index, seed ->
+                VenueMenuCategory(
+                    id = 1000L + index,
+                    venueId = venueId,
+                    name = seed.name,
+                    sortOrder = index,
+                    items = emptyList(),
+                    categoryType = seed.categoryType,
+                )
+            }
+        }
+        coEvery { venueMenuRepository.createCategory(any(), any(), any(), any()) } answers
             {
                 val venueId = invocation.args[0] as Long
                 val name = invocation.args[1] as String
@@ -8624,31 +8642,35 @@ class TelegramBotRouterTableTokenTest {
                     staffChatId = null,
                 )
             coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
-            coEvery { venueMenuRepository.getMenu(10L) } returnsMany
+            coEvery {
+                venueMenuRepository.createMissingCategories(
+                    10L,
+                    any(),
+                    200L,
+                    MenuItemAvailabilitySource.TELEGRAM_BOT,
+                )
+            } returns
                 listOf(
-                    emptyList(),
-                    listOf(
-                        VenueMenuCategory(
-                            id = 501L,
-                            venueId = 10L,
-                            name = "Кальянное меню",
-                            sortOrder = 10,
-                            items = emptyList(),
-                        ),
-                        VenueMenuCategory(
-                            id = 502L,
-                            venueId = 10L,
-                            name = "Напитки",
-                            sortOrder = 20,
-                            items = emptyList(),
-                        ),
-                        VenueMenuCategory(
-                            id = 503L,
-                            venueId = 10L,
-                            name = "Кухня",
-                            sortOrder = 30,
-                            items = emptyList(),
-                        ),
+                    VenueMenuCategory(
+                        id = 501L,
+                        venueId = 10L,
+                        name = "Кальянное меню",
+                        sortOrder = 10,
+                        items = emptyList(),
+                    ),
+                    VenueMenuCategory(
+                        id = 502L,
+                        venueId = 10L,
+                        name = "Напитки",
+                        sortOrder = 20,
+                        items = emptyList(),
+                    ),
+                    VenueMenuCategory(
+                        id = 503L,
+                        venueId = 10L,
+                        name = "Кухня",
+                        sortOrder = 30,
+                        items = emptyList(),
                     ),
                 )
 
@@ -8692,6 +8714,64 @@ class TelegramBotRouterTableTokenTest {
                     },
                 )
             }
+            coVerify(exactly = 1) {
+                venueMenuRepository.createMissingCategories(
+                    venueId = 10L,
+                    seeds =
+                        match { seeds ->
+                            seeds.map { it.name } == listOf("Кальянное меню", "Напитки", "Кухня")
+                        },
+                    actorUserId = 200L,
+                    source = MenuItemAvailabilitySource.TELEGRAM_BOT,
+                )
+            }
+            coVerify(exactly = 0) {
+                venueMenuRepository.createCategory(any(), any(), any(), any())
+            }
+        }
+
+    @Test
+    fun `default menu seed database failure sends no root screen or false success`() =
+        runBlocking {
+            coEvery { venueAccessRepository.listVenueMemberships(200L) } returns
+                listOf(VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER"))
+            coEvery { venueRepository.findVenueById(10L) } returns
+                VenueShort(id = 10L, name = "Тестовая кальянная", staffChatId = null)
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+            coEvery {
+                venueMenuRepository.createMissingCategories(
+                    10L,
+                    any(),
+                    200L,
+                    MenuItemAvailabilitySource.TELEGRAM_BOT,
+                )
+            } throws DatabaseUnavailableException()
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_11,
+                    message =
+                        Message(
+                            messageId = 20_004_11,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200L),
+                            text = "🍽 Меню заведения",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 1) {
+                outboxEnqueuer.enqueueSendMessage(100, "База недоступна, попробуйте позже.", null)
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.startsWith("🍽 Заказное меню") },
+                    any(),
+                )
+            }
+            coVerify(exactly = 0) { venueMenuRepository.createCategory(any(), any(), any(), any()) }
+            coVerify(exactly = 0) { auditLogRepository.appendJson(any(), any(), any(), any(), any()) }
         }
 
     @Test
@@ -9138,12 +9218,643 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
+    fun `menu management dialogs reject mismatched or missing current actor before access and mutation`() =
+        runBlocking {
+            val states =
+                listOf(
+                    DialogState(
+                        state = DialogStateType.OWNER_VENUE_ORDER_MENU_WAIT_SECTION_TITLE,
+                        payload = mapOf("venue_id" to "10", "owner_user_id" to "200"),
+                    ),
+                    DialogState(
+                        state = DialogStateType.OWNER_VENUE_ORDER_MENU_WAIT_SECTION_RENAME,
+                        payload =
+                            mapOf(
+                                "venue_id" to "10",
+                                "section_id" to "501",
+                                "owner_user_id" to "200",
+                            ),
+                    ),
+                    DialogState(
+                        state = DialogStateType.OWNER_VENUE_ORDER_MENU_WAIT_ITEM_RENAME,
+                        payload =
+                            mapOf(
+                                "venue_id" to "10",
+                                "section_id" to "501",
+                                "item_id" to "7001",
+                                "owner_user_id" to "200",
+                            ),
+                    ),
+                    DialogState(
+                        state = DialogStateType.OWNER_VENUE_ORDER_MENU_WAIT_ITEM_PRICE_EDIT,
+                        payload =
+                            mapOf(
+                                "venue_id" to "10",
+                                "section_id" to "501",
+                                "item_id" to "7001",
+                                "owner_user_id" to "200",
+                            ),
+                    ),
+                )
+            coEvery { dialogStateRepository.get(100) } returnsMany states.flatMap { listOf(it, it) }
+
+            states.forEachIndexed { index, state ->
+                val text =
+                    if (state.state == DialogStateType.OWNER_VENUE_ORDER_MENU_WAIT_ITEM_PRICE_EDIT) {
+                        "850"
+                    } else {
+                        "Private callback actor spoof"
+                    }
+                router.process(
+                    TelegramUpdate(
+                        updateId = 10_004_50L + index * 2L,
+                        message =
+                            Message(
+                                messageId = 20_004_50L + index * 2L,
+                                chat = Chat(id = 100, type = "private"),
+                                fromUser = User(id = 201L),
+                                text = text,
+                            ),
+                    ),
+                )
+                router.process(
+                    TelegramUpdate(
+                        updateId = 10_004_51L + index * 2L,
+                        message =
+                            Message(
+                                messageId = 20_004_51L + index * 2L,
+                                chat = Chat(id = 100, type = "private"),
+                                fromUser = null,
+                                text = text,
+                            ),
+                    ),
+                )
+            }
+
+            coVerify(exactly = 0) { venueAccessRepository.hasVenueAdminOrOwner(any(), any()) }
+            coVerify(exactly = 0) {
+                venueMenuRepository.createCategory(any(), any(), any(), any())
+            }
+            coVerify(exactly = 0) {
+                venueMenuRepository.updateCategory(any(), any(), any(), any(), any(), any())
+            }
+            coVerify(exactly = 0) {
+                venueMenuRepository.updateItem(
+                    venueId = any(),
+                    itemId = any(),
+                    categoryId = any(),
+                    name = any(),
+                    priceMinor = any(),
+                    currency = any(),
+                    isAvailable = any(),
+                    actorUserId = any(),
+                    source = any(),
+                )
+            }
+            coVerify(exactly = 8) { dialogStateRepository.clear(100) }
+            coVerify(exactly = 8) {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Не удалось продолжить. Откройте «🍽 Заказное меню» снова.",
+                    null,
+                )
+            }
+        }
+
+    @Test
+    fun `foreign menu management dialog owner is denied before repository mutation`() =
+        runBlocking {
+            val states =
+                listOf(
+                    DialogState(
+                        DialogStateType.OWNER_VENUE_ORDER_MENU_WAIT_SECTION_TITLE,
+                        mapOf("venue_id" to "10", "owner_user_id" to "201"),
+                    ),
+                    DialogState(
+                        DialogStateType.OWNER_VENUE_ORDER_MENU_WAIT_SECTION_RENAME,
+                        mapOf("venue_id" to "10", "section_id" to "501", "owner_user_id" to "201"),
+                    ),
+                    DialogState(
+                        DialogStateType.OWNER_VENUE_ORDER_MENU_WAIT_ITEM_RENAME,
+                        mapOf(
+                            "venue_id" to "10",
+                            "section_id" to "501",
+                            "item_id" to "7001",
+                            "owner_user_id" to "201",
+                        ),
+                    ),
+                    DialogState(
+                        DialogStateType.OWNER_VENUE_ORDER_MENU_WAIT_ITEM_PRICE_EDIT,
+                        mapOf(
+                            "venue_id" to "10",
+                            "section_id" to "501",
+                            "item_id" to "7001",
+                            "owner_user_id" to "201",
+                        ),
+                    ),
+                )
+            coEvery { dialogStateRepository.get(100) } returnsMany states
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(201L, 10L) } returns false
+
+            listOf("Foreign category", "Foreign rename", "Foreign item", "850")
+                .forEachIndexed { index, text ->
+                    router.process(
+                        TelegramUpdate(
+                            updateId = 10_004_60L + index,
+                            message =
+                                Message(
+                                    messageId = 20_004_60L + index,
+                                    chat = Chat(id = 100, type = "private"),
+                                    fromUser = User(id = 201L),
+                                    text = text,
+                                ),
+                        ),
+                    )
+                }
+
+            coVerify(exactly = 4) { venueAccessRepository.hasVenueAdminOrOwner(201L, 10L) }
+            coVerify(exactly = 0) { venueMenuRepository.createCategory(any(), any(), any(), any()) }
+            coVerify(exactly = 0) {
+                venueMenuRepository.updateCategory(any(), any(), any(), any(), any(), any())
+            }
+            coVerify(exactly = 0) {
+                venueMenuRepository.updateItem(
+                    venueId = any(),
+                    itemId = any(),
+                    categoryId = any(),
+                    name = any(),
+                    priceMinor = any(),
+                    currency = any(),
+                    isAvailable = any(),
+                    actorUserId = any(),
+                    source = any(),
+                )
+            }
+            coVerify(exactly = 4) { dialogStateRepository.clear(100) }
+            coVerify(exactly = 4) {
+                outboxEnqueuer.enqueueSendMessage(100, "Нет доступа к заведению.", null)
+            }
+        }
+
+    @Test
+    fun `menu management dialog database failures keep state and suppress success`() =
+        runBlocking {
+            val states =
+                listOf(
+                    DialogState(
+                        DialogStateType.OWNER_VENUE_ORDER_MENU_WAIT_SECTION_TITLE,
+                        mapOf("venue_id" to "10", "owner_user_id" to "201"),
+                    ),
+                    DialogState(
+                        DialogStateType.OWNER_VENUE_ORDER_MENU_WAIT_ITEM_RENAME,
+                        mapOf(
+                            "venue_id" to "10",
+                            "section_id" to "501",
+                            "item_id" to "7001",
+                            "owner_user_id" to "201",
+                        ),
+                    ),
+                    DialogState(
+                        DialogStateType.OWNER_VENUE_ORDER_MENU_WAIT_ITEM_PRICE_EDIT,
+                        mapOf(
+                            "venue_id" to "10",
+                            "section_id" to "501",
+                            "item_id" to "7001",
+                            "owner_user_id" to "201",
+                        ),
+                    ),
+                )
+            coEvery { dialogStateRepository.get(100) } returnsMany states
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(201L, 10L) } returns true
+            coEvery {
+                venueMenuRepository.createCategory(
+                    10L,
+                    "Retry category",
+                    201L,
+                    MenuItemAvailabilitySource.TELEGRAM_BOT,
+                )
+            } throws DatabaseUnavailableException()
+            coEvery {
+                venueMenuRepository.updateItem(
+                    venueId = 10L,
+                    itemId = 7001L,
+                    categoryId = null,
+                    name = "Retry item",
+                    priceMinor = null,
+                    currency = null,
+                    isAvailable = null,
+                    actorUserId = 201L,
+                    source = MenuItemAvailabilitySource.TELEGRAM_BOT,
+                )
+            } throws DatabaseUnavailableException()
+            coEvery {
+                venueMenuRepository.updateItem(
+                    venueId = 10L,
+                    itemId = 7001L,
+                    categoryId = null,
+                    name = null,
+                    priceMinor = 85_000L,
+                    currency = "RUB",
+                    isAvailable = null,
+                    actorUserId = 201L,
+                    source = MenuItemAvailabilitySource.TELEGRAM_BOT,
+                )
+            } throws DatabaseUnavailableException()
+
+            listOf("Retry category", "Retry item", "850").forEachIndexed { index, text ->
+                router.process(
+                    TelegramUpdate(
+                        updateId = 10_004_65L + index,
+                        message =
+                            Message(
+                                messageId = 20_004_65L + index,
+                                chat = Chat(id = 100, type = "private"),
+                                fromUser = User(id = 201L),
+                                text = text,
+                            ),
+                    ),
+                )
+            }
+
+            coVerify(exactly = 0) { dialogStateRepository.clear(100) }
+            coVerify(exactly = 3) {
+                outboxEnqueuer.enqueueSendMessage(100, "База недоступна, попробуйте позже.", null)
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(100, match { it.startsWith("✅") }, null)
+            }
+            coVerify(exactly = 0) { auditLogRepository.appendJson(any(), any(), any(), any(), any()) }
+        }
+
+    @Test
+    fun `menu management dialog submits use current actor telegram source and no router audit`() =
+        runBlocking {
+            val category =
+                VenueMenuCategory(
+                    id = 501L,
+                    venueId = 10L,
+                    name = "Renamed category",
+                    sortOrder = 0,
+                    items = emptyList(),
+                )
+            val itemCategory =
+                category.copy(
+                    id = 502L,
+                    name = "Current item category",
+                )
+            val item =
+                VenueMenuItem(
+                    id = 7001L,
+                    venueId = 10L,
+                    categoryId = itemCategory.id,
+                    name = "Renamed item",
+                    priceMinor = 85_000,
+                    currency = "RUB",
+                    isAvailable = true,
+                    sortOrder = 0,
+                    options = emptyList(),
+                )
+            val states =
+                listOf(
+                    DialogState(
+                        DialogStateType.OWNER_VENUE_ORDER_MENU_WAIT_SECTION_TITLE,
+                        mapOf(
+                            "venue_id" to "10",
+                            "owner_user_id" to "201",
+                            "actor_user_id" to "999999",
+                            "source" to "VENUE_MINI_APP",
+                        ),
+                    ),
+                    DialogState(
+                        DialogStateType.OWNER_VENUE_ORDER_MENU_WAIT_SECTION_RENAME,
+                        mapOf(
+                            "venue_id" to "10",
+                            "section_id" to "501",
+                            "owner_user_id" to "201",
+                            "actor_user_id" to "999999",
+                            "source" to "VENUE_MINI_APP",
+                        ),
+                    ),
+                    DialogState(
+                        DialogStateType.OWNER_VENUE_ORDER_MENU_WAIT_ITEM_RENAME,
+                        mapOf(
+                            "venue_id" to "10",
+                            "section_id" to "501",
+                            "item_id" to "7001",
+                            "owner_user_id" to "201",
+                            "actor_user_id" to "999999",
+                            "source" to "VENUE_MINI_APP",
+                        ),
+                    ),
+                    DialogState(
+                        DialogStateType.OWNER_VENUE_ORDER_MENU_WAIT_ITEM_PRICE_EDIT,
+                        mapOf(
+                            "venue_id" to "10",
+                            "section_id" to "501",
+                            "item_id" to "7001",
+                            "owner_user_id" to "201",
+                            "actor_user_id" to "999999",
+                            "source" to "VENUE_MINI_APP",
+                        ),
+                    ),
+                )
+            coEvery { dialogStateRepository.get(100) } returnsMany states
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(201L, 10L) } returns true
+            coEvery {
+                venueMenuRepository.createCategory(
+                    10L,
+                    "Added category",
+                    201L,
+                    MenuItemAvailabilitySource.TELEGRAM_BOT,
+                )
+            } returns category.copy(name = "Added category")
+            coEvery {
+                venueMenuRepository.updateCategory(
+                    10L,
+                    501L,
+                    "Renamed category",
+                    null,
+                    201L,
+                    MenuItemAvailabilitySource.TELEGRAM_BOT,
+                )
+            } returns category
+            coEvery {
+                venueMenuRepository.updateItem(
+                    venueId = 10L,
+                    itemId = 7001L,
+                    categoryId = null,
+                    name = "Renamed item",
+                    priceMinor = null,
+                    currency = null,
+                    isAvailable = null,
+                    actorUserId = 201L,
+                    source = MenuItemAvailabilitySource.TELEGRAM_BOT,
+                )
+            } returns item
+            coEvery {
+                venueMenuRepository.updateItem(
+                    venueId = 10L,
+                    itemId = 7001L,
+                    categoryId = null,
+                    name = null,
+                    priceMinor = 85_000L,
+                    currency = "RUB",
+                    isAvailable = null,
+                    actorUserId = 201L,
+                    source = MenuItemAvailabilitySource.TELEGRAM_BOT,
+                )
+            } returns item
+            coEvery { venueMenuRepository.getMenu(10L) } returns
+                listOf(category, itemCategory.copy(items = listOf(item)))
+
+            listOf("Added category", "Renamed category", "Renamed item", "850")
+                .forEachIndexed { index, text ->
+                    router.process(
+                        TelegramUpdate(
+                            updateId = 10_004_70L + index,
+                            message =
+                                Message(
+                                    messageId = 20_004_70L + index,
+                                    chat = Chat(id = 100, type = "private"),
+                                    fromUser = User(id = 201L, username = "private_manager"),
+                                    text = text,
+                                ),
+                        ),
+                    )
+                }
+
+            coVerify(exactly = 1) {
+                venueMenuRepository.createCategory(
+                    10L,
+                    "Added category",
+                    201L,
+                    MenuItemAvailabilitySource.TELEGRAM_BOT,
+                )
+            }
+            coVerify(exactly = 1) {
+                venueMenuRepository.updateCategory(
+                    10L,
+                    501L,
+                    "Renamed category",
+                    null,
+                    201L,
+                    MenuItemAvailabilitySource.TELEGRAM_BOT,
+                )
+            }
+            coVerify(exactly = 4) { dialogStateRepository.clear(100) }
+            coVerify(exactly = 1) { outboxEnqueuer.enqueueSendMessage(100, "✅ Раздел добавлен.", null) }
+            coVerify(exactly = 1) { outboxEnqueuer.enqueueSendMessage(100, "✅ Раздел переименован.", null) }
+            coVerify(exactly = 1) {
+                outboxEnqueuer.enqueueSendMessage(100, "✅ Название позиции обновлено.", null)
+            }
+            coVerify(exactly = 1) { outboxEnqueuer.enqueueSendMessage(100, "✅ Цена позиции обновлена.", null) }
+            coVerify(exactly = 0) { outboxEnqueuer.enqueueSendMessage(100, "Позиция не найдена.", null) }
+            coVerify(atLeast = 2) {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    any(),
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.callbackData?.contains(":10:502:7001") == true
+                            }
+                    },
+                )
+            }
+            coVerify(exactly = 0) { auditLogRepository.appendJson(any(), any(), any(), any(), any()) }
+        }
+
+    @Test
+    fun `owner category dialogs and manager category type preserve role parity`() =
+        runBlocking {
+            val category =
+                VenueMenuCategory(
+                    id = 501L,
+                    venueId = 10L,
+                    name = "Owner renamed category",
+                    sortOrder = 0,
+                    items = emptyList(),
+                    categoryType = MenuSemanticType.OTHER,
+                )
+            coEvery { dialogStateRepository.get(100) } returnsMany
+                listOf(
+                    DialogState(
+                        DialogStateType.OWNER_VENUE_ORDER_MENU_WAIT_SECTION_TITLE,
+                        mapOf("venue_id" to "10", "owner_user_id" to "200"),
+                    ),
+                    DialogState(
+                        DialogStateType.OWNER_VENUE_ORDER_MENU_WAIT_SECTION_RENAME,
+                        mapOf("venue_id" to "10", "section_id" to "501", "owner_user_id" to "200"),
+                    ),
+                )
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(201L, 10L) } returns true
+            coEvery {
+                venueMenuRepository.createCategory(
+                    10L,
+                    "Owner added category",
+                    200L,
+                    MenuItemAvailabilitySource.TELEGRAM_BOT,
+                )
+            } returns category.copy(name = "Owner added category")
+            coEvery {
+                venueMenuRepository.updateCategory(
+                    10L,
+                    501L,
+                    "Owner renamed category",
+                    null,
+                    200L,
+                    MenuItemAvailabilitySource.TELEGRAM_BOT,
+                )
+            } returns category
+            coEvery {
+                venueMenuRepository.updateCategory(
+                    10L,
+                    501L,
+                    null,
+                    MenuSemanticType.HOOKAH,
+                    201L,
+                    MenuItemAvailabilitySource.TELEGRAM_BOT,
+                )
+            } returns category.copy(categoryType = MenuSemanticType.HOOKAH)
+            coEvery { venueMenuRepository.getMenu(10L) } returns listOf(category)
+
+            listOf("Owner added category", "Owner renamed category").forEachIndexed { index, text ->
+                router.process(
+                    TelegramUpdate(
+                        updateId = 10_004_74L + index,
+                        message =
+                            Message(
+                                messageId = 20_004_74L + index,
+                                chat = Chat(id = 100, type = "private"),
+                                fromUser = User(id = 200L),
+                                text = text,
+                            ),
+                    ),
+                )
+            }
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_004_76L,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-manager-order-menu-section-type-set",
+                            from = User(id = 201L),
+                            message = Message(messageId = 30_004_76L, chat = Chat(id = 100, type = "private")),
+                            data = "omt_cs:10:501:HOOKAH",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 1) {
+                venueMenuRepository.createCategory(
+                    10L,
+                    "Owner added category",
+                    200L,
+                    MenuItemAvailabilitySource.TELEGRAM_BOT,
+                )
+            }
+            coVerify(exactly = 1) {
+                venueMenuRepository.updateCategory(
+                    10L,
+                    501L,
+                    "Owner renamed category",
+                    null,
+                    200L,
+                    MenuItemAvailabilitySource.TELEGRAM_BOT,
+                )
+            }
+            coVerify(exactly = 1) {
+                venueMenuRepository.updateCategory(
+                    10L,
+                    501L,
+                    null,
+                    MenuSemanticType.HOOKAH,
+                    201L,
+                    MenuItemAvailabilitySource.TELEGRAM_BOT,
+                )
+            }
+        }
+
+    @Test
+    fun `category rename audit failure keeps dialog retryable and sends success only after retry`() =
+        runBlocking {
+            val state =
+                DialogState(
+                    DialogStateType.OWNER_VENUE_ORDER_MENU_WAIT_SECTION_RENAME,
+                    mapOf(
+                        "venue_id" to "10",
+                        "section_id" to "501",
+                        "owner_user_id" to "201",
+                    ),
+                )
+            val updated =
+                VenueMenuCategory(
+                    id = 501L,
+                    venueId = 10L,
+                    name = "Retry category",
+                    sortOrder = 0,
+                    items = emptyList(),
+                )
+            coEvery { dialogStateRepository.get(100) } returnsMany listOf(state, state)
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(201L, 10L) } returns true
+            coEvery {
+                venueMenuRepository.updateCategory(
+                    10L,
+                    501L,
+                    "Retry category",
+                    null,
+                    201L,
+                    MenuItemAvailabilitySource.TELEGRAM_BOT,
+                )
+            } throws DatabaseUnavailableException() andThen updated
+            coEvery { venueMenuRepository.getMenu(10L) } returns listOf(updated)
+
+            repeat(2) { index ->
+                router.process(
+                    TelegramUpdate(
+                        updateId = 10_004_80L + index,
+                        message =
+                            Message(
+                                messageId = 20_004_80L + index,
+                                chat = Chat(id = 100, type = "private"),
+                                fromUser = User(id = 201L),
+                                text = "Retry category",
+                            ),
+                    ),
+                )
+            }
+
+            coVerify(exactly = 2) {
+                venueMenuRepository.updateCategory(
+                    10L,
+                    501L,
+                    "Retry category",
+                    null,
+                    201L,
+                    MenuItemAvailabilitySource.TELEGRAM_BOT,
+                )
+            }
+            coVerify(exactly = 1) { dialogStateRepository.clear(100) }
+            coVerify(exactly = 1) {
+                outboxEnqueuer.enqueueSendMessage(100, "База недоступна, попробуйте позже.", null)
+            }
+            coVerify(exactly = 1) { outboxEnqueuer.enqueueSendMessage(100, "✅ Раздел переименован.", null) }
+        }
+
+    @Test
     fun `item add audit failure after physical insert rolls back and dialog can retry safely`() =
         runBlocking {
             val dataSource = migratedTelegramMenuDataSource()
             val venueId = seedTelegramMenuAuditVenue(dataSource, actorUserId = 200L)
             val fixtureRepository = VenueMenuRepository(dataSource)
-            val category = fixtureRepository.createCategory(venueId, "Private category name")
+            val category =
+                fixtureRepository.createCategory(
+                    venueId,
+                    "Private category name",
+                    200L,
+                    MenuItemAvailabilitySource.TELEGRAM_BOT,
+                )
             val delegateAuditWriter = AuditLogRepository(dataSource, Json)
             var createAuditAttempts = 0
             var insertedItemObserved = false
@@ -9635,7 +10346,16 @@ class TelegramBotRouterTableTokenTest {
                         categoryType = MenuSemanticType.OTHER,
                     ),
                 )
-            coEvery { venueMenuRepository.updateCategoryType(10L, 501L, MenuSemanticType.HOOKAH) } returns
+            coEvery {
+                venueMenuRepository.updateCategory(
+                    10L,
+                    501L,
+                    null,
+                    MenuSemanticType.HOOKAH,
+                    200L,
+                    MenuItemAvailabilitySource.TELEGRAM_BOT,
+                )
+            } returns
                 VenueMenuCategory(
                     id = 501L,
                     venueId = 10L,
@@ -9682,7 +10402,16 @@ class TelegramBotRouterTableTokenTest {
                     },
                 )
             }
-            coVerify { venueMenuRepository.updateCategoryType(10L, 501L, MenuSemanticType.HOOKAH) }
+            coVerify {
+                venueMenuRepository.updateCategory(
+                    10L,
+                    501L,
+                    null,
+                    MenuSemanticType.HOOKAH,
+                    200L,
+                    MenuItemAvailabilitySource.TELEGRAM_BOT,
+                )
+            }
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
@@ -9721,9 +10450,25 @@ class TelegramBotRouterTableTokenTest {
                         categoryType = MenuSemanticType.HOOKAH,
                     ),
                 )
-            coEvery { venueMenuRepository.updateItemType(10L, 7001L, MenuSemanticType.DRINK) } returns
+            coEvery {
+                venueMenuRepository.updateItemType(
+                    10L,
+                    7001L,
+                    MenuSemanticType.DRINK,
+                    201L,
+                    MenuItemAvailabilitySource.TELEGRAM_BOT,
+                )
+            } returns
                 item.copy(itemType = MenuSemanticType.DRINK)
-            coEvery { venueMenuRepository.updateItemType(10L, 7001L, null) } returns
+            coEvery {
+                venueMenuRepository.updateItemType(
+                    10L,
+                    7001L,
+                    null,
+                    201L,
+                    MenuItemAvailabilitySource.TELEGRAM_BOT,
+                )
+            } returns
                 item.copy(itemType = null)
 
             router.process(
@@ -9763,9 +10508,33 @@ class TelegramBotRouterTableTokenTest {
                 ),
             )
 
-            coVerify { venueMenuRepository.updateItemType(10L, 7001L, MenuSemanticType.DRINK) }
-            coVerify { venueMenuRepository.updateItemType(10L, 7001L, null) }
-            coVerify(exactly = 0) { venueMenuRepository.updateItemType(10L, 7001L, MenuSemanticType.TEA) }
+            coVerify {
+                venueMenuRepository.updateItemType(
+                    10L,
+                    7001L,
+                    MenuSemanticType.DRINK,
+                    201L,
+                    MenuItemAvailabilitySource.TELEGRAM_BOT,
+                )
+            }
+            coVerify {
+                venueMenuRepository.updateItemType(
+                    10L,
+                    7001L,
+                    null,
+                    201L,
+                    MenuItemAvailabilitySource.TELEGRAM_BOT,
+                )
+            }
+            coVerify(exactly = 0) {
+                venueMenuRepository.updateItemType(
+                    10L,
+                    7001L,
+                    MenuSemanticType.TEA,
+                    202L,
+                    MenuItemAvailabilitySource.TELEGRAM_BOT,
+                )
+            }
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     100,

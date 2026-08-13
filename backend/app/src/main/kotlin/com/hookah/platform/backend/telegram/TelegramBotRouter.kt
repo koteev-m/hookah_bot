@@ -62,6 +62,7 @@ import com.hookah.platform.backend.miniapp.venue.appendStaffCallStatusAuditBestE
 import com.hookah.platform.backend.miniapp.venue.menu.BASE_FLAVOR_PROFILE_ALREADY_EXISTS_MESSAGE
 import com.hookah.platform.backend.miniapp.venue.menu.HookahFlavorProfileService
 import com.hookah.platform.backend.miniapp.venue.menu.MenuCategoryDeleteSource
+import com.hookah.platform.backend.miniapp.venue.menu.MenuCategorySeed
 import com.hookah.platform.backend.miniapp.venue.menu.MenuItemAvailabilitySource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuItemCreateSource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuItemDeleteSource
@@ -18064,7 +18065,7 @@ class TelegramBotRouter(
             enqueueMessage(chatId, "Нет доступа к заведению.")
             return
         }
-        val categories = loadOrCreateOwnerOrderMenuCategories(chatId, venueId) ?: return
+        val categories = loadOrCreateOwnerOrderMenuCategories(chatId, userId, venueId) ?: return
         enqueueMessage(
             chatId,
             "🍽 Заказное меню\n" +
@@ -18080,40 +18081,22 @@ class TelegramBotRouter(
 
     private suspend fun loadOrCreateOwnerOrderMenuCategories(
         chatId: Long,
+        userId: Long,
         venueId: Long,
     ): List<VenueMenuCategory>? {
-        val categories =
-            try {
-                venueMenuRepository.getMenu(venueId)
-            } catch (e: DatabaseUnavailableException) {
-                enqueueMessage(chatId, "База недоступна, попробуйте позже.")
-                return null
-            }
         val requiredDefaults =
             listOf(
-                "Кальянное меню",
-                "Напитки",
-                "Кухня",
+                MenuCategorySeed("Кальянное меню"),
+                MenuCategorySeed("Напитки"),
+                MenuCategorySeed("Кухня"),
             )
-        val existingNames =
-            categories
-                .map { it.name.trim().lowercase(Locale.ROOT) }
-                .toSet()
-        var changed = false
-        requiredDefaults.forEach { title ->
-            if (!existingNames.contains(title.lowercase(Locale.ROOT))) {
-                try {
-                    venueMenuRepository.createCategory(venueId = venueId, name = title)
-                    changed = true
-                } catch (e: DatabaseUnavailableException) {
-                    enqueueMessage(chatId, "База недоступна, попробуйте позже.")
-                    return null
-                }
-            }
-        }
-        if (!changed) return categories
         return try {
-            venueMenuRepository.getMenu(venueId)
+            venueMenuRepository.createMissingCategories(
+                venueId = venueId,
+                seeds = requiredDefaults,
+                actorUserId = userId,
+                source = MenuItemAvailabilitySource.TELEGRAM_BOT,
+            )
         } catch (e: DatabaseUnavailableException) {
             enqueueMessage(chatId, "База недоступна, попробуйте позже.")
             null
@@ -18226,10 +18209,13 @@ class TelegramBotRouter(
         }
         val updated =
             try {
-                venueMenuRepository.updateCategoryType(
+                venueMenuRepository.updateCategory(
                     venueId = venueId,
                     categoryId = sectionId,
+                    name = null,
                     categoryType = type,
+                    actorUserId = userId,
+                    source = MenuItemAvailabilitySource.TELEGRAM_BOT,
                 )
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
@@ -18354,6 +18340,8 @@ class TelegramBotRouter(
                     venueId = venueId,
                     itemId = itemId,
                     itemType = type,
+                    actorUserId = userId,
+                    source = MenuItemAvailabilitySource.TELEGRAM_BOT,
                 )
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
@@ -18454,8 +18442,14 @@ class TelegramBotRouter(
         state: DialogState,
     ) {
         val venueId = state.payload["venue_id"]?.toLongOrNull()
-        val ownerUserId = (from?.id ?: state.payload["owner_user_id"]?.toLongOrNull())
-        if (venueId == null || ownerUserId == null) {
+        val currentUserId = from?.id
+        val dialogOwnerUserId = state.payload["owner_user_id"]?.toLongOrNull()
+        if (
+            venueId == null ||
+            currentUserId == null ||
+            dialogOwnerUserId == null ||
+            currentUserId != dialogOwnerUserId
+        ) {
             dialogStateRepository.clear(chatId)
             enqueueMessage(chatId, "Не удалось продолжить. Откройте «🍽 Заказное меню» снова.")
             return
@@ -18464,7 +18458,7 @@ class TelegramBotRouter(
         if (input == "-" || input == "—") {
             dialogStateRepository.clear(chatId)
             enqueueMessage(chatId, "Добавление раздела отменено.")
-            showVenueOwnerOrderMenuRootByVenueId(chatId, ownerUserId, venueId)
+            showVenueOwnerOrderMenuRootByVenueId(chatId, currentUserId, venueId)
             return
         }
         val normalized = normalizeVenueConnectionRequiredField(input, maxLength = 120)
@@ -18473,7 +18467,7 @@ class TelegramBotRouter(
             return
         }
         val hasAccess =
-            runCatching { venueAccessRepository.hasVenueAdminOrOwner(ownerUserId, venueId) }
+            runCatching { venueAccessRepository.hasVenueAdminOrOwner(currentUserId, venueId) }
                 .onFailure { logBestEffort("check venue owner access on add section submit", it) }
                 .getOrDefault(false)
         if (!hasAccess) {
@@ -18482,14 +18476,19 @@ class TelegramBotRouter(
             return
         }
         try {
-            venueMenuRepository.createCategory(venueId = venueId, name = normalized)
+            venueMenuRepository.createCategory(
+                venueId = venueId,
+                name = normalized,
+                actorUserId = currentUserId,
+                source = MenuItemAvailabilitySource.TELEGRAM_BOT,
+            )
         } catch (e: DatabaseUnavailableException) {
             enqueueMessage(chatId, "База недоступна, попробуйте позже.")
             return
         }
         dialogStateRepository.clear(chatId)
         enqueueMessage(chatId, "✅ Раздел добавлен.")
-        showVenueOwnerOrderMenuRootByVenueId(chatId, ownerUserId, venueId)
+        showVenueOwnerOrderMenuRootByVenueId(chatId, currentUserId, venueId)
     }
 
     private suspend fun promptVenueOwnerOrderMenuRenameSection(
@@ -18534,8 +18533,15 @@ class TelegramBotRouter(
     ) {
         val venueId = state.payload["venue_id"]?.toLongOrNull()
         val sectionId = state.payload["section_id"]?.toLongOrNull()
-        val ownerUserId = (from?.id ?: state.payload["owner_user_id"]?.toLongOrNull())
-        if (venueId == null || sectionId == null || ownerUserId == null) {
+        val currentUserId = from?.id
+        val dialogOwnerUserId = state.payload["owner_user_id"]?.toLongOrNull()
+        if (
+            venueId == null ||
+            sectionId == null ||
+            currentUserId == null ||
+            dialogOwnerUserId == null ||
+            currentUserId != dialogOwnerUserId
+        ) {
             dialogStateRepository.clear(chatId)
             enqueueMessage(chatId, "Не удалось продолжить. Откройте «🍽 Заказное меню» снова.")
             return
@@ -18544,7 +18550,7 @@ class TelegramBotRouter(
         if (input == "-" || input == "—") {
             dialogStateRepository.clear(chatId)
             enqueueMessage(chatId, "Переименование раздела отменено.")
-            showVenueOwnerOrderMenuSectionByIds(chatId, ownerUserId, venueId, sectionId)
+            showVenueOwnerOrderMenuSectionByIds(chatId, currentUserId, venueId, sectionId)
             return
         }
         val normalized = normalizeVenueConnectionRequiredField(input, maxLength = 120)
@@ -18553,7 +18559,7 @@ class TelegramBotRouter(
             return
         }
         val hasAccess =
-            runCatching { venueAccessRepository.hasVenueAdminOrOwner(ownerUserId, venueId) }
+            runCatching { venueAccessRepository.hasVenueAdminOrOwner(currentUserId, venueId) }
                 .onFailure { logBestEffort("check venue owner access on rename section submit", it) }
                 .getOrDefault(false)
         if (!hasAccess) {
@@ -18567,6 +18573,9 @@ class TelegramBotRouter(
                     venueId = venueId,
                     categoryId = sectionId,
                     name = normalized,
+                    categoryType = null,
+                    actorUserId = currentUserId,
+                    source = MenuItemAvailabilitySource.TELEGRAM_BOT,
                 )
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
@@ -18575,12 +18584,12 @@ class TelegramBotRouter(
         if (updated == null) {
             dialogStateRepository.clear(chatId)
             enqueueMessage(chatId, "Раздел не найден.")
-            showVenueOwnerOrderMenuRootByVenueId(chatId, ownerUserId, venueId)
+            showVenueOwnerOrderMenuRootByVenueId(chatId, currentUserId, venueId)
             return
         }
         dialogStateRepository.clear(chatId)
         enqueueMessage(chatId, "✅ Раздел переименован.")
-        showVenueOwnerOrderMenuSectionByIds(chatId, ownerUserId, venueId, sectionId)
+        showVenueOwnerOrderMenuSectionByIds(chatId, currentUserId, venueId, sectionId)
     }
 
     private suspend fun deleteVenueOwnerOrderMenuSection(
@@ -19593,8 +19602,16 @@ class TelegramBotRouter(
         val venueId = state.payload["venue_id"]?.toLongOrNull()
         val sectionId = state.payload["section_id"]?.toLongOrNull()
         val itemId = state.payload["item_id"]?.toLongOrNull()
-        val ownerUserId = (from?.id ?: state.payload["owner_user_id"]?.toLongOrNull())
-        if (venueId == null || sectionId == null || itemId == null || ownerUserId == null) {
+        val currentUserId = from?.id
+        val dialogOwnerUserId = state.payload["owner_user_id"]?.toLongOrNull()
+        if (
+            venueId == null ||
+            sectionId == null ||
+            itemId == null ||
+            currentUserId == null ||
+            dialogOwnerUserId == null ||
+            currentUserId != dialogOwnerUserId
+        ) {
             dialogStateRepository.clear(chatId)
             enqueueMessage(chatId, "Не удалось продолжить. Откройте «🍽 Заказное меню» снова.")
             return
@@ -19603,7 +19620,7 @@ class TelegramBotRouter(
         if (input == "-" || input == "—") {
             dialogStateRepository.clear(chatId)
             enqueueMessage(chatId, "Изменение названия отменено.")
-            showVenueOwnerOrderMenuItemByIds(chatId, ownerUserId, venueId, sectionId, itemId)
+            showVenueOwnerOrderMenuItemByIds(chatId, currentUserId, venueId, sectionId, itemId)
             return
         }
         val normalized = normalizeVenueConnectionRequiredField(input, maxLength = 120)
@@ -19612,7 +19629,7 @@ class TelegramBotRouter(
             return
         }
         val hasAccess =
-            runCatching { venueAccessRepository.hasVenueAdminOrOwner(ownerUserId, venueId) }
+            runCatching { venueAccessRepository.hasVenueAdminOrOwner(currentUserId, venueId) }
                 .onFailure { logBestEffort("check venue owner access on rename item submit", it) }
                 .getOrDefault(false)
         if (!hasAccess) {
@@ -19625,12 +19642,12 @@ class TelegramBotRouter(
                 venueMenuRepository.updateItem(
                     venueId = venueId,
                     itemId = itemId,
-                    categoryId = sectionId,
+                    categoryId = null,
                     name = normalized,
                     priceMinor = null,
                     currency = null,
                     isAvailable = null,
-                    actorUserId = ownerUserId,
+                    actorUserId = currentUserId,
                     source = MenuItemAvailabilitySource.TELEGRAM_BOT,
                 )
             } catch (e: DatabaseUnavailableException) {
@@ -19640,12 +19657,12 @@ class TelegramBotRouter(
         if (updated == null) {
             dialogStateRepository.clear(chatId)
             enqueueMessage(chatId, "Позиция не найдена.")
-            showVenueOwnerOrderMenuSectionByIds(chatId, ownerUserId, venueId, sectionId)
+            showVenueOwnerOrderMenuSectionByIds(chatId, currentUserId, venueId, sectionId)
             return
         }
         dialogStateRepository.clear(chatId)
         enqueueMessage(chatId, "✅ Название позиции обновлено.")
-        showVenueOwnerOrderMenuItemByIds(chatId, ownerUserId, venueId, sectionId, itemId)
+        showVenueOwnerOrderMenuItemByIds(chatId, currentUserId, venueId, updated.categoryId, itemId)
     }
 
     private suspend fun promptVenueOwnerOrderMenuEditItemPrice(
@@ -19701,8 +19718,16 @@ class TelegramBotRouter(
         val venueId = state.payload["venue_id"]?.toLongOrNull()
         val sectionId = state.payload["section_id"]?.toLongOrNull()
         val itemId = state.payload["item_id"]?.toLongOrNull()
-        val ownerUserId = (from?.id ?: state.payload["owner_user_id"]?.toLongOrNull())
-        if (venueId == null || sectionId == null || itemId == null || ownerUserId == null) {
+        val currentUserId = from?.id
+        val dialogOwnerUserId = state.payload["owner_user_id"]?.toLongOrNull()
+        if (
+            venueId == null ||
+            sectionId == null ||
+            itemId == null ||
+            currentUserId == null ||
+            dialogOwnerUserId == null ||
+            currentUserId != dialogOwnerUserId
+        ) {
             dialogStateRepository.clear(chatId)
             enqueueMessage(chatId, "Не удалось продолжить. Откройте «🍽 Заказное меню» снова.")
             return
@@ -19713,7 +19738,7 @@ class TelegramBotRouter(
             return
         }
         val hasAccess =
-            runCatching { venueAccessRepository.hasVenueAdminOrOwner(ownerUserId, venueId) }
+            runCatching { venueAccessRepository.hasVenueAdminOrOwner(currentUserId, venueId) }
                 .onFailure { logBestEffort("check venue owner access on edit item price submit", it) }
                 .getOrDefault(false)
         if (!hasAccess) {
@@ -19726,12 +19751,12 @@ class TelegramBotRouter(
                 venueMenuRepository.updateItem(
                     venueId = venueId,
                     itemId = itemId,
-                    categoryId = sectionId,
+                    categoryId = null,
                     name = null,
                     priceMinor = priceRub * 100,
                     currency = "RUB",
                     isAvailable = null,
-                    actorUserId = ownerUserId,
+                    actorUserId = currentUserId,
                     source = MenuItemAvailabilitySource.TELEGRAM_BOT,
                 )
             } catch (e: DatabaseUnavailableException) {
@@ -19741,12 +19766,12 @@ class TelegramBotRouter(
         if (updated == null) {
             dialogStateRepository.clear(chatId)
             enqueueMessage(chatId, "Позиция не найдена.")
-            showVenueOwnerOrderMenuSectionByIds(chatId, ownerUserId, venueId, sectionId)
+            showVenueOwnerOrderMenuSectionByIds(chatId, currentUserId, venueId, sectionId)
             return
         }
         dialogStateRepository.clear(chatId)
         enqueueMessage(chatId, "✅ Цена позиции обновлена.")
-        showVenueOwnerOrderMenuItemByIds(chatId, ownerUserId, venueId, sectionId, itemId)
+        showVenueOwnerOrderMenuItemByIds(chatId, currentUserId, venueId, updated.categoryId, itemId)
     }
 
     private suspend fun setVenueOwnerOrderMenuItemAvailability(

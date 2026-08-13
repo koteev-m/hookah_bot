@@ -1,92 +1,96 @@
 # Project Status
 
-Last verified: 2026-08-12. Active Goal check: no active Goal/objective. This is a
-docs-only release handoff; the media/R2 goal mismatch stop rule was not triggered.
+Last verified: 2026-08-12. Active Goal is the objective in
+`/Users/maksimmartynov/.codex/attachments/b3a604ea-adda-4635-9f79-7937180caa97/goal-objective.md`.
+It is the bounded Menu Management transaction/audit closure, not media/R2.
 
-## 1. Current product and release state
+## 1. Current stage
 
-- Overall product, permission parity and the broader Menu/Dangerous Action Audit remain `PARTIAL`.
-- **DANGEROUS ACTION AUDIT SLICE / MENU ITEM CREATE AUDIT / DONE / MVP /
-  STAGING-SMOKE-PASSED**.
-- The closed status applies only to authenticated item creation. It does not close Menu Audit,
-  Dangerous Action Audit or the product.
-- Menu option create, item/category/option hard delete, item/option availability, option rename,
-  option price, atomic base-profile normalization, Shift Check aggregate audit and Venue Menu UX
-  stabilization remain their separately bounded release-closed contracts.
+**VENUE MENU MANAGEMENT / EXISTING-CONTRACT AUDIT AND TRANSACTION CLOSURE / MVP IMPLEMENTED /
+LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
 
-## 2. Current release evidence
+This status applies only to the existing category/item management writers. The overall product,
+broader menu constructor/media/top-list work, permission parity and Dangerous Action Audit remain
+`PARTIAL`. Previously release-closed menu create/delete/availability/option/normalization/Shift
+Check, Guest stale-cart/idempotency and Venue Menu UX contracts remain unchanged.
 
-- Current HEAD and `origin/main` are both `4d3ef651c2a3e12b6f018ddea43bd63da4d7c4b0`
-  (`Fix booking route test billing race`). The preceding item-create implementation is `0523b7f`.
-- At handoff `git status --short` reports only pre-existing untracked `scripts/dev/`; `git diff --check`
-  is clean. No stash was read, applied or changed.
-- User-confirmed release evidence for item create: the new GitHub Actions run was fully green, staging
-  deploy completed, and bounded smoke passed. Owner created through Mini App; Manager through
-  Telegram; Staff was denied; duplicate names made distinct item rows and audits; item ordering and
-  working Guest menu remained intact; cleanup completed normally.
+## 2. Verified writer inventory and scope
 
-## 3. Recently completed: Menu Item Create Audit
+`VenueMenuRepository` is still the sole main-source production SQL owner for `menu_categories`,
+`menu_items` and `menu_item_options`; no additional authenticated runtime writer was found.
+Migration/test/staging seed SQL is not a production writer. This closure contains exactly nine
+families:
 
-Contract: one authenticated production item-create writer, `VenueMenuRepository.createItem` through
-its private `INSERT INTO menu_items`. Mini App `POST /menu/items` and the Telegram Owner/Manager
-add-item dialog are the only authenticated callers. Owner/Manager are allowed for their venue;
-Staff, foreign, unaffiliated and Platform-only actors are denied. Actor/source are server-derived:
-`VENUE_MINI_APP` or `TELEGRAM_BOT`.
+1. category create, including authenticated Telegram default seeding;
+2. category rename;
+3. category semantic type;
+4. category reorder;
+5. item rename;
+6. item price/currency;
+7. item semantic type;
+8. item category move;
+9. item reorder.
 
-The repository owns one transaction: category scope, blocking category lock, scope recheck, current
-`MAX(sort_order)+1`, physical insert, generated id, same-connection audit, reread and commit.
-Each committed row writes exactly one `MENU_ITEM_CREATED` for `menu_item` / `itemId`, with only
-`venueId`, `itemId`, `source`. Audit failure rolls back the item; duplicate names retain separate-row
-semantics; item creation creates no options; no migration exists.
+No option reorder writer exists. No scope, lock-order, authority, financial, API/UX or seeding stop
+rule was triggered.
 
-## 4. Booking test release hygiene
+## 3. Implemented transaction and audit contract
 
-This is test-only, not a booking runtime defect. Before schedule assertions,
-`SubscriptionBillingJob` could create a TRIAL row while `seedSubscription` made its strict insert,
-causing H2 SQLState `23505` duplicate `venue_subscriptions` primary key. Seven relevant
-`VenueBookingRoutesTest` configurations now set `billing.subscription.intervalSeconds=0`.
-Production defaults, runtime and schema did not change. The exact `VenueBookingRoutesTest` plus
-`VenueRbacRoutesTest` selector passed; the new Actions run was green.
-
-## 5. Current Menu Management inventory
-
-All production `menu_categories`, `menu_items` and `menu_item_options` SQL writers are in
-`VenueMenuRepository`; there is no other main-source runtime writer. Migration/test/staging seed SQL
-is not an authenticated production writer. The seven remaining unaudited families are: category
-create (including Telegram default-category seeding), category rename, category semantic type,
-category reorder, item metadata/commercial PATCH, Telegram standalone item semantic type, and item
-reorder. See `docs/MENU_OPTIONS_STOPLIST.md` for the complete writer/caller/lock/coverage matrix.
-
-Current audit gaps are precisely: `MENU_CATEGORY_CREATED`, `MENU_CATEGORY_RENAMED`,
+The nine actions are `MENU_CATEGORY_CREATED`, `MENU_CATEGORY_RENAMED`,
 `MENU_CATEGORY_TYPE_CHANGED`, `MENU_CATEGORIES_REORDERED`, `MENU_ITEM_RENAMED`,
 `MENU_ITEM_PRICE_CHANGED`, `MENU_ITEM_TYPE_CHANGED`, `MENU_ITEM_CATEGORY_MOVED` and
-`MENU_ITEMS_REORDERED`. No option reorder writer exists.
+`MENU_ITEMS_REORDERED`.
 
-## 6. One next implementation epic
+Each operation uses one repository-owned JDBC connection/transaction: deterministic ordering/category
+locks, authoritative reread, real-delta calculation, business mutation, same-connection audit rows,
+authoritative result reread and one commit. Exact no-op writes no family audit and preserves
+`updated_at`; any SQL/audit failure rolls back every field, order/timestamp and audit row. Compound
+item PATCH can atomically emit one truthful audit for each real rename, price/currency, type, move
+and existing availability delta.
 
-**IMPLEMENT_MENU_MANAGEMENT_CLOSURE_EPIC_NEXT**.
+Category default seeding is one atomic operation with one create audit per physically missing row
+and zero on repeat. Reorders require the exact authoritative set and store count plus deterministic
+old/new SHA-256 order hashes, never full id arrays. Move locks source/destination categories in
+ascending id before the item; item reorder locks category then authoritative items by ascending id.
 
-Go: all remaining writers use the same repository and existing schema; there are seven, not more
-than twelve, physical writer families. The work preserves current product semantics and needs no
-migration, API or UI expansion. It can use one worktree, one CI set and one consolidated staging
-smoke. No unresolved authority, financial or privacy decision remains.
+## 4. Authority, privacy and compatibility
 
-Bounded payload policy: rename actions contain ids and source only; type changes contain finite
-old/new authoritative types; price/currency contain only old/new authoritative DB values; a category
-move contains old/new category ids; reorder records scope, count and deterministic old/new ordered-id
-hashes, never a full list. All use server-derived actor/source and exact one/no-op/rollback rules.
+Owner/Manager own-venue authority is unchanged; legacy `ADMIN` remains only Manager-compatible.
+Staff, foreign, unaffiliated and Platform-only actors are denied structure/commercial writes before
+entity facts. Mini App actor is the authenticated session subject and source is `VENUE_MINI_APP`.
+Telegram actor is the current user, must equal persisted dialog owner for dialog continuations, and
+source is `TELEGRAM_BOT`. Routes/router append no duplicate audit.
 
-Explicit exclusions: media/R2, images/files/PDF, promotions, cart recovery hardening, modifier-domain
-work, new product UI/features, audit viewer, membership-revoke linearization, force-close/session,
-Notification Consent, migrations and schema redesign.
+Payloads contain only allowlisted ids/source, authoritative finite old/new type or price/currency
+values, and bounded reorder counts/hashes. Names, raw requests/initData/Telegram data, media,
+option/promotion/cart/order contents, secrets, PII and full reorder arrays are excluded. Current
+Guest menu/new orders use current values; historical name/price snapshots remain immutable.
+Pricing, currency/minor units, promotion, stale-cart/idempotency, DTO/status and UX semantics did
+not change.
 
-## 7. Next action and constraints
+## 5. Local evidence
 
-Start the single closure epic only after re-verifying the inventory against current code. Keep already
-closed families closed. Require focused repository/routes/Telegram/PostgreSQL tests, existing exact CI
-selectors/XML, compile, ktlint, Mini App build/e2e and `git diff --check`; then one consolidated manual
-smoke for category/item mutations, Telegram parity, Staff denial, audit cardinality/privacy, Guest
-reload/current price, historical snapshot and cleanup.
+Green XML records repository `51/0/0/0`, Mini App routes `43/0/0/0`, Telegram `549/0/0/0`, Guest
+order/history `61/0/0/0` and real Testcontainers PostgreSQL menu concurrency `40/0/0/0`. The exact
+route/security selector passed `1164/0/0/0`; the exact five-suite PostgreSQL selector passed
+`73/0/0/0` with minimum vector `8 / 14 / 2 / 40 / 9`. The menu matrix contains all ten required
+management schedules with independent connections/PIDs, deterministic latches and observed
+`pg_blocking_pids`/`pg_locks` evidence.
 
-No runtime, tests, CI workflow, migration, stash or `scripts/dev/` change was made in this handoff.
-Do not stage, commit, push or deploy from this docs-only task.
+Standalone `compileKotlin`, `ktlintCheck`, Mini App production build and full Playwright smoke
+`169/169` passed. Existing CI minima have been raised to Guest `61`, repository `51`, routes `43`,
+Telegram `549` and menu PostgreSQL `40`; missing/zero/below-minimum/skipped/failing XML still fails
+the existing mandatory gates. Final `git diff --check` and status are the handoff-only checks.
+
+## 6. Release and schema verdict
+
+**NO_MIGRATION_EXPECTED**. No new workflow, schema, unique constraint, ordering engine, API or
+product feature was added. Independent review, green GitHub Actions, staging deploy and bounded
+manual smoke are still required before release; local evidence must not be described as production
+readiness.
+
+## 7. Worktree constraints
+
+Do not stage, commit, push, deploy or apply/read/change stash in this task. The pre-existing
+untracked `scripts/dev/` area remains untouched and must not be staged. Final handoff must include
+the exact validation results, remaining release gates and `git status --short`.

@@ -136,11 +136,11 @@ jobs:
               "com.hookah.platform.backend.telegram.TelegramKeyboardsTest",
           ]
           required_minimums = {
-              "com.hookah.platform.backend.miniapp.guest.GuestOrderRoutesTest": 59,
+              "com.hookah.platform.backend.miniapp.guest.GuestOrderRoutesTest": 61,
               "com.hookah.platform.backend.telegram.db.GuestOrderIdempotencyFingerprintTest": 7,
-              "com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepositoryTest": 44,
-              "com.hookah.platform.backend.miniapp.venue.VenueMenuRoutesTest": 40,
-              "com.hookah.platform.backend.telegram.TelegramBotRouterTableTokenTest": 542,
+              "com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepositoryTest": 51,
+              "com.hookah.platform.backend.miniapp.venue.VenueMenuRoutesTest": 43,
+              "com.hookah.platform.backend.telegram.TelegramBotRouterTableTokenTest": 549,
           }
           totals = {key: 0 for key in ("tests", "skipped", "failures", "errors")}
           problems = []
@@ -216,12 +216,12 @@ jobs:
                   2,
               ),
               (
-                  "menu option and item create mutation concurrency",
+                  "menu management mutation concurrency",
                   report_dir / (
                       "TEST-com.hookah.platform.backend.miniapp.venue.menu."
                       "VenueMenuOptionNormalizationConcurrencyPostgresTest.xml"
                   ),
-                  31,
+                  40,
               ),
               (
                   "guest order idempotency concurrency",

@@ -19,6 +19,9 @@ import com.hookah.platform.backend.miniapp.guest.db.GuestOrderContextCheckpoint
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
+import com.hookah.platform.backend.miniapp.venue.menu.MENU_ITEM_PRICE_CHANGED_AUDIT_ACTION
+import com.hookah.platform.backend.miniapp.venue.menu.MENU_ITEM_RENAMED_AUDIT_ACTION
+import com.hookah.platform.backend.miniapp.venue.menu.MenuItemAvailabilitySource
 import com.hookah.platform.backend.miniapp.venue.menu.MenuOptionDeleteSource
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepository
 import com.hookah.platform.backend.miniapp.venue.orders.OrderWorkflowStatus
@@ -3171,7 +3174,7 @@ class GuestOrderRoutesTest {
         }
 
     @Test
-    fun `idempotent replay keeps pricing snapshots after menu edit and availability change`() =
+    fun `audited menu rename and price use current values while prior order snapshots stay immutable`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("guest-order-promo-mixed-replay-snapshot")
             val config = buildConfig(jdbcUrl)
@@ -3239,9 +3242,71 @@ class GuestOrderRoutesTest {
             assertEquals(1_000L, submitted.pricing.promoDiscountTotalMinor)
             assertEquals(2_200L, submitted.pricing.finalPayableTotalMinor)
 
-            updateMenuItemNameAndPrice(jdbcUrl, promotedItemId, "Новый кальян", 9_000L)
-            updateMenuItemNameAndPrice(jdbcUrl, regularItemId, "Новый чай", 8_000L)
+            val menuRepository = VenueMenuRepository(h2DataSource(jdbcUrl))
+            assertNotNull(
+                menuRepository.updateItem(
+                    venueId = venueId,
+                    itemId = promotedItemId,
+                    categoryId = null,
+                    name = "Новый кальян",
+                    priceMinor = 9_000L,
+                    currency = null,
+                    isAvailable = null,
+                    actorUserId = TELEGRAM_USER_ID,
+                    source = MenuItemAvailabilitySource.VENUE_MINI_APP,
+                ),
+            )
+            assertNotNull(
+                menuRepository.updateItem(
+                    venueId = venueId,
+                    itemId = regularItemId,
+                    categoryId = null,
+                    name = "Новый чай",
+                    priceMinor = 8_000L,
+                    currency = null,
+                    isAvailable = null,
+                    actorUserId = TELEGRAM_USER_ID,
+                    source = MenuItemAvailabilitySource.VENUE_MINI_APP,
+                ),
+            )
+            assertEquals(2, countAuditActions(jdbcUrl, MENU_ITEM_RENAMED_AUDIT_ACTION))
+            assertEquals(2, countAuditActions(jdbcUrl, MENU_ITEM_PRICE_CHANGED_AUDIT_ACTION))
+            assertEquals(4, countRows(jdbcUrl, "audit_log"))
             setMenuItemAvailability(jdbcUrl, promotedItemId, isAvailable = false)
+
+            val currentMenuResponse =
+                client.get("/api/guest/venue/$venueId/menu") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.OK, currentMenuResponse.status)
+            val currentMenuItem =
+                json.decodeFromString(MenuResponse.serializer(), currentMenuResponse.bodyAsText())
+                    .categories
+                    .flatMap { it.items }
+                    .single { it.id == regularItemId }
+            assertEquals("Новый чай", currentMenuItem.name)
+            assertEquals(8_000L, currentMenuItem.priceMinor)
+            assertEquals("RUB", currentMenuItem.currency)
+
+            val currentRequest =
+                request.copy(
+                    idempotencyKey = "idem-promo-mixed-current",
+                    items = listOf(AddBatchItemDto(itemId = regularItemId, qty = 1)),
+                )
+            val currentResponse =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(json.encodeToString(AddBatchRequest.serializer(), currentRequest))
+                }
+            assertEquals(HttpStatusCode.OK, currentResponse.status)
+            val currentSubmit = json.decodeFromString(AddBatchResponse.serializer(), currentResponse.bodyAsText())
+            val currentPricingItem = currentSubmit.pricing.items.single()
+            assertEquals("Новый чай", currentPricingItem.name)
+            assertEquals(8_000L, currentPricingItem.baseUnitPriceMinor)
+            assertEquals(8_000L, currentPricingItem.priceMinor)
+            assertEquals(0L, currentSubmit.pricing.promoDiscountTotalMinor)
+            assertEquals(8_000L, currentSubmit.pricing.finalPayableTotalMinor)
 
             val replayResponse =
                 client.post("/api/guest/order/add-batch") {
@@ -3259,7 +3324,37 @@ class GuestOrderRoutesTest {
                 replay.pricing.items.map { it.name },
             )
             assertEquals(listOf(2_000L, 1_200L), replay.pricing.items.map { it.baseUnitPriceMinor })
-            assertEquals(1, countRows(jdbcUrl, "order_batches"))
+
+            val activeResponse =
+                client.get(
+                    "/api/guest/order/active?tableToken=promo-mixed-replay-token" +
+                        "&tableSessionId=$tableSessionId&tabId=$personalTabId",
+                ) {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.OK, activeResponse.status)
+            val activeOrder =
+                assertNotNull(
+                    json.decodeFromString(ActiveOrderResponse.serializer(), activeResponse.bodyAsText()).order,
+                )
+            val historicalItems =
+                activeOrder.batches
+                    .single { it.batchId == submitted.batchId }
+                    .items
+                    .associateBy { it.itemId }
+            assertEquals("Акционный кальян", historicalItems.getValue(promotedItemId).name)
+            assertEquals(2_000L, historicalItems.getValue(promotedItemId).priceMinor)
+            assertEquals("Обычный чай", historicalItems.getValue(regularItemId).name)
+            assertEquals(1_200L, historicalItems.getValue(regularItemId).priceMinor)
+            val currentOrderItem =
+                activeOrder.batches
+                    .single { it.batchId == currentSubmit.batchId }
+                    .items
+                    .single()
+            assertEquals("Новый чай", currentOrderItem.name)
+            assertEquals(8_000L, currentOrderItem.priceMinor)
+
+            assertEquals(2, countRows(jdbcUrl, "order_batches"))
             assertEquals(1, countPromotionApplications(jdbcUrl))
             assertEquals(1, countPromotionAdjustments(jdbcUrl))
         }
@@ -6854,25 +6949,6 @@ class GuestOrderRoutesTest {
         }
     }
 
-    private fun updateMenuItemNameAndPrice(
-        jdbcUrl: String,
-        itemId: Long,
-        name: String,
-        priceMinor: Long,
-    ) {
-        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
-            connection
-                .prepareStatement(
-                    "UPDATE menu_items SET name = ?, price_minor = ? WHERE id = ?",
-                ).use { statement ->
-                    statement.setString(1, name)
-                    statement.setLong(2, priceMinor)
-                    statement.setLong(3, itemId)
-                    statement.executeUpdate()
-                }
-        }
-    }
-
     private fun replacePromotionWindows(
         jdbcUrl: String,
         ruleId: Long,
@@ -7507,6 +7583,20 @@ class GuestOrderRoutesTest {
     ): Int =
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             connection.prepareStatement("SELECT COUNT(*) FROM $tableName").use { statement ->
+                statement.executeQuery().use { rs ->
+                    rs.next()
+                    rs.getInt(1)
+                }
+            }
+        }
+
+    private fun countAuditActions(
+        jdbcUrl: String,
+        action: String,
+    ): Int =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement("SELECT COUNT(*) FROM audit_log WHERE action = ?").use { statement ->
+                statement.setString(1, action)
                 statement.executeQuery().use { rs ->
                     rs.next()
                     rs.getInt(1)
