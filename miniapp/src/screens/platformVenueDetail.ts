@@ -37,6 +37,7 @@ export type PlatformVenueDetailOptions = {
   backendUrl: string
   isDebug: boolean
   venueId: number
+  focusHeadingOnLoad?: boolean
 }
 
 type DetailRefs = {
@@ -114,6 +115,9 @@ function buildDetailDom(root: HTMLDivElement): DetailRefs {
 
   const summaryCard = el('div', { className: 'card' })
   const summaryTitle = el('h2', { text: 'Заведение' })
+  summaryTitle.id = 'platform-venue-detail-heading'
+  summaryTitle.dataset.platformVenueDetailHeading = 'true'
+  summaryTitle.tabIndex = -1
   const summaryInfo = el('div', { className: 'venue-summary' })
   const ownersTitle = el('h3', { text: 'Владельцы' })
   const ownersList = el('div', { className: 'venue-staff-list' })
@@ -590,7 +594,7 @@ function renderScheduleRow(
 }
 
 export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOptions) {
-  const { root, backendUrl, isDebug, venueId } = options
+  const { root, backendUrl, isDebug, venueId, focusHeadingOnLoad = false } = options
   if (!root) return () => undefined
   const refs = buildDetailDom(root)
   const deps = buildApiDeps(isDebug)
@@ -618,6 +622,19 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
   let isMarkingInvoicePaid = false
   let isInviting = false
   let isRevokingOwner = false
+  let headingFocusFrame: number | null = null
+  let headingFocused = false
+
+  const focusHeadingAfterRender = () => {
+    if (!focusHeadingOnLoad || headingFocused || disposed) return
+    if (headingFocusFrame != null) window.cancelAnimationFrame(headingFocusFrame)
+    headingFocusFrame = window.requestAnimationFrame(() => {
+      headingFocusFrame = null
+      if (disposed || headingFocused || !refs.summaryTitle.isConnected) return
+      headingFocused = true
+      refs.summaryTitle.focus({ preventScroll: true })
+    })
+  }
 
   const setStatus = (text: string) => {
     refs.status.textContent = text
@@ -904,6 +921,7 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
     }
     currentVenue = result.data
     renderSummary()
+    focusHeadingAfterRender()
     renderStatusButtons()
     updateActionButtons()
     setStatus('')
@@ -1343,6 +1361,8 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
 
   return () => {
     disposed = true
+    if (headingFocusFrame != null) window.cancelAnimationFrame(headingFocusFrame)
+    headingFocusFrame = null
     venueAbort?.abort()
     subscriptionAbort?.abort()
     billingAbort?.abort()

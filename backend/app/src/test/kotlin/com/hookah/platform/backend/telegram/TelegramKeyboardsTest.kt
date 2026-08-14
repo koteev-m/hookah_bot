@@ -19,6 +19,7 @@ class TelegramKeyboardsTest {
                 listOf("📨 Заявки на подключение", "🏢 Кальянные"),
                 listOf("👤 Клиенты / Лимиты"),
                 listOf("📣 Продвижение"),
+                listOf("🤝 Добавить свою кальянную"),
             ),
             rows,
         )
@@ -384,6 +385,7 @@ class TelegramKeyboardsTest {
                 listOf("🧾 Заказы", "🛎 Вызовы"),
                 listOf("📄 Брони"),
                 listOf("🔄 Сменить заведение"),
+                listOf("🤝 Добавить свою кальянную"),
             ),
             rows,
         )
@@ -424,6 +426,7 @@ class TelegramKeyboardsTest {
                 listOf("💬 Чат персонала", "👥 Персонал"),
                 listOf("📣 Продвижение"),
                 listOf("🔄 Сменить заведение"),
+                listOf("🤝 Добавить свою кальянную"),
             ),
             rows,
         )
@@ -482,6 +485,7 @@ class TelegramKeyboardsTest {
             listOf(
                 listOf("🏢 Мои заведения", "📊 Статистика заведений"),
                 listOf("🍽 Каталог кальянных", "👤 Мой профиль"),
+                listOf("🤝 Добавить свою кальянную"),
             ),
             rows,
         )
@@ -512,7 +516,7 @@ class TelegramKeyboardsTest {
     fun `owner venue quota actions render create when capacity remains`() {
         val buttons = TelegramKeyboards.inlineOwnerVenueQuotaActions(canCreateVenue = true).inlineKeyboard.flatten()
 
-        assertEquals("➕ Создать новое заведение", buttons[0].text)
+        assertEquals("🤝 Подать заявку на заведение", buttons[0].text)
         assertEquals("owner_quota_create_start", buttons[0].callbackData)
         assertEquals("↩️ Назад", buttons[1].text)
         assertEquals("staff_venue_menu_back", buttons[1].callbackData)
@@ -522,10 +526,12 @@ class TelegramKeyboardsTest {
     fun `owner venue quota actions render limit request when quota is exhausted`() {
         val buttons = TelegramKeyboards.inlineOwnerVenueQuotaActions(canCreateVenue = false).inlineKeyboard.flatten()
 
-        assertEquals("📩 Запросить ещё заведение", buttons[0].text)
-        assertEquals("owner_quota_request_start", buttons[0].callbackData)
-        assertEquals("↩️ Назад", buttons[1].text)
-        assertEquals("staff_venue_menu_back", buttons[1].callbackData)
+        assertEquals("🤝 Подать заявку на заведение", buttons[0].text)
+        assertEquals("owner_quota_create_start", buttons[0].callbackData)
+        assertEquals("📩 Запросить ещё заведение", buttons[1].text)
+        assertEquals("owner_quota_request_start", buttons[1].callbackData)
+        assertEquals("↩️ Назад", buttons[2].text)
+        assertEquals("staff_venue_menu_back", buttons[2].callbackData)
     }
 
     @Test
@@ -538,14 +544,14 @@ class TelegramKeyboardsTest {
 
         assertEquals("✅ Mix · Черновик", buttons[0].text)
         assertEquals("owner_venue_select:10", buttons[0].callbackData)
-        assertEquals("➕ Создать новое заведение", buttons[1].text)
+        assertEquals("🤝 Подать заявку на заведение", buttons[1].text)
         assertEquals("owner_quota_create_start", buttons[1].callbackData)
         assertEquals("📩 Запросить увеличение лимита", buttons[2].text)
         assertEquals("owner_quota_request_start", buttons[2].callbackData)
     }
 
     @Test
-    fun `owner venues dashboard actions hide create when quota is exhausted but keep request`() {
+    fun `owner venues dashboard actions keep application when quota is exhausted`() {
         val buttons =
             TelegramKeyboards.inlineOwnerVenuesDashboardActions(
                 venues = listOf(10L to "Mix · Черновик"),
@@ -554,9 +560,10 @@ class TelegramKeyboardsTest {
 
         assertEquals("Mix · Черновик", buttons[0].text)
         assertEquals("owner_venue_select:10", buttons[0].callbackData)
-        assertEquals("📩 Запросить увеличение лимита", buttons[1].text)
-        assertEquals("owner_quota_request_start", buttons[1].callbackData)
-        assertFalse(buttons.any { it.callbackData == "owner_quota_create_start" })
+        assertEquals("🤝 Подать заявку на заведение", buttons[1].text)
+        assertEquals("owner_quota_create_start", buttons[1].callbackData)
+        assertEquals("📩 Запросить увеличение лимита", buttons[2].text)
+        assertEquals("owner_quota_request_start", buttons[2].callbackData)
     }
 
     @Test
@@ -2291,20 +2298,20 @@ class TelegramKeyboardsTest {
 
     @Test
     fun `venue owner onboarding entry uses bot flow and configured mini app link`() {
-        val markup = TelegramKeyboards.inlineVenueOwnerOnboardingEntry("https://mini.app")
+        val markup = TelegramKeyboards.inlineVenueOwnerOnboardingEntry("https://mini.app", venueId = 9001L)
         val buttons = markup.inlineKeyboard.flatten()
 
         assertEquals("💬 Настраивать в боте", buttons[0].text)
-        assertEquals("owner_venue_onboarding_entry", buttons[0].callbackData)
+        assertEquals("owner_venue_onboarding_entry:9001", buttons[0].callbackData)
         assertEquals(null, buttons[0].webApp)
         assertEquals("📱 Открыть Mini App", buttons[1].text)
         assertEquals(null, buttons[1].callbackData)
-        assertEquals("https://mini.app?mode=venue", buttons[1].webApp?.url)
+        assertEquals("https://mini.app?mode=venue&venueId=9001", buttons[1].webApp?.url)
     }
 
     @Test
     fun `venue owner onboarding entry reports missing mini app config without soon copy`() {
-        val markup = TelegramKeyboards.inlineVenueOwnerOnboardingEntry(null)
+        val markup = TelegramKeyboards.inlineVenueOwnerOnboardingEntry(null, venueId = 9001L)
         val buttons = markup.inlineKeyboard.flatten()
 
         assertEquals("📱 Mini App не настроен", buttons[1].text)

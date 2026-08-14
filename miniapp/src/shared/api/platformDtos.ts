@@ -17,9 +17,11 @@ export type PlatformUserListResponse = {
 export type PlatformVenueSummaryDto = {
   id: number
   name: string
+  city?: string | null
   status: string
   createdAt: string
   ownersCount: number
+  owners: PlatformVenueOwnerDto[]
   subscriptionSummary: PlatformSubscriptionSummaryDto | null
 }
 
@@ -146,4 +148,80 @@ export type PlatformOwnerInviteResponse = {
   instructions: string
   copyText: string
   deepLink?: string | null
+}
+
+export type PlatformOnboardingRequestStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED'
+
+export type PlatformOnboardingApplicantDto = {
+  userId: number
+  username?: string | null
+  firstName?: string | null
+  lastName?: string | null
+}
+
+export type PlatformOnboardingRequestDto = {
+  id: number
+  applicant: PlatformOnboardingApplicantDto
+  venueName: string
+  city: string
+  contact: string
+  comment?: string | null
+  status: PlatformOnboardingRequestStatus
+  createdAt: string
+  linkedVenueId?: number | null
+  trialConfigured: boolean
+  trialEndsOn?: string | null
+  currentPriceRub?: number | null
+  futurePriceRub?: number | null
+  futurePriceEffectiveOn?: string | null
+  commercialNote?: string | null
+}
+
+export type PlatformOnboardingRequestListResponse = {
+  requests: PlatformOnboardingRequestDto[]
+}
+
+export type PlatformOnboardingRequestResponse = {
+  request: PlatformOnboardingRequestDto
+}
+
+export type PlatformOnboardingTermsRequest = {
+  trialConfigured: boolean
+  trialEndsOn?: string | null
+  currentPriceRub: number
+  futurePriceRub?: number | null
+  futurePriceEffectiveOn?: string | null
+  commercialNote?: string | null
+}
+
+export type PlatformOnboardingCreateLinkResponse = {
+  request: PlatformOnboardingRequestDto
+  venueId: number
+  created: boolean
+}
+
+export type PlatformOperationalOwnerDto = {
+  userId: number
+  username?: string | null
+  firstName?: string | null
+  lastName?: string | null
+  venueCount: number
+  venueStatusCounts: Record<string, number>
+}
+
+export type PlatformOperationalOwnerVenueDto = {
+  id: number
+  name: string
+  city?: string | null
+  status: string
+  createdAt: string
+}
+
+export type PlatformOperationalOwnerListResponse = {
+  owners: PlatformOperationalOwnerDto[]
+}
+
+export type PlatformOperationalOwnerResponse = {
+  owner: PlatformOperationalOwnerDto
+  venues: PlatformOperationalOwnerVenueDto[]
 }

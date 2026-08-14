@@ -1,6 +1,6 @@
 # Platform Cockpit Model
 
-Дата актуализации: 2026-08-13.
+Дата актуализации: 2026-08-14.
 
 Статус: **current product reference** for Platform Mode. Platform guest QR status is **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / DONE / MVP / STAGING-SMOKE-PASSED**, schema verdict `NO_MIGRATION`; commit/push, green Actions for the release HEAD, staging deploy and the bounded real Telegram smoke are complete. This does not make the whole product production-ready or close broader Platform/Guest parity. Use this document together with `docs/UPDATED_PRODUCT_AI_ROADMAP.md`, `docs/COMMUNICATION_MODEL.md`, `docs/SECURITY_RBAC_MATRIX.md` and `docs/ANALYTICS_EVENTS.md` before opening new Platform, billing, support or analytics tasks.
 
@@ -136,49 +136,84 @@ Safety rules:
 
 ## Platform & Venue Onboarding / Ownership Cockpit
 
-Read-only runtime inventory verdict: **IMPLEMENT_PLATFORM_ONBOARDING_OWNERSHIP_COCKPIT_NEXT**.
+Status: **MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. This is not release-closed until green
+Actions, staging deploy and consolidated smoke.
 
-### Exact current behavior
+### Implemented behavior
 
-Venue Owner currently submits the first or an additional venue request only in Telegram through
-`🤝 Добавить свою кальянную`. The dialog stores only the current domain fields: venue name, city,
-contact and optional comment. The applicant can view the active request, edit/cancel `PENDING`, or
-close `APPROVED` while it remains unlinked. The state model is exactly `PENDING`, `APPROVED`,
-`REJECTED`, `CANCELLED`; `NEEDS_INFO` does not exist. A normal repeated flow checks
-`findActiveUnlinkedByUser` before insert and shows an existing pending or approved-unlinked request,
-but the check and insert have no database uniqueness guard for a simultaneous double submit.
+An authenticated Telegram user can submit a first or additional venue, including when they have no
+active OWNER membership. An existing active operational Owner can also submit an additional venue
+from Venue Mini App. Both adapters use one shared onboarding service and repository writer; the
+applicant and source are server-derived. Manager, Staff, foreign and Platform-only identities have
+no Venue Mini App application authority.
 
-Venue Mini App has no request API, `Мои заведения` workspace or `Добавить заведение`. Its
-`/api/venue/me` response already returns every active membership, and the current header selector
-uses that authoritative set; it is visible for multiple venues and persists the selected `venueId`.
-Approval alone remains non-seeding and does not create/link a venue. After the separate Platform
-create-new-DRAFT-and-link flow grants OWNER membership, the venue becomes available on the next `/api/venue/me`
-load and therefore appears in the existing selector. Shared initial menu bootstrap is independent
-of whether the first qualifying management entry is Mini App or Telegram.
+The application stores only venue name, city, contact and optional comment and remains one of exactly
+`PENDING`, `APPROVED`, `REJECTED`, `CANCELLED`. Applicant-row locking serializes simultaneous
+cross-surface submit. The writer compares the server-side canonical tuple of normalized venue name,
+city, contact and optional comment against every `PENDING` and `APPROVED`-unlinked row. An exact retry
+returns the authoritative existing request with no insert/audit; a distinct tuple creates a separate
+`PENDING` request and one submit audit. `REJECTED` and `CANCELLED` rows do not block a new application.
 
-Platform Mini App already has a venue-centric list, direct `DRAFT` venue create and existing venue
-detail. Detail returns every active OWNER membership and supports user search, OWNER assignment,
-invite and last-owner-safe revoke. Backend venue summaries contain name, city, status, owner count
-and subscription summary; current TypeScript/list UI omits city and shows only the count, not owner
-names. Current top-level routing is venues plus separate create, informational onboarding,
-placements, support and analytics screens. There is no connection-request API/UI, owners list,
-owner detail or owner drill-down.
+Venue Mini App exposes `Мои заведения`, authoritative OWNER cards and own application history plus
+submit/edit/cancel. Manager/Staff and unaffiliated/Platform-only actors are denied. Approval alone
+remains non-seeding and creates no access. After successful create/link, the next authoritative
+`/api/venue/me` reload adds the membership/card/selector option; the venue is not auto-selected.
 
-Telegram Platform Mode provides connection requests and `Кальянные`; the displayed owner-related
-section is `Клиенты / Лимиты`, while `Владельцы` is still accepted as an alias. It is a commercial
-quota/account flow, not a general membership-based owner workspace. Approve changes only request
-status. Commercial terms and create/link are separate; current creation may leave a DRAFT venue for
-manual recovery if later OWNER assignment, subscription application or request linking fails.
+Platform Mini App exposes `Заявки`, `Кальянные`, `Владельцы`. Requests support safe list/detail,
+approve/reject/close, commercial terms and create/link; venue rows include city and every safe active
+OWNER identity; owners are aggregated from operational memberships with portfolio drill-down. The
+existing direct Platform ownerless `DRAFT` tool and existing detail/invite/revoke/lifecycle surfaces
+remain available.
 
-### Bounded target contract
+Telegram and both Mini App adapters call the same writer/orchestrator. Platform create/link locks the
+applicant, request and commercial account in a fixed order, checks quota only at this boundary and
+commits the `DRAFT`, OWNER membership, commercial settings, request link and safe audits together.
+Failure rolls the whole transaction back; lost-response/concurrent retry returns the linked venue.
+For a first applicant without a commercial account, create/link preserves the former authoritative
+connection-request semantics: create the account with the existing default limit of one and apply
+the already-recorded terms; it does not invent a new default quota or account policy.
+`owner_quota_create_start` and persisted legacy direct-create dialogs only enter the application
+flow and perform no direct venue/member/link/selection writes.
+
+### Independent review closure evidence
+
+Five bounded review findings are locally closed without changing the epic stage or product scope:
+
+- `ONBOARDING-CANON-UNICODE-001`: the production tuple applies Unicode NFKC, collapses the full
+  Unicode `White_Space` class, trims, lowercases with `Locale.ROOT` and maps a whitespace-only
+  optional comment to `null`. Repository and PostgreSQL tests prove Unicode-equivalent retries keep
+  one physical request and one submit audit, while a real non-whitespace difference creates another.
+- `ONBOARDING-VENUE-ROUTE-COVERAGE-001`: production-module Venue route tests separately prove exact
+  retry, a distinct second application in the own list, server-owned applicant/actor/source/entry
+  policy/link authority despite spoof-like extra fields, safe `503 DATABASE_UNAVAILABLE` rollback,
+  and the exact `APPROVED`-unlinked retry response with no second `PENDING` row.
+- `ONBOARDING-PG-FIRST-APPLICANT-001`: a users-only PostgreSQL fixture starts with zero owner account,
+  venue, membership, subscription, request link, selected venue and menu category. Concurrent
+  create/link produces exactly one default commercial account with `allowedVenuesCount=1`, one
+  linked `DRAFT`, OWNER membership, settings and subscription; retry returns the same authority,
+  while selected context and menu categories remain absent.
+- `ONBOARDING-A11Y-CREATE-LINK-FOCUS-001`: successful create/link and linked retry wait for the
+  authoritative venue detail and focus its stable `h2`; disposed or replaced screens cannot reclaim
+  focus.
+- `ONBOARDING-OWNER-PLURAL-001`: owner list and detail use one Russian venue-count helper, with
+  focused assertions for `1`, `2`, `5`, `11`, `21`, `22` and `25`.
+
+Measured local backend evidence is repository `13`, Venue routes `8`, Platform routes `15`, Telegram
+`18 / 552 / 169`, and PostgreSQL onboarding concurrency `7`. The exact route/security aggregate is
+`1247`; the mandatory PostgreSQL vector is `8 / 14 / 2 / 44 / 9 / 7` (`84` total). Focused Mini App
+assertions cover focus restoration and pluralization. Green Actions, staging deploy and consolidated
+release smoke remain required before release closure.
+
+### Canonical contract
 
 Venue Owner Mini App receives `Мои заведения`: current venue cards, entry to the existing selector,
 `Добавить заведение`, own request list/detail and submission/edit/cancel through the same domain
 contract as Telegram. Expose only the actual four states and explain approved-but-unlinked state.
-Sequential repeat returns the active request rather than creating another; implementation must also
-serialize or safely conflict a simultaneous duplicate without relying on the client. After linking,
-the next authoritative access refresh adds the venue card and selector option. Telegram remains a
-supported adapter of the same backend service.
+Exact canonical repeat returns the matching authoritative request; a different venue name, city,
+contact or comment creates another application. Implementation serializes simultaneous exact and
+distinct submissions without relying on the client. After linking, the next authoritative access
+refresh adds the venue card and selector option. Telegram remains the acquisition adapter for first
+applicants and also supports additional venues.
 
 Platform Mini App receives one top-level onboarding/ownership workspace with:
 
@@ -216,8 +251,10 @@ and multiple venues per owner are valid and must be displayed without choosing a
 operational primary membership. The Telegram minimum-user-id quota lookup is only a current
 heuristic and must not become API or UI semantics.
 
-Venue Owner reads only own memberships and requests; Manager/Staff receive no application
-authority. Platform Owner reads all venues, owners and requests. Actor comes from validated server
+An authenticated Telegram applicant reads and mutates only their own request; active Venue Owner
+Mini App users read and mutate only their own requests. Manager/Staff receive no Venue Mini App
+application authority, but keep the ordinary authenticated Telegram acquisition entry. Platform
+Owner reads all venues, owners and requests. Actor comes from validated server
 session/current Telegram user; owner user id, request owner, linked venue and audit actor/source are
 never client-controlled. Applicant contact/comment stays visible only to that applicant and exact
 Platform Owner scope. Platform owner identity may use current allowlisted display name/username and
@@ -267,8 +304,8 @@ Use this as the Platform-specific part of release smoke:
 
 ## Open Platform Gaps
 
-- `PLATFORM & VENUE ONBOARDING / OWNERSHIP COCKPIT` is the next bounded epic: both Mini Apps lack
-  the shared request workspace and Platform Mode lacks an owner-centric workspace.
+- `PLATFORM & VENUE ONBOARDING / OWNERSHIP COCKPIT` is locally implemented; green Actions, staging
+  deploy and consolidated release smoke remain open before release closure.
 - Placements cockpit is future/partial.
 - Paid placement/promotion boosting is future and must follow `docs/GROWTH_RETENTION.md`: visible ad labels, moderation, billing and analytics are required before launch.
 - Platform analytics dashboard is future.

@@ -129,14 +129,11 @@ import com.hookah.platform.backend.platform.PlatformVenueRepository
 import com.hookah.platform.backend.platform.PlatformVenueSummary
 import com.hookah.platform.backend.platform.VenueOwnerAccount
 import com.hookah.platform.backend.platform.VenueOwnerAccountRepository
-import com.hookah.platform.backend.platform.VenueOwnerAccountVenue
 import com.hookah.platform.backend.platform.VenueOwnerLimitRequest
 import com.hookah.platform.backend.platform.VenueOwnerLimitRequestDecisionResult
 import com.hookah.platform.backend.platform.VenueOwnerLimitRequestOwner
 import com.hookah.platform.backend.platform.VenueOwnerLimitRequestSummary
-import com.hookah.platform.backend.platform.VenueOwnerQuotaCheckResult
 import com.hookah.platform.backend.platform.VenueOwnerQuotaSummary
-import com.hookah.platform.backend.platform.VenueOwnerVenueCreationResult
 import com.hookah.platform.backend.platform.VenueStatusAction
 import com.hookah.platform.backend.platform.VenueStatusChangeResult
 import com.hookah.platform.backend.promotions.GiftDecisionCommand
@@ -216,11 +213,13 @@ import com.hookah.platform.backend.telegram.db.VenueBookingHours
 import com.hookah.platform.backend.telegram.db.VenueBookingHoursRepository
 import com.hookah.platform.backend.telegram.db.VenueConnectionRequestRecord
 import com.hookah.platform.backend.telegram.db.VenueConnectionRequestRepository
+import com.hookah.platform.backend.telegram.db.VenueConnectionRequestSubmitResult
 import com.hookah.platform.backend.telegram.db.VenueInfoSection
 import com.hookah.platform.backend.telegram.db.VenueInfoSectionMediaAttachment
 import com.hookah.platform.backend.telegram.db.VenueInfoSectionMediaRepository
 import com.hookah.platform.backend.telegram.db.VenueInfoSectionsRepository
 import com.hookah.platform.backend.telegram.db.VenueMenuSectionImagesRepository
+import com.hookah.platform.backend.telegram.db.VenueOnboardingSource
 import com.hookah.platform.backend.telegram.db.VenuePromotion
 import com.hookah.platform.backend.telegram.db.VenuePromotionLifecycleMutation
 import com.hookah.platform.backend.telegram.db.VenuePromotionLifecycleOutcome
@@ -7059,6 +7058,7 @@ class TelegramBotRouterTableTokenTest {
                             listOf(
                                 listOf("🏢 Мои заведения", "📊 Статистика заведений"),
                                 listOf("🍽 Каталог кальянных", "👤 Мой профиль"),
+                                listOf("🤝 Добавить свою кальянную"),
                             )
                     },
                 )
@@ -7143,6 +7143,7 @@ class TelegramBotRouterTableTokenTest {
                             listOf(
                                 listOf("🏢 Мои заведения", "📊 Статистика заведений"),
                                 listOf("🍽 Каталог кальянных", "👤 Мой профиль"),
+                                listOf("🤝 Добавить свою кальянную"),
                             )
                     },
                 )
@@ -7726,34 +7727,10 @@ class TelegramBotRouterTableTokenTest {
                     VenueAccessRepository.VenueMembership(venueId = 11L, role = "OWNER"),
                 )
             coEvery { venueContextRepository.getSelectedVenue(100, 200L) } returns 11L
-            coEvery { venueOwnerAccountRepository.getOrCreateForOwner(200L, 1, 200L) } returns
-                VenueOwnerAccount(
-                    id = 901L,
-                    primaryOwnerUserId = 200L,
-                    allowedVenuesCount = 2,
-                    notes = null,
-                    commercialNote = null,
-                    createdAt = Instant.EPOCH,
-                    updatedAt = Instant.EPOCH,
-                    updatedByUserId = 200L,
-                )
-            coEvery { venueOwnerAccountRepository.listVenuesByOwnerAccount(901L) } returns
-                listOf(
-                    VenueOwnerAccountVenue(
-                        id = 10L,
-                        name = "Mix",
-                        city = "Москва",
-                        status = "DRAFT",
-                        createdAt = Instant.EPOCH,
-                    ),
-                    VenueOwnerAccountVenue(
-                        id = 11L,
-                        name = "Особняк",
-                        city = "Москва",
-                        status = "PUBLISHED",
-                        createdAt = Instant.EPOCH,
-                    ),
-                )
+            coEvery { platformVenueRepository.getVenueDetail(10L) } returns
+                platformGuestQrVenue(venueId = 10L, venueName = "Mix", status = VenueStatus.DRAFT)
+            coEvery { platformVenueRepository.getVenueDetail(11L) } returns
+                platformGuestQrVenue(venueId = 11L, venueName = "Особняк", status = VenueStatus.PUBLISHED)
 
             router.process(
                 TelegramUpdate(
@@ -7847,6 +7824,7 @@ class TelegramBotRouterTableTokenTest {
                             listOf(
                                 listOf("🏢 Мои заведения", "📊 Статистика заведений"),
                                 listOf("🍽 Каталог кальянных", "👤 Мой профиль"),
+                                listOf("🤝 Добавить свою кальянную"),
                             )
                     },
                 )
@@ -7894,6 +7872,7 @@ class TelegramBotRouterTableTokenTest {
                             listOf(
                                 listOf("🏢 Мои заведения", "📊 Статистика заведений"),
                                 listOf("🍽 Каталог кальянных", "👤 Мой профиль"),
+                                listOf("🤝 Добавить свою кальянную"),
                             )
                     },
                 )
@@ -7915,27 +7894,22 @@ class TelegramBotRouterTableTokenTest {
                     updatedByUserId = null,
                 )
             val summary = VenueOwnerQuotaSummary(account, usedVenuesCount = 1, availableVenuesCount = 1)
-            coEvery { venueAccessRepository.listVenueMemberships(200L) } returns
-                listOf(VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER"))
             coEvery { venueOwnerAccountRepository.getOrCreateForOwner(200L, 1, 200L) } returns account
             coEvery { venueOwnerAccountRepository.getQuotaSummary(300L) } returns summary
             coEvery { venueContextRepository.getSelectedVenue(100, 200L) } returns 10L
-            coEvery { venueOwnerAccountRepository.listVenuesByOwnerAccount(300L) } returns
+            coEvery { platformVenueRepository.getVenueDetail(10L) } returns
+                platformGuestQrVenue(venueId = 10L, venueName = "Mix", status = VenueStatus.DRAFT)
+            coEvery { platformVenueRepository.getVenueDetail(11L) } returns
+                platformGuestQrVenue(
+                    venueId = 11L,
+                    venueName = "Smoke Lab",
+                    status = VenueStatus.PUBLISHED,
+                    city = "Сочи",
+                )
+            coEvery { venueAccessRepository.listVenueMemberships(200L) } returns
                 listOf(
-                    VenueOwnerAccountVenue(
-                        id = 10L,
-                        name = "Mix",
-                        city = "Москва",
-                        status = "DRAFT",
-                        createdAt = Instant.parse("2026-04-03T12:00:00Z"),
-                    ),
-                    VenueOwnerAccountVenue(
-                        id = 11L,
-                        name = "Smoke Lab",
-                        city = "Сочи",
-                        status = "PUBLISHED",
-                        createdAt = Instant.parse("2026-04-03T12:01:00Z"),
-                    ),
+                    VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER"),
+                    VenueAccessRepository.VenueMembership(venueId = 11L, role = "OWNER"),
                 )
 
             router.process(
@@ -7968,7 +7942,7 @@ class TelegramBotRouterTableTokenTest {
                                     button.callbackData == "owner_venue_select:10"
                             } &&
                             it.inlineKeyboard.flatten().any { button ->
-                                button.text == "➕ Создать новое заведение" &&
+                                button.text == "🤝 Подать заявку на заведение" &&
                                     button.callbackData == "owner_quota_create_start"
                             } &&
                             it.inlineKeyboard.flatten().any { button ->
@@ -7999,16 +7973,8 @@ class TelegramBotRouterTableTokenTest {
                 listOf(VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER"))
             coEvery { venueOwnerAccountRepository.getOrCreateForOwner(200L, 1, 200L) } returns account
             coEvery { venueOwnerAccountRepository.getQuotaSummary(301L) } returns summary
-            coEvery { venueOwnerAccountRepository.listVenuesByOwnerAccount(301L) } returns
-                listOf(
-                    VenueOwnerAccountVenue(
-                        id = 10L,
-                        name = "Mix",
-                        city = "Москва",
-                        status = "DRAFT",
-                        createdAt = Instant.parse("2026-04-03T12:00:00Z"),
-                    ),
-                )
+            coEvery { platformVenueRepository.getVenueDetail(10L) } returns
+                platformGuestQrVenue(venueId = 10L, venueName = "Mix", status = VenueStatus.DRAFT)
 
             router.process(
                 TelegramUpdate(
@@ -8027,7 +7993,7 @@ class TelegramBotRouterTableTokenTest {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
                     match {
-                        it.contains("Лимит заведений исчерпан") &&
+                        it.contains("Лимит исчерпан") &&
                             it.contains("Доступно к созданию: 0")
                     },
                     match {
@@ -8036,9 +8002,9 @@ class TelegramBotRouterTableTokenTest {
                                 button.text == "📩 Запросить увеличение лимита" &&
                                     button.callbackData == "owner_quota_request_start"
                             } &&
-                            it.inlineKeyboard.flatten().none {
-                                    button ->
-                                button.callbackData == "owner_quota_create_start"
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "🤝 Подать заявку на заведение" &&
+                                    button.callbackData == "owner_quota_create_start"
                             }
                     },
                 )
@@ -8046,7 +8012,7 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
-    fun `owner can create new draft venue and selected venue is switched`() =
+    fun `legacy owner quota callback opens shared application and never creates or selects venue`() =
         runBlocking {
             val states = mutableMapOf<Long, DialogState>()
             coEvery { dialogStateRepository.get(100) } answers { states[100] ?: DialogState(DialogStateType.NONE) }
@@ -8058,43 +8024,9 @@ class TelegramBotRouterTableTokenTest {
                 states.remove(100)
                 Unit
             }
-            val account =
-                VenueOwnerAccount(
-                    id = 302L,
-                    primaryOwnerUserId = 200L,
-                    allowedVenuesCount = 2,
-                    notes = null,
-                    commercialNote = null,
-                    createdAt = Instant.parse("2026-04-03T12:00:00Z"),
-                    updatedAt = Instant.parse("2026-04-03T12:00:00Z"),
-                    updatedByUserId = null,
-                )
-            val beforeSummary = VenueOwnerQuotaSummary(account, usedVenuesCount = 1, availableVenuesCount = 1)
-            val afterSummary = VenueOwnerQuotaSummary(account, usedVenuesCount = 2, availableVenuesCount = 0)
             coEvery { venueAccessRepository.listVenueMemberships(200L) } returns
                 listOf(VenueAccessRepository.VenueMembership(venueId = 77L, role = "OWNER"))
-            coEvery { venueOwnerAccountRepository.getOrCreateForOwner(200L, 1, 200L) } returns account
-            coEvery { venueOwnerAccountRepository.ensureCanCreateVenue(302L) } returns
-                VenueOwnerQuotaCheckResult.Allowed(beforeSummary)
-            coEvery {
-                venueOwnerAccountRepository.createOwnedDraftVenue(
-                    ownerUserId = 200L,
-                    name = "Новый Mix",
-                    city = "Москва",
-                    address = "Арбат, 1",
-                    defaultLimit = 1,
-                )
-            } returns VenueOwnerVenueCreationResult.Success(venueId = 77L, summary = afterSummary)
-            coEvery { platformVenueRepository.getVenueDetail(77L) } returns
-                PlatformVenueDetail(
-                    id = 77L,
-                    name = "Новый Mix",
-                    city = "Москва",
-                    address = "Арбат, 1",
-                    status = VenueStatus.DRAFT,
-                    createdAt = Instant.parse("2026-04-03T12:01:00Z"),
-                    deletedAt = null,
-                )
+            coEvery { venueConnectionRequestRepository.findActiveUnlinkedByUser(200L) } returns null
 
             router.process(
                 TelegramUpdate(
@@ -8108,42 +8040,126 @@ class TelegramBotRouterTableTokenTest {
                         ),
                 ),
             )
-            listOf(
-                10_001_14 to "Новый Mix",
-                10_001_15 to "Москва",
-                10_001_16 to "Арбат, 1",
-            ).forEach { (updateId, text) ->
-                router.process(
-                    TelegramUpdate(
-                        updateId = updateId.toLong(),
-                        message =
-                            Message(
-                                messageId = updateId.toLong(),
-                                chat = Chat(id = 100, type = "private"),
-                                fromUser = User(id = 200L),
-                                text = text,
-                            ),
-                    ),
-                )
-            }
-
-            coVerify {
+            coVerify(exactly = 0) {
                 venueOwnerAccountRepository.createOwnedDraftVenue(
-                    ownerUserId = 200L,
-                    name = "Новый Mix",
-                    city = "Москва",
-                    address = "Арбат, 1",
-                    defaultLimit = 1,
+                    any(),
+                    any(),
+                    any(),
+                    any(),
+                    any(),
                 )
             }
-            coVerify { venueContextRepository.setSelectedVenue(100, 200L, 77L) }
+            coVerify(exactly = 0) { venueContextRepository.setSelectedVenue(any(), any(), any()) }
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
-                    match { it.contains("Заведение создано как черновик") },
+                    match { it.contains("Заявка на подключение кальянной") },
                     null,
                 )
             }
+        }
+
+    @Test
+    fun `persisted legacy owner venue create states dispatch into usable shared application flow`() =
+        runBlocking {
+            val states = mutableMapOf<Long, DialogState>()
+            coEvery { dialogStateRepository.get(any()) } answers {
+                states[firstArg<Long>()] ?: DialogState(DialogStateType.NONE)
+            }
+            coEvery { dialogStateRepository.set(any(), any()) } answers {
+                states[firstArg()] = secondArg()
+                Unit
+            }
+            coEvery { dialogStateRepository.clear(any()) } answers {
+                states.remove(firstArg<Long>())
+                Unit
+            }
+            coEvery {
+                venueConnectionRequestRepository.createOrReturnActive(
+                    telegramUserId = any(),
+                    venueName = any(),
+                    city = any(),
+                    contact = any(),
+                    comment = any(),
+                    source = VenueOnboardingSource.TELEGRAM_BOT,
+                )
+            } answers {
+                val applicantUserId = firstArg<Long>()
+                val venueName = secondArg<String>()
+                VenueConnectionRequestSubmitResult.Success(
+                    request =
+                        VenueConnectionRequestRecord(
+                            id = 10_000L + applicantUserId,
+                            telegramUserId = applicantUserId,
+                            venueName = venueName,
+                            city = thirdArg(),
+                            contact = arg(3),
+                            comment = arg(4),
+                            status = VenueConnectionRequestRepository.STATUS_PENDING,
+                            createdAt = Instant.parse("2026-08-14T10:00:00Z"),
+                        ),
+                    created = true,
+                )
+            }
+
+            val legacyStates =
+                listOf(
+                    DialogStateType.OWNER_VENUE_CREATE_WAIT_NAME,
+                    DialogStateType.OWNER_VENUE_CREATE_WAIT_CITY,
+                    DialogStateType.OWNER_VENUE_CREATE_WAIT_ADDRESS,
+                )
+
+            legacyStates.forEachIndexed { index, legacyState ->
+                val chatId = 810L + index
+                val userId = 910L + index
+                var updateId = 81_000L + (index * 10L)
+                states[chatId] = DialogState(legacyState, payload = mapOf("legacy" to "persisted"))
+
+                suspend fun dispatch(text: String) {
+                    router.process(
+                        TelegramUpdate(
+                            updateId = updateId,
+                            message =
+                                Message(
+                                    messageId = updateId++,
+                                    chat = Chat(id = chatId, type = "private"),
+                                    fromUser = User(id = userId),
+                                    text = text,
+                                ),
+                        ),
+                    )
+                }
+
+                dispatch("Старое значение")
+                assertEquals(DialogStateType.VENUE_CONNECT_WAIT_NAME, states[chatId]?.state)
+
+                dispatch("Новая кальянная ${index + 1}")
+                dispatch("Москва")
+                dispatch("+7 900 000-00-0${index + 1}")
+                dispatch("-")
+
+                assertEquals(null, states[chatId])
+            }
+
+            coVerify(exactly = 3) {
+                venueConnectionRequestRepository.createOrReturnActive(
+                    telegramUserId = any(),
+                    venueName = any(),
+                    city = any(),
+                    contact = any(),
+                    comment = null,
+                    source = VenueOnboardingSource.TELEGRAM_BOT,
+                )
+            }
+            coVerify(exactly = 0) {
+                venueOwnerAccountRepository.createOwnedDraftVenue(any(), any(), any(), any(), any())
+            }
+            coVerify(exactly = 0) { platformVenueRepository.createVenue(any(), any(), any(), any()) }
+            coVerify(exactly = 0) {
+                venueConnectionRequestRepository.createDraftAndLink(any(), any(), any())
+            }
+            coVerify(exactly = 0) { venueContextRepository.setSelectedVenue(any(), any(), any()) }
+            coVerify(exactly = 0) { venueMenuRepository.createMissingCategories(any(), any(), any(), any()) }
         }
 
     @Test
@@ -8424,16 +8440,12 @@ class TelegramBotRouterTableTokenTest {
             coEvery { venueOwnerAccountRepository.getOrCreateForOwner(200L, 1, 200L) } returns account
             coEvery { venueOwnerAccountRepository.getQuotaSummary(304L) } returns
                 VenueOwnerQuotaSummary(account, usedVenuesCount = 1, availableVenuesCount = 0)
-            coEvery { venueOwnerAccountRepository.listVenuesByOwnerAccount(304L) } returns
-                listOf(
-                    VenueOwnerAccountVenue(
-                        id = 10L,
-                        name = "Тестовая кальянная",
-                        city = null,
-                        status = "DRAFT",
-                        createdAt = Instant.parse("2026-04-03T12:00:00Z"),
-                    ),
-                )
+            coEvery { platformVenueRepository.getVenueDetail(10L) } returns
+                platformGuestQrVenue(
+                    venueId = 10L,
+                    venueName = "Тестовая кальянная",
+                    status = VenueStatus.DRAFT,
+                ).copy(city = null)
             coEvery { venueRepository.findVenueById(10L) } returns
                 VenueShort(
                     id = 10L,
@@ -8468,7 +8480,7 @@ class TelegramBotRouterTableTokenTest {
                                 button.text == "Тестовая кальянная · Черновик" &&
                                     button.callbackData == "owner_venue_select:10"
                             } &&
-                            it.inlineKeyboard.flatten().none {
+                            it.inlineKeyboard.flatten().any {
                                     button ->
                                 button.callbackData == "owner_quota_create_start"
                             } &&
@@ -25693,8 +25705,10 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
-    fun `start menu add venue button opens connection request flow`() =
+    fun `owner add venue text entry opens shared connection request flow`() =
         runBlocking {
+            coEvery { venueAccessRepository.listVenueMemberships(200L) } returns
+                listOf(VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER"))
             router.process(
                 TelegramUpdate(
                     updateId = 10_005,
@@ -35189,11 +35203,12 @@ class TelegramBotRouterTableTokenTest {
         venueId: Long = 10L,
         venueName: String = "Mix Public",
         status: VenueStatus = VenueStatus.PUBLISHED,
+        city: String = "Москва",
     ): PlatformVenueDetail =
         PlatformVenueDetail(
             id = venueId,
             name = venueName,
-            city = "Москва",
+            city = city,
             address = "Тверская, 1",
             status = status,
             createdAt = Instant.parse("2026-08-01T10:00:00Z"),

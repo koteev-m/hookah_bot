@@ -5,6 +5,7 @@ import com.hookah.platform.backend.billing.BillingInvoiceRepository
 import com.hookah.platform.backend.billing.BillingOverviewService
 import com.hookah.platform.backend.billing.BillingService
 import com.hookah.platform.backend.miniapp.venue.requireUserId
+import com.hookah.platform.backend.onboarding.VenueOnboardingService
 import com.hookah.platform.backend.support.SupportThreadRepository
 import com.hookah.platform.backend.support.platformSupportRoutes
 import com.hookah.platform.backend.telegram.TelegramOutboxEnqueuer
@@ -53,6 +54,7 @@ fun Route.platformRoutes(
     billingOverviewService: BillingOverviewService,
     subscriptionSettingsRepository: PlatformSubscriptionSettingsRepository,
     platformVenueMemberRepository: PlatformVenueMemberRepository,
+    venueOnboardingService: VenueOnboardingService,
     venueOwnerAccountRepository: VenueOwnerAccountRepository = VenueOwnerAccountRepository(null),
     staffInviteRepository: com.hookah.platform.backend.miniapp.venue.staff.StaffInviteRepository,
     staffInviteConfig: com.hookah.platform.backend.miniapp.venue.staff.StaffInviteConfig,
@@ -87,6 +89,11 @@ fun Route.platformRoutes(
         staffInviteRepository = staffInviteRepository,
         staffInviteConfig = staffInviteConfig,
         telegramBotUsername = telegramBotUsername,
+    )
+    platformOnboardingRoutes(
+        platformConfig = platformConfig,
+        venueOnboardingService = venueOnboardingService,
+        platformVenueRepository = platformVenueRepository,
     )
     platformBillingRoutes(
         platformConfig = platformConfig,

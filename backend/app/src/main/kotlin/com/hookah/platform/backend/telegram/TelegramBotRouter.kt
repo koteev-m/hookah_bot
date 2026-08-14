@@ -100,8 +100,8 @@ import com.hookah.platform.backend.miniapp.venue.staff.appendOwnerInviteAcceptAu
 import com.hookah.platform.backend.miniapp.venue.tables.TableNumberConflictException
 import com.hookah.platform.backend.miniapp.venue.tables.VenueTableOwnerSummary
 import com.hookah.platform.backend.miniapp.venue.tables.VenueTableRepository
+import com.hookah.platform.backend.onboarding.VenueOnboardingService
 import com.hookah.platform.backend.platform.OwnerAccountAssignmentPreparationResult
-import com.hookah.platform.backend.platform.PlatformOwnerAssignmentResult
 import com.hookah.platform.backend.platform.PlatformPriceScheduleItem
 import com.hookah.platform.backend.platform.PlatformSubscriptionSettingsRepository
 import com.hookah.platform.backend.platform.PlatformSubscriptionSnapshot
@@ -117,8 +117,6 @@ import com.hookah.platform.backend.platform.VenueOwnerAccountRepository
 import com.hookah.platform.backend.platform.VenueOwnerAccountVenue
 import com.hookah.platform.backend.platform.VenueOwnerLimitRequestDecisionResult
 import com.hookah.platform.backend.platform.VenueOwnerLimitRequestSummary
-import com.hookah.platform.backend.platform.VenueOwnerQuotaCheckResult
-import com.hookah.platform.backend.platform.VenueOwnerVenueCreationResult
 import com.hookah.platform.backend.platform.VenueStatusAction
 import com.hookah.platform.backend.platform.VenueStatusChangeResult
 import com.hookah.platform.backend.promotions.GiftDecisionCommand
@@ -186,13 +184,17 @@ import com.hookah.platform.backend.telegram.db.UserRepository
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
 import com.hookah.platform.backend.telegram.db.VenueBookingHours
 import com.hookah.platform.backend.telegram.db.VenueBookingHoursRepository
+import com.hookah.platform.backend.telegram.db.VenueConnectionRequestCreateLinkResult
+import com.hookah.platform.backend.telegram.db.VenueConnectionRequestMutationResult
 import com.hookah.platform.backend.telegram.db.VenueConnectionRequestRecord
 import com.hookah.platform.backend.telegram.db.VenueConnectionRequestRepository
+import com.hookah.platform.backend.telegram.db.VenueConnectionRequestSubmitResult
 import com.hookah.platform.backend.telegram.db.VenueInfoSection
 import com.hookah.platform.backend.telegram.db.VenueInfoSectionMediaRepository
 import com.hookah.platform.backend.telegram.db.VenueInfoSectionsRepository
 import com.hookah.platform.backend.telegram.db.VenueMenuSectionImagesRepository
 import com.hookah.platform.backend.telegram.db.VenueNotificationSetting
+import com.hookah.platform.backend.telegram.db.VenueOnboardingSource
 import com.hookah.platform.backend.telegram.db.VenuePromotion
 import com.hookah.platform.backend.telegram.db.VenuePromotionLifecycleOutcome
 import com.hookah.platform.backend.telegram.db.VenuePromotionLifecycleSource
@@ -309,6 +311,8 @@ class TelegramBotRouter(
     private val json: Json,
     private val venueConnectionRequestRepository: VenueConnectionRequestRepository =
         VenueConnectionRequestRepository(null),
+    private val venueOnboardingService: VenueOnboardingService =
+        VenueOnboardingService(venueConnectionRequestRepository),
     private val scope: CoroutineScope,
     private val venueInfoSectionsRepository: VenueInfoSectionsRepository = VenueInfoSectionsRepository(null),
     private val venueInfoSectionMediaRepository: VenueInfoSectionMediaRepository =
@@ -1121,11 +1125,11 @@ class TelegramBotRouter(
             state.state == DialogStateType.OWNER_VENUE_TABLES_WAIT_CAPACITY && !text.isNullOrBlank() ->
                 proceedOwnerVenueAddTableCapacity(chatId, from, text, state)
             state.state == DialogStateType.OWNER_VENUE_CREATE_WAIT_NAME && !text.isNullOrBlank() ->
-                proceedOwnerVenueCreateName(chatId, from, text)
+                redirectLegacyOwnerVenueCreateDialog(chatId, from)
             state.state == DialogStateType.OWNER_VENUE_CREATE_WAIT_CITY && !text.isNullOrBlank() ->
-                proceedOwnerVenueCreateCity(chatId, from, text, state)
+                redirectLegacyOwnerVenueCreateDialog(chatId, from)
             state.state == DialogStateType.OWNER_VENUE_CREATE_WAIT_ADDRESS && !text.isNullOrBlank() ->
-                proceedOwnerVenueCreateAddress(chatId, from, text, state)
+                redirectLegacyOwnerVenueCreateDialog(chatId, from)
             state.state == DialogStateType.OWNER_LIMIT_REQUEST_WAIT_COUNT && !text.isNullOrBlank() ->
                 proceedOwnerLimitRequestCount(chatId, from, text)
             state.state == DialogStateType.OWNER_LIMIT_REQUEST_WAIT_COMMENT && !text.isNullOrBlank() ->
@@ -1573,7 +1577,8 @@ class TelegramBotRouter(
                 startOwnerCreateVenueFromApprovedRequest(chatId, callbackQuery.from.id, data)
             data == "owner_quota_create_start" -> {
                 callbackAnswered = true
-                promptOwnerVenueCreateName(chatId, callbackQuery.from, callbackQuery.id)
+                enqueueCallbackAnswer(chatId, callbackQuery.id, text = "Открываю заявку")
+                showAddVenueEntry(chatId, callbackQuery.from)
             }
             data == "owner_quota_request_start" -> {
                 callbackAnswered = true
@@ -1688,8 +1693,8 @@ class TelegramBotRouter(
                     enqueueMessage(chatId, "Недостаточно прав.")
                 }
             }
-            data == "owner_venue_onboarding_entry" ->
-                showVenueOwnerVenueCard(chatId, callbackQuery.from)
+            data?.startsWith("owner_venue_onboarding_entry") == true ->
+                showVenueOwnerOnboardingEntry(chatId, callbackQuery.from, data)
             data == "owner_venue_onboarding_miniapp_unavailable" ->
                 enqueueMessage(chatId, miniAppUnavailableMessage())
             data?.startsWith("venue_select:") == true -> {
@@ -12972,17 +12977,6 @@ class TelegramBotRouter(
             enqueueMessage(chatId, "Не удалось определить пользователя. Нажмите /start и попробуйте снова.")
             return
         }
-        val pending =
-            try {
-                venueConnectionRequestRepository.findActiveUnlinkedByUser(userId)
-            } catch (e: DatabaseUnavailableException) {
-                enqueueMessage(chatId, "База недоступна, попробуйте позже.")
-                return
-            }
-        if (pending != null) {
-            showApplicantActiveVenueConnectionRequest(chatId, pending)
-            return
-        }
         dialogStateRepository.set(chatId, DialogState(DialogStateType.VENUE_CONNECT_WAIT_NAME))
         enqueueMessage(
             chatId,
@@ -13246,60 +13240,67 @@ class TelegramBotRouter(
             return
         }
         if (editingRequestId != null) {
-            val updated =
+            val result =
                 try {
-                    venueConnectionRequestRepository.updatePendingRequest(
+                    venueOnboardingService.updateOwnPendingApplication(
                         requestId = editingRequestId,
-                        telegramUserId = userId,
+                        applicantUserId = userId,
                         venueName = venueName,
                         city = city,
                         contact = contact,
                         comment = comment,
+                        source = VenueOnboardingSource.TELEGRAM_BOT,
                     )
                 } catch (e: DatabaseUnavailableException) {
                     enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                     return
                 }
-            if (!updated) {
-                dialogStateRepository.clear(chatId)
-                enqueueMessage(chatId, "Активная заявка не найдена. Нажмите «🤝 Добавить свою кальянную» ещё раз.")
-                return
-            }
             dialogStateRepository.clear(chatId)
-            enqueueMessage(chatId, "✅ Заявка обновлена.")
+            when (result) {
+                is VenueConnectionRequestMutationResult.Success -> enqueueMessage(chatId, "✅ Заявка обновлена.")
+                VenueConnectionRequestMutationResult.ApplicantNotOperationalOwner ->
+                    enqueueMessage(
+                        chatId,
+                        "Не удалось подтвердить право на изменение заявки. Нажмите /start и попробуйте снова.",
+                    )
+                is VenueConnectionRequestMutationResult.InvalidState,
+                VenueConnectionRequestMutationResult.NotFound,
+                ->
+                    enqueueMessage(
+                        chatId,
+                        "Активная заявка не найдена. Нажмите «🤝 Добавить свою кальянную» ещё раз.",
+                    )
+            }
             return
         }
-        val existingPending =
+        val submitted =
             try {
-                venueConnectionRequestRepository.findActiveUnlinkedByUser(userId)
-            } catch (e: DatabaseUnavailableException) {
-                enqueueMessage(chatId, "База недоступна, попробуйте позже.")
-                return
-            }
-        if (existingPending != null) {
-            dialogStateRepository.clear(chatId)
-            showApplicantActiveVenueConnectionRequest(chatId, existingPending)
-            return
-        }
-        val created =
-            try {
-                venueConnectionRequestRepository.createRequest(
-                    telegramUserId = userId,
+                venueOnboardingService.submitApplication(
+                    applicantUserId = userId,
                     venueName = venueName,
                     city = city,
                     contact = contact,
                     comment = comment,
+                    source = VenueOnboardingSource.TELEGRAM_BOT,
                 )
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
             }
-        if (created == null) {
-            enqueueMessage(chatId, "Не удалось отправить заявку. Попробуйте ещё раз.")
-            return
-        }
         dialogStateRepository.clear(chatId)
-        enqueueMessage(chatId, "✅ Заявка отправлена. Мы свяжемся с вами.")
+        when (submitted) {
+            is VenueConnectionRequestSubmitResult.Success -> {
+                if (submitted.created) {
+                    enqueueMessage(chatId, "✅ Заявка отправлена. Мы свяжемся с вами.")
+                }
+                showApplicantActiveVenueConnectionRequest(chatId, submitted.request)
+            }
+            VenueConnectionRequestSubmitResult.ApplicantNotOperationalOwner ->
+                enqueueMessage(
+                    chatId,
+                    "Не удалось подтвердить право на отправку заявки. Нажмите /start и попробуйте снова.",
+                )
+        }
     }
 
     private suspend fun startVenueConnectionEdit(
@@ -13314,12 +13315,12 @@ class TelegramBotRouter(
         }
         val request =
             try {
-                venueConnectionRequestRepository.findPendingByIdForUser(requestId, userId)
+                venueOnboardingService.findOwnApplication(requestId, userId)
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
             }
-        if (request == null) {
+        if (request == null || !request.status.equals(VenueConnectionRequestRepository.STATUS_PENDING, true)) {
             enqueueMessage(chatId, "Активная заявка не найдена.")
             return
         }
@@ -13346,19 +13347,31 @@ class TelegramBotRouter(
             enqueueMessage(chatId, "Не удалось отменить заявку. Попробуйте ещё раз.")
             return
         }
-        val cancelled =
+        val result =
             try {
-                venueConnectionRequestRepository.cancelPendingRequest(requestId, userId)
+                venueOnboardingService.cancelOwnPendingApplication(
+                    requestId = requestId,
+                    applicantUserId = userId,
+                    source = VenueOnboardingSource.TELEGRAM_BOT,
+                )
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
             }
-        if (!cancelled) {
-            enqueueMessage(chatId, "Активная заявка не найдена.")
-            return
+        when (result) {
+            is VenueConnectionRequestMutationResult.Success -> {
+                dialogStateRepository.clear(chatId)
+                enqueueMessage(chatId, "✅ Заявка отменена.")
+            }
+            VenueConnectionRequestMutationResult.ApplicantNotOperationalOwner ->
+                enqueueMessage(
+                    chatId,
+                    "Не удалось подтвердить право на отмену заявки. Нажмите /start и попробуйте снова.",
+                )
+            is VenueConnectionRequestMutationResult.InvalidState,
+            VenueConnectionRequestMutationResult.NotFound,
+            -> enqueueMessage(chatId, "Активная заявка не найдена.")
         }
-        dialogStateRepository.clear(chatId)
-        enqueueMessage(chatId, "✅ Заявка отменена.")
     }
 
     private suspend fun handleOwnerVenueConnectionDecision(
@@ -13377,20 +13390,19 @@ class TelegramBotRouter(
             enqueueMessage(chatId, "Не удалось обработать заявку. Попробуйте ещё раз.")
             return
         }
-        val status =
-            if (approved) {
-                VenueConnectionRequestRepository.STATUS_APPROVED
-            } else {
-                VenueConnectionRequestRepository.STATUS_REJECTED
-            }
-        val changed =
+        val result =
             try {
-                venueConnectionRequestRepository.setStatusByOwner(requestId, status)
+                venueOnboardingService.decideApplication(
+                    requestId = requestId,
+                    actorUserId = userId,
+                    approved = approved,
+                    source = VenueOnboardingSource.TELEGRAM_BOT,
+                )
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
             }
-        if (!changed) {
+        if (result !is VenueConnectionRequestMutationResult.Success) {
             enqueueMessage(chatId, "Заявка уже обработана или не найдена.")
             return
         }
@@ -13422,7 +13434,7 @@ class TelegramBotRouter(
         }
         val request =
             try {
-                venueConnectionRequestRepository.findById(requestId)
+                venueOnboardingService.findApplication(requestId)
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
@@ -13438,14 +13450,18 @@ class TelegramBotRouter(
             enqueueMessage(chatId, "Закрыть без создания можно только принятую заявку без созданного заведения.")
             return
         }
-        val closed =
+        val result =
             try {
-                venueConnectionRequestRepository.closeApprovedUnlinkedByOwner(requestId)
+                venueOnboardingService.closeApprovedApplication(
+                    requestId = requestId,
+                    actorUserId = userId,
+                    source = VenueOnboardingSource.TELEGRAM_BOT,
+                )
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
             }
-        if (!closed) {
+        if (result !is VenueConnectionRequestMutationResult.Success) {
             enqueueMessage(chatId, "Заявка уже обработана или не найдена.")
             return
         }
@@ -13473,7 +13489,7 @@ class TelegramBotRouter(
         }
         val request =
             try {
-                venueConnectionRequestRepository.findById(requestId)
+                venueOnboardingService.findApplication(requestId)
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
@@ -13840,7 +13856,8 @@ class TelegramBotRouter(
         text: String,
         state: DialogState,
     ) {
-        if (!isPlatformOwner(from?.id)) {
+        val actorUserId = from?.id
+        if (actorUserId == null || !isPlatformOwner(actorUserId)) {
             enqueueMessage(chatId, "Недостаточно прав.")
             return
         }
@@ -13865,42 +13882,33 @@ class TelegramBotRouter(
             enqueueMessage(chatId, "Заметка слишком длинная. Максимум 1000 символов.")
             return
         }
-        val updated =
+        val result =
             try {
-                venueConnectionRequestRepository.updateCommercialTerms(
+                venueOnboardingService.updateCommercialTerms(
                     requestId = requestId,
+                    actorUserId = actorUserId,
                     trialConfigured = trialConfigured,
                     trialEndsOn = trialEndsOn,
                     currentPriceRub = currentPriceRub,
                     futurePriceRub = futurePriceRub,
                     futurePriceEffectiveOn = futurePriceEffectiveOn,
                     commercialNote = note,
+                    source = VenueOnboardingSource.TELEGRAM_BOT,
                 )
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
             }
-        if (!updated) {
+        if (result !is VenueConnectionRequestMutationResult.Success) {
             dialogStateRepository.clear(chatId)
             enqueueMessage(chatId, "Не удалось сохранить условия. Заявка не найдена или уже обработана.")
             return
         }
-        val request =
-            try {
-                venueConnectionRequestRepository.findById(requestId)
-            } catch (e: DatabaseUnavailableException) {
-                enqueueMessage(chatId, "База недоступна, попробуйте позже.")
-                return
-            }
         dialogStateRepository.clear(chatId)
-        if (request == null) {
-            enqueueMessage(chatId, "Условия сохранены.")
-            return
-        }
         enqueueMessage(
             chatId,
-            buildOwnerCommercialTermsSummaryText(request),
-            TelegramKeyboards.inlineOwnerVenueCommercialSummaryActions(request.id),
+            buildOwnerCommercialTermsSummaryText(result.request),
+            TelegramKeyboards.inlineOwnerVenueCommercialSummaryActions(result.request.id),
         )
     }
 
@@ -13918,148 +13926,60 @@ class TelegramBotRouter(
             enqueueMessage(chatId, "Не удалось открыть создание кальянной. Попробуйте ещё раз.")
             return
         }
-        val request =
+        val result =
             try {
-                venueConnectionRequestRepository.findById(requestId)
-            } catch (e: DatabaseUnavailableException) {
-                enqueueMessage(chatId, "База недоступна, попробуйте позже.")
-                return
-            }
-        if (request == null) {
-            enqueueMessage(chatId, "Заявка не найдена.")
-            return
-        }
-        if (!request.status.equals(VenueConnectionRequestRepository.STATUS_APPROVED, ignoreCase = true)) {
-            enqueueMessage(chatId, "Для создания черновика заявка должна быть в статусе «Принята».")
-            return
-        }
-        if (!isCommercialTermsReady(request)) {
-            enqueueMessage(
-                chatId,
-                "Сначала заполните коммерческие условия.",
-                TelegramKeyboards.inlineOwnerVenueConnectionApprovedActions(request.id),
-            )
-            return
-        }
-        if (request.linkedVenueId != null) {
-            enqueueMessage(
-                chatId,
-                "Черновик уже создан: venue #${request.linkedVenueId}. Владелец уже назначен.",
-            )
-            return
-        }
-        val subscriptionTerms = buildVenueCommercialTermsSubscriptionUpdate(request)
-        if (subscriptionTerms == null) {
-            enqueueMessage(
-                chatId,
-                "Коммерческие условия заполнены некорректно: проверьте текущую и будущую стоимость.",
-                TelegramKeyboards.inlineOwnerVenueConnectionApprovedActions(request.id, canCreateVenue = true),
-            )
-            return
-        }
-
-        val ownerAccount =
-            try {
-                venueOwnerAccountRepository.getOrCreateForOwner(
-                    userId = request.telegramUserId,
-                    defaultLimit = 1,
-                    updatedByUserId = userId,
+                venueOnboardingService.createDraftAndLink(
+                    requestId = requestId,
+                    actorUserId = userId,
+                    source = VenueOnboardingSource.TELEGRAM_BOT,
                 )
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
             }
-        when (val quota = venueOwnerAccountRepository.ensureCanCreateVenue(ownerAccount.id)) {
-            is VenueOwnerQuotaCheckResult.Allowed -> Unit
-            is VenueOwnerQuotaCheckResult.LimitExceeded -> {
+        when (result) {
+            is VenueConnectionRequestCreateLinkResult.QuotaExceeded -> {
                 enqueueMessage(
                     chatId,
                     "Лимит заведений для владельца исчерпан: " +
-                        "${quota.summary.usedVenuesCount} из ${quota.summary.account.allowedVenuesCount}. " +
+                        "${result.usedVenuesCount} из ${result.allowedVenuesCount}. " +
                         "Сначала увеличьте лимит у клиента.",
                 )
                 return
             }
-            VenueOwnerQuotaCheckResult.NotFound,
-            VenueOwnerQuotaCheckResult.DatabaseError,
-            -> {
-                enqueueMessage(chatId, "База недоступна, попробуйте позже.")
-                return
-            }
-        }
-
-        val createdVenue =
-            try {
-                platformVenueRepository.createVenue(
-                    name = request.venueName,
-                    city = request.city,
-                    address = null,
-                    ownerAccountId = ownerAccount.id,
-                )
-            } catch (e: DatabaseUnavailableException) {
-                enqueueMessage(chatId, "База недоступна, попробуйте позже.")
-                return
-            }
-        updateVenueTimezoneFromLocationBestEffort(
-            venueId = createdVenue.id,
-            city = createdVenue.city,
-            address = createdVenue.address,
-        )
-        val assignment =
-            try {
-                platformVenueMemberRepository.assignOwner(
-                    venueId = createdVenue.id,
-                    userId = request.telegramUserId,
-                    role = "OWNER",
-                    invitedByUserId = userId,
-                    venueOwnerAccountRepository = venueOwnerAccountRepository,
-                    enforceQuota = true,
-                )
-            } catch (e: Exception) {
-                logBestEffort("owner venue assign from request", e)
-                PlatformOwnerAssignmentResult.DatabaseError
-            }
-        when (assignment) {
-            is PlatformOwnerAssignmentResult.Success -> Unit
-            is PlatformOwnerAssignmentResult.QuotaExceeded -> {
+            is VenueConnectionRequestCreateLinkResult.CommercialTermsMissing -> {
                 enqueueMessage(
                     chatId,
-                    "Черновик venue #${createdVenue.id} создан, но лимит владельца уже исчерпан. Проверьте вручную.",
+                    "Сначала заполните корректные коммерческие условия.",
+                    TelegramKeyboards.inlineOwnerVenueConnectionApprovedActions(result.request.id),
                 )
                 return
             }
-            PlatformOwnerAssignmentResult.OwnerAccountMismatch,
-            PlatformOwnerAssignmentResult.NotFound,
-            PlatformOwnerAssignmentResult.DatabaseError,
-            -> {
+            VenueConnectionRequestCreateLinkResult.ApplicantNotOperationalOwner -> {
                 enqueueMessage(
                     chatId,
-                    "Черновик venue #${createdVenue.id} создан, но назначить владельца не удалось. Проверьте вручную.",
+                    "У заявителя больше нет активной роли Owner. Создание и привязка заведения не выполнены.",
                 )
                 return
             }
-        }
-        val subscriptionSnapshot =
-            try {
-                platformSubscriptionSettingsRepository.applyCommercialTerms(
-                    venueId = createdVenue.id,
-                    trialEndDate = subscriptionTerms.trialEndDate,
-                    basePriceMinor = subscriptionTerms.basePriceMinor,
-                    futurePrice = subscriptionTerms.futurePrice,
-                    actorUserId = userId,
-                )
-            } catch (e: DatabaseUnavailableException) {
-                logBestEffort("apply venue connection commercial terms", e)
-                null
+            is VenueConnectionRequestCreateLinkResult.InvalidState -> {
+                val message =
+                    if (result.request.linkedVenueId != null) {
+                        "Черновик уже создан: venue #${result.request.linkedVenueId}. Владелец уже назначен."
+                    } else {
+                        "Для создания черновика заявка должна быть в статусе «Принята»."
+                    }
+                enqueueMessage(chatId, message)
+                return
             }
-        runCatching {
-            venueConnectionRequestRepository.linkApprovedRequestToVenue(
-                requestId = request.id,
-                venueId = createdVenue.id,
-            )
-        }.onFailure { e ->
-            logBestEffort("link venue_connection_request to venue", e)
+            VenueConnectionRequestCreateLinkResult.NotFound -> {
+                enqueueMessage(chatId, "Заявка не найдена.")
+                return
+            }
+            is VenueConnectionRequestCreateLinkResult.Success -> Unit
         }
+        result as VenueConnectionRequestCreateLinkResult.Success
+        val request = result.request
         val ownerContact =
             try {
                 userRepository.findTelegramUserContact(request.telegramUserId)
@@ -14068,19 +13988,21 @@ class TelegramBotRouter(
                 null
             }
 
-        enqueueMessage(
-            request.telegramUserId,
-            "✅ Ваша заявка одобрена.\nТеперь вы можете настроить свою кальянную.",
-            TelegramKeyboards.inlineVenueOwnerOnboardingEntry(config.webAppPublicUrl),
-        )
+        if (result.created) {
+            enqueueMessage(
+                request.telegramUserId,
+                "✅ Ваша заявка одобрена.\nТеперь вы можете настроить свою кальянную.",
+                TelegramKeyboards.inlineVenueOwnerOnboardingEntry(config.webAppPublicUrl, result.venueId),
+            )
+        }
         enqueueMessage(
             chatId,
             buildOwnerVenueCreatedFromRequestText(
-                venueId = createdVenue.id,
+                venueId = result.venueId,
                 ownerContact = ownerContact,
                 fallbackOwnerUserId = request.telegramUserId,
                 request = request,
-                termsApplied = subscriptionSnapshot != null,
+                termsApplied = true,
             ),
         )
     }
@@ -14114,6 +14036,19 @@ class TelegramBotRouter(
         from: User?,
     ) {
         showVenueOwnerVenueCardByUserId(chatId, from?.id)
+    }
+
+    private suspend fun showVenueOwnerOnboardingEntry(
+        chatId: Long,
+        from: User,
+        data: String,
+    ) {
+        val venueId = data.substringAfter(':', missingDelimiterValue = "").toLongOrNull()
+        if (venueId == null) {
+            showVenueOwnerVenueCard(chatId, from)
+        } else {
+            showVenueOwnerVenueCardByVenueId(chatId, from.id, venueId)
+        }
     }
 
     private suspend fun showVenueOwnerVenueCardByUserId(
@@ -26176,12 +26111,20 @@ class TelegramBotRouter(
 
     private fun buildApplicantVenueConnectionRequestText(request: VenueConnectionRequestRecord): String =
         buildString {
-            append("У вас уже есть активная заявка.")
+            append("Заявка #${request.id}")
             append("\n\nНазвание: ${request.venueName}")
             append("\nГород: ${request.city}")
             append("\nКонтакт: ${request.contact}")
             append("\nКомментарий: ${request.comment?.takeIf { it.isNotBlank() } ?: "—"}")
             append("\nСтатус: ${humanizeVenueConnectionRequestStatus(request.status)}")
+            if (
+                request.status.equals(VenueConnectionRequestRepository.STATUS_APPROVED, ignoreCase = true) &&
+                request.linkedVenueId == null
+            ) {
+                append(
+                    "\n\nЗаявка одобрена, но доступ к заведению появится только после создания и привязки платформой.",
+                )
+            }
         }
 
     private fun humanizeVenueConnectionRequestStatus(status: String): String =
@@ -30713,7 +30656,7 @@ class TelegramBotRouter(
     private suspend fun showOwnerVenueConnectionRequests(chatId: Long) {
         val requests =
             try {
-                venueConnectionRequestRepository.listActionableRequests(limit = 20)
+                venueOnboardingService.listActionableApplications(limit = 20)
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
@@ -32397,7 +32340,7 @@ class TelegramBotRouter(
 
     private suspend fun loadLinkedVenueConnectionRequestForSubscription(venueId: Long): VenueConnectionRequestRecord? =
         try {
-            venueConnectionRequestRepository.findApprovedByLinkedVenue(venueId)
+            venueOnboardingService.findApplicationByLinkedVenue(venueId)
         } catch (e: DatabaseUnavailableException) {
             null
         }
@@ -33349,7 +33292,7 @@ class TelegramBotRouter(
         }
         val venues =
             try {
-                venueOwnerAccountRepository.listVenuesByOwnerAccount(summary.account.id)
+                loadOperationalOwnerVenuePortfolio(userId)
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
@@ -33385,9 +33328,10 @@ class TelegramBotRouter(
             append("\nДоступно к созданию: $available")
             if (available <= 0) {
                 append("\n\nЛимит заведений исчерпан.")
-                append("\nЧтобы добавить ещё одно заведение, отправьте запрос владельцу платформы.")
+                append("\nЗаявку на подключение можно подать сейчас.")
+                append(" Лимит потребуется увеличить до создания черновика владельцем платформы.")
             } else {
-                append("\n\nМожно создать новое заведение как черновик и сразу перейти к настройке.")
+                append("\n\nПодайте заявку на подключение нового заведения.")
             }
         }
 
@@ -33404,9 +33348,10 @@ class TelegramBotRouter(
             append("\nДоступно к созданию: $available")
             append("\n")
             if (available <= 0) {
-                append("\nЛимит заведений исчерпан. Чтобы добавить новое заведение, запросите увеличение лимита.")
+                append("\nЛимит исчерпан, но заявку на новое заведение можно подать сейчас.")
+                append(" До создания черновика потребуется увеличение лимита.")
             } else {
-                append("\nВы можете создать ещё $available заведений или заранее запросить увеличение лимита.")
+                append("\nВы можете подать заявку ещё на $available заведений в рамках текущего лимита.")
             }
             append("\n\nСписок заведений:")
             if (venues.isEmpty()) {
@@ -33448,16 +33393,9 @@ class TelegramBotRouter(
             enqueueMessage(chatId, "Раздел доступен владельцу заведения.")
             return
         }
-        val account =
-            try {
-                venueOwnerAccountRepository.getOrCreateForOwner(userId, defaultLimit = 1, updatedByUserId = userId)
-            } catch (e: DatabaseUnavailableException) {
-                enqueueMessage(chatId, "База недоступна, попробуйте позже.")
-                return
-            }
         val venues =
             try {
-                venueOwnerAccountRepository.listVenuesByOwnerAccount(account.id)
+                loadOperationalOwnerVenuePortfolio(userId)
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
@@ -33473,6 +33411,23 @@ class TelegramBotRouter(
                 buildOwnerVenueDashboardButtons(venues, selectedVenueId),
             ),
         )
+    }
+
+    private suspend fun loadOperationalOwnerVenuePortfolio(userId: Long): List<VenueOwnerAccountVenue> {
+        val ownerMemberships =
+            venueAccessRepository
+                .listVenueMemberships(userId)
+                .filter { membership -> membership.role.equals("OWNER", ignoreCase = true) }
+        return ownerMemberships.mapNotNull { membership ->
+            val detail = platformVenueRepository.getVenueDetail(membership.venueId) ?: return@mapNotNull null
+            VenueOwnerAccountVenue(
+                id = detail.id,
+                name = detail.name,
+                city = detail.city,
+                status = detail.status.dbValue,
+                createdAt = detail.createdAt,
+            )
+        }
     }
 
     private suspend fun showOwnerVenueStatsByCallback(
@@ -33530,153 +33485,13 @@ class TelegramBotRouter(
         showOwnerSelectedVenueHub(chatId, user.id, venueId)
     }
 
-    private suspend fun promptOwnerVenueCreateName(
+    private suspend fun redirectLegacyOwnerVenueCreateDialog(
         chatId: Long,
         from: User?,
-        callbackQueryId: String? = null,
     ) {
-        val userId = from?.id
-        if (userId == null || !hasOwnedVenues(userId)) {
-            callbackQueryId?.let { enqueueCallbackAnswer(chatId, it, text = "Нет доступа", showAlert = true) }
-            if (callbackQueryId == null) enqueueMessage(chatId, "Раздел доступен владельцу заведения.")
-            return
-        }
-        val account =
-            try {
-                venueOwnerAccountRepository.getOrCreateForOwner(userId, defaultLimit = 1, updatedByUserId = userId)
-            } catch (e: DatabaseUnavailableException) {
-                callbackQueryId?.let { enqueueCallbackAnswer(chatId, it, text = "База недоступна", showAlert = true) }
-                if (callbackQueryId == null) enqueueMessage(chatId, "База недоступна, попробуйте позже.")
-                return
-            }
-        when (val quota = venueOwnerAccountRepository.ensureCanCreateVenue(account.id)) {
-            is VenueOwnerQuotaCheckResult.Allowed -> Unit
-            is VenueOwnerQuotaCheckResult.LimitExceeded -> {
-                callbackQueryId?.let { enqueueCallbackAnswer(chatId, it, text = "Лимит исчерпан", showAlert = true) }
-                enqueueMessage(
-                    chatId,
-                    buildOwnerVenueQuotaText(
-                        quota.summary.usedVenuesCount,
-                        quota.summary.account.allowedVenuesCount,
-                        quota.summary.availableVenuesCount,
-                    ),
-                    TelegramKeyboards.inlineOwnerVenueQuotaActions(canCreateVenue = false),
-                )
-                return
-            }
-            VenueOwnerQuotaCheckResult.NotFound,
-            VenueOwnerQuotaCheckResult.DatabaseError,
-            -> {
-                callbackQueryId?.let { enqueueCallbackAnswer(chatId, it, text = "База недоступна", showAlert = true) }
-                if (callbackQueryId == null) enqueueMessage(chatId, "База недоступна, попробуйте позже.")
-                return
-            }
-        }
-        dialogStateRepository.set(chatId, DialogState(DialogStateType.OWNER_VENUE_CREATE_WAIT_NAME))
-        enqueueMessage(chatId, "Введите название нового заведения.")
-        callbackQueryId?.let { enqueueCallbackAnswer(chatId, it, text = "Введите название") }
-    }
-
-    private suspend fun proceedOwnerVenueCreateName(
-        chatId: Long,
-        from: User?,
-        text: String,
-    ) {
-        val userId = from?.id
-        val name = normalizeVenueConnectionRequiredField(text, maxLength = 120)
-        if (userId == null || name == null) {
-            enqueueMessage(chatId, "Название должно быть одной строкой до 120 символов.")
-            return
-        }
-        dialogStateRepository.set(
-            chatId,
-            DialogState(
-                DialogStateType.OWNER_VENUE_CREATE_WAIT_CITY,
-                mapOf(
-                    "owner_user_id" to userId.toString(),
-                    "name" to name,
-                ),
-            ),
-        )
-        enqueueMessage(chatId, "Введите город нового заведения.")
-    }
-
-    private suspend fun proceedOwnerVenueCreateCity(
-        chatId: Long,
-        from: User?,
-        text: String,
-        state: DialogState,
-    ) {
-        val userId = from?.id ?: state.payload["owner_user_id"]?.toLongOrNull()
-        val city = normalizeVenueConnectionRequiredField(text, maxLength = 80)
-        val name = state.payload["name"]?.takeIf { it.isNotBlank() }
-        if (userId == null || name == null || city == null) {
-            enqueueMessage(chatId, "Город должен быть одной строкой до 80 символов.")
-            return
-        }
-        dialogStateRepository.set(
-            chatId,
-            DialogState(
-                DialogStateType.OWNER_VENUE_CREATE_WAIT_ADDRESS,
-                mapOf(
-                    "owner_user_id" to userId.toString(),
-                    "name" to name,
-                    "city" to city,
-                ),
-            ),
-        )
-        enqueueMessage(chatId, "Введите адрес нового заведения.")
-    }
-
-    private suspend fun proceedOwnerVenueCreateAddress(
-        chatId: Long,
-        from: User?,
-        text: String,
-        state: DialogState,
-    ) {
-        val userId = from?.id ?: state.payload["owner_user_id"]?.toLongOrNull()
-        val name = state.payload["name"]?.takeIf { it.isNotBlank() }
-        val city = state.payload["city"]?.takeIf { it.isNotBlank() }
-        val address = normalizeVenueConnectionRequiredField(text, maxLength = 200)
-        if (userId == null || name == null || city == null || address == null) {
-            enqueueMessage(chatId, "Адрес должен быть одной строкой до 200 символов.")
-            return
-        }
-        val result =
-            venueOwnerAccountRepository.createOwnedDraftVenue(
-                ownerUserId = userId,
-                name = name,
-                city = city,
-                address = address,
-                defaultLimit = 1,
-            )
-        when (result) {
-            is VenueOwnerVenueCreationResult.Success -> {
-                dialogStateRepository.clear(chatId)
-                updateVenueTimezoneFromLocationBestEffort(
-                    venueId = result.venueId,
-                    city = city,
-                    address = address,
-                )
-                saveSelectedVenueBestEffort(chatId, userId, result.venueId)
-                enqueueMessage(chatId, "✅ Заведение создано как черновик. Откройте карточку и завершите настройку.")
-                showVenueOwnerVenueCardByUserId(chatId, userId)
-            }
-            is VenueOwnerVenueCreationResult.LimitExceeded -> {
-                dialogStateRepository.clear(chatId)
-                enqueueMessage(
-                    chatId,
-                    buildOwnerVenueQuotaText(
-                        result.summary.usedVenuesCount,
-                        result.summary.account.allowedVenuesCount,
-                        result.summary.availableVenuesCount,
-                    ),
-                    TelegramKeyboards.inlineOwnerVenueQuotaActions(canCreateVenue = false),
-                )
-            }
-            VenueOwnerVenueCreationResult.DatabaseError ->
-                enqueueMessage(chatId, "База недоступна, попробуйте позже.")
-        }
+        dialogStateRepository.clear(chatId)
+        enqueueMessage(chatId, "Создание заведений теперь начинается с общей заявки на подключение.")
+        showAddVenueEntry(chatId, from)
     }
 
     private suspend fun promptOwnerLimitRequestCount(

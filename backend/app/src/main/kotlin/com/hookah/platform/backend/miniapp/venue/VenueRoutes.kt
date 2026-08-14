@@ -15,6 +15,7 @@ import com.hookah.platform.backend.miniapp.venue.location.VenueLocationSuggestPr
 import com.hookah.platform.backend.miniapp.venue.location.VenueLocationSuggestionItem
 import com.hookah.platform.backend.miniapp.venue.location.VenueLocationSuggestionKind
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffModuleSettingsRepository
+import com.hookah.platform.backend.onboarding.VenueOnboardingService
 import com.hookah.platform.backend.telegram.StaffChatNotificationResult
 import com.hookah.platform.backend.telegram.StaffChatNotifier
 import com.hookah.platform.backend.telegram.db.StaffChatLinkCodeRepository
@@ -22,9 +23,15 @@ import com.hookah.platform.backend.telegram.db.VenueAccessRepository
 import com.hookah.platform.backend.telegram.db.VenueBookingDateOverride
 import com.hookah.platform.backend.telegram.db.VenueBookingHours
 import com.hookah.platform.backend.telegram.db.VenueBookingHoursRepository
+import com.hookah.platform.backend.telegram.db.VenueConnectionRequestMutationResult
+import com.hookah.platform.backend.telegram.db.VenueConnectionRequestRecord
+import com.hookah.platform.backend.telegram.db.VenueConnectionRequestRepository
+import com.hookah.platform.backend.telegram.db.VenueConnectionRequestSubmitResult
+import com.hookah.platform.backend.telegram.db.VenueOnboardingSource
 import com.hookah.platform.backend.telegram.db.VenuePublicCardSettings
 import com.hookah.platform.backend.telegram.db.VenueRepository
 import com.hookah.platform.backend.telegram.db.VenueSettingsRepository
+import io.ktor.server.application.ApplicationCall
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
@@ -52,6 +59,14 @@ private const val SCHEDULE_GUEST_NOTE_MAX_LENGTH = 240
 private const val MAX_SCHEDULE_RANGE_DAYS = 370L
 private val DEFAULT_SCHEDULE_OPENS_AT: LocalTime = LocalTime.of(18, 0)
 private val DEFAULT_SCHEDULE_CLOSES_AT: LocalTime = LocalTime.MIDNIGHT
+private val OPERATIONAL_OWNER_VENUE_STATUSES =
+    setOf(
+        VenueStatus.DRAFT,
+        VenueStatus.PUBLISHED,
+        VenueStatus.HIDDEN,
+        VenueStatus.PAUSED,
+        VenueStatus.SUSPENDED,
+    )
 
 @Serializable
 data class VenueMeResponse(
@@ -68,6 +83,47 @@ data class VenueAccessDto(
     val role: String,
     val permissions: List<String>,
     val teamScheduleModuleEnabled: Boolean = true,
+)
+
+@Serializable
+data class VenueOwnershipResponse(
+    val userId: Long,
+    val venues: List<VenueOwnershipVenueDto>,
+    val applications: List<VenueConnectionApplicationDto>,
+)
+
+@Serializable
+data class VenueOwnershipVenueDto(
+    val venueId: Long,
+    val venueName: String? = null,
+    val venueCity: String? = null,
+    val venueStatus: String? = null,
+)
+
+@Serializable
+data class VenueConnectionApplicationDto(
+    val id: Long,
+    val venueName: String,
+    val city: String,
+    val contact: String,
+    val comment: String? = null,
+    val status: String,
+    val createdAt: String,
+    val linkedVenueId: Long? = null,
+)
+
+@Serializable
+data class VenueConnectionApplicationWriteRequest(
+    val venueName: String,
+    val city: String,
+    val contact: String,
+    val comment: String? = null,
+)
+
+@Serializable
+data class VenueConnectionApplicationWriteResponse(
+    val application: VenueConnectionApplicationDto,
+    val created: Boolean? = null,
 )
 
 @Serializable
@@ -212,6 +268,7 @@ data class VenueScheduleOverrideRangeUpdateRequest(
 
 fun Route.venueRoutes(
     venueAccessRepository: VenueAccessRepository,
+    venueOnboardingService: VenueOnboardingService,
     staffChatLinkCodeRepository: StaffChatLinkCodeRepository,
     venueRepository: VenueRepository,
     venueBookingHoursRepository: VenueBookingHoursRepository,
@@ -255,6 +312,111 @@ fun Route.venueRoutes(
                 throw ForbiddenException()
             }
             call.respond(VenueMeResponse(userId = userId, venues = venues))
+        }
+
+        route("/ownership") {
+            get {
+                val userId = call.requireUserId()
+                val ownerMemberships = requireOperationalOwner(venueAccessRepository, userId)
+                call.respond(
+                    VenueOwnershipResponse(
+                        userId = userId,
+                        venues =
+                            ownerMemberships.map { membership ->
+                                VenueOwnershipVenueDto(
+                                    venueId = membership.venueId,
+                                    venueName = membership.venueName,
+                                    venueCity = membership.venueCity,
+                                    venueStatus = membership.venueStatus,
+                                )
+                            },
+                        applications =
+                            venueOnboardingService
+                                .listOwnApplications(userId)
+                                .map(VenueConnectionRequestRecord::toVenueApplicationDto),
+                    ),
+                )
+            }
+
+            post("/applications") {
+                val userId = call.requireUserId()
+                requireOperationalOwner(venueAccessRepository, userId)
+                val request = call.receive<VenueConnectionApplicationWriteRequest>().normalized()
+                val result =
+                    venueOnboardingService.submitApplication(
+                        applicantUserId = userId,
+                        venueName = request.venueName,
+                        city = request.city,
+                        contact = request.contact,
+                        comment = request.comment,
+                        source = VenueOnboardingSource.VENUE_MINI_APP,
+                    )
+                when (result) {
+                    is VenueConnectionRequestSubmitResult.Success ->
+                        call.respond(
+                            VenueConnectionApplicationWriteResponse(
+                                application = result.request.toVenueApplicationDto(),
+                                created = result.created,
+                            ),
+                        )
+                    VenueConnectionRequestSubmitResult.ApplicantNotOperationalOwner -> throw ForbiddenException()
+                }
+            }
+
+            put("/applications/{requestId}") {
+                val userId = call.requireUserId()
+                requireOperationalOwner(venueAccessRepository, userId)
+                val requestId = call.requireVenueConnectionRequestId()
+                val request = call.receive<VenueConnectionApplicationWriteRequest>().normalized()
+                when (
+                    val result =
+                        venueOnboardingService.updateOwnPendingApplication(
+                            requestId = requestId,
+                            applicantUserId = userId,
+                            venueName = request.venueName,
+                            city = request.city,
+                            contact = request.contact,
+                            comment = request.comment,
+                            source = VenueOnboardingSource.VENUE_MINI_APP,
+                        )
+                ) {
+                    is VenueConnectionRequestMutationResult.Success ->
+                        call.respond(
+                            VenueConnectionApplicationWriteResponse(
+                                application = result.request.toVenueApplicationDto(),
+                            ),
+                        )
+                    is VenueConnectionRequestMutationResult.InvalidState ->
+                        throw InvalidInputException("Изменить можно только ожидающую решения заявку.")
+                    VenueConnectionRequestMutationResult.ApplicantNotOperationalOwner -> throw ForbiddenException()
+                    VenueConnectionRequestMutationResult.NotFound -> throw NotFoundException()
+                }
+            }
+
+            post("/applications/{requestId}/cancel") {
+                val userId = call.requireUserId()
+                requireOperationalOwner(venueAccessRepository, userId)
+                val requestId = call.requireVenueConnectionRequestId()
+                when (
+                    val result =
+                        venueOnboardingService.cancelOwnPendingApplication(
+                            requestId = requestId,
+                            applicantUserId = userId,
+                            source = VenueOnboardingSource.VENUE_MINI_APP,
+                        )
+                ) {
+                    is VenueConnectionRequestMutationResult.Success ->
+                        call.respond(
+                            VenueConnectionApplicationWriteResponse(
+                                application = result.request.toVenueApplicationDto(),
+                            ),
+                        )
+                    is VenueConnectionRequestMutationResult.InvalidState ->
+                        throw InvalidInputException("Отменить можно только ожидающую решения заявку.")
+                    VenueConnectionRequestMutationResult.ApplicantNotOperationalOwner -> throw ForbiddenException()
+                    VenueConnectionRequestMutationResult.NotFound -> throw NotFoundException()
+                }
+            }
         }
 
         get("/{venueId}/public-review-url") {
@@ -890,6 +1052,74 @@ private fun normalizeCoordinates(
     }
     return latitude to longitude
 }
+
+private suspend fun requireOperationalOwner(
+    venueAccessRepository: VenueAccessRepository,
+    userId: Long,
+): List<VenueAccessRepository.VenueMembership> {
+    val ownerMemberships =
+        venueAccessRepository
+            .listVenueMemberships(userId)
+            .filter { membership -> membership.role.equals("OWNER", ignoreCase = true) }
+    val hasOperationalVenue =
+        ownerMemberships.any { membership ->
+            val status = VenueStatus.fromDb(membership.venueStatus ?: VenueStatus.DRAFT.dbValue)
+            status != null && status in OPERATIONAL_OWNER_VENUE_STATUSES
+        }
+    if (!hasOperationalVenue) throw ForbiddenException()
+    return ownerMemberships
+}
+
+private fun ApplicationCall.requireVenueConnectionRequestId(): Long =
+    parameters["requestId"]?.toLongOrNull()?.takeIf { it > 0L } ?: throw NotFoundException()
+
+private fun VenueConnectionApplicationWriteRequest.normalized(): VenueConnectionApplicationWriteRequest =
+    VenueConnectionApplicationWriteRequest(
+        venueName = normalizeVenueApplicationRequired(venueName, 200, "Название"),
+        city = normalizeVenueApplicationRequired(city, 120, "Город"),
+        contact = normalizeVenueApplicationRequired(contact, 200, "Контакт"),
+        comment = normalizeVenueApplicationComment(comment),
+    )
+
+private fun normalizeVenueApplicationRequired(
+    value: String,
+    maxLength: Int,
+    fieldLabel: String,
+): String {
+    val normalized = value.trim()
+    if (normalized.isBlank() || normalized.length > maxLength) {
+        throw InvalidInputException("$fieldLabel должен содержать от 1 до $maxLength символов.")
+    }
+    return normalized
+}
+
+private fun normalizeVenueApplicationComment(value: String?): String? {
+    val normalized = value?.trim().orEmpty()
+    if (normalized.length > 500) {
+        throw InvalidInputException("Комментарий должен быть не длиннее 500 символов.")
+    }
+    return normalized.ifBlank { null }
+}
+
+private fun VenueConnectionRequestRecord.toVenueApplicationDto(): VenueConnectionApplicationDto =
+    VenueConnectionApplicationDto(
+        id = id,
+        venueName = venueName,
+        city = city,
+        contact = contact,
+        comment = comment,
+        status =
+            when (status.uppercase()) {
+                VenueConnectionRequestRepository.STATUS_PENDING,
+                VenueConnectionRequestRepository.STATUS_APPROVED,
+                VenueConnectionRequestRepository.STATUS_REJECTED,
+                VenueConnectionRequestRepository.STATUS_CANCELLED,
+                -> status.uppercase()
+                else -> throw IllegalStateException("Unsupported venue connection request status")
+            },
+        createdAt = createdAt.toString(),
+        linkedVenueId = linkedVenueId,
+    )
 
 private fun VenuePublicCardSettings.toResponse(): VenuePublicCardSettingsResponse =
     locationDisplay().let { location ->

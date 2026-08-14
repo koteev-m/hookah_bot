@@ -98,6 +98,13 @@ jobs:
             --tests "VenueStaffRoutesTest" \
             --tests "VenueStaffRepositoryTest" \
             --tests "PlatformVenueRoutesTest" \
+            --tests "PlatformRoutesTest" \
+            --tests "PlatformVenueRepositoryTest" \
+            --tests "PlatformVenueMemberRepositoryTest" \
+            --tests "VenueOwnerAccountRepositoryTest" \
+            --tests "VenueConnectionRequestRepositoryTest" \
+            --tests "VenueOnboardingRoutesTest" \
+            --tests "PlatformOnboardingRoutesTest" \
             --tests "com.hookah.platform.backend.telegram.TelegramBotRouterVenueConnectionRequestFlowTest" \
             --tests "TelegramBotRouterTableTokenTest" \
             --tests "TelegramKeyboardsTest" \
@@ -133,6 +140,13 @@ jobs:
               "com.hookah.platform.backend.miniapp.venue.VenueStaffRoutesTest",
               "com.hookah.platform.backend.miniapp.venue.staff.VenueStaffRepositoryTest",
               "com.hookah.platform.backend.platform.PlatformVenueRoutesTest",
+              "com.hookah.platform.backend.platform.PlatformRoutesTest",
+              "com.hookah.platform.backend.platform.PlatformVenueRepositoryTest",
+              "com.hookah.platform.backend.platform.PlatformVenueMemberRepositoryTest",
+              "com.hookah.platform.backend.platform.VenueOwnerAccountRepositoryTest",
+              "com.hookah.platform.backend.telegram.db.VenueConnectionRequestRepositoryTest",
+              "com.hookah.platform.backend.miniapp.venue.VenueOnboardingRoutesTest",
+              "com.hookah.platform.backend.platform.PlatformOnboardingRoutesTest",
               "com.hookah.platform.backend.telegram.TelegramBotRouterVenueConnectionRequestFlowTest",
               "com.hookah.platform.backend.telegram.TelegramBotRouterTableTokenTest",
               "com.hookah.platform.backend.telegram.TelegramKeyboardsTest",
@@ -142,8 +156,17 @@ jobs:
               "com.hookah.platform.backend.telegram.db.GuestOrderIdempotencyFingerprintTest": 7,
               "com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepositoryTest": 54,
               "com.hookah.platform.backend.miniapp.venue.VenueMenuRoutesTest": 46,
+              "com.hookah.platform.backend.platform.PlatformVenueRoutesTest": 13,
+              "com.hookah.platform.backend.platform.PlatformRoutesTest": 9,
+              "com.hookah.platform.backend.platform.PlatformVenueRepositoryTest": 1,
+              "com.hookah.platform.backend.platform.PlatformVenueMemberRepositoryTest": 1,
+              "com.hookah.platform.backend.platform.VenueOwnerAccountRepositoryTest": 9,
+              "com.hookah.platform.backend.telegram.db.VenueConnectionRequestRepositoryTest": 11,
+              "com.hookah.platform.backend.miniapp.venue.VenueOnboardingRoutesTest": 8,
+              "com.hookah.platform.backend.platform.PlatformOnboardingRoutesTest": 15,
               "com.hookah.platform.backend.telegram.TelegramBotRouterVenueConnectionRequestFlowTest": 18,
-              "com.hookah.platform.backend.telegram.TelegramBotRouterTableTokenTest": 551,
+              "com.hookah.platform.backend.telegram.TelegramBotRouterTableTokenTest": 552,
+              "com.hookah.platform.backend.telegram.TelegramKeyboardsTest": 169,
           }
           totals = {key: 0 for key in ("tests", "skipped", "failures", "errors")}
           problems = []
@@ -183,6 +206,7 @@ jobs:
             --tests "PromotionConfigurationConcurrencyPostgresTest" \
             --tests "VenueStaffMutationConcurrencyPostgresTest" \
             --tests "VenueMenuOptionNormalizationConcurrencyPostgresTest" \
+            --tests "VenueOnboardingConcurrencyPostgresTest" \
             --tests "GuestOrderIdempotencyConcurrencyPostgresTest" \
             --console=plain
       - name: Assert PostgreSQL activation promotion staff menu and guest order test results
@@ -233,6 +257,14 @@ jobs:
                       "GuestOrderIdempotencyConcurrencyPostgresTest.xml"
                   ),
                   9,
+              ),
+              (
+                  "venue onboarding serialization and create-link",
+                  report_dir / (
+                      "TEST-com.hookah.platform.backend.telegram.db."
+                      "VenueOnboardingConcurrencyPostgresTest.xml"
+                  ),
+                  7,
               ),
           ]
           problems = []

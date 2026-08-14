@@ -12,19 +12,14 @@ import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepositor
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepository
 import com.hookah.platform.backend.platform.PlatformEffectivePrice
-import com.hookah.platform.backend.platform.PlatformOwnerAssignmentResult
 import com.hookah.platform.backend.platform.PlatformPriceScheduleItem
 import com.hookah.platform.backend.platform.PlatformSubscriptionSettings
 import com.hookah.platform.backend.platform.PlatformSubscriptionSettingsRepository
 import com.hookah.platform.backend.platform.PlatformSubscriptionSnapshot
 import com.hookah.platform.backend.platform.PlatformVenueDetail
-import com.hookah.platform.backend.platform.PlatformVenueMember
 import com.hookah.platform.backend.platform.PlatformVenueMemberRepository
 import com.hookah.platform.backend.platform.PlatformVenueRepository
-import com.hookah.platform.backend.platform.VenueOwnerAccount
 import com.hookah.platform.backend.platform.VenueOwnerAccountRepository
-import com.hookah.platform.backend.platform.VenueOwnerQuotaCheckResult
-import com.hookah.platform.backend.platform.VenueOwnerQuotaSummary
 import com.hookah.platform.backend.platform.VenueStatusAction
 import com.hookah.platform.backend.platform.VenueStatusChangeResult
 import com.hookah.platform.backend.telegram.db.ChatContextRepository
@@ -35,12 +30,17 @@ import com.hookah.platform.backend.telegram.db.StaffCallRepository
 import com.hookah.platform.backend.telegram.db.StaffChatLinkCodeRepository
 import com.hookah.platform.backend.telegram.db.TableTokenRepository
 import com.hookah.platform.backend.telegram.db.TelegramUserContact
+import com.hookah.platform.backend.telegram.db.TelegramVenueContextRepository
 import com.hookah.platform.backend.telegram.db.UserRepository
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
 import com.hookah.platform.backend.telegram.db.VenueBookingHoursRepository
+import com.hookah.platform.backend.telegram.db.VenueConnectionRequestCreateLinkResult
+import com.hookah.platform.backend.telegram.db.VenueConnectionRequestMutationResult
 import com.hookah.platform.backend.telegram.db.VenueConnectionRequestRecord
 import com.hookah.platform.backend.telegram.db.VenueConnectionRequestRepository
+import com.hookah.platform.backend.telegram.db.VenueConnectionRequestSubmitResult
 import com.hookah.platform.backend.telegram.db.VenueMenuSectionImagesRepository
+import com.hookah.platform.backend.telegram.db.VenueOnboardingSource
 import com.hookah.platform.backend.telegram.db.VenueRepository
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -56,7 +56,7 @@ import java.time.LocalDate
 
 class TelegramBotRouterVenueConnectionRequestFlowTest {
     @Test
-    fun `add venue flow creates connection request and sends confirmation`() =
+    fun `authenticated user without owner membership submits first venue application`() =
         runBlocking {
             val apiClient: TelegramApiClient = mockk(relaxed = true)
             val outboxEnqueuer: TelegramOutboxEnqueuer = mockk(relaxed = true)
@@ -94,14 +94,19 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
             }
             coEvery { venueConnectionRequestRepository.findActiveUnlinkedByUser(any()) } returns null
             coEvery {
-                venueConnectionRequestRepository.createRequest(
+                venueConnectionRequestRepository.createOrReturnActive(
                     telegramUserId = 501L,
                     venueName = "Дым и Лёд",
                     city = "Москва",
                     contact = "@smoke_owner",
                     comment = null,
+                    source = VenueOnboardingSource.TELEGRAM_BOT,
                 )
-            } returns 1001L
+            } returns
+                VenueConnectionRequestSubmitResult.Success(
+                    connectionRequest(1001L, 501L, "Дым и Лёд", contact = "@smoke_owner"),
+                    created = true,
+                )
 
             val router =
                 TelegramBotRouter(
@@ -197,16 +202,36 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
             )
 
             coVerify {
-                venueConnectionRequestRepository.createRequest(
+                venueConnectionRequestRepository.createOrReturnActive(
                     telegramUserId = 501L,
                     venueName = "Дым и Лёд",
                     city = "Москва",
                     contact = "@smoke_owner",
                     comment = null,
+                    source = VenueOnboardingSource.TELEGRAM_BOT,
                 )
             }
+            coVerify(exactly = 0) { venueAccessRepository.listVenueMemberships(501L) }
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(chatId, "✅ Заявка отправлена. Мы свяжемся с вами.", any())
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    chatId,
+                    match {
+                        it.contains("Заявка #1001") &&
+                            it.contains("Название: Дым и Лёд") &&
+                            it.contains("Город: Москва") &&
+                            it.contains("Контакт: @smoke_owner") &&
+                            it.contains("Статус: На рассмотрении")
+                    },
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.callbackData == "venue_connect_pending_edit:1001"
+                            }
+                    },
+                )
             }
         }
 
@@ -248,15 +273,22 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
                 Unit
             }
             coEvery { venueConnectionRequestRepository.findActiveUnlinkedByUser(any()) } returns null
+            coEvery { venueAccessRepository.listVenueMemberships(601L) } returns
+                listOf(VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER"))
             coEvery {
-                venueConnectionRequestRepository.createRequest(
+                venueConnectionRequestRepository.createOrReturnActive(
                     telegramUserId = 601L,
                     venueName = "Lounge X",
                     city = "Москва",
                     contact = "@ownerx",
                     comment = null,
+                    source = VenueOnboardingSource.TELEGRAM_BOT,
                 )
-            } returns 2001L
+            } returns
+                VenueConnectionRequestSubmitResult.Success(
+                    connectionRequest(2001L, 601L, "Lounge X"),
+                    created = true,
+                )
 
             val router =
                 TelegramBotRouter(
@@ -366,12 +398,13 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
             )
 
             coVerify {
-                venueConnectionRequestRepository.createRequest(
+                venueConnectionRequestRepository.createOrReturnActive(
                     telegramUserId = 601L,
                     venueName = "Lounge X",
                     city = "Москва",
                     contact = "@ownerx",
                     comment = null,
+                    source = VenueOnboardingSource.TELEGRAM_BOT,
                 )
             }
         }
@@ -414,15 +447,22 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
                 Unit
             }
             coEvery { venueConnectionRequestRepository.findActiveUnlinkedByUser(any()) } returns null
+            coEvery { venueAccessRepository.listVenueMemberships(602L) } returns
+                listOf(VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER"))
             coEvery {
-                venueConnectionRequestRepository.createRequest(
+                venueConnectionRequestRepository.createOrReturnActive(
                     telegramUserId = 602L,
                     venueName = "Lounge Y",
                     city = "Сочи",
                     contact = "@owner_y | +7 999 000-00-00",
                     comment = null,
+                    source = VenueOnboardingSource.TELEGRAM_BOT,
                 )
-            } returns 2002L
+            } returns
+                VenueConnectionRequestSubmitResult.Success(
+                    connectionRequest(2002L, 602L, "Lounge Y", city = "Сочи"),
+                    true,
+                )
 
             val router =
                 TelegramBotRouter(
@@ -530,18 +570,19 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
             )
 
             coVerify {
-                venueConnectionRequestRepository.createRequest(
+                venueConnectionRequestRepository.createOrReturnActive(
                     telegramUserId = 602L,
                     venueName = "Lounge Y",
                     city = "Сочи",
                     contact = "@owner_y | +7 999 000-00-00",
                     comment = null,
+                    source = VenueOnboardingSource.TELEGRAM_BOT,
                 )
             }
         }
 
     @Test
-    fun `add venue flow shows existing pending request and blocks new one`() =
+    fun `telegram exact retry returns authoritative request and distinct payload creates another`() =
         runBlocking {
             val apiClient: TelegramApiClient = mockk(relaxed = true)
             val outboxEnqueuer: TelegramOutboxEnqueuer = mockk(relaxed = true)
@@ -549,7 +590,7 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
             val userRepository: UserRepository = mockk(relaxed = true)
             val tableTokenRepository: TableTokenRepository = mockk()
             val chatContextRepository: ChatContextRepository = mockk(relaxed = true)
-            val dialogStateRepository: DialogStateRepository = mockk(relaxed = true)
+            val dialogStateRepository: DialogStateRepository = mockk()
             val ordersRepository: OrdersRepository = mockk()
             val staffCallRepository: StaffCallRepository = mockk()
             val staffChatLinkCodeRepository: StaffChatLinkCodeRepository = mockk()
@@ -565,10 +606,19 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
             val venueConnectionRequestRepository: VenueConnectionRequestRepository = mockk()
 
             coEvery { idempotencyRepository.tryAcquire(any(), any(), any()) } returns true
-            coEvery { dialogStateRepository.get(any()) } returns DialogState(DialogStateType.NONE)
-            coEvery {
-                venueConnectionRequestRepository.findActiveUnlinkedByUser(7010L)
-            } returns
+            val states = mutableMapOf<Long, DialogState>()
+            coEvery { dialogStateRepository.get(any()) } answers {
+                states[firstArg<Long>()] ?: DialogState(DialogStateType.NONE)
+            }
+            coEvery { dialogStateRepository.set(any(), any()) } answers {
+                states[firstArg()] = secondArg()
+                Unit
+            }
+            coEvery { dialogStateRepository.clear(any()) } answers {
+                states.remove(firstArg<Long>())
+                Unit
+            }
+            val existing =
                 VenueConnectionRequestRecord(
                     id = 4001L,
                     telegramUserId = 7010L,
@@ -576,8 +626,40 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
                     city = "Москва",
                     contact = "@owner7010",
                     comment = null,
-                    status = "PENDING",
+                    status = VenueConnectionRequestRepository.STATUS_PENDING,
                     createdAt = Instant.parse("2026-04-03T12:30:00Z"),
+                )
+            coEvery {
+                venueConnectionRequestRepository.createOrReturnActive(
+                    telegramUserId = 7010L,
+                    venueName = "Smoke Place",
+                    city = "Москва",
+                    contact = "@owner7010",
+                    comment = null,
+                    source = VenueOnboardingSource.TELEGRAM_BOT,
+                )
+            } returns
+                VenueConnectionRequestSubmitResult.Success(existing, created = false)
+            coEvery {
+                venueConnectionRequestRepository.createOrReturnActive(
+                    telegramUserId = 7010L,
+                    venueName = "Second Place",
+                    city = "Казань",
+                    contact = "+7 900 000-00-01",
+                    comment = "Вторая точка",
+                    source = VenueOnboardingSource.TELEGRAM_BOT,
+                )
+            } returns
+                VenueConnectionRequestSubmitResult.Success(
+                    connectionRequest(
+                        id = 4002L,
+                        userId = 7010L,
+                        venueName = "Second Place",
+                        city = "Казань",
+                        contact = "+7 900 000-00-01",
+                        comment = "Вторая точка",
+                    ),
+                    created = true,
                 )
 
             val router =
@@ -622,31 +704,94 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
                 )
 
             val chatId = 704L
-            val from = User(id = 7010L, username = "owner7010")
-            router.process(
-                TelegramUpdate(
-                    updateId = 40,
-                    message =
-                        Message(
-                            messageId = 40,
-                            chat = Chat(chatId, "private"),
-                            fromUser = from,
-                            text = "🤝 Добавить свою кальянную",
-                        ),
-                ),
-            )
+            val from = User(id = 7010L)
 
-            coVerify(exactly = 0) {
-                venueConnectionRequestRepository.createRequest(any(), any(), any(), any(), any())
+            suspend fun sendText(
+                updateId: Long,
+                text: String,
+            ) {
+                router.process(
+                    TelegramUpdate(
+                        updateId = updateId,
+                        message =
+                            Message(
+                                messageId = updateId,
+                                chat = Chat(chatId, "private"),
+                                fromUser = from,
+                                text = text,
+                            ),
+                    ),
+                )
+            }
+
+            sendText(40, "🤝 Добавить свою кальянную")
+            sendText(41, "  Smoke Place  ")
+            sendText(42, " Москва ")
+            sendText(43, "@owner7010")
+            sendText(44, "-")
+
+            coVerify(exactly = 0) { venueConnectionRequestRepository.findActiveUnlinkedByUser(any()) }
+            coVerify {
+                venueConnectionRequestRepository.createOrReturnActive(
+                    telegramUserId = 7010L,
+                    venueName = "Smoke Place",
+                    city = "Москва",
+                    contact = "@owner7010",
+                    comment = null,
+                    source = VenueOnboardingSource.TELEGRAM_BOT,
+                )
             }
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     chatId,
-                    match { it.contains("У вас уже есть активная заявка.") && it.contains("Статус: На рассмотрении") },
+                    match {
+                        it.contains("Заявка #4001") &&
+                            it.contains("Название: Smoke Place") &&
+                            it.contains("Город: Москва") &&
+                            it.contains("Контакт: @owner7010") &&
+                            it.contains("Статус: На рассмотрении")
+                    },
                     match {
                         it is InlineKeyboardMarkup &&
                             it.inlineKeyboard.flatten().any { button ->
                                 button.callbackData == "venue_connect_pending_edit:4001"
+                            }
+                    },
+                )
+            }
+
+            sendText(45, "🤝 Добавить свою кальянную")
+            sendText(46, "Second Place")
+            sendText(47, "Казань")
+            sendText(48, "+7 900 000-00-01")
+            sendText(49, "Вторая точка")
+
+            coVerify {
+                venueConnectionRequestRepository.createOrReturnActive(
+                    telegramUserId = 7010L,
+                    venueName = "Second Place",
+                    city = "Казань",
+                    contact = "+7 900 000-00-01",
+                    comment = "Вторая точка",
+                    source = VenueOnboardingSource.TELEGRAM_BOT,
+                )
+            }
+            coVerify { outboxEnqueuer.enqueueSendMessage(chatId, "✅ Заявка отправлена. Мы свяжемся с вами.", any()) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    chatId,
+                    match {
+                        it.contains("Заявка #4002") &&
+                            it.contains("Название: Second Place") &&
+                            it.contains("Город: Казань") &&
+                            it.contains("Контакт: +7 900 000-00-01") &&
+                            it.contains("Комментарий: Вторая точка") &&
+                            it.contains("Статус: На рассмотрении")
+                    },
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.callbackData == "venue_connect_pending_edit:4002"
                             }
                     },
                 )
@@ -679,8 +824,16 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
 
             coEvery { idempotencyRepository.tryAcquire(any(), any(), any()) } returns true
             coEvery {
-                venueConnectionRequestRepository.cancelPendingRequest(5001L, 7011L)
-            } returns true
+                venueConnectionRequestRepository.cancel(5001L, 7011L, VenueOnboardingSource.TELEGRAM_BOT)
+            } returns
+                VenueConnectionRequestMutationResult.Success(
+                    connectionRequest(
+                        5001L,
+                        7011L,
+                        "Smoke",
+                        status = VenueConnectionRequestRepository.STATUS_CANCELLED,
+                    ),
+                )
 
             val router =
                 TelegramBotRouter(
@@ -738,7 +891,7 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
                 ),
             )
 
-            coVerify { venueConnectionRequestRepository.cancelPendingRequest(5001L, 7011L) }
+            coVerify { venueConnectionRequestRepository.cancel(5001L, 7011L, VenueOnboardingSource.TELEGRAM_BOT) }
             coVerify { outboxEnqueuer.enqueueSendMessage(chatId, "✅ Заявка отменена.", any()) }
         }
 
@@ -769,11 +922,16 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
 
             coEvery { idempotencyRepository.tryAcquire(any(), any(), any()) } returns true
             coEvery {
-                venueConnectionRequestRepository.setStatusByOwner(
-                    6001L,
-                    VenueConnectionRequestRepository.STATUS_APPROVED,
+                venueConnectionRequestRepository.decide(
+                    requestId = 6001L,
+                    actorUserId = 999L,
+                    targetStatus = VenueConnectionRequestRepository.STATUS_APPROVED,
+                    source = VenueOnboardingSource.TELEGRAM_BOT,
                 )
-            } returns true
+            } returns
+                VenueConnectionRequestMutationResult.Success(
+                    connectionRequest(6001L, 7011L, "Smoke", status = VenueConnectionRequestRepository.STATUS_APPROVED),
+                )
 
             val router =
                 TelegramBotRouter(
@@ -833,9 +991,11 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
             )
 
             coVerify {
-                venueConnectionRequestRepository.setStatusByOwner(
-                    6001L,
-                    VenueConnectionRequestRepository.STATUS_APPROVED,
+                venueConnectionRequestRepository.decide(
+                    requestId = 6001L,
+                    actorUserId = 999L,
+                    targetStatus = VenueConnectionRequestRepository.STATUS_APPROVED,
+                    source = VenueOnboardingSource.TELEGRAM_BOT,
                 )
             }
             coVerify(exactly = 0) { venueMenuRepository.createMissingCategories(any(), any(), any(), any()) }
@@ -878,6 +1038,7 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
             val venueMenuSectionImagesRepository: VenueMenuSectionImagesRepository = mockk(relaxed = true)
             val venueMenuRepository: VenueMenuRepository = mockk(relaxed = true)
             val venueAccessRepository: VenueAccessRepository = mockk()
+            val venueContextRepository: TelegramVenueContextRepository = mockk(relaxed = true)
             val subscriptionRepository: SubscriptionRepository = mockk()
             val guestMenuRepository: GuestMenuRepository = mockk()
             val tableSessionRepository: TableSessionRepository = mockk(relaxed = true)
@@ -889,7 +1050,7 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
             val venueOwnerAccountRepository: VenueOwnerAccountRepository = mockk()
 
             coEvery { idempotencyRepository.tryAcquire(any(), any(), any()) } returns true
-            coEvery { venueConnectionRequestRepository.findById(7001L) } returns
+            val approvedRequest =
                 VenueConnectionRequestRecord(
                     id = 7001L,
                     telegramUserId = 7011L,
@@ -908,130 +1069,23 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
                     commercialNote = "Индивидуальные условия",
                 )
             coEvery {
-                venueOwnerAccountRepository.getOrCreateForOwner(
-                    userId = 7011L,
-                    defaultLimit = 1,
-                    updatedByUserId = 999L,
-                )
-            } returns
-                VenueOwnerAccount(
-                    id = 3001L,
-                    primaryOwnerUserId = 7011L,
-                    allowedVenuesCount = 1,
-                    notes = null,
-                    commercialNote = null,
-                    createdAt = Instant.parse("2026-04-03T12:30:30Z"),
-                    updatedAt = Instant.parse("2026-04-03T12:30:30Z"),
-                    updatedByUserId = 999L,
-                )
-            coEvery { venueOwnerAccountRepository.ensureCanCreateVenue(3001L) } returns
-                VenueOwnerQuotaCheckResult.Allowed(
-                    VenueOwnerQuotaSummary(
-                        account =
-                            VenueOwnerAccount(
-                                id = 3001L,
-                                primaryOwnerUserId = 7011L,
-                                allowedVenuesCount = 1,
-                                notes = null,
-                                commercialNote = null,
-                                createdAt = Instant.parse("2026-04-03T12:30:30Z"),
-                                updatedAt = Instant.parse("2026-04-03T12:30:30Z"),
-                                updatedByUserId = 999L,
-                            ),
-                        usedVenuesCount = 0,
-                        availableVenuesCount = 1,
-                    ),
-                )
-            coEvery {
-                platformVenueRepository.createVenue(
-                    name = "Новая кальянная",
-                    city = "Москва",
-                    address = null,
-                    ownerAccountId = 3001L,
-                )
-            } returns
-                PlatformVenueDetail(
-                    id = 9001L,
-                    name = "Новая кальянная",
-                    city = "Москва",
-                    address = null,
-                    status = VenueStatus.DRAFT,
-                    createdAt = Instant.parse("2026-04-03T12:31:00Z"),
-                    deletedAt = null,
-                )
-            coEvery {
-                platformVenueMemberRepository.assignOwner(
-                    venueId = 9001L,
-                    userId = 7011L,
-                    role = "OWNER",
-                    invitedByUserId = 999L,
-                    venueOwnerAccountRepository = venueOwnerAccountRepository,
-                    enforceQuota = true,
-                )
-            } returns
-                PlatformOwnerAssignmentResult.Success(
-                    member =
-                        PlatformVenueMember(
-                            venueId = 9001L,
-                            userId = 7011L,
-                            role = "OWNER",
-                            createdAt = Instant.parse("2026-04-03T12:31:00Z"),
-                            invitedByUserId = 999L,
-                        ),
-                    alreadyMember = false,
-                )
-            coEvery {
-                venueConnectionRequestRepository.linkApprovedRequestToVenue(
+                venueConnectionRequestRepository.createDraftAndLink(
                     requestId = 7001L,
-                    venueId = 9001L,
+                    actorUserId = 999L,
+                    source = VenueOnboardingSource.TELEGRAM_BOT,
                 )
-            } returns true
+            } returns
+                VenueConnectionRequestCreateLinkResult.Success(
+                    request = approvedRequest.copy(linkedVenueId = 9001L),
+                    venueId = 9001L,
+                    created = true,
+                )
             coEvery { userRepository.findTelegramUserContact(7011L) } returns
                 TelegramUserContact(
                     telegramUserId = 7011L,
                     username = "new_owner",
                     firstName = "New",
                     lastName = "Owner",
-                )
-            coEvery {
-                platformSubscriptionSettingsRepository.applyCommercialTerms(
-                    venueId = 9001L,
-                    trialEndDate = null,
-                    basePriceMinor = 1_000_000,
-                    futurePrice =
-                        PlatformPriceScheduleItem(
-                            venueId = 0L,
-                            effectiveFrom = LocalDate.parse("2026-09-01"),
-                            priceMinor = 1_500_000,
-                            currency = PlatformSubscriptionSettingsRepository.DEFAULT_CURRENCY,
-                        ),
-                    actorUserId = 999L,
-                )
-            } returns
-                PlatformSubscriptionSnapshot(
-                    settings =
-                        PlatformSubscriptionSettings(
-                            venueId = 9001L,
-                            trialEndDate = null,
-                            paidStartDate = LocalDate.now(),
-                            basePriceMinor = 1_000_000,
-                            priceOverrideMinor = null,
-                            currency = PlatformSubscriptionSettingsRepository.DEFAULT_CURRENCY,
-                        ),
-                    schedule =
-                        listOf(
-                            PlatformPriceScheduleItem(
-                                venueId = 9001L,
-                                effectiveFrom = LocalDate.parse("2026-09-01"),
-                                priceMinor = 1_500_000,
-                                currency = PlatformSubscriptionSettingsRepository.DEFAULT_CURRENCY,
-                            ),
-                        ),
-                    effectivePriceToday =
-                        PlatformEffectivePrice(
-                            priceMinor = 1_000_000,
-                            currency = PlatformSubscriptionSettingsRepository.DEFAULT_CURRENCY,
-                        ),
                 )
 
             val router =
@@ -1066,6 +1120,7 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
                     venueMenuSectionImagesRepository = venueMenuSectionImagesRepository,
                     venueMenuRepository = venueMenuRepository,
                     venueAccessRepository = venueAccessRepository,
+                    venueContextRepository = venueContextRepository,
                     subscriptionRepository = subscriptionRepository,
                     guestMenuRepository = guestMenuRepository,
                     tableSessionRepository = tableSessionRepository,
@@ -1096,43 +1151,15 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
             )
 
             coVerify {
-                platformVenueRepository.createVenue(
-                    name = "Новая кальянная",
-                    city = "Москва",
-                    address = null,
-                    ownerAccountId = 3001L,
-                )
-            }
-            coVerify {
-                platformVenueMemberRepository.assignOwner(
-                    venueId = 9001L,
-                    userId = 7011L,
-                    role = "OWNER",
-                    invitedByUserId = 999L,
-                    venueOwnerAccountRepository = venueOwnerAccountRepository,
-                    enforceQuota = true,
-                )
-            }
-            coVerify {
-                platformSubscriptionSettingsRepository.applyCommercialTerms(
-                    venueId = 9001L,
-                    trialEndDate = null,
-                    basePriceMinor = 1_000_000,
-                    futurePrice =
-                        PlatformPriceScheduleItem(
-                            venueId = 0L,
-                            effectiveFrom = LocalDate.parse("2026-09-01"),
-                            priceMinor = 1_500_000,
-                            currency = PlatformSubscriptionSettingsRepository.DEFAULT_CURRENCY,
-                        ),
-                    actorUserId = 999L,
-                )
-            }
-            coVerify {
-                venueConnectionRequestRepository.linkApprovedRequestToVenue(
+                venueConnectionRequestRepository.createDraftAndLink(
                     requestId = 7001L,
-                    venueId = 9001L,
+                    actorUserId = 999L,
+                    source = VenueOnboardingSource.TELEGRAM_BOT,
                 )
+            }
+            coVerify(exactly = 0) { platformVenueRepository.createVenue(any(), any(), any(), any()) }
+            coVerify(exactly = 0) {
+                platformVenueMemberRepository.assignOwner(any(), any(), any(), any(), any(), any())
             }
             coVerify(exactly = 0) { venueMenuRepository.createMissingCategories(any(), any(), any(), any()) }
             coVerify(exactly = 0) {
@@ -1145,7 +1172,7 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
                     match {
                         it is InlineKeyboardMarkup &&
                             it.inlineKeyboard.flatten().any { button ->
-                                button.callbackData == "owner_venue_onboarding_entry"
+                                button.callbackData == "owner_venue_onboarding_entry:9001"
                             }
                     },
                 )
@@ -1166,6 +1193,38 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
                     null,
                 )
             }
+            coVerify(exactly = 0) { venueContextRepository.setSelectedVenue(any(), any(), any()) }
+
+            coEvery { venueAccessRepository.listVenueMemberships(7011L) } returns
+                listOf(
+                    VenueAccessRepository.VenueMembership(venueId = 8001L, role = "OWNER"),
+                    VenueAccessRepository.VenueMembership(venueId = 9001L, role = "OWNER"),
+                )
+            coEvery { venueContextRepository.getSelectedVenue(chatId, 7011L) } returns 8001L
+            coEvery { platformVenueRepository.getVenueDetail(9001L) } returns platformVenueDetail()
+            router.process(
+                TelegramUpdate(
+                    updateId = 44,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-owner-onboarding-entry",
+                            from = User(id = 7011L),
+                            message = Message(messageId = 44, chat = Chat(chatId, "private")),
+                            data = "owner_venue_onboarding_entry:9001",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    chatId,
+                    match { it.contains("🏢 Заведение") && it.contains("Название: Новая кальянная") },
+                    any(),
+                )
+            }
+            coVerify(exactly = 1) { venueContextRepository.setSelectedVenue(chatId, 7011L, 9001L) }
+            coVerify(exactly = 0) { venueMenuRepository.createMissingCategories(any(), any(), any(), any()) }
+            coVerify(exactly = 0) { venueMenuRepository.createCategory(any(), any(), any(), any(), any()) }
         }
 
     @Test
@@ -1654,7 +1713,16 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
                 )
             coEvery { idempotencyRepository.tryAcquire(any(), any(), any()) } returns true
             coEvery { venueConnectionRequestRepository.findById(102L) } returns request
-            coEvery { venueConnectionRequestRepository.closeApprovedUnlinkedByOwner(102L) } returns true
+            coEvery {
+                venueConnectionRequestRepository.closeApprovedUnlinked(
+                    requestId = 102L,
+                    actorUserId = 999L,
+                    source = VenueOnboardingSource.TELEGRAM_BOT,
+                )
+            } returns
+                VenueConnectionRequestMutationResult.Success(
+                    request.copy(status = VenueConnectionRequestRepository.STATUS_CANCELLED),
+                )
             coEvery { venueConnectionRequestRepository.listActionableRequests(limit = 20) } returns emptyList()
 
             val router =
@@ -1696,7 +1764,13 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
                 ),
             )
 
-            coVerify { venueConnectionRequestRepository.closeApprovedUnlinkedByOwner(102L) }
+            coVerify {
+                venueConnectionRequestRepository.closeApprovedUnlinked(
+                    requestId = 102L,
+                    actorUserId = 999L,
+                    source = VenueOnboardingSource.TELEGRAM_BOT,
+                )
+            }
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     709L,
@@ -2674,6 +2748,26 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
             json = Json { ignoreUnknownKeys = true },
             venueConnectionRequestRepository = venueConnectionRequestRepository,
             scope = CoroutineScope(Dispatchers.Unconfined),
+        )
+
+    private fun connectionRequest(
+        id: Long,
+        userId: Long,
+        venueName: String,
+        city: String = "Москва",
+        contact: String = "@owner",
+        comment: String? = null,
+        status: String = VenueConnectionRequestRepository.STATUS_PENDING,
+    ): VenueConnectionRequestRecord =
+        VenueConnectionRequestRecord(
+            id = id,
+            telegramUserId = userId,
+            venueName = venueName,
+            city = city,
+            contact = contact,
+            comment = comment,
+            status = status,
+            createdAt = Instant.parse("2026-04-03T12:30:00Z"),
         )
 
     private fun platformVenueDetail(): PlatformVenueDetail =

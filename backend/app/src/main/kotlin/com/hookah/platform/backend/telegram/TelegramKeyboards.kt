@@ -71,6 +71,11 @@ object TelegramKeyboards {
                         KeyboardButton(text = "🔄 Сменить заведение"),
                     ),
                 )
+                add(
+                    listOf(
+                        KeyboardButton(text = "🤝 Добавить свою кальянную"),
+                    ),
+                )
             }
         return ReplyKeyboardMarkup(keyboard = keyboard, resizeKeyboard = true)
     }
@@ -106,6 +111,11 @@ object TelegramKeyboards {
                         KeyboardButton(text = "🔄 Сменить заведение"),
                     ),
                 )
+                add(
+                    listOf(
+                        KeyboardButton(text = "🤝 Добавить свою кальянную"),
+                    ),
+                )
             }
         return ReplyKeyboardMarkup(keyboard = keyboard, resizeKeyboard = true)
     }
@@ -135,6 +145,11 @@ object TelegramKeyboards {
                     listOf(
                         KeyboardButton(text = "🍽 Каталог кальянных"),
                         KeyboardButton(text = "👤 Мой профиль"),
+                    ),
+                )
+                add(
+                    listOf(
+                        KeyboardButton(text = "🤝 Добавить свою кальянную"),
                     ),
                 )
             }
@@ -168,6 +183,11 @@ object TelegramKeyboards {
                 add(
                     listOf(
                         KeyboardButton(text = "📣 Продвижение"),
+                    ),
+                )
+                add(
+                    listOf(
+                        KeyboardButton(text = "🤝 Добавить свою кальянную"),
                     ),
                 )
             }
@@ -252,15 +272,14 @@ object TelegramKeyboards {
 
     fun inlineOwnerVenueQuotaActions(canCreateVenue: Boolean): InlineKeyboardMarkup {
         val rows = mutableListOf<List<InlineKeyboardButton>>()
-        if (canCreateVenue) {
-            rows +=
-                listOf(
-                    InlineKeyboardButton(
-                        text = "➕ Создать новое заведение",
-                        callbackData = "owner_quota_create_start",
-                    ),
-                )
-        } else {
+        rows +=
+            listOf(
+                InlineKeyboardButton(
+                    text = "🤝 Подать заявку на заведение",
+                    callbackData = "owner_quota_create_start",
+                ),
+            )
+        if (!canCreateVenue) {
             rows +=
                 listOf(
                     InlineKeyboardButton(
@@ -293,15 +312,13 @@ object TelegramKeyboards {
                         ),
                     )
                 }.toMutableList()
-        if (canCreateVenue) {
-            rows +=
-                listOf(
-                    InlineKeyboardButton(
-                        text = "➕ Создать новое заведение",
-                        callbackData = "owner_quota_create_start",
-                    ),
-                )
-        }
+        rows +=
+            listOf(
+                InlineKeyboardButton(
+                    text = "🤝 Подать заявку на заведение",
+                    callbackData = "owner_quota_create_start",
+                ),
+            )
         rows +=
             listOf(
                 InlineKeyboardButton(
@@ -4114,21 +4131,30 @@ object TelegramKeyboards {
                 ),
         )
 
-    fun inlineVenueOwnerOnboardingEntry(webAppUrl: String?): InlineKeyboardMarkup =
+    fun inlineVenueOwnerOnboardingEntry(
+        webAppUrl: String?,
+        venueId: Long,
+    ): InlineKeyboardMarkup =
         InlineKeyboardMarkup(
             inlineKeyboard =
                 listOf(
                     listOf(
                         InlineKeyboardButton(
                             text = "💬 Настраивать в боте",
-                            callbackData = "owner_venue_onboarding_entry",
+                            callbackData = "owner_venue_onboarding_entry:$venueId",
                         ),
                     ),
                     listOf(
                         webAppUrl?.let { url ->
                             InlineKeyboardButton(
                                 text = "📱 Открыть Mini App",
-                                webApp = WebAppInfo(buildWebAppUrl(url, mapOf("mode" to "venue"))),
+                                webApp =
+                                    WebAppInfo(
+                                        buildWebAppUrl(
+                                            url,
+                                            mapOf("mode" to "venue", "venueId" to venueId.toString()),
+                                        ),
+                                    ),
                             )
                         } ?: InlineKeyboardButton(
                             text = "📱 Mini App не настроен",

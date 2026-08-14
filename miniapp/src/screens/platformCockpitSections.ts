@@ -18,11 +18,11 @@ const sectionCopy: Record<PlatformCockpitSection, SectionCopy> = {
   onboarding: {
     title: 'Подключение заведений',
     lead:
-      'В Mini App уже доступны создание заведения, назначение owner и owner invite. Заявки на подключение пока остаются в Telegram-боте.',
+      'Заявки на подключение обрабатываются в общем workspace Mini App и Telegram с единым lifecycle.',
     points: [
-      'Создайте заведение в разделе «Заведения».',
-      'Назначьте владельца или сгенерируйте owner invite в карточке заведения.',
-      'Если заявка пришла через бот, обработайте её в текущем platform owner flow.'
+      'Откройте «Заявки», чтобы принять или отклонить application.',
+      'Заполните коммерческие условия перед созданием.',
+      'DRAFT, OWNER membership и link создаются одной операцией без автоматического выбора заведения.'
     ]
   },
   placements: {

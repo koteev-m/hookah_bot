@@ -37,6 +37,7 @@ data class PlatformVenueSummaryDto(
     val status: String,
     val createdAt: String,
     val ownersCount: Int,
+    val owners: List<PlatformVenueOwnerDto> = emptyList(),
     val subscriptionSummary: PlatformSubscriptionSummaryDto?,
 )
 
@@ -264,9 +265,13 @@ fun Route.platformVenueRoutes(
                         offset = offset,
                     ),
                 )
+            val ownersByVenue = venueRepository.listOwnersForVenues(venues.map { it.id })
             call.respond(
                 PlatformVenueListResponse(
-                    venues = venues.map { it.toSummaryDto() },
+                    venues =
+                        venues.map { venue ->
+                            venue.toSummaryDto(ownersByVenue[venue.id].orEmpty())
+                        },
                 ),
             )
         }
@@ -634,14 +639,15 @@ fun Route.platformVenueRoutes(
     }
 }
 
-private fun PlatformVenueSummary.toSummaryDto(): PlatformVenueSummaryDto =
+private fun PlatformVenueSummary.toSummaryDto(owners: List<PlatformVenueOwner>): PlatformVenueSummaryDto =
     PlatformVenueSummaryDto(
         id = id,
         name = name,
         city = city,
         status = status.dbValue,
         createdAt = createdAt.toString(),
-        ownersCount = ownersCount,
+        ownersCount = owners.size,
+        owners = owners.map { it.toOwnerDto() },
         subscriptionSummary = subscriptionSummary.toDto(),
     )
 

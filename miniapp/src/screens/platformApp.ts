@@ -11,21 +11,41 @@ import { append, el } from '../shared/ui/dom'
 import { presentApiError, type ApiErrorAction } from '../shared/ui/apiErrorPresenter'
 import { renderErrorDetails } from '../shared/ui/errorDetails'
 import { renderPlatformCockpitSectionScreen } from './platformCockpitSections'
+import {
+  renderPlatformApplicationDetailScreen,
+  renderPlatformApplicationsListScreen
+} from './platformApplications'
 import { renderPlatformCreateVenueScreen } from './platformCreateVenue'
 import { renderPlatformSupportScreen } from './platformSupport'
 import { renderPlatformVenueDetailScreen } from './platformVenueDetail'
 import { renderPlatformVenuesListScreen } from './platformVenuesList'
+import {
+  renderPlatformOwnerDetailScreen,
+  renderPlatformOwnersListScreen
+} from './platformOwners'
 
 export type PlatformAppOptions = {
   root: HTMLDivElement | null
   backendUrl: string
 }
 
-type RouteName = 'venues' | 'venue' | 'create' | 'onboarding' | 'placements' | 'support' | 'analytics'
+type RouteName =
+  | 'venues'
+  | 'venue'
+  | 'create'
+  | 'applications'
+  | 'application'
+  | 'owners'
+  | 'owner'
+  | 'placements'
+  | 'support'
+  | 'analytics'
 
 type Route = {
   name: RouteName
   venueId: number | null
+  requestId: number | null
+  userId: number | null
 }
 
 type PlatformShellRefs = {
@@ -54,19 +74,32 @@ function resolveRoute(): Route {
   const rawHash = window.location.hash.replace(/^#/, '')
   const cleaned = rawHash.startsWith('/') ? rawHash.slice(1) : rawHash
   if (!cleaned) {
-    return { name: 'venues', venueId: null }
+    return { name: 'venues', venueId: null, requestId: null, userId: null }
   }
   const [pathPart] = cleaned.split('?')
   const segments = pathPart.split('/').filter(Boolean)
-  const route = segments[0] as RouteName | undefined
-  if (!route || !['venues', 'venue', 'create', 'onboarding', 'placements', 'support', 'analytics'].includes(route)) {
-    return { name: 'venues', venueId: null }
+  const rawRoute = segments[0]
+  if (rawRoute === 'onboarding') {
+    return { name: 'applications', venueId: null, requestId: null, userId: null }
+  }
+  const route = rawRoute as RouteName | undefined
+  if (
+    !route ||
+    !['venues', 'venue', 'create', 'applications', 'application', 'owners', 'owner', 'placements', 'support', 'analytics'].includes(route)
+  ) {
+    return { name: 'venues', venueId: null, requestId: null, userId: null }
   }
   if (route === 'venue') {
     const venueId = parsePositiveInt(segments[1])
-    return { name: 'venue', venueId: venueId ?? null }
+    return { name: 'venue', venueId: venueId ?? null, requestId: null, userId: null }
   }
-  return { name: route, venueId: null }
+  if (route === 'application') {
+    return { name: route, venueId: null, requestId: parsePositiveInt(segments[1]) ?? null, userId: null }
+  }
+  if (route === 'owner') {
+    return { name: route, venueId: null, requestId: null, userId: parsePositiveInt(segments[1]) ?? null }
+  }
+  return { name: route, venueId: null, requestId: null, userId: null }
 }
 
 function renderErrorActions(container: HTMLElement, actions: ApiErrorAction[]) {
@@ -92,10 +125,17 @@ function buildPlatformShell(root: HTMLDivElement): PlatformShellRefs {
 
   const controls = el('div', { className: 'venue-controls' })
   const accessState = el('p', { className: 'venue-access-state', text: 'Проверяем доступ...' })
+  accessState.setAttribute('role', 'status')
+  accessState.setAttribute('aria-live', 'polite')
+  accessState.setAttribute('aria-atomic', 'true')
   append(controls, accessState)
 
   const errorCard = el('div', { className: 'error-card venue-error' }) as HTMLDivElement
   errorCard.hidden = true
+  errorCard.setAttribute('role', 'alert')
+  errorCard.setAttribute('aria-live', 'assertive')
+  errorCard.setAttribute('aria-atomic', 'true')
+  errorCard.tabIndex = -1
   const errorTitle = el('h3')
   const errorMessage = el('p')
   const errorActions = el('div', { className: 'error-actions' })
@@ -151,6 +191,7 @@ export function mountPlatformApp(options: PlatformAppOptions) {
     renderErrorActions(refs.errorActions, actions)
     renderErrorDetails(refs.errorDetails, error, { isDebug })
     refs.errorCard.hidden = false
+    refs.errorCard.focus({ preventScroll: true })
   }
 
   const hideError = () => {
@@ -158,7 +199,13 @@ export function mountPlatformApp(options: PlatformAppOptions) {
   }
 
   const renderNoAccess = () => {
-    refs.content.replaceChildren(el('div', { className: 'card', text: 'Нет доступа.' }))
+    const denied = el('div', { className: 'card', text: 'Нет доступа.' })
+    denied.setAttribute('role', 'alert')
+    denied.setAttribute('aria-live', 'assertive')
+    denied.setAttribute('aria-atomic', 'true')
+    denied.tabIndex = -1
+    refs.content.replaceChildren(denied)
+    denied.focus({ preventScroll: true })
   }
 
   const loadAccess = async () => {
@@ -205,7 +252,11 @@ export function mountPlatformApp(options: PlatformAppOptions) {
   const router = {
     getRouteName: () => (currentRoute.name === 'venues' ? 'catalog' : currentRoute.name),
     navigate,
-    back: () => navigate('#/venues'),
+    back: () => {
+      if (currentRoute.name === 'application') return navigate('#/applications')
+      if (currentRoute.name === 'owner') return navigate('#/owners')
+      navigate('#/venues')
+    },
     canGoBack: () => currentRoute.name !== 'venues',
     subscribe: (handler: () => void) => {
       routeListeners.add(handler)
@@ -215,7 +266,7 @@ export function mountPlatformApp(options: PlatformAppOptions) {
 
   const unbindBackButton = bindTelegramBackButton(router)
 
-  const renderRouteContent = (route: Route) => {
+  const renderRouteContent = (route: Route, focusVenueHeading = false) => {
     if (!hasAccess) {
       renderNoAccess()
       return () => undefined
@@ -235,7 +286,44 @@ export function mountPlatformApp(options: PlatformAppOptions) {
           isDebug,
           onNavigate: navigate
         })
-      case 'onboarding':
+      case 'applications':
+        return renderPlatformApplicationsListScreen({
+          root: refs.content,
+          backendUrl,
+          isDebug,
+          onNavigate: navigate
+        })
+      case 'application':
+        if (!route.requestId) {
+          navigate('#/applications')
+          return () => undefined
+        }
+        return renderPlatformApplicationDetailScreen({
+          root: refs.content,
+          backendUrl,
+          isDebug,
+          onNavigate: navigate,
+          requestId: route.requestId
+        })
+      case 'owners':
+        return renderPlatformOwnersListScreen({
+          root: refs.content,
+          backendUrl,
+          isDebug,
+          onNavigate: navigate
+        })
+      case 'owner':
+        if (!route.userId) {
+          navigate('#/owners')
+          return () => undefined
+        }
+        return renderPlatformOwnerDetailScreen({
+          root: refs.content,
+          backendUrl,
+          isDebug,
+          onNavigate: navigate,
+          userId: route.userId
+        })
       case 'placements':
       case 'analytics':
         return renderPlatformCockpitSectionScreen({
@@ -258,16 +346,31 @@ export function mountPlatformApp(options: PlatformAppOptions) {
           root: refs.content,
           backendUrl,
           isDebug,
-          venueId: route.venueId
+          venueId: route.venueId,
+          focusHeadingOnLoad: focusVenueHeading
         })
     }
   }
 
   const render = () => {
     const route = resolveRoute()
+    const previousRoute = currentRoute
     currentRoute = route
     currentDispose?.()
-    currentDispose = renderRouteContent(route)
+    currentDispose = renderRouteContent(
+      route,
+      previousRoute.name === 'application' && route.name === 'venue'
+    )
+    const returnedToList =
+      (previousRoute.name === 'application' && route.name === 'applications') ||
+      (previousRoute.name === 'owner' && route.name === 'owners')
+    if (returnedToList) {
+      const heading = refs.content.querySelector<HTMLElement>('h2')
+      if (heading) {
+        heading.tabIndex = -1
+        heading.focus({ preventScroll: true })
+      }
+    }
   }
 
   const onHashChange = () => {

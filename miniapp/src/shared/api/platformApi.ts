@@ -17,6 +17,12 @@ import type {
   PlatformOwnerInviteRequest,
   PlatformOwnerInviteResponse,
   PlatformOwnerRevokeResponse,
+  PlatformOnboardingCreateLinkResponse,
+  PlatformOnboardingRequestListResponse,
+  PlatformOnboardingRequestResponse,
+  PlatformOnboardingTermsRequest,
+  PlatformOperationalOwnerListResponse,
+  PlatformOperationalOwnerResponse,
   PlatformPriceScheduleResponse,
   PlatformPriceScheduleUpdateRequest,
   PlatformSubscriptionSettingsResponse,
@@ -148,6 +154,123 @@ export async function platformListVenues(
   return requestApi<PlatformVenueListResponse>(
     backendUrl,
     `/api/platform/venues${suffix ? `?${suffix}` : ''}`,
+    { signal },
+    deps
+  )
+}
+
+export async function platformListOnboardingRequests(
+  backendUrl: string,
+  params: { status?: string | null; q?: string | null; limit?: number; offset?: number },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  const search = new URLSearchParams()
+  if (params.status) search.set('status', params.status)
+  if (params.q) search.set('q', params.q)
+  if (params.limit) search.set('limit', String(params.limit))
+  if (params.offset) search.set('offset', String(params.offset))
+  const suffix = search.toString()
+  return requestApi<PlatformOnboardingRequestListResponse>(
+    backendUrl,
+    `/api/platform/onboarding/requests${suffix ? `?${suffix}` : ''}`,
+    { signal },
+    deps
+  )
+}
+
+export async function platformGetOnboardingRequest(
+  backendUrl: string,
+  requestId: number,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<PlatformOnboardingRequestResponse>(
+    backendUrl,
+    `/api/platform/onboarding/requests/${requestId}`,
+    { signal },
+    deps
+  )
+}
+
+export async function platformDecideOnboardingRequest(
+  backendUrl: string,
+  requestId: number,
+  decision: 'approve' | 'reject' | 'close',
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<PlatformOnboardingRequestResponse>(
+    backendUrl,
+    `/api/platform/onboarding/requests/${requestId}/${decision}`,
+    { method: 'POST', signal },
+    deps
+  )
+}
+
+export async function platformUpdateOnboardingTerms(
+  backendUrl: string,
+  requestId: number,
+  body: PlatformOnboardingTermsRequest,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<PlatformOnboardingRequestResponse>(
+    backendUrl,
+    `/api/platform/onboarding/requests/${requestId}/commercial-terms`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal
+    },
+    deps
+  )
+}
+
+export async function platformCreateAndLinkOnboardingRequest(
+  backendUrl: string,
+  requestId: number,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<PlatformOnboardingCreateLinkResponse>(
+    backendUrl,
+    `/api/platform/onboarding/requests/${requestId}/create-and-link`,
+    { method: 'POST', signal },
+    deps
+  )
+}
+
+export async function platformListOperationalOwners(
+  backendUrl: string,
+  params: { status?: string | null; q?: string | null; limit?: number; offset?: number },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  const search = new URLSearchParams()
+  if (params.status) search.set('status', params.status)
+  if (params.q) search.set('q', params.q)
+  if (params.limit) search.set('limit', String(params.limit))
+  if (params.offset) search.set('offset', String(params.offset))
+  const suffix = search.toString()
+  return requestApi<PlatformOperationalOwnerListResponse>(
+    backendUrl,
+    `/api/platform/owners${suffix ? `?${suffix}` : ''}`,
+    { signal },
+    deps
+  )
+}
+
+export async function platformGetOperationalOwner(
+  backendUrl: string,
+  userId: number,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<PlatformOperationalOwnerResponse>(
+    backendUrl,
+    `/api/platform/owners/${userId}`,
     { signal },
     deps
   )

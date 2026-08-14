@@ -1,6 +1,6 @@
 # Testing / QA Smoke Strategy
 
-Дата актуализации: 2026-08-13.
+Дата актуализации: 2026-08-14.
 
 Статус: **current product reference / UPDATED**. This document is the canonical QA/smoke strategy for the Telegram bot + Mini App platform. It consolidates local validation, GitHub Actions expectations, area-specific smoke suites, staging policy, failure reporting and Codex handoff rules. Deployment and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
 
@@ -213,8 +213,10 @@ Recorded local validation:
 - `:backend:app:compileKotlin` and `:backend:app:ktlintCheck` passed;
 - `npm --prefix miniapp run build` passed;
 - the real PostgreSQL migration smoke executed V120→V121 with `skipped=0` and `failures=0`;
-- focused Slice B browser checks and the exact full Mini App e2e smoke passed (`131/131`);
-- independent read-only review found no remaining P0/P1 findings.
+- focused Slice B browser checks and the exact full Mini App e2e smoke passed (`131/131`).
+
+That historical Slice B evidence does not attest the current onboarding/ownership worktree; its
+independent review remains a separate release gate below.
 
 Release/staging evidence:
 
@@ -1041,17 +1043,215 @@ recorded). Do not close a finding from intent, a code comment or an unrelated gr
 #### BOOTSTRAP-TEST-002
 
 - Area: Telegram onboarding-entry regression.
-- Evidence: connection-flow tests prove approval and linking perform zero category writes and assert
-  that `owner_venue_onboarding_entry` is emitted, but no direct test dispatches that callback and
-  proves the callback path itself has zero category writers.
+- Evidence: `TelegramBotRouterVenueConnectionRequestFlowTest` now creates/links through the shared
+  contract, directly dispatches `owner_venue_onboarding_entry` for the linked Owner, verifies the
+  venue card and asserts zero `createMissingCategories`/`createCategory` calls.
 - Risk: callback routing could later seed categories or bypass the explicit first-management-entry
   contract without failing the approval/linking tests.
-- Minimal fix: dispatch `owner_venue_onboarding_entry` for a linked Owner in
-  `TelegramBotRouterVenueConnectionRequestFlowTest`, assert the expected venue card/onboarding
-  response and verify zero `createMissingCategories` calls/audits.
+- Minimal fix: implemented by the direct callback regression above.
 - Required trigger/release boundary: mandatory in `PLATFORM & VENUE ONBOARDING / OWNERSHIP COCKPIT`
   before runtime release.
-- Status: `IN_NEXT_EPIC`.
+- Status: `DONE`; keep it in the mandatory Telegram release selector.
+
+#### ONBOARDING-H2-001
+
+- Area: legacy H2 request-status constraint fidelity.
+- Evidence: H2 V36 created an unnamed inline `status IN ('NEW')` check, while V38 drops only the
+  PostgreSQL-style canonical constraint name. A fresh empty H2 migration can finish but retains the
+  legacy check, so a canonical `PENDING` insert is rejected; migrating a database that contains a
+  `NEW` row can fail during the V38 backfill. The onboarding H2 suites therefore use an explicit
+  test fixture that migrates to V37, discovers/drops the actual legacy check through metadata and
+  then continues normal Flyway. PostgreSQL V36/V38 and the mandatory Testcontainers suite do not
+  have this defect.
+- Risk: packaged H2 dev runtime cannot reliably write/migrate canonical onboarding rows, and a
+  generic empty-schema module test can miss the retained check.
+- Minimal fix: in a separately approved migration-maintenance boundary, add a forward-only H2
+  repair plus a packaged-runtime regression; never edit the checksum of applied V36.
+- Required trigger/release boundary: before relying on packaged H2 for onboarding or the next H2
+  migration-maintenance release. It is not a PostgreSQL duplicate/create-link prerequisite.
+- Status: `OPEN`.
+
+#### ONBOARDING-TG-CONFIRM-001
+
+- Area: Telegram confirmation UX for consequential onboarding actions.
+- Evidence: the legacy applicant cancel and Platform reject/close/create callbacks execute their
+  current mutation on the first callback. This epic preserves that Telegram UX as required, while
+  the new Mini App surfaces use explicit confirmation copy.
+- Risk: an accidental Telegram tap can cancel/reject/close a request or start create/link without a
+  second confirmation screen; backend RBAC, state CAS and atomic rollback still prevent authority or
+  partial-write escalation.
+- Minimal fix: in a separately approved Telegram onboarding UX boundary, keep compatibility
+  callbacks but make the first tap show consequences and a distinct final confirmation callback;
+  prove the first tap writes nothing and preserve the four-state model.
+- Required trigger/release boundary: with the next Telegram onboarding destructive-action UX change;
+  it is not a shared-writer, duplicate-submit or create/link prerequisite.
+- Status: `OPEN`.
+
+#### ONBOARDING-DECISION-RETRY-001
+
+- Area: response-loss recovery for request decision/cancel/close mutations.
+- Evidence: mutations are serialized, transactional and truthfully audited, but after a committed
+  response is lost, repeating the same approve/reject/cancel/close action can return current-state
+  conflict and leave the client on its retry error until an authoritative reload. Submit and
+  create/link already have the stronger idempotent replay contract required by this epic.
+- Risk: an operator/applicant can briefly see stale failure copy after the requested state was
+  committed; this does not create duplicate or partial database state.
+- Minimal fix: either make same-target replay return the authoritative current record with zero
+  duplicate audit, or make clients refresh and explain the committed current state after conflict.
+- Required trigger/release boundary: with the next request decision/cancel retry-contract or client
+  mutation UX change; it is not a create/link recovery prerequisite.
+- Status: `OPEN`.
+
+#### ONBOARDING-FIRST-VENUE-001
+
+- Area: Telegram acquisition and first-applicant Platform create/link.
+- Evidence: a server-authenticated Telegram user with zero OWNER memberships sees the application
+  entry, submits through the shared writer, and produces zero venue/member/link/selection/menu writes
+  before Platform action. Platform create/link initializes the existing commercial-account default,
+  one DRAFT and exactly one OWNER membership atomically; retry returns that link.
+- Status: `DONE`; keep the first-user repository, Telegram and PostgreSQL regressions mandatory.
+
+#### ONBOARDING-APPLICATION-EQUIVALENCE-001
+
+- Area: logical application equivalence across Telegram, Venue Mini App and PostgreSQL.
+- Evidence: production normalization and tests use one exact tuple: normalized venue name, city,
+  contact and optional comment. Exact `PENDING`/`APPROVED`-unlinked retry returns the authoritative
+  row with zero insert/audit; any distinct tuple field creates another request; rejected/cancelled
+  rows do not block. Deterministic independent-connection PostgreSQL tests cover simultaneous same
+  and distinct cross-surface submissions.
+- Status: `DONE`; no applicant-only uniqueness, process mutex, migration or unique constraint exists.
+
+#### ONBOARDING-ROUTE-COVERAGE-001
+
+- Area: Platform production-path route/RBAC/privacy/projection gate.
+- Evidence: `PlatformOnboardingRoutesTest` runs through `Application.module()` and covers request
+  list/detail/decisions/close/terms/create-link/retry/failures, every non-Platform role, spoofed
+  authority fields, exact safe DTOs, venue city/all active operational owners and owner portfolio
+  list/detail graphs.
+- Status: `DONE`; exact CI XML minimum is `15` with zero skipped/failure/error.
+
+#### ONBOARDING-UX-A11Y-001
+
+- Area: onboarding/ownership form and async-state accessibility.
+- Evidence: every new form/filter control has an associated label; stable polite status and assertive
+  error live regions expose loading/mutations; status is textual; focused browser tests assert focus
+  after submit/error/cancel/back and account-isolated late responses.
+- Status: `DONE`; retain the focused ownership onboarding browser scenarios in full smoke.
+
+#### ONBOARDING-TG-LEGACY-STATE-001
+
+- Area: persisted Telegram direct-create dialog compatibility.
+- Evidence: actual incoming messages are dispatched from each persisted
+  `OWNER_VENUE_CREATE_WAIT_NAME`, `OWNER_VENUE_CREATE_WAIT_CITY` and
+  `OWNER_VENUE_CREATE_WAIT_ADDRESS` state; each state is cleared, the shared application dialog stays
+  usable, and draft/member/link/selection/menu writers remain at zero calls.
+- Status: `DONE`; retain the regression in `TelegramBotRouterTableTokenTest`.
+
+#### ONBOARDING-CANON-UNICODE-001
+
+- Area: Unicode-aware canonical application tuple.
+- Evidence: the production tuple keeps NFKC, Unicode White_Space collapse, trim,
+  `Locale.ROOT` lowercase and blank optional comment normalization. Repository-path tests cover NEL
+  U+0085, the complete Unicode White_Space code-point set, NFKC-compatible forms, blank comment and a
+  genuinely distinct non-whitespace character with exact physical request and audit cardinality;
+  PostgreSQL cross-surface retry also includes NEL.
+- Status: `DONE`; retain the repository and PostgreSQL regressions in their mandatory selectors.
+
+#### ONBOARDING-VENUE-ROUTE-COVERAGE-001
+
+- Area: Venue Mini App production-route onboarding coverage.
+- Evidence: `VenueOnboardingRoutesTest` runs through `Application.module()` and production
+  route/service/repository boundaries for canonical retry, a distinct second application,
+  client-field spoof resistance, safe database/audit failure, approved-unlinked replay and the full
+  Manager/Staff/foreign/Platform-only denial matrix.
+- Status: `DONE`; exact CI XML minimum is `8` with zero skipped/failure/error.
+
+#### ONBOARDING-PG-FIRST-APPLICANT-001
+
+- Area: real first-ever applicant PostgreSQL create/link evidence.
+- Evidence: the dedicated fixture starts with only applicant and Platform Owner users and zero
+  account/venue/membership/subscription/link/selection/menu state. Deterministic independent waiter
+  PIDs prove applicant-lock contention; concurrent create/link commits one default-limit-`1`
+  commercial account, one DRAFT, one OWNER membership, one settings/subscription/link/audit set,
+  leaves selected venue state unchanged and seeds no menu categories. The retry returns the same
+  authoritative venue.
+- Status: `DONE`; exact PostgreSQL XML minimum is `7` with zero skipped/failure/error.
+
+#### ONBOARDING-A11Y-CREATE-LINK-FOCUS-001
+
+- Area: Platform create/link focus restoration.
+- Evidence: after both first create/link and linked idempotent replay, the rendered venue-detail
+  heading has a stable target and receives programmatic focus; deterministic browser assertions
+  verify its exact accessible name and prevent focus from remaining on the removed action.
+- Status: `DONE`; retain both focused create/link scenarios in full Mini App smoke.
+
+#### ONBOARDING-OWNER-PLURAL-001
+
+- Area: Russian venue-count pluralization.
+- Evidence: the shared venue-count formatter is used by owner list cards and owner detail summary;
+  focused browser assertions cover `1`, `2`, `5`, `11`, `21`, `22` and `25`.
+- Status: `DONE`; retain the focused pluralization scenario in full Mini App smoke.
+
+### Platform & Venue Onboarding / Ownership Cockpit quality gate
+
+Status: **MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. Green Actions, staging deploy and the
+consolidated smoke below are still required before release closure.
+
+- Shared repository tests cover the production canonical tuple, exact-versus-distinct cross-surface
+  submit, exact no-op audit behavior, rejected/cancelled reuse, first-user submit/edit/cancel with
+  zero operational writes, quota rejection/audit rollback, create/link retry, one DRAFT/OWNER
+  membership/settings/link/audit set and zero menu categories.
+- `VenueOnboardingRoutesTest` covers active Owner own scope, applicant isolation and Manager/Staff/
+  unaffiliated/Platform-only denial for the Venue Mini App additional-venue entry.
+- `PlatformOnboardingRoutesTest` covers the production module request list/detail/approve/reject/
+  close/terms/create-link routes, invalid/not-found/database/audit failures, exact safe DTOs, the
+  complete non-Platform denial matrix, venue city/all active operational owners and one-to-many/
+  many-to-one owner projections.
+- `VenueOnboardingConcurrencyPostgresTest` is mandatory with minimum `7`: observed-lock Telegram/
+  Mini App exact submit produces one request/audit, distinct submissions both commit on independent
+  connections, approve/reject has one truthful winner, concurrent Platform create/link produces one
+  venue/membership/settings/link/audit set, and first applicants submit/link without a prior OWNER
+  membership. The mandatory PostgreSQL vector is `8 / 14 / 2 / 44 / 9 / 7` (total minimum `84`). Missing/
+  below-minimum/skipped/failed/errored XML remains a hard CI failure.
+- Telegram regression exposes first-venue application to a zero-membership authenticated user, keeps
+  `owner_quota_create_start` as an alias, dispatches all three persisted legacy states, proves zero
+  direct draft/membership/link/selection/menu writers and keeps account/limit-request behavior.
+- The exact route/security aggregate passed `1247 / 1247 / 0 / 0 / 0`
+  (discovered / executed / skipped / failures / errors). Measured focused counts are repository
+  `13`, Venue routes `8`, Platform onboarding routes
+  `15`, Telegram connection flow `18`, Telegram table/legacy state `552`, Telegram keyboards `169`
+  and PostgreSQL onboarding concurrency `7`. Exact CI minima remain repository `11`, Venue routes
+  `8`, Platform onboarding routes `15`, Telegram `18 / 552 / 169` and PostgreSQL onboarding `7`;
+  skipped/failure/error or missing XML fails the gate.
+- Full Mini App smoke retains deterministic Venue ownership cards/explicit selection, exact
+  double-submit, distinct second venue, approved-unlinked exact retry, account/late-response
+  isolation, edit/cancel/reject/close/Platform denial and focused labels/live-region/focus assertions.
+  The deterministic local run passed `191 / 191`, including ownership onboarding `15 / 15`.
+
+Consolidated staging smoke:
+
+1. An authenticated Telegram user with zero OWNER memberships sees and submits a first-venue
+   application. Existing Owner with one/multiple venues uses Telegram or Venue Mini App; Manager/
+   Staff/foreign/Platform-only direct Venue ownership routes are denied before facts.
+2. Telegram-first and Mini-App-first exact submit, including exhausted quota, create one logical
+   request and zero venue/member/link/menu rows. A distinct canonical payload creates a second row;
+   rejected/cancelled history does not block it.
+3. Pending edit/cancel and applicant isolation work; only the four canonical statuses appear.
+4. Legacy quota callback and each of the three persisted legacy direct-create states enter the
+   usable shared application flow with zero direct writes and no selected-venue change.
+5. Platform tabs list safe request detail, city/all co-owners and operational-owner portfolios; no
+   primary-owner label or private/raw Telegram/provider fields appear.
+6. Approve/reject/close and commercial terms are explicit. Approval alone creates no venue,
+   membership, selector entry or menu category.
+7. Insufficient quota at create/link leaves the approved request unlinked with no partial state;
+   after Platform adjusts the existing limit, retry succeeds once.
+8. Successful first-applicant create/link uses the existing commercial account default limit of one
+   and yields one DRAFT, active OWNER membership, commercial settings and request link; repeat returns
+   the same venue and emits no duplicate success notification/audit.
+9. Owner sees the new venue only after authoritative membership refresh and selects/opens it
+   explicitly; link does not auto-select. The direct onboarding callback still seeds no menu.
+10. Existing quota-pilot venues/memberships and current account/limit-request management remain
+    unchanged. Existing direct Platform ownerless DRAFT creation remains available.
 
 ### Menu Option Rename Audit quality gate
 

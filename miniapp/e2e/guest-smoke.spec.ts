@@ -7071,6 +7071,1265 @@ async function mockVenueMenuShiftCheckApi(
   }
 }
 
+type VenueOwnershipAccessFixture = {
+  venueId: number
+  venueName: string
+  venueCity: string
+  venueStatus: string
+  role: 'OWNER' | 'MANAGER' | 'STAFF'
+  permissions: string[]
+}
+
+type VenueOwnershipApplicationFixture = {
+  id: number
+  venueName: string
+  city: string
+  contact: string
+  comment: string | null
+  status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED'
+  createdAt: string
+  linkedVenueId: number | null
+}
+
+type OwnershipMutationFixture = {
+  method: string
+  path: string
+  body?: Record<string, unknown>
+}
+
+async function mockVenueOwnershipApi(
+  page: Page,
+  options: {
+    accesses: VenueOwnershipAccessFixture[]
+    applications?: VenueOwnershipApplicationFixture[]
+    otherAccount?: {
+      accesses: VenueOwnershipAccessFixture[]
+      applications?: VenueOwnershipApplicationFixture[]
+    }
+  }
+) {
+  type AccountState = {
+    accesses: VenueOwnershipAccessFixture[]
+    venues: Array<Omit<VenueOwnershipAccessFixture, 'role' | 'permissions'>>
+    applications: VenueOwnershipApplicationFixture[]
+  }
+  const primaryUserId = 123456789
+  const otherUserId = 987654321
+  const buildAccountState = (
+    accesses: VenueOwnershipAccessFixture[],
+    applications: VenueOwnershipApplicationFixture[] = []
+  ): AccountState => {
+    const clonedAccesses = accesses.map((access) => ({ ...access, permissions: [...access.permissions] }))
+    return {
+      accesses: clonedAccesses,
+      venues: clonedAccesses
+        .filter((access) => access.role === 'OWNER')
+        .map(({ venueId, venueName, venueCity, venueStatus }) => ({ venueId, venueName, venueCity, venueStatus })),
+      applications: applications.map((application) => ({ ...application }))
+    }
+  }
+  const accounts = new Map<number, AccountState>([
+    [primaryUserId, buildAccountState(options.accesses, options.applications)],
+    [
+      otherUserId,
+      buildAccountState(options.otherAccount?.accesses ?? [], options.otherAccount?.applications)
+    ]
+  ])
+  const allInitialApplications = [...accounts.values()].flatMap((account) => account.applications)
+  let nextApplicationId = Math.max(0, ...allInitialApplications.map((application) => application.id)) + 1
+  let ownershipGetCalls = 0
+  let applicationSubmitCalls = 0
+  let settledApplicationSubmitCalls = 0
+  let failNextApplicationSubmit = false
+  let loseNextApplicationSubmitResponse = false
+  const deferredApplicationSubmitResponses: Array<{ promise: Promise<void>; release: () => void }> = []
+  const mutations: OwnershipMutationFixture[] = []
+
+  const requestUserId = () =>
+    new URL(page.url()).searchParams.get('smokeUser') === 'other' ? otherUserId : primaryUserId
+  const accountFor = (userId: number) => {
+    const account = accounts.get(userId)
+    if (!account) throw new Error(`Missing ownership fixture account ${userId}`)
+    return account
+  }
+  const normalizeTupleField = (value: unknown) =>
+    String(value ?? '').normalize('NFKC').trim().replace(/\s+/gu, ' ').toLowerCase()
+  const canonicalTuple = (value: {
+    venueName: unknown
+    city: unknown
+    contact: unknown
+    comment: unknown
+  }) =>
+    [value.venueName, value.city, value.contact, value.comment]
+      .map(normalizeTupleField)
+      .join('\u001f')
+  const canParticipateInRetry = (application: VenueOwnershipApplicationFixture) =>
+    application.status === 'PENDING' ||
+    (application.status === 'APPROVED' && application.linkedVenueId == null)
+  const deferNextSubmitResponse = () => {
+    let release = () => undefined
+    const promise = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    deferredApplicationSubmitResponses.push({ promise, release })
+    return release
+  }
+
+  await page.route('**/api/auth/telegram', async (route) => {
+    await route.fulfill(jsonResponse({ token: 'e2e-ownership-token', expiresAtEpochSeconds: sessionExpiresAt }))
+  })
+  await page.route('**/api/venue/me', async (route) => {
+    const userId = requestUserId()
+    await route.fulfill(jsonResponse({ userId, venues: accountFor(userId).accesses }))
+  })
+  await page.route('**/api/venue/ownership**', async (route) => {
+    const request = route.request()
+    const path = new URL(request.url()).pathname
+    const method = request.method()
+    const userId = requestUserId()
+    const account = accountFor(userId)
+    if (path === '/api/venue/ownership' && method === 'GET') {
+      ownershipGetCalls += 1
+      await route.fulfill(
+        jsonResponse({ userId, venues: account.venues, applications: account.applications })
+      )
+      return
+    }
+
+    const applicationMatch = path.match(/^\/api\/venue\/ownership\/applications(?:\/(\d+))?(?:\/(cancel))?$/)
+    if (!applicationMatch) {
+      await route.fulfill(jsonResponse({ error: { code: 'NOT_FOUND', message: 'Not found' } }, 404))
+      return
+    }
+
+    const applicationId = applicationMatch[1] ? Number(applicationMatch[1]) : null
+    const action = applicationMatch[2]
+    if (applicationId == null && method === 'POST') {
+      applicationSubmitCalls += 1
+      if (failNextApplicationSubmit) {
+        failNextApplicationSubmit = false
+        await route.abort('failed')
+        return
+      }
+      const body = (await request.postDataJSON()) as Record<string, unknown>
+      const existing = account.applications.find(
+        (application) =>
+          canParticipateInRetry(application) && canonicalTuple(application) === canonicalTuple({
+            venueName: body.venueName,
+            city: body.city,
+            contact: body.contact,
+            comment: body.comment
+          })
+      )
+      let application = existing
+      let created = false
+      if (!application) {
+        application = {
+          id: nextApplicationId++,
+          venueName: String(body.venueName),
+          city: String(body.city),
+          contact: String(body.contact),
+          comment: body.comment == null ? null : String(body.comment),
+          status: 'PENDING',
+          createdAt: '2030-01-10T18:00:00Z',
+          linkedVenueId: null
+        }
+        account.applications = [...account.applications, application]
+        mutations.push({ method, path, body })
+        created = true
+      }
+      const shouldLoseResponse = loseNextApplicationSubmitResponse
+      loseNextApplicationSubmitResponse = false
+      const gate = deferredApplicationSubmitResponses.shift()
+      await gate?.promise
+      try {
+        if (shouldLoseResponse) {
+          await route.abort('failed')
+        } else {
+          await route.fulfill(jsonResponse({ application, created }))
+        }
+      } catch {
+        // Account replacement or navigation may dispose the screen before the authoritative response arrives.
+      } finally {
+        settledApplicationSubmitCalls += 1
+      }
+      return
+    }
+
+    const application = account.applications.find((candidate) => candidate.id === applicationId)
+    if (!application) {
+      await route.fulfill(jsonResponse({ error: { code: 'NOT_FOUND', message: 'Not found' } }, 404))
+      return
+    }
+    if (method === 'PUT' && !action) {
+      const body = (await request.postDataJSON()) as Record<string, unknown>
+      Object.assign(application, {
+        venueName: String(body.venueName),
+        city: String(body.city),
+        contact: String(body.contact),
+        comment: body.comment == null ? null : String(body.comment)
+      })
+      mutations.push({ method, path, body })
+      await route.fulfill(jsonResponse({ application }))
+      return
+    }
+    if (method === 'POST' && action === 'cancel') {
+      application.status = 'CANCELLED'
+      mutations.push({ method, path })
+      await route.fulfill(jsonResponse({ application }))
+      return
+    }
+    await route.fulfill(jsonResponse({ error: { code: 'METHOD_NOT_ALLOWED', message: 'Unsupported' } }, 405))
+  })
+
+  return {
+    getApplications: (userId = primaryUserId) =>
+      accountFor(userId).applications.map((application) => ({ ...application })),
+    getMutations: () => mutations.map((mutation) => ({ ...mutation })),
+    getOwnershipGetCalls: () => ownershipGetCalls,
+    getApplicationSubmitCalls: () => applicationSubmitCalls,
+    getSettledApplicationSubmitCalls: () => settledApplicationSubmitCalls,
+    failNextSubmit: () => {
+      failNextApplicationSubmit = true
+    },
+    loseNextSubmitResult: () => {
+      loseNextApplicationSubmitResponse = true
+    },
+    deferNextSubmitResponse,
+    setAccesses: (nextAccesses: VenueOwnershipAccessFixture[]) => {
+      accountFor(primaryUserId).accesses = nextAccesses.map((access) => ({
+        ...access,
+        permissions: [...access.permissions]
+      }))
+    },
+    setVenues: (nextVenues: Array<Omit<VenueOwnershipAccessFixture, 'role' | 'permissions'>>) => {
+      accountFor(primaryUserId).venues = nextVenues.map((venue) => ({ ...venue }))
+    }
+  }
+}
+
+async function fillVenueOwnershipApplication(
+  page: Page,
+  values: { venueName: string; city: string; contact: string; comment?: string }
+) {
+  await page.getByLabel('Название заведения').fill(values.venueName)
+  await page.getByLabel('Город', { exact: true }).fill(values.city)
+  await page.getByLabel('Контакт для связи').fill(values.contact)
+  await page.getByLabel('Комментарий (необязательно)').fill(values.comment ?? '')
+}
+
+type PlatformOnboardingRequestFixture = {
+  id: number
+  applicant: {
+    userId: number
+    username: string | null
+    firstName: string | null
+    lastName: string | null
+  }
+  venueName: string
+  city: string
+  contact: string
+  comment: string | null
+  status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED'
+  createdAt: string
+  linkedVenueId: number | null
+  trialConfigured: boolean
+  trialEndsOn: string | null
+  currentPriceRub: number | null
+  futurePriceRub: number | null
+  futurePriceEffectiveOn: string | null
+  commercialNote: string | null
+}
+
+async function mockPlatformOwnershipApi(
+  page: Page,
+  options: { platformAllowed?: boolean; ownerVenueCounts?: number[] } = {}
+) {
+  let request: PlatformOnboardingRequestFixture = {
+    id: 701,
+    applicant: {
+      userId: 501,
+      username: 'anna_owner',
+      firstName: 'Анна',
+      lastName: 'Иванова'
+    },
+    venueName: 'Дымный берег',
+    city: 'Казань',
+    contact: '@anna_owner',
+    comment: 'Нужна миграция меню',
+    status: 'PENDING',
+    createdAt: '2030-01-10T18:00:00Z',
+    linkedVenueId: null,
+    trialConfigured: false,
+    trialEndsOn: null,
+    currentPriceRub: null,
+    futurePriceRub: null,
+    futurePriceEffectiveOn: null,
+    commercialNote: null
+  }
+  const owner = {
+    userId: 501,
+    username: 'anna_owner',
+    firstName: 'Анна',
+    lastName: 'Иванова',
+    venueCount: 2,
+    venueStatusCounts: { PUBLISHED: 1, DRAFT: 1 }
+  }
+  const owners = options.ownerVenueCounts?.map((venueCount, index) => ({
+    userId: 600 + index,
+    username: `owner_${venueCount}`,
+    firstName: 'Владелец',
+    lastName: String(venueCount),
+    venueCount,
+    venueStatusCounts: { PUBLISHED: venueCount }
+  })) ?? [owner]
+  const ownerVenues = [
+    { id: 1, name: 'Микс', city: 'Москва', status: 'PUBLISHED', createdAt: '2029-01-01T00:00:00Z' },
+    { id: 2, name: 'Дымный берег', city: 'Казань', status: 'DRAFT', createdAt: '2030-01-10T00:00:00Z' }
+  ]
+  const mutations: OwnershipMutationFixture[] = []
+  const deferredApprovals: Array<{ promise: Promise<void>; release: () => void }> = []
+  const createLinkCreatedResults: boolean[] = []
+  let approvalCalls = 0
+  let createLinkCalls = 0
+  let onboardingCalls = 0
+  let loseNextCreateLinkResponse = false
+
+  const deferNextApproval = () => {
+    let release = () => undefined
+    const promise = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    deferredApprovals.push({ promise, release })
+    return { release }
+  }
+
+  await page.route('**/api/auth/telegram', async (route) => {
+    await route.fulfill(jsonResponse({ token: 'e2e-platform-ownership-token', expiresAtEpochSeconds: sessionExpiresAt }))
+  })
+  await page.route('**/api/platform/me', async (route) => {
+    if (options.platformAllowed === false) {
+      await route.fulfill(
+        jsonResponse({ error: { code: 'FORBIDDEN', message: 'Недостаточно прав.' } }, 403)
+      )
+      return
+    }
+    await route.fulfill(jsonResponse({ ok: true, ownerUserId: 123456789 }))
+  })
+  await page.route('**/api/platform/venues?**', async (route) => {
+    await route.fulfill(
+      jsonResponse({
+        venues: [
+          {
+            id: 1,
+            name: 'Микс',
+            city: 'Москва',
+            status: 'PUBLISHED',
+            createdAt: '2029-01-01T00:00:00Z',
+            ownersCount: 3,
+            owners: [
+              { userId: 501, role: 'OWNER', username: 'anna_owner', firstName: 'Анна', lastName: 'Иванова' },
+              { userId: 502, role: 'OWNER', username: 'co_owner', firstName: null, lastName: null },
+              { userId: 503, role: 'OWNER', username: null, firstName: null, lastName: null }
+            ],
+            subscriptionSummary: null
+          }
+        ]
+      })
+    )
+  })
+  await page.route('**/api/platform/venues/2', async (route) => {
+    await route.fulfill(
+      jsonResponse({
+        venue: {
+          id: 2,
+          name: 'Дымный берег',
+          city: 'Казань',
+          address: null,
+          status: 'DRAFT',
+          createdAt: '2030-01-10T00:00:00Z',
+          deletedAt: null
+        },
+        owners: [
+          { userId: 501, role: 'OWNER', username: 'anna_owner', firstName: 'Анна', lastName: 'Иванова' }
+        ],
+        subscriptionSummary: null
+      })
+    )
+  })
+  await page.route('**/api/platform/venues/2/subscription', async (route) => {
+    await route.fulfill(
+      jsonResponse({
+        settings: {
+          trialEndDate: '2030-02-01',
+          paidStartDate: null,
+          basePriceMinor: 220000,
+          priceOverrideMinor: null,
+          currency: 'RUB'
+        },
+        schedule: [],
+        effectivePriceToday: { priceMinor: 220000, currency: 'RUB' }
+      })
+    )
+  })
+  await page.route('**/api/platform/venues/2/billing', async (route) => {
+    await route.fulfill(jsonResponse(buildBillingOverview({ venueId: 2 })))
+  })
+  await page.route('**/api/platform/onboarding/requests**', async (route) => {
+    onboardingCalls += 1
+    const apiRequest = route.request()
+    const path = new URL(apiRequest.url()).pathname
+    const method = apiRequest.method()
+    const match = path.match(/^\/api\/platform\/onboarding\/requests(?:\/(\d+))?(?:\/(approve|reject|close|commercial-terms|create-and-link))?$/)
+    if (!match) {
+      await route.fulfill(jsonResponse({ error: { code: 'NOT_FOUND', message: 'Not found' } }, 404))
+      return
+    }
+    if (!match[1] && method === 'GET') {
+      await route.fulfill(jsonResponse({ requests: [request] }))
+      return
+    }
+    if (Number(match[1]) !== request.id) {
+      await route.fulfill(jsonResponse({ error: { code: 'NOT_FOUND', message: 'Not found' } }, 404))
+      return
+    }
+    const action = match[2]
+    if (!action && method === 'GET') {
+      await route.fulfill(jsonResponse({ request }))
+      return
+    }
+    if (method === 'POST' && action === 'approve') {
+      approvalCalls += 1
+      const gate = deferredApprovals.shift()
+      if (gate) await gate.promise
+      request = { ...request, status: 'APPROVED' }
+      mutations.push({ method, path })
+      await route.fulfill(jsonResponse({ request }))
+      return
+    }
+    if (method === 'POST' && action === 'reject') {
+      if (request.status !== 'PENDING') {
+        await route.fulfill(
+          jsonResponse({ error: { code: 'INVALID_TRANSITION', message: 'Недопустимый переход.' } }, 409)
+        )
+        return
+      }
+      request = { ...request, status: 'REJECTED' }
+      mutations.push({ method, path })
+      await route.fulfill(jsonResponse({ request }))
+      return
+    }
+    if (method === 'POST' && action === 'close') {
+      if (request.status !== 'APPROVED' || request.linkedVenueId != null) {
+        await route.fulfill(
+          jsonResponse({ error: { code: 'INVALID_TRANSITION', message: 'Недопустимый переход.' } }, 409)
+        )
+        return
+      }
+      request = { ...request, status: 'CANCELLED' }
+      mutations.push({ method, path })
+      await route.fulfill(jsonResponse({ request }))
+      return
+    }
+    if (method === 'PUT' && action === 'commercial-terms') {
+      const body = (await apiRequest.postDataJSON()) as Record<string, unknown>
+      request = {
+        ...request,
+        trialConfigured: Boolean(body.trialConfigured),
+        trialEndsOn: body.trialEndsOn == null ? null : String(body.trialEndsOn),
+        currentPriceRub: Number(body.currentPriceRub),
+        futurePriceRub: body.futurePriceRub == null ? null : Number(body.futurePriceRub),
+        futurePriceEffectiveOn: body.futurePriceEffectiveOn == null ? null : String(body.futurePriceEffectiveOn),
+        commercialNote: body.commercialNote == null ? null : String(body.commercialNote)
+      }
+      mutations.push({ method, path, body })
+      await route.fulfill(jsonResponse({ request }))
+      return
+    }
+    if (method === 'POST' && action === 'create-and-link') {
+      createLinkCalls += 1
+      const created = request.linkedVenueId == null
+      request = { ...request, linkedVenueId: 2 }
+      createLinkCreatedResults.push(created)
+      mutations.push({ method, path })
+      if (loseNextCreateLinkResponse) {
+        loseNextCreateLinkResponse = false
+        await route.abort('failed')
+        return
+      }
+      await route.fulfill(jsonResponse({ request, venueId: 2, created }))
+      return
+    }
+    await route.fulfill(jsonResponse({ error: { code: 'METHOD_NOT_ALLOWED', message: 'Unsupported' } }, 405))
+  })
+  await page.route('**/api/platform/owners**', async (route) => {
+    const path = new URL(route.request().url()).pathname
+    if (path === '/api/platform/owners') {
+      await route.fulfill(jsonResponse({ owners }))
+      return
+    }
+    const requestedOwner = owners.find((candidate) => path === `/api/platform/owners/${candidate.userId}`)
+    if (requestedOwner) {
+      await route.fulfill(
+        jsonResponse({ owner: requestedOwner, venues: requestedOwner.userId === owner.userId ? ownerVenues : [] })
+      )
+      return
+    }
+    await route.fulfill(jsonResponse({ error: { code: 'NOT_FOUND', message: 'Not found' } }, 404))
+  })
+
+  return {
+    getMutations: () => mutations.map((mutation) => ({ ...mutation })),
+    getRequest: () => ({ ...request }),
+    getApprovalCalls: () => approvalCalls,
+    getCreateLinkCalls: () => createLinkCalls,
+    getOnboardingCalls: () => onboardingCalls,
+    getCreateLinkCreatedResults: () => [...createLinkCreatedResults],
+    deferNextApproval,
+    loseNextCreateLinkResult: () => {
+      loseNextCreateLinkResponse = true
+    },
+    setRequest: (patch: Partial<PlatformOnboardingRequestFixture>) => {
+      request = { ...request, ...patch }
+    }
+  }
+}
+
+test('ownership onboarding: owner explicitly selects and opens one or multiple venue cards', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const firstAccess: VenueOwnershipAccessFixture = {
+    venueId: 1,
+    venueName: 'Микс',
+    venueCity: 'Москва',
+    venueStatus: 'PUBLISHED',
+    role: 'OWNER',
+    permissions: []
+  }
+  const secondAccess: VenueOwnershipAccessFixture = {
+    venueId: 2,
+    venueName: 'Дымный берег',
+    venueCity: 'Казань',
+    venueStatus: 'DRAFT',
+    role: 'OWNER',
+    permissions: []
+  }
+  const api = await mockVenueOwnershipApi(page, {
+    accesses: [firstAccess],
+    applications: [
+      {
+        id: 77,
+        venueName: 'Дымный берег',
+        city: 'Казань',
+        contact: '@anna_owner',
+        comment: null,
+        status: 'APPROVED',
+        createdAt: '2030-01-10T18:00:00Z',
+        linkedVenueId: 2
+      }
+    ]
+  })
+
+  await page.goto(`?mode=venue&venueId=1#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Мои заведения', exact: true }).click()
+
+  await expect(page.getByRole('heading', { name: 'Мои заведения' })).toBeVisible()
+  await clickTelegramBackButton(page)
+  await expect(page.getByRole('heading', { name: 'Обзор', exact: true })).toBeFocused()
+  await page.getByRole('button', { name: 'Мои заведения', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Мои заведения' })).toBeVisible()
+  const venueCard = page.locator('section.card').filter({
+    has: page.getByRole('heading', { name: 'Заведения', exact: true })
+  })
+  await expect(venueCard.locator('.venue-order-row').filter({ hasText: 'Микс' })).toBeVisible()
+  await expect(venueCard.locator('.venue-order-row').filter({ hasText: 'Дымный берег' })).toHaveCount(0)
+  await expect(page.locator('.venue-controls .venue-select')).toBeHidden()
+
+  api.setAccesses([firstAccess, secondAccess])
+  api.setVenues([firstAccess, secondAccess])
+  const linkedApplication = page.locator('.venue-order-row').filter({ hasText: 'Дымный берег' })
+  await linkedApplication.getByRole('button', { name: 'Обновить список' }).click()
+
+  await expect(page.getByRole('heading', { name: 'Мои заведения' })).toBeVisible()
+  await expect(venueCard.locator('.venue-order-row').filter({ hasText: 'Дымный берег' })).toBeVisible()
+  const selector = page.locator('.venue-controls .venue-select')
+  await expect(selector).toBeVisible()
+  await expect(selector).toHaveValue('1')
+  await expect(page).toHaveURL(/venueId=1/)
+
+  await selector.selectOption('2')
+  await expect(page).toHaveURL(/venueId=2/)
+  await expect(selector).toHaveValue('2')
+
+  await page.locator('.venue-order-row').filter({ hasText: 'Микс' }).getByRole('button', { name: 'Открыть' }).click()
+  await expect(page).toHaveURL(/venueId=1.*#\/dashboard/)
+})
+
+test('ownership onboarding: owner submits edits and cancels an application with approved-unlinked guidance', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueOwnershipApi(page, {
+    accesses: [
+      {
+        venueId: 1,
+        venueName: 'Микс',
+        venueCity: 'Москва',
+        venueStatus: 'PUBLISHED',
+        role: 'OWNER',
+        permissions: []
+      }
+    ],
+    applications: [
+      {
+        id: 77,
+        venueName: 'Одобренная кальянная',
+        city: 'Тула',
+        contact: '@approved_owner',
+        comment: null,
+        status: 'APPROVED',
+        createdAt: '2030-01-09T18:00:00Z',
+        linkedVenueId: null
+      }
+    ]
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Мои заведения', exact: true }).click()
+
+  await expect(
+    page.getByText('Заявка одобрена. Заведение ещё подготавливается и скоро появится в списке.')
+  ).toBeVisible()
+  await page.getByRole('button', { name: 'Добавить заведение' }).click()
+  await expect(page.getByLabel('Название заведения')).toBeFocused()
+  await page.getByRole('button', { name: 'Отмена', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Добавить заведение' })).toBeFocused()
+  await page.getByRole('button', { name: 'Добавить заведение' }).click()
+  await page.getByLabel('Название заведения').fill('Новая кальянная')
+  await page.getByLabel('Город', { exact: true }).fill('Самара')
+  await page.getByLabel('Контакт для связи').fill('@new_owner')
+  await page.getByLabel('Комментарий (необязательно)').fill('Открытие в марте')
+  await page.getByRole('button', { name: 'Отправить заявку' }).click()
+
+  let applicationRow = page.locator('.venue-order-row').filter({ hasText: 'Новая кальянная' })
+  await expect(applicationRow.getByText('На рассмотрении', { exact: true })).toBeVisible()
+  await expect(applicationRow).toBeFocused()
+  await applicationRow.getByRole('button', { name: 'Изменить' }).click()
+  await page.getByLabel('Название заведения').fill('Новая кальянная 2')
+  await page.getByRole('button', { name: 'Сохранить', exact: true }).click()
+
+  applicationRow = page.locator('.venue-order-row').filter({ hasText: 'Новая кальянная 2' })
+  await expect(applicationRow).toBeVisible()
+  let cancelConfirmation: string | null = null
+  page.once('dialog', async (dialog) => {
+    cancelConfirmation = dialog.message()
+    await dialog.accept()
+  })
+  await applicationRow.getByRole('button', { name: 'Отменить' }).click()
+
+  await expect.poll(() => cancelConfirmation).toBe(
+    'Отменить заявку «Новая кальянная 2»? После отмены платформа больше не будет её обрабатывать.'
+  )
+  await expect(applicationRow.getByText('Отменено', { exact: true })).toBeVisible()
+  await expect(applicationRow).toBeFocused()
+  expect(api.getApplications().find((application) => application.id === 78)?.status).toBe('CANCELLED')
+  expect(api.getMutations()).toEqual([
+    {
+      method: 'POST',
+      path: '/api/venue/ownership/applications',
+      body: {
+        venueName: 'Новая кальянная',
+        city: 'Самара',
+        contact: '@new_owner',
+        comment: 'Открытие в марте'
+      }
+    },
+    {
+      method: 'PUT',
+      path: '/api/venue/ownership/applications/78',
+      body: {
+        venueName: 'Новая кальянная 2',
+        city: 'Самара',
+        contact: '@new_owner',
+        comment: 'Открытие в марте'
+      }
+    },
+    { method: 'POST', path: '/api/venue/ownership/applications/78/cancel' }
+  ])
+})
+
+test('ownership onboarding: exact double-submit keeps one authoritative application', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueOwnershipApi(page, {
+    accesses: [
+      {
+        venueId: 1,
+        venueName: 'Микс',
+        venueCity: 'Москва',
+        venueStatus: 'PUBLISHED',
+        role: 'OWNER',
+        permissions: []
+      }
+    ]
+  })
+  const releaseFirstResponse = api.deferNextSubmitResponse()
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Мои заведения', exact: true }).click()
+  const liveStatus = page.locator('.ownership-workspace > .status')
+  await expect(liveStatus).toHaveAttribute('role', 'status')
+  await expect(liveStatus).toHaveAttribute('aria-live', 'polite')
+  await page.getByRole('button', { name: 'Добавить заведение' }).click()
+  await fillVenueOwnershipApplication(page, {
+    venueName: 'Северный дым',
+    city: 'Пермь',
+    contact: '@north_owner',
+    comment: 'Открытие осенью'
+  })
+  const submit = page.getByRole('button', { name: 'Отправить заявку' })
+  await submit.evaluate((button: HTMLButtonElement) => {
+    button.click()
+    button.click()
+  })
+
+  await expect.poll(() => api.getApplicationSubmitCalls()).toBe(1)
+  await expect(submit).toBeDisabled()
+  releaseFirstResponse()
+  const firstRow = page.locator('[data-application-id="1"]')
+  await expect(firstRow).toContainText('Северный дым')
+  await expect(firstRow).toContainText('На рассмотрении')
+  await expect(firstRow).toBeFocused()
+
+  await page.getByRole('button', { name: 'Добавить заведение' }).click()
+  await fillVenueOwnershipApplication(page, {
+    venueName: 'Северный дым',
+    city: 'Пермь',
+    contact: '@north_owner',
+    comment: 'Открытие осенью'
+  })
+  await page.getByRole('button', { name: 'Отправить заявку' }).click()
+
+  await expect(liveStatus).toHaveText(
+    'Заявка #1 уже была отправлена. Показан актуальный статус.'
+  )
+  await expect(firstRow).toBeFocused()
+  expect(api.getApplicationSubmitCalls()).toBe(2)
+  expect(api.getApplications()).toHaveLength(1)
+  expect(api.getMutations()).toHaveLength(1)
+})
+
+test('ownership onboarding: a distinct second venue creates and shows a second application', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueOwnershipApi(page, {
+    accesses: [
+      {
+        venueId: 1,
+        venueName: 'Микс',
+        venueCity: 'Москва',
+        venueStatus: 'PUBLISHED',
+        role: 'OWNER',
+        permissions: []
+      }
+    ]
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Мои заведения', exact: true }).click()
+  await page.getByRole('button', { name: 'Добавить заведение' }).click()
+  await fillVenueOwnershipApplication(page, {
+    venueName: 'Северный дым',
+    city: 'Пермь',
+    contact: '@north_owner',
+    comment: 'Первая площадка'
+  })
+  await page.getByRole('button', { name: 'Отправить заявку' }).click()
+  await page.getByRole('button', { name: 'Добавить заведение' }).click()
+  await fillVenueOwnershipApplication(page, {
+    venueName: 'Южный дым',
+    city: 'Самара',
+    contact: '@south_owner',
+    comment: 'Вторая площадка'
+  })
+  await page.getByRole('button', { name: 'Отправить заявку' }).click()
+
+  const firstRow = page.locator('[data-application-id="1"]')
+  const secondRow = page.locator('[data-application-id="2"]')
+  await expect(firstRow).toContainText('Северный дым')
+  await expect(firstRow).toContainText('Пермь')
+  await expect(secondRow).toContainText('Южный дым')
+  await expect(secondRow).toContainText('Самара')
+  await expect(secondRow).toBeFocused()
+  expect(api.getApplications().map((application) => application.venueName)).toEqual([
+    'Северный дым',
+    'Южный дым'
+  ])
+  expect(api.getMutations()).toHaveLength(2)
+})
+
+test('ownership onboarding: approved-unlinked canonical retry returns the existing request', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueOwnershipApi(page, {
+    accesses: [
+      {
+        venueId: 1,
+        venueName: 'Микс',
+        venueCity: 'Москва',
+        venueStatus: 'PUBLISHED',
+        role: 'OWNER',
+        permissions: []
+      }
+    ],
+    applications: [
+      {
+        id: 77,
+        venueName: 'Дымный берег',
+        city: 'Казань',
+        contact: '@owner',
+        comment: 'Пилот',
+        status: 'APPROVED',
+        createdAt: '2030-01-09T18:00:00Z',
+        linkedVenueId: null
+      }
+    ]
+  })
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Мои заведения', exact: true }).click()
+  await page.getByRole('button', { name: 'Добавить заведение' }).click()
+  await fillVenueOwnershipApplication(page, {
+    venueName: '  ДЫМНЫЙ   БЕРЕГ  ',
+    city: 'казань',
+    contact: '＠OWNER',
+    comment: 'ПИЛОТ'
+  })
+  await page.getByRole('button', { name: 'Отправить заявку' }).click()
+
+  const approvedRow = page.locator('[data-application-id="77"]')
+  await expect(approvedRow).toContainText(
+    'Заявка одобрена. Заведение ещё подготавливается и скоро появится в списке.'
+  )
+  await expect(approvedRow).toBeFocused()
+  await expect(page.locator('.ownership-workspace > .status')).toHaveText(
+    'Заявка #77 уже была отправлена. Показан актуальный статус.'
+  )
+  expect(api.getApplications()).toHaveLength(1)
+  expect(api.getApplications()[0].status).toBe('APPROVED')
+  expect(api.getMutations()).toHaveLength(0)
+})
+
+test('ownership onboarding: account replacement ignores a late prior-account submit response', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const ownerAccess: VenueOwnershipAccessFixture = {
+    venueId: 1,
+    venueName: 'Микс',
+    venueCity: 'Москва',
+    venueStatus: 'PUBLISHED',
+    role: 'OWNER',
+    permissions: []
+  }
+  const api = await mockVenueOwnershipApi(page, {
+    accesses: [ownerAccess],
+    otherAccount: {
+      accesses: [{ ...ownerAccess, venueId: 2, venueName: 'Другой аккаунт' }],
+      applications: [
+        {
+          id: 900,
+          venueName: 'Заявка другого владельца',
+          city: 'Тула',
+          contact: '@other_owner',
+          comment: null,
+          status: 'PENDING',
+          createdAt: '2030-01-09T18:00:00Z',
+          linkedVenueId: null
+        }
+      ]
+    }
+  })
+  const releaseOldResponse = api.deferNextSubmitResponse()
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Мои заведения', exact: true }).click()
+  await page.getByRole('button', { name: 'Добавить заведение' }).click()
+  await fillVenueOwnershipApplication(page, {
+    venueName: 'Поздняя заявка старого аккаунта',
+    city: 'Москва',
+    contact: '@old_owner'
+  })
+  await page.getByRole('button', { name: 'Отправить заявку' }).click()
+  await expect.poll(() => api.getApplications()).toHaveLength(1)
+
+  await page.evaluate(({ userId, initData }) => {
+    window.localStorage.setItem('__e2e_telegram_user_id', String(userId))
+    window.localStorage.setItem('__e2e_telegram_init_data', initData)
+  }, { userId: 987654321, initData: otherMockInitData })
+  await page.goto(`?mode=venue&smokeUser=other#tgWebAppData=${encodeURIComponent(otherMockInitData)}`)
+  await page.getByRole('button', { name: 'Мои заведения', exact: true }).click()
+
+  await expect(page.getByText('Заявка другого владельца', { exact: true })).toBeVisible()
+  await expect(page.getByText('Поздняя заявка старого аккаунта', { exact: true })).toHaveCount(0)
+  releaseOldResponse()
+  await expect.poll(() => api.getSettledApplicationSubmitCalls()).toBe(1)
+  await expect(page.getByText('Заявка другого владельца', { exact: true })).toBeVisible()
+  await expect(page.getByText('Поздняя заявка старого аккаунта', { exact: true })).toHaveCount(0)
+  expect(api.getApplications(123456789).map((application) => application.venueName)).toEqual([
+    'Поздняя заявка старого аккаунта'
+  ])
+  expect(api.getApplications(987654321).map((application) => application.venueName)).toEqual([
+    'Заявка другого владельца'
+  ])
+})
+
+test('ownership onboarding: lost response keeps the form and exact retry reuses the authoritative request', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueOwnershipApi(page, {
+    accesses: [
+      {
+        venueId: 1,
+        venueName: 'Микс',
+        venueCity: 'Москва',
+        venueStatus: 'PUBLISHED',
+        role: 'OWNER',
+        permissions: []
+      }
+    ]
+  })
+  api.loseNextSubmitResult()
+
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Мои заведения', exact: true }).click()
+  await page.getByRole('button', { name: 'Добавить заведение' }).click()
+  await page.getByLabel('Название заведения').fill('Северный дым')
+  await page.getByLabel('Город', { exact: true }).fill('Пермь')
+  await page.getByLabel('Контакт для связи').fill('@north_owner')
+  await page.getByLabel('Комментарий (необязательно)').fill('Сохранить при ошибке')
+  await page.getByRole('button', { name: 'Отправить заявку' }).click()
+
+  await expect(page.getByRole('heading', { name: 'Нет соединения' })).toBeVisible()
+  await expect(page.locator('.ownership-workspace > .error-card')).toHaveAttribute('role', 'alert')
+  await expect(page.locator('.ownership-workspace > .error-card')).toBeFocused()
+  await expect(page.getByLabel('Название заведения')).toHaveValue('Северный дым')
+  await expect(page.getByLabel('Город', { exact: true })).toHaveValue('Пермь')
+  await expect(page.getByLabel('Контакт для связи')).toHaveValue('@north_owner')
+  await expect(page.getByLabel('Комментарий (необязательно)')).toHaveValue('Сохранить при ошибке')
+  await expect(page.getByRole('button', { name: 'Отправить заявку' })).toBeEnabled()
+  expect(api.getApplicationSubmitCalls()).toBe(1)
+  expect(api.getApplications()).toHaveLength(1)
+
+  await page.getByRole('button', { name: 'Повторить' }).click()
+  await expect(page.locator('.venue-order-row').filter({ hasText: 'Северный дым' })).toContainText('На рассмотрении')
+  await expect(page.locator('.ownership-workspace > .status')).toHaveText(
+    'Заявка #1 уже была отправлена. Показан актуальный статус.'
+  )
+  expect(api.getApplicationSubmitCalls()).toBe(2)
+  expect(api.getApplications()).toHaveLength(1)
+  expect(api.getMutations()).toEqual([
+    {
+      method: 'POST',
+      path: '/api/venue/ownership/applications',
+      body: {
+        venueName: 'Северный дым',
+        city: 'Пермь',
+        contact: '@north_owner',
+        comment: 'Сохранить при ошибке'
+      }
+    }
+  ])
+})
+
+test('ownership onboarding: manager and staff cannot open the owner workspace', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueOwnershipApi(page, {
+    accesses: [
+      {
+        venueId: 1,
+        venueName: 'Микс',
+        venueCity: 'Москва',
+        venueStatus: 'PUBLISHED',
+        role: 'MANAGER',
+        permissions: []
+      },
+      {
+        venueId: 2,
+        venueName: 'Дым',
+        venueCity: 'Казань',
+        venueStatus: 'PUBLISHED',
+        role: 'STAFF',
+        permissions: []
+      }
+    ]
+  })
+
+  await page.goto(`?mode=venue&venueId=1#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  const ownershipNav = page.locator('.nav-button').filter({ hasText: 'Мои заведения' })
+  await expect(ownershipNav).toBeHidden()
+  await page.evaluate(() => {
+    window.location.hash = '#/ownership'
+  })
+
+  await expect(page.getByRole('heading', { name: 'Недостаточно прав' })).toBeVisible()
+  await expect(page.getByText('Раздел доступен только пользователю с действующей ролью OWNER.')).toBeVisible()
+  const directRouteDenial = page.getByRole('alert')
+  await expect(directRouteDenial).toHaveAttribute('aria-live', 'assertive')
+  await expect(directRouteDenial).toBeFocused()
+  expect(api.getOwnershipGetCalls()).toBe(0)
+
+  await page.locator('.venue-controls .venue-select').selectOption('2')
+  await expect(page.getByText('Роль: персонал')).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Недостаточно прав' })).toBeVisible()
+  await expect(page.getByRole('alert')).toBeFocused()
+  expect(api.getOwnershipGetCalls()).toBe(0)
+})
+
+test('ownership onboarding: platform shows requests owners and venue co-owners', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockPlatformOwnershipApi(page)
+  const approval = api.deferNextApproval()
+
+  await page.goto(`?mode=platform#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  const venueRow = page.locator('.venue-order-row').filter({ hasText: 'Микс' })
+  await expect(venueRow).toContainText('#1 · Москва · PUBLISHED')
+  await expect(venueRow).toContainText('Владельцы: Анна Иванова, @co_owner, User #503')
+
+  await page.getByRole('button', { name: 'Заявки' }).click()
+  await expect(page.getByRole('heading', { name: 'Подключение и ownership' })).toBeVisible()
+  await expect(page.getByLabel('Статус заявки')).toBeVisible()
+  await expect(page.getByLabel('Поиск заявок')).toBeVisible()
+  const applicationsStatus = page.locator('.ownership-workspace > .status')
+  await expect(applicationsStatus).toHaveAttribute('role', 'status')
+  await expect(applicationsStatus).toHaveAttribute('aria-live', 'polite')
+  const requestRow = page.locator('.venue-order-row').filter({ hasText: 'Дымный берег' })
+  await expect(requestRow).toContainText('#701 · Казань · Анна Иванова')
+  await requestRow.getByRole('button', { name: 'Открыть' }).click()
+
+  await expect(page.getByRole('heading', { name: 'Заявка #701' })).toBeVisible()
+  await expect(page.getByText('Контакт: @anna_owner')).toBeVisible()
+  await expect(page.getByText('Комментарий: Нужна миграция меню')).toBeVisible()
+  const approve = page.getByRole('button', { name: 'Одобрить' })
+  await approve.click()
+  await expect.poll(() => api.getApprovalCalls()).toBe(1)
+  await expect(applicationsStatus).toHaveText('Сохраняем...')
+  await expect(approve).toBeDisabled()
+  await approve.dispatchEvent('click')
+  expect(api.getApprovalCalls()).toBe(1)
+  approval.release()
+  await expect(page.getByText('Одобрена · ожидает создания')).toBeVisible()
+  await expect(applicationsStatus).toHaveText('Заявка #701 одобрена.')
+  await expect(applicationsStatus).toBeFocused()
+  const createBeforeTerms = page.getByRole('button', { name: 'Создать DRAFT и связать' })
+  await expect(createBeforeTerms).toBeDisabled()
+  await expect(page.getByText(/Сначала сохраните корректные коммерческие условия/)).toBeVisible()
+
+  await page.getByLabel('Текущая цена, ₽').fill('2200')
+  await page.getByLabel('Пробный период до (необязательно)').fill('2030-02-01')
+  await page.getByLabel('Коммерческая заметка (необязательно)').fill('Пилотный тариф')
+  await page.getByRole('button', { name: 'Сохранить условия' }).click()
+  await expect.poll(() => api.getRequest().currentPriceRub).toBe(2200)
+  await expect(applicationsStatus).toHaveText('Коммерческие условия заявки #701 сохранены.')
+  await expect(applicationsStatus).toBeFocused()
+  await expect(page.getByRole('button', { name: 'Создать DRAFT и связать' })).toBeEnabled()
+  expect(api.getMutations()).toEqual([
+    { method: 'POST', path: '/api/platform/onboarding/requests/701/approve' },
+    {
+      method: 'PUT',
+      path: '/api/platform/onboarding/requests/701/commercial-terms',
+      body: {
+        trialConfigured: true,
+        trialEndsOn: '2030-02-01',
+        currentPriceRub: 2200,
+        futurePriceRub: null,
+        futurePriceEffectiveOn: null,
+        commercialNote: 'Пилотный тариф'
+      }
+    }
+  ])
+
+  await page.getByRole('button', { name: '← К заявкам' }).click()
+  await expect(page.getByRole('heading', { name: 'Подключение и ownership' })).toBeFocused()
+  await page.getByRole('button', { name: 'Кальянные' }).click()
+  await expect(page.getByRole('heading', { name: 'Заведения' })).toBeVisible()
+  await page.getByRole('button', { name: 'Владельцы' }).click()
+  await expect(page.getByRole('heading', { name: 'Операционные владельцы' })).toBeVisible()
+  await expect(page.getByLabel('Поиск владельцев')).toBeVisible()
+  await expect(page.getByLabel('Статус заведения')).toBeVisible()
+  const ownerRow = page.locator('.venue-order-row').filter({ hasText: 'Анна Иванова' })
+  await expect(ownerRow).toContainText('User #501 · 2 заведения')
+  await expect(ownerRow).toContainText('PUBLISHED: 1 · DRAFT: 1')
+  await ownerRow.getByRole('button', { name: 'Открыть' }).click()
+
+  await expect(page.getByRole('heading', { name: 'Владелец #501' })).toBeVisible()
+  await expect(page.getByText('В управлении: 2 заведения', { exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Связанные заведения' })).toBeVisible()
+  await expect(page.locator('.venue-order-row').filter({ hasText: 'Микс' })).toContainText('#1 · Москва · PUBLISHED')
+  await expect(page.locator('.venue-order-row').filter({ hasText: 'Дымный берег' })).toContainText('#2 · Казань · DRAFT')
+  await page.getByRole('button', { name: '← К владельцам' }).click()
+  await expect(page.getByRole('heading', { name: 'Операционные владельцы' })).toBeFocused()
+})
+
+test('ownership onboarding: owner venue counts use Russian plural forms', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const cases = [
+    [1, '1 заведение'],
+    [2, '2 заведения'],
+    [5, '5 заведений'],
+    [11, '11 заведений'],
+    [21, '21 заведение'],
+    [22, '22 заведения'],
+    [25, '25 заведений']
+  ] as const
+  await mockPlatformOwnershipApi(page, { ownerVenueCounts: cases.map(([count]) => count) })
+
+  await page.goto(`?mode=platform#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Владельцы' }).click()
+
+  for (const [count, expected] of cases) {
+    const row = page.locator('.venue-order-row').filter({ hasText: `Владелец ${count}` })
+    await expect(row.locator('.venue-order-sub').first()).toHaveText(
+      new RegExp(`^User #\\d+ · ${expected}$`)
+    )
+  }
+})
+
+test('ownership onboarding: first create-link focuses the rendered venue detail heading', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockPlatformOwnershipApi(page)
+  api.setRequest({
+    status: 'APPROVED',
+    trialConfigured: true,
+    trialEndsOn: '2030-02-01',
+    currentPriceRub: 2200
+  })
+
+  await page.goto(`?mode=platform#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Заявки' }).click()
+  await page.locator('.venue-order-row').filter({ hasText: 'Дымный берег' }).getByRole('button', { name: 'Открыть' }).click()
+  page.once('dialog', async (dialog) => {
+    await dialog.accept()
+  })
+  await page.getByRole('button', { name: 'Создать DRAFT и связать' }).click()
+
+  await expect(page).toHaveURL(/#\/venue\/2$/)
+  const heading = page.locator('[data-platform-venue-detail-heading="true"]')
+  await expect(heading).toHaveRole('heading', { level: 2 })
+  await expect(heading).toHaveText('Дымный берег')
+  await expect(heading).toHaveAccessibleName('Дымный берег')
+  await expect(heading).toHaveAttribute('id', 'platform-venue-detail-heading')
+  await expect(heading).toBeFocused()
+  expect(api.getCreateLinkCreatedResults()).toEqual([true])
+})
+
+test('ownership onboarding: platform retries a lost create-link result as an idempotent replay', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockPlatformOwnershipApi(page)
+  api.setRequest({
+    status: 'APPROVED',
+    trialConfigured: true,
+    trialEndsOn: '2030-02-01',
+    currentPriceRub: 2200
+  })
+  api.loseNextCreateLinkResult()
+
+  await page.goto(`?mode=platform#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Заявки' }).click()
+  const requestRow = page.locator('.venue-order-row').filter({ hasText: 'Дымный берег' })
+  await requestRow.getByRole('button', { name: 'Открыть' }).click()
+
+  let confirmation: string | null = null
+  page.once('dialog', async (dialog) => {
+    confirmation = dialog.message()
+    await dialog.accept()
+  })
+  const create = page.getByRole('button', { name: 'Создать DRAFT и связать' })
+  await create.click()
+
+  await expect.poll(() => confirmation).toBe(
+    'Создать DRAFT «Дымный берег», назначить действующего OWNER и связать заявку? Новое заведение не будет выбрано автоматически.'
+  )
+  await expect(page.getByRole('heading', { name: 'Нет соединения' })).toBeVisible()
+  await expect(create).toBeEnabled()
+  expect(api.getCreateLinkCalls()).toBe(1)
+  expect(api.getCreateLinkCreatedResults()).toEqual([true])
+  expect(api.getRequest().linkedVenueId).toBe(2)
+
+  page.once('dialog', async (dialog) => {
+    await dialog.accept()
+  })
+  await page.getByRole('button', { name: 'Повторить' }).click()
+
+  await expect(page).toHaveURL(/#\/venue\/2$/)
+  const heading = page.locator('[data-platform-venue-detail-heading="true"]')
+  await expect(heading).toHaveText('Дымный берег')
+  await expect(heading).toHaveAccessibleName('Дымный берег')
+  await expect(heading).toBeFocused()
+  await expect(page.getByText('Заявка уже связана с существующим результатом.')).toBeVisible()
+  expect(api.getCreateLinkCalls()).toBe(2)
+  expect(api.getCreateLinkCreatedResults()).toEqual([true, false])
+  expect(api.getMutations()).toEqual([
+    { method: 'POST', path: '/api/platform/onboarding/requests/701/create-and-link' },
+    { method: 'POST', path: '/api/platform/onboarding/requests/701/create-and-link' }
+  ])
+})
+
+test('ownership onboarding: non-platform account is denied before request facts', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockPlatformOwnershipApi(page, { platformAllowed: false })
+
+  await page.goto(`?mode=platform#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+
+  const accessState = page.locator('.venue-access-state')
+  await expect(accessState).toHaveAttribute('role', 'status')
+  await expect(accessState).toHaveAttribute('aria-live', 'polite')
+  const platformDenial = page.getByRole('alert')
+  await expect(platformDenial).toHaveText('Нет доступа.')
+  await expect(platformDenial).toHaveAttribute('aria-live', 'assertive')
+  await expect(platformDenial).toBeFocused()
+  await expect(page.getByText('Дымный берег', { exact: true })).toHaveCount(0)
+  await expect(page.getByText('@anna_owner', { exact: false })).toHaveCount(0)
+  expect(api.getOnboardingCalls()).toBe(0)
+})
+
+test('ownership onboarding: platform rejects a pending request through the reject endpoint', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockPlatformOwnershipApi(page)
+
+  await page.goto(`?mode=platform#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Заявки' }).click()
+  await page.locator('.venue-order-row').filter({ hasText: 'Дымный берег' }).getByRole('button', { name: 'Открыть' }).click()
+  page.once('dialog', async (dialog) => {
+    await dialog.accept()
+  })
+  await page.getByRole('button', { name: 'Отклонить' }).click()
+
+  const status = page.locator('.ownership-workspace > .status')
+  await expect(page.getByText('Отклонена', { exact: true })).toBeVisible()
+  await expect(status).toHaveText('Заявка #701 отклонена.')
+  await expect(status).toBeFocused()
+  expect(api.getRequest().status).toBe('REJECTED')
+  expect(api.getMutations()).toEqual([
+    { method: 'POST', path: '/api/platform/onboarding/requests/701/reject' }
+  ])
+})
+
+test('ownership onboarding: platform closes approved-unlinked request through the close endpoint', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockPlatformOwnershipApi(page)
+  api.setRequest({ status: 'APPROVED', linkedVenueId: null })
+
+  await page.goto(`?mode=platform#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Заявки' }).click()
+  await page.locator('.venue-order-row').filter({ hasText: 'Дымный берег' }).getByRole('button', { name: 'Открыть' }).click()
+  page.once('dialog', async (dialog) => {
+    await dialog.accept()
+  })
+  await page.getByRole('button', { name: 'Закрыть без создания' }).click()
+
+  const status = page.locator('.ownership-workspace > .status')
+  await expect(page.getByText('Отменена', { exact: true })).toBeVisible()
+  await expect(status).toHaveText('Заявка #701 закрыта.')
+  await expect(status).toBeFocused()
+  expect(api.getRequest().status).toBe('CANCELLED')
+  expect(api.getMutations()).toEqual([
+    { method: 'POST', path: '/api/platform/onboarding/requests/701/close' }
+  ])
+})
+
 test('guest catalog sends debounced backend search and city filters then resets', async ({ page }) => {
   await installTelegramWebApp(page, 123456789)
   const api = await mockGuestApi(page, {

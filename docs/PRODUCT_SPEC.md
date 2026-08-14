@@ -455,6 +455,27 @@ Implementation slices:
 ## Block 11 — Platform Mode (multi-venue onboarding & lifecycle)
 MUST:
 - Treat Platform Mode as one cockpit for venues, onboarding requests, venue lifecycle, owner/access, billing/subscriptions/invoices, Support Center, analytics/audit and operational risk/health indicators.
+- An authenticated Telegram user submits a first or additional venue through the shared backend
+  contract even without an active OWNER membership. Venue Mini App submission is an additional-venue
+  entry available only to an active operational Owner; Manager, Staff, foreign and Platform-only
+  identities are denied there. The adapter selects this policy server-side, applicant/source are
+  never client fields, and both entries use one service and repository writer.
+- Submit creates only a request and is not blocked by commercial quota. Under the applicant row lock,
+  an exact canonical tuple of normalized venue name, city, contact and optional comment returns the
+  matching `PENDING` or `APPROVED`-unlinked request without insert/audit. A distinct tuple creates a
+  separate `PENDING`; `REJECTED`/`CANCELLED` rows do not block it.
+- Application lifecycle is exactly `PENDING`, `APPROVED`, `REJECTED`, `CANCELLED`. Platform
+  create-and-link enforces commercial quota and atomically creates one `DRAFT`, assigns active
+  `venue_members(role=OWNER)`, applies commercial terms and links the request. Failure leaves no
+  partial venue/member/link/settings/audit state; retry returns the authoritative link. Neither
+  submit nor approval/linking seeds menu categories or auto-selects a venue.
+- For an applicant without a previous OWNER membership or commercial account, Platform create/link
+  preserves the former connection-request account semantics and existing default limit of one; it
+  does not introduce a new quota/account policy.
+- Telegram `owner_quota_create_start` is a compatibility alias into that shared application flow;
+  it must never perform direct venue/membership/link/selection writes. Commercial owner accounts,
+  quota and limit-request management remain separate commercial contracts and existing pilot-created
+  venues are preserved without history rewrite.
 - Platform Owner can create venue, invite/add venue OWNER users, list active OWNER memberships and revoke one OWNER only when another active OWNER remains.
 - OWNER invite/revoke actions are audited; membership revoke does not relink primary/legal/billing owner linkage.
 - Current implementation lifecycle statuses are `DRAFT`, `PUBLISHED`, `HIDDEN`, `PAUSED`, `SUSPENDED`, `ARCHIVED`, `DELETED`.

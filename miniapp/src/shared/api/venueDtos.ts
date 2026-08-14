@@ -19,6 +19,44 @@ export type VenueMeResponse = {
   venues: VenueAccessDto[]
 }
 
+export type VenueConnectionApplicationStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED'
+
+export type VenueOwnershipVenueDto = {
+  venueId: number
+  venueName?: string | null
+  venueCity?: string | null
+  venueStatus?: string | null
+}
+
+export type VenueConnectionApplicationDto = {
+  id: number
+  venueName: string
+  city: string
+  contact: string
+  comment?: string | null
+  status: VenueConnectionApplicationStatus
+  createdAt: string
+  linkedVenueId?: number | null
+}
+
+export type VenueOwnershipResponse = {
+  userId: number
+  venues: VenueOwnershipVenueDto[]
+  applications: VenueConnectionApplicationDto[]
+}
+
+export type VenueConnectionApplicationWriteRequest = {
+  venueName: string
+  city: string
+  contact: string
+  comment?: string | null
+}
+
+export type VenueConnectionApplicationWriteResponse = {
+  application: VenueConnectionApplicationDto
+  created?: boolean | null
+}
+
 export type VenueTodayStaffSource = 'MANUAL' | 'SCHEDULE'
 
 export type VenueStaffModuleSettingsDto = {

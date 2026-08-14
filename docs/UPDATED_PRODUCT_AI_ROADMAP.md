@@ -1,6 +1,6 @@
 # Product + Telegram AI Bots Roadmap
 
-Дата обновления: 2026-08-13.
+Дата обновления: 2026-08-14.
 
 Статус документа: canonical roadmap. Этот файл объединяет актуальный product roadmap, Mini App launch roadmap и Telegram-native AI Bots roadmap. Старые audit-файлы в `docs/audit/` остаются evidence/history, но не являются текущим backlog без сверки с этим roadmap и текущим кодом.
 
@@ -22,7 +22,7 @@
 
 > Market launch требует production-ready Telegram bot + Mini App core. AI входит в продукт как assistant layer. Telegram Guest Mode, Telegram Business / Secretary Bots, Managed branded bots и Bot-to-Bot agents не являются обязательными для первого запуска.
 
-Текущий фокус перед пилотом: product P0/P1 закрыт по уже принятым M1-M9b.3 блокам, staging smoke, CI release validation, deploy/runbook hardening and minimal Guest Mini App browser smoke зелёные. M9a Deployment SSH Reliability Hardening is CLOSED / staging smoke passed: standard deploy remains supported, opt-in ControlMaster deploy is validated as a release-reliability workaround, and the exact SSH/network root cause remains unconfirmed. M9b Venue Working Hours and Date Exceptions Mini App Parity, M9b.1 range/rejection-copy improvements, M9b.2 exception save/list UX and M9b.3 date-range editing are CLOSED / staging smoke passed. Platform Owner Invite / ADMIN Semantics Hardening, Platform Venue OWNER Revocation, H2/PostgreSQL active-order + personal-tab uniqueness fidelity, Mini App mutation / operational verification closure pack, Staff Call Lifecycle ACK/DONE audit hardening, Staff-call guest-visible CANCELLED finishing patch, Guest Table Context UX Cleanup / Feature-gated Extension Module, Guest Table Session Exit / Expiry UX, Guest Bill / Display-Number / Full-Bill Parity, Guest Bill Request / Payment Method UX, Staff Chat Noise Reduction / Table Activity Card, hookah preparation placeholder polish, Platform Billing Cockpit / Owner Payment UX, Platform Billing Renewal / Advance Invoice / Courtesy Days, Staff/Manager invite deep-link sharing polish, Guest Communication UX / Support Tickets MVP, Booking Arrival Guard / Staff-Chat Booking Buttons, Guest History Foundation, Post-Visit Feedback MVP, Guest Favorites Phase 1 and Catalog Search and Filter Phase 1 are CLOSED. Guest Favorites Phase 1 is **DONE / MVP / STAGING-SMOKE-PASSED** for venue favorites only, including Telegram Profile/Catalog parity and source-aware Back navigation. Catalog Search and Filter Phase 1 is **CATALOG SEARCH AND FILTER PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**. Shared initial menu bootstrap is **VENUE MENU ONBOARDING / SHARED INITIAL MENU BOOTSTRAP / DONE / MVP / STAGING-SMOKE-PASSED**. The selected next bounded milestone is **PLATFORM & VENUE ONBOARDING / OWNERSHIP COCKPIT** with verdict `IMPLEMENT_PLATFORM_ONBOARDING_OWNERSHIP_COCKPIT_NEXT`; do not reopen closed slices without new smoke or code evidence. Scope не расширяем в сторону Telegram-native AI surfaces до готовности Mini App и public-safe tools.
+Текущий фокус перед пилотом: product P0/P1 закрыт по уже принятым M1-M9b.3 блокам, staging smoke, CI release validation, deploy/runbook hardening and minimal Guest Mini App browser smoke зелёные. M9a Deployment SSH Reliability Hardening is CLOSED / staging smoke passed: standard deploy remains supported, opt-in ControlMaster deploy is validated as a release-reliability workaround, and the exact SSH/network root cause remains unconfirmed. M9b Venue Working Hours and Date Exceptions Mini App Parity, M9b.1 range/rejection-copy improvements, M9b.2 exception save/list UX and M9b.3 date-range editing are CLOSED / staging smoke passed. Platform Owner Invite / ADMIN Semantics Hardening, Platform Venue OWNER Revocation, H2/PostgreSQL active-order + personal-tab uniqueness fidelity, Mini App mutation / operational verification closure pack, Staff Call Lifecycle ACK/DONE audit hardening, Staff-call guest-visible CANCELLED finishing patch, Guest Table Context UX Cleanup / Feature-gated Extension Module, Guest Table Session Exit / Expiry UX, Guest Bill / Display-Number / Full-Bill Parity, Guest Bill Request / Payment Method UX, Staff Chat Noise Reduction / Table Activity Card, hookah preparation placeholder polish, Platform Billing Cockpit / Owner Payment UX, Platform Billing Renewal / Advance Invoice / Courtesy Days, Staff/Manager invite deep-link sharing polish, Guest Communication UX / Support Tickets MVP, Booking Arrival Guard / Staff-Chat Booking Buttons, Guest History Foundation, Post-Visit Feedback MVP, Guest Favorites Phase 1 and Catalog Search and Filter Phase 1 are CLOSED. Guest Favorites Phase 1 is **DONE / MVP / STAGING-SMOKE-PASSED** for venue favorites only, including Telegram Profile/Catalog parity and source-aware Back navigation. Catalog Search and Filter Phase 1 is **CATALOG SEARCH AND FILTER PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**. Shared initial menu bootstrap is **VENUE MENU ONBOARDING / SHARED INITIAL MENU BOOTSTRAP / DONE / MVP / STAGING-SMOKE-PASSED**. **PLATFORM & VENUE ONBOARDING / OWNERSHIP COCKPIT** is **MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**; green Actions, staging deploy and consolidated smoke remain before release closure. Do not reopen closed slices without new smoke or code evidence. Scope не расширяем в сторону Telegram-native AI surfaces до готовности Mini App и public-safe tools.
 
 Актуальный post-fix snapshot:
 
@@ -40,7 +40,7 @@
 - STAFF booking policy разделён: STAFF видит брони и отмечает `Гость пришёл` / `Не пришёл` only for confirmed bookings, а confirm/cancel/change/message/settings остаются MANAGER/OWNER.
 - Venue Mini App booking card opens a persisted booking conversation thread: venue messages, Guest Bot replies and Guest Mini App replies share one source of truth; staff chat remains a notification mirror. M4A staging smoke passed after UX polish. M4B/M4C unified `Сообщения` inbox and resolve/reopen lifecycle are CLOSED after staging smoke: thread cards show context/status/last message/unread, active/resolved filters work, and explicit resolve/reopen does not mutate booking lifecycle.
 - Guest Communication UX / Support Tickets MVP is CLOSED after smoke: canonical model is `BOOKING_CHAT`, `VENUE_CHAT`, `SUPPORT_TICKET`, `STAFF_CALL` in `docs/COMMUNICATION_MODEL.md`; Guest nav is `Чаты` / `Помощь`; catalog and venue detail `Задать вопрос` opens/reuses `VENUE_CHAT`; booking `Открыть переписку` remains `BOOKING_CHAT`; Support tickets are separated through `SUPPORT_TICKET`; Platform sees support tickets but not ordinary venue chats; Staff sees neither support tickets nor ordinary venue chats; table context keeps `Вызвать персонал` as the live operational flow; support/venue chat creation and replies do not post to staff-chat and guest create/reply routes are rate-limited.
-- Platform cockpit docs are current in `docs/PLATFORM_COCKPIT.md`: Platform Mode is the cockpit for venues, onboarding, lifecycle, owner/access, billing/subscriptions/invoices, Support Center and analytics/audit. Manual billing and support-ticket MVP are closed; onboarding/placements/analytics, real acquiring/Stars, recurring payments and advanced support remain future/partial.
+- Platform cockpit docs are current in `docs/PLATFORM_COCKPIT.md`: Platform Mode is the cockpit for venues, onboarding, lifecycle, owner/access, billing/subscriptions/invoices, Support Center and analytics/audit. Manual billing and support-ticket MVP are closed; the bounded onboarding/ownership cockpit is locally validated and awaits review/Actions/staging, while placements/analytics, real acquiring/Stars, recurring payments and advanced support remain future/partial.
 - Growth/retention docs are current in `docs/GROWTH_RETENTION.md`: Guest History Foundation, Post-Visit Feedback MVP, venue-only Guest Favorites Phase 1, Simple Venue Promotions Phase 1, Promotion Creation Audit, Promotion Effective State Clarity, Promotion Lifecycle Status Audit and Venue Promotions Current/Archived Tabs UX are DONE / MVP / staging-smoke-passed. Repeat as Template Phase 1 is `MVP IMPLEMENTED / LOCAL VALIDATION PASSED / DEFERRED MANUAL SMOKE`; its environment-dependent production-readiness gate remains open in [`REPEAT-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#repeat-manual-001) without blocking independent bounded development. Executable Promotions Phase 2 / Happy Hours Percent is `DONE / STAGING-SMOKE-PASSED`; Gift parity is `GIFT_WITH_ITEM BOT/MINIAPP PARITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`, with independent review, CI and staging still required. Favorites covers catalog/detail mutations, Account list, current-user isolation, unavailable filtering/restoration, shared Bot/Mini App storage, Telegram Profile/Catalog entrypoints and source-aware Back. The manual `5/5` public review CTA and low-rating exact `VENUE_CHAT` follow-up are closed; persistent templates, favorite menu items/options, recommendations/frequent items, notification opt-in, favorites-based promotions, loyalty and broader analytics remain future/partial.
 - Staff profiles, Today Shift, optional Staff Schedule and future staff tips are canonical in
   `docs/STAFF_PROFILES_SHIFTS_TIPS.md`:
@@ -1324,9 +1324,11 @@ STAGING-SMOKE-PASSED**.
   partial/custom preservation, Staff denial, approval remaining non-seeding and cleanup. This does
   not close broader onboarding, menu constructor/media/top-list or the overall product.
 
-### Next implementation epic: Platform & Venue Onboarding / Ownership Cockpit
+### Current local implementation epic: Platform & Venue Onboarding / Ownership Cockpit
 
-Verdict: **IMPLEMENT_PLATFORM_ONBOARDING_OWNERSHIP_COCKPIT_NEXT**.
+Implementation contract: `IMPLEMENT_PLATFORM_ONBOARDING_OWNERSHIP_COCKPIT_NEXT`.
+
+Verdict: **MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
 
 One bounded epic is acceptable because the current request, venue, membership, user and commercial
 account repositories contain the required facts; owner aggregation does not need a primary-owner
@@ -1334,50 +1336,67 @@ redesign; both Telegram and Mini App can call one extracted backend contract; an
 analytics, media/R2 and menu behavior remain outside scope. Implement in internal slices, but keep
 one release boundary and one consolidated staging smoke.
 
-#### 1. Exact current behavior
+#### 1. Pre-implementation baseline retained for traceability
 
-- Venue Owner submits the first or an additional venue only in Telegram through
+- Historically, an authenticated Telegram user submitted a first or additional venue through
   `🤝 Добавить свою кальянную`. `venue_connection_requests` stores applicant user id, venue name,
   city, contact, optional comment, status, created time, optional linked venue and commercial terms.
   The actual statuses are `PENDING`, `APPROVED`, `REJECTED`, `CANCELLED`; there is no `NEEDS_INFO`.
-- Before and after the Telegram dialog, `findActiveUnlinkedByUser` prevents a normal sequential
-  repeat: an existing `PENDING` or `APPROVED`-unlinked request is shown. Pending can be edited or
-  cancelled; approved-unlinked can be closed. The check and insert are separate, so simultaneous
-  submit is not database-serialized today.
-- Venue Mini App exposes no request endpoints or `Мои заведения` screen. `/api/venue/me` already
+- Before and after that Telegram dialog, `findActiveUnlinkedByUser` prevented a normal sequential
+  repeat: an existing `PENDING` or `APPROVED`-unlinked request was shown. Pending could be edited or
+  cancelled; approved-unlinked could be closed. The check and insert were separate, so simultaneous
+  submit was not database-serialized in the pre-implementation baseline.
+- Venue Mini App exposed no request endpoints or `Мои заведения` screen. `/api/venue/me` already
   returns all active memberships; `venueApp.ts` builds the current selector from that server list,
   shows it for multiple venues and persists `venueId`.
-- Platform approval only changes request status and remains non-seeding. The current Telegram
+- Platform approval only changed request status and remained non-seeding. The former Telegram
   Platform flow separately records commercial terms, creates a new `DRAFT` venue, assigns the
   applicant as OWNER, applies subscription terms and links the approved request. There is no current
   UI action to choose and link an arbitrary existing venue. The steps are sequential and later
   failure can leave a DRAFT requiring manual recovery.
-- After membership/linking, the venue appears on the next `/api/venue/me` load and in the existing
+- After membership/linking, the venue appeared on the next `/api/venue/me` load and in the existing
   selector. The shared initial menu bootstrap remains explicit first-management-entry behavior and
   is independent of the first surface.
-- Platform Mini App can `GET/POST /api/platform/venues`, open venue detail, search
+- Platform Mini App could `GET/POST /api/platform/venues`, open venue detail, search
   `/api/platform/users`, assign/invite/revoke active OWNER memberships and run current venue/
   subscription actions. Backend list summaries include city, owner count and subscription summary;
-  current TypeScript/list UI omits city and owner names. It is venue-centric.
-- Current Platform routes are venues, create, informational onboarding, placements, support and
-  analytics. There is no connection-request API/UI, owner-centric list or owner drill-down. Owner
-  identity is visible only in venue detail. Telegram offers requests and venues plus displayed
-  `Клиенты / Лимиты`; handled `Владельцы` is an alias for that commercial account flow, not a full
+  the pre-implementation TypeScript/list UI omitted city and owner names and was venue-centric.
+- Platform routes were venues, create, informational onboarding, placements, support and
+  analytics. There was no connection-request API/UI, owner-centric list or owner drill-down. Owner
+  identity was visible only in venue detail. Telegram offered requests and venues plus displayed
+  `Клиенты / Лимиты`; handled `Владельцы` was an alias for that commercial account flow, not a full
   owners workspace.
 
-#### 2. User-visible gaps
+Resolved production scope:
 
-- Venue Owner must leave the Mini App and discover a Telegram command to add another venue, cannot
-  see all request history/state next to memberships, and receives no Mini App explanation for an
+- Authenticated Telegram users can submit a first or additional venue regardless of current OWNER
+  membership. Venue Mini App is the additional-venue entry for an active operational Owner only;
+  Manager, Staff, foreign and Platform-only identities are denied there. The adapter selects the
+  entry policy server-side, and applicant/source are never client-controlled.
+- Every first or additional venue uses the shared application flow. `owner_quota_create_start` and
+  persisted legacy direct-create dialog states are compatibility aliases with zero direct writes.
+- Quota/account/limit-request behavior stays commercial-only: it never gates submit and is enforced
+  only under account lock at Platform create/link.
+- Submit creates only the request. Atomic create/link owns DRAFT, OWNER membership, commercial
+  settings, request link and safe audits; rollback leaves no partial state and retry returns the link.
+- A first applicant without a prior OWNER membership receives the former connection-request
+  commercial initialization, including the existing default account limit of one; no new quota or
+  account policy is introduced.
+- Existing quota-pilot venues/memberships remain untouched. No migration or history rewrite exists.
+
+#### 2. Pre-implementation user-visible gaps
+
+- Venue Owner had to leave the Mini App and discover a Telegram command to add another venue, could
+  not see all request history/state next to memberships, and received no Mini App explanation for an
   approved-but-not-yet-linked request.
-- Platform Owner cannot process requests in the Platform source-of-truth UI, cannot scan owner names
-  or city from the venue list, and cannot start from an owner to inspect their venue portfolio.
-- Multiple operational owners are valid but current list presentation reduces them to a count;
-  commercial account language can be mistaken for primary operational ownership.
-- Telegram contains the onboarding orchestration, so adding UI calls directly to repositories would
-  create a second engine and divergent RBAC, retry, partial-failure and audit behavior.
+- Platform Owner could not process requests in the Platform source-of-truth UI, scan owner names or
+  city from the venue list, or start from an owner to inspect their venue portfolio.
+- Multiple operational owners were valid but the list presentation reduced them to a count;
+  commercial account language could be mistaken for primary operational ownership.
+- Telegram contained the onboarding orchestration, so adding UI calls directly to repositories
+  would have created a second engine with divergent RBAC, retry, partial-failure and audit behavior.
 
-#### 3. Exact bounded outcome
+#### 3. Implemented bounded contract
 
 - Venue Mini App adds `Мои заведения` with current venue cards, an action to select/open the existing
   venue context, `Добавить заведение`, own request list/detail and the current submission fields only:
@@ -1385,8 +1404,11 @@ one release boundary and one consolidated staging smoke.
   close where the shared contract exposes them.
 - Show only `PENDING`, `APPROVED`, `REJECTED`, `CANCELLED`. Copy distinguishes approval from completed
   linking. After linking, refresh authoritative access and show the venue card/selector option.
-- Sequential repeat returns the existing active request. Simultaneous repeat is serialized or
-  returns a retryable conflict/current active request server-side; the UI never chooses applicant id.
+- Under the applicant lock, submit compares one production canonical tuple: NFKC-normalized,
+  trimmed/collapsed/lowercased venue name, city, contact and optional comment. Exact retry among all
+  `PENDING` and `APPROVED`-unlinked rows returns the matching authoritative request without insert or
+  audit; a distinct tuple creates another `PENDING`, and `REJECTED`/`CANCELLED` do not block it.
+  Simultaneous exact/distinct submissions are serialized server-side; the UI never chooses applicant id.
 - Platform Mini App top-level onboarding/ownership workspace has `Заявки`, `Кальянные`, `Владельцы`.
   Existing billing, support, placements and analytics remain reachable but unchanged.
 - `Заявки` provides actionable/pending list, safe detail, approve/reject, commercial terms and the
@@ -1427,9 +1449,10 @@ Mini App reuse and extension:
 
 #### 5. RBAC and privacy contract
 
-- Venue Owner reads only own active memberships and requests. Every request query binds the
-  authenticated subject; client owner/applicant ids are ignored or rejected. Manager and Staff have
-  no owner application authority, even when UI controls are hidden.
+- Authenticated Telegram applicants read/mutate only their own requests, including before the first
+  OWNER membership exists. Venue Mini App additionally requires active operational OWNER before the
+  same subject-bound request operations. Client owner/applicant ids are ignored or rejected; Manager
+  and Staff have no Venue Mini App application authority even when UI controls are hidden.
 - Exact Platform Owner sees all venues, owners and requests and performs decisions. Platform role
   does not grant ordinary Venue-route authority. Actor and source are server-derived on both Mini App
   and Telegram.
@@ -1463,7 +1486,8 @@ Stable P2 finding `OWNERSHIP-MODEL-001`:
   are shown; never use minimum user id as authority. Preserve current account validation and add
   multi-owner/multi-venue tests.
 - Required trigger/release boundary: mandatory in this Ownership Cockpit epic.
-- Status: `IN_NEXT_EPIC`.
+- Status: `DONE`; release closure for the epic still requires green Actions, staging deploy and
+  the consolidated smoke.
 
 #### 7. Explicit out of scope
 
@@ -1474,11 +1498,13 @@ Platform features remain behaviorally unchanged.
 
 #### 8. Migration verdict
 
-**NO_MIGRATION_EXPECTED**. Current request rows/states/link, users, venue memberships, venues and
-owner accounts are sufficient. If implementation discovers that simultaneous duplicate prevention
-cannot be achieved transactionally with current rows/locks, stop and return
-`NEEDS_OTHER_PLATFORM_PREREQUISITE` instead of silently adding a uniqueness/state migration. Adding
-`NEEDS_INFO` or primary-owner membership is a separate product/schema decision.
+**NO_MIGRATION**. Current request rows/states/link, users, venue memberships, venues and owner
+accounts are sufficient. Applicant-row locking plus exact canonical comparison across all retryable
+rows has been verified by same/distinct PostgreSQL cross-surface submit and create/link tests; no uniqueness/state migration or
+`NEEDS_OTHER_PLATFORM_PREREQUISITE` is required. Adding `NEEDS_INFO` or primary-owner membership
+remains a separate product/schema decision. The pre-existing packaged-H2 legacy status-check defect
+is tracked separately as `ONBOARDING-H2-001`; it does not change the PostgreSQL/runtime schema
+verdict for this epic.
 
 #### 9. Likely files
 
@@ -1492,15 +1518,17 @@ Mini App: `venueApp.ts`, `venueApi.ts`, current Venue DTO module, `platformApp.t
 `platformDtos.ts`, focused new owner/request screens and styles only as needed. Tests:
 `VenueConnectionRequestRepositoryTest.kt`, `TelegramBotRouterVenueConnectionRequestFlowTest.kt`,
 `VenueRbacRoutesTest.kt`, `PlatformRoutesTest.kt`, `PlatformVenueRoutesTest.kt`,
+`PlatformOnboardingRoutesTest.kt`,
 `PlatformVenueRepositoryTest.kt`, `PlatformVenueMemberRepositoryTest.kt`,
 `VenueOwnerAccountRepositoryTest.kt`, a deterministic PostgreSQL concurrency class if needed, and
 `miniapp/e2e/guest-smoke.spec.ts`. CI may update only existing focused selectors/minima.
 
 #### 10. Backend tests
 
-- Repository: own/all list ordering and privacy, exact state mapping, edit/cancel CAS, sequential and
-  concurrent create-or-return-active, approve/reject CAS, repeated create-link recovery, no duplicate
-  membership/link and safe DB failure.
+- Repository: own/all list ordering and privacy, exact state mapping, edit/cancel CAS, production
+  canonical exact/distinct application behavior, rejected/cancelled reuse, simultaneous same/distinct
+  cross-surface submit, first-applicant lifecycle, repeated create-link recovery, no duplicate
+  membership/link/audit and safe DB failure.
 - Venue routes: Owner own cards/requests and fields; cross-user/foreign/Manager/Staff/unaffiliated/
   Platform-only denial without an oracle; actor spoof ignored; malformed/bounded fields; GETs have no
   mutation; access refresh after linking.
@@ -1514,18 +1542,22 @@ Mini App: `venueApp.ts`, `venueApi.ts`, current Venue DTO module, `platformApp.t
 
 #### 11. Mini App E2E
 
-Add deterministic browser scenarios for Owner zero/one/multiple venue cards, selector navigation,
-submit and sequential repeat, active pending/edit/cancel, approved-unlinked copy, linked access
-refresh, cross-account stale-response isolation and Manager/Staff no application UI/API mutation.
+Add deterministic browser scenarios for Owner one/multiple venue cards, selector navigation, exact
+double-submit, distinct second application, approved-unlinked exact retry, lost response, active
+pending/edit/cancel, linked access refresh, cross-account late-response isolation and
+unaffiliated/Manager/Staff/Platform-only no Venue Mini App application UI/API mutation. Assert associated labels,
+stable live regions, textual statuses and predictable submit/error/cancel/back focus.
 Platform scenarios cover the three workspace tabs, request detail/action/error recovery, venue city
 and all-owner summary, owner search/filter/drill-down, multiple owners, direct DRAFT create
 regression and safe empty/error states. Existing full smoke remains green.
 
 #### 12. Telegram regressions
 
-Preserve `🤝 Добавить свою кальянную`, pending edit/cancel, approved-unlinked close, Platform
+Preserve first-user `🤝 Добавить свою кальянную`, pending edit/cancel, approved-unlinked close, Platform
 approve/reject, commercial terms, create-new-DRAFT-and-link, owner notification, `Мои заведения`,
-multi-venue selection and current denial/copy. Prove Telegram calls the shared service, repeat does
+multi-venue selection and current denial/copy. Dispatch each persisted
+`OWNER_VENUE_CREATE_WAIT_NAME/CITY/ADDRESS` state into the usable shared flow with zero direct
+writes. Prove Telegram calls the shared service, exact repeat does
 not duplicate requests/venues/memberships/audits, approval/linking/onboarding callback seed zero menu
 categories, and Mini App use does not break Telegram-first flow.
 
@@ -1540,8 +1572,10 @@ production-readiness claim from local-only checks.
 
 #### 14. Consolidated staging smoke
 
-On one clean staging dataset verify: Owner with zero/one/multiple venues; Telegram-first and Mini
-App-first request submission; sequential repeat with one active row; pending edit/cancel; own-request
+On one clean staging dataset verify: a Telegram first applicant with zero OWNER memberships, Owner
+with one/multiple venues, and Manager/Staff/foreign/Platform-only Venue-route denial; Telegram-first
+and Mini App-first exact request submission, distinct second request and approved-unlinked exact
+retry; pending edit/cancel; own-request
 isolation; Manager/Staff direct denial; Platform three-tab navigation; pending detail; reject; approve
 without venue/menu creation; commercial terms; create-new-DRAFT-and-link; Owner membership/card/
 selector refresh; venue list city and all co-owners; owner search/status counts/drill-down; no primary
@@ -1550,7 +1584,29 @@ zero category writes through approval/linking/onboarding callback; safe audit/co
 failure/retry copy; and cleanup. Concurrency/failure injection stays automated unless a safe staging
 procedure is explicitly prepared.
 
-#### 15. Ready implementation prompt
+#### 15. Independent review finding closures
+
+Epic stage remains: **MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+The findings below are individually closed by current local implementation and test evidence; this
+does not close the overall epic release gate.
+
+| Finding | Status | Closure evidence |
+| --- | --- | --- |
+| `ONBOARDING-CANON-UNICODE-001` | `DONE` | The production tuple preserves NFKC, collapses Unicode-aware `(?U)\s+`, trims, lowercases with `Locale.ROOT` and maps a whitespace-only optional comment to `null`. Repository-path coverage proves `Smoke One` / `Smoke\u0085One` retry, the complete Unicode `White_Space` code-point set, NFKC-compatible forms, a truly distinct non-whitespace payload, and exact physical request/submit-audit cardinality. |
+| `ONBOARDING-VENUE-ROUTE-COVERAGE-001` | `DONE` | Eight production-module Venue route scenarios cover exact retry, distinct second application, server-derived applicant/actor/entry policy under spoof-like extra fields, safe database/audit failure, approved-unlinked retry and the denial boundaries without weakening sensitive-fact ordering. |
+| `ONBOARDING-PG-FIRST-APPLICANT-001` | `DONE` | The PostgreSQL users-only first-applicant fixture begins with zero commercial account, venue, membership, subscription, link, selected venue or menu category. Create/link preserves the existing default account limit of `1`; deterministic independent connections return one authoritative linked venue with no duplicate account, venue, membership or success audit. |
+| `ONBOARDING-A11Y-CREATE-LINK-FOCUS-001` | `DONE` | Successful create/link and linked retry wait for Venue detail render, then restore focus to its stable focusable heading with the expected accessible name instead of leaving focus on the removed action. |
+| `ONBOARDING-OWNER-PLURAL-001` | `DONE` | The shared Russian venue-count formatter is applied to owner list and detail labels, with assertions for `1`, `2`, `5`, `11`, `21`, `22` and `25`. |
+
+Validated backend evidence for the current worktree is repository `13`, Venue routes `8`, Platform
+routes `15`, Telegram connection flow `18`, Telegram table/legacy state `552`, Telegram keyboards
+`169` and PostgreSQL onboarding `7`. The exact route/security aggregate is `1247 / 1247`; the
+mandatory PostgreSQL vector is `8 / 14 / 2 / 44 / 9 / 7` (`84 / 84`). The deterministic Mini App
+smoke passed `191 / 191`, including ownership onboarding `15 / 15` with focus restoration and
+pluralization coverage. Green Actions, staging deploy and consolidated staging smoke remain required
+before release closure.
+
+#### 16. Ready implementation prompt
 
 ```text
 Следуй AGENTS.md. Реализуй один bounded epic:
@@ -1574,8 +1630,10 @@ Outcome:
    zero menu categories. Sequential/concurrent repeat and create-link retry are server-safe.
 4) Preserve multiple OWNER memberships. Do not invent primary owner:
    venue_owner_accounts.primary_owner_user_id is commercial account/quota state only.
-5) Venue Owner sees only own memberships/requests; Platform Owner sees all; Manager/Staff
-   get no application authority. Actor/source/request owner/link are server-derived.
+5) Venue Mini App exposes applications only to active operational Owners and only in own scope;
+   Manager/Staff are denied there. Every authenticated Telegram user keeps the ordinary first-or-
+   additional venue entry and own-request scope. Platform Owner sees all. Actor/source/request
+   owner/link are server-derived.
    Keep applicant contact/comment private to applicant + Platform Owner and exclude raw
    Telegram/initData/provider/private fields. Dangerous decisions are explicit and audit-aware.
 

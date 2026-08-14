@@ -72,6 +72,9 @@ import type {
   VenueStaffCallActionResponse,
   VenueStaffCallsResponse,
   VenueMeResponse,
+  VenueOwnershipResponse,
+  VenueConnectionApplicationWriteRequest,
+  VenueConnectionApplicationWriteResponse,
   VenueStaffChatStatusResponse,
   VenueStaffInviteAcceptRequest,
   VenueStaffInviteAcceptResponse,
@@ -116,6 +119,67 @@ export async function venueGetMe(
   signal?: AbortSignal
 ) {
   return requestApi<VenueMeResponse>(backendUrl, '/api/venue/me', { signal }, deps)
+}
+
+export async function venueGetOwnership(
+  backendUrl: string,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenueOwnershipResponse>(backendUrl, '/api/venue/ownership', { signal }, deps)
+}
+
+export async function venueSubmitConnectionApplication(
+  backendUrl: string,
+  body: VenueConnectionApplicationWriteRequest,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenueConnectionApplicationWriteResponse>(
+    backendUrl,
+    '/api/venue/ownership/applications',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal
+    },
+    deps
+  )
+}
+
+export async function venueUpdateConnectionApplication(
+  backendUrl: string,
+  requestId: number,
+  body: VenueConnectionApplicationWriteRequest,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenueConnectionApplicationWriteResponse>(
+    backendUrl,
+    `/api/venue/ownership/applications/${requestId}`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal
+    },
+    deps
+  )
+}
+
+export async function venueCancelConnectionApplication(
+  backendUrl: string,
+  requestId: number,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenueConnectionApplicationWriteResponse>(
+    backendUrl,
+    `/api/venue/ownership/applications/${requestId}/cancel`,
+    { method: 'POST', signal },
+    deps
+  )
 }
 
 export async function venueGetStaffModuleSettings(

@@ -21,6 +21,7 @@ import { renderVenueMenuScreen } from './venueMenu'
 import { renderVenueMessagesScreen } from './venueMessages'
 import { renderVenueOrderDetailScreen } from './venueOrderDetail'
 import { renderVenueOrdersScreen } from './venueOrders'
+import { renderVenueOwnershipScreen } from './venueOwnership'
 import { renderVenuePromotionsScreen } from './venuePromotions'
 import { renderVenueSettingsScreen } from './venueSettings'
 import { renderVenueShiftExtensionsScreen } from './venueShiftExtensions'
@@ -37,6 +38,7 @@ export type VenueAppOptions = {
 
 type RouteName =
   | 'dashboard'
+  | 'ownership'
   | 'orders'
   | 'order'
   | 'calls'
@@ -103,6 +105,7 @@ function resolveRoute(): Route {
     !route ||
     ![
       'dashboard',
+      'ownership',
       'orders',
       'order',
       'calls',
@@ -174,6 +177,7 @@ function buildVenueShell(root: HTMLDivElement): VenueShellRefs {
   const nav = el('nav', { className: 'venue-nav' })
   const navButtons = {
     dashboard: el('button', { className: 'nav-button', text: 'Обзор' }) as HTMLButtonElement,
+    ownership: el('button', { className: 'nav-button', text: 'Мои заведения' }) as HTMLButtonElement,
     orders: el('button', { className: 'nav-button', text: 'Заказы' }) as HTMLButtonElement,
     bookings: el('button', { className: 'nav-button', text: 'Брони' }) as HTMLButtonElement,
     calls: el('button', { className: 'nav-button', text: 'Вызовы' }) as HTMLButtonElement,
@@ -200,6 +204,7 @@ function buildVenueShell(root: HTMLDivElement): VenueShellRefs {
     {
       title: 'Работа смены',
       buttons: [
+        navButtons.ownership,
         navButtons.dashboard,
         navButtons.orders,
         navButtons.bookings,
@@ -453,6 +458,7 @@ export function mountVenueApp(options: VenueAppOptions) {
     currentRole === 'STAFF' && selectedAccess()?.teamScheduleModuleEnabled === false
 
   const updateNavVisibility = () => {
+    refs.navButtons.ownership.hidden = !accessList.some((access) => access.role === 'OWNER')
     refs.navButtons.orders.hidden = !hasPermission('ORDER_QUEUE_VIEW')
     refs.navButtons.bookings.hidden = !hasPermission('BOOKING_VIEW')
     refs.navButtons.messages.hidden = !hasPermission('SUPPORT_MANAGE')
@@ -484,6 +490,8 @@ export function mountVenueApp(options: VenueAppOptions) {
 
   const canAccessRoute = (route: RouteName) => {
     switch (route) {
+      case 'ownership':
+        return accessList.some((access) => access.role === 'OWNER')
       case 'orders':
       case 'order':
       case 'calls':
@@ -534,6 +542,38 @@ export function mountVenueApp(options: VenueAppOptions) {
     const screenRoot = document.createElement('div')
     screenRoot.className = 'screen-root'
     refs.content.replaceChildren(screenRoot)
+    if (route.name === 'ownership') {
+      if (!canAccessRoute(route.name)) {
+        const denied = el('section', { className: 'card' })
+        denied.setAttribute('role', 'alert')
+        denied.setAttribute('aria-live', 'assertive')
+        denied.setAttribute('aria-atomic', 'true')
+        denied.tabIndex = -1
+        append(
+          denied,
+          el('h2', { text: 'Недостаточно прав' }),
+          el('p', { text: 'Раздел доступен только пользователю с действующей ролью OWNER.' })
+        )
+        refs.content.replaceChildren(denied)
+        denied.focus({ preventScroll: true })
+        return () => undefined
+      }
+      return renderVenueOwnershipScreen({
+        root: screenRoot,
+        backendUrl,
+        isDebug,
+        onOpenVenue: (venueId) => {
+          const access = accessList.find((item) => item.venueId === venueId && item.role === 'OWNER')
+          if (!access) return
+          selectedVenueId = venueId
+          refs.venueSelect.value = String(venueId)
+          updateAccessFromSelection()
+          persistSelectedVenue()
+          navigate('#/dashboard')
+        },
+        onAccessRefresh: loadAccess
+      })
+    }
     const venueId = selectedVenueId
     const access =
       currentRole && venueId
@@ -691,6 +731,7 @@ export function mountVenueApp(options: VenueAppOptions) {
 
   const disposables: Array<() => void> = []
   disposables.push(on(refs.navButtons.dashboard, 'click', () => navigate('#/dashboard')))
+  disposables.push(on(refs.navButtons.ownership, 'click', () => navigate('#/ownership')))
   disposables.push(on(refs.navButtons.orders, 'click', () => navigate('#/orders')))
   disposables.push(on(refs.navButtons.bookings, 'click', () => navigate('#/bookings')))
   disposables.push(on(refs.navButtons.messages, 'click', () => navigate('#/messages')))
@@ -749,10 +790,18 @@ export function mountVenueApp(options: VenueAppOptions) {
 
   const render = () => {
     const route = resolveRoute()
+    const previousRoute = currentRoute
     currentRoute = route
     updateNav(refs.navButtons, route.name === 'order' ? 'orders' : route.name)
     currentDispose?.()
     currentDispose = renderRouteContent(route)
+    if (previousRoute.name === 'ownership' && route.name === 'dashboard') {
+      const heading = refs.content.querySelector<HTMLElement>('h2')
+      if (heading) {
+        heading.tabIndex = -1
+        heading.focus({ preventScroll: true })
+      }
+    }
   }
 
   const onHashChange = () => {

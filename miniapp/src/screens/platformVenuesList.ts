@@ -27,6 +27,7 @@ type ListRefs = {
   searchInput: HTMLInputElement
   createButton: HTMLButtonElement
   onboardingButton: HTMLButtonElement
+  ownersButton: HTMLButtonElement
   placementsButton: HTMLButtonElement
   supportButton: HTMLButtonElement
   analyticsButton: HTMLButtonElement
@@ -59,11 +60,12 @@ function buildListDom(root: HTMLDivElement): ListRefs {
       'Здесь доступны рабочие операции по заведениям и подпискам. Разделы без полной Mini App parity показывают безопасное объяснение, а не частично работающие controls.'
   })
   const cockpitActions = el('div', { className: 'venue-inline-actions' })
-  const onboardingButton = el('button', { className: 'button-small button-secondary', text: 'Подключение' }) as HTMLButtonElement
+  const onboardingButton = el('button', { className: 'button-small button-secondary', text: 'Заявки' }) as HTMLButtonElement
+  const ownersButton = el('button', { className: 'button-small button-secondary', text: 'Владельцы' }) as HTMLButtonElement
   const placementsButton = el('button', { className: 'button-small button-secondary', text: 'Размещения' }) as HTMLButtonElement
   const supportButton = el('button', { className: 'button-small button-secondary', text: 'Обращения' }) as HTMLButtonElement
   const analyticsButton = el('button', { className: 'button-small button-secondary', text: 'Аналитика' }) as HTMLButtonElement
-  append(cockpitActions, onboardingButton, placementsButton, supportButton, analyticsButton)
+  append(cockpitActions, onboardingButton, ownersButton, placementsButton, supportButton, analyticsButton)
   append(cockpitCard, cockpitTitle, cockpitLead, cockpitActions)
 
   const header = el('div', { className: 'card' })
@@ -123,6 +125,7 @@ function buildListDom(root: HTMLDivElement): ListRefs {
     searchInput,
     createButton,
     onboardingButton,
+    ownersButton,
     placementsButton,
     supportButton,
     analyticsButton,
@@ -144,8 +147,11 @@ function renderVenueRow(venue: PlatformVenueSummaryDto, onOpen: (id: number) => 
   append(
     meta,
     el('strong', { text: venue.name }),
-    el('p', { className: 'venue-order-sub', text: `#${venue.id} · ${venue.status}` }),
-    el('p', { className: 'venue-order-sub', text: `Владельцев: ${venue.ownersCount}` }),
+    el('p', {
+      className: 'venue-order-sub',
+      text: [`#${venue.id}`, venue.city?.trim(), venue.status].filter(Boolean).join(' · ')
+    }),
+    el('p', { className: 'venue-order-sub', text: formatOwnerSummary(venue) }),
     el('p', { className: 'venue-order-sub', text: formatSubscriptionSummary(venue.subscriptionSummary) })
   )
 
@@ -156,6 +162,19 @@ function renderVenueRow(venue: PlatformVenueSummaryDto, onOpen: (id: number) => 
 
   append(row, meta, actions)
   return row
+}
+
+function formatOwnerSummary(venue: PlatformVenueSummaryDto) {
+  const owners = venue.owners ?? []
+  if (!owners.length) return venue.ownersCount ? `Владельцев: ${venue.ownersCount}` : 'Владельцы не назначены'
+  const names = owners.map((owner) => {
+    const fullName = [owner.firstName?.trim(), owner.lastName?.trim()].filter(Boolean).join(' ')
+    if (fullName) return fullName
+    if (owner.username?.trim()) return `@${owner.username.replace(/^@/, '')}`
+    return `User #${owner.userId}`
+  })
+  if (names.length === 1) return `Владелец: ${names[0]}`
+  return `Владельцы: ${names.join(', ')}`
 }
 
 export function renderPlatformVenuesListScreen(options: PlatformVenuesListOptions) {
@@ -257,7 +276,8 @@ export function renderPlatformVenuesListScreen(options: PlatformVenuesListOption
   }
 
   const disposables = [
-    on(refs.onboardingButton, 'click', () => onNavigate('#/onboarding')),
+    on(refs.onboardingButton, 'click', () => onNavigate('#/applications')),
+    on(refs.ownersButton, 'click', () => onNavigate('#/owners')),
     on(refs.placementsButton, 'click', () => onNavigate('#/placements')),
     on(refs.supportButton, 'click', () => onNavigate('#/support')),
     on(refs.analyticsButton, 'click', () => onNavigate('#/analytics')),

@@ -335,6 +335,120 @@ class PlatformVenueRepository(private val dataSource: DataSource?) {
         }
     }
 
+    suspend fun listOwnersForVenues(venueIds: Collection<Long>): Map<Long, List<PlatformVenueOwner>> {
+        if (venueIds.isEmpty()) return emptyMap()
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        val ids = venueIds.distinct().sorted()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    val placeholders = ids.joinToString(",") { "?" }
+                    connection.prepareStatement(
+                        """
+                        SELECT vm.venue_id,
+                               vm.user_id,
+                               vm.role,
+                               u.username,
+                               u.first_name,
+                               u.last_name
+                        FROM venue_members vm
+                        LEFT JOIN users u ON u.telegram_user_id = vm.user_id
+                        WHERE vm.venue_id IN ($placeholders)
+                          AND UPPER(vm.role) = 'OWNER'
+                        ORDER BY vm.venue_id, vm.created_at, vm.user_id
+                        """.trimIndent(),
+                    ).use { statement ->
+                        ids.forEachIndexed { index, id -> statement.setLong(index + 1, id) }
+                        statement.executeQuery().use { rs ->
+                            val ownersByVenue = ids.associateWith { mutableListOf<PlatformVenueOwner>() }.toMutableMap()
+                            while (rs.next()) {
+                                ownersByVenue.getValue(rs.getLong("venue_id")).add(mapOwner(rs))
+                            }
+                            ownersByVenue
+                        }
+                    }
+                }
+            } catch (_: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    suspend fun listOperationalOwners(
+        query: String?,
+        venueStatus: VenueStatus?,
+        limit: Int,
+        offset: Int,
+    ): List<PlatformOperationalOwnerSummary> {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    val sql = StringBuilder(operationalOwnerSummarySql())
+                    val conditions = mutableListOf<String>()
+                    val params = mutableListOf<Any>()
+                    query?.trim()?.lowercase(Locale.ROOT)?.takeIf { it.isNotBlank() }?.let { normalized ->
+                        conditions +=
+                            "(LOWER(COALESCE(u.username, '')) LIKE ? OR " +
+                            "LOWER(COALESCE(u.first_name, '')) LIKE ? OR " +
+                            "LOWER(COALESCE(u.last_name, '')) LIKE ? OR CAST(u.telegram_user_id AS VARCHAR) = ?)"
+                        val like = "%$normalized%"
+                        params.addAll(listOf(like, like, like, normalized))
+                    }
+                    if (conditions.isNotEmpty()) sql.append(" AND ").append(conditions.joinToString(" AND "))
+                    sql.append(" GROUP BY u.telegram_user_id, u.username, u.first_name, u.last_name")
+                    if (venueStatus != null) {
+                        sql.append(" HAVING SUM(CASE WHEN UPPER(v.status) = ? THEN 1 ELSE 0 END) > 0")
+                        params += venueStatus.dbValue
+                    }
+                    sql.append(" ORDER BY venue_count DESC, u.telegram_user_id LIMIT ? OFFSET ?")
+                    params += limit.coerceIn(1, 200)
+                    params += offset.coerceAtLeast(0)
+                    connection.prepareStatement(sql.toString()).use { statement ->
+                        params.forEachIndexed { index, value -> statement.setObject(index + 1, value) }
+                        statement.executeQuery().use { rs ->
+                            buildList {
+                                while (rs.next()) add(mapOperationalOwnerSummary(rs))
+                            }
+                        }
+                    }
+                }
+            } catch (_: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    suspend fun getOperationalOwner(userId: Long): PlatformOperationalOwnerPortfolio? {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    val originalAutoCommit = connection.autoCommit
+                    val originalIsolation = connection.transactionIsolation
+                    connection.transactionIsolation = Connection.TRANSACTION_REPEATABLE_READ
+                    connection.autoCommit = false
+                    try {
+                        val summary =
+                            loadOperationalOwnerSummary(connection, userId)
+                                ?: return@use rollbackAndReturn(connection) { null }
+                        val venues = loadOperationalOwnerVenues(connection, userId)
+                        connection.commit()
+                        PlatformOperationalOwnerPortfolio(summary, venues)
+                    } catch (e: SQLException) {
+                        rollbackBestEffort(connection)
+                        throw e
+                    } finally {
+                        runCatching { connection.transactionIsolation = originalIsolation }
+                        runCatching { connection.autoCommit = originalAutoCommit }
+                    }
+                }
+            } catch (_: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
     suspend fun getSubscriptionSummary(venueId: Long): PlatformSubscriptionSummary? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
@@ -566,6 +680,99 @@ class PlatformVenueRepository(private val dataSource: DataSource?) {
         )
     }
 
+    private fun operationalOwnerSummarySql(): String =
+        """
+        SELECT u.telegram_user_id AS user_id,
+               u.username,
+               u.first_name,
+               u.last_name,
+               COUNT(DISTINCT vm.venue_id) AS venue_count,
+               SUM(CASE WHEN UPPER(v.status) = 'DRAFT' THEN 1 ELSE 0 END) AS draft_count,
+               SUM(CASE WHEN UPPER(v.status) = 'PUBLISHED' THEN 1 ELSE 0 END) AS published_count,
+               SUM(CASE WHEN UPPER(v.status) = 'HIDDEN' THEN 1 ELSE 0 END) AS hidden_count,
+               SUM(CASE WHEN UPPER(v.status) = 'PAUSED' THEN 1 ELSE 0 END) AS paused_count,
+               SUM(CASE WHEN UPPER(v.status) = 'SUSPENDED' THEN 1 ELSE 0 END) AS suspended_count,
+               SUM(CASE WHEN UPPER(v.status) = 'ARCHIVED' THEN 1 ELSE 0 END) AS archived_count
+        FROM users u
+        JOIN venue_members vm ON vm.user_id = u.telegram_user_id AND UPPER(vm.role) = 'OWNER'
+        JOIN venues v ON v.id = vm.venue_id AND UPPER(v.status) <> 'DELETED'
+        WHERE 1 = 1
+        """.trimIndent()
+
+    private fun loadOperationalOwnerSummary(
+        connection: Connection,
+        userId: Long,
+    ): PlatformOperationalOwnerSummary? =
+        connection.prepareStatement(
+            operationalOwnerSummarySql() +
+                " AND u.telegram_user_id = ? " +
+                "GROUP BY u.telegram_user_id, u.username, u.first_name, u.last_name",
+        ).use { statement ->
+            statement.setLong(1, userId)
+            statement.executeQuery().use { rs -> if (rs.next()) mapOperationalOwnerSummary(rs) else null }
+        }
+
+    private fun loadOperationalOwnerVenues(
+        connection: Connection,
+        userId: Long,
+    ): List<PlatformOperationalOwnerVenue> =
+        connection.prepareStatement(
+            """
+            SELECT v.id, v.name, v.city, v.status, v.created_at
+            FROM venue_members vm
+            JOIN venues v ON v.id = vm.venue_id
+            WHERE vm.user_id = ?
+              AND UPPER(vm.role) = 'OWNER'
+              AND UPPER(v.status) <> 'DELETED'
+            ORDER BY v.id
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, userId)
+            statement.executeQuery().use { rs ->
+                buildList {
+                    while (rs.next()) {
+                        val status = VenueStatus.fromDb(rs.getString("status")) ?: continue
+                        add(
+                            PlatformOperationalOwnerVenue(
+                                id = rs.getLong("id"),
+                                name = rs.getString("name"),
+                                city = rs.getString("city"),
+                                status = status,
+                                createdAt = rs.getTimestamp("created_at")?.toInstant() ?: Instant.EPOCH,
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+
+    private fun mapOperationalOwnerSummary(rs: ResultSet): PlatformOperationalOwnerSummary =
+        PlatformOperationalOwnerSummary(
+            userId = rs.getLong("user_id"),
+            username = rs.getString("username"),
+            firstName = rs.getString("first_name"),
+            lastName = rs.getString("last_name"),
+            venueCount = rs.getInt("venue_count"),
+            venueStatusCounts =
+                linkedMapOf(
+                    VenueStatus.DRAFT.dbValue to rs.getInt("draft_count"),
+                    VenueStatus.PUBLISHED.dbValue to rs.getInt("published_count"),
+                    VenueStatus.HIDDEN.dbValue to rs.getInt("hidden_count"),
+                    VenueStatus.PAUSED.dbValue to rs.getInt("paused_count"),
+                    VenueStatus.SUSPENDED.dbValue to rs.getInt("suspended_count"),
+                    VenueStatus.ARCHIVED.dbValue to rs.getInt("archived_count"),
+                ).filterValues { it > 0 },
+        )
+
+    private fun mapOwner(rs: ResultSet): PlatformVenueOwner =
+        PlatformVenueOwner(
+            userId = rs.getLong("user_id"),
+            role = rs.getString("role"),
+            username = rs.getString("username"),
+            firstName = rs.getString("first_name"),
+            lastName = rs.getString("last_name"),
+        )
+
     private fun selectVenueStatus(
         connection: Connection,
         venueId: Long,
@@ -717,6 +924,28 @@ data class PlatformVenueOwner(
     val username: String?,
     val firstName: String?,
     val lastName: String?,
+)
+
+data class PlatformOperationalOwnerSummary(
+    val userId: Long,
+    val username: String?,
+    val firstName: String?,
+    val lastName: String?,
+    val venueCount: Int,
+    val venueStatusCounts: Map<String, Int>,
+)
+
+data class PlatformOperationalOwnerVenue(
+    val id: Long,
+    val name: String,
+    val city: String?,
+    val status: VenueStatus,
+    val createdAt: Instant,
+)
+
+data class PlatformOperationalOwnerPortfolio(
+    val owner: PlatformOperationalOwnerSummary,
+    val venues: List<PlatformOperationalOwnerVenue>,
 )
 
 data class PlatformSubscriptionSummary(

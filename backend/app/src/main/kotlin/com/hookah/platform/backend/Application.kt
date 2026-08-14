@@ -101,6 +101,7 @@ import com.hookah.platform.backend.miniapp.venue.venueStaffCallRoutes
 import com.hookah.platform.backend.miniapp.venue.venueStaffModuleSettingsRoutes
 import com.hookah.platform.backend.miniapp.venue.venueStaffRoutes
 import com.hookah.platform.backend.miniapp.venue.venueStaffScheduleRoutes
+import com.hookah.platform.backend.onboarding.VenueOnboardingService
 import com.hookah.platform.backend.platform.PlatformConfig
 import com.hookah.platform.backend.platform.PlatformSubscriptionSettingsRepository
 import com.hookah.platform.backend.platform.PlatformUserRepository
@@ -355,7 +356,6 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
     val venueInfoSectionsRepository = VenueInfoSectionsRepository(dataSource)
     val venueInfoSectionMediaRepository = VenueInfoSectionMediaRepository(dataSource)
     val venueMenuSectionImagesRepository = VenueMenuSectionImagesRepository(dataSource)
-    val venueConnectionRequestRepository = VenueConnectionRequestRepository(dataSource)
     val userRepository = UserRepository(dataSource)
     val guestVenueRepository = GuestVenueRepository(dataSource)
     val guestFavoritesRepository = GuestFavoritesRepository(dataSource)
@@ -378,6 +378,8 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
             subscriptionRepository = subscriptionRepository,
         )
     val auditLogRepository = AuditLogRepository(dataSource, json)
+    val venueConnectionRequestRepository = VenueConnectionRequestRepository(dataSource, auditLogRepository)
+    val venueOnboardingService = VenueOnboardingService(venueConnectionRequestRepository)
     val venuePromotionRuleRepository = VenuePromotionRuleRepository(dataSource)
     val venuePromotionRepository =
         VenuePromotionRepository(
@@ -712,6 +714,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                 tableSessionTtl = tableSessionConfig.ttl,
                 json = telegramJson,
                 venueConnectionRequestRepository = venueConnectionRequestRepository,
+                venueOnboardingService = venueOnboardingService,
                 scope = botScope,
                 venueInfoSectionsRepository = venueInfoSectionsRepository,
                 venueInfoSectionMediaRepository = venueInfoSectionMediaRepository,
@@ -1262,6 +1265,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                 )
                 venueRoutes(
                     venueAccessRepository = venueAccessRepository,
+                    venueOnboardingService = venueOnboardingService,
                     staffChatLinkCodeRepository = staffChatLinkCodeRepository,
                     venueRepository = venueRepository,
                     venueBookingHoursRepository = venueBookingHoursRepository,
@@ -1374,6 +1378,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     billingOverviewService = billingOverviewService,
                     subscriptionSettingsRepository = subscriptionSettingsRepository,
                     platformVenueMemberRepository = platformVenueMemberRepository,
+                    venueOnboardingService = venueOnboardingService,
                     venueOwnerAccountRepository = venueOwnerAccountRepository,
                     staffInviteRepository = staffInviteRepository,
                     staffInviteConfig = staffInviteConfig,
