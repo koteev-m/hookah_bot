@@ -1,6 +1,6 @@
 # Guest Growth And Retention Model
 
-Дата актуализации: 2026-08-07.
+Дата актуализации: 2026-08-15.
 
 Статус: **current product reference / SPEC UPDATED**. Runtime-фичи growth/retention не считаются release-ready, пока для них нет требуемого CI/staging evidence. Guest visit/order history foundation, Post-Visit Feedback MVP, Guest Favorites Phase 1 and Simple Venue Promotions Phase 1 are **DONE / MVP / STAGING-SMOKE-PASSED**. Repeat as Template Phase 1 is **MVP IMPLEMENTED / LOCAL VALIDATION PASSED / DEFERRED MANUAL SMOKE**; its environment-dependent production-readiness gate remains open in [`REPEAT-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#repeat-manual-001), while independent bounded development may continue. Executable Promotions Phase 2 / Happy Hours Percent is **DONE / STAGING-SMOKE-PASSED**. Gift parity is **GIFT_WITH_ITEM BOT/MINIAPP PARITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**; CI and staging evidence remain open. Promotion creation audit is **DANGEROUS ACTION AUDIT SLICE / PROMOTION CREATION AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Promotion effective state clarity is **PROMOTION EFFECTIVE STATE CLARITY / DONE / MVP / STAGING-SMOKE-PASSED**. Promotion lifecycle status/archive audit is **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Venue promotions tabs are **VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / DONE / MVP / STAGING-SMOKE-PASSED**. Promotion configuration edit audit and broader dangerous-action audit remain partial/future.
 
@@ -77,7 +77,7 @@ Current implementation is **partial**:
 - Staff profiles / today on shift are a separate Phase 1 staff visibility module, not a growth
   campaign. They are done/local-smoke-passed in `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. Staff tips
   are future and must not be treated as guest order online payment.
-- Persistent template storage, promo codes, loyalty stamps/points, referrals, campaign segmentation and paid placement boosting remain future unless a later implementation summary says otherwise.
+- Persistent template storage, promo codes, points/cashback/tier loyalty, referrals, campaign segmentation and paid-ad productization remain future. Current code already contains favorite-item, Nth Hookah loyalty and manual placement foundations; their exact remaining outcomes and release status are `GROWTH-FAVORITE-MENU-001`, `GROWTH-LOYALTY-PRODUCTIZE-001`, `PLATFORM-PLACEMENTS-PARITY-001` and `GROWTH-PAID-PLACEMENT-001` in the master inventory.
 
 ## Promotion Compatibility Policy
 
@@ -133,7 +133,7 @@ loyalty and cashback must reuse this mechanism rather than add another stacking 
 | `EXECUTABLE_PROMOTION` | A server-evaluated schedule + eligibility + reward rule with an immutable application snapshot in the order. | Happy Hours Percent: DONE / STAGING-SMOKE-PASSED. Gift parity: GIFT_WITH_ITEM BOT/MINIAPP PARITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT. |
 | `PROMOTION_COMPATIBILITY_POLICY` | One reward-type-aware conflict resolver for all executable promotions and manual discounts. | AUDIT / FUTURE IMPLEMENTATION. |
 | `PROMO_CODE` | Code-based discount/reward with limits and accounting. | After MVP. |
-| `LOYALTY_STAMP` | Simple stamp-card loyalty model. | Future. |
+| `LOYALTY_NTH_HOOKAH_FREE` | Existing bounded Nth Hookah ledger/progress/redemption foundation. | Runtime exists; product/release reconciliation remains `GROWTH-LOYALTY-PRODUCTIZE-001`. |
 | `LOYALTY_POINTS` | Points/cashback-style ledger and redemption model. | Future; requires financial model. |
 | `REFERRAL` | Guest referral reward/invite model. | Future; requires anti-abuse. |
 | `OPT_IN_NOTIFICATION` | Guest consent to receive retention/promo notifications with frequency limits and unsubscribe. | MVP privacy requirement before any marketing sends. |
@@ -148,14 +148,14 @@ Guest Favorites Phase 1 DONE scope:
 - unavailable venue filtering without disclosing a hidden/blocked favorite venue; temporary hide/suspend keeps the row so the venue returns after restoration;
 - Telegram Catalog and Profile entrypoints to the same list, with Back returning to the originating screen.
 
-Future Favorites/retention scope:
-- favorite menu items;
-- favorite menu options;
+Remaining Favorites/retention scope:
+- favorite menu-item Mini App/account parity; backend/API/Telegram item favorites already exist;
+- favorite menu options and unavailable/restoration policy;
 - recommendations and frequent items;
 - persistent repeat-template library;
 - notification opt-in and any marketing or favorite-related sends;
 - favorites-based promotions;
-- loyalty.
+- loyalty product/release reconciliation, then any separately approved advanced model.
 
 Broader Growth scope includes:
 - Visit history based on `table_session` + booking + closed order, only after the visit/order model is stable.
@@ -216,7 +216,7 @@ Platform may moderate growth monetization later, but it is not required for MVP:
 - Visit/order history foundation is stable enough for follow-on Growth MVP blocks; repeat/history still depend on active order scoped by `table_session` / `tab` according to `docs/ORDER_SESSION_TAB_CORE.md`. Favorite venues do not require table context.
 - Repeat Phase 1 uses current menu availability, stop-list and selected-option IDs/prices through the shared resolver; persistent template storage remains out of scope.
 - Feedback depended on a correct close visit/order signal; that dependency is satisfied by the staging-smoked History visit model and remains regression-critical.
-- Preorder depends on booking lifecycle from `docs/BOOKING_LIFECYCLE.md` and reliable `visit_count`.
+- Preorder depends on booking lifecycle from `docs/BOOKING_LIFECYCLE.md`; `VisitRepository.getVisitCount()` exists, while eligibility/price/cutoff/fulfillment policy remains open.
 - Paid placement depends on Platform billing, moderation and analytics.
 - Cashback/points/flexible loyalty must not be implemented before a correct financial model and discount accounting.
 - Promo codes require limits, abuse controls, accounting and the shared Promotion Compatibility
@@ -320,7 +320,7 @@ Broader Growth smoke remains future:
 - Visit/order history foundation: `DONE / MVP / STAGING-SMOKE-PASSED`.
 - History detail legacy order compatibility: `DONE`.
 - Full base item historical snapshotting: `FUTURE/FOLLOW-UP` if a later audit still finds gaps beyond the current safe rendering.
-- Favorite venues Phase 1: `DONE / MVP / STAGING-SMOKE-PASSED`; favorite menu items/options remain `FUTURE`.
+- Favorite venues Phase 1: `DONE / MVP / STAGING-SMOKE-PASSED`; favorite menu-item backend/API/Telegram foundation exists, while Mini App/account parity and option policy remain open.
 - Repeat as Template Phase 1: `MVP IMPLEMENTED / LOCAL VALIDATION PASSED / DEFERRED MANUAL SMOKE`; [`REPEAT-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#repeat-manual-001) remains open. Persistent template library remains `FUTURE`.
 - Simple Venue Promotions Phase 1: `DONE / MVP / STAGING-SMOKE-PASSED`.
 - Venue Promotions Current/Archived Tabs UX: `VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / DONE / MVP / STAGING-SMOKE-PASSED`.
@@ -332,8 +332,8 @@ Broader Growth smoke remains future:
 - Reviews/post-visit feedback: `DONE / MVP / STAGING-SMOKE-PASSED`.
 - Manual `5/5` public review link CTA: `DONE / MVP`; automated review prompts and public review automation remain `FUTURE / disabled`.
 - Low-rating manual follow-up through exact `VENUE_CHAT`: `DONE / MVP`; Platform feedback analytics dashboard remains `FUTURE`.
-- Loyalty/referrals: `FUTURE`.
-- Paid placement/promotion boosting: `FUTURE`.
+- Nth Hookah loyalty: substantial runtime foundation, `UNKNOWN_NEEDS_RESEARCH` until product/release reconciliation; points/cashback/tiers and referrals remain future.
+- Manual placement foundation exists; Mini App parity is open, while charging/boosting remains a separate blocked product decision.
 - Visit history foundation: implemented on top of order/session/booking lifecycle; keep privacy, dedup and terminal-status tests in regression.
 
 ## Latest Bounded Runtime Block

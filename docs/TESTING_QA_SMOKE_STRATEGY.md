@@ -1,6 +1,6 @@
 # Testing / QA Smoke Strategy
 
-Дата актуализации: 2026-08-14.
+Дата актуализации: 2026-08-15.
 
 Статус: **current product reference / UPDATED**. This document is the canonical QA/smoke strategy for the Telegram bot + Mini App platform. It consolidates local validation, GitHub Actions expectations, area-specific smoke suites, staging policy, failure reporting and Codex handoff rules. Deployment and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
 
@@ -14,6 +14,11 @@ EXISTING-CONTRACT AUDIT AND TRANSACTION CLOSURE / DONE / MVP / STAGING-SMOKE-PAS
 completes only its bounded release gates. Shared initial menu bootstrap is **VENUE MENU ONBOARDING /
 SHARED INITIAL MENU BOOTSTRAP / DONE / MVP / STAGING-SMOKE-PASSED**; user-confirmed green Actions,
 staging deploy and the bounded cross-surface smoke close only that bootstrap slice.
+
+Latest onboarding release closure: **PLATFORM & VENUE ONBOARDING / OWNERSHIP COCKPIT / DONE / MVP /
+STAGING-SMOKE-PASSED** for release HEAD `e35def99ea8429462e5fdaaeee914f57da72e775`, with user-confirmed
+green Actions, staging deploy, consolidated smoke and cleanup. Local GitHub CLI authentication is
+invalid, so Actions are recorded as user-confirmed evidence.
 
 ## Core Rule
 
@@ -1194,8 +1199,11 @@ recorded). Do not close a finding from intent, a code comment or an unrelated gr
 
 ### Platform & Venue Onboarding / Ownership Cockpit quality gate
 
-Status: **MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. Green Actions, staging deploy and the
-consolidated smoke below are still required before release closure.
+Status: **PLATFORM & VENUE ONBOARDING / OWNERSHIP COCKPIT / DONE / MVP /
+STAGING-SMOKE-PASSED** for release HEAD `e35def99ea8429462e5fdaaeee914f57da72e775`.
+The automated gate below remains regression evidence. The user confirmed fully green GitHub Actions,
+staging deploy, completion of the consolidated smoke and cleanup; local GitHub CLI authentication is
+invalid, so Actions are recorded as user-confirmed rather than independently queried here.
 
 - Shared repository tests cover the production canonical tuple, exact-versus-distinct cross-surface
   submit, exact no-op audit behavior, rejected/cancelled reuse, first-user submit/edit/cancel with
@@ -1252,6 +1260,13 @@ Consolidated staging smoke:
    explicitly; link does not auto-select. The direct onboarding callback still seeds no menu.
 10. Existing quota-pilot venues/memberships and current account/limit-request management remain
     unchanged. Existing direct Platform ownerless DRAFT creation remains available.
+
+Recorded outcome: all ten scenarios passed. In particular, first-user Telegram and additional-venue
+Mini App applications worked; exact retry created no duplicate and a different application remained
+separate; Platform Owner saw requests, venues and owners; create/link produced exactly one venue and
+OWNER membership; selected venue did not change automatically; the legacy quota-direct path used the
+shared application flow; multi-owner/portfolio projections worked; the first-ever applicant received
+baseline limit `1`; applicant/actor/source stayed server-derived; cleanup passed.
 
 ### Menu Option Rename Audit quality gate
 

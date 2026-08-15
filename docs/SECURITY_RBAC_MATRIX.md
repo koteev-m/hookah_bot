@@ -1,6 +1,6 @@
 # Security / RBAC Permission Matrix
 
-Дата актуализации: 2026-08-14.
+Дата актуализации: 2026-08-15.
 
 Статус: **current product reference / UPDATED**. Runtime permission parity and the broader
 dangerous-action audit remain **PARTIAL** unless a specific route, test or smoke result is cited.
@@ -19,6 +19,11 @@ no new role, Platform or cross-venue authority. Venue Mode, staff, booking,
 Telegram fallback, menu, media,
 QA and deploy source-of-truth documents remain linked below; no bounded closure grants broad new
 authority or closes full permission parity.
+
+Platform/Venue onboarding authority status: **PLATFORM & VENUE ONBOARDING / OWNERSHIP COCKPIT /
+DONE / MVP / STAGING-SMOKE-PASSED** for release HEAD
+`e35def99ea8429462e5fdaaeee914f57da72e775`; the three explicit onboarding P2/P3 registry items
+remain open and do not weaken the released authority contract.
 
 Platform Guest QR status: **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / DONE / MVP / STAGING-SMOKE-PASSED**. Schema verdict is `NO_MIGRATION`; commit/push, green Actions for the release HEAD, staging deploy and the bounded real Telegram role/privacy smoke are complete. Broader permission parity and dangerous-action audit coverage remain `PARTIAL`.
 
@@ -626,8 +631,13 @@ retry focus the stable authoritative venue-detail `h2`, and one shared Russian p
 verified for `1`, `2`, `5`, `11`, `21`, `22` and `25` venues without changing DTO or product data.
 Measured local evidence is repository `13`, Venue routes `8`, Platform routes `15`, Telegram
 `18 / 552 / 169`, exact route/security `1247`, and PostgreSQL onboarding `7` within the mandatory
-`8 / 14 / 2 / 44 / 9 / 7` vector (`84` total). This is local review evidence only; green Actions,
-staging deploy and consolidated release smoke remain open.
+`8 / 14 / 2 / 44 / 9 / 7` vector (`84` total). For release HEAD
+`e35def99ea8429462e5fdaaeee914f57da72e775`, user-confirmed evidence records fully green Actions,
+staging deploy, consolidated cross-surface role/privacy/retry/create-link smoke and cleanup. The
+smoke confirms server-derived applicant/actor/source, one DRAFT plus one active OWNER membership,
+no automatic selected-venue change, legacy quota-flow convergence, multi-owner portfolios and the
+first-applicant baseline limit `1`. Local GitHub CLI authentication is invalid, so Actions are not
+independently attested by this docs-only closure.
 
 These bounded menu, staff and promotion creation/lifecycle slices do not close the overall dangerous-action audit.
 Promotion configuration edit, QR rotate, force-close/session, tab reopen, analytics export, the
@@ -653,7 +663,7 @@ Promotion Compatibility Policy and a broader audit viewer remain open.
 | Menu item availability audit | **DANGEROUS ACTION AUDIT SLICE / MENU ITEM AVAILABILITY AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Authenticated Mini App direct/compound and Telegram individual paths use one item-locked transaction with server-derived actor/source. | One real committed individual delta writes one allowlisted `MENU_ITEM_AVAILABILITY_CHANGED`; no-op/denial/failure/rollback writes zero. | Shift Check is aggregate-only; item metadata actions are covered by the separate local closure. |
 | Venue Menu Management existing-contract closure | **DONE / MVP / STAGING-SMOKE-PASSED**. Owner/Manager own-venue only; Staff/foreign/unaffiliated/Platform-only denied; actor/source are server-derived on Mini App and Telegram with strict dialog-owner binding. | Nine existing category/item families write exact privacy-safe same-transaction audits; exact no-op and rollback write zero, compound item deltas commit atomically, and reorders require the complete authoritative set. | No role/API/UX/schema expansion. User-confirmed green Actions, staging deploy and consolidated smoke close this bounded slice; broader Menu/Dangerous Action Audit stays `PARTIAL`. |
 | Shared initial menu bootstrap | **DONE / MVP / STAGING-SMOKE-PASSED**. Explicit Mini App mutation and Telegram root share one missing-only seed; GET and approval/linking remain non-seeding. | Owner/Manager own venue only; session/current-user actor and server-owned surface source; Staff/foreign/unaffiliated/Platform-only denied. | Release-closed only for this bootstrap; no migration or wider onboarding authority. |
-| Onboarding / ownership cockpit | **MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. Telegram and both Mini App adapters use one shared service; Platform has request and operational-owner workspaces; the legacy quota callback has no direct writer. The five bounded independent-review findings are locally closed. | Venue Mini App: active operational Owner only and own memberships/requests. Telegram: any authenticated applicant and own requests. Platform Owner: all venues/owners/requests. All actors are server-derived. | `NO_MIGRATION`; repository `13`, Venue routes `8`, Platform routes `15`, Telegram `18 / 552 / 169`, route/security `1247` and PostgreSQL vector `8 / 14 / 2 / 44 / 9 / 7 = 84` are local evidence. Green Actions, staging deploy and consolidated release smoke remain required. |
+| Onboarding / ownership cockpit | **DONE / MVP / STAGING-SMOKE-PASSED**. Telegram and both Mini App adapters use one shared service; Platform has request and operational-owner workspaces; the legacy quota callback has no direct writer. | Venue Mini App: active operational Owner only and own memberships/requests. Telegram: any authenticated applicant and own requests. Platform Owner: all venues/owners/requests. All actors are server-derived. | `NO_MIGRATION`; automated evidence plus user-confirmed green Actions, deploy and consolidated smoke close only this bounded release. `ONBOARDING-H2-001`, `ONBOARDING-TG-CONFIRM-001` and `ONBOARDING-DECISION-RETRY-001` remain open under their explicit triggers. |
 | Manager/Owner venue isolation | Own-venue RBAC is the product rule. | No cross-venue detail/reply/manage access. | Keep cross-venue tests for support, chats, orders, bookings and settings. |
 | Platform access | Platform Owner can manage platform scope and support tickets; ordinary venue chat is hidden. The bounded confirmed QR test enters the normal public Guest table flow only. Activation is atomic; teardown uses stored context identity and remains possible when token/table/venue/subscription becomes unavailable. | Platform does not bypass ordinary venue RBAC. Explicit Guest context temporarily wins routing only for ordinary Guest actions and is cleared by existing visit exit. Mini App re-entry requires matching chat context and no exit marker. | Controlled QR Phase 1 is staging-smoke-passed and stays in regression; event/audit explorer and analytics exports still need additional privacy gates before broad release. |
 | Dangerous action audit | Several audits exist, including the release-closed menu slices and the nine-family Menu Management closure. | All dangerous actions write safe actor/target/old-new/reason evidence. | Audit coverage remains `PARTIAL`; description/media/archive, QR rotate, force close, tab reopen, promotion configuration and analytics export remain open. |

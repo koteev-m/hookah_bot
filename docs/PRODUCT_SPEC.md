@@ -453,6 +453,14 @@ Implementation slices:
 6. Regression closure: cross-channel bill snapshot, QR/table restore, role denial, pending/approve/reject, staff-chat one-message behavior and bot/Mini App parity smoke.
 
 ## Block 11 — Platform Mode (multi-venue onboarding & lifecycle)
+
+Bounded release status: **PLATFORM & VENUE ONBOARDING / OWNERSHIP COCKPIT / DONE / MVP /
+STAGING-SMOKE-PASSED** for release HEAD `e35def99ea8429462e5fdaaeee914f57da72e775`.
+User-confirmed evidence records fully green Actions, staging deploy, consolidated cross-surface
+onboarding/ownership smoke and cleanup. The closure covers shared first/additional application,
+retry-safe Platform create/link and operational-owner portfolio semantics; it does not close the
+whole Platform product, lifecycle normalization, billing, analytics, support automation or media.
+
 MUST:
 - Treat Platform Mode as one cockpit for venues, onboarding requests, venue lifecycle, owner/access, billing/subscriptions/invoices, Support Center, analytics/audit and operational risk/health indicators.
 - An authenticated Telegram user submits a first or additional venue through the shared backend

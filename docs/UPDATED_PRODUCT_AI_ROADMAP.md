@@ -1,6 +1,6 @@
 # Product + Telegram AI Bots Roadmap
 
-Дата обновления: 2026-08-14.
+Дата обновления: 2026-08-15.
 
 Статус документа: canonical roadmap. Этот файл объединяет актуальный product roadmap, Mini App launch roadmap и Telegram-native AI Bots roadmap. Старые audit-файлы в `docs/audit/` остаются evidence/history, но не являются текущим backlog без сверки с этим roadmap и текущим кодом.
 
@@ -22,7 +22,7 @@
 
 > Market launch требует production-ready Telegram bot + Mini App core. AI входит в продукт как assistant layer. Telegram Guest Mode, Telegram Business / Secretary Bots, Managed branded bots и Bot-to-Bot agents не являются обязательными для первого запуска.
 
-Текущий фокус перед пилотом: product P0/P1 закрыт по уже принятым M1-M9b.3 блокам, staging smoke, CI release validation, deploy/runbook hardening and minimal Guest Mini App browser smoke зелёные. M9a Deployment SSH Reliability Hardening is CLOSED / staging smoke passed: standard deploy remains supported, opt-in ControlMaster deploy is validated as a release-reliability workaround, and the exact SSH/network root cause remains unconfirmed. M9b Venue Working Hours and Date Exceptions Mini App Parity, M9b.1 range/rejection-copy improvements, M9b.2 exception save/list UX and M9b.3 date-range editing are CLOSED / staging smoke passed. Platform Owner Invite / ADMIN Semantics Hardening, Platform Venue OWNER Revocation, H2/PostgreSQL active-order + personal-tab uniqueness fidelity, Mini App mutation / operational verification closure pack, Staff Call Lifecycle ACK/DONE audit hardening, Staff-call guest-visible CANCELLED finishing patch, Guest Table Context UX Cleanup / Feature-gated Extension Module, Guest Table Session Exit / Expiry UX, Guest Bill / Display-Number / Full-Bill Parity, Guest Bill Request / Payment Method UX, Staff Chat Noise Reduction / Table Activity Card, hookah preparation placeholder polish, Platform Billing Cockpit / Owner Payment UX, Platform Billing Renewal / Advance Invoice / Courtesy Days, Staff/Manager invite deep-link sharing polish, Guest Communication UX / Support Tickets MVP, Booking Arrival Guard / Staff-Chat Booking Buttons, Guest History Foundation, Post-Visit Feedback MVP, Guest Favorites Phase 1 and Catalog Search and Filter Phase 1 are CLOSED. Guest Favorites Phase 1 is **DONE / MVP / STAGING-SMOKE-PASSED** for venue favorites only, including Telegram Profile/Catalog parity and source-aware Back navigation. Catalog Search and Filter Phase 1 is **CATALOG SEARCH AND FILTER PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**. Shared initial menu bootstrap is **VENUE MENU ONBOARDING / SHARED INITIAL MENU BOOTSTRAP / DONE / MVP / STAGING-SMOKE-PASSED**. **PLATFORM & VENUE ONBOARDING / OWNERSHIP COCKPIT** is **MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**; green Actions, staging deploy and consolidated smoke remain before release closure. Do not reopen closed slices without new smoke or code evidence. Scope не расширяем в сторону Telegram-native AI surfaces до готовности Mini App и public-safe tools.
+Текущий фокус перед пилотом: product P0/P1 закрыт по уже принятым M1-M9b.3 блокам, staging smoke, CI release validation, deploy/runbook hardening and minimal Guest Mini App browser smoke зелёные. M9a Deployment SSH Reliability Hardening is CLOSED / staging smoke passed: standard deploy remains supported, opt-in ControlMaster deploy is validated as a release-reliability workaround, and the exact SSH/network root cause remains unconfirmed. M9b Venue Working Hours and Date Exceptions Mini App Parity, M9b.1 range/rejection-copy improvements, M9b.2 exception save/list UX and M9b.3 date-range editing are CLOSED / staging smoke passed. Platform Owner Invite / ADMIN Semantics Hardening, Platform Venue OWNER Revocation, H2/PostgreSQL active-order + personal-tab uniqueness fidelity, Mini App mutation / operational verification closure pack, Staff Call Lifecycle ACK/DONE audit hardening, Staff-call guest-visible CANCELLED finishing patch, Guest Table Context UX Cleanup / Feature-gated Extension Module, Guest Table Session Exit / Expiry UX, Guest Bill / Display-Number / Full-Bill Parity, Guest Bill Request / Payment Method UX, Staff Chat Noise Reduction / Table Activity Card, hookah preparation placeholder polish, Platform Billing Cockpit / Owner Payment UX, Platform Billing Renewal / Advance Invoice / Courtesy Days, Staff/Manager invite deep-link sharing polish, Guest Communication UX / Support Tickets MVP, Booking Arrival Guard / Staff-Chat Booking Buttons, Guest History Foundation, Post-Visit Feedback MVP, Guest Favorites Phase 1 and Catalog Search and Filter Phase 1 are CLOSED. Guest Favorites Phase 1 is **DONE / MVP / STAGING-SMOKE-PASSED** for venue favorites only, including Telegram Profile/Catalog parity and source-aware Back navigation. Catalog Search and Filter Phase 1 is **CATALOG SEARCH AND FILTER PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**. Shared initial menu bootstrap is **VENUE MENU ONBOARDING / SHARED INITIAL MENU BOOTSTRAP / DONE / MVP / STAGING-SMOKE-PASSED**. **PLATFORM & VENUE ONBOARDING / OWNERSHIP COCKPIT** is **DONE / MVP / STAGING-SMOKE-PASSED** for release HEAD `e35def99ea8429462e5fdaaeee914f57da72e775`, based on user-confirmed green Actions, deploy, consolidated smoke and cleanup. Do not reopen closed slices without new smoke or code evidence. The next implementation epic is not selected; Section 13 contains the verified master remaining-work inventory and comparative shortlist for user decision. Scope не расширяем в сторону Telegram-native AI surfaces до готовности Mini App и public-safe tools.
 
 Актуальный post-fix snapshot:
 
@@ -40,8 +40,8 @@
 - STAFF booking policy разделён: STAFF видит брони и отмечает `Гость пришёл` / `Не пришёл` only for confirmed bookings, а confirm/cancel/change/message/settings остаются MANAGER/OWNER.
 - Venue Mini App booking card opens a persisted booking conversation thread: venue messages, Guest Bot replies and Guest Mini App replies share one source of truth; staff chat remains a notification mirror. M4A staging smoke passed after UX polish. M4B/M4C unified `Сообщения` inbox and resolve/reopen lifecycle are CLOSED after staging smoke: thread cards show context/status/last message/unread, active/resolved filters work, and explicit resolve/reopen does not mutate booking lifecycle.
 - Guest Communication UX / Support Tickets MVP is CLOSED after smoke: canonical model is `BOOKING_CHAT`, `VENUE_CHAT`, `SUPPORT_TICKET`, `STAFF_CALL` in `docs/COMMUNICATION_MODEL.md`; Guest nav is `Чаты` / `Помощь`; catalog and venue detail `Задать вопрос` opens/reuses `VENUE_CHAT`; booking `Открыть переписку` remains `BOOKING_CHAT`; Support tickets are separated through `SUPPORT_TICKET`; Platform sees support tickets but not ordinary venue chats; Staff sees neither support tickets nor ordinary venue chats; table context keeps `Вызвать персонал` as the live operational flow; support/venue chat creation and replies do not post to staff-chat and guest create/reply routes are rate-limited.
-- Platform cockpit docs are current in `docs/PLATFORM_COCKPIT.md`: Platform Mode is the cockpit for venues, onboarding, lifecycle, owner/access, billing/subscriptions/invoices, Support Center and analytics/audit. Manual billing and support-ticket MVP are closed; the bounded onboarding/ownership cockpit is locally validated and awaits review/Actions/staging, while placements/analytics, real acquiring/Stars, recurring payments and advanced support remain future/partial.
-- Growth/retention docs are current in `docs/GROWTH_RETENTION.md`: Guest History Foundation, Post-Visit Feedback MVP, venue-only Guest Favorites Phase 1, Simple Venue Promotions Phase 1, Promotion Creation Audit, Promotion Effective State Clarity, Promotion Lifecycle Status Audit and Venue Promotions Current/Archived Tabs UX are DONE / MVP / staging-smoke-passed. Repeat as Template Phase 1 is `MVP IMPLEMENTED / LOCAL VALIDATION PASSED / DEFERRED MANUAL SMOKE`; its environment-dependent production-readiness gate remains open in [`REPEAT-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#repeat-manual-001) without blocking independent bounded development. Executable Promotions Phase 2 / Happy Hours Percent is `DONE / STAGING-SMOKE-PASSED`; Gift parity is `GIFT_WITH_ITEM BOT/MINIAPP PARITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`, with independent review, CI and staging still required. Favorites covers catalog/detail mutations, Account list, current-user isolation, unavailable filtering/restoration, shared Bot/Mini App storage, Telegram Profile/Catalog entrypoints and source-aware Back. The manual `5/5` public review CTA and low-rating exact `VENUE_CHAT` follow-up are closed; persistent templates, favorite menu items/options, recommendations/frequent items, notification opt-in, favorites-based promotions, loyalty and broader analytics remain future/partial.
+- Platform cockpit docs are current in `docs/PLATFORM_COCKPIT.md`: Platform Mode is the cockpit for venues, onboarding, lifecycle, owner/access, billing/subscriptions/invoices, Support Center and analytics/audit. Manual billing, support-ticket MVP and the bounded onboarding/ownership cockpit are release-closed; placements/analytics, real acquiring/Stars, recurring payments and advanced support remain future/partial.
+- Growth/retention docs are current in `docs/GROWTH_RETENTION.md`: Guest History, Post-Visit Feedback, venue-only Favorites, Simple Promotions, Happy Hours and the listed promotion audit/UX slices are closed. Repeat Phase 1 is locally validated with deferred manual smoke; Gift still needs review/CI/staging closure. Favorite-item backend/API/Telegram, Nth Hookah loyalty and manual placement foundations exist, so they are not blank future features; their Mini App/product/release outcomes are cataloged in Section 13. Persistent templates, consent/campaigns, advanced recommendations, promo codes, referrals, paid-ad productization and broader analytics remain open/deferred.
 - Staff profiles, Today Shift, optional Staff Schedule and future staff tips are canonical in
   `docs/STAFF_PROFILES_SHIFTS_TIPS.md`:
   `STAFF OPERATIONS SLICE A / MANAGER PARITY + SHIFT TIME DEFAULTS / DONE / MVP /
@@ -168,7 +168,7 @@ Launch focus:
 - webhook/outbox/staff notification monitoring;
 - fallback/error paths;
 - pilot venue runbook.
-- growth/retention remains `SPEC UPDATED / PARTIAL-FUTURE` overall in `docs/GROWTH_RETENTION.md`; History, Post-Visit Feedback, venue-only Guest Favorites Phase 1, Simple Venue Promotions Phase 1 and Happy Hours Percent are closed slices, Repeat remains local-validation-passed with deferred manual smoke, and Gift Bot/Mini App parity is `GIFT_WITH_ITEM BOT/MINIAPP PARITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT`. This is not staging/release evidence, nor evidence that favorite menu items, persistent repeat templates or loyalty are done.
+- growth/retention remains `SPEC UPDATED / PARTIAL-FUTURE` overall in `docs/GROWTH_RETENTION.md`; History, Feedback, venue Favorites, Simple Promotions and Happy Hours are closed, Repeat has deferred manual smoke, and Gift remains release-open. Favorite-item and Nth Hookah loyalty foundations exist but their broader Mini App/product/release outcomes are not done.
 
 ### Guest Flow
 
@@ -198,7 +198,7 @@ Done:
 
 Remaining P1/P2:
 
-- remaining guest growth/retention from `docs/GROWTH_RETENTION.md`: Repeat as Template Phase 1 is locally validated with deferred manual smoke in `REPEAT-MANUAL-001`; Simple Venue Promotions Phase 1 and Happy Hours Percent are `DONE / STAGING-SMOKE-PASSED`; Gift parity is `GIFT_WITH_ITEM BOT/MINIAPP PARITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT` and awaits independent review, CI and staging; favorite menu items/options, recommendations/frequent items, persistent templates, notification opt-in, favorites-based promotions and loyalty remain future; venue favorites, visit/order history and Post-Visit Feedback are DONE / staging-smoke-passed and stay in regression;
+- remaining guest growth/retention from `docs/GROWTH_RETENTION.md`: Repeat Phase 1 has deferred manual smoke; Gift awaits review/CI/staging; favorite-item Mini App/options, loyalty productization audit, recommendations, persistent templates, consent and campaigns remain. Venue favorites, History, Feedback, Simple Promotions and Happy Hours stay in regression;
 - richer profile/promotions/loyalty polish in Mini App only after the underlying product/accounting rules are implemented and smoked;
 - richer active order display with totals/promo/loyalty parity where needed;
 - booking create/confirm/change/cancel smoke passed for current staging MVP; keep it in regression smoke after future booking changes.
@@ -1083,6 +1083,10 @@ If a new roadmap is needed later, update this file instead of creating another r
 
 ## 12. Next Development Block
 
+**Decision state: MASTER REMAINING WORK INVENTORY PREPARED / USER DECISION REQUIRED.** No active
+implementation Goal or approved `NEXT` epic is recorded. The release-closed history below is retained
+for traceability; Section 13 is the only current comparative decision surface.
+
 Latest implementation-closed blocks, with release/staging status kept per canonical row: Staff
 profiles + today on shift Phase 1 (`DONE / MVP / STAGING-SMOKE-PASSED`); Staff-call
 guest-visible CANCELLED finishing patch; Booking Arrival Guard / Staff-Chat Booking Buttons;
@@ -1324,17 +1328,18 @@ STAGING-SMOKE-PASSED**.
   partial/custom preservation, Staff denial, approval remaining non-seeding and cleanup. This does
   not close broader onboarding, menu constructor/media/top-list or the overall product.
 
-### Current local implementation epic: Platform & Venue Onboarding / Ownership Cockpit
+### Release-closed epic: Platform & Venue Onboarding / Ownership Cockpit
 
 Implementation contract: `IMPLEMENT_PLATFORM_ONBOARDING_OWNERSHIP_COCKPIT_NEXT`.
 
-Verdict: **MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+Verdict: **DONE / MVP / STAGING-SMOKE-PASSED** for release HEAD
+`e35def99ea8429462e5fdaaeee914f57da72e775`.
 
-One bounded epic is acceptable because the current request, venue, membership, user and commercial
-account repositories contain the required facts; owner aggregation does not need a primary-owner
-redesign; both Telegram and Mini App can call one extracted backend contract; and billing, support,
-analytics, media/R2 and menu behavior remain outside scope. Implement in internal slices, but keep
-one release boundary and one consolidated staging smoke.
+The bounded epic was viable because the request, venue, membership, user and commercial account
+repositories contained the required facts; owner aggregation needed no primary-owner redesign;
+Telegram and both Mini Apps could call one extracted backend contract; and billing, support,
+analytics, media/R2 and menu behavior remained outside scope. The implementation used one release
+boundary and one consolidated staging smoke.
 
 #### 1. Pre-implementation baseline retained for traceability
 
@@ -1586,9 +1591,9 @@ procedure is explicitly prepared.
 
 #### 15. Independent review finding closures
 
-Epic stage remains: **MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
-The findings below are individually closed by current local implementation and test evidence; this
-does not close the overall epic release gate.
+Epic stage: **DONE / MVP / STAGING-SMOKE-PASSED**. The findings below were individually closed by
+implementation and test evidence; user-confirmed green Actions, staging deploy, consolidated smoke
+and cleanup close the bounded release gate. This does not close the overall Platform/Venue product.
 
 | Finding | Status | Closure evidence |
 | --- | --- | --- |
@@ -1598,15 +1603,21 @@ does not close the overall epic release gate.
 | `ONBOARDING-A11Y-CREATE-LINK-FOCUS-001` | `DONE` | Successful create/link and linked retry wait for Venue detail render, then restore focus to its stable focusable heading with the expected accessible name instead of leaving focus on the removed action. |
 | `ONBOARDING-OWNER-PLURAL-001` | `DONE` | The shared Russian venue-count formatter is applied to owner list and detail labels, with assertions for `1`, `2`, `5`, `11`, `21`, `22` and `25`. |
 
-Validated backend evidence for the current worktree is repository `13`, Venue routes `8`, Platform
+Validated backend evidence for the release is repository `13`, Venue routes `8`, Platform
 routes `15`, Telegram connection flow `18`, Telegram table/legacy state `552`, Telegram keyboards
 `169` and PostgreSQL onboarding `7`. The exact route/security aggregate is `1247 / 1247`; the
 mandatory PostgreSQL vector is `8 / 14 / 2 / 44 / 9 / 7` (`84 / 84`). The deterministic Mini App
 smoke passed `191 / 191`, including ownership onboarding `15 / 15` with focus restoration and
-pluralization coverage. Green Actions, staging deploy and consolidated staging smoke remain required
-before release closure.
+pluralization coverage. For the release HEAD, the user confirmed fully green Actions, staging deploy,
+the consolidated first/additional application, exact/distinct retry, Platform visibility,
+exactly-one create/link, explicit selection, legacy-flow, multi-owner, baseline-limit,
+server-derived-authority smoke and cleanup. Local GitHub CLI authentication is invalid, so Actions
+are recorded as user-confirmed rather than independently queried in this docs-only closure.
 
-#### 16. Ready implementation prompt
+#### 16. Historical fulfilled implementation prompt (not current `NEXT`)
+
+The preserved prompt below describes the now release-closed epic and is evidence/history only. It
+must not be reused as an active Goal; the next epic remains a user decision after Section 13 review.
 
 ```text
 Следуй AGENTS.md. Реализуй один bounded epic:
@@ -2223,3 +2234,314 @@ M7c adaptive transactional booking reminders are implemented, code/test-backed a
 - Legacy reconciliation: V109 adds `policy_version`, marks legacy `PENDING`/`FAILED` rows `CANCELED`, and the worker only claims `policy_version='M7C'` rows. Recorded staging audit after acceptance: `LEGACY/CANCELED = 3`, `LEGACY/SKIPPED = 1`, claimable legacy rows `0`.
 - Feature flag: missing/blank/malformed config and explicit `false` keep runtime disabled; explicit `true` is required for a later smoke.
 - Acceptance: the core M7c real Telegram smoke passed for one reminder delivery, visible reminder edit, button state, attendance indicators, venue-controlled booking status and idempotent repeat handling; `/health` and `/db/health` returned ok and staging was returned to `BOOKING_REMINDER_WORKER_ENABLED=false`. Keep M7c in regression smoke before broader operational rollout.
+
+## 13. MASTER REMAINING WORK INVENTORY
+
+Status: **MASTER REMAINING WORK INVENTORY PREPARED / USER DECISION REQUIRED**. This section is the
+canonical owner of the complete remaining-work catalog. It neither selects `NEXT` nor creates an
+active implementation Goal. Current code, migrations and focused tests were inspected read-only;
+runtime tests were intentionally not run for this docs-only inventory.
+
+### 13.1 Document inventory and audit method
+
+All 35 Markdown surfaces were scanned: 32 files under `docs/**`, plus `PROJECT_STATUS.md`,
+`README.md` and root `AGENTS.md`. Root `AGENTS.md` is instruction-only, not backlog evidence. No
+local nested `AGENTS.md` exists.
+
+| Classification | Files |
+| --- | --- |
+| `CANONICAL_CURRENT` (17) | `PROJECT_STATUS.md`, `README.md`, `AGENTS.md`; `ANALYTICS_EVENTS.md`, `BOOKING_LIFECYCLE.md`, `COMMUNICATION_MODEL.md`, `GROWTH_RETENTION.md`, `MEDIA_STORAGE_UPLOAD.md`, `MENU_OPTIONS_STOPLIST.md`, `ORDER_SESSION_TAB_CORE.md`, `PLATFORM_COCKPIT.md`, `PRODUCT_SPEC.md`, `SECURITY_RBAC_MATRIX.md`, `STAFF_PROFILES_SHIFTS_TIPS.md`, `TELEGRAM_FALLBACK_STAFF_CHAT.md`, this roadmap, `VENUE_OPERATIONS.md`. |
+| `ROLE_CURRENT` (5) | `docs/audit/ROLE_GUEST.md`, `ROLE_MANAGER.md`, `ROLE_PLATFORM_OWNER.md`, `ROLE_STAFF.md`, `ROLE_VENUE_OWNER.md`. |
+| `QA_CURRENT` (3) | `DEFERRED_MANUAL_SMOKE_BACKLOG.md`, `TESTING_QA_SMOKE_STRATEGY.md`, `docs/audit/MINI_APP_LAUNCH_SMOKE_CHECKLIST.md`. |
+| `OPERATIONS_CURRENT` (5) | `DEPLOYMENT_RUNBOOK.md`, `LOCAL_TELEGRAM_MINIAPP.md`, `MIGRATION_POLICY.md`, `OPERATIONS.md`, `STAGING_DEPLOYMENT.md`. |
+| `HISTORICAL_AUDIT` (4) | `BOT_MINIAPP_PARITY_AUDIT.md`, `MINI_APP_PRODUCTION_READINESS_AUDIT.md`, `PRODUCT_AUDIT_SUMMARY.md`, `PRODUCT_IDEAS_REVIEW.md`. |
+| `HANDOFF_HISTORY` (1) | `VENUE_BOT_TO_MINIAPP_PARITY_PROGRAM.md`. |
+| `OBSOLETE_OR_DUPLICATE` (0) | No whole file is safe to discard; stale and duplicate claims exist inside otherwise useful files. |
+
+Candidate counting uses normalized claim records: repeated wording inside one local context is
+collapsed, while cross-document and cross-domain repeats remain candidates until global
+deduplication. The three domain audits yielded 187 records; eight explicit AI roadmap outcomes bring
+the total to **195**. Final disposition is:
+
+| Disposition | Count |
+| --- | ---: |
+| `OPEN_CONFIRMED` | 43 |
+| `BLOCKED_PRODUCT_DECISION` | 14 |
+| `BLOCKED_PREREQUISITE` | 13 |
+| `DEFERRED_AFTER_MVP` | 31 |
+| `UNKNOWN_NEEDS_RESEARCH` | 6 |
+| `STALE_ALREADY_IMPLEMENTED` | 42 |
+| `DUPLICATE_OF_OTHER_ID` | 35 |
+| `HISTORICAL_ONLY` | 11 |
+| **Total raw candidates** | **195** |
+| **Canonical remaining items below** | **107** |
+
+Table shorthand: `MRWI` means this section is canonical owner; the following documents are other
+sources. `A` = green Actions, `F` = focused automated tests, `PG` = PostgreSQL migration/integration/
+concurrency evidence, `E2E` = Mini App browser smoke, `S` = staging deploy and bounded smoke, `RT` =
+real Telegram/staff-chat smoke, `D` = explicit product decision. The final column is always
+`scope / migration; main affected areas; release gates; trigger; priority evidence`.
+
+### 13.2 Security, correctness and data-integrity hardening
+
+| Stable ID / user-visible outcome | Status | Canonical owner; other sources | Current evidence; works → remains | User value / delay risk | Dependencies | Delivery |
+| --- | --- | --- | --- | --- | --- | --- |
+| `ONBOARDING-H2-001` — truthful packaged-H2 legacy status check | `OPEN_CONFIRMED` | MRWI; QA, Security, Platform | PostgreSQL onboarding is release-closed; packaged H2 legacy status check is still known-defective. Fix only with isolated H2 evidence; do not question the production migration verdict. | Platform correctness / misleading local status. | Reproducible H2 fixture. | S / NO; backend H2 status path; F+A; when H2 path is used; P2 existing registry. |
+| `ONBOARDING-TG-CONFIRM-001` — explicit Telegram submit confirmation | `OPEN_CONFIRMED` | MRWI; QA, Platform | Shared submit/idempotency is closed; Telegram still lacks the optional pre-submit confirmation UX. | Applicant confidence / accidental submission UX. | Preserve exact-retry contract. | S / NO; Telegram dialog/copy/tests; F+A+RT; when funnel friction is observed; P3 existing registry. |
+| `ONBOARDING-DECISION-RETRY-001` — clearer lost-response decision retry | `OPEN_CONFIRMED` | MRWI; QA, Platform | Server retry is authoritative and non-duplicating; the UI can better distinguish a recovered late response from a fresh decision. | Platform operator trust / confusing recovery, not data loss. | Existing shared service. | S / NO; Platform/Telegram copy; F+E2E+A+S; when support sees ambiguous retries; P3 existing registry. |
+| `SECURITY-AUDIT-ACTOR-FK-001` — align audit actor integrity | `OPEN_CONFIRMED` | MRWI; Security, migration policy | Audits are widely used; H2/PostgreSQL actor FK/nullability differ. Inspect legacy nulls, then align both dialects. | All roles / orphaned or unportable audit truth. | Legacy-data verdict. | M / YES; audit migrations/repositories; PG+F+A+S; before broader audit tooling; P2 data integrity. |
+| `QA-RBAC-DIRECT-DENIAL-001` — complete direct route denial coverage | `OPEN_CONFIRMED` | MRWI; Security, QA, role docs | Explicit permissions and many route tests work; matrix remains partial until every current/new route has Staff/foreign/Platform-only direct denial cases. | Tenant privacy / hidden UI can mask authority gaps. | Route inventory. | M / NO; backend routes/tests/CI; F+A; before enlarging role surfaces; P1 security. |
+| `SECURITY-ADMIN-COMPAT-001` — finish legacy ADMIN cleanup | `OPEN_CONFIRMED` | MRWI; Security, Venue, Telegram | Assignment already rejects product ADMIN and DB mapping aliases it to MANAGER; access/copy branches still accept or display ADMIN. Resolve data and copy without breaking legacy rows. | Venue role clarity / inconsistent authority and copy. | Legacy-row scan and alias policy. | M / POSSIBLE; DB/access/Telegram/UI; PG+F+A+S; before role redesign; P2 hygiene. |
+| `SECURITY-MANAGER-MENU-SCOPE-001` — decide Manager menu authority | `BLOCKED_PRODUCT_DECISION` | MRWI; Security, Menu, Venue | Current `VenuePermissions` grants full `MENU_MANAGE`; docs describe both retention and conservative narrowing. Choose one server policy before changing UI. | Owner control / accidental privilege drift. | Explicit Owner/Manager product decision. | M / POSSIBLE; RBAC/routes/Bot/Mini App; D+F+A+S; before new constructor scope; P1 authority. |
+| `VENUE-STAFF-STOPLIST-POLICY-001` — configurable Staff stop-list authority | `BLOCKED_PRODUCT_DECISION` | MRWI; Venue, Menu, Security, Telegram | Staff item/option availability paths work; no per-venue `staff_stoplist_enabled` exists. Decide always-on versus tenant-controlled enforcement. | Venue operations / over- or under-authorized Staff. | Staff operating policy. | M / YES likely; settings/RBAC/UI/Bot; D+PG+F+A+S; before exposing more Staff controls; P2. |
+| `MENU-RBAC-RACE-001` — transaction-bound option delete authority | `OPEN_CONFIRMED` | MRWI; Menu, Security | Route membership check precedes the repository hard-delete transaction. Bind final membership/permission recheck to the mutation and audit. | Venue security / revoke-to-write race. | Existing option-delete contract. | M / NO likely; routes/repository/concurrency tests; F+A+S; now or with related audit slice; P2 race. |
+| `SECURITY-TABLE-QR-AUDIT-001` — safe QR rotate/export consequences | `OPEN_CONFIRMED` | MRWI; Security, Venue | Rotate/export and batch operations work; audit is not consistently mutation-bound and rotate UX lacks explicit consequence confirmation. | Guest access safety / stale links and weak accountability. | Current table permissions. | M / NO/POSSIBLE; table routes/repo/UI/audit; F+A+S; before broader QR operations; P1 dangerous action. |
+| `NOTIFY-CALLBACK-AUDIT-001` — complete operational callback evidence | `OPEN_CONFIRMED` | MRWI; Telegram, Security, Analytics | State-aware callbacks/RBAC work and selected slices are audited; no complete enqueue/deliver/click/reject inventory or safe exactly-once policy exists. | Venue operations / actions become hard to reconstruct. | Audit-vs-analytics boundary. | M / POSSIBLE; Telegram/outbox/audit; F+A+RT; before notification automation; P1 operations/security. |
+| `SECURITY-GUEST-CONTEXT-RACES-001` — distributed Guest-context hardening | `DEFERRED_AFTER_MVP` | MRWI; Core, Security, roadmap | Controlled Platform Guest QR Phase 1 is closed for single-instance long polling. Remaining P2s cover distributed pending, immediate-exit edge cases, draft/dialog linearity and fuller endpoint race matrix. | Guest privacy / horizontal scaling races. | Scaling or expansion trigger. | L / POSSIBLE/YES; context stores/routes/UI; PG+F+A+RT; at multi-instance rollout; P2 deferred. |
+
+### 13.3 Guest order / session / tab / cart / bill core
+
+| Stable ID / user-visible outcome | Status | Canonical owner; other sources | Current evidence; works → remains | User value / delay risk | Dependencies | Delivery |
+| --- | --- | --- | --- | --- | --- | --- |
+| `ORDER-PERSONAL-TAB-INTEGRITY-001` — non-null personal-tab ownership | `OPEN_CONFIRMED` | MRWI; Core, Security | Personal/shared guards, idempotency and H2 fidelity work; PostgreSQL V29 still permits active PERSONAL rows with null owner. Scan/backfill, constrain and prove concurrency; decide separately whether shared uniqueness needs strengthening. | Guest privacy / ambiguous ownership. | Legacy-data verdict. | M / YES; tab schema/repository/routes; PG+F+A+S; before wider tab lifecycle; P1 integrity. |
+| `ORDER-TAB-LIFECYCLE-001` — paid/closed/reopen/member lifecycle | `OPEN_CONFIRMED` | MRWI; Core, Venue, Security | ACTIVE/CLOSED tabs, create/join/invite and scoped bills work. Define settlement/paid/reopen/leave/member management, reason/audit and UI. | Guest/Venue bill correctness / unsafe reopen or stranded tabs. | Bill settlement decision. | L / YES; tab/order DB/API/UI/Bot; D+PG+F+A+S; before shared-tab expansion; P1. |
+| `ORDER-SESSION-CLOSE-POLICY-001` — safe staff physical-session close | `BLOCKED_PRODUCT_DECISION` | MRWI; Core, Venue, Security | User exit and TTL expiry correctly leave the shared physical session intact. Decide who may force-close, what happens to orders/tabs/visits, and required reason/confirmation/audit. | Guest/Venue correctness / data loss or never-ending sessions. | Product ownership of physical visit. | L / POSSIBLE; session/order/visit/UI; D+PG+F+A+S; before force-close UI; P1. |
+| `CART-IMMUTABLE-DRAFT-LABEL-001` — truthful stale-cart labels | `OPEN_CONFIRMED` | MRWI; Core | Typed atomic stale-cart recovery and idempotency are closed; Mini App cart persists ids/options but recovery copy can use a mutable current item name. Persist a safe label or approve fallback semantics. | Guest clarity / misleading recovery. | Cart compatibility policy. | S / NO; `cartStore`/copy/tests; F+E2E+A+S; with next cart change; P2 UX/correctness. |
+| `CART-CROSS-SURFACE-SYNC-001` — one server-scoped Bot/Mini App draft | `DEFERRED_AFTER_MVP` | MRWI; Core, Telegram | Mini App cart is scoped localStorage; Bot draft is process-local. A common versioned server draft needs session/tab isolation and conflict resolution. | Guest continuity / split carts and restart loss. | Cart ownership/version policy. | XL / YES/POSSIBLE; DB/API/Mini App/Telegram; D+PG+F+A+RT; proven cross-surface demand; P2 deferred. |
+| `TELEGRAM-FALLBACK-TAB-001` — shared-tab-aware fallback order | `DEFERRED_AFTER_MVP` | MRWI; Telegram, Core | Quick-order fallback and payload contract work. Add authorized personal/joined tab selection and consistent structured lines. | Guest parity / wrong-tab confusion. | Tab lifecycle and selected-tab contract. | M / NO likely; Telegram/order API; F+A+RT; when shared tabs need Bot parity; P2. |
+
+### 13.4 Venue operations
+
+| Stable ID / user-visible outcome | Status | Canonical owner; other sources | Current evidence; works → remains | User value / delay risk | Dependencies | Delivery |
+| --- | --- | --- | --- | --- | --- | --- |
+| `VENUE-DASHBOARD-001` — one actionable Venue cockpit | `OPEN_CONFIRMED` | MRWI; Venue, Product Spec | Dashboard has venue/staff-call/staff-chat facts and separate stats work. Add role-specific order, booking, stop-list, shift and subscription warning cards from authoritative read models. | Venue speed / fragmented operations. | Stable queue/settings summaries. | M/L / POSSIBLE; Venue API/Mini App; F+E2E+A+S; before multi-venue pilot load; P1 operator UX. |
+| `VENUE-ORDER-QUEUE-ADVANCED-001` — SLA-aware order queue | `DEFERRED_AFTER_MVP` | MRWI; Venue, Analytics | Queue/detail/status/full bill are working. Rich filters/grouping, SLA timers and event-derived metrics remain. | Venue throughput / missed or delayed orders. | Event fidelity. | M/L / POSSIBLE; order queries/UI/analytics; F+A+S; at real queue volume; P2 deferred. |
+| `VENUE-TABLE-CRUD-001` — complete table edit/deactivate diagnostics | `OPEN_CONFIRMED` | MRWI; Venue | List, batch create, rotate and export work. Add single-table edit/deactivate, active-session warnings and operational diagnostics without treating QR as authority. | Venue setup / disruptive table changes. | Session-close consequences. | M / NO; table routes/UI; F+E2E+A+S; before larger floor plans; P1. |
+| `VENUE-SETTINGS-PARITY-001` — backend-backed settings parity | `OPEN_CONFIRMED` | MRWI; Venue, Telegram | Team/schedule, public card, hours/exceptions, booking hold and shift extension work; timezone and notification toggles exist in DB/Bot but lack complete Venue Mini App management. | Venue self-service / Bot-only configuration drift. | Notification policy. | M / NO; settings repo/API/UI/Bot regression; F+E2E+A+S; next settings epic; P1 operations. |
+| `VENUE-PUBLISH-WORKFLOW-001` — versioned settings publish/rollback | `DEFERRED_AFTER_MVP` | MRWI; Venue, Platform | Saved settings and guarded private/published preview work. Deliberate versioned publishing, history and rollback do not. | Venue safety / accidental public changes. | Lifecycle/product ownership decision. | L/XL / YES/POSSIBLE; settings DB/API/UI; D+PG+F+A+S; at multi-editor demand; P3. |
+| `VENUE-STATS-ADVANCED-001` — custom operational statistics | `DEFERRED_AFTER_MVP` | MRWI; Venue, Analytics | Today/7d/30d orders, revenue, average bill, discounts, cancellations and top items work. Add custom periods, booking/call metrics and only reliable AI summaries. | Venue decisions / incomplete operational picture. | Analytics event baseline. | L / POSSIBLE; stats queries/UI/AI; F+A+S; when fixed periods are insufficient; P2/P3. |
+| `STAFF-CALL-OPS-POLISH-001` — complete call actors/timing/replies | `OPEN_CONFIRMED` | MRWI; Venue, Telegram | NEW/ACK/DONE, guest CANCELLED and bounded audit are closed. Add permitted manual cancel, quick replies and `acked_by/done_by` timestamps/history. | Guest service / weak accountability and response-time truth. | Cancel/reply policy. | M / YES; calls schema/API/UI/staff-chat; PG+F+A+RT; before SLA metrics; P2. |
+| `STAFF-SCHEDULE-ADVANCED-001` — availability, swaps and recurring shifts | `DEFERRED_AFTER_MVP` | MRWI; Staff, Venue | Phase 1, restore, bulk assignment and optional module are closed. Availability, swaps, recurring templates, reminders, attendance and richer planning remain. | Staff planning / manual coordination. | Staff communication policy. | XL / YES likely; schedule DB/API/UI/Telegram; D+PG+F+A+S; proven scheduling demand; P3. |
+| `STAFF-COMMS-POLICY-001` — choose staff notification topology | `BLOCKED_PRODUCT_DECISION` | MRWI; Staff, Telegram, Venue | Staff-chat radar works. Decide personal bot confirmations, swap/signup messages and one forum topic versus another group, including consent and privacy. | Staff reliability / noisy or missed alerts. | Explicit topology/consent decision. | L / UNKNOWN; notifications/Telegram/settings; D; before schedule automation; P2. |
+| `VENUE-ADDRESS-AUTOCOMPLETE-001` — provider-independent local address search | `DEFERRED_AFTER_MVP` | MRWI; Product Spec, Venue | Manual structured country/city/address and route fallback are closed; optional commercial providers remain disabled. A local FIAS import/index is absent. | Guest routing/Venue setup / unverified addresses. | Dataset/license/update operations. | XL / YES; geodata DB/API/UI/ops; PG+F+A+S; only with validated business need; P3. |
+
+### 13.5 Telegram parity and notifications
+
+| Stable ID / user-visible outcome | Status | Canonical owner; other sources | Current evidence; works → remains | User value / delay risk | Dependencies | Delivery |
+| --- | --- | --- | --- | --- | --- | --- |
+| `TELEGRAM-PLATFORM-PARITY-001` — verified Platform Bot/Mini App action map | `UNKNOWN_NEEDS_RESEARCH` | MRWI; Telegram, Platform | Platform Bot has many real callbacks and Mini App has current workspaces; remaining docs still use broad parity/placeholders language. Produce a read-only action diff before scoping implementation. | Platform clarity / duplicate or phantom work. | Current screen/callback inventory. | M research / UNKNOWN; docs/code audit, then affected surfaces; no runtime gate until facts; now for planning; P2 research. |
+| `TELEGRAM-VENUE-CHAT-ENTRY-001` — verify Bot entry to VENUE_CHAT | `UNKNOWN_NEEDS_RESEARCH` | MRWI; Telegram, Communication | Mini App `Задать вопрос` and persisted venue replies work; Bot guest entry remains `needs verification`. Trace callbacks/routes and do a bounded manual walkthrough. | Guest communication / unreachable Bot path. | Communication routing. | S research / NO likely; Telegram/manual QA; RT if gap found; before parity claim; P2 research. |
+| `QA-TG-FALLBACK-SMOKE-001` — real-client fallback order proof | `OPEN_CONFIRMED` | MRWI; Telegram, QA | Quick-order payload and automated tests work; real Telegram message/edit/cancel/batch/source/tab behavior is still a release-confidence gate. | Guest fallback / integration regressions. | Staging bot/table. | S manual / NO; Telegram+order; RT; next suitable staging window; P1 QA. |
+| `QA-STAFF-CHAT-PILOT-001` — real per-venue staff-chat pilot | `OPEN_CONFIRMED` | MRWI; Telegram, Venue, Booking | Link/test/notifier/callback tests work. Verify calls/orders/bookings, retry and explicit absence of support/venue-chat/feedback noise in a real group. | Venue operations / silent or noisy radar. | Real staging group. | S/M manual / NO; staff-chat/Telegram; RT; before pilot venue reliance; P1. |
+| `NOTIFY-DELIVERY-HISTORY-001` — safe delivery status and retry history | `DEFERRED_AFTER_MVP` | MRWI; Telegram, Platform, Analytics | Outbox, notifier and link/test work; recipient-safe history/last delivery UI and coherent retry diagnostics do not. | Venue/Platform support / invisible delivery failures. | Event/callback policy. | M/L / POSSIBLE; outbox/API/UI; F+A+RT; at notification volume; P2. |
+
+### 13.6 Platform and commercial operations
+
+| Stable ID / user-visible outcome | Status | Canonical owner; other sources | Current evidence; works → remains | User value / delay risk | Dependencies | Delivery |
+| --- | --- | --- | --- | --- | --- | --- |
+| `PLATFORM-GTM-PIPELINE-001` — lead-to-paid onboarding funnel | `OPEN_CONFIRMED` | MRWI; Product Spec, Platform, Analytics | Shared applications, terms, decisions and atomic create/link are closed. Add source/partner attribution, qualified/demo/trial/activated/paid stages, timestamps, notes and conversion metrics. | Platform acquisition/revenue / off-system funnel. | Closed onboarding and event contract. | L / YES; onboarding DB/API/Platform/Telegram/analytics; PG+F+E2E+A+S; before B2B scale; P1 commercial readiness. |
+| `PLATFORM-LIFECYCLE-NORMALIZATION-001` — explicit lifecycle origins | `BLOCKED_PRODUCT_DECISION` | MRWI; Platform, Product Spec | Current DRAFT/PUBLISHED/HIDDEN/PAUSED/SUSPENDED/ARCHIVED/DELETED actions work. Decide separate onboarding, owner pause, platform suspension and deletion-request states. | Platform/Venue correctness / wrong restore or copy. | Product/legal retention decision. | L / YES; lifecycle DB/API/UI/availability; D+PG+F+A+S; before automation/legal deletion; P2. |
+| `PLATFORM-OWNER-TRANSFER-001` — legal/commercial owner transfer | `BLOCKED_PRODUCT_DECISION` | MRWI; Platform, Security | Multi-owner memberships, portfolios, invites and safe revoke work. Define payer/legal ownership transfer, quota/account relink, invoices and transactional audit. | Venue continuity / legal, access and billing risk. | Legal versus operational OWNER model. | XL / YES; owner/billing DB/API/UI; D+PG+F+A+S; first sale/entity transfer; P2→P1 at trigger. |
+| `PLATFORM-PLACEMENTS-PARITY-001` — existing placement management in Mini App | `OPEN_CONFIRMED` | MRWI; Platform, Growth | V92/V94 repositories and Telegram request/moderation/feed lifecycle work; Platform cockpit still has a placement placeholder. Add safe Mini App parity without calling it paid ads. | Platform/Venue efficiency / Bot-only management. | Existing placement contract. | M / NO; Platform/Venue API/UI; F+E2E+A+S; when cockpit is canonical for placements; P2. |
+| `PLATFORM-HEALTH-001` — risk and integration health cockpit | `BLOCKED_PREREQUISITE` | MRWI; Platform, Analytics, Ops | Lifecycle, billing and support facts exist separately. Unified overdue/blocked/queue/outbox/webhook/Telegram/staff-chat/Mini App health needs reliable instrumentation. | Platform operations / late incident detection. | Event coverage and delivery/provider telemetry. | L / POSSIBLE; aggregates/Platform UI/ops; F+A+S; before venue scale/on-call; P2 blocked. |
+| `PLATFORM-MODERATION-OPS-001` — flags, notes and bounded bulk review | `DEFERRED_AFTER_MVP` | MRWI; Platform, Product Spec | Individual lifecycle actions/audits work. Add moderation queues, operator notes and only safe bounded bulk actions. | Platform scale / manual repetition. | Lifecycle/audit policy. | L / POSSIBLE; DB/API/UI/audit; F+A+S; at sustained moderation volume; P3. |
+| `BILLING-PROVIDER-001` — production payment provider | `BLOCKED_PRODUCT_DECISION` | MRWI; Platform, Product Spec, Ops | Fake and generic HMAC foundations, signature checks, webhook/payment idempotency and checkout exist. Choose provider/legal contract and implement specific status/refund/chargeback/reconciliation/UX. | Platform revenue / money and reconciliation risk. | Provider, credentials, legal/commercial owner. | XL / POSSIBLE; billing/webhooks/UI/ops; D+provider tests+A+sandbox S; before online collection; P1 at trigger. |
+| `BILLING-INVOICE-VOID-REISSUE-001` — audited invoice correction | `OPEN_CONFIRMED` | MRWI; Platform | VOID enum and manual/renewal/courtesy flows work; open-invoice courtesy overlap only reports an error. Add idempotent void/reissue/correction without rewriting paid history. | Platform billing / blocked manual correction. | Correction policy. | M / POSSIBLE; billing repo/API/UI/audit; F+A+S; before first overlap incident; P1. |
+| `BILLING-SUSPENSION-PROVENANCE-001` — safe cause-specific reactivation | `OPEN_CONFIRMED` | MRWI; Platform, Security | Billing suspension and availability guards work; persisted cause/version is insufficient to distinguish billing recovery from manual Platform suspension. | Venue access / unsafe auto-reactivation. | Optional lifecycle normalization. | M / YES; subscription schema/engine/UI/audit; PG+F+A+S; before automatic recovery; P1. |
+| `BILLING-STARS-001` — Telegram Stars subscription channel | `DEFERRED_AFTER_MVP` | MRWI; Product Spec, Platform | Provider abstraction/invoices work. Stars eligibility, payment/refund/reconciliation mapping and UX are absent. | Venue convenience / channel-specific financial risk. | Commercial/channel decision. | L / POSSIBLE; Telegram/billing/events; provider F+A+S; demand and eligibility; P3. |
+| `BILLING-RECURRING-001` — automatic recurring billing | `DEFERRED_AFTER_MVP` | MRWI; Product Spec, Platform | Invoice periods, paid-through, renewal and billing engine work. Add mandates/tokens, retries/dunning, consent, cancellation/refunds and reconciliation. | Recurring revenue / compliance and double-charge risk. | Real provider, suspension provenance, agreement. | XL / YES; billing/subscriptions/notifications/ops; provider F+A+controlled S; after provider stability; P3. |
+| `SUPPORT-AUTOMATION-001` — SLA, aging and escalation | `OPEN_CONFIRMED` | MRWI; Platform, Communication | SUPPORT_TICKET list/reply/status/reopen and scope assignment work. Add SLA clocks, queue aging, worker/alerts, auto-escalation and operator assignment. | Guest/Venue support / missed tickets. | Notification reliability and ownership model. | L / YES; support DB/workers/UI/notifications; PG+F+A+S; before manual queue overload; P2. |
+| `SUPPORT-ADVANCED-001` — diagnostics, attachments, macros and CSAT | `BLOCKED_PREREQUISITE` | MRWI; Platform, Analytics, Media | Structured threads/context work. Privacy-safe diagnostic bundles, attachments/retention, macros and truthful CSAT/TTFR/TTR metrics require storage, redaction, SLA and event semantics. | Faster support / PII, storage and misleading-metric risk. | Media storage, analytics, SLA semantics. | L/XL / YES; support/storage/events/UI; privacy F+A+S; repeated support demand; P3 blocked. |
+| `ANALYTICS-EVENT-COVERAGE-001` — canonical server event baseline | `OPEN_CONFIRMED` | MRWI; Analytics, Product Spec, all domain docs | Event store and six observed names work, including `promotion_applied`; names/envelope/idempotency/retention and booking/support/staff/menu/notification/onboarding/favorites/repeat/provider coverage remain partial. | All roles / unreliable KPIs and automation. | Domain-owned server facts. | L / YES; event schema/emitters/tests/docs; PG+F+A+S sample; before dashboards/campaigns/funnel; P1. |
+| `ANALYTICS-PLATFORM-DASHBOARD-001` — reconciled Platform KPIs | `BLOCKED_PREREQUISITE` | MRWI; Analytics, Platform | Operational facts exist and UI intentionally avoids fake numbers. Add agreed aggregates, filters and drill-down only after event normalization. | Platform decisions / false confidence. | `ANALYTICS-EVENT-COVERAGE-001`. | L / POSSIBLE; query/API/Platform UI; fixtures+privacy F+A+S; immediately after event baseline; P1/P2 blocked. |
+| `PLATFORM-AUDIT-VIEWER-001` — privacy-filtered audit explorer | `OPEN_CONFIRMED` | MRWI; Security, Platform, Analytics | Safe audit rows exist for many bounded actions; no general Platform viewer/filter/export policy exists. Add scoped view, payload allowlists and direct denials; do not conflate with missing write audits. | Platform accountability / costly incident review. | Stable audit contracts. | L / POSSIBLE; audit queries/API/UI; F+A+S; after/alongside critical writer audits; P2. |
+
+### 13.7 Menu, content and media
+
+| Stable ID / user-visible outcome | Status | Canonical owner; other sources | Current evidence; works → remains | User value / delay risk | Dependencies | Delivery |
+| --- | --- | --- | --- | --- | --- | --- |
+| `MENU-CONC-001` — race-safe menu item relocation | `OPEN_CONFIRMED` | MRWI; QA, Menu | Current item mutation/audit families are closed, but non-locking `sourceCategoryHint` can become stale before category locks. Resolve authoritative source under deterministic locks. | Venue correctness / lost or misordered concurrent move. | Existing repository transaction model. | S / NO; menu repository/concurrency tests; F+A+S; next menu hardening slice; P2 existing registry. |
+| `MENU-TEST-002` — stronger category rollback proof | `OPEN_CONFIRMED` | MRWI; QA, Menu | Category create/seed/compound/reorder tests exist; not every injected same-connection failure asserts all immediate pre-state. Add bounded rollback invariants. | Venue data integrity / false confidence in atomicity. | No product decision. | S / NO; repository tests/CI; F+A; now with low scope; P2 existing registry. |
+| `MENU-DESCRIPTIONS-001` — item descriptions end to end | `OPEN_CONFIRMED` | MRWI; Menu, Product Spec | `menu_items.description` exists since V1; active repository/DTO/Guest/Venue UI paths do not expose it. Add bounded authoring, safe display and audit. | Guest choice/Venue content / impoverished menu. | Copy and payload privacy. | M / NO; menu repo/API/Bot/Mini Apps; F+E2E+A+S; content-quality epic; P1/P2 user value. |
+| `MENU-FEATURED-001` — venue-managed featured/top-list | `OPEN_CONFIRMED` | MRWI; Menu, Product Spec | Stats top items exist but no manual FEATURED/TOP_LIST field, ordering rule, API or UI. Keep separate from Platform paid placement. | Guest discovery/Venue merchandising / missed upsell. | Product ordering and caps. | M / YES likely; menu DB/API/UI/Bot; PG+F+E2E+A+S; when merchandising is prioritized; P2. |
+| `MENU-ADVANCED-CONSTRUCTOR-001` — advanced modifiers and bulk governance | `DEFERRED_AFTER_MVP` | MRWI; Menu, QA | Flat selected option, CRUD, shift check and bounded audit families work. Remaining bundle: modifier groups/required/min-max/multi-select, bulk import, unavailable display policy, general option uniqueness, Telegram shift-check/history. | Venue setup/Guest choice / large schema and combinatorial order risk. | Explicit demand and compatibility design. | XL / YES; menu/order DB/API/Bot/Mini Apps; D+PG+F+A+S; only with concrete venue use cases; P3. |
+| `MEDIA-STORAGE-DECISION-001` — approve media operating model | `BLOCKED_PRODUCT_DECISION` | MRWI; Media, Ops | Telegram file-id media works; no platform-owned object lifecycle. Decide provider, environment separation, credentials, retention/deletion, RPO/RTO, budget and incident owner. No Media/R2 implementation is authorized by this inventory. | All media surfaces / security, durability and cost risk. | User/product/operations decision. | S decision / NO runtime migration; architecture/ops docs; D; before any upload foundation; P1 blocker at trigger. |
+| `MEDIA-INFO-UPLOAD-001` — Mini App Photo/PDF management | `BLOCKED_PREREQUISITE` | MRWI; Media, Venue | Bot OWNER/MANAGER can author Telegram-file-id info media and Guest/Preview proxy is guarded. Browser upload/picker, scanning, object lifecycle and Mini App management are absent. | Venue self-service/Guest content / Bot-only authoring. | Storage decision and foundation. | XL / YES; media DB/API/storage/Venue+Guest UI; security F+A+S; after decision; P1 media slice. |
+| `MEDIA-STRUCTURED-MENU-001` — item photos/thumbnails | `BLOCKED_PREREQUISITE` | MRWI; Media, Menu | Structured menu/options and ordering work; item media schema/API/UI do not. Add lifecycle-safe item images and thumbnails; descriptions remain separate. | Guest conversion/Venue presentation / blind ordering. | Media foundation. | L/XL / YES; menu/media DB/API/Bot/Mini Apps; PG+security F+A+S; after foundation; P2. |
+| `MEDIA-STAFF-PHOTO-001` — consented staff profile photos | `DEFERRED_AFTER_MVP` | MRWI; Media, Staff, Security | Staff profiles and Guest-safe projection work without photos. Add consent, moderation, revocation and retention before any upload. | Guest trust/Staff identity / privacy and employment risk. | Media foundation and consent policy. | L / YES; staff/media DB/API/UI; privacy F+A+S; explicit venue demand; P3. |
+| `MEDIA-PROMOTION-MIGRATION-001` — promotion banners on shared media | `BLOCKED_PREREQUISITE` | MRWI; Media, Growth | Promotion text/rules and current banner-related drafts exist; shared object lifecycle does not. Migrate only after foundation with deletion/reference and rollback policy. | Venue promotions / broken assets and storage leaks. | Media foundation and promo audit. | L / YES; promotion/media DB/API/UI; PG+F+A+S; after first media slice; P2 blocked. |
+| `MEDIA-ADVANCED-001` — later option/flavor, galleries and processing | `DEFERRED_AFTER_MVP` | MRWI; Media, Menu | First-slice requirements are documented but unbuilt. Defer option/flavor media, Photo-menu subsections, quieter bulk Bot upload, scanner/backfill, video/editor/CDN/optimization/AI/galleries. | Rich content / major cost, moderation and scope explosion. | Stable foundation plus measured scale. | XL / YES; media pipeline/all UIs/ops; security/performance F+A+S; after production usage; P3. |
+
+### 13.8 Booking and visit lifecycle
+
+| Stable ID / user-visible outcome | Status | Canonical owner; other sources | Current evidence; works → remains | User value / delay risk | Dependencies | Delivery |
+| --- | --- | --- | --- | --- | --- | --- |
+| `BOOKING-REMINDER-ROLLOUT-001` — operational reminder enablement | `BLOCKED_PRODUCT_DECISION` | MRWI; Booking, QA, Ops | Worker, quiet hours, dedupe and one controlled real smoke work; feature remains disabled by default. Approve owner/runbook/monitoring, management visibility and fresh delivery smoke. | Guest attendance/Venue planning / silent sends or missed reminders. | Notification policy and ops owner. | S/M / NO; worker/config/UI/ops; D+F+A+RT; approved controlled rollout; P1 readiness. |
+| `BOOKING-NO-SHOW-AUTOMATION-001` — explicit expiry/no-show semantics | `BLOCKED_PRODUCT_DECISION` | MRWI; Booking, Venue | Worker expires overdue eligible bookings and staff can mark confirmed arrival/no-show. Decide EXPIRED versus NO_SHOW timing, grace/recovery and notifications. | Guest/Venue fairness / wrong status and analytics. | Product/operations policy. | M / POSSIBLE; booking worker/API/copy/events; D+F+A+S; before automatic no-show; P1 correctness. |
+| `BOOKING-QUEUE-POLISH-001` — needs-action booking workspace | `DEFERRED_AFTER_MVP` | MRWI; Booking, Venue | Queue, lifecycle, hold/deadline and state-aware actions work. Add full filters/history, overdue/needs-action/reminder views and clearer guest-versus-venue cancellation copy using already persisted actor facts. | Venue operations / slower handling and ambiguous cancellations. | Automation/copy decisions. | M / NO/POSSIBLE; booking queries/UI; F+E2E+A+S; at queue volume; P2. |
+| `BOOKING-THREAD-UNIQUENESS-001` — one booking conversation thread | `OPEN_CONFIRMED` | MRWI; Booking, Communication | Persisted BOOKING_THREAD works; repository is select-then-insert and DB index is non-unique. Scan/merge legacy duplicates, add unique/upsert/retry and deterministic race test. | Guest/Venue privacy / split conversations and duplicate notifications. | Legacy duplicate verdict. | M / YES; support-thread schema/repo/routes; PG+F+A+S; safe bounded next epic; P1 integrity. |
+| `BOOKING-AUDIT-EVENTS-001` — complete private booking evidence | `OPEN_CONFIRMED` | MRWI; Booking, Analytics, Security | Lifecycle statuses, reasons and cancellation actor are persisted; create/change/confirm/cancel/seated/no-show/reminder/chat lack a complete privacy-safe event/audit matrix. | Venue/Platform observability / unreconstructable actions. | Analytics envelope. | M/L / POSSIBLE; booking emitters/audit/events; F+A+S; before automation/dashboard; P1. |
+| `QA-BOOKING-ISOLATION-001` — real two-account booking isolation | `OPEN_CONFIRMED` | MRWI; Booking, QA | Route tests and one-account staging parity work; canonical docs still lack real two-account Bot/Mini App isolation plus schedule/timezone regression. | Guest privacy / cross-account release risk. | Two accounts and venue fixture. | S manual / NO; QA/Telegram/Mini App; RT; next suitable staging window; P1. |
+| `BOOKING-PREORDER-001` — controlled preorder lifecycle | `BLOCKED_PREREQUISITE` | MRWI; Booking, Core, Growth | Booking, menu/order and `getVisitCount` foundations work; no preorder eligibility, snapshot/repricing, cutoff, acceptance/fulfillment/payment or cancellation policy exists. | Guest convenience/Venue prep / stale menu and unpaid waste. | Stable order/tab, promo compatibility and product policy. | XL / YES; booking/order/menu DB/API/Bot/Mini Apps; D+PG+F+A+controlled S; approved use case; P2 blocked. |
+
+### 13.9 Growth and retention
+
+| Stable ID / user-visible outcome | Status | Canonical owner; other sources | Current evidence; works → remains | User value / delay risk | Dependencies | Delivery |
+| --- | --- | --- | --- | --- | --- | --- |
+| `REPEAT-MANUAL-001` — real Repeat Phase 1 evidence | `BLOCKED_PREREQUISITE` | MRWI; Deferred Smoke, Growth, Core | Transient server-resolved Repeat is locally validated. Complete prescribed two-venue/two-user/real-QR/menu-change smoke without expanding implementation. | Guest confidence / environment-only regressions. | Required fixtures/accounts. | S manual / NO; QA/Guest/Telegram; exact smoke; when fixtures exist; P1 existing release-confidence gate. |
+| `GROWTH-GIFT-RELEASE-001` — close Gift With Item release gates | `OPEN_CONFIRMED` | MRWI; Growth, QA, roadmap | Backend/Bot/Mini App implementation and local focused evidence exist. Independent review, green Actions, deploy and bounded application/bill/history smoke are not recorded closed. | Guest/Venue promotion / release uncertainty. | No new product scope. | S / NO; review/CI/staging; A+S; current closure opportunity; P1. |
+| `GROWTH-PROMO-COMPAT-001` — deterministic reward/discount compatibility | `BLOCKED_PRODUCT_DECISION` | MRWI; Growth, Security, Core | Happy Hours/Gift work and generic rule fields include stackable/conflict group; current candidate paths still hardcode behavior. Approve STACKABLE/EXCLUSIVE/OVERRIDE, priority/tie-break and manual/loyalty/code policy. | Guest bill/Venue revenue / accidental stacking. | Financial semantics decision. | L / POSSIBLE; promo engine/orders/bills/UI; D+F+A+S; before codes/advanced loyalty; P1. |
+| `SECURITY-PROMO-CONFIG-AUDIT-001` — transaction-bound promotion edit audit | `OPEN_CONFIRMED` | MRWI; Growth, Security | Promotion create/status/archive audits work. Effective configuration edits still need one safe old/new, actor, venue-scoped atomic audit. | Venue accountability / financial changes cannot be reconstructed. | Mutable-field and compatibility contract. | S/M / NO; promotion repo/routes/audit; rollback F+A+S; before wider executable promos; P2. |
+| `GROWTH-PROMO-UX-HARDENING-001` — race-safe accessible promotion lists | `OPEN_CONFIRMED` | MRWI; Growth, QA | Current/archive tabs, lifecycle cards and effective state are closed. Fix loading empty-state, two-query transition snapshots, non-color selection, keyboard E2E, time-boundary live refresh and expired-card action decision. | Venue UX/correctness / stale, duplicate or inaccessible cards. | Small expired-action decision. | M / NO; Venue UI/API snapshots/E2E; F+E2E+A+S; bounded quality epic; P2. |
+| `GROWTH-FAVORITE-MENU-001` — menu-item favorites in Mini App | `OPEN_CONFIRMED` | MRWI; Growth, Product Spec | V79, repository/API and Telegram item-favorite flows work. Add Guest Mini App item UI/account list and decide option-level/unavailable restoration semantics. | Guest retention/reorder / current foundation is Bot-heavy. | Stable item/option identity. | L / POSSIBLE; favorites DB/API/Guest UI/Telegram; F+E2E+A+S; after venue favorites; P2. |
+| `GROWTH-REPEAT-LIBRARY-001` — persistent named repeat templates | `DEFERRED_AFTER_MVP` | MRWI; Growth, Core | Transient repeat plan revalidates current menu and never auto-orders. Add owned named templates, edit/delete and stale-menu reconciliation only after real smoke. | Guest convenience / stale identity/price assumptions. | `REPEAT-MANUAL-001`. | M/L / YES; DB/API/Guest/Telegram; PG+F+A+S; after Phase 1 production proof; P2 deferred. |
+| `GROWTH-HISTORY-SNAPSHOT-AUDIT-001` — verify immutable historical base facts | `UNKNOWN_NEEDS_RESEARCH` | MRWI; Growth, Core | Visit entity, list/detail, merge, option and promotion facts work. Audit whether any legacy/current base name/price detail still depends on mutable menu data before promising immutable history. | Guest trust/Repeat fidelity / incorrect historical totals or labels. | Read-only evidence first. | S/M research / POSSIBLE; visit/order repo/migrations; no runtime change until gap proven; before persistent repeat; P2 research. |
+| `GROWTH-FEEDBACK-AUTOMATION-001` — consent-safe feedback prompts | `DEFERRED_AFTER_MVP` | MRWI; Growth, Telegram | Manual History feedback, low-rating VENUE_CHAT and manual 5/5 review CTA are closed; automated worker remains disabled. Add opt-in, caps, suppression and idempotent scheduling; never auto-redirect publicly. | Venue feedback/Guest trust / spam and consent risk. | Notification consent/delivery. | M / POSSIBLE; worker/outbox/consent; F+A+controlled RT; only after consent; P3. |
+| `GROWTH-NOTIFICATION-CONSENT-001` — persisted scopes and unsubscribe | `OPEN_CONFIRMED` | MRWI; Growth, Product Spec, Security | Transactional sends are separately gated and no marketing campaign runtime was found. Define operational versus marketing scopes, evidence/version/source/time, preferences, revoke and suppression. | Guest privacy/retention / non-compliant messaging. | Legal/product consent policy. | L / YES; consent DB/API/UI/Telegram/workers; PG+privacy F+A+S; before any campaign/prompt; P1. |
+| `GROWTH-CAMPAIGNS-001` — safe segmentation and campaigns | `BLOCKED_PREREQUISITE` | MRWI; Growth, Analytics | Favorites/history/promotions exist; marketing orchestration does not. Add audience, draft/approval/schedule, suppression/caps, delivery/results and abuse controls. | Venue revenue/Guest retention / spam and reputation risk. | Consent, event coverage, delivery reliability. | XL / YES; growth DB/API/Venue UI/outbox/analytics; PG+F+A+controlled S; approved use case; P2 blocked. |
+| `GROWTH-RECOMMENDATIONS-001` — explainable frequent-item suggestions | `DEFERRED_AFTER_MVP` | MRWI; Growth, Analytics | History, favorites, repeat and catalog foundations work. Add frequent-item aggregation, taste/profile policy, substitutions and measurable relevance without private leakage. | Guest discovery / weak or intrusive recommendations. | Real data volume and privacy policy. | L/XL / POSSIBLE; analytics/service/Guest UI; privacy/relevance F+A+evaluation; after data volume; P3. |
+| `GROWTH-CATALOG-SCALE-001` — large-catalog discovery and ranking | `DEFERRED_AFTER_MVP` | MRWI; Growth, QA, Product Spec | Search/filter Phase 1 is staging-closed on limited data. Pagination/ranking/map/geo and large-pilot behavior remain; environment smoke is separately tracked. | Guest discovery / degraded results at scale. | Representative dataset and ranking decision. | L / POSSIBLE; catalog queries/API/UI; performance F+A+S; at dataset growth; P2/P3. |
+
+### 13.10 Advanced monetization, loyalty and ads
+
+| Stable ID / user-visible outcome | Status | Canonical owner; other sources | Current evidence; works → remains | User value / delay risk | Dependencies | Delivery |
+| --- | --- | --- | --- | --- | --- | --- |
+| `GROWTH-PROMO-CODE-001` — limited, auditable promo codes | `BLOCKED_PREREQUISITE` | MRWI; Growth, Product Spec | PROMO_CODE exists only as a template/check-constraint foundation. Build code issue/input, scope/time/user/global limits, idempotency, accounting, abuse guard and bill/history only after compatibility. | Guest acquisition/Venue conversion / fraud and discount leakage. | `GROWTH-PROMO-COMPAT-001` and limit policy. | L/XL / YES; promotions/orders/bills/Bot/Mini Apps; PG+F+A+S; approved campaign; P2 blocked. |
+| `GROWTH-LOYALTY-PRODUCTIZE-001` — reconcile existing Nth Hookah loyalty | `UNKNOWN_NEEDS_RESEARCH` | MRWI; Growth, Product Spec, Security | V98-V100, ledger/progress/redemption, order accrual and Telegram owner/guest flows exist despite docs saying future. Determine enablement, ledger/RBAC/compatibility/migration/release evidence and Mini App parity before any status claim. | Guest/Venue value / undocumented financial runtime. | Promotion compatibility and product decision. | L/XL research / POSSIBLE; loyalty/order DB/Bot/Mini Apps/docs/QA; dedicated audit then A+S; before pilot claims; P1 research. |
+| `GROWTH-LOYALTY-ADVANCED-001` — points, cashback and tiers | `BLOCKED_PRODUCT_DECISION` | MRWI; Growth, Product Spec | Bounded Nth Hookah foundation exists; points/cashback/tier liability model does not. Define earn/redeem/expiry/refund/accounting/anti-abuse and compatibility. | Retention/revenue / financial liability and fraud. | Productized bounded loyalty and legal model. | XL / YES; loyalty/billing/orders/UI/analytics; D+PG+property/concurrency F+A+controlled S; later business case; P3. |
+| `GROWTH-REFERRAL-001` — referral rewards with anti-abuse | `DEFERRED_AFTER_MVP` | MRWI; Growth, Product Spec | No complete referral runtime/schema. Define attribution, qualifying event, reversals, limits and self/device/account abuse. | Acquisition / reward fraud and liability. | Loyalty/promo compatibility, analytics, consent. | L/XL / YES; DB/Guest/Telegram/rewards/events; PG+F+A+cohort S; approved model; P3. |
+| `GROWTH-PAID-PLACEMENT-001` — transparent paid placement | `BLOCKED_PRODUCT_DECISION` | MRWI; Growth, Platform | Manual Telegram placement request/moderation/feed foundation works. Decide editorial versus paid; paid requires ad labels, budget/billing, moderation, analytics, refunds/disputes and ordering. | Platform revenue/Venue acquisition / advertising and billing risk. | Commercial/legal policy, provider, analytics. | XL / POSSIBLE; placements/billing/Bot/Mini Apps/support; D+F+A+S; before charging; P2 decision. |
+| `GROWTH-PROMO-REWARDS-ADVANCED-001` — additional executable rewards | `DEFERRED_AFTER_MVP` | MRWI; Growth, Core | Informational promos, Happy Hours and Gift foundations work. BOGO/X+Y, special/fixed price, free option/refill and accounting/history do not. | Venue merchandising / combinatorial bill errors. | Compatibility and configuration audit. | XL / POSSIBLE; promo engine/orders/bills/UI; matrix F+A+S; proven venue demand; P3. |
+| `STAFF-TIPS-001` — legally bounded external staff tip intent | `BLOCKED_PRODUCT_DECISION` | MRWI; Staff, Security, Product Spec | Staff public-card foundation exists; no tip runtime. Decide external link plus intent/consent/moderation; platform payment, provider payout, Stars and crypto remain outside MVP unless separately approved. | Guest convenience/Staff income / legal, fraud and proof-of-payment risk. | Legal/product/payment boundary. | L / YES likely; staff DB/API/Guest UI/audit; D+PG+privacy F+A+S; approved venue pilot; P3. |
+
+### 13.11 QA, operations and documentation debt
+
+| Stable ID / user-visible outcome | Status | Canonical owner; other sources | Current evidence; works → remains | User value / delay risk | Dependencies | Delivery |
+| --- | --- | --- | --- | --- | --- | --- |
+| `CATALOG-SEARCH-MANUAL-001` — representative multi-venue catalog smoke | `BLOCKED_PREREQUISITE` | MRWI; Deferred Smoke, Growth | Limited-dataset Search/Filter Phase 1 is closed. Execute the existing extended scenario only with meaningful multi-venue data. | Guest discovery / scale regressions unobserved. | Representative dataset. | S manual / NO; QA/catalog; exact manual evidence; before ranking/scale work; P2 existing. |
+| `STAFF-IDENTITY-MANUAL-001` — free-member identity linking smoke | `BLOCKED_PREREQUISITE` | MRWI; Deferred Smoke, Staff | Identity linking/concurrency and released paths are closed. The exact free-member create-from-member manual scenario lacks a suitable account fixture. | Venue staffing / one environment path unverified. | Suitable account/environment. | S manual / NO; QA/Venue Staff UI; exact smoke; when fixture exists; P2 existing. |
+| `QA-COVERAGE-EXPANSION-001` — next risk-based browser/test targets | `UNKNOWN_NEEDS_RESEARCH` | MRWI; QA, current domain docs | Broad backend and Playwright coverage exists; docs still say frontend/scenario coverage partial without one bounded priority. Produce a risk/route matrix before adding tests. | Product quality / either blind spots or low-value test sprawl. | Master inventory priority. | M research / UNKNOWN; QA/tests/CI; read-only selection then F; before broad test epic; P2. |
+| `QA-PILOT-READINESS-001` — consolidated 1-3 venue pilot gate | `OPEN_CONFIRMED` | MRWI; roadmap launch gate, QA, Ops | Many bounded staging smokes are closed; the roadmap still requires one coherent Guest/Venue/Platform pilot, no known P0 auth/money leak, monitoring and incident ownership. | All users/business / slice-green but system-unready pilot. | Selected pilot venues and open P1 verdicts. | M manual/ops / NO; all surfaces/QA/ops; A+S+RT; before market pilot claim; P1 launch gate. |
+| `OPS-PRODUCTION-RUNBOOK-001` — verified production deploy/rollback/log commands | `OPEN_CONFIRMED` | MRWI; Deployment, Product Spec, Ops | Staging runbook/deploy is concrete; exact production deploy, previous-image rollback and log commands remain `needs verification`. | Platform operations / slow unsafe release recovery. | Production environment/authority. | M / NO; runbooks/deploy scripts only when separately authorized; verification gates; before production release; P1 ops. |
+| `OPS-BACKUP-RESTORE-001` — backup policy and restore drill | `OPEN_CONFIRMED` | MRWI; Deployment, Ops | Migration policy exists; exact production backup/restore commands, storage, retention and restore drill do not. | All data / unrecoverable incident. | Production DB/storage ownership. | M / NO runtime migration; ops/runbook; controlled drill; before production data; P1 durability. |
+| `OPS-OBSERVABILITY-001` — production logs, alerts and incident baseline | `OPEN_CONFIRMED` | MRWI; Deployment, Platform, Analytics | Health endpoints and some diagnostics work. Define production log access/retention, alert thresholds, outbox/webhook/provider/DB signals and incident ownership without secrets. | Platform reliability / late diagnosis. | Environment and telemetry inventory. | M/L / POSSIBLE; backend/infra/runbook; failure-state verification; before on-call/pilot scale; P1. |
+| `OPS-TELEGRAM-ADMIN-TOOLING-001` — safe webhook/outbox/staff-chat diagnostics | `OPEN_CONFIRMED` | MRWI; Deployment, Telegram | Current runbooks use manual API/SQL and working notifier primitives. Add bounded registration/status/replay/diagnostic workflows with auth and payload redaction. | Platform support / risky manual intervention. | Webhook strategy and audit policy. | M/L / POSSIBLE; admin endpoints/CLI/runbook; security F+A+staging; before webhook/notification scale; P2. |
+| `OPS-BILLING-DIAGNOSTICS-001` — provider replay/rotation runbook | `BLOCKED_PREREQUISITE` | MRWI; Deployment, Billing | Generic webhook foundation exists; provider-specific dashboard, test event, replay, reconciliation and credential rotation cannot be finalized without a provider. | Platform money operations / weak incident response. | `BILLING-PROVIDER-001`. | M / UNKNOWN; provider/ops/runbook; sandbox verification; alongside provider rollout; P1 blocked. |
+| `OPS-WEBHOOK-ROLLOUT-001` — Telegram webhook operating mode | `DEFERRED_AFTER_MVP` | MRWI; Deployment, Telegram | Long polling and staging operations are stable; webhook rollout is intentionally deferred. Add public HTTPS registration, secret verification, rollback and monitoring only when chosen. | Platform scale/reliability / premature infra risk. | Stable HTTPS and ops tooling. | M / POSSIBLE; Telegram config/ops; F+A+staging failover; scale trigger; P3. |
+| `OPS-ORDER-IDEMPOTENCY-PROD-ROLLOUT-001` — authorized V123/V124 production boundary | `DEFERRED_AFTER_MVP` | MRWI; Core, Migration, Deployment | Fingerprint/idempotency migrations and code are ready/validated outside production. Apply only in an authorized production release with backup/rollback evidence. | Order integrity / rollout risk, not missing code. | Production release authority. | S ops / migration already YES; DB/deploy; migration health+smoke; production release; P2 operational. |
+| `OPS-SSH-ROOTCAUSE-001` — identify fresh-SSH failure cause | `UNKNOWN_NEEDS_RESEARCH` | MRWI; Deployment, roadmap | ControlMaster workaround and staging deploy are closed; server/network cause of dropped fresh connections remains unproven. | Release reliability / recurrence under new conditions. | Recurrence or production hardening window. | Unknown / NO likely; SSH/network/runbook; diagnostics only; at recurrence; P2 research. |
+
+### 13.12 Explicitly deferred / not for MVP
+
+| Stable ID / user-visible outcome | Status | Canonical owner; other sources | Current evidence; works → remains | User value / delay risk | Dependencies | Delivery |
+| --- | --- | --- | --- | --- | --- | --- |
+| `AI-CORE-HARDENING-001` — production-safe internal assistant | `OPEN_CONFIRMED` | MRWI; roadmap AI sections, Security | Read-only assistant, fake/OpenAI provider flags, tools, context, audit metadata and Staff denial work. Add enforced E2E rate limits, timeout/error/fallback UX, audit operations and no-mutation regression per tool. | Owner/Manager productivity / provider abuse or unintended writes. | Stable public-safe tools and ops. | M/L / NO/POSSIBLE; AI service/provider/Telegram/tests; F+A+controlled S; before enabling real provider broadly; P2. |
+| `AI-OWNER-ONBOARDING-001` — draft-only setup assistant | `DEFERRED_AFTER_MVP` | MRWI; roadmap | AI drafting foundation exists. Later add setup/profile/menu-import/type/promotion/analytics/support drafts; user confirms and existing handlers write. | Venue onboarding / unsafe automation if rushed. | AI core hardening and mature write APIs. | L/XL / POSSIBLE; AI tools/Venue UI; safety F+A+S; after launch stabilization; deferred Phase 4. |
+| `AI-GUEST-CONCIERGE-001` — public-data concierge in owned surfaces | `DEFERRED_AFTER_MVP` | MRWI; roadmap, Growth | Public catalog/menu/promotion foundations exist; no complete safe concierge. Limit to public facts/deep links and current authorized table context, never checkout/discount/order mutation. | Guest discovery / privacy and hallucinated facts. | Search/readiness, public tools, rate limits. | L/XL / NO/POSSIBLE; AI/Guest Bot/Mini App; safety/eval F+A+S; after public data quality; deferred Phase 5. |
+| `AI-TELEGRAM-GUEST-MODE-001` — inline public discovery | `DEFERRED_AFTER_MVP` | MRWI; roadmap | Not required for launch. Needs reliable ranking/readiness/promotions/deep links, abuse controls and strict exclusion of private history/table/order/operations data. | Guest acquisition / public data leakage and abuse. | Guest concierge/public search. | XL / POSSIBLE; Telegram inline/AI/search; abuse/privacy F+A+S; after core launch; deferred Phase 6. |
+| `AI-BUSINESS-BOTS-001` — consented Business inbox drafts | `DEFERRED_AFTER_MVP` | MRWI; roadmap | No Business connection runtime. Add explicit consent, draft replies, optional FAQ, per-message audit and pause/escalation; no autonomous booking/payment/order/staff actions. | Venue support / unauthorized outbound messages. | Consent, support and AI hardening. | XL / YES/POSSIBLE; Telegram Business/AI/audit; safety F+A+pilot; after core commercial stability; deferred Phase 7. |
+| `AI-MANAGED-BOTS-001` — premium per-venue bot identities | `DEFERRED_AFTER_MVP` | MRWI; roadmap, Billing, Ops | Main bot works; per-venue managed bot lifecycle does not. Requires token vault, webhook isolation, per-bot config/rate limits, transfer/disable, tariff and support tooling. | Venue branding/revenue / secret isolation and support burden. | Provider billing, owner transfer, webhook ops. | XL / YES; bot platform/vault/billing/ops; security F+A+pilot; after main bot stability; deferred Phase 8. |
+| `AI-BOT-AGENTS-001` — loop-safe internal bot agents | `DEFERRED_AFTER_MVP` | MRWI; roadmap | No bot-to-bot automation. Require trace id, depth/dedupe/rate/timeout/loop guards and audit before a bounded use case. | Platform automation / runaway loops and duplicated actions. | Mature event/audit and AI core. | XL / POSSIBLE; agents/events/audit; adversarial F+A+controlled S; late explicit use case; deferred Phase 9. |
+| `AI-AUTONOMOUS-WRITES-001` — keep sensitive AI writes prohibited | `DEFERRED_AFTER_MVP` | MRWI; roadmap guardrails | Current assistant is read-only. Any future bill/order/discount/role/promotion/reply/menu/loyalty/placement/broadcast/booking/payment write requires explicit confirmation and existing handlers; no broad autonomous Goal is approved. | All users / catastrophic authority and money risk. | Separate use-case decision and safety case. | Unknown / UNKNOWN; all write domains; D+threat model+F+A+controlled S; no trigger approved; P3/not for MVP. |
+
+### 13.13 Cleanup ledger: stale, duplicates and history
+
+The following old claims are `STALE_ALREADY_IMPLEMENTED`; only the narrower remaining IDs above may
+be reopened:
+
+1. Active order scoped only by table and H2 uniqueness mismatch — PostgreSQL V61 and H2 V112 enforce
+   table-session active-order fidelity; keep regression, while null personal-owner integrity remains
+   `ORDER-PERSONAL-TAB-INTEGRITY-001`.
+2. Cart recovery/idempotency missing — request fingerprints, concurrency coverage and typed atomic
+   stale-cart rejection are present; only immutable recovery labels and cross-surface sync remain.
+3. Full bill, display number, discounts/exclusions missing — Guest/Venue/Bot read committed tab bills,
+   V59 display allocation and current adjustments; no backlog item exists without new regression.
+4. Staff-call ACK/DONE or guest cancel missing — bounded lifecycle/audit releases are closed; only
+   actor/timing/manual-cancel/reply polish remains.
+5. Booking queue/hold/arrival/chat/reminder/expiry entirely missing — routes, workers and persisted
+   threads exist; remaining work is rollout semantics, thread uniqueness, events and real isolation.
+6. Visit entity/history/feedback and `visit_count` missing — V77, `VisitRepository`, History, feedback
+   and `getVisitCount()` exist; snapshot research and automation are narrower future work.
+7. Telegram multi-venue selector and Owner invite acceptance/revoke missing — V67 selector/context,
+   membership checks, deep-link acceptance and last-owner-safe revoke are implemented and released.
+8. Venue settings/stats/tables/QR/preview are only placeholders — multiple bounded screens are real;
+   the inventory names only settings parity, advanced stats, table CRUD and QR audit gaps.
+9. Structured option selection, Staff availability, Shift Check, initial bootstrap and menu mutation
+   audits are absent — current flat option flow and released bounded menu slices exist; do not reopen.
+10. Support Center/manual billing/renewal/courtesy are missing — released MVPs exist; advanced support,
+    real provider and the two concrete billing correction/provenance gaps remain.
+11. Favorite menu items, loyalty and placement foundations are wholly absent — each has material
+    schema/backend/Telegram code. Their exact Mini App/productization/research outcomes are cataloged.
+12. All promotion analytics are absent — `promotion_applied` is emitted; broader event coverage is
+    still `ANALYTICS-EVENT-COVERAGE-001`.
+
+Global duplicate merges (`DUPLICATE_OF_OTHER_ID`) include:
+
+- force-close/session wording → `ORDER-SESSION-CLOSE-POLICY-001`; tab reopen/settlement →
+  `ORDER-TAB-LIFECYCLE-001`;
+- broad Dangerous Action Audit → the exact QR, menu-RBAC, promotion-config, callback, booking-event,
+  invoice/lifecycle writers above; read exploration remains `PLATFORM-AUDIT-VIEWER-001`;
+- settings partial → `VENUE-SETTINGS-PARITY-001` or deferred `VENUE-PUBLISH-WORKFLOW-001`;
+- staff-call future rows → `STAFF-CALL-OPS-POLISH-001`; personal/group policy →
+  `STAFF-COMMS-POLICY-001`; delivery visibility → `NOTIFY-DELIVERY-HISTORY-001`;
+- booking automation → reminder rollout plus no-show policy; preorder wording →
+  `BOOKING-PREORDER-001`;
+- public-card Photo/PDF upload → `MEDIA-INFO-UPLOAD-001`; item photo/thumbnail →
+  `MEDIA-STRUCTURED-MENU-001`; descriptions remain separate;
+- Staff stop-list and Manager authority were not collapsed because they are two different decisions;
+- manual smoke copies → only `REPEAT-MANUAL-001`, `CATALOG-SEARCH-MANUAL-001`,
+  `STAFF-IDENTITY-MANUAL-001`, `QA-TG-FALLBACK-SMOKE-001`, `QA-BOOKING-ISOLATION-001` and
+  `QA-STAFF-CHAT-PILOT-001`;
+- Platform KPI claims → `ANALYTICS-PLATFORM-DASHBOARD-001`; event-name/coverage claims →
+  `ANALYTICS-EVENT-COVERAGE-001`; audit reading is not write-path audit completeness;
+- support diagnostics/attachments/macros/CSAT → `SUPPORT-ADVANCED-001`, while SLA/assignment remains
+  `SUPPORT-AUTOMATION-001`;
+- notification opt-in/suppression → `GROWTH-NOTIFICATION-CONSENT-001`; segmentation/favorites sends →
+  `GROWTH-CAMPAIGNS-001`; cross-reward stacking → `GROWTH-PROMO-COMPAT-001`;
+- paid placement claims → `GROWTH-PAID-PLACEMENT-001`; existing non-paid UI parity stays separately
+  `PLATFORM-PLACEMENTS-PARITY-001`;
+- persistent repeat/save-as-template → `GROWTH-REPEAT-LIBRARY-001`; legal/payer/primary-owner relink →
+  `PLATFORM-OWNER-TRANSFER-001`;
+- production deploy/rollback/log/backup repetitions → `OPS-PRODUCTION-RUNBOOK-001`,
+  `OPS-OBSERVABILITY-001` and `OPS-BACKUP-RESTORE-001` according to distinct outcome.
+
+`HISTORICAL_ONLY` groups are dated pre-implementation audit matrices, fulfilled selected-next prompts,
+historical validation transcripts, unpromoted idea-scoring rows and older disabled-worker proposals.
+They remain evidence/history and do not own current backlog state.
+
+Five current P2/P3 registry items are deliberately preserved as open:
+
+- `ONBOARDING-H2-001`;
+- `ONBOARDING-TG-CONFIRM-001`;
+- `ONBOARDING-DECISION-RETRY-001`;
+- `MENU-CONC-001`;
+- `MENU-TEST-002`.
+
+### 13.14 Comparative shortlist — no epic selected
+
+Scores are comparative, not approval. `Readiness` includes absence of unresolved decisions and
+availability of code/test foundations. No candidate below is written as `NEXT`.
+
+| Epic | Included master IDs | User/business value | Correctness/security | Operational value | Readiness | Effort | Migration risk | Scope-explosion risk | Staging demonstrability | Why now / why defer | Stop decisions |
+| --- | --- | ---: | ---: | ---: | ---: | --- | --- | --- | ---: | --- | --- |
+| Booking conversation integrity and real isolation | `BOOKING-THREAD-UNIQUENESS-001`, `QA-BOOKING-ISOLATION-001` | 4 — one trustworthy chat | 5 | 4 | 5 | M | Medium | Low | 5 | Concrete DB race and privacy gate; can defer while volume is tiny. | Legacy duplicate merge/constraint rollout. |
+| Dangerous operational action hardening | `SECURITY-AUDIT-ACTOR-FK-001`, `MENU-RBAC-RACE-001`, `SECURITY-TABLE-QR-AUDIT-001` | 3 — fewer invisible failures | 5 | 5 | 4 | L | Medium | Medium | 4 | Closes concrete integrity/authority gaps; can defer only if risky actions stay low-volume. | Legacy audit actors; QR export policy. |
+| Menu content and merchandising | `MENU-DESCRIPTIONS-001`, `MENU-FEATURED-001` | 5 — better choice and discovery | 3 | 4 | 4 | L | Medium | Medium | 5 | Highly visible Guest/Venue value on existing menu core; can wait if content quality is not pilot bottleneck. | Featured ordering/caps; audit payload. |
+| Venue operations cockpit | `VENUE-DASHBOARD-001`, `VENUE-TABLE-CRUD-001`, `VENUE-SETTINGS-PARITY-001` | 4 — faster venue work | 4 | 5 | 4 | L | Low/Medium | Medium | 5 | Converts real screens into a coherent operating loop; defer while one venue can tolerate navigation. | Notification settings policy; table deactivation consequences. |
+| Gift release and promotion UX hardening | `GROWTH-GIFT-RELEASE-001`, `SECURITY-PROMO-CONFIG-AUDIT-001`, `GROWTH-PROMO-UX-HARDENING-001` | 5 — visible promotion value | 4 | 4 | 5 | M | Low | Low/Medium | 5 | Most work/evidence already exists and staging result is obvious; defer if promotion launch is not current. | Expired-card action; mutable config allowlist. |
+| Analytics event baseline and Platform KPIs | `ANALYTICS-EVENT-COVERAGE-001`, `ANALYTICS-PLATFORM-DASHBOARD-001`, `PLATFORM-AUDIT-VIEWER-001` | 4 — reliable decisions | 4 | 5 | 3 | XL | High | High | 3 | Unlocks funnel, health and campaigns; defer because event normalization can expand across every domain. | Event names/envelope/retention/KPI definitions. |
+| Order/tab settlement lifecycle | `ORDER-PERSONAL-TAB-INTEGRITY-001`, `ORDER-TAB-LIFECYCLE-001`, `ORDER-SESSION-CLOSE-POLICY-001` | 5 — trustworthy bill/visit close | 5 | 5 | 2 | XL | High | High | 5 | Highest core correctness leverage; defer until settlement and force-close decisions are explicit. | Paid/reopen semantics; physical-session ownership; legacy rows. |
+| Production billing provider and safe recovery | `BILLING-PROVIDER-001`, `BILLING-SUSPENSION-PROVENANCE-001`, `BILLING-INVOICE-VOID-REISSUE-001`, `OPS-BILLING-DIAGNOSTICS-001` | 5 — online revenue | 5 | 5 | 2 | XL | High | High | 4 | Mandatory before online collection; defer while manual billing is commercially acceptable. | Provider/legal contract, refunds/chargebacks, secret owner. |
+
+Decision lenses:
+
+- safest bounded next epic: **Booking conversation integrity and real isolation**;
+- highest direct user value: **Menu content and merchandising**;
+- strongest quality/security value: **Dangerous operational action hardening**;
+- fastest conspicuous result: **Gift release and promotion UX hardening**;
+- recommended balance: **Booking conversation integrity and real isolation** — a concrete P1
+  concurrency/privacy gap, clear migration/test boundary, strong staging demonstration and no broad
+  product redesign. This is a recommendation only, not an approved `NEXT`.
+
+Final decision state: **NEXT EPIC DECISION / MASTER REMAINING WORK INVENTORY PREPARED /
+USER DECISION REQUIRED**. No implementation-ready prompt is created for any shortlist candidate.

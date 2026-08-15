@@ -1,8 +1,13 @@
 # Platform Cockpit Model
 
-Дата актуализации: 2026-08-14.
+Дата актуализации: 2026-08-15.
 
-Статус: **current product reference** for Platform Mode. Platform guest QR status is **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / DONE / MVP / STAGING-SMOKE-PASSED**, schema verdict `NO_MIGRATION`; commit/push, green Actions for the release HEAD, staging deploy and the bounded real Telegram smoke are complete. This does not make the whole product production-ready or close broader Platform/Guest parity. Use this document together with `docs/UPDATED_PRODUCT_AI_ROADMAP.md`, `docs/COMMUNICATION_MODEL.md`, `docs/SECURITY_RBAC_MATRIX.md` and `docs/ANALYTICS_EVENTS.md` before opening new Platform, billing, support or analytics tasks.
+Статус: **current product reference** for Platform Mode. Platform guest QR and the bounded
+Platform/Venue onboarding and ownership cockpit are **DONE / MVP / STAGING-SMOKE-PASSED** for their
+recorded release scopes. This does not make the whole product production-ready or close broader
+Platform/Guest parity. Use this document together with `docs/UPDATED_PRODUCT_AI_ROADMAP.md`,
+`docs/COMMUNICATION_MODEL.md`, `docs/SECURITY_RBAC_MATRIX.md` and `docs/ANALYTICS_EVENTS.md` before
+opening new Platform, billing, support or analytics tasks.
 
 ## Scope
 
@@ -13,7 +18,7 @@ Ordinary venue operations such as orders, staff calls, booking queues, menu/stop
 | Area | Current implementation status | Product rule |
 | --- | --- | --- |
 | Venues | Platform Mini App can list/open venue details and run implemented lifecycle actions. | Platform cockpit is the source of truth for marketplace-level venue state. |
-| Onboarding requests | Request intake and owner status/details are Telegram-only. Platform approve/reject, commercial terms and create/link are also Telegram-only; the Platform Mini App `Подключение` screen is informational. | Telegram and both Mini Apps must use one backend application/orchestration contract; no second onboarding engine. |
+| Onboarding requests | Telegram and Venue Mini App submit through one shared contract; Platform Mini App has actionable `Заявки`, `Кальянные`, `Владельцы`, including retry-safe create/link. The bounded release is staging-smoke-passed. | Telegram and both Mini Apps use one backend application/orchestration contract; no second onboarding engine. |
 | Owner / access | Owner invite, accepted Telegram deep links, active OWNER membership list and last-owner-safe OWNER revoke are smoke-passed. | Runtime venue ownership is `venue_members(role=OWNER)`, not legacy owner linkage alone. |
 | Billing / subscriptions / invoices | Manual/fake billing cockpit, subscription overview, invoice ensure, manual mark-paid, next-period invoice and courtesy days are staging-smoked. | GET overviews are read-only; money/state mutations require explicit POST actions and audit. |
 | Support Center | Support Tickets MVP is smoke-passed for `SUPPORT_TICKET`, including platform-only and venue-transferred tickets. | Platform sees support tickets, not ordinary `VENUE_CHAT`. |
@@ -136,8 +141,8 @@ Safety rules:
 
 ## Platform & Venue Onboarding / Ownership Cockpit
 
-Status: **MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. This is not release-closed until green
-Actions, staging deploy and consolidated smoke.
+Status: **PLATFORM & VENUE ONBOARDING / OWNERSHIP COCKPIT / DONE / MVP /
+STAGING-SMOKE-PASSED** for release HEAD `e35def99ea8429462e5fdaaeee914f57da72e775`.
 
 ### Implemented behavior
 
@@ -177,7 +182,7 @@ flow and perform no direct venue/member/link/selection writes.
 
 ### Independent review closure evidence
 
-Five bounded review findings are locally closed without changing the epic stage or product scope:
+Five bounded review findings were closed before release without expanding the product scope:
 
 - `ONBOARDING-CANON-UNICODE-001`: the production tuple applies Unicode NFKC, collapses the full
   Unicode `White_Space` class, trims, lowercases with `Locale.ROOT` and maps a whitespace-only
@@ -201,8 +206,13 @@ Five bounded review findings are locally closed without changing the epic stage 
 Measured local backend evidence is repository `13`, Venue routes `8`, Platform routes `15`, Telegram
 `18 / 552 / 169`, and PostgreSQL onboarding concurrency `7`. The exact route/security aggregate is
 `1247`; the mandatory PostgreSQL vector is `8 / 14 / 2 / 44 / 9 / 7` (`84` total). Focused Mini App
-assertions cover focus restoration and pluralization. Green Actions, staging deploy and consolidated
-release smoke remain required before release closure.
+assertions cover focus restoration and pluralization. For the release HEAD, the user confirmed fully
+green GitHub Actions, staging deploy, the consolidated onboarding/ownership smoke and cleanup. The
+smoke covered first and additional applications, exact-versus-distinct retry, Platform request/
+venue/owner visibility, exactly-one create/link and OWNER membership, explicit venue selection,
+legacy quota-flow convergence, multi-owner portfolios, first-applicant baseline limit `1`, and
+server-derived applicant/actor/source. Local GitHub CLI authentication is invalid, so Actions are
+recorded as user-confirmed rather than independently queried in this docs-only closure.
 
 ### Canonical contract
 
@@ -304,8 +314,8 @@ Use this as the Platform-specific part of release smoke:
 
 ## Open Platform Gaps
 
-- `PLATFORM & VENUE ONBOARDING / OWNERSHIP COCKPIT` is locally implemented; green Actions, staging
-  deploy and consolidated release smoke remain open before release closure.
+- The bounded onboarding/ownership cockpit is release-closed; broader lead/readiness funnel,
+  moderation/bulk actions and risk/health automation remain separate work in the master inventory.
 - Placements cockpit is future/partial.
 - Paid placement/promotion boosting is future and must follow `docs/GROWTH_RETENTION.md`: visible ad labels, moderation, billing and analytics are required before launch.
 - Platform analytics dashboard is future.
