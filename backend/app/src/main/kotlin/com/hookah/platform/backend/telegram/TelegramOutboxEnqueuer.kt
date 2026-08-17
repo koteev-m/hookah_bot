@@ -6,6 +6,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import java.sql.Connection
 
 class TelegramOutboxEnqueuer(
     private val repository: TelegramOutboxRepository,
@@ -20,6 +21,24 @@ class TelegramOutboxEnqueuer(
     ) {
         val payload = buildSendMessagePayload(json, chatId, text, replyMarkup, parseMode)
         repository.enqueue(
+            chatId = chatId,
+            method = "sendMessage",
+            payloadJson = json.encodeToString(SendMessagePayload.serializer(), payload),
+            dedupeKey = dedupeKey,
+        )
+    }
+
+    fun enqueueBookingSendMessageInTransaction(
+        connection: Connection,
+        chatId: Long,
+        text: String,
+        replyMarkup: ReplyMarkup? = null,
+        parseMode: String? = null,
+        dedupeKey: String? = null,
+    ) {
+        val payload = buildSendMessagePayload(json, chatId, text, replyMarkup, parseMode)
+        repository.enqueueStrictBookingOnConnection(
+            connection = connection,
             chatId = chatId,
             method = "sendMessage",
             payloadJson = json.encodeToString(SendMessagePayload.serializer(), payload),

@@ -5,7 +5,7 @@ import {
   venueChangeBooking,
   venueConfirmBooking,
   venueGetBookings,
-  venueGetSupportThreads,
+  venueGetBookingThreadReconciliation,
   venueMessageBookingGuest,
   venueNoShowBooking,
   venueSeatBooking
@@ -13,6 +13,15 @@ import {
 import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
 import type { SupportThreadDto } from '../shared/api/supportDtos'
 import type { VenueAccessDto, VenueBookingDto } from '../shared/api/venueDtos'
+import { createBookingMessageAttempt } from '../shared/bookingMessageAttempt'
+import {
+  bookingThreadError,
+  bookingThreadLoading,
+  bookingThreadStates,
+  bookingThreadReconciliationChunks,
+  reconcileBookingThreadItems,
+  type BookingThreadReconciliationState
+} from '../shared/bookingThreadReconciliation'
 import { append, el, on } from '../shared/ui/dom'
 import { showToast } from '../shared/ui/toast'
 
@@ -185,95 +194,147 @@ function openBookingMessageModal(
     venueId: number
     deps: ReturnType<typeof buildApiDeps>
   }
-): Promise<SupportThreadDto | null> {
-  return new Promise((resolve) => {
-    const overlay = el('div', { className: 'venue-modal-overlay' })
-    const dialog = el('section', { className: 'venue-modal card' })
-    dialog.setAttribute('role', 'dialog')
-    dialog.setAttribute('aria-modal', 'true')
-    dialog.setAttribute('aria-labelledby', 'venue-booking-message-title')
+): {
+  bookingId: number
+  result: Promise<SupportThreadDto | null>
+  dispose: () => void
+  setReconciliationState: (state: BookingThreadReconciliationState) => void
+} {
+  const overlay = el('div', { className: 'venue-modal-overlay' })
+  const dialog = el('section', { className: 'venue-modal card' })
+  dialog.setAttribute('role', 'dialog')
+  dialog.setAttribute('aria-modal', 'true')
+  dialog.setAttribute('aria-labelledby', 'venue-booking-message-title')
 
-    const title = el('h3', { id: 'venue-booking-message-title', text: 'Сообщение гостю' })
-    const helper = el('p', {
-      className: 'venue-order-sub',
-      text: 'Сообщение придёт гостю в Telegram и появится в переписке.'
-    })
-    const bookingMeta = el('p', { className: 'venue-order-sub', text: bookingTitle(booking) })
-    const error = el('p', { className: 'status', text: '' })
-    const textarea = document.createElement('textarea')
-    textarea.className = 'venue-textarea venue-booking-message-textarea'
-    textarea.placeholder = 'Например: На 19:00 все столы заняты. Можем предложить 20:30?'
-    textarea.maxLength = 1000
-    textarea.rows = 5
-
-    const actions = el('div', { className: 'order-actions' })
-    const submitButton = el('button', { className: 'button-small', text: 'Отправить' }) as HTMLButtonElement
-    const cancelButton = el('button', { className: 'button-small button-secondary', text: 'Отмена' }) as HTMLButtonElement
-    let requestController: AbortController | null = null
-
-    const setBusy = (busy: boolean) => {
-      submitButton.disabled = busy
-      cancelButton.disabled = busy
-      submitButton.textContent = busy ? 'Отправляем…' : 'Отправить'
-    }
-
-    const close = () => {
-      requestController?.abort()
-      overlay.remove()
-      resolve(null)
-    }
-
-    submitButton.addEventListener('click', async () => {
-      const message = textarea.value.trim()
-      if (!message) {
-        error.textContent = 'Введите сообщение гостю.'
-        textarea.focus()
-        return
-      }
-      if (message.length > 1000) {
-        error.textContent = 'Сообщение должно быть не длиннее 1000 символов.'
-        textarea.focus()
-        return
-      }
-      setBusy(true)
-      requestController?.abort()
-      const controller = new AbortController()
-      requestController = controller
-      const result = await venueMessageBookingGuest(
-        options.backendUrl,
-        { venueId: options.venueId, bookingId: booking.bookingId, body: { message } },
-        options.deps,
-        controller.signal
-      )
-      if (requestController !== controller) return
-      setBusy(false)
-      if (!result.ok) {
-        error.textContent = result.error.message || 'Не удалось отправить сообщение.'
-        return
-      }
-      textarea.value = ''
-      overlay.remove()
-      resolve(result.data.thread)
-    })
-    cancelButton.addEventListener('click', close)
-    overlay.addEventListener('click', (event) => {
-      if (event.target === overlay) {
-        close()
-      }
-    })
-
-    append(actions, submitButton, cancelButton)
-    append(dialog, title, helper, bookingMeta, textarea, error, actions)
-    overlay.appendChild(dialog)
-    document.body.appendChild(overlay)
-    window.setTimeout(() => textarea.focus(), 0)
+  const title = el('h3', { id: 'venue-booking-message-title', text: 'Сообщение гостю' })
+  const helper = el('p', {
+    className: 'venue-order-sub',
+    text: 'Сообщение придёт гостю в Telegram и появится в переписке.'
   })
+  const bookingMeta = el('p', { className: 'venue-order-sub', text: bookingTitle(booking) })
+  const error = el('p', { className: 'status', text: '' })
+  const textarea = document.createElement('textarea')
+  textarea.className = 'venue-textarea venue-booking-message-textarea'
+  textarea.placeholder = 'Например: На 19:00 все столы заняты. Можем предложить 20:30?'
+  textarea.maxLength = 1000
+  textarea.rows = 5
+
+  const actions = el('div', { className: 'order-actions' })
+  const submitButton = el('button', { className: 'button-small', text: 'Отправить' }) as HTMLButtonElement
+  const cancelButton = el('button', { className: 'button-small button-secondary', text: 'Отмена' }) as HTMLButtonElement
+  const messageAttempt = createBookingMessageAttempt()
+  let requestController: AbortController | null = null
+  let reconciliationState: BookingThreadReconciliationState = {
+    status: 'READY_NO_THREAD',
+    thread: null
+  }
+  let settled = false
+  let resolveResult: (thread: SupportThreadDto | null) => void = () => undefined
+  const result = new Promise<SupportThreadDto | null>((resolve) => {
+    resolveResult = resolve
+  })
+
+  const setBusy = (busy: boolean) => {
+    submitButton.disabled = busy || reconciliationState.status !== 'READY_NO_THREAD'
+    cancelButton.disabled = busy
+    textarea.disabled = busy || reconciliationState.status !== 'READY_NO_THREAD'
+    submitButton.textContent = busy ? 'Отправляем…' : 'Отправить'
+  }
+
+  const setReconciliationState = (state: BookingThreadReconciliationState) => {
+    reconciliationState = state
+    setBusy(requestController !== null)
+    if (state.status === 'LOADING') {
+      error.textContent = 'Сверяем переписку перед отправкой…'
+    } else if (state.status === 'ERROR') {
+      error.textContent = 'Не удалось сверить переписку. Обновите её на экране броней; текст сохранён.'
+    } else if (state.status === 'READY_WITH_THREAD') {
+      error.textContent = 'Найдена существующая переписка. Закройте окно и откройте её из карточки брони.'
+    } else {
+      error.textContent = ''
+    }
+  }
+
+  const finish = (thread: SupportThreadDto | null) => {
+    if (settled) return
+    settled = true
+    messageAttempt.invalidate()
+    textarea.removeEventListener('input', messageAttempt.invalidate)
+    overlay.remove()
+    resolveResult(thread)
+  }
+
+  const dispose = () => {
+    requestController?.abort()
+    requestController = null
+    finish(null)
+  }
+
+  textarea.addEventListener('input', messageAttempt.invalidate)
+  submitButton.addEventListener('click', async () => {
+    if (settled || requestController || reconciliationState.status !== 'READY_NO_THREAD') return
+    const message = textarea.value.trim()
+    if (!message) {
+      error.textContent = 'Введите сообщение гостю.'
+      textarea.focus()
+      return
+    }
+    if (message.length > 1000) {
+      error.textContent = 'Сообщение должно быть не длиннее 1000 символов.'
+      textarea.focus()
+      return
+    }
+    setBusy(true)
+    const controller = new AbortController()
+    requestController = controller
+    const clientMessageId = messageAttempt.clientMessageIdFor(message, {
+      venueId: options.venueId,
+      bookingId: booking.bookingId
+    })
+    const response = await venueMessageBookingGuest(
+      options.backendUrl,
+      { venueId: options.venueId, bookingId: booking.bookingId, body: { message, clientMessageId } },
+      options.deps,
+      controller.signal
+    )
+    if (settled || requestController !== controller) return
+    requestController = null
+    setBusy(false)
+    if (!response.ok) {
+      const code = normalizeErrorCode(response.error)
+      if (response.error.status === 409 && code === ApiErrorCodes.BOOKING_MESSAGE_IDEMPOTENCY_PAYLOAD_MISMATCH) {
+        messageAttempt.invalidate()
+        error.textContent = 'Текст сообщения отличается от предыдущей попытки. Проверьте его и отправьте ещё раз.'
+      } else {
+        renderApiError(error, response.error, options.deps.isDebug)
+        error.textContent = `${error.textContent} Текст сохранён: повторите отправку без изменений — дубликат не появится.`
+      }
+      return
+    }
+    textarea.value = ''
+    finish(response.data.thread)
+  })
+  cancelButton.addEventListener('click', dispose)
+  overlay.addEventListener('click', (event) => {
+    if (event.target === overlay && !requestController) {
+      dispose()
+    }
+  })
+
+  append(actions, submitButton, cancelButton)
+  append(dialog, title, helper, bookingMeta, textarea, error, actions)
+  overlay.appendChild(dialog)
+  document.body.appendChild(overlay)
+  window.setTimeout(() => {
+    if (!settled) textarea.focus()
+  }, 0)
+  return { bookingId: booking.bookingId, result, dispose, setReconciliationState }
 }
 
 function renderBookings(
   list: HTMLDivElement,
   bookings: VenueBookingDto[],
-  bookingThreads: Map<number, SupportThreadDto>,
+  bookingThreadReconciliation: Map<number, BookingThreadReconciliationState>,
   canManage: boolean,
   canMarkArrivalStatus: boolean,
   onConfirm: (booking: VenueBookingDto) => void,
@@ -281,6 +342,7 @@ function renderBookings(
   onChange: (booking: VenueBookingDto, dateValue: string, timeValue: string) => void,
   onMessage: (booking: VenueBookingDto) => void,
   onOpenThread: (thread: SupportThreadDto) => void,
+  onRefreshConversation: () => void,
   onSeat: (booking: VenueBookingDto) => void,
   onNoShow: (booking: VenueBookingDto) => void
 ) {
@@ -292,7 +354,8 @@ function renderBookings(
     return
   }
   bookings.forEach((booking) => {
-    const thread = bookingThreads.get(booking.bookingId) ?? null
+    const reconciliation = bookingThreadReconciliation.get(booking.bookingId) ?? bookingThreadLoading()
+    const thread = reconciliation.status === 'READY_WITH_THREAD' ? reconciliation.thread : null
     const row = el('section', { className: 'card venue-booking-card' })
     row.appendChild(el('h3', { text: bookingTitle(booking) }))
     row.appendChild(
@@ -323,8 +386,12 @@ function renderBookings(
         })
       )
     }
-    if (thread) {
+    if (reconciliation.status === 'READY_WITH_THREAD') {
       row.appendChild(el('p', { className: 'venue-order-sub', text: 'Есть переписка с гостем.' }))
+    } else if (canManage && reconciliation.status === 'LOADING') {
+      row.appendChild(el('p', { className: 'venue-order-sub', text: 'Сверяем переписку…' }))
+    } else if (canManage && reconciliation.status === 'ERROR') {
+      row.appendChild(el('p', { className: 'status', text: 'Не удалось сверить переписку этой брони.' }))
     }
     const actions = el('div', { className: 'order-actions' })
     if (canManage && canConfirm(booking)) {
@@ -337,7 +404,7 @@ function renderBookings(
       cancelButton.addEventListener('click', () => onCancel(booking))
       actions.appendChild(cancelButton)
     }
-    if (canManage) {
+    if (canManage && (reconciliation.status === 'READY_NO_THREAD' || reconciliation.status === 'READY_WITH_THREAD')) {
       const messageButton = el('button', {
         className: 'button-small button-secondary',
         text: thread ? 'Открыть переписку' : 'Написать гостю'
@@ -350,6 +417,13 @@ function renderBookings(
         }
       })
       actions.appendChild(messageButton)
+    } else if (canManage && reconciliation.status === 'ERROR') {
+      const refreshConversationButton = el('button', {
+        className: 'button-small button-secondary',
+        text: 'Обновить переписку'
+      }) as HTMLButtonElement
+      refreshConversationButton.addEventListener('click', onRefreshConversation)
+      actions.appendChild(refreshConversationButton)
     }
     if (canMarkArrivalStatus && canMarkArrival(booking)) {
       const seatButton = el('button', { className: 'button-small', text: 'Гость пришёл' }) as HTMLButtonElement
@@ -379,8 +453,9 @@ export function renderVenueBookingsScreen(options: VenueBookingsOptions) {
   let disposed = false
   let isLoading = false
   let abortController: AbortController | null = null
+  let bookingMessageModal: ReturnType<typeof openBookingMessageModal> | null = null
   let currentBookings: VenueBookingDto[] = []
-  let bookingThreads = new Map<number, SupportThreadDto>()
+  let bookingThreadReconciliation = new Map<number, BookingThreadReconciliationState>()
   const canManage = access.permissions.includes('BOOKING_MANAGE')
   const canMarkArrivalStatus = access.permissions.includes('BOOKING_ARRIVAL_UPDATE')
 
@@ -394,7 +469,7 @@ export function renderVenueBookingsScreen(options: VenueBookingsOptions) {
     renderBookings(
       refs.list,
       currentBookings,
-      bookingThreads,
+      bookingThreadReconciliation,
       canManage,
       canMarkArrivalStatus,
       (booking) => void confirmBooking(booking),
@@ -402,6 +477,7 @@ export function renderVenueBookingsScreen(options: VenueBookingsOptions) {
       (booking, dateValue, timeValue) => void changeBooking(booking, dateValue, timeValue),
       (booking) => void messageBookingGuest(booking),
       (thread) => openThread(thread),
+      () => void loadBookings(),
       (booking) => void seatBooking(booking),
       (booking) => void noShowBooking(booking)
     )
@@ -413,25 +489,73 @@ export function renderVenueBookingsScreen(options: VenueBookingsOptions) {
     const controller = new AbortController()
     abortController = controller
     setLoading(true)
+    bookingThreadReconciliation = bookingThreadStates(currentBookings.map((booking) => booking.bookingId), 'LOADING')
+    bookingMessageModal?.setReconciliationState(bookingThreadLoading())
+    if (currentBookings.length) renderCurrentBookings()
     const result = await venueGetBookings(backendUrl, { venueId }, deps, controller.signal)
     if (disposed || abortController !== controller) return
     if (!result.ok) {
       abortController = null
       setLoading(false)
+      bookingThreadReconciliation = bookingThreadStates(currentBookings.map((booking) => booking.bookingId), 'ERROR')
+      bookingMessageModal?.setReconciliationState(bookingThreadError())
+      if (currentBookings.length) renderCurrentBookings()
       renderApiError(refs.status, result.error, isDebug)
       return
     }
     currentBookings = result.data.items
     if (canManage) {
-      const threadsResult = await venueGetSupportThreads(backendUrl, { venueId }, deps, controller.signal)
-      if (disposed || abortController !== controller) return
-      if (threadsResult.ok) {
-        bookingThreads = new Map()
-        threadsResult.data.items.forEach((thread) => {
-          if (thread.bookingId) {
-            bookingThreads.set(thread.bookingId, thread)
+      bookingThreadReconciliation = bookingThreadStates(currentBookings.map((booking) => booking.bookingId), 'LOADING')
+      renderCurrentBookings()
+      try {
+        const bookingIds = currentBookings.map((booking) => booking.bookingId)
+        const reconciled = new Map<number, BookingThreadReconciliationState>()
+        const reconciledThreadIds = new Set<number>()
+        for (const bookingIdChunk of bookingThreadReconciliationChunks(bookingIds)) {
+          const reconciliationResult = await venueGetBookingThreadReconciliation(
+            backendUrl,
+            { venueId, bookingIds: bookingIdChunk },
+            deps,
+            controller.signal
+          )
+          if (disposed || abortController !== controller) return
+          if (!reconciliationResult.ok) {
+            throw new Error('Booking thread reconciliation request failed')
+          }
+          const chunkReconciliation = reconcileBookingThreadItems(
+            bookingIdChunk,
+            reconciliationResult.data.items
+          )
+          chunkReconciliation.forEach((state, bookingId) => {
+            if (state.status === 'READY_WITH_THREAD') {
+              if (reconciledThreadIds.has(state.thread.threadId)) {
+                throw new Error('Duplicate booking thread across reconciliation chunks')
+              }
+              reconciledThreadIds.add(state.thread.threadId)
+            }
+            reconciled.set(bookingId, state)
+          })
+        }
+        reconciled.forEach((state) => {
+          if (state.status === 'READY_WITH_THREAD' && state.thread.venueId !== venueId) {
+            throw new Error('Booking thread venue mismatch')
           }
         })
+        bookingThreadReconciliation = reconciled
+      } catch {
+        abortController = null
+        setLoading(false)
+        bookingThreadReconciliation = bookingThreadStates(currentBookings.map((booking) => booking.bookingId), 'ERROR')
+        bookingMessageModal?.setReconciliationState(bookingThreadError())
+        refs.status.textContent = 'Не удалось достоверно сверить переписку. Отправка сообщений заблокирована.'
+        refs.refreshButton.textContent = 'Обновить переписку'
+        renderCurrentBookings()
+        return
+      }
+      if (bookingMessageModal) {
+        bookingMessageModal.setReconciliationState(
+          bookingThreadReconciliation.get(bookingMessageModal.bookingId) ?? bookingThreadError()
+        )
       }
     }
     abortController = null
@@ -518,9 +642,16 @@ export function renderVenueBookingsScreen(options: VenueBookingsOptions) {
 
   const messageBookingGuest = async (booking: VenueBookingDto) => {
     if (isLoading || !canManage) return
-    const thread = await openBookingMessageModal(booking, { backendUrl, venueId, deps })
+    if (bookingThreadReconciliation.get(booking.bookingId)?.status !== 'READY_NO_THREAD') return
+    bookingMessageModal?.dispose()
+    const modal = openBookingMessageModal(booking, { backendUrl, venueId, deps })
+    bookingMessageModal = modal
+    const thread = await modal.result
+    if (bookingMessageModal === modal) {
+      bookingMessageModal = null
+    }
     if (!thread || disposed) return
-    bookingThreads.set(booking.bookingId, thread)
+    bookingThreadReconciliation.set(booking.bookingId, { status: 'READY_WITH_THREAD', thread })
     refs.status.textContent = 'Сообщение отправлено гостю.'
     renderCurrentBookings()
     showToast('Сообщение отправлено гостю.')
@@ -576,6 +707,8 @@ export function renderVenueBookingsScreen(options: VenueBookingsOptions) {
   return () => {
     disposed = true
     abortController?.abort()
+    bookingMessageModal?.dispose()
+    bookingMessageModal = null
     disposables.forEach((dispose) => dispose())
   }
 }

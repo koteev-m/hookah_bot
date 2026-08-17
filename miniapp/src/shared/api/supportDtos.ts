@@ -48,6 +48,16 @@ export type SupportThreadListResponse = {
   items: SupportThreadDto[]
 }
 
+export type BookingThreadReconciliationItemDto = {
+  bookingId: number
+  status: 'WITH_THREAD' | 'NO_THREAD'
+  thread?: SupportThreadDto | null
+}
+
+export type BookingThreadReconciliationResponse = {
+  items: BookingThreadReconciliationItemDto[]
+}
+
 export type SupportThreadDetailResponse = {
   thread: SupportThreadDto
   messages: SupportMessageDto[]
@@ -55,6 +65,7 @@ export type SupportThreadDetailResponse = {
 
 export type SupportMessageCreateRequest = {
   message: string
+  clientMessageId?: string
 }
 
 export type SupportThreadCreateRequest = {

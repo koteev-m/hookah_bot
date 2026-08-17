@@ -1,6 +1,6 @@
 # Deployment / Runbook / Operations
 
-Дата актуализации: 2026-08-11.
+Дата актуализации: 2026-08-17.
 
 Статус: **current operations reference / UPDATED**. This document is the canonical deploy, release and operations runbook for the Telegram bot + Mini App platform. Use it together with `docs/TESTING_QA_SMOKE_STRATEGY.md` for validation scope, `docs/STAGING_DEPLOYMENT.md` for one-VPS staging details, `docs/OPERATIONS.md` for metrics/queue incident basics and `docs/MIGRATION_POLICY.md` for Flyway policy.
 
@@ -167,6 +167,1153 @@ Rules:
 - Avoid destructive migrations without retention/archive decision.
 - Billing/subscription state changes require audit and cannot be silently reversed.
 - If backup/restore commands are unknown for the environment, mark rollback as **RUNBOOK GAP** before release.
+
+### Booking Thread Integrity Preflight (PostgreSQL V124)
+
+Run this exact command against staging only after green Actions and before a release that can apply
+PostgreSQL V124. It is repeatable, read-only and does not apply the migration. Every query prefixed
+`UNSAFE` must return zero rows. The final guard exits `psql` with status `3` if any unsafe predicate
+is present; that is `STOP_FOR_BOOKING_THREAD_DEDUPLICATION_DECISION` and blocks deploy. The
+informational rows must be attached to the release evidence and reconciled with post-migration
+counts, but duplicate groups or a survivor that is not the earliest-created row are not unsafe by
+themselves.
+
+```bash
+psql "$DATABASE_URL" -X --set=ON_ERROR_STOP=1 <<'SQL'
+\pset pager off
+\set VERBOSITY terse
+BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;
+SET LOCAL lock_timeout = '30s';
+SET LOCAL statement_timeout = '60s';
+
+\echo 'UNSAFE null booking references (expected 0 rows)'
+SELECT id AS thread_id
+FROM support_threads
+WHERE thread_type = 'BOOKING_THREAD'
+  AND booking_id IS NULL
+ORDER BY id;
+
+\echo 'UNSAFE missing canonical bookings (expected 0 rows)'
+SELECT st.id AS thread_id, st.booking_id
+FROM support_threads st
+LEFT JOIN bookings b ON b.id = st.booking_id
+WHERE st.thread_type = 'BOOKING_THREAD'
+  AND st.booking_id IS NOT NULL
+  AND b.id IS NULL
+ORDER BY st.id;
+
+\echo 'UNSAFE venue/guest ownership mismatches (expected 0 rows)'
+SELECT
+    st.id AS thread_id,
+    st.booking_id,
+    st.venue_id AS stored_venue_id,
+    b.venue_id AS canonical_venue_id,
+    st.guest_user_id AS stored_guest_user_id,
+    b.user_id AS canonical_guest_user_id
+FROM support_threads st
+JOIN bookings b ON b.id = st.booking_id
+WHERE st.thread_type = 'BOOKING_THREAD'
+  AND (
+      st.venue_id IS DISTINCT FROM b.venue_id
+      OR st.guest_user_id IS DISTINCT FROM b.user_id
+  )
+ORDER BY st.id;
+
+\echo 'INFORMATIONAL duplicate booking groups'
+SELECT
+    booking_id,
+    COUNT(*) AS thread_count,
+    MIN(id) AS survivor_id,
+    ARRAY_AGG(id ORDER BY id) AS thread_ids
+FROM support_threads
+WHERE thread_type = 'BOOKING_THREAD'
+  AND booking_id IS NOT NULL
+GROUP BY booking_id
+HAVING COUNT(*) > 1
+ORDER BY booking_id;
+
+\echo 'UNSAFE conflicting duplicate statuses (expected 0 rows)'
+SELECT
+    booking_id,
+    ARRAY_AGG(DISTINCT status ORDER BY status) AS statuses
+FROM support_threads
+WHERE thread_type = 'BOOKING_THREAD'
+  AND booking_id IS NOT NULL
+GROUP BY booking_id
+HAVING COUNT(*) > 1
+   AND COUNT(DISTINCT status) > 1
+ORDER BY booking_id;
+
+\echo 'UNSAFE partial per-user read coverage (expected 0 rows)'
+WITH duplicate_groups AS (
+    SELECT booking_id, COUNT(*) AS thread_count
+    FROM support_threads
+    WHERE thread_type = 'BOOKING_THREAD'
+      AND booking_id IS NOT NULL
+    GROUP BY booking_id
+    HAVING COUNT(*) > 1
+)
+SELECT
+    groups.booking_id,
+    reads.user_id,
+    groups.thread_count,
+    COUNT(*) AS marker_count,
+    ARRAY_AGG(threads.id ORDER BY threads.id) AS represented_thread_ids
+FROM duplicate_groups groups
+JOIN support_threads threads
+  ON threads.thread_type = 'BOOKING_THREAD'
+ AND threads.booking_id = groups.booking_id
+JOIN support_thread_reads reads ON reads.thread_id = threads.id
+GROUP BY groups.booking_id, groups.thread_count, reads.user_id
+HAVING COUNT(*) <> groups.thread_count
+ORDER BY groups.booking_id, reads.user_id;
+
+\echo 'UNSAFE conflicting read timestamps (expected 0 rows)'
+WITH duplicate_groups AS (
+    SELECT booking_id
+    FROM support_threads
+    WHERE thread_type = 'BOOKING_THREAD'
+      AND booking_id IS NOT NULL
+    GROUP BY booking_id
+    HAVING COUNT(*) > 1
+)
+SELECT
+    groups.booking_id,
+    reads.user_id,
+    ARRAY_AGG(reads.last_read_at ORDER BY threads.id) AS read_timestamps
+FROM duplicate_groups groups
+JOIN support_threads threads
+  ON threads.thread_type = 'BOOKING_THREAD'
+ AND threads.booking_id = groups.booking_id
+JOIN support_thread_reads reads ON reads.thread_id = threads.id
+GROUP BY groups.booking_id, reads.user_id
+HAVING COUNT(DISTINCT reads.last_read_at) <> 1
+ORDER BY groups.booking_id, reads.user_id;
+
+\echo 'UNSAFE unknown booking-thread audit entity/action shapes (expected 0 rows)'
+WITH audit_payloads AS (
+    SELECT
+        audit.*,
+        audit.payload_json IS JSON OBJECT AS payload_is_object,
+        CASE
+            WHEN audit.payload_json IS JSON THEN (audit.payload_json::JSONB)::TEXT
+            ELSE audit.payload_json
+        END AS normalized_payload,
+        ticket.ticket_id_count,
+        ticket.ticket_id_value
+    FROM audit_log audit
+    CROSS JOIN LATERAL (
+        SELECT
+            COUNT(*) FILTER (WHERE entry.key = 'ticketId') AS ticket_id_count,
+            MIN(entry.value::TEXT) FILTER (WHERE entry.key = 'ticketId') AS ticket_id_value
+        FROM JSON_EACH(
+            CASE
+                WHEN audit.payload_json IS JSON OBJECT THEN audit.payload_json::JSON
+                ELSE '{}'::JSON
+            END
+        ) entry
+    ) ticket
+)
+SELECT audit.id AS audit_id, audit.entity_type, audit.action, audit.entity_id
+FROM audit_payloads audit
+JOIN support_threads thread
+  ON thread.id = audit.entity_id
+ AND thread.thread_type = 'BOOKING_THREAD'
+WHERE (
+    audit.entity_type = 'support_ticket'
+    OR audit.action = 'SUPPORT_TICKET_STATUS_CHANGED'
+    OR audit.normalized_payload ~
+        '"(ticketId|threadId|thread_id|supportThreadId|support_thread_id|bookingThreadId|booking_thread_id|ticket_id)"[[:space:]]*:'
+)
+  AND (
+      audit.entity_type <> 'support_ticket'
+      OR audit.action <> 'SUPPORT_TICKET_STATUS_CHANGED'
+  )
+ORDER BY audit.id;
+
+\echo 'UNSAFE malformed/non-object ticketId-bearing audit payloads (expected 0 rows)'
+WITH audit_payloads AS (
+    SELECT
+        audit.*,
+        audit.payload_json IS JSON OBJECT AS payload_is_object,
+        CASE
+            WHEN audit.payload_json IS JSON THEN (audit.payload_json::JSONB)::TEXT
+            ELSE audit.payload_json
+        END AS normalized_payload
+    FROM audit_log audit
+)
+SELECT audit.id AS audit_id, audit.entity_type, audit.action, audit.entity_id
+FROM audit_payloads audit
+WHERE audit.normalized_payload ~ '"ticketId"[[:space:]]*:'
+  AND NOT audit.payload_is_object
+ORDER BY audit.id;
+
+\echo 'UNSAFE repeated or non-top-level audit ticketId (expected 0 rows)'
+WITH audit_payloads AS (
+    SELECT
+        audit.*,
+        CASE
+            WHEN audit.payload_json IS JSON THEN (audit.payload_json::JSONB)::TEXT
+            ELSE audit.payload_json
+        END AS normalized_payload,
+        ticket.ticket_id_count
+    FROM audit_log audit
+    CROSS JOIN LATERAL (
+        SELECT COUNT(*) FILTER (WHERE entry.key = 'ticketId') AS ticket_id_count
+        FROM JSON_EACH(
+            CASE
+                WHEN audit.payload_json IS JSON OBJECT THEN audit.payload_json::JSON
+                ELSE '{}'::JSON
+            END
+        ) entry
+    ) ticket
+)
+SELECT audit.id AS audit_id, audit.entity_type, audit.action, audit.entity_id
+FROM audit_payloads audit
+WHERE audit.normalized_payload ~ '"ticketId"[[:space:]]*:'
+  AND (
+      audit.ticket_id_count <> 1
+      OR REGEXP_COUNT(audit.normalized_payload, '"ticketId"[[:space:]]*:') <> 1
+  )
+ORDER BY audit.id;
+
+\echo 'UNSAFE non-integer ticketId-bearing audit payloads (expected 0 rows)'
+WITH audit_payloads AS (
+    SELECT
+        audit.*,
+        CASE
+            WHEN audit.payload_json IS JSON THEN (audit.payload_json::JSONB)::TEXT
+            ELSE audit.payload_json
+        END AS normalized_payload,
+        ticket.ticket_id_count,
+        ticket.ticket_id_value
+    FROM audit_log audit
+    CROSS JOIN LATERAL (
+        SELECT
+            COUNT(*) FILTER (WHERE entry.key = 'ticketId') AS ticket_id_count,
+            MIN(entry.value::TEXT) FILTER (WHERE entry.key = 'ticketId') AS ticket_id_value
+        FROM JSON_EACH(
+            CASE
+                WHEN audit.payload_json IS JSON OBJECT THEN audit.payload_json::JSON
+                ELSE '{}'::JSON
+            END
+        ) entry
+    ) ticket
+)
+SELECT audit.id AS audit_id, audit.entity_type, audit.action, audit.entity_id
+FROM audit_payloads audit
+WHERE audit.normalized_payload ~ '"ticketId"[[:space:]]*:'
+  AND audit.ticket_id_count = 1
+  AND audit.ticket_id_value !~ '^-?(0|[1-9][0-9]*)$'
+ORDER BY audit.id;
+
+\echo 'UNSAFE unknown recursive audit thread-reference keys (expected 0 rows)'
+WITH RECURSIVE audit_nodes(audit_id, node, depth) AS (
+    SELECT audit.id, audit.payload_json::JSONB, 0
+    FROM audit_log audit
+    WHERE audit.payload_json IS JSON
+    UNION ALL
+    SELECT parent.audit_id, child.value, parent.depth + 1
+    FROM audit_nodes parent
+    CROSS JOIN LATERAL (
+        SELECT object_child.value
+        FROM JSONB_EACH(
+            CASE WHEN JSONB_TYPEOF(parent.node) = 'object' THEN parent.node ELSE '{}'::JSONB END
+        ) object_child
+        UNION ALL
+        SELECT array_child.value
+        FROM JSONB_ARRAY_ELEMENTS(
+            CASE WHEN JSONB_TYPEOF(parent.node) = 'array' THEN parent.node ELSE '[]'::JSONB END
+        ) array_child
+    ) child
+), audit_keys AS (
+    SELECT parent.audit_id, parent.depth, entry.key
+    FROM audit_nodes parent
+    CROSS JOIN LATERAL JSONB_EACH(
+        CASE WHEN JSONB_TYPEOF(parent.node) = 'object' THEN parent.node ELSE '{}'::JSONB END
+    ) entry
+), normalized_keys AS (
+    SELECT
+        audit_id,
+        depth,
+        key,
+        REGEXP_REPLACE(LOWER(NORMALIZE(key, NFKC)), '[_.[:space:]-]', '', 'g') AS compact_key
+    FROM audit_keys
+)
+SELECT audit_id, depth, key
+FROM normalized_keys
+WHERE NOT (depth = 0 AND key = 'ticketId')
+  AND compact_key ~ '(thread|ticket|conversation).*(ids|refs|id|ref)'
+ORDER BY audit_id, depth, key;
+
+\echo 'UNSAFE aliased audit thread references (expected 0 rows)'
+WITH audit_payloads AS (
+    SELECT
+        audit.*,
+        CASE
+            WHEN audit.payload_json IS JSON THEN (audit.payload_json::JSONB)::TEXT
+            ELSE audit.payload_json
+        END AS normalized_payload
+    FROM audit_log audit
+)
+SELECT audit.id AS audit_id, audit.entity_type, audit.action, audit.entity_id
+FROM audit_payloads audit
+WHERE audit.normalized_payload ~
+    '"(threadId|thread_id|supportThreadId|support_thread_id|bookingThreadId|booking_thread_id|ticket_id)"[[:space:]]*:'
+ORDER BY audit.id;
+
+\echo 'UNSAFE payload-only BOOKING_THREAD audit references (expected 0 rows)'
+WITH audit_payloads AS (
+    SELECT audit.*, ticket.ticket_id_count, ticket.ticket_id_value
+    FROM audit_log audit
+    CROSS JOIN LATERAL (
+        SELECT
+            COUNT(*) FILTER (WHERE entry.key = 'ticketId') AS ticket_id_count,
+            MIN(entry.value::TEXT) FILTER (WHERE entry.key = 'ticketId') AS ticket_id_value
+        FROM JSON_EACH(
+            CASE
+                WHEN audit.payload_json IS JSON OBJECT THEN audit.payload_json::JSON
+                ELSE '{}'::JSON
+            END
+        ) entry
+    ) ticket
+)
+SELECT audit.id AS audit_id, audit.entity_type, audit.action, audit.entity_id, thread.id AS payload_ticket_id
+FROM audit_payloads audit
+JOIN support_threads thread
+  ON thread.thread_type = 'BOOKING_THREAD'
+ AND audit.ticket_id_count = 1
+ AND thread.id::TEXT = audit.ticket_id_value
+WHERE audit.entity_type <> 'support_ticket'
+   OR audit.action <> 'SUPPORT_TICKET_STATUS_CHANGED'
+   OR audit.entity_id IS DISTINCT FROM thread.id
+ORDER BY audit.id;
+
+\echo 'UNSAFE malformed/non-object booking-thread audit payloads (expected 0 rows)'
+WITH audit_payloads AS (
+    SELECT audit.*, audit.payload_json IS JSON OBJECT AS payload_is_object
+    FROM audit_log audit
+)
+SELECT audit.id AS audit_id, audit.entity_id
+FROM audit_payloads audit
+JOIN support_threads thread
+  ON thread.id = audit.entity_id
+ AND thread.thread_type = 'BOOKING_THREAD'
+WHERE audit.entity_type = 'support_ticket'
+  AND audit.action = 'SUPPORT_TICKET_STATUS_CHANGED'
+  AND NOT audit.payload_is_object
+ORDER BY audit.id;
+
+\echo 'UNSAFE missing/repeated booking-thread audit ticketId (expected 0 rows)'
+WITH audit_payloads AS (
+    SELECT
+        audit.*,
+        CASE
+            WHEN audit.payload_json IS JSON THEN (audit.payload_json::JSONB)::TEXT
+            ELSE audit.payload_json
+        END AS normalized_payload,
+        ticket.ticket_id_count
+    FROM audit_log audit
+    CROSS JOIN LATERAL (
+        SELECT COUNT(*) FILTER (WHERE entry.key = 'ticketId') AS ticket_id_count
+        FROM JSON_EACH(
+            CASE
+                WHEN audit.payload_json IS JSON OBJECT THEN audit.payload_json::JSON
+                ELSE '{}'::JSON
+            END
+        ) entry
+    ) ticket
+)
+SELECT audit.id AS audit_id, audit.entity_id
+FROM audit_payloads audit
+JOIN support_threads thread
+  ON thread.id = audit.entity_id
+ AND thread.thread_type = 'BOOKING_THREAD'
+WHERE audit.entity_type = 'support_ticket'
+  AND audit.action = 'SUPPORT_TICKET_STATUS_CHANGED'
+  AND (
+      audit.ticket_id_count <> 1
+      OR REGEXP_COUNT(audit.normalized_payload, '"ticketId"[[:space:]]*:') <> 1
+  )
+ORDER BY audit.id;
+
+\echo 'UNSAFE non-integer booking-thread audit ticketId (expected 0 rows)'
+WITH audit_payloads AS (
+    SELECT audit.*, ticket.ticket_id_count, ticket.ticket_id_value
+    FROM audit_log audit
+    CROSS JOIN LATERAL (
+        SELECT
+            COUNT(*) FILTER (WHERE entry.key = 'ticketId') AS ticket_id_count,
+            MIN(entry.value::TEXT) FILTER (WHERE entry.key = 'ticketId') AS ticket_id_value
+        FROM JSON_EACH(
+            CASE
+                WHEN audit.payload_json IS JSON OBJECT THEN audit.payload_json::JSON
+                ELSE '{}'::JSON
+            END
+        ) entry
+    ) ticket
+)
+SELECT audit.id AS audit_id, audit.entity_id
+FROM audit_payloads audit
+JOIN support_threads thread
+  ON thread.id = audit.entity_id
+ AND thread.thread_type = 'BOOKING_THREAD'
+WHERE audit.entity_type = 'support_ticket'
+  AND audit.action = 'SUPPORT_TICKET_STATUS_CHANGED'
+  AND audit.ticket_id_count = 1
+  AND audit.ticket_id_value !~ '^-?(0|[1-9][0-9]*)$'
+ORDER BY audit.id;
+
+\echo 'UNSAFE aliased booking-thread audit references (expected 0 rows)'
+WITH audit_payloads AS (
+    SELECT
+        audit.*,
+        CASE
+            WHEN audit.payload_json IS JSON THEN (audit.payload_json::JSONB)::TEXT
+            ELSE audit.payload_json
+        END AS normalized_payload
+    FROM audit_log audit
+)
+SELECT audit.id AS audit_id, audit.entity_id
+FROM audit_payloads audit
+JOIN support_threads thread
+  ON thread.id = audit.entity_id
+ AND thread.thread_type = 'BOOKING_THREAD'
+WHERE audit.entity_type = 'support_ticket'
+  AND audit.action = 'SUPPORT_TICKET_STATUS_CHANGED'
+  AND audit.normalized_payload ~
+      '"(threadId|thread_id|supportThreadId|support_thread_id|bookingThreadId|booking_thread_id|ticket_id)"[[:space:]]*:'
+ORDER BY audit.id;
+
+\echo 'UNSAFE booking-thread audit ticketId/entity_id mismatches (expected 0 rows)'
+WITH audit_payloads AS (
+    SELECT audit.*, ticket.ticket_id_count, ticket.ticket_id_value
+    FROM audit_log audit
+    CROSS JOIN LATERAL (
+        SELECT
+            COUNT(*) FILTER (WHERE entry.key = 'ticketId') AS ticket_id_count,
+            MIN(entry.value::TEXT) FILTER (WHERE entry.key = 'ticketId') AS ticket_id_value
+        FROM JSON_EACH(
+            CASE
+                WHEN audit.payload_json IS JSON OBJECT THEN audit.payload_json::JSON
+                ELSE '{}'::JSON
+            END
+        ) entry
+    ) ticket
+)
+SELECT audit.id AS audit_id, audit.entity_id
+FROM audit_payloads audit
+JOIN support_threads thread
+  ON thread.id = audit.entity_id
+ AND thread.thread_type = 'BOOKING_THREAD'
+WHERE audit.entity_type = 'support_ticket'
+  AND audit.action = 'SUPPORT_TICKET_STATUS_CHANGED'
+  AND audit.ticket_id_count = 1
+  AND audit.ticket_id_value ~ '^-?(0|[1-9][0-9]*)$'
+  AND audit.ticket_id_value IS DISTINCT FROM audit.entity_id::TEXT
+ORDER BY audit.id;
+
+\echo 'INFORMATIONAL survivor MIN(id) is not earliest-created row'
+WITH duplicate_groups AS (
+    SELECT
+        booking_id,
+        MIN(id) AS survivor_id,
+        MIN(created_at) AS merged_created_at
+    FROM support_threads
+    WHERE thread_type = 'BOOKING_THREAD'
+      AND booking_id IS NOT NULL
+    GROUP BY booking_id
+    HAVING COUNT(*) > 1
+)
+SELECT
+    groups.booking_id,
+    groups.survivor_id,
+    survivor.created_at AS survivor_created_at,
+    groups.merged_created_at
+FROM duplicate_groups groups
+JOIN support_threads survivor ON survivor.id = groups.survivor_id
+WHERE survivor.created_at IS DISTINCT FROM groups.merged_created_at
+ORDER BY groups.booking_id;
+
+\echo 'INFORMATIONAL exact physical FK inventory (expected only two known rows)'
+WITH inbound_references AS (
+    SELECT LOWER(fk.table_name) AS table_name, LOWER(fk.column_name) AS column_name
+    FROM information_schema.referential_constraints reference
+    JOIN information_schema.key_column_usage fk
+      ON fk.constraint_catalog = reference.constraint_catalog
+     AND fk.constraint_schema = reference.constraint_schema
+     AND fk.constraint_name = reference.constraint_name
+    JOIN information_schema.key_column_usage target
+      ON target.constraint_catalog = reference.unique_constraint_catalog
+     AND target.constraint_schema = reference.unique_constraint_schema
+     AND target.constraint_name = reference.unique_constraint_name
+     AND target.ordinal_position = fk.position_in_unique_constraint
+    WHERE LOWER(target.table_schema) = LOWER(CURRENT_SCHEMA())
+      AND LOWER(target.table_name) = 'support_threads'
+      AND LOWER(target.column_name) = 'id'
+)
+SELECT table_name, column_name, COUNT(*) AS constraint_count
+FROM inbound_references
+GROUP BY table_name, column_name
+ORDER BY table_name, column_name;
+
+\echo 'UNSAFE unknown/missing FK or explicit thread_id reference families (expected 0 rows)'
+WITH inbound_references AS (
+    SELECT LOWER(fk.table_name) AS table_name, LOWER(fk.column_name) AS column_name
+    FROM information_schema.referential_constraints reference
+    JOIN information_schema.key_column_usage fk
+      ON fk.constraint_catalog = reference.constraint_catalog
+     AND fk.constraint_schema = reference.constraint_schema
+     AND fk.constraint_name = reference.constraint_name
+    JOIN information_schema.key_column_usage target
+      ON target.constraint_catalog = reference.unique_constraint_catalog
+     AND target.constraint_schema = reference.unique_constraint_schema
+     AND target.constraint_name = reference.unique_constraint_name
+     AND target.ordinal_position = fk.position_in_unique_constraint
+    WHERE LOWER(target.table_schema) = LOWER(CURRENT_SCHEMA())
+      AND LOWER(target.table_name) = 'support_threads'
+      AND LOWER(target.column_name) = 'id'
+), expected_references(table_name, column_name) AS (
+    VALUES ('support_messages', 'thread_id'), ('support_thread_reads', 'thread_id')
+)
+SELECT 'unknown inbound FK' AS issue, actual.table_name, actual.column_name
+FROM inbound_references actual
+LEFT JOIN expected_references expected USING (table_name, column_name)
+WHERE expected.table_name IS NULL
+UNION ALL
+SELECT 'expected inbound FK multiplicity is not exactly one', expected.table_name, expected.column_name
+FROM expected_references expected
+LEFT JOIN inbound_references actual USING (table_name, column_name)
+GROUP BY expected.table_name, expected.column_name
+HAVING COUNT(actual.table_name) <> 1
+UNION ALL
+SELECT
+    'unknown normalized thread-reference column',
+    LOWER(columns.table_name),
+    LOWER(columns.column_name)
+FROM information_schema.columns columns
+LEFT JOIN expected_references expected
+  ON expected.table_name = LOWER(columns.table_name)
+ AND expected.column_name = LOWER(columns.column_name)
+WHERE LOWER(columns.table_schema) = LOWER(CURRENT_SCHEMA())
+  AND REGEXP_REPLACE(LOWER(columns.column_name), '[^a-z0-9]', '', 'g') IN (
+      'threadid',
+      'supportthreadid',
+      'bookingthreadid',
+      'ticketid'
+  )
+  AND expected.table_name IS NULL
+ORDER BY 1, 2, 3;
+
+\echo 'UNSAFE missing/unknown JSON and durable payload families (expected 0 rows)'
+WITH expected_json(table_name, column_name) AS (
+    VALUES
+        ('analytics_events', 'payload_json'),
+        ('audit_log', 'payload_json'),
+        ('billing_invoices', 'provider_raw_payload'),
+        ('billing_notifications', 'payload_json'),
+        ('billing_payments', 'raw_payload'),
+        ('guest_batch_idempotency', 'response_snapshot'),
+        ('menu_items', 'options'),
+        ('order_batches', 'items_snapshot'),
+        ('order_promotion_applications', 'schedule_snapshot_json'),
+        ('order_promotion_applications', 'target_snapshot_json'),
+        ('telegram_dialog_state', 'payload'),
+        ('telegram_inbound_updates', 'payload_json'),
+        ('telegram_outbox', 'payload_json'),
+        ('venues', 'features'),
+        ('venues', 'ui_layout'),
+        ('visit_feedback', 'tags_json')
+), actual_json AS (
+    SELECT LOWER(columns.table_name) AS table_name, LOWER(columns.column_name) AS column_name
+    FROM information_schema.columns columns
+    WHERE LOWER(columns.table_schema) = LOWER(CURRENT_SCHEMA())
+      AND (
+          LOWER(columns.data_type) IN ('json', 'jsonb')
+          OR LOWER(columns.column_name) LIKE '%json%'
+          OR LOWER(columns.column_name) IN (
+              'payload',
+              'raw_payload',
+              'provider_raw_payload',
+              'features',
+              'ui_layout',
+              'options',
+              'items_snapshot',
+              'response_snapshot'
+          )
+      )
+)
+SELECT 'unknown durable payload family' AS issue, actual.table_name, actual.column_name
+FROM actual_json actual
+LEFT JOIN expected_json expected USING (table_name, column_name)
+WHERE expected.table_name IS NULL
+UNION ALL
+SELECT 'missing expected durable payload family', expected.table_name, expected.column_name
+FROM expected_json expected
+LEFT JOIN actual_json actual USING (table_name, column_name)
+WHERE actual.table_name IS NULL
+ORDER BY 1, 2, 3;
+
+\echo 'UNSAFE thread-reference keys in non-audit durable payload families (expected 0 rows)'
+SELECT durable_json.family
+FROM (
+    SELECT 'venues.features' AS family, features::TEXT AS payload FROM venues
+    UNION ALL SELECT 'venues.ui_layout', ui_layout::TEXT FROM venues
+    UNION ALL SELECT 'menu_items.options', options::TEXT FROM menu_items
+    UNION ALL SELECT 'order_batches.items_snapshot', items_snapshot::TEXT FROM order_batches
+    UNION ALL SELECT 'telegram_dialog_state.payload', payload::TEXT FROM telegram_dialog_state
+    UNION ALL SELECT 'billing_payments.raw_payload', raw_payload FROM billing_payments
+    UNION ALL SELECT 'billing_invoices.provider_raw_payload', provider_raw_payload FROM billing_invoices
+    UNION ALL SELECT 'billing_notifications.payload_json', payload_json FROM billing_notifications
+    UNION ALL SELECT 'telegram_inbound_updates.payload_json', payload_json FROM telegram_inbound_updates
+    UNION ALL SELECT 'telegram_outbox.payload_json', payload_json FROM telegram_outbox
+    UNION ALL SELECT 'guest_batch_idempotency.response_snapshot', response_snapshot::TEXT FROM guest_batch_idempotency
+    UNION ALL SELECT 'analytics_events.payload_json', payload_json FROM analytics_events
+    UNION ALL SELECT 'visit_feedback.tags_json', tags_json FROM visit_feedback
+    UNION ALL SELECT 'order_promotion_applications.schedule_snapshot_json', schedule_snapshot_json FROM order_promotion_applications
+    UNION ALL SELECT 'order_promotion_applications.target_snapshot_json', target_snapshot_json FROM order_promotion_applications
+) durable_json
+WHERE (
+    CASE
+        WHEN durable_json.payload IS JSON THEN (durable_json.payload::JSONB)::TEXT
+        ELSE durable_json.payload
+    END
+) ~
+    '"(ticketId|threadId|thread_id|supportThreadId|support_thread_id|bookingThreadId|booking_thread_id|ticket_id)"[[:space:]]*:'
+GROUP BY durable_json.family
+ORDER BY durable_json.family;
+
+\echo 'UNSAFE missing migration lock targets or EXCLUSIVE-lock privilege (expected 0 rows)'
+WITH required_lock_targets(table_name, lock_order) AS (
+    VALUES
+        ('bookings', 1),
+        ('support_threads', 2),
+        ('support_messages', 3),
+        ('support_thread_reads', 4),
+        ('audit_log', 5)
+), lock_targets AS (
+    SELECT
+        required.table_name,
+        required.lock_order,
+        TO_REGCLASS(FORMAT('%I.%I', CURRENT_SCHEMA(), required.table_name)) AS relation_oid
+    FROM required_lock_targets required
+)
+SELECT target.table_name, target.lock_order
+FROM lock_targets target
+WHERE target.relation_oid IS NULL
+   OR NOT (
+       HAS_TABLE_PRIVILEGE(CURRENT_USER, target.relation_oid, 'UPDATE')
+       OR HAS_TABLE_PRIVILEGE(CURRENT_USER, target.relation_oid, 'DELETE')
+       OR HAS_TABLE_PRIVILEGE(CURRENT_USER, target.relation_oid, 'TRUNCATE')
+       OR PG_HAS_ROLE(
+           CURRENT_USER,
+           (SELECT relation.relowner FROM pg_catalog.pg_class relation WHERE relation.oid = target.relation_oid),
+           'USAGE'
+       )
+       OR EXISTS (
+           SELECT 1
+           FROM pg_catalog.pg_roles role
+           WHERE role.rolname = CURRENT_USER
+             AND role.rolsuper
+       )
+   )
+ORDER BY target.lock_order;
+
+\echo 'INFORMATIONAL known logical reference inventory'
+SELECT
+    'audit_log' AS table_name,
+    'entity_type=support_ticket, entity_id=thread.id, payload_json.ticketId=thread.id' AS reference_contract,
+    COUNT(*) FILTER (WHERE st.thread_type = 'BOOKING_THREAD') AS booking_thread_reference_count
+FROM audit_log audit
+LEFT JOIN support_threads st ON st.id = audit.entity_id
+WHERE audit.entity_type = 'support_ticket';
+
+\echo 'INFORMATIONAL expected duplicate-group reparent/collapse counts'
+WITH duplicate_groups AS (
+    SELECT booking_id, MIN(id) AS survivor_id, COUNT(*) AS thread_count
+    FROM support_threads
+    WHERE thread_type = 'BOOKING_THREAD'
+      AND booking_id IS NOT NULL
+    GROUP BY booking_id
+    HAVING COUNT(*) > 1
+)
+SELECT
+    groups.booking_id,
+    groups.survivor_id,
+    groups.thread_count,
+    (
+        SELECT COUNT(*)
+        FROM support_messages messages
+        JOIN support_threads threads ON threads.id = messages.thread_id
+        WHERE threads.thread_type = 'BOOKING_THREAD'
+          AND threads.booking_id = groups.booking_id
+          AND threads.id <> groups.survivor_id
+    ) AS expected_message_reparents,
+    (
+        SELECT COUNT(*)
+        FROM support_thread_reads reads
+        JOIN support_threads threads ON threads.id = reads.thread_id
+        WHERE threads.thread_type = 'BOOKING_THREAD'
+          AND threads.booking_id = groups.booking_id
+    ) AS expected_read_rows_removed,
+    (
+        SELECT COUNT(DISTINCT reads.user_id)
+        FROM support_thread_reads reads
+        JOIN support_threads threads ON threads.id = reads.thread_id
+        WHERE threads.thread_type = 'BOOKING_THREAD'
+          AND threads.booking_id = groups.booking_id
+    ) AS expected_exact_read_markers_inserted,
+    (
+        SELECT COUNT(*)
+        FROM audit_log audit
+        JOIN support_threads threads ON threads.id = audit.entity_id
+        WHERE audit.entity_type = 'support_ticket'
+          AND threads.thread_type = 'BOOKING_THREAD'
+          AND threads.booking_id = groups.booking_id
+          AND threads.id <> groups.survivor_id
+    ) AS expected_audit_reparents
+FROM duplicate_groups groups
+ORDER BY groups.booking_id;
+
+\echo 'FINAL unsafe predicate count'
+WITH RECURSIVE duplicate_groups AS (
+    SELECT booking_id, COUNT(*) AS thread_count
+    FROM support_threads
+    WHERE thread_type = 'BOOKING_THREAD'
+      AND booking_id IS NOT NULL
+    GROUP BY booking_id
+    HAVING COUNT(*) > 1
+), partial_reads AS (
+    SELECT groups.booking_id, reads.user_id
+    FROM duplicate_groups groups
+    JOIN support_threads threads
+      ON threads.thread_type = 'BOOKING_THREAD'
+     AND threads.booking_id = groups.booking_id
+    JOIN support_thread_reads reads ON reads.thread_id = threads.id
+    GROUP BY groups.booking_id, groups.thread_count, reads.user_id
+    HAVING COUNT(*) <> groups.thread_count
+), conflicting_read_timestamps AS (
+    SELECT groups.booking_id, reads.user_id
+    FROM duplicate_groups groups
+    JOIN support_threads threads
+      ON threads.thread_type = 'BOOKING_THREAD'
+     AND threads.booking_id = groups.booking_id
+    JOIN support_thread_reads reads ON reads.thread_id = threads.id
+    GROUP BY groups.booking_id, reads.user_id
+    HAVING COUNT(DISTINCT reads.last_read_at) <> 1
+), inbound_references AS (
+    SELECT LOWER(fk.table_name) AS table_name, LOWER(fk.column_name) AS column_name
+    FROM information_schema.referential_constraints reference
+    JOIN information_schema.key_column_usage fk
+      ON fk.constraint_catalog = reference.constraint_catalog
+     AND fk.constraint_schema = reference.constraint_schema
+     AND fk.constraint_name = reference.constraint_name
+    JOIN information_schema.key_column_usage target
+      ON target.constraint_catalog = reference.unique_constraint_catalog
+     AND target.constraint_schema = reference.unique_constraint_schema
+     AND target.constraint_name = reference.unique_constraint_name
+     AND target.ordinal_position = fk.position_in_unique_constraint
+    WHERE LOWER(target.table_schema) = LOWER(CURRENT_SCHEMA())
+      AND LOWER(target.table_name) = 'support_threads'
+      AND LOWER(target.column_name) = 'id'
+), expected_references(table_name, column_name) AS (
+    VALUES ('support_messages', 'thread_id'), ('support_thread_reads', 'thread_id')
+), expected_json(table_name, column_name) AS (
+    VALUES
+        ('analytics_events', 'payload_json'),
+        ('audit_log', 'payload_json'),
+        ('billing_invoices', 'provider_raw_payload'),
+        ('billing_notifications', 'payload_json'),
+        ('billing_payments', 'raw_payload'),
+        ('guest_batch_idempotency', 'response_snapshot'),
+        ('menu_items', 'options'),
+        ('order_batches', 'items_snapshot'),
+        ('order_promotion_applications', 'schedule_snapshot_json'),
+        ('order_promotion_applications', 'target_snapshot_json'),
+        ('telegram_dialog_state', 'payload'),
+        ('telegram_inbound_updates', 'payload_json'),
+        ('telegram_outbox', 'payload_json'),
+        ('venues', 'features'),
+        ('venues', 'ui_layout'),
+        ('visit_feedback', 'tags_json')
+), actual_json AS (
+    SELECT LOWER(columns.table_name) AS table_name, LOWER(columns.column_name) AS column_name
+    FROM information_schema.columns columns
+    WHERE LOWER(columns.table_schema) = LOWER(CURRENT_SCHEMA())
+      AND (
+          LOWER(columns.data_type) IN ('json', 'jsonb')
+          OR LOWER(columns.column_name) LIKE '%json%'
+          OR LOWER(columns.column_name) IN (
+              'payload',
+              'raw_payload',
+              'provider_raw_payload',
+              'features',
+              'ui_layout',
+              'options',
+              'items_snapshot',
+              'response_snapshot'
+          )
+      )
+), non_audit_durable_json AS (
+    SELECT features::TEXT AS payload FROM venues
+    UNION ALL SELECT ui_layout::TEXT FROM venues
+    UNION ALL SELECT options::TEXT FROM menu_items
+    UNION ALL SELECT items_snapshot::TEXT FROM order_batches
+    UNION ALL SELECT payload::TEXT FROM telegram_dialog_state
+    UNION ALL SELECT raw_payload FROM billing_payments
+    UNION ALL SELECT provider_raw_payload FROM billing_invoices
+    UNION ALL SELECT payload_json FROM billing_notifications
+    UNION ALL SELECT payload_json FROM telegram_inbound_updates
+    UNION ALL SELECT payload_json FROM telegram_outbox
+    UNION ALL SELECT response_snapshot::TEXT FROM guest_batch_idempotency
+    UNION ALL SELECT payload_json FROM analytics_events
+    UNION ALL SELECT tags_json FROM visit_feedback
+    UNION ALL SELECT schedule_snapshot_json FROM order_promotion_applications
+    UNION ALL SELECT target_snapshot_json FROM order_promotion_applications
+), audit_payloads AS (
+    SELECT
+        audit.*,
+        audit.payload_json IS JSON OBJECT AS payload_is_object,
+        CASE
+            WHEN audit.payload_json IS JSON THEN (audit.payload_json::JSONB)::TEXT
+            ELSE audit.payload_json
+        END AS normalized_payload,
+        ticket.ticket_id_count,
+        ticket.ticket_id_value
+    FROM audit_log audit
+    CROSS JOIN LATERAL (
+        SELECT
+            COUNT(*) FILTER (WHERE entry.key = 'ticketId') AS ticket_id_count,
+            MIN(entry.value::TEXT) FILTER (WHERE entry.key = 'ticketId') AS ticket_id_value
+        FROM JSON_EACH(
+            CASE
+                WHEN audit.payload_json IS JSON OBJECT THEN audit.payload_json::JSON
+                ELSE '{}'::JSON
+            END
+        ) entry
+    ) ticket
+), audit_nodes(audit_id, node, depth) AS (
+    SELECT audit.id, audit.payload_json::JSONB, 0
+    FROM audit_log audit
+    WHERE audit.payload_json IS JSON
+    UNION ALL
+    SELECT parent.audit_id, child.value, parent.depth + 1
+    FROM audit_nodes parent
+    CROSS JOIN LATERAL (
+        SELECT object_child.value
+        FROM JSONB_EACH(
+            CASE WHEN JSONB_TYPEOF(parent.node) = 'object' THEN parent.node ELSE '{}'::JSONB END
+        ) object_child
+        UNION ALL
+        SELECT array_child.value
+        FROM JSONB_ARRAY_ELEMENTS(
+            CASE WHEN JSONB_TYPEOF(parent.node) = 'array' THEN parent.node ELSE '[]'::JSONB END
+        ) array_child
+    ) child
+), audit_keys AS (
+    SELECT parent.audit_id, parent.depth, entry.key
+    FROM audit_nodes parent
+    CROSS JOIN LATERAL JSONB_EACH(
+        CASE WHEN JSONB_TYPEOF(parent.node) = 'object' THEN parent.node ELSE '{}'::JSONB END
+    ) entry
+), unknown_audit_reference_keys AS (
+    SELECT audit_id
+    FROM (
+        SELECT
+            audit_id,
+            depth,
+            key,
+            REGEXP_REPLACE(LOWER(NORMALIZE(key, NFKC)), '[_.[:space:]-]', '', 'g') AS compact_key
+        FROM audit_keys
+    ) normalized
+    WHERE NOT (depth = 0 AND key = 'ticketId')
+      AND compact_key ~ '(thread|ticket|conversation).*(ids|refs|id|ref)'
+), booking_audits AS (
+    SELECT audit.*
+    FROM audit_payloads audit
+    JOIN support_threads thread
+      ON thread.id = audit.entity_id
+     AND thread.thread_type = 'BOOKING_THREAD'
+), required_lock_targets(table_name, lock_order) AS (
+    VALUES
+        ('bookings', 1),
+        ('support_threads', 2),
+        ('support_messages', 3),
+        ('support_thread_reads', 4),
+        ('audit_log', 5)
+), lock_targets AS (
+    SELECT
+        required.table_name,
+        required.lock_order,
+        TO_REGCLASS(FORMAT('%I.%I', CURRENT_SCHEMA(), required.table_name)) AS relation_oid
+    FROM required_lock_targets required
+), unsafe_checks AS (
+    SELECT COUNT(*) AS row_count
+    FROM support_threads
+    WHERE thread_type = 'BOOKING_THREAD' AND booking_id IS NULL
+    UNION ALL
+    SELECT COUNT(*)
+    FROM support_threads st
+    LEFT JOIN bookings b ON b.id = st.booking_id
+    WHERE st.thread_type = 'BOOKING_THREAD' AND st.booking_id IS NOT NULL AND b.id IS NULL
+    UNION ALL
+    SELECT COUNT(*)
+    FROM support_threads st
+    JOIN bookings b ON b.id = st.booking_id
+    WHERE st.thread_type = 'BOOKING_THREAD'
+      AND (st.venue_id IS DISTINCT FROM b.venue_id OR st.guest_user_id IS DISTINCT FROM b.user_id)
+    UNION ALL
+    SELECT COUNT(*)
+    FROM (
+        SELECT booking_id
+        FROM support_threads
+        WHERE thread_type = 'BOOKING_THREAD' AND booking_id IS NOT NULL
+        GROUP BY booking_id
+        HAVING COUNT(*) > 1 AND COUNT(DISTINCT status) > 1
+    ) conflicts
+    UNION ALL
+    SELECT COUNT(*) FROM partial_reads
+    UNION ALL
+    SELECT COUNT(*) FROM conflicting_read_timestamps
+    UNION ALL
+    SELECT COUNT(*)
+    FROM inbound_references actual
+    LEFT JOIN expected_references expected USING (table_name, column_name)
+    WHERE expected.table_name IS NULL
+    UNION ALL
+    SELECT COUNT(*)
+    FROM (
+        SELECT expected.table_name, expected.column_name
+        FROM expected_references expected
+        LEFT JOIN inbound_references actual USING (table_name, column_name)
+        GROUP BY expected.table_name, expected.column_name
+        HAVING COUNT(actual.table_name) <> 1
+    ) invalid_expected_reference_multiplicity
+    UNION ALL
+    SELECT COUNT(*)
+    FROM information_schema.columns columns
+    LEFT JOIN expected_references expected
+      ON expected.table_name = LOWER(columns.table_name)
+     AND expected.column_name = LOWER(columns.column_name)
+    WHERE LOWER(columns.table_schema) = LOWER(CURRENT_SCHEMA())
+      AND REGEXP_REPLACE(LOWER(columns.column_name), '[^a-z0-9]', '', 'g') IN (
+          'threadid',
+          'supportthreadid',
+          'bookingthreadid',
+          'ticketid'
+      )
+      AND expected.table_name IS NULL
+    UNION ALL
+    SELECT COUNT(*)
+    FROM actual_json actual
+    LEFT JOIN expected_json expected USING (table_name, column_name)
+    WHERE expected.table_name IS NULL
+    UNION ALL
+    SELECT COUNT(*)
+    FROM expected_json expected
+    LEFT JOIN actual_json actual USING (table_name, column_name)
+    WHERE actual.table_name IS NULL
+    UNION ALL
+    SELECT COUNT(*)
+    FROM non_audit_durable_json durable_json
+    WHERE (
+        CASE
+            WHEN durable_json.payload IS JSON THEN (durable_json.payload::JSONB)::TEXT
+            ELSE durable_json.payload
+        END
+    ) ~
+        '"(ticketId|threadId|thread_id|supportThreadId|support_thread_id|bookingThreadId|booking_thread_id|ticket_id)"[[:space:]]*:'
+    UNION ALL
+    SELECT COUNT(*)
+    FROM lock_targets target
+    WHERE target.relation_oid IS NULL
+       OR NOT (
+           HAS_TABLE_PRIVILEGE(CURRENT_USER, target.relation_oid, 'UPDATE')
+           OR HAS_TABLE_PRIVILEGE(CURRENT_USER, target.relation_oid, 'DELETE')
+           OR HAS_TABLE_PRIVILEGE(CURRENT_USER, target.relation_oid, 'TRUNCATE')
+           OR PG_HAS_ROLE(
+               CURRENT_USER,
+               (SELECT relation.relowner FROM pg_catalog.pg_class relation WHERE relation.oid = target.relation_oid),
+               'USAGE'
+           )
+           OR EXISTS (
+               SELECT 1
+               FROM pg_catalog.pg_roles role
+               WHERE role.rolname = CURRENT_USER
+                 AND role.rolsuper
+           )
+       )
+    UNION ALL
+    SELECT COUNT(*)
+    FROM unknown_audit_reference_keys
+    UNION ALL
+    SELECT COUNT(*)
+    FROM booking_audits audit
+    WHERE (
+        audit.entity_type = 'support_ticket'
+        OR audit.action = 'SUPPORT_TICKET_STATUS_CHANGED'
+        OR audit.normalized_payload ~
+            '"(ticketId|threadId|thread_id|supportThreadId|support_thread_id|bookingThreadId|booking_thread_id|ticket_id)"[[:space:]]*:'
+    )
+      AND (
+          audit.entity_type <> 'support_ticket'
+          OR audit.action <> 'SUPPORT_TICKET_STATUS_CHANGED'
+      )
+    UNION ALL
+    SELECT COUNT(*)
+    FROM audit_payloads audit
+    WHERE audit.normalized_payload ~ '"ticketId"[[:space:]]*:'
+      AND NOT audit.payload_is_object
+    UNION ALL
+    SELECT COUNT(*)
+    FROM audit_payloads audit
+    WHERE audit.normalized_payload ~ '"ticketId"[[:space:]]*:'
+      AND (
+          audit.ticket_id_count <> 1
+          OR REGEXP_COUNT(audit.normalized_payload, '"ticketId"[[:space:]]*:') <> 1
+      )
+    UNION ALL
+    SELECT COUNT(*)
+    FROM audit_payloads audit
+    WHERE audit.normalized_payload ~ '"ticketId"[[:space:]]*:'
+      AND audit.ticket_id_count = 1
+      AND audit.ticket_id_value !~ '^-?(0|[1-9][0-9]*)$'
+    UNION ALL
+    SELECT COUNT(*)
+    FROM audit_payloads audit
+    WHERE audit.normalized_payload ~
+        '"(threadId|thread_id|supportThreadId|support_thread_id|bookingThreadId|booking_thread_id|ticket_id)"[[:space:]]*:'
+    UNION ALL
+    SELECT COUNT(*)
+    FROM audit_payloads audit
+    JOIN support_threads thread
+      ON thread.thread_type = 'BOOKING_THREAD'
+     AND audit.ticket_id_count = 1
+     AND thread.id::TEXT = audit.ticket_id_value
+    WHERE audit.entity_type <> 'support_ticket'
+       OR audit.action <> 'SUPPORT_TICKET_STATUS_CHANGED'
+       OR audit.entity_id IS DISTINCT FROM thread.id
+    UNION ALL
+    SELECT COUNT(*)
+    FROM booking_audits audit
+    WHERE audit.entity_type = 'support_ticket'
+      AND audit.action = 'SUPPORT_TICKET_STATUS_CHANGED'
+      AND NOT audit.payload_is_object
+    UNION ALL
+    SELECT COUNT(*)
+    FROM booking_audits audit
+    WHERE audit.entity_type = 'support_ticket'
+      AND audit.action = 'SUPPORT_TICKET_STATUS_CHANGED'
+      AND (
+          audit.ticket_id_count <> 1
+          OR REGEXP_COUNT(audit.normalized_payload, '"ticketId"[[:space:]]*:') <> 1
+      )
+    UNION ALL
+    SELECT COUNT(*)
+    FROM booking_audits audit
+    WHERE audit.entity_type = 'support_ticket'
+      AND audit.action = 'SUPPORT_TICKET_STATUS_CHANGED'
+      AND audit.ticket_id_count = 1
+      AND audit.ticket_id_value !~ '^-?(0|[1-9][0-9]*)$'
+    UNION ALL
+    SELECT COUNT(*)
+    FROM booking_audits audit
+    WHERE audit.entity_type = 'support_ticket'
+      AND audit.action = 'SUPPORT_TICKET_STATUS_CHANGED'
+      AND audit.normalized_payload ~
+          '"(threadId|thread_id|supportThreadId|support_thread_id|bookingThreadId|booking_thread_id|ticket_id)"[[:space:]]*:'
+    UNION ALL
+    SELECT COUNT(*)
+    FROM booking_audits audit
+    WHERE audit.entity_type = 'support_ticket'
+      AND audit.action = 'SUPPORT_TICKET_STATUS_CHANGED'
+      AND audit.ticket_id_count = 1
+      AND audit.ticket_id_value ~ '^-?(0|[1-9][0-9]*)$'
+      AND audit.ticket_id_value IS DISTINCT FROM audit.entity_id::TEXT
+)
+SELECT
+    SUM(row_count) AS unsafe_row_count,
+    CASE WHEN SUM(row_count) > 0 THEN 'true' ELSE 'false' END AS booking_preflight_unsafe
+FROM unsafe_checks
+\gset
+
+COMMIT;
+\echo 'unsafe_row_count=' :unsafe_row_count
+\if :booking_preflight_unsafe
+  \echo 'STOP_FOR_BOOKING_THREAD_DEDUPLICATION_DECISION'
+  \quit 3
+\endif
+\echo 'BOOKING_THREAD_PREFLIGHT_SAFE_TO_CONTINUE'
+SQL
+```
+
+The one affected logical support-thread audit family is
+`audit_log(entity_type='support_ticket', entity_id=thread.id, payload_json.ticketId=thread.id)` with
+the explicit booking-compatible action `SUPPORT_TICKET_STATUS_CHANGED`. There is no accepted legacy
+booking-audit action without `ticketId`. Other audit entity types use unrelated id spaces, so a
+numeric collision alone is not rewritten; if an explicit payload `ticketId` resolves to a booking
+thread but the audit envelope is not canonical, the preflight and migration stop for a decision.
+Valid JSON is normalized before logical-key scanning, including decoding JSON Unicode escapes.
+Audit `ticketId` cardinality is counted from decoded top-level `json` keys rather than collapsed
+`jsonb`, so a plain key plus an escaped spelling of the same logical key is still a duplicate and
+fails closed. The same preflight recursively visits decoded object/array keys, applies Unicode NFKC,
+locale-independent lowercase and separator removal, and stops on any extra key containing
+`thread`/`ticket`/`conversation` plus `id(s)`/`ref(s)`. Exact top-level `ticketId` is the only
+allowed thread-reference key; unknown keys are never generically remapped. Unrelated keys such as
+`conversationStatus` remain valid negative evidence. The preflight is read-only and returns a
+non-zero exit through the existing unsafe-result branch.
+
+PostgreSQL V124 and this preflight keep their semantic JSON-object entry handling unchanged. H2
+V125 reaches the same order/whitespace-independent decision through deterministic SQL aliases backed
+by the duplicate-aware `BookingAuditReferencePolicy` parser; it does not extract or rewrite
+`ticketId` with a regex over serialized JSON. Reordered safe fields, pretty/minified payloads and
+Unicode-escaped duplicate keys are migration-test parity cases. This local parity fix remains
+`LOCAL_FIX_REVIEW_REQUIRED` until independent review.
+
+The confirmed durable reference set is intentionally narrower than the negative-evidence scan:
+`support_messages.thread_id` and `support_thread_reads.thread_id` are physical inbound FKs, while
+the audit family above is the only accepted logical JSON reference. The other 15 allowlisted
+non-audit JSON/payload/snapshot table-column pairs are scanned as negative evidence; they are not
+declared thread references or migration rewrite targets. Adding a new family, inbound FK,
+normalized thread-reference column or decoded thread-like key stops both preflight and migration
+until it has an explicit remap or no-reference proof.
+
+The read-only preflight sets both timeouts but intentionally does not take the migration's table
+locks. PostgreSQL V124 itself, in its single Flyway transaction and before its first catalog or
+domain guard, takes `EXCLUSIVE` locks in this order:
+`bookings`, `support_threads`, `support_messages`, `support_thread_reads`, `audit_log`. `EXCLUSIVE`
+conflicts with both `ROW SHARE` from `SELECT ... FOR UPDATE` and `ROW EXCLUSIVE` from
+`INSERT`/`UPDATE`/`DELETE`, while ordinary reads can continue. The `30s` migration lock timeout and
+`5min` statement timeout fail and release the transaction instead of applying from an unstable
+confirmed-reference set. The 15 negative-evidence payload families are not additional lock targets;
+their writer drain remains a mandatory cutover condition. The database locks do not replace that
+traffic drain.
+
+Do not weaken the preflight by selecting `MIN`/`MAX(last_read_at)`, accepting a generic missing
+`ticketId`, or deleting read/message/audit evidence. Do not run this command against production
+without separate release authorization.
+
+### Booking Thread Integrity Cutover Order
+
+PostgreSQL V124 and the additive Mini App message-idempotency migration must be released in this
+exact order:
+
+1. Verify a current database backup and an approved restore path are ready.
+2. Drain traffic and stop every old booking-message, status, read and audit writer.
+3. Verify exactly one backend instance remains for the controlled cutover.
+4. Run the read-only, repeatable preflight above and retain its zero-unsafe evidence.
+5. Deploy only the new backend binary; do not run old and new booking writers together.
+6. Let Flyway apply V124 under its explicit database locks and the additive message migration.
+7. Verify `/health`, `/db/health`, migration version and startup logs.
+8. Compare post-migration thread/message/read/audit counts and all documented invariants with the
+   preflight evidence.
+9. Run the bounded two-account Guest/Venue booking-chat smoke, including one safe manual replay.
+10. Return traffic only after every preceding check passes.
+
+After schema cutover, the previous binary is not a valid semantic rollback: it does not supply the
+persisted Mini App key or same-transaction notification contract. Use a forward fix or the approved
+database restore path. A failed V124 transaction leaves its schema version and domain facts
+unchanged; still investigate the exact guard/lock failure before retrying.
 
 ### Guest Order Payload-Bound Idempotency Rollout Boundary
 
@@ -350,6 +1497,11 @@ Needs verification:
 | Venue lifecycle/security | Rollback requires reason/audit and visibility review. |
 
 Do not promise a rollback command that the repo/runbook does not currently prove. Mark missing rollback commands as **RUNBOOK GAP** and add a follow-up task.
+
+For the booking-thread V124/message-idempotency cutover specifically, an old backend binary is
+semantically prohibited after the schema cutover because it omits the required Mini App replay key
+and atomic outbox write. The only approved recovery directions are a forward fix or the previously
+verified database restore path; do not restore traffic to the old writer as a routine rollback.
 
 ## Incident Response
 

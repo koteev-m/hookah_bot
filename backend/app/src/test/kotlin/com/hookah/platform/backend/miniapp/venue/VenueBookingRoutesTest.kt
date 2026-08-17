@@ -16,9 +16,11 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.server.config.MapApplicationConfig
 import io.ktor.server.testing.testApplication
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import java.sql.DriverManager
 import java.sql.Timestamp
 import java.time.Instant
@@ -762,13 +764,15 @@ class VenueBookingRoutesTest {
             assertFalse(confirmMessage.contains("UTC"), confirmMessage)
             assertEquals(0, bookingReminderCount(jdbcUrl, bookingId))
 
+            val bookingMessageText = "На 19:00 все столы заняты. Можем предложить 20:30?"
+            val bookingClientMessageId = UUID.randomUUID().toString()
             val messageResponse =
                 client.post("/api/venue/bookings/$bookingId/message?venueId=$venueId") {
                     headers {
                         append(HttpHeaders.Authorization, "Bearer $managerToken")
                         append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
                     }
-                    setBody("""{"message":"На 19:00 все столы заняты. Можем предложить 20:30?"}""")
+                    setBody(bookingMessageBody(bookingMessageText, bookingClientMessageId))
                 }
             assertEquals(HttpStatusCode.OK, messageResponse.status)
             val guestMessagePayload = outboxPayloadJson(jdbcUrl, GUEST_ID).last()
@@ -838,14 +842,51 @@ class VenueBookingRoutesTest {
                     .content,
             )
             assertEquals(
-                "На 19:00 все столы заняты. Можем предложить 20:30?",
+                bookingMessageText,
                 messageResponseBody.getValue("message").jsonObject.getValue("text").jsonPrimitive.content,
             )
+            val messageId =
+                messageResponseBody
+                    .getValue("message")
+                    .jsonObject
+                    .getValue("messageId")
+                    .jsonPrimitive
+                    .content
+                    .toLong()
             assertEquals(1, supportThreadCount(jdbcUrl, venueId, bookingId))
             assertEquals(
-                listOf("На 19:00 все столы заняты. Можем предложить 20:30?"),
+                listOf(bookingMessageText),
                 supportMessageTexts(jdbcUrl, threadId),
             )
+            val threadStateAfterMessage = supportThreadWriteState(jdbcUrl, threadId)
+            val readsAfterMessage = supportThreadReadRows(jdbcUrl, threadId)
+            val auditsAfterMessage = auditRowCount(jdbcUrl)
+            val outboxAfterMessage = outboxPayloadJson(jdbcUrl, GUEST_ID)
+            val replayResponse =
+                client.post("/api/venue/bookings/$bookingId/message?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $managerToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody(bookingMessageBody(bookingMessageText, bookingClientMessageId))
+                }
+            assertEquals(HttpStatusCode.OK, replayResponse.status)
+            val replayBody = json.parseToJsonElement(replayResponse.bodyAsText()).jsonObject
+            assertEquals(
+                messageId,
+                replayBody
+                    .getValue("message")
+                    .jsonObject
+                    .getValue("messageId")
+                    .jsonPrimitive
+                    .content
+                    .toLong(),
+            )
+            assertEquals(threadStateAfterMessage, supportThreadWriteState(jdbcUrl, threadId))
+            assertEquals(readsAfterMessage, supportThreadReadRows(jdbcUrl, threadId))
+            assertEquals(auditsAfterMessage, auditRowCount(jdbcUrl))
+            assertEquals(outboxAfterMessage, outboxPayloadJson(jdbcUrl, GUEST_ID))
+            assertEquals(listOf(bookingMessageText), supportMessageTexts(jdbcUrl, threadId))
 
             val secondThreadMessageResponse =
                 client.post("/api/venue/$venueId/support/threads/$threadId/messages") {
@@ -853,7 +894,7 @@ class VenueBookingRoutesTest {
                         append(HttpHeaders.Authorization, "Bearer $managerToken")
                         append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
                     }
-                    setBody("""{"message":"Можем забронировать на 20:30."}""")
+                    setBody(bookingMessageBody("Можем забронировать на 20:30."))
                 }
             assertEquals(HttpStatusCode.OK, secondThreadMessageResponse.status)
             assertEquals(1, supportThreadCount(jdbcUrl, venueId, bookingId))
@@ -926,7 +967,7 @@ class VenueBookingRoutesTest {
                         append(HttpHeaders.Authorization, "Bearer $guestToken")
                         append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
                     }
-                    setBody("""{"message":"Да, 20:30 подходит."}""")
+                    setBody(bookingMessageBody("Да, 20:30 подходит."))
                 }
             assertEquals(HttpStatusCode.OK, guestReplyResponse.status)
             assertEquals(
@@ -1072,7 +1113,7 @@ class VenueBookingRoutesTest {
                         append(HttpHeaders.Authorization, "Bearer $guestToken")
                         append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
                     }
-                    setBody("""{"message":"Ещё актуально?"}""")
+                    setBody(bookingMessageBody("Ещё актуально?"))
                 }
             assertEquals(HttpStatusCode.OK, guestReplyToResolvedThreadResponse.status)
             assertEquals(
@@ -1619,7 +1660,7 @@ class VenueBookingRoutesTest {
                         append(HttpHeaders.Authorization, "Bearer $managerToken")
                         append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
                     }
-                    setBody("""{"message":"Проверка связи"}""")
+                    setBody(bookingMessageBody("Проверка связи"))
                 }
             assertEquals(HttpStatusCode.OK, validMessageResponse.status)
             val threadId =
@@ -2049,6 +2090,67 @@ class VenueBookingRoutesTest {
                 }
             }
         }
+
+    private fun supportThreadWriteState(
+        jdbcUrl: String,
+        threadId: Long,
+    ): Triple<String, String, String?> =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                "SELECT status, updated_at, last_message_at FROM support_threads WHERE id = ?",
+            ).use { statement ->
+                statement.setLong(1, threadId)
+                statement.executeQuery().use { rows ->
+                    assertTrue(rows.next())
+                    Triple(
+                        rows.getString("status"),
+                        rows.getTimestamp("updated_at").toInstant().toString(),
+                        rows.getTimestamp("last_message_at")?.toInstant()?.toString(),
+                    )
+                }
+            }
+        }
+
+    private fun supportThreadReadRows(
+        jdbcUrl: String,
+        threadId: Long,
+    ): List<Pair<Long, String>> =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                "SELECT user_id, last_read_at FROM support_thread_reads WHERE thread_id = ? ORDER BY user_id",
+            ).use { statement ->
+                statement.setLong(1, threadId)
+                statement.executeQuery().use { rows ->
+                    buildList {
+                        while (rows.next()) {
+                            add(
+                                rows.getLong("user_id") to
+                                    rows.getTimestamp("last_read_at").toInstant().toString(),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+    private fun auditRowCount(jdbcUrl: String): Int =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.createStatement().use { statement ->
+                statement.executeQuery("SELECT COUNT(*) FROM audit_log").use { rows ->
+                    assertTrue(rows.next())
+                    rows.getInt(1)
+                }
+            }
+        }
+
+    private fun bookingMessageBody(
+        message: String,
+        clientMessageId: String = UUID.randomUUID().toString(),
+    ): String =
+        buildJsonObject {
+            put("message", message)
+            put("clientMessageId", clientMessageId)
+        }.toString()
 
     companion object {
         private const val GUEST_ID = 424242L

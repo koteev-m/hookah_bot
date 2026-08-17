@@ -12,11 +12,16 @@ import com.hookah.platform.backend.miniapp.venue.VenueRole
 import com.hookah.platform.backend.miniapp.venue.requireUserId
 import com.hookah.platform.backend.miniapp.venue.requireVenueId
 import com.hookah.platform.backend.miniapp.venue.resolveVenueRole
+import com.hookah.platform.backend.support.BookingMessageNotificationKind
 import com.hookah.platform.backend.support.SupportMessageAuthorRole
 import com.hookah.platform.backend.support.SupportMessageDto
 import com.hookah.platform.backend.support.SupportMessageSource
 import com.hookah.platform.backend.support.SupportThreadDto
+import com.hookah.platform.backend.support.SupportThreadReadAccess
+import com.hookah.platform.backend.support.SupportThreadReadResult
+import com.hookah.platform.backend.support.SupportThreadRecord
 import com.hookah.platform.backend.support.SupportThreadRepository
+import com.hookah.platform.backend.support.normalizeBookingClientMessageId
 import com.hookah.platform.backend.support.normalizeSupportMessage
 import com.hookah.platform.backend.support.toDto
 import com.hookah.platform.backend.telegram.TelegramKeyboards
@@ -57,6 +62,7 @@ private data class VenueBookingCancelRequest(
 @Serializable
 private data class VenueBookingMessageRequest(
     val message: String? = null,
+    val clientMessageId: String? = null,
 )
 
 @Serializable
@@ -270,33 +276,51 @@ fun Route.venueBookingRoutes(
             val booking =
                 guestBookingRepository.findByVenue(bookingId = bookingId, venueId = venueId)
                     ?: throw NotFoundException()
-            val venueName = resolveBookingVenueName(guestBookingRepository, booking.venueId)
-            val thread =
-                supportThreadRepository.createOrFindBookingThread(
-                    venueId = booking.venueId,
+            val clientMessageId = normalizeBookingClientMessageId(request.clientMessageId)
+            val write =
+                supportThreadRepository.addBookingMessage(
                     bookingId = booking.id,
-                    guestUserId = booking.userId,
-                    title = formatBookingDisplayLabel(booking),
-                )
-            val message =
-                supportThreadRepository.addMessage(
-                    threadId = thread.id,
                     authorUserId = userId,
                     authorRole = SupportMessageAuthorRole.VENUE,
                     source = SupportMessageSource.VENUE_MINIAPP,
                     text = messageText,
-                )
-            supportThreadRepository.markThreadRead(threadId = thread.id, userId = userId)
+                    title = formatBookingDisplayLabel(booking),
+                    expectedVenueId = venueId,
+                    clientMessageId = clientMessageId,
+                    notificationWriter = { connection, notification ->
+                        check(notification.kind == BookingMessageNotificationKind.GUEST_NOTIFICATION)
+                        outboxEnqueuer.enqueueBookingSendMessageInTransaction(
+                            connection = connection,
+                            chatId = notification.recipientChatId,
+                            text = buildBookingGuestContactMessage(notification.thread, notification.message.text),
+                            replyMarkup =
+                                TelegramKeyboards.inlineGuestBookingReplyActions(
+                                    notification.thread.venueId ?: error("Booking venue is required"),
+                                    notification.thread.bookingId ?: error("Booking id is required"),
+                                ),
+                            dedupeKey = notification.dedupeKey,
+                        )
+                    },
+                ) ?: throw NotFoundException()
+            val thread = write.thread
+            val message = write.message
+            if (write.created) {
+                when (
+                    supportThreadRepository.markThreadRead(
+                        threadId = thread.id,
+                        access = SupportThreadReadAccess.Venue(userId = userId, venueId = venueId),
+                    )
+                ) {
+                    SupportThreadReadResult.MARKED -> Unit
+                    SupportThreadReadResult.NOT_FOUND -> throw NotFoundException()
+                    SupportThreadReadResult.FORBIDDEN -> throw ForbiddenException()
+                }
+            }
             val responseThread =
                 supportThreadRepository.getVenueThread(
                     venueId = booking.venueId,
                     threadId = thread.id,
                 )?.thread ?: thread
-            outboxEnqueuer.enqueueSendMessage(
-                chatId = booking.userId,
-                text = buildBookingGuestContactMessage(booking, venueName, messageText),
-                replyMarkup = TelegramKeyboards.inlineGuestBookingReplyActions(booking.venueId, booking.id),
-            )
             call.respond(
                 VenueBookingMessageResponse(
                     bookingId = booking.id,
@@ -423,9 +447,6 @@ private fun BookingRecord.toVenueBookingDto(
 private fun formatBookingDisplayLabel(booking: BookingRecord): String =
     booking.displayNumber?.let { "Бронь №$it" } ?: "Бронь #${booking.id}"
 
-private fun formatBookingDisplayLabelGenitive(booking: BookingRecord): String =
-    booking.displayNumber?.let { "брони №$it" } ?: "брони"
-
 private suspend fun resolveBookingVenueName(
     guestBookingRepository: GuestBookingRepository,
     venueId: Long,
@@ -474,10 +495,13 @@ private suspend fun buildBookingCanceledGuestNotification(
 }
 
 private fun buildBookingGuestContactMessage(
-    booking: BookingRecord,
-    venueName: String,
+    thread: SupportThreadRecord,
     messageText: String,
-): String = "Сообщение по вашей ${formatBookingDisplayLabelGenitive(booking)} в «$venueName»:\n\n$messageText"
+): String {
+    val bookingLabel = thread.booking?.displayNumber?.let { "брони №$it" } ?: "брони"
+    val venueName = thread.venueName?.takeIf { it.isNotBlank() } ?: "заведение"
+    return "Сообщение по вашей $bookingLabel в «$venueName»:\n\n$messageText"
+}
 
 private fun StringBuilder.appendBookingGuestDetails(
     booking: BookingRecord,

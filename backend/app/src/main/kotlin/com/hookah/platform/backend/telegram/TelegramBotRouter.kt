@@ -1149,9 +1149,9 @@ class TelegramBotRouter(
             state.state == DialogStateType.VENUE_STAFF_ORDERS_WAIT_ITEM_DISCOUNT_PERCENT && !text.isNullOrBlank() ->
                 proceedVenueStaffOrderBillItemDiscountPercent(chatId, from, text, state)
             state.state == DialogStateType.VENUE_BOOKING_WAIT_GUEST_MESSAGE && !text.isNullOrBlank() ->
-                sendVenueBookingGuestMessage(chatId, from, text, state)
+                sendVenueBookingGuestMessage(chatId, from, text, state, message.messageId)
             state.state == DialogStateType.GUEST_BOOKING_WAIT_REPLY && !text.isNullOrBlank() ->
-                sendGuestBookingReply(chatId, from, text, state)
+                sendGuestBookingReply(chatId, from, text, state, message.messageId)
             state.state == DialogStateType.GUEST_SUPPORT_WAIT_MESSAGE && !text.isNullOrBlank() ->
                 createGuestSupportTicketFromBot(chatId, from, text, state)
             state.state == DialogStateType.GUEST_FEEDBACK_WAIT_COMMENT && !text.isNullOrBlank() ->
@@ -5588,6 +5588,7 @@ class TelegramBotRouter(
         from: User?,
         text: String,
         state: DialogState,
+        telegramMessageId: Long,
     ) {
         val userId = from?.id
         if (userId == null) {
@@ -5634,34 +5635,44 @@ class TelegramBotRouter(
                 .getOrNull()
                 ?.takeIf { it.isNotBlank() }
                 ?: "заведении"
-        supportThreadRepository?.let { repository ->
+        val repository = supportThreadRepository
+        if (repository == null) {
+            enqueueMessage(chatId, "Переписка временно недоступна. Попробуйте позже.")
+            return
+        }
+        val write =
             try {
-                val thread =
-                    repository.createOrFindBookingThread(
-                        venueId = booking.venueId,
-                        bookingId = booking.id,
-                        guestUserId = booking.userId,
-                        title = formatBookingDisplayLabel(booking),
-                    )
-                repository.addMessage(
-                    threadId = thread.id,
+                repository.addBookingMessage(
+                    bookingId = booking.id,
                     authorUserId = userId,
                     authorRole = SupportMessageAuthorRole.VENUE,
                     source = SupportMessageSource.STAFF_CHAT,
                     text = messageText,
+                    telegramMessageId = telegramMessageId,
+                    title = formatBookingDisplayLabel(booking),
+                    expectedVenueId = venueId,
                 )
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
             }
+        if (write == null) {
+            dialogStateRepository.clear(chatId)
+            enqueueMessage(chatId, "Бронь не найдена.")
+            return
         }
         enqueueMessage(
             booking.userId,
-            "Сообщение по вашей ${formatBookingDisplayLabelGenitive(booking)} в «$venueName»:\n\n$messageText",
+            "Сообщение по вашей ${formatBookingDisplayLabelGenitive(booking)} в «$venueName»:\n\n${write.message.text}",
             TelegramKeyboards.inlineGuestBookingReplyActions(booking.venueId, booking.id),
+            dedupeKey = "booking-thread-message:${write.message.id}:guest-notification",
         )
         dialogStateRepository.clear(chatId)
-        enqueueMessage(chatId, "✅ Сообщение гостю отправлено.")
+        enqueueMessage(
+            chatId,
+            "✅ Сообщение гостю отправлено.",
+            dedupeKey = "booking-thread-message:${write.message.id}:venue-ack",
+        )
     }
 
     private suspend fun promptGuestBookingReply(
@@ -5738,6 +5749,7 @@ class TelegramBotRouter(
         from: User?,
         text: String,
         state: DialogState,
+        telegramMessageId: Long,
     ) {
         val userId = from?.id
         if (userId == null) {
@@ -5778,29 +5790,38 @@ class TelegramBotRouter(
             enqueueMessage(chatId, "Бронь не найдена или уже неактуальна.")
             return
         }
-        supportThreadRepository?.let { repository ->
+        val repository = supportThreadRepository
+        if (repository == null) {
+            enqueueMessage(chatId, "Переписка временно недоступна. Попробуйте позже.")
+            return
+        }
+        val write =
             try {
-                val thread =
-                    repository.createOrFindBookingThread(
-                        venueId = booking.venueId,
-                        bookingId = booking.id,
-                        guestUserId = booking.userId,
-                        title = formatBookingDisplayLabel(booking),
-                    )
-                repository.addMessage(
-                    threadId = thread.id,
+                repository.addBookingMessage(
+                    bookingId = booking.id,
                     authorUserId = userId,
                     authorRole = SupportMessageAuthorRole.GUEST,
                     source = SupportMessageSource.GUEST_BOT,
                     text = replyText,
+                    telegramMessageId = telegramMessageId,
+                    title = formatBookingDisplayLabel(booking),
+                    expectedGuestUserId = userId,
                 )
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
             }
+        if (write == null) {
+            dialogStateRepository.clear(chatId)
+            enqueueMessage(chatId, "Бронь не найдена или уже неактуальна.")
+            return
         }
         dialogStateRepository.clear(chatId)
-        enqueueMessage(chatId, "✅ Ответ отправлен заведению.")
+        enqueueMessage(
+            chatId,
+            "✅ Ответ отправлен заведению.",
+            dedupeKey = "booking-thread-message:${write.message.id}:guest-ack",
+        )
     }
 
     private suspend fun promptGuestSupportTicket(
@@ -34688,9 +34709,10 @@ class TelegramBotRouter(
         text: String,
         replyMarkup: ReplyMarkup? = null,
         parseMode: String? = null,
+        dedupeKey: String? = null,
     ) {
         runCatching {
-            outboxEnqueuer.enqueueSendMessage(chatId, text, replyMarkup, parseMode)
+            outboxEnqueuer.enqueueSendMessage(chatId, text, replyMarkup, parseMode, dedupeKey)
         }.onFailure { logBestEffort("outbox enqueue", it) }
     }
 

@@ -1,6 +1,6 @@
 # Guest Communication Model
 
-Дата актуализации: 2026-07-21.
+Дата актуализации: 2026-08-17.
 
 Статус: **current product reference**. Этот документ является single source of truth для guest communication routing после smoke-tested Support/Tickets and Venue Chat MVP. Старые audit notes про `Сообщения`, booking support и staff-chat нужно сверять с этой моделью перед будущими задачами Codex. Role/scoping decisions for these flows are governed by `docs/SECURITY_RBAC_MATRIX.md`; Venue operational handling is governed by `docs/VENUE_OPERATIONS.md`; booking lifecycle details are governed by `docs/BOOKING_LIFECYCLE.md`; Telegram fallback and staff-chat behavior is governed by `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`; validation strategy is governed by `docs/TESTING_QA_SMOKE_STRATEGY.md`; release/deploy operations are governed by `docs/DEPLOYMENT_RUNBOOK.md`.
 
@@ -17,7 +17,23 @@ Guest communication is split into four different product scenarios. Do not merge
 
 ## Thread Types
 
-- `BOOKING_CHAT` is represented by booking conversation threads. It is opened from booking flows and must remain separate from support ticket queues. Booking statuses, hold/deadline, reminders and no-show/seated behavior are defined in `docs/BOOKING_LIFECYCLE.md`.
+- `BOOKING_CHAT` is represented by exactly one booking conversation thread per global
+  `bookings.id`. The server locks and reads the booking before deriving guest/venue participants;
+  client-supplied tenant fields are not authority. Every Guest/Venue Mini App and Telegram booking
+  message uses one booking-specific writer that re-checks the locked booking's Guest identity or
+  Venue linkage plus stored thread metadata/status after the canonical booking and thread locks,
+  then commits message plus thread
+  status/timestamps in one transaction. A concurrently closed thread creates no message and stays
+  closed. The generic message writer positively allows only `VENUE_CHAT` / `SUPPORT_TICKET` and
+  rejects `BOOKING_THREAD` plus unknown/future types. Database uniqueness and persisted Telegram-message retry dedupe
+  remain additional defenses. It is opened from booking flows and remains separate from support
+  ticket queues. Booking statuses, lossless duplicate/read-state policy, hold/deadline, reminders
+  and no-show/seated behavior are defined in `docs/BOOKING_LIFECYCLE.md`.
+- Read-marker writes preserve the same parent-first dependency: booking chat uses
+  `bookings -> support_threads -> support_thread_reads`; ordinary venue/support chat uses
+  `support_threads -> support_thread_reads` after the caller owns the thread. No read-marker path
+  acquires `support_thread_reads` before reaching back to its thread. This ordering changes neither
+  participants nor the RBAC matrix.
 - `VENUE_CHAT` is represented by a venue-scoped ordinary chat thread for one guest and one venue. Normal venue-question entrypoints reuse an existing ordinary guest+venue chat instead of creating duplicates.
 - Low-feedback follow-up opens the exact active `VENUE_CHAT`: reuse an active thread and add fresh feedback context, or create a new active thread when the previous thread is closed/resolved. The system/context message `Отзыв после визита` may include rating, tags, comment and visit date. It is not a personal Owner message.
 - `SUPPORT_TICKET` is represented by support-ticket threads with status, category, assignee scope and audit/status behavior.
@@ -33,6 +49,13 @@ Guest communication is split into four different product scenarios. Do not merge
 - Catalog cards expose `Задать вопрос`, which opens or creates `VENUE_CHAT`.
 - Venue detail exposes local `💬 Задать вопрос`, which opens or creates `VENUE_CHAT`.
 - If Owner/Manager later sends a manual reply from a feedback follow-up thread, Guest receives it in `Чаты`, not `Помощь` / Support.
+- Booking `Открыть переписку` loads the exact server-returned thread, including a resolved thread or
+  one outside the current list window; it must never fall back to another active conversation.
+- Booking-thread reconciliation uses a complete read-only bounded batch response for the requested
+  server-authorized booking ids. A capped thread list, unfinished batch/page or failed read cannot
+  prove that a thread is absent; the composer and first-thread action remain unavailable until the
+  exact result is `NO_THREAD`, or until the exact existing thread and its messages load successfully.
+  These safety reads bypass and prohibit HTTP storage so reload cannot reuse a stale pre-send state.
 - Table context must not show a primary `Связаться с заведением` CTA. Live questions at the table use `Вызвать персонал`.
 - Table-context support/help remains secondary for Mini App, QR, technical issues, unresolved complaints or order/service problems that should become tickets.
 
@@ -57,7 +80,13 @@ Guest communication is split into four different product scenarios. Do not merge
 - Staff does not see ordinary `VENUE_CHAT` in the MVP.
 - Platform Owner sees support tickets, including platform-only and transferred tickets.
 - Platform Owner does not see ordinary `VENUE_CHAT` unless a future product policy explicitly changes that.
+- Platform Owner does not list, open, reply to, assign or resolve ordinary `BOOKING_CHAT`; a venue
+  cannot transfer a booking chat into the Platform support queue.
 - Cross-venue access is rejected server-side; UI hiding is not a security boundary.
+- Exact booking-thread lookup derives Guest/Venue scope from canonical bookings. Guest can request
+  only own bookings; Venue Owner/Manager can request only bookings of the own venue; Staff remains
+  denied. Missing/foreign ids return no partial thread facts, and lookup performs no thread,
+  message, read-marker, audit or outbox writes.
 
 ## Notifications And Anti-Spam
 
@@ -65,6 +94,13 @@ Guest communication is split into four different product scenarios. Do not merge
 - `SUPPORT_TICKET` creation/replies do not enqueue staff-chat notifications.
 - Feedback follow-up context does not enqueue staff-chat, create a support ticket or auto-send a personal message from Owner/Manager.
 - Support/venue replies may notify the guest through the existing safe Telegram outbox when possible.
+- Mini App booking replies carry an opaque, non-authoritative `clientMessageId`. The backend scopes
+  it to canonical thread + source + actor and writes the message, thread state and server-derived
+  Telegram outbox row on one JDBC connection before responding. Exact manual replay after an
+  ambiguous network result returns the original message with no new outbox; a changed payload is a
+  safe `409` and automatic resend remains out of scope. Venue replies notify the canonical booking
+  guest; Guest replies receive only the private acknowledgement and never post the conversation to
+  staff-chat.
 - `STAFF_CALL` keeps the existing operational notification behavior.
 - Telegram fallback and staff-chat allow/deny policy is canonical in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`: support tickets, venue chats and full booking-chat streams must not post to staff-chat.
 - Guest support ticket creation, venue chat creation and guest support/venue chat messages are rate-limited through the existing guest rate-limit infrastructure.

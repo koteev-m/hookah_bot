@@ -1,6 +1,6 @@
 # Booking Lifecycle Model
 
-Дата актуализации: 2026-07-09.
+Дата актуализации: 2026-08-17.
 
 Статус: **current product reference / SPEC UPDATED**. Booking flows are implemented in several bounded slices: guest booking create/list/cancel/change acceptance foundations, Venue Mini App booking queue/lifecycle, hold settings, `arrival_deadline_at`, confirmed-only arrival terminal actions, state-aware staff-chat booking buttons, booking conversation threads, booking `SEATED` -> Guest History integration and opt-in reminder code are documented as smoke-closed or code/test-backed in the current roadmap. The complete booking lifecycle is still **PARTIAL / needs verification** for rollout-gated reminders, full automation, preorder, feedback and all analytics/audit event coverage.
 
@@ -213,18 +213,125 @@ Current vs target:
 ## Booking Chat
 
 Rules:
-- `BOOKING_CHAT` is tied to one `booking_id`.
+- `BOOKING_CHAT` is tied to exactly one global `bookings.id`; `booking_id`, not
+  `(venue_id, booking_id)`, is its canonical identity.
+- At most one non-null `BOOKING_THREAD` exists for a booking. The backend locks the canonical
+  booking row, derives the venue and guest from it, then resolves the thread and writes the first
+  or later message in one transaction.
+- Every Guest/Venue Mini App and Telegram message write goes through the booking-specific
+  repository writer. That writer reloads the thread, derives `booking_id`, locks the canonical
+  booking, locks and reloads the canonical thread, re-checks the locked booking's Guest identity or
+  Venue linkage, stored thread ownership and locked conversation status, then inserts the message and updates status/
+  timestamps in the same transaction. A concurrently `CLOSED` thread is rejected before message
+  facts and is never reopened. The generic message writer positively allows only `VENUE_CHAT` and
+  `SUPPORT_TICKET`; `BOOKING_THREAD` and unknown/future types fail closed.
 - Venue can message guest about time, comment, arrival and ordinary booking coordination.
-- Guest can reply from Bot/Mini App where implemented.
+- Guest can open/reuse the thread from the own-booking Mini App action and reply from Bot/Mini App;
+  Venue Owner/Manager can reply only for the own venue. Staff and Platform do not receive ordinary
+  booking-chat access.
 - Booking `Открыть переписку` opens `BOOKING_CHAT` / `Чаты`, not `SUPPORT_TICKET`.
 - Booking chat has its own active/resolved conversation status where implemented; resolving a chat must not confirm, cancel, seat, no-show or otherwise mutate the booking.
 - Guest booking replies persist to `BOOKING_CHAT`; booking chat messages do not post to staff-chat.
 - If a booking problem becomes a dispute/complaint, the guest uses Help -> `SUPPORT_TICKET` category `Бронь`.
 - Booking support outside table requires verified booking or venue context.
+- Telegram retries use the persisted inbound message id for per-thread message idempotency; guest
+  notification and acknowledgements use stable outbox dedupe keys.
+- Every Mini App booking reply carries an opaque `clientMessageId` generated for that pending send.
+  It contains no actor, booking, thread or message data and is not authority. The client keeps it
+  only for an unchanged manual retry after an ambiguous network result; editing the draft, a
+  successful response, or changing account/venue/thread/booking invalidates it. There is no
+  automatic resend loop.
+- Each active booking context exposes an explicit reconciliation state: `LOADING / UNKNOWN`,
+  `READY_NO_THREAD`, `READY_WITH_THREAD` or `ERROR`. Guest/Venue dedicated booking cards and generic
+  booking-thread screens do not expose the composer, send action or `Написать гостю` until an
+  exact authoritative lookup succeeds for that booking. The read-only bounded batch endpoints
+  `GET /api/guest/support/booking-threads?bookingIds=...` and
+  `GET /api/venue/{venueId}/support/booking-threads?bookingIds=...` return one explicit
+  `WITH_THREAD` or `NO_THREAD` result for every requested, server-authorized id (maximum 100 ids per
+  request). Clients validate the full response and deterministically chunk larger authoritative
+  booking sets; reconciliation completes only after every chunk succeeds. Absence from a capped
+  thread list, an incomplete page/batch or a failed request never means `READY_NO_THREAD`. Existing
+  exact/list/detail safety reads are `no-store` on both HTTP response and Mini App fetch so a stale
+  pre-send result cannot survive a lost-response reload. Existing threads additionally require a
+  successful message fetch. A failed lookup/message read preserves the draft, shows the screen-scoped
+  `Обновить переписку` action and performs reads only; it never creates a fresh key or resends.
 
 Current vs target:
-- Current docs say booking conversation threads are implemented through `support_threads` / `support_messages`, with Guest Bot replies, Guest Mini App replies and Venue Mini App replies sharing one persisted thread.
-- No DB-level duplicate/race protection for concurrent booking thread creation is documented as complete; keep as future if needed.
+- Booking conversation threads are implemented through `support_threads` / `support_messages`, with
+  Guest Bot, Guest Mini App, Venue Telegram and Venue Mini App production writers sharing one
+  persisted thread and transaction-bound message path.
+- PostgreSQL V124 enforces a partial unique `booking_id` constraint; H2 V125 uses an equivalent
+  nullable generated key. Safe legacy duplicates merge without deleting messages. Automatic merge
+  is allowed only when the group has no read markers, or every represented user has exactly one
+  marker on every duplicate thread and all of that user's `last_read_at` values are identical.
+  Partial coverage or different timestamps stops the migration before domain mutation; the
+  migration never selects `MIN`/`MAX` as an approximation for lost read evidence.
+- The survivor is `MIN(thread.id)`. It keeps that id and receives exact group
+  `MIN(created_at)`, `MAX(updated_at)` and `MAX(last_message_at)` with all-null preservation;
+  statuses must already agree, while its other stored metadata stays unchanged. Message facts and
+  known audit references are reparented without losing evidence. The production producer schema is
+  `entity_type=support_ticket`, action `SUPPORT_TICKET_STATUS_CHANGED`, with exact top-level
+  `ticketId` as its only thread reference. For each affected row, payload must be an object and its
+  integer `ticketId` must equal the pre-migration `entity_id`; both are remapped to the survivor.
+  Action/entity, actor, target, timestamp and every other payload value remain unchanged. Valid JSON
+  keys are decoded, NFKC-normalized, lowercased with locale-independent semantics and compared after
+  `_`, `-`, `.`, spaces are removed. Any additional recursive key containing
+  `thread`/`ticket`/`conversation` plus `id(s)`/`ref(s)` fails before mutation; no unknown key is
+  silently remapped. `conversationStatus` remains unrelated negative evidence. Missing, non-integer,
+  mismatched or aliased thread references and unknown affected audit shapes stop before domain mutation,
+  identical read rows collapse to one exact marker, duplicate rows are deleted only after remaps,
+  and the unique invariant is installed last. Null/missing booking, canonical venue/guest mismatch,
+  conflicting statuses or an unknown/unhandled reference family also stop before domain mutation
+  under `STOP_FOR_BOOKING_THREAD_DEDUPLICATION_DECISION`.
+- PostgreSQL V124 and the read-only preflight derive top-level `ticketId` from decoded JSON object
+  entries. H2 V125 calls deterministic aliases backed by the duplicate-aware
+  `BookingAuditReferencePolicy` semantic parser for cardinality, exact integer extraction and
+  top-level remap. The H2 decision therefore does not depend on serialized key order, whitespace,
+  minification or safe extra fields, and does not use a regex to extract or replace `ticketId`.
+  Plain plus Unicode-escaped duplicate keys still fail before domain mutation.
+- PostgreSQL V124 takes bounded `EXCLUSIVE` locks before its first guard, in the exact order
+  `bookings`, `support_threads`, `support_messages`, `support_thread_reads`, `audit_log`. This blocks
+  the confirmed booking/thread/message/read/audit reference writers while preserving ordinary
+  reads. The other 15 non-audit durable JSON/payload/snapshot pairs are negative-evidence scans,
+  not declared references or extra lock targets. Traffic drain and stopping old writers therefore
+  remain mandatory for rollout; the locks are not permission to run mixed binaries.
+- Booking read-marker transactions acquire parents first:
+  `bookings -> support_threads -> support_thread_reads`. Non-booking callers that already own or
+  inserted the thread use `support_threads -> support_thread_reads`; no path locks a read marker and
+  then reaches back to the thread or booking. Authorization results and Guest/Venue/Platform role
+  boundaries are unchanged by this ordering.
+- Mini App idempotency is persisted as
+  `(thread_id, source, author_user_id, client_message_id)`. Replaying the same key with the exact
+  normalized stored text returns the original message without touching thread state or outbox;
+  reusing it for different text fails with
+  `BOOKING_MESSAGE_IDEMPOTENCY_PAYLOAD_MISMATCH` and zero writes. A new key creates a new message.
+  Replay resolution occurs after canonical authorization/locks but before mutable closed-status
+  rejection, so a response lost just before a later close is still recoverable; a new key on a
+  closed thread remains denied. Telegram keeps its separate `telegram_message_id` contract.
+- For a new Mini App booking message, authoritative booking/thread participant checks after the
+  existing surface authentication/RBAC prerequisite, replay lookup,
+  message insert, thread update and server-derived Telegram outbox insert use one JDBC connection
+  and one commit. Venue replies notify the canonical guest; Guest replies enqueue only the existing
+  safe private acknowledgement and never the staff chat. An outbox failure rolls everything back;
+  replay after a lost committed HTTP response returns the original message and outbox row.
+- The existing suspend `TelegramOutboxRepository.enqueue` remains the legacy key-only contract:
+  a repeated `dedupeKey` is an idempotent no-op even if a caller regenerated mutable envelope bytes.
+  The connection-aware booking-only method is separate and strict: equal
+  `chat_id + method + canonical payload_json` replays, while any mismatch aborts the booking message
+  transaction. Reminder, billing and ordinary Telegram callers do not inherit strict collisions.
+- The implementation and regression matrix includes H2/PostgreSQL migration,
+  repository race/idempotency/rollback, parent-first read-marker, RBAC route, Telegram and browser
+  coverage. Local validation includes semantic/recursive migration wrappers `42/42` per database, exact
+  message metadata wrappers `5/5`, real PostgreSQL Mini App idempotency `11/11`, predicate parity
+  and H2 helper policy coverage `6/6`, plus deterministic reload-after-commit browser coverage. Independent review is still
+  required; green Actions and staging/two-account real-client smoke remain later release gates.
+- The seven findings in the current bounded fix have local fixes and coverage, but each remains
+  `LOCAL_FIX_REVIEW_REQUIRED` and the epic
+  remains `REVIEW REQUIRED BEFORE COMMIT`. `BOOKING-DEDUP-AUDIT-REF-001` is not treated as a final
+  complete-reference verdict; recursive coverage is the separate
+  `BOOKING-AUDIT-UNKNOWN-REFERENCE-KEY-001` fix awaiting review.
+- `BOOKING-SAVEPOINT-COLLISION-001` stays `OPEN`: unique-conflict recovery is defensive-only behind
+  the canonical booking-row lock and must not be removed without a separate concurrency review.
 
 ## Staff-Chat Notification Policy
 
@@ -313,7 +420,7 @@ Privacy:
 | Mini App guest booking screen | `Мои брони` active/upcoming list with public label/time/deadline is documented; Guest History Foundation is staging-smoked for booking-only `SEATED` visits and non-seated booking filtering. | Account booking list/history with safe status labels and actions. | Broader booking-history polish, feedback and retention loops remain future. |
 | Venue Mini App booking queue | Implemented/smoked for M3/M7a/M7b/M7c slices. | Source-of-truth operational queue under Venue Mode. | Overdue automation, broader reminder UI and preorder remain partial/future. |
 | Telegram `/my` booking list | Implemented and compared visually with Guest Mini App for public label/time/deadline. | Same identity/status/deadline semantics across Bot and Mini App. | Keep runtime regression. |
-| Booking chat | Implemented as persisted booking threads; `Открыть переписку` opens messages. | `BOOKING_CHAT` is separate from support and staff-chat. | Race/unique constraints and Bot full inbox remain future where needed. |
+| Booking chat | Implemented as one persisted thread per global `booking_id`; `Открыть переписку` opens the exact active or resolved thread. | DB uniqueness, booking-row serialization, atomic messages, retry dedupe and Guest/Venue/Platform isolation are locally proved. | Green Actions, migration preflight and bounded staging/two-account Telegram smoke remain release gates; Bot full inbox remains future. |
 | Booking lifecycle statuses | Runtime statuses include `PENDING`, `CONFIRMED`, `CHANGED`, `CANCELED`, `EXPIRED`, `NO_SHOW`, `SEATED`. | Product copy distinguishes proposed time and cancellation actor. | Split `canceled_by_guest` / `canceled_by_venue` only when runtime supports it. |
 | Hold minutes / arrival deadline | `venue_booking_settings.hold_minutes` and `arrival_deadline_at` are documented as implemented/smoked. | Venue setting with deadline snapshot and venue-local display. | Automatic policy edge cases need verification. |
 | Reminders worker | M7c is code/test-backed and one controlled staging smoke passed; runtime disabled by default. | Rollout-gated transactional reminders with dedupe, quiet hours and safe actions. | Enable only with explicit rollout/smoke; management UI future. |

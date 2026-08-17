@@ -5,11 +5,20 @@ import {
   guestConfirmBooking,
   guestCreateBooking,
   guestGetActiveBookings,
+  guestGetBookingThreadReconciliation,
   guestGetBookings,
+  guestOpenBookingThread,
   guestUpdateBooking
 } from '../shared/api/guestApi'
 import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
 import type { GuestBookingResponse } from '../shared/api/guestDtos'
+import {
+  bookingThreadLoading,
+  bookingThreadStates,
+  bookingThreadReconciliationChunks,
+  reconcileBookingThreadItems,
+  type BookingThreadReconciliationState
+} from '../shared/bookingThreadReconciliation'
 import { append, el, on } from '../shared/ui/dom'
 import { showToast } from '../shared/ui/toast'
 
@@ -302,12 +311,32 @@ function renderApiError(status: HTMLParagraphElement, error: ApiErrorInfo, isDeb
   status.textContent = isDebug ? `${error.message} (${error.code})` : error.message || 'Не удалось выполнить действие.'
 }
 
+function renderBookingConversationError(status: HTMLParagraphElement, error: ApiErrorInfo, isDebug: boolean) {
+  const code = normalizeErrorCode(error)
+  if (code === ApiErrorCodes.UNAUTHORIZED || code === ApiErrorCodes.INITDATA_INVALID) {
+    clearSession()
+    status.textContent = 'Сессия истекла. Закройте и снова откройте Mini App.'
+    return
+  }
+  const message =
+    error.status === 403 || error.status === 404
+      ? 'Переписка недоступна: бронь не найдена или больше не активна. Обновите список броней.'
+      : 'Не удалось открыть переписку. Попробуйте ещё раз.'
+  status.textContent = isDebug ? `${message} (${error.code})` : message
+}
+
 function renderBookings(
   list: HTMLDivElement,
   bookings: GuestBookingResponse[],
+  bookingThreadReconciliation: Map<number, BookingThreadReconciliationState>,
   onCancel: (booking: GuestBookingResponse) => void,
   onConfirm: (booking: GuestBookingResponse) => void,
   onChange: (booking: GuestBookingResponse, payload: { scheduledAt: string; partySize: number | null; comment: string | null }) => void,
+  onOpenConversation: (
+    booking: GuestBookingResponse,
+    button: HTMLButtonElement,
+    status: HTMLParagraphElement
+  ) => void,
   onRefresh: () => void
 ) {
   list.replaceChildren()
@@ -326,6 +355,7 @@ function renderBookings(
     return
   }
   activeBookings.forEach((booking) => {
+    const reconciliation = bookingThreadReconciliation.get(booking.bookingId) ?? bookingThreadLoading()
     const row = el('article', { className: 'venue-order-row guest-booking-card' })
     const info = el('div', { className: 'guest-booking-content' })
     const cardHeader = el('div', { className: 'guest-booking-header' })
@@ -370,6 +400,33 @@ function renderBookings(
     }
     append(row, info)
     const actions = el('div', { className: 'button-row order-actions guest-booking-actions' })
+    const conversationStatus = el('p', {
+      className: 'status guest-booking-conversation-status',
+      text: ''
+    }) as HTMLParagraphElement
+    conversationStatus.setAttribute('aria-live', 'polite')
+    conversationStatus.hidden = true
+    if (reconciliation.status === 'READY_NO_THREAD' || reconciliation.status === 'READY_WITH_THREAD') {
+      const conversationButton = el('button', {
+        className: 'button-small',
+        text: 'Открыть переписку'
+      }) as HTMLButtonElement
+      conversationButton.dataset.bookingConversation = String(booking.bookingId)
+      conversationButton.addEventListener('click', () => onOpenConversation(booking, conversationButton, conversationStatus))
+      actions.appendChild(conversationButton)
+    } else if (reconciliation.status === 'LOADING') {
+      conversationStatus.hidden = false
+      conversationStatus.textContent = 'Сверяем переписку…'
+    } else {
+      conversationStatus.hidden = false
+      conversationStatus.textContent = 'Не удалось сверить переписку этой брони.'
+      const refreshConversationButton = el('button', {
+        className: 'button-small button-secondary',
+        text: 'Обновить переписку'
+      }) as HTMLButtonElement
+      refreshConversationButton.addEventListener('click', onRefresh)
+      actions.appendChild(refreshConversationButton)
+    }
     if (canConfirmAttendance(booking)) {
       const confirmButton = el('button', { className: 'button-small', text: '✅ Я приду' }) as HTMLButtonElement
       confirmButton.addEventListener('click', () => onConfirm(booking))
@@ -448,6 +505,7 @@ function renderBookings(
     if (actions.childElementCount > 0) {
       row.appendChild(actions)
     }
+    row.appendChild(conversationStatus)
     row.appendChild(changeForm)
     section.appendChild(row)
   })
@@ -463,7 +521,10 @@ export function renderGuestBookingsScreen(options: GuestBookingsOptions) {
   const disposables: Array<() => void> = []
   let disposed = false
   let isLoading = false
+  let openingConversationBookingId: number | null = null
   let abortController: AbortController | null = null
+  let currentBookings: GuestBookingResponse[] = []
+  let bookingThreadReconciliation = new Map<number, BookingThreadReconciliationState>()
 
   const setLoading = (loading: boolean) => {
     isLoading = loading
@@ -492,35 +553,179 @@ export function renderGuestBookingsScreen(options: GuestBookingsOptions) {
     refs.successMeta.textContent = `${displayBookingTime(booking)} · ${booking.partySize ?? '—'} гостей`
   }
 
+  const setConversationLoading = (bookingId: number | null) => {
+    refs.list.querySelectorAll<HTMLButtonElement>('button[data-booking-conversation]').forEach((button) => {
+      const buttonBookingId = Number(button.dataset.bookingConversation)
+      button.disabled = bookingId !== null
+      button.textContent = buttonBookingId === bookingId ? 'Открываем…' : 'Открыть переписку'
+    })
+  }
+
   const loadBookings = async () => {
-    if (isLoading) return
+    if (isLoading || openingConversationBookingId !== null) return
     abortController?.abort()
     const controller = new AbortController()
     abortController = controller
     setLoading(true)
+    bookingThreadReconciliation = bookingThreadStates(currentBookings.map((booking) => booking.bookingId), 'LOADING')
+    if (currentBookings.length) {
+      renderBookings(
+        refs.list,
+        currentBookings,
+        bookingThreadReconciliation,
+        (booking) => void cancelBooking(booking),
+        (booking) => void confirmBooking(booking),
+        (booking, payload) => void changeBooking(booking, payload),
+        (booking, button, status) => void openBookingConversation(booking, button, status),
+        () => void loadBookings()
+      )
+    }
     const result = venueId
       ? await guestGetBookings(backendUrl, venueId, deps, controller.signal)
       : await guestGetActiveBookings(backendUrl, deps, controller.signal)
     if (disposed || abortController !== controller) return
-    abortController = null
-    setLoading(false)
     if (!result.ok) {
+      abortController = null
+      setLoading(false)
+      bookingThreadReconciliation = bookingThreadStates(currentBookings.map((booking) => booking.bookingId), 'ERROR')
       renderApiError(refs.status, result.error, isDebug)
+      if (currentBookings.length) {
+        renderBookings(
+          refs.list,
+          currentBookings,
+          bookingThreadReconciliation,
+          (booking) => void cancelBooking(booking),
+          (booking) => void confirmBooking(booking),
+          (booking, payload) => void changeBooking(booking, payload),
+          (booking, button, status) => void openBookingConversation(booking, button, status),
+          () => void loadBookings()
+        )
+      }
       return
     }
-    refs.status.textContent = ''
+    currentBookings = result.data.items
+    bookingThreadReconciliation = bookingThreadStates(currentBookings.map((booking) => booking.bookingId), 'LOADING')
     renderBookings(
       refs.list,
-      result.data.items,
+      currentBookings,
+      bookingThreadReconciliation,
       (booking) => void cancelBooking(booking),
       (booking) => void confirmBooking(booking),
       (booking, payload) => void changeBooking(booking, payload),
+      (booking, button, status) => void openBookingConversation(booking, button, status),
+      () => void loadBookings()
+    )
+    try {
+      const bookingIds = currentBookings.map((booking) => booking.bookingId)
+      const reconciled = new Map<number, BookingThreadReconciliationState>()
+      const reconciledThreadIds = new Set<number>()
+      for (const bookingIdChunk of bookingThreadReconciliationChunks(bookingIds)) {
+        const reconciliationResult = await guestGetBookingThreadReconciliation(
+          backendUrl,
+          bookingIdChunk,
+          deps,
+          controller.signal
+        )
+        if (disposed || abortController !== controller) return
+        if (!reconciliationResult.ok) {
+          throw new Error('Booking thread reconciliation request failed')
+        }
+        const chunkReconciliation = reconcileBookingThreadItems(
+          bookingIdChunk,
+          reconciliationResult.data.items
+        )
+        chunkReconciliation.forEach((state, bookingId) => {
+          if (state.status === 'READY_WITH_THREAD') {
+            if (reconciledThreadIds.has(state.thread.threadId)) {
+              throw new Error('Duplicate booking thread across reconciliation chunks')
+            }
+            reconciledThreadIds.add(state.thread.threadId)
+          }
+          reconciled.set(bookingId, state)
+        })
+      }
+      currentBookings.forEach((booking) => {
+        const state = reconciled.get(booking.bookingId)
+        if (state?.status === 'READY_WITH_THREAD' && state.thread.venueId !== booking.venueId) {
+          throw new Error('Booking thread venue mismatch')
+        }
+      })
+      bookingThreadReconciliation = reconciled
+    } catch {
+      abortController = null
+      setLoading(false)
+      bookingThreadReconciliation = bookingThreadStates(currentBookings.map((booking) => booking.bookingId), 'ERROR')
+      refs.status.textContent = 'Не удалось достоверно сверить переписку. Отправка сообщений заблокирована.'
+      renderBookings(
+        refs.list,
+        currentBookings,
+        bookingThreadReconciliation,
+        (booking) => void cancelBooking(booking),
+        (booking) => void confirmBooking(booking),
+        (booking, payload) => void changeBooking(booking, payload),
+        (booking, button, status) => void openBookingConversation(booking, button, status),
+        () => void loadBookings()
+      )
+      return
+    }
+    abortController = null
+    setLoading(false)
+    refs.status.textContent = ''
+    renderBookings(
+      refs.list,
+      currentBookings,
+      bookingThreadReconciliation,
+      (booking) => void cancelBooking(booking),
+      (booking) => void confirmBooking(booking),
+      (booking, payload) => void changeBooking(booking, payload),
+      (booking, button, status) => void openBookingConversation(booking, button, status),
       () => void loadBookings()
     )
   }
 
+  const openBookingConversation = async (
+    booking: GuestBookingResponse,
+    button: HTMLButtonElement,
+    status: HTMLParagraphElement
+  ) => {
+    if (isLoading || openingConversationBookingId !== null) return
+    const reconciliation = bookingThreadReconciliation.get(booking.bookingId)
+    if (!reconciliation || reconciliation.status === 'LOADING' || reconciliation.status === 'ERROR') return
+    if (reconciliation.status === 'READY_WITH_THREAD') {
+      window.location.hash = `#/messages?threadId=${encodeURIComponent(String(reconciliation.thread.threadId))}`
+      return
+    }
+    abortController?.abort()
+    const controller = new AbortController()
+    abortController = controller
+    openingConversationBookingId = booking.bookingId
+    setConversationLoading(booking.bookingId)
+    button.disabled = true
+    status.hidden = false
+    status.textContent = 'Открываем переписку…'
+    const result = await guestOpenBookingThread(backendUrl, booking.bookingId, deps, controller.signal)
+    if (disposed || abortController !== controller) return
+    abortController = null
+    openingConversationBookingId = null
+    setConversationLoading(null)
+    if (!result.ok) {
+      renderBookingConversationError(status, result.error, isDebug)
+      return
+    }
+    if (result.data.thread.threadType !== 'BOOKING_THREAD' || result.data.thread.bookingId !== booking.bookingId) {
+      status.textContent = 'Не удалось подтвердить переписку этой брони. Обновите список и попробуйте ещё раз.'
+      return
+    }
+    bookingThreadReconciliation.set(booking.bookingId, {
+      status: 'READY_WITH_THREAD',
+      thread: result.data.thread
+    })
+    status.textContent = ''
+    window.location.hash = `#/messages?threadId=${encodeURIComponent(String(result.data.thread.threadId))}`
+  }
+
   const submitBooking = async () => {
-    if (!venueId || isLoading) return
+    if (!venueId || isLoading || openingConversationBookingId !== null) return
     const scheduledAt = buildScheduledAt(refs.dateInput.value, refs.timeInput.value)
     if (!scheduledAt) {
       refs.status.textContent = 'Выберите дату и время.'
@@ -556,7 +761,7 @@ export function renderGuestBookingsScreen(options: GuestBookingsOptions) {
   }
 
   const cancelBooking = async (booking: GuestBookingResponse) => {
-    if (isLoading) return
+    if (isLoading || openingConversationBookingId !== null) return
     const confirmed = window.confirm('Отменить бронь?')
     if (!confirmed) return
     abortController?.abort()
@@ -582,7 +787,7 @@ export function renderGuestBookingsScreen(options: GuestBookingsOptions) {
   }
 
   const confirmBooking = async (booking: GuestBookingResponse) => {
-    if (isLoading) return
+    if (isLoading || openingConversationBookingId !== null) return
     abortController?.abort()
     const controller = new AbortController()
     abortController = controller
@@ -612,7 +817,7 @@ export function renderGuestBookingsScreen(options: GuestBookingsOptions) {
     booking: GuestBookingResponse,
     payload: { scheduledAt: string; partySize: number | null; comment: string | null }
   ) => {
-    if (isLoading) return
+    if (isLoading || openingConversationBookingId !== null) return
     abortController?.abort()
     const controller = new AbortController()
     abortController = controller

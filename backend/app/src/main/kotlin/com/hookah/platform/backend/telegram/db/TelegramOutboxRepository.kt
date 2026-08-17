@@ -6,7 +6,12 @@ import com.hookah.platform.backend.telegram.sanitizeTelegramForLog
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import org.slf4j.LoggerFactory
+import java.sql.Connection
 import java.sql.SQLException
 import java.sql.Timestamp
 import java.time.Duration
@@ -42,38 +47,7 @@ class TelegramOutboxRepository(private val dataSource: DataSource?) {
         withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    val normalizedDedupeKey = dedupeKey?.trim()?.takeIf { it.isNotEmpty() }
-                    if (normalizedDedupeKey != null && outboxDedupeExists(connection, normalizedDedupeKey)) {
-                        return@use
-                    }
-                    try {
-                        val sql =
-                            if (normalizedDedupeKey == null) {
-                                """
-                                INSERT INTO telegram_outbox (chat_id, method, payload_json)
-                                VALUES (?, ?, ?)
-                                """.trimIndent()
-                            } else {
-                                """
-                                INSERT INTO telegram_outbox (chat_id, method, payload_json, dedupe_key)
-                                VALUES (?, ?, ?, ?)
-                                """.trimIndent()
-                            }
-                        connection.prepareStatement(sql).use { statement ->
-                            statement.setLong(1, chatId)
-                            statement.setString(2, method)
-                            statement.setString(3, payloadJson)
-                            if (normalizedDedupeKey != null) {
-                                statement.setString(4, normalizedDedupeKey)
-                            }
-                            statement.executeUpdate()
-                        }
-                    } catch (e: SQLException) {
-                        if (normalizedDedupeKey != null && outboxDedupeExists(connection, normalizedDedupeKey)) {
-                            return@use
-                        }
-                        throw e
-                    }
+                    enqueueLegacyOnConnection(connection, chatId, method, payloadJson, dedupeKey)
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -87,20 +61,188 @@ class TelegramOutboxRepository(private val dataSource: DataSource?) {
         }
     }
 
-    private fun outboxDedupeExists(
-        connection: java.sql.Connection,
+    fun enqueueStrictBookingOnConnection(
+        connection: Connection,
+        chatId: Long,
+        method: String,
+        payloadJson: String,
+        dedupeKey: String? = null,
+    ) {
+        val normalizedDedupeKey = normalizeDedupeKey(dedupeKey)
+        if (normalizedDedupeKey != null) {
+            findOutboxEnvelope(connection, normalizedDedupeKey)?.let { existing ->
+                if (existing.matchesStrict(chatId, method, payloadJson)) return
+                throw outboxDedupeConflict()
+            }
+        }
+        val sql =
+            if (normalizedDedupeKey == null) {
+                """
+                INSERT INTO telegram_outbox (chat_id, method, payload_json)
+                VALUES (?, ?, ?)
+                """.trimIndent()
+            } else {
+                """
+                INSERT INTO telegram_outbox (chat_id, method, payload_json, dedupe_key)
+                VALUES (?, ?, ?, ?)
+                """.trimIndent()
+            }
+        val savepoint =
+            if (normalizedDedupeKey != null && !connection.autoCommit) {
+                connection.setSavepoint()
+            } else {
+                null
+            }
+        try {
+            connection.prepareStatement(sql).use { statement ->
+                statement.setLong(1, chatId)
+                statement.setString(2, method)
+                statement.setString(3, payloadJson)
+                if (normalizedDedupeKey != null) statement.setString(4, normalizedDedupeKey)
+                statement.executeUpdate()
+            }
+        } catch (e: SQLException) {
+            if (savepoint != null) {
+                try {
+                    connection.rollback(savepoint)
+                } catch (rollbackFailure: SQLException) {
+                    e.addSuppressed(rollbackFailure)
+                    throw e
+                }
+            }
+            if (normalizedDedupeKey != null && isUniqueViolation(e)) {
+                findOutboxEnvelope(connection, normalizedDedupeKey)?.let { existing ->
+                    if (existing.matchesStrict(chatId, method, payloadJson)) return
+                    throw outboxDedupeConflict()
+                }
+            }
+            throw e
+        } finally {
+            if (savepoint != null) {
+                runCatching { connection.releaseSavepoint(savepoint) }
+            }
+        }
+    }
+
+    private fun enqueueLegacyOnConnection(
+        connection: Connection,
+        chatId: Long,
+        method: String,
+        payloadJson: String,
+        dedupeKey: String?,
+    ) {
+        val normalizedDedupeKey = normalizeDedupeKey(dedupeKey)
+        if (normalizedDedupeKey != null && findOutboxEnvelope(connection, normalizedDedupeKey) != null) return
+        val sql =
+            if (normalizedDedupeKey == null) {
+                "INSERT INTO telegram_outbox (chat_id, method, payload_json) VALUES (?, ?, ?)"
+            } else {
+                "INSERT INTO telegram_outbox (chat_id, method, payload_json, dedupe_key) VALUES (?, ?, ?, ?)"
+            }
+        val savepoint =
+            if (normalizedDedupeKey != null && !connection.autoCommit) {
+                connection.setSavepoint()
+            } else {
+                null
+            }
+        try {
+            connection.prepareStatement(sql).use { statement ->
+                statement.setLong(1, chatId)
+                statement.setString(2, method)
+                statement.setString(3, payloadJson)
+                if (normalizedDedupeKey != null) statement.setString(4, normalizedDedupeKey)
+                statement.executeUpdate()
+            }
+        } catch (e: SQLException) {
+            if (savepoint != null) {
+                try {
+                    connection.rollback(savepoint)
+                } catch (rollbackFailure: SQLException) {
+                    e.addSuppressed(rollbackFailure)
+                    throw e
+                }
+            }
+            if (normalizedDedupeKey != null && isUniqueViolation(e)) return
+            throw e
+        } finally {
+            if (savepoint != null) {
+                runCatching { connection.releaseSavepoint(savepoint) }
+            }
+        }
+    }
+
+    private fun findOutboxEnvelope(
+        connection: Connection,
         dedupeKey: String,
-    ): Boolean =
+    ): OutboxEnvelope? =
         connection.prepareStatement(
             """
-            SELECT 1
+            SELECT chat_id, method, payload_json
             FROM telegram_outbox
             WHERE dedupe_key = ?
             """.trimIndent(),
         ).use { statement ->
             statement.setString(1, dedupeKey)
-            statement.executeQuery().use { resultSet -> resultSet.next() }
+            statement.executeQuery().use { resultSet ->
+                if (!resultSet.next()) {
+                    null
+                } else {
+                    OutboxEnvelope(
+                        chatId = resultSet.getLong("chat_id"),
+                        method = resultSet.getString("method"),
+                        payloadJson = resultSet.getString("payload_json"),
+                    )
+                }
+            }
         }
+
+    private fun normalizeDedupeKey(dedupeKey: String?): String? = dedupeKey?.trim()?.takeIf { it.isNotEmpty() }
+
+    private fun outboxDedupeConflict(): SQLException =
+        SQLException("Telegram outbox dedupe key belongs to a different envelope", "23505")
+
+    private fun isUniqueViolation(exception: SQLException): Boolean {
+        var current: SQLException? = exception
+        while (current != null) {
+            if (current.sqlState == "23505") return true
+            current = current.nextException
+        }
+        return false
+    }
+
+    private data class OutboxEnvelope(
+        val chatId: Long,
+        val method: String,
+        val payloadJson: String,
+    ) {
+        fun matchesStrict(
+            expectedChatId: Long,
+            expectedMethod: String,
+            expectedPayloadJson: String,
+        ): Boolean =
+            chatId == expectedChatId &&
+                method == expectedMethod &&
+                canonicalJson(payloadJson) == canonicalJson(expectedPayloadJson)
+    }
+
+    companion object {
+        private val strictJson = Json { ignoreUnknownKeys = false }
+
+        private fun canonicalJson(payloadJson: String): String =
+            canonicalize(strictJson.parseToJsonElement(payloadJson)).toString()
+
+        private fun canonicalize(element: JsonElement): JsonElement =
+            when (element) {
+                is JsonObject ->
+                    JsonObject(
+                        element.entries
+                            .sortedBy { it.key }
+                            .associate { (key, value) -> key to canonicalize(value) },
+                    )
+                is JsonArray -> JsonArray(element.map(::canonicalize))
+                else -> element
+            }
+    }
 
     suspend fun claimBatch(
         limit: Int,

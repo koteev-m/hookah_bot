@@ -46,6 +46,7 @@ import type {
   VenueResponse
 } from './guestDtos'
 import type {
+  BookingThreadReconciliationResponse,
   SupportMessageCreateRequest,
   SupportMessageCreateResponse,
   SupportThreadDetailResponse,
@@ -197,6 +198,26 @@ export async function guestGetActiveBookings(
   )
 }
 
+export async function guestOpenBookingThread(
+  backendUrl: string,
+  bookingId: number,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+): Promise<ApiResult<SupportThreadDetailResponse>> {
+  if (!Number.isFinite(bookingId) || !Number.isInteger(bookingId) || bookingId <= 0) {
+    return invalidPositiveIdResult('bookingId')
+  }
+  return requestApi<SupportThreadDetailResponse>(
+    backendUrl,
+    `/api/guest/support/booking-threads/${bookingId}`,
+    {
+      method: 'POST',
+      signal
+    },
+    deps
+  )
+}
+
 export async function guestUpdateBooking(
   backendUrl: string,
   venueId: number,
@@ -303,7 +324,35 @@ export async function guestGetSupportThreads(
     search.set('threadTypes', options.threadTypes.join(','))
   }
   const suffix = search.toString() ? `?${search.toString()}` : ''
-  return requestApi<SupportThreadListResponse>(backendUrl, `/api/guest/support/threads${suffix}`, { signal }, deps)
+  return requestApi<SupportThreadListResponse>(
+    backendUrl,
+    `/api/guest/support/threads${suffix}`,
+    { signal, cache: 'no-store' },
+    deps
+  )
+}
+
+export async function guestGetBookingThreadReconciliation(
+  backendUrl: string,
+  bookingIds: number[],
+  deps: RequestDependencies,
+  signal?: AbortSignal
+): Promise<ApiResult<BookingThreadReconciliationResponse>> {
+  if (
+    bookingIds.length === 0 ||
+    bookingIds.length > 100 ||
+    bookingIds.some((bookingId) => !Number.isSafeInteger(bookingId) || bookingId <= 0) ||
+    new Set(bookingIds).size !== bookingIds.length
+  ) {
+    return invalidInputResult('bookingIds должны содержать от 1 до 100 уникальных положительных чисел')
+  }
+  const search = new URLSearchParams({ bookingIds: bookingIds.join(',') })
+  return requestApi<BookingThreadReconciliationResponse>(
+    backendUrl,
+    `/api/guest/support/booking-threads?${search.toString()}`,
+    { signal, cache: 'no-store' },
+    deps
+  )
 }
 
 export async function guestCreateVenueChat(
@@ -340,7 +389,7 @@ export async function guestGetSupportThread(
   return requestApi<SupportThreadDetailResponse>(
     backendUrl,
     `/api/guest/support/threads/${threadId}`,
-    { signal },
+    { signal, cache: 'no-store' },
     deps
   )
 }

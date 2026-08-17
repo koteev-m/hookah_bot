@@ -1,15 +1,32 @@
 # Project Status
 
-Last verified: 2026-08-15.
+Last verified: 2026-08-17.
 
 ## 1. Current stage
 
-**NEXT EPIC DECISION / MASTER REMAINING WORK INVENTORY PREPARED /
-USER DECISION REQUIRED**.
+**BOOKING CONVERSATION INTEGRITY / THREAD UNIQUENESS AND REAL MULTI-TENANT ISOLATION /
+MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
 
-There is no active Codex Goal. No implementation epic is selected or recorded as `NEXT`.
-The canonical catalog and comparative shortlist are in
-[`docs/UPDATED_PRODUCT_AI_ROADMAP.md`](docs/UPDATED_PRODUCT_AI_ROADMAP.md#13-master-remaining-work-inventory).
+This bounded fix records local implementation and test evidence for
+`BOOKING-CLIENT-ID-RELOAD-RECONCILIATION-001`,
+`BOOKING-AUDIT-UNKNOWN-REFERENCE-KEY-001`,
+`BOOKING-MINIAPP-IDEMPOTENCY-PG-EVIDENCE-001`, `BOOKING-DOC-PREVERDICT-001`,
+`BOOKING-OUTBOX-LEGACY-DEDUPE-SEMANTICS-001` and
+`BOOKING-MESSAGE-MIGRATION-METADATA-001`, plus the H2 semantic-parity fix for
+`BOOKING-DEDUP-AUDIT-REF-001`, inside only
+`BOOKING-THREAD-UNIQUENESS-001` / `QA-BOOKING-ISOLATION-001`. The four Guest/Venue dedicated/generic
+Mini App booking surfaces now reconcile every authoritative booking id through a complete bounded
+read-only batch contract before exposing first-send/reply actions after recreate; absence from a
+capped thread list is never evidence of no thread, and a failed/partial read remains screen-scoped
+and fail-closed.
+PostgreSQL V124/H2 V125 reject recursive unknown audit reference keys before domain mutation, the
+deployment preflight uses the same predicate, and Mini App message metadata is asserted exactly on
+both databases. Legacy outbox enqueue retains key-only replay while only the connection-aware
+booking API uses strict canonical-envelope collision checks. Real PostgreSQL evidence observes the
+waiting caller's exact independent PID, ungranted `pg_locks` row and
+`pg_blocking_pids(waiter) = [caller A]` before release/commit. Independent review is still required;
+no final-review verdict, green Actions, preflight, migration, deploy or staging smoke is recorded.
+No reminder, no-show, queue, preorder or broad analytics/audit redesign is included.
 
 ## 2. Release closure
 
@@ -43,8 +60,9 @@ overall production readiness.
 - Markdown surfaces scanned: `35` (`32` under `docs/**` plus this file, `README.md`, root
   `AGENTS.md`).
 - Normalized raw candidate records: `195`.
-- Canonical remaining items after evidence review and global deduplication: `107`.
-- Disposition: `OPEN_CONFIRMED 43`, `BLOCKED_PRODUCT_DECISION 14`,
+- Canonical catalog items after evidence review and global deduplication: `107`; `105` remain active
+  after the two locally implemented booking items below.
+- Disposition: `OPEN_CONFIRMED 41`, `MVP_IMPLEMENTED_LOCAL_VALIDATION_PASSED 2`, `BLOCKED_PRODUCT_DECISION 14`,
   `BLOCKED_PREREQUISITE 13`, `DEFERRED_AFTER_MVP 31`, `UNKNOWN_NEEDS_RESEARCH 6`,
   `STALE_ALREADY_IMPLEMENTED 42`, `DUPLICATE_OF_OTHER_ID 35`, `HISTORICAL_ONLY 11`.
 - Historical audits remain evidence/history and do not reactivate closed work without current
@@ -58,6 +76,52 @@ Current P2/P3 registry entries preserved as open:
 - `MENU-CONC-001`;
 - `MENU-TEST-002`.
 
-Media/object-storage work remains blocked by `MEDIA-STORAGE-DECISION-001`; this docs-only task did
-not implement or modify Media/R2. The next epic remains a joint user/ChatGPT decision after review
-of the full master inventory.
+Booking review registry for this Goal:
+
+- `BOOKING-DEDUP-READ-001` — `DONE` after fail-closed H2/PostgreSQL lossless-read migration proof and
+  live writer-first/migration-first snapshot serialization;
+- `BOOKING-WRITER-CONVERGENCE-001` — `DONE` after production route/repository convergence proof;
+- `BOOKING-CI-FLOOR-001` — `DONE` after exact selectors, XML minima and structured Playwright floor;
+- `BOOKING-PG-EVIDENCE-001` — `DONE` after exact PostgreSQL race post-state evidence;
+- `BOOKING-MINIAPP-OUTBOX-001` — `DONE`; persisted scope-bound Mini App replay identity and
+  same-transaction message/thread/strict-booking outbox remain covered; the legacy enqueue contract
+  is separately preserved by this bounded fix;
+- `BOOKING-DEDUP-AUDIT-REF-001` — `LOCAL_FIX_REVIEW_REQUIRED`; H2 now validates and remaps the exact
+  top-level integer `ticketId` with a duplicate-aware semantic JSON helper independent of key order
+  and formatting. The recursive unknown-key gap is locally fixed separately under
+  `BOOKING-AUDIT-UNKNOWN-REFERENCE-KEY-001`; both still await independent review;
+- `BOOKING-MIGRATION-SNAPSHOT-001` — `DONE`; pre-guard PostgreSQL table locks and real writer-first
+  plus migration-first Flyway serialization pass the exact `2/2` concurrency gate;
+- `BOOKING-READ-LOCK-ORDER-001` — `DONE`; all 15 standalone read-marker callers and four connection-aware paths
+  use `bookings -> support_threads -> support_thread_reads` or
+  `support_threads -> support_thread_reads`, with fresh repository `11/11` and real PostgreSQL
+  `3/3` lock/RBAC evidence and no reverse runtime DML path;
+- `BOOKING-SAVEPOINT-COLLISION-001` — `OPEN`; the current unique-conflict branch is defensive-only
+  under the booking-row lock and requires a separate review before removal.
+
+Findings fixed locally and still requiring independent review in this bounded fix:
+
+- `BOOKING-CLIENT-ID-RELOAD-RECONCILIATION-001` — `LOCAL_FIX_REVIEW_REQUIRED`;
+- `BOOKING-AUDIT-UNKNOWN-REFERENCE-KEY-001` — `LOCAL_FIX_REVIEW_REQUIRED`;
+- `BOOKING-MINIAPP-IDEMPOTENCY-PG-EVIDENCE-001` — `LOCAL_FIX_REVIEW_REQUIRED`;
+- `BOOKING-DOC-PREVERDICT-001` — `LOCAL_FIX_REVIEW_REQUIRED`;
+- `BOOKING-OUTBOX-LEGACY-DEDUPE-SEMANTICS-001` — `LOCAL_FIX_REVIEW_REQUIRED`;
+- `BOOKING-MESSAGE-MIGRATION-METADATA-001` — `LOCAL_FIX_REVIEW_REQUIRED`;
+- `BOOKING-DEDUP-AUDIT-REF-001` — `LOCAL_FIX_REVIEW_REQUIRED`.
+
+Still open by design:
+
+- `BOOKING-CI-PLAYWRIGHT-FLAKE-001` — `OPEN`; an earlier structured run executed `197/198` after
+  one unrelated favorite-test failure, and this pass first executed `205/206` after one unrelated
+  catalog-debounce timing failure before the focused and second full `206/206` reruns passed.
+  Trigger: the next Mini App CI-hardening pass or a repeated same failure in GitHub Actions;
+- `BOOKING-SAVEPOINT-COLLISION-001` — `OPEN`;
+- `BOOKING-AUDIT-EVENTS-001` — `OPEN`;
+- `BOOKING-REMINDER-ROLLOUT-001` — `OPEN`;
+- `BOOKING-NO-SHOW-AUTOMATION-001` — `OPEN`;
+- `BOOKING-QUEUE-POLISH-001` — `OPEN`;
+- `BOOKING-PREORDER-001` — `OPEN`.
+
+Media/object-storage work remains blocked by `MEDIA-STORAGE-DECISION-001`; this Goal did not
+implement or modify Media/R2. Next step: independent review, explicit commit, green Actions,
+PostgreSQL pre-deploy scan/migration, then bounded Guest/Venue/Telegram staging isolation smoke.

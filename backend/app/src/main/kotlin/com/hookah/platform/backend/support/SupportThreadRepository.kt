@@ -1,6 +1,9 @@
 package com.hookah.platform.backend.support
 
+import com.hookah.platform.backend.api.BookingMessageIdempotencyPayloadMismatchException
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.api.InvalidInputException
+import com.hookah.platform.backend.telegram.db.VenueAccessRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.sql.Connection
@@ -10,6 +13,8 @@ import java.sql.Statement
 import java.sql.Types
 import java.time.Instant
 import javax.sql.DataSource
+
+const val MAX_BOOKING_THREAD_LOOKUP_IDS = 100
 
 enum class SupportThreadCategory {
     BOOKING,
@@ -72,6 +77,51 @@ enum class SupportThreadCreatedSource {
     GUEST_BOT,
 }
 
+enum class BookingConversationCheckpoint {
+    AFTER_BOOKING_LOCK,
+    AFTER_THREAD_RESOLVE,
+    AFTER_MESSAGE_WRITE,
+}
+
+enum class SupportThreadReadCheckpoint {
+    AFTER_THREAD_LOCK,
+    AFTER_MARKER_WRITE,
+}
+
+sealed interface SupportThreadReadAccess {
+    val userId: Long
+
+    data class Guest(
+        override val userId: Long,
+    ) : SupportThreadReadAccess
+
+    data class Venue(
+        override val userId: Long,
+        val venueId: Long,
+    ) : SupportThreadReadAccess
+
+    data class Platform(
+        override val userId: Long,
+        val platformOwnerUserId: Long?,
+    ) : SupportThreadReadAccess
+}
+
+enum class SupportThreadReadResult {
+    MARKED,
+    NOT_FOUND,
+    FORBIDDEN,
+}
+
+enum class BookingMessageNotificationKind(
+    private val dedupeSuffix: String,
+) {
+    GUEST_NOTIFICATION("guest-notification"),
+    GUEST_ACK("guest-ack"),
+    ;
+
+    fun dedupeKey(messageId: Long): String = "booking-thread-message:$messageId:$dedupeSuffix"
+}
+
 data class SupportBookingContextRecord(
     val bookingId: Long,
     val displayNumber: Int?,
@@ -117,12 +167,33 @@ data class SupportMessageRecord(
     val text: String,
     val telegramMessageId: Long?,
     val createdAt: Instant,
+    val clientMessageId: String? = null,
 )
 
 data class SupportThreadDetailRecord(
     val thread: SupportThreadRecord,
     val messages: List<SupportMessageRecord>,
 )
+
+data class BookingThreadLookupRecord(
+    val bookingId: Long,
+    val thread: SupportThreadRecord?,
+)
+
+data class BookingThreadMessageRecord(
+    val thread: SupportThreadRecord,
+    val message: SupportMessageRecord,
+    val created: Boolean = true,
+)
+
+data class BookingMessageNotificationContext(
+    val kind: BookingMessageNotificationKind,
+    val recipientChatId: Long,
+    val thread: SupportThreadRecord,
+    val message: SupportMessageRecord,
+) {
+    val dedupeKey: String = kind.dedupeKey(message.id)
+}
 
 data class SupportOrderContextRecord(
     val orderId: Long,
@@ -149,25 +220,261 @@ data class SupportTicketCreateInput(
     val correlationId: String? = null,
 )
 
-open class SupportThreadRepository(private val dataSource: DataSource?) {
-    open suspend fun createOrFindBookingThread(
+private data class BookingThreadContext(
+    val id: Long,
+    val venueId: Long,
+    val guestUserId: Long,
+)
+
+private enum class BookingThreadLookupScope(
+    val columnName: String,
+) {
+    GUEST("user_id"),
+    VENUE("venue_id"),
+}
+
+private data class SupportThreadWriteContext(
+    val id: Long,
+    val bookingId: Long?,
+    val venueId: Long?,
+    val guestUserId: Long,
+    val threadType: String?,
+    val assigneeScope: String?,
+    val status: String,
+)
+
+private data class SupportThreadReadPointer(
+    val bookingId: Long?,
+    val threadType: String?,
+)
+
+open class SupportThreadRepository(
+    private val dataSource: DataSource?,
+    private val venueAccessRepository: VenueAccessRepository = VenueAccessRepository(dataSource),
+    private val supportThreadReadCheckpoint: (SupportThreadReadCheckpoint) -> Unit = {},
+    private val bookingConversationCheckpoint: (BookingConversationCheckpoint) -> Unit = {},
+) {
+    open suspend fun lookupGuestBookingThreads(
+        userId: Long,
+        bookingIds: List<Long>,
+    ): List<BookingThreadLookupRecord>? =
+        lookupBookingThreads(
+            bookingIds = bookingIds,
+            viewerUserId = userId,
+            scope = BookingThreadLookupScope.GUEST,
+            scopeId = userId,
+        )
+
+    open suspend fun lookupVenueBookingThreads(
         venueId: Long,
-        bookingId: Long,
-        guestUserId: Long,
-        title: String? = null,
-    ): SupportThreadRecord {
+        viewerUserId: Long,
+        bookingIds: List<Long>,
+    ): List<BookingThreadLookupRecord>? =
+        lookupBookingThreads(
+            bookingIds = bookingIds,
+            viewerUserId = viewerUserId,
+            scope = BookingThreadLookupScope.VENUE,
+            scopeId = venueId,
+        )
+
+    private suspend fun lookupBookingThreads(
+        bookingIds: List<Long>,
+        viewerUserId: Long,
+        scope: BookingThreadLookupScope,
+        scopeId: Long,
+    ): List<BookingThreadLookupRecord>? {
+        require(bookingIds.size in 1..MAX_BOOKING_THREAD_LOOKUP_IDS)
+        require(bookingIds.all { it > 0 })
+        require(bookingIds.distinct().size == bookingIds.size)
         val ds = dataSource ?: throw DatabaseUnavailableException()
-        return withContext(Dispatchers.IO) {
-            ds.connection.use { connection ->
-                selectBookingThread(connection, venueId, bookingId)
-                    ?: insertBookingThread(
-                        connection = connection,
-                        venueId = venueId,
-                        bookingId = bookingId,
-                        guestUserId = guestUserId,
-                        title = title?.takeIf { it.isNotBlank() } ?: "Бронь #$bookingId",
-                    )
+        try {
+            return withContext(Dispatchers.IO) {
+                ds.connection.use { connection ->
+                    val bookings = selectBookingLookupContexts(connection, bookingIds, scope, scopeId)
+                    if (bookings.size != bookingIds.size) return@withContext null
+                    val threads = selectBookingThreadsForLookup(connection, bookingIds, viewerUserId)
+                    val threadsByBookingId = mutableMapOf<Long, SupportThreadRecord>()
+                    for (thread in threads) {
+                        val bookingId = thread.bookingId ?: return@withContext null
+                        val booking = bookings[bookingId] ?: return@withContext null
+                        if (
+                            thread.threadType != SupportThreadType.BOOKING_THREAD ||
+                            thread.venueId != booking.venueId ||
+                            thread.guestUserId != booking.guestUserId ||
+                            threadsByBookingId.put(bookingId, thread) != null
+                        ) {
+                            return@withContext null
+                        }
+                    }
+                    bookingIds.map { bookingId ->
+                        BookingThreadLookupRecord(
+                            bookingId = bookingId,
+                            thread = threadsByBookingId[bookingId],
+                        )
+                    }
+                }
             }
+        } catch (_: SQLException) {
+            throw DatabaseUnavailableException()
+        }
+    }
+
+    open suspend fun createOrFindBookingThread(
+        bookingId: Long,
+        title: String? = null,
+    ): SupportThreadRecord? {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        try {
+            return withContext(Dispatchers.IO) {
+                ds.connection.use { connection ->
+                    inTransaction(connection) {
+                        val booking = lockBookingContext(connection, bookingId) ?: return@inTransaction null
+                        bookingConversationCheckpoint(BookingConversationCheckpoint.AFTER_BOOKING_LOCK)
+                        resolveBookingThread(connection, booking, title).also {
+                            bookingConversationCheckpoint(BookingConversationCheckpoint.AFTER_THREAD_RESOLVE)
+                        }
+                    }
+                }
+            }
+        } catch (_: SQLException) {
+            throw DatabaseUnavailableException()
+        }
+    }
+
+    open suspend fun addBookingMessage(
+        bookingId: Long,
+        authorUserId: Long?,
+        authorRole: SupportMessageAuthorRole,
+        source: SupportMessageSource,
+        text: String,
+        telegramMessageId: Long? = null,
+        title: String? = null,
+        statusAfterInsert: SupportThreadStatus? = statusAfterMessage(authorRole),
+        expectedThreadId: Long? = null,
+        expectedGuestUserId: Long? = null,
+        expectedVenueId: Long? = null,
+        clientMessageId: String? = null,
+        beforeInsert: (() -> Unit)? = null,
+        notificationWriter: ((Connection, BookingMessageNotificationContext) -> Unit)? = null,
+    ): BookingThreadMessageRecord? {
+        val miniAppNotificationKind = miniAppNotificationKind(source)
+        require((clientMessageId != null) == (miniAppNotificationKind != null))
+        require(miniAppNotificationKind == null || authorUserId != null)
+        require(miniAppNotificationKind == null || notificationWriter != null)
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        try {
+            return withContext(Dispatchers.IO) {
+                ds.connection.use { connection ->
+                    inTransaction(connection) {
+                        val initiallyObservedThread =
+                            expectedThreadId?.let { selectThreadWriteContext(connection, it) }
+                                ?: if (expectedThreadId == null) {
+                                    selectBookingThreadWriteContext(connection, bookingId)
+                                } else {
+                                    return@inTransaction null
+                                }
+                        val authoritativeBookingId = initiallyObservedThread?.bookingId ?: bookingId
+                        if (authoritativeBookingId != bookingId) return@inTransaction null
+
+                        val booking =
+                            lockBookingContext(connection, authoritativeBookingId)
+                                ?: return@inTransaction null
+                        bookingConversationCheckpoint(BookingConversationCheckpoint.AFTER_BOOKING_LOCK)
+                        if (
+                            !matchesExpectedBookingActor(
+                                booking = booking,
+                                authorUserId = authorUserId,
+                                authorRole = authorRole,
+                                expectedGuestUserId = expectedGuestUserId,
+                                expectedVenueId = expectedVenueId,
+                            )
+                        ) {
+                            return@inTransaction null
+                        }
+
+                        val currentThread =
+                            expectedThreadId?.let { selectThreadWriteContext(connection, it) }
+                                ?: if (expectedThreadId == null) {
+                                    selectBookingThreadWriteContext(connection, booking.id)
+                                } else {
+                                    return@inTransaction null
+                                }
+                        val thread =
+                            if (currentThread == null) {
+                                resolveBookingThread(connection, booking, title)
+                            } else {
+                                if (!matchesBookingThread(currentThread, booking, expectedThreadId)) {
+                                    return@inTransaction null
+                                }
+                                selectBookingThread(connection, booking.id)
+                                    ?.takeIf { it.id == currentThread.id }
+                                    ?: return@inTransaction null
+                            }
+                        bookingConversationCheckpoint(BookingConversationCheckpoint.AFTER_THREAD_RESOLVE)
+                        val lockedThread = lockThread(connection, thread.id)
+                        if (!matchesBookingThread(lockedThread, booking, expectedThreadId)) {
+                            return@inTransaction null
+                        }
+                        if (clientMessageId != null) {
+                            selectMessageByClientDelivery(
+                                connection = connection,
+                                threadId = thread.id,
+                                authorUserId = authorUserId ?: error("Mini App booking message author is required"),
+                                source = source,
+                                clientMessageId = clientMessageId,
+                            )?.let { existing ->
+                                if (existing.text != text) {
+                                    throw BookingMessageIdempotencyPayloadMismatchException()
+                                }
+                                return@inTransaction BookingThreadMessageRecord(
+                                    thread = selectBookingThread(connection, booking.id) ?: thread,
+                                    message = existing,
+                                    created = false,
+                                )
+                            }
+                        }
+                        if (lockedThread.status == SupportThreadStatus.CLOSED.name) {
+                            if (miniAppNotificationKind != null) {
+                                throw InvalidInputException("closed thread cannot be changed")
+                            }
+                            return@inTransaction null
+                        }
+                        beforeInsert?.invoke()
+                        val message =
+                            addMessageAfterThreadLock(
+                                connection = connection,
+                                threadId = thread.id,
+                                authorUserId = authorUserId,
+                                authorRole = authorRole,
+                                source = source,
+                                text = text,
+                                telegramMessageId = telegramMessageId,
+                                clientMessageId = clientMessageId,
+                                statusAfterInsert = statusAfterInsert,
+                            )
+                        bookingConversationCheckpoint(BookingConversationCheckpoint.AFTER_MESSAGE_WRITE)
+                        val write =
+                            BookingThreadMessageRecord(
+                                thread = selectBookingThread(connection, booking.id) ?: thread,
+                                message = message,
+                            )
+                        if (miniAppNotificationKind != null) {
+                            notificationWriter?.invoke(
+                                connection,
+                                BookingMessageNotificationContext(
+                                    kind = miniAppNotificationKind,
+                                    recipientChatId = booking.guestUserId,
+                                    thread = write.thread,
+                                    message = write.message,
+                                ),
+                            )
+                        }
+                        write
+                    }
+                }
+            }
+        } catch (_: SQLException) {
+            throw DatabaseUnavailableException()
         }
     }
 
@@ -181,21 +488,25 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
         statusAfterInsert: SupportThreadStatus? = statusAfterMessage(authorRole),
     ): SupportMessageRecord {
         val ds = dataSource ?: throw DatabaseUnavailableException()
-        return withContext(Dispatchers.IO) {
-            ds.connection.use { connection ->
-                inTransaction(connection) {
-                    addMessage(
-                        connection = connection,
-                        threadId = threadId,
-                        authorUserId = authorUserId,
-                        authorRole = authorRole,
-                        source = source,
-                        text = text,
-                        telegramMessageId = telegramMessageId,
-                        statusAfterInsert = statusAfterInsert,
-                    )
+        try {
+            return withContext(Dispatchers.IO) {
+                ds.connection.use { connection ->
+                    inTransaction(connection) {
+                        addMessage(
+                            connection = connection,
+                            threadId = threadId,
+                            authorUserId = authorUserId,
+                            authorRole = authorRole,
+                            source = source,
+                            text = text,
+                            telegramMessageId = telegramMessageId,
+                            statusAfterInsert = statusAfterInsert,
+                        )
+                    }
                 }
             }
+        } catch (_: SQLException) {
+            throw DatabaseUnavailableException()
         }
     }
 
@@ -209,6 +520,47 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
         telegramMessageId: Long? = null,
         statusAfterInsert: SupportThreadStatus? = statusAfterMessage(authorRole),
     ): SupportMessageRecord {
+        val thread = lockThread(connection, threadId)
+        when (thread.threadType) {
+            SupportThreadType.SUPPORT_TICKET.name,
+            SupportThreadType.VENUE_CHAT.name,
+            -> Unit
+            SupportThreadType.BOOKING_THREAD.name -> error("BOOKING_THREAD messages require addBookingMessage")
+            else -> error("unsupported thread type for addMessage")
+        }
+        return addMessageAfterThreadLock(
+            connection = connection,
+            threadId = threadId,
+            authorUserId = authorUserId,
+            authorRole = authorRole,
+            source = source,
+            text = text,
+            telegramMessageId = telegramMessageId,
+            clientMessageId = null,
+            statusAfterInsert = statusAfterInsert,
+        )
+    }
+
+    private fun addMessageAfterThreadLock(
+        connection: Connection,
+        threadId: Long,
+        authorUserId: Long?,
+        authorRole: SupportMessageAuthorRole,
+        source: SupportMessageSource,
+        text: String,
+        telegramMessageId: Long?,
+        clientMessageId: String?,
+        statusAfterInsert: SupportThreadStatus?,
+    ): SupportMessageRecord {
+        if (telegramMessageId != null) {
+            selectMessageByTelegramDelivery(
+                connection = connection,
+                threadId = threadId,
+                authorUserId = authorUserId,
+                source = source,
+                telegramMessageId = telegramMessageId,
+            )?.let { return it }
+        }
         val messageId =
             insertMessage(
                 connection = connection,
@@ -218,6 +570,7 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
                 source = source,
                 text = text,
                 telegramMessageId = telegramMessageId,
+                clientMessageId = clientMessageId,
             )
         updateThreadAfterMessage(connection, threadId, statusAfterInsert)
         return selectMessage(connection, messageId) ?: error("support message was not found after insert")
@@ -251,6 +604,7 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
             source = input.messageSource,
             text = input.message,
             telegramMessageId = null,
+            clientMessageId = null,
         )
         updateThreadAfterMessage(connection, threadId, SupportThreadStatus.NEW)
         val thread =
@@ -402,6 +756,14 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
                     """
                     ${threadSelect(unreadCountExpression())}
                     WHERE st.venue_id = ?
+                      AND (
+                          st.thread_type <> 'BOOKING_THREAD'
+                          OR (
+                              b.id IS NOT NULL
+                              AND b.venue_id = st.venue_id
+                              AND b.user_id = st.guest_user_id
+                          )
+                      )
                       $bookingFilter
                       $typeFilter
                       $statusFilter
@@ -514,6 +876,14 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
                     """
                     ${threadSelect(unreadCountExpression())}
                     WHERE st.guest_user_id = ?
+                      AND (
+                          st.thread_type <> 'BOOKING_THREAD'
+                          OR (
+                              b.id IS NOT NULL
+                              AND b.venue_id = st.venue_id
+                              AND b.user_id = st.guest_user_id
+                          )
+                      )
                       $typeFilter
                       $statusFilter
                     ORDER BY COALESCE(st.last_message_at, st.created_at) DESC, st.id DESC
@@ -541,17 +911,79 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
 
     open suspend fun markThreadRead(
         threadId: Long,
-        userId: Long,
-    ) {
+        access: SupportThreadReadAccess,
+    ): SupportThreadReadResult {
         val ds = dataSource ?: throw DatabaseUnavailableException()
-        withContext(Dispatchers.IO) {
+        return withContext(Dispatchers.IO) {
             ds.connection.use { connection ->
-                markThreadRead(connection, threadId, userId)
+                inTransaction(connection) {
+                    markThreadReadInTransaction(
+                        connection = connection,
+                        threadId = threadId,
+                        access = access,
+                        bookingReadAllowed = true,
+                    )
+                }
             }
         }
     }
 
-    open fun markThreadRead(
+    /**
+     * Marks a non-booking thread inside a caller-owned transaction after that caller has locked or
+     * inserted the thread row. Booking reads must use the repository-owned suspend method so their
+     * booking -> thread lock order cannot be inverted by a caller that already holds the thread.
+     */
+    open fun markNonBookingThreadReadAfterThreadLock(
+        connection: Connection,
+        threadId: Long,
+        access: SupportThreadReadAccess,
+    ): SupportThreadReadResult {
+        check(!connection.autoCommit) {
+            "markNonBookingThreadReadAfterThreadLock(connection, ...) requires an active transaction"
+        }
+        return markThreadReadInTransaction(
+            connection = connection,
+            threadId = threadId,
+            access = access,
+            bookingReadAllowed = false,
+        )
+    }
+
+    private fun markThreadReadInTransaction(
+        connection: Connection,
+        threadId: Long,
+        access: SupportThreadReadAccess,
+        bookingReadAllowed: Boolean,
+    ): SupportThreadReadResult {
+        val preauthorization = preauthorizeThreadRead(connection, access)
+        if (preauthorization != SupportThreadReadResult.MARKED) return preauthorization
+        val pointer =
+            selectThreadReadPointer(connection, threadId, access)
+                ?: return SupportThreadReadResult.NOT_FOUND
+        if (pointer.threadType == SupportThreadType.BOOKING_THREAD.name && !bookingReadAllowed) {
+            return SupportThreadReadResult.NOT_FOUND
+        }
+        val booking =
+            if (pointer.threadType == SupportThreadType.BOOKING_THREAD.name) {
+                val bookingId = pointer.bookingId ?: return SupportThreadReadResult.NOT_FOUND
+                lockBookingContext(connection, bookingId) ?: return SupportThreadReadResult.NOT_FOUND
+            } else {
+                null
+            }
+        val thread = lockThreadIfPresent(connection, threadId) ?: return SupportThreadReadResult.NOT_FOUND
+        if (thread.bookingId != pointer.bookingId || thread.threadType != pointer.threadType) {
+            return SupportThreadReadResult.NOT_FOUND
+        }
+        if (!hasCanonicalThreadIdentity(thread, booking)) return SupportThreadReadResult.NOT_FOUND
+        val authorization = authorizeThreadRead(connection, thread, access)
+        if (authorization != SupportThreadReadResult.MARKED) return authorization
+        supportThreadReadCheckpoint(SupportThreadReadCheckpoint.AFTER_THREAD_LOCK)
+        writeThreadReadMarker(connection, threadId, access.userId)
+        supportThreadReadCheckpoint(SupportThreadReadCheckpoint.AFTER_MARKER_WRITE)
+        return SupportThreadReadResult.MARKED
+    }
+
+    private fun writeThreadReadMarker(
         connection: Connection,
         threadId: Long,
         userId: Long,
@@ -560,7 +992,10 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
             connection.prepareStatement(
                 """
                 UPDATE support_thread_reads
-                SET last_read_at = CURRENT_TIMESTAMP
+                SET last_read_at = CASE
+                    WHEN last_read_at > CURRENT_TIMESTAMP THEN last_read_at
+                    ELSE CURRENT_TIMESTAMP
+                END
                 WHERE thread_id = ?
                   AND user_id = ?
                 """.trimIndent(),
@@ -570,30 +1005,15 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
                 statement.executeUpdate()
             }
         if (updated > 0) return
-        try {
-            connection.prepareStatement(
-                """
-                INSERT INTO support_thread_reads (thread_id, user_id, last_read_at)
-                VALUES (?, ?, CURRENT_TIMESTAMP)
-                """.trimIndent(),
-            ).use { statement ->
-                statement.setLong(1, threadId)
-                statement.setLong(2, userId)
-                statement.executeUpdate()
-            }
-        } catch (_: SQLException) {
-            connection.prepareStatement(
-                """
-                UPDATE support_thread_reads
-                SET last_read_at = CURRENT_TIMESTAMP
-                WHERE thread_id = ?
-                  AND user_id = ?
-                """.trimIndent(),
-            ).use { statement ->
-                statement.setLong(1, threadId)
-                statement.setLong(2, userId)
-                statement.executeUpdate()
-            }
+        connection.prepareStatement(
+            """
+            INSERT INTO support_thread_reads (thread_id, user_id, last_read_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, threadId)
+            statement.setLong(2, userId)
+            statement.executeUpdate()
         }
     }
 
@@ -698,30 +1118,210 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             ds.connection.use { connection ->
-                val thread = selectThread(connection, threadId) ?: return@withContext null
+                val thread = selectPlatformThread(connection, threadId) ?: return@withContext null
                 SupportThreadDetailRecord(thread = thread, messages = listMessages(connection, threadId))
             }
         }
     }
 
+    private fun lockBookingContext(
+        connection: Connection,
+        bookingId: Long,
+    ): BookingThreadContext? =
+        connection.prepareStatement(
+            """
+            SELECT id, venue_id, user_id
+            FROM bookings
+            WHERE id = ?
+            FOR UPDATE
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, bookingId)
+            statement.executeQuery().use { resultSet ->
+                if (!resultSet.next()) {
+                    null
+                } else {
+                    BookingThreadContext(
+                        id = resultSet.getLong("id"),
+                        venueId = resultSet.getLong("venue_id"),
+                        guestUserId = resultSet.getLong("user_id"),
+                    )
+                }
+            }
+        }
+
+    private fun selectBookingLookupContexts(
+        connection: Connection,
+        bookingIds: List<Long>,
+        scope: BookingThreadLookupScope,
+        scopeId: Long,
+    ): Map<Long, BookingThreadContext> {
+        val placeholders = bookingIds.joinToString(", ") { "?" }
+        return connection.prepareStatement(
+            """
+            SELECT id, venue_id, user_id
+            FROM bookings
+            WHERE id IN ($placeholders)
+              AND ${scope.columnName} = ?
+            ORDER BY id
+            """.trimIndent(),
+        ).use { statement ->
+            var index = 1
+            bookingIds.forEach { bookingId -> statement.setLong(index++, bookingId) }
+            statement.setLong(index, scopeId)
+            statement.executeQuery().use { resultSet ->
+                buildMap {
+                    while (resultSet.next()) {
+                        val booking =
+                            BookingThreadContext(
+                                id = resultSet.getLong("id"),
+                                venueId = resultSet.getLong("venue_id"),
+                                guestUserId = resultSet.getLong("user_id"),
+                            )
+                        put(booking.id, booking)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun selectBookingThreadsForLookup(
+        connection: Connection,
+        bookingIds: List<Long>,
+        viewerUserId: Long,
+    ): List<SupportThreadRecord> {
+        val placeholders = bookingIds.joinToString(", ") { "?" }
+        return connection.prepareStatement(
+            """
+            ${threadSelect(unreadCountExpression())}
+            WHERE st.booking_id IN ($placeholders)
+              AND st.thread_type = 'BOOKING_THREAD'
+            ORDER BY st.booking_id, st.id
+            """.trimIndent(),
+        ).use { statement ->
+            var index = 1
+            statement.setLong(index++, viewerUserId)
+            statement.setLong(index++, viewerUserId)
+            bookingIds.forEach { bookingId -> statement.setLong(index++, bookingId) }
+            statement.executeQuery().use { resultSet ->
+                buildList {
+                    while (resultSet.next()) {
+                        add(resultSet.toThreadRecord())
+                    }
+                }
+            }
+        }
+    }
+
+    private fun matchesExpectedBookingActor(
+        booking: BookingThreadContext,
+        authorUserId: Long?,
+        authorRole: SupportMessageAuthorRole,
+        expectedGuestUserId: Long?,
+        expectedVenueId: Long?,
+    ): Boolean {
+        if (expectedGuestUserId != null && expectedGuestUserId != booking.guestUserId) return false
+        if (expectedVenueId != null && expectedVenueId != booking.venueId) return false
+        return when (authorRole) {
+            SupportMessageAuthorRole.GUEST ->
+                authorUserId != null &&
+                    expectedGuestUserId != null &&
+                    authorUserId == expectedGuestUserId
+            SupportMessageAuthorRole.VENUE -> authorUserId != null && expectedVenueId != null
+            SupportMessageAuthorRole.PLATFORM -> false
+            SupportMessageAuthorRole.SYSTEM -> expectedGuestUserId != null || expectedVenueId != null
+        }
+    }
+
+    private fun matchesBookingThread(
+        thread: SupportThreadWriteContext,
+        booking: BookingThreadContext,
+        expectedThreadId: Long?,
+    ): Boolean =
+        (expectedThreadId == null || thread.id == expectedThreadId) &&
+            thread.threadType == SupportThreadType.BOOKING_THREAD.name &&
+            thread.bookingId == booking.id &&
+            thread.venueId == booking.venueId &&
+            thread.guestUserId == booking.guestUserId
+
+    private fun selectBookingThreadWriteContext(
+        connection: Connection,
+        bookingId: Long,
+    ): SupportThreadWriteContext? =
+        connection.prepareStatement(
+            """
+            SELECT id, booking_id, venue_id, guest_user_id, thread_type, assignee_scope, status
+            FROM support_threads
+            WHERE booking_id = ?
+              AND thread_type = 'BOOKING_THREAD'
+            ORDER BY id ASC
+            LIMIT 1
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, bookingId)
+            statement.executeQuery().use { resultSet ->
+                if (resultSet.next()) resultSet.toThreadWriteContext() else null
+            }
+        }
+
+    private fun selectThreadWriteContext(
+        connection: Connection,
+        threadId: Long,
+    ): SupportThreadWriteContext? =
+        connection.prepareStatement(
+            """
+            SELECT id, booking_id, venue_id, guest_user_id, thread_type, assignee_scope, status
+            FROM support_threads
+            WHERE id = ?
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, threadId)
+            statement.executeQuery().use { resultSet ->
+                if (resultSet.next()) resultSet.toThreadWriteContext() else null
+            }
+        }
+
+    private fun resolveBookingThread(
+        connection: Connection,
+        booking: BookingThreadContext,
+        title: String?,
+    ): SupportThreadRecord {
+        selectBookingThread(connection, booking.id)?.let { return it }
+        val savepoint = connection.setSavepoint()
+        return try {
+            insertBookingThread(
+                connection = connection,
+                venueId = booking.venueId,
+                bookingId = booking.id,
+                guestUserId = booking.guestUserId,
+                title = title?.takeIf { it.isNotBlank() } ?: "Бронь #${booking.id}",
+            )
+        } catch (exception: SQLException) {
+            if (!isUniqueViolation(exception)) throw exception
+            connection.rollback(savepoint)
+            selectBookingThread(connection, booking.id) ?: throw exception
+        } finally {
+            runCatching { connection.releaseSavepoint(savepoint) }
+        }
+    }
+
     private fun selectBookingThread(
         connection: Connection,
-        venueId: Long,
         bookingId: Long,
     ): SupportThreadRecord? =
         connection.prepareStatement(
             """
             ${threadSelect()}
-            WHERE st.venue_id = ?
-              AND st.booking_id = ?
-              AND st.category = 'BOOKING'
-              AND (st.thread_type = 'BOOKING_THREAD' OR st.thread_type IS NULL)
+            WHERE st.booking_id = ?
+              AND st.thread_type = 'BOOKING_THREAD'
+              AND b.id IS NOT NULL
+              AND b.venue_id = st.venue_id
+              AND b.user_id = st.guest_user_id
             ORDER BY st.id ASC
             LIMIT 1
             """.trimIndent(),
         ).use { statement ->
-            statement.setLong(1, venueId)
-            statement.setLong(2, bookingId)
+            statement.setLong(1, bookingId)
             statement.executeQuery().use { rs -> if (rs.next()) rs.toThreadRecord() else null }
         }
 
@@ -828,6 +1428,14 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
             ${threadSelect()}
             WHERE st.venue_id = ?
               AND st.id = ?
+              AND (
+                  st.thread_type <> 'BOOKING_THREAD'
+                  OR (
+                      b.id IS NOT NULL
+                      AND b.venue_id = st.venue_id
+                      AND b.user_id = st.guest_user_id
+                  )
+              )
             """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, venueId)
@@ -835,7 +1443,7 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
             statement.executeQuery().use { rs -> if (rs.next()) rs.toThreadRecord() else null }
         }
 
-    private fun selectThread(
+    private fun selectPlatformThread(
         connection: Connection,
         threadId: Long,
     ): SupportThreadRecord? =
@@ -843,6 +1451,7 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
             """
             ${threadSelect()}
             WHERE st.id = ?
+              AND st.thread_type = 'SUPPORT_TICKET'
             """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, threadId)
@@ -859,6 +1468,14 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
             ${threadSelect()}
             WHERE st.guest_user_id = ?
               AND st.id = ?
+              AND (
+                  st.thread_type <> 'BOOKING_THREAD'
+                  OR (
+                      b.id IS NOT NULL
+                      AND b.venue_id = st.venue_id
+                      AND b.user_id = st.guest_user_id
+                  )
+              )
             """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, userId)
@@ -918,6 +1535,7 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
         source: SupportMessageSource,
         text: String,
         telegramMessageId: Long?,
+        clientMessageId: String?,
     ): Long =
         connection.prepareStatement(
             """
@@ -927,9 +1545,10 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
                 author_role,
                 source,
                 text,
-                telegram_message_id
+                telegram_message_id,
+                client_message_id
             )
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """.trimIndent(),
             Statement.RETURN_GENERATED_KEYS,
         ).use { statement ->
@@ -939,9 +1558,223 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
             statement.setString(4, source.name)
             statement.setString(5, text)
             statement.setNullableLong(6, telegramMessageId)
+            statement.setNullableString(7, clientMessageId)
             statement.executeUpdate()
             statement.generatedKeys.use { keys ->
                 if (keys.next()) keys.getLong(1) else error("support message id was not generated")
+            }
+        }
+
+    private fun lockThread(
+        connection: Connection,
+        threadId: Long,
+    ): SupportThreadWriteContext = lockThreadIfPresent(connection, threadId) ?: error("support thread was not found")
+
+    private fun lockThreadIfPresent(
+        connection: Connection,
+        threadId: Long,
+    ): SupportThreadWriteContext? =
+        connection.prepareStatement(
+            """
+            SELECT id, booking_id, venue_id, guest_user_id, thread_type, assignee_scope, status
+            FROM support_threads
+            WHERE id = ?
+            FOR UPDATE
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, threadId)
+            statement.executeQuery().use { resultSet ->
+                if (resultSet.next()) {
+                    resultSet.toThreadWriteContext()
+                } else {
+                    null
+                }
+            }
+        }
+
+    private fun selectThreadReadPointer(
+        connection: Connection,
+        threadId: Long,
+        access: SupportThreadReadAccess,
+    ): SupportThreadReadPointer? {
+        val actorScope =
+            when (access) {
+                is SupportThreadReadAccess.Guest -> "AND guest_user_id = ?"
+                is SupportThreadReadAccess.Venue -> "AND venue_id = ?"
+                is SupportThreadReadAccess.Platform -> "AND thread_type = 'SUPPORT_TICKET'"
+            }
+        return connection.prepareStatement(
+            """
+            SELECT booking_id, thread_type
+            FROM support_threads
+            WHERE id = ?
+              $actorScope
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, threadId)
+            when (access) {
+                is SupportThreadReadAccess.Guest -> statement.setLong(2, access.userId)
+                is SupportThreadReadAccess.Venue -> statement.setLong(2, access.venueId)
+                is SupportThreadReadAccess.Platform -> Unit
+            }
+            statement.executeQuery().use { resultSet ->
+                if (resultSet.next()) {
+                    SupportThreadReadPointer(
+                        bookingId = resultSet.getLong("booking_id").takeUnless { resultSet.wasNull() },
+                        threadType = resultSet.getString("thread_type"),
+                    )
+                } else {
+                    null
+                }
+            }
+        }
+    }
+
+    private fun preauthorizeThreadRead(
+        connection: Connection,
+        access: SupportThreadReadAccess,
+    ): SupportThreadReadResult =
+        when (access) {
+            is SupportThreadReadAccess.Guest -> SupportThreadReadResult.MARKED
+            is SupportThreadReadAccess.Venue ->
+                if (venueAccessRepository.hasVenueAdminOrOwner(connection, access.userId, access.venueId)) {
+                    SupportThreadReadResult.MARKED
+                } else {
+                    SupportThreadReadResult.FORBIDDEN
+                }
+            is SupportThreadReadAccess.Platform ->
+                if (access.platformOwnerUserId != null && access.userId == access.platformOwnerUserId) {
+                    SupportThreadReadResult.MARKED
+                } else {
+                    SupportThreadReadResult.FORBIDDEN
+                }
+        }
+
+    private fun hasCanonicalThreadIdentity(
+        thread: SupportThreadWriteContext,
+        booking: BookingThreadContext?,
+    ): Boolean =
+        when (thread.threadType) {
+            SupportThreadType.BOOKING_THREAD.name ->
+                booking != null && matchesBookingThread(thread, booking, expectedThreadId = thread.id)
+            SupportThreadType.SUPPORT_TICKET.name,
+            SupportThreadType.VENUE_CHAT.name,
+            -> true
+            else -> false
+        }
+
+    private fun authorizeThreadRead(
+        connection: Connection,
+        thread: SupportThreadWriteContext,
+        access: SupportThreadReadAccess,
+    ): SupportThreadReadResult {
+        if (
+            thread.assigneeScope != SupportAssigneeScope.VENUE.name &&
+            thread.assigneeScope != SupportAssigneeScope.PLATFORM.name
+        ) {
+            return SupportThreadReadResult.NOT_FOUND
+        }
+        return when (access) {
+            is SupportThreadReadAccess.Guest ->
+                if (thread.guestUserId == access.userId) {
+                    SupportThreadReadResult.MARKED
+                } else {
+                    SupportThreadReadResult.NOT_FOUND
+                }
+            is SupportThreadReadAccess.Venue -> {
+                if (!venueAccessRepository.hasVenueAdminOrOwner(connection, access.userId, access.venueId)) {
+                    SupportThreadReadResult.FORBIDDEN
+                } else if (thread.venueId != access.venueId) {
+                    SupportThreadReadResult.NOT_FOUND
+                } else {
+                    SupportThreadReadResult.MARKED
+                }
+            }
+            is SupportThreadReadAccess.Platform -> {
+                if (access.platformOwnerUserId == null || access.userId != access.platformOwnerUserId) {
+                    SupportThreadReadResult.FORBIDDEN
+                } else if (thread.threadType != SupportThreadType.SUPPORT_TICKET.name) {
+                    SupportThreadReadResult.NOT_FOUND
+                } else {
+                    SupportThreadReadResult.MARKED
+                }
+            }
+        }
+    }
+
+    private fun selectMessageByTelegramDelivery(
+        connection: Connection,
+        threadId: Long,
+        authorUserId: Long?,
+        source: SupportMessageSource,
+        telegramMessageId: Long,
+    ): SupportMessageRecord? =
+        connection.prepareStatement(
+            """
+            SELECT id,
+                   thread_id,
+                   author_user_id,
+                   author_role,
+                   source,
+                   text,
+                   telegram_message_id,
+                   client_message_id,
+                   created_at
+            FROM support_messages
+            WHERE thread_id = ?
+              AND source = ?
+              AND telegram_message_id = ?
+              AND (
+                  author_user_id = ?
+                  OR (author_user_id IS NULL AND ? IS NULL)
+              )
+            ORDER BY id ASC
+            LIMIT 1
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, threadId)
+            statement.setString(2, source.name)
+            statement.setLong(3, telegramMessageId)
+            statement.setNullableLong(4, authorUserId)
+            statement.setNullableLong(5, authorUserId)
+            statement.executeQuery().use { resultSet ->
+                if (resultSet.next()) resultSet.toMessageRecord() else null
+            }
+        }
+
+    private fun selectMessageByClientDelivery(
+        connection: Connection,
+        threadId: Long,
+        authorUserId: Long,
+        source: SupportMessageSource,
+        clientMessageId: String,
+    ): SupportMessageRecord? =
+        connection.prepareStatement(
+            """
+            SELECT id,
+                   thread_id,
+                   author_user_id,
+                   author_role,
+                   source,
+                   text,
+                   telegram_message_id,
+                   client_message_id,
+                   created_at
+            FROM support_messages
+            WHERE thread_id = ?
+              AND source = ?
+              AND author_user_id = ?
+              AND client_message_id = ?
+            ORDER BY id ASC
+            LIMIT 1
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, threadId)
+            statement.setString(2, source.name)
+            statement.setLong(3, authorUserId)
+            statement.setString(4, clientMessageId)
+            statement.executeQuery().use { resultSet ->
+                if (resultSet.next()) resultSet.toMessageRecord() else null
             }
         }
 
@@ -983,6 +1816,7 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
                    source,
                    text,
                    telegram_message_id,
+                   client_message_id,
                    created_at
             FROM support_messages
             WHERE thread_id = ?
@@ -1012,6 +1846,7 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
                    source,
                    text,
                    telegram_message_id,
+                   client_message_id,
                    created_at
             FROM support_messages
             WHERE id = ?
@@ -1085,6 +1920,18 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
             text = getString("text"),
             telegramMessageId = getLong("telegram_message_id").takeUnless { wasNull() },
             createdAt = getTimestamp("created_at").toInstant(),
+            clientMessageId = getString("client_message_id"),
+        )
+
+    private fun ResultSet.toThreadWriteContext(): SupportThreadWriteContext =
+        SupportThreadWriteContext(
+            id = getLong("id"),
+            bookingId = getLong("booking_id").takeUnless { wasNull() },
+            venueId = getLong("venue_id").takeUnless { wasNull() },
+            guestUserId = getLong("guest_user_id"),
+            threadType = getString("thread_type"),
+            assigneeScope = getString("assignee_scope"),
+            status = getString("status"),
         )
 
     private fun <T> inTransaction(
@@ -1102,6 +1949,27 @@ open class SupportThreadRepository(private val dataSource: DataSource?) {
             connection.autoCommit = previousAutoCommit
         }
     }
+
+    private fun isUniqueViolation(exception: SQLException): Boolean {
+        var current: Throwable? = exception
+        while (current != null) {
+            val sqlException = current as? SQLException
+            if (sqlException?.sqlState == "23505") return true
+            current =
+                when (current) {
+                    is SQLException -> current.nextException ?: current.cause
+                    else -> current.cause
+                }
+        }
+        return false
+    }
+
+    private fun miniAppNotificationKind(source: SupportMessageSource): BookingMessageNotificationKind? =
+        when (source) {
+            SupportMessageSource.GUEST_MINIAPP -> BookingMessageNotificationKind.GUEST_ACK
+            SupportMessageSource.VENUE_MINIAPP -> BookingMessageNotificationKind.GUEST_NOTIFICATION
+            else -> null
+        }
 
     private companion object {
         private fun statusFilterCondition(filter: SupportInboxFilter?): String =

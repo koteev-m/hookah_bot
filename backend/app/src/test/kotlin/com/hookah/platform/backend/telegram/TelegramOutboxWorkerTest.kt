@@ -96,6 +96,33 @@ class TelegramOutboxWorkerTest {
         }
 
     @Test
+    fun `legacy dedupe key keeps the first envelope when a retry regenerates payload`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            val dataSource = PostgresTestEnv.createDataSource(database)
+            val repository = TelegramOutboxRepository(dataSource)
+            val outboxEnqueuer = TelegramOutboxEnqueuer(repository, Json { ignoreUnknownKeys = true })
+
+            outboxEnqueuer.enqueueSendMessage(123L, "original reminder", dedupeKey = "booking-reminder:78")
+            outboxEnqueuer.enqueueSendMessage(456L, "regenerated reminder", dedupeKey = "booking-reminder:78")
+
+            DriverManager.getConnection(database.jdbcUrl, database.user, database.password).use { connection ->
+                connection.prepareStatement(
+                    "SELECT chat_id, payload_json FROM telegram_outbox WHERE dedupe_key = 'booking-reminder:78'",
+                ).use { statement ->
+                    statement.executeQuery().use { resultSet ->
+                        assertEquals(true, resultSet.next())
+                        assertEquals(123L, resultSet.getLong("chat_id"))
+                        assertEquals(true, resultSet.getString("payload_json").contains("original reminder"))
+                        assertEquals(false, resultSet.next())
+                    }
+                }
+            }
+
+            dataSource.close()
+        }
+
+    @Test
     fun `retry is scheduled on 429`() =
         runBlocking {
             val database = PostgresTestEnv.createDatabase()
@@ -384,7 +411,7 @@ class TelegramOutboxWorkerTest {
             connection.prepareStatement(
                 """
                 INSERT INTO venues (name, status, staff_chat_id)
-                VALUES ('Venue', 'active_published', 777)
+                VALUES ('Venue', 'PUBLISHED', 777)
                 RETURNING id
                 """.trimIndent(),
             ).use { statement ->
@@ -407,15 +434,38 @@ class TelegramOutboxWorkerTest {
                     resultSet.getLong("id")
                 }
             }
+        val tableSessionId =
+            connection.prepareStatement(
+                """
+                INSERT INTO table_sessions (
+                    venue_id,
+                    table_id,
+                    started_at,
+                    last_activity_at,
+                    expires_at,
+                    status
+                )
+                VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP + INTERVAL '1 hour', 'ACTIVE')
+                RETURNING id
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.setLong(2, tableId)
+                statement.executeQuery().use { resultSet ->
+                    resultSet.next()
+                    resultSet.getLong("id")
+                }
+            }
         return connection.prepareStatement(
             """
-            INSERT INTO orders (venue_id, table_id, status)
-            VALUES (?, ?, 'ACTIVE')
+            INSERT INTO orders (venue_id, table_id, table_session_id, status)
+            VALUES (?, ?, ?, 'ACTIVE')
             RETURNING id
             """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, venueId)
             statement.setLong(2, tableId)
+            statement.setLong(3, tableSessionId)
             statement.executeQuery().use { resultSet ->
                 resultSet.next()
                 resultSet.getLong("id")

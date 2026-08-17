@@ -1,6 +1,6 @@
 # Security / RBAC Permission Matrix
 
-Дата актуализации: 2026-08-15.
+Дата актуализации: 2026-08-17.
 
 Статус: **current product reference / UPDATED**. Runtime permission parity and the broader
 dangerous-action audit remain **PARTIAL** unless a specific route, test or smoke result is cited.
@@ -40,6 +40,25 @@ Tokens and client-provided ids are context pointers, not authority:
 - Platform Guest QR confirm/cancel uses a short opaque reference to a five-minute process-local pending record bound to exact Platform Owner + chat + token + venue + table. The reference is not authority; restart, expiry, cancel or first valid conditional consumption invalidates the flow safely. Phase 1 is single-instance long-polling; a callback routed to another instance has no pending authority and fails closed.
 - Exact Platform Owner Guest Mini App create/touch or explicit-session resolve requires the matching active server-owned Telegram chat context and no user-exit marker. Client `mode=guest`, token/session id and Platform role cannot recreate context after exit.
 - Exact Platform Owner authoritative table-bound Guest mutations lock that same chat-context row first and run final context/session/exit authorization plus order/bill, staff-call, tab, shift-extension or support ticket/message/status/read-receipt write in one JDBC transaction. `tableToken` on support always invokes the guard, including token-only requests; a client token never supplies authority or a session.
+- A booking-chat message writer treats route-side reads as navigation/DTO context only. Inside one
+  repository transaction it reloads the thread, derives `booking_id`, locks the canonical booking
+  `FOR UPDATE`, re-checks the authenticated Guest id or expected Venue id against that booking plus
+  stored venue/guest metadata, and only then writes message facts and thread state. Venue
+  membership/permission remains the existing route-side prerequisite rather than a transaction-bound
+  membership re-authorization. Foreign or corrupt metadata is denied before message facts; the
+  generic support/venue-chat writer rejects `BOOKING_THREAD`.
+- Mini App `clientMessageId` is an opaque replay pointer, never actor/source/thread/booking
+  authority. The server derives that scope after the same canonical locks. Reuse with different
+  normalized text is denied with a privacy-safe conflict response and zero writes; invalid or
+  absent identity on a Mini App `BOOKING_THREAD` reply is denied before mutation. Telegram keeps
+  its separate persisted inbound-message identity.
+- Booking notification recipient and payload are derived from the locked canonical booking/thread,
+  not from client input. Message, thread update and outbox row commit atomically; a Guest reply can
+  enqueue only a private acknowledgement, not a staff-chat copy.
+- Mark-read authorization remains server-owned and role outcomes are unchanged. Booking chat locks
+  `bookings -> support_threads` before writing `support_thread_reads`; non-booking chat locks or
+  owns `support_threads` before the read marker. No read-marker path locks the child row before
+  reaching back to the thread or booking.
 - Staff-chat callbacks are shortcuts only; every callback must re-check actor role, venue scope and entity state server-side.
 - Client analytics events are low-trust diagnostics and cannot drive money, access, billing, order state or venue lifecycle.
 
@@ -53,7 +72,7 @@ Tokens and client-provided ids are context pointers, not authority:
 | `table_session` | Current visit/session at a venue table. | Required for active order, tab, batch, bill request and staff call mutations. |
 | `tab` | Personal/shared bill account inside a table session. | Guest sees only own personal tab or joined shared tabs. |
 | `support_ticket` | Status-tracked support/problem ticket. | Guest own tickets, Venue Owner/Manager own venue tickets, Platform Owner all tickets. Staff none. |
-| `booking` | Guest booking, booking queue and booking conversation. | Guest own booking, Venue Owner/Manager own venue; Staff operational view/arrival/no-show only where allowed; canonical lifecycle in `docs/BOOKING_LIFECYCLE.md`. |
+| `booking` | Guest booking, booking queue and booking conversation. | Global `booking_id` is the conversation identity. Guest owns only their booking; Venue Owner/Manager only the canonical booking venue; Staff has operational view/arrival/no-show only where allowed and no chat; Platform has no ordinary booking-chat access. Canonical lifecycle is in `docs/BOOKING_LIFECYCLE.md`. |
 | `feedback` | One post-visit rating/tags/comment bound to a visible completed guest visit. | Guest submits only for own visible completed visit; Venue Owner/Manager reads own venue and may open low-rating `VENUE_CHAT`; Staff none; Platform dashboard future. |
 | `staff_profile` | Public staff display profile and linked private venue-member relation. | Guest sees only opt-in public fields; linked user ids stay private. Owner/Manager private directory uses the existing `users` identity projection, while one active member can have at most one active linked card. Owner keeps broad controls; Manager manages only display-only/Staff-linked cards. |
 | `staff_shift` | Manual Today publication and optional planned schedule intervals for staff profiles. | Guest sees only the shared public Today projection: explicit visible manual rows in `MANUAL`, or current active public presence in `SCHEDULE`; never the full/future schedule. |
@@ -72,7 +91,7 @@ Tokens and client-provided ids are context pointers, not authority:
 | Staff | Shift operations role. | Orders, operational calls, allowed booking arrival/no-show and stop-list availability; Schedule Phase 1 provides own-shift plus safe-overlap read only while the optional module is enabled. No schedule mutation, support tickets, venue chats, feedback dashboard/follow-up, billing, settings or platform. |
 | Venue Manager | Venue operations management role. | Own venue only. Can manage bookings, orders, menu/availability, tables where allowed, chats, feedback read/follow-up and own-venue support. No platform/billing commercial controls or public review link editing. |
 | Venue Owner | Venue owner role through active `venue_members(role=OWNER)`. | Own venue operations, staff, settings, staff chat, feedback read/follow-up, public review link editing and venue billing view/pay where implemented. |
-| Platform Owner | Platform-wide operator. | Venues, lifecycle, owner access, billing, support center, analytics/audit. Does not see ordinary `VENUE_CHAT` by default. |
+| Platform Owner | Platform-wide operator. | Venues, lifecycle, owner access, billing, support center, analytics/audit. Does not see ordinary `VENUE_CHAT` or `BOOKING_CHAT` by default. |
 | Support actor | Derived responsibility when a Guest, Venue Owner/Manager or Platform Owner handles a support ticket. | Not a separate global role in the product model. |
 
 ### ADMIN Decision
@@ -92,6 +111,7 @@ Target decision: remove `ADMIN` from the product model and keep it only as a com
 | Guest | `staff_tip.intent_create` | Visible/tips-enabled staff profile | Future Phase 2. Creates intent/clickout only; no platform payment and no proof of payment. |
 | Guest | `support_ticket.create_own`, `support_ticket.view_own`, `support_ticket.reply_own` | Own support tickets | Current MVP. Venue/order/booking context must be server-verified. |
 | Guest | `booking.create_own`, `booking.view_own` | Own bookings | Current. Status/action availability depends on booking lifecycle. |
+| Guest | `booking_chat.open_own`, `booking_chat.reply_own` | Exact own booking | Current. Backend resolves guest/venue from the locked canonical booking and returns 404 for foreign or malformed ownership. |
 | Guest | `feedback.submit_own_completed_visit`, `feedback.view_own` | Own visible completed History visit | DONE / MVP / staging-smoke-passed. `ORDER_CLOSED`, booking `SEATED` and merged visits only; duplicate submit does not overwrite. |
 | Guest | `order_batch.create_own_in_session` | Current table session + own/joined tab | Current target/core. Requires active table context, selected tab and menu/stop-list validation. |
 | Guest | `promotion.preview_own_cart`, `promotion.apply_via_submit` | Current table session + own/joined tab | Current for the Happy Hours percentage slice. Server derives eligibility, current prices and adjustments; Guest cannot supply a trusted discount. |
@@ -102,7 +122,7 @@ Target decision: remove `ADMIN` from the product model and keep it only as a com
 | Tab Member | `shared_tab.view`, `shared_tab.add_batch`, `shared_tab.leave` | Joined shared tab | Target/current where shared tab flow is implemented. |
 | Staff | `order_queue.view`, `order_batch.status_update_allowed` | Own venue operations | Current. Must preserve table-session/batch/tab boundaries. |
 | Staff | `staff_call.view`, `staff_call.ack_complete` | Own venue calls | Current ACK/DONE smoke passed; CANCELLED UI/lifecycle and row-level actor columns remain future. |
-| Staff | `booking.view`, arrival/no-show where allowed | Own venue bookings | Current STAFF booking split. Confirm/cancel/change/message/settings denied. |
+| Staff | `booking.view`, arrival/no-show where allowed | Own venue bookings | Current STAFF booking split. Confirm/cancel/change/message/settings and `BOOKING_CHAT` denied. |
 | Staff | `menu.view`, `table.view`, `menu_availability.manage` | Own venue operational availability | Current docs say item/option stop-list parity is aligned. Target menu policy is `staff_stoplist_enabled` or equivalent before Staff can change availability; see `docs/MENU_OPTIONS_STOPLIST.md`. |
 | Staff | `MENU_SHIFT_CHECK` denied | All venue scopes | Current Phase 1 rule. Entry is hidden and direct API is denied; existing individual item/option availability permission is unchanged. |
 | Staff | `staff_profile.edit_own_draft` | Own linked profile only | Current Phase 1 where policy allows. Staff may edit own draft fields only, cannot self-publish or enable guest visibility. Photo upload remains future. |
@@ -111,6 +131,7 @@ Target decision: remove `ADMIN` from the product model and keep it only as a com
 | Staff | `promotion.manage.none`, `promotion.calculate.none` | All scopes | Phase 1/2 rule. Staff may see persisted order facts but does not configure or calculate promotions. |
 | Venue Manager | `order_queue.view`, `order_batch.status_update`, `order_batch.reject` | Own venue | Current where route permissions allow. |
 | Venue Manager | `booking.manage`, `staff_call.manage` | Own venue | Current. |
+| Venue Manager | `booking_chat.open`, `booking_chat.reply` | Canonical bookings of own venue | Current. Cannot transfer booking chat to Platform; foreign/mismatched booking metadata is hidden. |
 | Venue Manager | `menu.view`, `menu.manage`, `stop_list.manage` | Own venue | Current with policy caveats by route. Conservative target keeps Manager to stop-list/shift check/basic availability unless broad `MENU_MANAGE` is explicitly retained; see `docs/MENU_OPTIONS_STOPLIST.md`. |
 | Venue Manager | `MENU_SHIFT_CHECK` | Own venue only | Phase 1 staging-smoke-passed. May prepare a local draft and atomically confirm one bounded availability batch, including no-op completion. |
 | Venue Manager | `table.view`, limited `table.manage` | Own venue | Current where backend permission allows; owner-only QR actions must stay denied if configured so. |
@@ -133,11 +154,13 @@ Target decision: remove `ADMIN` from the product model and keep it only as a com
 | Venue Owner | `venue_preview.view` | Own venue only | Current. Server-selected preview is read-only and grants no lifecycle mutation, publication, share-link, auto-save or unsaved-form authority. |
 | Venue Owner | `billing.view/pay` | Own venue subscription/payment state | Current manual billing MVP for view/pay surfaces; Platform-only mark-paid/courtesy remain denied. |
 | Venue Owner | `support_ticket.manage_own_venue`, `venue_chat.manage_own_venue` | Own venue only | Current. Can transfer support tickets to Platform. |
+| Venue Owner | `booking_chat.open`, `booking_chat.reply` | Canonical bookings of own venue | Current. Cannot transfer booking chat to Platform; foreign/mismatched booking metadata is hidden. |
 | Venue Owner | `feedback.view_own_venue`, `feedback.follow_up_low`, `public_review_url.manage` | Own venue only | Current MVP. Public review URL setting is Owner-only and shared by Bot/Mini App. |
 | Venue Owner | `promotion.manage` | Own venue only | Current for informational Phase 1 and the Happy Hours percentage schedule/target/reward/status slice. |
 | Venue Owner | `venue.lifecycle.request_pause/archive/delete` | Own venue | Target only if product implements owner-requested lifecycle; Platform lifecycle remains Platform Owner. |
 | Platform Owner | `platform.venues.manage`, `platform.lifecycle.manage`, `platform.owner_access.manage` | Platform | Current for implemented cockpit/lifecycle/owner access. |
 | Platform Owner | `platform.billing.manage`, `platform.support.manage_all`, `platform.analytics.view`, `platform.audit.view`, `platform.settings.manage` | Platform | Billing/support MVP current; analytics/audit explorer partial/future. |
+| Platform Owner | no ordinary `booking_chat.*` | Booking conversations | Current explicit denial. Platform support list/detail/message/assignment/status paths accept `SUPPORT_TICKET` only and deny before exposing booking messages. |
 | Platform Owner | Ordinary `VENUE_CHAT` access | Venue chats | Denied by current target unless a future product policy explicitly changes it. |
 | Platform Owner | Ordinary venue Guest Preview access | Venue scope | Not granted automatically by platform scope. The Venue preview route requires an allowed OWNER/MANAGER membership in that venue. |
 | Platform Owner | Ordinary Staff Schedule access | Venue scope | Not granted automatically in Phase 1. A real own-venue membership and its venue role are required. |
@@ -817,6 +840,26 @@ Promotion Compatibility Policy and a broader audit viewer remain open.
     Telegram identity or unrelated PII.
 65. Deterministic PostgreSQL coverage proves ordered outcomes for rename versus rename,
     normalization, canonical create and direct delete without arbitrary sleeps or partial audit.
+66. Guest and Venue generic reply routes may read a booking thread for DTO/navigation, but every
+    `BOOKING_THREAD` write repeats canonical booking ownership and stored metadata checks under the
+    booking lock. Foreign Guest/Venue and mismatched thread metadata create no message/status facts.
+67. Direct repository `addMessage` positively allows only ordinary `VENUE_CHAT` and
+    `SUPPORT_TICKET`; `BOOKING_THREAD` and unknown/future types fail closed. The booking writer
+    rejects a concurrently `CLOSED` thread under lock before message facts, and a failure after an
+    allowed booking-message insert rolls back both message and thread status/timestamps.
+68. Duplicate booking-thread migration collapses read markers only after proving complete per-user
+    coverage and one exact timestamp across the group. Partial/different read evidence, unknown
+    inbound references, missing booking, ownership mismatch or conflicting statuses aborts before
+    messages, reads, audits or threads are changed.
+69. Mark-read keeps the existing Guest/Venue/Platform authorization results while enforcing
+    parent-first row locks: booking `bookings -> support_threads -> support_thread_reads`, ordinary
+    chat `support_threads -> support_thread_reads`, and no `support_thread_reads -> support_threads`
+    inversion.
+70. Exact booking-thread reconciliation starts from the canonical bookings visible to the current
+    server-authenticated actor and returns one explicit result for every requested id. Guest is
+    limited to own bookings; Venue Owner/Manager to the own venue; Staff remains denied. A missing,
+    foreign, duplicate, malformed or incomplete id set fails without partial thread/message facts,
+    and this lookup creates no thread, message, read marker, audit or outbox row.
 
 ## Roadmap Status
 

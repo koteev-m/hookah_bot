@@ -20,6 +20,12 @@ import type {
   SupportThreadType
 } from '../shared/api/supportDtos'
 import type { TableContextSnapshot } from '../shared/state/tableContext'
+import { createBookingMessageAttempt } from '../shared/bookingMessageAttempt'
+import {
+  bookingThreadError,
+  bookingThreadLoading,
+  type BookingThreadReconciliationState
+} from '../shared/bookingThreadReconciliation'
 import { append, el, on } from '../shared/ui/dom'
 import { showToast } from '../shared/ui/toast'
 
@@ -279,6 +285,63 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
   let venues: CatalogVenueDto[] = []
   let currentFilter: SupportThreadFilter = 'active'
   let selectedThreadId: number | null = initialThreadId ?? null
+  let disposeThreadDetail: (() => void) | null = null
+  let detailThread: SupportThreadDto | null = null
+  let reconciliationState: BookingThreadReconciliationState = bookingThreadLoading()
+  let initialInventoryPending = initialThreadId != null
+  let bookingSendInFlightThreadId: number | null = null
+  const bookingSendBusyMessage = 'Дождитесь завершения отправки перед обновлением или сменой переписки.'
+
+  const showBookingSendBusy = () => {
+    if (bookingSendInFlightThreadId == null) return false
+    refs.status.textContent = bookingSendBusyMessage
+    const status = refs.detail.querySelector<HTMLElement>('[data-booking-status]')
+    if (status) status.textContent = bookingSendBusyMessage
+    return true
+  }
+
+  const setBookingSendInFlight = (threadId: number | null) => {
+    bookingSendInFlightThreadId = threadId
+    const busy = threadId != null
+    refs.refreshButton.disabled = busy
+    refs.activeButton.disabled = busy
+    refs.resolvedButton.disabled = busy
+    refs.list.querySelectorAll<HTMLButtonElement>('.venue-message-thread-card button').forEach((button) => {
+      button.disabled = busy
+    })
+    if (busy) {
+      showBookingSendBusy()
+    } else {
+      if (refs.status.textContent === bookingSendBusyMessage) refs.status.textContent = ''
+      const status = refs.detail.querySelector<HTMLElement>('[data-booking-status]')
+      if (status?.textContent === bookingSendBusyMessage) status.textContent = ''
+    }
+  }
+
+  const clearReconciliationError = () => {
+    refs.detail.querySelector('.booking-thread-reconciliation-error')?.remove()
+  }
+
+  const blockBookingComposer = (message: string) => {
+    if (detailThread?.threadType !== 'BOOKING_THREAD') return
+    const textarea = refs.detail.querySelector<HTMLTextAreaElement>('[data-booking-composer]')
+    const submitButton = refs.detail.querySelector<HTMLButtonElement>('[data-booking-send]')
+    const status = refs.detail.querySelector<HTMLElement>('[data-booking-status]')
+    if (textarea) textarea.disabled = true
+    if (submitButton) submitButton.disabled = true
+    if (status) status.textContent = message
+  }
+
+  const showReconciliationError = (message: string) => {
+    clearReconciliationError()
+    blockBookingComposer(message)
+    const error = el('section', { className: 'card booking-thread-reconciliation-error' })
+    error.appendChild(el('p', { className: 'status', text: message }))
+    const refresh = el('button', { className: 'button-secondary', text: 'Обновить переписку' }) as HTMLButtonElement
+    refresh.addEventListener('click', () => void loadThreads())
+    error.appendChild(refresh)
+    refs.detail.prepend(error)
+  }
 
   const selectedVenueId = () => {
     const raw = refs.venueSelect.value
@@ -370,7 +433,7 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
     }
     refs.status.textContent = ''
     selectedThreadId = result.data.thread.threadId
-    renderThreadDetail(result.data.thread, result.data.messages)
+    showThreadDetail(result.data.thread, result.data.messages)
     await loadThreads()
   }
 
@@ -421,21 +484,26 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
         card.appendChild(el('span', { className: 'menu-item-badge', text: `Новых: ${unread}` }))
       }
       const openButton = el('button', { className: 'button-small', text: 'Открыть' }) as HTMLButtonElement
-      openButton.addEventListener('click', () => void loadThread(thread.threadId))
+      openButton.disabled = bookingSendInFlightThreadId != null
+      openButton.addEventListener('click', () => void loadThread(thread.threadId, 'selection'))
       append(card, title, venue, meta, preview, openButton)
       refs.list.appendChild(card)
     })
   }
 
   const loadThreads = async () => {
+    if (showBookingSendBusy()) return
     abortController?.abort()
     const controller = new AbortController()
     abortController = controller
     refs.refreshButton.disabled = true
     refs.refreshButton.textContent = 'Обновляем…'
+    reconciliationState = bookingThreadLoading()
+    clearReconciliationError()
+    blockBookingComposer('Сверяем переписку…')
     updateFilterButtons()
     const result = await guestGetSupportThreads(backendUrl, deps, controller.signal, {
-      filter: currentFilter,
+      filter: initialInventoryPending ? undefined : currentFilter,
       threadTypes: copy.threadTypes
     })
     if (disposed || abortController !== controller) return
@@ -443,43 +511,136 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
     refs.refreshButton.disabled = false
     refs.refreshButton.textContent = '🔄 Обновить'
     if (!result.ok) {
-      renderApiError(refs.status, result.error, isDebug)
+      reconciliationState = bookingThreadError()
+      refs.status.textContent = 'Не удалось сверить список переписок. Отправка сообщений заблокирована.'
+      refs.refreshButton.textContent = 'Обновить переписку'
+      showReconciliationError('Не удалось сверить переписку. Черновик сохранён; повторите чтение.')
       return
     }
     refs.status.textContent = ''
-    threads = result.data.items
+    const inventoryItems = result.data.items
+    if (initialInventoryPending && initialThreadId != null) {
+      threads = inventoryItems
+      renderThreadList()
+      void loadThread(initialThreadId, 'initial')
+      return
+    } else {
+      threads = inventoryItems
+    }
+    if (
+      selectedThreadId != null &&
+      detailThread?.threadId === selectedThreadId &&
+      !threads.some((thread) => thread.threadId === selectedThreadId) &&
+      (currentFilter === 'resolved'
+        ? isResolvedThread(detailThread) || isClosedThread(detailThread)
+        : !isResolvedThread(detailThread) && !isClosedThread(detailThread))
+    ) {
+      threads = [detailThread, ...threads]
+    }
     renderThreadList()
     const selectedStillVisible = selectedThreadId && threads.some((thread) => thread.threadId === selectedThreadId)
-    if (screenMode === 'messages' && selectedThreadId && selectedStillVisible && refs.detail.childElementCount === 0) {
+    if (selectedThreadId && selectedStillVisible) {
       void loadThread(selectedThreadId)
-    } else if (screenMode === 'messages' && threads.length && (!selectedStillVisible || refs.detail.childElementCount === 0)) {
+    } else if (screenMode === 'messages' && threads.length && !detailThread) {
       void loadThread(threads[0].threadId)
     } else if (!threads.length || !selectedStillVisible) {
       selectedThreadId = null
-      refs.detail.replaceChildren()
+      clearThreadDetail()
     }
   }
 
-  const loadThread = async (threadId: number) => {
+  const loadThread = async (
+    threadId: number,
+    source: 'initial' | 'selection' | 'refresh' = 'refresh'
+  ) => {
+    if (showBookingSendBusy()) return null
+    const inventoryThread = threads.find((thread) => thread.threadId === threadId)
+    const canLoadExactInitialTarget = source === 'initial' && initialInventoryPending && initialThreadId === threadId
+    if (!inventoryThread && !canLoadExactInitialTarget) {
+      reconciliationState = bookingThreadError()
+      showReconciliationError('Переписка отсутствует в актуальном списке. Обновите переписку.')
+      return null
+    }
+    const selectionSupersedesInitial = source === 'selection' && initialInventoryPending
+    if (selectionSupersedesInitial) {
+      initialInventoryPending = false
+    }
+    const switchingThread = selectedThreadId !== threadId
+    const preservedDraft =
+      !switchingThread && detailThread?.threadId === threadId && detailThread.threadType === 'BOOKING_THREAD'
+        ? refs.detail.querySelector<HTMLTextAreaElement>('[data-booking-composer]')?.value ?? ''
+        : ''
+    if (switchingThread && refs.detail.childElementCount > 0) {
+      clearThreadDetail()
+    }
+    selectedThreadId = threadId
     abortController?.abort()
     const controller = new AbortController()
     abortController = controller
+    reconciliationState = bookingThreadLoading()
+    clearReconciliationError()
+    if (detailThread?.threadId === threadId) {
+      blockBookingComposer('Загружаем актуальные сообщения…')
+    } else {
+      const loading = el('section', { className: 'card' })
+      loading.appendChild(el('p', { className: 'venue-order-sub', text: 'Загружаем переписку…' }))
+      refs.detail.replaceChildren(loading)
+    }
     const result = await guestGetSupportThread(backendUrl, threadId, deps, controller.signal)
-    if (disposed || abortController !== controller) return
+    if (disposed || abortController !== controller) return null
     abortController = null
     if (!result.ok) {
-      renderApiError(refs.status, result.error, isDebug)
-      return
+      reconciliationState = bookingThreadError()
+      showReconciliationError('Не удалось загрузить сообщения. Черновик сохранён; обновите переписку.')
+      return null
     }
-    selectedThreadId = result.data.thread.threadId
-    threads = threads.map((thread) =>
-      thread.threadId === selectedThreadId ? { ...thread, unreadCount: 0, lastMessagePreview: result.data.thread.lastMessagePreview } : thread
-    )
+    const exactThread = result.data.thread
+    if (
+      exactThread.threadId !== threadId ||
+      !copy.threadTypes.some((threadType) => threadType === exactThread.threadType) ||
+      (exactThread.threadType === 'BOOKING_THREAD' &&
+        (!Number.isSafeInteger(exactThread.bookingId) || (exactThread.bookingId ?? 0) <= 0)) ||
+      (inventoryThread != null &&
+        (exactThread.threadType !== inventoryThread.threadType ||
+          exactThread.bookingId !== inventoryThread.bookingId ||
+          exactThread.venueId !== inventoryThread.venueId))
+    ) {
+      reconciliationState = bookingThreadError()
+      showReconciliationError('Состав переписки изменился. Обновите переписку перед ответом.')
+      return null
+    }
+    if (canLoadExactInitialTarget || selectionSupersedesInitial) {
+      currentFilter = isResolvedThread(exactThread) || isClosedThread(exactThread) ? 'resolved' : 'active'
+      initialInventoryPending = false
+      threads = threads.filter((thread) =>
+        currentFilter === 'resolved'
+          ? isResolvedThread(thread) || isClosedThread(thread)
+          : !isResolvedThread(thread) && !isClosedThread(thread)
+      )
+      updateFilterButtons()
+    }
+    reconciliationState = { status: 'READY_WITH_THREAD', thread: exactThread }
+    selectedThreadId = exactThread.threadId
+    const exactInventoryIndex = threads.findIndex((thread) => thread.threadId === selectedThreadId)
+    if (exactInventoryIndex >= 0) {
+      threads = threads.map((thread) =>
+        thread.threadId === selectedThreadId
+          ? { ...exactThread, unreadCount: 0 }
+          : thread
+      )
+    } else {
+      threads = [{ ...exactThread, unreadCount: 0 }, ...threads]
+    }
     renderThreadList()
-    renderThreadDetail(result.data.thread, result.data.messages)
+    showThreadDetail(exactThread, result.data.messages, preservedDraft)
+    return exactThread
   }
 
-  const renderThreadDetail = (thread: SupportThreadDto, messages: SupportMessageDto[]) => {
+  const renderThreadDetail = (thread: SupportThreadDto, messages: SupportMessageDto[], preservedDraft = '') => {
+    const bookingMessage = thread.threadType === 'BOOKING_THREAD'
+    const messageAttempt = createBookingMessageAttempt()
+    let detailDisposed = false
+    let sendController: AbortController | null = null
     let currentMessages = messages
     const resolved = isResolvedThread(thread)
     const closed = isClosedThread(thread)
@@ -505,9 +666,13 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
     textarea.placeholder = screenMode === 'tickets' ? 'Напишите ответ по обращению.' : 'Напишите ответ заведению.'
     textarea.maxLength = 1000
     textarea.rows = 4
+    textarea.value = preservedDraft
+    textarea.dataset.bookingComposer = String(bookingMessage)
     const status = el('p', { className: 'status', text: '' })
+    status.dataset.bookingStatus = String(bookingMessage)
     const actions = el('div', { className: 'order-actions' })
     const submitButton = el('button', { className: 'button-small', text: 'Отправить' }) as HTMLButtonElement
+    submitButton.dataset.bookingSend = String(bookingMessage)
     const resolveButton = el('button', { className: 'button-small button-secondary', text: 'Завершить переписку' }) as HTMLButtonElement
     const reopenButton = el('button', { className: 'button-small', text: 'Возобновить переписку' }) as HTMLButtonElement
     if (!resolved && !closed) {
@@ -521,6 +686,7 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
     submitButton.hidden = resolved || closed
 
     const applyStatusChange = async (action: 'resolve' | 'reopen', button: HTMLButtonElement) => {
+      if (showBookingSendBusy()) return
       button.disabled = true
       const result =
         action === 'resolve'
@@ -533,7 +699,7 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
       }
       currentFilter = action === 'resolve' ? 'resolved' : 'active'
       selectedThreadId = result.data.thread.threadId
-      renderThreadDetail(result.data.thread, result.data.messages)
+      showThreadDetail(result.data.thread, result.data.messages)
       refs.status.textContent =
         action === 'resolve' ? 'Переписка завершена.' : 'Переписка возобновлена.'
       showToast(action === 'resolve' ? 'Переписка завершена.' : 'Переписка возобновлена.')
@@ -543,7 +709,15 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
     resolveButton.addEventListener('click', () => void applyStatusChange('resolve', resolveButton))
     reopenButton.addEventListener('click', () => void applyStatusChange('reopen', reopenButton))
 
+    const invalidateDraftAttempt = () => {
+      if (bookingMessage) {
+        messageAttempt.invalidate()
+      }
+    }
+    textarea.addEventListener('input', invalidateDraftAttempt)
+
     submitButton.addEventListener('click', async () => {
+      if (sendController || (bookingMessage && reconciliationState.status !== 'READY_WITH_THREAD')) return
       const text = textarea.value.trim()
       if (!text) {
         status.textContent = 'Введите сообщение.'
@@ -551,26 +725,95 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
         return
       }
       submitButton.disabled = true
-      const result = await guestSendSupportThreadMessage(backendUrl, thread.threadId, { message: text }, deps)
+      textarea.disabled = true
+      resolveButton.disabled = true
+      reopenButton.disabled = true
+      const controller = new AbortController()
+      sendController = controller
+      if (bookingMessage) {
+        setBookingSendInFlight(thread.threadId)
+      }
+      const payload = bookingMessage
+        ? {
+            message: text,
+            clientMessageId: messageAttempt.clientMessageIdFor(text, {
+              venueId: thread.venueId ?? null,
+              threadId: thread.threadId,
+              bookingId: thread.bookingId ?? null
+            })
+          }
+        : { message: text }
+      const result = await guestSendSupportThreadMessage(backendUrl, thread.threadId, payload, deps, controller.signal)
+      if (detailDisposed || sendController !== controller) return
+      sendController = null
+      if (bookingMessage) {
+        setBookingSendInFlight(null)
+      }
       submitButton.disabled = false
+      textarea.disabled = false
+      resolveButton.disabled = false
+      reopenButton.disabled = false
       if (!result.ok) {
-        renderApiError(status, result.error, isDebug)
+        const code = normalizeErrorCode(result.error)
+        if (bookingMessage && result.error.status === 409 && code === ApiErrorCodes.BOOKING_MESSAGE_IDEMPOTENCY_PAYLOAD_MISMATCH) {
+          messageAttempt.invalidate()
+          status.textContent = 'Текст сообщения отличается от предыдущей попытки. Проверьте его и отправьте ещё раз.'
+        } else {
+          renderApiError(status, result.error, isDebug)
+          if (bookingMessage) {
+            status.textContent = `${status.textContent} Текст сохранён: повторите отправку без изменений — дубликат не появится.`
+          }
+        }
         return
       }
+      messageAttempt.invalidate()
       currentMessages = [...currentMessages, result.data.message]
       renderMessages(messagesList, currentMessages)
       textarea.value = ''
       status.textContent = screenMode === 'tickets' ? 'Сообщение добавлено к обращению.' : 'Сообщение отправлено заведению.'
       showToast(screenMode === 'tickets' ? 'Сообщение добавлено.' : 'Сообщение отправлено заведению.')
-      void loadThreads()
+      if (bookingMessage) {
+        threads = threads.map((candidate) =>
+          candidate.threadId === result.data.thread.threadId ? result.data.thread : candidate
+        )
+        renderThreadList()
+      } else {
+        void loadThreads()
+      }
     })
+
+    return () => {
+      detailDisposed = true
+      sendController?.abort()
+      sendController = null
+      if (bookingMessage && bookingSendInFlightThreadId === thread.threadId) {
+        setBookingSendInFlight(null)
+      }
+      messageAttempt.invalidate()
+      textarea.removeEventListener('input', invalidateDraftAttempt)
+    }
+  }
+
+  const clearThreadDetail = () => {
+    disposeThreadDetail?.()
+    disposeThreadDetail = null
+    detailThread = null
+    refs.detail.replaceChildren()
+  }
+
+  const showThreadDetail = (thread: SupportThreadDto, messages: SupportMessageDto[], preservedDraft = '') => {
+    if (showBookingSendBusy()) return
+    disposeThreadDetail?.()
+    detailThread = thread
+    disposeThreadDetail = renderThreadDetail(thread, messages, preservedDraft)
   }
 
   const setFilter = (filter: SupportThreadFilter) => {
+    if (showBookingSendBusy()) return
     if (currentFilter === filter) return
     currentFilter = filter
     selectedThreadId = null
-    refs.detail.replaceChildren()
+    clearThreadDetail()
     void loadThreads()
   }
 
@@ -592,6 +835,7 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
   return () => {
     disposed = true
     abortController?.abort()
+    clearThreadDetail()
     disposables.forEach((dispose) => dispose())
   }
 }

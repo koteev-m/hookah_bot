@@ -650,6 +650,7 @@ export type VenueBookingCancelRequest = {
 
 export type VenueBookingMessageRequest = {
   message: string
+  clientMessageId: string
 }
 
 export type VenueBookingStatusResponse = {

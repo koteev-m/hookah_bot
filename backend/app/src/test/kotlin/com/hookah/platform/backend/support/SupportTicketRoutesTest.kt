@@ -488,10 +488,10 @@ class SupportTicketRoutesTest {
                                 source = SupportMessageSource.GUEST_MINIAPP,
                                 text = "This reply must not commit after exit",
                             )
-                            supportThreadRepository.markThreadRead(
+                            supportThreadRepository.markNonBookingThreadReadAfterThreadLock(
                                 connection = connection,
                                 threadId = locked.thread.id,
-                                userId = platformOwnerId,
+                                access = SupportThreadReadAccess.Guest(platformOwnerId),
                             )
                         }
                     }

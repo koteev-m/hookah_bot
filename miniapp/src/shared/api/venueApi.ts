@@ -105,6 +105,7 @@ import type {
   VenueGuestPreviewResponse
 } from './venueDtos'
 import type {
+  BookingThreadReconciliationResponse,
   SupportMessageCreateRequest,
   SupportMessageCreateResponse,
   SupportThreadDetailResponse,
@@ -897,7 +898,39 @@ export async function venueGetSupportThreads(
   return requestApi<SupportThreadListResponse>(
     backendUrl,
     `/api/venue/${params.venueId}/support/threads${suffix}`,
-    { signal },
+    { signal, cache: 'no-store' },
+    deps
+  )
+}
+
+export async function venueGetBookingThreadReconciliation(
+  backendUrl: string,
+  params: { venueId: number; bookingIds: number[] },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  if (
+    !Number.isSafeInteger(params.venueId) ||
+    params.venueId <= 0 ||
+    params.bookingIds.length === 0 ||
+    params.bookingIds.length > 100 ||
+    params.bookingIds.some((bookingId) => !Number.isSafeInteger(bookingId) || bookingId <= 0) ||
+    new Set(params.bookingIds).size !== params.bookingIds.length
+  ) {
+    return {
+      ok: false as const,
+      error: {
+        status: 400,
+        code: 'INVALID_INPUT',
+        message: 'venueId и bookingIds должны содержать корректные уникальные положительные числа'
+      }
+    }
+  }
+  const search = new URLSearchParams({ bookingIds: params.bookingIds.join(',') })
+  return requestApi<BookingThreadReconciliationResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/support/booking-threads?${search.toString()}`,
+    { signal, cache: 'no-store' },
     deps
   )
 }
@@ -911,7 +944,7 @@ export async function venueGetSupportThread(
   return requestApi<SupportThreadDetailResponse>(
     backendUrl,
     `/api/venue/${params.venueId}/support/threads/${params.threadId}`,
-    { signal },
+    { signal, cache: 'no-store' },
     deps
   )
 }

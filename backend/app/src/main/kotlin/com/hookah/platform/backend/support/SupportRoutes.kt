@@ -29,8 +29,10 @@ import com.hookah.platform.backend.telegram.TelegramKeyboards
 import com.hookah.platform.backend.telegram.TelegramOutboxEnqueuer
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
 import com.hookah.platform.backend.telegram.db.VenueRepository
+import io.ktor.http.HttpHeaders
 import io.ktor.server.application.call
 import io.ktor.server.request.receive
+import io.ktor.server.response.header
 import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
@@ -40,6 +42,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.sql.Connection
+import java.util.UUID
 
 @Serializable
 data class SupportBookingContextDto(
@@ -93,6 +96,24 @@ data class SupportThreadListResponse(
 )
 
 @Serializable
+enum class BookingThreadLookupStatus {
+    WITH_THREAD,
+    NO_THREAD,
+}
+
+@Serializable
+data class BookingThreadLookupItemDto(
+    val bookingId: Long,
+    val status: BookingThreadLookupStatus,
+    val thread: SupportThreadDto? = null,
+)
+
+@Serializable
+data class BookingThreadLookupResponse(
+    val items: List<BookingThreadLookupItemDto>,
+)
+
+@Serializable
 data class SupportThreadDetailResponse(
     val thread: SupportThreadDto,
     val messages: List<SupportMessageDto>,
@@ -101,6 +122,7 @@ data class SupportThreadDetailResponse(
 @Serializable
 data class SupportMessageCreateRequest(
     val message: String? = null,
+    val clientMessageId: String? = null,
 )
 
 @Serializable
@@ -160,6 +182,43 @@ fun Route.guestSupportRoutes(
     platformOwnerUserId: Long? = null,
     guestTableContextLifecycleRepository: GuestTableContextLifecycleRepository? = null,
 ) {
+    route("/support/booking-threads") {
+        get {
+            call.response.header(HttpHeaders.CacheControl, "no-store")
+            val userId = call.requireUserId()
+            val bookingIds = call.parseBookingThreadLookupIds()
+            val lookup =
+                supportThreadRepository.lookupGuestBookingThreads(
+                    userId = userId,
+                    bookingIds = bookingIds,
+                ) ?: throw NotFoundException()
+            call.respond(lookup.toLookupResponse())
+        }
+
+        post("{bookingId}") {
+            val userId = call.requireUserId()
+            val bookingId =
+                call.parameters["bookingId"]?.toLongOrNull()?.takeIf { it > 0 }
+                    ?: throw InvalidInputException("bookingId must be a positive number")
+            val booking =
+                guestBookingRepository.findActiveByGuest(bookingId = bookingId, userId = userId)
+                    ?: throw NotFoundException()
+            val title = booking.displayNumber?.let { "Бронь №$it" } ?: "Бронь #${booking.id}"
+            val thread =
+                supportThreadRepository.createOrFindBookingThread(
+                    bookingId = booking.id,
+                    title = title,
+                ) ?: throw NotFoundException()
+            markThreadReadAuthorized(
+                supportThreadRepository,
+                thread.id,
+                SupportThreadReadAccess.Guest(userId),
+            )
+            val detail = supportThreadRepository.getGuestThread(userId, thread.id) ?: throw NotFoundException()
+            call.respond(detail.toResponse(unreadCountOverride = 0))
+        }
+    }
+
     route("/support/venue-chats") {
         post {
             val userId = call.requireUserId()
@@ -174,7 +233,11 @@ fun Route.guestSupportRoutes(
                     guestUserId = userId,
                 )
             if (existing != null) {
-                supportThreadRepository.markThreadRead(threadId = existing.thread.id, userId = userId)
+                markThreadReadAuthorized(
+                    supportThreadRepository,
+                    existing.thread.id,
+                    SupportThreadReadAccess.Guest(userId),
+                )
                 call.respond(existing.toResponse(unreadCountOverride = 0))
                 return@post
             }
@@ -193,13 +256,18 @@ fun Route.guestSupportRoutes(
                     guestUserId = userId,
                     title = "Чат с ${venue.name}",
                 )
-            supportThreadRepository.markThreadRead(threadId = detail.thread.id, userId = userId)
+            markThreadReadAuthorized(
+                supportThreadRepository,
+                detail.thread.id,
+                SupportThreadReadAccess.Guest(userId),
+            )
             call.respond(detail.toResponse(unreadCountOverride = 0))
         }
     }
 
     route("/support/threads") {
         get {
+            call.response.header(HttpHeaders.CacheControl, "no-store")
             val userId = call.requireUserId()
             val filter = parseSupportInboxFilter(call.request.queryParameters["filter"])
             val threadTypes =
@@ -303,7 +371,11 @@ fun Route.guestSupportRoutes(
                                 verified = verified,
                             ),
                         ).also {
-                            supportThreadRepository.markThreadRead(threadId = it.thread.id, userId = userId)
+                            markThreadReadAuthorized(
+                                supportThreadRepository,
+                                it.thread.id,
+                                SupportThreadReadAccess.Guest(userId),
+                            )
                         }
                     }
                 }
@@ -317,6 +389,7 @@ fun Route.guestSupportRoutes(
         }
 
         get("{threadId}") {
+            call.response.header(HttpHeaders.CacheControl, "no-store")
             val userId = call.requireUserId()
             val threadId = call.parseThreadId()
             val detail =
@@ -380,17 +453,19 @@ fun Route.guestSupportRoutes(
                     lifecycleRepository = guestTableContextLifecycleRepository,
                     tableSessionConfig = tableSessionConfig,
                     supportThreadRepository = supportThreadRepository,
+                    outboxEnqueuer = outboxEnqueuer,
                     auditLogRepository = auditLogRepository,
                     guestRateLimitConfig = guestRateLimitConfig,
                     rateLimiter = rateLimiter,
                     detail = detail,
                     messageText = messageText,
+                    clientMessageId = request.clientMessageId,
                 )
             call.respond(
                 SupportMessageCreateResponse(
                     thread = result.thread.toDto(unreadCountOverride = 0),
                     message = result.message.toDto(),
-                    queued = false,
+                    queued = result.queued,
                 ),
             )
         }
@@ -403,8 +478,26 @@ fun Route.venueSupportRoutes(
     outboxEnqueuer: TelegramOutboxEnqueuer,
     auditLogRepository: AuditLogRepository? = null,
 ) {
+    route("/venue/{venueId}/support/booking-threads") {
+        get {
+            call.response.header(HttpHeaders.CacheControl, "no-store")
+            val userId = call.requireUserId()
+            val venueId = call.requireVenueId()
+            requireSupportManage(venueAccessRepository, userId, venueId)
+            val bookingIds = call.parseBookingThreadLookupIds()
+            val lookup =
+                supportThreadRepository.lookupVenueBookingThreads(
+                    venueId = venueId,
+                    viewerUserId = userId,
+                    bookingIds = bookingIds,
+                ) ?: throw NotFoundException()
+            call.respond(lookup.toLookupResponse())
+        }
+    }
+
     route("/venue/{venueId}/support/threads") {
         get {
+            call.response.header(HttpHeaders.CacheControl, "no-store")
             val userId = call.requireUserId()
             val venueId = call.requireVenueId()
             requireSupportManage(venueAccessRepository, userId, venueId)
@@ -427,12 +520,17 @@ fun Route.venueSupportRoutes(
         }
 
         get("{threadId}") {
+            call.response.header(HttpHeaders.CacheControl, "no-store")
             val userId = call.requireUserId()
             val venueId = call.requireVenueId()
             requireSupportManage(venueAccessRepository, userId, venueId)
             val threadId = call.parseThreadId()
             val detail = supportThreadRepository.getVenueThread(venueId, threadId) ?: throw NotFoundException()
-            supportThreadRepository.markThreadRead(threadId = detail.thread.id, userId = userId)
+            markThreadReadAuthorized(
+                supportThreadRepository,
+                detail.thread.id,
+                SupportThreadReadAccess.Venue(userId = userId, venueId = venueId),
+            )
             call.respond(detail.toResponse(unreadCountOverride = 0))
         }
 
@@ -452,7 +550,11 @@ fun Route.venueSupportRoutes(
                 newStatus = SupportThreadStatus.RESOLVED,
                 source = "VENUE_MINIAPP",
             )
-            supportThreadRepository.markThreadRead(threadId = detail.thread.id, userId = userId)
+            markThreadReadAuthorized(
+                supportThreadRepository,
+                detail.thread.id,
+                SupportThreadReadAccess.Venue(userId = userId, venueId = venueId),
+            )
             val updated = supportThreadRepository.getVenueThread(venueId, detail.thread.id) ?: throw NotFoundException()
             call.respond(updated.toResponse(unreadCountOverride = 0))
         }
@@ -473,7 +575,11 @@ fun Route.venueSupportRoutes(
                 newStatus = SupportThreadStatus.IN_PROGRESS,
                 source = "VENUE_MINIAPP",
             )
-            supportThreadRepository.markThreadRead(threadId = detail.thread.id, userId = userId)
+            markThreadReadAuthorized(
+                supportThreadRepository,
+                detail.thread.id,
+                SupportThreadReadAccess.Venue(userId = userId, venueId = venueId),
+            )
             val updated = supportThreadRepository.getVenueThread(venueId, detail.thread.id) ?: throw NotFoundException()
             call.respond(updated.toResponse(unreadCountOverride = 0))
         }
@@ -484,6 +590,9 @@ fun Route.venueSupportRoutes(
             requireSupportManage(venueAccessRepository, userId, venueId)
             val threadId = call.parseThreadId()
             val detail = supportThreadRepository.getVenueThread(venueId, threadId) ?: throw NotFoundException()
+            if (detail.thread.threadType != SupportThreadType.SUPPORT_TICKET) {
+                throw NotFoundException()
+            }
             requireThreadStatusChangeAllowed(detail.thread)
             changeThreadScope(
                 supportThreadRepository = supportThreadRepository,
@@ -504,7 +613,11 @@ fun Route.venueSupportRoutes(
                     source = "VENUE_MINIAPP",
                 )
             }
-            supportThreadRepository.markThreadRead(threadId = detail.thread.id, userId = userId)
+            markThreadReadAuthorized(
+                supportThreadRepository,
+                detail.thread.id,
+                SupportThreadReadAccess.Venue(userId = userId, venueId = venueId),
+            )
             val updated = supportThreadRepository.getVenueThread(venueId, detail.thread.id) ?: throw NotFoundException()
             call.respond(updated.toResponse(unreadCountOverride = 0))
         }
@@ -518,35 +631,86 @@ fun Route.venueSupportRoutes(
             val messageText = normalizeSupportMessage(request.message)
             val detail = supportThreadRepository.getVenueThread(venueId, threadId) ?: throw NotFoundException()
             requireVenueCanActOnThread(detail.thread)
-            requireThreadMessageAllowed(detail.thread)
+            if (detail.thread.threadType != SupportThreadType.BOOKING_THREAD) {
+                requireThreadMessageAllowed(detail.thread)
+            }
+            val bookingWrite =
+                if (detail.thread.threadType == SupportThreadType.BOOKING_THREAD) {
+                    val clientMessageId = normalizeBookingClientMessageId(request.clientMessageId)
+                    supportThreadRepository.addBookingMessage(
+                        bookingId = detail.thread.bookingId ?: throw NotFoundException(),
+                        authorUserId = userId,
+                        authorRole = SupportMessageAuthorRole.VENUE,
+                        source = SupportMessageSource.VENUE_MINIAPP,
+                        text = messageText,
+                        expectedThreadId = detail.thread.id,
+                        expectedVenueId = venueId,
+                        clientMessageId = clientMessageId,
+                        notificationWriter = { connection, notification ->
+                            check(notification.kind == BookingMessageNotificationKind.GUEST_NOTIFICATION)
+                            outboxEnqueuer.enqueueBookingSendMessageInTransaction(
+                                connection = connection,
+                                chatId = notification.recipientChatId,
+                                text =
+                                    buildSupportReplyMessageForGuest(
+                                        notification.thread,
+                                        notification.message.text,
+                                        "заведения",
+                                    ),
+                                replyMarkup =
+                                    notification.thread.bookingId?.let { bookingId ->
+                                        notification.thread.venueId?.let { venue ->
+                                            TelegramKeyboards.inlineGuestBookingReplyActions(venue, bookingId)
+                                        }
+                                    },
+                                dedupeKey = notification.dedupeKey,
+                            )
+                        },
+                    ) ?: throw NotFoundException()
+                } else {
+                    null
+                }
             val message =
-                supportThreadRepository.addMessage(
-                    threadId = detail.thread.id,
-                    authorUserId = userId,
-                    authorRole = SupportMessageAuthorRole.VENUE,
-                    source = SupportMessageSource.VENUE_MINIAPP,
-                    text = messageText,
+                bookingWrite?.message
+                    ?: supportThreadRepository.addMessage(
+                        threadId = detail.thread.id,
+                        authorUserId = userId,
+                        authorRole = SupportMessageAuthorRole.VENUE,
+                        source = SupportMessageSource.VENUE_MINIAPP,
+                        text = messageText,
+                    )
+            if (bookingWrite?.created != false) {
+                markThreadReadAuthorized(
+                    supportThreadRepository,
+                    detail.thread.id,
+                    SupportThreadReadAccess.Venue(userId = userId, venueId = venueId),
                 )
-            supportThreadRepository.markThreadRead(threadId = detail.thread.id, userId = userId)
+            }
             val refreshedThread =
-                supportThreadRepository.getVenueThread(venueId, detail.thread.id)?.thread ?: detail.thread
-            appendSupportReplyAuditBestEffort(
-                auditLogRepository = auditLogRepository,
-                actorUserId = userId,
-                oldThread = detail.thread,
-                refreshedThread = refreshedThread,
-                source = "VENUE_MINIAPP",
-            )
-            outboxEnqueuer.enqueueSendMessage(
-                chatId = detail.thread.guestUserId,
-                text = buildSupportReplyMessageForGuest(refreshedThread, messageText, "заведения"),
-                replyMarkup =
-                    detail.thread.bookingId?.let { bookingId ->
-                        refreshedThread.venueId?.let { venue ->
-                            TelegramKeyboards.inlineGuestBookingReplyActions(venue, bookingId)
-                        }
-                    },
-            )
+                supportThreadRepository.getVenueThread(venueId, detail.thread.id)?.thread
+                    ?: bookingWrite?.thread
+                    ?: detail.thread
+            if (bookingWrite?.created != false) {
+                appendSupportReplyAuditBestEffort(
+                    auditLogRepository = auditLogRepository,
+                    actorUserId = userId,
+                    oldThread = detail.thread,
+                    refreshedThread = refreshedThread,
+                    source = "VENUE_MINIAPP",
+                )
+            }
+            if (bookingWrite == null) {
+                outboxEnqueuer.enqueueSendMessage(
+                    chatId = refreshedThread.guestUserId,
+                    text = buildSupportReplyMessageForGuest(refreshedThread, messageText, "заведения"),
+                    replyMarkup =
+                        refreshedThread.bookingId?.let { bookingId ->
+                            refreshedThread.venueId?.let { venue ->
+                                TelegramKeyboards.inlineGuestBookingReplyActions(venue, bookingId)
+                            }
+                        },
+                )
+            }
             call.respond(
                 SupportMessageCreateResponse(
                     thread = refreshedThread.toDto(unreadCountOverride = 0),
@@ -600,7 +764,14 @@ fun Route.platformSupportRoutes(
             if (detail.thread.threadType != SupportThreadType.SUPPORT_TICKET) {
                 throw NotFoundException()
             }
-            supportThreadRepository.markThreadRead(threadId = detail.thread.id, userId = userId)
+            markThreadReadAuthorized(
+                supportThreadRepository,
+                detail.thread.id,
+                SupportThreadReadAccess.Platform(
+                    userId = userId,
+                    platformOwnerUserId = platformConfig.ownerUserId,
+                ),
+            )
             call.respond(detail.toResponse(unreadCountOverride = 0))
         }
 
@@ -622,7 +793,14 @@ fun Route.platformSupportRoutes(
                     source = SupportMessageSource.PLATFORM_MINIAPP,
                     text = messageText,
                 )
-            supportThreadRepository.markThreadRead(threadId = detail.thread.id, userId = userId)
+            markThreadReadAuthorized(
+                supportThreadRepository,
+                detail.thread.id,
+                SupportThreadReadAccess.Platform(
+                    userId = userId,
+                    platformOwnerUserId = platformConfig.ownerUserId,
+                ),
+            )
             val refreshedThread =
                 supportThreadRepository.getPlatformThread(detail.thread.id)?.thread ?: detail.thread
             appendSupportReplyAuditBestEffort(
@@ -791,7 +969,12 @@ private suspend fun createConfirmedPlatformGuestTicket(
                     verified = verified,
                 ),
         ).also {
-            supportThreadRepository.markThreadRead(connection, it.thread.id, userId)
+            markThreadReadAuthorized(
+                supportThreadRepository,
+                connection,
+                it.thread.id,
+                SupportThreadReadAccess.Guest(userId),
+            )
         }
     }
 
@@ -871,7 +1054,11 @@ private suspend fun getGuestThreadAndMarkRead(
 ): SupportThreadDetailRecord {
     val detail = supportThreadRepository.getGuestThread(userId, threadId) ?: throw NotFoundException()
     if (!requiresConfirmedPlatformGuestThreadMutation(userId, platformOwnerUserId, detail.thread)) {
-        supportThreadRepository.markThreadRead(threadId = detail.thread.id, userId = userId)
+        markThreadReadAuthorized(
+            supportThreadRepository,
+            detail.thread.id,
+            SupportThreadReadAccess.Guest(userId),
+        )
         return detail
     }
 
@@ -888,7 +1075,12 @@ private suspend fun getGuestThreadAndMarkRead(
             supportThreadRepository.lockGuestThread(connection, userId, detail.thread.id)
                 ?: throw NotFoundException()
         requireConfirmedPlatformGuestThread(locked.thread, detail.thread, confirmed)
-        supportThreadRepository.markThreadRead(connection, locked.thread.id, userId)
+        markThreadReadAuthorized(
+            supportThreadRepository,
+            connection,
+            locked.thread.id,
+            SupportThreadReadAccess.Guest(userId),
+        )
         supportThreadRepository.getGuestThread(connection, userId, locked.thread.id) ?: throw NotFoundException()
     }
 }
@@ -913,7 +1105,11 @@ private suspend fun changeGuestThreadStatus(
             newStatus = newStatus,
             source = "GUEST_MINIAPP",
         )
-        supportThreadRepository.markThreadRead(threadId = detail.thread.id, userId = userId)
+        markThreadReadAuthorized(
+            supportThreadRepository,
+            detail.thread.id,
+            SupportThreadReadAccess.Guest(userId),
+        )
         return supportThreadRepository.getGuestThread(userId, detail.thread.id) ?: throw NotFoundException()
     }
 
@@ -935,7 +1131,12 @@ private suspend fun changeGuestThreadStatus(
             if (locked.thread.status != newStatus) {
                 supportThreadRepository.updateThreadStatus(connection, locked.thread.id, newStatus)
             }
-            supportThreadRepository.markThreadRead(connection, locked.thread.id, userId)
+            markThreadReadAuthorized(
+                supportThreadRepository,
+                connection,
+                locked.thread.id,
+                SupportThreadReadAccess.Guest(userId),
+            )
             supportThreadRepository.getGuestThread(connection, userId, locked.thread.id) ?: throw NotFoundException()
         }
     if (detail.thread.status != updated.thread.status) {
@@ -955,6 +1156,7 @@ private suspend fun changeGuestThreadStatus(
 private data class GuestThreadMessageResult(
     val thread: SupportThreadRecord,
     val message: SupportMessageRecord,
+    val queued: Boolean,
 )
 
 private suspend fun addGuestThreadMessage(
@@ -963,42 +1165,97 @@ private suspend fun addGuestThreadMessage(
     lifecycleRepository: GuestTableContextLifecycleRepository?,
     tableSessionConfig: TableSessionConfig,
     supportThreadRepository: SupportThreadRepository,
+    outboxEnqueuer: TelegramOutboxEnqueuer,
     auditLogRepository: AuditLogRepository?,
     guestRateLimitConfig: GuestRateLimitConfig?,
     rateLimiter: RateLimiter?,
     detail: SupportThreadDetailRecord,
     messageText: String,
+    clientMessageId: String?,
 ): GuestThreadMessageResult {
     if (!requiresConfirmedPlatformGuestThreadMutation(userId, platformOwnerUserId, detail.thread)) {
-        requireThreadMessageAllowed(detail.thread)
-        enforceGuestSupportRateLimit(
-            guestRateLimitConfig = guestRateLimitConfig,
-            rateLimiter = rateLimiter,
-            userId = userId,
-            venueId = detail.thread.venueId,
-            tableSessionId = detail.thread.tableSessionId,
-            endpoint = "support-message",
-            selector = { supportMessage },
-        )
+        if (detail.thread.threadType != SupportThreadType.BOOKING_THREAD) {
+            requireThreadMessageAllowed(detail.thread)
+        }
+        val bookingWrite =
+            if (detail.thread.threadType == SupportThreadType.BOOKING_THREAD) {
+                val clientMessageId = normalizeBookingClientMessageId(clientMessageId)
+                supportThreadRepository.addBookingMessage(
+                    bookingId = detail.thread.bookingId ?: throw NotFoundException(),
+                    authorUserId = userId,
+                    authorRole = SupportMessageAuthorRole.GUEST,
+                    source = SupportMessageSource.GUEST_MINIAPP,
+                    text = messageText,
+                    expectedThreadId = detail.thread.id,
+                    expectedGuestUserId = userId,
+                    clientMessageId = clientMessageId,
+                    beforeInsert = {
+                        enforceGuestSupportRateLimit(
+                            guestRateLimitConfig = guestRateLimitConfig,
+                            rateLimiter = rateLimiter,
+                            userId = userId,
+                            venueId = detail.thread.venueId,
+                            tableSessionId = detail.thread.tableSessionId,
+                            endpoint = "support-message",
+                            selector = { supportMessage },
+                        )
+                    },
+                    notificationWriter = { connection, notification ->
+                        check(notification.kind == BookingMessageNotificationKind.GUEST_ACK)
+                        outboxEnqueuer.enqueueBookingSendMessageInTransaction(
+                            connection = connection,
+                            chatId = notification.recipientChatId,
+                            text = "✅ Ответ отправлен заведению.",
+                            dedupeKey = notification.dedupeKey,
+                        )
+                    },
+                ) ?: throw NotFoundException()
+            } else {
+                enforceGuestSupportRateLimit(
+                    guestRateLimitConfig = guestRateLimitConfig,
+                    rateLimiter = rateLimiter,
+                    userId = userId,
+                    venueId = detail.thread.venueId,
+                    tableSessionId = detail.thread.tableSessionId,
+                    endpoint = "support-message",
+                    selector = { supportMessage },
+                )
+                null
+            }
         val message =
-            supportThreadRepository.addMessage(
-                threadId = detail.thread.id,
-                authorUserId = userId,
-                authorRole = SupportMessageAuthorRole.GUEST,
-                source = SupportMessageSource.GUEST_MINIAPP,
-                text = messageText,
+            bookingWrite?.message
+                ?: supportThreadRepository.addMessage(
+                    threadId = detail.thread.id,
+                    authorUserId = userId,
+                    authorRole = SupportMessageAuthorRole.GUEST,
+                    source = SupportMessageSource.GUEST_MINIAPP,
+                    text = messageText,
+                )
+        if (bookingWrite?.created != false) {
+            markThreadReadAuthorized(
+                supportThreadRepository,
+                detail.thread.id,
+                SupportThreadReadAccess.Guest(userId),
             )
-        supportThreadRepository.markThreadRead(threadId = detail.thread.id, userId = userId)
+        }
         val refreshedThread =
-            supportThreadRepository.getGuestThread(userId, detail.thread.id)?.thread ?: detail.thread
-        appendSupportReplyAuditBestEffort(
-            auditLogRepository = auditLogRepository,
-            actorUserId = userId,
-            oldThread = detail.thread,
-            refreshedThread = refreshedThread,
-            source = "GUEST_MINIAPP",
+            supportThreadRepository.getGuestThread(userId, detail.thread.id)?.thread
+                ?: bookingWrite?.thread
+                ?: detail.thread
+        if (bookingWrite?.created != false) {
+            appendSupportReplyAuditBestEffort(
+                auditLogRepository = auditLogRepository,
+                actorUserId = userId,
+                oldThread = detail.thread,
+                refreshedThread = refreshedThread,
+                source = "GUEST_MINIAPP",
+            )
+        }
+        return GuestThreadMessageResult(
+            thread = refreshedThread,
+            message = message,
+            queued = bookingWrite != null,
         )
-        return GuestThreadMessageResult(thread = refreshedThread, message = message)
     }
 
     val result =
@@ -1034,11 +1291,16 @@ private suspend fun addGuestThreadMessage(
                     source = SupportMessageSource.GUEST_MINIAPP,
                     text = messageText,
                 )
-            supportThreadRepository.markThreadRead(connection, locked.thread.id, userId)
+            markThreadReadAuthorized(
+                supportThreadRepository,
+                connection,
+                locked.thread.id,
+                SupportThreadReadAccess.Guest(userId),
+            )
             val refreshedThread =
                 supportThreadRepository.getGuestThread(connection, userId, locked.thread.id)?.thread
                     ?: throw NotFoundException()
-            GuestThreadMessageResult(thread = refreshedThread, message = message)
+            GuestThreadMessageResult(thread = refreshedThread, message = message, queued = false)
         }
     appendSupportReplyAuditBestEffort(
         auditLogRepository = auditLogRepository,
@@ -1213,6 +1475,33 @@ private fun requireVenueCanActOnThread(thread: SupportThreadRecord) {
     }
 }
 
+private suspend fun markThreadReadAuthorized(
+    supportThreadRepository: SupportThreadRepository,
+    threadId: Long,
+    access: SupportThreadReadAccess,
+) {
+    requireThreadReadAuthorized(supportThreadRepository.markThreadRead(threadId, access))
+}
+
+private fun markThreadReadAuthorized(
+    supportThreadRepository: SupportThreadRepository,
+    connection: Connection,
+    threadId: Long,
+    access: SupportThreadReadAccess,
+) {
+    requireThreadReadAuthorized(
+        supportThreadRepository.markNonBookingThreadReadAfterThreadLock(connection, threadId, access),
+    )
+}
+
+private fun requireThreadReadAuthorized(result: SupportThreadReadResult) {
+    when (result) {
+        SupportThreadReadResult.MARKED -> Unit
+        SupportThreadReadResult.NOT_FOUND -> throw NotFoundException()
+        SupportThreadReadResult.FORBIDDEN -> throw ForbiddenException()
+    }
+}
+
 private suspend fun requireSupportManage(
     venueAccessRepository: VenueAccessRepository,
     userId: Long,
@@ -1224,6 +1513,23 @@ private suspend fun requireSupportManage(
         throw ForbiddenException()
     }
 }
+
+private fun List<BookingThreadLookupRecord>.toLookupResponse(): BookingThreadLookupResponse =
+    BookingThreadLookupResponse(
+        items =
+            map { lookup ->
+                BookingThreadLookupItemDto(
+                    bookingId = lookup.bookingId,
+                    status =
+                        if (lookup.thread == null) {
+                            BookingThreadLookupStatus.NO_THREAD
+                        } else {
+                            BookingThreadLookupStatus.WITH_THREAD
+                        },
+                    thread = lookup.thread?.toDto(),
+                )
+            },
+    )
 
 fun SupportThreadRecord.toDto(unreadCountOverride: Int? = null): SupportThreadDto =
     SupportThreadDto(
@@ -1285,6 +1591,18 @@ fun normalizeSupportMessage(value: String?): String {
         throw InvalidInputException("message must be at most $MAX_SUPPORT_MESSAGE_LENGTH characters")
     }
     return trimmed
+}
+
+fun normalizeBookingClientMessageId(value: String?): String {
+    val candidate = value ?: throw InvalidInputException("clientMessageId is required")
+    if (candidate.length > MAX_BOOKING_CLIENT_MESSAGE_ID_LENGTH) {
+        throw InvalidInputException("clientMessageId must be at most $MAX_BOOKING_CLIENT_MESSAGE_ID_LENGTH characters")
+    }
+    val parsed = runCatching { UUID.fromString(candidate) }.getOrNull()
+    if (parsed == null || parsed.toString() != candidate) {
+        throw InvalidInputException("clientMessageId must be a canonical UUID")
+    }
+    return candidate
 }
 
 fun buildSupportReplyMessageForGuest(
@@ -1462,6 +1780,30 @@ private fun parseSupportInboxFilter(value: String?): SupportInboxFilter? =
         else -> throw InvalidInputException("filter must be active or resolved")
     }
 
+private fun io.ktor.server.application.ApplicationCall.parseBookingThreadLookupIds(): List<Long> {
+    val values = request.queryParameters.getAll("bookingIds").orEmpty()
+    if (values.size != 1) {
+        throw InvalidInputException("bookingIds must be provided once as a comma-separated list")
+    }
+    val tokens = values.single().split(',')
+    if (tokens.isEmpty() || tokens.size > MAX_BOOKING_THREAD_LOOKUP_IDS) {
+        throw InvalidInputException("bookingIds must contain between 1 and $MAX_BOOKING_THREAD_LOOKUP_IDS ids")
+    }
+    val bookingIds =
+        tokens.map { token ->
+            val normalized = token.trim()
+            if (normalized.isEmpty() || normalized.any { !it.isDigit() }) {
+                throw InvalidInputException("bookingIds must contain positive numbers")
+            }
+            normalized.toLongOrNull()?.takeIf { it > 0 }
+                ?: throw InvalidInputException("bookingIds must contain positive numbers")
+        }
+    if (bookingIds.distinct().size != bookingIds.size) {
+        throw InvalidInputException("bookingIds must be unique")
+    }
+    return bookingIds
+}
+
 private fun normalizeSupportCategory(
     value: String?,
     default: SupportThreadCategory,
@@ -1569,6 +1911,7 @@ private fun io.ktor.server.application.ApplicationCall.parseThreadId(): Long =
         ?: throw InvalidInputException("threadId must be a number")
 
 private const val MAX_SUPPORT_MESSAGE_LENGTH = 1000
+private const val MAX_BOOKING_CLIENT_MESSAGE_ID_LENGTH = 64
 private const val MAX_SUPPORT_TITLE_LENGTH = 120
 private const val SUPPORT_TICKET_STATUS_CHANGED = "SUPPORT_TICKET_STATUS_CHANGED"
 private const val SUPPORT_TICKET_SCOPE_CHANGED = "SUPPORT_TICKET_SCOPE_CHANGED"

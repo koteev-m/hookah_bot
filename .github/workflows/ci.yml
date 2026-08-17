@@ -54,7 +54,7 @@ jobs:
 
   backend-release-critical-routes:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 60
     strategy:
       fail-fast: true
       matrix:
@@ -75,39 +75,42 @@ jobs:
         run: docker info
       - name: Run guest venue platform route and security tests
         run: |
-          _JAVA_OPTIONS=-Xmx4g ./gradlew --no-daemon --max-workers=1 :backend:app:test \
-            --tests "GuestVenueRoutesTest" \
-            --tests "GuestOrderRoutesTest" \
-            --tests "GuestOrderIdempotencyFingerprintTest" \
-            --tests "GuestVisitRoutesTest" \
-            --tests "GuestTableResolveRoutesTest" \
-            --tests "GuestTableContextActivationRepositoryTest" \
-            --tests "GuestTableContextTeardownRepositoryTest" \
-            --tests "PlatformGuestTableMutationCoordinatorTest" \
-            --tests "PlatformGuestQrPendingConfirmationStoreTest" \
-            --tests "GuestTabsRoutesTest" \
-            --tests "GuestStaffCallRoutesTest" \
-            --tests "ShiftExtensionRoutesTest" \
-            --tests "SupportTicketRoutesTest" \
-            --tests "VenueOrderRoutesTest" \
-            --tests "VenuePromotionRoutesTest" \
-            --tests "VenuePromotionRepositoryTest" \
+          JAVA_TOOL_OPTIONS=-Dapi.version=1.44 _JAVA_OPTIONS=-Xmx4g \
+            ./gradlew --no-daemon --max-workers=1 :backend:app:test \
+            --tests "com.hookah.platform.backend.miniapp.guest.GuestVenueRoutesTest" \
+            --tests "com.hookah.platform.backend.miniapp.guest.GuestOrderRoutesTest" \
+            --tests "com.hookah.platform.backend.telegram.db.GuestOrderIdempotencyFingerprintTest" \
+            --tests "com.hookah.platform.backend.miniapp.guest.GuestVisitRoutesTest" \
+            --tests "com.hookah.platform.backend.miniapp.guest.GuestTableResolveRoutesTest" \
+            --tests "com.hookah.platform.backend.miniapp.guest.db.GuestTableContextActivationRepositoryTest" \
+            --tests "com.hookah.platform.backend.miniapp.guest.db.GuestTableContextTeardownRepositoryTest" \
+            --tests "com.hookah.platform.backend.miniapp.guest.db.PlatformGuestTableMutationCoordinatorTest" \
+            --tests "com.hookah.platform.backend.telegram.PlatformGuestQrPendingConfirmationStoreTest" \
+            --tests "com.hookah.platform.backend.miniapp.guest.GuestTabsRoutesTest" \
+            --tests "com.hookah.platform.backend.miniapp.guest.GuestStaffCallRoutesTest" \
+            --tests "com.hookah.platform.backend.miniapp.shift.ShiftExtensionRoutesTest" \
+            --tests "com.hookah.platform.backend.support.SupportTicketRoutesTest" \
+            --tests "com.hookah.platform.backend.support.SupportThreadReadRepositoryTest" \
+            --tests "com.hookah.platform.backend.telegram.TelegramOutboxWorkerTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.VenueOrderRoutesTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.promotions.VenuePromotionRoutesTest" \
+            --tests "com.hookah.platform.backend.telegram.db.VenuePromotionRepositoryTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepositoryTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.VenueMenuRoutesTest" \
-            --tests "AuditLogRepositoryTest" \
-            --tests "VenueStaffRoutesTest" \
-            --tests "VenueStaffRepositoryTest" \
-            --tests "PlatformVenueRoutesTest" \
-            --tests "PlatformRoutesTest" \
-            --tests "PlatformVenueRepositoryTest" \
-            --tests "PlatformVenueMemberRepositoryTest" \
-            --tests "VenueOwnerAccountRepositoryTest" \
-            --tests "VenueConnectionRequestRepositoryTest" \
-            --tests "VenueOnboardingRoutesTest" \
-            --tests "PlatformOnboardingRoutesTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.AuditLogRepositoryTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.VenueStaffRoutesTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.staff.VenueStaffRepositoryTest" \
+            --tests "com.hookah.platform.backend.platform.PlatformVenueRoutesTest" \
+            --tests "com.hookah.platform.backend.platform.PlatformRoutesTest" \
+            --tests "com.hookah.platform.backend.platform.PlatformVenueRepositoryTest" \
+            --tests "com.hookah.platform.backend.platform.PlatformVenueMemberRepositoryTest" \
+            --tests "com.hookah.platform.backend.platform.VenueOwnerAccountRepositoryTest" \
+            --tests "com.hookah.platform.backend.telegram.db.VenueConnectionRequestRepositoryTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.VenueOnboardingRoutesTest" \
+            --tests "com.hookah.platform.backend.platform.PlatformOnboardingRoutesTest" \
             --tests "com.hookah.platform.backend.telegram.TelegramBotRouterVenueConnectionRequestFlowTest" \
-            --tests "TelegramBotRouterTableTokenTest" \
-            --tests "TelegramKeyboardsTest" \
+            --tests "com.hookah.platform.backend.telegram.TelegramBotRouterTableTokenTest" \
+            --tests "com.hookah.platform.backend.telegram.TelegramKeyboardsTest" \
             --console=plain
       - name: Assert route and security test results
         if: ${{ !cancelled() }}
@@ -131,6 +134,8 @@ jobs:
               "com.hookah.platform.backend.miniapp.guest.GuestStaffCallRoutesTest",
               "com.hookah.platform.backend.miniapp.shift.ShiftExtensionRoutesTest",
               "com.hookah.platform.backend.support.SupportTicketRoutesTest",
+              "com.hookah.platform.backend.support.SupportThreadReadRepositoryTest",
+              "com.hookah.platform.backend.telegram.TelegramOutboxWorkerTest",
               "com.hookah.platform.backend.miniapp.venue.VenueOrderRoutesTest",
               "com.hookah.platform.backend.miniapp.venue.promotions.VenuePromotionRoutesTest",
               "com.hookah.platform.backend.telegram.db.VenuePromotionRepositoryTest",
@@ -152,6 +157,9 @@ jobs:
               "com.hookah.platform.backend.telegram.TelegramKeyboardsTest",
           ]
           required_minimums = {
+              "com.hookah.platform.backend.support.SupportTicketRoutesTest": 12,
+              "com.hookah.platform.backend.support.SupportThreadReadRepositoryTest": 11,
+              "com.hookah.platform.backend.telegram.TelegramOutboxWorkerTest": 8,
               "com.hookah.platform.backend.miniapp.guest.GuestOrderRoutesTest": 61,
               "com.hookah.platform.backend.telegram.db.GuestOrderIdempotencyFingerprintTest": 7,
               "com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepositoryTest": 54,
@@ -197,19 +205,62 @@ jobs:
           if problems:
               raise SystemExit("\n".join(problems))
           PY
-      - name: Run mandatory PostgreSQL activation promotion staff menu and guest order concurrency gates
+      - name: Run mandatory PostgreSQL menu mutation gate
         if: ${{ !cancelled() }}
         run: |
           JAVA_TOOL_OPTIONS=-Dapi.version=1.44 _JAVA_OPTIONS=-Xmx4g \
             ./gradlew --no-daemon --max-workers=1 :backend:app:test \
-            --tests "GuestTableContextActivationPostgresTest" \
-            --tests "PromotionConfigurationConcurrencyPostgresTest" \
-            --tests "VenueStaffMutationConcurrencyPostgresTest" \
-            --tests "VenueMenuOptionNormalizationConcurrencyPostgresTest" \
-            --tests "VenueOnboardingConcurrencyPostgresTest" \
-            --tests "GuestOrderIdempotencyConcurrencyPostgresTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.menu.VenueMenuOptionNormalizationConcurrencyPostgresTest" \
             --console=plain
-      - name: Assert PostgreSQL activation promotion staff menu and guest order test results
+      - name: Assert mandatory PostgreSQL menu mutation results
+        if: ${{ !cancelled() }}
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          from xml.etree import ElementTree
+
+          report = Path(
+              "backend/app/build/test-results/test/"
+              "TEST-com.hookah.platform.backend.miniapp.venue.menu."
+              "VenueMenuOptionNormalizationConcurrencyPostgresTest.xml"
+          )
+          if not report.is_file():
+              raise SystemExit(f"missing JUnit XML: {report}")
+          suite = ElementTree.parse(report).getroot()
+          counts = {
+              key: int(suite.attrib.get(key, "0"))
+              for key in ("tests", "skipped", "failures", "errors")
+          }
+          executed = counts["tests"] - counts["skipped"]
+          print(
+              f"PostgreSQL menu mutation JUnit: xml={report} "
+              f"discovered={counts['tests']} executed={executed} "
+              f"skipped={counts['skipped']} failures={counts['failures']} "
+              f"errors={counts['errors']} required=44"
+          )
+          if counts["tests"] < 44:
+              raise SystemExit(
+                  "incomplete PostgreSQL menu mutation matrix: "
+                  f"required=44 actual={counts['tests']}"
+              )
+          if any(counts[key] for key in ("skipped", "failures", "errors")):
+              raise SystemExit(f"PostgreSQL menu mutation gate failed: {counts}")
+          PY
+      - name: Run mandatory PostgreSQL integrity and concurrency gates
+        if: ${{ !cancelled() }}
+        run: |
+          JAVA_TOOL_OPTIONS=-Dapi.version=1.44 _JAVA_OPTIONS=-Xmx4g \
+            ./gradlew --no-daemon --max-workers=1 :backend:app:test \
+            --tests "com.hookah.platform.backend.miniapp.guest.db.GuestTableContextActivationPostgresTest" \
+            --tests "com.hookah.platform.backend.telegram.db.PromotionConfigurationConcurrencyPostgresTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.staff.VenueStaffMutationConcurrencyPostgresTest" \
+            --tests "com.hookah.platform.backend.telegram.db.VenueOnboardingConcurrencyPostgresTest" \
+            --tests "com.hookah.platform.backend.telegram.db.GuestOrderIdempotencyConcurrencyPostgresTest" \
+            --tests "com.hookah.platform.backend.support.BookingConversationConcurrencyPostgresTest" \
+            --tests "com.hookah.platform.backend.support.BookingMessageIdempotencyPostgresTest" \
+            --tests "com.hookah.platform.backend.support.SupportThreadReadConcurrencyPostgresTest" \
+            --console=plain
+      - name: Assert mandatory PostgreSQL integrity and concurrency results
         if: ${{ !cancelled() }}
         run: |
           python3 - <<'PY'
@@ -225,6 +276,14 @@ jobs:
                       "GuestTableContextActivationPostgresTest.xml"
                   ),
                   8,
+              ),
+              (
+                  "support-thread read canonical parent lock order",
+                  report_dir / (
+                      "TEST-com.hookah.platform.backend.support."
+                      "SupportThreadReadConcurrencyPostgresTest.xml"
+                  ),
+                  3,
               ),
               (
                   "promotion lifecycle/configuration",
@@ -243,14 +302,6 @@ jobs:
                   2,
               ),
               (
-                  "menu management mutation concurrency",
-                  report_dir / (
-                      "TEST-com.hookah.platform.backend.miniapp.venue.menu."
-                      "VenueMenuOptionNormalizationConcurrencyPostgresTest.xml"
-                  ),
-                  44,
-              ),
-              (
                   "guest order idempotency concurrency",
                   report_dir / (
                       "TEST-com.hookah.platform.backend.telegram.db."
@@ -265,6 +316,22 @@ jobs:
                       "VenueOnboardingConcurrencyPostgresTest.xml"
                   ),
                   7,
+              ),
+              (
+                  "booking conversation canonical row lock",
+                  report_dir / (
+                      "TEST-com.hookah.platform.backend.support."
+                      "BookingConversationConcurrencyPostgresTest.xml"
+                  ),
+                  1,
+              ),
+              (
+                  "booking Mini App message idempotency and transactional outbox",
+                  report_dir / (
+                      "TEST-com.hookah.platform.backend.support."
+                      "BookingMessageIdempotencyPostgresTest.xml"
+                  ),
+                  11,
               ),
           ]
           problems = []
@@ -320,9 +387,74 @@ jobs:
       - name: Run venue booking RBAC tests
         run: |
           ./gradlew --no-daemon :backend:app:test \
-            --tests "VenueBookingRoutesTest" \
-            --tests "VenueRbacRoutesTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.VenueBookingRoutesTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.VenueRbacRoutesTest" \
+            --tests "com.hookah.platform.backend.support.BookingConversationRoutesTest" \
+            --tests "com.hookah.platform.backend.support.BookingConversationRepositoryTest" \
             --console=plain
+      - name: Assert venue booking and conversation test results
+        if: ${{ !cancelled() }}
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          from xml.etree import ElementTree
+
+          report_dir = Path("backend/app/build/test-results/test")
+          required_suites = [
+              (
+                  "venue booking routes",
+                  report_dir / (
+                      "TEST-com.hookah.platform.backend.miniapp.venue."
+                      "VenueBookingRoutesTest.xml"
+                  ),
+                  8,
+              ),
+              (
+                  "venue RBAC routes",
+                  report_dir / (
+                      "TEST-com.hookah.platform.backend.miniapp.venue."
+                      "VenueRbacRoutesTest.xml"
+                  ),
+                  36,
+              ),
+              (
+                  "booking conversation routes",
+                  report_dir / (
+                      "TEST-com.hookah.platform.backend.support."
+                  "BookingConversationRoutesTest.xml"
+                  ),
+                  5,
+              ),
+              (
+                  "booking conversation repository",
+                  report_dir / (
+                      "TEST-com.hookah.platform.backend.support."
+                      "BookingConversationRepositoryTest.xml"
+                  ),
+                  12,
+              ),
+          ]
+          problems = []
+          for label, report, minimum in required_suites:
+              if not report.is_file():
+                  problems.append(f"missing JUnit XML: {report}")
+                  continue
+              suite = ElementTree.parse(report).getroot()
+              counts = {
+                  key: int(suite.attrib.get(key, "0"))
+                  for key in ("tests", "skipped", "failures", "errors")
+              }
+              print(f"{label}: xml={report} minimum={minimum} counts={counts}")
+              if counts["tests"] < minimum:
+                  problems.append(
+                      f"incomplete {label}: required={minimum} actual={counts['tests']}"
+                  )
+              if any(counts[key] for key in ("skipped", "failures", "errors")):
+                  problems.append(f"non-passing {label}: {counts}")
+
+          if problems:
+              raise SystemExit("\n".join(problems))
+          PY
 
   backend-telegram-lightweight:
     runs-on: ubuntu-latest
@@ -346,10 +478,10 @@ jobs:
       - name: Run Telegram keyboard payload notifier tests
         run: |
           ./gradlew --no-daemon :backend:app:test \
-            --tests "TelegramKeyboardsTest" \
-            --tests "SendMessagePayloadTest" \
-            --tests "StaffChatNotifierTest" \
-            --tests "TelegramBotRouterLinkCommandTest" \
+            --tests "com.hookah.platform.backend.telegram.TelegramKeyboardsTest" \
+            --tests "com.hookah.platform.backend.telegram.SendMessagePayloadTest" \
+            --tests "com.hookah.platform.backend.telegram.StaffChatNotifierTest" \
+            --tests "com.hookah.platform.backend.telegram.TelegramBotRouterLinkCommandTest" \
             --console=plain
 
   backend-migration-sanity:
@@ -377,12 +509,18 @@ jobs:
         run: |
           JAVA_TOOL_OPTIONS=-Dapi.version=1.44 _JAVA_OPTIONS=-Xmx4g \
             ./gradlew --no-daemon --max-workers=1 :backend:app:test \
-            --tests "TelegramDialogStateMigrationTest" \
-            --tests "TableSessionsMigrationV28PostgresTest" \
-            --tests "AuditLogTargetMigrationH2Test" \
-            --tests "AuditLogTargetMigrationPostgresTest" \
-            --tests "GuestBatchIdempotencyFingerprintMigrationH2Test" \
-            --tests "GuestBatchIdempotencyFingerprintMigrationPostgresTest" \
+            --tests "com.hookah.platform.backend.telegram.TelegramDialogStateMigrationTest" \
+            --tests "com.hookah.platform.backend.miniapp.guest.TableSessionsMigrationV28PostgresTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.AuditLogTargetMigrationH2Test" \
+            --tests "com.hookah.platform.backend.miniapp.venue.AuditLogTargetMigrationPostgresTest" \
+            --tests "com.hookah.platform.backend.miniapp.guest.GuestBatchIdempotencyFingerprintMigrationH2Test" \
+            --tests "com.hookah.platform.backend.miniapp.guest.GuestBatchIdempotencyFingerprintMigrationPostgresTest" \
+            --tests "com.hookah.platform.backend.support.BookingThreadIntegrityMigrationH2Test" \
+            --tests "com.hookah.platform.backend.support.BookingThreadIntegrityMigrationPostgresTest" \
+            --tests "com.hookah.platform.backend.support.BookingAuditReferencePolicyTest" \
+            --tests "com.hookah.platform.backend.support.BookingMessageIdempotencyMigrationH2Test" \
+            --tests "com.hookah.platform.backend.support.BookingMessageIdempotencyMigrationPostgresTest" \
+            --tests "com.hookah.platform.backend.support.BookingThreadIntegrityMigrationConcurrencyPostgresTest" \
             --console=plain
       - name: Assert mandatory migration test results
         if: ${{ !cancelled() }}
@@ -393,6 +531,22 @@ jobs:
 
           report_dir = Path("backend/app/build/test-results/test")
           required_suites = [
+              (
+                  "H2 Telegram dialog-state migration",
+                  report_dir / (
+                      "TEST-com.hookah.platform.backend.telegram."
+                      "TelegramDialogStateMigrationTest.xml"
+                  ),
+                  1,
+              ),
+              (
+                  "PostgreSQL table-session V28 migration",
+                  report_dir / (
+                      "TEST-com.hookah.platform.backend.miniapp.guest."
+                      "TableSessionsMigrationV28PostgresTest.xml"
+                  ),
+                  1,
+              ),
               (
                   "H2 audit target migration",
                   report_dir / (
@@ -422,6 +576,54 @@ jobs:
                   report_dir / (
                       "TEST-com.hookah.platform.backend.miniapp.guest."
                       "GuestBatchIdempotencyFingerprintMigrationPostgresTest.xml"
+                  ),
+                  2,
+              ),
+              (
+                  "H2 booking thread integrity migration",
+                  report_dir / (
+                      "TEST-com.hookah.platform.backend.support."
+                  "BookingThreadIntegrityMigrationH2Test.xml"
+                  ),
+                  42,
+              ),
+              (
+                  "PostgreSQL booking thread integrity migration",
+                  report_dir / (
+                      "TEST-com.hookah.platform.backend.support."
+                  "BookingThreadIntegrityMigrationPostgresTest.xml"
+                  ),
+                  42,
+              ),
+              (
+                  "booking audit recursive-key PG/H2/preflight predicate parity",
+                  report_dir / (
+                      "TEST-com.hookah.platform.backend.support."
+                      "BookingAuditReferencePolicyTest.xml"
+                  ),
+                  6,
+              ),
+              (
+                  "H2 booking Mini App message idempotency migration",
+                  report_dir / (
+                      "TEST-com.hookah.platform.backend.support."
+                  "BookingMessageIdempotencyMigrationH2Test.xml"
+                  ),
+                  5,
+              ),
+              (
+                  "PostgreSQL booking Mini App message idempotency migration",
+                  report_dir / (
+                      "TEST-com.hookah.platform.backend.support."
+                  "BookingMessageIdempotencyMigrationPostgresTest.xml"
+                  ),
+                  5,
+              ),
+              (
+                  "PostgreSQL booking thread migration lock serialization",
+                  report_dir / (
+                      "TEST-com.hookah.platform.backend.support."
+                      "BookingThreadIntegrityMigrationConcurrencyPostgresTest.xml"
                   ),
                   2,
               ),
@@ -609,9 +811,139 @@ jobs:
       - name: Install Playwright Chromium
         working-directory: miniapp
         run: npx playwright install --with-deps chromium
-      - name: Run Mini App browser smoke
+      - name: Run full Mini App browser smoke with structured JSON report
         working-directory: miniapp
-        run: npm run e2e:smoke
+        env:
+          CI: "1"
+          TZ: UTC
+          MINIAPP_E2E_PORT: "5174"
+          PLAYWRIGHT_JSON_OUTPUT_FILE: playwright-results.json
+        run: npm run e2e:smoke -- --reporter=list,json
+      - name: Assert full Mini App browser smoke results
+        if: ${{ !cancelled() }}
+        working-directory: miniapp
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          report_path = Path("playwright-results.json")
+          minimum_executed = 206
+          if not report_path.is_file():
+              raise SystemExit(f"missing Playwright JSON report: {report_path}")
+
+          try:
+              report = json.loads(report_path.read_text(encoding="utf-8"))
+          except (OSError, UnicodeError, json.JSONDecodeError) as error:
+              raise SystemExit(f"invalid Playwright JSON report {report_path}: {error}") from error
+
+          stats = report.get("stats")
+          if not isinstance(stats, dict):
+              raise SystemExit(f"missing Playwright stats object: {report_path}")
+
+          required_stats = ("expected", "unexpected", "flaky", "skipped")
+          invalid_stats = {
+              key: stats.get(key)
+              for key in required_stats
+              if (
+                  not isinstance(stats.get(key), int)
+                  or isinstance(stats.get(key), bool)
+                  or stats.get(key) < 0
+              )
+          }
+          if invalid_stats:
+              raise SystemExit(f"invalid Playwright stats in {report_path}: {invalid_stats}")
+
+          suites = report.get("suites")
+          if not isinstance(suites, list):
+              raise SystemExit(f"invalid Playwright suites array: {report_path}")
+
+          def iter_tests(suite):
+              for spec in suite.get("specs", []):
+                  yield from spec.get("tests", [])
+              for child in suite.get("suites", []):
+                  yield from iter_tests(child)
+
+          try:
+              reported_tests = [test for suite in suites for test in iter_tests(suite)]
+              outcome_counts = {
+                  key: sum(test.get("status") == key for test in reported_tests)
+                  for key in required_stats
+              }
+              unknown_outcomes = [
+                  test.get("status")
+                  for test in reported_tests
+                  if test.get("status") not in required_stats
+              ]
+          except (AttributeError, TypeError) as error:
+              raise SystemExit(f"invalid Playwright suite structure: {error}") from error
+
+          if unknown_outcomes:
+              raise SystemExit(f"unknown Playwright outcomes: {unknown_outcomes}")
+          stats_outcomes = {key: stats[key] for key in required_stats}
+          if outcome_counts != stats_outcomes:
+              raise SystemExit(
+                  f"Playwright stats/suite mismatch: stats={stats_outcomes} "
+                  f"suite_outcomes={outcome_counts}"
+              )
+
+          expected = stats["expected"]
+          unexpected = stats["unexpected"]
+          failures = unexpected
+          flaky = stats["flaky"]
+          skipped = stats["skipped"]
+          executed = expected + unexpected + flaky
+          runner_errors = report.get("errors")
+          if not isinstance(runner_errors, list):
+              raise SystemExit(f"invalid Playwright errors array: {report_path}")
+
+          missing_results = sum(
+              test["status"] != "skipped" and not test.get("results")
+              for test in reported_tests
+          )
+          non_passing_expectations = sum(
+              test["status"] != "skipped" and test.get("expectedStatus") != "passed"
+              for test in reported_tests
+          )
+          failed_attempts = sum(
+              result.get("status") != "passed"
+              for test in reported_tests
+              if test["status"] != "skipped"
+              for result in test.get("results", [])
+          )
+
+          print(
+              f"Playwright JSON: report={report_path} executed={executed} "
+              f"expected={expected} failures={failures} flaky={flaky} "
+              f"skipped={skipped} runner_errors={len(runner_errors)} "
+              f"failed_attempts={failed_attempts} "
+              f"required_executed={minimum_executed}"
+          )
+
+          problems = []
+          if executed < minimum_executed:
+              problems.append(
+                  f"incomplete Mini App smoke: required={minimum_executed} actual={executed}"
+              )
+          if failures:
+              problems.append(f"failed Playwright tests: {failures}")
+          if flaky:
+              problems.append(f"flaky Playwright outcomes: {flaky}")
+          if skipped:
+              problems.append(f"skipped Playwright tests: {skipped}")
+          if runner_errors:
+              problems.append(f"Playwright runner errors: {len(runner_errors)}")
+          if missing_results:
+              problems.append(f"Playwright tests without execution results: {missing_results}")
+          if non_passing_expectations:
+              problems.append(
+                  f"Playwright tests with non-passing expected status: {non_passing_expectations}"
+              )
+          if failed_attempts:
+              problems.append(f"failed Playwright attempts: {failed_attempts}")
+          if problems:
+              raise SystemExit("\n".join(problems))
+          PY
 
   docker:
     runs-on: ubuntu-latest

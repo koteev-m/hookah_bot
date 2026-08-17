@@ -199,6 +199,13 @@ class OrderIdempotencyPayloadMismatchException :
                 "Обновите корзину и отправьте заказ ещё раз.",
     )
 
+class BookingMessageIdempotencyPayloadMismatchException :
+    ApiException(
+        code = ApiErrorCodes.BOOKING_MESSAGE_IDEMPOTENCY_PAYLOAD_MISMATCH,
+        httpStatus = HttpStatusCode.Conflict,
+        message = "Этот ключ отправки уже использован для другого сообщения. Повторите отправку ещё раз.",
+    )
+
 class OrderIdempotencyReplayUnverifiableException :
     ApiException(
         code = ApiErrorCodes.ORDER_IDEMPOTENCY_REPLAY_UNVERIFIABLE,

@@ -142,6 +142,7 @@ import com.hookah.platform.backend.promotions.PromotionGiftOffer
 import com.hookah.platform.backend.promotions.PromotionGiftOfferStatus
 import com.hookah.platform.backend.promotions.PromotionGiftRewardItem
 import com.hookah.platform.backend.promotions.PromotionGiftUnavailableReason
+import com.hookah.platform.backend.support.BookingThreadMessageRecord
 import com.hookah.platform.backend.support.SupportAssigneeScope
 import com.hookah.platform.backend.support.SupportMessageAuthorRole
 import com.hookah.platform.backend.support.SupportMessageRecord
@@ -460,23 +461,56 @@ class TelegramBotRouterTableTokenTest {
         } returns ZoneId.of(VenueSettingsRepository.DEFAULT_AUTO_TIMEZONE)
         coEvery { venueMenuSectionImagesRepository.ensureBotTestVenueMenuSectionImages() } returns Unit
         coEvery {
-            supportThreadRepository.createOrFindBookingThread(any(), any(), any(), any())
+            supportThreadRepository.addBookingMessage(
+                bookingId = any(),
+                authorUserId = any(),
+                authorRole = any(),
+                source = any(),
+                text = any(),
+                telegramMessageId = any(),
+                title = any(),
+                statusAfterInsert = any(),
+                expectedThreadId = any(),
+                expectedGuestUserId = any(),
+                expectedVenueId = any(),
+            )
         } answers {
-            SupportThreadRecord(
-                id = 9000L,
-                venueId = invocation.args[0] as Long,
-                venueName = "Mix",
-                guestUserId = invocation.args[2] as Long,
-                category = SupportThreadCategory.BOOKING,
-                status = SupportThreadStatus.OPEN,
-                bookingId = invocation.args[1] as Long,
-                orderId = null,
-                tableSessionId = null,
-                title = invocation.args[3] as String,
-                lastMessageAt = null,
-                createdAt = Instant.parse("2026-04-03T18:00:00Z"),
-                updatedAt = Instant.parse("2026-04-03T18:00:00Z"),
-                booking = null,
+            val bookingId = invocation.args[0] as Long
+            val authorUserId = invocation.args[1] as Long?
+            val authorRole = invocation.args[2] as SupportMessageAuthorRole
+            val source = invocation.args[3] as SupportMessageSource
+            val text = invocation.args[4] as String
+            val telegramMessageId = invocation.args[5] as Long?
+            val title = invocation.args[6] as String
+            BookingThreadMessageRecord(
+                thread =
+                    SupportThreadRecord(
+                        id = 9000L,
+                        venueId = 10L,
+                        venueName = "Mix",
+                        guestUserId = 555L,
+                        category = SupportThreadCategory.BOOKING,
+                        status = SupportThreadStatus.OPEN,
+                        bookingId = bookingId,
+                        orderId = null,
+                        tableSessionId = null,
+                        title = title,
+                        lastMessageAt = null,
+                        createdAt = Instant.parse("2026-04-03T18:00:00Z"),
+                        updatedAt = Instant.parse("2026-04-03T18:00:00Z"),
+                        booking = null,
+                    ),
+                message =
+                    SupportMessageRecord(
+                        id = 9001L,
+                        threadId = 9000L,
+                        authorUserId = authorUserId,
+                        authorRole = authorRole,
+                        source = source,
+                        text = text,
+                        telegramMessageId = telegramMessageId,
+                        createdAt = Instant.parse("2026-04-03T18:01:00Z"),
+                    ),
             )
         }
         coEvery {
@@ -17986,28 +18020,32 @@ class TelegramBotRouterTableTokenTest {
                                 it.text == "↩️ Ответить" && it.callbackData == "guest_booking_reply:10:77"
                             }
                     },
+                    null,
+                    "booking-thread-message:9001:guest-notification",
                 )
             }
             coVerify {
-                supportThreadRepository.createOrFindBookingThread(
-                    venueId = 10L,
+                supportThreadRepository.addBookingMessage(
                     bookingId = 77L,
-                    guestUserId = 555L,
-                    title = "Бронь №7",
-                )
-            }
-            coVerify {
-                supportThreadRepository.addMessage(
-                    threadId = 9000L,
                     authorUserId = 200L,
                     authorRole = SupportMessageAuthorRole.VENUE,
                     source = SupportMessageSource.STAFF_CHAT,
                     text = "Подтвердите, пожалуйста, время на 18:00.",
-                    telegramMessageId = null,
+                    telegramMessageId = 20_002_4L,
+                    title = "Бронь №7",
+                    expectedVenueId = 10L,
                 )
             }
             coVerify { dialogStateRepository.clear(100) }
-            coVerify { outboxEnqueuer.enqueueSendMessage(100, "✅ Сообщение гостю отправлено.", any()) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "✅ Сообщение гостю отправлено.",
+                    null,
+                    null,
+                    "booking-thread-message:9001:venue-ack",
+                )
+            }
         }
 
     @Test
@@ -18326,25 +18364,27 @@ class TelegramBotRouterTableTokenTest {
 
             coVerify(exactly = 0) { outboxEnqueuer.enqueueSendMessage(-777L, any(), any()) }
             coVerify {
-                supportThreadRepository.createOrFindBookingThread(
-                    venueId = 10L,
+                supportThreadRepository.addBookingMessage(
                     bookingId = 77L,
-                    guestUserId = 555L,
-                    title = "Бронь №7",
-                )
-            }
-            coVerify {
-                supportThreadRepository.addMessage(
-                    threadId = 9000L,
                     authorUserId = 555L,
                     authorRole = SupportMessageAuthorRole.GUEST,
                     source = SupportMessageSource.GUEST_BOT,
                     text = "Будем на 10 минут позже.",
-                    telegramMessageId = null,
+                    telegramMessageId = 20_002_401L,
+                    title = "Бронь №7",
+                    expectedGuestUserId = 555L,
                 )
             }
             coVerify { dialogStateRepository.clear(555L) }
-            coVerify { outboxEnqueuer.enqueueSendMessage(555L, "✅ Ответ отправлен заведению.", any()) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    555L,
+                    "✅ Ответ отправлен заведению.",
+                    null,
+                    null,
+                    "booking-thread-message:9001:guest-ack",
+                )
+            }
         }
 
     @Test
