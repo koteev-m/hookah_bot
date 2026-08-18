@@ -1,7 +1,11 @@
 package com.hookah.platform.backend.support
 
 import com.hookah.platform.backend.test.PostgresTestEnv
+import java.util.UUID
+import javax.sql.DataSource
 import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 class BookingThreadIntegrityMigrationPostgresTest {
     @Test
@@ -52,6 +56,339 @@ class BookingThreadIntegrityMigrationPostgresTest {
     @Test
     fun `unknown reference fails before domain mutation on PostgreSQL`() {
         support().assertUnknownReferenceFailsBeforeDomainMutation()
+    }
+
+    @Test
+    fun `composite expected-looking foreign key fails before domain mutation on PostgreSQL`() {
+        val database = PostgresTestEnv.createDatabase()
+        PostgresTestEnv.createDataSource(database, migrate = false).use { dataSource ->
+            BookingThreadIntegrityMigrationTestSupport.assertPhysicalReferenceInventoryFailsBeforeDomainMutation(
+                dataSource = dataSource,
+                location = POSTGRES_MIGRATION_LOCATION,
+                previousVersion = PREVIOUS_VERSION,
+                expectedVersion = EXPECTED_VERSION,
+                configureReferenceShape = { connection, _ ->
+                    connection.createStatement().use { statement ->
+                        statement.execute(
+                            "ALTER TABLE support_threads ADD COLUMN tenant_id BIGINT NOT NULL DEFAULT 1",
+                        )
+                        statement.execute(
+                            "ALTER TABLE support_messages ADD COLUMN tenant_id BIGINT NOT NULL DEFAULT 1",
+                        )
+                        statement.execute(
+                            """
+                            ALTER TABLE support_threads
+                            ADD CONSTRAINT uq_support_threads_id_tenant UNIQUE (id, tenant_id)
+                            """.trimIndent(),
+                        )
+                        statement.execute(
+                            "ALTER TABLE support_messages DROP CONSTRAINT support_messages_thread_id_fkey",
+                        )
+                        statement.execute(
+                            """
+                            ALTER TABLE support_messages
+                            ADD CONSTRAINT support_messages_thread_tenant_fkey
+                            FOREIGN KEY (thread_id, tenant_id)
+                            REFERENCES support_threads(id, tenant_id)
+                            ON DELETE CASCADE
+                            """.trimIndent(),
+                        )
+                    }
+                },
+                loadReferenceRows = {
+                    queryRows(
+                        dataSource,
+                        """
+                        SELECT 'thread', id::TEXT, NULL::TEXT, tenant_id::TEXT
+                        FROM support_threads
+                        UNION ALL
+                        SELECT 'message', id::TEXT, thread_id::TEXT, tenant_id::TEXT
+                        FROM support_messages
+                        ORDER BY 1, 2
+                        """.trimIndent(),
+                    )
+                },
+            )
+        }
+    }
+
+    @Test
+    fun `foreign key to non-id target column fails before domain mutation on PostgreSQL`() {
+        val database = PostgresTestEnv.createDatabase()
+        PostgresTestEnv.createDataSource(database, migrate = false).use { dataSource ->
+            BookingThreadIntegrityMigrationTestSupport.assertPhysicalReferenceInventoryFailsBeforeDomainMutation(
+                dataSource = dataSource,
+                location = POSTGRES_MIGRATION_LOCATION,
+                previousVersion = PREVIOUS_VERSION,
+                expectedVersion = EXPECTED_VERSION,
+                configureReferenceShape = { connection, fixture ->
+                    connection.createStatement().use { statement ->
+                        statement.execute("ALTER TABLE support_threads ADD COLUMN reference_key BIGINT")
+                        statement.execute(
+                            "UPDATE support_threads SET reference_key = id + $REFERENCE_KEY_OFFSET",
+                        )
+                        statement.execute("ALTER TABLE support_threads ALTER COLUMN reference_key SET NOT NULL")
+                        statement.execute(
+                            """
+                            ALTER TABLE support_threads
+                            ADD CONSTRAINT uq_support_threads_reference_key UNIQUE (reference_key)
+                            """.trimIndent(),
+                        )
+                        statement.execute(
+                            """
+                            CREATE TABLE non_id_booking_thread_reference (
+                                id BIGINT PRIMARY KEY,
+                                target_reference BIGINT NOT NULL,
+                                CONSTRAINT non_id_booking_thread_reference_fkey
+                                    FOREIGN KEY (target_reference)
+                                    REFERENCES support_threads(reference_key)
+                                    ON DELETE CASCADE
+                            )
+                            """.trimIndent(),
+                        )
+                        statement.execute(
+                            """
+                            INSERT INTO non_id_booking_thread_reference (id, target_reference)
+                            VALUES (1, ${fixture.duplicateThreadId + REFERENCE_KEY_OFFSET})
+                            """.trimIndent(),
+                        )
+                    }
+                },
+                loadReferenceRows = {
+                    queryRows(
+                        dataSource,
+                        """
+                        SELECT 'thread', id::TEXT, reference_key::TEXT
+                        FROM support_threads
+                        UNION ALL
+                        SELECT 'reference', id::TEXT, target_reference::TEXT
+                        FROM non_id_booking_thread_reference
+                        ORDER BY 1, 2
+                        """.trimIndent(),
+                    )
+                },
+            )
+        }
+    }
+
+    @Test
+    fun `external same-name relation cannot replace expected local foreign key on PostgreSQL`() {
+        val database = PostgresTestEnv.createDatabase()
+        val externalSchema = uniqueIdentifier("v124_same_name")
+        PostgresTestEnv.createDataSource(database, migrate = false).use { dataSource ->
+            try {
+                BookingThreadIntegrityMigrationTestSupport.assertPhysicalReferenceInventoryFailsBeforeDomainMutation(
+                    dataSource = dataSource,
+                    location = POSTGRES_MIGRATION_LOCATION,
+                    previousVersion = PREVIOUS_VERSION,
+                    expectedVersion = EXPECTED_VERSION,
+                    configureReferenceShape = { connection, fixture ->
+                        connection.createStatement().use { statement ->
+                            statement.execute("CREATE SCHEMA $externalSchema")
+                            statement.execute(
+                                "ALTER TABLE support_messages DROP CONSTRAINT support_messages_thread_id_fkey",
+                            )
+                            statement.execute(
+                                """
+                                CREATE TABLE $externalSchema.support_messages (
+                                    id BIGINT PRIMARY KEY,
+                                    thread_id BIGINT NOT NULL,
+                                    CONSTRAINT external_support_messages_thread_id_fkey
+                                        FOREIGN KEY (thread_id)
+                                        REFERENCES ${database.schema}.support_threads(id)
+                                        ON DELETE CASCADE
+                                )
+                                """.trimIndent(),
+                            )
+                            statement.execute(
+                                """
+                                INSERT INTO $externalSchema.support_messages (id, thread_id)
+                                VALUES (1, ${fixture.duplicateThreadId})
+                                """.trimIndent(),
+                            )
+                        }
+                    },
+                    loadReferenceRows = {
+                        queryRows(
+                            dataSource,
+                            "SELECT id::TEXT, thread_id::TEXT FROM $externalSchema.support_messages ORDER BY id",
+                        )
+                    },
+                )
+            } finally {
+                dropSchema(dataSource, externalSchema)
+            }
+        }
+    }
+
+    @Test
+    fun `additional external foreign key fails before domain mutation on PostgreSQL`() {
+        val database = PostgresTestEnv.createDatabase()
+        val externalSchema = uniqueIdentifier("v124_extra_reference")
+        PostgresTestEnv.createDataSource(database, migrate = false).use { dataSource ->
+            try {
+                BookingThreadIntegrityMigrationTestSupport.assertPhysicalReferenceInventoryFailsBeforeDomainMutation(
+                    dataSource = dataSource,
+                    location = POSTGRES_MIGRATION_LOCATION,
+                    previousVersion = PREVIOUS_VERSION,
+                    expectedVersion = EXPECTED_VERSION,
+                    configureReferenceShape = { connection, fixture ->
+                        connection.createStatement().use { statement ->
+                            statement.execute("CREATE SCHEMA $externalSchema")
+                            statement.execute(
+                                """
+                                CREATE TABLE $externalSchema.extra_booking_thread_reference (
+                                    id BIGINT PRIMARY KEY,
+                                    thread_id BIGINT NOT NULL,
+                                    CONSTRAINT extra_booking_thread_reference_fkey
+                                        FOREIGN KEY (thread_id)
+                                        REFERENCES ${database.schema}.support_threads(id)
+                                        ON DELETE CASCADE
+                                )
+                                """.trimIndent(),
+                            )
+                            statement.execute(
+                                """
+                                INSERT INTO $externalSchema.extra_booking_thread_reference (id, thread_id)
+                                VALUES (1, ${fixture.duplicateThreadId})
+                                """.trimIndent(),
+                            )
+                        }
+                    },
+                    loadReferenceRows = {
+                        queryRows(
+                            dataSource,
+                            """
+                            SELECT id::TEXT, thread_id::TEXT
+                            FROM $externalSchema.extra_booking_thread_reference
+                            ORDER BY id
+                            """.trimIndent(),
+                        )
+                    },
+                )
+            } finally {
+                dropSchema(dataSource, externalSchema)
+            }
+        }
+    }
+
+    @Test
+    fun `cross owner inbound reference remains visible to fail closed inventory on PostgreSQL`() {
+        val database = PostgresTestEnv.createDatabase()
+        val targetRole = uniqueIdentifier("v124_target")
+        val sourceRole = uniqueIdentifier("v124_source")
+        val sourceSchema = uniqueIdentifier("v124_source_schema")
+        val rolePassword = "v124-test-password"
+        val adminDataSource = PostgresTestEnv.createDataSource(database, migrate = false)
+        var targetRoleCreated = false
+        var sourceRoleCreated = false
+        var sourceSchemaCreated = false
+
+        try {
+            adminDataSource.connection.use { connection ->
+                connection.createStatement().use { statement ->
+                    statement.execute("CREATE ROLE $targetRole LOGIN PASSWORD '$rolePassword'")
+                    targetRoleCreated = true
+                    statement.execute("ALTER SCHEMA ${database.schema} OWNER TO $targetRole")
+                }
+            }
+
+            PostgresTestEnv.createDataSource(
+                database.copy(user = targetRole, password = rolePassword),
+                migrate = false,
+            ).use { targetDataSource ->
+                BookingThreadIntegrityMigrationTestSupport.assertPhysicalReferenceInventoryFailsBeforeDomainMutation(
+                    dataSource = targetDataSource,
+                    location = POSTGRES_MIGRATION_LOCATION,
+                    previousVersion = PREVIOUS_VERSION,
+                    expectedVersion = EXPECTED_VERSION,
+                    configureReferenceShape = { targetConnection, fixture ->
+                        adminDataSource.connection.use { connection ->
+                            connection.createStatement().use { statement ->
+                                statement.execute("CREATE ROLE $sourceRole NOLOGIN")
+                                sourceRoleCreated = true
+                                statement.execute("CREATE SCHEMA $sourceSchema AUTHORIZATION $sourceRole")
+                                sourceSchemaCreated = true
+                                statement.execute(
+                                    """
+                                    CREATE TABLE $sourceSchema.hidden_booking_thread_reference (
+                                        id BIGINT PRIMARY KEY,
+                                        thread_id BIGINT NOT NULL,
+                                        CONSTRAINT hidden_booking_thread_reference_fk
+                                            FOREIGN KEY (thread_id)
+                                            REFERENCES ${database.schema}.support_threads(id)
+                                            ON DELETE CASCADE
+                                    )
+                                    """.trimIndent(),
+                                )
+                                statement.execute(
+                                    """
+                                    INSERT INTO $sourceSchema.hidden_booking_thread_reference (id, thread_id)
+                                    VALUES (1, ${fixture.duplicateThreadId})
+                                    """.trimIndent(),
+                                )
+                                statement.execute(
+                                    "ALTER TABLE $sourceSchema.hidden_booking_thread_reference OWNER TO $sourceRole",
+                                )
+                            }
+                        }
+
+                        assertEquals(
+                            0,
+                            queryCount(
+                                targetConnection,
+                                """
+                                SELECT COUNT(*)
+                                FROM information_schema.referential_constraints
+                                WHERE constraint_schema = '$sourceSchema'
+                                  AND constraint_name = 'hidden_booking_thread_reference_fk'
+                                """.trimIndent(),
+                            ),
+                        )
+                        assertEquals(
+                            1,
+                            queryCount(
+                                targetConnection,
+                                """
+                                SELECT COUNT(*)
+                                FROM pg_catalog.pg_constraint constraint_row
+                                WHERE constraint_row.conname = 'hidden_booking_thread_reference_fk'
+                                  AND constraint_row.confrelid =
+                                      '${database.schema}.support_threads'::REGCLASS
+                                """.trimIndent(),
+                            ),
+                        )
+                    },
+                    loadReferenceRows = {
+                        queryRows(
+                            adminDataSource,
+                            """
+                            SELECT id::TEXT, thread_id::TEXT
+                            FROM $sourceSchema.hidden_booking_thread_reference
+                            ORDER BY id
+                            """.trimIndent(),
+                        )
+                    },
+                )
+            }
+        } finally {
+            adminDataSource.connection.use { connection ->
+                connection.createStatement().use { statement ->
+                    if (sourceSchemaCreated) {
+                        statement.execute("DROP SCHEMA $sourceSchema CASCADE")
+                    }
+                    if (sourceRoleCreated) {
+                        statement.execute("DROP ROLE $sourceRole")
+                    }
+                    if (targetRoleCreated) {
+                        statement.execute("REASSIGN OWNED BY $targetRole TO ${database.user}")
+                        statement.execute("DROP OWNED BY $targetRole")
+                        statement.execute("DROP ROLE $targetRole")
+                    }
+                }
+            }
+            adminDataSource.close()
+        }
     }
 
     @Test
@@ -225,6 +562,59 @@ class BookingThreadIntegrityMigrationPostgresTest {
             usesGeneratedBookingKey = false,
             close = dataSource::close,
         )
+    }
+
+    private fun queryRows(
+        dataSource: DataSource,
+        sql: String,
+    ): List<String> =
+        dataSource.connection.use { connection ->
+            connection.createStatement().use { statement ->
+                statement.executeQuery(sql).use { resultSet ->
+                    val columnCount = resultSet.metaData.columnCount
+                    buildList {
+                        while (resultSet.next()) {
+                            add(
+                                (1..columnCount).joinToString(separator = "|") { column ->
+                                    resultSet.getString(column) ?: "<NULL>"
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+    private fun queryCount(
+        connection: java.sql.Connection,
+        sql: String,
+    ): Int =
+        connection.createStatement().use { statement ->
+            statement.executeQuery(sql).use { resultSet ->
+                assertTrue(resultSet.next())
+                resultSet.getInt(1)
+            }
+        }
+
+    private fun dropSchema(
+        dataSource: DataSource,
+        schema: String,
+    ) {
+        dataSource.connection.use { connection ->
+            connection.createStatement().use { statement ->
+                statement.execute("DROP SCHEMA IF EXISTS $schema CASCADE")
+            }
+        }
+    }
+
+    private fun uniqueIdentifier(prefix: String): String =
+        "${prefix}_${UUID.randomUUID().toString().replace("-", "").lowercase()}"
+
+    private companion object {
+        const val POSTGRES_MIGRATION_LOCATION = "classpath:db/migration/postgresql"
+        const val PREVIOUS_VERSION = "123"
+        const val EXPECTED_VERSION = "124"
+        const val REFERENCE_KEY_OFFSET = 1_000_000L
     }
 }
 

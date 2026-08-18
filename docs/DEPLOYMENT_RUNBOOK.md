@@ -636,66 +636,307 @@ WHERE survivor.created_at IS DISTINCT FROM groups.merged_created_at
 ORDER BY groups.booking_id;
 
 \echo 'INFORMATIONAL exact physical FK inventory (expected only two known rows)'
-WITH inbound_references AS (
-    SELECT LOWER(fk.table_name) AS table_name, LOWER(fk.column_name) AS column_name
-    FROM information_schema.referential_constraints reference
-    JOIN information_schema.key_column_usage fk
-      ON fk.constraint_catalog = reference.constraint_catalog
-     AND fk.constraint_schema = reference.constraint_schema
-     AND fk.constraint_name = reference.constraint_name
-    JOIN information_schema.key_column_usage target
-      ON target.constraint_catalog = reference.unique_constraint_catalog
-     AND target.constraint_schema = reference.unique_constraint_schema
-     AND target.constraint_name = reference.unique_constraint_name
-     AND target.ordinal_position = fk.position_in_unique_constraint
-    WHERE LOWER(target.table_schema) = LOWER(CURRENT_SCHEMA())
-      AND LOWER(target.table_name) = 'support_threads'
-      AND LOWER(target.column_name) = 'id'
+WITH expected_relation_identity(relation_role, relation_name, column_name) AS (
+    VALUES
+        ('TARGET'::TEXT, 'support_threads'::NAME, 'id'::NAME),
+        ('SUPPORT_MESSAGES'::TEXT, 'support_messages'::NAME, 'thread_id'::NAME),
+        ('SUPPORT_THREAD_READS'::TEXT, 'support_thread_reads'::NAME, 'thread_id'::NAME)
+), relation_identity AS (
+    SELECT
+        expected.relation_role,
+        relation_schema.oid AS namespace_oid,
+        relation_schema.nspname::TEXT AS schema_name,
+        relation_table.oid AS relation_oid,
+        relation_table.relname::TEXT AS relation_name,
+        relation_column.attnum AS column_attnum,
+        relation_column.attname::TEXT AS column_name
+    FROM expected_relation_identity expected
+    JOIN pg_catalog.pg_namespace relation_schema
+      ON relation_schema.nspname = CURRENT_SCHEMA()
+    JOIN pg_catalog.pg_class relation_table
+      ON relation_table.relnamespace = relation_schema.oid
+     AND relation_table.relname = expected.relation_name
+     AND relation_table.relkind = 'r'
+    JOIN pg_catalog.pg_attribute relation_column
+      ON relation_column.attrelid = relation_table.oid
+     AND relation_column.attname = expected.column_name
+     AND relation_column.attnum > 0
+     AND NOT relation_column.attisdropped
+), inbound_references AS (
+    SELECT
+        fk_constraint.oid AS constraint_oid,
+        fk_constraint.conname::TEXT AS constraint_name,
+        fk_constraint.conrelid AS source_relation_oid,
+        source_table.relnamespace AS source_namespace_oid,
+        source_schema.nspname::TEXT AS source_schema_name,
+        source_table.relname::TEXT AS source_relation_name,
+        fk_constraint.confrelid AS target_relation_oid,
+        fk_constraint.conkey::SMALLINT[] AS source_attnums,
+        fk_constraint.confkey::SMALLINT[] AS target_attnums,
+        ARRAY(
+            SELECT source_attribute.attname::TEXT
+            FROM pg_catalog.generate_subscripts(fk_constraint.conkey, 1)
+                AS source_key(ordinality)
+            LEFT JOIN pg_catalog.pg_attribute source_attribute
+              ON source_attribute.attrelid = fk_constraint.conrelid
+             AND source_attribute.attnum = fk_constraint.conkey[source_key.ordinality]
+             AND source_attribute.attnum > 0
+             AND NOT source_attribute.attisdropped
+            ORDER BY source_key.ordinality
+        )::TEXT[] AS source_column_names,
+        ARRAY(
+            SELECT target_attribute.attname::TEXT
+            FROM pg_catalog.generate_subscripts(fk_constraint.confkey, 1)
+                AS target_key(ordinality)
+            LEFT JOIN pg_catalog.pg_attribute target_attribute
+              ON target_attribute.attrelid = fk_constraint.confrelid
+             AND target_attribute.attnum = fk_constraint.confkey[target_key.ordinality]
+             AND target_attribute.attnum > 0
+             AND NOT target_attribute.attisdropped
+            ORDER BY target_key.ordinality
+        )::TEXT[] AS target_column_names,
+        pg_catalog.CARDINALITY(fk_constraint.conkey) AS source_column_count,
+        pg_catalog.CARDINALITY(fk_constraint.confkey) AS target_column_count,
+        fk_constraint.confupdtype::TEXT AS confupdtype,
+        fk_constraint.confdeltype::TEXT AS confdeltype,
+        fk_constraint.confmatchtype::TEXT AS confmatchtype
+    FROM relation_identity target
+    JOIN pg_catalog.pg_constraint fk_constraint
+      ON fk_constraint.contype = 'f'
+     AND fk_constraint.confrelid = target.relation_oid
+    LEFT JOIN pg_catalog.pg_class source_table
+      ON source_table.oid = fk_constraint.conrelid
+    LEFT JOIN pg_catalog.pg_namespace source_schema
+      ON source_schema.oid = source_table.relnamespace
+    WHERE target.relation_role = 'TARGET'
+), expected_fk_contracts AS (
+    SELECT
+        expected.source_role,
+        source.namespace_oid AS source_namespace_oid,
+        source.schema_name AS source_schema_name,
+        source.relation_oid AS source_relation_oid,
+        source.relation_name AS source_relation_name,
+        source.column_attnum AS source_column_attnum,
+        source.column_name AS source_column_name,
+        target.relation_oid AS target_relation_oid,
+        target.column_attnum AS target_column_attnum,
+        target.column_name AS target_column_name
+    FROM (
+        VALUES ('SUPPORT_MESSAGES'::TEXT), ('SUPPORT_THREAD_READS'::TEXT)
+    ) expected(source_role)
+    LEFT JOIN relation_identity source
+      ON source.relation_role = expected.source_role
+    LEFT JOIN relation_identity target
+      ON target.relation_role = 'TARGET'
+), reference_matches AS (
+    SELECT expected.source_role, actual.constraint_oid
+    FROM expected_fk_contracts expected
+    JOIN inbound_references actual
+      ON actual.source_relation_oid = expected.source_relation_oid
+     AND actual.source_namespace_oid = expected.source_namespace_oid
+     AND actual.source_schema_name = expected.source_schema_name
+     AND actual.source_relation_name = expected.source_relation_name
+     AND actual.target_relation_oid = expected.target_relation_oid
+     AND actual.source_column_count = 1
+     AND actual.target_column_count = 1
+     AND actual.source_attnums = ARRAY[expected.source_column_attnum]::SMALLINT[]
+     AND actual.target_attnums = ARRAY[expected.target_column_attnum]::SMALLINT[]
+     AND actual.source_column_names = ARRAY[expected.source_column_name]::TEXT[]
+     AND actual.target_column_names = ARRAY[expected.target_column_name]::TEXT[]
+     AND actual.confupdtype = 'a'
+     AND actual.confdeltype = 'c'
+     AND actual.confmatchtype = 's'
 )
-SELECT table_name, column_name, COUNT(*) AS constraint_count
-FROM inbound_references
-GROUP BY table_name, column_name
-ORDER BY table_name, column_name;
+SELECT
+    actual.constraint_oid,
+    actual.constraint_name,
+    actual.source_relation_oid,
+    actual.source_namespace_oid,
+    actual.source_schema_name,
+    actual.source_relation_name,
+    actual.target_relation_oid,
+    actual.source_attnums,
+    actual.target_attnums,
+    actual.source_column_names,
+    actual.target_column_names,
+    actual.source_column_count,
+    actual.target_column_count,
+    actual.confupdtype,
+    actual.confdeltype,
+    actual.confmatchtype,
+    matched.source_role AS expected_role
+FROM inbound_references actual
+LEFT JOIN reference_matches matched USING (constraint_oid)
+ORDER BY actual.constraint_oid;
 
 \echo 'UNSAFE unknown/missing FK or explicit thread_id reference families (expected 0 rows)'
-WITH inbound_references AS (
-    SELECT LOWER(fk.table_name) AS table_name, LOWER(fk.column_name) AS column_name
-    FROM information_schema.referential_constraints reference
-    JOIN information_schema.key_column_usage fk
-      ON fk.constraint_catalog = reference.constraint_catalog
-     AND fk.constraint_schema = reference.constraint_schema
-     AND fk.constraint_name = reference.constraint_name
-    JOIN information_schema.key_column_usage target
-      ON target.constraint_catalog = reference.unique_constraint_catalog
-     AND target.constraint_schema = reference.unique_constraint_schema
-     AND target.constraint_name = reference.unique_constraint_name
-     AND target.ordinal_position = fk.position_in_unique_constraint
-    WHERE LOWER(target.table_schema) = LOWER(CURRENT_SCHEMA())
-      AND LOWER(target.table_name) = 'support_threads'
-      AND LOWER(target.column_name) = 'id'
-), expected_references(table_name, column_name) AS (
+WITH expected_relation_identity(relation_role, relation_name, column_name) AS (
+    VALUES
+        ('TARGET'::TEXT, 'support_threads'::NAME, 'id'::NAME),
+        ('SUPPORT_MESSAGES'::TEXT, 'support_messages'::NAME, 'thread_id'::NAME),
+        ('SUPPORT_THREAD_READS'::TEXT, 'support_thread_reads'::NAME, 'thread_id'::NAME)
+), relation_identity AS (
+    SELECT
+        expected.relation_role,
+        relation_schema.oid AS namespace_oid,
+        relation_schema.nspname::TEXT AS schema_name,
+        relation_table.oid AS relation_oid,
+        relation_table.relname::TEXT AS relation_name,
+        relation_column.attnum AS column_attnum,
+        relation_column.attname::TEXT AS column_name
+    FROM expected_relation_identity expected
+    JOIN pg_catalog.pg_namespace relation_schema
+      ON relation_schema.nspname = CURRENT_SCHEMA()
+    JOIN pg_catalog.pg_class relation_table
+      ON relation_table.relnamespace = relation_schema.oid
+     AND relation_table.relname = expected.relation_name
+     AND relation_table.relkind = 'r'
+    JOIN pg_catalog.pg_attribute relation_column
+      ON relation_column.attrelid = relation_table.oid
+     AND relation_column.attname = expected.column_name
+     AND relation_column.attnum > 0
+     AND NOT relation_column.attisdropped
+), identity_issues AS (
+    SELECT
+        'expected relation identity is not exactly one'::TEXT AS issue,
+        CURRENT_SCHEMA()::TEXT AS table_name,
+        expected.relation_name::TEXT AS column_name
+    FROM expected_relation_identity expected
+    LEFT JOIN relation_identity actual
+      ON actual.relation_role = expected.relation_role
+    GROUP BY expected.relation_role, expected.relation_name
+    HAVING COUNT(actual.relation_oid) <> 1
+), inbound_references AS (
+    SELECT
+        fk_constraint.oid AS constraint_oid,
+        fk_constraint.conname::TEXT AS constraint_name,
+        fk_constraint.conrelid AS source_relation_oid,
+        source_table.relnamespace AS source_namespace_oid,
+        source_schema.nspname::TEXT AS source_schema_name,
+        source_table.relname::TEXT AS source_relation_name,
+        fk_constraint.confrelid AS target_relation_oid,
+        fk_constraint.conkey::SMALLINT[] AS source_attnums,
+        fk_constraint.confkey::SMALLINT[] AS target_attnums,
+        ARRAY(
+            SELECT source_attribute.attname::TEXT
+            FROM pg_catalog.generate_subscripts(fk_constraint.conkey, 1)
+                AS source_key(ordinality)
+            LEFT JOIN pg_catalog.pg_attribute source_attribute
+              ON source_attribute.attrelid = fk_constraint.conrelid
+             AND source_attribute.attnum = fk_constraint.conkey[source_key.ordinality]
+             AND source_attribute.attnum > 0
+             AND NOT source_attribute.attisdropped
+            ORDER BY source_key.ordinality
+        )::TEXT[] AS source_column_names,
+        ARRAY(
+            SELECT target_attribute.attname::TEXT
+            FROM pg_catalog.generate_subscripts(fk_constraint.confkey, 1)
+                AS target_key(ordinality)
+            LEFT JOIN pg_catalog.pg_attribute target_attribute
+              ON target_attribute.attrelid = fk_constraint.confrelid
+             AND target_attribute.attnum = fk_constraint.confkey[target_key.ordinality]
+             AND target_attribute.attnum > 0
+             AND NOT target_attribute.attisdropped
+            ORDER BY target_key.ordinality
+        )::TEXT[] AS target_column_names,
+        pg_catalog.CARDINALITY(fk_constraint.conkey) AS source_column_count,
+        pg_catalog.CARDINALITY(fk_constraint.confkey) AS target_column_count,
+        fk_constraint.confupdtype::TEXT AS confupdtype,
+        fk_constraint.confdeltype::TEXT AS confdeltype,
+        fk_constraint.confmatchtype::TEXT AS confmatchtype
+    FROM relation_identity target
+    JOIN pg_catalog.pg_constraint fk_constraint
+      ON fk_constraint.contype = 'f'
+     AND fk_constraint.confrelid = target.relation_oid
+    LEFT JOIN pg_catalog.pg_class source_table
+      ON source_table.oid = fk_constraint.conrelid
+    LEFT JOIN pg_catalog.pg_namespace source_schema
+      ON source_schema.oid = source_table.relnamespace
+    WHERE target.relation_role = 'TARGET'
+), expected_fk_contracts AS (
+    SELECT
+        expected.source_role,
+        source.namespace_oid AS source_namespace_oid,
+        source.schema_name AS source_schema_name,
+        source.relation_oid AS source_relation_oid,
+        source.relation_name AS source_relation_name,
+        source.column_attnum AS source_column_attnum,
+        source.column_name AS source_column_name,
+        target.relation_oid AS target_relation_oid,
+        target.column_attnum AS target_column_attnum,
+        target.column_name AS target_column_name
+    FROM (
+        VALUES ('SUPPORT_MESSAGES'::TEXT), ('SUPPORT_THREAD_READS'::TEXT)
+    ) expected(source_role)
+    LEFT JOIN relation_identity source
+      ON source.relation_role = expected.source_role
+    LEFT JOIN relation_identity target
+      ON target.relation_role = 'TARGET'
+), reference_matches AS (
+    SELECT expected.source_role, actual.constraint_oid
+    FROM expected_fk_contracts expected
+    JOIN inbound_references actual
+      ON actual.source_relation_oid = expected.source_relation_oid
+     AND actual.source_namespace_oid = expected.source_namespace_oid
+     AND actual.source_schema_name = expected.source_schema_name
+     AND actual.source_relation_name = expected.source_relation_name
+     AND actual.target_relation_oid = expected.target_relation_oid
+     AND actual.source_column_count = 1
+     AND actual.target_column_count = 1
+     AND actual.source_attnums = ARRAY[expected.source_column_attnum]::SMALLINT[]
+     AND actual.target_attnums = ARRAY[expected.target_column_attnum]::SMALLINT[]
+     AND actual.source_column_names = ARRAY[expected.source_column_name]::TEXT[]
+     AND actual.target_column_names = ARRAY[expected.target_column_name]::TEXT[]
+     AND actual.confupdtype = 'a'
+     AND actual.confdeltype = 'c'
+     AND actual.confmatchtype = 's'
+), reference_issues AS (
+    SELECT issue, table_name, column_name
+    FROM identity_issues
+    UNION ALL
+    SELECT
+        'unknown inbound FK constraint',
+        COALESCE(
+            actual.source_schema_name || '.' || actual.source_relation_name,
+            '<unresolved source relation>'
+        ),
+        COALESCE(actual.constraint_name, 'oid=' || actual.constraint_oid::TEXT)
+    FROM inbound_references actual
+    LEFT JOIN reference_matches matched USING (constraint_oid)
+    WHERE matched.constraint_oid IS NULL
+    UNION ALL
+    SELECT
+        'expected inbound FK multiplicity is not exactly one',
+        COALESCE(expected.source_schema_name, CURRENT_SCHEMA())::TEXT,
+        COALESCE(expected.source_relation_name, expected.source_role)
+    FROM expected_fk_contracts expected
+    LEFT JOIN reference_matches matched USING (source_role)
+    GROUP BY
+        expected.source_role,
+        expected.source_schema_name,
+        expected.source_relation_name
+    HAVING COUNT(matched.constraint_oid) <> 1
+    UNION ALL
+    SELECT
+        'physical inbound FK count is not exactly two',
+        CURRENT_SCHEMA()::TEXT,
+        'support_threads'::TEXT
+    WHERE (SELECT COUNT(*) FROM inbound_references) <> 2
+), expected_reference_columns(table_name, column_name) AS (
     VALUES ('support_messages', 'thread_id'), ('support_thread_reads', 'thread_id')
 )
-SELECT 'unknown inbound FK' AS issue, actual.table_name, actual.column_name
-FROM inbound_references actual
-LEFT JOIN expected_references expected USING (table_name, column_name)
-WHERE expected.table_name IS NULL
-UNION ALL
-SELECT 'expected inbound FK multiplicity is not exactly one', expected.table_name, expected.column_name
-FROM expected_references expected
-LEFT JOIN inbound_references actual USING (table_name, column_name)
-GROUP BY expected.table_name, expected.column_name
-HAVING COUNT(actual.table_name) <> 1
+SELECT issue, table_name, column_name
+FROM reference_issues
 UNION ALL
 SELECT
     'unknown normalized thread-reference column',
     LOWER(columns.table_name),
     LOWER(columns.column_name)
 FROM information_schema.columns columns
-LEFT JOIN expected_references expected
+LEFT JOIN expected_reference_columns expected
   ON expected.table_name = LOWER(columns.table_name)
  AND expected.column_name = LOWER(columns.column_name)
-WHERE LOWER(columns.table_schema) = LOWER(CURRENT_SCHEMA())
+WHERE columns.table_schema = CURRENT_SCHEMA()
   AND REGEXP_REPLACE(LOWER(columns.column_name), '[^a-z0-9]', '', 'g') IN (
       'threadid',
       'supportthreadid',
@@ -727,7 +968,7 @@ WITH expected_json(table_name, column_name) AS (
 ), actual_json AS (
     SELECT LOWER(columns.table_name) AS table_name, LOWER(columns.column_name) AS column_name
     FROM information_schema.columns columns
-    WHERE LOWER(columns.table_schema) = LOWER(CURRENT_SCHEMA())
+    WHERE columns.table_schema = CURRENT_SCHEMA()
       AND (
           LOWER(columns.data_type) IN ('json', 'jsonb')
           OR LOWER(columns.column_name) LIKE '%json%'
@@ -901,22 +1142,159 @@ WITH RECURSIVE duplicate_groups AS (
     JOIN support_thread_reads reads ON reads.thread_id = threads.id
     GROUP BY groups.booking_id, reads.user_id
     HAVING COUNT(DISTINCT reads.last_read_at) <> 1
+), expected_relation_identity(relation_role, relation_name, column_name) AS (
+    VALUES
+        ('TARGET'::TEXT, 'support_threads'::NAME, 'id'::NAME),
+        ('SUPPORT_MESSAGES'::TEXT, 'support_messages'::NAME, 'thread_id'::NAME),
+        ('SUPPORT_THREAD_READS'::TEXT, 'support_thread_reads'::NAME, 'thread_id'::NAME)
+), relation_identity AS (
+    SELECT
+        expected.relation_role,
+        relation_schema.oid AS namespace_oid,
+        relation_schema.nspname::TEXT AS schema_name,
+        relation_table.oid AS relation_oid,
+        relation_table.relname::TEXT AS relation_name,
+        relation_column.attnum AS column_attnum,
+        relation_column.attname::TEXT AS column_name
+    FROM expected_relation_identity expected
+    JOIN pg_catalog.pg_namespace relation_schema
+      ON relation_schema.nspname = CURRENT_SCHEMA()
+    JOIN pg_catalog.pg_class relation_table
+      ON relation_table.relnamespace = relation_schema.oid
+     AND relation_table.relname = expected.relation_name
+     AND relation_table.relkind = 'r'
+    JOIN pg_catalog.pg_attribute relation_column
+      ON relation_column.attrelid = relation_table.oid
+     AND relation_column.attname = expected.column_name
+     AND relation_column.attnum > 0
+     AND NOT relation_column.attisdropped
+), identity_issues AS (
+    SELECT
+        'expected relation identity is not exactly one'::TEXT AS issue,
+        CURRENT_SCHEMA()::TEXT AS table_name,
+        expected.relation_name::TEXT AS column_name
+    FROM expected_relation_identity expected
+    LEFT JOIN relation_identity actual
+      ON actual.relation_role = expected.relation_role
+    GROUP BY expected.relation_role, expected.relation_name
+    HAVING COUNT(actual.relation_oid) <> 1
 ), inbound_references AS (
-    SELECT LOWER(fk.table_name) AS table_name, LOWER(fk.column_name) AS column_name
-    FROM information_schema.referential_constraints reference
-    JOIN information_schema.key_column_usage fk
-      ON fk.constraint_catalog = reference.constraint_catalog
-     AND fk.constraint_schema = reference.constraint_schema
-     AND fk.constraint_name = reference.constraint_name
-    JOIN information_schema.key_column_usage target
-      ON target.constraint_catalog = reference.unique_constraint_catalog
-     AND target.constraint_schema = reference.unique_constraint_schema
-     AND target.constraint_name = reference.unique_constraint_name
-     AND target.ordinal_position = fk.position_in_unique_constraint
-    WHERE LOWER(target.table_schema) = LOWER(CURRENT_SCHEMA())
-      AND LOWER(target.table_name) = 'support_threads'
-      AND LOWER(target.column_name) = 'id'
-), expected_references(table_name, column_name) AS (
+    SELECT
+        fk_constraint.oid AS constraint_oid,
+        fk_constraint.conname::TEXT AS constraint_name,
+        fk_constraint.conrelid AS source_relation_oid,
+        source_table.relnamespace AS source_namespace_oid,
+        source_schema.nspname::TEXT AS source_schema_name,
+        source_table.relname::TEXT AS source_relation_name,
+        fk_constraint.confrelid AS target_relation_oid,
+        fk_constraint.conkey::SMALLINT[] AS source_attnums,
+        fk_constraint.confkey::SMALLINT[] AS target_attnums,
+        ARRAY(
+            SELECT source_attribute.attname::TEXT
+            FROM pg_catalog.generate_subscripts(fk_constraint.conkey, 1)
+                AS source_key(ordinality)
+            LEFT JOIN pg_catalog.pg_attribute source_attribute
+              ON source_attribute.attrelid = fk_constraint.conrelid
+             AND source_attribute.attnum = fk_constraint.conkey[source_key.ordinality]
+             AND source_attribute.attnum > 0
+             AND NOT source_attribute.attisdropped
+            ORDER BY source_key.ordinality
+        )::TEXT[] AS source_column_names,
+        ARRAY(
+            SELECT target_attribute.attname::TEXT
+            FROM pg_catalog.generate_subscripts(fk_constraint.confkey, 1)
+                AS target_key(ordinality)
+            LEFT JOIN pg_catalog.pg_attribute target_attribute
+              ON target_attribute.attrelid = fk_constraint.confrelid
+             AND target_attribute.attnum = fk_constraint.confkey[target_key.ordinality]
+             AND target_attribute.attnum > 0
+             AND NOT target_attribute.attisdropped
+            ORDER BY target_key.ordinality
+        )::TEXT[] AS target_column_names,
+        pg_catalog.CARDINALITY(fk_constraint.conkey) AS source_column_count,
+        pg_catalog.CARDINALITY(fk_constraint.confkey) AS target_column_count,
+        fk_constraint.confupdtype::TEXT AS confupdtype,
+        fk_constraint.confdeltype::TEXT AS confdeltype,
+        fk_constraint.confmatchtype::TEXT AS confmatchtype
+    FROM relation_identity target
+    JOIN pg_catalog.pg_constraint fk_constraint
+      ON fk_constraint.contype = 'f'
+     AND fk_constraint.confrelid = target.relation_oid
+    LEFT JOIN pg_catalog.pg_class source_table
+      ON source_table.oid = fk_constraint.conrelid
+    LEFT JOIN pg_catalog.pg_namespace source_schema
+      ON source_schema.oid = source_table.relnamespace
+    WHERE target.relation_role = 'TARGET'
+), expected_fk_contracts AS (
+    SELECT
+        expected.source_role,
+        source.namespace_oid AS source_namespace_oid,
+        source.schema_name AS source_schema_name,
+        source.relation_oid AS source_relation_oid,
+        source.relation_name AS source_relation_name,
+        source.column_attnum AS source_column_attnum,
+        source.column_name AS source_column_name,
+        target.relation_oid AS target_relation_oid,
+        target.column_attnum AS target_column_attnum,
+        target.column_name AS target_column_name
+    FROM (
+        VALUES ('SUPPORT_MESSAGES'::TEXT), ('SUPPORT_THREAD_READS'::TEXT)
+    ) expected(source_role)
+    LEFT JOIN relation_identity source
+      ON source.relation_role = expected.source_role
+    LEFT JOIN relation_identity target
+      ON target.relation_role = 'TARGET'
+), reference_matches AS (
+    SELECT expected.source_role, actual.constraint_oid
+    FROM expected_fk_contracts expected
+    JOIN inbound_references actual
+      ON actual.source_relation_oid = expected.source_relation_oid
+     AND actual.source_namespace_oid = expected.source_namespace_oid
+     AND actual.source_schema_name = expected.source_schema_name
+     AND actual.source_relation_name = expected.source_relation_name
+     AND actual.target_relation_oid = expected.target_relation_oid
+     AND actual.source_column_count = 1
+     AND actual.target_column_count = 1
+     AND actual.source_attnums = ARRAY[expected.source_column_attnum]::SMALLINT[]
+     AND actual.target_attnums = ARRAY[expected.target_column_attnum]::SMALLINT[]
+     AND actual.source_column_names = ARRAY[expected.source_column_name]::TEXT[]
+     AND actual.target_column_names = ARRAY[expected.target_column_name]::TEXT[]
+     AND actual.confupdtype = 'a'
+     AND actual.confdeltype = 'c'
+     AND actual.confmatchtype = 's'
+), reference_issues AS (
+    SELECT issue, table_name, column_name
+    FROM identity_issues
+    UNION ALL
+    SELECT
+        'unknown inbound FK constraint',
+        COALESCE(
+            actual.source_schema_name || '.' || actual.source_relation_name,
+            '<unresolved source relation>'
+        ),
+        COALESCE(actual.constraint_name, 'oid=' || actual.constraint_oid::TEXT)
+    FROM inbound_references actual
+    LEFT JOIN reference_matches matched USING (constraint_oid)
+    WHERE matched.constraint_oid IS NULL
+    UNION ALL
+    SELECT
+        'expected inbound FK multiplicity is not exactly one',
+        COALESCE(expected.source_schema_name, CURRENT_SCHEMA())::TEXT,
+        COALESCE(expected.source_relation_name, expected.source_role)
+    FROM expected_fk_contracts expected
+    LEFT JOIN reference_matches matched USING (source_role)
+    GROUP BY
+        expected.source_role,
+        expected.source_schema_name,
+        expected.source_relation_name
+    HAVING COUNT(matched.constraint_oid) <> 1
+    UNION ALL
+    SELECT
+        'physical inbound FK count is not exactly two',
+        CURRENT_SCHEMA()::TEXT,
+        'support_threads'::TEXT
+    WHERE (SELECT COUNT(*) FROM inbound_references) <> 2
+), expected_reference_columns(table_name, column_name) AS (
     VALUES ('support_messages', 'thread_id'), ('support_thread_reads', 'thread_id')
 ), expected_json(table_name, column_name) AS (
     VALUES
@@ -939,7 +1317,7 @@ WITH RECURSIVE duplicate_groups AS (
 ), actual_json AS (
     SELECT LOWER(columns.table_name) AS table_name, LOWER(columns.column_name) AS column_name
     FROM information_schema.columns columns
-    WHERE LOWER(columns.table_schema) = LOWER(CURRENT_SCHEMA())
+    WHERE columns.table_schema = CURRENT_SCHEMA()
       AND (
           LOWER(columns.data_type) IN ('json', 'jsonb')
           OR LOWER(columns.column_name) LIKE '%json%'
@@ -1076,26 +1454,14 @@ WITH RECURSIVE duplicate_groups AS (
     UNION ALL
     SELECT COUNT(*) FROM conflicting_read_timestamps
     UNION ALL
-    SELECT COUNT(*)
-    FROM inbound_references actual
-    LEFT JOIN expected_references expected USING (table_name, column_name)
-    WHERE expected.table_name IS NULL
-    UNION ALL
-    SELECT COUNT(*)
-    FROM (
-        SELECT expected.table_name, expected.column_name
-        FROM expected_references expected
-        LEFT JOIN inbound_references actual USING (table_name, column_name)
-        GROUP BY expected.table_name, expected.column_name
-        HAVING COUNT(actual.table_name) <> 1
-    ) invalid_expected_reference_multiplicity
+    SELECT COUNT(*) FROM reference_issues
     UNION ALL
     SELECT COUNT(*)
     FROM information_schema.columns columns
-    LEFT JOIN expected_references expected
+    LEFT JOIN expected_reference_columns expected
       ON expected.table_name = LOWER(columns.table_name)
      AND expected.column_name = LOWER(columns.column_name)
-    WHERE LOWER(columns.table_schema) = LOWER(CURRENT_SCHEMA())
+    WHERE columns.table_schema = CURRENT_SCHEMA()
       AND REGEXP_REPLACE(LOWER(columns.column_name), '[^a-z0-9]', '', 'g') IN (
           'threadid',
           'supportthreadid',

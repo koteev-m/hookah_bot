@@ -74,6 +74,47 @@ internal object BookingThreadIntegrityMigrationTestSupport {
         readFixture = ReadFixture.IDENTICAL,
     )
 
+    fun assertPhysicalReferenceInventoryFailsBeforeDomainMutation(
+        dataSource: DataSource,
+        location: String,
+        previousVersion: String,
+        expectedVersion: String,
+        configureReferenceShape: (Connection, ReferenceGuardFixture) -> Unit,
+        loadReferenceRows: () -> List<String> = { emptyList() },
+    ) {
+        migrateToPrevious(dataSource, location, previousVersion)
+        dataSource.connection.use { connection ->
+            val fixture = seedDuplicateGroup(connection, ReadFixture.NONE)
+            configureReferenceShape(
+                connection,
+                ReferenceGuardFixture(duplicateThreadId = fixture.duplicateTwoId),
+            )
+        }
+
+        val beforeSnapshot =
+            dataSource.connection.use { connection ->
+                loadReferenceGuardSnapshot(connection, loadReferenceRows())
+            }
+        val failure =
+            assertFailsWith<FlywayException> {
+                flyway(dataSource, location, expectedVersion).migrate()
+            }
+        assertTrue(
+            failure.stackTraceToString().contains("Unexpected support thread reference inventory"),
+            failure.stackTraceToString(),
+        )
+
+        val afterSnapshot =
+            dataSource.connection.use { connection ->
+                loadReferenceGuardSnapshot(connection, loadReferenceRows())
+            }
+        assertEquals(beforeSnapshot, afterSnapshot)
+        assertEquals(previousVersion, flyway(dataSource, location, expectedVersion).info().current().version.version)
+        dataSource.connection.use { connection ->
+            assertFalse(indexExists(connection, UNIQUE_INDEX))
+        }
+    }
+
     fun assertPartialReadCoverageFailsBeforeDomainMutation(
         dataSource: DataSource,
         location: String,
@@ -2060,6 +2101,165 @@ internal object BookingThreadIntegrityMigrationTestSupport {
             audits = loadAudits(connection),
         )
 
+    private fun loadReferenceGuardSnapshot(
+        connection: Connection,
+        referenceRows: List<String>,
+    ): ReferenceGuardSnapshot =
+        ReferenceGuardSnapshot(
+            domain = loadDomainSnapshot(connection),
+            referenceRows = referenceRows,
+            constraints =
+                loadStringRows(
+                    connection,
+                    """
+                    WITH current_relations AS (
+                        SELECT relation_table.oid AS relation_oid
+                        FROM pg_catalog.pg_class relation_table
+                        JOIN pg_catalog.pg_namespace relation_schema
+                          ON relation_schema.oid = relation_table.relnamespace
+                        WHERE relation_schema.nspname = CURRENT_SCHEMA()
+                          AND relation_table.relname IN (
+                              'support_threads',
+                              'support_messages',
+                              'support_thread_reads'
+                          )
+                    ), target_relation AS (
+                        SELECT relation_oid
+                        FROM current_relations
+                        WHERE relation_oid = 'support_threads'::REGCLASS
+                    )
+                    SELECT
+                        constraint_row.oid::TEXT,
+                        constraint_row.conname,
+                        constraint_row.contype::TEXT,
+                        constraint_row.conrelid::TEXT,
+                        source_table.relnamespace::TEXT,
+                        source_schema.nspname,
+                        source_table.relname,
+                        constraint_row.confrelid::TEXT,
+                        target_table.relnamespace::TEXT,
+                        target_schema.nspname,
+                        target_table.relname,
+                        constraint_row.conkey::TEXT,
+                        constraint_row.confkey::TEXT,
+                        constraint_row.confupdtype::TEXT,
+                        constraint_row.confdeltype::TEXT,
+                        constraint_row.confmatchtype::TEXT,
+                        constraint_row.convalidated::TEXT,
+                        constraint_row.condeferrable::TEXT,
+                        constraint_row.condeferred::TEXT,
+                        pg_catalog.pg_get_constraintdef(constraint_row.oid, TRUE)
+                    FROM pg_catalog.pg_constraint constraint_row
+                    LEFT JOIN pg_catalog.pg_class source_table
+                      ON source_table.oid = constraint_row.conrelid
+                    LEFT JOIN pg_catalog.pg_namespace source_schema
+                      ON source_schema.oid = source_table.relnamespace
+                    LEFT JOIN pg_catalog.pg_class target_table
+                      ON target_table.oid = constraint_row.confrelid
+                    LEFT JOIN pg_catalog.pg_namespace target_schema
+                      ON target_schema.oid = target_table.relnamespace
+                    WHERE constraint_row.conrelid IN (
+                        SELECT relation_oid FROM current_relations
+                    )
+                       OR constraint_row.confrelid = (
+                           SELECT relation_oid FROM target_relation
+                       )
+                    ORDER BY constraint_row.oid
+                    """.trimIndent(),
+                ),
+            indexes =
+                loadStringRows(
+                    connection,
+                    """
+                    SELECT
+                        index_row.indexrelid::TEXT,
+                        index_schema.oid::TEXT,
+                        index_schema.nspname,
+                        index_table.relname,
+                        table_row.oid::TEXT,
+                        table_schema.oid::TEXT,
+                        table_schema.nspname,
+                        table_row.relname,
+                        index_row.indisunique::TEXT,
+                        index_row.indisvalid::TEXT,
+                        index_row.indisready::TEXT,
+                        index_row.indkey::TEXT,
+                        pg_catalog.pg_get_indexdef(index_row.indexrelid)
+                    FROM pg_catalog.pg_index index_row
+                    JOIN pg_catalog.pg_class index_table
+                      ON index_table.oid = index_row.indexrelid
+                    JOIN pg_catalog.pg_namespace index_schema
+                      ON index_schema.oid = index_table.relnamespace
+                    JOIN pg_catalog.pg_class table_row
+                      ON table_row.oid = index_row.indrelid
+                    JOIN pg_catalog.pg_namespace table_schema
+                      ON table_schema.oid = table_row.relnamespace
+                    WHERE table_schema.nspname = CURRENT_SCHEMA()
+                      AND table_row.relname IN (
+                          'support_threads',
+                          'support_messages',
+                          'support_thread_reads'
+                      )
+                    ORDER BY index_row.indexrelid
+                    """.trimIndent(),
+                ),
+            flywayHistory =
+                loadStringRows(
+                    connection,
+                    """
+                    SELECT
+                        installed_rank::TEXT,
+                        version,
+                        description,
+                        type,
+                        script,
+                        checksum::TEXT,
+                        success::TEXT
+                    FROM flyway_schema_history
+                    ORDER BY installed_rank
+                    """.trimIndent(),
+                ),
+        )
+
+    private fun loadStringRows(
+        connection: Connection,
+        sql: String,
+    ): List<List<String?>> =
+        connection.createStatement().use { statement ->
+            statement.executeQuery(sql).use { resultSet ->
+                val columnCount = resultSet.metaData.columnCount
+                buildList {
+                    while (resultSet.next()) {
+                        add((1..columnCount).map(resultSet::getString))
+                    }
+                }
+            }
+        }
+
+    private fun indexExists(
+        connection: Connection,
+        indexName: String,
+    ): Boolean =
+        connection.prepareStatement(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM pg_catalog.pg_class index_table
+                JOIN pg_catalog.pg_namespace index_schema
+                  ON index_schema.oid = index_table.relnamespace
+                WHERE index_schema.nspname = CURRENT_SCHEMA()
+                  AND index_table.relname = ?
+                  AND index_table.relkind = 'i'
+            )
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setString(1, indexName)
+            statement.executeQuery().use { resultSet ->
+                assertTrue(resultSet.next())
+                resultSet.getBoolean(1)
+            }
+        }
+
     private fun auditTicketId(audit: AuditRow): Long =
         Json.parseToJsonElement(audit.payloadJson).jsonObject.getValue("ticketId").jsonPrimitive.content.toLong()
 
@@ -2292,6 +2492,10 @@ internal object BookingThreadIntegrityMigrationTestSupport {
 
     private fun ResultSet.instant(column: String): Instant? = getTimestamp(column)?.toInstant()
 
+    data class ReferenceGuardFixture(
+        val duplicateThreadId: Long,
+    )
+
     private data class SafeFixture(
         val venueId: Long,
         val bookingId: Long,
@@ -2324,6 +2528,14 @@ internal object BookingThreadIntegrityMigrationTestSupport {
         val messages: List<MessageRow>,
         val reads: List<ReadRow>,
         val audits: List<AuditRow>,
+    )
+
+    private data class ReferenceGuardSnapshot(
+        val domain: DomainSnapshot,
+        val referenceRows: List<String>,
+        val constraints: List<List<String?>>,
+        val indexes: List<List<String?>>,
+        val flywayHistory: List<List<String?>>,
     )
 
     private data class ThreadRow(

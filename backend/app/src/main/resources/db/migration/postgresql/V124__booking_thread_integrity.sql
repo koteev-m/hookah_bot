@@ -9,31 +9,140 @@ LOCK TABLE
     audit_log
 IN EXCLUSIVE MODE;
 
+CREATE TEMPORARY TABLE booking_thread_relation_identity ON COMMIT DROP AS
+WITH expected_identity(relation_role, relation_name, column_name) AS (
+    VALUES
+        ('TARGET'::TEXT, 'support_threads'::NAME, 'id'::NAME),
+        ('SUPPORT_MESSAGES'::TEXT, 'support_messages'::NAME, 'thread_id'::NAME),
+        ('SUPPORT_THREAD_READS'::TEXT, 'support_thread_reads'::NAME, 'thread_id'::NAME)
+)
+SELECT
+    expected.relation_role,
+    relation_schema.oid AS namespace_oid,
+    relation_schema.nspname::TEXT AS schema_name,
+    relation_table.oid AS relation_oid,
+    relation_table.relname::TEXT AS relation_name,
+    relation_column.attnum AS column_attnum,
+    relation_column.attname::TEXT AS column_name
+FROM expected_identity expected
+JOIN pg_catalog.pg_namespace relation_schema
+  ON relation_schema.nspname = CURRENT_SCHEMA()
+JOIN pg_catalog.pg_class relation_table
+  ON relation_table.relnamespace = relation_schema.oid
+ AND relation_table.relname = expected.relation_name
+ AND relation_table.relkind = 'r'
+JOIN pg_catalog.pg_attribute relation_column
+  ON relation_column.attrelid = relation_table.oid
+ AND relation_column.attname = expected.column_name
+ AND relation_column.attnum > 0
+ AND NOT relation_column.attisdropped;
+
+DO $$
+DECLARE
+    identity_count BIGINT;
+    target_identity_count BIGINT;
+    message_identity_count BIGINT;
+    read_identity_count BIGINT;
+BEGIN
+    SELECT
+        COUNT(*),
+        COUNT(*) FILTER (WHERE relation_role = 'TARGET'),
+        COUNT(*) FILTER (WHERE relation_role = 'SUPPORT_MESSAGES'),
+        COUNT(*) FILTER (WHERE relation_role = 'SUPPORT_THREAD_READS')
+    INTO
+        identity_count,
+        target_identity_count,
+        message_identity_count,
+        read_identity_count
+    FROM booking_thread_relation_identity;
+
+    IF identity_count <> 3
+       OR target_identity_count <> 1
+       OR message_identity_count <> 1
+       OR read_identity_count <> 1
+    THEN
+        RAISE EXCEPTION
+            'Unexpected support thread reference inventory';
+    END IF;
+END $$;
+
 CREATE TEMPORARY TABLE booking_thread_reference_inventory ON COMMIT DROP AS
+WITH target_identity AS (
+    SELECT relation_oid
+    FROM booking_thread_relation_identity
+    WHERE relation_role = 'TARGET'
+)
 SELECT
     'FOREIGN_KEY'::TEXT AS reference_kind,
-    LOWER(fk.table_name) AS table_name,
-    LOWER(fk.column_name) AS column_name,
+    fk_constraint.oid AS constraint_oid,
+    fk_constraint.conname::TEXT AS constraint_name,
+    fk_constraint.conrelid AS source_relation_oid,
+    source_table.relnamespace AS source_namespace_oid,
+    source_schema.nspname::TEXT AS source_schema_name,
+    source_table.relname::TEXT AS source_relation_name,
+    fk_constraint.confrelid AS target_relation_oid,
+    fk_constraint.conkey::SMALLINT[] AS source_attnums,
+    fk_constraint.confkey::SMALLINT[] AS target_attnums,
+    ARRAY(
+        SELECT source_attribute.attname::TEXT
+        FROM pg_catalog.generate_subscripts(fk_constraint.conkey, 1)
+            AS source_key(ordinality)
+        LEFT JOIN pg_catalog.pg_attribute source_attribute
+          ON source_attribute.attrelid = fk_constraint.conrelid
+         AND source_attribute.attnum = fk_constraint.conkey[source_key.ordinality]
+         AND source_attribute.attnum > 0
+         AND NOT source_attribute.attisdropped
+        ORDER BY source_key.ordinality
+    )::TEXT[] AS source_column_names,
+    ARRAY(
+        SELECT target_attribute.attname::TEXT
+        FROM pg_catalog.generate_subscripts(fk_constraint.confkey, 1)
+            AS target_key(ordinality)
+        LEFT JOIN pg_catalog.pg_attribute target_attribute
+          ON target_attribute.attrelid = fk_constraint.confrelid
+         AND target_attribute.attnum = fk_constraint.confkey[target_key.ordinality]
+         AND target_attribute.attnum > 0
+         AND NOT target_attribute.attisdropped
+        ORDER BY target_key.ordinality
+    )::TEXT[] AS target_column_names,
+    pg_catalog.CARDINALITY(fk_constraint.conkey) AS source_column_count,
+    pg_catalog.CARDINALITY(fk_constraint.confkey) AS target_column_count,
+    fk_constraint.confupdtype::TEXT AS confupdtype,
+    fk_constraint.confdeltype::TEXT AS confdeltype,
+    fk_constraint.confmatchtype::TEXT AS confmatchtype,
+    NULL::TEXT AS table_name,
+    NULL::TEXT AS column_name,
     NULL::TEXT AS discriminator
-FROM information_schema.referential_constraints reference
-JOIN information_schema.key_column_usage fk
-  ON fk.constraint_catalog = reference.constraint_catalog
- AND fk.constraint_schema = reference.constraint_schema
- AND fk.constraint_name = reference.constraint_name
-JOIN information_schema.key_column_usage target
-  ON target.constraint_catalog = reference.unique_constraint_catalog
- AND target.constraint_schema = reference.unique_constraint_schema
- AND target.constraint_name = reference.unique_constraint_name
- AND target.ordinal_position = fk.position_in_unique_constraint
-WHERE LOWER(target.table_schema) = LOWER(CURRENT_SCHEMA())
-  AND LOWER(target.table_name) = 'support_threads'
-  AND LOWER(target.column_name) = 'id'
+FROM target_identity target
+JOIN pg_catalog.pg_constraint fk_constraint
+  ON fk_constraint.contype = 'f'
+ AND fk_constraint.confrelid = target.relation_oid
+LEFT JOIN pg_catalog.pg_class source_table
+  ON source_table.oid = fk_constraint.conrelid
+LEFT JOIN pg_catalog.pg_namespace source_schema
+  ON source_schema.oid = source_table.relnamespace
 UNION ALL
 SELECT
-    'LOGICAL_AUDIT',
-    'audit_log',
-    'entity_id',
-    'support_ticket';
+    'LOGICAL_AUDIT'::TEXT,
+    NULL::OID,
+    NULL::TEXT,
+    NULL::OID,
+    NULL::OID,
+    NULL::TEXT,
+    NULL::TEXT,
+    NULL::OID,
+    NULL::SMALLINT[],
+    NULL::SMALLINT[],
+    NULL::TEXT[],
+    NULL::TEXT[],
+    NULL::INTEGER,
+    NULL::INTEGER,
+    NULL::TEXT,
+    NULL::TEXT,
+    NULL::TEXT,
+    'audit_log'::TEXT,
+    'entity_id'::TEXT,
+    'support_ticket'::TEXT;
 
 CREATE TEMPORARY TABLE booking_thread_expected_json_inventory (
     table_name TEXT NOT NULL,
@@ -125,22 +234,115 @@ WHERE NOT (depth = 0 AND key = 'ticketId')
 
 DO $$
 DECLARE
-    inbound_reference_count BIGINT;
+    physical_reference_count BIGINT;
     message_reference_count BIGINT;
     read_reference_count BIGINT;
     audit_reference_count BIGINT;
+    expected_target_relation_oid OID;
+    expected_target_namespace_oid OID;
+    expected_target_schema_name TEXT;
+    expected_target_relation_name TEXT;
+    expected_target_column_attnum SMALLINT;
+    expected_target_column_name TEXT;
+    expected_message_relation_oid OID;
+    expected_message_namespace_oid OID;
+    expected_message_schema_name TEXT;
+    expected_message_relation_name TEXT;
+    expected_message_column_attnum SMALLINT;
+    expected_message_column_name TEXT;
+    expected_read_relation_oid OID;
+    expected_read_namespace_oid OID;
+    expected_read_schema_name TEXT;
+    expected_read_relation_name TEXT;
+    expected_read_column_attnum SMALLINT;
+    expected_read_column_name TEXT;
 BEGIN
     SELECT
-        COUNT(*),
+        relation_oid,
+        namespace_oid,
+        schema_name,
+        relation_name,
+        column_attnum,
+        column_name
+    INTO STRICT
+        expected_target_relation_oid,
+        expected_target_namespace_oid,
+        expected_target_schema_name,
+        expected_target_relation_name,
+        expected_target_column_attnum,
+        expected_target_column_name
+    FROM booking_thread_relation_identity
+    WHERE relation_role = 'TARGET';
+
+    SELECT
+        relation_oid,
+        namespace_oid,
+        schema_name,
+        relation_name,
+        column_attnum,
+        column_name
+    INTO STRICT
+        expected_message_relation_oid,
+        expected_message_namespace_oid,
+        expected_message_schema_name,
+        expected_message_relation_name,
+        expected_message_column_attnum,
+        expected_message_column_name
+    FROM booking_thread_relation_identity
+    WHERE relation_role = 'SUPPORT_MESSAGES';
+
+    SELECT
+        relation_oid,
+        namespace_oid,
+        schema_name,
+        relation_name,
+        column_attnum,
+        column_name
+    INTO STRICT
+        expected_read_relation_oid,
+        expected_read_namespace_oid,
+        expected_read_schema_name,
+        expected_read_relation_name,
+        expected_read_column_attnum,
+        expected_read_column_name
+    FROM booking_thread_relation_identity
+    WHERE relation_role = 'SUPPORT_THREAD_READS';
+
+    SELECT
+        COUNT(*) FILTER (WHERE reference_kind = 'FOREIGN_KEY'),
         COUNT(*) FILTER (
             WHERE reference_kind = 'FOREIGN_KEY'
-              AND table_name = 'support_messages'
-              AND column_name = 'thread_id'
+              AND source_relation_oid = expected_message_relation_oid
+              AND source_namespace_oid = expected_message_namespace_oid
+              AND source_schema_name = expected_message_schema_name
+              AND source_relation_name = expected_message_relation_name
+              AND target_relation_oid = expected_target_relation_oid
+              AND source_column_count = 1
+              AND target_column_count = 1
+              AND source_attnums = ARRAY[expected_message_column_attnum]::SMALLINT[]
+              AND target_attnums = ARRAY[expected_target_column_attnum]::SMALLINT[]
+              AND source_column_names = ARRAY[expected_message_column_name]::TEXT[]
+              AND target_column_names = ARRAY[expected_target_column_name]::TEXT[]
+              AND confupdtype = 'a'
+              AND confdeltype = 'c'
+              AND confmatchtype = 's'
         ),
         COUNT(*) FILTER (
             WHERE reference_kind = 'FOREIGN_KEY'
-              AND table_name = 'support_thread_reads'
-              AND column_name = 'thread_id'
+              AND source_relation_oid = expected_read_relation_oid
+              AND source_namespace_oid = expected_read_namespace_oid
+              AND source_schema_name = expected_read_schema_name
+              AND source_relation_name = expected_read_relation_name
+              AND target_relation_oid = expected_target_relation_oid
+              AND source_column_count = 1
+              AND target_column_count = 1
+              AND source_attnums = ARRAY[expected_read_column_attnum]::SMALLINT[]
+              AND target_attnums = ARRAY[expected_target_column_attnum]::SMALLINT[]
+              AND source_column_names = ARRAY[expected_read_column_name]::TEXT[]
+              AND target_column_names = ARRAY[expected_target_column_name]::TEXT[]
+              AND confupdtype = 'a'
+              AND confdeltype = 'c'
+              AND confmatchtype = 's'
         ),
         COUNT(*) FILTER (
             WHERE reference_kind = 'LOGICAL_AUDIT'
@@ -149,13 +351,13 @@ BEGIN
               AND discriminator = 'support_ticket'
         )
     INTO
-        inbound_reference_count,
+        physical_reference_count,
         message_reference_count,
         read_reference_count,
         audit_reference_count
     FROM booking_thread_reference_inventory;
 
-    IF inbound_reference_count <> 3
+    IF physical_reference_count <> 2
        OR message_reference_count <> 1
        OR read_reference_count <> 1
        OR audit_reference_count <> 1
@@ -175,7 +377,7 @@ BEGIN
     IF EXISTS (
         SELECT 1
         FROM information_schema.columns columns
-        WHERE LOWER(columns.table_schema) = LOWER(CURRENT_SCHEMA())
+        WHERE columns.table_schema = CURRENT_SCHEMA()
           AND REGEXP_REPLACE(LOWER(columns.column_name), '[^a-z0-9]', '', 'g') IN (
               'threadid',
               'supportthreadid',
@@ -196,7 +398,7 @@ BEGIN
         FROM (
             SELECT LOWER(columns.table_name) AS table_name, LOWER(columns.column_name) AS column_name
             FROM information_schema.columns columns
-            WHERE LOWER(columns.table_schema) = LOWER(CURRENT_SCHEMA())
+            WHERE columns.table_schema = CURRENT_SCHEMA()
               AND (
                   LOWER(columns.data_type) IN ('json', 'jsonb')
                   OR LOWER(columns.column_name) LIKE '%json%'
@@ -221,7 +423,7 @@ BEGIN
         EXCEPT
         SELECT LOWER(columns.table_name), LOWER(columns.column_name)
         FROM information_schema.columns columns
-        WHERE LOWER(columns.table_schema) = LOWER(CURRENT_SCHEMA())
+        WHERE columns.table_schema = CURRENT_SCHEMA()
           AND (
               LOWER(columns.data_type) IN ('json', 'jsonb')
               OR LOWER(columns.column_name) LIKE '%json%'
@@ -544,6 +746,7 @@ BEGIN
 END $$;
 
 DROP TABLE booking_thread_reference_inventory;
+DROP TABLE booking_thread_relation_identity;
 DROP TABLE booking_thread_expected_json_inventory;
 DROP TABLE booking_thread_audit_payload_inventory;
 DROP TABLE booking_thread_unknown_audit_reference_keys;

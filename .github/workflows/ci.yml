@@ -591,9 +591,9 @@ jobs:
                   "PostgreSQL booking thread integrity migration",
                   report_dir / (
                       "TEST-com.hookah.platform.backend.support."
-                  "BookingThreadIntegrityMigrationPostgresTest.xml"
+                      "BookingThreadIntegrityMigrationPostgresTest.xml"
                   ),
-                  42,
+                  47,
               ),
               (
                   "booking audit recursive-key PG/H2/preflight predicate parity",

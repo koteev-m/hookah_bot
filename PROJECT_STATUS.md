@@ -1,6 +1,6 @@
 # Project Status
 
-Last verified: 2026-08-17.
+Last verified: 2026-08-18.
 
 ## 1. Current stage
 
@@ -27,6 +27,19 @@ waiting caller's exact independent PID, ungranted `pg_locks` row and
 `pg_blocking_pids(waiter) = [caller A]` before release/commit. Independent review is still required;
 no final-review verdict, green Actions, preflight, migration, deploy or staging smoke is recorded.
 No reminder, no-show, queue, preorder or broad analytics/audit redesign is included.
+
+`BOOKING-V124-CATALOG-INVENTORY-001` is also locally fixed: PostgreSQL V124 now anchors inbound
+foreign keys on the exact current-schema `support_threads` OID and records one authoritative row per
+constraint through `pg_catalog`, including exact source OID/namespace, complete ordered
+`conkey`/`confkey` arrays and action/match metadata. Exact current-schema source OIDs and attnums are
+required for the two known single-column references; composite, non-`id`, external same-name,
+additional cross-schema and privilege-hidden cross-owner references fail closed before domain
+mutation. A controlled PostgreSQL 16 catalog stress reproduced SQLSTATE `57014` at V124's
+five-minute statement timeout before the fix. The strengthened production-migration wrapper passes
+`47/47` with domain/catalog/index/Flyway-history snapshots, and the exact `44/44` menu mutation class
+remains the bounded performance evidence. This local fix still requires a short independent review,
+an explicit commit and a new green Actions run before any preflight, migration or deploy; no staging
+preflight/deploy or post-failure release-DB migration has been performed.
 
 ## 2. Release closure
 
@@ -108,6 +121,11 @@ Findings fixed locally and still requiring independent review in this bounded fi
 - `BOOKING-OUTBOX-LEGACY-DEDUPE-SEMANTICS-001` — `LOCAL_FIX_REVIEW_REQUIRED`;
 - `BOOKING-MESSAGE-MIGRATION-METADATA-001` — `LOCAL_FIX_REVIEW_REQUIRED`;
 - `BOOKING-DEDUP-AUDIT-REF-001` — `LOCAL_FIX_REVIEW_REQUIRED`.
+- `BOOKING-V124-CATALOG-INVENTORY-001` — `LOCAL_FIX_REVIEW_REQUIRED`.
+- `BOOKING-V124-CONSTRAINT-SHAPE-001` — `LOCAL_FIX_REVIEW_REQUIRED`.
+- `BOOKING-V124-SOURCE-RELATION-IDENTITY-001` — `LOCAL_FIX_REVIEW_REQUIRED`.
+- `BOOKING-V124-PG-CI-FLOOR-001` — `LOCAL_FIX_REVIEW_REQUIRED`.
+- `BOOKING-V124-CROSS-OWNER-DOMAIN-SNAPSHOT-001` — `LOCAL_FIX_REVIEW_REQUIRED`.
 
 Still open by design:
 

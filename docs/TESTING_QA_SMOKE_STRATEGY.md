@@ -43,7 +43,7 @@ Actions run was green. This is test fixture isolation, not a runtime booking def
 
 The mandatory automated matrix for the bounded integrity slice is:
 
-- PostgreSQL V124 and H2 V125 migration wrappers: minimum `42` tests each, zero skipped/failures/
+- PostgreSQL V124 / H2 V125 migration wrappers: minimum `47 / 42` tests, zero skipped/failures/
   errors. Each wrapper executes the production migration and proves: clean/no-duplicate preservation;
   duplicate merge with no reads; merge with complete timestamp-identical reads; fail-before-domain-
   mutation for partial read coverage, conflicting read timestamps, ownership mismatch, null booking,
@@ -53,7 +53,10 @@ The mandatory automated matrix for the bounded integrity slice is:
   payload pairs are matched after valid-JSON normalization; mixed plain/escaped top-level
   `ticketId` duplicates and nested/escaped `conversationThreadId`, nested `thread_id`, array
   `ticketIds` and numeric-string references must fail unchanged. Unrelated `conversationStatus`
-  must not false-stop. `BookingAuditReferencePolicyTest` minimum `6` independently holds the H2
+  must not false-stop. The five PostgreSQL-only inventory cases additionally reject a composite
+  expected-looking FK, a non-`id` target FK, an external same-name source, an additional external
+  source and a privilege-hidden cross-owner source while comparing domain/catalog/index/Flyway
+  history snapshots. `BookingAuditReferencePolicyTest` minimum `6` independently holds the H2
   duplicate-aware semantic cardinality/extraction/remap policy, PostgreSQL normalized-key predicate
   and read-only deployment-preflight text to the same semantic matrix. Production-
   shaped audit payloads prove canonical `entity_id` + `ticketId` remap, unrelated numeric collision
@@ -2184,7 +2187,7 @@ Expectations:
 - `backend-migration-sanity` requires Docker and exact production-migration selectors/XML. All
   twelve selected reports are asserted: Telegram dialog-state `1`, PostgreSQL table-session V28
   `1`, audit-target H2/PostgreSQL `2 / 2`, guest idempotency-fingerprint H2/PostgreSQL `2 / 2`,
-  booking-thread H2/PostgreSQL `42 / 42`, audit-key semantic/predicate parity `6`, Mini App message-schema
+  booking-thread H2/PostgreSQL `42 / 47`, audit-key semantic/predicate parity `6`, Mini App message-schema
   H2/PostgreSQL `5 / 5`, and real PostgreSQL migration-lock concurrency `2`. Missing, below-minimum,
   skipped, failed or errored reports fail the existing mandatory job.
 - `miniapp-e2e-smoke` parses the full structured Playwright JSON and requires at least `206`
