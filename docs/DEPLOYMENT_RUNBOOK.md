@@ -1788,9 +1788,11 @@ worktree:
 ```bash
 PREFLIGHT_SOURCE="$RELEASE_WORKTREE/docs/DEPLOYMENT_RUNBOOK.md"
 PREFLIGHT_TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
-PREFLIGHT_ARTIFACT="$(
-  mktemp "/tmp/booking-unread-preflight-${EXPECTED_RELEASE_SHA}-${PREFLIGHT_TIMESTAMP}-XXXXXX.sh"
+PREFLIGHT_TMP_DIR="$(
+  mktemp -d "${TMPDIR:-/tmp}/booking-unread-preflight-${EXPECTED_RELEASE_SHA}-${PREFLIGHT_TIMESTAMP}.XXXXXX"
 )"
+PREFLIGHT_ARTIFACT="${PREFLIGHT_TMP_DIR}/preflight.sh"
+trap 'rm -rf "$PREFLIGHT_TMP_DIR"' EXIT
 export PREFLIGHT_SOURCE PREFLIGHT_ARTIFACT
 
 PREFLIGHT_SHA256="$(
@@ -1847,9 +1849,9 @@ bash "$PREFLIGHT_ARTIFACT"
 
 This extraction fails closed on missing, duplicate, reversed or ambiguous markers, on a range that
 is not exactly one `bash` fence, and on an empty or unexpected artifact. It selects the marker-bound
-current block, not the first similar fence and not a historical runbook section. The timestamped
-temporary file contains the fenced shell body byte-for-byte; after extraction its SHA-256 is
-recorded, and the file is not edited before the exact `bash` execution. Incomplete or ambiguous
+current block, not the first similar fence and not a historical runbook section. The timestamped temporary directory contains `preflight.sh` with the fenced
+shell body byte-for-byte; after extraction its SHA-256 is recorded, and the file is not edited
+before the exact `bash` execution. Incomplete or ambiguous
 extraction is a STOP.
 
 SQL or shell text from a ChatGPT message, terminal history, clipboard history, a previously saved
