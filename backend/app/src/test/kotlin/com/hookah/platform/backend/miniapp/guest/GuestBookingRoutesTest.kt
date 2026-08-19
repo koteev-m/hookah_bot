@@ -1,10 +1,16 @@
 package com.hookah.platform.backend.miniapp.guest
 
+import com.hookah.platform.backend.ModuleOverrides
 import com.hookah.platform.backend.api.ApiErrorCodes
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import com.hookah.platform.backend.module
+import com.hookah.platform.backend.moduleWithOverrides
+import com.hookah.platform.backend.telegram.BookingStaffNotification
+import com.hookah.platform.backend.telegram.StaffChatNotificationResult
+import com.hookah.platform.backend.telegram.StaffChatNotifier
+import com.hookah.platform.backend.telegram.buildBookingStaffNotificationText
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
 import io.ktor.client.request.post
@@ -15,12 +21,19 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.config.MapApplicationConfig
 import io.ktor.server.testing.testApplication
+import io.mockk.coEvery
+import io.mockk.coVerify
+import io.mockk.mockk
+import io.mockk.slot
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.sql.DriverManager
+import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneId
+import java.time.ZoneOffset
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -46,6 +59,7 @@ class GuestBookingRoutesTest {
                     "api.session.issuer" to "hookah",
                     "api.session.audience" to "miniapp",
                     "api.session.ttlSeconds" to "3600",
+                    "billing.subscription.intervalSeconds" to "0",
                 )
 
             environment { this.config = config }
@@ -187,6 +201,7 @@ class GuestBookingRoutesTest {
                     "api.session.issuer" to "hookah",
                     "api.session.audience" to "miniapp",
                     "api.session.ttlSeconds" to "3600",
+                    "billing.subscription.intervalSeconds" to "0",
                 )
 
             environment { this.config = config }
@@ -211,10 +226,42 @@ class GuestBookingRoutesTest {
         }
 
     @Test
-    fun `guest attendance route notifies staff chat only once`() =
+    fun `guest attendance missing timezone uses Moscow once for response staff and deadline under UTC`() =
+        runAttendanceTimezoneScenario(
+            venueTimezone = null,
+            scheduledAt = "2030-01-09T21:30:00Z",
+            expectedDisplayDate = LocalDate.of(2030, 1, 10),
+            expectedDisplayLabel = "Бронь №1 · 10.01.2030, 00:30",
+            expectedScheduledAt = "2030-01-10T00:30:00+03:00",
+            expectedScheduledLocalDate = "2030-01-10",
+            expectedScheduledLocalTime = "00:30",
+            expectedDeadlineAt = "2030-01-10T01:00:00+03:00",
+            expectedDeadlineDisplay = "10.01.2030, 01:00",
+            expectedDeadlineTime = "01:00",
+            expectedPersistedDeadline = Instant.parse("2030-01-09T22:00:00Z"),
+        )
+
+    @Test
+    fun `guest attendance Honolulu timezone wins once for response staff and deadline under UTC`() =
+        runAttendanceTimezoneScenario(
+            venueTimezone = "Pacific/Honolulu",
+            scheduledAt = "2030-01-10T02:30:00Z",
+            expectedDisplayDate = LocalDate.of(2030, 1, 9),
+            expectedDisplayLabel = "Бронь №1 · 09.01.2030, 16:30",
+            expectedScheduledAt = "2030-01-09T16:30:00-10:00",
+            expectedScheduledLocalDate = "2030-01-09",
+            expectedScheduledLocalTime = "16:30",
+            expectedDeadlineAt = "2030-01-09T17:00:00-10:00",
+            expectedDeadlineDisplay = "09.01.2030, 17:00",
+            expectedDeadlineTime = "17:00",
+            expectedPersistedDeadline = Instant.parse("2030-01-10T03:00:00Z"),
+        )
+
+    @Test
+    fun `guest create uses Moscow fallback for hours service date number and label near UTC boundary`() =
         testApplication {
             val jdbcUrl =
-                "jdbc:h2:mem:booking-attendance-route-${UUID.randomUUID()};MODE=PostgreSQL;" +
+                "jdbc:h2:mem:booking-create-moscow-fallback-${UUID.randomUUID()};MODE=PostgreSQL;" +
                     "DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE"
             val config =
                 MapApplicationConfig(
@@ -226,89 +273,262 @@ class GuestBookingRoutesTest {
                     "api.session.issuer" to "hookah",
                     "api.session.audience" to "miniapp",
                     "api.session.ttlSeconds" to "3600",
+                    "billing.subscription.intervalSeconds" to "0",
                 )
 
             environment { this.config = config }
             application { module() }
             client.get("/health")
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            seedSubscription(jdbcUrl, venueId)
+            seedUser(jdbcUrl, TELEGRAM_USER_ID)
+            setDateOverrideHours(
+                jdbcUrl = jdbcUrl,
+                venueId = venueId,
+                serviceDate = LocalDate.of(2030, 1, 9),
+                opensAt = "00:00:00",
+                closesAt = "00:00:00",
+                isClosed = true,
+            )
+            val guestToken = issueToken(config, TELEGRAM_USER_ID)
 
+            val referenceBookingId = createBooking(client, guestToken, venueId, "2030-01-10T18:00:00Z")
+            assertEquals("2030-01-10" to 1, bookingDisplay(jdbcUrl, referenceBookingId))
+
+            val createResponse =
+                client.post("/api/guest/booking/create") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $guestToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody(
+                        """
+                        {"venueId":$venueId,"scheduledAt":"2030-01-09T21:30:00Z","partySize":3}
+                        """.trimIndent(),
+                    )
+                }
+
+            assertEquals(HttpStatusCode.OK, createResponse.status)
+            val created = json.parseToJsonElement(createResponse.bodyAsText()).jsonObject
+            val bookingId = created.getValue("bookingId").jsonPrimitive.content.toLong()
+            assertEquals("2", created.getValue("displayNumber").jsonPrimitive.content)
+            assertEquals(
+                "Бронь №2 · 10.01.2030, 00:30",
+                created.getValue("displayLabel").jsonPrimitive.content,
+            )
+            assertEquals("2030-01-10", created.getValue("scheduledLocalDate").jsonPrimitive.content)
+            assertEquals("00:30", created.getValue("scheduledLocalTime").jsonPrimitive.content)
+            assertEquals("10.01.2030, 01:00", created.getValue("arrivalDeadlineAtDisplay").jsonPrimitive.content)
+            assertEquals(
+                PersistedBookingTime(
+                    scheduledAt = Instant.parse("2030-01-09T21:30:00Z"),
+                    displayDate = LocalDate.of(2030, 1, 10),
+                    displayNumber = 2,
+                    arrivalDeadlineAt = Instant.parse("2030-01-09T22:00:00Z"),
+                ),
+                persistedBookingTime(jdbcUrl, bookingId),
+            )
+        }
+
+    @Test
+    fun `guest update uses invalid timezone fallback for hours service date number and label`() =
+        testApplication {
+            val jdbcUrl =
+                "jdbc:h2:mem:booking-update-moscow-fallback-${UUID.randomUUID()};MODE=PostgreSQL;" +
+                    "DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE"
+            val config =
+                MapApplicationConfig(
+                    "ktor.environment" to "test",
+                    "db.jdbcUrl" to jdbcUrl,
+                    "db.user" to "sa",
+                    "db.password" to "",
+                    "api.session.jwtSecret" to "secret-secret-secret-secret-secret",
+                    "api.session.issuer" to "hookah",
+                    "api.session.audience" to "miniapp",
+                    "api.session.ttlSeconds" to "3600",
+                    "billing.subscription.intervalSeconds" to "0",
+                )
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            seedSubscription(jdbcUrl, venueId)
+            seedUser(jdbcUrl, TELEGRAM_USER_ID)
+            val guestToken = issueToken(config, TELEGRAM_USER_ID)
+            val bookingId = createBooking(client, guestToken, venueId, "2030-01-10T18:00:00Z")
+            val targetDateBookingId = createBooking(client, guestToken, venueId, "2030-01-11T18:00:00Z")
+            assertEquals("2030-01-11" to 1, bookingDisplay(jdbcUrl, targetDateBookingId))
+            setVenueTimezone(jdbcUrl, venueId, "Invalid/Booking_Zone")
+            setDateOverrideHours(
+                jdbcUrl = jdbcUrl,
+                venueId = venueId,
+                serviceDate = LocalDate.of(2030, 1, 10),
+                opensAt = "00:00:00",
+                closesAt = "00:00:00",
+                isClosed = true,
+            )
+
+            val updateResponse =
+                client.post("/api/guest/booking/update?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $guestToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody(
+                        """
+                        {"bookingId":$bookingId,"scheduledAt":"2030-01-10T21:30:00Z","partySize":4}
+                        """.trimIndent(),
+                    )
+                }
+
+            assertEquals(HttpStatusCode.OK, updateResponse.status)
+            val updated = json.parseToJsonElement(updateResponse.bodyAsText()).jsonObject
+            assertEquals("2", updated.getValue("displayNumber").jsonPrimitive.content)
+            assertEquals(
+                "Бронь №2 · 11.01.2030, 00:30",
+                updated.getValue("displayLabel").jsonPrimitive.content,
+            )
+            assertEquals("2030-01-11", updated.getValue("scheduledLocalDate").jsonPrimitive.content)
+            assertEquals("00:30", updated.getValue("scheduledLocalTime").jsonPrimitive.content)
+            assertEquals("11.01.2030, 01:00", updated.getValue("arrivalDeadlineAtDisplay").jsonPrimitive.content)
+            assertEquals(
+                PersistedBookingTime(
+                    scheduledAt = Instant.parse("2030-01-10T21:30:00Z"),
+                    displayDate = LocalDate.of(2030, 1, 11),
+                    displayNumber = 2,
+                    arrivalDeadlineAt = Instant.parse("2030-01-10T22:00:00Z"),
+                ),
+                persistedBookingTime(jdbcUrl, bookingId),
+            )
+        }
+
+    @Test
+    fun `guest Honolulu create confirm keeps persisted reminder notification and response under UTC`() =
+        testApplication {
+            assertEquals(ZoneOffset.UTC, ZoneId.systemDefault().normalized(), "This regression must run with TZ=UTC")
+            val jdbcUrl =
+                "jdbc:h2:mem:booking-display-zone-${UUID.randomUUID()};MODE=PostgreSQL;" +
+                    "DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE"
+            val bookingNotification = slot<BookingStaffNotification>()
+            val bookingNotificationZone = slot<ZoneId>()
+            val staffChatNotifier = mockk<StaffChatNotifier>()
+            coEvery {
+                staffChatNotifier.notifyBookingNow(
+                    event = capture(bookingNotification),
+                    venueZoneId = capture(bookingNotificationZone),
+                )
+            } returns StaffChatNotificationResult.SENT_OR_QUEUED
+            val config =
+                MapApplicationConfig(
+                    "ktor.environment" to "test",
+                    "db.jdbcUrl" to jdbcUrl,
+                    "db.user" to "sa",
+                    "db.password" to "",
+                    "api.session.jwtSecret" to "secret-secret-secret-secret-secret",
+                    "api.session.issuer" to "hookah",
+                    "api.session.audience" to "miniapp",
+                    "api.session.ttlSeconds" to "3600",
+                    "billing.subscription.intervalSeconds" to "0",
+                    "booking.reminders.enabled" to "true",
+                )
+
+            environment { this.config = config }
+            application {
+                moduleWithOverrides(
+                    ModuleOverrides(staffChatNotifier = staffChatNotifier),
+                )
+            }
+            client.get("/health")
             val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
             seedSubscription(jdbcUrl, venueId)
             seedUser(jdbcUrl, TELEGRAM_USER_ID)
             seedUser(jdbcUrl, MANAGER_ID)
             seedVenueMember(jdbcUrl, venueId, MANAGER_ID, "MANAGER")
+            setVenueTimezone(jdbcUrl, venueId, "Pacific/Honolulu")
             val guestToken = issueToken(config, TELEGRAM_USER_ID)
             val managerToken = issueToken(config, MANAGER_ID)
-            val bookingId = createBooking(client, guestToken, venueId, "2030-01-10T18:30:00Z")
+
+            val createResponse =
+                client.post("/api/guest/booking/create") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $guestToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody(
+                        """
+                        {"venueId":$venueId,"scheduledAt":"2030-01-10T02:30:00Z","partySize":2}
+                        """.trimIndent(),
+                    )
+                }
+
+            assertEquals(HttpStatusCode.OK, createResponse.status)
+            val created = json.parseToJsonElement(createResponse.bodyAsText()).jsonObject
+            val bookingId = created.getValue("bookingId").jsonPrimitive.content.toLong()
+            assertEquals("2030-01-09" to 1, bookingDisplay(jdbcUrl, bookingId))
+            assertEquals(
+                "Бронь №1 · 09.01.2030, 16:30",
+                created.getValue("displayLabel").jsonPrimitive.content,
+            )
+            assertEquals("2030-01-09T16:30:00-10:00", created.getValue("scheduledAt").jsonPrimitive.content)
+            assertEquals("09.01.2030, 16:30", created.getValue("scheduledAtDisplay").jsonPrimitive.content)
+            assertEquals("2030-01-09", created.getValue("scheduledLocalDate").jsonPrimitive.content)
+            assertEquals("16:30", created.getValue("scheduledLocalTime").jsonPrimitive.content)
+            assertEquals("2030-01-09T17:00:00-10:00", created.getValue("arrivalDeadlineAt").jsonPrimitive.content)
+            assertEquals("09.01.2030, 17:00", created.getValue("arrivalDeadlineAtDisplay").jsonPrimitive.content)
+            assertEquals("17:00", created.getValue("arrivalDeadlineTimeDisplay").jsonPrimitive.content)
+            assertEquals(
+                PersistedBookingTime(
+                    scheduledAt = Instant.parse("2030-01-10T02:30:00Z"),
+                    displayDate = LocalDate.of(2030, 1, 9),
+                    displayNumber = 1,
+                    arrivalDeadlineAt = Instant.parse("2030-01-10T03:00:00Z"),
+                ),
+                persistedBookingTime(jdbcUrl, bookingId),
+            )
+
+            coVerify(exactly = 1) {
+                staffChatNotifier.notifyBookingNow(
+                    event = any(),
+                    venueZoneId = any(),
+                )
+            }
+            assertEquals(ZoneId.of("Pacific/Honolulu"), bookingNotificationZone.captured)
+            assertEquals(Instant.parse("2030-01-10T02:30:00Z"), bookingNotification.captured.scheduledAt)
+            assertEquals("2030-01-09T16:30:00-10:00", bookingNotification.captured.scheduledAtText)
+            val staffNotificationText =
+                buildBookingStaffNotificationText(
+                    venueName = "Booking Venue",
+                    event = bookingNotification.captured.event,
+                    bookingId = bookingNotification.captured.bookingId,
+                    displayNumber = bookingNotification.captured.displayNumber,
+                    scheduledAt = bookingNotification.captured.scheduledAt,
+                    venueZoneId = bookingNotificationZone.captured,
+                    status = bookingNotification.captured.status,
+                    scheduledAtText = bookingNotification.captured.scheduledAtText,
+                    partySize = bookingNotification.captured.partySize,
+                    comment = bookingNotification.captured.comment,
+                    guestDisplayName = bookingNotification.captured.guestDisplayName,
+                )
+            assertTrue(staffNotificationText.contains("Бронь №1 · 09.01.2030, 16:30"), staffNotificationText)
+
             val confirmResponse =
                 client.post("/api/venue/bookings/$bookingId/confirm?venueId=$venueId") {
                     headers { append(HttpHeaders.Authorization, "Bearer $managerToken") }
                 }
             assertEquals(HttpStatusCode.OK, confirmResponse.status)
-            linkStaffChat(jdbcUrl, venueId, STAFF_CHAT_ID)
-
-            repeat(2) {
-                val guestConfirmResponse =
-                    client.post("/api/guest/booking/confirm?venueId=$venueId") {
-                        headers {
-                            append(HttpHeaders.Authorization, "Bearer $guestToken")
-                            append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
-                        }
-                        setBody("""{"bookingId":$bookingId}""")
-                    }
-                assertEquals(HttpStatusCode.OK, guestConfirmResponse.status)
-                assertEquals(
-                    "confirmed",
-                    json.parseToJsonElement(guestConfirmResponse.bodyAsText())
-                        .jsonObject
-                        .getValue("status")
-                        .jsonPrimitive
-                        .content,
-                )
-            }
-
-            assertEquals(1, outboxCountForChat(jdbcUrl, STAFF_CHAT_ID))
-            val staffText = outboxTextForChat(jdbcUrl, STAFF_CHAT_ID)
-            assertTrue(staffText.contains("✅ Гость подтвердил визит"))
-            assertTrue(staffText.contains("Бронь №1 · 10.01.2030, 21:30"))
-            assertTrue(staffText.contains("Гость: имя не указано"))
-            assertTrue(staffText.contains("Гостей: 2"))
-            assertTrue(staffText.contains("Держим стол до 22:00"))
-            assertFalse(staffText.contains(TELEGRAM_USER_ID.toString()))
-            assertFalse(staffText.contains("u$TELEGRAM_USER_ID"))
-        }
-
-    @Test
-    fun `booking display date uses venue timezone`() =
-        testApplication {
-            val jdbcUrl =
-                "jdbc:h2:mem:booking-display-zone-${UUID.randomUUID()};MODE=PostgreSQL;" +
-                    "DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE"
-            val config =
-                MapApplicationConfig(
-                    "ktor.environment" to "test",
-                    "db.jdbcUrl" to jdbcUrl,
-                    "db.user" to "sa",
-                    "db.password" to "",
-                    "api.session.jwtSecret" to "secret-secret-secret-secret-secret",
-                    "api.session.issuer" to "hookah",
-                    "api.session.audience" to "miniapp",
-                    "api.session.ttlSeconds" to "3600",
-                )
-
-            environment { this.config = config }
-            application { module() }
-            client.get("/health")
-
-            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
-            seedSubscription(jdbcUrl, venueId)
-            seedUser(jdbcUrl, TELEGRAM_USER_ID)
-            setVenueTimezone(jdbcUrl, venueId, "Pacific/Honolulu")
-            val guestToken = issueToken(config, TELEGRAM_USER_ID)
-
-            val bookingId = createBooking(client, guestToken, venueId, "2030-01-10T02:30:00Z")
-
-            assertEquals("2030-01-09" to 1, bookingDisplay(jdbcUrl, bookingId))
+            assertEquals(
+                PersistedReminder(
+                    scheduledFor = Instant.parse("2030-01-09T02:30:00Z"),
+                    status = "PENDING",
+                ),
+                m7cReminder(jdbcUrl, bookingId),
+            )
+            val confirmMessage = outboxTextForChat(jdbcUrl, TELEGRAM_USER_ID)
+            assertTrue(confirmMessage.contains("✅ Бронь №1 · 09.01.2030, 16:30 подтверждена"), confirmMessage)
+            assertTrue(confirmMessage.contains("Время: 09.01.2030, 16:30"), confirmMessage)
+            assertTrue(confirmMessage.contains("Держим до 17:00"), confirmMessage)
+            assertFalse(confirmMessage.contains("10.01.2030, 05:30"), confirmMessage)
         }
 
     @Test
@@ -327,6 +547,7 @@ class GuestBookingRoutesTest {
                     "api.session.issuer" to "hookah",
                     "api.session.audience" to "miniapp",
                     "api.session.ttlSeconds" to "3600",
+                    "billing.subscription.intervalSeconds" to "0",
                 )
 
             environment { this.config = config }
@@ -389,6 +610,7 @@ class GuestBookingRoutesTest {
                     "api.session.issuer" to "hookah",
                     "api.session.audience" to "miniapp",
                     "api.session.ttlSeconds" to "3600",
+                    "billing.subscription.intervalSeconds" to "0",
                 )
 
             environment { this.config = config }
@@ -644,6 +866,125 @@ class GuestBookingRoutesTest {
             }
         }
 
+    private fun runAttendanceTimezoneScenario(
+        venueTimezone: String?,
+        scheduledAt: String,
+        expectedDisplayDate: LocalDate,
+        expectedDisplayLabel: String,
+        expectedScheduledAt: String,
+        expectedScheduledLocalDate: String,
+        expectedScheduledLocalTime: String,
+        expectedDeadlineAt: String,
+        expectedDeadlineDisplay: String,
+        expectedDeadlineTime: String,
+        expectedPersistedDeadline: Instant,
+    ) = testApplication {
+        assertEquals(ZoneOffset.UTC, ZoneId.systemDefault().normalized(), "This regression must run with TZ=UTC")
+        val jdbcUrl =
+            "jdbc:h2:mem:booking-attendance-zone-${UUID.randomUUID()};MODE=PostgreSQL;" +
+                "DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE;" +
+                "QUERY_STATISTICS=TRUE;QUERY_STATISTICS_MAX_ENTRIES=10000"
+        val config =
+            MapApplicationConfig(
+                "ktor.environment" to "test",
+                "db.jdbcUrl" to jdbcUrl,
+                "db.user" to "sa",
+                "db.password" to "",
+                "api.session.jwtSecret" to "secret-secret-secret-secret-secret",
+                "api.session.issuer" to "hookah",
+                "api.session.audience" to "miniapp",
+                "api.session.ttlSeconds" to "3600",
+                "billing.subscription.intervalSeconds" to "0",
+            )
+
+        environment { this.config = config }
+        application { module() }
+        client.get("/health")
+
+        val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+        venueTimezone?.let { setVenueTimezone(jdbcUrl, venueId, it) }
+        seedSubscription(jdbcUrl, venueId)
+        seedUser(jdbcUrl, TELEGRAM_USER_ID)
+        seedUser(jdbcUrl, MANAGER_ID)
+        seedVenueMember(jdbcUrl, venueId, MANAGER_ID, "MANAGER")
+        val guestToken = issueToken(config, TELEGRAM_USER_ID)
+        val managerToken = issueToken(config, MANAGER_ID)
+        val bookingId = createBooking(client, guestToken, venueId, scheduledAt)
+        val confirmResponse =
+            client.post("/api/venue/bookings/$bookingId/confirm?venueId=$venueId") {
+                headers { append(HttpHeaders.Authorization, "Bearer $managerToken") }
+            }
+        assertEquals(HttpStatusCode.OK, confirmResponse.status)
+        linkStaffChat(jdbcUrl, venueId, STAFF_CHAT_ID)
+
+        suspend fun confirmAttendance() =
+            client.post("/api/guest/booking/confirm?venueId=$venueId") {
+                headers {
+                    append(HttpHeaders.Authorization, "Bearer $guestToken")
+                    append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                }
+                setBody("""{"bookingId":$bookingId}""")
+            }
+
+        val zoneReadsBefore = venueZoneResolverQueryCount(jdbcUrl)
+        assertTrue(zoneReadsBefore > 0, "Expected setup to register the production venue-settings resolver query")
+        val guestConfirmResponse = confirmAttendance()
+        assertEquals(HttpStatusCode.OK, guestConfirmResponse.status)
+        assertEquals(zoneReadsBefore + 1, venueZoneResolverQueryCount(jdbcUrl))
+
+        val confirmed = json.parseToJsonElement(guestConfirmResponse.bodyAsText()).jsonObject
+        assertEquals("confirmed", confirmed.getValue("status").jsonPrimitive.content)
+        assertEquals(expectedDisplayLabel, confirmed.getValue("displayLabel").jsonPrimitive.content)
+        assertEquals(expectedScheduledAt, confirmed.getValue("scheduledAt").jsonPrimitive.content)
+        assertEquals(
+            expectedDisplayLabel.substringAfter(" · "),
+            confirmed.getValue("scheduledAtDisplay").jsonPrimitive.content,
+        )
+        assertEquals(expectedScheduledLocalDate, confirmed.getValue("scheduledLocalDate").jsonPrimitive.content)
+        assertEquals(expectedScheduledLocalTime, confirmed.getValue("scheduledLocalTime").jsonPrimitive.content)
+        assertEquals(expectedDeadlineAt, confirmed.getValue("arrivalDeadlineAt").jsonPrimitive.content)
+        assertEquals(expectedDeadlineDisplay, confirmed.getValue("arrivalDeadlineAtDisplay").jsonPrimitive.content)
+        assertEquals(expectedDeadlineTime, confirmed.getValue("arrivalDeadlineTimeDisplay").jsonPrimitive.content)
+        assertTrue(confirmed.getValue("lastGuestConfirmationAt").jsonPrimitive.content.isNotBlank())
+        val scheduleVersion = confirmed.getValue("attendanceScheduleVersion").jsonPrimitive.content.toLong()
+        assertEquals(
+            PersistedBookingTime(
+                scheduledAt = Instant.parse(scheduledAt),
+                displayDate = expectedDisplayDate,
+                displayNumber = 1,
+                arrivalDeadlineAt = expectedPersistedDeadline,
+            ),
+            persistedBookingTime(jdbcUrl, bookingId),
+        )
+
+        assertEquals(1, outboxCountForChat(jdbcUrl, STAFF_CHAT_ID))
+        assertEquals(
+            "booking-guest-attendance:$bookingId:$scheduleVersion",
+            outboxDedupeKeyForChat(jdbcUrl, STAFF_CHAT_ID),
+        )
+        val staffText = outboxTextForChat(jdbcUrl, STAFF_CHAT_ID)
+        assertTrue(staffText.contains("✅ Гость подтвердил визит"), staffText)
+        assertTrue(staffText.contains(expectedDisplayLabel), staffText)
+        assertTrue(staffText.contains("Гость: имя не указано"), staffText)
+        assertTrue(staffText.contains("Гостей: 2"), staffText)
+        assertTrue(staffText.contains("Держим стол до $expectedDeadlineTime"), staffText)
+        assertFalse(staffText.contains(TELEGRAM_USER_ID.toString()), staffText)
+        assertFalse(staffText.contains("u$TELEGRAM_USER_ID"), staffText)
+
+        val retryZoneReadsBefore = venueZoneResolverQueryCount(jdbcUrl)
+        val retryResponse = confirmAttendance()
+        assertEquals(HttpStatusCode.OK, retryResponse.status)
+        assertEquals(retryZoneReadsBefore + 1, venueZoneResolverQueryCount(jdbcUrl))
+        val retried = json.parseToJsonElement(retryResponse.bodyAsText()).jsonObject
+        assertEquals(expectedDisplayLabel, retried.getValue("displayLabel").jsonPrimitive.content)
+        assertEquals(expectedDeadlineDisplay, retried.getValue("arrivalDeadlineAtDisplay").jsonPrimitive.content)
+        assertEquals(1, outboxCountForChat(jdbcUrl, STAFF_CHAT_ID))
+        assertEquals(
+            "booking-guest-attendance:$bookingId:$scheduleVersion",
+            outboxDedupeKeyForChat(jdbcUrl, STAFF_CHAT_ID),
+        )
+    }
+
     private suspend fun createBooking(
         client: io.ktor.client.HttpClient,
         guestToken: String,
@@ -707,6 +1048,83 @@ class GuestBookingRoutesTest {
                 statement.executeQuery().use { rs ->
                     rs.next()
                     rs.getDate("display_date").toLocalDate().toString() to rs.getInt("display_number")
+                }
+            }
+        }
+
+    private fun persistedBookingTime(
+        jdbcUrl: String,
+        bookingId: Long,
+    ): PersistedBookingTime =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT scheduled_at, display_date, display_number, arrival_deadline_at
+                FROM bookings
+                WHERE id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, bookingId)
+                statement.executeQuery().use { rs ->
+                    assertTrue(rs.next())
+                    PersistedBookingTime(
+                        scheduledAt = rs.getTimestamp("scheduled_at").toInstant(),
+                        displayDate = rs.getDate("display_date").toLocalDate(),
+                        displayNumber = rs.getInt("display_number"),
+                        arrivalDeadlineAt = rs.getTimestamp("arrival_deadline_at").toInstant(),
+                    )
+                }
+            }
+        }
+
+    private fun m7cReminder(
+        jdbcUrl: String,
+        bookingId: Long,
+    ): PersistedReminder =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT scheduled_for, status
+                FROM booking_reminders
+                WHERE booking_id = ? AND policy_version = 'M7C'
+                ORDER BY id
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, bookingId)
+                statement.executeQuery().use { rs ->
+                    assertTrue(rs.next())
+                    val reminder =
+                        PersistedReminder(
+                            scheduledFor = rs.getTimestamp("scheduled_for").toInstant(),
+                            status = rs.getString("status"),
+                        )
+                    assertFalse(rs.next())
+                    reminder
+                }
+            }
+        }
+
+    private fun venueZoneResolverQueryCount(jdbcUrl: String): Long =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.createStatement().use { statement ->
+                statement.executeQuery(
+                    """
+                    SELECT SQL_STATEMENT, EXECUTION_COUNT
+                    FROM INFORMATION_SCHEMA.QUERY_STATISTICS
+                    """.trimIndent(),
+                ).use { rs ->
+                    var executionCount = 0L
+                    while (rs.next()) {
+                        val normalizedSql =
+                            rs.getString("SQL_STATEMENT")
+                                .lowercase()
+                                .replace(Regex("""\s+"""), " ")
+                                .trim()
+                        if (normalizedSql == VENUE_SETTINGS_RESOLVER_SQL) {
+                            executionCount += rs.getLong("EXECUTION_COUNT")
+                        }
+                    }
+                    executionCount
                 }
             }
         }
@@ -992,7 +1410,54 @@ class GuestBookingRoutesTest {
             }
         }
 
+    private fun outboxDedupeKeyForChat(
+        jdbcUrl: String,
+        chatId: Long,
+    ): String? =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT dedupe_key
+                FROM telegram_outbox
+                WHERE chat_id = ? AND method = 'sendMessage'
+                ORDER BY id
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, chatId)
+                statement.executeQuery().use { rs ->
+                    assertTrue(rs.next())
+                    val dedupeKey = rs.getString("dedupe_key")
+                    assertFalse(rs.next())
+                    dedupeKey
+                }
+            }
+        }
+
+    private data class PersistedBookingTime(
+        val scheduledAt: Instant,
+        val displayDate: LocalDate,
+        val displayNumber: Int,
+        val arrivalDeadlineAt: Instant,
+    )
+
+    private data class PersistedReminder(
+        val scheduledFor: Instant,
+        val status: String,
+    )
+
     companion object {
+        private val VENUE_SETTINGS_RESOLVER_SQL =
+            """
+            SELECT venue_id,
+                   notify_orders_enabled,
+                   notify_staff_calls_enabled,
+                   notify_cancellations_enabled,
+                   timezone,
+                   public_review_url
+            FROM venue_settings
+            WHERE venue_id = ?
+            """.trimIndent().lowercase().replace(Regex("""\s+"""), " ")
+
         private const val TELEGRAM_USER_ID = 424242L
         private const val MANAGER_ID = 515151L
         private const val STAFF_CHAT_ID = -900900L

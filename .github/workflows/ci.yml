@@ -74,7 +74,10 @@ jobs:
       - name: Verify Docker availability (required for Testcontainers)
         run: docker info
       - name: Run guest venue platform route and security tests
+        env:
+          TZ: UTC
         run: |
+          echo "CI timezone contract: $TZ"
           JAVA_TOOL_OPTIONS=-Dapi.version=1.44 _JAVA_OPTIONS=-Xmx4g \
             ./gradlew --no-daemon --max-workers=1 :backend:app:test \
             --tests "com.hookah.platform.backend.miniapp.guest.GuestVenueRoutesTest" \
@@ -92,6 +95,7 @@ jobs:
             --tests "com.hookah.platform.backend.support.SupportTicketRoutesTest" \
             --tests "com.hookah.platform.backend.support.SupportThreadReadRepositoryTest" \
             --tests "com.hookah.platform.backend.telegram.BookingMessageStaffChatNotifierTest" \
+            --tests "com.hookah.platform.backend.telegram.StaffChatNotifierTest" \
             --tests "com.hookah.platform.backend.telegram.TelegramOutboxWorkerTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.VenueOrderRoutesTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.promotions.VenuePromotionRoutesTest" \
@@ -137,6 +141,7 @@ jobs:
               "com.hookah.platform.backend.support.SupportTicketRoutesTest",
               "com.hookah.platform.backend.support.SupportThreadReadRepositoryTest",
               "com.hookah.platform.backend.telegram.BookingMessageStaffChatNotifierTest",
+              "com.hookah.platform.backend.telegram.StaffChatNotifierTest",
               "com.hookah.platform.backend.telegram.TelegramOutboxWorkerTest",
               "com.hookah.platform.backend.miniapp.venue.VenueOrderRoutesTest",
               "com.hookah.platform.backend.miniapp.venue.promotions.VenuePromotionRoutesTest",
@@ -162,6 +167,7 @@ jobs:
               "com.hookah.platform.backend.support.SupportTicketRoutesTest": 13,
               "com.hookah.platform.backend.support.SupportThreadReadRepositoryTest": 21,
               "com.hookah.platform.backend.telegram.BookingMessageStaffChatNotifierTest": 5,
+              "com.hookah.platform.backend.telegram.StaffChatNotifierTest": 39,
               "com.hookah.platform.backend.telegram.TelegramOutboxWorkerTest": 8,
               "com.hookah.platform.backend.miniapp.guest.GuestOrderRoutesTest": 61,
               "com.hookah.platform.backend.telegram.db.GuestOrderIdempotencyFingerprintTest": 7,
@@ -176,7 +182,7 @@ jobs:
               "com.hookah.platform.backend.miniapp.venue.VenueOnboardingRoutesTest": 8,
               "com.hookah.platform.backend.platform.PlatformOnboardingRoutesTest": 15,
               "com.hookah.platform.backend.telegram.TelegramBotRouterVenueConnectionRequestFlowTest": 18,
-              "com.hookah.platform.backend.telegram.TelegramBotRouterTableTokenTest": 552,
+              "com.hookah.platform.backend.telegram.TelegramBotRouterTableTokenTest": 553,
               "com.hookah.platform.backend.telegram.TelegramKeyboardsTest": 169,
           }
           required_test_names = {
@@ -186,6 +192,9 @@ jobs:
               "com.hookah.platform.backend.support.SupportThreadReadRepositoryTest": {
                   "NULL author venue chat participates in every unread projection and clears on exact open",
                   "NULL author support and unrelated threads stay excluded and unauthorized actors get no count facts",
+              },
+              "com.hookah.platform.backend.telegram.TelegramBotRouterTableTokenTest": {
+                  "bot booking create uses zone A once when resolver would next return zone B",
               },
           }
           totals = {key: 0 for key in ("tests", "skipped", "failures", "errors")}
@@ -423,10 +432,14 @@ jobs:
       - name: Verify Docker availability (required for Testcontainers)
         run: docker info
       - name: Run venue booking RBAC tests
+        env:
+          TZ: UTC
         run: |
+          echo "CI timezone contract: $TZ"
           ./gradlew --no-daemon :backend:app:test \
             --tests "com.hookah.platform.backend.booking.BookingDisplayLabelTest" \
             --tests "com.hookah.platform.backend.miniapp.guest.GuestBookingRoutesTest" \
+            --tests "com.hookah.platform.backend.miniapp.guest.BookingReminderWorkerTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.VenueBookingRoutesTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.VenueRbacRoutesTest" \
             --tests "com.hookah.platform.backend.support.BookingConversationRoutesTest" \
@@ -455,7 +468,15 @@ jobs:
                       "TEST-com.hookah.platform.backend.miniapp.guest."
                       "GuestBookingRoutesTest.xml"
                   ),
-                  7,
+                  10,
+              ),
+              (
+                  "booking reminder worker",
+                  report_dir / (
+                      "TEST-com.hookah.platform.backend.miniapp.guest."
+                      "BookingReminderWorkerTest.xml"
+                  ),
+                  1,
               ),
               (
                   "venue booking routes",
@@ -463,7 +484,7 @@ jobs:
                       "TEST-com.hookah.platform.backend.miniapp.venue."
                       "VenueBookingRoutesTest.xml"
                   ),
-                  8,
+                  10,
               ),
               (
                   "venue RBAC routes",
@@ -491,7 +512,16 @@ jobs:
               ),
           ]
           required_test_names = {
-              "ordinary Guest surface contract rejects cross inbox opens without raw marker mutation or message facts",
+              "TEST-com.hookah.platform.backend.miniapp.guest.GuestBookingRoutesTest.xml": {
+                  "guest attendance missing timezone uses Moscow once for response staff and deadline under UTC",
+                  "guest attendance Honolulu timezone wins once for response staff and deadline under UTC",
+              },
+              "TEST-com.hookah.platform.backend.miniapp.venue.VenueBookingRoutesTest.xml": {
+                  "valid Honolulu timezone wins over UTC host for persisted deadline reminder and notification",
+              },
+              "TEST-com.hookah.platform.backend.support.BookingConversationRoutesTest.xml": {
+                  "ordinary Guest surface contract rejects cross inbox opens without raw marker mutation or message facts",
+              },
           }
           problems = []
           for label, report, minimum in required_suites:
@@ -510,18 +540,17 @@ jobs:
                   )
               if any(counts[key] for key in ("skipped", "failures", "errors")):
                   problems.append(f"non-passing {label}: {counts}")
-              if report.name.endswith("BookingConversationRoutesTest.xml"):
-                  actual_names = [
-                      (case.attrib.get("name") or "").removesuffix("()")
-                      for case in suite.iter("testcase")
-                  ]
-                  for required_name in required_test_names:
-                      occurrences = actual_names.count(required_name)
-                      if occurrences != 1:
-                          problems.append(
-                              "missing or duplicate mandatory booking route testcase: "
-                              f"name={required_name!r} actual={occurrences}"
-                          )
+              actual_names = [
+                  (case.attrib.get("name") or "").removesuffix("()")
+                  for case in suite.iter("testcase")
+              ]
+              for required_name in required_test_names.get(report.name, set()):
+                  occurrences = actual_names.count(required_name)
+                  if occurrences != 1:
+                      problems.append(
+                          "missing or duplicate mandatory booking testcase: "
+                          f"report={report.name} name={required_name!r} actual={occurrences}"
+                      )
 
           if problems:
               raise SystemExit("\n".join(problems))
@@ -551,7 +580,6 @@ jobs:
           ./gradlew --no-daemon :backend:app:test \
             --tests "com.hookah.platform.backend.telegram.TelegramKeyboardsTest" \
             --tests "com.hookah.platform.backend.telegram.SendMessagePayloadTest" \
-            --tests "com.hookah.platform.backend.telegram.StaffChatNotifierTest" \
             --tests "com.hookah.platform.backend.telegram.TelegramBotRouterLinkCommandTest" \
             --console=plain
 

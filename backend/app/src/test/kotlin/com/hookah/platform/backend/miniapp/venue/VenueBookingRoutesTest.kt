@@ -24,6 +24,8 @@ import kotlinx.serialization.json.put
 import java.sql.DriverManager
 import java.sql.Timestamp
 import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -1722,10 +1724,10 @@ class VenueBookingRoutesTest {
         }
 
     @Test
-    fun `explicit enabled booking reminders schedules M7c reminder on venue confirm`() =
+    fun `venue confirm uses Moscow fallback for reminder hold and label with UTC host`() =
         testApplication {
             val jdbcUrl =
-                "jdbc:h2:mem:venue-booking-reminder-enabled-${UUID.randomUUID()};MODE=PostgreSQL;" +
+                "jdbc:h2:mem:venue-booking-reminder-fallback-${UUID.randomUUID()};MODE=PostgreSQL;" +
                     "DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE"
             val config =
                 MapApplicationConfig(
@@ -1744,8 +1746,7 @@ class VenueBookingRoutesTest {
             environment { this.config = config }
             application { module() }
             client.get("/health")
-
-            val venueId = seedVenue(jdbcUrl)
+            val venueId = seedVenue(jdbcUrl, timezone = null)
             seedSubscription(jdbcUrl, venueId)
             seedUser(jdbcUrl, GUEST_ID)
             seedUser(jdbcUrl, MANAGER_ID)
@@ -1759,7 +1760,9 @@ class VenueBookingRoutesTest {
                         append(HttpHeaders.Authorization, "Bearer $guestToken")
                         append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
                     }
-                    setBody("""{"venueId":$venueId,"scheduledAt":"2030-01-10T18:30:00Z","partySize":4}""")
+                    setBody(
+                        """{"venueId":$venueId,"scheduledAt":"2030-01-10T21:30:00Z","partySize":4}""",
+                    )
                 }
             assertEquals(HttpStatusCode.OK, createResponse.status)
             val bookingId =
@@ -1776,7 +1779,210 @@ class VenueBookingRoutesTest {
                 }
 
             assertEquals(HttpStatusCode.OK, confirmResponse.status)
-            assertEquals(1, m7cPendingBookingReminderCount(jdbcUrl, bookingId))
+            assertEquals(
+                PersistedVenueBooking(
+                    scheduledAt = Instant.parse("2030-01-10T21:30:00Z"),
+                    displayDate = LocalDate.of(2030, 1, 11),
+                    displayNumber = 1,
+                    arrivalDeadlineAt = Instant.parse("2030-01-10T22:00:00Z"),
+                    status = "CONFIRMED",
+                ),
+                persistedVenueBooking(jdbcUrl, bookingId),
+            )
+            assertEquals(
+                PersistedReminder(
+                    scheduledFor = Instant.parse("2030-01-09T19:00:00Z"),
+                    status = "PENDING",
+                ),
+                m7cReminder(jdbcUrl, bookingId),
+            )
+            val confirmMessage = outboxTexts(jdbcUrl, GUEST_ID).last()
+            assertTrue(confirmMessage.contains("✅ Бронь №1 · 11.01.2030, 00:30 подтверждена"), confirmMessage)
+            assertTrue(confirmMessage.contains("Время: 11.01.2030, 00:30"), confirmMessage)
+            assertTrue(confirmMessage.contains("Держим до 01:00"), confirmMessage)
+        }
+
+    @Test
+    fun `venue change uses invalid timezone fallback for local time service date reminder and label`() =
+        testApplication {
+            val jdbcUrl =
+                "jdbc:h2:mem:venue-booking-change-fallback-${UUID.randomUUID()};MODE=PostgreSQL;" +
+                    "DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE"
+            val config =
+                MapApplicationConfig(
+                    "ktor.environment" to "test",
+                    "db.jdbcUrl" to jdbcUrl,
+                    "db.user" to "sa",
+                    "db.password" to "",
+                    "api.session.jwtSecret" to "secret-secret-secret-secret-secret",
+                    "api.session.issuer" to "hookah",
+                    "api.session.audience" to "miniapp",
+                    "api.session.ttlSeconds" to "3600",
+                    "billing.subscription.intervalSeconds" to "0",
+                    "booking.reminders.enabled" to "true",
+                )
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+            val venueId = seedVenue(jdbcUrl, timezone = "Invalid/Booking_Zone")
+            seedSubscription(jdbcUrl, venueId)
+            seedUser(jdbcUrl, GUEST_ID)
+            seedUser(jdbcUrl, MANAGER_ID)
+            seedVenueMember(jdbcUrl, venueId, MANAGER_ID, "MANAGER")
+            val guestToken = issueToken(config, GUEST_ID)
+            val managerToken = issueToken(config, MANAGER_ID)
+
+            suspend fun createBooking(scheduledAt: String): Long {
+                val response =
+                    client.post("/api/guest/booking/create") {
+                        headers {
+                            append(HttpHeaders.Authorization, "Bearer $guestToken")
+                            append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                        }
+                        setBody("""{"venueId":$venueId,"scheduledAt":"$scheduledAt","partySize":4}""")
+                    }
+                assertEquals(HttpStatusCode.OK, response.status)
+                return json.parseToJsonElement(response.bodyAsText())
+                    .jsonObject
+                    .getValue("bookingId")
+                    .jsonPrimitive
+                    .content
+                    .toLong()
+            }
+
+            val bookingId = createBooking("2030-01-10T18:30:00Z")
+            val targetDateBookingId = createBooking("2030-01-12T18:00:00Z")
+            assertEquals(LocalDate.of(2030, 1, 12), persistedVenueBooking(jdbcUrl, targetDateBookingId).displayDate)
+
+            val changeResponse =
+                client.post("/api/venue/bookings/$bookingId/change?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $managerToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody(
+                        """
+                        {"scheduledLocalDate":"2030-01-12","scheduledLocalTime":"00:30"}
+                        """.trimIndent(),
+                    )
+                }
+
+            assertEquals(HttpStatusCode.OK, changeResponse.status)
+            assertEquals(
+                "2030-01-11T21:30:00Z",
+                json.parseToJsonElement(changeResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("scheduledAt")
+                    .jsonPrimitive
+                    .content,
+            )
+            assertEquals(
+                PersistedVenueBooking(
+                    scheduledAt = Instant.parse("2030-01-11T21:30:00Z"),
+                    displayDate = LocalDate.of(2030, 1, 12),
+                    displayNumber = 2,
+                    arrivalDeadlineAt = Instant.parse("2030-01-11T22:00:00Z"),
+                    status = "CHANGED",
+                ),
+                persistedVenueBooking(jdbcUrl, bookingId),
+            )
+            assertEquals(
+                PersistedReminder(
+                    scheduledFor = Instant.parse("2030-01-10T19:00:00Z"),
+                    status = "PENDING",
+                ),
+                m7cReminder(jdbcUrl, bookingId),
+            )
+            val changeMessage = outboxTexts(jdbcUrl, GUEST_ID).last()
+            assertTrue(changeMessage.contains("🕒 Бронь №2 · 12.01.2030, 00:30 перенесена"), changeMessage)
+            assertTrue(changeMessage.contains("Новое время: 12.01.2030, 00:30"), changeMessage)
+            assertTrue(changeMessage.contains("Держим до 01:00"), changeMessage)
+        }
+
+    @Test
+    fun `valid Honolulu timezone wins over UTC host for persisted deadline reminder and notification`() =
+        testApplication {
+            assertEquals("UTC", ZoneId.systemDefault().id)
+            val jdbcUrl =
+                "jdbc:h2:mem:venue-booking-reminder-honolulu-${UUID.randomUUID()};MODE=PostgreSQL;" +
+                    "DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE"
+            val config =
+                MapApplicationConfig(
+                    "ktor.environment" to "test",
+                    "db.jdbcUrl" to jdbcUrl,
+                    "db.user" to "sa",
+                    "db.password" to "",
+                    "api.session.jwtSecret" to "secret-secret-secret-secret-secret",
+                    "api.session.issuer" to "hookah",
+                    "api.session.audience" to "miniapp",
+                    "api.session.ttlSeconds" to "3600",
+                    "billing.subscription.intervalSeconds" to "0",
+                    "booking.reminders.enabled" to "true",
+                )
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+            val venueId = seedVenue(jdbcUrl, timezone = "Pacific/Honolulu")
+            seedSubscription(jdbcUrl, venueId)
+            seedUser(jdbcUrl, GUEST_ID)
+            seedUser(jdbcUrl, MANAGER_ID)
+            seedVenueMember(jdbcUrl, venueId, MANAGER_ID, "MANAGER")
+            val guestToken = issueToken(config, GUEST_ID)
+            val managerToken = issueToken(config, MANAGER_ID)
+
+            val createResponse =
+                client.post("/api/guest/booking/create") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $guestToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody(
+                        """{"venueId":$venueId,"scheduledAt":"2030-01-10T10:30:00Z","partySize":4}""",
+                    )
+                }
+
+            assertEquals(HttpStatusCode.OK, createResponse.status)
+            val created = json.parseToJsonElement(createResponse.bodyAsText()).jsonObject
+            val bookingId = created.getValue("bookingId").jsonPrimitive.content.toLong()
+            assertEquals("2030-01-10T00:30:00-10:00", created.getValue("scheduledAt").jsonPrimitive.content)
+            assertEquals("Бронь №1 · 10.01.2030, 00:30", created.getValue("displayLabel").jsonPrimitive.content)
+            assertEquals("2030-01-10", created.getValue("scheduledLocalDate").jsonPrimitive.content)
+            assertEquals("00:30", created.getValue("scheduledLocalTime").jsonPrimitive.content)
+            assertEquals(
+                "2030-01-10T01:00:00-10:00",
+                created.getValue("arrivalDeadlineAt").jsonPrimitive.content,
+            )
+            assertEquals("10.01.2030, 01:00", created.getValue("arrivalDeadlineAtDisplay").jsonPrimitive.content)
+
+            val confirmResponse =
+                client.post("/api/venue/bookings/$bookingId/confirm?venueId=$venueId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $managerToken") }
+                }
+
+            assertEquals(HttpStatusCode.OK, confirmResponse.status)
+            assertEquals(
+                PersistedVenueBooking(
+                    scheduledAt = Instant.parse("2030-01-10T10:30:00Z"),
+                    displayDate = LocalDate.of(2030, 1, 10),
+                    displayNumber = 1,
+                    arrivalDeadlineAt = Instant.parse("2030-01-10T11:00:00Z"),
+                    status = "CONFIRMED",
+                ),
+                persistedVenueBooking(jdbcUrl, bookingId),
+            )
+            assertEquals(
+                PersistedReminder(
+                    scheduledFor = Instant.parse("2030-01-09T08:00:00Z"),
+                    status = "PENDING",
+                ),
+                m7cReminder(jdbcUrl, bookingId),
+            )
+            val confirmMessage = outboxTexts(jdbcUrl, GUEST_ID).last()
+            assertTrue(confirmMessage.contains("✅ Бронь №1 · 10.01.2030, 00:30 подтверждена"), confirmMessage)
+            assertTrue(confirmMessage.contains("Время: 10.01.2030, 00:30"), confirmMessage)
+            assertTrue(confirmMessage.contains("Держим до 01:00"), confirmMessage)
         }
 
     private fun issueToken(
@@ -1793,7 +1999,10 @@ class VenueBookingRoutesTest {
         return SessionTokenService(tokenConfig).issueToken(userId).token
     }
 
-    private fun seedVenue(jdbcUrl: String): Long =
+    private fun seedVenue(
+        jdbcUrl: String,
+        timezone: String? = "Europe/Moscow",
+    ): Long =
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             val venueId =
                 connection.prepareStatement(
@@ -1809,14 +2018,17 @@ class VenueBookingRoutesTest {
                         keys.getLong(1)
                     }
                 }
-            connection.prepareStatement(
-                """
-                INSERT INTO venue_settings (venue_id, timezone)
-                VALUES (?, 'Europe/Moscow')
-                """.trimIndent(),
-            ).use { statement ->
-                statement.setLong(1, venueId)
-                statement.executeUpdate()
+            if (timezone != null) {
+                connection.prepareStatement(
+                    """
+                    INSERT INTO venue_settings (venue_id, timezone)
+                    VALUES (?, ?)
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setLong(1, venueId)
+                    statement.setString(2, timezone)
+                    statement.executeUpdate()
+                }
             }
             seedDailyBookingHours(connection, venueId)
             venueId
@@ -1939,24 +2151,54 @@ class VenueBookingRoutesTest {
             }
         }
 
-    private fun m7cPendingBookingReminderCount(
+    private fun persistedVenueBooking(
         jdbcUrl: String,
         bookingId: Long,
-    ): Int =
+    ): PersistedVenueBooking =
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             connection.prepareStatement(
                 """
-                SELECT COUNT(*)
-                FROM booking_reminders
-                WHERE booking_id = ?
-                  AND policy_version = 'M7C'
-                  AND status = 'PENDING'
+                SELECT scheduled_at, display_date, display_number, arrival_deadline_at, status
+                FROM bookings
+                WHERE id = ?
                 """.trimIndent(),
             ).use { statement ->
                 statement.setLong(1, bookingId)
                 statement.executeQuery().use { rs ->
-                    rs.next()
-                    rs.getInt(1)
+                    assertTrue(rs.next())
+                    PersistedVenueBooking(
+                        scheduledAt = rs.getTimestamp("scheduled_at").toInstant(),
+                        displayDate = rs.getDate("display_date").toLocalDate(),
+                        displayNumber = rs.getInt("display_number"),
+                        arrivalDeadlineAt = rs.getTimestamp("arrival_deadline_at").toInstant(),
+                        status = rs.getString("status"),
+                    )
+                }
+            }
+        }
+
+    private fun m7cReminder(
+        jdbcUrl: String,
+        bookingId: Long,
+    ): PersistedReminder =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT scheduled_for, status
+                FROM booking_reminders
+                WHERE booking_id = ? AND policy_version = 'M7C'
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, bookingId)
+                statement.executeQuery().use { rs ->
+                    assertTrue(rs.next())
+                    val reminder =
+                        PersistedReminder(
+                            scheduledFor = rs.getTimestamp("scheduled_for").toInstant(),
+                            status = rs.getString("status"),
+                        )
+                    assertFalse(rs.next())
+                    reminder
                 }
             }
         }
@@ -2164,6 +2406,19 @@ class VenueBookingRoutesTest {
             put("message", message)
             put("clientMessageId", clientMessageId)
         }.toString()
+
+    private data class PersistedVenueBooking(
+        val scheduledAt: Instant,
+        val displayDate: LocalDate,
+        val displayNumber: Int,
+        val arrivalDeadlineAt: Instant,
+        val status: String,
+    )
+
+    private data class PersistedReminder(
+        val scheduledFor: Instant,
+        val status: String,
+    )
 
     companion object {
         private const val GUEST_ID = 424242L

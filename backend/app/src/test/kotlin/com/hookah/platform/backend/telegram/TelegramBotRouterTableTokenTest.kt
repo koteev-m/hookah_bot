@@ -239,6 +239,7 @@ import com.hookah.platform.backend.telegram.db.VenueSettingsRepository
 import com.hookah.platform.backend.telegram.db.VenueShort
 import com.hookah.platform.backend.telegram.db.VenueStatsReport
 import com.hookah.platform.backend.telegram.db.VenueStatsRepository
+import io.mockk.clearMocks
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.coVerifyOrder
@@ -16872,6 +16873,148 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
+    fun `bot booking create uses zone A once when resolver would next return zone B`() =
+        runBlocking {
+            val zoneA = ZoneId.of("Pacific/Honolulu")
+            val zoneB = ZoneId.of("Pacific/Kiritimati")
+            val bookingDate = LocalDate.now(zoneA)
+            val bookingTime = LocalTime.of(20, 0)
+            val expectedScheduledAt = LocalDateTime.of(bookingDate, bookingTime).atZone(zoneA).toInstant()
+            val expectedDeadline = expectedScheduledAt.plus(Duration.ofMinutes(30))
+            val formattedDate = bookingDate.format(java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy"))
+            val expectedStaffVisitText =
+                "${
+                    bookingDate.dayOfWeek.getDisplayName(
+                        java.time.format.TextStyle.FULL,
+                        java.util.Locale.forLanguageTag("ru"),
+                    )
+                }, 20:00"
+            var persistedBooking: BookingRecord? = null
+
+            assertEquals(bookingDate.plusDays(1), LocalDate.now(zoneB))
+            coEvery { venueSettingsRepository.resolveZoneId(10L, any()) } returns zoneA
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery { venueRepository.findCatalogVenueByIdForGuest(10L) } returns
+                CatalogVenueShort(
+                    id = 10L,
+                    name = "Тестовая кальянная",
+                    city = "Москва",
+                    address = "Тверская, 1",
+                )
+            coEvery { venueBookingHoursRepository.findByVenueAndDate(10L, bookingDate) } returns
+                VenueBookingHours(
+                    venueId = 10L,
+                    weekday = bookingDate.dayOfWeek.value,
+                    opensAt = LocalTime.of(14, 0),
+                    closesAt = LocalTime.of(23, 0),
+                )
+            coEvery {
+                guestBookingRepository.create(
+                    venueId = 10L,
+                    userId = 200L,
+                    scheduledAt = expectedScheduledAt,
+                    partySize = 2,
+                    comment = null,
+                    venueZoneId = zoneA,
+                    serviceDate = bookingDate,
+                )
+            } answers {
+                BookingRecord(
+                    id = 79L,
+                    venueId = 10L,
+                    userId = 200L,
+                    scheduledAt = invocation.args[2] as Instant,
+                    partySize = 2,
+                    comment = null,
+                    status = BookingStatus.PENDING,
+                    displayNumber = 41,
+                    displayDate = invocation.args[6] as LocalDate,
+                    arrivalDeadlineAt = (invocation.args[2] as Instant).plus(Duration.ofMinutes(30)),
+                ).also { persistedBooking = it }
+            }
+
+            // This callback only stages the draft; the confirmation callback below is the single create operation.
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_25,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-booking-skip-comment-zone-a",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_002_25, chat = Chat(id = 100, type = "private")),
+                            data = "bot_catalog_venue_book_comment_skip:10:$bookingDate:20_00:2",
+                        ),
+                ),
+            )
+
+            clearMocks(venueSettingsRepository, answers = false, recordedCalls = true, childMocks = false)
+            coEvery { venueSettingsRepository.resolveZoneId(10L, any()) } returnsMany listOf(zoneA, zoneB)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_002_26,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-booking-confirm-zone-a",
+                            from = User(id = 200L),
+                            message = Message(messageId = 20_002_26, chat = Chat(id = 100, type = "private")),
+                            data = "bot_catalog_venue_book_confirm",
+                        ),
+                ),
+            )
+
+            val persisted = requireNotNull(persistedBooking)
+            assertEquals(expectedScheduledAt, persisted.scheduledAt)
+            assertEquals(bookingDate, persisted.displayDate)
+            assertEquals(41, persisted.displayNumber)
+            assertEquals(expectedDeadline, persisted.arrivalDeadlineAt)
+            assertEquals(BookingStatus.PENDING, persisted.status)
+            coVerify(exactly = 1) { venueSettingsRepository.resolveZoneId(10L, any()) }
+            coVerify(exactly = 1) {
+                guestBookingRepository.create(
+                    venueId = 10L,
+                    userId = 200L,
+                    scheduledAt = expectedScheduledAt,
+                    partySize = 2,
+                    comment = null,
+                    venueZoneId = zoneA,
+                    serviceDate = bookingDate,
+                )
+            }
+            // PENDING is the authoritative Bot-create reminder outcome: no due_at/status row exists
+            // until a separate Venue-confirm operation schedules it with that operation's zone.
+            coVerify(exactly = 0) { guestBookingRepository.scheduleRemindersForBooking(any(), any(), any()) }
+            coVerify(exactly = 1) {
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    match {
+                        it.contains("✅ Бронь создана") &&
+                            it.contains("Бронь №41 · $formattedDate, 20:00") &&
+                            it.contains("Ждём вас") &&
+                            it.contains("в 20:00.")
+                    },
+                    null,
+                )
+            }
+            coVerify(exactly = 1) {
+                staffChatNotifier.notifyBookingNow(
+                    event =
+                        match {
+                            it.venueId == 10L &&
+                                it.bookingId == 79L &&
+                                it.event == BookingStaffNotificationEvent.CREATED &&
+                                it.status == BookingStatus.PENDING &&
+                                it.scheduledAt == expectedScheduledAt &&
+                                it.scheduledAtText == expectedStaffVisitText &&
+                                it.partySize == 2 &&
+                                it.displayNumber == 41
+                        },
+                    venueZoneId = zoneA,
+                )
+            }
+        }
+
+    @Test
     fun `booking comment step can navigate back to guest count`() =
         runBlocking {
             val bookingDate = LocalDate.now(ZoneId.systemDefault()).plusDays(1)
@@ -18235,6 +18378,9 @@ class TelegramBotRouterTableTokenTest {
                     "Вы уже подтвердили визит.",
                     false,
                 )
+            }
+            coVerify(exactly = 2) {
+                venueSettingsRepository.resolveZoneId(10L, any())
             }
         }
 

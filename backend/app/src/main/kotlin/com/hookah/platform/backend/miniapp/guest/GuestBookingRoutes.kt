@@ -95,7 +95,11 @@ fun Route.guestBookingRoutes(
             val venueId = normalizePositiveLong(request.venueId, "venueId")
             ensureGuestActionAvailable(venueId, guestVenueRepository, subscriptionRepository)
             val userId = call.requireUserId()
-            val venueZoneId = venueSettingsRepository.resolveZoneId(venueId)
+            val venueZoneId =
+                venueSettingsRepository.resolveZoneId(
+                    venueId,
+                    defaultBookingDisplayZoneId(),
+                )
             val scheduledAt = parseBookingInstant(request.scheduledAt)
             requireBookingWithinVenueHours(
                 venueBookingHoursRepository = venueBookingHoursRepository,
@@ -112,13 +116,11 @@ fun Route.guestBookingRoutes(
                     comment = normalizeBookingComment(request.comment),
                     venueZoneId = venueZoneId,
                 )
-            val bookingDisplayZoneId =
-                venueSettingsRepository.resolveZoneId(venueId, defaultBookingDisplayZoneId())
             notifyVenueStaffAboutBooking(
                 staffChatNotifier = staffChatNotifier,
                 venueRepository = venueRepository,
                 outboxEnqueuer = outboxEnqueuer,
-                venueZoneId = bookingDisplayZoneId,
+                venueZoneId = venueZoneId,
                 notification =
                     BookingStaffNotification(
                         venueId = created.venueId,
@@ -136,7 +138,7 @@ fun Route.guestBookingRoutes(
             call.respond(
                 created.toResponse(
                     venueName = guestBookingRepository.findVenueName(venueId),
-                    zoneId = venueSettingsRepository.resolveZoneId(venueId, defaultBookingDisplayZoneId()),
+                    zoneId = venueZoneId,
                 ),
             )
         }
@@ -146,7 +148,11 @@ fun Route.guestBookingRoutes(
             val bookingId = normalizePositiveLong(request.bookingId, "bookingId")
             val userId = call.requireUserId()
             val venueId = call.requireVenueId()
-            val venueZoneId = venueSettingsRepository.resolveZoneId(venueId)
+            val venueZoneId =
+                venueSettingsRepository.resolveZoneId(
+                    venueId,
+                    defaultBookingDisplayZoneId(),
+                )
             ensureGuestActionAvailable(venueId, guestVenueRepository, subscriptionRepository)
             val scheduledAt = parseBookingInstant(request.scheduledAt)
             requireBookingWithinVenueHours(
@@ -165,13 +171,11 @@ fun Route.guestBookingRoutes(
                     comment = normalizeBookingComment(request.comment),
                     venueZoneId = venueZoneId,
                 ) ?: throw NotFoundException()
-            val bookingDisplayZoneId =
-                venueSettingsRepository.resolveZoneId(venueId, defaultBookingDisplayZoneId())
             notifyVenueStaffAboutBooking(
                 staffChatNotifier = staffChatNotifier,
                 venueRepository = venueRepository,
                 outboxEnqueuer = outboxEnqueuer,
-                venueZoneId = bookingDisplayZoneId,
+                venueZoneId = venueZoneId,
                 notification =
                     BookingStaffNotification(
                         venueId = updated.venueId,
@@ -189,7 +193,7 @@ fun Route.guestBookingRoutes(
             call.respond(
                 updated.toResponse(
                     venueName = guestBookingRepository.findVenueName(venueId),
-                    zoneId = venueSettingsRepository.resolveZoneId(venueId, defaultBookingDisplayZoneId()),
+                    zoneId = venueZoneId,
                 ),
             )
         }
@@ -198,7 +202,11 @@ fun Route.guestBookingRoutes(
             val request = call.receive<GuestBookingCancelRequest>()
             val userId = call.requireUserId()
             val venueId = call.requireVenueId()
-            val venueZoneId = venueSettingsRepository.resolveZoneId(venueId)
+            val venueZoneId =
+                venueSettingsRepository.resolveZoneId(
+                    venueId,
+                    defaultBookingDisplayZoneId(),
+                )
             ensureGuestActionAvailable(venueId, guestVenueRepository, subscriptionRepository)
             val canceled =
                 guestBookingRepository.cancelByGuest(
@@ -206,13 +214,11 @@ fun Route.guestBookingRoutes(
                     venueId = venueId,
                     userId = userId,
                 ) ?: throw NotFoundException()
-            val bookingDisplayZoneId =
-                venueSettingsRepository.resolveZoneId(venueId, defaultBookingDisplayZoneId())
             notifyVenueStaffAboutBooking(
                 staffChatNotifier = staffChatNotifier,
                 venueRepository = venueRepository,
                 outboxEnqueuer = outboxEnqueuer,
-                venueZoneId = bookingDisplayZoneId,
+                venueZoneId = venueZoneId,
                 notification =
                     BookingStaffNotification(
                         venueId = canceled.venueId,
@@ -230,7 +236,7 @@ fun Route.guestBookingRoutes(
             call.respond(
                 canceled.toResponse(
                     venueName = guestBookingRepository.findVenueName(venueId),
-                    zoneId = venueSettingsRepository.resolveZoneId(venueId, defaultBookingDisplayZoneId()),
+                    zoneId = venueZoneId,
                 ),
             )
         }
@@ -263,20 +269,25 @@ fun Route.guestBookingRoutes(
                     GuestAttendanceConfirmationStatus.NOT_FOUND,
                     -> throw NotFoundException()
                 }
+            val venueZoneId =
+                venueSettingsRepository.resolveZoneId(
+                    confirmed.venueId,
+                    defaultBookingDisplayZoneId(),
+                )
             if (result.status == GuestAttendanceConfirmationStatus.APPLIED) {
                 notifyVenueStaffAboutGuestAttendance(
                     venueRepository = venueRepository,
-                    venueSettingsRepository = venueSettingsRepository,
                     outboxEnqueuer = outboxEnqueuer,
                     booking = confirmed,
                     guestDisplayName = loadGuestDisplayName(userRepository, userId),
                     scheduleVersionEpochSeconds = result.scheduleVersionEpochSeconds,
+                    venueZoneId = venueZoneId,
                 )
             }
             call.respond(
                 confirmed.toResponse(
                     venueName = guestBookingRepository.findVenueName(venueId),
-                    zoneId = venueSettingsRepository.resolveZoneId(venueId, defaultBookingDisplayZoneId()),
+                    zoneId = venueZoneId,
                 ),
             )
         }
@@ -309,7 +320,10 @@ private suspend fun notifyVenueStaffAboutBooking(
     notification: BookingStaffNotification,
 ) {
     if (staffChatNotifier != null) {
-        staffChatNotifier.notifyBookingNow(notification)
+        staffChatNotifier.notifyBookingNow(
+            event = notification,
+            venueZoneId = venueZoneId,
+        )
         return
     }
     val venue = venueRepository.findVenueById(notification.venueId) ?: return
@@ -339,11 +353,11 @@ private suspend fun notifyVenueStaffAboutBooking(
 
 private suspend fun notifyVenueStaffAboutGuestAttendance(
     venueRepository: VenueRepository,
-    venueSettingsRepository: VenueSettingsRepository,
     outboxEnqueuer: TelegramOutboxEnqueuer,
     booking: BookingRecord,
     guestDisplayName: String?,
     scheduleVersionEpochSeconds: Long?,
+    venueZoneId: ZoneId,
 ) {
     val venue = venueRepository.findVenueById(booking.venueId) ?: return
     val chatId = venue.staffChatId ?: return
@@ -351,7 +365,7 @@ private suspend fun notifyVenueStaffAboutGuestAttendance(
         buildGuestAttendanceStaffChatText(
             booking = booking,
             guestDisplayName = guestDisplayName,
-            zoneId = venueSettingsRepository.resolveZoneId(booking.venueId),
+            zoneId = venueZoneId,
         )
     outboxEnqueuer.enqueueSendMessage(
         chatId = chatId,

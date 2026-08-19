@@ -1,6 +1,6 @@
 # Testing / QA Smoke Strategy
 
-Дата актуализации: 2026-08-18.
+Дата актуализации: 2026-08-19.
 
 Статус: **current product reference / UPDATED**. This document is the canonical QA/smoke strategy for the Telegram bot + Mini App platform. It consolidates local validation, GitHub Actions expectations, area-specific smoke suites, staging policy, failure reporting and Codex handoff rules. Deployment and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
 
@@ -37,12 +37,71 @@ Quality gates must match the blast radius of the change. Do not claim a feature 
 
 ### Booking test-only release hygiene
 
-Before booking schedule assertions, `SubscriptionBillingJob` could race the test's strict
-`seedSubscription` insert by creating a TRIAL row. H2 then reported SQLState `23505`, duplicate
-`venue_subscriptions` primary key. Seven relevant `VenueBookingRoutesTest` configurations now set
-`billing.subscription.intervalSeconds=0`; production defaults, runtime and schema are unchanged.
-The exact `VenueBookingRoutesTest` plus `VenueRbacRoutesTest` selector passed and the new GitHub
-Actions run was green. This is test fixture isolation, not a runtime booking defect.
+`BOOKING-TEST-SUBSCRIPTION-WORKER-ISOLATION-001 = LOCAL_FIX_REVIEW_REQUIRED`. Before booking
+assertions, `SubscriptionBillingJob` could race a strict `seedSubscription` fixture insert by
+creating a TRIAL row. H2 then reported SQLState `23505`, duplicate `venue_subscriptions` primary
+key. Every fixture-bearing `GuestBookingRoutesTest` and `VenueBookingRoutesTest` configuration now
+sets `billing.subscription.intervalSeconds=0`. The same isolation contract remains the default for
+`GuestOrderRoutesTest` configurations that use its strict fixture; its two inventoried
+non-fixture configurations explicitly retain normal worker behavior. Non-fixture booking configs
+are also unchanged. The fixture remains a strict `INSERT`, so an accidental background insert
+still fails fast. Production billing defaults, runtime and schema are unchanged.
+
+`BOOKING-TIMEZONE-ATTENDANCE-SINGLE-RESOLUTION-001 = LOCAL_FIX_REVIEW_REQUIRED`. Guest attendance
+staff-chat coverage deliberately omits a venue timezone and must also pass with the host timezone
+set to UTC. The route resolves one operation zone with the deterministic booking product fallback,
+then passes that exact `ZoneId` to both the staff-chat formatter and response DTO. The focused test
+retains the one-row outbox, safe guest label, copy and Telegram-ID privacy assertions. Bot `/my`
+and reminder attendance callbacks likewise reuse one resolved zone for the staff alert and refreshed
+guest message.
+
+`BOOKING-TIMEZONE-STAFF-NOTIFIER-PROPAGATION-001 = LOCAL_FIX_REVIEW_REQUIRED`. Booking lifecycle
+staff notifications require their caller's resolved operation `ZoneId`; `notifyBookingNow` cannot
+re-read venue timezone independently. Guest Mini App create/update/cancel and Bot
+create/update/cancellation paths reuse their one operation zone for persisted/local semantics,
+labels and notifier delivery. The unrelated order live-card timezone resolver and the separate
+transactional fact-only booking-message radar path keep their existing contracts.
+
+`BOOKING-TIMEZONE-FALLBACK-CONSISTENCY-001 = LOCAL_FIX_REVIEW_REQUIRED`. Attendance, Guest
+create/update and Venue confirm/change now resolve one canonical booking zone per operation and
+reuse it for booking-hours validation, local-time interpretation, service/display date and number,
+hold/deadline presentation, reminder scheduling and response/notification labels. A valid persisted
+venue timezone still wins; missing, blank or invalid settings use `Europe/Moscow` through
+`defaultBookingDisplayZoneId()`, so the host timezone no longer changes those booking semantics.
+UTC production-route regressions assert persisted instants, display dates/numbers, deadlines,
+reminder due times and labels at UTC/Moscow calendar boundaries. This is local validation only:
+green Actions and deploy/staging evidence are not claimed. The billing-race isolation above remains
+strictly test-only; production billing defaults and runtime behavior are unchanged.
+
+The independent-review closure findings for this bounded timezone slice remain review-required:
+
+- `BOOKING-TIMEZONE-TELEGRAM-CREATE-UPDATE-DOUBLE-RESOLUTION-001 = LOCAL_FIX_REVIEW_REQUIRED`.
+  Telegram Bot booking create/update resolves the authoritative venue zone exactly once before the
+  first timezone-dependent range check, then reuses it for the local instant, persisted schedule,
+  service date/number, deadline, reminder, response and staff-chat notification.
+- `BOOKING-CI-TZ-UTC-GATE-001 = LOCAL_FIX_REVIEW_REQUIRED`. The affected release-critical
+  route/security and booking/RBAC GitHub Actions test steps declare and log `TZ=UTC`; unrelated
+  jobs retain their existing timezone environment.
+- `BOOKING-CI-STAFF-NOTIFIER-XML-FLOOR-001 = LOCAL_FIX_REVIEW_REQUIRED`.
+  `backend-release-critical-routes` parses the exact
+  `TEST-com.hookah.platform.backend.telegram.StaffChatNotifierTest.xml` report at minimum `39` and
+  fails on a missing/below-minimum/zero, skipped, failed or errored suite.
+- `BOOKING-TIMEZONE-REREAD-RACE-EVIDENCE-001 = LOCAL_FIX_REVIEW_REQUIRED`. A single Bot booking
+  operation uses a resolver prepared to return Zone A and then Zone B, requires exactly one
+  resolver call and proves every range/persistence/deadline/Telegram/staff-chat result remains in
+  Zone A. Bot create preserves the lifecycle's `PENDING` state, so its authoritative reminder
+  result is no `due_at`/status row and zero scheduling calls; the valid-zone Venue-confirm
+  regression separately proves the actual pending reminder's due time and status.
+- `BOOKING-TIMEZONE-VALID-PRECEDENCE-EVIDENCE-001 = LOCAL_FIX_REVIEW_REQUIRED`. With host
+  `TZ=UTC`, a valid persisted non-Moscow venue zone wins over the Moscow fallback for the persisted
+  instant, display date/number, deadline, pending reminder, response label and notification label.
+- `BOOKING-TIMEZONE-ATTENDANCE-CONTRACT-EVIDENCE-001 = LOCAL_FIX_REVIEW_REQUIRED`. Production-route
+  attendance regressions cover both a missing timezone/Moscow fallback and a valid non-Moscow
+  timezone with one resolver call, matching response/staff-chat schedule and deadline semantics,
+  and unchanged one-row outbox/dedupe behavior.
+
+These statuses record local implementation and automated evidence only. They do not claim green
+GitHub Actions, deploy, staging smoke or production readiness.
 
 ### Booking conversation automated regression matrix
 
@@ -115,8 +174,10 @@ the current UX/unread closure gates; both remain mandatory where selected in CI:
   timezone conversion and deterministic product-default timezone fallback. The dedicated
   `booking-label-parity.spec.ts` minimum is `2`; it must load that same fixture through the
   production TypeScript formatter and pass every case in distinct browser timezones.
-- `GuestBookingRoutesTest`: minimum `7`, retaining Guest booking list/create/update lifecycle and
-  authoritative `displayLabel` coverage.
+- `GuestBookingRoutesTest`: minimum `10`, retaining Guest booking list/create/update lifecycle and
+  authoritative `displayLabel` coverage. CI also requires the exact missing-timezone and valid
+  Honolulu attendance testcase names, so the two one-resolution route contracts cannot disappear
+  behind the class floor.
 - The same exact route/repository selectors must cover the read-only bounded reconciliation batch:
   more than 100 existing booking threads with the target beyond the former list cutoff, explicit
   `WITH_THREAD` and authoritative `NO_THREAD`, Guest and Venue scope, Staff and foreign denial,
@@ -136,13 +197,18 @@ the current UX/unread closure gates; both remain mandatory where selected in CI:
 - `BookingMessageStaffChatNotifierTest`: minimum `5`, executable without Docker and asserting exact
   canonical label/link payload, privacy-safe text, logical dedupe, caller-transaction rollback,
   disabled/unlinked/missing-URL skip and stable product-timezone fallback.
+- `StaffChatNotifierTest`: exact XML minimum `39`, with zero skipped/failures/errors; the lifecycle
+  notifier must consume its caller-owned `ZoneId` without reading venue settings.
 - `SupportTicketRoutesTest` remains an exact support regression selector with minimum `13` and zero
   skipped/failures/errors; its exact confirmed Platform Guest wrong-surface/raw-marker/no-facts
   testcase is mandatory.
-- Existing booking/RBAC regression remains exact: `GuestBookingRoutesTest` minimum `7`,
-  `VenueBookingRoutesTest` minimum `8` and `VenueRbacRoutesTest` minimum `36`.
+- Existing booking/RBAC regression remains exact: `GuestBookingRoutesTest` minimum `10`,
+  `BookingReminderWorkerTest` minimum `1`, `VenueBookingRoutesTest` minimum `10` and
+  `VenueRbacRoutesTest` minimum `36`. The valid Honolulu venue testcase name is mandatory evidence
+  for persisted schedule/deadline, pending reminder and guest-notification precedence.
 - `TelegramBotRouterTableTokenTest` remains an exact production-router regression gate (current
-  minimum `552`) and verifies persisted inbound Telegram message ids plus stable outbox dedupe keys.
+  minimum `553`) and verifies persisted inbound Telegram message ids plus stable outbox dedupe keys.
+  Its exact single-operation Zone A then Zone B testcase name is mandatory.
 - Production Mini App build and the full deterministic browser smoke are required. The current
   structured floor is `216`. CI must require exact passing results for
   `shared booking label fixture stays aligned with the production TypeScript helper`,
@@ -2463,17 +2529,24 @@ Expectations:
   Both parsers require `skipped=0`, `failures=0`, `errors=0`; a missing or below-minimum report is
   fatal. Docker availability alone is not evidence, and route failure must not silently skip the
   PostgreSQL gates.
-- The route/security selector also executes and asserts `SupportTicketRoutesTest=13`,
-  `SupportThreadReadRepositoryTest=21`, `BookingMessageStaffChatNotifierTest=5` and
-  `TelegramOutboxWorkerTest=8`, preserving cursor/RBAC behavior, fixed confirmed-Platform Guest
-  surface denial, privacy-safe staff alerts and legacy key-only enqueue/retry alongside the strict
-  booking-only transaction API. The two NULL-author repository testcase names and the confirmed
-  Platform Guest wrong-surface testcase name are mandatory, so unrelated tests cannot satisfy the
-  class floor.
+- The route/security selector runs with `TZ=UTC` and also executes and asserts
+  `SupportTicketRoutesTest=13`, `SupportThreadReadRepositoryTest=21`,
+  `BookingMessageStaffChatNotifierTest=5`, `StaffChatNotifierTest=39`,
+  `TelegramOutboxWorkerTest=8`, `GuestOrderRoutesTest=61` and
+  `TelegramBotRouterTableTokenTest=553`, preserving cursor/RBAC behavior, fixed confirmed-Platform
+  Guest surface denial, caller-owned booking-notifier timezone, privacy-safe staff alerts and
+  legacy key-only enqueue/retry alongside the strict booking-only transaction API. The two
+  NULL-author repository testcase names, the confirmed Platform Guest wrong-surface testcase name
+  and `bot booking create uses zone A once when resolver would next return zone B` are mandatory,
+  so unrelated tests cannot satisfy the class floors.
 - `backend-venue-booking-rbac` asserts exact XML minima `BookingDisplayLabelTest=2`,
-  `GuestBookingRoutesTest=7`, `VenueBookingRoutesTest=8`, `VenueRbacRoutesTest=36`,
-  `BookingConversationRoutesTest=8` and `BookingConversationRepositoryTest=13`; the ordinary Guest
-  wrong-surface testcase name is also mandatory.
+  `GuestBookingRoutesTest=10`, `BookingReminderWorkerTest=1`, `VenueBookingRoutesTest=10`,
+  `VenueRbacRoutesTest=36`, `BookingConversationRoutesTest=8` and
+  `BookingConversationRepositoryTest=13`. It runs with `TZ=UTC` and requires the exact testcase
+  names `guest attendance missing timezone uses Moscow once for response staff and deadline under
+  UTC`, `guest attendance Honolulu timezone wins once for response staff and deadline under UTC`,
+  `valid Honolulu timezone wins over UTC host for persisted
+  deadline reminder and notification`, plus the ordinary Guest wrong-surface contract.
 - `backend-migration-sanity` requires Docker and exact production-migration selectors/XML. All
   fourteen selected reports are asserted: Telegram dialog-state `1`, PostgreSQL table-session V28
   `1`, audit-target H2/PostgreSQL `2 / 2`, guest idempotency-fingerprint H2/PostgreSQL `2 / 2`,

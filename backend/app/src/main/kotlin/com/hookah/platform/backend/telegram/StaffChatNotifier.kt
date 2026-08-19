@@ -339,8 +339,10 @@ class StaffChatNotifier(
         )
     }
 
-    suspend fun notifyBookingNow(event: BookingStaffNotification): StaffChatNotificationResult {
-        val venueZoneId = resolveVenueZoneId(event.venueId)
+    suspend fun notifyBookingNow(
+        event: BookingStaffNotification,
+        venueZoneId: ZoneId,
+    ): StaffChatNotificationResult {
         return notifyTextNow(
             venueId = event.venueId,
             notificationKey = bookingNotificationKey(event.bookingId, event.event),

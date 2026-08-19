@@ -3937,7 +3937,7 @@ class GuestOrderRoutesTest {
     fun `signed gift scope fails closed on legacy choice and skip inputs`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("guest-order-gift-legacy-decision-rejected")
-            val config = buildConfig(jdbcUrl)
+            val config = buildConfig(jdbcUrl, disableSubscriptionBillingWorker = false)
 
             environment { this.config = config }
             application { module() }
@@ -5736,7 +5736,7 @@ class GuestOrderRoutesTest {
     fun `repository replays existing batch but rejects new write after order scope closes`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("guest-order-transactional-scope")
-            val config = buildConfig(jdbcUrl)
+            val config = buildConfig(jdbcUrl, disableSubscriptionBillingWorker = false)
 
             environment { this.config = config }
             application { module() }
@@ -6022,6 +6022,7 @@ class GuestOrderRoutesTest {
         platformOwnerId: Long? = null,
         guestAddBatchMaxRequests: Int? = null,
         guestAddBatchWindowSeconds: Long? = null,
+        disableSubscriptionBillingWorker: Boolean = true,
     ): MapApplicationConfig {
         val entries =
             mutableListOf(
@@ -6031,6 +6032,9 @@ class GuestOrderRoutesTest {
                 "db.user" to "sa",
                 "db.password" to "",
             )
+        if (disableSubscriptionBillingWorker) {
+            entries.add("billing.subscription.intervalSeconds" to "0")
+        }
         if (platformOwnerId != null) {
             entries.add("platform.ownerUserId" to platformOwnerId.toString())
         }

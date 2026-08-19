@@ -30,6 +30,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Test
 import java.time.Instant
+import java.time.ZoneId
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -510,7 +511,6 @@ class StaffChatNotifierTest {
     @Test
     fun `notifyBooking uses display booking number and hides raw booking id`() =
         runBlocking {
-            coEvery { venueSettingsRepository.find(1L) } returns null
             coEvery { venueRepository.findVenueById(1L) } returns
                 VenueShort(
                     id = 1L,
@@ -540,11 +540,12 @@ class StaffChatNotifierTest {
                         displayNumber = 1,
                         guestDisplayName = "Мария",
                     ),
+                    venueZoneId = ZoneId.of("Asia/Yekaterinburg"),
                 )
 
             assertEquals(StaffChatNotificationResult.SENT_OR_QUEUED, result)
             val payload = payloadSlot.captured
-            assertTrue(payload.contains("📅 Новая бронь\\nБронь №1 · 03.04.2026, 18:00"), payload)
+            assertTrue(payload.contains("📅 Новая бронь\\nБронь №1 · 03.04.2026, 20:00"), payload)
             assertTrue(payload.contains("Заведение: Mix"), payload)
             assertTrue(payload.contains("Гость: Мария"), payload)
             assertFalse(payload.contains("Дата и время:"), payload)
@@ -565,6 +566,7 @@ class StaffChatNotifierTest {
             assertTrue(payload.contains("staff_booking_message:1:7"), payload)
             assertTrue(payload.contains("❌ Отменить бронь"), payload)
             assertTrue(payload.contains("staff_booking_cancel_ask:1:7"), payload)
+            coVerify(exactly = 0) { venueSettingsRepository.find(1L) }
         }
 
     @Test
@@ -601,6 +603,7 @@ class StaffChatNotifierTest {
                         displayNumber = 1,
                         guestDisplayName = "Мария",
                     ),
+                    venueZoneId = ZoneId.of("Europe/Moscow"),
                 )
 
             assertEquals(StaffChatNotificationResult.SENT_OR_QUEUED, result)
@@ -649,6 +652,7 @@ class StaffChatNotifierTest {
                         displayNumber = 1,
                         guestDisplayName = "Мария",
                     ),
+                    venueZoneId = ZoneId.of("Europe/Moscow"),
                 )
 
             assertEquals(StaffChatNotificationResult.SENT_OR_QUEUED, result)
@@ -699,6 +703,7 @@ class StaffChatNotifierTest {
                         actorDisplayName = "@waiter",
                         guestDisplayName = "Мария",
                     ),
+                    venueZoneId = ZoneId.of("Europe/Moscow"),
                 )
 
             assertEquals(StaffChatNotificationResult.SENT_OR_QUEUED, result)
@@ -752,6 +757,7 @@ class StaffChatNotifierTest {
                         actorDisplayName = "@waiter",
                         guestDisplayName = "Мария",
                     ),
+                    venueZoneId = ZoneId.of("Europe/Moscow"),
                 )
 
             assertEquals(StaffChatNotificationResult.SENT_OR_QUEUED, result)

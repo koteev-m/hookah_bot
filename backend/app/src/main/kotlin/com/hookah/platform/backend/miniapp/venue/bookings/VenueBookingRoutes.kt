@@ -185,15 +185,14 @@ fun Route.venueBookingRoutes(
                     requiredPermission = VenuePermission.BOOKING_MANAGE,
                     status = BookingStatus.CONFIRMED,
                 )
-            val zoneId = venueSettingsRepository.resolveZoneId(booking.venueId)
-            val displayZoneId =
+            val zoneId =
                 venueSettingsRepository.resolveZoneId(
                     booking.venueId,
                     defaultBookingDisplayZoneId(),
                 )
             outboxEnqueuer.enqueueSendMessage(
                 chatId = booking.userId,
-                text = buildBookingConfirmedGuestNotification(booking, guestBookingRepository, displayZoneId),
+                text = buildBookingConfirmedGuestNotification(booking, guestBookingRepository, zoneId),
             )
             if (bookingRemindersEnabled) {
                 guestBookingRepository.scheduleRemindersForBooking(
@@ -217,8 +216,7 @@ fun Route.venueBookingRoutes(
                 call.parameters["bookingId"]?.toLongOrNull()
                     ?: throw InvalidInputException("bookingId must be a number")
             val request = call.receive<VenueBookingChangeRequest>()
-            val zoneId = venueSettingsRepository.resolveZoneId(venueId)
-            val displayZoneId = venueSettingsRepository.resolveZoneId(venueId, defaultBookingDisplayZoneId())
+            val zoneId = venueSettingsRepository.resolveZoneId(venueId, defaultBookingDisplayZoneId())
             val scheduledAt = parseBookingInstant(request, zoneId)
             val changeReason = normalizeBookingReason(request.reasonText)
             val updated =
@@ -235,7 +233,7 @@ fun Route.venueBookingRoutes(
                     buildBookingChangedGuestNotification(
                         updated,
                         guestBookingRepository,
-                        displayZoneId,
+                        zoneId,
                         changeReason,
                     ),
             )
