@@ -33,6 +33,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class BookingConversationRoutesTest {
@@ -108,11 +109,11 @@ class BookingConversationRoutesTest {
 
             assertEquals(
                 setOf(firstThreadId, threadId(secondBookingOpen), threadId(secondVenueOpen)),
-                listBookingThreadIds("/api/guest/support/threads", guestAToken),
+                listBookingThreadIds("/api/guest/support/threads?surface=CONVERSATIONS", guestAToken),
             )
             assertEquals(
                 setOf(threadId(secondGuestOpen)),
-                listBookingThreadIds("/api/guest/support/threads", guestBToken),
+                listBookingThreadIds("/api/guest/support/threads?surface=CONVERSATIONS", guestBToken),
             )
             assertEquals(
                 setOf(firstThreadId, threadId(secondBookingOpen), threadId(secondGuestOpen)),
@@ -121,6 +122,476 @@ class BookingConversationRoutesTest {
             assertEquals(
                 setOf(threadId(secondVenueOpen)),
                 listBookingThreadIds("/api/venue/$venueB/support/threads", managerBToken),
+            )
+        }
+
+    @Test
+    fun `same service day bookings keep distinct stable labels across booking and conversation DTOs`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("booking-display-label-parity")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, "Label Venue")
+            seedUsers(jdbcUrl, GUEST_A, MANAGER_A)
+            seedVenueMember(jdbcUrl, venueId, MANAGER_A, "MANAGER")
+            val guestToken = issueToken(config, GUEST_A)
+            val managerToken = issueToken(config, MANAGER_A)
+            val firstBookingId = createBooking(guestToken, venueId, "2030-01-10T18:30:00Z")
+            val secondBookingId = createBooking(guestToken, venueId, "2030-01-10T19:30:00Z")
+            val firstThread = openBookingThread(guestToken, firstBookingId)
+            val secondThread = openBookingThread(guestToken, secondBookingId)
+            val firstThreadId = threadId(firstThread)
+            val secondThreadId = threadId(secondThread)
+            val expectedLabels =
+                mapOf(
+                    firstBookingId to "Бронь №1 · 10.01.2030, 21:30",
+                    secondBookingId to "Бронь №2 · 10.01.2030, 22:30",
+                )
+
+            assertNotEquals(firstBookingId, secondBookingId)
+            assertNotEquals(firstThreadId, secondThreadId)
+            assertEquals(
+                expectedLabels[firstBookingId],
+                firstThread.getValue("thread").jsonObject.getValue("contextLabel").jsonPrimitive.content,
+            )
+            assertEquals(
+                expectedLabels[secondBookingId],
+                secondThread.getValue("thread").jsonObject.getValue("contextLabel").jsonPrimitive.content,
+            )
+
+            suspend fun bookingLabels(
+                path: String,
+                token: String,
+            ): Map<Long, String> {
+                val response =
+                    client.get(path) {
+                        headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    }
+                assertEquals(HttpStatusCode.OK, response.status, response.bodyAsText())
+                return json.parseToJsonElement(response.bodyAsText())
+                    .jsonObject
+                    .getValue("items")
+                    .jsonArray
+                    .associate { item ->
+                        val value = item.jsonObject
+                        value.getValue("bookingId").jsonPrimitive.content.toLong() to
+                            value.getValue("displayLabel").jsonPrimitive.content
+                    }
+            }
+
+            suspend fun conversationLabels(
+                path: String,
+                token: String,
+            ): Map<Long, String> {
+                val response =
+                    client.get(path) {
+                        headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    }
+                assertEquals(HttpStatusCode.OK, response.status, response.bodyAsText())
+                return json.parseToJsonElement(response.bodyAsText())
+                    .jsonObject
+                    .getValue("items")
+                    .jsonArray
+                    .associate { item ->
+                        val value = item.jsonObject
+                        val booking = value.getValue("booking").jsonObject
+                        val contextLabel = value.getValue("contextLabel").jsonPrimitive.content
+                        assertEquals(contextLabel, booking.getValue("displayLabel").jsonPrimitive.content)
+                        value.getValue("bookingId").jsonPrimitive.content.toLong() to contextLabel
+                    }
+            }
+
+            val guestBookingLabels = bookingLabels("/api/guest/bookings", guestToken)
+            val venueBookingLabels = bookingLabels("/api/venue/bookings?venueId=$venueId", managerToken)
+            val guestConversationLabels =
+                conversationLabels("/api/guest/support/threads?surface=CONVERSATIONS", guestToken)
+            val venueConversationLabels =
+                conversationLabels(
+                    "/api/venue/$venueId/support/threads?threadType=BOOKING_THREAD",
+                    managerToken,
+                )
+
+            assertEquals(expectedLabels, guestBookingLabels)
+            assertEquals(expectedLabels, venueBookingLabels)
+            assertEquals(expectedLabels, guestConversationLabels)
+            assertEquals(expectedLabels, venueConversationLabels)
+            assertEquals(
+                venueConversationLabels,
+                conversationLabels(
+                    "/api/venue/$venueId/support/threads?filter=active&threadType=BOOKING_THREAD",
+                    managerToken,
+                ),
+            )
+            assertEquals(
+                venueBookingLabels,
+                bookingLabels("/api/venue/bookings?venueId=$venueId", managerToken),
+            )
+
+            deleteVenueSettings(jdbcUrl, venueId)
+            val productFallbackLabels =
+                mapOf(
+                    firstBookingId to "Бронь №1 · 10.01.2030, 21:30",
+                    secondBookingId to "Бронь №2 · 10.01.2030, 22:30",
+                )
+            assertEquals(productFallbackLabels, bookingLabels("/api/guest/bookings", guestToken))
+            assertEquals(
+                productFallbackLabels,
+                bookingLabels("/api/venue/bookings?venueId=$venueId", managerToken),
+            )
+            assertEquals(
+                productFallbackLabels,
+                conversationLabels("/api/guest/support/threads?surface=CONVERSATIONS", guestToken),
+            )
+            assertEquals(
+                productFallbackLabels,
+                conversationLabels(
+                    "/api/venue/$venueId/support/threads?threadType=BOOKING_THREAD",
+                    managerToken,
+                ),
+            )
+        }
+
+    @Test
+    fun `venue conversation unread count is actor scoped booking isolated and excludes support`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("venue-conversation-unread")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venueA = seedVenue(jdbcUrl, "Unread Venue A")
+            val venueB = seedVenue(jdbcUrl, "Unread Venue B")
+            seedUsers(jdbcUrl, GUEST_A, MANAGER_A, MANAGER_B, STAFF_B, PLATFORM_OWNER)
+            seedVenueMember(jdbcUrl, venueA, MANAGER_A, "MANAGER")
+            seedVenueMember(jdbcUrl, venueA, STAFF_B, "STAFF")
+            seedVenueMember(jdbcUrl, venueB, MANAGER_B, "MANAGER")
+            val guestToken = issueToken(config, GUEST_A)
+            val managerAToken = issueToken(config, MANAGER_A)
+            val managerBToken = issueToken(config, MANAGER_B)
+            val staffToken = issueToken(config, STAFF_B)
+            val platformToken = issueToken(config, PLATFORM_OWNER)
+            val firstBookingId = createBooking(guestToken, venueA, "2030-01-10T18:30:00Z")
+            val secondBookingId = createBooking(guestToken, venueA, "2030-01-10T19:30:00Z")
+            val thirdBookingId = createBooking(guestToken, venueA, "2030-01-10T19:45:00Z")
+            val firstThreadId = threadId(openBookingThread(guestToken, firstBookingId))
+            val secondThreadId = threadId(openBookingThread(guestToken, secondBookingId))
+            val thirdThreadId = threadId(openBookingThread(guestToken, thirdBookingId))
+
+            val guestMessage =
+                client.post("/api/guest/support/threads/$firstThreadId/messages") {
+                    authorizedJson(guestToken)
+                    setBody(bookingMessageBody("Unread booking message"))
+                }
+            assertEquals(HttpStatusCode.OK, guestMessage.status, guestMessage.bodyAsText())
+            val newerGuestMessage =
+                client.post("/api/guest/support/threads/$secondThreadId/messages") {
+                    authorizedJson(guestToken)
+                    setBody(bookingMessageBody("Newer unread booking message"))
+                }
+            assertEquals(HttpStatusCode.OK, newerGuestMessage.status, newerGuestMessage.bodyAsText())
+            val newestReadMessage =
+                client.post("/api/venue/$venueA/support/threads/$thirdThreadId/messages") {
+                    authorizedJson(managerAToken)
+                    setBody(bookingMessageBody("Newest already-read venue reply"))
+                }
+            assertEquals(HttpStatusCode.OK, newestReadMessage.status, newestReadMessage.bodyAsText())
+            val supportTicketId = seedSupportTicketMessage(jdbcUrl, venueA, GUEST_A)
+            val readsBeforeRejectedSupportDetail = tableCount(jdbcUrl, "support_thread_reads")
+            val rejectedSupportDetail =
+                client.get(
+                    "/api/venue/$venueA/support/threads/$supportTicketId" +
+                        "?threadTypes=BOOKING_THREAD,VENUE_CHAT",
+                ) {
+                    headers { append(HttpHeaders.Authorization, "Bearer $managerAToken") }
+                }
+            assertDeniedWithoutFacts(
+                rejectedSupportDetail,
+                HttpStatusCode.NotFound,
+                "Platform support ticket",
+                "Platform-only support message",
+            )
+            assertEquals(readsBeforeRejectedSupportDetail, tableCount(jdbcUrl, "support_thread_reads"))
+
+            suspend fun unreadCount(
+                path: String,
+                token: String,
+            ): Pair<HttpResponse, Int?> {
+                val response =
+                    client.get(path) {
+                        headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    }
+                val count =
+                    if (response.status == HttpStatusCode.OK) {
+                        json.parseToJsonElement(response.bodyAsText())
+                            .jsonObject
+                            .getValue("unreadCount")
+                            .jsonPrimitive
+                            .content
+                            .toInt()
+                    } else {
+                        null
+                    }
+                return response to count
+            }
+
+            val (venueAUnreadResponse, venueAUnread) =
+                unreadCount("/api/venue/$venueA/support/unread-count", managerAToken)
+            assertEquals(HttpStatusCode.OK, venueAUnreadResponse.status, venueAUnreadResponse.bodyAsText())
+            assertEquals("no-store", venueAUnreadResponse.headers[HttpHeaders.CacheControl])
+            assertEquals(2, venueAUnread)
+            assertEquals(
+                0,
+                unreadCount("/api/venue/$venueB/support/unread-count", managerBToken).second,
+            )
+
+            val inboxResponse =
+                client.get(
+                    "/api/venue/$venueA/support/threads?threadTypes=BOOKING_THREAD,VENUE_CHAT",
+                ) {
+                    headers { append(HttpHeaders.Authorization, "Bearer $managerAToken") }
+                }
+            assertEquals(HttpStatusCode.OK, inboxResponse.status, inboxResponse.bodyAsText())
+            val inbox =
+                json.parseToJsonElement(inboxResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("items")
+                    .jsonArray
+                    .map { it.jsonObject }
+            assertEquals(listOf(secondThreadId, firstThreadId, thirdThreadId), inbox.map { it.threadIdValue() })
+            assertEquals(listOf("1", "1", "0"), inbox.map { it.getValue("unreadCount").jsonPrimitive.content })
+            assertTrue(inbox.none { it.getValue("threadId").jsonPrimitive.content.toLong() == supportTicketId })
+
+            alignThreadLastMessageAt(jdbcUrl, firstThreadId, secondThreadId)
+            val deterministicTieResponse =
+                client.get(
+                    "/api/venue/$venueA/support/threads?threadTypes=BOOKING_THREAD,VENUE_CHAT",
+                ) {
+                    headers { append(HttpHeaders.Authorization, "Bearer $managerAToken") }
+                }
+            assertEquals(HttpStatusCode.OK, deterministicTieResponse.status, deterministicTieResponse.bodyAsText())
+            val deterministicTieThreadIds =
+                json.parseToJsonElement(deterministicTieResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("items")
+                    .jsonArray
+                    .map { it.jsonObject.threadIdValue() }
+            assertEquals(listOf(secondThreadId, firstThreadId, thirdThreadId), deterministicTieThreadIds)
+
+            val readsBeforeOpen = tableCount(jdbcUrl, "support_thread_reads")
+            val openExact =
+                client.get(
+                    "/api/venue/$venueA/support/threads/$firstThreadId" +
+                        "?threadTypes=BOOKING_THREAD,VENUE_CHAT",
+                ) {
+                    headers { append(HttpHeaders.Authorization, "Bearer $managerAToken") }
+                }
+            assertEquals(HttpStatusCode.OK, openExact.status, openExact.bodyAsText())
+            assertEquals("0", openExact.threadJson().getValue("unreadCount").jsonPrimitive.content)
+            assertEquals(1, unreadCount("/api/venue/$venueA/support/unread-count", managerAToken).second)
+            val readsAfterOpen = tableCount(jdbcUrl, "support_thread_reads")
+            assertEquals(readsBeforeOpen + 1, readsAfterOpen)
+
+            val afterFirstOpen =
+                client.get(
+                    "/api/venue/$venueA/support/threads?threadTypes=BOOKING_THREAD,VENUE_CHAT",
+                ) {
+                    headers { append(HttpHeaders.Authorization, "Bearer $managerAToken") }
+                }
+            assertEquals(HttpStatusCode.OK, afterFirstOpen.status, afterFirstOpen.bodyAsText())
+            val unreadByThread =
+                json.parseToJsonElement(afterFirstOpen.bodyAsText())
+                    .jsonObject
+                    .getValue("items")
+                    .jsonArray
+                    .associate { item ->
+                        item.jsonObject.threadIdValue() to
+                            item.jsonObject.getValue("unreadCount").jsonPrimitive.content.toInt()
+                    }
+            assertEquals(0, unreadByThread[firstThreadId])
+            assertEquals(1, unreadByThread[secondThreadId])
+            assertEquals(0, unreadByThread[thirdThreadId])
+
+            val repeatOpen =
+                client.get(
+                    "/api/venue/$venueA/support/threads/$firstThreadId" +
+                        "?threadTypes=BOOKING_THREAD,VENUE_CHAT",
+                ) {
+                    headers { append(HttpHeaders.Authorization, "Bearer $managerAToken") }
+                }
+            assertEquals(HttpStatusCode.OK, repeatOpen.status, repeatOpen.bodyAsText())
+            assertEquals(readsAfterOpen, tableCount(jdbcUrl, "support_thread_reads"))
+            assertEquals(1, unreadCount("/api/venue/$venueA/support/unread-count", managerAToken).second)
+
+            val openSecond =
+                client.get(
+                    "/api/venue/$venueA/support/threads/$secondThreadId" +
+                        "?threadTypes=BOOKING_THREAD,VENUE_CHAT",
+                ) {
+                    headers { append(HttpHeaders.Authorization, "Bearer $managerAToken") }
+                }
+            assertEquals(HttpStatusCode.OK, openSecond.status, openSecond.bodyAsText())
+            assertEquals(0, unreadCount("/api/venue/$venueA/support/unread-count", managerAToken).second)
+
+            val foreign = unreadCount("/api/venue/$venueA/support/unread-count", managerBToken).first
+            assertDeniedWithoutFacts(foreign, HttpStatusCode.Forbidden, "unreadCount", "Unread booking message")
+            val staff = unreadCount("/api/venue/$venueA/support/unread-count", staffToken).first
+            assertDeniedWithoutFacts(staff, HttpStatusCode.Forbidden, "unreadCount", "Unread booking message")
+
+            val platformResponse =
+                client.get("/api/platform/support/threads") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $platformToken") }
+                }
+            assertEquals(HttpStatusCode.OK, platformResponse.status, platformResponse.bodyAsText())
+            val platformThreadIds =
+                json.parseToJsonElement(platformResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("items")
+                    .jsonArray
+                    .map { it.jsonObject.getValue("threadId").jsonPrimitive.content.toLong() }
+            assertEquals(listOf(supportTicketId), platformThreadIds)
+            assertFalse(firstThreadId in platformThreadIds)
+            assertFalse(secondThreadId in platformThreadIds)
+            assertFalse(thirdThreadId in platformThreadIds)
+        }
+
+    @Test
+    fun `ordinary Guest surface contract rejects cross inbox opens without raw marker mutation or message facts`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-surface-contract")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, "Guest Surface Venue")
+            seedUsers(jdbcUrl, GUEST_A, MANAGER_A, PLATFORM_OWNER)
+            seedVenueMember(jdbcUrl, venueId, MANAGER_A, "MANAGER")
+            val guestToken = issueToken(config, GUEST_A)
+            val managerToken = issueToken(config, MANAGER_A)
+            val platformToken = issueToken(config, PLATFORM_OWNER)
+
+            val bookingId = createBooking(guestToken, venueId, "2030-01-10T18:30:00Z")
+            val bookingThreadId = threadId(openBookingThread(guestToken, bookingId))
+            val bookingSecret = "booking-surface-secret"
+            val bookingReply =
+                client.post("/api/venue/$venueId/support/threads/$bookingThreadId/messages") {
+                    authorizedJson(managerToken)
+                    setBody(bookingMessageBody(bookingSecret))
+                }
+            assertEquals(HttpStatusCode.OK, bookingReply.status, bookingReply.bodyAsText())
+            val bookingMessageId = responseMessageId(bookingReply)
+
+            val venueChatCreate =
+                client.post("/api/guest/support/venue-chats") {
+                    authorizedJson(guestToken)
+                    setBody("""{"venueId":$venueId}""")
+                }
+            assertEquals(HttpStatusCode.OK, venueChatCreate.status, venueChatCreate.bodyAsText())
+            val venueChatThreadId = threadId(json.parseToJsonElement(venueChatCreate.bodyAsText()).jsonObject)
+            val venueChatSecret = "venue-chat-surface-secret"
+            val venueChatReply =
+                client.post("/api/venue/$venueId/support/threads/$venueChatThreadId/messages") {
+                    authorizedJson(managerToken)
+                    setBody("""{"message":"$venueChatSecret"}""")
+                }
+            assertEquals(HttpStatusCode.OK, venueChatReply.status, venueChatReply.bodyAsText())
+            val venueChatMessageId = responseMessageId(venueChatReply)
+
+            val supportCreate =
+                client.post("/api/guest/support/threads") {
+                    authorizedJson(guestToken)
+                    setBody(
+                        """
+                        {
+                          "category":"MINIAPP_TECHNICAL",
+                          "title":"Surface ticket",
+                          "message":"support-initial"
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, supportCreate.status, supportCreate.bodyAsText())
+            val supportThreadId = threadId(json.parseToJsonElement(supportCreate.bodyAsText()).jsonObject)
+            val supportSecret = "support-surface-secret"
+            val platformReply =
+                client.post("/api/platform/support/threads/$supportThreadId/messages") {
+                    authorizedJson(platformToken)
+                    setBody("""{"message":"$supportSecret"}""")
+                }
+            assertEquals(HttpStatusCode.OK, platformReply.status, platformReply.bodyAsText())
+            val supportMessageId = responseMessageId(platformReply)
+
+            val bookingBefore = assertNotNull(threadReadMarker(jdbcUrl, bookingThreadId, GUEST_A))
+            val venueChatBefore = assertNotNull(threadReadMarker(jdbcUrl, venueChatThreadId, GUEST_A))
+            val supportBefore = assertNotNull(threadReadMarker(jdbcUrl, supportThreadId, GUEST_A))
+            val auditBefore = tableCount(jdbcUrl, "audit_log")
+            val outboxBefore = tableCount(jdbcUrl, "telegram_outbox")
+
+            val supportViaConversations =
+                client.get("/api/guest/support/threads/$supportThreadId?surface=CONVERSATIONS") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $guestToken") }
+                }
+            assertDeniedWithoutFacts(
+                supportViaConversations,
+                HttpStatusCode.NotFound,
+                supportSecret,
+                "support-initial",
+            )
+            assertEquals(supportBefore, threadReadMarker(jdbcUrl, supportThreadId, GUEST_A))
+
+            val bookingViaSupport =
+                client.get("/api/guest/support/threads/$bookingThreadId?surface=SUPPORT") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $guestToken") }
+                }
+            assertDeniedWithoutFacts(bookingViaSupport, HttpStatusCode.NotFound, bookingSecret)
+            assertEquals(bookingBefore, threadReadMarker(jdbcUrl, bookingThreadId, GUEST_A))
+
+            val venueChatViaSupport =
+                client.get("/api/guest/support/threads/$venueChatThreadId?surface=SUPPORT") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $guestToken") }
+                }
+            assertDeniedWithoutFacts(venueChatViaSupport, HttpStatusCode.NotFound, venueChatSecret)
+            assertEquals(venueChatBefore, threadReadMarker(jdbcUrl, venueChatThreadId, GUEST_A))
+            assertEquals(auditBefore, tableCount(jdbcUrl, "audit_log"))
+            assertEquals(outboxBefore, tableCount(jdbcUrl, "telegram_outbox"))
+
+            val correctBooking =
+                client.get("/api/guest/support/threads/$bookingThreadId?surface=CONVERSATIONS") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $guestToken") }
+                }
+            assertEquals(HttpStatusCode.OK, correctBooking.status, correctBooking.bodyAsText())
+            assertTrue(correctBooking.bodyAsText().contains(bookingSecret))
+            assertEquals(
+                bookingMessageId,
+                assertNotNull(threadReadMarker(jdbcUrl, bookingThreadId, GUEST_A)).lastReadMessageId,
+            )
+            assertEquals(venueChatBefore, threadReadMarker(jdbcUrl, venueChatThreadId, GUEST_A))
+            assertEquals(supportBefore, threadReadMarker(jdbcUrl, supportThreadId, GUEST_A))
+
+            val correctVenueChat =
+                client.get("/api/guest/support/threads/$venueChatThreadId?surface=CONVERSATIONS") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $guestToken") }
+                }
+            assertEquals(HttpStatusCode.OK, correctVenueChat.status, correctVenueChat.bodyAsText())
+            assertTrue(correctVenueChat.bodyAsText().contains(venueChatSecret))
+            assertEquals(
+                venueChatMessageId,
+                assertNotNull(threadReadMarker(jdbcUrl, venueChatThreadId, GUEST_A)).lastReadMessageId,
+            )
+
+            val correctSupport =
+                client.get("/api/guest/support/threads/$supportThreadId?surface=SUPPORT") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $guestToken") }
+                }
+            assertEquals(HttpStatusCode.OK, correctSupport.status, correctSupport.bodyAsText())
+            assertTrue(correctSupport.bodyAsText().contains(supportSecret))
+            assertEquals(
+                supportMessageId,
+                assertNotNull(threadReadMarker(jdbcUrl, supportThreadId, GUEST_A)).lastReadMessageId,
             )
         }
 
@@ -350,7 +821,7 @@ class BookingConversationRoutesTest {
             assertEquals(GUEST_A, venueNotification.chatId)
             assertEquals("sendMessage", venueNotification.method)
             assertEquals(
-                "Сообщение от заведения по обращению «Бронь №1» " +
+                "Сообщение от заведения по брони «Бронь №1 · 10.01.2030, 21:30» " +
                     "в «Booking Venue A»:\n\n$venueText",
                 venueNotificationPayload.getValue("text").jsonPrimitive.content,
             )
@@ -374,7 +845,7 @@ class BookingConversationRoutesTest {
                 }
             assertConversation(venueDetail, guestText, venueText)
             val guestDetail =
-                client.get("/api/guest/support/threads/$threadId") {
+                client.get("/api/guest/support/threads/$threadId?surface=CONVERSATIONS") {
                     headers { append(HttpHeaders.Authorization, "Bearer $guestAToken") }
                 }
             assertConversation(guestDetail, guestText, venueText)
@@ -409,7 +880,7 @@ class BookingConversationRoutesTest {
             val auditBeforeDenials = tableCount(jdbcUrl, "audit_log")
 
             val foreignGuestDetail =
-                client.get("/api/guest/support/threads/$threadId") {
+                client.get("/api/guest/support/threads/$threadId?surface=CONVERSATIONS") {
                     headers { append(HttpHeaders.Authorization, "Bearer $guestBToken") }
                 }
             assertDeniedWithoutFacts(foreignGuestDetail, HttpStatusCode.NotFound, guestText, venueText)
@@ -478,7 +949,9 @@ class BookingConversationRoutesTest {
             assertEquals(readsBeforeDenials, tableCount(jdbcUrl, "support_thread_reads"))
             assertEquals(outboxBeforeDenials, tableCount(jdbcUrl, "telegram_outbox"))
             assertEquals(auditBeforeDenials, tableCount(jdbcUrl, "audit_log"))
-            assertTrue(listBookingThreadIds("/api/guest/support/threads", guestBToken).isEmpty())
+            assertTrue(
+                listBookingThreadIds("/api/guest/support/threads?surface=CONVERSATIONS", guestBToken).isEmpty(),
+            )
         }
 
     @Test
@@ -697,6 +1170,11 @@ class BookingConversationRoutesTest {
             .content
             .toLong()
 
+    private fun JsonObject.threadIdValue(): Long = getValue("threadId").jsonPrimitive.content.toLong()
+
+    private suspend fun HttpResponse.threadJson(): JsonObject =
+        json.parseToJsonElement(bodyAsText()).jsonObject.getValue("thread").jsonObject
+
     private suspend fun assertBookingLookup(
         response: HttpResponse,
         withThreadBookingId: Long,
@@ -736,9 +1214,21 @@ class BookingConversationRoutesTest {
         path: String,
         token: String,
     ): Set<Long> {
-        val separator = if ('?' in path) '&' else '?'
+        val filter =
+            if (path.startsWith("/api/guest/") && "surface=" !in path) {
+                "surface=CONVERSATIONS"
+            } else if (!path.startsWith("/api/guest/") && "threadType=" !in path) {
+                "threadType=BOOKING_THREAD"
+            } else {
+                null
+            }
+        val requestPath =
+            filter?.let {
+                val separator = if ('?' in path) '&' else '?'
+                "$path$separator$it"
+            } ?: path
         val response =
-            client.get("$path${separator}threadType=BOOKING_THREAD") {
+            client.get(requestPath) {
                 headers { append(HttpHeaders.Authorization, "Bearer $token") }
             }
         assertEquals(HttpStatusCode.OK, response.status, response.bodyAsText())
@@ -903,6 +1393,53 @@ class BookingConversationRoutesTest {
         }
     }
 
+    private fun seedSupportTicketMessage(
+        jdbcUrl: String,
+        venueId: Long,
+        guestUserId: Long,
+    ): Long =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            val threadId =
+                connection.prepareStatement(
+                    """
+                    INSERT INTO support_threads (
+                        venue_id,
+                        guest_user_id,
+                        category,
+                        status,
+                        thread_type,
+                        assignee_scope,
+                        created_source,
+                        title,
+                        last_message_at,
+                        updated_at
+                    )
+                    VALUES (?, ?, 'OTHER', 'NEW', 'SUPPORT_TICKET', 'PLATFORM', 'GUEST_MINIAPP',
+                            'Platform support ticket', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    """.trimIndent(),
+                    Statement.RETURN_GENERATED_KEYS,
+                ).use { statement ->
+                    statement.setLong(1, venueId)
+                    statement.setLong(2, guestUserId)
+                    statement.executeUpdate()
+                    statement.generatedKeys.use { keys ->
+                        assertTrue(keys.next())
+                        keys.getLong(1)
+                    }
+                }
+            connection.prepareStatement(
+                """
+                INSERT INTO support_messages (thread_id, author_user_id, author_role, source, text)
+                VALUES (?, ?, 'GUEST', 'GUEST_MINIAPP', 'Platform-only support message')
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, threadId)
+                statement.setLong(2, guestUserId)
+                assertEquals(1, statement.executeUpdate())
+            }
+            threadId
+        }
+
     private fun seedVenueMember(
         jdbcUrl: String,
         venueId: Long,
@@ -920,6 +1457,34 @@ class BookingConversationRoutesTest {
                 statement.setLong(2, userId)
                 statement.setString(3, role)
                 statement.executeUpdate()
+            }
+        }
+    }
+
+    private fun deleteVenueSettings(
+        jdbcUrl: String,
+        venueId: Long,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement("DELETE FROM venue_settings WHERE venue_id = ?").use { statement ->
+                statement.setLong(1, venueId)
+                assertEquals(1, statement.executeUpdate())
+            }
+        }
+    }
+
+    private fun alignThreadLastMessageAt(
+        jdbcUrl: String,
+        firstThreadId: Long,
+        secondThreadId: Long,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                "UPDATE support_threads SET last_message_at = TIMESTAMP '2030-01-10 23:00:00' WHERE id IN (?, ?)",
+            ).use { statement ->
+                statement.setLong(1, firstThreadId)
+                statement.setLong(2, secondThreadId)
+                assertEquals(2, statement.executeUpdate())
             }
         }
     }
@@ -1180,6 +1745,13 @@ class BookingConversationRoutesTest {
         val payloadJson: String,
     )
 
+    private data class RawThreadReadMarker(
+        val threadId: Long,
+        val userId: Long,
+        val lastReadMessageId: Long?,
+        val lastReadAt: Instant?,
+    )
+
     private fun threadState(
         jdbcUrl: String,
         threadId: Long,
@@ -1233,6 +1805,39 @@ class BookingConversationRoutesTest {
                 statement.executeQuery().use { rows ->
                     assertTrue(rows.next())
                     rows.getTimestamp("last_read_at").toInstant().toString()
+                }
+            }
+        }
+
+    private fun threadReadMarker(
+        jdbcUrl: String,
+        threadId: Long,
+        userId: Long,
+    ): RawThreadReadMarker? =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT thread_id, user_id, last_read_message_id, last_read_at
+                FROM support_thread_reads
+                WHERE thread_id = ?
+                  AND user_id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, threadId)
+                statement.setLong(2, userId)
+                statement.executeQuery().use { rows ->
+                    if (!rows.next()) {
+                        null
+                    } else {
+                        val lastReadMessageId = rows.getLong("last_read_message_id")
+                        val cursorWasNull = rows.wasNull()
+                        RawThreadReadMarker(
+                            threadId = rows.getLong("thread_id"),
+                            userId = rows.getLong("user_id"),
+                            lastReadMessageId = if (cursorWasNull) null else lastReadMessageId,
+                            lastReadAt = rows.getTimestamp("last_read_at")?.toInstant(),
+                        )
+                    }
                 }
             }
         }

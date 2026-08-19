@@ -1,7 +1,7 @@
 import { REQUEST_ABORTED_CODE } from '../shared/api/abort'
 import { clearSession, getAccessToken } from '../shared/api/auth'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
-import { venueGetMe } from '../shared/api/venueApi'
+import { venueGetConversationUnreadCount, venueGetMe } from '../shared/api/venueApi'
 import type { VenueAccessDto } from '../shared/api/venueDtos'
 import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
 import { isDebugEnabled } from '../shared/debug'
@@ -72,6 +72,7 @@ type VenueShellRefs = {
   accessState: HTMLParagraphElement
   venueSelect: HTMLSelectElement
   navButtons: Record<NavRouteName, HTMLButtonElement>
+  messagesUnreadBadge: HTMLSpanElement
   navSections: Array<{ element: HTMLDivElement; buttons: HTMLButtonElement[] }>
   content: HTMLDivElement
   errorCard: HTMLDivElement
@@ -182,7 +183,7 @@ function buildVenueShell(root: HTMLDivElement): VenueShellRefs {
     bookings: el('button', { className: 'nav-button', text: 'Брони' }) as HTMLButtonElement,
     calls: el('button', { className: 'nav-button', text: 'Вызовы' }) as HTMLButtonElement,
     extensions: el('button', { className: 'nav-button', text: 'Запросы продления' }) as HTMLButtonElement,
-    messages: el('button', { className: 'nav-button', text: 'Сообщения' }) as HTMLButtonElement,
+    messages: el('button', { className: 'nav-button', text: 'Переписки' }) as HTMLButtonElement,
     'guest-preview': el('button', {
       className: 'nav-button',
       text: 'Предпросмотр для гостя'
@@ -197,8 +198,18 @@ function buildVenueShell(root: HTMLDivElement): VenueShellRefs {
     settings: el('button', { className: 'nav-button', text: 'Настройки' }) as HTMLButtonElement,
     subscription: el('button', { className: 'nav-button', text: 'Подписка' }) as HTMLButtonElement,
     chat: el('button', { className: 'nav-button', text: 'Чат персонала' }) as HTMLButtonElement,
-    support: el('button', { className: 'nav-button', text: 'Обращения' }) as HTMLButtonElement
+    support: el('button', { className: 'nav-button', text: 'Поддержка' }) as HTMLButtonElement
   }
+  Object.entries(navButtons).forEach(([route, button]) => {
+    button.dataset.navRoute = route
+  })
+  const messagesUnreadBadge = el('span', {
+    className: 'nav-unread-badge',
+    text: ''
+  }) as HTMLSpanElement
+  messagesUnreadBadge.hidden = true
+  messagesUnreadBadge.setAttribute('aria-hidden', 'true')
+  navButtons.messages.append(' ', messagesUnreadBadge)
 
   const navSections = [
     {
@@ -263,6 +274,7 @@ function buildVenueShell(root: HTMLDivElement): VenueShellRefs {
     accessState,
     venueSelect,
     navButtons,
+    messagesUnreadBadge,
     navSections,
     content,
     errorCard,
@@ -342,11 +354,23 @@ export function mountVenueApp(options: VenueAppOptions) {
 
   let disposed = false
   let accessAbort: AbortController | null = null
+  let conversationUnreadAbort: AbortController | null = null
   let accessList: VenueAccessDto[] = []
   let selectedVenueId: number | null = null
   let currentRole: VenueAccessDto['role'] | null = null
   let currentPermissions: string[] = []
   let currentUserId: number | null = null
+
+  const setConversationUnreadCount = (value: number) => {
+    const count = Number.isSafeInteger(value) && value > 0 ? value : 0
+    refs.messagesUnreadBadge.hidden = count === 0
+    refs.messagesUnreadBadge.textContent = count > 99 ? '99+' : String(count)
+    refs.navButtons.messages.dataset.unreadCount = String(count)
+    refs.navButtons.messages.setAttribute(
+      'aria-label',
+      count > 0 ? `Переписки, непрочитанных: ${count}` : 'Переписки'
+    )
+  }
 
   const updateAccessState = () => {
     if (selectedVenueId && currentRole) {
@@ -444,6 +468,9 @@ export function mountVenueApp(options: VenueAppOptions) {
     const access = selection ? accessList.find((venue) => venue.venueId === selection) ?? null : null
     currentRole = access?.role ?? null
     currentPermissions = access?.permissions ?? []
+    conversationUnreadAbort?.abort()
+    conversationUnreadAbort = null
+    setConversationUnreadCount(0)
     updateAccessState()
     updateNavVisibility()
   }
@@ -456,6 +483,32 @@ export function mountVenueApp(options: VenueAppOptions) {
       : accessList.find((venue) => venue.venueId === selectedVenueId) ?? null
   const staffOwnScheduleModuleDisabled = () =>
     currentRole === 'STAFF' && selectedAccess()?.teamScheduleModuleEnabled === false
+
+  const refreshConversationUnreadCount = async () => {
+    const venueId = selectedVenueId
+    const userId = currentUserId
+    if (!venueId || !userId || !hasPermission('SUPPORT_MANAGE')) {
+      conversationUnreadAbort?.abort()
+      conversationUnreadAbort = null
+      setConversationUnreadCount(0)
+      return
+    }
+    conversationUnreadAbort?.abort()
+    const controller = new AbortController()
+    conversationUnreadAbort = controller
+    const result = await venueGetConversationUnreadCount(backendUrl, { venueId }, deps, controller.signal)
+    if (
+      disposed ||
+      conversationUnreadAbort !== controller ||
+      selectedVenueId !== venueId ||
+      currentUserId !== userId
+    ) {
+      return
+    }
+    conversationUnreadAbort = null
+    if (!result.ok) return
+    setConversationUnreadCount(result.data.unreadCount)
+  }
 
   const updateNavVisibility = () => {
     refs.navButtons.ownership.hidden = !accessList.some((access) => access.role === 'OWNER')
@@ -635,7 +688,14 @@ export function mountVenueApp(options: VenueAppOptions) {
           onOpenOrder: (orderId) => navigate(`#/order/${orderId}`)
         })
       case 'bookings':
-        return renderVenueBookingsScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
+        return renderVenueBookingsScreen({
+          root: screenRoot,
+          backendUrl,
+          isDebug,
+          venueId,
+          access,
+          onConversationUnreadChanged: () => void refreshConversationUnreadCount()
+        })
       case 'messages':
         return renderVenueMessagesScreen({
           root: screenRoot,
@@ -644,7 +704,8 @@ export function mountVenueApp(options: VenueAppOptions) {
           venueId,
           access,
           screenMode: 'bookingMessages',
-          initialThreadId: route.threadId
+          initialThreadId: route.threadId,
+          onConversationUnreadChanged: () => void refreshConversationUnreadCount()
         })
       case 'guest-preview':
         return renderVenueGuestPreviewScreen({
@@ -795,6 +856,7 @@ export function mountVenueApp(options: VenueAppOptions) {
     updateNav(refs.navButtons, route.name === 'order' ? 'orders' : route.name)
     currentDispose?.()
     currentDispose = renderRouteContent(route)
+    void refreshConversationUnreadCount()
     if (previousRoute.name === 'ownership' && route.name === 'dashboard') {
       const heading = refs.content.querySelector<HTMLElement>('h2')
       if (heading) {
@@ -818,6 +880,8 @@ export function mountVenueApp(options: VenueAppOptions) {
     disposed = true
     accessAbort?.abort()
     accessAbort = null
+    conversationUnreadAbort?.abort()
+    conversationUnreadAbort = null
     window.removeEventListener('hashchange', onHashChange)
     currentDispose?.()
     unbindBackButton()

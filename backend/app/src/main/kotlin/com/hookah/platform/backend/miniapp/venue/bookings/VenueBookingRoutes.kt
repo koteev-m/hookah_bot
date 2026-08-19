@@ -3,6 +3,9 @@ package com.hookah.platform.backend.miniapp.venue.bookings
 import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.NotFoundException
+import com.hookah.platform.backend.booking.defaultBookingDisplayZoneId
+import com.hookah.platform.backend.booking.formatBookingDisplayLabel
+import com.hookah.platform.backend.booking.resolveBookingDisplayZoneId
 import com.hookah.platform.backend.miniapp.guest.db.BookingRecord
 import com.hookah.platform.backend.miniapp.guest.db.BookingStatus
 import com.hookah.platform.backend.miniapp.guest.db.GuestBookingRepository
@@ -17,8 +20,6 @@ import com.hookah.platform.backend.support.SupportMessageAuthorRole
 import com.hookah.platform.backend.support.SupportMessageDto
 import com.hookah.platform.backend.support.SupportMessageSource
 import com.hookah.platform.backend.support.SupportThreadDto
-import com.hookah.platform.backend.support.SupportThreadReadAccess
-import com.hookah.platform.backend.support.SupportThreadReadResult
 import com.hookah.platform.backend.support.SupportThreadRecord
 import com.hookah.platform.backend.support.SupportThreadRepository
 import com.hookah.platform.backend.support.normalizeBookingClientMessageId
@@ -104,6 +105,7 @@ private data class VenueBookingListResponse(
 private data class VenueBookingDto(
     val bookingId: Long,
     val displayNumber: Int? = null,
+    val displayLabel: String,
     val status: String,
     val scheduledAt: String,
     val scheduledAtDisplay: String? = null,
@@ -163,7 +165,7 @@ fun Route.venueBookingRoutes(
                 throw ForbiddenException()
             }
             val bookings = guestBookingRepository.listActiveByVenue(venueId = venueId)
-            val zoneId = venueSettingsRepository.resolveZoneId(venueId)
+            val zoneId = venueSettingsRepository.resolveZoneId(venueId, defaultBookingDisplayZoneId())
             val holdMinutes = guestBookingRepository.getHoldMinutes(venueId)
             call.respond(
                 VenueBookingListResponse(
@@ -184,9 +186,14 @@ fun Route.venueBookingRoutes(
                     status = BookingStatus.CONFIRMED,
                 )
             val zoneId = venueSettingsRepository.resolveZoneId(booking.venueId)
+            val displayZoneId =
+                venueSettingsRepository.resolveZoneId(
+                    booking.venueId,
+                    defaultBookingDisplayZoneId(),
+                )
             outboxEnqueuer.enqueueSendMessage(
                 chatId = booking.userId,
-                text = buildBookingConfirmedGuestNotification(booking, guestBookingRepository, zoneId),
+                text = buildBookingConfirmedGuestNotification(booking, guestBookingRepository, displayZoneId),
             )
             if (bookingRemindersEnabled) {
                 guestBookingRepository.scheduleRemindersForBooking(
@@ -211,6 +218,7 @@ fun Route.venueBookingRoutes(
                     ?: throw InvalidInputException("bookingId must be a number")
             val request = call.receive<VenueBookingChangeRequest>()
             val zoneId = venueSettingsRepository.resolveZoneId(venueId)
+            val displayZoneId = venueSettingsRepository.resolveZoneId(venueId, defaultBookingDisplayZoneId())
             val scheduledAt = parseBookingInstant(request, zoneId)
             val changeReason = normalizeBookingReason(request.reasonText)
             val updated =
@@ -223,7 +231,13 @@ fun Route.venueBookingRoutes(
                 ) ?: throw NotFoundException()
             outboxEnqueuer.enqueueSendMessage(
                 chatId = updated.userId,
-                text = buildBookingChangedGuestNotification(updated, guestBookingRepository, zoneId, changeReason),
+                text =
+                    buildBookingChangedGuestNotification(
+                        updated,
+                        guestBookingRepository,
+                        displayZoneId,
+                        changeReason,
+                    ),
             )
             if (bookingRemindersEnabled) {
                 guestBookingRepository.scheduleRemindersForBooking(
@@ -252,10 +266,20 @@ fun Route.venueBookingRoutes(
                     status = BookingStatus.CANCELED,
                     cancelReasonText = cancelReason,
                 )
-            val zoneId = venueSettingsRepository.resolveZoneId(booking.venueId)
+            val displayZoneId =
+                venueSettingsRepository.resolveZoneId(
+                    booking.venueId,
+                    defaultBookingDisplayZoneId(),
+                )
             outboxEnqueuer.enqueueSendMessage(
                 chatId = booking.userId,
-                text = buildBookingCanceledGuestNotification(booking, guestBookingRepository, zoneId, cancelReason),
+                text =
+                    buildBookingCanceledGuestNotification(
+                        booking,
+                        guestBookingRepository,
+                        displayZoneId,
+                        cancelReason,
+                    ),
             )
             call.respond(VenueBookingStatusResponse(bookingId = booking.id, status = booking.status.toApi()))
         }
@@ -276,6 +300,7 @@ fun Route.venueBookingRoutes(
             val booking =
                 guestBookingRepository.findByVenue(bookingId = bookingId, venueId = venueId)
                     ?: throw NotFoundException()
+            val zoneId = venueSettingsRepository.resolveZoneId(venueId, defaultBookingDisplayZoneId())
             val clientMessageId = normalizeBookingClientMessageId(request.clientMessageId)
             val write =
                 supportThreadRepository.addBookingMessage(
@@ -284,7 +309,7 @@ fun Route.venueBookingRoutes(
                     authorRole = SupportMessageAuthorRole.VENUE,
                     source = SupportMessageSource.VENUE_MINIAPP,
                     text = messageText,
-                    title = formatBookingDisplayLabel(booking),
+                    title = booking.toDisplayLabel(zoneId),
                     expectedVenueId = venueId,
                     clientMessageId = clientMessageId,
                     notificationWriter = { connection, notification ->
@@ -304,18 +329,6 @@ fun Route.venueBookingRoutes(
                 ) ?: throw NotFoundException()
             val thread = write.thread
             val message = write.message
-            if (write.created) {
-                when (
-                    supportThreadRepository.markThreadRead(
-                        threadId = thread.id,
-                        access = SupportThreadReadAccess.Venue(userId = userId, venueId = venueId),
-                    )
-                ) {
-                    SupportThreadReadResult.MARKED -> Unit
-                    SupportThreadReadResult.NOT_FOUND -> throw NotFoundException()
-                    SupportThreadReadResult.FORBIDDEN -> throw ForbiddenException()
-                }
-            }
             val responseThread =
                 supportThreadRepository.getVenueThread(
                     venueId = booking.venueId,
@@ -429,6 +442,7 @@ private fun BookingRecord.toVenueBookingDto(
     return VenueBookingDto(
         bookingId = id,
         displayNumber = displayNumber,
+        displayLabel = toDisplayLabel(zoneId),
         status = status.toApi(),
         scheduledAt = scheduledAt.toString(),
         scheduledAtDisplay = formatBookingNotificationTime(scheduledAt, zoneId),
@@ -444,8 +458,13 @@ private fun BookingRecord.toVenueBookingDto(
     )
 }
 
-private fun formatBookingDisplayLabel(booking: BookingRecord): String =
-    booking.displayNumber?.let { "Бронь №$it" } ?: "Бронь #${booking.id}"
+private fun BookingRecord.toDisplayLabel(zoneId: ZoneId): String =
+    formatBookingDisplayLabel(
+        bookingId = id,
+        displayNumber = displayNumber,
+        scheduledAt = scheduledAt,
+        venueZoneId = zoneId,
+    )
 
 private suspend fun resolveBookingVenueName(
     guestBookingRepository: GuestBookingRepository,
@@ -459,7 +478,7 @@ private suspend fun buildBookingConfirmedGuestNotification(
 ): String {
     val venueName = resolveBookingVenueName(guestBookingRepository, booking.venueId)
     return buildString {
-        append("✅ ${formatBookingDisplayLabel(booking)} подтверждена")
+        append("✅ ${booking.toDisplayLabel(zoneId)} подтверждена")
         appendBookingGuestDetails(booking, venueName, zoneId, timeLabel = "Время")
         append("\n\nЖдём вас!")
     }
@@ -473,7 +492,7 @@ private suspend fun buildBookingChangedGuestNotification(
 ): String {
     val venueName = resolveBookingVenueName(guestBookingRepository, booking.venueId)
     return buildString {
-        append("🕒 ${formatBookingDisplayLabel(booking)} перенесена")
+        append("🕒 ${booking.toDisplayLabel(zoneId)} перенесена")
         appendBookingGuestDetails(booking, venueName, zoneId, timeLabel = "Новое время")
         reasonText?.let { append("\nКомментарий: $it") }
     }
@@ -487,7 +506,7 @@ private suspend fun buildBookingCanceledGuestNotification(
 ): String {
     val venueName = resolveBookingVenueName(guestBookingRepository, booking.venueId)
     return buildString {
-        append("❌ ${formatBookingDisplayLabel(booking)} отменена")
+        append("❌ ${booking.toDisplayLabel(zoneId)} отменена")
         append("\n\nЗаведение: $venueName")
         append("\nВремя брони: ${formatBookingNotificationTime(booking.scheduledAt, zoneId)}")
         reasonText?.let { append("\nПричина: $it") }
@@ -498,7 +517,19 @@ private fun buildBookingGuestContactMessage(
     thread: SupportThreadRecord,
     messageText: String,
 ): String {
-    val bookingLabel = thread.booking?.displayNumber?.let { "брони №$it" } ?: "брони"
+    val bookingLabel =
+        thread.booking
+            ?.let {
+                formatBookingDisplayLabel(
+                    bookingId = it.bookingId,
+                    displayNumber = it.displayNumber,
+                    scheduledAt = it.scheduledAt,
+                    venueZoneId = resolveBookingDisplayZoneId(thread.venueTimezone),
+                )
+            }
+            ?.replaceFirst("Бронь", "брони")
+            ?: thread.bookingId?.let { "брони #$it" }
+            ?: "брони"
     val venueName = thread.venueName?.takeIf { it.isNotBlank() } ?: "заведение"
     return "Сообщение по вашей $bookingLabel в «$venueName»:\n\n$messageText"
 }

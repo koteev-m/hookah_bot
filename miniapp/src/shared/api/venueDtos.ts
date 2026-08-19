@@ -620,6 +620,7 @@ export type VenueStaffCallActionResponse = {
 export type VenueBookingDto = {
   bookingId: number
   displayNumber?: number | null
+  displayLabel?: string | null
   status: 'pending' | 'confirmed' | 'changed' | 'canceled' | 'expired' | 'no_show' | 'seated' | string
   scheduledAt: string
   scheduledAtDisplay?: string | null

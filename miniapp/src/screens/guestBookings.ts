@@ -19,6 +19,7 @@ import {
   reconcileBookingThreadItems,
   type BookingThreadReconciliationState
 } from '../shared/bookingThreadReconciliation'
+import { bookingDisplayLabel } from '../shared/ui/bookingLabel'
 import { append, el, on } from '../shared/ui/dom'
 import { showToast } from '../shared/ui/toast'
 
@@ -77,12 +78,6 @@ function bookingStatusLabel(status: string): string {
     default:
       return status
   }
-}
-
-function bookingDisplayLabel(booking: GuestBookingResponse): string {
-  if (booking.displayLabel) return booking.displayLabel
-  if (booking.displayNumber) return `Бронь №${booking.displayNumber}`
-  return 'Бронь'
 }
 
 function formatBookingTime(value: string): string {
@@ -357,9 +352,21 @@ function renderBookings(
   activeBookings.forEach((booking) => {
     const reconciliation = bookingThreadReconciliation.get(booking.bookingId) ?? bookingThreadLoading()
     const row = el('article', { className: 'venue-order-row guest-booking-card' })
+    row.dataset.bookingId = String(booking.bookingId)
     const info = el('div', { className: 'guest-booking-content' })
     const cardHeader = el('div', { className: 'guest-booking-header' })
-    cardHeader.appendChild(el('strong', { className: 'guest-booking-title', text: bookingDisplayLabel(booking) }))
+    cardHeader.appendChild(
+      el('strong', {
+        className: 'guest-booking-title',
+        text: bookingDisplayLabel({
+          bookingId: booking.bookingId,
+          displayNumber: booking.displayNumber,
+          displayLabel: booking.displayLabel,
+          scheduledAt: booking.scheduledAt,
+          scheduledAtDisplay: booking.scheduledAtDisplay
+        })
+      })
+    )
     if (booking.venueName) {
       cardHeader.appendChild(el('p', { className: 'venue-order-sub', text: booking.venueName }))
     }

@@ -577,6 +577,7 @@ type BillingOverviewFixture = {
 type VenueBookingFixture = {
   bookingId: number
   displayNumber?: number | null
+  displayLabel?: string | null
   status: string
   scheduledAt: string
   scheduledAtDisplay?: string | null
@@ -628,6 +629,7 @@ type SupportThreadFixture = {
   booking?: {
     bookingId: number
     displayNumber?: number | null
+    displayLabel?: string | null
     scheduledAt?: string | null
     partySize?: number | null
     status?: string | null
@@ -1237,6 +1239,7 @@ async function mockGuestBookingConversationApi(
     failThreadInventoryCallNumbers?: number[]
     resolvedBookingIds?: number[]
     preopenBookingIds?: number[]
+    staffChatConfigured?: boolean
   } = {}
 ) {
   let nextThreadId = 7200
@@ -1247,6 +1250,7 @@ async function mockGuestBookingConversationApi(
   const messageRequests: BookingMessageRequestFixture[] = []
   const messagesByIdempotencyKey = new Map<string, { normalizedText: string; message: SupportMessageFixture }>()
   const outboxKeys = new Set<string>()
+  const staffAlertKeys = new Set<string>()
   let threadInventoryCalls = 0
   let threadDetailCalls = 0
   const bookingReconciliationRequests: number[][] = []
@@ -1289,6 +1293,7 @@ async function mockGuestBookingConversationApi(
       booking: {
         bookingId: booking.bookingId,
         displayNumber: booking.displayNumber,
+        displayLabel: booking.displayLabel,
         scheduledAt: booking.scheduledAt,
         partySize: booking.partySize,
         status: booking.status
@@ -1380,9 +1385,14 @@ async function mockGuestBookingConversationApi(
         return
       }
       const filter = url.searchParams.get('filter')
-      const requestedTypes = (url.searchParams.get('threadTypes') ?? '').split(',').filter(Boolean)
+      const surface = url.searchParams.get('surface')
       const items = Array.from(threadsByBookingId.values()).filter((thread) => {
-        const matchesType = requestedTypes.length === 0 || requestedTypes.includes(thread.threadType ?? '')
+        const matchesType =
+          surface === 'CONVERSATIONS'
+            ? thread.threadType === 'BOOKING_THREAD' || thread.threadType === 'VENUE_CHAT'
+            : surface === 'SUPPORT'
+              ? thread.threadType === 'SUPPORT_TICKET'
+              : false
         const resolved = thread.status === 'RESOLVED' || thread.status === 'CLOSED'
         return matchesType && (filter == null ? true : filter === 'resolved' ? resolved : !resolved)
       })
@@ -1442,6 +1452,9 @@ async function mockGuestBookingConversationApi(
       thread.updatedAt = message.createdAt
       messagesByIdempotencyKey.set(idempotencyKey, { normalizedText, message })
       outboxKeys.add(`booking-thread-message:${message.messageId}:guest-ack`)
+      if (options.staffChatConfigured !== false) {
+        staffAlertKeys.add(`booking-thread-message:${message.messageId}:venue-staff-alert`)
+      }
       if (options.failFirstMessageAfterCommit && messageRequests.length === 1) {
         await route.abort('failed')
         return
@@ -1469,10 +1482,263 @@ async function mockGuestBookingConversationApi(
     getMessages: () => [...messages],
     getMessageRequests: () => [...messageRequests],
     getOutboxCount: () => outboxKeys.size,
+    getStaffAlertCount: () => staffAlertKeys.size,
     getThreadInventoryCalls: () => threadInventoryCalls,
     getThreadDetailCalls: () => threadDetailCalls,
     getBookingReconciliationRequests: () => bookingReconciliationRequests.map((bookingIds) => [...bookingIds]),
     releaseThreadInventoryCall: (callNumber: number) => threadInventoryGates.get(callNumber)?.release()
+  }
+}
+
+type RawSupportThreadReadFixture = {
+  thread_id: number
+  user_id: number
+  last_read_message_id: number | null
+  last_read_at: string
+}
+
+type GuestSurfaceDetailRequestFixture = {
+  threadId: number
+  surface: string | null
+  allowed: boolean
+}
+
+async function mockGuestSurfaceGuardApi(
+  page: Page,
+  options: { deferSurface?: 'CONVERSATIONS' | 'SUPPORT' } = {}
+) {
+  const guestUserId = 123456789
+  const ticketThreadId = 7351
+  const bookingThreadId = 7352
+  const venueChatThreadId = 7353
+  const threads: SupportThreadFixture[] = [
+    {
+      threadId: ticketThreadId,
+      venueId: 1,
+      venueName: 'Микс',
+      threadType: 'SUPPORT_TICKET',
+      assigneeScope: 'VENUE',
+      category: 'OTHER',
+      contextLabel: 'Техническое обращение',
+      status: 'NEW',
+      statusLabel: 'Новый',
+      title: 'Техническое обращение',
+      lastMessagePreview: 'Секретное сообщение поддержки',
+      lastMessageAt: '2030-01-10T18:01:00Z',
+      unreadCount: 1,
+      createdAt: '2030-01-10T18:00:00Z',
+      updatedAt: '2030-01-10T18:01:00Z'
+    },
+    {
+      threadId: bookingThreadId,
+      venueId: 1,
+      venueName: 'Микс',
+      threadType: 'BOOKING_THREAD',
+      assigneeScope: 'VENUE',
+      category: 'BOOKING',
+      contextLabel: 'Бронь №52 · 10.01.2030, 21:00',
+      status: 'IN_PROGRESS',
+      statusLabel: 'В работе',
+      bookingId: 8052,
+      title: 'Бронь №52 · 10.01.2030, 21:00',
+      lastMessagePreview: 'Секретное сообщение по брони',
+      lastMessageAt: '2030-01-10T18:02:00Z',
+      unreadCount: 1,
+      createdAt: '2030-01-10T18:00:00Z',
+      updatedAt: '2030-01-10T18:02:00Z',
+      booking: {
+        bookingId: 8052,
+        displayNumber: 52,
+        displayLabel: 'Бронь №52 · 10.01.2030, 21:00',
+        scheduledAt: '2030-01-10T18:00:00Z',
+        partySize: 4,
+        status: 'confirmed'
+      }
+    },
+    {
+      threadId: venueChatThreadId,
+      venueId: 1,
+      venueName: 'Микс',
+      threadType: 'VENUE_CHAT',
+      assigneeScope: 'VENUE',
+      category: 'OTHER',
+      contextLabel: 'Чат с Микс',
+      status: 'IN_PROGRESS',
+      statusLabel: 'В работе',
+      title: 'Чат с Микс',
+      lastMessagePreview: 'Секретное сообщение заведения',
+      lastMessageAt: '2030-01-10T18:03:00Z',
+      unreadCount: 1,
+      createdAt: '2030-01-10T18:00:00Z',
+      updatedAt: '2030-01-10T18:03:00Z'
+    }
+  ]
+  const messages = new Map<number, SupportMessageFixture[]>([
+    [
+      ticketThreadId,
+      [
+        {
+          messageId: 8351,
+          threadId: ticketThreadId,
+          authorRole: 'PLATFORM',
+          source: 'PLATFORM_MINIAPP',
+          text: 'Секретное сообщение поддержки',
+          createdAt: '2030-01-10T18:01:00Z'
+        }
+      ]
+    ],
+    [
+      bookingThreadId,
+      [
+        {
+          messageId: 8352,
+          threadId: bookingThreadId,
+          authorRole: 'VENUE',
+          source: 'VENUE_MINIAPP',
+          text: 'Секретное сообщение по брони',
+          createdAt: '2030-01-10T18:02:00Z'
+        }
+      ]
+    ],
+    [
+      venueChatThreadId,
+      [
+        {
+          messageId: 8353,
+          threadId: venueChatThreadId,
+          authorRole: 'VENUE',
+          source: 'VENUE_MINIAPP',
+          text: 'Секретное сообщение заведения',
+          createdAt: '2030-01-10T18:03:00Z'
+        }
+      ]
+    ]
+  ])
+  const markers = new Map<number, RawSupportThreadReadFixture>(
+    threads.map((thread) => {
+      const messageId = messages.get(thread.threadId)?.[0]?.messageId ?? null
+      return [
+        thread.threadId,
+        {
+          thread_id: thread.threadId,
+          user_id: guestUserId,
+          last_read_message_id: messageId == null ? null : messageId - 1,
+          last_read_at: '2030-01-10T17:59:00Z'
+        }
+      ]
+    })
+  )
+  const detailRequests: GuestSurfaceDetailRequestFixture[] = []
+  let deferredDetailUsed = false
+  let releaseDeferredDetail = () => undefined
+  const deferredDetailGate = new Promise<void>((resolve) => {
+    releaseDeferredDetail = resolve
+  })
+  let notifyDeferredDetailStarted = () => undefined
+  const deferredDetailStarted = new Promise<void>((resolve) => {
+    notifyDeferredDetailStarted = resolve
+  })
+  let notifyDeferredDetailSettled = () => undefined
+  const deferredDetailSettled = new Promise<void>((resolve) => {
+    notifyDeferredDetailSettled = resolve
+  })
+
+  const unreadFor = (threadId: number) => {
+    const marker = markers.get(threadId)
+    const cursor = marker?.last_read_message_id ?? null
+    return (messages.get(threadId) ?? []).filter(
+      (message) => message.authorRole !== 'GUEST' && (cursor == null || message.messageId > cursor)
+    ).length
+  }
+  const responseThread = (thread: SupportThreadFixture): SupportThreadFixture => ({
+    ...thread,
+    unreadCount: unreadFor(thread.threadId)
+  })
+  const allowedForSurface = (thread: SupportThreadFixture, surface: string | null) =>
+    surface === 'CONVERSATIONS'
+      ? thread.threadType === 'BOOKING_THREAD' || thread.threadType === 'VENUE_CHAT'
+      : surface === 'SUPPORT'
+        ? thread.threadType === 'SUPPORT_TICKET'
+        : false
+
+  await page.route('**/api/guest/support/threads**', async (route) => {
+    const request = route.request()
+    const url = new URL(request.url())
+    const detailMatch = url.pathname.match(/^\/api\/guest\/support\/threads\/(\d+)$/)
+    const surface = url.searchParams.get('surface')
+    if (!detailMatch && url.pathname === '/api/guest/support/threads' && request.method() === 'GET') {
+      const filter = url.searchParams.get('filter')
+      const items = threads
+        .filter((thread) => allowedForSurface(thread, surface))
+        .filter((thread) => {
+          const resolved = thread.status === 'RESOLVED' || thread.status === 'CLOSED'
+          return filter == null ? true : filter === 'resolved' ? resolved : !resolved
+        })
+        .map(responseThread)
+      await route.fulfill(jsonResponse({ items }))
+      return
+    }
+    if (!detailMatch || request.method() !== 'GET') {
+      await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'not found' }) })
+      return
+    }
+    const threadId = Number(detailMatch[1])
+    const thread = threads.find((candidate) => candidate.threadId === threadId)
+    const allowed = thread != null && allowedForSurface(thread, surface)
+    detailRequests.push({ threadId, surface, allowed })
+    const isDeferredDetail =
+      !deferredDetailUsed &&
+      options.deferSurface === surface
+    if (isDeferredDetail) {
+      deferredDetailUsed = true
+      notifyDeferredDetailStarted()
+      await deferredDetailGate
+    }
+    if (!thread || !allowed) {
+      await route.fulfill(
+        jsonResponse({ error: { code: 'NOT_FOUND', message: 'Переписка не найдена.' } }, 404)
+      )
+      return
+    }
+    const threadMessages = messages.get(threadId) ?? []
+    const maxMessageId = threadMessages.reduce<number | null>(
+      (current, message) => (current == null || message.messageId > current ? message.messageId : current),
+      null
+    )
+    const marker = markers.get(threadId)
+    if (marker && maxMessageId != null) {
+      marker.last_read_message_id =
+        marker.last_read_message_id == null
+          ? maxMessageId
+          : Math.max(marker.last_read_message_id, maxMessageId)
+      marker.last_read_at = '2030-01-10T18:10:00Z'
+    }
+    if (isDeferredDetail) {
+      await route
+        .fulfill(jsonResponse({ thread: responseThread(thread), messages: threadMessages }))
+        .catch(() => undefined)
+      notifyDeferredDetailSettled()
+    } else {
+      await route.fulfill(jsonResponse({ thread: responseThread(thread), messages: threadMessages }))
+    }
+  })
+
+  return {
+    ticketThreadId,
+    bookingThreadId,
+    venueChatThreadId,
+    ticketMessage: 'Секретное сообщение поддержки',
+    bookingMessage: 'Секретное сообщение по брони',
+    venueChatMessage: 'Секретное сообщение заведения',
+    getRawMarker: (threadId: number) => {
+      const marker = markers.get(threadId)
+      return marker ? { ...marker } : null
+    },
+    getUnreadCount: unreadFor,
+    getDetailRequests: () => detailRequests.map((request) => ({ ...request })),
+    waitForDeferredDetail: () => deferredDetailStarted,
+    releaseDeferredDetail,
+    waitForDeferredDetailSettled: () => deferredDetailSettled
   }
 }
 
@@ -6036,6 +6302,8 @@ async function mockVenueBookingsApi(
     capThreadInventoryAt100?: boolean
     initialGuestMessages?: Array<{ bookingId: number; text: string }>
     preopenBookingIds?: number[]
+    initialThreads?: SupportThreadFixture[]
+    initialMessages?: SupportMessageFixture[]
   } = {}
 ) {
   const role = options.role ?? 'MANAGER'
@@ -6056,6 +6324,7 @@ async function mockVenueBookingsApi(
   let bookingListCalls = 0
   let threadInventoryCalls = 0
   let threadDetailCalls = 0
+  const threadDetailRequests: Array<{ threadId: number; threadTypes: string[] }> = []
   const bookingReconciliationRequests: number[][] = []
   const changeRequests: unknown[] = []
   const cancelReasons: Array<string | null> = []
@@ -6064,8 +6333,11 @@ async function mockVenueBookingsApi(
   const threadMessageRequests: BookingMessageRequestFixture[] = []
   let nextThreadId = 4000
   let nextMessageId = 5000
-  let supportThreads: SupportThreadFixture[] = []
-  let supportMessages: SupportMessageFixture[] = []
+  let supportThreads: SupportThreadFixture[] = (options.initialThreads ?? []).map((thread) => ({
+    ...thread,
+    booking: thread.booking ? { ...thread.booking } : thread.booking
+  }))
+  let supportMessages: SupportMessageFixture[] = (options.initialMessages ?? []).map((message) => ({ ...message }))
   const messagesByIdempotencyKey = new Map<string, { normalizedText: string; message: SupportMessageFixture }>()
   const outboxKeys = new Set<string>()
   const bookingReconciliationGates = new Map<number, { promise: Promise<void>; release: () => void }>()
@@ -6098,6 +6370,9 @@ async function mockVenueBookingsApi(
   const findOrCreateBookingThread = (booking: VenueBookingFixture) => {
     let thread = supportThreads.find((item) => item.bookingId === booking.bookingId)
     if (!thread) {
+      const displayLabel =
+        booking.displayLabel ??
+        (booking.displayNumber ? `Бронь №${booking.displayNumber}` : `Бронь #${booking.bookingId}`)
       thread = {
         threadId: nextThreadId++,
         venueId: 1,
@@ -6106,11 +6381,11 @@ async function mockVenueBookingsApi(
         threadType: 'BOOKING_THREAD',
         assigneeScope: 'VENUE',
         category: 'BOOKING',
-        contextLabel: booking.displayNumber ? `Бронь №${booking.displayNumber}` : `Бронь #${booking.bookingId}`,
+        contextLabel: displayLabel,
         status: 'OPEN',
         statusLabel: 'В работе',
         bookingId: booking.bookingId,
-        title: booking.displayNumber ? `Бронь №${booking.displayNumber}` : `Бронь #${booking.bookingId}`,
+        title: displayLabel,
         lastMessagePreview: null,
         lastMessageAt: null,
         unreadCount: 0,
@@ -6119,6 +6394,7 @@ async function mockVenueBookingsApi(
         booking: {
           bookingId: booking.bookingId,
           displayNumber: booking.displayNumber,
+          displayLabel,
           scheduledAt: booking.scheduledAt,
           partySize: booking.partySize,
           status: booking.status
@@ -6240,6 +6516,13 @@ async function mockVenueBookingsApi(
     await route.fulfill(jsonResponse({ items: [] }))
   })
 
+  await page.route('**/api/venue/1/support/unread-count', async (route) => {
+    const unreadCount = supportThreads
+      .filter((thread) => thread.threadType === 'BOOKING_THREAD' || thread.threadType === 'VENUE_CHAT')
+      .reduce((total, thread) => total + Math.max(0, thread.unreadCount ?? 0), 0)
+    await route.fulfill(jsonResponse({ unreadCount }))
+  })
+
   await page.route((url) => url.pathname === '/api/venue/1/support/booking-threads', async (route) => {
     const request = route.request()
     if (request.method() !== 'GET') {
@@ -6315,10 +6598,16 @@ async function mockVenueBookingsApi(
       }
       const bookingIdParam = url.searchParams.get('bookingId')
       const filter = url.searchParams.get('filter')
+      const requestedThreadTypes = (url.searchParams.get('threadTypes') ?? url.searchParams.get('threadType') ?? '')
+        .split(',')
+        .filter(Boolean)
       const bookingId = bookingIdParam == null ? null : Number(bookingIdParam)
       let items = bookingId != null && Number.isFinite(bookingId)
         ? supportThreads.filter((thread) => thread.bookingId === bookingId)
         : supportThreads
+      if (requestedThreadTypes.length > 0) {
+        items = items.filter((thread) => requestedThreadTypes.includes(thread.threadType ?? 'SUPPORT_TICKET'))
+      }
       if (filter === 'active') {
         items = items.filter((thread) => thread.status === 'OPEN')
       } else if (filter === 'resolved') {
@@ -6410,6 +6699,19 @@ async function mockVenueBookingsApi(
     }
     if (request.method() === 'GET') {
       threadDetailCalls += 1
+      const requestedThreadTypes = (url.searchParams.get('threadTypes') ?? '')
+        .split(',')
+        .filter(Boolean)
+      threadDetailRequests.push({ threadId, threadTypes: requestedThreadTypes })
+      if (
+        requestedThreadTypes.length > 0 &&
+        !requestedThreadTypes.includes(thread.threadType ?? 'SUPPORT_TICKET')
+      ) {
+        await route.fulfill(
+          jsonResponse({ error: { code: 'SUPPORT_THREAD_NOT_FOUND', message: 'Переписка не найдена' } }, 404)
+        )
+        return
+      }
       await threadDetailGates.get(threadDetailCalls)?.promise
       if (options.failThreadDetailCallNumbers?.includes(threadDetailCalls)) {
         await route.fulfill(
@@ -6538,11 +6840,17 @@ async function mockVenueBookingsApi(
     getBookingListCalls: () => bookingListCalls,
     getThreadInventoryCalls: () => threadInventoryCalls,
     getThreadDetailCalls: () => threadDetailCalls,
+    getThreadDetailRequests: () => threadDetailRequests.map((request) => ({ ...request, threadTypes: [...request.threadTypes] })),
     getBookingReconciliationRequests: () => bookingReconciliationRequests.map((bookingIds) => [...bookingIds]),
     releaseBookingReconciliationCall: (callNumber: number) => bookingReconciliationGates.get(callNumber)?.release(),
     releaseThreadDetailCall: (callNumber: number) => threadDetailGates.get(callNumber)?.release(),
     getSupportMessages: () => supportMessages,
+    addGuestMessage: (threadId: number, text: string) => {
+      const thread = supportThreads.find((candidate) => candidate.threadId === threadId)
+      return thread ? addSupportMessage(thread, 'GUEST', 'GUEST_MINIAPP', text) : null
+    },
     getThreadForBooking: (bookingId: number) => supportThreads.find((thread) => thread.bookingId === bookingId) ?? null,
+    getThreadById: (threadId: number) => supportThreads.find((thread) => thread.threadId === threadId) ?? null,
     getSupportThreadCount: () => supportThreads.length,
     getBookingMessageRequests: () => [...bookingMessageRequests],
     getThreadMessageRequests: () => [...threadMessageRequests],
@@ -6558,7 +6866,13 @@ async function mockVenueBookingsApi(
   }
 }
 
-async function mockBookingMessageContextSwitchApi(page: Page) {
+async function mockBookingMessageContextSwitchApi(
+  page: Page,
+  options: {
+    conversationUnreadByScope?: Record<string, number>
+    deferredUnreadScopes?: string[]
+  } = {}
+) {
   const bookingsByVenue = new Map<number, VenueBookingFixture[]>([
     [1, [buildVenueBooking({ bookingId: 801, displayNumber: 21 })]],
     [2, [buildVenueBooking({ bookingId: 804, displayNumber: 22 })]]
@@ -6572,6 +6886,16 @@ async function mockBookingMessageContextSwitchApi(page: Page) {
     [2, [buildBookingThreadFixture(9200, 2, 804, 22)]]
   ])
   const messageRequests: BookingMessageRequestFixture[] = []
+  const unreadRequests: string[] = []
+  const settledUnreadRequests: string[] = []
+  const deferredUnread = new Map<string, { promise: Promise<void>; release: () => void }>()
+  options.deferredUnreadScopes?.forEach((scope) => {
+    let release = () => undefined
+    const promise = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    deferredUnread.set(scope, { promise, release })
+  })
 
   function buildBookingThreadFixture(
     threadId: number,
@@ -6600,6 +6924,7 @@ async function mockBookingMessageContextSwitchApi(page: Page) {
       booking: {
         bookingId,
         displayNumber,
+        displayLabel: `Бронь №${displayNumber}`,
         scheduledAt: '2030-01-10T18:30:00Z',
         partySize: 4,
         status: 'confirmed'
@@ -6700,6 +7025,17 @@ async function mockBookingMessageContextSwitchApi(page: Page) {
     }
   )
 
+  await page.route('**/api/venue/*/support/unread-count', async (route) => {
+    const venueId = Number(
+      new URL(route.request().url()).pathname.match(/^\/api\/venue\/(\d+)\/support\/unread-count$/)?.[1]
+    )
+    const scope = `${currentUserId()}:${venueId}`
+    unreadRequests.push(scope)
+    await deferredUnread.get(scope)?.promise
+    await route.fulfill(jsonResponse({ unreadCount: options.conversationUnreadByScope?.[scope] ?? 0 }))
+    settledUnreadRequests.push(scope)
+  })
+
   await page.route('**/api/venue/*/support/threads**', async (route) => {
     const request = route.request()
     const url = new URL(request.url())
@@ -6745,7 +7081,10 @@ async function mockBookingMessageContextSwitchApi(page: Page) {
   })
 
   return {
-    getMessageRequests: () => [...messageRequests]
+    getMessageRequests: () => [...messageRequests],
+    getUnreadRequests: () => [...unreadRequests],
+    getSettledUnreadRequests: () => [...settledUnreadRequests],
+    releaseUnreadScope: (scope: string) => deferredUnread.get(scope)?.release()
   }
 }
 
@@ -15989,8 +16328,9 @@ test('venue manager manages bookings queue lifecycle', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Брони', exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Брони', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Брони' })).toBeVisible()
-  await expect(page.getByText('Бронь №12')).toBeVisible()
-  await expect(page.getByText(/10\.01\.2030, 21:30/)).toBeVisible()
+  const bookingCard = page.locator('.venue-booking-card[data-booking-id="701"]')
+  await expect(bookingCard.getByRole('heading', { name: 'Бронь №12 · 10.01.2030, 21:30' })).toBeVisible()
+  await expect(bookingCard.locator('.venue-order-meta')).toContainText('10.01.2030, 21:30')
   await expect(page.getByText('Гость: Алексей')).toBeVisible()
   await expect(page.getByText('Держим до: 10.01.2030, 22:00')).toBeVisible()
   await expect(page.getByText('Гость подтвердил визит: 10.01.2030, 21:05')).toBeVisible()
@@ -16013,7 +16353,7 @@ test('venue manager manages bookings queue lifecycle', async ({ page }) => {
   expect(api.getBookingMessages()).toEqual(['На 19:00 все столы заняты. Можем предложить 20:30?'])
 
   await page.getByRole('button', { name: 'Открыть переписку' }).click()
-  await expect(page.getByRole('heading', { name: 'Сообщения' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Переписки' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Активные' })).toBeVisible()
   const venueThreadCard = page.locator('.venue-message-thread-card').filter({ hasText: 'Бронь №12' })
   await expect(venueThreadCard).toBeVisible()
@@ -16030,7 +16370,7 @@ test('venue manager manages bookings queue lifecycle', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Возобновить переписку' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Завершённые' })).toHaveAttribute('data-active', 'true')
   await page.getByRole('button', { name: 'Активные' }).click()
-  await expect(page.getByText('Сообщений пока нет.')).toBeVisible()
+  await expect(page.getByText('Новых переписок нет.')).toBeVisible()
   await page.getByRole('button', { name: 'Завершённые' }).click()
   await expect(venueThreadCard).toBeVisible()
   await venueThreadCard.getByRole('button', { name: 'Открыть' }).click()
@@ -16058,6 +16398,285 @@ test('venue manager manages bookings queue lifecycle', async ({ page }) => {
   await expect(page.getByText('Активных броней пока нет.')).toBeVisible()
   expect(api.getCancelCalls()).toBe(1)
   expect(api.getCancelReasons()).toEqual(['Гость попросил отменить'])
+})
+
+test('venue booking conversation discoverability keeps labels unread and exact thread identity authoritative', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const firstLabel = 'Бронь №41 · 10.01.2030, 19:00'
+  const secondLabel = 'Бронь №42 · 10.01.2030, 21:00'
+  const bookings = [
+    buildVenueBooking({
+      bookingId: 730,
+      displayNumber: 41,
+      displayLabel: firstLabel,
+      scheduledAt: '2030-01-10T16:00:00Z',
+      scheduledAtDisplay: '10.01.2030, 19:00',
+      scheduledLocalTime: '19:00'
+    }),
+    buildVenueBooking({
+      bookingId: 731,
+      displayNumber: 42,
+      displayLabel: secondLabel,
+      scheduledAt: '2030-01-10T18:00:00Z',
+      scheduledAtDisplay: '10.01.2030, 21:00',
+      scheduledLocalTime: '21:00'
+    })
+  ]
+  const initialThreads: SupportThreadFixture[] = [
+    {
+      threadId: 7410,
+      venueId: 1,
+      venueName: 'Микс',
+      guestDisplayName: 'Алексей',
+      threadType: 'BOOKING_THREAD',
+      assigneeScope: 'VENUE',
+      category: 'BOOKING',
+      contextLabel: firstLabel,
+      status: 'OPEN',
+      statusLabel: 'В работе',
+      bookingId: 730,
+      title: firstLabel,
+      lastMessagePreview: 'Подтвердите, пожалуйста, стол у окна.',
+      lastMessageAt: '2030-01-10T18:20:00Z',
+      unreadCount: 2,
+      createdAt: '2030-01-10T18:00:00Z',
+      updatedAt: '2030-01-10T18:20:00Z',
+      booking: {
+        bookingId: 730,
+        displayNumber: 41,
+        displayLabel: firstLabel,
+        scheduledAt: '2030-01-10T16:00:00Z',
+        partySize: 4,
+        status: 'pending'
+      }
+    },
+    {
+      threadId: 7420,
+      venueId: 1,
+      venueName: 'Микс',
+      guestDisplayName: 'Алексей',
+      threadType: 'BOOKING_THREAD',
+      assigneeScope: 'VENUE',
+      category: 'BOOKING',
+      contextLabel: secondLabel,
+      status: 'OPEN',
+      statusLabel: 'В работе',
+      bookingId: 731,
+      title: secondLabel,
+      lastMessagePreview: 'Вторая бронь остаётся без новых сообщений.',
+      lastMessageAt: '2030-01-10T18:40:00Z',
+      unreadCount: 0,
+      createdAt: '2030-01-10T18:05:00Z',
+      updatedAt: '2030-01-10T18:40:00Z',
+      booking: {
+        bookingId: 731,
+        displayNumber: 42,
+        displayLabel: secondLabel,
+        scheduledAt: '2030-01-10T18:00:00Z',
+        partySize: 4,
+        status: 'pending'
+      }
+    },
+    {
+      threadId: 7430,
+      venueId: 1,
+      venueName: 'Микс',
+      guestDisplayName: 'Марина',
+      threadType: 'VENUE_CHAT',
+      assigneeScope: 'VENUE',
+      category: 'GENERAL',
+      contextLabel: 'Вопрос о парковке',
+      status: 'OPEN',
+      statusLabel: 'В работе',
+      title: 'Вопрос о парковке',
+      lastMessagePreview: 'Есть ли рядом парковка?',
+      lastMessageAt: '2030-01-10T18:30:00Z',
+      unreadCount: 1,
+      createdAt: '2030-01-10T18:10:00Z',
+      updatedAt: '2030-01-10T18:30:00Z'
+    }
+  ]
+  const initialMessages: SupportMessageFixture[] = [
+    {
+      messageId: 8810,
+      threadId: 7410,
+      authorRole: 'GUEST',
+      source: 'GUEST_MINIAPP',
+      text: 'Подтвердите, пожалуйста, стол у окна.',
+      createdAt: '2030-01-10T18:20:00Z'
+    },
+    {
+      messageId: 8820,
+      threadId: 7420,
+      authorRole: 'VENUE',
+      source: 'VENUE_MINIAPP',
+      text: 'Вторая бронь остаётся без новых сообщений.',
+      createdAt: '2030-01-10T18:40:00Z'
+    },
+    {
+      messageId: 8830,
+      threadId: 7430,
+      authorRole: 'GUEST',
+      source: 'GUEST_MINIAPP',
+      text: 'Есть ли рядом парковка?',
+      createdAt: '2030-01-10T18:30:00Z'
+    }
+  ]
+  const api = await mockVenueBookingsApi(page, { bookings, initialThreads, initialMessages })
+
+  const messagesNav = page.locator('[data-nav-route="messages"]')
+  const firstBookingCard = page.locator('.venue-booking-card[data-booking-id="730"]')
+  const secondBookingCard = page.locator('.venue-booking-card[data-booking-id="731"]')
+
+  await page.goto('?mode=venue#/bookings')
+  await expect(firstBookingCard).toContainText(firstLabel)
+  await expect(secondBookingCard).toContainText(secondLabel)
+  await expect(firstBookingCard).toHaveAttribute('data-unread-count', '2')
+  await expect(firstBookingCard.locator('.booking-unread-badge')).toHaveText('Новых сообщений: 2')
+  await expect(secondBookingCard).toHaveAttribute('data-unread-count', '0')
+  await expect(secondBookingCard.locator('.booking-unread-badge')).toHaveCount(0)
+  await expect(messagesNav).toHaveAttribute('data-unread-count', '3')
+
+  await page.reload()
+  await expect(firstBookingCard).toContainText(firstLabel)
+  await expect(secondBookingCard).toContainText(secondLabel)
+  await expect(firstBookingCard).toHaveAttribute('data-unread-count', '2')
+  await expect(messagesNav).toHaveAttribute('data-unread-count', '3')
+
+  await messagesNav.click()
+  await expect(page.getByRole('heading', { name: 'Переписки' })).toBeVisible()
+  await expect(page.locator('.venue-message-thread-card')).toHaveCount(3)
+  await expect.poll(async () =>
+    page.locator('.venue-message-thread-card').evaluateAll((cards) =>
+      cards.map((card) => ({
+        threadId: card.getAttribute('data-thread-id'),
+        threadType: card.getAttribute('data-thread-type'),
+        unreadCount: card.getAttribute('data-unread-count')
+      }))
+    )
+  ).toEqual([
+    { threadId: '7430', threadType: 'VENUE_CHAT', unreadCount: '1' },
+    { threadId: '7410', threadType: 'BOOKING_THREAD', unreadCount: '2' },
+    { threadId: '7420', threadType: 'BOOKING_THREAD', unreadCount: '0' }
+  ])
+  await expect(page.locator('.venue-message-thread-card[data-thread-id="7410"]')).toContainText(firstLabel)
+  await expect(page.locator('.venue-message-thread-card[data-thread-id="7420"]')).toContainText(secondLabel)
+  await expect(page.locator('.venue-message-thread-card[data-thread-id="7430"]')).toContainText('Чат')
+
+  await page.locator('[data-nav-route="support"]').click()
+  await expect(page.getByRole('heading', { name: 'Поддержка' })).toBeVisible()
+  await expect(page.getByText('Обращений в поддержку нет.')).toBeVisible()
+  await expect(page.locator('.venue-message-thread-card')).toHaveCount(0)
+
+  await page.locator('[data-nav-route="bookings"]').click()
+  await secondBookingCard.getByRole('button', { name: 'Открыть переписку' }).click()
+  await expect(page).toHaveURL(/#\/messages\?threadId=7420$/)
+  await expect(page.locator('.venue-messages-detail').getByRole('heading', { name: secondLabel })).toBeVisible()
+  await expect(page.locator('.venue-messages-detail')).toContainText('Вторая бронь остаётся без новых сообщений.')
+  await expect(messagesNav).toHaveAttribute('data-unread-count', '3')
+
+  await page.locator('[data-nav-route="bookings"]').click()
+  await firstBookingCard.getByRole('button', { name: 'Открыть переписку' }).click()
+  await expect(page).toHaveURL(/#\/messages\?threadId=7410$/)
+  await expect(page.locator('.venue-messages-detail').getByRole('heading', { name: firstLabel })).toBeVisible()
+  await expect(page.locator('.venue-messages-detail')).toContainText('Подтвердите, пожалуйста, стол у окна.')
+  await expect(messagesNav).toHaveAttribute('data-unread-count', '1')
+
+  await page.locator('[data-nav-route="bookings"]').click()
+  await expect(firstBookingCard).toHaveAttribute('data-unread-count', '0')
+  await expect(firstBookingCard.locator('.booking-unread-badge')).toHaveCount(0)
+  await expect(secondBookingCard).toHaveAttribute('data-unread-count', '0')
+  await expect(messagesNav).toHaveAttribute('data-unread-count', '1')
+
+  await page.reload()
+  await expect(firstBookingCard).toContainText(firstLabel)
+  await expect(secondBookingCard).toContainText(secondLabel)
+  await expect(firstBookingCard).toHaveAttribute('data-unread-count', '0')
+  await expect(messagesNav).toHaveAttribute('data-unread-count', '1')
+
+  await page.goto('?mode=venue#/messages?threadId=7420')
+  await expect(page.locator('.venue-messages-detail').getByRole('heading', { name: secondLabel })).toBeVisible()
+  await expect(page.locator('.venue-message-thread-card[data-thread-id="7420"]')).toHaveAttribute('data-selected', 'true')
+  await expect(page.locator('.venue-messages-detail')).toContainText('Вторая бронь остаётся без новых сообщений.')
+
+  await page
+    .locator('.venue-message-thread-card[data-thread-id="7430"]')
+    .getByRole('button', { name: 'Открыть' })
+    .click()
+  await expect(page.locator('.venue-messages-detail')).toContainText('Есть ли рядом парковка?')
+  await expect(messagesNav).toHaveAttribute('data-unread-count', '0')
+
+  expect(api.addGuestMessage(7410, 'Новое сообщение после прочтения.')).not.toBeNull()
+  await page.getByRole('button', { name: '🔄 Обновить', exact: true }).click()
+  await expect(messagesNav).toHaveAttribute('data-unread-count', '1')
+  await expect(page.locator('.venue-message-thread-card[data-thread-id="7410"]')).toHaveAttribute(
+    'data-unread-count',
+    '1'
+  )
+  await expect(page.locator('.venue-message-thread-card[data-thread-id="7420"]')).toHaveAttribute(
+    'data-unread-count',
+    '0'
+  )
+
+  await page.locator('[data-nav-route="bookings"]').click()
+  await expect(firstBookingCard).toHaveAttribute('data-unread-count', '1')
+  await expect(firstBookingCard.locator('.booking-unread-badge')).toHaveText('Новых сообщений: 1')
+  await expect(secondBookingCard).toHaveAttribute('data-unread-count', '0')
+  await expect(secondBookingCard.locator('.booking-unread-badge')).toHaveCount(0)
+})
+
+test('venue conversation deep link rejects a support ticket before its read marker can change', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const supportThread: SupportThreadFixture = {
+    threadId: 7490,
+    venueId: 1,
+    venueName: 'Микс',
+    guestDisplayName: 'Алексей',
+    threadType: 'SUPPORT_TICKET',
+    assigneeScope: 'VENUE',
+    category: 'PAYMENT',
+    contextLabel: 'Проблема с оплатой',
+    status: 'OPEN',
+    statusLabel: 'В работе',
+    title: 'Проблема с оплатой',
+    lastMessagePreview: 'Не проходит оплата.',
+    lastMessageAt: '2030-01-10T18:45:00Z',
+    unreadCount: 4,
+    createdAt: '2030-01-10T18:40:00Z',
+    updatedAt: '2030-01-10T18:45:00Z'
+  }
+  const api = await mockVenueBookingsApi(page, {
+    bookings: [],
+    initialThreads: [supportThread],
+    initialMessages: [
+      {
+        messageId: 8890,
+        threadId: supportThread.threadId,
+        authorRole: 'GUEST',
+        source: 'GUEST_MINIAPP',
+        text: 'Не проходит оплата.',
+        createdAt: '2030-01-10T18:45:00Z'
+      }
+    ]
+  })
+
+  await page.goto('?mode=venue#/messages?threadId=7490')
+  await expect(page.getByRole('heading', { name: 'Переписки' })).toBeVisible()
+  await expect(page.locator('.venue-messages-detail')).toContainText(
+    'Не удалось загрузить сообщения. Черновик сохранён; обновите переписку.'
+  )
+  await expect(page.getByText('Проблема с оплатой', { exact: true })).toHaveCount(0)
+  expect(api.getThreadDetailRequests()).toEqual([
+    { threadId: 7490, threadTypes: ['BOOKING_THREAD', 'VENUE_CHAT'] }
+  ])
+  expect(api.getThreadById(7490)?.unreadCount).toBe(4)
+
+  await page.locator('[data-nav-route="support"]').click()
+  await expect(page.getByRole('heading', { name: 'Поддержка' })).toBeVisible()
+  const supportCard = page.locator('.venue-message-thread-card[data-thread-id="7490"]')
+  await expect(supportCard).toContainText('Проблема с оплатой')
+  await expect(supportCard).toHaveAttribute('data-unread-count', '4')
+  expect(api.getThreadById(7490)?.unreadCount).toBe(4)
 })
 
 test('venue booking message double click keeps one client message id and one persisted delivery', async ({ page }) => {
@@ -16117,7 +16736,7 @@ test('venue booking exact reconciliation opens a target beyond the 100-thread in
   expect(api.getBookingReconciliationRequests()).toEqual([[705]])
 
   await bookingCard.getByRole('button', { name: 'Открыть переписку' }).click()
-  await expect(page.getByRole('heading', { name: 'Сообщения' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Переписки' })).toBeVisible()
   await expect(
     page.locator('.venue-messages-detail').getByText('Целевая переписка за пределами первых ста.')
   ).toBeVisible()
@@ -16273,7 +16892,7 @@ test('venue booking reload reconciles a committed message before allowing anothe
   await bookingCard.getByRole('button', { name: 'Обновить переписку' }).click()
   await expect(bookingCard.getByRole('button', { name: 'Открыть переписку' })).toBeVisible()
   await bookingCard.getByRole('button', { name: 'Открыть переписку' }).click()
-  await expect(page.getByRole('heading', { name: 'Сообщения' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Переписки' })).toBeVisible()
   await expect(page.locator('.venue-messages-detail').getByText('Сообщение уже сохранено до потери ответа.')).toBeVisible()
 
   expect(api.getBookingListCalls()).toBe(3)
@@ -16302,6 +16921,7 @@ test('guest booking message keeps its client message id for unchanged manual ret
   await textarea.fill('Да, время подходит.')
   await page.getByRole('button', { name: 'Отправить' }).click()
   await expect(page.locator('.venue-messages-detail .status')).toContainText('повторите отправку без изменений')
+  expect(conversationApi.getStaffAlertCount()).toBe(1)
   await page.getByRole('button', { name: 'Отправить' }).click()
 
   await expect(page.locator('.venue-messages-detail').getByText('Да, время подходит.')).toBeVisible()
@@ -16310,6 +16930,29 @@ test('guest booking message keeps its client message id for unchanged manual ret
   expect(requests[1].clientMessageId).toBe(requests[0].clientMessageId)
   expect(conversationApi.getMessages()).toHaveLength(1)
   expect(conversationApi.getOutboxCount()).toBe(1)
+  expect(conversationApi.getStaffAlertCount()).toBe(1)
+})
+
+test('guest booking message skips the staff alert when staff chat is not configured', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const booking = buildGuestBooking({ bookingId: 508, displayNumber: 18, displayLabel: 'Бронь №18' })
+  await mockGuestApi(page, { bookings: [booking], restoreContext: null })
+  const conversationApi = await mockGuestBookingConversationApi(page, [booking], {
+    preopenBookingIds: [booking.bookingId],
+    staffChatConfigured: false
+  })
+  const thread = conversationApi.getThreadForBooking(booking.bookingId)
+  expect(thread).not.toBeNull()
+
+  await page.goto(`?mode=guest#/messages?threadId=${thread?.threadId}`)
+  await page.getByPlaceholder('Напишите ответ заведению.').fill('Уточните, пожалуйста, номер стола.')
+  await page.getByRole('button', { name: 'Отправить' }).click()
+
+  await expect(page.locator('.venue-messages-detail').getByText('Уточните, пожалуйста, номер стола.')).toBeVisible()
+  expect(conversationApi.getMessageRequests()).toHaveLength(1)
+  expect(conversationApi.getMessages()).toHaveLength(1)
+  expect(conversationApi.getOutboxCount()).toBe(1)
+  expect(conversationApi.getStaffAlertCount()).toBe(0)
 })
 
 test('guest booking deep-link reload blocks reply until inventory and messages reconcile', async ({ page }) => {
@@ -16508,7 +17151,7 @@ test('booking message account venue and thread switches invalidate the pending c
   await expect.poll(() => api.getMessageRequests()).toHaveLength(2)
   await page.getByRole('dialog').getByRole('button', { name: 'Отмена' }).click()
 
-  await page.getByRole('button', { name: 'Сообщения', exact: true }).click()
+  await page.getByRole('button', { name: 'Переписки', exact: true }).click()
   const firstVenueTwoThread = page.locator('.venue-message-thread-card').filter({ hasText: 'Бронь №22' })
   await firstVenueTwoThread.getByRole('button', { name: 'Открыть' }).click()
   await page.getByPlaceholder('Напишите ответ гостю.').fill(message)
@@ -16547,6 +17190,51 @@ test('booking message account venue and thread switches invalidate the pending c
   ])
 })
 
+test('venue conversation unread badge ignores late venue state and resets across account switch', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const userOneVenueOne = '123456789:1'
+  const userOneVenueTwo = '123456789:2'
+  const userTwoVenueOne = '987654321:1'
+  const api = await mockBookingMessageContextSwitchApi(page, {
+    conversationUnreadByScope: {
+      [userOneVenueOne]: 7,
+      [userOneVenueTwo]: 0,
+      [userTwoVenueOne]: 2
+    },
+    deferredUnreadScopes: [userOneVenueOne]
+  })
+  const messagesNav = page.locator('[data-nav-route="messages"]')
+  const venueSelect = page.locator('.venue-select')
+
+  await page.goto('?mode=venue&venueId=1#/bookings')
+  await expect.poll(() => api.getUnreadRequests().filter((scope) => scope === userOneVenueOne).length).toBeGreaterThan(0)
+  await expect(messagesNav).toHaveAttribute('data-unread-count', '0')
+
+  await venueSelect.selectOption('2')
+  await expect(venueSelect).toHaveValue('2')
+  await expect.poll(() => api.getUnreadRequests()).toContain(userOneVenueTwo)
+  await expect(messagesNav).toHaveAttribute('data-unread-count', '0')
+
+  api.releaseUnreadScope(userOneVenueOne)
+  await expect.poll(() => api.getSettledUnreadRequests()).toContain(userOneVenueOne)
+  await expect(messagesNav).toHaveAttribute('data-unread-count', '0')
+
+  await venueSelect.selectOption('1')
+  await expect(venueSelect).toHaveValue('1')
+  await expect(messagesNav).toHaveAttribute('data-unread-count', '7')
+
+  await page.evaluate(
+    ({ userId, initData }) => {
+      window.localStorage.setItem('__e2e_telegram_user_id', String(userId))
+      window.localStorage.setItem('__e2e_telegram_init_data', initData)
+    },
+    { userId: 987654321, initData: otherMockInitData }
+  )
+  await page.goto('?mode=venue&venueId=1&smokeUser=other#/bookings')
+  await expect.poll(() => api.getUnreadRequests()).toContain(userTwoVenueOne)
+  await expect(messagesNav).toHaveAttribute('data-unread-count', '2')
+})
+
 test('venue staff sees booking arrival controls only', async ({ page }) => {
   await installTelegramWebApp(page, 123456789)
   const api = await mockVenueBookingsApi(page, {
@@ -16558,7 +17246,7 @@ test('venue staff sees booking arrival controls only', async ({ page }) => {
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
   await expect(page.getByRole('button', { name: 'Брони', exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Обращения', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Поддержка', exact: true })).toHaveCount(0)
   await page.evaluate(() => {
     window.location.hash = '#/support'
   })
@@ -16569,7 +17257,7 @@ test('venue staff sees booking arrival controls only', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Подтвердить' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Отменить' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Написать гостю' })).toHaveCount(0)
-  await expect(page.getByRole('button', { name: 'Сообщения', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Переписки', exact: true })).toHaveCount(0)
   await expect(page.getByText('Перенести бронь')).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Гость пришёл' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Не пришёл' })).toBeVisible()
@@ -16607,6 +17295,7 @@ test('guest replies to booking thread from Mini App messages', async ({ page }) 
     booking: {
       bookingId: 701,
       displayNumber: 12,
+      displayLabel: 'Бронь №12',
       scheduledAt: '2030-01-10T18:30:00Z',
       partySize: 4,
       status: 'confirmed'
@@ -16760,8 +17449,9 @@ test('guest opens venue chat from catalog and venue card question actions', asyn
     const url = new URL(request.url())
     const threadMatch = url.pathname.match(/\/api\/guest\/support\/threads\/(\d+)$/)
     if (!threadMatch && request.method() === 'GET') {
-      const threadTypes = url.searchParams.get('threadTypes') ?? url.searchParams.get('threadType') ?? ''
-      await route.fulfill(jsonResponse({ items: threadTypes.includes('VENUE_CHAT') ? [thread] : [] }))
+      await route.fulfill(
+        jsonResponse({ items: url.searchParams.get('surface') === 'CONVERSATIONS' ? [thread] : [] })
+      )
       return
     }
     if (threadMatch && request.method() === 'GET' && Number(threadMatch[1]) === thread.threadId) {
@@ -16790,6 +17480,161 @@ test('guest opens venue chat from catalog and venue card question actions', asyn
   await page.getByRole('button', { name: '💬 Задать вопрос' }).click()
   await expect(page.locator('.venue-messages-detail').getByRole('heading', { name: 'Чат с Микс' })).toBeVisible()
   expect(createCalls).toBe(2)
+})
+
+test('guest conversation deep link rejects support ticket without clearing unread marker', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page, { restoreContext: null })
+  const api = await mockGuestSurfaceGuardApi(page)
+  const markerBefore = api.getRawMarker(api.ticketThreadId)
+
+  await page.goto(
+    `?mode=guest#/messages?threadId=${api.ticketThreadId}&surface=SUPPORT`
+  )
+
+  await expect(page.getByRole('heading', { name: 'Чаты' })).toBeVisible()
+  await expect(page.locator('.booking-thread-reconciliation-error')).toContainText(
+    'Не удалось загрузить сообщения. Черновик сохранён; обновите переписку.'
+  )
+  await expect(page.locator('.venue-messages-detail')).not.toContainText(api.ticketMessage)
+  expect(api.getRawMarker(api.ticketThreadId)).toEqual(markerBefore)
+  expect(api.getUnreadCount(api.ticketThreadId)).toBe(1)
+  expect(api.getDetailRequests()).toContainEqual({
+    threadId: api.ticketThreadId,
+    surface: 'CONVERSATIONS',
+    allowed: false
+  })
+
+  await page.evaluate(() => {
+    window.location.hash = '#/support'
+  })
+  const ticketCard = page.locator(
+    `.venue-message-thread-card[data-thread-id="${api.ticketThreadId}"]`
+  )
+  await expect(ticketCard).toHaveAttribute('data-unread-count', '1')
+  await expect(ticketCard.locator('.menu-item-badge')).toHaveText('Новых: 1')
+})
+
+test('guest support deep links reject booking and venue chats without clearing unread markers', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page, { restoreContext: null })
+  const api = await mockGuestSurfaceGuardApi(page)
+  const bookingMarkerBefore = api.getRawMarker(api.bookingThreadId)
+  const venueMarkerBefore = api.getRawMarker(api.venueChatThreadId)
+
+  await page.goto(
+    `?mode=guest#/support?threadId=${api.bookingThreadId}&surface=CONVERSATIONS`
+  )
+  await expect(page.getByRole('heading', { name: 'Мои обращения' })).toBeVisible()
+  await expect(page.locator('.booking-thread-reconciliation-error')).toBeVisible()
+  await expect(page.locator('.venue-messages-detail')).not.toContainText(api.bookingMessage)
+  expect(api.getRawMarker(api.bookingThreadId)).toEqual(bookingMarkerBefore)
+
+  await page.evaluate((threadId) => {
+    window.location.hash = `#/support?threadId=${threadId}&surface=CONVERSATIONS`
+  }, api.venueChatThreadId)
+  await expect(page.locator('.booking-thread-reconciliation-error')).toBeVisible()
+  await expect(page.locator('.venue-messages-detail')).not.toContainText(api.venueChatMessage)
+  expect(api.getRawMarker(api.venueChatThreadId)).toEqual(venueMarkerBefore)
+  expect(api.getDetailRequests()).toEqual(
+    expect.arrayContaining([
+      { threadId: api.bookingThreadId, surface: 'SUPPORT', allowed: false },
+      { threadId: api.venueChatThreadId, surface: 'SUPPORT', allowed: false }
+    ])
+  )
+
+  await page.evaluate((threadId) => {
+    window.location.hash = `#/messages?threadId=${threadId}&surface=SUPPORT`
+  }, api.ticketThreadId)
+  const bookingCard = page.locator(
+    `.venue-message-thread-card[data-thread-id="${api.bookingThreadId}"]`
+  )
+  const venueChatCard = page.locator(
+    `.venue-message-thread-card[data-thread-id="${api.venueChatThreadId}"]`
+  )
+  await expect(bookingCard).toHaveAttribute('data-unread-count', '1')
+  await expect(bookingCard.locator('.menu-item-badge')).toHaveText('Новых: 1')
+  await expect(venueChatCard).toHaveAttribute('data-unread-count', '1')
+  await expect(venueChatCard.locator('.menu-item-badge')).toHaveText('Новых: 1')
+})
+
+test('guest exact surface deep links clear only the opened thread unread marker', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page, { restoreContext: null })
+  const api = await mockGuestSurfaceGuardApi(page)
+  const bookingMarkerBefore = api.getRawMarker(api.bookingThreadId)
+  const venueMarkerBefore = api.getRawMarker(api.venueChatThreadId)
+
+  await page.goto(`?mode=guest#/support?threadId=${api.ticketThreadId}&surface=SUPPORT`)
+
+  await expect(page.locator('.venue-messages-detail')).toContainText(api.ticketMessage)
+  const ticketCard = page.locator(
+    `.venue-message-thread-card[data-thread-id="${api.ticketThreadId}"]`
+  )
+  await expect(ticketCard).toHaveAttribute('data-unread-count', '0')
+  await expect(ticketCard.locator('.menu-item-badge')).toHaveCount(0)
+  expect(api.getRawMarker(api.ticketThreadId)).toEqual({
+    thread_id: api.ticketThreadId,
+    user_id: 123456789,
+    last_read_message_id: 8351,
+    last_read_at: '2030-01-10T18:10:00Z'
+  })
+  expect(api.getRawMarker(api.bookingThreadId)).toEqual(bookingMarkerBefore)
+  expect(api.getRawMarker(api.venueChatThreadId)).toEqual(venueMarkerBefore)
+
+  await page.evaluate((threadId) => {
+    window.location.hash = `#/messages?threadId=${threadId}&surface=CONVERSATIONS`
+  }, api.bookingThreadId)
+  await expect(page.locator('.venue-messages-detail')).toContainText(api.bookingMessage)
+  const bookingCard = page.locator(
+    `.venue-message-thread-card[data-thread-id="${api.bookingThreadId}"]`
+  )
+  const venueChatCard = page.locator(
+    `.venue-message-thread-card[data-thread-id="${api.venueChatThreadId}"]`
+  )
+  await expect(bookingCard).toHaveAttribute('data-unread-count', '0')
+  await expect(bookingCard.locator('.menu-item-badge')).toHaveCount(0)
+  await expect(venueChatCard).toHaveAttribute('data-unread-count', '1')
+  await expect(venueChatCard.locator('.menu-item-badge')).toHaveText('Новых: 1')
+  expect(api.getRawMarker(api.bookingThreadId)).toEqual({
+    thread_id: api.bookingThreadId,
+    user_id: 123456789,
+    last_read_message_id: 8352,
+    last_read_at: '2030-01-10T18:10:00Z'
+  })
+  expect(api.getRawMarker(api.venueChatThreadId)).toEqual(venueMarkerBefore)
+  expect(api.getDetailRequests()).toEqual(
+    expect.arrayContaining([
+      { threadId: api.ticketThreadId, surface: 'SUPPORT', allowed: true },
+      { threadId: api.bookingThreadId, surface: 'CONVERSATIONS', allowed: true }
+    ])
+  )
+})
+
+test('guest ignores a late detail response from the previous surface', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page, { restoreContext: null })
+  const api = await mockGuestSurfaceGuardApi(page, { deferSurface: 'SUPPORT' })
+
+  await page.goto(`?mode=guest#/support?threadId=${api.ticketThreadId}&surface=SUPPORT`)
+  await api.waitForDeferredDetail()
+  await page.evaluate((threadId) => {
+    window.location.hash = `#/messages?threadId=${threadId}&surface=CONVERSATIONS`
+  }, api.bookingThreadId)
+
+  await expect(page.getByRole('heading', { name: 'Чаты' })).toBeVisible()
+  await expect(page.locator('.venue-messages-detail')).toContainText(api.bookingMessage)
+  api.releaseDeferredDetail()
+  await api.waitForDeferredDetailSettled()
+  await expect(page.getByRole('heading', { name: 'Чаты' })).toBeVisible()
+  await expect(page.locator('.venue-messages-detail')).toContainText(api.bookingMessage)
+  await expect(page.locator('.venue-messages-detail')).not.toContainText(api.ticketMessage)
+  expect(api.getDetailRequests()).toEqual(
+    expect.arrayContaining([
+      { threadId: api.ticketThreadId, surface: 'SUPPORT', allowed: true },
+      { threadId: api.bookingThreadId, surface: 'CONVERSATIONS', allowed: true }
+    ])
+  )
 })
 
 test('guest support tickets stay list-first and open detail only by choice or creation', async ({ page }) => {
@@ -16836,12 +17681,10 @@ test('guest support tickets stay list-first and open detail only by choice or cr
     const url = new URL(request.url())
     const threadMatch = url.pathname.match(/\/api\/guest\/support\/threads\/(\d+)(?:\/messages)?$/)
     if (!threadMatch && request.method() === 'GET') {
-      const threadType = url.searchParams.get('threadType')
-      const threadTypes = url.searchParams.get('threadTypes') ?? threadType ?? ''
       const items =
-        threadTypes.includes('BOOKING_THREAD') || threadTypes.includes('VENUE_CHAT')
-          ? []
-          : threads.filter((thread) => ['OPEN', 'NEW', 'IN_PROGRESS', 'WAITING_USER'].includes(thread.status))
+        url.searchParams.get('surface') === 'SUPPORT'
+          ? threads.filter((thread) => ['OPEN', 'NEW', 'IN_PROGRESS', 'WAITING_USER'].includes(thread.status))
+          : []
       await route.fulfill(jsonResponse({ items }))
       return
     }
@@ -17002,8 +17845,8 @@ test('venue manager support queue is list-first and transfers ticket with clear 
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
-  await page.getByRole('button', { name: 'Обращения', exact: true }).click()
-  await expect(page.getByRole('heading', { name: 'Обращения' })).toBeVisible()
+  await page.getByRole('button', { name: 'Поддержка', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Поддержка' })).toBeVisible()
   await expect(page.locator('.venue-message-thread-card').filter({ hasText: 'Нужна помощь по заказу' })).toBeVisible()
   await expect(page.locator('.venue-messages-detail')).toHaveText('')
 
@@ -18372,7 +19215,7 @@ test('venue owner sees feedback section and staff does not', async ({ page }) =>
   await expect(page.getByText('Долго ждали')).toBeVisible()
   await page.getByRole('button', { name: 'Связаться с гостем' }).click()
   await expect.poll(() => api.getFollowUpCalls()).toBe(1)
-  await expect(page.getByRole('heading', { name: 'Сообщения' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Переписки' })).toBeVisible()
   const messageDetail = page.locator('.venue-messages-detail')
   await expect(messageDetail).toContainText('Отзыв после визита')
   await expect(messageDetail).toContainText('Оценка: 2/5')

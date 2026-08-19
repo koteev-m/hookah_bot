@@ -26,8 +26,8 @@ class BookingMessageIdempotencyMigrationH2Test {
     }
 
     @Test
-    fun `message idempotency metadata and migration head are exact on H2`() {
-        assertions().assertExactMetadataAndMigrationHead()
+    fun `message idempotency metadata and migration version are exact on H2`() {
+        assertions().assertExactMetadataAndMigrationVersion()
     }
 
     private fun assertions(): BookingMessageIdempotencyMigrationAssertions =

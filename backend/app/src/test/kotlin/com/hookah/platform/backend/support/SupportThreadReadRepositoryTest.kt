@@ -9,10 +9,16 @@ import java.sql.Statement
 import java.sql.Timestamp
 import java.time.Instant
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import javax.sql.DataSource
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class SupportThreadReadRepositoryTest {
     @Test
@@ -234,6 +240,599 @@ class SupportThreadReadRepositoryTest {
         }
 
     @Test
+    fun `null cursor treats every foreign message as unread regardless of marker timestamp`() =
+        withFixture { fixture ->
+            val threadId = fixture.seedBookingThread()
+            val sharedCreatedAt = Instant.parse("2031-02-03T10:15:30Z")
+            fixture.seedMessage(threadId, fixture.guestUserId, sharedCreatedAt, "Первое")
+            fixture.seedMessage(threadId, fixture.ownerUserId, sharedCreatedAt, "Своё")
+            fixture.seedMessage(threadId, fixture.guestUserId, sharedCreatedAt, "Второе")
+            fixture.seedRead(
+                threadId = threadId,
+                userId = fixture.ownerUserId,
+                readAt = Instant.parse("2099-01-01T00:00:00Z"),
+                lastReadMessageId = null,
+            )
+
+            assertEquals(
+                2,
+                runBlocking {
+                    fixture.repository.countVenueConversationUnread(fixture.venueId, fixture.ownerUserId)
+                },
+            )
+            assertNull(fixture.readMarker(threadId, fixture.ownerUserId)?.lastReadMessageId)
+        }
+
+    @Test
+    fun `message id cursor orders equal timestamps and ignores own messages above cursor`() =
+        withFixture { fixture ->
+            val threadId = fixture.seedBookingThread()
+            val sharedCreatedAt = Instant.parse("2031-02-03T10:15:30Z")
+            val firstForeign = fixture.seedMessage(threadId, fixture.guestUserId, sharedCreatedAt, "Первое")
+            fixture.seedRead(
+                threadId = threadId,
+                userId = fixture.ownerUserId,
+                readAt = sharedCreatedAt.plusSeconds(60),
+                lastReadMessageId = firstForeign,
+            )
+            val secondForeign = fixture.seedMessage(threadId, fixture.guestUserId, sharedCreatedAt, "Второе")
+            val ownMessage = fixture.seedMessage(threadId, fixture.ownerUserId, sharedCreatedAt, "Своё")
+
+            assertTrue(secondForeign > firstForeign)
+            assertTrue(ownMessage > secondForeign)
+            assertEquals(
+                1,
+                runBlocking {
+                    fixture.repository.countVenueConversationUnread(fixture.venueId, fixture.ownerUserId)
+                },
+            )
+
+            val detail =
+                assertNotNull(
+                    runBlocking {
+                        fixture.repository.getVenueThreadAndMarkRead(
+                            venueId = fixture.venueId,
+                            threadId = threadId,
+                            viewerUserId = fixture.ownerUserId,
+                            allowedThreadTypes = setOf(SupportThreadType.BOOKING_THREAD),
+                        )
+                    },
+                )
+            assertEquals(listOf(firstForeign, secondForeign, ownMessage), detail.messages.map { it.id })
+            assertEquals(ownMessage, fixture.readMarker(threadId, fixture.ownerUserId)?.lastReadMessageId)
+            assertEquals(
+                0,
+                runBlocking {
+                    fixture.repository.countVenueConversationUnread(fixture.venueId, fixture.ownerUserId)
+                },
+            )
+        }
+
+    @Test
+    fun `repeat open is idempotent cursor never moves backwards and another thread is unchanged`() =
+        withFixture { fixture ->
+            val threadId = fixture.seedBookingThread()
+            val otherThreadId = fixture.seedThread(SupportThreadType.VENUE_CHAT)
+            fixture.seedMessage(
+                threadId,
+                fixture.guestUserId,
+                Instant.parse("2031-02-03T10:15:30Z"),
+                "Сообщение",
+            )
+            val futureCursor = 9_999_999L
+            val otherCursor = 8_888_888L
+            fixture.seedRead(
+                threadId,
+                fixture.ownerUserId,
+                Instant.parse("2031-02-03T10:16:30Z"),
+                futureCursor,
+            )
+            fixture.seedRead(
+                otherThreadId,
+                fixture.ownerUserId,
+                Instant.parse("2031-02-03T10:16:30Z"),
+                otherCursor,
+            )
+
+            repeat(2) {
+                assertNotNull(
+                    runBlocking {
+                        fixture.repository.getVenueThreadAndMarkRead(
+                            venueId = fixture.venueId,
+                            threadId = threadId,
+                            viewerUserId = fixture.ownerUserId,
+                        )
+                    },
+                )
+            }
+
+            assertEquals(2, fixture.countReads())
+            assertEquals(futureCursor, fixture.readMarker(threadId, fixture.ownerUserId)?.lastReadMessageId)
+            assertEquals(otherCursor, fixture.readMarker(otherThreadId, fixture.ownerUserId)?.lastReadMessageId)
+        }
+
+    @Test
+    fun `empty thread open records metadata but keeps cursor null`() =
+        withFixture { fixture ->
+            val threadId = fixture.seedThread(SupportThreadType.VENUE_CHAT)
+
+            assertNotNull(
+                runBlocking {
+                    fixture.repository.getVenueThreadAndMarkRead(
+                        venueId = fixture.venueId,
+                        threadId = threadId,
+                        viewerUserId = fixture.ownerUserId,
+                    )
+                },
+            )
+
+            val marker = assertNotNull(fixture.readMarker(threadId, fixture.ownerUserId))
+            assertEquals(threadId, marker.threadId)
+            assertEquals(fixture.ownerUserId, marker.userId)
+            assertNull(marker.lastReadMessageId)
+            assertNotNull(marker.lastReadAt)
+            assertEquals(
+                0,
+                runBlocking {
+                    fixture.repository.countVenueConversationUnread(fixture.venueId, fixture.ownerUserId)
+                },
+            )
+        }
+
+    @Test
+    fun `wrong expected type and foreign actor leave no marker or message facts`() =
+        withFixture { fixture ->
+            val supportThread = fixture.seedThread(SupportThreadType.SUPPORT_TICKET)
+            val messageId =
+                fixture.seedMessage(
+                    supportThread,
+                    fixture.guestUserId,
+                    Instant.parse("2031-02-03T10:15:30Z"),
+                    "Скрытое сообщение",
+                )
+
+            assertNull(
+                runBlocking {
+                    fixture.repository.getVenueThreadAndMarkRead(
+                        venueId = fixture.venueId,
+                        threadId = supportThread,
+                        viewerUserId = fixture.ownerUserId,
+                        allowedThreadTypes = setOf(SupportThreadType.BOOKING_THREAD),
+                    )
+                },
+            )
+            assertNull(
+                runBlocking {
+                    fixture.repository.getGuestThreadAndMarkRead(
+                        fixture.foreignGuestUserId,
+                        supportThread,
+                        GuestThreadSurface.SUPPORT,
+                    )
+                },
+            )
+            assertEquals(0, fixture.countReads())
+            assertEquals(listOf(messageId), fixture.messageIds(supportThread))
+        }
+
+    @Test
+    fun `detail failure rolls cursor update back to its previous raw marker`() =
+        withFixture { fixture ->
+            val threadId = fixture.seedBookingThread()
+            val firstMessage =
+                fixture.seedMessage(
+                    threadId,
+                    fixture.guestUserId,
+                    Instant.parse("2031-02-03T10:15:30Z"),
+                    "Первое",
+                )
+            fixture.seedRead(
+                threadId,
+                fixture.ownerUserId,
+                Instant.parse("2031-02-03T10:16:30Z"),
+                firstMessage,
+            )
+            fixture.seedMessage(
+                threadId,
+                fixture.guestUserId,
+                Instant.parse("2031-02-03T10:17:30Z"),
+                "Второе",
+            )
+            val before = assertNotNull(fixture.readMarker(threadId, fixture.ownerUserId))
+            val failingRepository =
+                SupportThreadRepository(
+                    dataSource = fixture.dataSource,
+                    supportThreadReadCheckpoint = { checkpoint ->
+                        if (checkpoint == SupportThreadReadCheckpoint.AFTER_MARKER_WRITE) {
+                            error("injected detail read failure")
+                        }
+                    },
+                )
+
+            assertFailsWith<IllegalStateException> {
+                runBlocking {
+                    failingRepository.getVenueThreadAndMarkRead(
+                        venueId = fixture.venueId,
+                        threadId = threadId,
+                        viewerUserId = fixture.ownerUserId,
+                    )
+                }
+            }
+            assertEquals(before, fixture.readMarker(threadId, fixture.ownerUserId))
+            assertEquals(
+                1,
+                runBlocking {
+                    fixture.repository.countVenueConversationUnread(fixture.venueId, fixture.ownerUserId)
+                },
+            )
+        }
+
+    @Test
+    fun `venue aggregate excludes support tickets`() =
+        withFixture { fixture ->
+            val bookingThread = fixture.seedBookingThread()
+            val venueChat = fixture.seedThread(SupportThreadType.VENUE_CHAT)
+            val supportTicket = fixture.seedThread(SupportThreadType.SUPPORT_TICKET)
+            listOf(bookingThread, venueChat, supportTicket).forEachIndexed { index, threadId ->
+                fixture.seedMessage(
+                    threadId,
+                    fixture.guestUserId,
+                    Instant.parse("2031-02-03T10:15:30Z").plusSeconds(index.toLong()),
+                    "Сообщение $index",
+                )
+            }
+
+            assertEquals(
+                2,
+                runBlocking {
+                    fixture.repository.countVenueConversationUnread(fixture.venueId, fixture.ownerUserId)
+                },
+            )
+        }
+
+    @Test
+    fun `NULL author venue chat participates in every unread projection and clears on exact open`() =
+        withFixture { fixture ->
+            val threadId = fixture.seedThread(SupportThreadType.VENUE_CHAT)
+            val ownMessageId =
+                fixture.seedMessage(
+                    threadId,
+                    fixture.ownerUserId,
+                    Instant.parse("2031-02-03T10:14:30Z"),
+                    "Своё до системного",
+                    authorRole = SupportMessageAuthorRole.VENUE,
+                    source = SupportMessageSource.VENUE_MINIAPP,
+                )
+            val firstSystemMessageId =
+                fixture.seedMessage(
+                    threadId,
+                    null,
+                    Instant.parse("2031-02-03T10:15:30Z"),
+                    "Отзыв после визита",
+                    authorRole = SupportMessageAuthorRole.SYSTEM,
+                    source = SupportMessageSource.SYSTEM,
+                )
+
+            assertEquals(
+                1,
+                runBlocking {
+                    fixture.repository.countVenueConversationUnread(fixture.venueId, fixture.ownerUserId)
+                },
+            )
+            assertEquals(
+                1,
+                runBlocking {
+                    fixture.repository.listVenueThreads(
+                        venueId = fixture.venueId,
+                        viewerUserId = fixture.ownerUserId,
+                        threadTypes = setOf(SupportThreadType.BOOKING_THREAD, SupportThreadType.VENUE_CHAT),
+                    ).single { it.id == threadId }.unreadCount
+                },
+            )
+
+            fixture.seedRead(
+                threadId = threadId,
+                userId = fixture.guestUserId,
+                readAt = Instant.parse("2031-02-03T10:14:45Z"),
+                lastReadMessageId = ownMessageId,
+            )
+            assertEquals(
+                1,
+                runBlocking {
+                    fixture.repository.listGuestThreads(
+                        userId = fixture.guestUserId,
+                        filter = null,
+                        threadTypes = GuestThreadSurface.CONVERSATIONS.expectedThreadTypes,
+                    ).single { it.id == threadId }.unreadCount
+                },
+            )
+            assertNotNull(
+                runBlocking {
+                    fixture.repository.getGuestThreadAndMarkRead(
+                        userId = fixture.guestUserId,
+                        threadId = threadId,
+                        surface = GuestThreadSurface.CONVERSATIONS,
+                    )
+                },
+            )
+            assertEquals(
+                firstSystemMessageId,
+                fixture.readMarker(threadId, fixture.guestUserId)?.lastReadMessageId,
+            )
+            assertEquals(
+                0,
+                runBlocking {
+                    fixture.repository.listGuestThreads(
+                        userId = fixture.guestUserId,
+                        filter = null,
+                        threadTypes = GuestThreadSurface.CONVERSATIONS.expectedThreadTypes,
+                    ).single { it.id == threadId }.unreadCount
+                },
+            )
+            assertEquals(
+                1,
+                runBlocking {
+                    fixture.repository.countVenueConversationUnread(fixture.venueId, fixture.ownerUserId)
+                },
+            )
+
+            fixture.seedRead(
+                threadId = threadId,
+                userId = fixture.ownerUserId,
+                readAt = Instant.parse("2031-02-03T10:14:45Z"),
+                lastReadMessageId = ownMessageId,
+            )
+            assertEquals(
+                1,
+                runBlocking {
+                    fixture.repository.countVenueConversationUnread(fixture.venueId, fixture.ownerUserId)
+                },
+            )
+
+            val opened =
+                assertNotNull(
+                    runBlocking {
+                        fixture.repository.getVenueThreadAndMarkRead(
+                            venueId = fixture.venueId,
+                            threadId = threadId,
+                            viewerUserId = fixture.ownerUserId,
+                            allowedThreadTypes = setOf(SupportThreadType.BOOKING_THREAD, SupportThreadType.VENUE_CHAT),
+                        )
+                    },
+                )
+            assertEquals(listOf(ownMessageId, firstSystemMessageId), opened.messages.map { it.id })
+            val openedMarker = assertNotNull(fixture.readMarker(threadId, fixture.ownerUserId))
+            assertEquals(threadId, openedMarker.threadId)
+            assertEquals(fixture.ownerUserId, openedMarker.userId)
+            assertEquals(firstSystemMessageId, openedMarker.lastReadMessageId)
+            assertNotNull(openedMarker.lastReadAt)
+            assertEquals(
+                0,
+                runBlocking {
+                    fixture.repository.countVenueConversationUnread(fixture.venueId, fixture.ownerUserId)
+                },
+            )
+
+            val secondSystemMessageId =
+                fixture.seedMessage(
+                    threadId,
+                    null,
+                    Instant.parse("2031-02-03T10:16:30Z"),
+                    "Новый системный контекст",
+                    authorRole = SupportMessageAuthorRole.SYSTEM,
+                    source = SupportMessageSource.SYSTEM,
+                )
+            assertTrue(secondSystemMessageId > firstSystemMessageId)
+            assertEquals(
+                1,
+                runBlocking {
+                    fixture.repository.countVenueConversationUnread(fixture.venueId, fixture.ownerUserId)
+                },
+            )
+
+            assertNotNull(
+                runBlocking {
+                    fixture.repository.getVenueThreadAndMarkRead(
+                        venueId = fixture.venueId,
+                        threadId = threadId,
+                        viewerUserId = fixture.ownerUserId,
+                        allowedThreadTypes = setOf(SupportThreadType.BOOKING_THREAD, SupportThreadType.VENUE_CHAT),
+                    )
+                },
+            )
+            fixture.seedMessage(
+                threadId,
+                fixture.ownerUserId,
+                Instant.parse("2031-02-03T10:17:30Z"),
+                "Своё после открытия",
+                authorRole = SupportMessageAuthorRole.VENUE,
+                source = SupportMessageSource.VENUE_MINIAPP,
+            )
+            assertEquals(
+                0,
+                runBlocking {
+                    fixture.repository.countVenueConversationUnread(fixture.venueId, fixture.ownerUserId)
+                },
+            )
+        }
+
+    @Test
+    fun `NULL author support and unrelated threads stay excluded and unauthorized actors get no count facts`() =
+        withFixture { fixture ->
+            val venueChat = fixture.seedThread(SupportThreadType.VENUE_CHAT)
+            val unrelatedVenueChat = fixture.seedThread(SupportThreadType.VENUE_CHAT)
+            val supportTicket = fixture.seedThread(SupportThreadType.SUPPORT_TICKET)
+            fixture.seedMessage(
+                venueChat,
+                null,
+                Instant.parse("2031-02-03T10:15:30Z"),
+                "Visible venue system message",
+                authorRole = SupportMessageAuthorRole.SYSTEM,
+                source = SupportMessageSource.SYSTEM,
+            )
+            val unrelatedMessage =
+                fixture.seedMessage(
+                    unrelatedVenueChat,
+                    fixture.guestUserId,
+                    Instant.parse("2031-02-03T10:16:30Z"),
+                    "Other thread",
+                )
+            fixture.seedRead(
+                unrelatedVenueChat,
+                fixture.ownerUserId,
+                Instant.parse("2031-02-03T10:16:45Z"),
+                unrelatedMessage,
+            )
+            fixture.seedMessage(
+                supportTicket,
+                null,
+                Instant.parse("2031-02-03T10:17:30Z"),
+                "System support context",
+                authorRole = SupportMessageAuthorRole.SYSTEM,
+                source = SupportMessageSource.SYSTEM,
+            )
+            val unrelatedBefore = assertNotNull(fixture.readMarker(unrelatedVenueChat, fixture.ownerUserId))
+
+            assertEquals(
+                1,
+                runBlocking {
+                    fixture.repository.countVenueConversationUnread(fixture.venueId, fixture.ownerUserId)
+                },
+            )
+            assertEquals(
+                1,
+                runBlocking {
+                    fixture.repository.listGuestThreads(
+                        userId = fixture.guestUserId,
+                        filter = null,
+                        threadTypes = GuestThreadSurface.SUPPORT.expectedThreadTypes,
+                    ).single { it.id == supportTicket }.unreadCount
+                },
+            )
+            listOf(
+                fixture.foreignVenueManagerUserId,
+                fixture.staffUserId,
+                fixture.platformOwnerUserId,
+            ).forEach { unauthorizedUserId ->
+                assertEquals(
+                    0,
+                    runBlocking {
+                        fixture.repository.countVenueConversationUnread(fixture.venueId, unauthorizedUserId)
+                    },
+                )
+            }
+
+            assertNotNull(
+                runBlocking {
+                    fixture.repository.getVenueThreadAndMarkRead(
+                        venueId = fixture.venueId,
+                        threadId = venueChat,
+                        viewerUserId = fixture.ownerUserId,
+                        allowedThreadTypes = setOf(SupportThreadType.BOOKING_THREAD, SupportThreadType.VENUE_CHAT),
+                    )
+                },
+            )
+            assertEquals(unrelatedBefore, fixture.readMarker(unrelatedVenueChat, fixture.ownerUserId))
+            assertEquals(
+                0,
+                runBlocking {
+                    fixture.repository.countVenueConversationUnread(fixture.venueId, fixture.ownerUserId)
+                },
+            )
+        }
+
+    @Test
+    fun `atomic venue detail read leaves a message committed after its snapshot unread`() =
+        withFixture { fixture ->
+            val threadId = fixture.seedBookingThread()
+            val bookingId =
+                requireNotNull(
+                    runBlocking { fixture.repository.getVenueThread(fixture.venueId, threadId) }
+                        ?.thread
+                        ?.bookingId,
+                )
+            val afterThreadLock = CountDownLatch(1)
+            val releaseRead = CountDownLatch(1)
+            val writerStarted = CountDownLatch(1)
+            val readRepository =
+                SupportThreadRepository(
+                    dataSource = fixture.dataSource,
+                    supportThreadReadCheckpoint = { checkpoint ->
+                        if (checkpoint == SupportThreadReadCheckpoint.AFTER_THREAD_LOCK) {
+                            afterThreadLock.countDown()
+                            check(releaseRead.await(5, TimeUnit.SECONDS)) { "read release was not signalled" }
+                        }
+                    },
+                )
+            val executor = Executors.newFixedThreadPool(2)
+            try {
+                val readFuture =
+                    executor.submit<SupportThreadDetailRecord?> {
+                        runBlocking {
+                            readRepository.getVenueThreadAndMarkRead(
+                                venueId = fixture.venueId,
+                                threadId = threadId,
+                                viewerUserId = fixture.ownerUserId,
+                                allowedThreadTypes = setOf(SupportThreadType.BOOKING_THREAD),
+                            )
+                        }
+                    }
+                assertTrue(afterThreadLock.await(5, TimeUnit.SECONDS))
+
+                val writeFuture =
+                    executor.submit<BookingThreadMessageRecord?> {
+                        writerStarted.countDown()
+                        runBlocking {
+                            fixture.repository.addBookingMessage(
+                                bookingId = bookingId,
+                                authorUserId = fixture.guestUserId,
+                                authorRole = SupportMessageAuthorRole.GUEST,
+                                source = SupportMessageSource.GUEST_BOT,
+                                text = "Сообщение после снимка",
+                                telegramMessageId = 91_001L,
+                                expectedThreadId = threadId,
+                                expectedGuestUserId = fixture.guestUserId,
+                            )
+                        }
+                    }
+                assertTrue(writerStarted.await(5, TimeUnit.SECONDS))
+                releaseRead.countDown()
+
+                val firstDetail = assertNotNull(readFuture.get(5, TimeUnit.SECONDS))
+                assertEquals(0, firstDetail.messages.size)
+                assertNotNull(writeFuture.get(5, TimeUnit.SECONDS))
+                assertEquals(
+                    1,
+                    runBlocking {
+                        fixture.repository.countVenueConversationUnread(fixture.venueId, fixture.ownerUserId)
+                    },
+                )
+
+                val refreshed =
+                    assertNotNull(
+                        runBlocking {
+                            fixture.repository.getVenueThreadAndMarkRead(
+                                venueId = fixture.venueId,
+                                threadId = threadId,
+                                viewerUserId = fixture.ownerUserId,
+                                allowedThreadTypes = setOf(SupportThreadType.BOOKING_THREAD),
+                            )
+                        },
+                    )
+                assertEquals(1, refreshed.messages.size)
+                assertEquals(
+                    0,
+                    runBlocking {
+                        fixture.repository.countVenueConversationUnread(fixture.venueId, fixture.ownerUserId)
+                    },
+                )
+            } finally {
+                releaseRead.countDown()
+                executor.shutdownNow()
+                assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS))
+            }
+        }
+
+    @Test
     fun `standalone read rolls back when failure is injected after marker write`() =
         withFixture { fixture ->
             val threadId = fixture.seedThread(SupportThreadType.SUPPORT_TICKET)
@@ -435,18 +1034,68 @@ class SupportThreadReadRepositoryTest {
             threadId: Long,
             userId: Long,
             readAt: Instant,
+            lastReadMessageId: Long? = null,
         ) {
             dataSource.connection.use { connection ->
                 connection.prepareStatement(
-                    "INSERT INTO support_thread_reads (thread_id, user_id, last_read_at) VALUES (?, ?, ?)",
+                    """
+                    INSERT INTO support_thread_reads (thread_id, user_id, last_read_at, last_read_message_id)
+                    VALUES (?, ?, ?, ?)
+                    """.trimIndent(),
                 ).use { statement ->
                     statement.setLong(1, threadId)
                     statement.setLong(2, userId)
                     statement.setTimestamp(3, Timestamp.from(readAt))
+                    if (lastReadMessageId == null) {
+                        statement.setNull(4, java.sql.Types.BIGINT)
+                    } else {
+                        statement.setLong(4, lastReadMessageId)
+                    }
                     statement.executeUpdate()
                 }
             }
         }
+
+        fun seedMessage(
+            threadId: Long,
+            authorUserId: Long?,
+            createdAt: Instant,
+            text: String,
+            authorRole: SupportMessageAuthorRole = SupportMessageAuthorRole.GUEST,
+            source: SupportMessageSource = SupportMessageSource.GUEST_MINIAPP,
+        ): Long =
+            dataSource.connection.use { connection ->
+                connection.prepareStatement(
+                    """
+                    INSERT INTO support_messages (
+                        thread_id,
+                        author_user_id,
+                        author_role,
+                        source,
+                        text,
+                        created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """.trimIndent(),
+                    Statement.RETURN_GENERATED_KEYS,
+                ).use { statement ->
+                    statement.setLong(1, threadId)
+                    if (authorUserId == null) {
+                        statement.setNull(2, java.sql.Types.BIGINT)
+                    } else {
+                        statement.setLong(2, authorUserId)
+                    }
+                    statement.setString(3, authorRole.name)
+                    statement.setString(4, source.name)
+                    statement.setString(5, text)
+                    statement.setTimestamp(6, Timestamp.from(createdAt))
+                    statement.executeUpdate()
+                    statement.generatedKeys.use { keys ->
+                        check(keys.next())
+                        keys.getLong(1)
+                    }
+                }
+            }
 
         fun readAt(
             threadId: Long,
@@ -460,6 +1109,51 @@ class SupportThreadReadRepositoryTest {
                     statement.setLong(2, userId)
                     statement.executeQuery().use { rows ->
                         if (rows.next()) rows.getTimestamp(1).toInstant() else null
+                    }
+                }
+            }
+
+        fun readMarker(
+            threadId: Long,
+            userId: Long,
+        ): ReadMarker? =
+            dataSource.connection.use { connection ->
+                connection.prepareStatement(
+                    """
+                    SELECT thread_id, user_id, last_read_message_id, last_read_at
+                    FROM support_thread_reads
+                    WHERE thread_id = ?
+                      AND user_id = ?
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setLong(1, threadId)
+                    statement.setLong(2, userId)
+                    statement.executeQuery().use { rows ->
+                        if (!rows.next()) {
+                            null
+                        } else {
+                            ReadMarker(
+                                threadId = rows.getLong("thread_id"),
+                                userId = rows.getLong("user_id"),
+                                lastReadMessageId =
+                                    rows.getLong("last_read_message_id").takeUnless { rows.wasNull() },
+                                lastReadAt = rows.getTimestamp("last_read_at")?.toInstant(),
+                            )
+                        }
+                    }
+                }
+            }
+
+        fun messageIds(threadId: Long): List<Long> =
+            dataSource.connection.use { connection ->
+                connection.prepareStatement(
+                    "SELECT id FROM support_messages WHERE thread_id = ? ORDER BY id",
+                ).use { statement ->
+                    statement.setLong(1, threadId)
+                    statement.executeQuery().use { rows ->
+                        buildList {
+                            while (rows.next()) add(rows.getLong(1))
+                        }
                     }
                 }
             }
@@ -599,4 +1293,11 @@ class SupportThreadReadRepositoryTest {
             }
         }
     }
+
+    private data class ReadMarker(
+        val threadId: Long,
+        val userId: Long,
+        val lastReadMessageId: Long?,
+        val lastReadAt: Instant?,
+    )
 }

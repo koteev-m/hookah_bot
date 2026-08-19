@@ -47,13 +47,13 @@ import type {
 } from './guestDtos'
 import type {
   BookingThreadReconciliationResponse,
+  GuestThreadSurface,
   SupportMessageCreateRequest,
   SupportMessageCreateResponse,
   SupportThreadDetailResponse,
   SupportThreadCreateRequest,
   SupportThreadCreateResponse,
   SupportThreadFilter,
-  SupportThreadType,
   SupportThreadListResponse,
   VenueChatCreateRequest
 } from './supportDtos'
@@ -310,19 +310,14 @@ export async function guestConfirmBooking(
 export async function guestGetSupportThreads(
   backendUrl: string,
   deps: RequestDependencies,
-  signal?: AbortSignal,
-  options?: { filter?: SupportThreadFilter; threadType?: SupportThreadType; threadTypes?: SupportThreadType[] }
+  signal: AbortSignal | undefined,
+  options: { filter?: SupportThreadFilter; surface: GuestThreadSurface }
 ): Promise<ApiResult<SupportThreadListResponse>> {
   const search = new URLSearchParams()
-  if (options?.filter) {
+  if (options.filter) {
     search.set('filter', options.filter)
   }
-  if (options?.threadType) {
-    search.set('threadType', options.threadType)
-  }
-  if (options?.threadTypes?.length) {
-    search.set('threadTypes', options.threadTypes.join(','))
-  }
+  search.set('surface', options.surface)
   const suffix = search.toString() ? `?${search.toString()}` : ''
   return requestApi<SupportThreadListResponse>(
     backendUrl,
@@ -380,6 +375,7 @@ export async function guestCreateVenueChat(
 export async function guestGetSupportThread(
   backendUrl: string,
   threadId: number,
+  surface: GuestThreadSurface,
   deps: RequestDependencies,
   signal?: AbortSignal
 ): Promise<ApiResult<SupportThreadDetailResponse>> {
@@ -388,7 +384,7 @@ export async function guestGetSupportThread(
   }
   return requestApi<SupportThreadDetailResponse>(
     backendUrl,
-    `/api/guest/support/threads/${threadId}`,
+    `/api/guest/support/threads/${threadId}?surface=${surface}`,
     { signal, cache: 'no-store' },
     deps
   )

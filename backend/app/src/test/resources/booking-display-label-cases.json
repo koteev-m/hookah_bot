@@ -1,0 +1,119 @@
+{
+  "defaultTimezone": "Europe/Moscow",
+  "browserTimezones": [
+    "Pacific/Honolulu",
+    "Asia/Tokyo"
+  ],
+  "cases": [
+    {
+      "id": "normal-display-number",
+      "bookingId": 42,
+      "displayNumber": 2,
+      "displayLabel": null,
+      "scheduledAt": "2030-01-10T18:30:00Z",
+      "scheduledAtDisplay": "10.01.2030, 21:30",
+      "venueTimezone": "Europe/Moscow",
+      "legacyLabel": null,
+      "expectedLabel": "Бронь №2 · 10.01.2030, 21:30"
+    },
+    {
+      "id": "same-number-different-date",
+      "bookingId": 43,
+      "displayNumber": 2,
+      "displayLabel": null,
+      "scheduledAt": "2030-01-11T18:30:00Z",
+      "scheduledAtDisplay": "11.01.2030, 21:30",
+      "venueTimezone": "Europe/Moscow",
+      "legacyLabel": null,
+      "expectedLabel": "Бронь №2 · 11.01.2030, 21:30"
+    },
+    {
+      "id": "zero-display-number",
+      "bookingId": 44,
+      "displayNumber": 0,
+      "displayLabel": null,
+      "scheduledAt": "2030-01-10T18:30:00Z",
+      "scheduledAtDisplay": "10.01.2030, 21:30",
+      "venueTimezone": "Europe/Moscow",
+      "legacyLabel": null,
+      "expectedLabel": "Бронь #44 · 10.01.2030, 21:30"
+    },
+    {
+      "id": "null-display-number",
+      "bookingId": 45,
+      "displayNumber": null,
+      "displayLabel": null,
+      "scheduledAt": "2030-01-10T19:15:00Z",
+      "scheduledAtDisplay": "10.01.2030, 19:15",
+      "venueTimezone": "UTC",
+      "legacyLabel": null,
+      "expectedLabel": "Бронь #45 · 10.01.2030, 19:15"
+    },
+    {
+      "id": "booking-id-only-fallback",
+      "bookingId": 46,
+      "displayNumber": null,
+      "displayLabel": null,
+      "scheduledAt": null,
+      "scheduledAtDisplay": null,
+      "venueTimezone": "Europe/Moscow",
+      "legacyLabel": null,
+      "expectedLabel": "Бронь #46"
+    },
+    {
+      "id": "authoritative-scheduled-display",
+      "bookingId": 47,
+      "displayNumber": 7,
+      "displayLabel": null,
+      "scheduledAt": "2030-06-01T22:15:00Z",
+      "scheduledAtDisplay": "02.06.2030, 03:15",
+      "venueTimezone": "Asia/Yekaterinburg",
+      "legacyLabel": null,
+      "expectedLabel": "Бронь №7 · 02.06.2030, 03:15"
+    },
+    {
+      "id": "invalid-timezone-fallback",
+      "bookingId": 48,
+      "displayNumber": 8,
+      "displayLabel": null,
+      "scheduledAt": "2030-01-10T18:30:00Z",
+      "scheduledAtDisplay": "10.01.2030, 21:30",
+      "venueTimezone": "Not/A-Timezone",
+      "legacyLabel": null,
+      "expectedLabel": "Бронь №8 · 10.01.2030, 21:30"
+    },
+    {
+      "id": "missing-timezone-fallback",
+      "bookingId": 49,
+      "displayNumber": 9,
+      "displayLabel": null,
+      "scheduledAt": "2030-01-10T19:45:00Z",
+      "scheduledAtDisplay": "10.01.2030, 22:45",
+      "venueTimezone": null,
+      "legacyLabel": null,
+      "expectedLabel": "Бронь №9 · 10.01.2030, 22:45"
+    },
+    {
+      "id": "positive-number-without-schedule",
+      "bookingId": 50,
+      "displayNumber": 10,
+      "displayLabel": null,
+      "scheduledAt": null,
+      "scheduledAtDisplay": null,
+      "venueTimezone": "Europe/Moscow",
+      "legacyLabel": null,
+      "expectedLabel": "Бронь #50"
+    },
+    {
+      "id": "authoritative-display-label-wins",
+      "bookingId": 51,
+      "displayNumber": 11,
+      "displayLabel": "Бронь №11 · 10.01.2030, 21:30",
+      "scheduledAt": "2030-01-10T18:30:00Z",
+      "scheduledAtDisplay": "10.01.2030, 04:30",
+      "venueTimezone": "Europe/Moscow",
+      "legacyLabel": "Устаревшая подпись",
+      "expectedLabel": "Бронь №11 · 10.01.2030, 21:30"
+    }
+  ]
+}

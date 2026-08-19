@@ -473,6 +473,10 @@ class TelegramBotRouterTableTokenTest {
                 expectedThreadId = any(),
                 expectedGuestUserId = any(),
                 expectedVenueId = any(),
+                clientMessageId = any(),
+                beforeInsert = any(),
+                notificationWriter = any(),
+                guestBotNotificationWriter = any(),
             )
         } answers {
             val bookingId = invocation.args[0] as Long
@@ -16981,7 +16985,7 @@ class TelegramBotRouterTableTokenTest {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
                     match { text ->
-                        text.contains("Бронь №7") &&
+                        text.contains("Бронь №7 · 03.04.2026, 21:00") &&
                             text.contains("Гость: Максим") &&
                             text.contains("Смена: пятница") &&
                             text.contains("Визит: пятница") &&
@@ -17052,7 +17056,9 @@ class TelegramBotRouterTableTokenTest {
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
-                    match { it.contains("Бронь №7") && it.contains("Гость: Максим") },
+                    match {
+                        it.contains("Бронь №7 · 03.04.2026, 21:00") && it.contains("Гость: Максим")
+                    },
                     match { markup ->
                         val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
                         buttons.map { it.text } == listOf("✅ Гость пришёл", "🚫 Не пришёл") &&
@@ -17106,7 +17112,9 @@ class TelegramBotRouterTableTokenTest {
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
-                    match { it.contains("Бронь №7") && it.contains("Гость: Максим") },
+                    match {
+                        it.contains("Бронь №7 · 03.04.2026, 21:00") && it.contains("Гость: Максим")
+                    },
                     match { markup ->
                         val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
                         buttons.none { button ->
@@ -17374,7 +17382,7 @@ class TelegramBotRouterTableTokenTest {
                 outboxEnqueuer.enqueueSendMessage(
                     555L,
                     match { text ->
-                        text.contains("✅ Бронь №7 подтверждена заведением.") &&
+                        text.contains("✅ Бронь №7 · 03.04.2026, 21:00 подтверждена заведением.") &&
                             text.contains("Ждём вас") &&
                             text.contains("Мы держим бронь до") &&
                             text.contains("Если задерживаетесь")
@@ -17387,7 +17395,7 @@ class TelegramBotRouterTableTokenTest {
                     100,
                     20_002_3,
                     match {
-                        it.contains("Бронь №7") &&
+                        it.contains("Бронь №7 · 03.04.2026, 21:00") &&
                             it.contains("Гость: Максим") &&
                             it.contains("Держим до:") &&
                             it.contains("Статус: Подтверждена")
@@ -17518,7 +17526,7 @@ class TelegramBotRouterTableTokenTest {
                     100,
                     20_002_33,
                     match {
-                        it.contains("Бронь №7") &&
+                        it.contains("Бронь №7 · 03.04.2026, 21:00") &&
                             it.contains("Гость: Максим") &&
                             it.contains("Держим до:") &&
                             it.contains("Отметить, что гость пришёл?")
@@ -17757,7 +17765,8 @@ class TelegramBotRouterTableTokenTest {
                     -777,
                     20_002_34,
                     match {
-                        it.contains("Бронь №7: гость пришёл") &&
+                        it.startsWith("Бронь №7 · 03.04.2026, 21:00: гость пришёл") &&
+                            it.contains("\n\nБронь №7 · 03.04.2026, 21:00") &&
                             it.contains("Гость: Максим") &&
                             it.contains("Статус: Гость пришёл")
                     },
@@ -17827,7 +17836,8 @@ class TelegramBotRouterTableTokenTest {
                     -777,
                     20_002_35,
                     match {
-                        it.contains("Бронь №7: гость не пришёл") &&
+                        it.startsWith("Бронь №7 · 03.04.2026, 21:00: гость не пришёл") &&
+                            it.contains("\n\nБронь №7 · 03.04.2026, 21:00") &&
                             it.contains("Статус: Гость не пришёл")
                     },
                     null,
@@ -17919,7 +17929,9 @@ class TelegramBotRouterTableTokenTest {
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     100L,
-                    match { it.contains("Напишите сообщение гостю по Бронь №7") },
+                    match {
+                        it.contains("Напишите сообщение гостю по Бронь №7 · 03.04.2026, 21:00")
+                    },
                     any(),
                 )
             }
@@ -17992,6 +18004,7 @@ class TelegramBotRouterTableTokenTest {
                     displayNumber = 7,
                     displayDate = LocalDate.parse("2026-04-03"),
                 )
+            coEvery { venueSettingsRepository.resolveZoneId(10L, any()) } returns ZoneId.of("Europe/Moscow")
 
             router.process(
                 TelegramUpdate(
@@ -18010,7 +18023,9 @@ class TelegramBotRouterTableTokenTest {
                 outboxEnqueuer.enqueueSendMessage(
                     555L,
                     match { text ->
-                        text.contains("Сообщение по вашей брони №7 в «Mix»") &&
+                        text.contains("Сообщение от заведения по брони:") &&
+                            text.contains("Бронь №7 · 03.04.2026, 21:00") &&
+                            text.contains("Заведение: «Mix»") &&
                             text.contains("Подтвердите, пожалуйста, время на 18:00.") &&
                             !text.contains("@manager")
                     },
@@ -18032,7 +18047,7 @@ class TelegramBotRouterTableTokenTest {
                     source = SupportMessageSource.STAFF_CHAT,
                     text = "Подтвердите, пожалуйста, время на 18:00.",
                     telegramMessageId = 20_002_4L,
-                    title = "Бронь №7",
+                    title = "Бронь №7 · 03.04.2026, 21:00",
                     expectedVenueId = 10L,
                 )
             }
@@ -18096,7 +18111,9 @@ class TelegramBotRouterTableTokenTest {
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     555L,
-                    match { it.contains("Напишите ответ по Бронь №7") && it.contains("/cancel") },
+                    match {
+                        it.contains("Напишите ответ по Бронь №7 · 03.04.2026, 21:00") && it.contains("/cancel")
+                    },
                     any(),
                 )
             }
@@ -18192,7 +18209,7 @@ class TelegramBotRouterTableTokenTest {
                     match {
                         it.contains("✅ Вы подтвердили, что придёте.") &&
                             it.contains("Место: Mix") &&
-                            it.contains("Бронь №7")
+                            it.contains("Бронь №7 · 03.04.2026, 21:00")
                     },
                     match { markup ->
                         markup is InlineKeyboardMarkup &&
@@ -18257,7 +18274,7 @@ class TelegramBotRouterTableTokenTest {
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     555L,
-                    "✅ Бронь №7 отменена.",
+                    "✅ Бронь №7 · 03.04.2026, 21:00 отменена.",
                     any(),
                 )
             }
@@ -18313,7 +18330,7 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
-    fun `guest booking reply persists booking chat without staff chat notification`() =
+    fun `guest booking reply delegates staff alert to transactional booking writer`() =
         runBlocking {
             coEvery { dialogStateRepository.get(555L) } returns
                 DialogState(
@@ -18348,6 +18365,7 @@ class TelegramBotRouterTableTokenTest {
                     birthdayDay = null,
                     birthdaySetAt = null,
                 )
+            coEvery { venueSettingsRepository.resolveZoneId(10L, any()) } returns ZoneId.of("Europe/Moscow")
 
             router.process(
                 TelegramUpdate(
@@ -18362,7 +18380,6 @@ class TelegramBotRouterTableTokenTest {
                 ),
             )
 
-            coVerify(exactly = 0) { outboxEnqueuer.enqueueSendMessage(-777L, any(), any()) }
             coVerify {
                 supportThreadRepository.addBookingMessage(
                     bookingId = 77L,
@@ -18371,8 +18388,9 @@ class TelegramBotRouterTableTokenTest {
                     source = SupportMessageSource.GUEST_BOT,
                     text = "Будем на 10 минут позже.",
                     telegramMessageId = 20_002_401L,
-                    title = "Бронь №7",
+                    title = "Бронь №7 · 03.04.2026, 21:00",
                     expectedGuestUserId = 555L,
+                    guestBotNotificationWriter = any(),
                 )
             }
             coVerify { dialogStateRepository.clear(555L) }
@@ -18431,7 +18449,9 @@ class TelegramBotRouterTableTokenTest {
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     200L,
-                    match { it.contains("Напишите сообщение гостю по Бронь №7") },
+                    match {
+                        it.contains("Напишите сообщение гостю по Бронь №7 · 03.04.2026, 21:00")
+                    },
                     any(),
                 )
             }
@@ -18487,7 +18507,10 @@ class TelegramBotRouterTableTokenTest {
                 outboxEnqueuer.enqueueEditMessageText(
                     100,
                     20_002_42,
-                    match { it.contains("Выберите причину отмены") && it.contains("Бронь №7") },
+                    match {
+                        it.contains("Выберите причину отмены") &&
+                            it.contains("Бронь №7 · 03.04.2026, 21:00")
+                    },
                     match { markup ->
                         markup is InlineKeyboardMarkup &&
                             markup.inlineKeyboard.flatten().any { it.text == "Нет мест" } &&
@@ -18578,7 +18601,9 @@ class TelegramBotRouterTableTokenTest {
                 outboxEnqueuer.enqueueEditMessageText(
                     100,
                     20_002_43,
-                    match { it.contains("Бронь №7") && !it.contains("Отменить бронь?") },
+                    match {
+                        it.contains("Бронь №7 · 03.04.2026, 21:00") && !it.contains("Отменить бронь?")
+                    },
                     match { markup ->
                         markup is InlineKeyboardMarkup &&
                             markup.inlineKeyboard.flatten().any { it.text == "✅ Подтвердить" } &&
@@ -18626,7 +18651,7 @@ class TelegramBotRouterTableTokenTest {
                     100,
                     20_002_432,
                     match { text ->
-                        text.contains("Отменить Бронь №7?") &&
+                        text.contains("Отменить Бронь №7 · 03.04.2026, 21:00?") &&
                             text.contains("Гость: Максим") &&
                             text.contains("Причина: Нет мест")
                     },
@@ -18689,7 +18714,10 @@ class TelegramBotRouterTableTokenTest {
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     200L,
-                    match { it.contains("Напишите причину отмены для Бронь №7") && it.contains("/cancel") },
+                    match {
+                        it.contains("Напишите причину отмены для Бронь №7 · 03.04.2026, 21:00") &&
+                            it.contains("/cancel")
+                    },
                     any(),
                 )
             }
@@ -18750,7 +18778,7 @@ class TelegramBotRouterTableTokenTest {
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     555L,
-                    "❌ Бронь №7 отменена заведением.\nПричина: Нет мест",
+                    "❌ Бронь №7 · 03.04.2026, 21:00 отменена заведением.\nПричина: Нет мест",
                     any(),
                 )
             }
@@ -18759,7 +18787,7 @@ class TelegramBotRouterTableTokenTest {
                     -777,
                     20_002_44,
                     match {
-                        it.contains("Бронь №7") &&
+                        it.contains("Бронь №7 · 03.04.2026, 21:00") &&
                             it.contains("Гость: Максим") &&
                             it.contains("Статус: Отменена") &&
                             it.contains("Отменил: @waiter") &&
@@ -18860,7 +18888,7 @@ class TelegramBotRouterTableTokenTest {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
                     match { text ->
-                        text.contains("Бронь №7") &&
+                        text.contains("Бронь №7 · 03.04.2026, 21:00") &&
                             text.contains("Кальянная: Тестовая кальянная") &&
                             text.contains("Имя для персонала: Максим") &&
                             text.contains("Гостей: 3")
@@ -18933,7 +18961,7 @@ class TelegramBotRouterTableTokenTest {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
                     match { text ->
-                        text.contains("Бронь №7") &&
+                        text.contains("Бронь №7 · 03.04.2026, 21:00") &&
                             text.contains("Статус: Подтверждена") &&
                             !text.contains("Ваш ответ: придёте")
                     },
@@ -18950,7 +18978,7 @@ class TelegramBotRouterTableTokenTest {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
                     match { text ->
-                        text.contains("Бронь №8") &&
+                        text.contains("Бронь №8 · 04.04.2026, 21:00") &&
                             text.contains("Статус: Подтверждена") &&
                             text.contains("Ваш ответ: придёте")
                     },
@@ -19083,7 +19111,7 @@ class TelegramBotRouterTableTokenTest {
                 )
                 outboxEnqueuer.enqueueSendMessage(
                     100,
-                    match { text -> text.contains("Бронь №8") },
+                    match { text -> text.contains("Бронь №8 · 03.04.2026, 21:00") },
                     any(),
                 )
             }
@@ -19141,7 +19169,7 @@ class TelegramBotRouterTableTokenTest {
                     100,
                     match { text ->
                         text.contains("Тестовая кальянная") &&
-                            text.contains("Выберите новую дату для бронь №7.")
+                            text.contains("Выберите новую дату для бронь №7 · 03.04.2026, 21:00.")
                     },
                     match { it is InlineKeyboardMarkup },
                 )
@@ -19198,7 +19226,7 @@ class TelegramBotRouterTableTokenTest {
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
-                    "✅ Бронь №7 отменена.",
+                    "✅ Бронь №7 · 03.04.2026, 21:00 отменена.",
                     any(),
                 )
             }

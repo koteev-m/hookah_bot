@@ -4,10 +4,38 @@ Last verified: 2026-08-18.
 
 ## 1. Current stage
 
-**BOOKING CONVERSATION INTEGRITY / THREAD UNIQUENESS AND REAL MULTI-TENANT ISOLATION /
+**BOOKING CONVERSATION UX / DISTINCT LABELS, INBOX AND UNREAD DISCOVERABILITY /
 MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
 
-This bounded fix records local implementation and test evidence for
+This bounded slice keeps authoritative per-venue-service-day booking numbers and adds one stable
+venue-local label, `Бронь №N · dd.MM.yyyy, HH:mm`, with a booking-id fallback across Guest/Venue
+booking DTOs, booking conversations and Telegram notifications. Venue navigation now separates
+`Брони`, `Переписки` (`BOOKING_THREAD` plus `VENUE_CHAT`) and `Поддержка` (`SUPPORT_TICKET`). Existing
+actor/thread-scoped message-id cursors drive unread-first inbox ordering, exact booking-card markers
+and the aggregate conversation badge. `last_read_message_id` is the sole unread authority;
+`last_read_at` remains wall-clock metadata only. Every user-visible message with
+`author_user_id = NULL` is a system message and counts as foreign for every actor, including exact
+thread/card and aggregate Venue conversation unread. Guest exact-open routes map the fixed
+server-owned `CONVERSATIONS` (`BOOKING_THREAD` + `VENUE_CHAT`) or `SUPPORT` (`SUPPORT_TICKET`)
+surface into the repository transaction; locked ownership and type validation happen before the
+message snapshot, marker update or detail disclosure for ordinary Guest and confirmed Platform
+Guest-context calls. A committed Guest booking message can atomically
+enqueue one fact-only alert to the canonical venue's already linked staff chat; missing/disabled
+configuration safely skips it. Additive PostgreSQL V126/H2 V127 add the nullable cursor and `(thread_id, id)`
+message index without a default, backfill, foreign key or destructive rewrite. No thread/RBAC
+change, personal subscription domain, Media/R2, reminder, no-show, queue or preorder expansion is
+included. Independent review, green Actions, migration rollout, staging redeploy and a fresh
+Guest/Venue/Telegram smoke are still required; no staging smoke is recorded for this slice.
+
+Fresh local evidence for the three current findings is exact, not aggregate-only:
+`SupportThreadReadRepositoryTest 21/21`, `BookingConversationRoutesTest 8/8`,
+`SupportTicketRoutesTest 13/13` and real-PostgreSQL
+`SupportThreadReadConcurrencyPostgresTest 6/6` each report zero skipped/failures/errors; the full
+structured Playwright run reports `216/216` with zero unexpected/flaky/skipped/runner errors or
+failed attempts. This is local validation only, not green Actions or staging evidence.
+
+The previous booking-conversation-integrity release remains separately review-required. Its local
+implementation and test evidence covers
 `BOOKING-CLIENT-ID-RELOAD-RECONCILIATION-001`,
 `BOOKING-AUDIT-UNKNOWN-REFERENCE-KEY-001`,
 `BOOKING-MINIAPP-IDEMPOTENCY-PG-EVIDENCE-001`, `BOOKING-DOC-PREVERDICT-001`,
@@ -72,10 +100,10 @@ overall production readiness.
 
 - Markdown surfaces scanned: `35` (`32` under `docs/**` plus this file, `README.md`, root
   `AGENTS.md`).
-- Normalized raw candidate records: `195`.
-- Canonical catalog items after evidence review and global deduplication: `107`; `105` remain active
-  after the two locally implemented booking items below.
-- Disposition: `OPEN_CONFIRMED 41`, `MVP_IMPLEMENTED_LOCAL_VALIDATION_PASSED 2`, `BLOCKED_PRODUCT_DECISION 14`,
+- Normalized raw candidate records: `198`.
+- Canonical catalog items after evidence review and global deduplication: `110`; `105` remain active
+  after the five locally implemented booking items below.
+- Disposition: `OPEN_CONFIRMED 41`, `MVP_IMPLEMENTED_LOCAL_VALIDATION_PASSED 5`, `BLOCKED_PRODUCT_DECISION 14`,
   `BLOCKED_PREREQUISITE 13`, `DEFERRED_AFTER_MVP 31`, `UNKNOWN_NEEDS_RESEARCH 6`,
   `STALE_ALREADY_IMPLEMENTED 42`, `DUPLICATE_OF_OTHER_ID 35`, `HISTORICAL_ONLY 11`.
 - Historical audits remain evidence/history and do not reactivate closed work without current
@@ -91,6 +119,17 @@ Current P2/P3 registry entries preserved as open:
 
 Booking review registry for this Goal:
 
+- `BOOKING-DISPLAY-LABEL-001` — `MVP_IMPLEMENTED_LOCAL_VALIDATION_PASSED`; authoritative booking
+  number plus venue-local date/time and stable booking-id fallback are shared across Guest/Venue
+  booking, conversation and Telegram surfaces; independent review/Actions/staging smoke remain;
+- `BOOKING-INBOX-DISCOVERABILITY-001` — `MVP_IMPLEMENTED_LOCAL_VALIDATION_PASSED`; Venue
+  `Переписки` contains only booking conversations and venue chats with deterministic unread-first
+  ordering, while `Поддержка` remains the support-ticket surface;
+- `BOOKING-UNREAD-NOTIFICATION-001` — `MVP_IMPLEMENTED_LOCAL_VALIDATION_PASSED`; actor-scoped
+  nav/card unread uses the monotonic `last_read_message_id` cursor, and exact read clearing snapshots
+  `MAX(support_messages.id)` under canonical locks. The existing transactional outbox can send one
+  privacy-safe canonical-venue staff-chat alert without introducing personal subscriptions;
+
 - `BOOKING-DEDUP-READ-001` — `DONE` after fail-closed H2/PostgreSQL lossless-read migration proof and
   live writer-first/migration-first snapshot serialization;
 - `BOOKING-WRITER-CONVERGENCE-001` — `DONE` after production route/repository convergence proof;
@@ -105,15 +144,29 @@ Booking review registry for this Goal:
   `BOOKING-AUDIT-UNKNOWN-REFERENCE-KEY-001`; both still await independent review;
 - `BOOKING-MIGRATION-SNAPSHOT-001` — `DONE`; pre-guard PostgreSQL table locks and real writer-first
   plus migration-first Flyway serialization pass the exact `2/2` concurrency gate;
-- `BOOKING-READ-LOCK-ORDER-001` — `DONE`; all 15 standalone read-marker callers and four connection-aware paths
-  use `bookings -> support_threads -> support_thread_reads` or
-  `support_threads -> support_thread_reads`, with fresh repository `11/11` and real PostgreSQL
-  `3/3` lock/RBAC evidence and no reverse runtime DML path;
+- `BOOKING-READ-LOCK-ORDER-001` — `DONE`; production read-marker paths retain
+  `bookings -> support_threads -> support_thread_reads` or
+  `support_threads -> support_thread_reads`, with exact repository `21` and real PostgreSQL `6`
+  lock/cursor/RBAC cases and no reverse runtime DML path;
 - `BOOKING-SAVEPOINT-COLLISION-001` — `OPEN`; the current unique-conflict branch is defensive-only
   under the booking-row lock and requires a separate review before removal.
 
 Findings fixed locally and still requiring independent review in this bounded fix:
 
+- `BOOKING-UNREAD-NULL-AUTHOR-001` — `LOCAL_FIX_REVIEW_REQUIRED`; user-visible NULL-author rows use
+  the same null-safe foreign-author predicate in exact/card and aggregate Venue unread, with
+  authoritative exact-open clearing and no RBAC expansion;
+- `BOOKING-UNREAD-GUEST-TYPE-GUARD-001` — `LOCAL_FIX_REVIEW_REQUIRED`; ordinary Guest and confirmed
+  Platform Guest-context routes pass fixed server-owned `CONVERSATIONS` / `SUPPORT` contracts into
+  locked ownership/type validation before markers or message facts;
+- `BOOKING-UNREAD-MIXED-VERSION-ROLLOUT-001` — `LOCAL_FIX_REVIEW_REQUIRED`; V126 docs require a
+  backup, full old-instance drain, exactly one new image, normal-startup migration, forward-fix
+  rollback and bounded NULL-author/type-guard/isolation smoke;
+- `BOOKING-UNREAD-TIMESTAMP-AUTHORITY-001` — `LOCAL_FIX_REVIEW_REQUIRED`;
+- `BOOKING-UNREAD-PG-RACE-COVERAGE-001` — `LOCAL_FIX_REVIEW_REQUIRED`;
+- `BOOKING-LABEL-TS-PARITY-COVERAGE-001` — `LOCAL_FIX_REVIEW_REQUIRED`;
+- `BOOKING-E2E-NOTIFIER-COVERAGE-001` — `LOCAL_FIX_REVIEW_REQUIRED`;
+- `BOOKING-DOC-CURRENT-SLICE-DRIFT-001` — `LOCAL_FIX_REVIEW_REQUIRED`;
 - `BOOKING-CLIENT-ID-RELOAD-RECONCILIATION-001` — `LOCAL_FIX_REVIEW_REQUIRED`;
 - `BOOKING-AUDIT-UNKNOWN-REFERENCE-KEY-001` — `LOCAL_FIX_REVIEW_REQUIRED`;
 - `BOOKING-MINIAPP-IDEMPOTENCY-PG-EVIDENCE-001` — `LOCAL_FIX_REVIEW_REQUIRED`;
@@ -131,7 +184,14 @@ Still open by design:
 
 - `BOOKING-CI-PLAYWRIGHT-FLAKE-001` — `OPEN`; an earlier structured run executed `197/198` after
   one unrelated favorite-test failure, and this pass first executed `205/206` after one unrelated
-  catalog-debounce timing failure before the focused and second full `206/206` reruns passed.
+  catalog-debounce timing failure before the focused and second full `206/206` reruns passed. The
+  discoverability run first executed `207/208` after the same unrelated catalog virtual-clock
+  debounce flake; its isolated repeat and second full structured `208/208` run passed. After the
+  wrong-thread-type deep-link read guard was added, the final structured run passed `209/209`
+  with zero unexpected, flaky or skipped results. This cursor/label/notifier slice then passed the
+  raised structured floor at `212/212`, also with zero unexpected, flaky or skipped results. The
+  current Guest surface/deep-link closure raised the mandatory structured floor and passed
+  `216/216`, again with zero unexpected, flaky or skipped results.
   Trigger: the next Mini App CI-hardening pass or a repeated same failure in GitHub Actions;
 - `BOOKING-SAVEPOINT-COLLISION-001` — `OPEN`;
 - `BOOKING-AUDIT-EVENTS-001` — `OPEN`;
@@ -141,5 +201,7 @@ Still open by design:
 - `BOOKING-PREORDER-001` — `OPEN`.
 
 Media/object-storage work remains blocked by `MEDIA-STORAGE-DECISION-001`; this Goal did not
-implement or modify Media/R2. Next step: independent review, explicit commit, green Actions,
-PostgreSQL pre-deploy scan/migration, then bounded Guest/Venue/Telegram staging isolation smoke.
+implement or modify Media/R2. Next step for this slice: independent review, explicit commit, green
+Actions, apply the additive cursor migration, staging redeploy and bounded Guest/Venue/Telegram
+conversation smoke. The previous integrity release retains its separate V124/V125
+preflight/migration sequence.

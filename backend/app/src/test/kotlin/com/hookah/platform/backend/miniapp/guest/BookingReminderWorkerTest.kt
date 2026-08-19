@@ -71,8 +71,8 @@ class BookingReminderWorkerTest {
                     match { text ->
                         text.contains("Напоминаем о брони") &&
                             text.contains("Место: Booking Venue") &&
-                            text.contains("Бронь №1") &&
-                            text.contains("Дата и время: 10.05.2030, 20:00") &&
+                            text.contains("Бронь №1 · 10.05.2030, 20:00") &&
+                            !text.contains("Дата и время:") &&
                             text.contains("Гостей: 2") &&
                             text.contains("Держим стол до 20:30.")
                     },

@@ -1,6 +1,6 @@
 # Testing / QA Smoke Strategy
 
-Дата актуализации: 2026-08-17.
+Дата актуализации: 2026-08-18.
 
 Статус: **current product reference / UPDATED**. This document is the canonical QA/smoke strategy for the Telegram bot + Mini App platform. It consolidates local validation, GitHub Actions expectations, area-specific smoke suites, staging policy, failure reporting and Codex handoff rules. Deployment and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
 
@@ -20,11 +20,16 @@ STAGING-SMOKE-PASSED** for release HEAD `e35def99ea8429462e5fdaaeee914f57da72e77
 green Actions, staging deploy, consolidated smoke and cleanup. Local GitHub CLI authentication is
 invalid, so Actions are recorded as user-confirmed evidence.
 
-Current review-ready slice: **BOOKING CONVERSATION INTEGRITY / THREAD UNIQUENESS AND REAL
-MULTI-TENANT ISOLATION / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE
-COMMIT**. This records local implementation evidence for `BOOKING-THREAD-UNIQUENESS-001` and
-`QA-BOOKING-ISOLATION-001` only. Green Actions, migration preflight/deploy and bounded real
-two-account Telegram/Mini App staging smoke remain required before release.
+Current review-ready slice: **BOOKING CONVERSATION UX / DISTINCT LABELS, INBOX AND UNREAD
+DISCOVERABILITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+This records bounded local implementation evidence only. Independent review, green Actions,
+PostgreSQL V126/H2 V127 rollout, staging redeploy and a fresh Guest/Venue/Telegram smoke remain
+required before release.
+
+Historical review-ready slice (still separately awaiting its release gates): **BOOKING CONVERSATION
+INTEGRITY / THREAD UNIQUENESS AND REAL MULTI-TENANT ISOLATION / MVP IMPLEMENTED / LOCAL VALIDATION
+PASSED / REVIEW REQUIRED BEFORE COMMIT**. Its V124/V125 preflight, migration and two-account staging
+requirements remain regression/release evidence; it is not the current slice and is not marked done.
 
 ## Core Rule
 
@@ -39,9 +44,10 @@ Before booking schedule assertions, `SubscriptionBillingJob` could race the test
 The exact `VenueBookingRoutesTest` plus `VenueRbacRoutesTest` selector passed and the new GitHub
 Actions run was green. This is test fixture isolation, not a runtime booking defect.
 
-### Booking conversation integrity quality gate
+### Booking conversation automated regression matrix
 
-The mandatory automated matrix for the bounded integrity slice is:
+The matrix retains the previous bounded integrity slice as historical regression evidence and adds
+the current UX/unread closure gates; both remain mandatory where selected in CI:
 
 - PostgreSQL V124 / H2 V125 migration wrappers: minimum `47 / 42` tests, zero skipped/failures/
   errors. Each wrapper executes the production migration and proves: clean/no-duplicate preservation;
@@ -67,13 +73,23 @@ The mandatory automated matrix for the bounded integrity slice is:
   that the migration re-evaluates the committed unsafe state before mutation. Migration-first proves
   the inverse wait edge, a safe merge, one authoritative survivor marker and a stale duplicate
   writer resolving to `NOT_FOUND` without an orphan.
-- `SupportThreadReadRepositoryTest` minimum `11` and
-  `SupportThreadReadConcurrencyPostgresTest` minimum `3` form the mandatory
+- `SupportThreadReadRepositoryTest` minimum `21` and
+  `SupportThreadReadConcurrencyPostgresTest` minimum `6` form the mandatory
   `BOOKING-READ-LOCK-ORDER-001` gate: booking marks must follow
   `bookings -> support_threads -> support_thread_reads`, non-booking marks
   `support_threads -> support_thread_reads`, and no child-to-parent lock inversion may appear.
-  Real PostgreSQL cases cover Guest/Venue booking reads plus Guest/Venue/Platform non-booking
-  actor/type/scope combinations with parent locks held before marker DML.
+  The same suites prove that `last_read_message_id`, not timestamp comparison, is unread authority:
+  the accepted exact read locks the canonical parent rows, snapshots `MAX(support_messages.id)`,
+  advances the cursor monotonically and reads the returned detail in the same transaction. Real
+  PostgreSQL cases cover writer-started-earlier blocking evidence, equal `created_at` ordering,
+  concurrent monotonic reads, another-thread isolation and own-message exclusion. The repository
+  floor includes the exact NULL-author projection/open case and NULL-author support/unrelated/
+  unauthorized exclusion case; the PostgreSQL floor includes the production NULL-author
+  `VENUE_CHAT` exact-open case with another actor's raw marker unchanged.
+- Additive cursor migration wrappers `SupportThreadReadCursorMigrationH2Test` and
+  `SupportThreadReadCursorMigrationPostgresTest`: minimum `4` each, zero skipped/failures/errors.
+  They execute actual H2 V127/PostgreSQL V126 heads and assert nullable `BIGINT`, no default or
+  backfill, preserved `last_read_at` plus primary-key facts, and the exact `(thread_id, id)` index.
 - Additive Mini App message-schema wrappers
   `BookingMessageIdempotencyMigrationH2Test` and
   `BookingMessageIdempotencyMigrationPostgresTest`: minimum `5` each, proving exact nullable
@@ -84,56 +100,324 @@ The mandatory automated matrix for the bounded integrity slice is:
   independent production repository calls visibly blocked on the canonical booking row and one
   resulting thread. Post-state must prove both callers returned the same authoritative id, exact
   booking/venue/guest/type/status, and zero messages and relevant audits.
-- `BookingConversationRepositoryTest`: minimum `12`, covering repeat convergence, distinct booking
+- `BookingConversationRepositoryTest`: minimum `13`, covering repeat convergence, distinct booking
   identity, Telegram retry idempotency, both message sources, authoritative actor/metadata checks,
   locked rejection of concurrently closed threads, positive generic-writer type allowlisting,
-  ordinary chat/ticket regression and rollback.
-- `BookingConversationRoutesTest`: minimum `5`, covering two guests/two venues/multiple bookings,
+  ordinary chat/ticket regression, rollback and one-time Guest Bot transactional notification
+  callback execution across replay.
+- `BookingConversationRoutesTest`: minimum `8`, covering two guests/two venues/multiple bookings,
   Guest and Venue generic booking replies through the authoritative writer, direct privacy denials,
-  safe idempotency replay/mismatch `409` and required/strict Mini App key validation.
+  safe idempotency replay/mismatch `409`, required/strict Mini App key validation, cross-surface
+  booking-label parity, actor/thread-scoped unread aggregation/read clearing and the exact ordinary
+  Guest wrong-surface/raw-marker/no-facts contract.
+- `BookingDisplayLabelTest`: minimum `2`, loading the shared JSON case fixture and exercising the
+  production Kotlin formatter for positive-number formatting, stable booking-id fallback, venue
+  timezone conversion and deterministic product-default timezone fallback. The dedicated
+  `booking-label-parity.spec.ts` minimum is `2`; it must load that same fixture through the
+  production TypeScript formatter and pass every case in distinct browser timezones.
+- `GuestBookingRoutesTest`: minimum `7`, retaining Guest booking list/create/update lifecycle and
+  authoritative `displayLabel` coverage.
 - The same exact route/repository selectors must cover the read-only bounded reconciliation batch:
   more than 100 existing booking threads with the target beyond the former list cutoff, explicit
   `WITH_THREAD` and authoritative `NO_THREAD`, Guest and Venue scope, Staff and foreign denial,
   malformed/duplicate/oversized input rejection, complete one-result-per-request validation,
   repeated lookup, `Cache-Control: no-store` on exact/list/detail readers and zero
   thread/message/read/audit/outbox writes.
-- `BookingMessageIdempotencyPostgresTest`: minimum `11`, covering Guest/Venue same-key replay,
+- `BookingMessageIdempotencyPostgresTest`: minimum `17`, covering Guest/Venue same-key replay,
   mismatch, different keys, atomic outbox rollback/recovery and lost-response replay. The contention
   case uses independent connections/PIDs and an observer that proves the waiting caller has an
   ungranted `pg_locks` row and exact caller A in `pg_blocking_pids` before release. Exact and
   canonical-equivalent booking envelopes replay; conflicting chat/method/payload envelopes fail
   closed and roll back. Assertions include one physical message/outbox/logical thread mutation and
-  zero duplicate read markers/audits. The legacy suspend enqueue remains key-only and is covered by
-  `TelegramOutboxWorkerTest` minimum `8`.
-- `SupportTicketRoutesTest` remains an exact support regression selector with minimum `12` and zero
-  skipped/failures/errors.
-- Existing booking/RBAC regression remains exact: `VenueBookingRoutesTest` minimum `8` and
-  `VenueRbacRoutesTest` minimum `36`.
+  zero duplicate read markers/audits. New Guest Mini App/Bot coverage additionally requires one
+  canonical-venue fact-only staff alert, no replay duplicate, safe missing/disabled configuration,
+  wrong-venue exclusion and full message/outbox rollback on strict enqueue failure. The legacy
+  suspend enqueue remains key-only and is covered by `TelegramOutboxWorkerTest` minimum `8`.
+- `BookingMessageStaffChatNotifierTest`: minimum `5`, executable without Docker and asserting exact
+  canonical label/link payload, privacy-safe text, logical dedupe, caller-transaction rollback,
+  disabled/unlinked/missing-URL skip and stable product-timezone fallback.
+- `SupportTicketRoutesTest` remains an exact support regression selector with minimum `13` and zero
+  skipped/failures/errors; its exact confirmed Platform Guest wrong-surface/raw-marker/no-facts
+  testcase is mandatory.
+- Existing booking/RBAC regression remains exact: `GuestBookingRoutesTest` minimum `7`,
+  `VenueBookingRoutesTest` minimum `8` and `VenueRbacRoutesTest` minimum `36`.
 - `TelegramBotRouterTableTokenTest` remains an exact production-router regression gate (current
   minimum `552`) and verifies persisted inbound Telegram message ids plus stable outbox dedupe keys.
-- Production Mini App build and the full deterministic browser smoke are required; the current
-  floor is `206`, including exact thread reuse/isolation, double-click convergence,
+- Production Mini App build and the full deterministic browser smoke are required. The current
+  structured floor is `216`. CI must require exact passing results for
+  `shared booking label fixture stays aligned with the production TypeScript helper`,
+  `authoritative booking labels do not change with the browser timezone`,
+  `guest booking message keeps its client message id for unchanged manual retry after a lost response`,
+  `guest booking message skips the staff alert when staff chat is not configured`,
+  `guest conversation deep link rejects support ticket without clearing unread marker`,
+  `guest support deep links reject booking and venue chats without clearing unread markers`,
+  `guest exact surface deep links clear only the opened thread unread marker` and
+  `guest ignores a late detail response from the previous surface`. The matrix
+  also includes exact thread reuse/isolation,
+  wrong-thread-type deep-link read guards,
+  double-click convergence,
   commit-then-lost-response reload/reconciliation on both Venue dedicated and Guest generic
   surfaces, edit rotation, context invalidation, opening a resolved target instead of another
   active conversation, and a target existing beyond a mocked inventory of more than 100 threads.
   The >100-thread case must show the target messages, hide the first-thread action and issue no
   blind POST. A partial batch failure stays `ERROR/UNKNOWN`; refresh performs reads only and does not
   rotate/replay `clientMessageId`. CI writes the Playwright JSON report and cross-checks its suite outcomes
-  against `stats`; at least `206` tests must execute with zero
+  against `stats`; at least `216` tests must execute with zero
   unexpected, flaky, skipped, runner-error, missing-result, non-passing-expectation or failed-attempt
   entries. A missing, malformed or structurally inconsistent report fails the job.
 
 `BOOKING-CI-PLAYWRIGHT-FLAKE-001` remains `OPEN`: an earlier structured run executed `197/198`
 after one unrelated favorite-test failure. This pass first executed `205/206` after one unrelated
 catalog-debounce timing failure; its focused rerun and the second full structured `206/206` run
-passed. Green reruns do not erase either flake signal. Revisit the finding in the next Mini App
-CI-hardening pass or after a repeated same failure in GitHub Actions.
+passed. The discoverability slice first executed `207/208` after the same unrelated catalog
+virtual-clock debounce flake; its isolated repeat and the second full structured `208/208` run
+passed. The subsequent wrong-thread-type read-guard run then passed a structured `209/209` with zero
+unexpected, flaky or skipped results. The cursor/label/notifier slice then passed the raised
+structured floor at `212/212`, again with zero unexpected, flaky or skipped results. Green reruns do
+not erase these flake signals. The current Guest surface/deep-link/stale-response closure then
+passed the raised full structured floor at `216/216` with zero unexpected, flaky or skipped results.
+Revisit the finding in the next Mini App CI-hardening pass or after a repeated same failure in
+GitHub Actions.
 
 CI must assert the exact JUnit XML files and zero skipped/failures/errors. A selector that discovers
 fewer tests must fail the job. PostgreSQL/Testcontainers checks may not be treated as optional or
 green through skips.
 
-Before migration, run the exact read-only PostgreSQL preflight from
+### Booking conversation labels, inbox and unread quality gate
+
+The bounded discoverability slice adds these regression requirements without reopening the
+V124/V125 migration, thread-uniqueness or broad outbox design verdicts:
+
+- two bookings for the same Guest, venue and service day at different times keep different booking
+  ids, authoritative display numbers and threads; Guest booking, Venue booking and conversation
+  list/detail DTOs return the same stable venue-local label before and after reload, sorting and
+  filtering;
+- missing display number falls back to stable `booking_id`, never DOM/list position or a generic
+  `Бронь 1`;
+- Venue conversation lists contain only the requested `BOOKING_THREAD` plus `VENUE_CHAT`, order
+  unread first then `last_message_at DESC` then `thread_id DESC`, and expose bounded preview/time,
+  type and actor-scoped unread count;
+- `GET /api/venue/{venueId}/support/unread-count` is Owner/Manager own-venue scoped and counts only
+  unread `BOOKING_THREAD` plus `VENUE_CHAT` messages. `SUPPORT_TICKET`, foreign venues and Staff are
+  excluded before message facts;
+- exact detail read clears only the exact actor/thread marker, another thread and another actor are
+  unchanged, and repeat reads remain idempotent. A wrong-queue exact deep link is type-clamped and
+  rejected before read-marker mutation;
+- `support_thread_reads.last_read_message_id` is the sole unread authority. `last_read_at` is
+  wall-clock metadata only and may not appear in an unread predicate. Existing marker rows remain
+  nullable with no backfill; therefore a NULL cursor leaves every foreign-authored message unread.
+  User-visible rows with `author_user_id = NULL` are system messages and foreign to every actor;
+  they count on the exact thread/card and in the aggregate Venue conversation badge for
+  `BOOKING_THREAD` / `VENUE_CHAT`, then clear through the same authoritative open. Internal-only rows
+  must be excluded by visibility, never by weakening the unread predicate.
+  Accepted open snapshots `MAX(message.id)` under the canonical parent locks, advances only
+  monotonically and returns marker plus detail/messages from the same transaction. Unread is exactly
+  `author_user_id IS DISTINCT FROM actor_user_id` plus `message.id > cursor` (or a NULL cursor);
+  own messages never count;
+- Guest route regressions must prove the fixed server-owned surface contract:
+  `CONVERSATIONS = {BOOKING_THREAD, VENUE_CHAT}` and `SUPPORT = {SUPPORT_TICKET}`. For both ordinary
+  authenticated Guest and confirmed Platform Owner Guest-context calls, each wrong-surface case
+  returns the current privacy-safe rejection, discloses zero message body/detail facts and leaves
+  raw `support_thread_reads(thread_id, user_id, last_read_message_id, last_read_at)` unchanged.
+  Correct-surface cases update only the exact marker. The repository transaction must validate the
+  locked type before `MAX(message.id)`, marker/audit/outbox mutation or detail read; a client cannot
+  supply an arbitrary type set.
+- one newly committed Guest booking message creates at most one canonical-venue staff-chat alert
+  outbox row when Telegram, staff-chat binding and exact Mini App URL are available. Replay creates
+  no second logical alert; missing/disabled configuration creates none; wrong-venue context cannot
+  choose a recipient; transaction failure rolls back message plus outbox rows. Alert payload and
+  logs contain no raw booking-chat text;
+- notification validation is explicitly tiered: backend integration owns outbox cardinality,
+  transaction rollback, retry/replay and unlink serialization; Playwright owns visible badges,
+  exact deep-link/callback navigation and safe mock alert counters; only a bounded staging smoke can
+  prove real Telegram delivery to a linked staff chat;
+- deterministic Mini App smoke identifies cards/threads by stable data attributes, never
+  `.first()` / `.nth()`, and covers two distinct booking labels and exact threads, nav/card unread,
+  exact-read clearing, booking-only Support emptiness, venue/account switch isolation, reload and
+  exact callback/deep-link navigation;
+- focused backend selectors, exact JUnit XML, Mini App production build, full structured Playwright
+  smoke, Kotlin compile/lint, workflow YAML parse, `git diff --check` and `git status --short` are
+  mandatory before recording local validation. Runtime/staff-chat behavior still requires green
+  Actions, staging redeploy and a fresh real Telegram/Mini App smoke; local success is not staging
+  evidence.
+
+#### PostgreSQL V126 controlled mixed-version release and smoke boundary
+
+This is a required future release check, not evidence that green Actions, a deploy, migration or
+staging smoke has run.
+
+This current-section wording addresses only the two remaining commit-blocking documentation
+findings `BOOKING-UNREAD-ROLLOUT-PREFLIGHT-HEAD-001` and
+`BOOKING-UNREAD-ROLLOUT-MANUAL-DB-CLEANUP-001`. The already approved label smoke remains unchanged;
+this wording does not raise the epic or release status.
+
+PostgreSQL V126 is additive. It adds nullable `BIGINT support_thread_reads.last_read_message_id`
+with no default, no backfill and no destructive rewrite;
+`last_read_at` and primary key `(thread_id, user_id)` remain intact. The old binary is
+schema-compatible but updates only `last_read_at`. The new binary treats a NULL cursor as every
+foreign-authored message unread, including a user-visible system message with
+`author_user_id = NULL`. No message or marker data is lost, but badges can repeat or be inaccurate
+during mixed-version operation. H2 V127 is the additive dialect-parity/test migration: it adds the
+same nullable `BIGINT last_read_message_id` with no default, no backfill and no destructive rewrite,
+preserves `last_read_at` and primary key `(thread_id, user_id)`, and applies only in H2/local/test
+environments. Staging PostgreSQL applies PostgreSQL V126, never H2 V127.
+
+`EXPECTED_RELEASE_SHA` comes only from the exact commit SHA shown by a fully green GitHub Actions
+run after commit and push. The operator copies the full 40-character lowercase SHA from that run
+and passes it explicitly; GitHub CLI is optional because the value may be copied from the Actions
+UI. Validate it with `^[0-9a-f]{40}$`, fetch `origin`, and require
+`origin/main = EXPECTED_RELEASE_SHA`. Never derive the expected value from local `HEAD` or from the
+checkout being verified; `EXPECTED_RELEASE_SHA="$(git rev-parse HEAD)"` and equivalent contracts are
+forbidden.
+
+Use the exact executable procedure in `docs/DEPLOYMENT_RUNBOOK.md` to create a separate detached
+`RELEASE_WORKTREE` at `EXPECTED_RELEASE_SHA`. Its `HEAD` must equal the expected SHA and
+`git status --porcelain --untracked-files=all` must be empty. A dirty release worktree, `scripts/dev/`
+or any other untracked file is a STOP. The development worktree is not used for preflight, build or
+deploy; mutable branches and mutable image tags are not release identity.
+
+Build the backend image only from that detached exact-SHA worktree. Its tag contains the full
+`EXPECTED_RELEASE_SHA`, and its immutable image ID is recorded before cutover. If the image really
+contains `org.opencontainers.image.revision`, it must equal `EXPECTED_RELEASE_SHA`; if the build
+does not create that label, do not invent it. Exact-worktree provenance, the full-SHA tag and the
+recorded immutable image ID then remain mandatory. A mutable `staging` tag alone is insufficient,
+and the deploy command must use this exact prepared image with an explicit
+`DEPLOY_SHA = EXPECTED_RELEASE_SHA`.
+
+The release equality is unconditional:
+`green Actions SHA = origin/main = release worktree HEAD = prepared backend image release SHA =
+DEPLOY_SHA`. Any mismatch is a STOP.
+
+The final preflight must be extracted at operation time from
+`$RELEASE_WORKTREE/docs/DEPLOYMENT_RUNBOOK.md` by the documented Python standard-library extractor.
+It requires exactly one `BOOKING_UNREAD_PREFLIGHT_BEGIN` and exactly one
+`BOOKING_UNREAD_PREFLIGHT_END`, rejects missing, duplicate, reversed, empty or ambiguous ranges,
+selects the current marker-bounded block rather than a first similar fence or historical section,
+and writes the exact nonempty body to a timestamped temporary file. The current fenced artifact is
+a `bash` wrapper around `psql`, not pure SQL, so the exact extracted file is executed with `bash`,
+not `psql -f`. Its SHA-256 is recorded immediately after extraction, and the artifact is never
+edited before execution.
+
+SQL or shell text from a ChatGPT message, terminal history, clipboard history, a previously saved
+SQL/shell file, cached snippet, another branch, another commit, a historical runbook section or any
+other stale copy is forbidden. Manual editing of the extracted artifact and deleting, omitting or
+weakening a guard merely to obtain exit code 0 are forbidden. Incomplete or ambiguous extraction
+is a STOP. An initial pre-drain preflight never replaces the final post-drain extraction and
+execution. The final preflight runs only after `hookah_backend_container_count = 0`,
+`hookah_application_writer_session_count = 0` and
+`unidentified_candidate_session_count = 0`, and before any new backend starts.
+
+The authorized release must use this exact order:
+
+1. Pin `EXPECTED_RELEASE_SHA` externally from the exact fully green GitHub Actions run and create
+   the separate clean detached worktree at that SHA.
+2. Verify that the same exact commit/push has fully green Actions and that
+   `origin/main = release worktree HEAD = EXPECTED_RELEASE_SHA`; any mismatch is a STOP.
+3. Create and verify the database backup and the approved full-database restore path.
+4. Before downtime, prepare the exact image only from the detached release worktree, use the full
+   SHA tag, verify any real OCI revision label and record the immutable image ID.
+5. Drain normal traffic and stop/drain every old hookah backend instance; keep traffic drained
+   through migration and the complete smoke.
+6. Confirm `hookah_backend_container_count = 0` for the exact staging Compose project and `backend`
+   service while PostgreSQL remains running.
+7. Inspect `pg_stat_activity` and confirm
+   `hookah_application_writer_session_count = 0`, including idle application connections.
+8. Confirm `unidentified_candidate_session_count = 0`; every unidentified candidate is a STOP.
+9. Extract the final preflight from the exact release worktree, record its SHA-256, execute the exact
+   unedited shell artifact and retain its result, including the expected pre-cutover Flyway head.
+10. Verify `DEPLOY_SHA = prepared image release SHA = EXPECTED_RELEASE_SHA`, then start exactly one
+    new backend from the recorded prepared image; do not start an old instance.
+11. Allow that backend's normal startup to apply PostgreSQL V126.
+12. Verify the Flyway head is V126 and verify its checksum and successful history row/startup log.
+13. Confirm every running hookah backend container uses the recorded new image and that old image
+    running count is zero.
+14. Run health, database health and the V126 schema invariants.
+15. Run the complete bounded staging smoke below with exactly one new backend.
+16. Restore normal traffic only after every smoke check passes completely.
+
+The sequence `stop container -> immediately start new backend` is forbidden. The PostgreSQL session
+gate and final read-only preflight must occur between stop/drain and the one-new-backend start.
+Cutover requires `hookah_backend_container_count = 0`,
+`hookah_application_writer_session_count = 0` and
+`unidentified_candidate_session_count = 0`; any non-zero value blocks PostgreSQL V126. This is the
+mandatory **zero application writer sessions** gate, not an active-query-only check.
+
+The current backend does not configure a unique PostgreSQL `application_name`; staging uses
+`DB_USER = POSTGRES_USER` and the Compose network. Apply the fail-closed runbook predicate: inspect
+every `client backend` on the current database/user except the gate session itself and classify it
+using recorded old-container PID/client address and Compose network, observed `application_name`,
+and individually proved operator PIDs. `idle` is not drained. Any unidentified row is
+`STOP_FOR_BOOKING_MIXED_VERSION_ROLLOUT_DECISION`, not an optimistic continue.
+
+After PostgreSQL V126 has applied successfully, improvised manual DB/schema/data cleanup is
+forbidden. The following are unconditionally forbidden in every release recovery plan after V126:
+restoring one table; restoring a set of selected tables; restoring only `support_thread_reads`;
+restoring only `support_messages`; restoring schema objects separately from data; any other
+partial-table restore; a partial restore over the migrated schema; or manually merging data from a
+backup. Do not run manual `UPDATE`, `DELETE` or `INSERT` statements on read-marker/cursor rows;
+manually `ALTER`, `DROP` or recreate schema objects; edit `flyway_schema_history`; mutate migration
+versions or checksums; run cleanup SQL; downgrade the schema; run automatic or manual
+`flyway repair`; or start the old backend to "repair" state. This prohibition has no
+operator-confidence, exceptional-case or separately approved partial-recovery-plan override.
+
+If startup or verification fails after schema cutover:
+
+1. Keep normal traffic drained.
+2. Do not start the old backend.
+3. Perform no manual DB/schema/data cleanup.
+4. Preserve the verified backup, evidence and logs.
+5. Prepare a reviewed forward-fix binary.
+6. Start only the reviewed forward-fixed backend.
+7. Repeat health, database health, schema invariants and the complete smoke before reopening
+   traffic.
+8. Reopen traffic only after every repeated check succeeds completely.
+
+The only restore path permitted by this release recovery contract is a full, consistent restore of
+the entire database as a separate disaster-recovery decision. It is not an ordinary release
+rollback and requires separate explicit confirmation from the user/product owner. After the full
+restore, select a backend binary compatible with the restored Flyway state, reassess migrations,
+then repeat health, database health, schema invariants and the complete smoke before reopening
+traffic. Never combine a full-database restore with a partial transfer of tables, rows or schema
+objects over V126. A long mixed deployment is prohibited. No old binary may be started to repair
+the V126 database, and only the new or reviewed forward-fixed backend may run before traffic
+reopens, unless a separately approved full-database disaster recovery has first restored a Flyway
+state compatible with the selected binary.
+
+With exactly one new backend and old image running count zero, the bounded staging smoke must prove:
+
+- a user-visible NULL-author system message in a real `VENUE_CHAT` produces an unread badge;
+- exact open clears the badge, and a new system message after open becomes unread again;
+- wrong-surface deep links leave raw read markers unchanged;
+- the correct surface clears only the exact marker;
+- Guest, Venue and account/venue isolation hold;
+- a real staff-chat Telegram notification reaches the canonical linked chat;
+- Support and Conversations remain separate and do not mix.
+
+The exact label-collision acceptance scenario is mandatory:
+
+1. Create or select two test bookings for the same venue with the same display number (the
+   authoritative `display_number`), but different service dates (`display_date`).
+2. Confirm that the two records really have the same number, for example №1 and №1.
+3. Confirm that their user-visible labels differ because of venue-local date/time:
+   `Бронь №1 · <дата A>, <время A>` and `Бронь №1 · <дата B>, <время B>`.
+4. Verify both labels in Guest booking list/detail, Venue booking list/detail, conversation
+   list/detail, and the staff-chat notification if one is created in this smoke.
+5. Confirm that no surface shortens both records to identical `Бронь 1` or `Бронь №1` labels.
+6. Confirm that each label and its associated open action resolves to the exact corresponding
+   booking/thread.
+
+Two bookings with different display numbers do not reproduce the original collision and cannot
+substitute for this scenario. If staging fixtures cannot naturally produce the same display number
+on different service dates, record that capability as a smoke setup prerequisite; do not weaken the
+smoke to different numbers.
+
+The associated findings `BOOKING-UNREAD-NULL-AUTHOR-001`,
+`BOOKING-UNREAD-GUEST-TYPE-GUARD-001` and `BOOKING-UNREAD-MIXED-VERSION-ROLLOUT-001` remain
+`LOCAL_FIX_REVIEW_REQUIRED`. The epic stays **BOOKING CONVERSATION UX / DISTINCT LABELS, INBOX AND
+UNREAD DISCOVERABILITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE
+COMMIT**.
+
+Before the previous integrity V124/V125 migration, run the exact read-only PostgreSQL preflight from
 `docs/DEPLOYMENT_RUNBOOK.md`. Stop under `STOP_FOR_BOOKING_THREAD_DEDUPLICATION_DECISION` if any
 unsafe section returns a row: null or missing booking, canonical venue/guest mismatch, conflicting
 duplicate status, partial read coverage, conflicting read timestamps, malformed/mismatched/unknown
@@ -2175,24 +2459,33 @@ Expectations:
   `PromotionConfigurationConcurrencyPostgresTest`, `VenueStaffMutationConcurrencyPostgresTest`,
   `GuestOrderIdempotencyConcurrencyPostgresTest`, `VenueOnboardingConcurrencyPostgresTest`,
   `BookingConversationConcurrencyPostgresTest` and `BookingMessageIdempotencyPostgresTest`, then
-  independently parses all eight XML reports at minimums `8 / 3 / 14 / 2 / 9 / 7 / 1 / 11`.
+  independently parses all eight XML reports at minimums `8 / 6 / 14 / 2 / 9 / 7 / 1 / 17`.
   Both parsers require `skipped=0`, `failures=0`, `errors=0`; a missing or below-minimum report is
   fatal. Docker availability alone is not evidence, and route failure must not silently skip the
   PostgreSQL gates.
-- The route/security selector also executes and asserts `TelegramOutboxWorkerTest=8`, preserving
-  legacy key-only enqueue/retry behavior alongside the strict booking-only transaction API.
-- `backend-venue-booking-rbac` asserts exact XML minima `VenueBookingRoutesTest=8`,
-  `VenueRbacRoutesTest=36`, `BookingConversationRoutesTest=5` and
-  `BookingConversationRepositoryTest=12`.
+- The route/security selector also executes and asserts `SupportTicketRoutesTest=13`,
+  `SupportThreadReadRepositoryTest=21`, `BookingMessageStaffChatNotifierTest=5` and
+  `TelegramOutboxWorkerTest=8`, preserving cursor/RBAC behavior, fixed confirmed-Platform Guest
+  surface denial, privacy-safe staff alerts and legacy key-only enqueue/retry alongside the strict
+  booking-only transaction API. The two NULL-author repository testcase names and the confirmed
+  Platform Guest wrong-surface testcase name are mandatory, so unrelated tests cannot satisfy the
+  class floor.
+- `backend-venue-booking-rbac` asserts exact XML minima `BookingDisplayLabelTest=2`,
+  `GuestBookingRoutesTest=7`, `VenueBookingRoutesTest=8`, `VenueRbacRoutesTest=36`,
+  `BookingConversationRoutesTest=8` and `BookingConversationRepositoryTest=13`; the ordinary Guest
+  wrong-surface testcase name is also mandatory.
 - `backend-migration-sanity` requires Docker and exact production-migration selectors/XML. All
-  twelve selected reports are asserted: Telegram dialog-state `1`, PostgreSQL table-session V28
+  fourteen selected reports are asserted: Telegram dialog-state `1`, PostgreSQL table-session V28
   `1`, audit-target H2/PostgreSQL `2 / 2`, guest idempotency-fingerprint H2/PostgreSQL `2 / 2`,
   booking-thread H2/PostgreSQL `42 / 47`, audit-key semantic/predicate parity `6`, Mini App message-schema
-  H2/PostgreSQL `5 / 5`, and real PostgreSQL migration-lock concurrency `2`. Missing, below-minimum,
-  skipped, failed or errored reports fail the existing mandatory job.
-- `miniapp-e2e-smoke` parses the full structured Playwright JSON and requires at least `206`
+  H2/PostgreSQL `5 / 5`, cursor H2/PostgreSQL `4 / 4`, and real PostgreSQL migration-lock
+  concurrency `2`. Missing, below-minimum, skipped, failed or errored reports fail the existing
+  mandatory job.
+- `miniapp-e2e-smoke` parses the full structured Playwright JSON and requires at least `216`
   executed with zero failure, flaky, skipped, runner error, missing result, non-passing expectation
-  or failed attempt.
+  or failed attempt. It additionally fails unless both exact `booking-label-parity.spec.ts` cases,
+  the exact replay-one/missing-configuration-zero staff-alert counter cases and all three exact
+  Guest surface/deep-link guard cases plus the exact late-previous-surface response guard pass.
 - If CI is red, first identify the failing job, failing test class, failing test name, assertion/error and first useful stack frame.
 - Do not paste only `Execution failed for task ':backend:app:test'`; inspect XML/test output or CI logs for the actual assertion.
 - External/transient failures should be separated from product regressions. A network/dependency timeout is not the same as a Kotlin compile/test failure.
@@ -2632,12 +2925,13 @@ Telegram/staff-chat:
 ## Roadmap Status
 
 - Testing/QA smoke strategy: `UPDATED`.
-- Booking conversation integrity / real isolation:
-  **MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. Exact H2/real-PG
-  audit/message migrations, repository/message/migration concurrency, routes/RBAC/Telegram and
-  `206/206` browser checks are local evidence; the first same-worktree structured run had one
-  unrelated catalog debounce timing failure before its focused and full reruns passed. Actions,
-  migration rollout and real two-account staging smoke remain.
+- Booking conversation UX / distinct labels, inbox and unread discoverability:
+  **MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. The current local
+  closure includes NULL-author system unread, fixed Guest queue/type guards and the documented V126
+  mixed-version boundary, but still requires independent review, green Actions, a drained
+  single-new-image migration rollout and bounded staging smoke. The preceding V124/V125 integrity /
+  real-isolation slice remains historical regression evidence and separately review-required; it is
+  not reopened or marked done here.
 - Catalog search/filter: **CATALOG SEARCH AND FILTER PHASE 1 / DONE / MVP /
   STAGING-SMOKE-PASSED** after green Actions, staging deploy and limited-dataset manual smoke.
   Extended dataset coverage remains non-blocking deferred manual smoke in

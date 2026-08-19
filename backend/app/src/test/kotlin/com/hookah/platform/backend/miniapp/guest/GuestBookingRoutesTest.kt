@@ -361,11 +361,11 @@ class GuestBookingRoutesTest {
             val second = items[1].jsonObject
             assertEquals(earlierBookingId.toString(), first.getValue("bookingId").jsonPrimitive.content)
             assertEquals("Дым", first.getValue("venueName").jsonPrimitive.content)
-            assertEquals("Бронь №1", first.getValue("displayLabel").jsonPrimitive.content)
+            assertEquals("Бронь №1 · 09.01.2030, 22:00", first.getValue("displayLabel").jsonPrimitive.content)
             assertEquals("09.01.2030, 22:00", first.getValue("scheduledAtDisplay").jsonPrimitive.content)
             assertEquals(laterBookingId.toString(), second.getValue("bookingId").jsonPrimitive.content)
             assertEquals("Микс", second.getValue("venueName").jsonPrimitive.content)
-            assertEquals("Бронь №1", second.getValue("displayLabel").jsonPrimitive.content)
+            assertEquals("Бронь №1 · 10.01.2030, 21:00", second.getValue("displayLabel").jsonPrimitive.content)
             assertEquals("Подтверждена", second.getValue("statusLabel").jsonPrimitive.content)
             assertEquals("10.01.2030, 21:00", second.getValue("scheduledAtDisplay").jsonPrimitive.content)
             assertEquals("21:30", second.getValue("arrivalDeadlineTimeDisplay").jsonPrimitive.content)

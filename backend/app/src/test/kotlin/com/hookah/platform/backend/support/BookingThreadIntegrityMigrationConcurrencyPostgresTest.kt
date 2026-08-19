@@ -34,6 +34,7 @@ class BookingThreadIntegrityMigrationConcurrencyPostgresTest {
                         location = POSTGRES_MIGRATIONS,
                         previousVersion = PREVIOUS_VERSION,
                     )
+                dataSource.connection.use(::addCurrentReadCursorCompatibilityColumn)
                 val beforeWriterSnapshot =
                     dataSource.connection.use { connection ->
                         BookingThreadIntegrityMigrationTestSupport
@@ -148,6 +149,7 @@ class BookingThreadIntegrityMigrationConcurrencyPostgresTest {
                         location = POSTGRES_MIGRATIONS,
                         previousVersion = PREVIOUS_VERSION,
                     )
+                dataSource.connection.use(::addCurrentReadCursorCompatibilityColumn)
                 val survivorApplicationName = writerApplicationName("migration_first_survivor", database)
                 val deletedApplicationName = writerApplicationName("migration_first_deleted", database)
                 writerDataSource(database, survivorApplicationName).use { survivorWriterDataSource ->
@@ -915,6 +917,12 @@ class BookingThreadIntegrityMigrationConcurrencyPostgresTest {
         val holdsReadsRowExclusive: Boolean,
         val diagnostic: String,
     )
+
+    private fun addCurrentReadCursorCompatibilityColumn(connection: Connection) {
+        connection.createStatement().use { statement ->
+            statement.execute("ALTER TABLE support_thread_reads ADD COLUMN last_read_message_id BIGINT")
+        }
+    }
 
     private companion object {
         const val POSTGRES_MIGRATIONS = "classpath:db/migration/postgresql"

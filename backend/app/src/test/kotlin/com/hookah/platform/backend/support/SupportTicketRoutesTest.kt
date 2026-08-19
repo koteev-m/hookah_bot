@@ -46,6 +46,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class SupportTicketRoutesTest {
@@ -99,7 +100,7 @@ class SupportTicketRoutesTest {
             deleteSupportReadMarker(jdbcUrl, threadId, GUEST_ID)
             assertEquals(null, supportReadAt(jdbcUrl, threadId, GUEST_ID))
             val detailResponse =
-                client.get("/api/guest/support/threads/$threadId") {
+                client.get("/api/guest/support/threads/$threadId?surface=SUPPORT") {
                     headers { append(HttpHeaders.Authorization, "Bearer $guestToken") }
                 }
             assertEquals(HttpStatusCode.OK, detailResponse.status)
@@ -246,7 +247,7 @@ class SupportTicketRoutesTest {
 
             deleteSupportReadMarker(jdbcUrl, threadId, platformOwnerId)
             val confirmedDetailResponse =
-                client.get("/api/guest/support/threads/$threadId") {
+                client.get("/api/guest/support/threads/$threadId?surface=SUPPORT") {
                     headers { append(HttpHeaders.Authorization, "Bearer $platformToken") }
                 }
             assertEquals(HttpStatusCode.OK, confirmedDetailResponse.status)
@@ -258,7 +259,7 @@ class SupportTicketRoutesTest {
             seedUserExit(jdbcUrl, platformOwnerId, table.tableSessionId)
 
             val afterExitResponse =
-                client.get("/api/guest/support/threads/$threadId") {
+                client.get("/api/guest/support/threads/$threadId?surface=SUPPORT") {
                     headers { append(HttpHeaders.Authorization, "Bearer $platformToken") }
                 }
 
@@ -268,6 +269,168 @@ class SupportTicketRoutesTest {
             assertEquals(timingBefore, tableSessionTiming(jdbcUrl, table.tableSessionId))
             assertEquals(auditBefore, tableRowCount(jdbcUrl, "audit_log"))
             assertEquals(0, tableRowCount(jdbcUrl, "tab"))
+        }
+
+    @Test
+    fun `confirmed Platform Guest surface contract rejects cross inbox opens without raw marker mutation or facts`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("confirmed-platform-surface-contract")
+            val platformOwnerId = 900001L
+            val config = buildConfig(jdbcUrl, platformOwnerId)
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl)
+            seedUser(jdbcUrl, platformOwnerId)
+            val table = seedActiveTableContext(jdbcUrl, venueId)
+            seedPlatformTableConfirmation(
+                jdbcUrl = jdbcUrl,
+                chatId = platformOwnerId + 1,
+                userId = platformOwnerId,
+                venueId = venueId,
+                table = table,
+            )
+            val platformToken = issueToken(config, platformOwnerId)
+            val dataSource =
+                JdbcDataSource().apply {
+                    setURL(jdbcUrl)
+                    user = "sa"
+                    password = ""
+                }
+            val repository = SupportThreadRepository(dataSource)
+
+            val bookingId = seedBookingForGuest(jdbcUrl, venueId, platformOwnerId)
+            val bookingThread = assertNotNull(repository.createOrFindBookingThread(bookingId))
+            assertNotNull(
+                repository.getGuestThreadAndMarkRead(
+                    userId = platformOwnerId,
+                    threadId = bookingThread.id,
+                    surface = GuestThreadSurface.CONVERSATIONS,
+                ),
+            )
+            val bookingSecret = "confirmed-platform-booking-secret"
+            val bookingSystemMessage =
+                assertNotNull(
+                    repository.addBookingMessage(
+                        bookingId = bookingId,
+                        authorUserId = null,
+                        authorRole = SupportMessageAuthorRole.SYSTEM,
+                        source = SupportMessageSource.SYSTEM,
+                        text = bookingSecret,
+                        expectedThreadId = bookingThread.id,
+                        expectedGuestUserId = platformOwnerId,
+                        statusAfterInsert = null,
+                    ),
+                ).message
+
+            val venueChat =
+                repository.createOrFindVenueChat(
+                    venueId = venueId,
+                    guestUserId = platformOwnerId,
+                    title = "Confirmed Platform venue chat",
+                )
+            assertNotNull(
+                repository.getGuestThreadAndMarkRead(
+                    userId = platformOwnerId,
+                    threadId = venueChat.thread.id,
+                    surface = GuestThreadSurface.CONVERSATIONS,
+                ),
+            )
+            val venueChatSecret = "confirmed-platform-venue-chat-secret"
+            val venueChatSystemMessage =
+                repository.addMessage(
+                    threadId = venueChat.thread.id,
+                    authorUserId = null,
+                    authorRole = SupportMessageAuthorRole.SYSTEM,
+                    source = SupportMessageSource.SYSTEM,
+                    text = venueChatSecret,
+                    statusAfterInsert = null,
+                )
+
+            val supportCreate =
+                client.post("/api/guest/support/threads") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $platformToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody(
+                        """
+                        {
+                          "category":"ORDER_SERVICE",
+                          "message":"confirmed-platform-support-initial",
+                          "tableToken":"${table.token}"
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, supportCreate.status, supportCreate.bodyAsText())
+            val supportThreadId =
+                json.parseToJsonElement(supportCreate.bodyAsText())
+                    .jsonObject
+                    .getValue("thread")
+                    .jsonObject
+                    .getValue("threadId")
+                    .jsonPrimitive.content.toLong()
+            val supportSecret = "confirmed-platform-support-secret"
+            val supportSystemMessage =
+                repository.addMessage(
+                    threadId = supportThreadId,
+                    authorUserId = null,
+                    authorRole = SupportMessageAuthorRole.SYSTEM,
+                    source = SupportMessageSource.SYSTEM,
+                    text = supportSecret,
+                    statusAfterInsert = null,
+                )
+
+            val bookingBefore = assertNotNull(supportReadMarker(jdbcUrl, bookingThread.id, platformOwnerId))
+            val venueChatBefore = assertNotNull(supportReadMarker(jdbcUrl, venueChat.thread.id, platformOwnerId))
+            val supportBefore = assertNotNull(supportReadMarker(jdbcUrl, supportThreadId, platformOwnerId))
+            val timingBefore = tableSessionTiming(jdbcUrl, table.tableSessionId)
+            val auditBefore = tableRowCount(jdbcUrl, "audit_log")
+            val outboxBefore = tableRowCount(jdbcUrl, "telegram_outbox")
+
+            val supportViaConversations =
+                client.get("/api/guest/support/threads/$supportThreadId?surface=CONVERSATIONS") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $platformToken") }
+                }
+            assertEquals(HttpStatusCode.NotFound, supportViaConversations.status)
+            assertFalse(supportViaConversations.bodyAsText().contains(supportSecret))
+            assertFalse(supportViaConversations.bodyAsText().contains("confirmed-platform-support-initial"))
+            assertEquals(supportBefore, supportReadMarker(jdbcUrl, supportThreadId, platformOwnerId))
+
+            val bookingViaSupport =
+                client.get("/api/guest/support/threads/${bookingThread.id}?surface=SUPPORT") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $platformToken") }
+                }
+            assertEquals(HttpStatusCode.NotFound, bookingViaSupport.status)
+            assertFalse(bookingViaSupport.bodyAsText().contains(bookingSecret))
+            assertEquals(bookingBefore, supportReadMarker(jdbcUrl, bookingThread.id, platformOwnerId))
+
+            val venueChatViaSupport =
+                client.get("/api/guest/support/threads/${venueChat.thread.id}?surface=SUPPORT") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $platformToken") }
+                }
+            assertEquals(HttpStatusCode.NotFound, venueChatViaSupport.status)
+            assertFalse(venueChatViaSupport.bodyAsText().contains(venueChatSecret))
+            assertEquals(venueChatBefore, supportReadMarker(jdbcUrl, venueChat.thread.id, platformOwnerId))
+            assertEquals(timingBefore, tableSessionTiming(jdbcUrl, table.tableSessionId))
+            assertEquals(auditBefore, tableRowCount(jdbcUrl, "audit_log"))
+            assertEquals(outboxBefore, tableRowCount(jdbcUrl, "telegram_outbox"))
+
+            val correctSupport =
+                client.get("/api/guest/support/threads/$supportThreadId?surface=SUPPORT") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $platformToken") }
+                }
+            assertEquals(HttpStatusCode.OK, correctSupport.status, correctSupport.bodyAsText())
+            assertTrue(correctSupport.bodyAsText().contains(supportSecret))
+            assertEquals(
+                supportSystemMessage.id,
+                assertNotNull(supportReadMarker(jdbcUrl, supportThreadId, platformOwnerId)).lastReadMessageId,
+            )
+            assertTrue(bookingSystemMessage.id > 0)
+            assertTrue(venueChatSystemMessage.id > 0)
         }
 
     @Test
@@ -1507,6 +1670,39 @@ class SupportTicketRoutesTest {
         }
     }
 
+    private fun seedBookingForGuest(
+        jdbcUrl: String,
+        venueId: Long,
+        guestUserId: Long,
+    ): Long =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                INSERT INTO bookings (
+                    venue_id,
+                    user_id,
+                    scheduled_at,
+                    party_size,
+                    status,
+                    display_date,
+                    display_number
+                )
+                VALUES (?, ?, ?, 2, 'PENDING', ?, 1)
+                """.trimIndent(),
+                Statement.RETURN_GENERATED_KEYS,
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.setLong(2, guestUserId)
+                statement.setTimestamp(3, Timestamp.from(Instant.parse("2030-01-10T18:00:00Z")))
+                statement.setDate(4, java.sql.Date.valueOf("2030-01-10"))
+                statement.executeUpdate()
+                statement.generatedKeys.use { keys ->
+                    assertTrue(keys.next())
+                    keys.getLong(1)
+                }
+            }
+        }
+
     private fun seedVenueMember(
         jdbcUrl: String,
         venueId: Long,
@@ -1660,6 +1856,39 @@ class SupportTicketRoutesTest {
                 statement.setLong(2, userId)
                 statement.executeQuery().use { rs ->
                     if (rs.next()) rs.getTimestamp("last_read_at")?.toInstant() else null
+                }
+            }
+        }
+
+    private fun supportReadMarker(
+        jdbcUrl: String,
+        threadId: Long,
+        userId: Long,
+    ): RawSupportReadMarker? =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT thread_id, user_id, last_read_message_id, last_read_at
+                FROM support_thread_reads
+                WHERE thread_id = ?
+                  AND user_id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, threadId)
+                statement.setLong(2, userId)
+                statement.executeQuery().use { rows ->
+                    if (!rows.next()) {
+                        null
+                    } else {
+                        val lastReadMessageId = rows.getLong("last_read_message_id")
+                        val cursorWasNull = rows.wasNull()
+                        RawSupportReadMarker(
+                            threadId = rows.getLong("thread_id"),
+                            userId = rows.getLong("user_id"),
+                            lastReadMessageId = if (cursorWasNull) null else lastReadMessageId,
+                            lastReadAt = rows.getTimestamp("last_read_at")?.toInstant(),
+                        )
+                    }
                 }
             }
         }
@@ -1820,5 +2049,12 @@ class SupportTicketRoutesTest {
     private data class TableSessionTiming(
         val lastActivityAt: Instant,
         val expiresAt: Instant,
+    )
+
+    private data class RawSupportReadMarker(
+        val threadId: Long,
+        val userId: Long,
+        val lastReadMessageId: Long?,
+        val lastReadAt: Instant?,
     )
 }

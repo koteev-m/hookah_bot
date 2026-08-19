@@ -178,6 +178,7 @@ informational rows must be attached to the release evidence and reconciled with 
 counts, but duplicate groups or a survivor that is not the earliest-created row are not unsafe by
 themselves.
 
+<!-- BOOKING_UNREAD_PREFLIGHT_BEGIN -->
 ```bash
 psql "$DATABASE_URL" -X --set=ON_ERROR_STOP=1 <<'SQL'
 \pset pager off
@@ -1612,6 +1613,7 @@ COMMIT;
 \echo 'BOOKING_THREAD_PREFLIGHT_SAFE_TO_CONTINUE'
 SQL
 ```
+<!-- BOOKING_UNREAD_PREFLIGHT_END -->
 
 The one affected logical support-thread audit family is
 `audit_log(entity_type='support_ticket', entity_id=thread.id, payload_json.ticketId=thread.id)` with
@@ -1680,6 +1682,377 @@ After schema cutover, the previous binary is not a valid semantic rollback: it d
 persisted Mini App key or same-transaction notification contract. Use a forward fix or the approved
 database restore path. A failed V124 transaction leaves its schema version and domain facts
 unchanged; still investigate the exact guard/lock failure before retrying.
+
+### Support Read Cursor PostgreSQL V126 Controlled Mixed-Version Boundary
+
+This bounded note records the local runbook fix for
+`BOOKING-UNREAD-MIXED-VERSION-ROLLOUT-001`; the finding remains
+`LOCAL_FIX_REVIEW_REQUIRED`. It is a future-release contract, not evidence that a migration,
+deploy, green Actions run or staging smoke has happened.
+
+This current-section wording addresses only the two remaining commit-blocking documentation
+findings `BOOKING-UNREAD-ROLLOUT-PREFLIGHT-HEAD-001` and
+`BOOKING-UNREAD-ROLLOUT-MANUAL-DB-CLEANUP-001`. The already approved label smoke remains unchanged;
+this wording does not raise the epic or release status.
+
+PostgreSQL V126 is additive. It adds nullable `BIGINT support_thread_reads.last_read_message_id`
+with no default, no backfill and no destructive rewrite;
+`last_read_at` and the existing primary key `(thread_id, user_id)` are preserved. The old binary is
+schema-compatible but updates only `last_read_at`. The new binary treats a NULL cursor as every
+foreign-authored message unread, including a user-visible system message whose `author_user_id` is
+NULL. No message or marker data is lost, but badges can repeat or be inaccurate during mixed-version
+operation.
+
+H2 V127 is the additive dialect-parity/test migration. It adds the same nullable
+`BIGINT last_read_message_id` with no default, no backfill and no destructive rewrite, while preserving
+`last_read_at` and primary key `(thread_id, user_id)`. H2 V127 applies only in H2/local/test
+environments. Staging PostgreSQL applies PostgreSQL V126, never H2 V127.
+
+#### Externally pinned exact-release provenance contract
+
+`EXPECTED_RELEASE_SHA` comes only from the exact commit SHA shown by a fully green GitHub Actions
+run after commit and push. The operator copies the complete 40-character lowercase SHA from that
+run and passes it explicitly as `EXPECTED_RELEASE_SHA`; GitHub CLI is optional because the value may
+be copied manually from the Actions UI. The expected value must never be derived from local `HEAD`,
+the checkout being inspected, a mutable branch name or a mutable image tag. In particular,
+`EXPECTED_RELEASE_SHA="$(git rev-parse HEAD)"` and every equivalent self-derived contract are
+forbidden.
+
+Starting from the repository that owns the worktrees, create a separate detached release worktree:
+
+```bash
+EXPECTED_RELEASE_SHA='<full 40-character lowercase SHA copied from fully green GitHub Actions run>'
+
+if [[ ! "$EXPECTED_RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "Invalid EXPECTED_RELEASE_SHA" >&2
+  exit 1
+fi
+
+git fetch --prune origin
+
+REMOTE_MAIN_SHA="$(git rev-parse origin/main)"
+test "$REMOTE_MAIN_SHA" = "$EXPECTED_RELEASE_SHA"
+
+RELEASE_WORKTREE="/tmp/hookah-release-${EXPECTED_RELEASE_SHA}"
+test ! -e "$RELEASE_WORKTREE"
+
+git worktree add \
+  --detach \
+  "$RELEASE_WORKTREE" \
+  "$EXPECTED_RELEASE_SHA"
+
+cd "$RELEASE_WORKTREE"
+
+test "$(git rev-parse HEAD)" = "$EXPECTED_RELEASE_SHA"
+test -z "$(git status --porcelain --untracked-files=all)"
+```
+
+Failure of the regex `^[0-9a-f]{40}$`, the `origin/main` equality, the detached release-worktree
+`HEAD` equality or the clean-worktree check is a STOP. The release worktree must contain no
+`scripts/dev/` or any other untracked file. A dirty checkout is a STOP. The development worktree is
+used only to fetch and create the worktree; it is never used for release preflight, image build or
+deploy. A mutable branch name or mutable tag is not release identity.
+
+The release identity invariant is exact and unconditional:
+
+```text
+green Actions SHA
+= origin/main
+= release worktree HEAD
+= prepared backend image release SHA
+= DEPLOY_SHA
+```
+
+The backend image is built only with the detached exact-SHA release worktree as its build context.
+Its tag contains the full `EXPECTED_RELEASE_SHA`, and its immutable image ID is recorded before
+cutover. If the built image actually contains the OCI label
+`org.opencontainers.image.revision`, that label must equal `EXPECTED_RELEASE_SHA`; if the current
+build produces no such label, do not invent one. In that case provenance is the exact detached
+worktree plus the full-SHA tag plus the recorded immutable image ID. A mutable `staging` tag alone is
+insufficient. Set and pass `DEPLOY_SHA` explicitly, require
+`DEPLOY_SHA = EXPECTED_RELEASE_SHA`, and make the deploy command use the exact image prepared from
+that release worktree. Any SHA, tag/revision or image-ID mismatch is a STOP.
+
+#### Executable final-preflight provenance
+
+The current final preflight artifact is the uniquely marker-bounded `bash` fenced block under
+`Booking Thread Integrity Preflight (PostgreSQL V124)` in this runbook. It is a shell wrapper around
+`psql`, not a pure SQL artifact, so it must be executed as the exact extracted shell file; running
+it with `psql -f` would be the wrong artifact contract. The marker-only change does not alter its
+SQL or guard semantics.
+
+Only after the project-scoped backend count, application-writer count and unidentified-session
+count have all reached zero, extract, checksum and execute that exact current block from the release
+worktree:
+
+```bash
+PREFLIGHT_SOURCE="$RELEASE_WORKTREE/docs/DEPLOYMENT_RUNBOOK.md"
+PREFLIGHT_TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+PREFLIGHT_ARTIFACT="$(
+  mktemp "/tmp/booking-unread-preflight-${EXPECTED_RELEASE_SHA}-${PREFLIGHT_TIMESTAMP}-XXXXXX.sh"
+)"
+export PREFLIGHT_SOURCE PREFLIGHT_ARTIFACT
+
+PREFLIGHT_SHA256="$(
+  python3 - <<'PY'
+from hashlib import sha256
+from os import environ
+from pathlib import Path
+
+source_path = Path(environ["PREFLIGHT_SOURCE"])
+artifact_path = Path(environ["PREFLIGHT_ARTIFACT"])
+source = source_path.read_bytes()
+begin = b"<!-- BOOKING_UNREAD_PREFLIGHT_" + b"BEGIN -->"
+end = b"<!-- BOOKING_UNREAD_PREFLIGHT_" + b"END -->"
+
+if source.count(begin) != 1 or source.count(end) != 1:
+    raise SystemExit("STOP: missing or duplicate booking-unread preflight markers")
+
+begin_at = source.index(begin) + len(begin)
+end_at = source.index(end)
+if begin_at >= end_at:
+    raise SystemExit("STOP: booking-unread preflight markers are reversed or empty")
+
+marked = source[begin_at:end_at]
+prefix = b"\n```bash\n"
+suffix = b"```\n"
+if (
+    not marked.startswith(prefix)
+    or not marked.endswith(suffix)
+    or marked.count(b"```") != 2
+):
+    raise SystemExit("STOP: marker range is not exactly one bash fenced artifact")
+
+artifact = marked[len(prefix):-len(suffix)]
+expected_start = b"psql \"$DATABASE_URL\" -X --set=ON_ERROR_STOP=1 <<'SQL'\n"
+if not artifact or not artifact.strip() or not artifact.startswith(expected_start):
+    raise SystemExit("STOP: extracted shell preflight is empty or has an unexpected type")
+
+artifact_path.write_bytes(artifact)
+print(sha256(artifact).hexdigest())
+PY
+)"
+
+if [[ ! "$PREFLIGHT_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "Invalid extracted preflight SHA-256" >&2
+  exit 1
+fi
+
+printf 'PREFLIGHT_ARTIFACT=%s\nPREFLIGHT_SHA256=%s\n' \
+  "$PREFLIGHT_ARTIFACT" \
+  "$PREFLIGHT_SHA256"
+
+bash "$PREFLIGHT_ARTIFACT"
+```
+
+This extraction fails closed on missing, duplicate, reversed or ambiguous markers, on a range that
+is not exactly one `bash` fence, and on an empty or unexpected artifact. It selects the marker-bound
+current block, not the first similar fence and not a historical runbook section. The timestamped
+temporary file contains the fenced shell body byte-for-byte; after extraction its SHA-256 is
+recorded, and the file is not edited before the exact `bash` execution. Incomplete or ambiguous
+extraction is a STOP.
+
+SQL or shell text from a ChatGPT message, terminal history, clipboard history, a previously saved
+SQL/shell file, cached snippet, another branch, another commit, a historical runbook section or any
+other stale copy is forbidden. Manual editing of the extracted artifact is forbidden. Do not omit,
+delete or weaken its guard merely to obtain exit code 0. An initial pre-drain preflight may expose a
+blocker early, but it never replaces the final post-drain extraction and execution from the exact
+release worktree. Unsafe, ambiguous, truncated or incomplete output is a STOP and never authorizes
+manual deletion of a check or data.
+
+#### Exact controlled rollout sequence
+
+The authorized release must use this exact order:
+
+1. Pin `EXPECTED_RELEASE_SHA` externally from the exact fully green GitHub Actions run and create
+   the separate clean detached worktree at that SHA.
+2. Verify that the same exact commit/push has fully green Actions and that
+   `origin/main = release worktree HEAD = EXPECTED_RELEASE_SHA`; any mismatch is a STOP.
+3. Create the database backup, verify that the backup artifact is readable, and confirm the approved
+   full-database restore path.
+4. Before downtime, build the exact backend image only from the detached release worktree, use a
+   full-`EXPECTED_RELEASE_SHA` tag, verify any real OCI revision label, and record the immutable image
+   ID. Do not use a mutable `staging` tag as identity.
+5. Drain normal traffic and stop/drain every old hookah backend instance. Keep traffic drained
+   through migration and the complete smoke.
+6. Confirm `hookah_backend_container_count = 0` for the exact staging Compose project and `backend`
+   service, while its PostgreSQL service remains running and ready.
+7. Inspect `pg_stat_activity` and confirm
+   `hookah_application_writer_session_count = 0`, including `idle` application connections.
+8. Confirm `unidentified_candidate_session_count = 0`. The operator/gate session and proven
+   PostgreSQL maintenance/system sessions are not hookah backend writers; every unidentified
+   candidate session is a STOP.
+9. Extract the marker-bounded final preflight from the exact release worktree, record the extracted
+   artifact SHA-256, execute that exact unedited shell artifact, and retain the result including the
+   expected pre-cutover Flyway head.
+10. Pass `DEPLOY_SHA` explicitly, verify
+    `DEPLOY_SHA = prepared image release SHA = EXPECTED_RELEASE_SHA`, and start exactly one new
+    backend from the recorded prepared image. Do not start any old instance.
+11. Allow that backend's normal startup to apply PostgreSQL V126.
+12. Verify the Flyway head is V126 and verify its checksum and successful history row/startup log.
+13. Confirm every running hookah backend container uses the recorded new image and that the old
+    image running count is zero.
+14. Run `/health`, `/db/health` and the V126 schema invariants.
+15. Run the complete bounded staging smoke below with exactly one new backend.
+16. Restore normal traffic only after every smoke check passes completely.
+
+The sequence `stop container -> immediately start new backend` is forbidden: the PostgreSQL session
+gate and final read-only preflight must occur between stop/drain and the one-new-backend start.
+Cutover may continue only when all conditions are true:
+
+```text
+hookah_backend_container_count = 0
+AND hookah_application_writer_session_count = 0
+AND unidentified_candidate_session_count = 0
+```
+
+Any non-zero value blocks PostgreSQL V126 cutover. In release evidence this is the mandatory
+**zero application writer sessions** gate, not an active-query-only check.
+
+#### Mandatory container/process zero-writer gate
+
+Run from the exact staging project directory and compose file:
+
+```bash
+cd /opt/hookah-bot
+docker compose config --services
+test "$(docker compose ps --status running -q backend | wc -l | tr -d ' ')" = "0"
+test "$(docker compose ps --status running -q postgres | wc -l | tr -d ' ')" = "1"
+docker compose exec -T postgres sh -c 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+```
+
+Record `hookah_backend_container_count = 0` and PostgreSQL readiness in release evidence. These
+commands are deliberately scoped by `/opt/hookah-bot/docker-compose.yml`, its resolved Compose
+project and the exact `backend`/`postgres` services. Do not replace them with a global `docker ps`
+text or label match that could count a different Docker project or similarly named service.
+PostgreSQL must stay running; stopping it is not a substitute for draining application writers.
+
+#### Mandatory PostgreSQL application-session zero-writer gate
+
+The current staging configuration uses `DB_USER = POSTGRES_USER`, the database named by
+`DB_JDBC_URL`/`POSTGRES_DB`, and a backend client address on the Compose container network. Neither
+`application.conf` nor `DatabaseFactory` sets a PostgreSQL `application_name`, so do not invent or
+filter on a presumed value. Capture the old backend container IDs and Compose network addresses
+before drain, then, after the container gate reaches zero, inspect every candidate session:
+
+```bash
+cd /opt/hookah-bot
+docker compose exec -T postgres sh -c \
+  'psql -X -U "$POSTGRES_USER" -d "$POSTGRES_DB" --set=ON_ERROR_STOP=1' <<'SQL'
+\pset pager off
+SELECT
+    pg_backend_pid() AS zero_writer_gate_operator_pid,
+    current_database() AS database_name,
+    current_user AS database_user;
+
+SELECT
+    pid,
+    usename,
+    application_name,
+    client_addr,
+    client_port,
+    state,
+    backend_start,
+    xact_start,
+    query_start,
+    wait_event_type,
+    wait_event
+FROM pg_stat_activity
+WHERE backend_type = 'client backend'
+  AND datname = current_database()
+  AND usename = current_user
+  AND pid <> pg_backend_pid()
+ORDER BY backend_start, pid;
+SQL
+```
+
+The actual candidate predicate is therefore the current staging database plus its shared
+`DB_USER`/`POSTGRES_USER`, `backend_type = 'client backend'`, excluding only the PID of this gate's
+operator session. Classify returned rows using the recorded old-container PID/client address and
+Compose network, the observed (not assumed) `application_name`, and an individually identified
+operator PID when applicable. `idle`, `idle in transaction` and active connections all count as
+application writers when they belong to the hookah backend. The current gate query itself is
+excluded by `pg_backend_pid()`; the later read-only preflight operator session is likewise not an
+application writer. PostgreSQL system workers are excluded by `backend_type`; a separate
+maintenance or operator client counts as non-application only when its PID and purpose are proved
+and recorded.
+
+Because the backend does not set a unique `application_name`, this inspection is intentionally
+fail-closed. A row attributable to an old hookah container makes
+`hookah_application_writer_session_count > 0`; terminate/drain its owning old process and repeat
+both gates. Any row that cannot be conclusively attributed is
+`STOP_FOR_BOOKING_MIXED_VERSION_ROLLOUT_DECISION`, not permission to continue optimistically. Do not
+weaken the check to active queries: an idle old connection proves that the old binary is not fully
+drained.
+
+#### Failure, rollback and mixed-version boundary
+
+After PostgreSQL V126 has applied successfully, improvised manual DB/schema/data cleanup is
+forbidden. The following are unconditionally forbidden in every release recovery plan after V126:
+restoring one table; restoring a set of selected tables; restoring only `support_thread_reads`;
+restoring only `support_messages`; restoring schema objects separately from data; any other
+partial-table restore; a partial restore over the migrated schema; or manually merging data from a
+backup. Do not run manual `UPDATE`, `DELETE` or `INSERT` statements on read-marker/cursor rows;
+manually `ALTER`, `DROP` or recreate schema objects; edit `flyway_schema_history`; mutate migration
+versions or checksums; run cleanup SQL; downgrade the schema; run automatic or manual
+`flyway repair`; or start the old backend to "repair" state. This prohibition has no
+operator-confidence, exceptional-case or separately approved partial-recovery-plan override.
+
+If startup or verification fails after schema cutover:
+
+1. Keep normal traffic drained.
+2. Do not start the old backend.
+3. Perform no manual DB/schema/data cleanup.
+4. Preserve the verified backup, evidence and logs.
+5. Prepare a reviewed forward-fix binary.
+6. Start only the reviewed forward-fixed backend.
+7. Repeat health, database health, schema invariants and the complete smoke before reopening
+   traffic.
+8. Reopen traffic only after every repeated check succeeds completely.
+
+The only restore path permitted by this release recovery contract is a full, consistent restore of
+the entire database as a separate disaster-recovery decision. It is not an ordinary release
+rollback and requires separate explicit confirmation from the user/product owner. After the full
+restore, select a backend binary compatible with the restored Flyway state, reassess migrations,
+then repeat health, database health, schema invariants and the complete smoke before reopening
+traffic. Never combine a full-database restore with a partial transfer of tables, rows or schema
+objects over V126. A long mixed deployment is prohibited. No old binary may be started to repair
+the V126 database, and only the new or reviewed forward-fixed backend may run before traffic
+reopens, unless a separately approved full-database disaster recovery has first restored a Flyway
+state compatible with the selected binary.
+
+#### Required bounded staging smoke
+
+With exactly one new backend instance and old image running count zero, verify all of the following
+before traffic reopens:
+
+- a user-visible NULL-author system message in a real `VENUE_CHAT` produces an unread badge;
+- exact open clears that badge, and a new system message after the open becomes unread again;
+- crafted wrong-surface deep links do not change raw read markers;
+- the correct surface clears only the exact marker;
+- Guest, Venue and account/venue isolation hold;
+- a real staff-chat Telegram notification reaches the canonical linked chat;
+- Support and Conversations remain separate and do not mix.
+
+The exact label-collision acceptance scenario is mandatory:
+
+1. Create or select two test bookings for the same venue with the same display number (the
+   authoritative `display_number`), but different service dates (`display_date`).
+2. Confirm that the two records really have the same number, for example №1 and №1.
+3. Confirm that their user-visible labels differ because of venue-local date/time:
+   `Бронь №1 · <дата A>, <время A>` and `Бронь №1 · <дата B>, <время B>`.
+4. Verify both labels in Guest booking list/detail, Venue booking list/detail, conversation
+   list/detail, and the staff-chat notification if one is created in this smoke.
+5. Confirm that no surface shortens both records to identical `Бронь 1` or `Бронь №1` labels.
+6. Confirm that each label and its associated open action resolves to the exact corresponding
+   booking/thread.
+
+Two bookings with different display numbers do not reproduce the original collision and cannot
+substitute for this scenario. If staging fixtures cannot naturally produce the same display number
+on different service dates, record that capability as a smoke setup prerequisite; do not weaken the
+smoke to different numbers.
+
+Do not run this cutover, PostgreSQL V126, H2 V127 or staging preflight from a docs-only task.
 
 ### Guest Order Payload-Bound Idempotency Rollout Boundary
 
@@ -1923,6 +2296,8 @@ ChatGPT should return:
 ## Roadmap Status
 
 - Deployment/runbook docs: `UPDATED`.
+- Booking conversation UX V126 mixed-version boundary:
+  `LOCAL_FIX_REVIEW_REQUIRED`; no migration, deploy or staging smoke is recorded.
 - Staging deploy policy: `DOCUMENTED`.
 - Rollback policy: `PARTIAL`; exact previous-image/DB restore commands need verification.
 - Operations troubleshooting: `PARTIAL`; exact production log and provider diagnostic commands need verification.

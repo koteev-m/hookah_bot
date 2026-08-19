@@ -1,5 +1,6 @@
 package com.hookah.platform.backend.telegram
 
+import com.hookah.platform.backend.booking.formatBookingDisplayLabel
 import com.hookah.platform.backend.miniapp.guest.db.BookingStatus
 import com.hookah.platform.backend.miniapp.venue.orders.OrderBillActiveItemSnapshot
 import com.hookah.platform.backend.miniapp.venue.orders.OrderBillDiscountSnapshot
@@ -91,6 +92,7 @@ data class BookingStaffNotification(
     val bookingId: Long,
     val event: BookingStaffNotificationEvent,
     val status: BookingStatus? = null,
+    val scheduledAt: Instant? = null,
     val scheduledAtText: String?,
     val partySize: Int?,
     val comment: String?,
@@ -337,8 +339,9 @@ class StaffChatNotifier(
         )
     }
 
-    suspend fun notifyBookingNow(event: BookingStaffNotification): StaffChatNotificationResult =
-        notifyTextNow(
+    suspend fun notifyBookingNow(event: BookingStaffNotification): StaffChatNotificationResult {
+        val venueZoneId = resolveVenueZoneId(event.venueId)
+        return notifyTextNow(
             venueId = event.venueId,
             notificationKey = bookingNotificationKey(event.bookingId, event.event),
             setting =
@@ -354,7 +357,10 @@ class StaffChatNotifier(
                 buildBookingStaffNotificationText(
                     venueName = venue.name,
                     event = event.event,
+                    bookingId = event.bookingId,
                     displayNumber = event.displayNumber,
+                    scheduledAt = event.scheduledAt,
+                    venueZoneId = venueZoneId,
                     status = bookingStaffNotificationStatus(event),
                     scheduledAtText = event.scheduledAtText,
                     partySize = event.partySize,
@@ -366,6 +372,7 @@ class StaffChatNotifier(
             },
             replyMarkup = bookingStaffNotificationReplyMarkup(event),
         )
+    }
 
     private fun bookingStaffNotificationReplyMarkup(event: BookingStaffNotification): ReplyMarkup =
         when (bookingStaffNotificationStatus(event)) {
@@ -1555,7 +1562,10 @@ private fun staffCallUserFacingComment(comment: String?): String? {
 internal fun buildBookingStaffNotificationText(
     venueName: String,
     event: BookingStaffNotificationEvent,
+    bookingId: Long? = null,
     displayNumber: Int?,
+    scheduledAt: Instant? = null,
+    venueZoneId: ZoneId = defaultStaffChatVenueZoneId,
     status: BookingStatus? = null,
     scheduledAtText: String?,
     partySize: Int?,
@@ -1565,10 +1575,23 @@ internal fun buildBookingStaffNotificationText(
     guestDisplayName: String? = null,
 ): String =
     buildString {
+        val bookingLabel =
+            if (bookingId != null && scheduledAt != null) {
+                formatBookingDisplayLabel(
+                    bookingId = bookingId,
+                    displayNumber = displayNumber,
+                    scheduledAt = scheduledAt,
+                    venueZoneId = venueZoneId,
+                )
+            } else {
+                val identity =
+                    displayNumber?.takeIf { it > 0 }?.let { "Бронь №$it" }
+                        ?: bookingId?.let { "Бронь #$it" }
+                        ?: "Бронь"
+                scheduledAtText?.takeIf { it.isNotBlank() }?.let { "$identity · $it" } ?: identity
+            }
         if (event == BookingStaffNotificationEvent.VENUE_CANCELLED) {
-            append("❌ Бронь")
-            displayNumber?.let { append(" №").append(it) }
-            append(" отменена заведением")
+            append("❌ Бронь отменена заведением")
             actorDisplayName?.takeIf { it.isNotBlank() }?.let {
                 append('\n').append("Отменил: ").append(it)
             }
@@ -1581,14 +1604,11 @@ internal fun buildBookingStaffNotificationText(
                     BookingStaffNotificationEvent.VENUE_CANCELLED -> error("handled above")
                 },
             )
-            displayNumber?.let { append(" №").append(it) }
         }
+        append('\n').append(bookingLabel)
         append('\n')
         append("Заведение: ").append(venueName)
         append('\n').append("Гость: ").append(guestDisplayNameOrFallback(guestDisplayName))
-        scheduledAtText?.takeIf { it.isNotBlank() }?.let {
-            append('\n').append("Дата и время: ").append(it)
-        }
         status?.let { append('\n').append("Статус: ").append(bookingStaffStatusLabel(it)) }
         partySize?.let { append('\n').append("Гостей: ").append(it) }
         comment?.takeIf { it.isNotBlank() }?.let {

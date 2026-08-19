@@ -744,6 +744,10 @@ class VenueBookingRoutesTest {
             assertEquals(bookingId.toString(), item.getValue("bookingId").jsonPrimitive.content)
             assertEquals("pending", item.getValue("status").jsonPrimitive.content)
             assertEquals("window", item.getValue("comment").jsonPrimitive.content)
+            assertEquals(
+                "Бронь №1 · 10.01.2030, 21:30",
+                item.getValue("displayLabel").jsonPrimitive.content,
+            )
             assertEquals("10.01.2030, 21:30", item.getValue("scheduledAtDisplay").jsonPrimitive.content)
             assertEquals("2030-01-10", item.getValue("scheduledLocalDate").jsonPrimitive.content)
             assertEquals("21:30", item.getValue("scheduledLocalTime").jsonPrimitive.content)
@@ -756,7 +760,7 @@ class VenueBookingRoutesTest {
                 }
             assertEquals(HttpStatusCode.OK, confirmResponse.status)
             val confirmMessage = outboxTexts(jdbcUrl, GUEST_ID).last()
-            assertTrue(confirmMessage.contains("✅ Бронь №1 подтверждена"), confirmMessage)
+            assertTrue(confirmMessage.contains("✅ Бронь №1 · 10.01.2030, 21:30 подтверждена"), confirmMessage)
             assertTrue(confirmMessage.contains("Заведение: Booking Venue"), confirmMessage)
             assertTrue(confirmMessage.contains("Время: 10.01.2030, 21:30"), confirmMessage)
             assertTrue(confirmMessage.contains("Гостей: 4"), confirmMessage)
@@ -782,7 +786,10 @@ class VenueBookingRoutesTest {
                     .getValue("text")
                     .jsonPrimitive
                     .content
-            assertTrue(guestMessage.contains("Сообщение по вашей брони №1 в «Booking Venue»"), guestMessage)
+            assertTrue(
+                guestMessage.contains("Сообщение по вашей брони №1 · 10.01.2030, 21:30 в «Booking Venue»"),
+                guestMessage,
+            )
             assertTrue(guestMessage.contains("На 19:00 все столы заняты. Можем предложить 20:30?"), guestMessage)
             assertFalse(guestMessage.contains("u$MANAGER_ID"), guestMessage)
             assertFalse(guestMessage.contains("@"), guestMessage)
@@ -824,7 +831,7 @@ class VenueBookingRoutesTest {
                     .content,
             )
             assertEquals(
-                "Бронь №1",
+                "Бронь №1 · 10.01.2030, 21:30",
                 messageResponseBody
                     .getValue("thread")
                     .jsonObject
@@ -907,7 +914,7 @@ class VenueBookingRoutesTest {
             )
 
             val guestThreadsResponse =
-                client.get("/api/guest/support/threads?filter=active") {
+                client.get("/api/guest/support/threads?filter=active&surface=CONVERSATIONS") {
                     headers { append(HttpHeaders.Authorization, "Bearer $guestToken") }
                 }
             assertEquals(HttpStatusCode.OK, guestThreadsResponse.status)
@@ -920,7 +927,10 @@ class VenueBookingRoutesTest {
                     .jsonObject
             assertEquals(threadId.toString(), guestThreadItem.getValue("threadId").jsonPrimitive.content)
             assertEquals("Booking Venue", guestThreadItem.getValue("venueName").jsonPrimitive.content)
-            assertEquals("Бронь №1", guestThreadItem.getValue("contextLabel").jsonPrimitive.content)
+            assertEquals(
+                "Бронь №1 · 10.01.2030, 21:30",
+                guestThreadItem.getValue("contextLabel").jsonPrimitive.content,
+            )
             assertEquals(
                 "Можем забронировать на 20:30.",
                 guestThreadItem.getValue("lastMessagePreview").jsonPrimitive.content,
@@ -928,7 +938,7 @@ class VenueBookingRoutesTest {
             assertEquals("2", guestThreadItem.getValue("unreadCount").jsonPrimitive.content)
 
             val guestThreadDetailResponse =
-                client.get("/api/guest/support/threads/$threadId") {
+                client.get("/api/guest/support/threads/$threadId?surface=CONVERSATIONS") {
                     headers { append(HttpHeaders.Authorization, "Bearer $guestToken") }
                 }
             assertEquals(HttpStatusCode.OK, guestThreadDetailResponse.status)
@@ -944,7 +954,7 @@ class VenueBookingRoutesTest {
             )
 
             val guestThreadsAfterReadResponse =
-                client.get("/api/guest/support/threads?filter=active") {
+                client.get("/api/guest/support/threads?filter=active&surface=CONVERSATIONS") {
                     headers { append(HttpHeaders.Authorization, "Bearer $guestToken") }
                 }
             assertEquals(HttpStatusCode.OK, guestThreadsAfterReadResponse.status)
@@ -1027,7 +1037,7 @@ class VenueBookingRoutesTest {
                     .content,
             )
             val guestActiveThreadsAfterResolveResponse =
-                client.get("/api/guest/support/threads?filter=active") {
+                client.get("/api/guest/support/threads?filter=active&surface=CONVERSATIONS") {
                     headers { append(HttpHeaders.Authorization, "Bearer $guestToken") }
                 }
             assertEquals(HttpStatusCode.OK, guestActiveThreadsAfterResolveResponse.status)
@@ -1039,7 +1049,7 @@ class VenueBookingRoutesTest {
                     .isEmpty(),
             )
             val guestResolvedThreadsResponse =
-                client.get("/api/guest/support/threads?filter=resolved") {
+                client.get("/api/guest/support/threads?filter=resolved&surface=CONVERSATIONS") {
                     headers { append(HttpHeaders.Authorization, "Bearer $guestToken") }
                 }
             assertEquals(HttpStatusCode.OK, guestResolvedThreadsResponse.status)
@@ -1207,7 +1217,7 @@ class VenueBookingRoutesTest {
             assertEquals("2030-01-10T19:30:00Z", changedItem.getValue("scheduledAt").jsonPrimitive.content)
 
             val changeMessage = outboxTexts(jdbcUrl, GUEST_ID).last()
-            assertTrue(changeMessage.contains("🕒 Бронь №1 перенесена"), changeMessage)
+            assertTrue(changeMessage.contains("🕒 Бронь №1 · 10.01.2030, 22:30 перенесена"), changeMessage)
             assertTrue(changeMessage.contains("Заведение: Booking Venue"), changeMessage)
             assertTrue(changeMessage.contains("Новое время: 10.01.2030, 22:30"), changeMessage)
             assertTrue(changeMessage.contains("Гостей: 4"), changeMessage)
@@ -1227,7 +1237,7 @@ class VenueBookingRoutesTest {
             assertEquals(HttpStatusCode.OK, cancelResponse.status)
 
             val cancelMessage = outboxTexts(jdbcUrl, GUEST_ID).last()
-            assertTrue(cancelMessage.contains("❌ Бронь №1 отменена"), cancelMessage)
+            assertTrue(cancelMessage.contains("❌ Бронь №1 · 10.01.2030, 22:30 отменена"), cancelMessage)
             assertTrue(cancelMessage.contains("Заведение: Booking Venue"), cancelMessage)
             assertTrue(cancelMessage.contains("Время брони: 10.01.2030, 22:30"), cancelMessage)
             assertTrue(cancelMessage.contains("Причина: зал закрыт"), cancelMessage)
@@ -1265,7 +1275,10 @@ class VenueBookingRoutesTest {
                 }
             assertEquals(HttpStatusCode.OK, blankCancelResponse.status)
             val blankCancelMessage = outboxTexts(jdbcUrl, GUEST_ID).last()
-            assertTrue(blankCancelMessage.contains("❌ Бронь №2 отменена"), blankCancelMessage)
+            assertTrue(
+                blankCancelMessage.contains("❌ Бронь №2 · 10.01.2030, 23:00 отменена"),
+                blankCancelMessage,
+            )
             assertTrue(blankCancelMessage.contains("Время брони: 10.01.2030, 23:00"), blankCancelMessage)
             assertFalse(blankCancelMessage.contains("Причина:"), blankCancelMessage)
             assertFalse(blankCancelMessage.contains("не указана"), blankCancelMessage)

@@ -1,6 +1,6 @@
 # Booking Lifecycle Model
 
-Дата актуализации: 2026-08-17.
+Дата актуализации: 2026-08-18.
 
 Статус: **current product reference / SPEC UPDATED**. Booking flows are implemented in several bounded slices: guest booking create/list/cancel/change acceptance foundations, Venue Mini App booking queue/lifecycle, hold settings, `arrival_deadline_at`, confirmed-only arrival terminal actions, state-aware staff-chat booking buttons, booking conversation threads, booking `SEATED` -> Guest History integration and opt-in reminder code are documented as smoke-closed or code/test-backed in the current roadmap. The complete booking lifecycle is still **PARTIAL / needs verification** for rollout-gated reminders, full automation, preorder, feedback and all analytics/audit event coverage.
 
@@ -122,7 +122,13 @@ Guest copy:
 - Proposed time: `Заведение предложило другое время: HH:mm.`
 
 Current vs target:
-- Current docs say Bot `/my` and Guest Mini App `Мои брони` show active/upcoming bookings with public `Бронь №...`, venue-local time, status, party size, comment and `Держим до HH:mm` when applicable.
+- `bookings.display_number` is authoritative and unique within one venue service day; it may
+  legitimately restart on another service day. Every Guest/Venue booking and booking-conversation
+  surface therefore uses `Бронь №<display_number> · <venue-local dd.MM.yyyy, HH:mm>`.
+  Missing/invalid numbers fall back to stable `Бронь #<booking_id>`, never a list index or
+  generic `Бронь 1` placeholder. Sort, filter and reload do not change the label.
+- Bot `/my` and Guest Mini App `Мои брони` additionally show status, party size,
+  comment and `Держим до HH:mm` when applicable.
 - Real two-account Telegram runtime isolation for Guest booking list remains explicitly unverified in current role docs; keep it in regression.
 
 ## Venue Booking Queue
@@ -143,6 +149,7 @@ Queue filters:
 - no-show / seated history.
 
 Card fields:
+- the same authoritative booking display label used by Guest, conversations and Telegram;
 - safe guest label;
 - scheduled venue-local time;
 - party size;
@@ -231,7 +238,10 @@ Rules:
   booking-chat access.
 - Booking `Открыть переписку` opens `BOOKING_CHAT` / `Чаты`, not `SUPPORT_TICKET`.
 - Booking chat has its own active/resolved conversation status where implemented; resolving a chat must not confirm, cancel, seat, no-show or otherwise mutate the booking.
-- Guest booking replies persist to `BOOKING_CHAT`; booking chat messages do not post to staff-chat.
+- Guest booking replies persist to `BOOKING_CHAT`. The full message stream never posts to
+  staff-chat; a newly committed Guest message may create one fact-only alert in the canonical
+  venue's existing linked staff-chat, with the authoritative booking label, safe Guest label and
+  exact conversation link but without message text.
 - If a booking problem becomes a dispute/complaint, the guest uses Help -> `SUPPORT_TICKET` category `Бронь`.
 - Booking support outside table requires verified booking or venue context.
 - Telegram retries use the persisted inbound message id for per-thread message idempotency; guest
@@ -300,6 +310,20 @@ Current vs target:
   inserted the thread use `support_threads -> support_thread_reads`; no path locks a read marker and
   then reaches back to the thread or booking. Authorization results and Guest/Venue/Platform role
   boundaries are unchanged by this ordering.
+- `support_thread_reads.last_read_message_id` is the sole current unread authority. After the
+  canonical parent locks, an accepted exact open snapshots `MAX(support_messages.id)`, advances the
+  actor/thread cursor monotonically and returns the marker plus detail/messages in the same
+  transaction. A detail failure rolls the marker back. Production unread SQL uses the null-safe
+  `author_user_id IS DISTINCT FROM actor_user_id` contract. Unread is a foreign-authored message with a
+  NULL cursor or `message.id > last_read_message_id`; equal timestamps do not collapse message
+  order and own messages never count. Every user-visible message whose `author_user_id` is NULL is
+  a system message and is foreign to every actor. It participates in per-thread/card unread and,
+  for `BOOKING_THREAD` or `VENUE_CHAT`, the aggregate Venue conversation badge; the normal exact
+  open clears it without expanding thread or RBAC authority. `last_read_at` remains wall-clock
+  metadata only.
+- PostgreSQL V126/H2 V127 add nullable `BIGINT last_read_message_id` and the exact
+  `support_messages(thread_id, id)` index. Existing marker rows deliberately retain NULL cursors;
+  there is no default, backfill, foreign key or destructive rewrite.
 - Mini App idempotency is persisted as
   `(thread_id, source, author_user_id, client_message_id)`. Replaying the same key with the exact
   normalized stored text returns the original message without touching thread state or outbox;
@@ -311,27 +335,221 @@ Current vs target:
 - For a new Mini App booking message, authoritative booking/thread participant checks after the
   existing surface authentication/RBAC prerequisite, replay lookup,
   message insert, thread update and server-derived Telegram outbox insert use one JDBC connection
-  and one commit. Venue replies notify the canonical guest; Guest replies enqueue only the existing
-  safe private acknowledgement and never the staff chat. An outbox failure rolls everything back;
-  replay after a lost committed HTTP response returns the original message and outbox row.
+  and one commit. Venue replies notify the canonical guest; Guest replies retain the existing safe
+  private acknowledgement and, only for the canonical venue with enabled linked staff-chat, enqueue
+  one bounded fact-only staff alert. The message text is not copied into that payload. An outbox
+  failure rolls everything back; replay after a lost committed HTTP response returns the original
+  message and outbox rows without duplicates. Missing/disabled staff-chat safely omits the venue
+  alert and records no venue-alert success; the separate private Guest acknowledgement is unchanged.
 - The existing suspend `TelegramOutboxRepository.enqueue` remains the legacy key-only contract:
   a repeated `dedupeKey` is an idempotent no-op even if a caller regenerated mutable envelope bytes.
   The connection-aware booking-only method is separate and strict: equal
   `chat_id + method + canonical payload_json` replays, while any mismatch aborts the booking message
   transaction. Reminder, billing and ordinary Telegram callers do not inherit strict collisions.
 - The implementation and regression matrix includes H2/PostgreSQL migration,
-  repository race/idempotency/rollback, parent-first read-marker, RBAC route, Telegram and browser
-  coverage. Local validation includes semantic/recursive migration wrappers `42/42` per database, exact
-  message metadata wrappers `5/5`, real PostgreSQL Mini App idempotency `11/11`, predicate parity
-  and H2 helper policy coverage `6/6`, plus deterministic reload-after-commit browser coverage. Independent review is still
-  required; green Actions and staging/two-account real-client smoke remain later release gates.
-- The seven findings in the current bounded fix have local fixes and coverage, but each remains
+  repository race/idempotency/rollback, parent-first read cursor, RBAC route, Telegram and browser
+  coverage. The current cursor gate requires repository `21`, real PostgreSQL read-race `6` and
+  H2/PostgreSQL cursor-migration wrappers `4/4`; label parity requires Kotlin `2` plus the shared
+  JSON fixture's dedicated TypeScript/Playwright cases; notification coverage requires real
+  PostgreSQL booking idempotency `17`, notifier unit `5` and legacy outbox `8`. Guest surface
+  guards require exact route XML floors `BookingConversationRoutesTest=8` and
+  `SupportTicketRoutesTest=13` plus the structured Playwright floor `216`. Historical V124/V125
+  semantic/recursive and message-metadata gates remain mandatory regression evidence. Independent
+  review is still required; green Actions, cursor migration rollout and staging/two-account
+  real-client smoke remain later release gates.
+- The seven findings in the preceding integrity fix have local fixes and coverage, but each remains
   `LOCAL_FIX_REVIEW_REQUIRED` and the epic
   remains `REVIEW REQUIRED BEFORE COMMIT`. `BOOKING-DEDUP-AUDIT-REF-001` is not treated as a final
   complete-reference verdict; recursive coverage is the separate
   `BOOKING-AUDIT-UNKNOWN-REFERENCE-KEY-001` fix awaiting review.
+- The five cursor/parity/notifier/documentation findings in the current UX/discoverability closure
+  likewise remain `LOCAL_FIX_REVIEW_REQUIRED`; local validation does not mark the epic or release
+  done.
+- Guest exact detail/open is additionally type-clamped by a fixed server-owned surface:
+  `CONVERSATIONS` is exactly `BOOKING_THREAD` + `VENUE_CHAT`, and `SUPPORT` is exactly
+  `SUPPORT_TICKET`. Ordinary Guest and confirmed Platform Guest-context adapters pass that bounded
+  contract into one repository-owned transaction. After fact-free preauthorization, it takes the
+  canonical booking lock when applicable and `support_threads FOR UPDATE`, rechecks Guest ownership
+  and the locked type, then and only then snapshots `MAX(message.id)`, advances the cursor and reads
+  the detail. Wrong-surface opens disclose no message facts and write no marker, audit or outbox.
 - `BOOKING-SAVEPOINT-COLLISION-001` stays `OPEN`: unique-conflict recovery is defensive-only behind
   the canonical booking-row lock and must not be removed without a separate concurrency review.
+
+### PostgreSQL V126 Controlled Mixed-Version Rollout Boundary
+
+This is an operational contract for a future release, not evidence that green Actions, a staging
+migration, deploy or smoke has happened.
+
+This current-section wording addresses only the two remaining commit-blocking documentation
+findings `BOOKING-UNREAD-ROLLOUT-PREFLIGHT-HEAD-001` and
+`BOOKING-UNREAD-ROLLOUT-MANUAL-DB-CLEANUP-001`. The already approved label smoke remains unchanged;
+this wording does not raise the epic or release status.
+
+PostgreSQL V126 is additive. It adds nullable `BIGINT support_thread_reads.last_read_message_id`
+with no default, no backfill and no destructive rewrite;
+`last_read_at` and primary key `(thread_id, user_id)` remain intact. The old binary is
+schema-compatible but updates only `last_read_at`. The new binary treats a NULL cursor as every
+foreign-authored message unread, including a user-visible system message with
+`author_user_id = NULL`. No message or marker data is lost, but badges can repeat or be inaccurate
+during mixed-version operation. H2 V127 is the additive dialect-parity/test migration: it adds the
+same nullable `BIGINT last_read_message_id` with no default, no backfill and no destructive rewrite,
+preserves `last_read_at` and primary key `(thread_id, user_id)`, and applies only to H2/local/test.
+Staging PostgreSQL applies PostgreSQL V126, never H2 V127.
+
+`EXPECTED_RELEASE_SHA` comes only from the exact commit SHA shown by a fully green GitHub Actions
+run after commit and push. The operator copies the full 40-character lowercase SHA from that run
+and passes it explicitly; GitHub CLI is optional because the value may be copied from the Actions
+UI. Validate it with `^[0-9a-f]{40}$`, fetch `origin`, and require
+`origin/main = EXPECTED_RELEASE_SHA`. Never derive the expected value from local `HEAD` or from the
+checkout being verified; `EXPECTED_RELEASE_SHA="$(git rev-parse HEAD)"` and equivalent contracts are
+forbidden.
+
+Use the exact executable procedure in `docs/DEPLOYMENT_RUNBOOK.md` to create a separate detached
+`RELEASE_WORKTREE` at `EXPECTED_RELEASE_SHA`. Its `HEAD` must equal the expected SHA and
+`git status --porcelain --untracked-files=all` must be empty. A dirty release worktree, `scripts/dev/`
+or any other untracked file is a STOP. The development worktree is not used for preflight, build or
+deploy; mutable branches and mutable image tags are not release identity.
+
+Build the backend image only from that detached exact-SHA worktree. Its tag contains the full
+`EXPECTED_RELEASE_SHA`, and its immutable image ID is recorded before cutover. If the image really
+contains `org.opencontainers.image.revision`, it must equal `EXPECTED_RELEASE_SHA`; if the build
+does not create that label, do not invent it. Exact-worktree provenance, the full-SHA tag and the
+recorded immutable image ID then remain mandatory. A mutable `staging` tag alone is insufficient,
+and the deploy command must use this exact prepared image with an explicit
+`DEPLOY_SHA = EXPECTED_RELEASE_SHA`.
+
+The release equality is unconditional:
+`green Actions SHA = origin/main = release worktree HEAD = prepared backend image release SHA =
+DEPLOY_SHA`. Any mismatch is a STOP.
+
+The final preflight must be extracted at operation time from
+`$RELEASE_WORKTREE/docs/DEPLOYMENT_RUNBOOK.md` by the documented Python standard-library extractor.
+It requires exactly one `BOOKING_UNREAD_PREFLIGHT_BEGIN` and exactly one
+`BOOKING_UNREAD_PREFLIGHT_END`, rejects missing, duplicate, reversed, empty or ambiguous ranges,
+selects the current marker-bounded block rather than a first similar fence or historical section,
+and writes the exact nonempty body to a timestamped temporary file. The current fenced artifact is
+a `bash` wrapper around `psql`, not pure SQL, so the exact extracted file is executed with `bash`,
+not `psql -f`. Its SHA-256 is recorded immediately after extraction, and the artifact is never
+edited before execution.
+
+SQL or shell text from a ChatGPT message, terminal history, clipboard history, a previously saved
+SQL/shell file, cached snippet, another branch, another commit, a historical runbook section or any
+other stale copy is forbidden. Manual editing of the extracted artifact and deleting, omitting or
+weakening a guard merely to obtain exit code 0 are forbidden. Incomplete or ambiguous extraction
+is a STOP. An initial pre-drain preflight never replaces the final post-drain extraction and
+execution. The final preflight runs only after `hookah_backend_container_count = 0`,
+`hookah_application_writer_session_count = 0` and
+`unidentified_candidate_session_count = 0`, and before any new backend starts.
+
+The authorized release must use this exact order:
+
+1. Pin `EXPECTED_RELEASE_SHA` externally from the exact fully green GitHub Actions run and create
+   the separate clean detached worktree at that SHA.
+2. Verify that the same exact commit/push has fully green Actions and that
+   `origin/main = release worktree HEAD = EXPECTED_RELEASE_SHA`; any mismatch is a STOP.
+3. Create and verify the database backup and the approved full-database restore path.
+4. Before downtime, prepare the exact image only from the detached release worktree, use the full
+   SHA tag, verify any real OCI revision label and record the immutable image ID.
+5. Drain normal traffic and stop/drain every old hookah backend instance; keep traffic drained
+   through migration and the complete smoke.
+6. Confirm `hookah_backend_container_count = 0` for the exact staging Compose project and `backend`
+   service while PostgreSQL remains running.
+7. Inspect `pg_stat_activity` and confirm
+   `hookah_application_writer_session_count = 0`, including idle application connections.
+8. Confirm `unidentified_candidate_session_count = 0`; every unidentified candidate is a STOP.
+9. Extract the final preflight from the exact release worktree, record its SHA-256, execute the exact
+   unedited shell artifact and retain its result, including the expected pre-cutover Flyway head.
+10. Verify `DEPLOY_SHA = prepared image release SHA = EXPECTED_RELEASE_SHA`, then start exactly one
+    new backend from the recorded prepared image; do not start an old instance.
+11. Allow that backend's normal startup to apply PostgreSQL V126.
+12. Verify the Flyway head is V126 and verify its checksum and successful history row/startup log.
+13. Confirm every running hookah backend container uses the recorded new image and that old image
+    running count is zero.
+14. Run health, database health and the V126 schema invariants.
+15. Run the complete bounded staging smoke below with exactly one new backend.
+16. Restore normal traffic only after every smoke check passes completely.
+
+The sequence `stop container -> immediately start new backend` is forbidden. The PostgreSQL session
+gate and final read-only preflight must occur between stop/drain and the one-new-backend start.
+Cutover requires `hookah_backend_container_count = 0`,
+`hookah_application_writer_session_count = 0` and
+`unidentified_candidate_session_count = 0`; any non-zero value blocks PostgreSQL V126. This is the
+mandatory **zero application writer sessions** gate, not an active-query-only check.
+
+The current backend does not configure a unique PostgreSQL `application_name`; staging uses
+`DB_USER = POSTGRES_USER` and the Compose network. The release operator must therefore apply the
+fail-closed predicate from `docs/DEPLOYMENT_RUNBOOK.md`: inspect every `client backend` on the
+current database/user other than the gate session itself and classify it using recorded old-container
+PID/client address and Compose network, observed `application_name`, and individually proved
+operator PIDs. `idle` is not drained. Any unidentified row is
+`STOP_FOR_BOOKING_MIXED_VERSION_ROLLOUT_DECISION`, not an optimistic continue.
+
+After PostgreSQL V126 has applied successfully, improvised manual DB/schema/data cleanup is
+forbidden. The following are unconditionally forbidden in every release recovery plan after V126:
+restoring one table; restoring a set of selected tables; restoring only `support_thread_reads`;
+restoring only `support_messages`; restoring schema objects separately from data; any other
+partial-table restore; a partial restore over the migrated schema; or manually merging data from a
+backup. Do not run manual `UPDATE`, `DELETE` or `INSERT` statements on read-marker/cursor rows;
+manually `ALTER`, `DROP` or recreate schema objects; edit `flyway_schema_history`; mutate migration
+versions or checksums; run cleanup SQL; downgrade the schema; run automatic or manual
+`flyway repair`; or start the old backend to "repair" state. This prohibition has no
+operator-confidence, exceptional-case or separately approved partial-recovery-plan override.
+
+If startup or verification fails after schema cutover:
+
+1. Keep normal traffic drained.
+2. Do not start the old backend.
+3. Perform no manual DB/schema/data cleanup.
+4. Preserve the verified backup, evidence and logs.
+5. Prepare a reviewed forward-fix binary.
+6. Start only the reviewed forward-fixed backend.
+7. Repeat health, database health, schema invariants and the complete smoke before reopening
+   traffic.
+8. Reopen traffic only after every repeated check succeeds completely.
+
+The only restore path permitted by this release recovery contract is a full, consistent restore of
+the entire database as a separate disaster-recovery decision. It is not an ordinary release
+rollback and requires separate explicit confirmation from the user/product owner. After the full
+restore, select a backend binary compatible with the restored Flyway state, reassess migrations,
+then repeat health, database health, schema invariants and the complete smoke before reopening
+traffic. Never combine a full-database restore with a partial transfer of tables, rows or schema
+objects over V126. A long mixed deployment is prohibited. No old binary may be started to repair
+the V126 database, and only the new or reviewed forward-fixed backend may run before traffic
+reopens, unless a separately approved full-database disaster recovery has first restored a Flyway
+state compatible with the selected binary.
+
+With exactly one new backend and old image running count zero, the bounded staging smoke must prove:
+
+- a user-visible NULL-author system message in a real `VENUE_CHAT` produces an unread badge;
+- exact open clears the badge, and a new system message after open becomes unread again;
+- wrong-surface deep links leave raw read markers unchanged;
+- the correct surface clears only the exact marker;
+- Guest, Venue and account/venue isolation hold;
+- a real staff-chat Telegram notification reaches the canonical linked chat;
+- Support and Conversations remain separate and do not mix.
+
+The exact label-collision acceptance scenario is mandatory:
+
+1. Create or select two test bookings for the same venue with the same display number (the
+   authoritative `display_number`), but different service dates (`display_date`).
+2. Confirm that the two records really have the same number, for example №1 and №1.
+3. Confirm that their user-visible labels differ because of venue-local date/time:
+   `Бронь №1 · <дата A>, <время A>` and `Бронь №1 · <дата B>, <время B>`.
+4. Verify both labels in Guest booking list/detail, Venue booking list/detail, conversation
+   list/detail, and the staff-chat notification if one is created in this smoke.
+5. Confirm that no surface shortens both records to identical `Бронь 1` or `Бронь №1` labels.
+6. Confirm that each label and its associated open action resolves to the exact corresponding
+   booking/thread.
+
+Two bookings with different display numbers do not reproduce the original collision and cannot
+substitute for this scenario. If staging fixtures cannot naturally produce the same display number
+on different service dates, record that capability as a smoke setup prerequisite; do not weaken the
+smoke to different numbers.
+
+`BOOKING-UNREAD-NULL-AUTHOR-001`, `BOOKING-UNREAD-GUEST-TYPE-GUARD-001` and
+`BOOKING-UNREAD-MIXED-VERSION-ROLLOUT-001` remain `LOCAL_FIX_REVIEW_REQUIRED` until the next
+independent review. The epic remains **BOOKING CONVERSATION UX / DISTINCT LABELS, INBOX AND UNREAD
+DISCOVERABILITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
 
 ## Staff-Chat Notification Policy
 
@@ -340,6 +558,7 @@ Staff-chat policy is canonical in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. Staff-
 - confirmed/changed/canceled;
 - arrival soon / overdue when future policy enables it;
 - reminder attendance updates where current implementation does so safely.
+- a fact-only new-Guest-message radar alert for `BOOKING_THREAD`, never the raw message stream.
 
 State-aware booking notification buttons:
 - `PENDING`: confirm, cancel, message; no arrival buttons.
@@ -426,7 +645,7 @@ Privacy:
 | Reminders worker | M7c is code/test-backed and one controlled staging smoke passed; runtime disabled by default. | Rollout-gated transactional reminders with dedupe, quiet hours and safe actions. | Enable only with explicit rollout/smoke; management UI future. |
 | No-show / seated | Runtime statuses, confirmed-only arrival guard and `BOOKING_SEATED` visit creation are documented; staging smoke confirmed non-seated booking statuses are hidden from Guest History. | Seated can feed visit; no-show must not. | Feedback, preorder and `visit_count` remain partial/future. |
 | Analytics events | Analytics spec says booking events need verification. | Emit full booking lifecycle/reminder/chat facts. | Event emission/payload safety is partial/future unless tests prove it. |
-| Staff-chat booking notifications | State-aware operational booking notifications are allowed by policy and smoke-closed for current paths. | Staff-chat is radar only; no booking chat/support ticket spam. | Keep per-venue real Telegram group regression. |
+| Staff-chat booking notifications | State-aware lifecycle notifications exist; the bounded new-Guest-message alert is locally implemented without raw chat text. | Staff-chat is radar only; no booking-chat stream, venue-chat or support-ticket spam. | Independent review, green Actions and a per-venue real Telegram group smoke remain required. |
 | Support routing for booking problems | `SUPPORT_TICKET` category `Бронь` requires verified booking/venue context. | Booking problems escalate through support, not booking chat lifecycle. | Keep context verification and staff-chat denial in support regression. |
 
 ## Roadmap Status
@@ -460,7 +679,18 @@ Privacy:
 16. Seated booking creates or links exactly one `BOOKING_SEATED` visit where visit foundation exists.
 17. Booking `Открыть переписку` opens `BOOKING_CHAT` / `Чаты`, not Support.
 18. Booking support issue requires verified booking or venue context.
-19. Booking chat/support messages do not post to staff-chat.
+19. A new Guest booking message creates at most one fact-only canonical-venue staff-chat alert with
+    exact-thread navigation when linked; raw booking-chat text, support tickets and venue chats do
+    not post to staff-chat.
 20. Venue users cannot access another venue booking.
 21. Staff access matches final RBAC policy: view + confirmed-only seated/no-show unless changed intentionally.
 22. Booking analytics/audit events exist where implemented, and payloads contain no raw message text/initData/secrets.
+23. A user-visible NULL-author `VENUE_CHAT` system message appears unread in the exact card and
+    aggregate Venue conversation badge, then clears only for the actor/thread opened; another actor
+    and unrelated thread marker remain unchanged.
+24. Ordinary Guest and confirmed Platform Guest-context crafted wrong-surface opens disclose no
+    messages and preserve exact raw `thread_id`, `user_id`, `last_read_message_id`, `last_read_at`;
+    correct `CONVERSATIONS` / `SUPPORT` opens update only their exact marker.
+25. After an authorized V126 staging cutover, verify exactly one backend with the new image, no old
+    image, account/venue isolation and the complete NULL-author/wrong-surface smoke from the rollout
+    boundary above.

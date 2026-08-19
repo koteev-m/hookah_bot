@@ -17,6 +17,7 @@ import {
   bookingThreadLoading,
   type BookingThreadReconciliationState
 } from '../shared/bookingThreadReconciliation'
+import { bookingDisplayLabel } from '../shared/ui/bookingLabel'
 import { append, el, on } from '../shared/ui/dom'
 import { showToast } from '../shared/ui/toast'
 
@@ -28,6 +29,7 @@ type VenueMessagesOptions = {
   access: VenueAccessDto
   screenMode: 'bookingMessages' | 'supportTickets'
   initialThreadId?: number | null
+  onConversationUnreadChanged?: () => void
 }
 
 type VenueMessagesRefs = {
@@ -74,10 +76,16 @@ function formatDateTime(value?: string | null): string {
 }
 
 function supportTitle(thread: SupportThreadDto): string {
+  if (thread.threadType === 'BOOKING_THREAD') {
+    return bookingDisplayLabel({
+      bookingId: thread.booking?.bookingId ?? thread.bookingId,
+      displayNumber: thread.booking?.displayNumber,
+      displayLabel: thread.booking?.displayLabel,
+      scheduledAt: thread.booking?.scheduledAt,
+      legacyLabel: thread.contextLabel || thread.title
+    })
+  }
   if (thread.contextLabel) return thread.contextLabel
-  const displayNumber = thread.booking?.displayNumber
-  if (displayNumber) return `Бронь №${displayNumber}`
-  if (thread.bookingId) return `Бронь #${thread.bookingId}`
   return thread.title
 }
 
@@ -107,7 +115,23 @@ function previewText(thread: SupportThreadDto): string {
 
 function unreadCount(thread: SupportThreadDto): number {
   const value = thread.unreadCount ?? 0
-  return Number.isFinite(value) && value > 0 ? value : 0
+  return Number.isSafeInteger(value) && value > 0 ? value : 0
+}
+
+function lastMessageTimestamp(thread: SupportThreadDto): number {
+  if (!thread.lastMessageAt) return 0
+  const timestamp = Date.parse(thread.lastMessageAt)
+  return Number.isNaN(timestamp) ? 0 : timestamp
+}
+
+function sortConversationThreads(items: SupportThreadDto[]): SupportThreadDto[] {
+  return [...items].sort((left, right) => {
+    const unreadOrder = Number(unreadCount(right) > 0) - Number(unreadCount(left) > 0)
+    if (unreadOrder !== 0) return unreadOrder
+    const messageTimeOrder = lastMessageTimestamp(right) - lastMessageTimestamp(left)
+    if (messageTimeOrder !== 0) return messageTimeOrder
+    return right.threadId - left.threadId
+  })
 }
 
 function isResolvedThread(thread: SupportThreadDto): boolean {
@@ -148,16 +172,16 @@ function guestDisplay(thread: SupportThreadDto): string {
 function screenCopy(screenMode: VenueMessagesOptions['screenMode']): VenueMessagesCopy {
   if (screenMode === 'supportTickets') {
     return {
-      title: 'Обращения',
+      title: 'Поддержка',
       hint: 'Очередь обращений гостей. Срочные вызовы стола остаются в разделе «Вызовы».',
-      emptyText: 'Обращений пока нет.',
+      emptyText: 'Обращений в поддержку нет.',
       threadTypes: ['SUPPORT_TICKET']
     }
   }
   return {
-    title: 'Сообщения',
-    hint: 'Переписка с гостями по броням и обычным вопросам. Обращения по проблемам находятся отдельно.',
-    emptyText: 'Сообщений пока нет.',
+    title: 'Переписки',
+    hint: 'Разговоры с гостями по броням и обычным вопросам. Обращения по проблемам находятся в разделе «Поддержка».',
+    emptyText: 'Новых переписок нет.',
     threadTypes: ['BOOKING_THREAD', 'VENUE_CHAT']
   }
 }
@@ -193,7 +217,16 @@ function buildDom(root: HTMLDivElement, copy: VenueMessagesCopy): VenueMessagesR
 }
 
 export function renderVenueMessagesScreen(options: VenueMessagesOptions) {
-  const { root, backendUrl, isDebug, venueId, access, screenMode, initialThreadId } = options
+  const {
+    root,
+    backendUrl,
+    isDebug,
+    venueId,
+    access,
+    screenMode,
+    initialThreadId,
+    onConversationUnreadChanged
+  } = options
   if (!root) return () => undefined
   const copy = screenCopy(screenMode)
   const refs = buildDom(root, copy)
@@ -284,6 +317,10 @@ export function renderVenueMessagesScreen(options: VenueMessagesOptions) {
     threads.forEach((thread) => {
       const card = el('section', { className: 'card venue-message-thread-card' })
       card.dataset.selected = String(thread.threadId === selectedThreadId)
+      card.dataset.threadId = String(thread.threadId)
+      card.dataset.threadType = thread.threadType
+      card.dataset.unreadCount = String(unreadCount(thread))
+      if (thread.bookingId != null) card.dataset.bookingId = String(thread.bookingId)
       const title = el('h3', { text: supportTitle(thread) })
       const guest = el('p', { className: 'venue-order-sub', text: `Гость: ${guestDisplay(thread)}` })
       const meta = el('p', {
@@ -336,12 +373,13 @@ export function renderVenueMessagesScreen(options: VenueMessagesOptions) {
     refs.status.textContent = ''
     const inventoryItems = result.data.items
     if (initialInventoryPending && initialThreadId != null) {
-      threads = inventoryItems
+      threads = sortConversationThreads(inventoryItems)
       renderThreadList()
+      onConversationUnreadChanged?.()
       void loadThread(initialThreadId, 'initial')
       return
     } else {
-      threads = inventoryItems
+      threads = sortConversationThreads(inventoryItems)
     }
     if (
       selectedThreadId != null &&
@@ -351,9 +389,10 @@ export function renderVenueMessagesScreen(options: VenueMessagesOptions) {
         ? isResolvedThread(detailThread) || isClosedThread(detailThread)
         : !isResolvedThread(detailThread) && !isClosedThread(detailThread))
     ) {
-      threads = [detailThread, ...threads]
+      threads = sortConversationThreads([detailThread, ...threads])
     }
     renderThreadList()
+    onConversationUnreadChanged?.()
     const selectedStillVisible = selectedThreadId && threads.some((thread) => thread.threadId === selectedThreadId)
     if (selectedThreadId && selectedStillVisible) {
       void loadThread(selectedThreadId)
@@ -400,7 +439,12 @@ export function renderVenueMessagesScreen(options: VenueMessagesOptions) {
       loading.appendChild(el('p', { className: 'venue-order-sub', text: 'Загружаем переписку…' }))
       refs.detail.replaceChildren(loading)
     }
-    const result = await venueGetSupportThread(backendUrl, { venueId, threadId }, deps, controller.signal)
+    const result = await venueGetSupportThread(
+      backendUrl,
+      { venueId, threadId, threadTypes: copy.threadTypes },
+      deps,
+      controller.signal
+    )
     if (disposed || abortController !== controller) return
     abortController = null
     if (!result.ok) {
@@ -438,14 +482,17 @@ export function renderVenueMessagesScreen(options: VenueMessagesOptions) {
     selectedThreadId = exactThread.threadId
     const exactInventoryIndex = threads.findIndex((thread) => thread.threadId === selectedThreadId)
     if (exactInventoryIndex >= 0) {
-      threads = threads.map((thread) =>
-        thread.threadId === selectedThreadId ? { ...exactThread, unreadCount: 0 } : thread
+      threads = sortConversationThreads(
+        threads.map((thread) =>
+          thread.threadId === selectedThreadId ? { ...exactThread, unreadCount: 0 } : thread
+        )
       )
     } else {
-      threads = [{ ...exactThread, unreadCount: 0 }, ...threads]
+      threads = sortConversationThreads([{ ...exactThread, unreadCount: 0 }, ...threads])
     }
     renderThreadList()
     showThreadDetail(exactThread, result.data.messages, preservedDraft)
+    onConversationUnreadChanged?.()
   }
 
   const renderThreadDetail = (thread: SupportThreadDto, messages: SupportMessageDto[], preservedDraft = '') => {
@@ -634,10 +681,13 @@ export function renderVenueMessagesScreen(options: VenueMessagesOptions) {
       status.textContent = 'Сообщение отправлено гостю.'
       showToast('Сообщение отправлено гостю.')
       if (bookingMessage) {
-        threads = threads.map((candidate) =>
-          candidate.threadId === result.data.thread.threadId ? result.data.thread : candidate
+        threads = sortConversationThreads(
+          threads.map((candidate) =>
+            candidate.threadId === result.data.thread.threadId ? result.data.thread : candidate
+          )
         )
         renderThreadList()
+        onConversationUnreadChanged?.()
       } else {
         void loadThreads()
       }

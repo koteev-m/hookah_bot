@@ -1,6 +1,7 @@
 export type SupportBookingContextDto = {
   bookingId: number
   displayNumber?: number | null
+  displayLabel?: string | null
   scheduledAt?: string | null
   partySize?: number | null
   status?: string | null
@@ -34,6 +35,7 @@ export type SupportThreadDto = {
 
 export type SupportThreadFilter = 'active' | 'resolved'
 export type SupportThreadType = 'BOOKING_THREAD' | 'SUPPORT_TICKET' | 'VENUE_CHAT'
+export type GuestThreadSurface = 'CONVERSATIONS' | 'SUPPORT'
 
 export type SupportMessageDto = {
   messageId: number
@@ -46,6 +48,10 @@ export type SupportMessageDto = {
 
 export type SupportThreadListResponse = {
   items: SupportThreadDto[]
+}
+
+export type VenueConversationUnreadCountResponse = {
+  unreadCount: number
 }
 
 export type BookingThreadReconciliationItemDto = {

@@ -4,6 +4,8 @@ import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.NotFoundException
 import com.hookah.platform.backend.api.TooManyRequestsException
+import com.hookah.platform.backend.booking.formatBookingDisplayLabel
+import com.hookah.platform.backend.booking.resolveBookingDisplayZoneId
 import com.hookah.platform.backend.miniapp.guest.GuestRateLimitConfig
 import com.hookah.platform.backend.miniapp.guest.GuestRateLimitKey
 import com.hookah.platform.backend.miniapp.guest.GuestRateLimitPolicy
@@ -24,6 +26,7 @@ import com.hookah.platform.backend.miniapp.venue.requireVenueId
 import com.hookah.platform.backend.miniapp.venue.resolveVenueRole
 import com.hookah.platform.backend.platform.PlatformConfig
 import com.hookah.platform.backend.platform.requirePlatformOwner
+import com.hookah.platform.backend.telegram.BookingMessageStaffChatNotifier
 import com.hookah.platform.backend.telegram.TableContext
 import com.hookah.platform.backend.telegram.TelegramKeyboards
 import com.hookah.platform.backend.telegram.TelegramOutboxEnqueuer
@@ -48,6 +51,7 @@ import java.util.UUID
 data class SupportBookingContextDto(
     val bookingId: Long,
     val displayNumber: Int? = null,
+    val displayLabel: String,
     val scheduledAt: String? = null,
     val partySize: Int? = null,
     val status: String? = null,
@@ -93,6 +97,11 @@ data class SupportMessageDto(
 @Serializable
 data class SupportThreadListResponse(
     val items: List<SupportThreadDto>,
+)
+
+@Serializable
+data class VenueConversationUnreadCountResponse(
+    val unreadCount: Int,
 )
 
 @Serializable
@@ -172,6 +181,7 @@ fun Route.guestSupportRoutes(
     supportThreadRepository: SupportThreadRepository,
     venueRepository: VenueRepository,
     outboxEnqueuer: TelegramOutboxEnqueuer,
+    bookingMessageStaffChatNotifier: BookingMessageStaffChatNotifier,
     tableTokenResolver: suspend (String) -> TableContext?,
     tableSessionRepository: TableSessionRepository,
     tableSessionConfig: TableSessionConfig,
@@ -209,12 +219,13 @@ fun Route.guestSupportRoutes(
                     bookingId = booking.id,
                     title = title,
                 ) ?: throw NotFoundException()
-            markThreadReadAuthorized(
-                supportThreadRepository,
-                thread.id,
-                SupportThreadReadAccess.Guest(userId),
-            )
-            val detail = supportThreadRepository.getGuestThread(userId, thread.id) ?: throw NotFoundException()
+            val detail =
+                supportThreadRepository.getGuestThreadAndMarkRead(
+                    userId = userId,
+                    threadId = thread.id,
+                    surface = GuestThreadSurface.CONVERSATIONS,
+                )
+                    ?: throw NotFoundException()
             call.respond(detail.toResponse(unreadCountOverride = 0))
         }
     }
@@ -233,12 +244,14 @@ fun Route.guestSupportRoutes(
                     guestUserId = userId,
                 )
             if (existing != null) {
-                markThreadReadAuthorized(
-                    supportThreadRepository,
-                    existing.thread.id,
-                    SupportThreadReadAccess.Guest(userId),
-                )
-                call.respond(existing.toResponse(unreadCountOverride = 0))
+                val detail =
+                    supportThreadRepository.getGuestThreadAndMarkRead(
+                        userId = userId,
+                        threadId = existing.thread.id,
+                        surface = GuestThreadSurface.CONVERSATIONS,
+                    )
+                        ?: throw NotFoundException()
+                call.respond(detail.toResponse(unreadCountOverride = 0))
                 return@post
             }
             enforceGuestSupportRateLimit(
@@ -256,12 +269,14 @@ fun Route.guestSupportRoutes(
                     guestUserId = userId,
                     title = "Чат с ${venue.name}",
                 )
-            markThreadReadAuthorized(
-                supportThreadRepository,
-                detail.thread.id,
-                SupportThreadReadAccess.Guest(userId),
-            )
-            call.respond(detail.toResponse(unreadCountOverride = 0))
+            val opened =
+                supportThreadRepository.getGuestThreadAndMarkRead(
+                    userId = userId,
+                    threadId = detail.thread.id,
+                    surface = GuestThreadSurface.CONVERSATIONS,
+                )
+                    ?: throw NotFoundException()
+            call.respond(opened.toResponse(unreadCountOverride = 0))
         }
     }
 
@@ -270,16 +285,12 @@ fun Route.guestSupportRoutes(
             call.response.header(HttpHeaders.CacheControl, "no-store")
             val userId = call.requireUserId()
             val filter = parseSupportInboxFilter(call.request.queryParameters["filter"])
-            val threadTypes =
-                parseOptionalThreadTypes(
-                    threadType = call.request.queryParameters["threadType"],
-                    threadTypes = call.request.queryParameters["threadTypes"],
-                )
+            val surface = parseGuestThreadSurface(call.request.queryParameters["surface"])
             val threads =
                 supportThreadRepository.listGuestThreads(
                     userId = userId,
                     filter = filter,
-                    threadTypes = threadTypes,
+                    threadTypes = surface.expectedThreadTypes,
                 )
             call.respond(SupportThreadListResponse(items = threads.map { it.toDto() }))
         }
@@ -370,13 +381,7 @@ fun Route.guestSupportRoutes(
                                 messageText = messageText,
                                 verified = verified,
                             ),
-                        ).also {
-                            markThreadReadAuthorized(
-                                supportThreadRepository,
-                                it.thread.id,
-                                SupportThreadReadAccess.Guest(userId),
-                            )
-                        }
+                        )
                     }
                 }
             call.respond(
@@ -392,6 +397,7 @@ fun Route.guestSupportRoutes(
             call.response.header(HttpHeaders.CacheControl, "no-store")
             val userId = call.requireUserId()
             val threadId = call.parseThreadId()
+            val surface = parseGuestThreadSurface(call.request.queryParameters["surface"])
             val detail =
                 getGuestThreadAndMarkRead(
                     userId = userId,
@@ -400,6 +406,7 @@ fun Route.guestSupportRoutes(
                     tableSessionConfig = tableSessionConfig,
                     supportThreadRepository = supportThreadRepository,
                     threadId = threadId,
+                    surface = surface,
                 )
             call.respond(detail.toResponse(unreadCountOverride = 0))
         }
@@ -454,6 +461,7 @@ fun Route.guestSupportRoutes(
                     tableSessionConfig = tableSessionConfig,
                     supportThreadRepository = supportThreadRepository,
                     outboxEnqueuer = outboxEnqueuer,
+                    bookingMessageStaffChatNotifier = bookingMessageStaffChatNotifier,
                     auditLogRepository = auditLogRepository,
                     guestRateLimitConfig = guestRateLimitConfig,
                     rateLimiter = rateLimiter,
@@ -478,6 +486,22 @@ fun Route.venueSupportRoutes(
     outboxEnqueuer: TelegramOutboxEnqueuer,
     auditLogRepository: AuditLogRepository? = null,
 ) {
+    get("/venue/{venueId}/support/unread-count") {
+        call.response.header(HttpHeaders.CacheControl, "no-store")
+        val userId = call.requireUserId()
+        val venueId = call.requireVenueId()
+        requireSupportManage(venueAccessRepository, userId, venueId)
+        call.respond(
+            VenueConversationUnreadCountResponse(
+                unreadCount =
+                    supportThreadRepository.countVenueConversationUnread(
+                        venueId = venueId,
+                        viewerUserId = userId,
+                    ),
+            ),
+        )
+    }
+
     route("/venue/{venueId}/support/booking-threads") {
         get {
             call.response.header(HttpHeaders.CacheControl, "no-store")
@@ -525,12 +549,18 @@ fun Route.venueSupportRoutes(
             val venueId = call.requireVenueId()
             requireSupportManage(venueAccessRepository, userId, venueId)
             val threadId = call.parseThreadId()
-            val detail = supportThreadRepository.getVenueThread(venueId, threadId) ?: throw NotFoundException()
-            markThreadReadAuthorized(
-                supportThreadRepository,
-                detail.thread.id,
-                SupportThreadReadAccess.Venue(userId = userId, venueId = venueId),
-            )
+            val threadTypes =
+                parseOptionalThreadTypes(
+                    threadType = call.request.queryParameters["threadType"],
+                    threadTypes = call.request.queryParameters["threadTypes"],
+                )
+            val detail =
+                supportThreadRepository.getVenueThreadAndMarkRead(
+                    venueId = venueId,
+                    threadId = threadId,
+                    viewerUserId = userId,
+                    allowedThreadTypes = threadTypes,
+                ) ?: throw NotFoundException()
             call.respond(detail.toResponse(unreadCountOverride = 0))
         }
 
@@ -550,12 +580,12 @@ fun Route.venueSupportRoutes(
                 newStatus = SupportThreadStatus.RESOLVED,
                 source = "VENUE_MINIAPP",
             )
-            markThreadReadAuthorized(
-                supportThreadRepository,
-                detail.thread.id,
-                SupportThreadReadAccess.Venue(userId = userId, venueId = venueId),
-            )
-            val updated = supportThreadRepository.getVenueThread(venueId, detail.thread.id) ?: throw NotFoundException()
+            val updated =
+                supportThreadRepository.getVenueThreadAndMarkRead(
+                    venueId = venueId,
+                    threadId = detail.thread.id,
+                    viewerUserId = userId,
+                ) ?: throw NotFoundException()
             call.respond(updated.toResponse(unreadCountOverride = 0))
         }
 
@@ -575,12 +605,12 @@ fun Route.venueSupportRoutes(
                 newStatus = SupportThreadStatus.IN_PROGRESS,
                 source = "VENUE_MINIAPP",
             )
-            markThreadReadAuthorized(
-                supportThreadRepository,
-                detail.thread.id,
-                SupportThreadReadAccess.Venue(userId = userId, venueId = venueId),
-            )
-            val updated = supportThreadRepository.getVenueThread(venueId, detail.thread.id) ?: throw NotFoundException()
+            val updated =
+                supportThreadRepository.getVenueThreadAndMarkRead(
+                    venueId = venueId,
+                    threadId = detail.thread.id,
+                    viewerUserId = userId,
+                ) ?: throw NotFoundException()
             call.respond(updated.toResponse(unreadCountOverride = 0))
         }
 
@@ -613,12 +643,13 @@ fun Route.venueSupportRoutes(
                     source = "VENUE_MINIAPP",
                 )
             }
-            markThreadReadAuthorized(
-                supportThreadRepository,
-                detail.thread.id,
-                SupportThreadReadAccess.Venue(userId = userId, venueId = venueId),
-            )
-            val updated = supportThreadRepository.getVenueThread(venueId, detail.thread.id) ?: throw NotFoundException()
+            val updated =
+                supportThreadRepository.getVenueThreadAndMarkRead(
+                    venueId = venueId,
+                    threadId = detail.thread.id,
+                    viewerUserId = userId,
+                    allowedThreadTypes = setOf(SupportThreadType.SUPPORT_TICKET),
+                ) ?: throw NotFoundException()
             call.respond(updated.toResponse(unreadCountOverride = 0))
         }
 
@@ -679,13 +710,6 @@ fun Route.venueSupportRoutes(
                         source = SupportMessageSource.VENUE_MINIAPP,
                         text = messageText,
                     )
-            if (bookingWrite?.created != false) {
-                markThreadReadAuthorized(
-                    supportThreadRepository,
-                    detail.thread.id,
-                    SupportThreadReadAccess.Venue(userId = userId, venueId = venueId),
-                )
-            }
             val refreshedThread =
                 supportThreadRepository.getVenueThread(venueId, detail.thread.id)?.thread
                     ?: bookingWrite?.thread
@@ -760,18 +784,12 @@ fun Route.platformSupportRoutes(
         get("{threadId}") {
             val userId = call.requirePlatformOwner(platformConfig)
             val threadId = call.parseThreadId()
-            val detail = supportThreadRepository.getPlatformThread(threadId) ?: throw NotFoundException()
-            if (detail.thread.threadType != SupportThreadType.SUPPORT_TICKET) {
-                throw NotFoundException()
-            }
-            markThreadReadAuthorized(
-                supportThreadRepository,
-                detail.thread.id,
-                SupportThreadReadAccess.Platform(
-                    userId = userId,
+            val detail =
+                supportThreadRepository.getPlatformThreadAndMarkRead(
+                    threadId = threadId,
+                    viewerUserId = userId,
                     platformOwnerUserId = platformConfig.ownerUserId,
-                ),
-            )
+                ) ?: throw NotFoundException()
             call.respond(detail.toResponse(unreadCountOverride = 0))
         }
 
@@ -793,14 +811,6 @@ fun Route.platformSupportRoutes(
                     source = SupportMessageSource.PLATFORM_MINIAPP,
                     text = messageText,
                 )
-            markThreadReadAuthorized(
-                supportThreadRepository,
-                detail.thread.id,
-                SupportThreadReadAccess.Platform(
-                    userId = userId,
-                    platformOwnerUserId = platformConfig.ownerUserId,
-                ),
-            )
             val refreshedThread =
                 supportThreadRepository.getPlatformThread(detail.thread.id)?.thread ?: detail.thread
             appendSupportReplyAuditBestEffort(
@@ -968,14 +978,7 @@ private suspend fun createConfirmedPlatformGuestTicket(
                     messageText = messageText,
                     verified = verified,
                 ),
-        ).also {
-            markThreadReadAuthorized(
-                supportThreadRepository,
-                connection,
-                it.thread.id,
-                SupportThreadReadAccess.Guest(userId),
-            )
-        }
+        )
     }
 
 private fun verifyConfirmedPlatformGuestTicketContext(
@@ -1051,37 +1054,39 @@ private suspend fun getGuestThreadAndMarkRead(
     tableSessionConfig: TableSessionConfig,
     supportThreadRepository: SupportThreadRepository,
     threadId: Long,
+    surface: GuestThreadSurface,
 ): SupportThreadDetailRecord {
-    val detail = supportThreadRepository.getGuestThread(userId, threadId) ?: throw NotFoundException()
-    if (!requiresConfirmedPlatformGuestThreadMutation(userId, platformOwnerUserId, detail.thread)) {
-        markThreadReadAuthorized(
-            supportThreadRepository,
-            detail.thread.id,
-            SupportThreadReadAccess.Guest(userId),
-        )
-        return detail
+    if (userId != platformOwnerUserId) {
+        return supportThreadRepository.getGuestThreadAndMarkRead(userId, threadId, surface)
+            ?: throw NotFoundException()
+    }
+    val openContext =
+        supportThreadRepository.getGuestThreadOpenContext(userId, threadId)
+            ?: throw NotFoundException()
+    if (!requiresConfirmedPlatformGuestThreadMutation(userId, platformOwnerUserId, openContext)) {
+        return supportThreadRepository.getGuestThreadAndMarkRead(userId, threadId, surface)
+            ?: throw NotFoundException()
     }
 
     return requireConfirmedPlatformGuestMutation(
         userId = userId,
         platformOwnerUserId = platformOwnerUserId,
         lifecycleRepository = lifecycleRepository,
-        expectedVenueId = detail.thread.venueId,
-        expectedTableId = detail.thread.tableId,
-        expectedTableSessionId = detail.thread.tableSessionId,
+        expectedVenueId = openContext.venueId,
+        expectedTableId = openContext.tableId,
+        expectedTableSessionId = openContext.tableSessionId,
         ttl = tableSessionConfig.ttl,
+        touchSessionBeforeMutation = false,
     ) { connection, confirmed ->
-        val locked =
-            supportThreadRepository.lockGuestThread(connection, userId, detail.thread.id)
-                ?: throw NotFoundException()
-        requireConfirmedPlatformGuestThread(locked.thread, detail.thread, confirmed)
-        markThreadReadAuthorized(
-            supportThreadRepository,
+        supportThreadRepository.getGuestThreadAndMarkRead(
             connection,
-            locked.thread.id,
-            SupportThreadReadAccess.Guest(userId),
-        )
-        supportThreadRepository.getGuestThread(connection, userId, locked.thread.id) ?: throw NotFoundException()
+            userId = userId,
+            threadId = threadId,
+            surface = surface,
+            lockedThreadValidator = { locked ->
+                requireConfirmedPlatformGuestThread(locked, openContext, confirmed)
+            },
+        ) ?: throw NotFoundException()
     }
 }
 
@@ -1105,12 +1110,17 @@ private suspend fun changeGuestThreadStatus(
             newStatus = newStatus,
             source = "GUEST_MINIAPP",
         )
-        markThreadReadAuthorized(
-            supportThreadRepository,
-            detail.thread.id,
-            SupportThreadReadAccess.Guest(userId),
+        return supportThreadRepository.getGuestThreadAndMarkRead(
+            userId = userId,
+            threadId = detail.thread.id,
+            surface =
+                if (detail.thread.threadType == SupportThreadType.SUPPORT_TICKET) {
+                    GuestThreadSurface.SUPPORT
+                } else {
+                    GuestThreadSurface.CONVERSATIONS
+                },
         )
-        return supportThreadRepository.getGuestThread(userId, detail.thread.id) ?: throw NotFoundException()
+            ?: throw NotFoundException()
     }
 
     val updated =
@@ -1166,6 +1176,7 @@ private suspend fun addGuestThreadMessage(
     tableSessionConfig: TableSessionConfig,
     supportThreadRepository: SupportThreadRepository,
     outboxEnqueuer: TelegramOutboxEnqueuer,
+    bookingMessageStaffChatNotifier: BookingMessageStaffChatNotifier,
     auditLogRepository: AuditLogRepository?,
     guestRateLimitConfig: GuestRateLimitConfig?,
     rateLimiter: RateLimiter?,
@@ -1208,6 +1219,11 @@ private suspend fun addGuestThreadMessage(
                             text = "✅ Ответ отправлен заведению.",
                             dedupeKey = notification.dedupeKey,
                         )
+                        bookingMessageStaffChatNotifier.enqueueGuestMessageAlertInTransaction(
+                            connection = connection,
+                            thread = notification.thread,
+                            messageId = notification.message.id,
+                        )
                     },
                 ) ?: throw NotFoundException()
             } else {
@@ -1231,13 +1247,6 @@ private suspend fun addGuestThreadMessage(
                     source = SupportMessageSource.GUEST_MINIAPP,
                     text = messageText,
                 )
-        if (bookingWrite?.created != false) {
-            markThreadReadAuthorized(
-                supportThreadRepository,
-                detail.thread.id,
-                SupportThreadReadAccess.Guest(userId),
-            )
-        }
         val refreshedThread =
             supportThreadRepository.getGuestThread(userId, detail.thread.id)?.thread
                 ?: bookingWrite?.thread
@@ -1291,12 +1300,6 @@ private suspend fun addGuestThreadMessage(
                     source = SupportMessageSource.GUEST_MINIAPP,
                     text = messageText,
                 )
-            markThreadReadAuthorized(
-                supportThreadRepository,
-                connection,
-                locked.thread.id,
-                SupportThreadReadAccess.Guest(userId),
-            )
             val refreshedThread =
                 supportThreadRepository.getGuestThread(connection, userId, locked.thread.id)?.thread
                     ?: throw NotFoundException()
@@ -1321,6 +1324,15 @@ private fun requiresConfirmedPlatformGuestThreadMutation(
         thread.threadType == SupportThreadType.SUPPORT_TICKET &&
         (thread.tableId != null || thread.tableSessionId != null)
 
+private fun requiresConfirmedPlatformGuestThreadMutation(
+    userId: Long,
+    platformOwnerUserId: Long?,
+    thread: GuestThreadOpenContextRecord,
+): Boolean =
+    userId == platformOwnerUserId &&
+        thread.threadType == SupportThreadType.SUPPORT_TICKET &&
+        (thread.tableId != null || thread.tableSessionId != null)
+
 private fun requireConfirmedPlatformGuestThread(
     locked: SupportThreadRecord,
     expected: SupportThreadRecord,
@@ -1328,6 +1340,25 @@ private fun requireConfirmedPlatformGuestThread(
 ) {
     if (
         locked.threadType != SupportThreadType.SUPPORT_TICKET ||
+        locked.venueId != expected.venueId ||
+        locked.tableId != expected.tableId ||
+        locked.tableSessionId != expected.tableSessionId ||
+        locked.venueId != confirmed.context.venueId ||
+        locked.tableId != confirmed.context.tableId ||
+        (locked.tableSessionId != null && locked.tableSessionId != confirmed.tableSession.id)
+    ) {
+        throw ForbiddenException(PLATFORM_GUEST_RECONFIRM_MESSAGE)
+    }
+}
+
+private fun requireConfirmedPlatformGuestThread(
+    locked: GuestThreadOpenContextRecord,
+    expected: GuestThreadOpenContextRecord,
+    confirmed: ConfirmedPlatformGuestMutationContext,
+) {
+    if (
+        locked.threadType != SupportThreadType.SUPPORT_TICKET ||
+        locked.threadId != expected.threadId ||
         locked.venueId != expected.venueId ||
         locked.tableId != expected.tableId ||
         locked.tableSessionId != expected.tableSessionId ||
@@ -1475,14 +1506,6 @@ private fun requireVenueCanActOnThread(thread: SupportThreadRecord) {
     }
 }
 
-private suspend fun markThreadReadAuthorized(
-    supportThreadRepository: SupportThreadRepository,
-    threadId: Long,
-    access: SupportThreadReadAccess,
-) {
-    requireThreadReadAuthorized(supportThreadRepository.markThreadRead(threadId, access))
-}
-
 private fun markThreadReadAuthorized(
     supportThreadRepository: SupportThreadRepository,
     connection: Connection,
@@ -1560,6 +1583,13 @@ fun SupportThreadRecord.toDto(unreadCountOverride: Int? = null): SupportThreadDt
                 SupportBookingContextDto(
                     bookingId = it.bookingId,
                     displayNumber = it.displayNumber,
+                    displayLabel =
+                        formatBookingDisplayLabel(
+                            bookingId = it.bookingId,
+                            displayNumber = it.displayNumber,
+                            scheduledAt = it.scheduledAt,
+                            venueZoneId = resolveBookingDisplayZoneId(venueTimezone),
+                        ),
                     scheduledAt = it.scheduledAt?.toString(),
                     partySize = it.partySize,
                     status = it.status,
@@ -1611,7 +1641,12 @@ fun buildSupportReplyMessageForGuest(
     authorLabel: String,
 ): String {
     val venueSuffix = thread.venueName?.let { " в «$it»" }.orEmpty()
-    val subject = if (thread.threadType == SupportThreadType.VENUE_CHAT) "по чату" else "по обращению"
+    val subject =
+        when (thread.threadType) {
+            SupportThreadType.BOOKING_THREAD -> "по брони"
+            SupportThreadType.VENUE_CHAT -> "по чату"
+            SupportThreadType.SUPPORT_TICKET -> "по обращению"
+        }
     return "Сообщение от $authorLabel $subject «${thread.formatSupportThreadLabel()}»$venueSuffix:\n\n$messageText"
 }
 
@@ -1736,8 +1771,14 @@ private suspend fun appendSupportAuditBestEffort(
 private fun SupportThreadRecord.formatSupportThreadLabel(): String =
     when (normalizedCategory()) {
         SupportThreadCategory.BOOKING ->
-            booking?.displayNumber?.let { "Бронь №$it" }
-                ?: bookingId?.let { "Бронь #$it" }
+            booking?.let {
+                formatBookingDisplayLabel(
+                    bookingId = it.bookingId,
+                    displayNumber = it.displayNumber,
+                    scheduledAt = it.scheduledAt,
+                    venueZoneId = resolveBookingDisplayZoneId(venueTimezone),
+                )
+            } ?: bookingId?.let { "Бронь #$it" }
                 ?: title
         SupportThreadCategory.ORDER_SERVICE ->
             orderDisplayLabel ?: orderId?.let { "Заказ #$it" } ?: tableLabel ?: title
@@ -1889,6 +1930,11 @@ private fun parseOptionalThreadTypes(
     if (values.isEmpty()) return null
     return values.map { parseOptionalThreadType(it) ?: throw InvalidInputException("threadType is required") }.toSet()
 }
+
+private fun parseGuestThreadSurface(value: String?): GuestThreadSurface =
+    value?.trim()?.uppercase()?.let { raw ->
+        runCatching { GuestThreadSurface.valueOf(raw) }.getOrNull()
+    } ?: throw InvalidInputException("surface must be CONVERSATIONS or SUPPORT")
 
 private fun parseRequiredAssigneeScope(value: String?): SupportAssigneeScope =
     value?.trim()?.uppercase()?.let { raw ->

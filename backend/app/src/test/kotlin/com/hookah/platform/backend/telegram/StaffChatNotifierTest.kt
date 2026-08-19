@@ -510,6 +510,7 @@ class StaffChatNotifierTest {
     @Test
     fun `notifyBooking uses display booking number and hides raw booking id`() =
         runBlocking {
+            coEvery { venueSettingsRepository.find(1L) } returns null
             coEvery { venueRepository.findVenueById(1L) } returns
                 VenueShort(
                     id = 1L,
@@ -532,6 +533,7 @@ class StaffChatNotifierTest {
                         venueId = 1L,
                         bookingId = 7L,
                         event = BookingStaffNotificationEvent.CREATED,
+                        scheduledAt = Instant.parse("2026-04-03T15:00:00Z"),
                         scheduledAtText = "03.04.2026 18:00",
                         partySize = 3,
                         comment = "У окна",
@@ -542,10 +544,10 @@ class StaffChatNotifierTest {
 
             assertEquals(StaffChatNotificationResult.SENT_OR_QUEUED, result)
             val payload = payloadSlot.captured
-            assertTrue(payload.contains("📅 Новая бронь №1"), payload)
+            assertTrue(payload.contains("📅 Новая бронь\\nБронь №1 · 03.04.2026, 18:00"), payload)
             assertTrue(payload.contains("Заведение: Mix"), payload)
             assertTrue(payload.contains("Гость: Мария"), payload)
-            assertTrue(payload.contains("Дата и время: 03.04.2026 18:00"), payload)
+            assertFalse(payload.contains("Дата и время:"), payload)
             assertTrue(payload.contains("Статус: Ожидает подтверждения"), payload)
             assertTrue(payload.contains("Гостей: 3"), payload)
             assertTrue(payload.contains("Комментарий: У окна"), payload)
@@ -568,6 +570,7 @@ class StaffChatNotifierTest {
     @Test
     fun `notifyBooking renders arrival actions only for confirmed status`() =
         runBlocking {
+            coEvery { venueSettingsRepository.find(1L) } returns null
             coEvery { venueRepository.findVenueById(1L) } returns
                 VenueShort(
                     id = 1L,
@@ -591,6 +594,7 @@ class StaffChatNotifierTest {
                         bookingId = 7L,
                         event = BookingStaffNotificationEvent.UPDATED,
                         status = BookingStatus.CONFIRMED,
+                        scheduledAt = Instant.parse("2026-04-03T15:00:00Z"),
                         scheduledAtText = "03.04.2026 18:00",
                         partySize = 3,
                         comment = null,
@@ -614,6 +618,7 @@ class StaffChatNotifierTest {
     @Test
     fun `notifyBooking hides confirm and arrival actions for changed status`() =
         runBlocking {
+            coEvery { venueSettingsRepository.find(1L) } returns null
             coEvery { venueRepository.findVenueById(1L) } returns
                 VenueShort(
                     id = 1L,
@@ -637,6 +642,7 @@ class StaffChatNotifierTest {
                         bookingId = 7L,
                         event = BookingStaffNotificationEvent.UPDATED,
                         status = BookingStatus.CHANGED,
+                        scheduledAt = Instant.parse("2026-04-03T15:00:00Z"),
                         scheduledAtText = "03.04.2026 18:00",
                         partySize = 3,
                         comment = null,
@@ -661,6 +667,7 @@ class StaffChatNotifierTest {
     @Test
     fun `notifyBooking distinguishes venue cancellation from guest cancellation`() =
         runBlocking {
+            coEvery { venueSettingsRepository.find(1L) } returns null
             coEvery { venueRepository.findVenueById(1L) } returns
                 VenueShort(
                     id = 1L,
@@ -683,6 +690,7 @@ class StaffChatNotifierTest {
                         venueId = 1L,
                         bookingId = 7L,
                         event = BookingStaffNotificationEvent.VENUE_CANCELLED,
+                        scheduledAt = Instant.parse("2026-04-03T15:00:00Z"),
                         scheduledAtText = "03.04.2026 18:00",
                         partySize = 3,
                         comment = "У окна",
@@ -695,7 +703,8 @@ class StaffChatNotifierTest {
 
             assertEquals(StaffChatNotificationResult.SENT_OR_QUEUED, result)
             val payload = payloadSlot.captured
-            assertTrue(payload.contains("❌ Бронь №1 отменена заведением"), payload)
+            assertTrue(payload.contains("❌ Бронь отменена заведением"), payload)
+            assertTrue(payload.contains("Бронь №1 · 03.04.2026, 18:00"), payload)
             assertTrue(payload.contains("Отменил: @waiter"), payload)
             assertTrue(payload.contains("Гость: Мария"), payload)
             assertTrue(payload.contains("Причина: Нет мест"), payload)
@@ -734,6 +743,7 @@ class StaffChatNotifierTest {
                         venueId = 1L,
                         bookingId = 7L,
                         event = BookingStaffNotificationEvent.VENUE_CANCELLED,
+                        scheduledAt = Instant.parse("2026-04-03T15:00:00Z"),
                         scheduledAtText = "03.04.2026 18:00",
                         partySize = 3,
                         comment = "У окна",

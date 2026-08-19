@@ -1,5 +1,7 @@
 package com.hookah.platform.backend.miniapp.guest
 
+import com.hookah.platform.backend.booking.defaultBookingDisplayZoneId
+import com.hookah.platform.backend.booking.formatBookingDisplayLabel
 import com.hookah.platform.backend.miniapp.guest.db.BookingReminderDelivery
 import com.hookah.platform.backend.miniapp.guest.db.GuestBookingRepository
 import com.hookah.platform.backend.telegram.TelegramKeyboards
@@ -55,7 +57,7 @@ class BookingReminderWorker(
         var failed = 0
         for (reminder in due) {
             try {
-                val zoneId = venueSettingsRepository.resolveZoneId(reminder.venueId, ZoneId.systemDefault())
+                val zoneId = venueSettingsRepository.resolveZoneId(reminder.venueId, defaultBookingDisplayZoneId())
                 outboxEnqueuer.enqueueSendMessage(
                     chatId = reminder.userId,
                     text = buildReminderText(reminder, zoneId),
@@ -86,8 +88,13 @@ class BookingReminderWorker(
         reminder: BookingReminderDelivery,
         zoneId: ZoneId,
     ): String {
-        val bookingLabel = reminder.displayNumber?.let { "Бронь №$it" } ?: "Бронь"
-        val visitText = LocalDateTime.ofInstant(reminder.scheduledAt, zoneId).format(dateTimeFormatter)
+        val bookingLabel =
+            formatBookingDisplayLabel(
+                bookingId = reminder.bookingId,
+                displayNumber = reminder.displayNumber,
+                scheduledAt = reminder.scheduledAt,
+                venueZoneId = zoneId,
+            )
         val deadlineText =
             reminder.arrivalDeadlineAt
                 ?.let { LocalDateTime.ofInstant(it, zoneId).format(timeFormatter) }
@@ -95,7 +102,6 @@ class BookingReminderWorker(
             append("Напоминаем о брони")
             append("\n\nМесто: ").append(reminder.venueName)
             append('\n').append(bookingLabel)
-            append("\nДата и время: ").append(visitText)
             append("\nГостей: ").append(reminder.partySize ?: "не указано")
             deadlineText?.let { append("\nДержим стол до ").append(it).append('.') }
         }
@@ -104,7 +110,6 @@ class BookingReminderWorker(
     private fun reminderOutboxDedupeKey(reminderId: Long): String = "booking-reminder:$reminderId"
 
     private companion object {
-        val dateTimeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("dd.MM.yyyy, HH:mm")
         val timeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
     }
 }

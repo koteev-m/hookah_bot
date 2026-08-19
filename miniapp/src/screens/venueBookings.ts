@@ -22,6 +22,7 @@ import {
   reconcileBookingThreadItems,
   type BookingThreadReconciliationState
 } from '../shared/bookingThreadReconciliation'
+import { bookingDisplayLabel } from '../shared/ui/bookingLabel'
 import { append, el, on } from '../shared/ui/dom'
 import { showToast } from '../shared/ui/toast'
 
@@ -31,6 +32,7 @@ type VenueBookingsOptions = {
   isDebug: boolean
   venueId: number
   access: VenueAccessDto
+  onConversationUnreadChanged?: () => void
 }
 
 type VenueBookingsRefs = {
@@ -184,7 +186,17 @@ function renderChangeForm(
 }
 
 function bookingTitle(booking: VenueBookingDto): string {
-  return booking.displayNumber ? `Бронь №${booking.displayNumber}` : `Бронь #${booking.bookingId}`
+  return bookingDisplayLabel({
+    bookingId: booking.bookingId,
+    displayNumber: booking.displayNumber,
+    displayLabel: booking.displayLabel,
+    scheduledAt: booking.scheduledAt,
+    scheduledAtDisplay: booking.scheduledAtDisplay
+  })
+}
+
+function normalizedUnreadCount(value?: number | null): number {
+  return value != null && Number.isSafeInteger(value) && value > 0 ? value : 0
 }
 
 function openBookingMessageModal(
@@ -357,7 +369,18 @@ function renderBookings(
     const reconciliation = bookingThreadReconciliation.get(booking.bookingId) ?? bookingThreadLoading()
     const thread = reconciliation.status === 'READY_WITH_THREAD' ? reconciliation.thread : null
     const row = el('section', { className: 'card venue-booking-card' })
+    row.dataset.bookingId = String(booking.bookingId)
+    row.dataset.unreadCount = String(normalizedUnreadCount(thread?.unreadCount))
     row.appendChild(el('h3', { text: bookingTitle(booking) }))
+    const unread = normalizedUnreadCount(thread?.unreadCount)
+    if (unread > 0) {
+      row.appendChild(
+        el('span', {
+          className: 'menu-item-badge booking-unread-badge',
+          text: `Новых сообщений: ${unread}`
+        })
+      )
+    }
     row.appendChild(
       el('p', {
         className: 'venue-order-meta',
@@ -444,7 +467,7 @@ function renderBookings(
 }
 
 export function renderVenueBookingsScreen(options: VenueBookingsOptions) {
-  const { root, backendUrl, isDebug, venueId, access } = options
+  const { root, backendUrl, isDebug, venueId, access, onConversationUnreadChanged } = options
   if (!root) return () => undefined
 
   const refs = buildDom(root)
@@ -562,6 +585,7 @@ export function renderVenueBookingsScreen(options: VenueBookingsOptions) {
     setLoading(false)
     refs.status.textContent = ''
     renderCurrentBookings()
+    onConversationUnreadChanged?.()
   }
 
   const confirmBooking = async (booking: VenueBookingDto) => {

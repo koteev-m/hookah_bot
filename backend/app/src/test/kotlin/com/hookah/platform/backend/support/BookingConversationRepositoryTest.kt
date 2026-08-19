@@ -208,6 +208,53 @@ class BookingConversationRepositoryTest {
         }
 
     @Test
+    fun `Guest Bot replay does not rerun transactional notification after booking context changes`() =
+        withFixture { fixture ->
+            runBlocking {
+                var notificationWrites = 0
+                val first =
+                    assertNotNull(
+                        fixture.repository.addBookingMessage(
+                            bookingId = fixture.bookingId,
+                            authorUserId = fixture.guestUserId,
+                            authorRole = SupportMessageAuthorRole.GUEST,
+                            source = SupportMessageSource.GUEST_BOT,
+                            text = "Первый текст",
+                            telegramMessageId = 7_101L,
+                            expectedGuestUserId = fixture.guestUserId,
+                            guestBotNotificationWriter = { connection, committedWrite ->
+                                assertEquals(false, connection.autoCommit)
+                                assertEquals(1, committedWrite.thread.booking?.displayNumber)
+                                notificationWrites += 1
+                            },
+                        ),
+                    )
+                fixture.changeBookingContext()
+
+                val replay =
+                    assertNotNull(
+                        fixture.repository.addBookingMessage(
+                            bookingId = fixture.bookingId,
+                            authorUserId = fixture.guestUserId,
+                            authorRole = SupportMessageAuthorRole.GUEST,
+                            source = SupportMessageSource.GUEST_BOT,
+                            text = "Изменённый текст повтора",
+                            telegramMessageId = 7_101L,
+                            expectedGuestUserId = fixture.guestUserId,
+                            guestBotNotificationWriter = { _, _ -> error("Replay must not enqueue a notification") },
+                        ),
+                    )
+
+                assertTrue(first.created)
+                assertEquals(false, replay.created)
+                assertEquals(first.message.id, replay.message.id)
+                assertEquals("Первый текст", replay.message.text)
+                assertEquals(1, notificationWrites)
+                assertEquals(1, fixture.countMessages())
+            }
+        }
+
+    @Test
     fun `Mini App and Telegram sources append to the same authoritative thread`() =
         withFixture { fixture ->
             runBlocking {
@@ -554,6 +601,26 @@ class BookingConversationRepositoryTest {
         fun countMessages(): Int = count("SELECT COUNT(*) FROM support_messages")
 
         fun countReads(): Int = count("SELECT COUNT(*) FROM support_thread_reads")
+
+        fun changeBookingContext() {
+            dataSource.connection.use { connection ->
+                connection.prepareStatement(
+                    "UPDATE bookings SET scheduled_at = ?, display_number = ? WHERE id = ?",
+                ).use { statement ->
+                    statement.setTimestamp(1, Timestamp.from(Instant.parse("2030-01-10T20:45:00Z")))
+                    statement.setInt(2, 91)
+                    statement.setLong(3, bookingId)
+                    assertEquals(1, statement.executeUpdate())
+                }
+                connection.prepareStatement(
+                    "UPDATE users SET username = ? WHERE telegram_user_id = ?",
+                ).use { statement ->
+                    statement.setString(1, "changed-guest")
+                    statement.setLong(2, guestUserId)
+                    assertEquals(1, statement.executeUpdate())
+                }
+            }
+        }
 
         fun lookupMutationCounts(): List<Int> =
             listOf(

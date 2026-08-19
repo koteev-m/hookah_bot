@@ -3,8 +3,10 @@ package com.hookah.platform.backend.support
 import com.hookah.platform.backend.api.BookingMessageIdempotencyPayloadMismatchException
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.api.InvalidInputException
+import com.hookah.platform.backend.telegram.BookingMessageStaffChatNotifier
 import com.hookah.platform.backend.telegram.SendMessagePayload
 import com.hookah.platform.backend.telegram.TelegramOutboxEnqueuer
+import com.hookah.platform.backend.telegram.bookingMessageStaffAlertDedupeKey
 import com.hookah.platform.backend.telegram.buildSendMessagePayload
 import com.hookah.platform.backend.telegram.db.TelegramOutboxRepository
 import com.hookah.platform.backend.test.PostgresTestEnv
@@ -50,6 +52,149 @@ class BookingMessageIdempotencyPostgresTest {
         }
 
     @Test
+    fun `guest miniapp message commits one exact privacy-safe staff alert and replay does not duplicate`() =
+        withFixture { fixture ->
+            fixture.linkCanonicalStaffChat(chatId = -777L, timezone = "Europe/Moscow")
+            val key = UUID.randomUUID().toString()
+            val first = fixture.writeGuestWithStaffAlert(key, "Guest secret reply")
+            val replay = fixture.writeGuestWithStaffAlert(key, "Guest secret reply")
+
+            assertTrue(first.created)
+            assertTrue(!replay.created)
+            assertEquals(first.message.id, replay.message.id)
+            assertEquals(1, fixture.messageCount())
+            assertEquals(2, fixture.outboxCount())
+            val alert = fixture.outbox(bookingMessageStaffAlertDedupeKey(first.message.id))
+            assertEquals(-777L, alert.chatId)
+            assertTrue(alert.payloadJson.contains("Новое сообщение по брони"), alert.payloadJson)
+            assertTrue(alert.payloadJson.contains("Бронь №1 · 10.01.2030, 21:30"), alert.payloadJson)
+            assertTrue(alert.payloadJson.contains("Гость: @message${fixture.guestUserId}"), alert.payloadJson)
+            assertTrue(
+                alert.payloadJson.contains(
+                    "https://miniapp.example/entry?existing=1&mode=venue&venueId=${fixture.venueId}" +
+                        "#/messages?threadId=${first.thread.id}",
+                ),
+                alert.payloadJson,
+            )
+            assertTrue(!alert.payloadJson.contains("Guest secret reply"), alert.payloadJson)
+            assertTrue(!alert.payloadJson.contains("authorUserId"), alert.payloadJson)
+        }
+
+    @Test
+    fun `guest staff alert safely skips missing chat disabled telegram and missing exact url`() =
+        withFixture { fixture ->
+            fixture.writeGuestWithStaffAlert(UUID.randomUUID().toString(), "No linked chat")
+            assertEquals(1, fixture.outboxCount())
+
+            fixture.linkCanonicalStaffChat(chatId = -777L, timezone = "Europe/Moscow")
+            fixture.writeGuestWithStaffAlert(
+                clientMessageId = UUID.randomUUID().toString(),
+                text = "Telegram disabled",
+                telegramActive = false,
+            )
+            fixture.writeGuestWithStaffAlert(
+                clientMessageId = UUID.randomUUID().toString(),
+                text = "No exact URL",
+                webAppPublicUrl = null,
+            )
+
+            assertEquals(3, fixture.messageCount())
+            assertEquals(3, fixture.outboxCount())
+            assertEquals(0, fixture.staffAlertCount())
+        }
+
+    @Test
+    fun `unlink committed first makes waiting production message skip the stale staff chat`() =
+        withFixture { fixture ->
+            coroutineScope {
+                fixture.linkCanonicalStaffChat(chatId = -777L, timezone = "Europe/Moscow")
+                fixture.openConnection().use { unlinkConnection ->
+                    unlinkConnection.autoCommit = false
+                    fixture.unlinkCanonicalStaffChat(unlinkConnection)
+                    val unlinkPid = fixture.backendPid(unlinkConnection)
+                    val write =
+                        async(Dispatchers.IO) {
+                            fixture.writeGuestWithStaffAlert(
+                                UUID.randomUUID().toString(),
+                                "Message waiting for unlink",
+                            )
+                        }
+
+                    try {
+                        val evidence = fixture.observeBlockedCaller(unlinkPid)
+                        assertEquals(listOf(unlinkPid), evidence.blockingPids)
+                        assertEquals("transactionid", evidence.waitingLockType)
+                        assertEquals("ShareLock", evidence.waitingLockMode)
+                        assertTrue(evidence.blockerLockGranted)
+                        unlinkConnection.commit()
+                    } catch (failure: Throwable) {
+                        unlinkConnection.rollback()
+                        throw failure
+                    }
+
+                    val committed = write.await()
+                    assertTrue(committed.created)
+                }
+            }
+
+            assertEquals(1, fixture.messageCount())
+            assertEquals(1, fixture.outboxCount())
+            assertEquals(0, fixture.staffAlertCount())
+            assertEquals(0, fixture.outboxCountForChat(-777L))
+        }
+
+    @Test
+    fun `guest staff alert uses only canonical booking venue chat`() =
+        withFixture { fixture ->
+            fixture.linkCanonicalStaffChat(chatId = -777L, timezone = "Europe/Moscow")
+            fixture.createForeignVenueWithStaffChat(-888L)
+
+            val write = fixture.writeGuestWithStaffAlert(UUID.randomUUID().toString(), "Canonical venue only")
+            val alert = fixture.outbox(bookingMessageStaffAlertDedupeKey(write.message.id))
+
+            assertEquals(-777L, alert.chatId)
+            assertEquals(0, fixture.outboxCountForChat(-888L))
+        }
+
+    @Test
+    fun `strict staff alert failure rolls back booking message and guest ack`() =
+        withFixture { fixture ->
+            fixture.linkCanonicalStaffChat(chatId = -777L, timezone = "Europe/Moscow")
+            fixture.rejectVenueStaffAlertOutbox()
+
+            val failure =
+                runCatching {
+                    fixture.writeGuestWithStaffAlert(UUID.randomUUID().toString(), "Must roll back together")
+                }.exceptionOrNull()
+
+            assertIs<DatabaseUnavailableException>(failure)
+            assertEquals(0, fixture.bookingThreadCount())
+            assertEquals(0, fixture.messageCount())
+            assertEquals(0, fixture.outboxCount())
+        }
+
+    @Test
+    fun `guest bot replay with changed booking context does not regenerate staff alert`() =
+        withFixture { fixture ->
+            fixture.linkCanonicalStaffChat(chatId = -777L, timezone = "Europe/Moscow")
+            val telegramMessageId = 90_001L
+            val committed = fixture.writeGuestBotWithStaffAlert(telegramMessageId, "Bot secret reply")
+            val alertBefore = fixture.outbox(bookingMessageStaffAlertDedupeKey(committed.message.id))
+            fixture.changeBookingAndGuestDisplayContext()
+
+            val replay = fixture.writeGuestBotWithStaffAlert(telegramMessageId, "Changed replay text is ignored")
+
+            assertTrue(committed.created)
+            assertTrue(!replay.created)
+            assertEquals(committed.message.id, replay.message.id)
+            assertEquals(1, fixture.messageCount())
+            assertEquals(1, fixture.outboxCount())
+            assertEquals(alertBefore, fixture.outbox(bookingMessageStaffAlertDedupeKey(committed.message.id)))
+            assertTrue(!alertBefore.payloadJson.contains("Bot secret reply"), alertBefore.payloadJson)
+            assertTrue(!alertBefore.payloadJson.contains("Changed replay text"), alertBefore.payloadJson)
+        }
+
+    @Test
     fun `venue same key and text commits one message and outbox`() =
         withFixture { fixture ->
             val key = UUID.randomUUID().toString()
@@ -65,6 +210,7 @@ class BookingMessageIdempotencyPostgresTest {
             assertEquals(fixture.guestUserId, outbox.chatId)
             assertEquals("booking-thread-message:${first.message.id}:guest-notification", outbox.dedupeKey)
             assertTrue(outbox.payloadJson.contains("Venue reply"))
+            assertEquals(0, fixture.staffAlertCount())
         }
 
     @Test
@@ -355,6 +501,67 @@ class BookingMessageIdempotencyPostgresTest {
                 ),
             )
 
+        suspend fun writeGuestWithStaffAlert(
+            clientMessageId: String,
+            text: String,
+            telegramActive: Boolean = true,
+            webAppPublicUrl: String? = "https://miniapp.example/entry?existing=1#old",
+        ): BookingThreadMessageRecord =
+            assertNotNull(
+                repository.addBookingMessage(
+                    bookingId = bookingId,
+                    authorUserId = guestUserId,
+                    authorRole = SupportMessageAuthorRole.GUEST,
+                    source = SupportMessageSource.GUEST_MINIAPP,
+                    text = text,
+                    expectedGuestUserId = guestUserId,
+                    clientMessageId = clientMessageId,
+                    notificationWriter = { connection, notification ->
+                        enqueueNotification(connection, notification)
+                        bookingStaffNotifier(telegramActive, webAppPublicUrl)
+                            .enqueueGuestMessageAlertInTransaction(
+                                connection = connection,
+                                thread = notification.thread,
+                                messageId = notification.message.id,
+                            )
+                    },
+                ),
+            )
+
+        suspend fun writeGuestBotWithStaffAlert(
+            telegramMessageId: Long,
+            text: String,
+        ): BookingThreadMessageRecord =
+            assertNotNull(
+                repository.addBookingMessage(
+                    bookingId = bookingId,
+                    authorUserId = guestUserId,
+                    authorRole = SupportMessageAuthorRole.GUEST,
+                    source = SupportMessageSource.GUEST_BOT,
+                    text = text,
+                    telegramMessageId = telegramMessageId,
+                    expectedGuestUserId = guestUserId,
+                    guestBotNotificationWriter = { connection, committedWrite ->
+                        bookingStaffNotifier(telegramActive = true, webAppPublicUrl = "https://miniapp.example/entry")
+                            .enqueueGuestMessageAlertInTransaction(
+                                connection = connection,
+                                thread = committedWrite.thread,
+                                messageId = committedWrite.message.id,
+                            )
+                    },
+                ),
+            )
+
+        private fun bookingStaffNotifier(
+            telegramActive: Boolean,
+            webAppPublicUrl: String?,
+        ): BookingMessageStaffChatNotifier =
+            BookingMessageStaffChatNotifier(
+                outboxEnqueuer = outboxEnqueuer,
+                isTelegramActive = { telegramActive },
+                webAppPublicUrl = { webAppPublicUrl },
+            )
+
         fun backendPid(connection: Connection): Int =
             connection.createStatement().use { statement ->
                 statement.executeQuery("SELECT pg_backend_pid()").use { rows ->
@@ -362,6 +569,15 @@ class BookingMessageIdempotencyPostgresTest {
                     rows.getInt(1)
                 }
             }
+
+        fun openConnection(): Connection = dataSource.connection
+
+        fun unlinkCanonicalStaffChat(connection: Connection) {
+            connection.prepareStatement("UPDATE venues SET staff_chat_id = NULL WHERE id = ?").use { statement ->
+                statement.setLong(1, venueId)
+                check(statement.executeUpdate() == 1)
+            }
+        }
 
         fun observeBlockedCaller(blockerPid: Int): LockEvidence =
             dataSource.connection.use { observer ->
@@ -566,6 +782,20 @@ class BookingMessageIdempotencyPostgresTest {
             }
         }
 
+        fun rejectVenueStaffAlertOutbox() {
+            dataSource.connection.use { connection ->
+                connection.createStatement().use { statement ->
+                    statement.execute(
+                        """
+                        ALTER TABLE telegram_outbox
+                        ADD CONSTRAINT reject_booking_message_staff_alert
+                        CHECK (dedupe_key IS NULL OR dedupe_key NOT LIKE '%:venue-staff-alert')
+                        """.trimIndent(),
+                    )
+                }
+            }
+        }
+
         fun allowBookingOutbox() {
             dataSource.connection.use { connection ->
                 connection.createStatement().use { statement ->
@@ -577,6 +807,20 @@ class BookingMessageIdempotencyPostgresTest {
         fun messageCount(): Int = count("SELECT COUNT(*) FROM support_messages")
 
         fun outboxCount(): Int = count("SELECT COUNT(*) FROM telegram_outbox")
+
+        fun staffAlertCount(): Int =
+            count("SELECT COUNT(*) FROM telegram_outbox WHERE dedupe_key LIKE '%:venue-staff-alert'")
+
+        fun outboxCountForChat(chatId: Long): Int =
+            dataSource.connection.use { connection ->
+                connection.prepareStatement("SELECT COUNT(*) FROM telegram_outbox WHERE chat_id = ?").use { statement ->
+                    statement.setLong(1, chatId)
+                    statement.executeQuery().use { rows ->
+                        check(rows.next())
+                        rows.getInt(1)
+                    }
+                }
+            }
 
         fun bookingThreadCount(): Int =
             count("SELECT COUNT(*) FROM support_threads WHERE thread_type = 'BOOKING_THREAD'")
@@ -681,6 +925,59 @@ class BookingMessageIdempotencyPostgresTest {
                     keys.getLong(1)
                 }
             }
+
+        fun linkCanonicalStaffChat(
+            chatId: Long,
+            timezone: String,
+        ) {
+            dataSource.connection.use { connection ->
+                connection.prepareStatement("UPDATE venues SET staff_chat_id = ? WHERE id = ?").use { statement ->
+                    statement.setLong(1, chatId)
+                    statement.setLong(2, venueId)
+                    check(statement.executeUpdate() == 1)
+                }
+                connection.prepareStatement(
+                    """
+                    INSERT INTO venue_settings (venue_id, timezone)
+                    VALUES (?, ?)
+                    ON CONFLICT (venue_id) DO UPDATE SET timezone = EXCLUDED.timezone
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setLong(1, venueId)
+                    statement.setString(2, timezone)
+                    statement.executeUpdate()
+                }
+            }
+        }
+
+        fun createForeignVenueWithStaffChat(chatId: Long) {
+            dataSource.connection.use { connection ->
+                val foreignVenueId = insertVenue(connection)
+                connection.prepareStatement("UPDATE venues SET staff_chat_id = ? WHERE id = ?").use { statement ->
+                    statement.setLong(1, chatId)
+                    statement.setLong(2, foreignVenueId)
+                    check(statement.executeUpdate() == 1)
+                }
+            }
+        }
+
+        fun changeBookingAndGuestDisplayContext() {
+            dataSource.connection.use { connection ->
+                connection.prepareStatement(
+                    "UPDATE bookings SET display_number = 2, scheduled_at = ? WHERE id = ?",
+                ).use { statement ->
+                    statement.setTimestamp(1, Timestamp.from(Instant.parse("2030-01-10T20:30:00Z")))
+                    statement.setLong(2, bookingId)
+                    check(statement.executeUpdate() == 1)
+                }
+                connection.prepareStatement(
+                    "UPDATE users SET username = 'changed-guest' WHERE telegram_user_id = ?",
+                ).use { statement ->
+                    statement.setLong(1, guestUserId)
+                    check(statement.executeUpdate() == 1)
+                }
+            }
+        }
 
         private fun insertBooking(
             connection: Connection,

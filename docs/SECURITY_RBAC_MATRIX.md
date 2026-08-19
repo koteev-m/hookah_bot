@@ -1,6 +1,6 @@
 # Security / RBAC Permission Matrix
 
-Дата актуализации: 2026-08-17.
+Дата актуализации: 2026-08-18.
 
 Статус: **current product reference / UPDATED**. Runtime permission parity and the broader
 dangerous-action audit remain **PARTIAL** unless a specific route, test or smoke result is cited.
@@ -53,12 +53,40 @@ Tokens and client-provided ids are context pointers, not authority:
   absent identity on a Mini App `BOOKING_THREAD` reply is denied before mutation. Telegram keeps
   its separate persisted inbound-message identity.
 - Booking notification recipient and payload are derived from the locked canonical booking/thread,
-  not from client input. Message, thread update and outbox row commit atomically; a Guest reply can
-  enqueue only a private acknowledgement, not a staff-chat copy.
+  not from client input. Message, thread update and outbox rows commit atomically. A Guest reply
+  keeps its private acknowledgement and may enqueue exactly one additional fact-only alert to the
+  canonical venue's already linked staff-chat. User-visible alert text and API DTOs contain no raw
+  message text, author user id or target Telegram chat id; transport addressing remains server-side
+  outbox metadata. Its exact-thread button grants no authority and is rechecked by the normal
+  Owner/Manager Venue route.
 - Mark-read authorization remains server-owned and role outcomes are unchanged. Booking chat locks
   `bookings -> support_threads` before writing `support_thread_reads`; non-booking chat locks or
   owns `support_threads` before the read marker. No read-marker path locks the child row before
-  reaching back to the thread or booking.
+  reaching back to the thread or booking. Under those canonical locks an accepted open snapshots
+  `MAX(support_messages.id)` and advances only that actor/thread cursor monotonically.
+- Exact Venue detail reads may be clamped to an expected thread-type set. A mismatched deep link
+  returns not found before `support_thread_reads` mutation, so `Переписки` cannot consume a
+  `SUPPORT_TICKET` read marker and `Поддержка` cannot consume a booking/venue-chat marker.
+- Guest detail/open routes use a fixed server-owned surface enum, never a client-supplied type set:
+  `CONVERSATIONS` maps exactly to `BOOKING_THREAD` + `VENUE_CHAT`, while `SUPPORT` maps exactly to
+  `SUPPORT_TICKET`. The repository operation requires a non-empty expected set and, in one
+  transaction, performs fact-free preauthorization, the canonical booking lock when applicable,
+  `support_threads FOR UPDATE`, locked Guest ownership recheck and locked type validation before
+  `MAX(message.id)`, monotonic marker update or detail/messages read. Wrong surface returns the
+  current privacy-safe denial with zero marker/audit/outbox mutation and zero message facts.
+  Ordinary authenticated Guest and confirmed Platform Owner Guest-context adapters pass the same
+  exact surface contract; Platform privilege cannot bypass the queue boundary.
+- An accepted exact Venue detail read locks the canonical booking/thread before the marker and
+  response snapshot. `support_thread_reads.last_read_message_id` is the sole unread authority;
+  `last_read_at` is wall-clock metadata only. Production unread SQL uses
+  `author_user_id IS DISTINCT FROM actor_user_id`; a foreign-authored message is unread exactly when its
+  id is above the cursor, or when the cursor is NULL. A user-visible message whose
+  `author_user_id` is NULL is a system message and therefore foreign to every actor; it uses the
+  same per-thread/card and aggregate-count predicate without granting visibility. The cursor
+  snapshot, marker update and returned
+  detail/messages share one transaction, so a writer committed after that snapshot remains unread;
+  detail failure rolls the marker back. PostgreSQL V126/H2 V127 add the nullable cursor without a
+  default, backfill, foreign key or destructive rewrite.
 - Staff-chat callbacks are shortcuts only; every callback must re-check actor role, venue scope and entity state server-side.
 - Client analytics events are low-trust diagnostics and cannot drive money, access, billing, order state or venue lifecycle.
 
@@ -173,10 +201,10 @@ Target decision: remove `ADMIN` from the product model and keep it only as a com
 | Orders | Guest fallback/order status; venue operational shortcuts where implemented. | Primary guest QR/table order UX. | Primary venue queue/detail source of truth; see `docs/VENUE_OPERATIONS.md`. | No ordinary order workspace by default. | Order notifications/activity cards allowed. | Staff-chat is radar/shortcut, not source of truth. |
 | Staff calls | Guest table fallback/actions and staff-chat callbacks where implemented. | Guest create/status. | Venue operations queue. | No. | Allowed for operational staff calls. | Separate from support tickets; Telegram/staff-chat rules in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. |
 | Bookings | Guest `/my`, booking actions and venue/admin flows where implemented. | Guest booking/list. | Owner/Manager booking queue/actions; Staff view/arrival/no-show only. | Platform only if future analytics/audit requires. | Booking operational notifications allowed by existing policy. | Booking lifecycle follows `docs/BOOKING_LIFECYCLE.md`; booking chat stays `BOOKING_CHAT`, not support. |
-| Support tickets | `/support` fallback where implemented. | Guest `Помощь`. | Owner/Manager `Обращения` for own venue. | Platform `Обращения` / Support Center. | Never for support tickets. | Staff denied. Platform sees support, not ordinary venue chats. |
-| Venue chats | Guest bot/Mini App entry where implemented. | Guest `Чаты`. | Owner/Manager `Сообщения`. | No by default. | Never for ordinary venue chats. | Staff denied. |
+| Support tickets | `/support` fallback where implemented. | Guest `Помощь`. | Owner/Manager `Поддержка` for own venue. | Platform `Обращения` / Support Center. | Never for support tickets. | Staff denied. Platform sees support, not ordinary venue chats. |
+| Venue chats | Guest bot/Mini App entry where implemented. | Guest `Чаты`. | Owner/Manager `Переписки`. | No by default. | Never for ordinary venue chats. | Staff denied. |
 | Post-visit feedback | No automated prompt; public review setting uses the same backend source as Mini App. | Submit only from own completed History detail; optional explicit Yandex CTA after `5/5`. | Owner/Manager read list and open low-rating exact `VENUE_CHAT`; Owner edits public review URL; Staff denied. | Feedback analytics dashboard future. | Never. | No auto support ticket, Owner message, Telegram prompt or public redirect. |
-| Booking chats | Booking action `Открыть переписку`. | Guest `Чаты`. | Owner/Manager `Сообщения`. | No by default. | Notification mirror only where existing policy allows. | Must not become support queue. |
+| Booking chats | Booking action `Открыть переписку`. | Guest `Чаты`. | Owner/Manager `Переписки`; actor-scoped unread. | No by default. | One fact-only new-Guest-message radar alert; never the message stream. | Must not become support queue or grant Staff chat authority. |
 | Menu/stop-list | Bot owner/manager/staff paths where implemented; no Phase 1 shift-check UI. | Guest read/order only after QR. | Owner/Manager manage and have `MENU_SHIFT_CHECK`; Staff keeps individual availability only and has no shift-check entry/API. | No ordinary menu management or automatic Venue shift-check authority. | No source-of-truth edits. | Shift-check batch is own-venue, atomic and audited; existing individual stop-list policy is unchanged. |
 | Promotions | Existing Telegram templates and shared server-owned Happy Hours preview/submit. | Informational read plus current server-owned Happy Hours cart breakdown/submit. | Owner/Manager manage informational and bounded Happy Hours rules; Staff denied. | No ordinary venue promotion management. | Persisted order facts only. | One backend engine; Bot/Mini App clients never calculate trusted discounts. |
 | Venue card preview | Existing owner/manager guest-preview callbacks. | The real published public card. | One `Предпросмотр для гостя` renderer: server-selected `PUBLISHED_PUBLIC` uses the exact Guest read model; `PRIVATE_DRAFT` uses an own-venue saved public allowlist. Staff has no entry. | No automatic access. | No. | No Guest bypass, mutations, public URL, share token or cache. Private media delivery is authenticated and venue/section/media-scoped; raw refs are excluded. |
@@ -854,16 +882,28 @@ Promotion Compatibility Policy and a broader audit viewer remain open.
 69. Mark-read keeps the existing Guest/Venue/Platform authorization results while enforcing
     parent-first row locks: booking `bookings -> support_threads -> support_thread_reads`, ordinary
     chat `support_threads -> support_thread_reads`, and no `support_thread_reads -> support_threads`
-    inversion.
+    inversion. After the parent lock it snapshots `MAX(message.id)` and monotonically updates the
+    actor/thread `last_read_message_id`; unread uses foreign author plus `id > cursor`, never
+    `created_at > last_read_at`.
 70. Exact booking-thread reconciliation starts from the canonical bookings visible to the current
     server-authenticated actor and returns one explicit result for every requested id. Guest is
     limited to own bookings; Venue Owner/Manager to the own venue; Staff remains denied. A missing,
     foreign, duplicate, malformed or incomplete id set fails without partial thread/message facts,
     and this lookup creates no thread, message, read marker, audit or outbox row.
+71. Seed a user-visible NULL-author system message and prove it is unread to each authorized actor,
+    clears only for the actor whose exact marker advances, remains excluded from unauthorized
+    actors, and enters the Venue aggregate only for `BOOKING_THREAD` / `VENUE_CHAT`.
+72. For ordinary Guest and confirmed Platform Guest-context, call `SUPPORT_TICKET` through
+    `CONVERSATIONS` and `BOOKING_THREAD` / `VENUE_CHAT` through `SUPPORT`. Each must fail before
+    message facts and leave exact raw marker, audit and outbox state unchanged; correct-surface opens
+    must mutate only the target actor/thread marker.
 
 ## Roadmap Status
 
 - Security/RBAC matrix: `UPDATED`.
+- Booking conversation UX / NULL-author unread and Guest surface guard:
+  **MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**; the three current
+  findings remain `LOCAL_FIX_REVIEW_REQUIRED`, with no green-Actions, deploy or staging claim.
 - Permission parity: `PARTIAL`; keep route-level denial tests and role smoke in regression.
 - Staff profiles / today shift and Identity Linking UX + Duplicate Prevention are `DONE / MVP /
   STAGING-SMOKE-PASSED`; Manager duplicate state is read-only and repair is Owner-only.

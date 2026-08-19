@@ -40,7 +40,7 @@ data class GuestBookingResponse(
     val lastGuestConfirmationAt: String? = null,
     val attendanceScheduleVersion: Long? = null,
     val displayNumber: Int? = null,
-    val displayLabel: String? = null,
+    val displayLabel: String,
     val venueName: String? = null,
     val statusLabel: String? = null,
     val scheduledAtDisplay: String? = null,

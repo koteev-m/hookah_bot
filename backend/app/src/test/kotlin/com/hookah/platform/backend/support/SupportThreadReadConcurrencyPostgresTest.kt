@@ -22,6 +22,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -32,10 +33,44 @@ class SupportThreadReadConcurrencyPostgresTest {
             val database = PostgresTestEnv.createDatabase()
             PostgresTestEnv.createDataSource(database).use { dataSource ->
                 val fixture = seedFixture(dataSource.connection)
+                val setupRepository = SupportThreadRepository(dataSource)
                 val thread =
                     assertNotNull(
-                        SupportThreadRepository(dataSource).createOrFindBookingThread(fixture.bookingId),
+                        setupRepository.createOrFindBookingThread(fixture.bookingId),
                     )
+                val firstMessage =
+                    assertNotNull(
+                        setupRepository.addBookingMessage(
+                            bookingId = fixture.bookingId,
+                            authorUserId = fixture.guestUserId,
+                            authorRole = SupportMessageAuthorRole.GUEST,
+                            source = SupportMessageSource.GUEST_BOT,
+                            text = "First cursor message",
+                            telegramMessageId = 92_001L,
+                            expectedThreadId = thread.id,
+                            expectedGuestUserId = fixture.guestUserId,
+                        ),
+                    ).message
+                val access = SupportThreadReadAccess.Guest(fixture.guestUserId)
+                assertEquals(SupportThreadReadResult.MARKED, setupRepository.markThreadRead(thread.id, access))
+                val markerBefore =
+                    dataSource.connection.use { connection ->
+                        assertNotNull(readMarker(connection, thread.id, fixture.guestUserId))
+                    }
+                assertEquals(firstMessage.id, markerBefore.lastReadMessageId)
+                val secondMessage =
+                    assertNotNull(
+                        setupRepository.addBookingMessage(
+                            bookingId = fixture.bookingId,
+                            authorUserId = fixture.guestUserId,
+                            authorRole = SupportMessageAuthorRole.GUEST,
+                            source = SupportMessageSource.GUEST_BOT,
+                            text = "Second cursor message",
+                            telegramMessageId = 92_002L,
+                            expectedThreadId = thread.id,
+                            expectedGuestUserId = fixture.guestUserId,
+                        ),
+                    ).message
                 val firstMarkerWritten = CountDownLatch(1)
                 val releaseFirst = CountDownLatch(1)
                 val markerWrites = AtomicInteger()
@@ -52,7 +87,6 @@ class SupportThreadReadConcurrencyPostgresTest {
                             }
                         },
                     )
-                val access = SupportThreadReadAccess.Guest(fixture.guestUserId)
                 directConnection(database).use { observer ->
                     val first = async(Dispatchers.IO) { repository.markThreadRead(thread.id, access) }
                     assertTrue(firstMarkerWritten.await(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS))
@@ -78,7 +112,406 @@ class SupportThreadReadConcurrencyPostgresTest {
                     )
                     assertEquals(1, countReads(observer, thread.id, fixture.guestUserId))
                     assertEquals(2, markerWrites.get())
+                    val markerAfter = assertNotNull(readMarker(observer, thread.id, fixture.guestUserId))
+                    assertEquals(secondMessage.id, markerAfter.lastReadMessageId)
+                    assertTrue(
+                        requireNotNull(markerAfter.lastReadMessageId) >=
+                            requireNotNull(markerBefore.lastReadMessageId),
+                    )
+                    assertTrue(!markerAfter.lastReadAt.isBefore(markerBefore.lastReadAt))
                 }
+            }
+        }
+
+    @Test
+    fun `writer with earlier transaction timestamp commits after reader and remains unread by message id`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource.connection)
+                val setupRepository = SupportThreadRepository(dataSource)
+                val thread =
+                    assertNotNull(
+                        setupRepository.createOrFindBookingThread(fixture.bookingId),
+                    )
+                val baselineMessage =
+                    assertNotNull(
+                        setupRepository.addBookingMessage(
+                            bookingId = fixture.bookingId,
+                            authorUserId = fixture.guestUserId,
+                            authorRole = SupportMessageAuthorRole.GUEST,
+                            source = SupportMessageSource.GUEST_BOT,
+                            text = "Committed before the read snapshot",
+                            telegramMessageId = 93_001L,
+                            expectedThreadId = thread.id,
+                            expectedGuestUserId = fixture.guestUserId,
+                        ),
+                    ).message
+                val unaffectedThreadId =
+                    seedSupportThread(
+                        dataSource.connection,
+                        fixture,
+                        threadType = SupportThreadType.VENUE_CHAT,
+                    )
+                val unaffectedMessage =
+                    setupRepository.addMessage(
+                        threadId = unaffectedThreadId,
+                        authorUserId = fixture.guestUserId,
+                        authorRole = SupportMessageAuthorRole.GUEST,
+                        source = SupportMessageSource.GUEST_MINIAPP,
+                        text = "Another thread message",
+                    )
+                val venueAccess =
+                    SupportThreadReadAccess.Venue(
+                        userId = fixture.venueOwnerUserId,
+                        venueId = fixture.venueId,
+                    )
+                assertEquals(
+                    SupportThreadReadResult.MARKED,
+                    setupRepository.markThreadRead(unaffectedThreadId, venueAccess),
+                )
+                val unaffectedMarkerBefore =
+                    dataSource.connection.use { connection ->
+                        assertNotNull(readMarker(connection, unaffectedThreadId, fixture.venueOwnerUserId))
+                    }
+                assertEquals(unaffectedMessage.id, unaffectedMarkerBefore.lastReadMessageId)
+
+                val writerBeforeBookingLock = CountDownLatch(1)
+                val releaseWriterToBookingLock = CountDownLatch(1)
+                val readerMarkerWritten = CountDownLatch(1)
+                val releaseReaderCommit = CountDownLatch(1)
+                val writerCheckpointCount = AtomicInteger()
+                val writerApplicationName = writerApplicationName("cursor_writer", database)
+                val readerApplicationName = writerApplicationName("cursor_reader", database)
+
+                writerDataSource(database, writerApplicationName).use { writerPool ->
+                    writerDataSource(database, readerApplicationName).use { readerPool ->
+                        val writerRepository =
+                            SupportThreadRepository(
+                                dataSource = writerPool,
+                                bookingConversationCheckpoint = { checkpoint ->
+                                    if (
+                                        checkpoint == BookingConversationCheckpoint.AFTER_INITIAL_THREAD_LOOKUP &&
+                                        writerCheckpointCount.incrementAndGet() == 1
+                                    ) {
+                                        writerBeforeBookingLock.countDown()
+                                        check(
+                                            releaseWriterToBookingLock.await(
+                                                WAIT_TIMEOUT_SECONDS,
+                                                TimeUnit.SECONDS,
+                                            ),
+                                        )
+                                    }
+                                },
+                            )
+                        val readerRepository =
+                            SupportThreadRepository(
+                                dataSource = readerPool,
+                                supportThreadReadCheckpoint = { checkpoint ->
+                                    if (checkpoint == SupportThreadReadCheckpoint.AFTER_MARKER_WRITE) {
+                                        readerMarkerWritten.countDown()
+                                        check(
+                                            releaseReaderCommit.await(
+                                                WAIT_TIMEOUT_SECONDS,
+                                                TimeUnit.SECONDS,
+                                            ),
+                                        )
+                                    }
+                                },
+                            )
+
+                        directConnection(database).use { observer ->
+                            val writer =
+                                async(Dispatchers.IO) {
+                                    writerRepository.addBookingMessage(
+                                        bookingId = fixture.bookingId,
+                                        authorUserId = fixture.guestUserId,
+                                        authorRole = SupportMessageAuthorRole.GUEST,
+                                        source = SupportMessageSource.GUEST_BOT,
+                                        text = "Started before reader, committed after reader",
+                                        telegramMessageId = 93_002L,
+                                        expectedThreadId = thread.id,
+                                        expectedGuestUserId = fixture.guestUserId,
+                                    )
+                                }
+                            assertTrue(
+                                writerBeforeBookingLock.await(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                                "Writer did not pause after establishing its transaction timestamp",
+                            )
+                            val writerPid = onlyApplicationBackendPid(observer, writerApplicationName)
+                            val writerTransactionStartedAt = transactionStartedAt(observer, writerPid)
+                            awaitDatabaseClockAfter(observer, writerTransactionStartedAt)
+
+                            val reader =
+                                async(Dispatchers.IO) {
+                                    readerRepository.getVenueThreadAndMarkRead(
+                                        venueId = fixture.venueId,
+                                        threadId = thread.id,
+                                        viewerUserId = fixture.venueOwnerUserId,
+                                        allowedThreadTypes = setOf(SupportThreadType.BOOKING_THREAD),
+                                    )
+                                }
+                            assertTrue(
+                                readerMarkerWritten.await(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                                "Reader did not write its locked-snapshot cursor",
+                            )
+                            val readerPid = onlyApplicationBackendPid(observer, readerApplicationName)
+                            val readerTransactionStartedAt = transactionStartedAt(observer, readerPid)
+                            assertTrue(
+                                writerTransactionStartedAt.isBefore(readerTransactionStartedAt),
+                                "Writer transaction must start first: writer=$writerTransactionStartedAt, " +
+                                    "reader=$readerTransactionStartedAt",
+                            )
+
+                            val lockEvidence =
+                                try {
+                                    releaseWriterToBookingLock.countDown()
+                                    awaitExactLockEdge(
+                                        observer = observer,
+                                        writerPid = writerPid,
+                                        readerPid = readerPid,
+                                        operation = writer,
+                                    )
+                                } finally {
+                                    releaseWriterToBookingLock.countDown()
+                                    releaseReaderCommit.countDown()
+                                }
+                            assertEquals(writerPid, lockEvidence.waitingPid)
+                            assertEquals(listOf(readerPid), lockEvidence.blockingPids)
+                            assertEquals("transactionid", lockEvidence.waitingLockType)
+                            assertEquals("ShareLock", lockEvidence.waitingLockMode)
+                            assertFalse(lockEvidence.waitingLockGranted)
+                            assertNotNull(lockEvidence.transactionId)
+                            assertEquals("ExclusiveLock", lockEvidence.blockerLockMode)
+                            assertTrue(lockEvidence.blockerLockGranted)
+
+                            val readerDetail =
+                                assertNotNull(
+                                    withTimeout(TimeUnit.SECONDS.toMillis(WAIT_TIMEOUT_SECONDS)) {
+                                        reader.await()
+                                    },
+                                )
+                            val committedWrite =
+                                assertNotNull(
+                                    withTimeout(TimeUnit.SECONDS.toMillis(WAIT_TIMEOUT_SECONDS)) {
+                                        writer.await()
+                                    },
+                                )
+                            assertEquals(listOf(baselineMessage.id), readerDetail.messages.map { it.id })
+                            assertTrue(committedWrite.message.id > baselineMessage.id)
+
+                            val marker =
+                                assertNotNull(
+                                    readMarker(observer, thread.id, fixture.venueOwnerUserId),
+                                )
+                            assertEquals(baselineMessage.id, marker.lastReadMessageId)
+                            val committedCreatedAt = messageCreatedAt(observer, committedWrite.message.id)
+                            assertTrue(
+                                committedCreatedAt.isBefore(marker.lastReadAt),
+                                "The late commit must reproduce the timestamp loss window: " +
+                                    "createdAt=$committedCreatedAt, lastReadAt=${marker.lastReadAt}",
+                            )
+                            assertEquals(
+                                1,
+                                setupRepository.countVenueConversationUnread(
+                                    fixture.venueId,
+                                    fixture.venueOwnerUserId,
+                                ),
+                            )
+
+                            val ownMessage =
+                                assertNotNull(
+                                    setupRepository.addBookingMessage(
+                                        bookingId = fixture.bookingId,
+                                        authorUserId = fixture.venueOwnerUserId,
+                                        authorRole = SupportMessageAuthorRole.VENUE,
+                                        source = SupportMessageSource.STAFF_CHAT,
+                                        text = "Own venue message above the cursor",
+                                        telegramMessageId = 93_003L,
+                                        expectedThreadId = thread.id,
+                                        expectedVenueId = fixture.venueId,
+                                    ),
+                                ).message
+                            assertTrue(ownMessage.id > committedWrite.message.id)
+                            assertEquals(
+                                1,
+                                setupRepository.countVenueConversationUnread(
+                                    fixture.venueId,
+                                    fixture.venueOwnerUserId,
+                                ),
+                                "Own messages above the cursor must not increment unread",
+                            )
+                            assertEquals(
+                                unaffectedMarkerBefore,
+                                assertNotNull(
+                                    readMarker(observer, unaffectedThreadId, fixture.venueOwnerUserId),
+                                ),
+                                "Reading and writing the booking thread must not mutate another marker",
+                            )
+
+                            assertNotNull(
+                                setupRepository.getVenueThreadAndMarkRead(
+                                    venueId = fixture.venueId,
+                                    threadId = thread.id,
+                                    viewerUserId = fixture.venueOwnerUserId,
+                                    allowedThreadTypes = setOf(SupportThreadType.BOOKING_THREAD),
+                                ),
+                            )
+                            val cursorBeforeRollback =
+                                dataSource.connection.use { connection ->
+                                    assertNotNull(
+                                        readMarker(connection, thread.id, fixture.venueOwnerUserId),
+                                    )
+                                }
+                            assertEquals(ownMessage.id, cursorBeforeRollback.lastReadMessageId)
+                            val messageAfterCursor =
+                                assertNotNull(
+                                    setupRepository.addBookingMessage(
+                                        bookingId = fixture.bookingId,
+                                        authorUserId = fixture.guestUserId,
+                                        authorRole = SupportMessageAuthorRole.GUEST,
+                                        source = SupportMessageSource.GUEST_BOT,
+                                        text = "Must stay unread after marker rollback",
+                                        telegramMessageId = 93_004L,
+                                        expectedThreadId = thread.id,
+                                        expectedGuestUserId = fixture.guestUserId,
+                                    ),
+                                ).message
+                            assertTrue(
+                                messageAfterCursor.id > requireNotNull(cursorBeforeRollback.lastReadMessageId),
+                            )
+                            val failingReader =
+                                SupportThreadRepository(
+                                    dataSource = dataSource,
+                                    supportThreadReadCheckpoint = { checkpoint ->
+                                        if (checkpoint == SupportThreadReadCheckpoint.AFTER_MARKER_WRITE) {
+                                            error("injected cursor rollback")
+                                        }
+                                    },
+                                )
+                            val rollbackFailure =
+                                runCatching {
+                                    failingReader.getVenueThreadAndMarkRead(
+                                        venueId = fixture.venueId,
+                                        threadId = thread.id,
+                                        viewerUserId = fixture.venueOwnerUserId,
+                                        allowedThreadTypes = setOf(SupportThreadType.BOOKING_THREAD),
+                                    )
+                                }.exceptionOrNull()
+                            assertIs<IllegalStateException>(rollbackFailure)
+                            assertEquals(
+                                cursorBeforeRollback,
+                                assertNotNull(
+                                    readMarker(observer, thread.id, fixture.venueOwnerUserId),
+                                ),
+                                "A failed detail read must restore the prior cursor and metadata timestamp",
+                            )
+                            assertEquals(
+                                1,
+                                setupRepository.countVenueConversationUnread(
+                                    fixture.venueId,
+                                    fixture.venueOwnerUserId,
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+    @Test
+    fun `equal message timestamps are ordered and cleared by message id cursor`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource.connection)
+                val repository = SupportThreadRepository(dataSource)
+                val thread = assertNotNull(repository.createOrFindBookingThread(fixture.bookingId))
+                val equalCreatedAt = Instant.parse("2031-02-03T04:05:06Z")
+                val firstMessage =
+                    assertNotNull(
+                        repository.addBookingMessage(
+                            bookingId = fixture.bookingId,
+                            authorUserId = fixture.guestUserId,
+                            authorRole = SupportMessageAuthorRole.GUEST,
+                            source = SupportMessageSource.GUEST_BOT,
+                            text = "First equal-timestamp message",
+                            telegramMessageId = 94_001L,
+                            expectedThreadId = thread.id,
+                            expectedGuestUserId = fixture.guestUserId,
+                        ),
+                    ).message
+                dataSource.connection.use { connection ->
+                    updateMessageCreatedAt(connection, firstMessage.id, equalCreatedAt)
+                }
+                val venueAccess =
+                    SupportThreadReadAccess.Venue(
+                        userId = fixture.venueOwnerUserId,
+                        venueId = fixture.venueId,
+                    )
+                assertNotNull(
+                    repository.getVenueThreadAndMarkRead(
+                        venueId = fixture.venueId,
+                        threadId = thread.id,
+                        viewerUserId = fixture.venueOwnerUserId,
+                        allowedThreadTypes = setOf(SupportThreadType.BOOKING_THREAD),
+                    ),
+                )
+                dataSource.connection.use { connection ->
+                    assertEquals(
+                        firstMessage.id,
+                        assertNotNull(
+                            readMarker(connection, thread.id, venueAccess.userId),
+                        ).lastReadMessageId,
+                    )
+                }
+
+                val secondMessage =
+                    assertNotNull(
+                        repository.addBookingMessage(
+                            bookingId = fixture.bookingId,
+                            authorUserId = fixture.guestUserId,
+                            authorRole = SupportMessageAuthorRole.GUEST,
+                            source = SupportMessageSource.GUEST_BOT,
+                            text = "Second equal-timestamp message",
+                            telegramMessageId = 94_002L,
+                            expectedThreadId = thread.id,
+                            expectedGuestUserId = fixture.guestUserId,
+                        ),
+                    ).message
+                dataSource.connection.use { connection ->
+                    updateMessageCreatedAt(connection, secondMessage.id, equalCreatedAt)
+                    assertEquals(equalCreatedAt, messageCreatedAt(connection, firstMessage.id))
+                    assertEquals(equalCreatedAt, messageCreatedAt(connection, secondMessage.id))
+                }
+                assertTrue(secondMessage.id > firstMessage.id)
+                assertEquals(
+                    1,
+                    repository.countVenueConversationUnread(fixture.venueId, fixture.venueOwnerUserId),
+                )
+
+                val refreshed =
+                    assertNotNull(
+                        repository.getVenueThreadAndMarkRead(
+                            venueId = fixture.venueId,
+                            threadId = thread.id,
+                            viewerUserId = fixture.venueOwnerUserId,
+                            allowedThreadTypes = setOf(SupportThreadType.BOOKING_THREAD),
+                        ),
+                    )
+                assertEquals(listOf(firstMessage.id, secondMessage.id), refreshed.messages.map { it.id })
+                dataSource.connection.use { connection ->
+                    assertEquals(
+                        secondMessage.id,
+                        assertNotNull(
+                            readMarker(connection, thread.id, venueAccess.userId),
+                        ).lastReadMessageId,
+                    )
+                }
+                assertEquals(
+                    0,
+                    repository.countVenueConversationUnread(fixture.venueId, fixture.venueOwnerUserId),
+                )
             }
         }
 
@@ -310,6 +743,88 @@ class SupportThreadReadConcurrencyPostgresTest {
         }
 
     @Test
+    fun `PostgreSQL NULL author venue chat is unread until locked exact open and preserves another actor marker`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val fixture = seedFixture(dataSource.connection)
+                val repository = SupportThreadRepository(dataSource)
+                val threadId =
+                    seedSupportThread(
+                        dataSource.connection,
+                        fixture,
+                        threadType = SupportThreadType.VENUE_CHAT,
+                    )
+                val baseline =
+                    repository.addMessage(
+                        threadId = threadId,
+                        authorUserId = fixture.venueOwnerUserId,
+                        authorRole = SupportMessageAuthorRole.VENUE,
+                        source = SupportMessageSource.VENUE_MINIAPP,
+                        text = "Venue baseline",
+                    )
+                assertEquals(
+                    SupportThreadReadResult.MARKED,
+                    repository.markThreadRead(
+                        threadId,
+                        SupportThreadReadAccess.Venue(
+                            userId = fixture.venueOwnerUserId,
+                            venueId = fixture.venueId,
+                        ),
+                    ),
+                )
+                assertEquals(
+                    SupportThreadReadResult.MARKED,
+                    repository.markThreadRead(
+                        threadId,
+                        SupportThreadReadAccess.Guest(fixture.guestUserId),
+                    ),
+                )
+                val otherActorBefore =
+                    dataSource.connection.use { connection ->
+                        assertNotNull(readMarker(connection, threadId, fixture.guestUserId))
+                    }
+                assertEquals(baseline.id, otherActorBefore.lastReadMessageId)
+
+                val systemMessage =
+                    repository.addMessage(
+                        threadId = threadId,
+                        authorUserId = null,
+                        authorRole = SupportMessageAuthorRole.SYSTEM,
+                        source = SupportMessageSource.SYSTEM,
+                        text = "Отзыв после визита",
+                        statusAfterInsert = null,
+                    )
+                assertEquals(
+                    1,
+                    repository.countVenueConversationUnread(fixture.venueId, fixture.venueOwnerUserId),
+                )
+
+                val detail =
+                    assertNotNull(
+                        repository.getVenueThreadAndMarkRead(
+                            venueId = fixture.venueId,
+                            threadId = threadId,
+                            viewerUserId = fixture.venueOwnerUserId,
+                            allowedThreadTypes = setOf(SupportThreadType.BOOKING_THREAD, SupportThreadType.VENUE_CHAT),
+                        ),
+                    )
+                assertEquals(listOf(baseline.id, systemMessage.id), detail.messages.map { it.id })
+                assertEquals(
+                    0,
+                    repository.countVenueConversationUnread(fixture.venueId, fixture.venueOwnerUserId),
+                )
+                dataSource.connection.use { connection ->
+                    assertEquals(
+                        systemMessage.id,
+                        assertNotNull(readMarker(connection, threadId, fixture.venueOwnerUserId)).lastReadMessageId,
+                    )
+                    assertEquals(otherActorBefore, readMarker(connection, threadId, fixture.guestUserId))
+                }
+            }
+        }
+
+    @Test
     fun `close and read serialize in both orders with closed status and one marker`() =
         runBlocking {
             val database = PostgresTestEnv.createDatabase()
@@ -427,6 +942,172 @@ class SupportThreadReadConcurrencyPostgresTest {
             Thread.yield()
         }
         error("Timed out waiting for PostgreSQL lock: $diagnostic")
+    }
+
+    private fun awaitExactLockEdge(
+        observer: Connection,
+        writerPid: Int,
+        readerPid: Int,
+        operation: kotlinx.coroutines.Deferred<*>,
+    ): ExactLockEvidence {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(WAIT_TIMEOUT_SECONDS)
+        var diagnostic = "No matching transaction-id lock edge observed"
+        while (System.nanoTime() < deadline) {
+            val evidence =
+                observer.prepareStatement(
+                    """
+                    SELECT
+                        waiting.pid AS waiting_pid,
+                        pg_blocking_pids(waiting.pid) AS blocking_pids,
+                        waiting.locktype AS waiting_lock_type,
+                        waiting.mode AS waiting_lock_mode,
+                        waiting.granted AS waiting_lock_granted,
+                        waiting.transactionid::TEXT AS transaction_id,
+                        blocker.mode AS blocker_lock_mode,
+                        blocker.granted AS blocker_lock_granted
+                    FROM pg_locks waiting
+                    JOIN pg_locks blocker
+                      ON blocker.pid = ?
+                     AND blocker.locktype = waiting.locktype
+                     AND blocker.transactionid = waiting.transactionid
+                     AND blocker.granted
+                    WHERE waiting.pid = ?
+                      AND NOT waiting.granted
+                      AND waiting.locktype = 'transactionid'
+                      AND waiting.mode = 'ShareLock'
+                      AND ? = ANY(pg_blocking_pids(waiting.pid))
+                    ORDER BY waiting.transactionid::TEXT
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setInt(1, readerPid)
+                    statement.setInt(2, writerPid)
+                    statement.setInt(3, readerPid)
+                    statement.executeQuery().use { rows ->
+                        buildList {
+                            while (rows.next()) {
+                                val sqlBlockingPids = rows.getArray("blocking_pids")
+                                val blockingPids =
+                                    try {
+                                        (sqlBlockingPids.array as Array<*>)
+                                            .map { (it as Number).toInt() }
+                                    } finally {
+                                        sqlBlockingPids.free()
+                                    }
+                                add(
+                                    ExactLockEvidence(
+                                        waitingPid = rows.getInt("waiting_pid"),
+                                        blockingPids = blockingPids,
+                                        waitingLockType = rows.getString("waiting_lock_type"),
+                                        waitingLockMode = rows.getString("waiting_lock_mode"),
+                                        waitingLockGranted = rows.getBoolean("waiting_lock_granted"),
+                                        transactionId = rows.getString("transaction_id"),
+                                        blockerLockMode = rows.getString("blocker_lock_mode"),
+                                        blockerLockGranted = rows.getBoolean("blocker_lock_granted"),
+                                    ),
+                                )
+                            }
+                        }
+                    }
+                }
+            diagnostic =
+                "writerPid=$writerPid; readerPid=$readerPid; " +
+                "edges=${evidence.joinToString()}"
+            evidence.singleOrNull { it.blockingPids == listOf(readerPid) }?.let { return it }
+            check(!operation.isCompleted) {
+                "Writer completed before the exact PostgreSQL lock edge was observed: $diagnostic"
+            }
+            Thread.yield()
+        }
+        error("Timed out waiting for exact PostgreSQL lock edge: $diagnostic")
+    }
+
+    private fun transactionStartedAt(
+        observer: Connection,
+        pid: Int,
+    ): Instant =
+        observer.prepareStatement(
+            "SELECT xact_start FROM pg_stat_activity WHERE pid = ? AND datname = current_database()",
+        ).use { statement ->
+            statement.setInt(1, pid)
+            statement.executeQuery().use { rows ->
+                check(rows.next()) { "PostgreSQL backend pid=$pid disappeared before xact_start inspection" }
+                val startedAt = rows.getTimestamp("xact_start")
+                check(startedAt != null) { "PostgreSQL backend pid=$pid has no active transaction" }
+                check(!rows.next()) { "PostgreSQL backend pid=$pid was not unique" }
+                startedAt.toInstant()
+            }
+        }
+
+    private fun awaitDatabaseClockAfter(
+        observer: Connection,
+        earlier: Instant,
+    ) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(WAIT_TIMEOUT_SECONDS)
+        var observed = earlier
+        while (System.nanoTime() < deadline) {
+            observed =
+                observer.createStatement().use { statement ->
+                    statement.executeQuery("SELECT clock_timestamp()").use { rows ->
+                        check(rows.next())
+                        rows.getTimestamp(1).toInstant()
+                    }
+                }
+            if (observed.isAfter(earlier)) return
+            Thread.yield()
+        }
+        error("PostgreSQL clock did not advance after $earlier; last observed=$observed")
+    }
+
+    private fun readMarker(
+        connection: Connection,
+        threadId: Long,
+        userId: Long,
+    ): ReadMarker? =
+        connection.prepareStatement(
+            """
+            SELECT last_read_at, last_read_message_id
+            FROM support_thread_reads
+            WHERE thread_id = ? AND user_id = ?
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, threadId)
+            statement.setLong(2, userId)
+            statement.executeQuery().use { rows ->
+                if (rows.next()) {
+                    val lastReadMessageId = rows.getLong("last_read_message_id")
+                    val cursorWasNull = rows.wasNull()
+                    ReadMarker(
+                        lastReadAt = rows.getTimestamp("last_read_at").toInstant(),
+                        lastReadMessageId = if (cursorWasNull) null else lastReadMessageId,
+                    )
+                } else {
+                    null
+                }
+            }
+        }
+
+    private fun messageCreatedAt(
+        connection: Connection,
+        messageId: Long,
+    ): Instant =
+        connection.prepareStatement("SELECT created_at FROM support_messages WHERE id = ?").use { statement ->
+            statement.setLong(1, messageId)
+            statement.executeQuery().use { rows ->
+                check(rows.next()) { "Missing support message id=$messageId" }
+                rows.getTimestamp("created_at").toInstant()
+            }
+        }
+
+    private fun updateMessageCreatedAt(
+        connection: Connection,
+        messageId: Long,
+        createdAt: Instant,
+    ) {
+        connection.prepareStatement("UPDATE support_messages SET created_at = ? WHERE id = ?").use { statement ->
+            statement.setTimestamp(1, Timestamp.from(createdAt))
+            statement.setLong(2, messageId)
+            assertEquals(1, statement.executeUpdate())
+        }
     }
 
     private fun seedFixture(connection: Connection): Fixture =
@@ -696,6 +1377,22 @@ class SupportThreadReadConcurrencyPostgresTest {
         val threadsRowShareGranted: Boolean,
         val readsRowExclusiveGranted: Boolean,
         val diagnostic: String,
+    )
+
+    private data class ReadMarker(
+        val lastReadAt: Instant,
+        val lastReadMessageId: Long?,
+    )
+
+    private data class ExactLockEvidence(
+        val waitingPid: Int,
+        val blockingPids: List<Int>,
+        val waitingLockType: String,
+        val waitingLockMode: String,
+        val waitingLockGranted: Boolean,
+        val transactionId: String?,
+        val blockerLockMode: String,
+        val blockerLockGranted: Boolean,
     )
 
     private data class Fixture(

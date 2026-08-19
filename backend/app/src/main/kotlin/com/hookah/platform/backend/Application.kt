@@ -114,6 +114,7 @@ import com.hookah.platform.backend.security.constantTimeEquals
 import com.hookah.platform.backend.support.SupportThreadRepository
 import com.hookah.platform.backend.support.guestSupportRoutes
 import com.hookah.platform.backend.support.venueSupportRoutes
+import com.hookah.platform.backend.telegram.BookingMessageStaffChatNotifier
 import com.hookah.platform.backend.telegram.InMemoryTelegramRateLimiter
 import com.hookah.platform.backend.telegram.StaffBillUpdateNotifier
 import com.hookah.platform.backend.telegram.StaffChatNotifier
@@ -554,6 +555,12 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
     val telegramInboundUpdateQueueRepository = TelegramInboundUpdateQueueRepository(dataSource)
     val telegramOutboxRepository = TelegramOutboxRepository(dataSource)
     val telegramOutboxEnqueuer = TelegramOutboxEnqueuer(telegramOutboxRepository, telegramJson)
+    val bookingMessageStaffChatNotifier =
+        BookingMessageStaffChatNotifier(
+            outboxEnqueuer = telegramOutboxEnqueuer,
+            isTelegramActive = { telegramConfig.enabled && !telegramConfig.token.isNullOrBlank() },
+            webAppPublicUrl = { telegramConfig.webAppPublicUrl },
+        )
     val staffChatNotifierScope =
         CoroutineScope(
             SupervisorJob() + Dispatchers.IO + CoroutineName("staff-chat-notifier"),
@@ -1204,6 +1211,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                         supportThreadRepository = supportThreadRepository,
                         venueRepository = venueRepository,
                         outboxEnqueuer = telegramOutboxEnqueuer,
+                        bookingMessageStaffChatNotifier = bookingMessageStaffChatNotifier,
                         tableTokenResolver = tableTokenResolver,
                         tableSessionRepository = tableSessionRepository,
                         tableSessionConfig = tableSessionConfig,

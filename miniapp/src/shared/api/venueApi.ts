@@ -111,7 +111,8 @@ import type {
   SupportThreadDetailResponse,
   SupportThreadFilter,
   SupportThreadType,
-  SupportThreadListResponse
+  SupportThreadListResponse,
+  VenueConversationUnreadCountResponse
 } from './supportDtos'
 
 export async function venueGetMe(
@@ -903,6 +904,20 @@ export async function venueGetSupportThreads(
   )
 }
 
+export async function venueGetConversationUnreadCount(
+  backendUrl: string,
+  params: { venueId: number },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenueConversationUnreadCountResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/support/unread-count`,
+    { signal, cache: 'no-store' },
+    deps
+  )
+}
+
 export async function venueGetBookingThreadReconciliation(
   backendUrl: string,
   params: { venueId: number; bookingIds: number[] },
@@ -937,13 +952,18 @@ export async function venueGetBookingThreadReconciliation(
 
 export async function venueGetSupportThread(
   backendUrl: string,
-  params: { venueId: number; threadId: number },
+  params: { venueId: number; threadId: number; threadTypes?: SupportThreadType[] },
   deps: RequestDependencies,
   signal?: AbortSignal
 ) {
+  const search = new URLSearchParams()
+  if (params.threadTypes?.length) {
+    search.set('threadTypes', params.threadTypes.join(','))
+  }
+  const suffix = search.toString() ? `?${search.toString()}` : ''
   return requestApi<SupportThreadDetailResponse>(
     backendUrl,
-    `/api/venue/${params.venueId}/support/threads/${params.threadId}`,
+    `/api/venue/${params.venueId}/support/threads/${params.threadId}${suffix}`,
     { signal, cache: 'no-store' },
     deps
   )

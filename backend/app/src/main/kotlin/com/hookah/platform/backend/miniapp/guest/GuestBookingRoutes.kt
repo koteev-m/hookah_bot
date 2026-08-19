@@ -5,6 +5,8 @@ import com.hookah.platform.backend.api.NotFoundException
 import com.hookah.platform.backend.api.VenueBookingOutsideHoursException
 import com.hookah.platform.backend.api.VenueClosedOnSelectedDateException
 import com.hookah.platform.backend.api.VenueScheduleNotConfiguredException
+import com.hookah.platform.backend.booking.defaultBookingDisplayZoneId
+import com.hookah.platform.backend.booking.formatBookingDisplayLabel
 import com.hookah.platform.backend.miniapp.guest.api.GuestBookingCancelRequest
 import com.hookah.platform.backend.miniapp.guest.api.GuestBookingConfirmRequest
 import com.hookah.platform.backend.miniapp.guest.api.GuestBookingCreateRequest
@@ -77,7 +79,11 @@ fun Route.guestBookingRoutes(
             guestBookingRepository
                 .listActiveByUser(userId = userId, limit = 50)
                 .map { booking ->
-                    val zoneId = venueSettingsRepository.resolveZoneId(booking.venueId)
+                    val zoneId =
+                        venueSettingsRepository.resolveZoneId(
+                            booking.venueId,
+                            defaultBookingDisplayZoneId(),
+                        )
                     booking.toResponse(zoneId = zoneId)
                 }
         call.respond(GuestBookingListResponse(items = bookings))
@@ -106,16 +112,20 @@ fun Route.guestBookingRoutes(
                     comment = normalizeBookingComment(request.comment),
                     venueZoneId = venueZoneId,
                 )
+            val bookingDisplayZoneId =
+                venueSettingsRepository.resolveZoneId(venueId, defaultBookingDisplayZoneId())
             notifyVenueStaffAboutBooking(
                 staffChatNotifier = staffChatNotifier,
                 venueRepository = venueRepository,
                 outboxEnqueuer = outboxEnqueuer,
+                venueZoneId = bookingDisplayZoneId,
                 notification =
                     BookingStaffNotification(
                         venueId = created.venueId,
                         bookingId = created.id,
                         event = BookingStaffNotificationEvent.CREATED,
                         status = created.status,
+                        scheduledAt = created.scheduledAt,
                         scheduledAtText = formatBookingInstant(created.scheduledAt, venueZoneId),
                         partySize = created.partySize,
                         comment = created.comment,
@@ -126,7 +136,7 @@ fun Route.guestBookingRoutes(
             call.respond(
                 created.toResponse(
                     venueName = guestBookingRepository.findVenueName(venueId),
-                    zoneId = venueZoneId,
+                    zoneId = venueSettingsRepository.resolveZoneId(venueId, defaultBookingDisplayZoneId()),
                 ),
             )
         }
@@ -155,16 +165,20 @@ fun Route.guestBookingRoutes(
                     comment = normalizeBookingComment(request.comment),
                     venueZoneId = venueZoneId,
                 ) ?: throw NotFoundException()
+            val bookingDisplayZoneId =
+                venueSettingsRepository.resolveZoneId(venueId, defaultBookingDisplayZoneId())
             notifyVenueStaffAboutBooking(
                 staffChatNotifier = staffChatNotifier,
                 venueRepository = venueRepository,
                 outboxEnqueuer = outboxEnqueuer,
+                venueZoneId = bookingDisplayZoneId,
                 notification =
                     BookingStaffNotification(
                         venueId = updated.venueId,
                         bookingId = updated.id,
                         event = BookingStaffNotificationEvent.UPDATED,
                         status = updated.status,
+                        scheduledAt = updated.scheduledAt,
                         scheduledAtText = formatBookingInstant(updated.scheduledAt, venueZoneId),
                         partySize = updated.partySize,
                         comment = updated.comment,
@@ -175,7 +189,7 @@ fun Route.guestBookingRoutes(
             call.respond(
                 updated.toResponse(
                     venueName = guestBookingRepository.findVenueName(venueId),
-                    zoneId = venueZoneId,
+                    zoneId = venueSettingsRepository.resolveZoneId(venueId, defaultBookingDisplayZoneId()),
                 ),
             )
         }
@@ -192,16 +206,20 @@ fun Route.guestBookingRoutes(
                     venueId = venueId,
                     userId = userId,
                 ) ?: throw NotFoundException()
+            val bookingDisplayZoneId =
+                venueSettingsRepository.resolveZoneId(venueId, defaultBookingDisplayZoneId())
             notifyVenueStaffAboutBooking(
                 staffChatNotifier = staffChatNotifier,
                 venueRepository = venueRepository,
                 outboxEnqueuer = outboxEnqueuer,
+                venueZoneId = bookingDisplayZoneId,
                 notification =
                     BookingStaffNotification(
                         venueId = canceled.venueId,
                         bookingId = canceled.id,
                         event = BookingStaffNotificationEvent.CANCELLED,
                         status = canceled.status,
+                        scheduledAt = canceled.scheduledAt,
                         scheduledAtText = formatBookingInstant(canceled.scheduledAt, venueZoneId),
                         partySize = canceled.partySize,
                         comment = canceled.comment,
@@ -212,7 +230,7 @@ fun Route.guestBookingRoutes(
             call.respond(
                 canceled.toResponse(
                     venueName = guestBookingRepository.findVenueName(venueId),
-                    zoneId = venueZoneId,
+                    zoneId = venueSettingsRepository.resolveZoneId(venueId, defaultBookingDisplayZoneId()),
                 ),
             )
         }
@@ -258,7 +276,7 @@ fun Route.guestBookingRoutes(
             call.respond(
                 confirmed.toResponse(
                     venueName = guestBookingRepository.findVenueName(venueId),
-                    zoneId = venueSettingsRepository.resolveZoneId(venueId),
+                    zoneId = venueSettingsRepository.resolveZoneId(venueId, defaultBookingDisplayZoneId()),
                 ),
             )
         }
@@ -273,7 +291,7 @@ fun Route.guestBookingRoutes(
                     userId = userId,
                 )
             val venueName = guestBookingRepository.findVenueName(venueId)
-            val zoneId = venueSettingsRepository.resolveZoneId(venueId)
+            val zoneId = venueSettingsRepository.resolveZoneId(venueId, defaultBookingDisplayZoneId())
             call.respond(
                 GuestBookingListResponse(
                     items = bookings.map { it.toResponse(venueName, zoneId) },
@@ -287,6 +305,7 @@ private suspend fun notifyVenueStaffAboutBooking(
     staffChatNotifier: StaffChatNotifier?,
     venueRepository: VenueRepository,
     outboxEnqueuer: TelegramOutboxEnqueuer,
+    venueZoneId: ZoneId,
     notification: BookingStaffNotification,
 ) {
     if (staffChatNotifier != null) {
@@ -305,8 +324,14 @@ private suspend fun notifyVenueStaffAboutBooking(
     val text =
         buildString {
             append(title)
-            notification.displayNumber?.let { append(" №").append(it) }
-            notification.scheduledAtText?.let { append(" на ").append(it) }
+            append('\n').append(
+                formatBookingDisplayLabel(
+                    bookingId = notification.bookingId,
+                    displayNumber = notification.displayNumber,
+                    scheduledAt = notification.scheduledAt,
+                    venueZoneId = venueZoneId,
+                ),
+            )
             append('\n').append("Гость: ").append(notification.guestDisplayName?.takeIf { it.isNotBlank() } ?: "Гость")
         }
     outboxEnqueuer.enqueueSendMessage(chatId = chatId, text = text)
@@ -436,8 +461,6 @@ private fun formatBookingInstant(
     zoneId: ZoneId = ZoneOffset.UTC,
 ): String = bookingInstantFormatter.format(value.atZone(zoneId))
 
-private fun formatBookingDisplayLabel(displayNumber: Int?): String = displayNumber?.let { "Бронь №$it" } ?: "Бронь"
-
 private fun humanizeBookingStatus(status: BookingStatus): String =
     when (status) {
         BookingStatus.PENDING -> "Ожидает подтверждения"
@@ -483,7 +506,13 @@ private fun BookingRecord.toResponse(
         lastGuestConfirmationAt = lastGuestConfirmationAt?.let { formatBookingInstant(it, zoneId) },
         attendanceScheduleVersion = attendanceScheduleVersionEpochSeconds(),
         displayNumber = displayNumber,
-        displayLabel = formatBookingDisplayLabel(displayNumber),
+        displayLabel =
+            formatBookingDisplayLabel(
+                bookingId = id,
+                displayNumber = displayNumber,
+                scheduledAt = scheduledAt,
+                venueZoneId = zoneId,
+            ),
         venueName = venueName,
         statusLabel = humanizeBookingStatus(status),
         scheduledAtDisplay = displayDateTime(scheduledAt, zoneId),
@@ -507,7 +536,13 @@ private fun UserBookingSummaryRecord.toResponse(zoneId: ZoneId): GuestBookingRes
         lastGuestConfirmationAt = lastGuestConfirmationAt?.let { formatBookingInstant(it, zoneId) },
         attendanceScheduleVersion = attendanceScheduleVersionEpochSeconds(),
         displayNumber = displayNumber,
-        displayLabel = formatBookingDisplayLabel(displayNumber),
+        displayLabel =
+            formatBookingDisplayLabel(
+                bookingId = id,
+                displayNumber = displayNumber,
+                scheduledAt = scheduledAt,
+                venueZoneId = zoneId,
+            ),
         venueName = venueName,
         statusLabel = humanizeBookingStatus(status),
         scheduledAtDisplay = displayDateTime(scheduledAt, zoneId),

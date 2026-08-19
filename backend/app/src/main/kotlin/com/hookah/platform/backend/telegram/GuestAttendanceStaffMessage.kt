@@ -1,11 +1,11 @@
 package com.hookah.platform.backend.telegram
 
+import com.hookah.platform.backend.booking.formatBookingDisplayLabel
 import com.hookah.platform.backend.miniapp.guest.db.BookingRecord
 import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
-private val guestAttendanceDateTimeFormatter = DateTimeFormatter.ofPattern("dd.MM.yyyy, HH:mm")
 private val guestAttendanceTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
 
 fun buildGuestAttendanceStaffChatText(
@@ -13,8 +13,13 @@ fun buildGuestAttendanceStaffChatText(
     guestDisplayName: String?,
     zoneId: ZoneId,
 ): String {
-    val bookingLabel = booking.displayNumber?.let { "Бронь №$it" } ?: "Бронь"
-    val visitText = LocalDateTime.ofInstant(booking.scheduledAt, zoneId).format(guestAttendanceDateTimeFormatter)
+    val bookingLabel =
+        formatBookingDisplayLabel(
+            bookingId = booking.id,
+            displayNumber = booking.displayNumber,
+            scheduledAt = booking.scheduledAt,
+            venueZoneId = zoneId,
+        )
     val deadlineText =
         booking.arrivalDeadlineAt
             ?.let { LocalDateTime.ofInstant(it, zoneId).format(guestAttendanceTimeFormatter) }
@@ -23,7 +28,7 @@ fun buildGuestAttendanceStaffChatText(
     val partySize = booking.partySize?.toString() ?: "не указано"
     return buildString {
         append("✅ Гость подтвердил визит")
-        append("\n\n").append(bookingLabel).append(" · ").append(visitText)
+        append("\n\n").append(bookingLabel)
         append("\nГость: ").append(guestName)
         append("\nГостей: ").append(partySize)
         append("\nДержим стол до ").append(deadlineText)

@@ -13,6 +13,7 @@ import {
 import type { CatalogVenueDto } from '../shared/api/guestDtos'
 import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
 import type {
+  GuestThreadSurface,
   SupportMessageDto,
   SupportThreadCreateRequest,
   SupportThreadDto,
@@ -26,6 +27,7 @@ import {
   bookingThreadLoading,
   type BookingThreadReconciliationState
 } from '../shared/bookingThreadReconciliation'
+import { bookingDisplayLabel } from '../shared/ui/bookingLabel'
 import { append, el, on } from '../shared/ui/dom'
 import { showToast } from '../shared/ui/toast'
 
@@ -67,6 +69,7 @@ type GuestSupportScreenCopy = {
   emptyText: string
   showCreate: boolean
   threadTypes: SupportThreadType[]
+  surface: GuestThreadSurface
 }
 
 function buildApiDeps(isDebug: boolean) {
@@ -105,11 +108,16 @@ function threadTitle(thread: SupportThreadDto): string {
   if (thread.threadType === 'VENUE_CHAT') {
     return thread.venueName ? `Чат с ${thread.venueName}` : thread.title
   }
+  if (thread.threadType === 'BOOKING_THREAD') {
+    return bookingDisplayLabel({
+      bookingId: thread.booking?.bookingId ?? thread.bookingId,
+      displayNumber: thread.booking?.displayNumber,
+      displayLabel: thread.booking?.displayLabel,
+      scheduledAt: thread.booking?.scheduledAt,
+      legacyLabel: thread.contextLabel || thread.title
+    })
+  }
   if (thread.contextLabel) return thread.contextLabel
-  if (thread.threadType === 'BOOKING_THREAD') return thread.bookingId ? `Бронь #${thread.bookingId}` : 'Бронь'
-  const displayNumber = thread.booking?.displayNumber
-  if (displayNumber) return `Бронь №${displayNumber}`
-  if (thread.bookingId) return `Бронь #${thread.bookingId}`
   return thread.title
 }
 
@@ -180,7 +188,8 @@ function screenCopy(screenMode: GuestSupportThreadsOptions['screenMode']): Guest
       body: 'Здесь можно сообщить о проблеме и посмотреть статус обращений.',
       emptyText: 'У вас пока нет обращений.',
       showCreate: true,
-      threadTypes: ['SUPPORT_TICKET']
+      threadTypes: ['SUPPORT_TICKET'],
+      surface: 'SUPPORT'
     }
   }
   return {
@@ -188,7 +197,8 @@ function screenCopy(screenMode: GuestSupportThreadsOptions['screenMode']): Guest
     body: 'Здесь все ваши чаты с заведениями: вопросы, брони и другие переписки. Проблемы и жалобы находятся в разделе Помощь.',
     emptyText: 'Пока нет чатов. Вы можете задать вопрос заведению из каталога или карточки заведения.',
     showCreate: false,
-    threadTypes: ['BOOKING_THREAD', 'VENUE_CHAT']
+    threadTypes: ['BOOKING_THREAD', 'VENUE_CHAT'],
+    surface: 'CONVERSATIONS'
   }
 }
 
@@ -472,6 +482,10 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
     threads.forEach((thread) => {
       const card = el('section', { className: 'card venue-message-thread-card' })
       card.dataset.selected = String(thread.threadId === selectedThreadId)
+      card.dataset.threadId = String(thread.threadId)
+      card.dataset.threadType = thread.threadType
+      card.dataset.unreadCount = String(unreadCount(thread))
+      if (thread.bookingId != null) card.dataset.bookingId = String(thread.bookingId)
       const title = el('h3', { text: threadTitle(thread) })
       const venue = el('p', { className: 'venue-order-sub', text: thread.venueName || 'Заведение' })
       const meta = el('p', {
@@ -504,7 +518,7 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
     updateFilterButtons()
     const result = await guestGetSupportThreads(backendUrl, deps, controller.signal, {
       filter: initialInventoryPending ? undefined : currentFilter,
-      threadTypes: copy.threadTypes
+      surface: copy.surface
     })
     if (disposed || abortController !== controller) return
     abortController = null
@@ -586,7 +600,7 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
       loading.appendChild(el('p', { className: 'venue-order-sub', text: 'Загружаем переписку…' }))
       refs.detail.replaceChildren(loading)
     }
-    const result = await guestGetSupportThread(backendUrl, threadId, deps, controller.signal)
+    const result = await guestGetSupportThread(backendUrl, threadId, copy.surface, deps, controller.signal)
     if (disposed || abortController !== controller) return null
     abortController = null
     if (!result.ok) {

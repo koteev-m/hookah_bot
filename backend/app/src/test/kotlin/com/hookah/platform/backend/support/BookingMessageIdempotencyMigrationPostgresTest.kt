@@ -25,8 +25,8 @@ class BookingMessageIdempotencyMigrationPostgresTest {
     }
 
     @Test
-    fun `message idempotency metadata and migration head are exact on PostgreSQL`() {
-        assertions().assertExactMetadataAndMigrationHead()
+    fun `message idempotency metadata and migration version are exact on PostgreSQL`() {
+        assertions().assertExactMetadataAndMigrationVersion()
     }
 
     private fun assertions(): BookingMessageIdempotencyMigrationAssertions {

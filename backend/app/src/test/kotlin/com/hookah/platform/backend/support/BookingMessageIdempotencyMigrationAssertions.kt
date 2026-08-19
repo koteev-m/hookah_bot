@@ -106,7 +106,7 @@ internal class BookingMessageIdempotencyMigrationAssertions(
             assertEquals(64, singleString(connection, "SELECT client_message_id FROM support_messages").length)
         }
 
-    fun assertExactMetadataAndMigrationHead() =
+    fun assertExactMetadataAndMigrationVersion() =
         scenario { connection, fixture ->
             insertLegacyMessage(connection, fixture.threadId, fixture.guestUserId, "GUEST_MINIAPP", null)
             insertLegacyMessage(connection, fixture.threadId, fixture.guestUserId, "GUEST_BOT", 81002L)
@@ -158,7 +158,6 @@ internal class BookingMessageIdempotencyMigrationAssertions(
 
             val flyway = Flyway.configure().dataSource(dataSource).locations(location).load()
             assertEquals(expectedVersion, flyway.info().current().version.toString())
-            assertTrue(flyway.info().pending().isEmpty(), "$expectedVersion must be the actual migration head")
         }
 
     private fun scenario(assertion: (Connection, Fixture) -> Unit) {

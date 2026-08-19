@@ -9,6 +9,7 @@ import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.MenuItemDeleteBlockedByFixedRewardException
 import com.hookah.platform.backend.api.NotFoundException
+import com.hookah.platform.backend.booking.formatBookingDisplayLabel
 import com.hookah.platform.backend.location.VenueLocationDisplay
 import com.hookah.platform.backend.location.buildYandexVenueRouteUrl
 import com.hookah.platform.backend.location.formatVenueDisplayAddress
@@ -349,6 +350,12 @@ class TelegramBotRouter(
     private val platformGuestQrCallbackTagFactory: () -> String = ::newPlatformGuestQrCallbackTag,
 ) {
     private val logger = LoggerFactory.getLogger(TelegramBotRouter::class.java)
+    private val bookingMessageStaffChatNotifier =
+        BookingMessageStaffChatNotifier(
+            outboxEnqueuer = outboxEnqueuer,
+            isTelegramActive = { config.enabled && !config.token.isNullOrBlank() },
+            webAppPublicUrl = { config.webAppPublicUrl },
+        )
     private val aiTelegramHandler =
         AiTelegramHandler(
             outboxEnqueuer = outboxEnqueuer,
@@ -644,7 +651,6 @@ class TelegramBotRouter(
     private val bookingDateFormatter = DateTimeFormatter.ofPattern("dd.MM")
     private val bookingDateConfirmFormatter = DateTimeFormatter.ofPattern("dd.MM.yyyy")
     private val bookingDateTimeFormatter = DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm")
-    private val bookingReminderDateTimeFormatter = DateTimeFormatter.ofPattern("dd.MM.yyyy, HH:mm")
     private val bookingTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
     private val guestVisitDateFormatter = DateTimeFormatter.ofPattern("d MMMM yyyy", Locale.forLanguageTag("ru"))
     private val bookingDateFirstPageSize = 3
@@ -3568,7 +3574,14 @@ class TelegramBotRouter(
             enqueueMessage(
                 chatId,
                 "✅ Бронь обновлена\n" +
-                    "${formatBookingDisplayLabel(updatedBooking)}\n\n" +
+                    "${
+                        formatBookingDisplayLabel(
+                            bookingId = updatedBooking.id,
+                            displayNumber = updatedBooking.displayNumber,
+                            scheduledAt = updatedBooking.scheduledAt,
+                            venueZoneId = venueZoneId,
+                        )
+                    }\n\n" +
                     "Кальянная: ${venue.name}\n" +
                     "$guestVisitText\n" +
                     "Гостей: ${draft.guestsLabel}\n" +
@@ -3580,6 +3593,7 @@ class TelegramBotRouter(
                     bookingId = updatedBooking.id,
                     event = BookingStaffNotificationEvent.UPDATED,
                     status = updatedBooking.status,
+                    scheduledAt = updatedBooking.scheduledAt,
                     scheduledAtText = staffVisitText,
                     partySize = partySize,
                     comment = draft.comment,
@@ -3609,7 +3623,14 @@ class TelegramBotRouter(
         enqueueMessage(
             chatId,
             "✅ Бронь создана\n" +
-                "${formatBookingDisplayLabel(createdBooking)}\n\n" +
+                "${
+                    formatBookingDisplayLabel(
+                        bookingId = createdBooking.id,
+                        displayNumber = createdBooking.displayNumber,
+                        scheduledAt = createdBooking.scheduledAt,
+                        venueZoneId = venueZoneId,
+                    )
+                }\n\n" +
                 "Кальянная: ${venue.name}\n" +
                 "$guestVisitText\n" +
                 "Гостей: ${draft.guestsLabel}\n" +
@@ -3622,6 +3643,7 @@ class TelegramBotRouter(
                 bookingId = createdBooking.id,
                 event = BookingStaffNotificationEvent.CREATED,
                 status = createdBooking.status,
+                scheduledAt = createdBooking.scheduledAt,
                 scheduledAtText = staffVisitText,
                 partySize = partySize,
                 comment = draft.comment,
@@ -4560,7 +4582,7 @@ class TelegramBotRouter(
             offset = 0,
             prompt =
                 "Выберите новую дату для " +
-                    "${formatBookingDisplayLabel(booking).replaceFirstChar { it.lowercase(Locale.ROOT) }}.",
+                    "${formatBookingDisplayLabelWithTime(booking).replaceFirstChar { it.lowercase(Locale.ROOT) }}.",
         )
     }
 
@@ -4594,13 +4616,14 @@ class TelegramBotRouter(
         if (editing?.bookingId == bookingId) {
             botBookingEditContexts.remove(chatId)
         }
-        enqueueMessage(chatId, "✅ ${formatBookingDisplayLabel(canceled)} отменена.")
+        enqueueMessage(chatId, "✅ ${formatBookingDisplayLabelWithTime(canceled)} отменена.")
         notifyStaffChatAboutBooking(
             BookingStaffNotification(
                 venueId = canceled.venueId,
                 bookingId = canceled.id,
                 event = BookingStaffNotificationEvent.CANCELLED,
                 status = canceled.status,
+                scheduledAt = canceled.scheduledAt,
                 scheduledAtText =
                     formatBookingInstantForStaff(
                         canceled.scheduledAt,
@@ -4820,7 +4843,15 @@ class TelegramBotRouter(
             chatId = chatId,
             callbackQueryId = callbackQueryId,
             text = "Бронь подтверждена",
-            fallbackMessage = "✅ ${formatBookingDisplayLabel(displayBooking)} подтверждена.",
+            fallbackMessage =
+                "✅ ${
+                    formatBookingDisplayLabel(
+                        bookingId = displayBooking.id,
+                        displayNumber = displayBooking.displayNumber,
+                        scheduledAt = displayBooking.scheduledAt,
+                        venueZoneId = zoneId,
+                    )
+                } подтверждена.",
         )
     }
 
@@ -4904,7 +4935,8 @@ class TelegramBotRouter(
         }
         enqueueMessage(
             targetChatId,
-            "Напишите сообщение гостю по ${formatBookingDisplayLabel(booking)}. Контакты не будут раскрыты.\n" +
+            "Напишите сообщение гостю по ${formatBookingDisplayLabelWithTime(booking)}. " +
+                "Контакты не будут раскрыты.\n" +
                 "Отправьте /cancel, чтобы отменить.",
         )
         val callbackText =
@@ -5076,7 +5108,7 @@ class TelegramBotRouter(
             )
             enqueueMessage(
                 targetChatId,
-                "Напишите причину отмены для ${formatBookingDisplayLabel(booking)}. " +
+                "Напишите причину отмены для ${formatBookingDisplayLabelWithTime(booking)}. " +
                     "Отправьте /cancel, чтобы отменить.",
             )
             answerBookingCallbackOrMessage(
@@ -5185,7 +5217,7 @@ class TelegramBotRouter(
     ) {
         val text =
             buildString {
-                append("Отменить ${formatBookingDisplayLabel(booking)}?")
+                append("Отменить ${formatBookingDisplayLabelWithTime(booking)}?")
                 append("\nГость: ${formatGuestDisplayNameForStaff(booking.guestDisplayName)}")
                 append("\nПричина: ").append(reasonText)
             }
@@ -5325,10 +5357,11 @@ class TelegramBotRouter(
             return
         }
         val actorDisplay = formatStaffChatActionActor(user)
+        val bookingLabel = formatBookingDisplayLabelWithTime(booking)
         venueBookingCancelReasonDrafts.remove(chatId)
         enqueueMessage(
             booking.userId,
-            "❌ ${formatBookingDisplayLabel(booking)} отменена заведением.\nПричина: $reasonText",
+            "❌ $bookingLabel отменена заведением.\nПричина: $reasonText",
         )
         notifyStaffChatAboutBooking(
             BookingStaffNotification(
@@ -5336,6 +5369,7 @@ class TelegramBotRouter(
                 bookingId = booking.id,
                 event = BookingStaffNotificationEvent.VENUE_CANCELLED,
                 status = booking.status,
+                scheduledAt = booking.scheduledAt,
                 scheduledAtText =
                     formatBookingInstantForStaff(
                         booking.scheduledAt,
@@ -5371,7 +5405,7 @@ class TelegramBotRouter(
             chatId = chatId,
             callbackQueryId = callbackQueryId,
             text = "Бронь отменена",
-            fallbackMessage = "✅ ${formatBookingDisplayLabel(booking)} отменена.",
+            fallbackMessage = "✅ $bookingLabel отменена.",
         )
     }
 
@@ -5456,13 +5490,14 @@ class TelegramBotRouter(
             )
             return
         }
+        val bookingLabel = formatBookingDisplayLabelWithTime(booking)
         val text =
             when (status) {
                 BookingStatus.SEATED ->
-                    "${formatBookingDisplayLabel(booking)}: гость пришёл\n\n" +
+                    "$bookingLabel: гость пришёл\n\n" +
                         buildVenueStaffBookingText(booking, zoneId = resolveVenueZoneId(venueId))
                 BookingStatus.NO_SHOW ->
-                    "${formatBookingDisplayLabel(booking)}: гость не пришёл\n\n" +
+                    "$bookingLabel: гость не пришёл\n\n" +
                         buildVenueStaffBookingText(booking, zoneId = resolveVenueZoneId(venueId))
                 else -> buildVenueStaffBookingText(booking, zoneId = resolveVenueZoneId(venueId))
             }
@@ -5630,6 +5665,7 @@ class TelegramBotRouter(
             enqueueMessage(chatId, "Бронь не найдена.")
             return
         }
+        val bookingLabel = formatBookingDisplayLabelWithTime(booking)
         val venueName =
             runCatching { venueRepository.findVenueById(venueId)?.name }
                 .getOrNull()
@@ -5649,7 +5685,7 @@ class TelegramBotRouter(
                     source = SupportMessageSource.STAFF_CHAT,
                     text = messageText,
                     telegramMessageId = telegramMessageId,
-                    title = formatBookingDisplayLabel(booking),
+                    title = bookingLabel,
                     expectedVenueId = venueId,
                 )
             } catch (e: DatabaseUnavailableException) {
@@ -5663,7 +5699,7 @@ class TelegramBotRouter(
         }
         enqueueMessage(
             booking.userId,
-            "Сообщение по вашей ${formatBookingDisplayLabelGenitive(booking)} в «$venueName»:\n\n${write.message.text}",
+            "Сообщение от заведения по брони:\n$bookingLabel\nЗаведение: «$venueName»\n\n${write.message.text}",
             TelegramKeyboards.inlineGuestBookingReplyActions(booking.venueId, booking.id),
             dedupeKey = "booking-thread-message:${write.message.id}:guest-notification",
         )
@@ -5732,7 +5768,7 @@ class TelegramBotRouter(
         )
         enqueueMessage(
             chatId,
-            "Напишите ответ по ${formatBookingDisplayLabel(booking)}. " +
+            "Напишите ответ по ${formatBookingDisplayLabelWithTime(booking)}. " +
                 "Мы отправим его заведению без раскрытия контактов.\n" +
                 "Отправьте /cancel, чтобы отменить.",
         )
@@ -5790,6 +5826,7 @@ class TelegramBotRouter(
             enqueueMessage(chatId, "Бронь не найдена или уже неактуальна.")
             return
         }
+        val bookingLabel = formatBookingDisplayLabelWithTime(booking)
         val repository = supportThreadRepository
         if (repository == null) {
             enqueueMessage(chatId, "Переписка временно недоступна. Попробуйте позже.")
@@ -5804,8 +5841,15 @@ class TelegramBotRouter(
                     source = SupportMessageSource.GUEST_BOT,
                     text = replyText,
                     telegramMessageId = telegramMessageId,
-                    title = formatBookingDisplayLabel(booking),
+                    title = bookingLabel,
                     expectedGuestUserId = userId,
+                    guestBotNotificationWriter = { connection, committedWrite ->
+                        bookingMessageStaffChatNotifier.enqueueGuestMessageAlertInTransaction(
+                            connection = connection,
+                            thread = committedWrite.thread,
+                            messageId = committedWrite.message.id,
+                        )
+                    },
                 )
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
@@ -6165,15 +6209,20 @@ class TelegramBotRouter(
         venueName: String,
         zoneId: ZoneId,
     ): String {
-        val visitText = LocalDateTime.ofInstant(booking.scheduledAt, zoneId).format(bookingReminderDateTimeFormatter)
         val deadlineText =
             booking.arrivalDeadlineAt
                 ?.let { LocalDateTime.ofInstant(it, zoneId).format(bookingTimeFormatter) }
         return buildString {
             append("Напоминаем о брони")
             append("\n\nМесто: ").append(venueName)
-            append('\n').append(formatBookingDisplayLabel(booking))
-            append("\nДата и время: ").append(visitText)
+            append('\n').append(
+                formatBookingDisplayLabel(
+                    bookingId = booking.id,
+                    displayNumber = booking.displayNumber,
+                    scheduledAt = booking.scheduledAt,
+                    venueZoneId = zoneId,
+                ),
+            )
             append("\nГостей: ").append(booking.partySize ?: "не указано")
             deadlineText?.let { append("\nДержим стол до ").append(it).append('.') }
             append("\n\n✅ Вы подтвердили, что придёте.")
@@ -6215,7 +6264,7 @@ class TelegramBotRouter(
             offset = 0,
             prompt =
                 "Выберите новую дату для " +
-                    "${formatBookingDisplayLabel(booking).replaceFirstChar { it.lowercase(Locale.ROOT) }}.",
+                    "${formatBookingDisplayLabelWithTime(booking).replaceFirstChar { it.lowercase(Locale.ROOT) }}.",
         )
         answerBookingCallbackOrMessage(
             chatId = chatId,
@@ -6233,7 +6282,7 @@ class TelegramBotRouter(
         data: String,
     ) {
         val booking = loadActiveGuestBookingFromReminder(chatId, callbackQueryId, user.id, data, "br_cancel:") ?: return
-        val text = "Отменить ${formatBookingDisplayLabel(booking)}?"
+        val text = "Отменить ${formatBookingDisplayLabelWithTime(booking)}?"
         val replyMarkup = TelegramKeyboards.inlineBookingReminderCancelConfirm(booking.id)
         if (sourceMessageId != null) {
             enqueueEditMessage(chatId, sourceMessageId, text, replyMarkup)
@@ -6289,13 +6338,15 @@ class TelegramBotRouter(
             )
             return
         }
-        enqueueMessage(chatId, "✅ ${formatBookingDisplayLabel(canceled)} отменена.")
+        val bookingLabel = formatBookingDisplayLabelWithTime(canceled)
+        enqueueMessage(chatId, "✅ $bookingLabel отменена.")
         notifyStaffChatAboutBooking(
             BookingStaffNotification(
                 venueId = canceled.venueId,
                 bookingId = canceled.id,
                 event = BookingStaffNotificationEvent.CANCELLED,
                 status = canceled.status,
+                scheduledAt = canceled.scheduledAt,
                 scheduledAtText =
                     formatBookingInstantForStaff(
                         canceled.scheduledAt,
@@ -6311,7 +6362,7 @@ class TelegramBotRouter(
             chatId = chatId,
             callbackQueryId = callbackQueryId,
             text = "Бронь отменена",
-            fallbackMessage = "✅ ${formatBookingDisplayLabel(canceled)} отменена.",
+            fallbackMessage = "✅ $bookingLabel отменена.",
         )
     }
 
@@ -6335,7 +6386,7 @@ class TelegramBotRouter(
         )
         enqueueMessage(
             chatId,
-            "Напишите сообщение заведению по ${formatBookingDisplayLabel(booking)}. " +
+            "Напишите сообщение заведению по ${formatBookingDisplayLabelWithTime(booking)}. " +
                 "Мы отправим его без раскрытия контактов.\n" +
                 "Отправьте /cancel, чтобы отменить.",
         )
@@ -7108,18 +7159,15 @@ class TelegramBotRouter(
             DayOfWeek.SUNDAY -> "воскресенье"
         }
 
-    private fun formatBookingDisplayLabel(
+    private suspend fun formatBookingDisplayLabelWithTime(
         booking: com.hookah.platform.backend.miniapp.guest.db.BookingRecord,
-    ): String = formatBookingDisplayLabel(booking.id, booking.displayNumber)
-
-    private fun formatBookingDisplayLabel(
-        bookingId: Long,
-        displayNumber: Int?,
-    ): String = displayNumber?.let { "Бронь №$it" } ?: "Бронь"
-
-    private fun formatBookingDisplayLabelGenitive(
-        booking: com.hookah.platform.backend.miniapp.guest.db.BookingRecord,
-    ): String = booking.displayNumber?.let { "брони №$it" } ?: "брони"
+    ): String =
+        formatBookingDisplayLabel(
+            bookingId = booking.id,
+            displayNumber = booking.displayNumber,
+            scheduledAt = booking.scheduledAt,
+            venueZoneId = resolveVenueZoneId(booking.venueId),
+        )
 
     private fun formatGuestDisplayNameForStaff(value: String?): String =
         value?.trim()?.takeIf { it.isNotBlank() } ?: "Гость"
@@ -7146,10 +7194,17 @@ class TelegramBotRouter(
 
     private fun buildMyBookingText(
         booking: com.hookah.platform.backend.miniapp.guest.db.UserBookingSummaryRecord,
-        zoneId: ZoneId = ZoneId.systemDefault(),
+        zoneId: ZoneId,
     ): String =
         buildString {
-            append(formatBookingDisplayLabel(booking.id, booking.displayNumber))
+            append(
+                formatBookingDisplayLabel(
+                    bookingId = booking.id,
+                    displayNumber = booking.displayNumber,
+                    scheduledAt = booking.scheduledAt,
+                    venueZoneId = zoneId,
+                ),
+            )
             append("\nКальянная: ${booking.venueName}")
             append("\nИмя для персонала: ${formatGuestDisplayNameForGuest(booking.guestDisplayName)}")
             append('\n').append(formatGuestBookingVisitText(booking, zoneId))
@@ -7218,7 +7273,16 @@ class TelegramBotRouter(
             booking.arrivalDeadlineAt
                 ?.let { LocalDateTime.ofInstant(it, zoneId).format(bookingTimeFormatter) }
         return buildString {
-            append("✅ ${formatBookingDisplayLabel(booking)} подтверждена заведением.")
+            append(
+                "✅ ${
+                    formatBookingDisplayLabel(
+                        bookingId = booking.id,
+                        displayNumber = booking.displayNumber,
+                        scheduledAt = booking.scheduledAt,
+                        venueZoneId = zoneId,
+                    )
+                } подтверждена заведением.",
+            )
             append('\n').append(formatGuestBookingVisitText(booking, zoneId))
             deadlineText?.let { deadline ->
                 append("\nМы держим бронь до $deadline.")
@@ -25744,28 +25808,22 @@ class TelegramBotRouter(
             else -> "Не указана"
         }
 
-    private fun buildVenueStaffBookingsText(
-        bookings: List<com.hookah.platform.backend.miniapp.guest.db.BookingRecord>,
-    ): String =
-        buildString {
-            append("📄 Брони")
-            append("\n\n")
-            bookings.forEach { booking ->
-                append("• ")
-                append(buildVenueStaffBookingText(booking).replace("\n", "\n  "))
-                append("\n")
-            }
-        }.trimEnd()
-
     private fun buildVenueStaffBookingText(
         booking: com.hookah.platform.backend.miniapp.guest.db.BookingRecord,
         cancellationActorDisplay: String? = null,
-        zoneId: ZoneId = ZoneId.systemDefault(),
+        zoneId: ZoneId,
     ): String {
         val serviceDate = booking.displayDate ?: LocalDateTime.ofInstant(booking.scheduledAt, zoneId).toLocalDate()
         val actualDate = LocalDateTime.ofInstant(booking.scheduledAt, zoneId).toLocalDate()
         return buildString {
-            append(formatBookingDisplayLabel(booking))
+            append(
+                formatBookingDisplayLabel(
+                    bookingId = booking.id,
+                    displayNumber = booking.displayNumber,
+                    scheduledAt = booking.scheduledAt,
+                    venueZoneId = zoneId,
+                ),
+            )
             append("\nГость: ${formatGuestDisplayNameForStaff(booking.guestDisplayName)}")
             append("\nСмена: ${formatWeekdayFull(serviceDate.dayOfWeek)}")
             append("\nВизит: ${formatStaffBookingVisitText(serviceDate, booking.scheduledAt, zoneId)}")
