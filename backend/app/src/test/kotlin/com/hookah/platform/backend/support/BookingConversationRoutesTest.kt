@@ -572,6 +572,14 @@ class BookingConversationRoutesTest {
                     setBody(bookingMessageBody("  same normalized text  ", clientMessageId))
                 }
             assertEquals(HttpStatusCode.OK, first.status)
+            assertEquals(
+                "true",
+                json.parseToJsonElement(first.bodyAsText())
+                    .jsonObject
+                    .getValue("queued")
+                    .jsonPrimitive
+                    .content,
+            )
             val firstMessageId = responseMessageId(first)
             val guestAck =
                 bookingMessageOutbox(
@@ -598,6 +606,14 @@ class BookingConversationRoutesTest {
                     setBody(bookingMessageBody("same normalized text", clientMessageId))
                 }
             assertEquals(HttpStatusCode.OK, replay.status)
+            assertEquals(
+                "true",
+                json.parseToJsonElement(replay.bodyAsText())
+                    .jsonObject
+                    .getValue("queued")
+                    .jsonPrimitive
+                    .content,
+            )
             assertEquals(firstMessageId, responseMessageId(replay))
             assertEquals(stateAfterFirst, threadState(jdbcUrl, threadId))
             assertEquals(readsAfterFirst, tableCount(jdbcUrl, "support_thread_reads"))
@@ -657,6 +673,108 @@ class BookingConversationRoutesTest {
             assertEquals(1, messageRows(jdbcUrl, threadId).size)
             assertEquals(outboxBefore + 1, tableCount(jdbcUrl, "telegram_outbox"))
         }
+
+    @Test
+    fun `venue booking reply denied by traffic policy is atomic and the same key retries after allow`() {
+        val jdbcUrl = buildJdbcUrl("booking-message-traffic-policy")
+        val initiallyAllowedConfig = buildAllowlistConfig(jdbcUrl, GUEST_A, MANAGER_A)
+        var venueId = 0L
+        var bookingId = 0L
+        var threadId = 0L
+
+        testApplication {
+            environment { config = initiallyAllowedConfig }
+            application { module() }
+            client.get("/health")
+
+            venueId = seedVenue(jdbcUrl, "Booking Traffic Policy Venue")
+            seedUsers(jdbcUrl, GUEST_A, MANAGER_A)
+            seedVenueMember(jdbcUrl, venueId, MANAGER_A, "MANAGER")
+            val guestToken = issueToken(initiallyAllowedConfig, GUEST_A)
+            bookingId = createBooking(guestToken, venueId, "2030-01-10T18:30:00Z")
+            threadId = threadId(openBookingThread(guestToken, bookingId))
+        }
+
+        val clientMessageId = UUID.randomUUID().toString()
+        val stateBefore = threadState(jdbcUrl, threadId)
+        val readsBefore = tableCount(jdbcUrl, "support_thread_reads")
+        val outboxBefore = tableCount(jdbcUrl, "telegram_outbox")
+        val auditBefore = tableCount(jdbcUrl, "audit_log")
+        val deniedConfig = buildAllowlistConfig(jdbcUrl, MANAGER_A)
+
+        testApplication {
+            environment { config = deniedConfig }
+            application { module() }
+
+            val response =
+                client.post("/api/venue/$venueId/support/threads/$threadId/messages") {
+                    authorizedJson(issueToken(deniedConfig, MANAGER_A))
+                    setBody(bookingMessageBody("Retry after allowlist correction", clientMessageId))
+                }
+
+            assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
+            val body = response.bodyAsText()
+            val errorCode =
+                json.parseToJsonElement(body)
+                    .jsonObject
+                    .getValue("error")
+                    .jsonObject
+                    .getValue("code")
+                    .jsonPrimitive
+                    .content
+            assertEquals(ApiErrorCodes.CONFIG_ERROR, errorCode)
+            assertFalse(body.contains("ALLOWLIST", ignoreCase = true))
+            assertFalse(body.contains(GUEST_A.toString()))
+            assertFalse(body.contains(MANAGER_A.toString()))
+        }
+
+        assertEquals(stateBefore, threadState(jdbcUrl, threadId))
+        assertTrue(messageRows(jdbcUrl, threadId).isEmpty())
+        assertEquals(readsBefore, tableCount(jdbcUrl, "support_thread_reads"))
+        assertEquals(outboxBefore, tableCount(jdbcUrl, "telegram_outbox"))
+        assertEquals(auditBefore, tableCount(jdbcUrl, "audit_log"))
+
+        testApplication {
+            environment { config = initiallyAllowedConfig }
+            application { module() }
+            val managerToken = issueToken(initiallyAllowedConfig, MANAGER_A)
+
+            val committed =
+                client.post("/api/venue/$venueId/support/threads/$threadId/messages") {
+                    authorizedJson(managerToken)
+                    setBody(bookingMessageBody("Retry after allowlist correction", clientMessageId))
+                }
+            val replay =
+                client.post("/api/venue/$venueId/support/threads/$threadId/messages") {
+                    authorizedJson(managerToken)
+                    setBody(bookingMessageBody("Retry after allowlist correction", clientMessageId))
+                }
+
+            assertEquals(HttpStatusCode.OK, committed.status)
+            assertEquals(HttpStatusCode.OK, replay.status)
+            assertEquals(
+                "true",
+                json.parseToJsonElement(committed.bodyAsText())
+                    .jsonObject
+                    .getValue("queued")
+                    .jsonPrimitive
+                    .content,
+            )
+            assertEquals(
+                "true",
+                json.parseToJsonElement(replay.bodyAsText())
+                    .jsonObject
+                    .getValue("queued")
+                    .jsonPrimitive
+                    .content,
+            )
+            assertEquals(responseMessageId(committed), responseMessageId(replay))
+        }
+
+        assertEquals(listOf(MessageRow("VENUE", "Retry after allowlist correction")), messageRows(jdbcUrl, threadId))
+        assertEquals(outboxBefore + 1, tableCount(jdbcUrl, "telegram_outbox"))
+        assertEquals(auditBefore, tableCount(jdbcUrl, "audit_log"))
+    }
 
     private suspend fun ApplicationTestBuilder.createBooking(
         token: String,
@@ -810,6 +928,30 @@ class BookingConversationRoutesTest {
             "billing.subscription.intervalSeconds" to "0",
             "venue.staffInviteSecretPepper" to "invite-pepper",
         )
+
+    private fun buildAllowlistConfig(
+        jdbcUrl: String,
+        vararg allowedIds: Long,
+    ): MapApplicationConfig {
+        val ids = allowedIds.toSet().sorted().joinToString(",")
+        return MapApplicationConfig(
+            "ktor.environment" to "test",
+            "app.env" to "test",
+            "db.jdbcUrl" to jdbcUrl,
+            "db.user" to "sa",
+            "db.password" to "",
+            "api.session.jwtSecret" to "secret-secret-secret-secret-secret",
+            "api.session.issuer" to "hookah",
+            "api.session.audience" to "miniapp",
+            "api.session.ttlSeconds" to "3600",
+            "platform.ownerUserId" to PLATFORM_OWNER.toString(),
+            "billing.subscription.intervalSeconds" to "0",
+            "venue.staffInviteSecretPepper" to "invite-pepper",
+            "telegram.trafficPolicy" to "ALLOWLIST",
+            "telegram.allowedUserIds" to ids,
+            "telegram.allowedChatIds" to ids,
+        )
+    }
 
     private fun issueToken(
         config: MapApplicationConfig,

@@ -1,9 +1,17 @@
 package com.hookah.platform.backend.telegram
 
+import ch.qos.logback.classic.Logger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
+import com.hookah.platform.backend.metrics.AppMetrics
+import com.hookah.platform.backend.telegram.db.StaffChatNotificationClaim
 import com.hookah.platform.backend.telegram.db.StaffChatNotificationRepository
 import com.hookah.platform.backend.telegram.db.TelegramOutboxRepository
 import com.hookah.platform.backend.telegram.db.TelegramOutboxStatus
 import com.hookah.platform.backend.test.PostgresTestEnv
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.mock.MockEngine
+import io.ktor.server.config.MapApplicationConfig
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
@@ -17,23 +25,182 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.jupiter.api.Test
+import org.slf4j.LoggerFactory
 import java.sql.Connection
 import java.sql.DriverManager
 import java.sql.Timestamp
 import java.time.Instant
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class TelegramOutboxWorkerTest {
+    private val trafficPolicy = TelegramTrafficPolicy.unrestricted()
+
+    @Test
+    fun `zero chat callback row is never claimed in unrestricted mode`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            val dataSource = PostgresTestEnv.createDataSource(database)
+            val repository = TelegramOutboxRepository(dataSource, trafficPolicy)
+            DriverManager.getConnection(database.jdbcUrl, database.user, database.password).use { connection ->
+                connection.prepareStatement(
+                    """
+                    INSERT INTO telegram_outbox (
+                        chat_id, method, payload_json, status, attempts, last_error, created_at
+                    ) VALUES (
+                        0, 'answerCallbackQuery', '{"callback_query_id":"historic"}',
+                        'NEW', 0, 'preserve-zero', TIMESTAMPTZ '2025-01-01 00:00:00Z'
+                    )
+                    """.trimIndent(),
+                ).use { it.executeUpdate() }
+            }
+            val before = outboxSnapshots(database.jdbcUrl, database.user, database.password, setOf(0L))
+
+            val claimed =
+                repository.claimBatch(
+                    limit = 10,
+                    now = Instant.parse("2030-01-01T00:00:00Z"),
+                    visibilityTimeout = java.time.Duration.ofMinutes(2),
+                )
+
+            assertEquals(emptyList(), claimed)
+            assertEquals(before, outboxSnapshots(database.jdbcUrl, database.user, database.password, setOf(0L)))
+            dataSource.close()
+        }
+
+    @Test
+    fun `claim skips disallowed rows without mutation and does not starve allowed rows`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            val dataSource = PostgresTestEnv.createDataSource(database)
+            val restrictedPolicy =
+                TelegramTrafficPolicy.from(
+                    MapApplicationConfig(
+                        "telegram.trafficPolicy" to "ALLOWLIST",
+                        "telegram.allowedUserIds" to "123",
+                        "telegram.allowedChatIds" to "123",
+                    ),
+                    appEnv = "staging",
+                )
+            val repository = TelegramOutboxRepository(dataSource, restrictedPolicy)
+            val json = Json { ignoreUnknownKeys = true }
+            val outboxEnqueuer = TelegramOutboxEnqueuer(repository, json, restrictedPolicy)
+            val apiClient: TelegramApiClient = mockk(relaxed = true)
+            val fixedNow = Instant.parse("2030-01-01T00:00:00Z")
+            val worker =
+                TelegramOutboxWorker(
+                    repository = repository,
+                    apiClientProvider = { apiClient },
+                    json = json,
+                    rateLimiter = TelegramRateLimiter { },
+                    config = TelegramOutboxConfig(batchSize = 10, maxConcurrency = 1),
+                    scope = CoroutineScope(Dispatchers.IO),
+                    nowProvider = { fixedNow },
+                )
+
+            DriverManager.getConnection(database.jdbcUrl, database.user, database.password).use { connection ->
+                connection.prepareStatement(
+                    """
+                    INSERT INTO telegram_outbox (
+                        chat_id, method, payload_json, status, attempts, last_error,
+                        created_at, processed_at, next_attempt_at
+                    )
+                    VALUES
+                        (999, 'sendMessage', '{"chat_id":999,"text":"blocked-new"}',
+                         'NEW', 2, 'preserve-new', TIMESTAMPTZ '2025-01-01 00:00:00Z', NULL, NULL),
+                        (888, 'sendMessage', '{"chat_id":888,"text":"blocked-sending"}',
+                         'SENDING', 4, 'preserve-sending', TIMESTAMPTZ '2025-01-02 00:00:00Z',
+                         TIMESTAMPTZ '2025-01-03 00:00:00Z', TIMESTAMPTZ '2025-01-04 00:00:00Z')
+                    """.trimIndent(),
+                ).use { it.executeUpdate() }
+            }
+            val before = outboxSnapshots(database.jdbcUrl, database.user, database.password, setOf(888L, 999L))
+
+            assertEquals(
+                TelegramOutboxEnqueueOutcome.ENQUEUED,
+                outboxEnqueuer.enqueueSendMessage(123L, "allowed"),
+            )
+            coEvery { apiClient.dispatchOutbox(123L, "sendMessage", any()) } returns
+                TelegramCallResult.Success(JsonNull)
+
+            worker.processOnce()
+
+            val after = outboxSnapshots(database.jdbcUrl, database.user, database.password, setOf(888L, 999L))
+            assertEquals(before, after)
+            coVerify(exactly = 1) { apiClient.dispatchOutbox(123L, "sendMessage", any()) }
+            DriverManager.getConnection(database.jdbcUrl, database.user, database.password).use { connection ->
+                connection.prepareStatement("SELECT status FROM telegram_outbox WHERE chat_id = 123").use { statement ->
+                    statement.executeQuery().use { resultSet ->
+                        assertEquals(true, resultSet.next())
+                        assertEquals(TelegramOutboxStatus.SENT.name, resultSet.getString("status"))
+                    }
+                }
+            }
+
+            dataSource.close()
+        }
+
+    @Test
+    fun `disallowed producers create no outbox or staff notification state`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            val dataSource = PostgresTestEnv.createDataSource(database)
+            val restrictedPolicy =
+                TelegramTrafficPolicy.from(
+                    MapApplicationConfig(
+                        "telegram.trafficPolicy" to "ALLOWLIST",
+                        "telegram.allowedUserIds" to "123",
+                        "telegram.allowedChatIds" to "123",
+                    ),
+                    appEnv = "staging",
+                )
+            val repository = TelegramOutboxRepository(dataSource, restrictedPolicy)
+            val enqueuer =
+                TelegramOutboxEnqueuer(repository, Json { ignoreUnknownKeys = true }, restrictedPolicy)
+            val staffRepository = StaffChatNotificationRepository(dataSource, restrictedPolicy)
+
+            assertEquals(
+                TelegramOutboxEnqueueOutcome.SKIPPED_TRAFFIC_POLICY,
+                enqueuer.enqueueSendMessage(999L, "blocked"),
+            )
+            val claim =
+                staffRepository.tryClaimAndEnqueue(
+                    notificationKey = 77L,
+                    chatId = -100999L,
+                    method = "sendMessage",
+                    payloadJson = """{"chat_id":-100999,"text":"blocked"}""",
+                )
+
+            assertEquals(StaffChatNotificationClaim.SKIPPED_TRAFFIC_POLICY, claim)
+            DriverManager.getConnection(database.jdbcUrl, database.user, database.password).use { connection ->
+                connection.prepareStatement("SELECT COUNT(*) FROM telegram_outbox").use { statement ->
+                    statement.executeQuery().use { resultSet ->
+                        assertEquals(true, resultSet.next())
+                        assertEquals(0L, resultSet.getLong(1))
+                    }
+                }
+                connection.prepareStatement("SELECT COUNT(*) FROM telegram_staff_chat_notifications").use { statement ->
+                    statement.executeQuery().use { resultSet ->
+                        assertEquals(true, resultSet.next())
+                        assertEquals(0L, resultSet.getLong(1))
+                    }
+                }
+            }
+
+            dataSource.close()
+        }
+
     @Test
     fun `worker sends queued message`() =
         runBlocking {
             val database = PostgresTestEnv.createDatabase()
             val dataSource = PostgresTestEnv.createDataSource(database)
-            val repository = TelegramOutboxRepository(dataSource)
+            val repository = TelegramOutboxRepository(dataSource, trafficPolicy)
             val json = Json { ignoreUnknownKeys = true }
-            val outboxEnqueuer = TelegramOutboxEnqueuer(repository, json)
+            val outboxEnqueuer = TelegramOutboxEnqueuer(repository, json, trafficPolicy)
             val apiClient: TelegramApiClient = mockk(relaxed = true)
             val rateLimiter = TelegramRateLimiter { }
             val config = TelegramOutboxConfig(batchSize = 1, maxConcurrency = 1)
@@ -48,12 +215,12 @@ class TelegramOutboxWorkerTest {
                 )
 
             outboxEnqueuer.enqueueSendMessage(123L, "hello")
-            coEvery { apiClient.callMethod("sendMessage", any()) } returns
+            coEvery { apiClient.dispatchOutbox(123L, "sendMessage", any()) } returns
                 TelegramCallResult.Success(JsonNull)
 
             worker.processOnce()
 
-            coVerify(exactly = 1) { apiClient.callMethod("sendMessage", any()) }
+            coVerify(exactly = 1) { apiClient.dispatchOutbox(123L, "sendMessage", any()) }
 
             DriverManager.getConnection(database.jdbcUrl, database.user, database.password).use { connection ->
                 connection.prepareStatement(
@@ -74,9 +241,9 @@ class TelegramOutboxWorkerTest {
         runBlocking {
             val database = PostgresTestEnv.createDatabase()
             val dataSource = PostgresTestEnv.createDataSource(database)
-            val repository = TelegramOutboxRepository(dataSource)
+            val repository = TelegramOutboxRepository(dataSource, trafficPolicy)
             val json = Json { ignoreUnknownKeys = true }
-            val outboxEnqueuer = TelegramOutboxEnqueuer(repository, json)
+            val outboxEnqueuer = TelegramOutboxEnqueuer(repository, json, trafficPolicy)
 
             outboxEnqueuer.enqueueSendMessage(123L, "hello", dedupeKey = "booking-reminder:77")
             outboxEnqueuer.enqueueSendMessage(123L, "hello", dedupeKey = "booking-reminder:77")
@@ -100,8 +267,9 @@ class TelegramOutboxWorkerTest {
         runBlocking {
             val database = PostgresTestEnv.createDatabase()
             val dataSource = PostgresTestEnv.createDataSource(database)
-            val repository = TelegramOutboxRepository(dataSource)
-            val outboxEnqueuer = TelegramOutboxEnqueuer(repository, Json { ignoreUnknownKeys = true })
+            val repository = TelegramOutboxRepository(dataSource, trafficPolicy)
+            val outboxEnqueuer =
+                TelegramOutboxEnqueuer(repository, Json { ignoreUnknownKeys = true }, trafficPolicy)
 
             outboxEnqueuer.enqueueSendMessage(123L, "original reminder", dedupeKey = "booking-reminder:78")
             outboxEnqueuer.enqueueSendMessage(456L, "regenerated reminder", dedupeKey = "booking-reminder:78")
@@ -127,9 +295,9 @@ class TelegramOutboxWorkerTest {
         runBlocking {
             val database = PostgresTestEnv.createDatabase()
             val dataSource = PostgresTestEnv.createDataSource(database)
-            val repository = TelegramOutboxRepository(dataSource)
+            val repository = TelegramOutboxRepository(dataSource, trafficPolicy)
             val json = Json { ignoreUnknownKeys = true }
-            val outboxEnqueuer = TelegramOutboxEnqueuer(repository, json)
+            val outboxEnqueuer = TelegramOutboxEnqueuer(repository, json, trafficPolicy)
             val apiClient: TelegramApiClient = mockk(relaxed = true)
             val rateLimiter = TelegramRateLimiter { }
             val fixedNow = Instant.parse("2024-02-10T12:00:00Z")
@@ -146,7 +314,7 @@ class TelegramOutboxWorkerTest {
                 )
 
             outboxEnqueuer.enqueueSendMessage(999L, "hello")
-            coEvery { apiClient.callMethod("sendMessage", any()) } returns
+            coEvery { apiClient.dispatchOutbox(999L, "sendMessage", any()) } returns
                 TelegramCallResult.Failure(
                     errorCode = 429,
                     description = "Too Many Requests",
@@ -177,9 +345,9 @@ class TelegramOutboxWorkerTest {
         runBlocking {
             val database = PostgresTestEnv.createDatabase()
             val dataSource = PostgresTestEnv.createDataSource(database)
-            val repository = TelegramOutboxRepository(dataSource)
+            val repository = TelegramOutboxRepository(dataSource, trafficPolicy)
             val json = Json { ignoreUnknownKeys = true }
-            val outboxEnqueuer = TelegramOutboxEnqueuer(repository, json)
+            val outboxEnqueuer = TelegramOutboxEnqueuer(repository, json, trafficPolicy)
             val apiClient: TelegramApiClient = mockk(relaxed = true)
             val worker =
                 TelegramOutboxWorker(
@@ -192,7 +360,7 @@ class TelegramOutboxWorkerTest {
                 )
 
             outboxEnqueuer.enqueueSendMessage(456L, "hello")
-            coEvery { apiClient.callMethod("sendMessage", any()) } returns
+            coEvery { apiClient.dispatchOutbox(456L, "sendMessage", any()) } returns
                 TelegramCallResult.Failure(
                     errorCode = 403,
                     description = "Forbidden",
@@ -221,9 +389,9 @@ class TelegramOutboxWorkerTest {
         runBlocking {
             val database = PostgresTestEnv.createDatabase()
             val dataSource = PostgresTestEnv.createDataSource(database)
-            val repository = TelegramOutboxRepository(dataSource)
+            val repository = TelegramOutboxRepository(dataSource, trafficPolicy)
             val json = Json { ignoreUnknownKeys = true }
-            val outboxEnqueuer = TelegramOutboxEnqueuer(repository, json)
+            val outboxEnqueuer = TelegramOutboxEnqueuer(repository, json, trafficPolicy)
             val apiClient: TelegramApiClient = mockk(relaxed = true)
             val worker =
                 TelegramOutboxWorker(
@@ -236,7 +404,7 @@ class TelegramOutboxWorkerTest {
                 )
 
             outboxEnqueuer.enqueueAnswerCallbackQuery(321L, "callback-id")
-            coEvery { apiClient.callMethod("answerCallbackQuery", any()) } returns
+            coEvery { apiClient.dispatchOutbox(321L, "answerCallbackQuery", any()) } returns
                 TelegramCallResult.Failure(
                     errorCode = 429,
                     description = "Too Many Requests",
@@ -265,8 +433,8 @@ class TelegramOutboxWorkerTest {
         runBlocking {
             val database = PostgresTestEnv.createDatabase()
             val dataSource = PostgresTestEnv.createDataSource(database)
-            val repository = TelegramOutboxRepository(dataSource)
-            val staffChatRepository = StaffChatNotificationRepository(dataSource)
+            val repository = TelegramOutboxRepository(dataSource, trafficPolicy)
+            val staffChatRepository = StaffChatNotificationRepository(dataSource, trafficPolicy)
             val json = Json { ignoreUnknownKeys = true }
             val apiClient: TelegramApiClient = mockk(relaxed = true)
             val worker =
@@ -294,7 +462,7 @@ class TelegramOutboxWorkerTest {
                 method = "sendMessage",
                 payloadJson = payload,
             )
-            coEvery { apiClient.callMethod("sendMessage", any()) } returns
+            coEvery { apiClient.dispatchOutbox(777L, "sendMessage", any()) } returns
                 TelegramCallResult.Success(messageIdResult(333L))
 
             worker.processOnce()
@@ -319,8 +487,8 @@ class TelegramOutboxWorkerTest {
         runBlocking {
             val database = PostgresTestEnv.createDatabase()
             val dataSource = PostgresTestEnv.createDataSource(database)
-            val repository = TelegramOutboxRepository(dataSource)
-            val staffChatRepository = StaffChatNotificationRepository(dataSource)
+            val repository = TelegramOutboxRepository(dataSource, trafficPolicy)
+            val staffChatRepository = StaffChatNotificationRepository(dataSource, trafficPolicy)
             val json = Json { ignoreUnknownKeys = true }
             val apiClient: TelegramApiClient = mockk(relaxed = true)
             val worker =
@@ -354,13 +522,13 @@ class TelegramOutboxWorkerTest {
                 method = "editMessageText",
                 payloadJson = payload,
             )
-            coEvery { apiClient.callMethod("editMessageText", any()) } returns
+            coEvery { apiClient.dispatchOutbox(777L, "editMessageText", any()) } returns
                 TelegramCallResult.Failure(
                     errorCode = 400,
                     description = "Bad Request: message to edit not found",
                     retryAfterSeconds = null,
                 )
-            coEvery { apiClient.callMethod("sendMessage", any()) } returns
+            coEvery { apiClient.dispatchOutbox(777L, "sendMessage", any()) } returns
                 TelegramCallResult.Success(messageIdResult(444L))
 
             worker.processOnce()
@@ -394,10 +562,307 @@ class TelegramOutboxWorkerTest {
             dataSource.close()
         }
 
+    @Test
+    fun `malformed payload is terminal local validation without transport fallback or metrics`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            val dataSource = PostgresTestEnv.createDataSource(database)
+            val repository = TelegramOutboxRepository(dataSource, trafficPolicy)
+            val staffChatRepository = StaffChatNotificationRepository(dataSource, trafficPolicy)
+            val json = Json { ignoreUnknownKeys = true }
+            var telegramRequestCount = 0
+            val httpClient =
+                HttpClient(
+                    MockEngine {
+                        telegramRequestCount += 1
+                        error("Telegram transport must not be called for a malformed outbox payload")
+                    },
+                )
+            val apiClient = TelegramApiClient(MALFORMED_TOKEN_SENTINEL, httpClient, json, trafficPolicy)
+            val metrics = AppMetrics()
+            val fixedNow = Instant.parse("2030-01-01T00:00:00Z")
+            val appender = ListAppender<ILoggingEvent>().apply { start() }
+            val workerLogger = LoggerFactory.getLogger(TelegramOutboxWorker::class.java) as Logger
+            workerLogger.addAppender(appender)
+            val worker =
+                TelegramOutboxWorker(
+                    repository = repository,
+                    apiClientProvider = { apiClient },
+                    json = json,
+                    rateLimiter = TelegramRateLimiter { },
+                    config = TelegramOutboxConfig(batchSize = 1, maxConcurrency = 1),
+                    scope = CoroutineScope(Dispatchers.IO),
+                    nowProvider = { fixedNow },
+                    metrics = metrics,
+                )
+            val orderId =
+                DriverManager.getConnection(database.jdbcUrl, database.user, database.password).use { connection ->
+                    createLiveOrderFixture(connection)
+                }
+            assertEquals(
+                true,
+                staffChatRepository.enqueueOrderMessage(
+                    orderId = orderId,
+                    venueId = 1L,
+                    chatId = 777L,
+                    method = "editMessageText",
+                    payloadJson = MALFORMED_PAYLOAD_SENTINEL,
+                ),
+            )
+
+            try {
+                worker.processOnce()
+                worker.processOnce()
+
+                assertEquals(0, telegramRequestCount)
+                assertNoOutboundMetrics(metrics)
+                val logs = appender.list.joinToString("\n") { it.formattedMessage }
+                assertTrue(logs.contains("reason_code=MALFORMED_JSON"))
+                assertFalse(logs.contains(MALFORMED_PAYLOAD_SENTINEL))
+                assertFalse(logs.contains(MALFORMED_TOKEN_SENTINEL))
+                assertFalse(logs.contains("777"))
+
+                DriverManager.getConnection(database.jdbcUrl, database.user, database.password).use { connection ->
+                    connection.prepareStatement(
+                        """
+                        SELECT status, attempts, last_error, processed_at, next_attempt_at
+                        FROM telegram_outbox
+                        WHERE method = 'editMessageText'
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.executeQuery().use { resultSet ->
+                            assertTrue(resultSet.next())
+                            assertEquals(TelegramOutboxStatus.FAILED.name, resultSet.getString("status"))
+                            assertEquals(1, resultSet.getInt("attempts"))
+                            assertEquals("Invalid Telegram outbox payload", resultSet.getString("last_error"))
+                            assertEquals(Timestamp.from(fixedNow), resultSet.getTimestamp("processed_at"))
+                            assertNull(resultSet.getTimestamp("next_attempt_at"))
+                            assertFalse(resultSet.next())
+                        }
+                    }
+                    connection.prepareStatement("SELECT COUNT(*) FROM telegram_outbox").use { statement ->
+                        statement.executeQuery().use { resultSet ->
+                            assertTrue(resultSet.next())
+                            assertEquals(1L, resultSet.getLong(1))
+                        }
+                    }
+                    connection.prepareStatement(
+                        "SELECT COUNT(*) FROM telegram_staff_chat_order_outbox_links WHERE order_id = ?",
+                    ).use { statement ->
+                        statement.setLong(1, orderId)
+                        statement.executeQuery().use { resultSet ->
+                            assertTrue(resultSet.next())
+                            assertEquals(1L, resultSet.getLong(1))
+                        }
+                    }
+                }
+            } finally {
+                workerLogger.detachAppender(appender)
+                appender.stop()
+                apiClient.close()
+                dataSource.close()
+            }
+        }
+
+    @Test
+    fun `linked edit with mismatched allowlisted envelope uses no transport retry or fallback state`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            val dataSource = PostgresTestEnv.createDataSource(database)
+            val restrictedPolicy =
+                TelegramTrafficPolicy.from(
+                    MapApplicationConfig(
+                        "telegram.trafficPolicy" to "ALLOWLIST",
+                        "telegram.allowedUserIds" to "777,888",
+                        "telegram.allowedChatIds" to "777,888",
+                    ),
+                    appEnv = "staging",
+                )
+            val repository = TelegramOutboxRepository(dataSource, restrictedPolicy)
+            val staffChatRepository = StaffChatNotificationRepository(dataSource, restrictedPolicy)
+            val json = Json { ignoreUnknownKeys = true }
+            var telegramRequestCount = 0
+            val httpClient =
+                HttpClient(
+                    MockEngine {
+                        telegramRequestCount += 1
+                        error("Telegram transport must not be called for a rejected outbox envelope")
+                    },
+                )
+            val apiClient = TelegramApiClient("test-token", httpClient, json, restrictedPolicy)
+            val metrics = AppMetrics()
+            val fixedNow = Instant.parse("2030-01-01T00:00:00Z")
+            val appender = ListAppender<ILoggingEvent>().apply { start() }
+            val workerLogger = LoggerFactory.getLogger(TelegramOutboxWorker::class.java) as Logger
+            workerLogger.addAppender(appender)
+            val worker =
+                TelegramOutboxWorker(
+                    repository = repository,
+                    apiClientProvider = { apiClient },
+                    json = json,
+                    rateLimiter = TelegramRateLimiter { },
+                    config = TelegramOutboxConfig(batchSize = 1, maxConcurrency = 1),
+                    scope = CoroutineScope(Dispatchers.IO),
+                    nowProvider = { fixedNow },
+                    metrics = metrics,
+                )
+            val orderId =
+                DriverManager.getConnection(database.jdbcUrl, database.user, database.password).use { connection ->
+                    createLiveOrderFixture(connection)
+                }
+            assertEquals(
+                true,
+                staffChatRepository.upsertOrderMessage(
+                    orderId = orderId,
+                    venueId = 1L,
+                    chatId = 777L,
+                    messageId = 111L,
+                ),
+            )
+            val payload =
+                json.encodeToString(
+                    EditMessageTextPayload.serializer(),
+                    EditMessageTextPayload(chatId = 888L, messageId = 111L, text = "must not be delivered"),
+                )
+            assertEquals(
+                true,
+                staffChatRepository.enqueueOrderMessage(
+                    orderId = orderId,
+                    venueId = 1L,
+                    chatId = 777L,
+                    method = "editMessageText",
+                    payloadJson = payload,
+                ),
+            )
+
+            try {
+                worker.processOnce()
+                worker.processOnce()
+
+                assertEquals(0, telegramRequestCount)
+                assertNoOutboundMetrics(metrics)
+                val logs = appender.list.joinToString("\n") { it.formattedMessage }
+                assertTrue(logs.contains("reason_code=INVALID_ENVELOPE"))
+                assertFalse(logs.contains("777"))
+                assertFalse(logs.contains("888"))
+                assertFalse(logs.contains("test-token"))
+                assertFalse(logs.contains("must not be delivered"))
+                DriverManager.getConnection(database.jdbcUrl, database.user, database.password).use { connection ->
+                    connection.prepareStatement(
+                        """
+                        SELECT status, attempts, last_error, processed_at, next_attempt_at
+                        FROM telegram_outbox
+                        WHERE method = 'editMessageText'
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.executeQuery().use { resultSet ->
+                            assertEquals(true, resultSet.next())
+                            assertEquals(TelegramOutboxStatus.FAILED.name, resultSet.getString("status"))
+                            assertEquals(1, resultSet.getInt("attempts"))
+                            assertEquals(
+                                "Telegram outbox envelope rejected locally",
+                                resultSet.getString("last_error"),
+                            )
+                            assertEquals(Timestamp.from(fixedNow), resultSet.getTimestamp("processed_at"))
+                            assertNull(resultSet.getTimestamp("next_attempt_at"))
+                            assertEquals(false, resultSet.next())
+                        }
+                    }
+                    connection.prepareStatement(
+                        "SELECT COUNT(*) FROM telegram_outbox WHERE method = 'sendMessage'",
+                    ).use { statement ->
+                        statement.executeQuery().use { resultSet ->
+                            assertEquals(true, resultSet.next())
+                            assertEquals(0L, resultSet.getLong(1))
+                        }
+                    }
+                    connection.prepareStatement(
+                        "SELECT COUNT(*) FROM telegram_staff_chat_order_outbox_links WHERE order_id = ?",
+                    ).use { statement ->
+                        statement.setLong(1, orderId)
+                        statement.executeQuery().use { resultSet ->
+                            assertEquals(true, resultSet.next())
+                            assertEquals(1L, resultSet.getLong(1))
+                        }
+                    }
+                    connection.prepareStatement(
+                        "SELECT chat_id, message_id FROM telegram_staff_chat_order_messages WHERE order_id = ?",
+                    ).use { statement ->
+                        statement.setLong(1, orderId)
+                        statement.executeQuery().use { resultSet ->
+                            assertEquals(true, resultSet.next())
+                            assertEquals(777L, resultSet.getLong("chat_id"))
+                            assertEquals(111L, resultSet.getLong("message_id"))
+                        }
+                    }
+                }
+            } finally {
+                workerLogger.detachAppender(appender)
+                appender.stop()
+                apiClient.close()
+                dataSource.close()
+            }
+        }
+
     private fun messageIdResult(messageId: Long): JsonObject =
         buildJsonObject {
             put("message_id", messageId)
         }
+
+    private fun assertNoOutboundMetrics(metrics: AppMetrics) {
+        assertEquals(0.0, metrics.registry.get("outbound_send_success_total").counter().count())
+        assertEquals(0.0, metrics.registry.get("outbound_send_failed_total").counter().count())
+        assertEquals(0.0, metrics.registry.get("outbound_429_total").counter().count())
+    }
+
+    private fun outboxSnapshots(
+        jdbcUrl: String,
+        user: String,
+        password: String,
+        chatIds: Set<Long>,
+    ): Map<Long, OutboxSnapshot> =
+        DriverManager.getConnection(jdbcUrl, user, password).use { connection ->
+            val placeholders = chatIds.joinToString(",") { "?" }
+            connection.prepareStatement(
+                """
+                SELECT chat_id, status, attempts, last_error, processed_at, next_attempt_at
+                FROM telegram_outbox
+                WHERE chat_id IN ($placeholders)
+                ORDER BY chat_id
+                """.trimIndent(),
+            ).use { statement ->
+                chatIds.sorted().forEachIndexed { index, chatId -> statement.setLong(index + 1, chatId) }
+                statement.executeQuery().use { resultSet ->
+                    buildMap {
+                        while (resultSet.next()) {
+                            put(
+                                resultSet.getLong("chat_id"),
+                                OutboxSnapshot(
+                                    status = resultSet.getString("status"),
+                                    attempts = resultSet.getInt("attempts"),
+                                    lastError = resultSet.getString("last_error"),
+                                    processedAt = resultSet.getTimestamp("processed_at")?.toInstant(),
+                                    nextAttemptAt = resultSet.getTimestamp("next_attempt_at")?.toInstant(),
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+    private data class OutboxSnapshot(
+        val status: String,
+        val attempts: Int,
+        val lastError: String?,
+        val processedAt: Instant?,
+        val nextAttemptAt: Instant?,
+    )
+
+    private companion object {
+        const val MALFORMED_PAYLOAD_SENTINEL = "{malformed-payload-secret"
+        const val MALFORMED_TOKEN_SENTINEL = "malformed-test-token-secret"
+    }
 
     private fun createLiveOrderFixture(connection: Connection): Long {
         connection.prepareStatement(

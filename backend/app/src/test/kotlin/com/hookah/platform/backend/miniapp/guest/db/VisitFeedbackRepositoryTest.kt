@@ -1,5 +1,7 @@
 package com.hookah.platform.backend.miniapp.guest.db
 
+import com.hookah.platform.backend.telegram.TelegramTrafficPolicy
+import io.ktor.server.config.MapApplicationConfig
 import kotlinx.coroutines.runBlocking
 import org.flywaydb.core.Flyway
 import org.h2.jdbcx.JdbcDataSource
@@ -17,6 +19,8 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 
 class VisitFeedbackRepositoryTest {
+    private val unrestrictedScope = TelegramTrafficPolicy.unrestricted().outboundClaimScope
+
     @Test
     fun `closed order visit schedules one idempotent feedback request`() =
         runBlocking {
@@ -84,20 +88,91 @@ class VisitFeedbackRepositoryTest {
         }
 
     @Test
-    fun `pick due requests returns only due pending requests`() =
+    fun `pick due requests is read only and delivery outcome increments attempts`() =
         runBlocking {
             val jdbcUrl = migratedJdbcUrl("visit-feedback-due")
             val fixture = seedBase(jdbcUrl)
             val dueVisitId = seedClosedOrderVisit(jdbcUrl, fixture, GUEST_USER)
             val futureVisitId = seedClosedOrderVisit(jdbcUrl, fixture, OTHER_GUEST)
             val repository = VisitFeedbackRepository(dataSource(jdbcUrl))
-            repository.scheduleFeedbackRequestForVisit(dueVisitId, Instant.parse("2030-05-10T12:00:00Z"))
+            val request =
+                repository.scheduleFeedbackRequestForVisit(dueVisitId, Instant.parse("2030-05-10T12:00:00Z"))
+            assertNotNull(request)
             repository.scheduleFeedbackRequestForVisit(futureVisitId, Instant.parse("2030-05-11T12:00:00Z"))
+            val beforePick = feedbackRequestSnapshot(jdbcUrl, request.id)
 
-            val due = repository.pickDueRequests(Instant.parse("2030-05-11T09:01:00Z"), limit = 10)
+            val due =
+                repository.pickDueRequests(
+                    Instant.parse("2030-05-11T09:01:00Z"),
+                    limit = 10,
+                    outboundClaimScope = unrestrictedScope,
+                )
 
             assertEquals(listOf(dueVisitId), due.map { it.visitId })
-            assertEquals(1, due.single().attempts)
+            assertEquals(0, due.single().attempts)
+            assertEquals(beforePick, feedbackRequestSnapshot(jdbcUrl, request.id))
+
+            assertEquals(true, repository.markRequestSent(request.id, Instant.parse("2030-05-11T09:02:00Z")))
+            val afterSent = feedbackRequestSnapshot(jdbcUrl, request.id)
+            assertEquals(VisitFeedbackRequestStatus.SENT.name, afterSent.status)
+            assertEquals(1, afterSent.attempts)
+        }
+
+    @Test
+    fun `allowlist filters before limit without mutating older denied request`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("visit-feedback-allowlist-limit")
+            val fixture = seedBase(jdbcUrl)
+            val deniedVisitId = seedClosedOrderVisit(jdbcUrl, fixture, GUEST_USER)
+            val allowedVisitId = seedClosedOrderVisit(jdbcUrl, fixture, OTHER_GUEST)
+            val repository = VisitFeedbackRepository(dataSource(jdbcUrl))
+            val scheduleNow = Instant.parse("2030-05-10T12:00:00Z")
+            val deniedRequest = repository.scheduleFeedbackRequestForVisit(deniedVisitId, scheduleNow)
+            val allowedRequest = repository.scheduleFeedbackRequestForVisit(allowedVisitId, scheduleNow)
+            assertNotNull(deniedRequest)
+            assertNotNull(allowedRequest)
+            assertEquals(true, deniedRequest.id < allowedRequest.id)
+            val deniedBefore = feedbackRequestSnapshot(jdbcUrl, deniedRequest.id)
+            val restrictedPolicy =
+                TelegramTrafficPolicy.from(
+                    MapApplicationConfig(
+                        "telegram.trafficPolicy" to "ALLOWLIST",
+                        "telegram.allowedUserIds" to OTHER_GUEST.toString(),
+                        "telegram.allowedChatIds" to OTHER_GUEST.toString(),
+                    ),
+                    appEnv = "staging",
+                )
+
+            val due =
+                repository.pickDueRequests(
+                    now = Instant.parse("2030-05-11T09:01:00Z"),
+                    limit = 1,
+                    outboundClaimScope = restrictedPolicy.outboundClaimScope,
+                )
+
+            assertEquals(listOf(allowedVisitId), due.map { it.visitId })
+            assertEquals(deniedBefore, feedbackRequestSnapshot(jdbcUrl, deniedRequest.id))
+            assertEquals(true, repository.markRequestSent(allowedRequest.id))
+            assertEquals(1, feedbackRequestSnapshot(jdbcUrl, allowedRequest.id).attempts)
+
+            val groupOnlyPolicy =
+                TelegramTrafficPolicy.from(
+                    MapApplicationConfig(
+                        "telegram.trafficPolicy" to "ALLOWLIST",
+                        "telegram.allowedUserIds" to GUEST_USER.toString(),
+                        "telegram.allowedChatIds" to "-100123",
+                    ),
+                    appEnv = "staging",
+                )
+            assertEquals(
+                emptyList(),
+                repository.pickDueRequests(
+                    now = Instant.parse("2030-05-11T09:01:00Z"),
+                    limit = 1,
+                    outboundClaimScope = groupOnlyPolicy.outboundClaimScope,
+                ),
+            )
+            assertEquals(deniedBefore, feedbackRequestSnapshot(jdbcUrl, deniedRequest.id))
         }
 
     @Test
@@ -335,6 +410,40 @@ class VisitFeedbackRepositoryTest {
         }
     }
 
+    private fun feedbackRequestSnapshot(
+        jdbcUrl: String,
+        requestId: Long,
+    ): FeedbackRequestSnapshot =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT id, visit_id, venue_id, user_id, scheduled_for, status, attempts,
+                       dedupe_key, sent_at, last_error, created_at, updated_at
+                FROM visit_feedback_requests
+                WHERE id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, requestId)
+                statement.executeQuery().use { rs ->
+                    check(rs.next())
+                    FeedbackRequestSnapshot(
+                        id = rs.getLong("id"),
+                        visitId = rs.getLong("visit_id"),
+                        venueId = rs.getLong("venue_id"),
+                        userId = rs.getLong("user_id"),
+                        scheduledFor = rs.getTimestamp("scheduled_for").toInstant(),
+                        status = rs.getString("status"),
+                        attempts = rs.getInt("attempts"),
+                        dedupeKey = rs.getString("dedupe_key"),
+                        sentAt = rs.getTimestamp("sent_at")?.toInstant(),
+                        lastError = rs.getString("last_error"),
+                        createdAt = rs.getTimestamp("created_at").toInstant(),
+                        updatedAt = rs.getTimestamp("updated_at").toInstant(),
+                    )
+                }
+            }
+        }
+
     private fun migratedJdbcUrl(prefix: String): String {
         val jdbcUrl =
             "jdbc:h2:mem:$prefix-${UUID.randomUUID()};MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;" +
@@ -571,6 +680,21 @@ class VisitFeedbackRepositoryTest {
     private data class Fixture(
         val venueId: Long,
         val tableId: Long,
+    )
+
+    private data class FeedbackRequestSnapshot(
+        val id: Long,
+        val visitId: Long,
+        val venueId: Long,
+        val userId: Long,
+        val scheduledFor: Instant,
+        val status: String,
+        val attempts: Int,
+        val dedupeKey: String,
+        val sentAt: Instant?,
+        val lastError: String?,
+        val createdAt: Instant,
+        val updatedAt: Instant,
     )
 
     private companion object {

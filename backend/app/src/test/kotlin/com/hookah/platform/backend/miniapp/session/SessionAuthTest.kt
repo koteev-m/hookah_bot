@@ -75,6 +75,52 @@ class SessionAuthTest {
         }
 
     @Test
+    fun `valid token issued before allowlist removal is forbidden on every protected request`() {
+        val beforeRemovalConfig =
+            MapApplicationConfig(
+                "app.env" to appEnv,
+                "api.session.jwtSecret" to "test-secret",
+                "api.session.ttlSeconds" to "7200",
+                "api.session.issuer" to "test-issuer",
+                "api.session.audience" to "test-audience",
+                "telegram.trafficPolicy" to "ALLOWLIST",
+                "telegram.allowedUserIds" to TELEGRAM_USER_ID.toString(),
+                "telegram.allowedChatIds" to TELEGRAM_USER_ID.toString(),
+            )
+        val issuedToken =
+            SessionTokenService(SessionTokenConfig.from(beforeRemovalConfig, appEnv))
+                .issueToken(TELEGRAM_USER_ID, now = Instant.now().truncatedTo(ChronoUnit.SECONDS))
+
+        testApplication {
+            environment {
+                config =
+                    MapApplicationConfig(
+                        "app.env" to appEnv,
+                        "api.session.jwtSecret" to "test-secret",
+                        "api.session.ttlSeconds" to "7200",
+                        "api.session.issuer" to "test-issuer",
+                        "api.session.audience" to "test-audience",
+                        "telegram.trafficPolicy" to "ALLOWLIST",
+                        "telegram.allowedUserIds" to OTHER_TELEGRAM_USER_ID.toString(),
+                        "telegram.allowedChatIds" to OTHER_TELEGRAM_USER_ID.toString(),
+                    )
+            }
+
+            application { module() }
+
+            val response =
+                client.get("/api/guest/_ping") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer ${issuedToken.token}")
+                    }
+                }
+
+            assertEquals(HttpStatusCode.Forbidden, response.status)
+            assertApiErrorEnvelope(response, ApiErrorCodes.FORBIDDEN)
+        }
+    }
+
+    @Test
     fun `should return envelope for unknown api route`() =
         testApplication {
             environment {
@@ -136,5 +182,6 @@ class SessionAuthTest {
 
     private companion object {
         const val TELEGRAM_USER_ID: Long = 1234L
+        const val OTHER_TELEGRAM_USER_ID: Long = 5678L
     }
 }

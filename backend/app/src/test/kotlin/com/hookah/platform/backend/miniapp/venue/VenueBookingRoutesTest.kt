@@ -1,5 +1,6 @@
 package com.hookah.platform.backend.miniapp.venue
 
+import com.hookah.platform.backend.api.ApiErrorCodes
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.module
@@ -788,6 +789,7 @@ class VenueBookingRoutesTest {
             assertFalse(guestMessage.contains("@"), guestMessage)
             assertTrue(guestMessagePayload.contains("guest_booking_reply:$venueId:$bookingId"), guestMessagePayload)
             val messageResponseBody = json.parseToJsonElement(messageResponse.bodyAsText()).jsonObject
+            assertEquals("true", messageResponseBody.getValue("queued").jsonPrimitive.content)
             val threadId =
                 messageResponseBody
                     .getValue("thread")
@@ -872,6 +874,7 @@ class VenueBookingRoutesTest {
                 }
             assertEquals(HttpStatusCode.OK, replayResponse.status)
             val replayBody = json.parseToJsonElement(replayResponse.bodyAsText()).jsonObject
+            assertEquals("true", replayBody.getValue("queued").jsonPrimitive.content)
             assertEquals(
                 messageId,
                 replayBody
@@ -1270,6 +1273,81 @@ class VenueBookingRoutesTest {
             assertFalse(blankCancelMessage.contains("Причина:"), blankCancelMessage)
             assertFalse(blankCancelMessage.contains("не указана"), blankCancelMessage)
         }
+
+    @Test
+    fun `direct venue booking reply denied by traffic policy creates no conversation state`() {
+        val jdbcUrl =
+            "jdbc:h2:mem:venue-booking-message-policy-${UUID.randomUUID()};MODE=PostgreSQL;" +
+                "DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE"
+        val initiallyAllowedConfig = bookingTrafficPolicyConfig(jdbcUrl, GUEST_ID, MANAGER_ID)
+        var venueId = 0L
+        var bookingId = 0L
+
+        testApplication {
+            environment { config = initiallyAllowedConfig }
+            application { module() }
+            client.get("/health")
+
+            venueId = seedVenue(jdbcUrl)
+            seedSubscription(jdbcUrl, venueId)
+            seedUser(jdbcUrl, GUEST_ID)
+            seedUser(jdbcUrl, MANAGER_ID)
+            seedVenueMember(jdbcUrl, venueId, MANAGER_ID, "MANAGER")
+            val createResponse =
+                client.post("/api/guest/booking/create") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer ${issueToken(initiallyAllowedConfig, GUEST_ID)}")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody(
+                        """{"venueId":$venueId,"scheduledAt":"2030-01-10T18:30:00Z","partySize":2}""",
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, createResponse.status)
+            bookingId =
+                json.parseToJsonElement(createResponse.bodyAsText())
+                    .jsonObject
+                    .getValue("bookingId")
+                    .jsonPrimitive
+                    .content
+                    .toLong()
+        }
+
+        val outboxBefore = tableRowCount(jdbcUrl, "telegram_outbox")
+        val auditBefore = tableRowCount(jdbcUrl, "audit_log")
+        val deniedConfig = bookingTrafficPolicyConfig(jdbcUrl, MANAGER_ID)
+        testApplication {
+            environment { config = deniedConfig }
+            application { module() }
+
+            val response =
+                client.post("/api/venue/bookings/$bookingId/message?venueId=$venueId") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer ${issueToken(deniedConfig, MANAGER_ID)}")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody(bookingMessageBody("Must roll back"))
+                }
+
+            assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
+            val body = json.parseToJsonElement(response.bodyAsText()).jsonObject
+            assertEquals(
+                ApiErrorCodes.CONFIG_ERROR,
+                body.getValue("error").jsonObject.getValue("code").jsonPrimitive.content,
+            )
+            val serialized = body.toString()
+            assertFalse(serialized.contains("queued", ignoreCase = true))
+            assertFalse(serialized.contains("ALLOWLIST", ignoreCase = true))
+            assertFalse(serialized.contains(GUEST_ID.toString()))
+            assertFalse(serialized.contains(MANAGER_ID.toString()))
+        }
+
+        assertEquals(0, supportThreadCount(jdbcUrl, venueId, bookingId))
+        assertEquals(0, tableRowCount(jdbcUrl, "support_messages"))
+        assertEquals(0, tableRowCount(jdbcUrl, "support_thread_reads"))
+        assertEquals(outboxBefore, tableRowCount(jdbcUrl, "telegram_outbox"))
+        assertEquals(auditBefore, tableRowCount(jdbcUrl, "audit_log"))
+    }
 
     @Test
     fun `arrival terminal actions require confirmed booking and control visits`() =
@@ -1780,6 +1858,28 @@ class VenueBookingRoutesTest {
         return SessionTokenService(tokenConfig).issueToken(userId).token
     }
 
+    private fun bookingTrafficPolicyConfig(
+        jdbcUrl: String,
+        vararg allowedIds: Long,
+    ): MapApplicationConfig {
+        val ids = allowedIds.joinToString(",")
+        return MapApplicationConfig(
+            "ktor.environment" to "test",
+            "app.env" to "test",
+            "db.jdbcUrl" to jdbcUrl,
+            "db.user" to "sa",
+            "db.password" to "",
+            "api.session.jwtSecret" to "secret-secret-secret-secret-secret",
+            "api.session.issuer" to "hookah",
+            "api.session.audience" to "miniapp",
+            "api.session.ttlSeconds" to "3600",
+            "billing.subscription.intervalSeconds" to "0",
+            "telegram.trafficPolicy" to "ALLOWLIST",
+            "telegram.allowedUserIds" to ids,
+            "telegram.allowedChatIds" to ids,
+        )
+    }
+
     private fun seedVenue(jdbcUrl: String): Long =
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             val venueId =
@@ -2142,6 +2242,29 @@ class VenueBookingRoutesTest {
                 }
             }
         }
+
+    private fun tableRowCount(
+        jdbcUrl: String,
+        tableName: String,
+    ): Int {
+        require(
+            tableName in
+                setOf(
+                    "support_messages",
+                    "support_thread_reads",
+                    "telegram_outbox",
+                    "audit_log",
+                ),
+        )
+        return DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.createStatement().use { statement ->
+                statement.executeQuery("SELECT COUNT(*) FROM $tableName").use { rows ->
+                    assertTrue(rows.next())
+                    rows.getInt(1)
+                }
+            }
+        }
+    }
 
     private fun bookingMessageBody(
         message: String,

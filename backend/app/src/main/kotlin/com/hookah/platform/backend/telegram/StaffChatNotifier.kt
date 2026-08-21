@@ -157,6 +157,7 @@ enum class StaffChatNotificationResult {
     SKIPPED_DISABLED,
     SKIPPED_DUPLICATE,
     SKIPPED_INACTIVE,
+    SKIPPED_TRAFFIC_POLICY,
     FAILED_ENQUEUE,
 }
 
@@ -192,6 +193,7 @@ class StaffChatNotifier(
     private val notificationRepository: StaffChatNotificationRepository,
     private val venueSettingsRepository: VenueSettingsRepository? = null,
     private val isTelegramActive: () -> Boolean,
+    private val trafficPolicy: TelegramTrafficPolicy,
     private val scope: CoroutineScope,
     private val json: Json = Json { ignoreUnknownKeys = true },
     private val venueMiniAppUrl: (Long) -> String? = { null },
@@ -207,9 +209,10 @@ class StaffChatNotifier(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                val safeMessage = sanitizeTelegramForLog(e.message)
-                logger.warn("Failed to notify staff chat for new batch: {}", safeMessage)
-                logger.debugTelegramException(e) { "notifyNewBatch exception" }
+                logger.warn(
+                    "Staff chat notification failed operation=new_batch error_type={}",
+                    e::class.simpleName ?: "unknown",
+                )
             }
         }
     }
@@ -450,12 +453,9 @@ class StaffChatNotifier(
             runCatching { venueOrdersRepository?.loadOrderDetail(venueId = venueId, orderId = orderId) }
                 .onFailure { e ->
                     logger.warn(
-                        "Failed to load order detail for staff chat activity card venue_id={} order_id={}: {}",
-                        venueId,
-                        orderId,
-                        sanitizeTelegramForLog(e.message),
+                        "Staff chat data load failed operation=order_detail error_type={}",
+                        e::class.simpleName ?: "unknown",
                     )
-                    logger.debugTelegramException(e) { "load order detail for staff chat activity card" }
                 }
                 .getOrNull()
                 ?: return null
@@ -519,6 +519,10 @@ class StaffChatNotifier(
         if (venue == null || chatId == null) {
             logResult(event.venueId, logKey, StaffChatNotificationResult.SKIPPED_NO_STAFF_CHAT)
             return StaffChatNotificationResult.SKIPPED_NO_STAFF_CHAT
+        }
+        if (!trafficPolicy.allowsOutboundChat(chatId)) {
+            logResult(event.venueId, logKey, StaffChatNotificationResult.SKIPPED_TRAFFIC_POLICY)
+            return StaffChatNotificationResult.SKIPPED_TRAFFIC_POLICY
         }
         if (!isEnabled(event.venueId, StaffChatNotificationSetting.ORDERS, staffChatLinked = true)) {
             logResult(event.venueId, logKey, StaffChatNotificationResult.SKIPPED_DISABLED)
@@ -608,6 +612,8 @@ class StaffChatNotifier(
             when (claimResult) {
                 StaffChatNotificationClaim.CLAIMED -> StaffChatNotificationResult.SENT_OR_QUEUED
                 StaffChatNotificationClaim.ALREADY -> StaffChatNotificationResult.SKIPPED_DUPLICATE
+                StaffChatNotificationClaim.SKIPPED_TRAFFIC_POLICY ->
+                    StaffChatNotificationResult.SKIPPED_TRAFFIC_POLICY
                 StaffChatNotificationClaim.ERROR -> StaffChatNotificationResult.FAILED_ENQUEUE
             }
         logResult(event.venueId, logKey, result)
@@ -626,12 +632,9 @@ class StaffChatNotifier(
                 )
             }.onFailure { e ->
                 logger.warn(
-                    "Failed to load staff order activity venue_id={} order_id={}: {}",
-                    event.venueId,
-                    event.orderId,
-                    sanitizeTelegramForLog(e.message),
+                    "Staff chat data load failed operation=order_activity error_type={}",
+                    e::class.simpleName ?: "unknown",
                 )
-                logger.debugTelegramException(e) { "load staff order activity" }
             }.getOrDefault(emptyList())
         return items.map { item -> item.toStaffOrderActivityBlock(event) }
     }
@@ -729,6 +732,10 @@ class StaffChatNotifier(
             logResult(venueId, notificationKey, StaffChatNotificationResult.SKIPPED_NO_STAFF_CHAT)
             return StaffChatNotificationResult.SKIPPED_NO_STAFF_CHAT
         }
+        if (!trafficPolicy.allowsOutboundChat(chatId)) {
+            logResult(venueId, notificationKey, StaffChatNotificationResult.SKIPPED_TRAFFIC_POLICY)
+            return StaffChatNotificationResult.SKIPPED_TRAFFIC_POLICY
+        }
         if (!isEnabled(venueId, setting, staffChatLinked = true)) {
             logResult(venueId, notificationKey, StaffChatNotificationResult.SKIPPED_DISABLED)
             return StaffChatNotificationResult.SKIPPED_DISABLED
@@ -755,6 +762,8 @@ class StaffChatNotifier(
             when (claimResult) {
                 StaffChatNotificationClaim.CLAIMED -> StaffChatNotificationResult.SENT_OR_QUEUED
                 StaffChatNotificationClaim.ALREADY -> StaffChatNotificationResult.SKIPPED_DUPLICATE
+                StaffChatNotificationClaim.SKIPPED_TRAFFIC_POLICY ->
+                    StaffChatNotificationResult.SKIPPED_TRAFFIC_POLICY
                 StaffChatNotificationClaim.ERROR -> StaffChatNotificationResult.FAILED_ENQUEUE
             }
         logResult(venueId, notificationKey, result)
@@ -776,6 +785,10 @@ class StaffChatNotifier(
         if (venue == null || chatId == null) {
             logResult(venueId, notificationKey = 0L, StaffChatNotificationResult.SKIPPED_NO_STAFF_CHAT)
             return StaffChatNotificationResult.SKIPPED_NO_STAFF_CHAT
+        }
+        if (!trafficPolicy.allowsOutboundChat(chatId)) {
+            logResult(venueId, notificationKey = 0L, StaffChatNotificationResult.SKIPPED_TRAFFIC_POLICY)
+            return StaffChatNotificationResult.SKIPPED_TRAFFIC_POLICY
         }
         if (!isEnabled(venueId, setting, staffChatLinked = true)) {
             logResult(venueId, notificationKey = 0L, StaffChatNotificationResult.SKIPPED_DISABLED)
@@ -816,11 +829,9 @@ class StaffChatNotifier(
             runCatching { venueSettingsRepository?.find(venueId) }
                 .onFailure { e ->
                     logger.warn(
-                        "Failed to load staff chat notification settings venue_id={}: {}",
-                        venueId,
-                        sanitizeTelegramForLog(e.message),
+                        "Staff chat data load failed operation=notification_settings error_type={}",
+                        e::class.simpleName ?: "unknown",
                     )
-                    logger.debugTelegramException(e) { "load staff chat notification settings" }
                 }
                 .getOrNull() ?: return true
         return when (setting) {
@@ -835,17 +846,15 @@ class StaffChatNotifier(
             runCatching { venueSettingsRepository?.find(venueId)?.timezone }
                 .onFailure { e ->
                     logger.warn(
-                        "Failed to load venue timezone for staff chat live message venue_id={}: {}",
-                        venueId,
-                        sanitizeTelegramForLog(e.message),
+                        "Staff chat data load failed operation=venue_timezone error_type={}",
+                        e::class.simpleName ?: "unknown",
                     )
-                    logger.debugTelegramException(e) { "load staff chat venue timezone" }
                 }
                 .getOrNull()
                 ?.takeIf { it.isNotBlank() }
                 ?: VenueSettingsRepository.DEFAULT_AUTO_TIMEZONE
         return runCatching { ZoneId.of(timezone) }
-            .onFailure { logger.warn("Invalid venue timezone venue_id={} timezone={}", venueId, timezone) }
+            .onFailure { logger.warn("Staff chat venue timezone is invalid") }
             .getOrDefault(defaultStaffChatVenueZoneId)
     }
 
@@ -856,30 +865,16 @@ class StaffChatNotifier(
     ) {
         when (result) {
             StaffChatNotificationResult.SENT_OR_QUEUED ->
-                logger.info(
-                    "Staff chat notification result={} venue_id={} key={}",
-                    result,
-                    venueId,
-                    notificationKey,
-                )
+                logger.info("Staff chat notification result={}", result)
             StaffChatNotificationResult.SKIPPED_DUPLICATE ->
-                logger.debug(
-                    "Staff chat notification result={} venue_id={} key={}",
-                    result,
-                    venueId,
-                    notificationKey,
-                )
+                logger.debug("Staff chat notification result={}", result)
             StaffChatNotificationResult.SKIPPED_NO_STAFF_CHAT,
             StaffChatNotificationResult.SKIPPED_DISABLED,
             StaffChatNotificationResult.SKIPPED_INACTIVE,
+            StaffChatNotificationResult.SKIPPED_TRAFFIC_POLICY,
             StaffChatNotificationResult.FAILED_ENQUEUE,
             ->
-                logger.warn(
-                    "Staff chat notification result={} venue_id={} key={}",
-                    result,
-                    venueId,
-                    notificationKey,
-                )
+                logger.warn("Staff chat notification result={}", result)
         }
     }
 }

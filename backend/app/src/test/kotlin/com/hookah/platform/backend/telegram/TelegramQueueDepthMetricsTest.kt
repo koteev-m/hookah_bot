@@ -28,8 +28,10 @@ class TelegramQueueDepthMetricsTest {
         runBlocking {
             val database = PostgresTestEnv.createDatabase()
             val dataSource = PostgresTestEnv.createDataSource(database)
-            val repository = TelegramOutboxRepository(dataSource)
-            val enqueuer = TelegramOutboxEnqueuer(repository, Json { ignoreUnknownKeys = true })
+            val trafficPolicy = TelegramTrafficPolicy.unrestricted()
+            val repository = TelegramOutboxRepository(dataSource, trafficPolicy)
+            val enqueuer =
+                TelegramOutboxEnqueuer(repository, Json { ignoreUnknownKeys = true }, trafficPolicy)
 
             assertEquals(0L, repository.queueDepth())
             enqueuer.enqueueSendMessage(chatId = 321L, text = "hello")

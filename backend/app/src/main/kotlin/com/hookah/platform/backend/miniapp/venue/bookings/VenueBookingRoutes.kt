@@ -13,6 +13,7 @@ import com.hookah.platform.backend.miniapp.venue.requireUserId
 import com.hookah.platform.backend.miniapp.venue.requireVenueId
 import com.hookah.platform.backend.miniapp.venue.resolveVenueRole
 import com.hookah.platform.backend.support.BookingMessageNotificationKind
+import com.hookah.platform.backend.support.BookingMessageNotificationWriteResult
 import com.hookah.platform.backend.support.SupportMessageAuthorRole
 import com.hookah.platform.backend.support.SupportMessageDto
 import com.hookah.platform.backend.support.SupportMessageSource
@@ -25,6 +26,7 @@ import com.hookah.platform.backend.support.normalizeBookingClientMessageId
 import com.hookah.platform.backend.support.normalizeSupportMessage
 import com.hookah.platform.backend.support.toDto
 import com.hookah.platform.backend.telegram.TelegramKeyboards
+import com.hookah.platform.backend.telegram.TelegramOutboxEnqueueOutcome
 import com.hookah.platform.backend.telegram.TelegramOutboxEnqueuer
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
 import com.hookah.platform.backend.telegram.db.VenueSettingsRepository
@@ -289,17 +291,23 @@ fun Route.venueBookingRoutes(
                     clientMessageId = clientMessageId,
                     notificationWriter = { connection, notification ->
                         check(notification.kind == BookingMessageNotificationKind.GUEST_NOTIFICATION)
-                        outboxEnqueuer.enqueueBookingSendMessageInTransaction(
-                            connection = connection,
-                            chatId = notification.recipientChatId,
-                            text = buildBookingGuestContactMessage(notification.thread, notification.message.text),
-                            replyMarkup =
-                                TelegramKeyboards.inlineGuestBookingReplyActions(
-                                    notification.thread.venueId ?: error("Booking venue is required"),
-                                    notification.thread.bookingId ?: error("Booking id is required"),
-                                ),
-                            dedupeKey = notification.dedupeKey,
-                        )
+                        when (
+                            outboxEnqueuer.enqueueBookingSendMessageInTransaction(
+                                connection = connection,
+                                chatId = notification.recipientChatId,
+                                text = buildBookingGuestContactMessage(notification.thread, notification.message.text),
+                                replyMarkup =
+                                    TelegramKeyboards.inlineGuestBookingReplyActions(
+                                        notification.thread.venueId ?: error("Booking venue is required"),
+                                        notification.thread.bookingId ?: error("Booking id is required"),
+                                    ),
+                                dedupeKey = notification.dedupeKey,
+                            )
+                        ) {
+                            TelegramOutboxEnqueueOutcome.ENQUEUED -> BookingMessageNotificationWriteResult.WRITTEN
+                            TelegramOutboxEnqueueOutcome.SKIPPED_TRAFFIC_POLICY ->
+                                BookingMessageNotificationWriteResult.REJECTED
+                        }
                     },
                 ) ?: throw NotFoundException()
             val thread = write.thread

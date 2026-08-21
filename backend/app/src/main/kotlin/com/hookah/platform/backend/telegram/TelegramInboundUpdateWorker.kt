@@ -19,9 +19,10 @@ import kotlin.math.min
 
 class TelegramInboundUpdateWorker(
     private val repository: TelegramInboundUpdateQueueRepository,
-    private val router: TelegramBotRouter,
+    private val processUpdate: suspend (TelegramUpdate) -> Unit,
     private val json: Json,
     private val scope: CoroutineScope,
+    private val trafficPolicy: TelegramTrafficPolicy,
     private val pollInterval: Duration = Duration.ofMillis(500),
     private val batchSize: Int = 10,
     private val maxAttempts: Int = 5,
@@ -40,10 +41,9 @@ class TelegramInboundUpdateWorker(
                         throw e
                     } catch (e: Exception) {
                         logger.warn(
-                            "Telegram webhook worker tick failed: {}",
-                            sanitizeTelegramForLog(e.message),
+                            "Telegram webhook worker tick failed errorType={}",
+                            e::class.simpleName ?: "unknown",
                         )
-                        logger.debugTelegramException(e) { "Telegram webhook worker exception" }
                         false
                     }
                 if (!didWork) {
@@ -72,9 +72,9 @@ class TelegramInboundUpdateWorker(
         val parsed =
             try {
                 json.decodeFromString(TelegramUpdate.serializer(), update.payloadJson)
-            } catch (e: SerializationException) {
-                val safeMessage = sanitizeTelegramForLog(e.message)
-                logger.warn("Invalid telegram update payload id={}: {}", update.updateId, safeMessage)
+            } catch (_: SerializationException) {
+                val safeMessage = "invalid telegram update payload"
+                logger.warn("Invalid telegram update payload source=webhook_queue")
                 repository.markFailed(
                     id = update.id,
                     status = TelegramInboundUpdateStatus.FAILED,
@@ -85,8 +85,20 @@ class TelegramInboundUpdateWorker(
                 return
             }
 
+        when (val decision = trafficPolicy.evaluateInbound(parsed)) {
+            TelegramTrafficPolicy.InboundDecision.Allowed -> Unit
+            is TelegramTrafficPolicy.InboundDecision.Denied -> {
+                logger.info(
+                    "Telegram inbound update denied source=webhook_queue reason={}",
+                    decision.reason,
+                )
+                repository.markProcessed(update.id, Instant.now())
+                return
+            }
+        }
+
         try {
-            router.process(parsed)
+            processUpdate(parsed)
             repository.markProcessed(update.id, Instant.now())
         } catch (e: CancellationException) {
             throw e
@@ -106,12 +118,10 @@ class TelegramInboundUpdateWorker(
                     null
                 }
             logger.warn(
-                "Telegram update processing failed id={} attempt={}: {}",
-                update.updateId,
+                "Telegram update processing failed source=webhook_queue attempt={} errorType={}",
                 attempts,
-                safeMessage,
+                e::class.simpleName ?: "unknown",
             )
-            logger.debugTelegramException(e) { "Telegram update processing exception id=${update.updateId}" }
             repository.markFailed(
                 id = update.id,
                 status = status,

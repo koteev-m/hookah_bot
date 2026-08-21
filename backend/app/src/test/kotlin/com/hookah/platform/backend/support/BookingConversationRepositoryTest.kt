@@ -1,5 +1,6 @@
 package com.hookah.platform.backend.support
 
+import com.hookah.platform.backend.api.ConfigException
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.test.migrateH2OnboardingFixture
 import kotlinx.coroutines.Dispatchers
@@ -220,7 +221,7 @@ class BookingConversationRepositoryTest {
                         text = "Сообщение из кабинета",
                         expectedVenueId = fixture.venueId,
                         clientMessageId = UUID.randomUUID().toString(),
-                        notificationWriter = { _, _ -> },
+                        notificationWriter = { _, _ -> BookingMessageNotificationWriteResult.WRITTEN },
                     )
                 val venueTelegram =
                     fixture.repository.addBookingMessage(
@@ -254,6 +255,76 @@ class BookingConversationRepositoryTest {
         }
 
     @Test
+    fun `rejected Mini App notification rolls back and leaves the same client key reusable`() =
+        withFixture { fixture ->
+            runBlocking {
+                val clientMessageId = UUID.randomUUID().toString()
+                val stateBefore = fixture.lookupMutationCounts()
+                val failure =
+                    runCatching {
+                        fixture.repository.addBookingMessage(
+                            bookingId = fixture.bookingId,
+                            authorUserId = fixture.guestUserId,
+                            authorRole = SupportMessageAuthorRole.GUEST,
+                            source = SupportMessageSource.GUEST_MINIAPP,
+                            text = "Retry after policy change",
+                            expectedGuestUserId = fixture.guestUserId,
+                            clientMessageId = clientMessageId,
+                            notificationWriter = { _, _ -> BookingMessageNotificationWriteResult.REJECTED },
+                        )
+                    }.exceptionOrNull()
+
+                assertIs<ConfigException>(failure)
+                assertEquals(stateBefore, fixture.lookupMutationCounts())
+                assertEquals(0, fixture.countBookingThreads())
+                assertEquals(0, fixture.countMessages())
+                assertEquals(0, fixture.countReads())
+
+                var notificationWrites = 0
+                val committed =
+                    assertNotNull(
+                        fixture.repository.addBookingMessage(
+                            bookingId = fixture.bookingId,
+                            authorUserId = fixture.guestUserId,
+                            authorRole = SupportMessageAuthorRole.GUEST,
+                            source = SupportMessageSource.GUEST_MINIAPP,
+                            text = "Retry after policy change",
+                            expectedGuestUserId = fixture.guestUserId,
+                            clientMessageId = clientMessageId,
+                            notificationWriter = { _, _ ->
+                                notificationWrites += 1
+                                BookingMessageNotificationWriteResult.WRITTEN
+                            },
+                        ),
+                    )
+                val replay =
+                    assertNotNull(
+                        fixture.repository.addBookingMessage(
+                            bookingId = fixture.bookingId,
+                            authorUserId = fixture.guestUserId,
+                            authorRole = SupportMessageAuthorRole.GUEST,
+                            source = SupportMessageSource.GUEST_MINIAPP,
+                            text = "Retry after policy change",
+                            expectedGuestUserId = fixture.guestUserId,
+                            clientMessageId = clientMessageId,
+                            notificationWriter = { _, _ ->
+                                notificationWrites += 1
+                                BookingMessageNotificationWriteResult.WRITTEN
+                            },
+                        ),
+                    )
+
+                assertTrue(committed.created)
+                assertTrue(!replay.created)
+                assertEquals(committed.message.id, replay.message.id)
+                assertEquals(1, notificationWrites)
+                assertEquals(1, fixture.countBookingThreads())
+                assertEquals(1, fixture.countMessages())
+                assertEquals(0, fixture.countReads())
+            }
+        }
+
+    @Test
     fun `authoritative writer denies foreign guest and venue expectations before message facts`() =
         withFixture { fixture ->
             runBlocking {
@@ -270,7 +341,7 @@ class BookingConversationRepositoryTest {
                         expectedThreadId = thread.id,
                         expectedGuestUserId = fixture.guestUserId + 1,
                         clientMessageId = UUID.randomUUID().toString(),
-                        notificationWriter = { _, _ -> },
+                        notificationWriter = { _, _ -> BookingMessageNotificationWriteResult.WRITTEN },
                     )
                 val foreignVenue =
                     fixture.repository.addBookingMessage(
@@ -282,7 +353,7 @@ class BookingConversationRepositoryTest {
                         expectedThreadId = thread.id,
                         expectedVenueId = fixture.venueId + 1,
                         clientMessageId = UUID.randomUUID().toString(),
-                        notificationWriter = { _, _ -> },
+                        notificationWriter = { _, _ -> BookingMessageNotificationWriteResult.WRITTEN },
                     )
 
                 assertNull(foreignGuest)
@@ -312,7 +383,7 @@ class BookingConversationRepositoryTest {
                         expectedThreadId = guestThread.id,
                         expectedGuestUserId = fixture.guestUserId,
                         clientMessageId = UUID.randomUUID().toString(),
-                        notificationWriter = { _, _ -> },
+                        notificationWriter = { _, _ -> BookingMessageNotificationWriteResult.WRITTEN },
                     )
                 assertNull(guestMismatch)
                 assertEquals(guestStateBefore, fixture.threadState(guestThread.id))
@@ -333,7 +404,7 @@ class BookingConversationRepositoryTest {
                         expectedThreadId = venueThread.id,
                         expectedVenueId = fixture.venueId,
                         clientMessageId = UUID.randomUUID().toString(),
-                        notificationWriter = { _, _ -> },
+                        notificationWriter = { _, _ -> BookingMessageNotificationWriteResult.WRITTEN },
                     )
                 assertNull(venueMismatch)
                 assertEquals(venueStateBefore, fixture.threadState(venueThread.id))
@@ -368,7 +439,7 @@ class BookingConversationRepositoryTest {
                     expectedThreadId = thread.id,
                     expectedGuestUserId = fixture.guestUserId,
                     clientMessageId = UUID.randomUUID().toString(),
-                    notificationWriter = { _, _ -> },
+                    notificationWriter = { _, _ -> BookingMessageNotificationWriteResult.WRITTEN },
                 )
             }
         }

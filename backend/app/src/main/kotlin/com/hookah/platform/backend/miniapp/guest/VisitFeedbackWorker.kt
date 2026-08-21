@@ -2,6 +2,8 @@ package com.hookah.platform.backend.miniapp.guest
 
 import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackRepository
 import com.hookah.platform.backend.telegram.TelegramKeyboards
+import com.hookah.platform.backend.telegram.TelegramOutboundClaimScope
+import com.hookah.platform.backend.telegram.TelegramOutboxEnqueueOutcome
 import com.hookah.platform.backend.telegram.TelegramOutboxEnqueuer
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -21,6 +23,7 @@ data class VisitFeedbackWorkerResult(
 class VisitFeedbackWorker(
     private val repository: VisitFeedbackRepository,
     private val outboxEnqueuer: TelegramOutboxEnqueuer,
+    private val outboundClaimScope: TelegramOutboundClaimScope,
     private val interval: Duration,
     private val batchSize: Int,
     private val scope: CoroutineScope,
@@ -36,31 +39,46 @@ class VisitFeedbackWorker(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    logger.warn("Visit feedback worker failed: {}", e.message)
-                    logger.debug("Visit feedback worker failure details", e)
+                    logger.warn(
+                        "Visit feedback worker failed error_type={}",
+                        e::class.simpleName ?: "unknown",
+                    )
                 }
                 delay(interval.toMillis())
             }
         }
 
     suspend fun runOnce(now: Instant = nowProvider()): VisitFeedbackWorkerResult {
-        val due = repository.pickDueRequests(now = now, limit = batchSize)
+        val due =
+            repository.pickDueRequests(
+                now = now,
+                limit = batchSize,
+                outboundClaimScope = outboundClaimScope,
+            )
         var sent = 0
         var failed = 0
         for (request in due) {
             try {
-                outboxEnqueuer.enqueueSendMessage(
-                    chatId = request.userId,
-                    text = buildFeedbackRequestText(request.venueName),
-                    replyMarkup = TelegramKeyboards.inlineVisitFeedbackActions(request.visitId),
-                )
-                repository.markRequestSent(request.requestId, now)
-                sent++
+                when (
+                    outboxEnqueuer.enqueueSendMessage(
+                        chatId = request.userId,
+                        text = buildFeedbackRequestText(request.venueName),
+                        replyMarkup = TelegramKeyboards.inlineVisitFeedbackActions(request.visitId),
+                    )
+                ) {
+                    TelegramOutboxEnqueueOutcome.ENQUEUED -> {
+                        if (repository.markRequestSent(request.requestId, now)) {
+                            sent++
+                        }
+                    }
+                    TelegramOutboxEnqueueOutcome.SKIPPED_TRAFFIC_POLICY -> Unit
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                repository.markRequestFailed(request.requestId, e.message)
-                failed++
+                if (repository.markRequestFailed(request.requestId, e.message)) {
+                    failed++
+                }
             }
         }
         if (sent > 0 || failed > 0) {

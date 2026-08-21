@@ -1,8 +1,7 @@
 package com.hookah.platform.backend.telegram.db
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
-import com.hookah.platform.backend.telegram.debugTelegramException
-import com.hookah.platform.backend.telegram.sanitizeTelegramForLog
+import com.hookah.platform.backend.telegram.TelegramTrafficPolicy
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -34,7 +33,10 @@ data class TelegramOutboxMessage(
     val staffLiveOrderId: Long? = null,
 )
 
-class TelegramOutboxRepository(private val dataSource: DataSource?) {
+class TelegramOutboxRepository(
+    private val dataSource: DataSource?,
+    private val trafficPolicy: TelegramTrafficPolicy,
+) {
     private val logger = LoggerFactory.getLogger(TelegramOutboxRepository::class.java)
 
     suspend fun enqueue(
@@ -43,6 +45,7 @@ class TelegramOutboxRepository(private val dataSource: DataSource?) {
         payloadJson: String,
         dedupeKey: String? = null,
     ) {
+        if (!trafficPolicy.allowsOutboundChat(chatId)) return
         val ds = dataSource ?: throw DatabaseUnavailableException()
         withContext(Dispatchers.IO) {
             try {
@@ -68,6 +71,7 @@ class TelegramOutboxRepository(private val dataSource: DataSource?) {
         payloadJson: String,
         dedupeKey: String? = null,
     ) {
+        if (!trafficPolicy.allowsOutboundChat(chatId)) return
         val normalizedDedupeKey = normalizeDedupeKey(dedupeKey)
         if (normalizedDedupeKey != null) {
             findOutboxEnvelope(connection, normalizedDedupeKey)?.let { existing ->
@@ -249,12 +253,21 @@ class TelegramOutboxRepository(private val dataSource: DataSource?) {
         now: Instant,
         visibilityTimeout: Duration,
     ): List<TelegramOutboxMessage> {
+        val claimScope = trafficPolicy.outboundClaimScope
+        val eligibleChatIds = claimScope.eligibleChatIds.sorted()
+        if (!claimScope.unrestricted && eligibleChatIds.isEmpty()) return emptyList()
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
                     connection.autoCommit = false
                     try {
+                        val chatEligibilitySql =
+                            if (claimScope.unrestricted) {
+                                ""
+                            } else {
+                                "AND o.chat_id IN (${eligibleChatIds.joinToString(",") { "?" }})"
+                            }
                         val selectSql =
                             """
                             SELECT o.id,
@@ -269,7 +282,9 @@ class TelegramOutboxRepository(private val dataSource: DataSource?) {
                                    ) AS staff_live_order_id
                             FROM telegram_outbox o
                             WHERE o.status IN (?, ?)
+                              AND o.chat_id <> 0
                               AND (o.next_attempt_at IS NULL OR o.next_attempt_at <= ?)
+                              $chatEligibilitySql
                             ORDER BY o.created_at, o.id
                             LIMIT ?
                             FOR UPDATE SKIP LOCKED
@@ -279,7 +294,11 @@ class TelegramOutboxRepository(private val dataSource: DataSource?) {
                             statement.setString(1, TelegramOutboxStatus.NEW.name)
                             statement.setString(2, TelegramOutboxStatus.SENDING.name)
                             statement.setTimestamp(3, Timestamp.from(now))
-                            statement.setInt(4, limit)
+                            var parameterIndex = 4
+                            eligibleChatIds.takeIf { !claimScope.unrestricted }?.forEach { chatId ->
+                                statement.setLong(parameterIndex++, chatId)
+                            }
+                            statement.setInt(parameterIndex, limit)
                             statement.executeQuery().use { resultSet ->
                                 while (resultSet.next()) {
                                     val id = resultSet.getLong("id")
@@ -411,6 +430,7 @@ class TelegramOutboxRepository(private val dataSource: DataSource?) {
         chatId: Long,
         messageId: Long,
     ) {
+        if (!trafficPolicy.allowsOutboundChat(chatId)) return
         val ds = dataSource ?: throw DatabaseUnavailableException()
         withContext(Dispatchers.IO) {
             try {
@@ -445,6 +465,7 @@ class TelegramOutboxRepository(private val dataSource: DataSource?) {
         chatId: Long,
         payloadJson: String,
     ) {
+        if (!trafficPolicy.allowsOutboundChat(chatId)) return
         val ds = dataSource ?: throw DatabaseUnavailableException()
         withContext(Dispatchers.IO) {
             try {
@@ -555,8 +576,10 @@ class TelegramOutboxRepository(private val dataSource: DataSource?) {
         action: String,
         throwable: Throwable,
     ) {
-        val safeMessage = sanitizeTelegramForLog(throwable.message ?: throwable::class.simpleName.orEmpty())
-        logger.warn("Telegram outbox {} failed: {}", action, safeMessage)
-        logger.debugTelegramException(throwable) { "Telegram outbox $action exception" }
+        logger.warn(
+            "Telegram outbox operation failed operation={} error_type={}",
+            action,
+            throwable::class.simpleName ?: "unknown",
+        )
     }
 }

@@ -43,6 +43,7 @@ import com.hookah.platform.backend.telegram.NewBatchNotification
 import com.hookah.platform.backend.telegram.StaffBillRequestNotification
 import com.hookah.platform.backend.telegram.StaffChatNotificationResult
 import com.hookah.platform.backend.telegram.StaffChatNotifier
+import com.hookah.platform.backend.telegram.TelegramTrafficPolicy
 import com.hookah.platform.backend.telegram.db.GiftDecisionRequiredException
 import com.hookah.platform.backend.telegram.db.GuestOrderWriteCheckpoint
 import com.hookah.platform.backend.telegram.db.OrderBatchItemInput
@@ -2287,12 +2288,14 @@ class GuestOrderRoutesTest {
             val jdbcUrl = buildJdbcUrl("guest-order-staff-chat-outbox")
             val config = buildConfig(jdbcUrl)
             val dataSource = h2DataSource(jdbcUrl)
+            val trafficPolicy = TelegramTrafficPolicy.unrestricted()
             val staffChatNotifier =
                 StaffChatNotifier(
                     venueRepository = VenueRepository(dataSource),
-                    notificationRepository = StaffChatNotificationRepository(dataSource),
+                    notificationRepository = StaffChatNotificationRepository(dataSource, trafficPolicy),
                     venueSettingsRepository = VenueSettingsRepository(dataSource),
                     isTelegramActive = { true },
+                    trafficPolicy = trafficPolicy,
                     scope = CoroutineScope(Dispatchers.Default),
                     json = json,
                     venueMiniAppUrl = { venueId -> "https://mini.app/miniapp/?mode=venue&venueId=$venueId" },

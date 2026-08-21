@@ -1,8 +1,6 @@
 package com.hookah.platform.backend.telegram.db
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
-import com.hookah.platform.backend.telegram.debugTelegramException
-import com.hookah.platform.backend.telegram.sanitizeTelegramForLog
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -269,8 +267,10 @@ class TelegramInboundUpdateQueueRepository(private val dataSource: DataSource?) 
         action: String,
         throwable: Throwable,
     ) {
-        val safeMessage = sanitizeTelegramForLog(throwable.message ?: throwable::class.simpleName.orEmpty())
-        logger.warn("Telegram inbound queue {} failed: {}", action, safeMessage)
-        logger.debugTelegramException(throwable) { "Telegram inbound queue $action exception" }
+        logger.warn(
+            "Telegram inbound queue operation failed operation={} error_type={}",
+            action,
+            throwable::class.simpleName ?: "unknown",
+        )
     }
 }

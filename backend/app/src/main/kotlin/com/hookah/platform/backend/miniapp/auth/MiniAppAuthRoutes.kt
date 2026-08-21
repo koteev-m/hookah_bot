@@ -2,12 +2,14 @@ package com.hookah.platform.backend.miniapp.auth
 
 import com.hookah.platform.backend.api.ConfigException
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.api.InitDataInvalidException
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.miniapp.api.MiniAppUserDto
 import com.hookah.platform.backend.miniapp.api.TelegramAuthRequest
 import com.hookah.platform.backend.miniapp.api.TelegramAuthResponse
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
+import com.hookah.platform.backend.telegram.TelegramTrafficPolicy
 import com.hookah.platform.backend.telegram.User
 import com.hookah.platform.backend.telegram.db.UserRepository
 import io.ktor.server.application.call
@@ -28,6 +30,7 @@ fun Route.miniAppAuthRoutes(
     appConfig: ApplicationConfig,
     sessionTokenService: SessionTokenService,
     userRepository: UserRepository,
+    telegramTrafficPolicy: TelegramTrafficPolicy,
 ) {
     val initDataConfig = initDataValidationConfig(appConfig)
     val authService =
@@ -36,6 +39,7 @@ fun Route.miniAppAuthRoutes(
             userRepository = userRepository,
             sessionTokenService = sessionTokenService,
             initDataConfig = initDataConfig,
+            telegramTrafficPolicy = telegramTrafficPolicy,
         )
     route("/api") {
         post("/auth/telegram") {
@@ -79,6 +83,7 @@ private class TelegramAuthService(
     private val userRepository: UserRepository,
     private val sessionTokenService: SessionTokenService,
     private val initDataConfig: InitDataValidationConfig,
+    private val telegramTrafficPolicy: TelegramTrafficPolicy,
 ) {
     private val validator =
         TelegramInitDataValidator(
@@ -107,6 +112,10 @@ private class TelegramAuthService(
                     -> throw InitDataInvalidException()
                 }
             }
+
+        if (!telegramTrafficPolicy.allowsMiniAppUser(validated.user.id)) {
+            throw ForbiddenException()
+        }
 
         val upsertedId =
             try {

@@ -1,7 +1,5 @@
 package com.hookah.platform.backend.telegram.db
 
-import com.hookah.platform.backend.telegram.debugTelegramException
-import com.hookah.platform.backend.telegram.sanitizeTelegramForLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
@@ -71,12 +69,7 @@ class StaffChatLinkCodeRepository(
                     LinkCodeResult(code = code, expiresAt = expiresAt, ttlSeconds = ttlSeconds)
                 } catch (e: Exception) {
                     connection.rollback()
-                    logger.warn(
-                        "Failed to create staff chat link code venueId={}: {}",
-                        venueId,
-                        sanitizeTelegramForLog(e.message),
-                    )
-                    logger.debugTelegramException(e) { "createLinkCode exception venueId=$venueId" }
+                    logFailure("create link code", e)
                     null
                 } finally {
                     connection.autoCommit = true
@@ -151,16 +144,7 @@ class StaffChatLinkCodeRepository(
 
                     val authorized =
                         runCatching { authorize(connection, record.venueId) }.getOrElse { throwable ->
-                            logger.warn(
-                                "Authorization check failed venueId={} chatId={} userId={}: {}",
-                                record.venueId,
-                                chatId,
-                                usedByUserId,
-                                sanitizeTelegramForLog(throwable.message),
-                            )
-                            logger.debugTelegramException(
-                                throwable,
-                            ) { "Authorization check exception venueId=${record.venueId}" }
+                            logFailure("authorization check", throwable)
                             false
                         }
                     if (!authorized) {
@@ -171,16 +155,7 @@ class StaffChatLinkCodeRepository(
 
                     val bindResult =
                         runCatching { bind(connection, record.venueId) }.getOrElse { throwable ->
-                            logger.warn(
-                                "Bind attempt failed venueId={} chatId={} userId={}: {}",
-                                record.venueId,
-                                chatId,
-                                usedByUserId,
-                                sanitizeTelegramForLog(throwable.message),
-                            )
-                            logger.debugTelegramException(throwable) {
-                                "bind callback exception venueId=${record.venueId} chatId=$chatId userId=$usedByUserId"
-                            }
+                            logFailure("bind callback", throwable)
                             null
                         } ?: return@use rollbackAndReturn(connection) { LinkAndBindResult.DatabaseError }
 
@@ -211,16 +186,7 @@ class StaffChatLinkCodeRepository(
                     }
                 } catch (e: Exception) {
                     rollbackBestEffort(connection)
-                    logger.warn(
-                        "Failed to link staff chat with code for chatId={} userId={} venueId={}: {}",
-                        chatId,
-                        usedByUserId,
-                        record?.venueId,
-                        sanitizeTelegramForLog(e.message),
-                    )
-                    logger.debugTelegramException(e) {
-                        "linkAndBindWithCode exception chatId=$chatId userId=$usedByUserId venueId=${record?.venueId}"
-                    }
+                    logFailure("link and bind", e)
                     LinkAndBindResult.DatabaseError
                 } finally {
                     connection.autoCommit = initialAutoCommit
@@ -300,10 +266,7 @@ class StaffChatLinkCodeRepository(
             val updatedRows = statement.executeUpdate()
             if (updatedRows != 1) {
                 logger.warn(
-                    "Unexpected rows updated when marking code used codeHash={} chatId={} userId={} updated={}",
-                    codeHash,
-                    chatId,
-                    usedByUserId,
+                    "Unexpected rows updated when marking staff chat code used updated={}",
                     updatedRows,
                 )
                 throw IllegalStateException("Failed to mark code as used")
@@ -313,6 +276,17 @@ class StaffChatLinkCodeRepository(
 
     private fun rollbackBestEffort(connection: Connection) {
         runCatching { connection.rollback() }
+    }
+
+    private fun logFailure(
+        operation: String,
+        throwable: Throwable,
+    ) {
+        logger.warn(
+            "Staff chat link repository operation failed operation={} error_type={}",
+            operation,
+            throwable::class.java.simpleName,
+        )
     }
 
     private fun <T> rollbackAndReturn(

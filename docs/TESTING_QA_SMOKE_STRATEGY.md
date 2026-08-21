@@ -30,6 +30,97 @@ two-account Telegram/Mini App staging smoke remain required before release.
 
 Quality gates must match the blast radius of the change. Do not claim a feature is release-ready from local-only checks when it changes backend runtime, Mini App behavior, Telegram bot, staff-chat, billing/security or migrations. Do not run staging deploy for docs-only changes.
 
+### V125 staging Telegram traffic allowlist prerequisite quality gate
+
+The V125-compatible prerequisite is a backend/configuration security change with no migration and
+no frontend change. Phase 1 is local-only: it must not contact Telegram or staging, create fixtures,
+build a release image, deploy, commit or push. Its mandatory automated matrix is:
+
+- `TelegramTrafficPolicyStartupTest`, `TelegramTrafficPolicyConfigTest` and
+  `TelegramTrafficPolicyTest`: staging startup/configuration
+  fails closed for missing, unknown, unrestricted, empty, duplicate, malformed, zero, wrong-sign or
+  overflowing values; dev/test/production keep their existing default behavior; positive 64-bit
+  user IDs, positive private chats, negative group/supergroup chats and whitespace are deterministic.
+- `TelegramLongPollingWorkerTest`, `TelegramInboundUpdateWorkerTest`,
+  `TelegramBotRouterIdempotencyTest` and `TelegramWebhookRoutesTest`: allowed/denied private and
+  group updates, callback actor/chat combinations, missing actor/chat and unsupported update shapes;
+  direct long-polling/webhook ingress denial occurs before router, idempotency, enqueue or any
+  database write. A denied long-polling update advances only the process-local offset. A historical
+  queued webhook row is first claimed and then marked processed by the defense-in-depth worker gate,
+  but never reaches router/idempotency/domain/outbox writes; future activation still requires zero
+  pending/claimed inbound rows. The same-token restart/redelivery composition test
+  starts the first worker, waits for its batch, cancels and joins its job/scope, then starts a distinct
+  worker with the same router/token configuration and redelivers the batch. With the shared
+  idempotency and outbox mocks, the denied update reaches neither dependency, while the replayed
+  allowed update makes two idempotency acquisition attempts (`true`, then `false`) and exactly one
+  outbound side effect. This is deterministic interaction evidence, not a database restore/restart
+  test; the long-polling path does not write the webhook inbound queue. Runtime configuration starts
+  only the selected long-polling or webhook path, never both.
+- `TelegramAuthRouteTest` and `SessionAuthTest`: signed initData is allowlisted before user upsert or
+  JWT issuance, a denied identity receives generic `403 FORBIDDEN`, and every protected request
+  rechecks the policy so a valid JWT issued before removal is denied after the configured restart.
+- `TelegramOutboxWorkerTest`, `StaffChatNotifierTest` and
+  `TelegramApiClientTrafficPolicyTest`: a disallowed chat row is not
+  claimed, sent or mutated (`attempts`, `status`, `nextAttemptAt`, `processedAt` stay unchanged),
+  while allowed rows retain normal retry/send semantics. Every direct chat-targeted send, edit and
+  callback-answer path, including otherwise valid non-zero disallowed envelopes, is denied through
+  the same policy; there is no raw-client bypass.
+- Captured-log assertions are explicit and scoped: `TelegramTrafficPolicyConfigTest` and
+  `TelegramTrafficPolicyLoggingTest` prove invalid
+  raw identity values are neither logged nor echoed in errors; `TelegramLongPollingWorkerTest`
+  captures a provider/preflight failure sentinel, while `TelegramInboundUpdateWorkerTest` and
+  `TelegramWebhookRoutesTest` capture queued and direct-webhook denial payload sentinels; each asserts
+  that logs retain only safe source/reason/error-type metadata;
+  `TelegramAuthRouteTest` captures the denied initData request and verifies that user IDs, bot token,
+  raw initData and user payload are absent; `TelegramApiClientTrafficPolicyTest` does the same for
+  provider error payloads. These tests do not claim that arbitrary third-party logging outside the
+  tested application paths is redacted.
+
+Run focused groups first, then the relevant extended Telegram suite and backend compile/lint:
+
+```bash
+./gradlew --no-daemon --max-workers=1 :backend:app:test \
+  --tests '*TelegramTrafficPolicyStartupTest*' \
+  --tests '*TelegramTrafficPolicyConfigTest*' \
+  --tests '*TelegramTrafficPolicyTest*' \
+  --tests '*TelegramTrafficPolicyLoggingTest*' \
+  --tests '*TelegramLongPollingWorkerTest*' \
+  --console=plain
+
+./gradlew --no-daemon --max-workers=1 :backend:app:test \
+  --tests '*TelegramInboundUpdateWorkerTest*' \
+  --tests '*TelegramBotRouterIdempotencyTest*' \
+  --tests '*TelegramWebhookConfigTest*' \
+  --tests '*TelegramWebhookRoutesTest*' \
+  --console=plain
+
+./gradlew --no-daemon --max-workers=1 :backend:app:test \
+  --tests '*TelegramAuthRouteTest*' \
+  --tests '*SessionAuthTest*' \
+  --console=plain
+
+./gradlew --no-daemon --max-workers=1 :backend:app:test \
+  --tests '*TelegramOutboxWorkerTest*' \
+  --tests '*StaffChatNotifierTest*' \
+  --tests '*TelegramApiClientTrafficPolicyTest*' \
+  --console=plain
+
+./gradlew --no-daemon --max-workers=1 :backend:app:test \
+  --tests '*TelegramBotRouter*' \
+  --tests '*MiniApp*Auth*' \
+  --console=plain
+
+./gradlew --no-daemon --max-workers=1 :backend:app:compileKotlin --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:ktlintCheck --console=plain
+git diff --check
+git status --short
+```
+
+The Mini App production build is not a Phase 1 gate unless frontend files are actually changed.
+Green local checks prove only implementation readiness for independent review; commit/push, green
+Actions, V125 staging deploy and real Telegram/Mini App smoke belong to later separately authorized
+phases.
+
 ### Booking test-only release hygiene
 
 Before booking schedule assertions, `SubscriptionBillingJob` could race the test's strict

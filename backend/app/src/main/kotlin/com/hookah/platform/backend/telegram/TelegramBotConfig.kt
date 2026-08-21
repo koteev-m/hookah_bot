@@ -30,6 +30,7 @@ data class TelegramBotConfig(
             appEnv: String,
             environment: Map<String, String> = System.getenv(),
         ): TelegramBotConfig {
+            val normalizedAppEnv = appEnv.trim().lowercase(Locale.ROOT)
             val section = config.config("telegram")
             val enabled = section.propertyOrNull("enabled")?.getString()?.toBoolean() ?: false
             val token = section.propertyOrNull("token")?.getString()?.takeIf { it.isNotBlank() }
@@ -43,10 +44,15 @@ data class TelegramBotConfig(
                     ?: "/telegram/webhook"
             val webhookSecretToken =
                 section.propertyOrNull("webhookSecretToken")?.getString()?.takeIf { it.isNotBlank() }
-            if (appEnv == "prod" && enabled && mode == Mode.WEBHOOK && webhookSecretToken.isNullOrBlank()) {
+            if (
+                normalizedAppEnv in RESTRICTED_WEBHOOK_ENVIRONMENTS &&
+                enabled &&
+                mode == Mode.WEBHOOK &&
+                webhookSecretToken.isNullOrBlank()
+            ) {
                 val logger = LoggerFactory.getLogger(TelegramBotConfig::class.java)
-                logger.error("telegram.webhookSecretToken is required for webhook mode in prod")
-                error("telegram.webhookSecretToken must be configured for env=$appEnv")
+                logger.error("telegram.webhookSecretToken is required for webhook mode in restricted environments")
+                error("telegram.webhookSecretToken must be configured for restricted webhook mode")
             }
             val webAppPublicUrl = section.propertyOrNull("webAppPublicUrl")?.getString()?.takeIf { it.isNotBlank() }
             val miniAppEntryEnabled =
@@ -128,5 +134,7 @@ data class TelegramBotConfig(
                 outbox = outbox,
             )
         }
+
+        private val RESTRICTED_WEBHOOK_ENVIRONMENTS = setOf("staging", "prod", "production")
     }
 }

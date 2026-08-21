@@ -1,8 +1,29 @@
 # Project Status
 
-Last verified: 2026-08-18.
+Last verified: 2026-08-21.
 
 ## 1. Current stage
+
+**V125 STAGING TELEGRAM TRAFFIC ALLOWLIST PREREQUISITE / FEATURE-WORKTREE IMPLEMENTED /
+LOCAL VALIDATION COMPLETE / INDEPENDENT REVIEW REQUIRED**.
+
+The prerequisite is being implemented only on the V125-compatible feature worktree based on exact
+SHA `e7aed9cdc243a7be158841a00d214716c21beb94`. It adds a centralized fail-closed staging identity
+policy across Telegram ingress, Mini App auth and protected JWT requests, outbox claim and direct
+chat-targeted calls, plus restricted operator/configuration documentation. It contains no database
+migration or Mini App frontend change. This status does not record review, commit, push, GitHub
+Actions, V125 staging deploy, manual Telegram/Mini App smoke, backup, V126 or any staging/runtime/data
+change. The focused policy/config/lifecycle, webhook/inbound, Mini App auth/session/RBAC,
+outbox/staff-notification and complete Telegram Router suites pass, as do `compileKotlin` and
+`ktlintCheck`. The final comparable full backend suite executed 2080 tests with zero errors and zero
+skips and reported exactly five confirmed V125 baseline failures: three in
+`GuestBookingRepositoryTest` and two in `StaffProfileLinkConcurrencyPostgresTest`. The failure set,
+expected/actual values and assertion lines match the recorded exact-V125 baseline. This is local
+evidence only; independent review, commit, push, green
+Actions and a separately authorized V125 staging phase remain outstanding.
+
+The independent booking release line below remains unchanged context and is not part of this
+V125-compatible prerequisite branch.
 
 **BOOKING CONVERSATION INTEGRITY / THREAD UNIQUENESS AND REAL MULTI-TENANT ISOLATION /
 MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.

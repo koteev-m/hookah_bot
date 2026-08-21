@@ -3,8 +3,6 @@ package com.hookah.platform.backend.telegram.db
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.miniapp.subscription.SubscriptionStatus
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
-import com.hookah.platform.backend.telegram.debugTelegramException
-import com.hookah.platform.backend.telegram.sanitizeTelegramForLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
@@ -388,11 +386,9 @@ open class VenueRepository(private val dataSource: DataSource?) {
                 } catch (e: Exception) {
                     connection.rollback()
                     logger.warn(
-                        "Failed to unlink staff chat chatId={}: {}",
-                        chatId,
-                        sanitizeTelegramForLog(e.message),
+                        "Staff chat unlink failed error_type={}",
+                        e::class.simpleName ?: "unknown",
                     )
-                    logger.debugTelegramException(e) { "unlinkStaffChat exception chatId=$chatId" }
                     UnlinkResult.DatabaseError
                 } finally {
                     connection.autoCommit = true
@@ -458,11 +454,9 @@ open class VenueRepository(private val dataSource: DataSource?) {
                 } catch (e: Exception) {
                     connection.rollback()
                     logger.warn(
-                        "Failed to unlink staff chat venueId={}: {}",
-                        venueId,
-                        sanitizeTelegramForLog(e.message),
+                        "Staff chat unlink failed error_type={}",
+                        e::class.simpleName ?: "unknown",
                     )
-                    logger.debugTelegramException(e) { "unlinkStaffChatByVenueId exception venueId=$venueId" }
                     UnlinkResult.DatabaseError
                 } finally {
                     connection.autoCommit = true
@@ -599,21 +593,13 @@ open class VenueRepository(private val dataSource: DataSource?) {
                     null
                 }
             if (isUniqueViolation) {
-                logger.info(
-                    "Staff chat bind conflict chatId={} venueId={} existingVenueId={}",
-                    chatId,
-                    venueId,
-                    conflictVenueId,
-                )
+                logger.info("Staff chat bind conflict")
                 return BindResult.ChatAlreadyLinked(conflictVenueId)
             }
             logger.warn(
-                "Failed to bind staff chat venueId={} chatId={}: {}",
-                venueId,
-                chatId,
-                sanitizeTelegramForLog(e.message),
+                "Staff chat bind failed error_type={}",
+                e::class.simpleName ?: "unknown",
             )
-            logger.debugTelegramException(e) { "bindStaffChat exception venueId=$venueId chatId=$chatId" }
             return BindResult.DatabaseError
         } finally {
             if (manageTransaction) {

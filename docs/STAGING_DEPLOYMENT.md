@@ -62,6 +62,9 @@ Required staging values:
 - `TELEGRAM_BOT_ENABLED=true`
 - `TELEGRAM_BOT_MODE=long_polling`
 - `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_TRAFFIC_POLICY=ALLOWLIST`
+- `TELEGRAM_ALLOWED_USER_IDS`
+- `TELEGRAM_ALLOWED_CHAT_IDS`
 - `TELEGRAM_WEBAPP_PUBLIC_URL=https://staging.hookahtootah.club/miniapp/`
 - `TELEGRAM_BOT_USERNAME`
 - `PLATFORM_OWNER_TELEGRAM_ID`
@@ -93,16 +96,115 @@ Before deploy, verify the non-secret part of the server env:
 
 ```bash
 cd /opt/hookah-bot
-grep -E '^(POSTGRES_DB|POSTGRES_USER|DB_JDBC_URL|DB_USER|TELEGRAM_WEBAPP_PUBLIC_URL|MINIAPP_STATIC_DIR|MINIAPP_DEV_SERVER_URL|CORS_ALLOWED_HOSTS)=' .env
+grep -E '^(POSTGRES_DB|POSTGRES_USER|DB_JDBC_URL|DB_USER|TELEGRAM_TRAFFIC_POLICY|TELEGRAM_WEBAPP_PUBLIC_URL|MINIAPP_STATIC_DIR|MINIAPP_DEV_SERVER_URL|CORS_ALLOWED_HOSTS)=' .env
 ```
 
 Check secret presence only with masking:
 
 ```bash
-grep -E '^(POSTGRES_PASSWORD|DB_PASSWORD|TELEGRAM_BOT_TOKEN|API_SESSION_JWT_SECRET|TELEGRAM_STAFF_CHAT_LINK_SECRET_PEPPER|AI_API_KEY)=' .env | sed 's/=.*/=***SET***/'
+for key in \
+  POSTGRES_PASSWORD \
+  DB_PASSWORD \
+  TELEGRAM_BOT_TOKEN \
+  TELEGRAM_ALLOWED_USER_IDS \
+  TELEGRAM_ALLOWED_CHAT_IDS \
+  API_SESSION_JWT_SECRET \
+  TELEGRAM_STAFF_CHAT_LINK_SECRET_PEPPER
+do
+  if awk -v expected="$key" '
+    index($0, "=") > 0 && substr($0, 1, index($0, "=") - 1) == expected {
+      seen++
+      value = substr($0, index($0, "=") + 1)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+      probe = value
+      gsub(/[[:space:]]/, "", probe)
+      if (probe != "" && probe != "\"\"" && probe != sprintf("%c%c", 39, 39)) {
+        nonempty++
+      }
+    }
+    END { exit !(seen == 1 && nonempty == 1) }
+  ' .env
+  then
+    printf '%s=%s\n' "$key" '***SET***'
+  else
+    printf '%s=%s\n' "$key" '***MISSING_OR_EMPTY_OR_DUPLICATE***' >&2
+    exit 1
+  fi
+done
 ```
 
-Do not print raw `POSTGRES_PASSWORD`, `DB_PASSWORD`, Telegram tokens, JWT secrets, peppers, or API keys.
+This check exits non-zero for a missing, blank, explicitly empty-quoted or duplicate required key and
+never prints its value. `AI_API_KEY` is optional; if the AI provider is enabled, validate it with the
+same masked single-value check. Do not print raw `POSTGRES_PASSWORD`, `DB_PASSWORD`, Telegram tokens,
+JWT secrets, peppers, API keys or allowlist IDs.
+
+### Mandatory Staging Telegram Traffic Allowlist
+
+Unrestricted Telegram traffic is forbidden when `APP_ENV=staging`. Backend startup must fail before
+database initialization unless all three variables are present and valid:
+
+```dotenv
+TELEGRAM_TRAFFIC_POLICY=ALLOWLIST
+TELEGRAM_ALLOWED_USER_IDS=<positive-user-id>,<positive-user-id>
+TELEGRAM_ALLOWED_CHAT_IDS=<positive-private-chat-id>,<positive-private-chat-id>,<negative-staff-group-id>
+```
+
+The lists are comma-separated canonical decimal signed 64-bit values. Surrounding whitespace is
+trimmed; empty elements, zero, overflow, non-decimal values and duplicates are rejected. User IDs
+must be positive. Chat IDs may be positive private chats or negative groups/supergroups. For every
+allowed Mini App/private-bot user, place the positive ID in both lists. Never commit real IDs.
+
+Store the runtime values only in the mode-0600 server `.env`. Maintain a second restricted operator
+manifest at `/etc/hookah-bot/staging/telegram-allowlist.manifest`. The directory is `root:root` mode
+0700 and the file is `root:root` mode 0600. The manifest maps non-sensitive tester aliases to the
+exact user/private-chat/staff-chat IDs, purpose, approval and review date; it contains no bot token
+and is never uploaded from or copied into the repository. Familiar people and previous staging
+testers lose bot and Mini App access unless their exact IDs are present. That is intended fail-closed
+behavior.
+
+The policy is immutable for the lifetime of a backend process. Updating either list requires:
+
+1. review and update the restricted manifest;
+2. update only the staging `.env`;
+3. perform a controlled backend restart with exactly one backend/poller;
+4. repeat auth, queue, provenance and log gates.
+
+Do not test startup failure against the live staging database. The automated
+`TelegramTrafficPolicyStartupTest` starts the application locally with invalid staging settings and
+proves fail-closed startup. A controlled deploy must also treat the expected policy/config exception
+as a startup failure, never fall back to unrestricted mode.
+
+To prove denied traffic creates no state after a later authorized deploy, snapshot the relevant
+`users`, `telegram_processed_updates`, `telegram_inbound_updates` and `telegram_outbox` facts, submit
+one update and one signed Mini App auth attempt from a deliberately excluded test identity, and
+compare the snapshots. The denied webhook response may be HTTP 200 to acknowledge intentional
+discard, but it must enqueue nothing. Logs may contain only bounded denial reason/counts, never IDs,
+token, initData, update payload or message text.
+
+#### Safe private staff-group ID bootstrap
+
+No application bootstrap endpoint or weakened group policy is needed. The later V125 deployment
+operator must use this procedure before placing a staff group ID in the allowlist:
+
+1. Create a dedicated, private, non-topic Telegram supergroup with a pre-reviewed exact title and
+   post one disposable non-topic message from the operator's account. Do not reuse a real venue group.
+2. In Telegram Desktop copy that message's private link. Accept only the exact
+   `https://t.me/c/<positive-internal-id>/<positive-message-id>` shape and derive the candidate Bot
+   API ID as `-100<positive-internal-id>`. Any public, topic, malformed, ambiguous, non-positive or
+   overflowing link is a STOP.
+3. During the later controlled V125 window, drain and stop the old unrestricted staging poller before
+   adding the unchanged staging bot to this group. Never run a second poller or webhook.
+4. Read the unchanged bot token from its restricted secret store into a temporary mode-0600 curl
+   config outside Git. The token must not appear in shell history, process arguments or command
+   output. Call the read-only Bot API `getChat` for the candidate.
+5. A local verifier must emit only PASS/FAIL and require `ok=true`, exact returned `result.id`, exact
+   `result.type=supergroup` and the exact pre-reviewed `result.title`. Do not print or retain the raw
+   JSON, title, token or ID in general logs.
+6. Only after exact match, write the ID to the restricted manifest and staging `.env`. A mismatch,
+   unavailable `getChat`, uncertain bot membership or inability to keep the token private is a STOP.
+
+Real venue/user data is not disposable smoke data. The allowlist does not authorize using venue 2 or
+any other existing real object as a fixture.
 
 For temporary tunnel-based local dev, keep using local env files and set public URL variables to the exact current public origin. This path is legacy and should not be hardcoded in Kotlin, TypeScript, templates, or committed docs.
 
@@ -456,7 +558,8 @@ Use `TELEGRAM_BOT_MODE=long_polling` for the first staging because:
 Switch to webhook later when staging is stable:
 
 1. Set `TELEGRAM_BOT_MODE=webhook`.
-2. Set `TELEGRAM_WEBHOOK_SECRET_TOKEN`.
+2. Set a nonempty `TELEGRAM_WEBHOOK_SECRET_TOKEN`; staging startup fails closed without it, so an
+   allowlisted actor/chat cannot be forged through an unauthenticated public webhook request.
 3. Keep `TELEGRAM_WEBHOOK_PATH=/telegram/webhook`.
 4. Restart backend.
 5. Register webhook with Telegram:

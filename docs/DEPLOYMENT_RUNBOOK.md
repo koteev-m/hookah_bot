@@ -140,6 +140,56 @@ Rules:
 - Commit only safe examples such as `docs/env/staging.env.example`.
 - Secret presence checks may mask values; raw secret values must not be printed in logs, docs, PR comments or ChatGPT/Codex messages.
 
+### V125 Staging Telegram Traffic Allowlist Prerequisite
+
+This is a separate prerequisite release based on the exact deployed V125-compatible source. It does
+not include V126, a staging deploy, smoke fixture creation or any schema change. Its local phase is
+complete only after the focused policy, inbound, webhook, Mini App session, outbox and direct API
+tests plus compile/lint pass. Commit/push, green Actions, V125 deployment and real-client smoke are
+separate later phases.
+
+Security contract:
+
+- `APP_ENV=staging` accepts only explicit `TELEGRAM_TRAFFIC_POLICY=ALLOWLIST` with nonempty valid
+  `TELEGRAM_ALLOWED_USER_IDS` and `TELEGRAM_ALLOWED_CHAT_IDS`; invalid or incomplete configuration
+  fails startup before DB initialization.
+- The same immutable policy gates long-polling before router/idempotency/DB writes, webhook before
+  enqueue, signed Mini App initData before user/session creation, every protected JWT request,
+  outbox claim and every direct chat-targeted Telegram API call.
+- A positive private identity must appear in both lists. A staff group/supergroup uses its exact
+  negative Bot API chat ID. Denial produces no user, idempotency, inbound-queue or outbound state.
+- Denied long-polling updates are intentionally acknowledged only by advancing the in-memory Telegram
+  offset. Same-token restart may redeliver an unconfirmed update; the central gate/idempotency must
+  still create no duplicate state.
+- The bot token, username and mode are unchanged. The process starts either one long poller or one
+  webhook worker, never both. The deployment phase must additionally prove exactly one backend
+  container and no second poller/webhook for the token.
+- Long-polling startup synchronously requires `getWebhookInfo.url` to be empty before the worker is
+  launched. Webhook mode in `staging`, `prod` or `production` requires a nonempty webhook secret
+  before the route is installed; mandatory Telegram traffic `ALLOWLIST` remains staging-only.
+- Unrestricted staging Telegram traffic remains prohibited after this prerequisite. Testers not in
+  the restricted manifest intentionally lose private-bot and Mini App access.
+
+Real IDs live only in the mode-0600 staging `.env` and
+`/etc/hookah-bot/staging/telegram-allowlist.manifest`, never in Git, build artifacts, logs or release
+chat. The manifest directory is `root:root` mode 0700 and the manifest is `root:root` mode 0600.
+Updating the manifest/list requires review and a controlled backend restart; already issued JWTs are
+checked again on every protected request and therefore become generic `403 FORBIDDEN` after the
+identity is removed and the backend restarts.
+
+The exact staff group must be a dedicated private non-topic test supergroup with a pre-reviewed exact
+title. Accept only an exact Telegram Desktop
+`https://t.me/c/<positive-internal-id>/<positive-message-id>` link and derive the candidate negative
+ID, then—in a later drained V125 window—verify it with read-only Bot API `getChat` using a token-safe
+temporary mode-0600 client config. Require exact ID, exact `supergroup` type and exact expected title
+while emitting only PASS/FAIL. Do not add an application bootstrap bypass. Any ambiguity, mismatch or
+token exposure is STOP. See `docs/STAGING_DEPLOYMENT.md` for the full operator procedure.
+
+Before a later V125 deploy, read-only evidence must show active inbound states and outbox
+`NEW/SENDING` counts are zero. After deploy, a deliberately excluded test identity must yield no
+changes to `users`, `telegram_processed_updates`, `telegram_inbound_updates` or `telegram_outbox`.
+Real venues/users, including venue 2, are not disposable fixtures.
+
 ## Migrations Runbook
 
 Current practice:
