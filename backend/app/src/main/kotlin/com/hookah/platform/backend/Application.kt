@@ -17,6 +17,7 @@ import com.hookah.platform.backend.api.ApiErrorEnvelope
 import com.hookah.platform.backend.api.ApiException
 import com.hookah.platform.backend.api.ApiHeaders
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.billing.BillingAdjustmentRepository
 import com.hookah.platform.backend.billing.BillingConfig
 import com.hookah.platform.backend.billing.BillingInvoiceRepository
@@ -125,8 +126,10 @@ import com.hookah.platform.backend.telegram.TelegramBotRouter
 import com.hookah.platform.backend.telegram.TelegramCallResult
 import com.hookah.platform.backend.telegram.TelegramDownloadedFile
 import com.hookah.platform.backend.telegram.TelegramInboundUpdateWorker
+import com.hookah.platform.backend.telegram.TelegramLongPollingWorker
 import com.hookah.platform.backend.telegram.TelegramOutboxEnqueuer
 import com.hookah.platform.backend.telegram.TelegramOutboxWorker
+import com.hookah.platform.backend.telegram.TelegramTrafficPolicy
 import com.hookah.platform.backend.telegram.TelegramUpdate
 import com.hookah.platform.backend.telegram.buildWebAppUrl
 import com.hookah.platform.backend.telegram.db.ChatContextRepository
@@ -158,9 +161,6 @@ import com.hookah.platform.backend.telegram.db.VenuePromotionRuleRepository
 import com.hookah.platform.backend.telegram.db.VenueRepository
 import com.hookah.platform.backend.telegram.db.VenueSettingsRepository
 import com.hookah.platform.backend.telegram.db.VenueStatsRepository
-import com.hookah.platform.backend.telegram.debugTelegramException
-import com.hookah.platform.backend.telegram.sanitizeTelegramForLog
-import com.hookah.platform.backend.tools.retryWithBackoff
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.engine.java.Java
@@ -178,11 +178,14 @@ import io.ktor.server.application.ApplicationStarted
 import io.ktor.server.application.ApplicationStopped
 import io.ktor.server.application.ApplicationStopping
 import io.ktor.server.application.call
+import io.ktor.server.application.createRouteScopedPlugin
 import io.ktor.server.application.install
 import io.ktor.server.auth.Authentication
+import io.ktor.server.auth.AuthenticationChecked
 import io.ktor.server.auth.authenticate
 import io.ktor.server.auth.jwt.JWTPrincipal
 import io.ktor.server.auth.jwt.jwt
+import io.ktor.server.auth.principal
 import io.ktor.server.config.ApplicationConfig
 import io.ktor.server.http.content.staticFiles
 import io.ktor.server.metrics.micrometer.MicrometerMetrics
@@ -218,9 +221,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
@@ -269,7 +271,29 @@ internal data class ModuleOverrides(
     val afterPlatformGuestTeardown: (suspend (chatId: Long, actorUserId: Long) -> Unit)? = null,
     val guestOrderContextCheckpoint: (GuestOrderContextCheckpoint) -> Unit = {},
     val guestOrderWriteCheckpoint: (GuestOrderWriteCheckpoint) -> Unit = {},
+    val telegramCommandMenuConfigurator: suspend (TelegramApiClient) -> Unit =
+        ::configureTelegramCommandMenuSafely,
 )
+
+private class TelegramTrafficPolicySessionGuardConfig {
+    lateinit var trafficPolicy: TelegramTrafficPolicy
+}
+
+private val TelegramTrafficPolicySessionGuard =
+    createRouteScopedPlugin(
+        name = "TelegramTrafficPolicySessionGuard",
+        createConfiguration = ::TelegramTrafficPolicySessionGuardConfig,
+    ) {
+        val trafficPolicy = pluginConfig.trafficPolicy
+        on(AuthenticationChecked) { call ->
+            val telegramUserId =
+                call.principal<JWTPrincipal>()?.payload?.subject?.toLongOrNull()
+                    ?: return@on
+            if (!trafficPolicy.allowsMiniAppUser(telegramUserId)) {
+                throw ForbiddenException()
+            }
+        }
+    }
 
 private fun ApplicationCall.isApiRequest(): Boolean {
     val p = request.path()
@@ -323,6 +347,8 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                 ?: System.getenv("APP_ENV")
                 ?: "dev"
         ).trim().lowercase(Locale.ROOT)
+    val telegramTrafficPolicy = TelegramTrafficPolicy.from(appConfig, appEnv)
+    val telegramConfig = TelegramBotConfig.from(appConfig, appEnv)
     val dbConfig = DbConfig.from(appConfig)
     val appVersion = appConfig.optionalString("app.version") ?: "dev"
     val miniAppDevServerUrl = appConfig.optionalString("miniapp.devServerUrl")?.takeIf { it.isNotBlank() }
@@ -534,7 +560,6 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
         logger.info("DB enabled with jdbcUrl={}", redactJdbcUrl(dbConfig.jdbcUrl.orEmpty()))
     }
 
-    val telegramConfig = TelegramBotConfig.from(appConfig, appEnv)
     if (
         (appEnv == "prod" || appEnv == "production") &&
         telegramConfig.enabled &&
@@ -550,11 +575,13 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
     var telegramRouter: TelegramBotRouter? = null
     var telegramWebhookWorkerScope: CoroutineScope? = null
     var telegramWebhookWorkerJob: Job? = null
+    var telegramLongPollingWorkerJob: Job? = null
     var telegramOutboxWorkerScope: CoroutineScope? = null
     var telegramOutboxWorkerJob: Job? = null
     val telegramInboundUpdateQueueRepository = TelegramInboundUpdateQueueRepository(dataSource)
-    val telegramOutboxRepository = TelegramOutboxRepository(dataSource)
-    val telegramOutboxEnqueuer = TelegramOutboxEnqueuer(telegramOutboxRepository, telegramJson)
+    val telegramOutboxRepository = TelegramOutboxRepository(dataSource, telegramTrafficPolicy)
+    val telegramOutboxEnqueuer =
+        TelegramOutboxEnqueuer(telegramOutboxRepository, telegramJson, telegramTrafficPolicy)
     val bookingMessageStaffChatNotifier =
         BookingMessageStaffChatNotifier(
             outboxEnqueuer = telegramOutboxEnqueuer,
@@ -630,6 +657,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
         BookingReminderWorker(
             repository = guestBookingRepository,
             outboxEnqueuer = telegramOutboxEnqueuer,
+            outboundClaimScope = telegramTrafficPolicy.outboundClaimScope,
             venueSettingsRepository = venueSettingsRepository,
             interval = bookingReminderWorkerConfig.interval,
             batchSize = bookingReminderWorkerConfig.batchSize,
@@ -640,13 +668,14 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
             dataSource = dataSource,
             pepper = staffInviteConfig.secretPepper,
         )
-    val staffChatNotificationRepository = StaffChatNotificationRepository(dataSource)
+    val staffChatNotificationRepository = StaffChatNotificationRepository(dataSource, telegramTrafficPolicy)
     val staffChatNotifier =
         StaffChatNotifier(
             venueRepository = venueRepository,
             notificationRepository = staffChatNotificationRepository,
             venueSettingsRepository = venueSettingsRepository,
             isTelegramActive = { telegramConfig.enabled && !telegramConfig.token.isNullOrBlank() },
+            trafficPolicy = telegramTrafficPolicy,
             scope = staffChatNotifierScope,
             json = telegramJson,
             venueMiniAppUrl = { venueId ->
@@ -685,6 +714,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                         }
                     },
                 json = telegramJson,
+                trafficPolicy = telegramTrafficPolicy,
             )
         telegramRouter =
             TelegramBotRouter(
@@ -745,7 +775,48 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                 bookingRemindersEnabled = bookingReminderWorkerConfig.enabled,
                 repeatOrderResolver = repeatOrderResolver,
                 guestTableContextLifecycleRepository = guestTableContextLifecycleRepository,
+                trafficPolicy = telegramTrafficPolicy,
             )
+
+        when (telegramConfig.mode) {
+            TelegramBotConfig.Mode.LONG_POLLING -> {
+                val router = telegramRouter!!
+                telegramLongPollingWorkerJob =
+                    runBlocking {
+                        TelegramLongPollingWorker(
+                            getUpdates = telegramApiClient::getUpdates,
+                            getWebhookUrl = { telegramApiClient.getWebhookInfo().url },
+                            processUpdate = router::process,
+                            trafficPolicy = telegramTrafficPolicy,
+                            timeoutSeconds = telegramConfig.longPollingTimeoutSeconds,
+                            scope = botScope,
+                        ).start()
+                    }
+            }
+
+            TelegramBotConfig.Mode.WEBHOOK -> {
+                logger.info("Telegram webhook mode enabled at {}", telegramConfig.webhookPath)
+                if (dataSource != null) {
+                    val router = telegramRouter!!
+                    telegramWebhookWorkerScope =
+                        CoroutineScope(
+                            SupervisorJob() + Dispatchers.IO + CoroutineName("telegram-webhook-worker"),
+                        )
+                    val worker =
+                        TelegramInboundUpdateWorker(
+                            repository = telegramInboundUpdateQueueRepository,
+                            processUpdate = router::process,
+                            json = telegramJson,
+                            scope = telegramWebhookWorkerScope!!,
+                            trafficPolicy = telegramTrafficPolicy,
+                            metrics = appMetrics,
+                        )
+                    telegramWebhookWorkerJob = worker.start()
+                } else {
+                    logger.warn("Telegram webhook worker disabled: database is not configured")
+                }
+            }
+        }
 
         if (dataSource != null) {
             telegramOutboxWorkerScope =
@@ -769,80 +840,6 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
             telegramOutboxWorkerJob = outboxWorker.start()
         } else {
             logger.warn("Telegram outbox worker disabled: database is not configured")
-        }
-
-        when (telegramConfig.mode) {
-            TelegramBotConfig.Mode.LONG_POLLING -> {
-                val router = telegramRouter!!
-                botScope.launch {
-                    var offset: Long? = null
-                    while (isActive) {
-                        val updates: List<TelegramUpdate> =
-                            try {
-                                retryWithBackoff(
-                                    maxAttempts = 3,
-                                    maxDelayMillis = 2000,
-                                    jitterRatio = 0.2,
-                                    shouldRetry = { e -> e !is CancellationException },
-                                ) {
-                                    telegramApiClient.getUpdates(
-                                        offset,
-                                        telegramConfig.longPollingTimeoutSeconds,
-                                    )
-                                }
-                            } catch (e: CancellationException) {
-                                throw e
-                            } catch (e: Exception) {
-                                logger.warn("Telegram long polling error: {}", sanitizeTelegramForLog(e.message))
-                                logger.debugTelegramException(e) { "Telegram long polling exception" }
-                                delay(1000)
-                                continue
-                            }
-
-                        val sortedUpdates = updates.sortedBy { it.updateId }
-                        for (update in sortedUpdates) {
-                            try {
-                                router.process(update)
-                            } catch (e: CancellationException) {
-                                throw e
-                            } catch (e: Exception) {
-                                logger.warn(
-                                    "Telegram update processing failed id={}: {}",
-                                    update.updateId,
-                                    sanitizeTelegramForLog(e.message),
-                                )
-                                logger.debugTelegramException(e) {
-                                    "Telegram update processing exception id=${update.updateId}"
-                                }
-                            } finally {
-                                offset = update.updateId + 1
-                            }
-                        }
-                    }
-                }
-            }
-
-            TelegramBotConfig.Mode.WEBHOOK -> {
-                logger.info("Telegram webhook mode enabled at {}", telegramConfig.webhookPath)
-                if (dataSource != null) {
-                    val router = telegramRouter!!
-                    telegramWebhookWorkerScope =
-                        CoroutineScope(
-                            SupervisorJob() + Dispatchers.IO + CoroutineName("telegram-webhook-worker"),
-                        )
-                    val worker =
-                        TelegramInboundUpdateWorker(
-                            repository = telegramInboundUpdateQueueRepository,
-                            router = router,
-                            json = telegramJson,
-                            scope = telegramWebhookWorkerScope!!,
-                            metrics = appMetrics,
-                        )
-                    telegramWebhookWorkerJob = worker.start()
-                } else {
-                    logger.warn("Telegram webhook worker disabled: database is not configured")
-                }
-            }
         }
     }
 
@@ -873,7 +870,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
             val scope = telegramScope
             if (apiClient != null && scope != null) {
                 scope.launch {
-                    configureTelegramCommandMenu(apiClient)
+                    overrides.telegramCommandMenuConfigurator(apiClient)
                 }
             }
         }
@@ -886,6 +883,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
         bookingReminderJob?.cancel()
         httpClient.close()
         telegramApiClient?.close()
+        telegramLongPollingWorkerJob?.cancel()
         telegramScope?.cancel()
         telegramWebhookWorkerJob?.cancel()
         telegramWebhookWorkerScope?.cancel()
@@ -1120,7 +1118,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
             billingService = billingService,
         )
 
-        miniAppAuthRoutes(appConfig, sessionTokenService, userRepository)
+        miniAppAuthRoutes(appConfig, sessionTokenService, userRepository, telegramTrafficPolicy)
 
         val guestInfoMediaDownloader: (suspend (String) -> TelegramDownloadedFile?)? =
             overrides.telegramFileDownloader ?: telegramApiClient?.let { client ->
@@ -1140,6 +1138,9 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
         }
 
         authenticate("miniapp-session") {
+            install(TelegramTrafficPolicySessionGuard) {
+                trafficPolicy = telegramTrafficPolicy
+            }
             route("/api") {
                 route("/guest") {
                     guestVenueRoutes(
@@ -1413,25 +1414,33 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     try {
                         val payload = call.receiveText()
                         val update = telegramJson.decodeFromString(TelegramUpdate.serializer(), payload)
+                        val decision = telegramTrafficPolicy.evaluateInbound(update)
+                        if (decision is TelegramTrafficPolicy.InboundDecision.Denied) {
+                            logger.info(
+                                "Telegram inbound update denied source=webhook reason={}",
+                                decision.reason,
+                            )
+                            call.respond(HttpStatusCode.OK)
+                            return@post
+                        }
                         telegramInboundUpdateQueueRepository.enqueue(update.updateId, payload)
                         call.respond(HttpStatusCode.OK)
                     } catch (e: CancellationException) {
                         throw e
-                    } catch (e: SerializationException) {
-                        logger.warn("Webhook enqueue failed: {}", sanitizeTelegramForLog(e.message))
-                        logger.debugTelegramException(e) { "Webhook enqueue exception" }
+                    } catch (_: SerializationException) {
+                        logger.warn("Webhook enqueue failed errorType=invalid_payload")
                         call.respond(HttpStatusCode.BadRequest)
-                    } catch (e: ContentTransformationException) {
-                        logger.warn("Webhook enqueue failed: {}", sanitizeTelegramForLog(e.message))
-                        logger.debugTelegramException(e) { "Webhook enqueue exception" }
+                    } catch (_: ContentTransformationException) {
+                        logger.warn("Webhook enqueue failed errorType=invalid_request")
                         call.respond(HttpStatusCode.BadRequest)
-                    } catch (e: DatabaseUnavailableException) {
-                        logger.warn("Webhook enqueue failed: {}", sanitizeTelegramForLog(e.message))
-                        logger.debugTelegramException(e) { "Webhook enqueue exception" }
+                    } catch (_: DatabaseUnavailableException) {
+                        logger.warn("Webhook enqueue failed errorType=database_unavailable")
                         call.respond(HttpStatusCode.ServiceUnavailable)
                     } catch (e: Exception) {
-                        logger.warn("Webhook enqueue failed: {}", sanitizeTelegramForLog(e.message))
-                        logger.debugTelegramException(e) { "Webhook enqueue exception" }
+                        logger.warn(
+                            "Webhook enqueue failed errorType={}",
+                            e::class.simpleName ?: "unknown",
+                        )
                         call.respond(HttpStatusCode.InternalServerError)
                     }
                 }
@@ -1555,6 +1564,19 @@ private suspend fun ApplicationCall.redirectToMiniAppRoot() {
     respondRedirect(url = target, permanent = false)
 }
 
+internal suspend fun configureTelegramCommandMenuSafely(apiClient: TelegramApiClient) {
+    try {
+        configureTelegramCommandMenu(apiClient)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        logger.warn(
+            "Telegram command menu configuration failed errorType={}",
+            e::class.simpleName ?: "unknown",
+        )
+    }
+}
+
 private suspend fun configureTelegramCommandMenu(apiClient: TelegramApiClient) {
     val commands =
         buildJsonArray {
@@ -1586,81 +1608,57 @@ private suspend fun configureTelegramCommandMenu(apiClient: TelegramApiClient) {
         )
 
     scopes.forEach { scopeType ->
-        val deletePayload =
-            buildJsonObject {
-                put(
-                    "scope",
-                    buildJsonObject {
-                        put("type", scopeType)
-                    },
-                )
-            }
-        when (val result = apiClient.callMethod("deleteMyCommands", deletePayload)) {
+        when (val result = apiClient.deleteMyCommands(scopeType)) {
             is TelegramCallResult.Success -> logger.info("Telegram bot commands cleared for scope={}", scopeType)
             is TelegramCallResult.Failure ->
                 logger.warn(
-                    "Failed to clear Telegram bot commands for scope={}: {}{}",
+                    "Failed to clear Telegram bot commands for scope={} errorCode={} retryAfterSeconds={}",
                     scopeType,
-                    sanitizeTelegramForLog(result.description),
-                    result.errorCode?.let { " (code=$it)" } ?: "",
+                    result.errorCode,
+                    result.retryAfterSeconds,
                 )
+            TelegramCallResult.TrafficDenied ->
+                logger.error("Telegram bot command configuration denied unexpectedly")
         }
     }
 
     scopes.forEach { scopeType ->
-        val commandsPayload =
-            buildJsonObject {
-                put(
-                    "scope",
-                    buildJsonObject {
-                        put("type", scopeType)
-                    },
-                )
-                put("commands", commands)
-            }
-        when (val result = apiClient.callMethod("setMyCommands", commandsPayload)) {
+        when (val result = apiClient.setMyCommands(scopeType, commands)) {
             is TelegramCallResult.Success -> logger.info("Telegram bot commands configured for scope={}", scopeType)
             is TelegramCallResult.Failure ->
                 logger.warn(
-                    "Failed to configure Telegram bot commands for scope={}: {}{}",
+                    "Failed to configure Telegram bot commands for scope={} errorCode={} retryAfterSeconds={}",
                     scopeType,
-                    sanitizeTelegramForLog(result.description),
-                    result.errorCode?.let { " (code=$it)" } ?: "",
+                    result.errorCode,
+                    result.retryAfterSeconds,
                 )
+            TelegramCallResult.TrafficDenied ->
+                logger.error("Telegram bot command configuration denied unexpectedly")
         }
     }
 
-    val defaultCommandsPayload =
-        buildJsonObject {
-            put("commands", commands)
-        }
-    when (val result = apiClient.callMethod("setMyCommands", defaultCommandsPayload)) {
+    when (val result = apiClient.setMyCommands(null, commands)) {
         is TelegramCallResult.Success -> logger.info("Telegram bot commands configured")
         is TelegramCallResult.Failure ->
             logger.warn(
-                "Failed to configure Telegram bot commands: {}{}",
-                sanitizeTelegramForLog(result.description),
-                result.errorCode?.let { " (code=$it)" } ?: "",
+                "Failed to configure Telegram bot commands errorCode={} retryAfterSeconds={}",
+                result.errorCode,
+                result.retryAfterSeconds,
             )
+        TelegramCallResult.TrafficDenied ->
+            logger.error("Telegram bot command configuration denied unexpectedly")
     }
 
-    val menuButtonPayload =
-        buildJsonObject {
-            put(
-                "menu_button",
-                buildJsonObject {
-                    put("type", "commands")
-                },
-            )
-        }
-    when (val result = apiClient.callMethod("setChatMenuButton", menuButtonPayload)) {
+    when (val result = apiClient.setCommandsMenuButton()) {
         is TelegramCallResult.Success -> logger.info("Telegram menu button configured")
         is TelegramCallResult.Failure ->
             logger.warn(
-                "Failed to configure Telegram menu button: {}{}",
-                sanitizeTelegramForLog(result.description),
-                result.errorCode?.let { " (code=$it)" } ?: "",
+                "Failed to configure Telegram menu button errorCode={} retryAfterSeconds={}",
+                result.errorCode,
+                result.retryAfterSeconds,
             )
+        TelegramCallResult.TrafficDenied ->
+            logger.error("Telegram menu button configuration denied unexpectedly")
     }
 }
 

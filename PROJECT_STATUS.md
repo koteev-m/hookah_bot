@@ -1,8 +1,30 @@
 # Project Status
 
-Last verified: 2026-08-18.
+Last verified: 2026-08-23.
 
 ## 1. Current stage
+
+**TELEGRAM TRAFFIC ALLOWLIST / MAIN PORT IMPLEMENTED LOCALLY /
+PORT-SCOPED LOCAL VALIDATION PASSED / READY FOR INDEPENDENT REVIEW / UNCOMMITTED**.
+
+The reviewed V125 prerequisite commit `b4e13da3179438fad69d2344e1cb136a56f95f6c` is already the
+allowlist-enabled staging rollback baseline. HT-05 ports that behavior onto exact main
+`84e8c798b3d8ce3d789f79bbdbf10e565a2dfd33` in a separate worktree while preserving the booking
+conversation, unread cursor, timezone, PostgreSQL V126/H2 V127 and deployment-preflight changes
+that landed after the common base. The changeset is local and uncommitted. Required
+allowlist/booking tests, the full Telegram router suite, H2/PostgreSQL migration parity, backend
+compile/style, the Mini App production build and the structured `216/216` browser smoke pass with
+zero skips in the scoped gates. Task-local read-only audits found a CI XML-floor mismatch, unsafe
+rollback wording, stale policy-test expectations and four unbounded best-effort Telegram log
+contexts; those findings are fixed and the final task-local re-audits report no remaining actionable
+issue. A separate independent review remains pending. The complete backend run reports `2127`
+tests, `2` failures, `0` errors and `0` skips; exact main reproduces both failures in
+`StaffProfileLinkConcurrencyPostgresTest` with the same two-waiter lock-observation assertion,
+outside this port's changed paths. No push, PR, merge, main-port deploy, V126 execution or staging
+mutation is recorded. Staging Manifest B remains active and unrestricted staging rollback is
+prohibited.
+
+The booking release line below remains unchanged product context and is preserved by this port.
 
 **BOOKING CONVERSATION UX / DISTINCT LABELS, INBOX AND UNREAD DISCOVERABILITY /
 MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
@@ -28,8 +50,8 @@ included. Independent review, green Actions, migration rollout, staging redeploy
 Guest/Venue/Telegram smoke are still required; no staging smoke is recorded for this slice.
 
 Fresh local evidence for the three current findings is exact, not aggregate-only:
-`SupportThreadReadRepositoryTest 21/21`, `BookingConversationRoutesTest 8/8`,
-`SupportTicketRoutesTest 13/13` and real-PostgreSQL
+`SupportThreadReadRepositoryTest 21/21`, `BookingConversationRoutesTest 9/9`,
+`SupportTicketRoutesTest 15/15` and real-PostgreSQL
 `SupportThreadReadConcurrencyPostgresTest 6/6` each report zero skipped/failures/errors; the full
 structured Playwright run reports `216/216` with zero unexpected/flaky/skipped/runner errors or
 failed attempts. This is local validation only, not green Actions or staging evidence.

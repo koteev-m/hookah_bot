@@ -59,6 +59,7 @@ class TelegramBotRouterLinkCommandTest {
 
     private fun createRouter(botUsername: String? = "TestBot"): TelegramBotRouter =
         TelegramBotRouter(
+            trafficPolicy = TelegramTrafficPolicy.unrestricted(),
             config =
                 TelegramBotConfig(
                     enabled = true,

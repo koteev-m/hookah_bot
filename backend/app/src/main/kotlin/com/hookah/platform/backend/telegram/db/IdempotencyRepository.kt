@@ -1,8 +1,6 @@
 package com.hookah.platform.backend.telegram.db
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
-import com.hookah.platform.backend.telegram.debugTelegramException
-import com.hookah.platform.backend.telegram.sanitizeTelegramForLog
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -61,9 +59,10 @@ class IdempotencyRepository(private val dataSource: DataSource?) {
     }
 
     private fun logInsertFailure(throwable: Throwable) {
-        val safeMessage = sanitizeTelegramForLog(throwable.message ?: throwable::class.simpleName.orEmpty())
-        logger.warn("Idempotency insert failed: {}", safeMessage)
-        logger.debugTelegramException(throwable) { "Idempotency insert exception" }
+        logger.warn(
+            "Telegram idempotency operation failed operation=insert error_type={}",
+            throwable::class.simpleName ?: "unknown",
+        )
     }
 
     private fun isUniqueViolation(throwable: SQLException): Boolean {

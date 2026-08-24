@@ -8,9 +8,15 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.sql.Connection
 
+enum class TelegramOutboxEnqueueOutcome {
+    ENQUEUED,
+    SKIPPED_TRAFFIC_POLICY,
+}
+
 class TelegramOutboxEnqueuer(
     private val repository: TelegramOutboxRepository,
     private val json: Json,
+    private val trafficPolicy: TelegramTrafficPolicy,
 ) {
     suspend fun enqueueSendMessage(
         chatId: Long,
@@ -18,7 +24,10 @@ class TelegramOutboxEnqueuer(
         replyMarkup: ReplyMarkup? = null,
         parseMode: String? = null,
         dedupeKey: String? = null,
-    ) {
+    ): TelegramOutboxEnqueueOutcome {
+        if (!trafficPolicy.allowsOutboundChat(chatId)) {
+            return TelegramOutboxEnqueueOutcome.SKIPPED_TRAFFIC_POLICY
+        }
         val payload = buildSendMessagePayload(json, chatId, text, replyMarkup, parseMode)
         repository.enqueue(
             chatId = chatId,
@@ -26,6 +35,7 @@ class TelegramOutboxEnqueuer(
             payloadJson = json.encodeToString(SendMessagePayload.serializer(), payload),
             dedupeKey = dedupeKey,
         )
+        return TelegramOutboxEnqueueOutcome.ENQUEUED
     }
 
     fun enqueueBookingSendMessageInTransaction(
@@ -35,7 +45,10 @@ class TelegramOutboxEnqueuer(
         replyMarkup: ReplyMarkup? = null,
         parseMode: String? = null,
         dedupeKey: String? = null,
-    ) {
+    ): TelegramOutboxEnqueueOutcome {
+        if (!trafficPolicy.allowsOutboundChat(chatId)) {
+            return TelegramOutboxEnqueueOutcome.SKIPPED_TRAFFIC_POLICY
+        }
         val payload = buildSendMessagePayload(json, chatId, text, replyMarkup, parseMode)
         repository.enqueueStrictBookingOnConnection(
             connection = connection,
@@ -44,6 +57,7 @@ class TelegramOutboxEnqueuer(
             payloadJson = json.encodeToString(SendMessagePayload.serializer(), payload),
             dedupeKey = dedupeKey,
         )
+        return TelegramOutboxEnqueueOutcome.ENQUEUED
     }
 
     suspend fun enqueueEditMessageText(
@@ -52,7 +66,10 @@ class TelegramOutboxEnqueuer(
         text: String,
         replyMarkup: ReplyMarkup? = null,
         dedupeKey: String? = null,
-    ) {
+    ): TelegramOutboxEnqueueOutcome {
+        if (!trafficPolicy.allowsOutboundChat(chatId)) {
+            return TelegramOutboxEnqueueOutcome.SKIPPED_TRAFFIC_POLICY
+        }
         val payload = buildEditMessageTextPayload(json, chatId, messageId, text, replyMarkup)
         repository.enqueue(
             chatId = chatId,
@@ -60,6 +77,7 @@ class TelegramOutboxEnqueuer(
             payloadJson = json.encodeToString(EditMessageTextPayload.serializer(), payload),
             dedupeKey = dedupeKey,
         )
+        return TelegramOutboxEnqueueOutcome.ENQUEUED
     }
 
     suspend fun enqueueSendPhoto(
@@ -67,13 +85,17 @@ class TelegramOutboxEnqueuer(
         photo: String,
         caption: String? = null,
         replyMarkup: ReplyMarkup? = null,
-    ) {
+    ): TelegramOutboxEnqueueOutcome {
+        if (!trafficPolicy.allowsOutboundChat(chatId)) {
+            return TelegramOutboxEnqueueOutcome.SKIPPED_TRAFFIC_POLICY
+        }
         val payload = buildSendPhotoPayload(json, chatId, photo, caption, replyMarkup)
         repository.enqueue(
             chatId = chatId,
             method = "sendPhoto",
             payloadJson = json.encodeToString(SendPhotoPayload.serializer(), payload),
         )
+        return TelegramOutboxEnqueueOutcome.ENQUEUED
     }
 
     suspend fun enqueueSendDocument(
@@ -81,13 +103,17 @@ class TelegramOutboxEnqueuer(
         document: String,
         caption: String? = null,
         replyMarkup: ReplyMarkup? = null,
-    ) {
+    ): TelegramOutboxEnqueueOutcome {
+        if (!trafficPolicy.allowsOutboundChat(chatId)) {
+            return TelegramOutboxEnqueueOutcome.SKIPPED_TRAFFIC_POLICY
+        }
         val payload = buildSendDocumentPayload(json, chatId, document, caption, replyMarkup)
         repository.enqueue(
             chatId = chatId,
             method = "sendDocument",
             payloadJson = json.encodeToString(SendDocumentPayload.serializer(), payload),
         )
+        return TelegramOutboxEnqueueOutcome.ENQUEUED
     }
 
     suspend fun enqueueAnswerCallbackQuery(
@@ -95,7 +121,10 @@ class TelegramOutboxEnqueuer(
         callbackQueryId: String,
         text: String? = null,
         showAlert: Boolean = false,
-    ) {
+    ): TelegramOutboxEnqueueOutcome {
+        if (!trafficPolicy.allowsOutboundChat(chatId)) {
+            return TelegramOutboxEnqueueOutcome.SKIPPED_TRAFFIC_POLICY
+        }
         val payload: JsonObject =
             buildJsonObject {
                 put("callback_query_id", callbackQueryId)
@@ -109,5 +138,6 @@ class TelegramOutboxEnqueuer(
             method = "answerCallbackQuery",
             payloadJson = json.encodeToString(JsonObject.serializer(), payload),
         )
+        return TelegramOutboxEnqueueOutcome.ENQUEUED
     }
 }

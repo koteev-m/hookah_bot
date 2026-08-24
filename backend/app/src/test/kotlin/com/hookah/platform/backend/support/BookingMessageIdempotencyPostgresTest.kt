@@ -1,16 +1,20 @@
 package com.hookah.platform.backend.support
 
 import com.hookah.platform.backend.api.BookingMessageIdempotencyPayloadMismatchException
+import com.hookah.platform.backend.api.ConfigException
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.telegram.BookingMessageStaffChatNotifier
 import com.hookah.platform.backend.telegram.SendMessagePayload
+import com.hookah.platform.backend.telegram.TelegramOutboxEnqueueOutcome
 import com.hookah.platform.backend.telegram.TelegramOutboxEnqueuer
+import com.hookah.platform.backend.telegram.TelegramTrafficPolicy
 import com.hookah.platform.backend.telegram.bookingMessageStaffAlertDedupeKey
 import com.hookah.platform.backend.telegram.buildSendMessagePayload
 import com.hookah.platform.backend.telegram.db.TelegramOutboxRepository
 import com.hookah.platform.backend.test.PostgresTestEnv
 import com.zaxxer.hikari.HikariDataSource
+import io.ktor.server.config.MapApplicationConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -78,6 +82,26 @@ class BookingMessageIdempotencyPostgresTest {
             )
             assertTrue(!alert.payloadJson.contains("Guest secret reply"), alert.payloadJson)
             assertTrue(!alert.payloadJson.contains("authorUserId"), alert.payloadJson)
+        }
+
+    @Test
+    fun `allowed guest message commits its ack while a denied staff group creates no alert`() =
+        withFixture { fixture ->
+            fixture.linkCanonicalStaffChat(chatId = -777L, timezone = "Europe/Moscow")
+
+            val write =
+                fixture.writeGuestWithStaffAlert(
+                    clientMessageId = UUID.randomUUID().toString(),
+                    text = "Allowed guest with denied staff group",
+                    enqueuer = fixture.guestOnlyOutboxEnqueuer,
+                )
+
+            assertTrue(write.created)
+            assertEquals(1, fixture.messageCount())
+            assertEquals(1, fixture.outboxCount())
+            assertEquals(fixture.guestUserId, fixture.singleOutbox().chatId)
+            assertEquals(0, fixture.staffAlertCount())
+            assertEquals(0, fixture.outboxCountForChat(-777L))
         }
 
     @Test
@@ -298,6 +322,39 @@ class BookingMessageIdempotencyPostgresTest {
         }
 
     @Test
+    fun `traffic policy rejection rolls back and the same key commits once after allow`() =
+        withFixture { fixture ->
+            val key = UUID.randomUUID().toString()
+            val failure =
+                runCatching {
+                    fixture.writeVenue(
+                        clientMessageId = key,
+                        text = "Retry after allowlist correction",
+                        enqueuer = fixture.rejectedOutboxEnqueuer,
+                    )
+                }.exceptionOrNull()
+
+            assertIs<ConfigException>(failure)
+            assertEquals(0, fixture.bookingThreadCount())
+            assertEquals(0, fixture.messageCount())
+            assertEquals(0, fixture.outboxCount())
+            assertEquals(0, fixture.readMarkerCount())
+            assertEquals(0, fixture.auditCount())
+
+            val committed = fixture.writeVenue(key, "Retry after allowlist correction")
+            val replay = fixture.writeVenue(key, "Retry after allowlist correction")
+
+            assertTrue(committed.created)
+            assertTrue(!replay.created)
+            assertEquals(committed.message.id, replay.message.id)
+            assertEquals(1, fixture.bookingThreadCount())
+            assertEquals(1, fixture.messageCount())
+            assertEquals(1, fixture.outboxCount())
+            assertEquals(0, fixture.readMarkerCount())
+            assertEquals(0, fixture.auditCount())
+        }
+
+    @Test
     fun `outbox insert failure rolls back new thread message and outbox`() =
         withFixture { fixture ->
             assertEquals(0, fixture.bookingThreadCount())
@@ -463,10 +520,42 @@ class BookingMessageIdempotencyPostgresTest {
         val venueId: Long
         val bookingId: Long
         private val json = Json { ignoreUnknownKeys = true }
+        private val trafficPolicy = TelegramTrafficPolicy.unrestricted()
         private val outboxEnqueuer =
             TelegramOutboxEnqueuer(
-                TelegramOutboxRepository(dataSource),
+                TelegramOutboxRepository(dataSource, trafficPolicy),
                 json,
+                trafficPolicy,
+            )
+        private val rejectedTrafficPolicy =
+            TelegramTrafficPolicy.from(
+                MapApplicationConfig(
+                    "telegram.trafficPolicy" to "ALLOWLIST",
+                    "telegram.allowedUserIds" to venueUserId.toString(),
+                    "telegram.allowedChatIds" to venueUserId.toString(),
+                ),
+                appEnv = "staging",
+            )
+        val rejectedOutboxEnqueuer =
+            TelegramOutboxEnqueuer(
+                TelegramOutboxRepository(dataSource, rejectedTrafficPolicy),
+                json,
+                rejectedTrafficPolicy,
+            )
+        private val guestOnlyTrafficPolicy =
+            TelegramTrafficPolicy.from(
+                MapApplicationConfig(
+                    "telegram.trafficPolicy" to "ALLOWLIST",
+                    "telegram.allowedUserIds" to guestUserId.toString(),
+                    "telegram.allowedChatIds" to guestUserId.toString(),
+                ),
+                appEnv = "staging",
+            )
+        val guestOnlyOutboxEnqueuer =
+            TelegramOutboxEnqueuer(
+                TelegramOutboxRepository(dataSource, guestOnlyTrafficPolicy),
+                json,
+                guestOnlyTrafficPolicy,
             )
 
         init {
@@ -506,6 +595,7 @@ class BookingMessageIdempotencyPostgresTest {
             text: String,
             telegramActive: Boolean = true,
             webAppPublicUrl: String? = "https://miniapp.example/entry?existing=1#old",
+            enqueuer: TelegramOutboxEnqueuer = outboxEnqueuer,
         ): BookingThreadMessageRecord =
             assertNotNull(
                 repository.addBookingMessage(
@@ -517,13 +607,16 @@ class BookingMessageIdempotencyPostgresTest {
                     expectedGuestUserId = guestUserId,
                     clientMessageId = clientMessageId,
                     notificationWriter = { connection, notification ->
-                        enqueueNotification(connection, notification)
-                        bookingStaffNotifier(telegramActive, webAppPublicUrl)
-                            .enqueueGuestMessageAlertInTransaction(
-                                connection = connection,
-                                thread = notification.thread,
-                                messageId = notification.message.id,
-                            )
+                        enqueueNotification(connection, notification, enqueuer).also { result ->
+                            if (result == BookingMessageNotificationWriteResult.WRITTEN) {
+                                bookingStaffNotifier(telegramActive, webAppPublicUrl, enqueuer)
+                                    .enqueueGuestMessageAlertInTransaction(
+                                        connection = connection,
+                                        thread = notification.thread,
+                                        messageId = notification.message.id,
+                                    )
+                            }
+                        }
                     },
                 ),
             )
@@ -555,9 +648,10 @@ class BookingMessageIdempotencyPostgresTest {
         private fun bookingStaffNotifier(
             telegramActive: Boolean,
             webAppPublicUrl: String?,
+            enqueuer: TelegramOutboxEnqueuer = outboxEnqueuer,
         ): BookingMessageStaffChatNotifier =
             BookingMessageStaffChatNotifier(
-                outboxEnqueuer = outboxEnqueuer,
+                outboxEnqueuer = enqueuer,
                 isTelegramActive = { telegramActive },
                 webAppPublicUrl = { webAppPublicUrl },
             )
@@ -640,6 +734,7 @@ class BookingMessageIdempotencyPostgresTest {
         suspend fun writeVenue(
             clientMessageId: String,
             text: String,
+            enqueuer: TelegramOutboxEnqueuer = outboxEnqueuer,
         ): BookingThreadMessageRecord =
             assertNotNull(
                 repository.addBookingMessage(
@@ -650,21 +745,29 @@ class BookingMessageIdempotencyPostgresTest {
                     text = text,
                     expectedVenueId = venueId,
                     clientMessageId = clientMessageId,
-                    notificationWriter = ::enqueueNotification,
+                    notificationWriter = { connection, notification ->
+                        enqueueNotification(connection, notification, enqueuer)
+                    },
                 ),
             )
 
         private fun enqueueNotification(
             connection: Connection,
             notification: BookingMessageNotificationContext,
-        ) {
+            enqueuer: TelegramOutboxEnqueuer = outboxEnqueuer,
+        ): BookingMessageNotificationWriteResult {
             check(notification.recipientChatId == guestUserId)
-            outboxEnqueuer.enqueueBookingSendMessageInTransaction(
-                connection = connection,
-                chatId = notification.recipientChatId,
-                text = notificationText(notification),
-                dedupeKey = notification.dedupeKey,
-            )
+            return when (
+                enqueuer.enqueueBookingSendMessageInTransaction(
+                    connection = connection,
+                    chatId = notification.recipientChatId,
+                    text = notificationText(notification),
+                    dedupeKey = notification.dedupeKey,
+                )
+            ) {
+                TelegramOutboxEnqueueOutcome.ENQUEUED -> BookingMessageNotificationWriteResult.WRITTEN
+                TelegramOutboxEnqueueOutcome.SKIPPED_TRAFFIC_POLICY -> BookingMessageNotificationWriteResult.REJECTED
+            }
         }
 
         fun expectedOutbox(notification: BookingMessageNotificationContext): OutboxRow =

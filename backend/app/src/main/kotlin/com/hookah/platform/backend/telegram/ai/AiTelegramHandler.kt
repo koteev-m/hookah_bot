@@ -348,7 +348,7 @@ class AiTelegramHandler(
     ): AiVenueRole? {
         val role =
             runCatching { venueAccessRepository.findVenueMembership(userId, venueId) }
-                .onFailure { logger.warn("Failed to load venue membership for AI assistant", it) }
+                .onFailure { logAiFailure("load_venue_membership", it) }
                 .getOrNull()
                 ?.role
                 ?.let(::mapRole)
@@ -372,13 +372,13 @@ class AiTelegramHandler(
         if (accesses.isEmpty()) return null
         val selectedVenueId =
             runCatching { venueContextRepository.getSelectedVenue(chatId, userId) }
-                .onFailure { logger.warn("Failed to load selected venue context for AI assistant", it) }
+                .onFailure { logAiFailure("load_selected_venue", it) }
                 .getOrNull()
         val selectedAccess = selectedVenueId?.let { venueId -> accesses.firstOrNull { it.venueId == venueId } }
         if (selectedAccess != null) return selectedAccess
         if (selectedVenueId != null) {
             runCatching { venueContextRepository.clearSelectedVenue(chatId, userId) }
-                .onFailure { logger.warn("Failed to clear stale selected venue context for AI assistant", it) }
+                .onFailure { logAiFailure("clear_selected_venue", it) }
         }
         if (accesses.size == 1) {
             saveSelectedVenueBestEffort(chatId, userId, accesses.single().venueId)
@@ -392,7 +392,7 @@ class AiTelegramHandler(
 
     private suspend fun loadVenueAccesses(userId: Long): List<AiVenueAccess> =
         runCatching { venueAccessRepository.listVenueMemberships(userId) }
-            .onFailure { logger.warn("Failed to load venue memberships for AI assistant", it) }
+            .onFailure { logAiFailure("list_venue_memberships", it) }
             .getOrDefault(emptyList())
             .mapNotNull { membership ->
                 val role = mapRole(membership.role) ?: return@mapNotNull null
@@ -417,19 +417,19 @@ class AiTelegramHandler(
         venueId: Long,
     ) {
         runCatching { venueContextRepository.setSelectedVenue(chatId, userId, venueId) }
-            .onFailure { logger.warn("Failed to save selected venue context for AI assistant", it) }
+            .onFailure { logAiFailure("save_selected_venue", it) }
     }
 
     private suspend fun loadVenueName(venueId: Long): String {
         val fromPlatform =
             runCatching { platformVenueRepository.getVenueDetail(venueId)?.name }
-                .onFailure { logger.warn("Failed to load platform venue for AI assistant", it) }
+                .onFailure { logAiFailure("load_platform_venue", it) }
                 .getOrNull()
                 ?.trim()
                 ?.takeIf { it.isNotBlank() }
         if (fromPlatform != null) return fromPlatform
         return runCatching { venueRepository.findVenueById(venueId)?.name }
-            .onFailure { logger.warn("Failed to load venue for AI assistant", it) }
+            .onFailure { logAiFailure("load_venue", it) }
             .getOrNull()
             ?.trim()
             ?.takeIf { it.isNotBlank() }
@@ -449,7 +449,18 @@ class AiTelegramHandler(
         replyMarkup: ReplyMarkup? = null,
     ) {
         runCatching { outboxEnqueuer.enqueueSendMessage(chatId, text, replyMarkup) }
-            .onFailure { logger.warn("Failed to enqueue AI assistant message", it) }
+            .onFailure { logAiFailure("enqueue_message", it) }
+    }
+
+    private fun logAiFailure(
+        operation: String,
+        throwable: Throwable,
+    ) {
+        logger.warn(
+            "Telegram AI operation failed operation={} error_type={}",
+            operation,
+            throwable::class.simpleName ?: "unknown",
+        )
     }
 
     private fun rootActions(

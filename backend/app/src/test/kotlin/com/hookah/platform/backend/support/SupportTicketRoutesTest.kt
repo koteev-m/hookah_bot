@@ -777,6 +777,14 @@ class SupportTicketRoutesTest {
         }
 
     @Test
+    fun `denied generic guest notifications persist replies with queued false`() =
+        assertGenericReplyTrafficPolicy(guestAllowed = false)
+
+    @Test
+    fun `allowed generic guest notifications persist replies with queued true`() =
+        assertGenericReplyTrafficPolicy(guestAllowed = true)
+
+    @Test
     fun `guest venue chat is reused and does not notify staff chat or platform support`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("venue-chat-routing")
@@ -1414,6 +1422,130 @@ class SupportTicketRoutesTest {
             assertEquals(HttpStatusCode.OK, platformDetailResponse.status)
         }
 
+    private fun assertGenericReplyTrafficPolicy(guestAllowed: Boolean) =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("support-generic-traffic-policy-${if (guestAllowed) "allowed" else "denied"}")
+            val platformOwnerId = 900001L
+            val actorIds = "$OWNER_ID,$platformOwnerId"
+            val allowedIds = if (guestAllowed) "$actorIds,$GUEST_ID" else actorIds
+            val config =
+                buildConfig(
+                    jdbcUrl = jdbcUrl,
+                    platformOwnerId = platformOwnerId,
+                    extra =
+                        mapOf(
+                            "telegram.trafficPolicy" to "ALLOWLIST",
+                            "telegram.allowedUserIds" to allowedIds,
+                            "telegram.allowedChatIds" to allowedIds,
+                        ),
+                )
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl)
+            seedUser(jdbcUrl, GUEST_ID)
+            seedUser(jdbcUrl, OWNER_ID)
+            seedUser(jdbcUrl, platformOwnerId)
+            seedVenueMember(jdbcUrl, venueId, OWNER_ID, "OWNER")
+            val venueTicketId = seedVenueSupportTicket(jdbcUrl, venueId, GUEST_ID)
+            val venueChatId = seedVenueChat(jdbcUrl, venueId, GUEST_ID)
+            val platformTicketId = seedVenueSupportTicket(jdbcUrl, venueId, GUEST_ID)
+            val ownerToken = issueToken(config, OWNER_ID)
+            val platformToken = issueToken(config, platformOwnerId)
+            var expectedOutboxCount = 0
+
+            val venueReplyText = "Venue support reply"
+            val venueReply =
+                client.post("/api/venue/$venueId/support/threads/$venueTicketId/messages") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $ownerToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"message":"$venueReplyText"}""")
+                }
+            assertEquals(HttpStatusCode.OK, venueReply.status)
+            val venueReplyBody = venueReply.bodyAsText()
+            assertEquals(
+                guestAllowed.toString(),
+                json.parseToJsonElement(venueReplyBody).jsonObject["queued"]?.jsonPrimitive?.content ?: "false",
+            )
+            assertFalse(venueReplyBody.contains("allowlist", ignoreCase = true))
+            assertFalse(venueReplyBody.contains("traffic policy", ignoreCase = true))
+            assertEquals(2, supportMessageCount(jdbcUrl, venueTicketId))
+            assertEquals(venueReplyText, supportMessageTexts(jdbcUrl, venueTicketId).last())
+            assertEquals("WAITING_USER", supportThreadStatus(jdbcUrl, venueTicketId))
+            assertEquals(null, supportReadAt(jdbcUrl, venueTicketId, OWNER_ID))
+            assertEquals(
+                listOf("SUPPORT_TICKET_MESSAGE_ADDED", "SUPPORT_TICKET_STATUS_CHANGED"),
+                supportAuditActions(jdbcUrl, venueTicketId),
+            )
+            if (guestAllowed) expectedOutboxCount += 1
+            assertEquals(expectedOutboxCount, outboxTexts(jdbcUrl, GUEST_ID).size)
+
+            val venueChatReplyText = "Venue chat reply"
+            val venueChatReply =
+                client.post("/api/venue/$venueId/support/threads/$venueChatId/messages") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $ownerToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"message":"$venueChatReplyText"}""")
+                }
+            assertEquals(HttpStatusCode.OK, venueChatReply.status)
+            val venueChatReplyBody = venueChatReply.bodyAsText()
+            assertEquals(
+                guestAllowed.toString(),
+                json.parseToJsonElement(venueChatReplyBody).jsonObject["queued"]?.jsonPrimitive?.content ?: "false",
+            )
+            assertFalse(venueChatReplyBody.contains("allowlist", ignoreCase = true))
+            assertFalse(venueChatReplyBody.contains("traffic policy", ignoreCase = true))
+            assertEquals(2, supportMessageCount(jdbcUrl, venueChatId))
+            assertEquals(venueChatReplyText, supportMessageTexts(jdbcUrl, venueChatId).last())
+            assertEquals("WAITING_USER", supportThreadStatus(jdbcUrl, venueChatId))
+            assertEquals(null, supportReadAt(jdbcUrl, venueChatId, OWNER_ID))
+            assertTrue(supportAuditActions(jdbcUrl, venueChatId).isEmpty())
+            if (guestAllowed) expectedOutboxCount += 1
+            assertEquals(expectedOutboxCount, outboxTexts(jdbcUrl, GUEST_ID).size)
+
+            val platformReplyText = "Platform support reply"
+            val platformReply =
+                client.post("/api/platform/support/threads/$platformTicketId/messages") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $platformToken")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"message":"$platformReplyText"}""")
+                }
+            assertEquals(HttpStatusCode.OK, platformReply.status)
+            val platformReplyBody = platformReply.bodyAsText()
+            assertEquals(
+                guestAllowed.toString(),
+                json.parseToJsonElement(platformReplyBody).jsonObject["queued"]?.jsonPrimitive?.content ?: "false",
+            )
+            assertFalse(platformReplyBody.contains("allowlist", ignoreCase = true))
+            assertFalse(platformReplyBody.contains("traffic policy", ignoreCase = true))
+            assertEquals(2, supportMessageCount(jdbcUrl, platformTicketId))
+            assertEquals(platformReplyText, supportMessageTexts(jdbcUrl, platformTicketId).last())
+            assertEquals("WAITING_USER", supportThreadStatus(jdbcUrl, platformTicketId))
+            assertEquals(null, supportReadAt(jdbcUrl, platformTicketId, platformOwnerId))
+            assertEquals(
+                listOf("SUPPORT_TICKET_MESSAGE_ADDED", "SUPPORT_TICKET_STATUS_CHANGED"),
+                supportAuditActions(jdbcUrl, platformTicketId),
+            )
+            if (guestAllowed) expectedOutboxCount += 1
+            val guestOutboxTexts = outboxTexts(jdbcUrl, GUEST_ID)
+            assertEquals(expectedOutboxCount, guestOutboxTexts.size)
+            if (guestAllowed) {
+                assertTrue(guestOutboxTexts.any { venueReplyText in it })
+                assertTrue(guestOutboxTexts.any { venueChatReplyText in it })
+                assertTrue(guestOutboxTexts.any { platformReplyText in it })
+            } else {
+                assertTrue(guestOutboxTexts.isEmpty())
+            }
+        }
+
     private fun buildJdbcUrl(prefix: String): String {
         val dbName = "$prefix-${UUID.randomUUID()}"
         return "jdbc:h2:mem:$dbName;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1"
@@ -1770,6 +1902,52 @@ class SupportTicketRoutesTest {
             threadId
         }
 
+    private fun seedVenueChat(
+        jdbcUrl: String,
+        venueId: Long,
+        guestUserId: Long,
+    ): Long =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            val threadId =
+                connection.prepareStatement(
+                    """
+                    INSERT INTO support_threads (
+                        venue_id,
+                        guest_user_id,
+                        category,
+                        status,
+                        title,
+                        last_message_at,
+                        thread_type,
+                        assignee_scope,
+                        created_source
+                    )
+                    VALUES (?, ?, 'OTHER', 'NEW', 'Вопрос заведению', CURRENT_TIMESTAMP,
+                            'VENUE_CHAT', 'VENUE', 'GUEST_MINIAPP')
+                    """.trimIndent(),
+                    Statement.RETURN_GENERATED_KEYS,
+                ).use { statement ->
+                    statement.setLong(1, venueId)
+                    statement.setLong(2, guestUserId)
+                    statement.executeUpdate()
+                    statement.generatedKeys.use { keys ->
+                        keys.next()
+                        keys.getLong(1)
+                    }
+                }
+            connection.prepareStatement(
+                """
+                INSERT INTO support_messages (thread_id, author_user_id, author_role, source, text)
+                VALUES (?, ?, 'GUEST', 'GUEST_MINIAPP', 'Есть вопрос заведению')
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, threadId)
+                statement.setLong(2, guestUserId)
+                statement.executeUpdate()
+            }
+            threadId
+        }
+
     private fun supportThreadUpdatedAt(
         jdbcUrl: String,
         threadId: Long,
@@ -1834,6 +2012,25 @@ class SupportTicketRoutesTest {
                 statement.executeQuery().use { rs ->
                     rs.next()
                     rs.getInt(1)
+                }
+            }
+        }
+
+    private fun supportMessageTexts(
+        jdbcUrl: String,
+        threadId: Long,
+    ): List<String> =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                "SELECT text FROM support_messages WHERE thread_id = ? ORDER BY id",
+            ).use { statement ->
+                statement.setLong(1, threadId)
+                statement.executeQuery().use { rows ->
+                    buildList {
+                        while (rows.next()) {
+                            add(rows.getString("text"))
+                        }
+                    }
                 }
             }
         }

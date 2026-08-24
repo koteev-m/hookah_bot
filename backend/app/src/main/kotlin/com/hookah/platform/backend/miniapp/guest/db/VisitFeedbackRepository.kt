@@ -1,6 +1,7 @@
 package com.hookah.platform.backend.miniapp.guest.db
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.telegram.TelegramOutboundClaimScope
 import com.hookah.platform.backend.telegram.db.VenueSettingsRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -193,8 +194,11 @@ class VisitFeedbackRepository(private val dataSource: DataSource?) {
     suspend fun pickDueRequests(
         now: Instant = Instant.now(),
         limit: Int = DEFAULT_BATCH_SIZE,
+        outboundClaimScope: TelegramOutboundClaimScope,
     ): List<VisitFeedbackRequestDelivery> {
         require(limit > 0) { "limit must be > 0" }
+        val eligibleUserIds = outboundClaimScope.eligiblePositiveRecipientIds
+        if (eligibleUserIds?.isEmpty() == true) return emptyList()
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
@@ -202,10 +206,9 @@ class VisitFeedbackRepository(private val dataSource: DataSource?) {
                     val initialAutoCommit = connection.autoCommit
                     connection.autoCommit = false
                     try {
-                        val requests = selectDueRequests(connection, now, limit)
-                        incrementAttempts(connection, requests.map { it.requestId })
+                        val requests = selectDueRequests(connection, now, limit, eligibleUserIds)
                         connection.commit()
-                        requests.map { it.copy(attempts = it.attempts + 1) }
+                        requests
                     } catch (e: SQLException) {
                         runCatching { connection.rollback() }
                         throw e
@@ -734,8 +737,13 @@ class VisitFeedbackRepository(private val dataSource: DataSource?) {
         connection: Connection,
         now: Instant,
         limit: Int,
-    ): List<VisitFeedbackRequestDelivery> =
-        connection.prepareStatement(
+        eligibleUserIds: List<Long>?,
+    ): List<VisitFeedbackRequestDelivery> {
+        val recipientPredicate =
+            eligibleUserIds?.let { ids ->
+                "AND vfr.user_id IN (${ids.joinToString(",") { "?" }})"
+            }.orEmpty()
+        return connection.prepareStatement(
             """
             SELECT vfr.id AS request_id,
                    vfr.visit_id,
@@ -754,6 +762,7 @@ class VisitFeedbackRepository(private val dataSource: DataSource?) {
                     AND vf.user_id = vfr.user_id
                     AND vf.status = ?
               )
+              $recipientPredicate
             ORDER BY vfr.scheduled_for, vfr.id
             LIMIT ?
             """.trimIndent(),
@@ -761,30 +770,16 @@ class VisitFeedbackRepository(private val dataSource: DataSource?) {
             statement.setString(1, VisitFeedbackRequestStatus.PENDING.name)
             statement.setTimestamp(2, Timestamp.from(now))
             statement.setString(3, VisitFeedbackStatus.SKIPPED.name)
-            statement.setInt(4, limit)
+            var parameterIndex = 4
+            eligibleUserIds?.forEach { userId ->
+                statement.setLong(parameterIndex++, userId)
+            }
+            statement.setInt(parameterIndex, limit)
             statement.executeQuery().use { rs ->
                 buildList {
                     while (rs.next()) add(rs.toFeedbackRequestDelivery())
                 }
             }
-        }
-
-    private fun incrementAttempts(
-        connection: Connection,
-        requestIds: List<Long>,
-    ) {
-        if (requestIds.isEmpty()) return
-        val placeholders = requestIds.joinToString(",") { "?" }
-        connection.prepareStatement(
-            """
-            UPDATE visit_feedback_requests
-            SET attempts = attempts + 1,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE id IN ($placeholders)
-            """.trimIndent(),
-        ).use { statement ->
-            requestIds.forEachIndexed { index, id -> statement.setLong(index + 1, id) }
-            statement.executeUpdate()
         }
     }
 
@@ -802,6 +797,7 @@ class VisitFeedbackRepository(private val dataSource: DataSource?) {
                         """
                         UPDATE visit_feedback_requests
                         SET status = ?,
+                            attempts = attempts + 1,
                             sent_at = ?,
                             last_error = ?,
                             updated_at = CURRENT_TIMESTAMP

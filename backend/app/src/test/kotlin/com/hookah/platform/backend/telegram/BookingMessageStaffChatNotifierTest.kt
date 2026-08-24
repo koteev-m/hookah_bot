@@ -8,6 +8,7 @@ import com.hookah.platform.backend.support.SupportThreadRecord
 import com.hookah.platform.backend.support.SupportThreadStatus
 import com.hookah.platform.backend.support.SupportThreadType
 import com.hookah.platform.backend.telegram.db.TelegramOutboxRepository
+import io.ktor.server.config.MapApplicationConfig
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -35,7 +36,7 @@ class BookingMessageStaffChatNotifierTest {
         withFixture { fixture ->
             fixture.seedVenue(venueId = 10L, staffChatId = -777L, timezone = "Europe/Moscow")
             fixture.seedVenue(venueId = 11L, staffChatId = -888L, timezone = "Europe/Moscow")
-            val notifier = fixture.notifier()
+            val notifier = fixture.notifier(trafficPolicy = allowlistTrafficPolicy(-777L))
             val thread = bookingThread(guestDisplayName = "Алексей")
 
             fixture.commit { connection ->
@@ -172,6 +173,23 @@ class BookingMessageStaffChatNotifierTest {
         }
 
     @Test
+    fun `traffic policy rejects an unlisted staff chat without creating outbox state`() =
+        withFixture { fixture ->
+            fixture.seedVenue(venueId = 10L, staffChatId = -777L, timezone = "Europe/Moscow")
+
+            fixture.commit { connection ->
+                fixture.notifier(trafficPolicy = allowlistTrafficPolicy(-888L))
+                    .enqueueGuestMessageAlertInTransaction(
+                        connection = connection,
+                        thread = bookingThread(),
+                        messageId = 7_010L,
+                    )
+            }
+
+            assertEquals(0, fixture.outboxCount())
+        }
+
+    @Test
     fun `fallback booking identity and guest label are stable in the product timezone`() =
         withFixture { fixture ->
             fixture.seedVenue(venueId = 10L, staffChatId = -777L, timezone = null)
@@ -206,6 +224,17 @@ class BookingMessageStaffChatNotifierTest {
         createSchema(dataSource)
         block(Fixture(dataSource, json))
     }
+
+    private fun allowlistTrafficPolicy(vararg allowedGroupIds: Long): TelegramTrafficPolicy =
+        TelegramTrafficPolicy.from(
+            config =
+                MapApplicationConfig(
+                    "telegram.trafficPolicy" to "ALLOWLIST",
+                    "telegram.allowedUserIds" to "100",
+                    "telegram.allowedChatIds" to (listOf(100L) + allowedGroupIds.toList()).joinToString(","),
+                ),
+            appEnv = "test",
+        )
 
     private fun createSchema(dataSource: DataSource) {
         dataSource.connection.use { connection ->
@@ -277,16 +306,20 @@ class BookingMessageStaffChatNotifierTest {
 
     private class Fixture(
         val dataSource: DataSource,
-        json: Json,
+        private val json: Json,
     ) {
-        private val outboxEnqueuer = TelegramOutboxEnqueuer(TelegramOutboxRepository(dataSource), json)
-
         fun notifier(
             telegramActive: Boolean = true,
             webAppPublicUrl: String? = "https://miniapp.example/entry?existing=1#old-fragment",
+            trafficPolicy: TelegramTrafficPolicy = TelegramTrafficPolicy.unrestricted(),
         ): BookingMessageStaffChatNotifier =
             BookingMessageStaffChatNotifier(
-                outboxEnqueuer = outboxEnqueuer,
+                outboxEnqueuer =
+                    TelegramOutboxEnqueuer(
+                        repository = TelegramOutboxRepository(dataSource, trafficPolicy),
+                        json = json,
+                        trafficPolicy = trafficPolicy,
+                    ),
                 isTelegramActive = { telegramActive },
                 webAppPublicUrl = { webAppPublicUrl },
             )

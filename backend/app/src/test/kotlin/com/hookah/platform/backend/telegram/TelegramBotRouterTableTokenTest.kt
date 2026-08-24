@@ -343,6 +343,7 @@ class TelegramBotRouterTableTokenTest {
         venueMenuRepositoryOverride: VenueMenuRepository = venueMenuRepository,
     ): TelegramBotRouter =
         TelegramBotRouter(
+            trafficPolicy = TelegramTrafficPolicy.unrestricted(),
             config =
                 TelegramBotConfig(
                     enabled = true,
@@ -2667,8 +2668,8 @@ class TelegramBotRouterTableTokenTest {
             assertEquals(2, mutationLogs.size)
             assertTrue(mutationLogs.any { it.contains("action=VENUE_STAFF_ROLE_CHANGED") })
             assertTrue(mutationLogs.any { it.contains("action=VENUE_STAFF_MEMBER_REMOVED") })
-            assertTrue(mutationLogs.all { it.contains("venueId=10") })
             assertTrue(mutationLogs.all { it.contains("exceptionClass=IllegalStateException") })
+            assertTrue(mutationLogs.none { it.contains("venueId=") })
             assertTrue(mutationLogs.none { it.contains(targetUserId.toString()) })
             assertTrue(mutationLogs.none { it.contains(secretFailureMessage) })
             assertTrue(mutationLogs.none { it.contains("private-marker") })
@@ -3550,7 +3551,7 @@ class TelegramBotRouterTableTokenTest {
                 )
             } coAnswers {
                 cancelConsumed.complete(Unit)
-                Unit
+                TelegramOutboxEnqueueOutcome.ENQUEUED
             }
             processTableStart(updateId = 10_014, actorUserId = 999L)
 

@@ -29,6 +29,7 @@ import com.hookah.platform.backend.platform.requirePlatformOwner
 import com.hookah.platform.backend.telegram.BookingMessageStaffChatNotifier
 import com.hookah.platform.backend.telegram.TableContext
 import com.hookah.platform.backend.telegram.TelegramKeyboards
+import com.hookah.platform.backend.telegram.TelegramOutboxEnqueueOutcome
 import com.hookah.platform.backend.telegram.TelegramOutboxEnqueuer
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
 import com.hookah.platform.backend.telegram.db.VenueRepository
@@ -679,23 +680,29 @@ fun Route.venueSupportRoutes(
                         clientMessageId = clientMessageId,
                         notificationWriter = { connection, notification ->
                             check(notification.kind == BookingMessageNotificationKind.GUEST_NOTIFICATION)
-                            outboxEnqueuer.enqueueBookingSendMessageInTransaction(
-                                connection = connection,
-                                chatId = notification.recipientChatId,
-                                text =
-                                    buildSupportReplyMessageForGuest(
-                                        notification.thread,
-                                        notification.message.text,
-                                        "заведения",
-                                    ),
-                                replyMarkup =
-                                    notification.thread.bookingId?.let { bookingId ->
-                                        notification.thread.venueId?.let { venue ->
-                                            TelegramKeyboards.inlineGuestBookingReplyActions(venue, bookingId)
-                                        }
-                                    },
-                                dedupeKey = notification.dedupeKey,
-                            )
+                            when (
+                                outboxEnqueuer.enqueueBookingSendMessageInTransaction(
+                                    connection = connection,
+                                    chatId = notification.recipientChatId,
+                                    text =
+                                        buildSupportReplyMessageForGuest(
+                                            notification.thread,
+                                            notification.message.text,
+                                            "заведения",
+                                        ),
+                                    replyMarkup =
+                                        notification.thread.bookingId?.let { bookingId ->
+                                            notification.thread.venueId?.let { venue ->
+                                                TelegramKeyboards.inlineGuestBookingReplyActions(venue, bookingId)
+                                            }
+                                        },
+                                    dedupeKey = notification.dedupeKey,
+                                )
+                            ) {
+                                TelegramOutboxEnqueueOutcome.ENQUEUED -> BookingMessageNotificationWriteResult.WRITTEN
+                                TelegramOutboxEnqueueOutcome.SKIPPED_TRAFFIC_POLICY ->
+                                    BookingMessageNotificationWriteResult.REJECTED
+                            }
                         },
                     ) ?: throw NotFoundException()
                 } else {
@@ -723,23 +730,31 @@ fun Route.venueSupportRoutes(
                     source = "VENUE_MINIAPP",
                 )
             }
-            if (bookingWrite == null) {
-                outboxEnqueuer.enqueueSendMessage(
-                    chatId = refreshedThread.guestUserId,
-                    text = buildSupportReplyMessageForGuest(refreshedThread, messageText, "заведения"),
-                    replyMarkup =
-                        refreshedThread.bookingId?.let { bookingId ->
-                            refreshedThread.venueId?.let { venue ->
-                                TelegramKeyboards.inlineGuestBookingReplyActions(venue, bookingId)
-                            }
-                        },
-                )
-            }
+            val queued =
+                if (bookingWrite == null) {
+                    when (
+                        outboxEnqueuer.enqueueSendMessage(
+                            chatId = refreshedThread.guestUserId,
+                            text = buildSupportReplyMessageForGuest(refreshedThread, messageText, "заведения"),
+                            replyMarkup =
+                                refreshedThread.bookingId?.let { bookingId ->
+                                    refreshedThread.venueId?.let { venue ->
+                                        TelegramKeyboards.inlineGuestBookingReplyActions(venue, bookingId)
+                                    }
+                                },
+                        )
+                    ) {
+                        TelegramOutboxEnqueueOutcome.ENQUEUED -> true
+                        TelegramOutboxEnqueueOutcome.SKIPPED_TRAFFIC_POLICY -> false
+                    }
+                } else {
+                    true
+                }
             call.respond(
                 SupportMessageCreateResponse(
                     thread = refreshedThread.toDto(unreadCountOverride = 0),
                     message = message.toDto(),
-                    queued = true,
+                    queued = queued,
                 ),
             )
         }
@@ -820,15 +835,26 @@ fun Route.platformSupportRoutes(
                 refreshedThread = refreshedThread,
                 source = "PLATFORM_MINIAPP",
             )
-            outboxEnqueuer.enqueueSendMessage(
-                chatId = detail.thread.guestUserId,
-                text = buildSupportReplyMessageForGuest(refreshedThread, messageText, "поддержки платформы"),
-            )
+            val queued =
+                when (
+                    outboxEnqueuer.enqueueSendMessage(
+                        chatId = detail.thread.guestUserId,
+                        text =
+                            buildSupportReplyMessageForGuest(
+                                refreshedThread,
+                                messageText,
+                                "поддержки платформы",
+                            ),
+                    )
+                ) {
+                    TelegramOutboxEnqueueOutcome.ENQUEUED -> true
+                    TelegramOutboxEnqueueOutcome.SKIPPED_TRAFFIC_POLICY -> false
+                }
             call.respond(
                 SupportMessageCreateResponse(
                     thread = refreshedThread.toDto(unreadCountOverride = 0),
                     message = message.toDto(),
-                    queued = true,
+                    queued = queued,
                 ),
             )
         }
@@ -1213,17 +1239,25 @@ private suspend fun addGuestThreadMessage(
                     },
                     notificationWriter = { connection, notification ->
                         check(notification.kind == BookingMessageNotificationKind.GUEST_ACK)
-                        outboxEnqueuer.enqueueBookingSendMessageInTransaction(
-                            connection = connection,
-                            chatId = notification.recipientChatId,
-                            text = "✅ Ответ отправлен заведению.",
-                            dedupeKey = notification.dedupeKey,
-                        )
-                        bookingMessageStaffChatNotifier.enqueueGuestMessageAlertInTransaction(
-                            connection = connection,
-                            thread = notification.thread,
-                            messageId = notification.message.id,
-                        )
+                        when (
+                            outboxEnqueuer.enqueueBookingSendMessageInTransaction(
+                                connection = connection,
+                                chatId = notification.recipientChatId,
+                                text = "✅ Ответ отправлен заведению.",
+                                dedupeKey = notification.dedupeKey,
+                            )
+                        ) {
+                            TelegramOutboxEnqueueOutcome.ENQUEUED -> {
+                                bookingMessageStaffChatNotifier.enqueueGuestMessageAlertInTransaction(
+                                    connection = connection,
+                                    thread = notification.thread,
+                                    messageId = notification.message.id,
+                                )
+                                BookingMessageNotificationWriteResult.WRITTEN
+                            }
+                            TelegramOutboxEnqueueOutcome.SKIPPED_TRAFFIC_POLICY ->
+                                BookingMessageNotificationWriteResult.REJECTED
+                        }
                     },
                 ) ?: throw NotFoundException()
             } else {

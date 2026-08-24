@@ -1,21 +1,26 @@
 package com.hookah.platform.backend.telegram
 
+import ch.qos.logback.classic.Logger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import com.hookah.platform.backend.telegram.db.TelegramInboundUpdateQueueRepository
 import com.hookah.platform.backend.telegram.db.TelegramInboundUpdateStatus
 import com.hookah.platform.backend.test.PostgresTestEnv
-import io.mockk.coVerify
-import io.mockk.mockk
+import io.ktor.server.config.MapApplicationConfig
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import org.junit.jupiter.api.Test
+import org.slf4j.LoggerFactory
 import java.sql.DriverManager
 import java.sql.Timestamp
 import java.time.Duration
 import java.time.Instant
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 
 class TelegramInboundUpdateWorkerTest {
     @Test
@@ -24,20 +29,21 @@ class TelegramInboundUpdateWorkerTest {
             val database = PostgresTestEnv.createDatabase()
             val dataSource = PostgresTestEnv.createDataSource(database)
             val repository = TelegramInboundUpdateQueueRepository(dataSource)
-            val router: TelegramBotRouter = mockk(relaxed = true)
+            val processedUpdateIds = mutableListOf<Long>()
             val json = Json { ignoreUnknownKeys = true }
             val worker =
                 TelegramInboundUpdateWorker(
                     repository = repository,
-                    router = router,
+                    processUpdate = { update -> processedUpdateIds += update.updateId },
                     json = json,
                     scope = CoroutineScope(Dispatchers.IO),
+                    trafficPolicy = TelegramTrafficPolicy.unrestricted(),
                 )
 
             repository.enqueue(42, """{"update_id":42}""")
             worker.processOnce()
 
-            coVerify(exactly = 1) { router.process(match { it.updateId == 42L }) }
+            assertEquals(listOf(42L), processedUpdateIds)
 
             DriverManager.getConnection(database.jdbcUrl, database.user, database.password).use { connection ->
                 connection.prepareStatement(
@@ -51,6 +57,68 @@ class TelegramInboundUpdateWorkerTest {
             }
 
             dataSource.close()
+        }
+
+    @Test
+    fun `worker does not route historical queued update denied by policy`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            val dataSource = PostgresTestEnv.createDataSource(database)
+            val appender = ListAppender<ILoggingEvent>().apply { start() }
+            val workerLogger = LoggerFactory.getLogger(TelegramInboundUpdateWorker::class.java) as Logger
+            workerLogger.addAppender(appender)
+            val repository = TelegramInboundUpdateQueueRepository(dataSource)
+            val processedUpdateIds = mutableListOf<Long>()
+            val policy =
+                TelegramTrafficPolicy.from(
+                    MapApplicationConfig(
+                        "telegram.trafficPolicy" to "ALLOWLIST",
+                        "telegram.allowedUserIds" to "101",
+                        "telegram.allowedChatIds" to "101",
+                    ),
+                    "staging",
+                )
+            val worker =
+                TelegramInboundUpdateWorker(
+                    repository = repository,
+                    processUpdate = { update -> processedUpdateIds += update.updateId },
+                    json = Json { ignoreUnknownKeys = true },
+                    scope = CoroutineScope(Dispatchers.IO),
+                    trafficPolicy = policy,
+                )
+
+            try {
+                repository.enqueue(
+                    43,
+                    "{\"update_id\":43,\"message\":{\"message_id\":1," +
+                        "\"chat\":{\"id\":$SENSITIVE_DENIED_USER_ID,\"type\":\"private\"}," +
+                        "\"from\":{\"id\":$SENSITIVE_DENIED_USER_ID}," +
+                        "\"text\":\"$PAYLOAD_SENTINEL token=$SENSITIVE_TOKEN\"}}",
+                )
+                worker.processOnce()
+
+                assertTrue(processedUpdateIds.isEmpty())
+                DriverManager.getConnection(database.jdbcUrl, database.user, database.password).use { connection ->
+                    connection.prepareStatement(
+                        "SELECT status FROM telegram_inbound_updates WHERE update_id = 43",
+                    ).use { statement ->
+                        statement.executeQuery().use { resultSet ->
+                            resultSet.next()
+                            assertEquals(TelegramInboundUpdateStatus.PROCESSED.name, resultSet.getString("status"))
+                        }
+                    }
+                }
+                val logs = appender.list.joinToString("\n") { it.formattedMessage }
+                assertTrue(logs.contains("source=webhook_queue"))
+                assertTrue(logs.contains("reason=ACTOR_NOT_ALLOWED"))
+                assertFalse(logs.contains(SENSITIVE_DENIED_USER_ID.toString()))
+                assertFalse(logs.contains(PAYLOAD_SENTINEL))
+                assertFalse(logs.contains(SENSITIVE_TOKEN))
+            } finally {
+                workerLogger.detachAppender(appender)
+                appender.stop()
+                dataSource.close()
+            }
         }
 
     @Test
@@ -106,4 +174,10 @@ class TelegramInboundUpdateWorkerTest {
 
             dataSource.close()
         }
+
+    private companion object {
+        const val SENSITIVE_DENIED_USER_ID = 202L
+        const val PAYLOAD_SENTINEL = "INBOUND_PAYLOAD_SENTINEL"
+        const val SENSITIVE_TOKEN = "777777:SENSITIVE_INBOUND_TOKEN"
+    }
 }

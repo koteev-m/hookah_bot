@@ -81,6 +81,14 @@ docker build -f backend/Dockerfile .
 ### Auth: `POST /api/auth/telegram`
 `initData` — это строка, которую Telegram Mini App передаёт клиентскому приложению. Её нельзя «пересобирать» или менять — отправляйте на сервер ровно как есть. На сервере подпись `initData` проверяется с использованием `TELEGRAM_BOT_TOKEN` (даже если бот/поллинг не используются), плюс применяются ограничения по времени: `TELEGRAM_MINIAPP_INITDATA_MAX_AGE_SECONDS` и `TELEGRAM_MINIAPP_INITDATA_MAX_FUTURE_SKEW_SECONDS`.
 
+Staging additionally requires `TELEGRAM_TRAFFIC_POLICY=ALLOWLIST` with non-empty
+`TELEGRAM_ALLOWED_USER_IDS` and `TELEGRAM_ALLOWED_CHAT_IDS`. The signed initData user must be
+allowed before a user row or session token is created. Every later protected request rechecks the
+current allowlist, so removing a user and restarting the backend also revokes already issued JWTs.
+Denied identities receive only generic `FORBIDDEN`; the response never reveals the allowlist.
+Development, test and production retain their existing unrestricted behavior when the policy is
+absent; an explicit `ALLOWLIST` enables the same checks there.
+
 Пример запроса:
 ```json
 {
@@ -149,6 +157,7 @@ TTL session token задаётся переменной `API_SESSION_TTL_SECONDS
 Ожидаемые коды ошибок и статусы:
 - `UNAUTHORIZED` (401) — отсутствует или невалидный Bearer token.
 - `INITDATA_INVALID` (401) — `initData` не прошла проверку подписи/срока.
+- `FORBIDDEN` (403) — signed Mini App identity не разрешена текущей traffic policy.
 - `INVALID_INPUT` (400) — некорректные параметры (например, `tableToken`, `reason`, `comment`).
 - `NOT_FOUND` (404) — неизвестный `tableToken` и т.п.
 - `SUBSCRIPTION_BLOCKED` (423) — подписка past_due/suspended/suspended_by_platform.
@@ -232,6 +241,17 @@ Telegram webhook (если используете webhook-режим бота):
 - `TELEGRAM_STAFF_CHAT_LINK_SECRET_PEPPER=<staff-chat-link-secret-pepper>`
 - `TELEGRAM_WEBHOOK_SECRET_TOKEN=<telegram-webhook-secret>`
 - `TELEGRAM_WEBHOOK_PATH=/telegram/webhook`
+
+Обязательная изоляция Telegram на staging:
+- `TELEGRAM_TRAFFIC_POLICY=ALLOWLIST`
+- `TELEGRAM_ALLOWED_USER_IDS=<comma-separated-positive-user-ids>`
+- `TELEGRAM_ALLOWED_CHAT_IDS=<comma-separated-positive-private-and-negative-group-ids>`
+
+Реальные идентификаторы не хранятся в Git. Их размещают только в server-side `.env` и restricted
+`/etc/hookah-bot/staging/telegram-allowlist.manifest` (directory `root:root` 0700, file `root:root`
+0600); изменение любого списка требует controlled backend restart. Подробная процедура, включая
+безопасную проверку staff-group ID, находится в
+`docs/STAGING_DEPLOYMENT.md` и `docs/DEPLOYMENT_RUNBOOK.md`.
 
 ### HTTPS termination через reverse proxy
 Backend слушает HTTP, TLS завершается на edge. Пример для Nginx:

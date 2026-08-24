@@ -1,5 +1,8 @@
 package com.hookah.platform.backend.miniapp.auth
 
+import ch.qos.logback.classic.Logger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import com.hookah.platform.backend.api.ApiErrorCodes
 import com.hookah.platform.backend.miniapp.api.TelegramAuthRequest
 import com.hookah.platform.backend.miniapp.api.TelegramAuthResponse
@@ -16,11 +19,14 @@ import io.ktor.server.testing.testApplication
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import org.slf4j.LoggerFactory
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
+import java.sql.DriverManager
 import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class TelegramAuthRouteTest {
@@ -43,6 +49,9 @@ class TelegramAuthRouteTest {
                         "db.user" to "sa",
                         "db.password" to "",
                         "telegram.token" to botToken,
+                        "telegram.trafficPolicy" to "ALLOWLIST",
+                        "telegram.allowedUserIds" to "12345",
+                        "telegram.allowedChatIds" to "12345,-1009876543210",
                     )
             }
             application { module() }
@@ -65,6 +74,80 @@ class TelegramAuthRouteTest {
             assertEquals("john", payload.user.username)
             assertEquals("John", payload.user.firstName)
             assertEquals("Doe", payload.user.lastName)
+        }
+
+    @Test
+    fun `valid initData for disallowed user returns generic forbidden before user write`() =
+        testApplication {
+            val deniedUserId = 712345678901234567L
+            val allowedUserId = 712345678901234568L
+            val deniedBotToken = "777777:SENSITIVE_AUTH_TOKEN"
+            val payloadSentinel = "AUTH_INITDATA_PAYLOAD_SENTINEL"
+            val jdbcUrl =
+                "jdbc:h2:mem:miniapp-auth-denied;MODE=PostgreSQL;" +
+                    "DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1"
+            val appender = ListAppender<ILoggingEvent>().apply { start() }
+            val rootLogger = LoggerFactory.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME) as Logger
+            rootLogger.addAppender(appender)
+            try {
+                environment {
+                    config =
+                        MapApplicationConfig(
+                            "app.env" to "test",
+                            "api.session.jwtSecret" to "test-secret",
+                            "api.session.issuer" to "test-issuer",
+                            "api.session.audience" to "test-audience",
+                            "db.jdbcUrl" to jdbcUrl,
+                            "db.user" to "sa",
+                            "db.password" to "",
+                            "telegram.token" to deniedBotToken,
+                            "telegram.trafficPolicy" to "ALLOWLIST",
+                            "telegram.allowedUserIds" to allowedUserId.toString(),
+                            "telegram.allowedChatIds" to "$allowedUserId,-1009876543210",
+                        )
+                }
+                application { module() }
+
+                val now = Instant.now().epochSecond
+                val userJson =
+                    """{"id":$deniedUserId,"username":"$payloadSentinel","first_name":"Sensitive"}"""
+                val initData = generateValidInitData(deniedBotToken, userJson, now)
+
+                val response =
+                    client.post("/api/auth/telegram") {
+                        contentType(ContentType.Application.Json)
+                        setBody(json.encodeToString(TelegramAuthRequest(initData)))
+                    }
+
+                assertEquals(HttpStatusCode.Forbidden, response.status)
+                assertApiErrorEnvelope(response, ApiErrorCodes.FORBIDDEN)
+                val responseBody = response.bodyAsText()
+                assertFalse(responseBody.contains(deniedUserId.toString()))
+                assertFalse(responseBody.contains(allowedUserId.toString()))
+                assertFalse(responseBody.contains(payloadSentinel))
+                DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                    connection.prepareStatement(
+                        "SELECT COUNT(*) FROM users WHERE telegram_user_id = ?",
+                    ).use { statement ->
+                        statement.setLong(1, deniedUserId)
+                        statement.executeQuery().use { resultSet ->
+                            assertTrue(resultSet.next())
+                            assertEquals(0L, resultSet.getLong(1))
+                        }
+                    }
+                }
+
+                val logs = appender.list.joinToString("\n") { it.formattedMessage }
+                assertTrue(logs.contains("DB enabled with jdbcUrl="))
+                assertFalse(logs.contains(deniedUserId.toString()))
+                assertFalse(logs.contains(allowedUserId.toString()))
+                assertFalse(logs.contains(payloadSentinel))
+                assertFalse(logs.contains(deniedBotToken))
+                assertFalse(logs.contains(initData))
+            } finally {
+                rootLogger.detachAppender(appender)
+                appender.stop()
+            }
         }
 
     @Test

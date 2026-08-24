@@ -1,6 +1,7 @@
 package com.hookah.platform.backend.support
 
 import com.hookah.platform.backend.api.BookingMessageIdempotencyPayloadMismatchException
+import com.hookah.platform.backend.api.ConfigException
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
@@ -134,6 +135,11 @@ enum class BookingMessageNotificationKind(
     ;
 
     fun dedupeKey(messageId: Long): String = "booking-thread-message:$messageId:$dedupeSuffix"
+}
+
+enum class BookingMessageNotificationWriteResult {
+    WRITTEN,
+    REJECTED,
 }
 
 data class SupportBookingContextRecord(
@@ -380,7 +386,12 @@ open class SupportThreadRepository(
         expectedVenueId: Long? = null,
         clientMessageId: String? = null,
         beforeInsert: (() -> Unit)? = null,
-        notificationWriter: ((Connection, BookingMessageNotificationContext) -> Unit)? = null,
+        notificationWriter: (
+            (
+                Connection,
+                BookingMessageNotificationContext,
+            ) -> BookingMessageNotificationWriteResult
+        )? = null,
         guestBotNotificationWriter: ((Connection, BookingThreadMessageRecord) -> Unit)? = null,
     ): BookingThreadMessageRecord? {
         val miniAppNotificationKind = miniAppNotificationKind(source)
@@ -502,15 +513,20 @@ open class SupportThreadRepository(
                                 message = message,
                             )
                         if (miniAppNotificationKind != null) {
-                            notificationWriter?.invoke(
-                                connection,
-                                BookingMessageNotificationContext(
-                                    kind = miniAppNotificationKind,
-                                    recipientChatId = booking.guestUserId,
-                                    thread = write.thread,
-                                    message = write.message,
-                                ),
-                            )
+                            when (
+                                checkNotNull(notificationWriter).invoke(
+                                    connection,
+                                    BookingMessageNotificationContext(
+                                        kind = miniAppNotificationKind,
+                                        recipientChatId = booking.guestUserId,
+                                        thread = write.thread,
+                                        message = write.message,
+                                    ),
+                                )
+                            ) {
+                                BookingMessageNotificationWriteResult.WRITTEN -> Unit
+                                BookingMessageNotificationWriteResult.REJECTED -> throw ConfigException()
+                            }
                         }
                         guestBotNotificationWriter?.invoke(connection, write)
                         write

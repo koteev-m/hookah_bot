@@ -5,6 +5,8 @@ import com.hookah.platform.backend.booking.formatBookingDisplayLabel
 import com.hookah.platform.backend.miniapp.guest.db.BookingReminderDelivery
 import com.hookah.platform.backend.miniapp.guest.db.GuestBookingRepository
 import com.hookah.platform.backend.telegram.TelegramKeyboards
+import com.hookah.platform.backend.telegram.TelegramOutboundClaimScope
+import com.hookah.platform.backend.telegram.TelegramOutboxEnqueueOutcome
 import com.hookah.platform.backend.telegram.TelegramOutboxEnqueuer
 import com.hookah.platform.backend.telegram.db.VenueSettingsRepository
 import kotlinx.coroutines.CancellationException
@@ -28,6 +30,7 @@ data class BookingReminderWorkerResult(
 class BookingReminderWorker(
     private val repository: GuestBookingRepository,
     private val outboxEnqueuer: TelegramOutboxEnqueuer,
+    private val outboundClaimScope: TelegramOutboundClaimScope,
     private val venueSettingsRepository: VenueSettingsRepository,
     private val interval: Duration,
     private val batchSize: Int,
@@ -44,38 +47,52 @@ class BookingReminderWorker(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    logger.warn("Booking reminder worker failed: {}", e.message)
-                    logger.debug("Booking reminder worker failure details", e)
+                    logger.warn(
+                        "Booking reminder worker failed error_type={}",
+                        e::class.simpleName ?: "unknown",
+                    )
                 }
                 delay(interval.toMillis())
             }
         }
 
     suspend fun runOnce(now: Instant = nowProvider()): BookingReminderWorkerResult {
-        val due = repository.pickDueReminders(now = now, limit = batchSize)
+        val due =
+            repository.pickDueReminders(
+                now = now,
+                limit = batchSize,
+                outboundClaimScope = outboundClaimScope,
+            )
         var queued = 0
         var failed = 0
         for (reminder in due) {
             try {
                 val zoneId = venueSettingsRepository.resolveZoneId(reminder.venueId, defaultBookingDisplayZoneId())
-                outboxEnqueuer.enqueueSendMessage(
-                    chatId = reminder.userId,
-                    text = buildReminderText(reminder, zoneId),
-                    replyMarkup =
-                        TelegramKeyboards.inlineBookingReminderActions(
-                            bookingId = reminder.bookingId,
-                            reminderId = reminder.reminderId,
-                        ),
-                    dedupeKey = reminderOutboxDedupeKey(reminder.reminderId),
-                )
-                if (repository.markReminderQueued(reminder.reminderId)) {
-                    queued++
+                when (
+                    outboxEnqueuer.enqueueSendMessage(
+                        chatId = reminder.userId,
+                        text = buildReminderText(reminder, zoneId),
+                        replyMarkup =
+                            TelegramKeyboards.inlineBookingReminderActions(
+                                bookingId = reminder.bookingId,
+                                reminderId = reminder.reminderId,
+                            ),
+                        dedupeKey = reminderOutboxDedupeKey(reminder.reminderId),
+                    )
+                ) {
+                    TelegramOutboxEnqueueOutcome.ENQUEUED -> {
+                        if (repository.markReminderQueued(reminder.reminderId)) {
+                            queued++
+                        }
+                    }
+                    TelegramOutboxEnqueueOutcome.SKIPPED_TRAFFIC_POLICY -> Unit
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                repository.markReminderFailed(reminder.reminderId, e.message)
-                failed++
+                if (repository.markReminderFailed(reminder.reminderId, e.message)) {
+                    failed++
+                }
             }
         }
         if (queued > 0 || failed > 0) {

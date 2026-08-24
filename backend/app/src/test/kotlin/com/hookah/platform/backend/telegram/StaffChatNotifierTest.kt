@@ -21,6 +21,7 @@ import com.hookah.platform.backend.telegram.db.VenueRepository
 import com.hookah.platform.backend.telegram.db.VenueSettings
 import com.hookah.platform.backend.telegram.db.VenueSettingsRepository
 import com.hookah.platform.backend.telegram.db.VenueShort
+import io.ktor.server.config.MapApplicationConfig
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
@@ -36,6 +37,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class StaffChatNotifierTest {
+    private val trafficPolicy = TelegramTrafficPolicy.unrestricted()
     private val venueRepository: VenueRepository = mockk()
     private val notificationRepository: StaffChatNotificationRepository = mockk()
     private val venueSettingsRepository: VenueSettingsRepository = mockk()
@@ -45,8 +47,41 @@ class StaffChatNotifierTest {
             notificationRepository = notificationRepository,
             venueSettingsRepository = venueSettingsRepository,
             isTelegramActive = { true },
+            trafficPolicy = trafficPolicy,
             scope = CoroutineScope(Dispatchers.Unconfined),
         )
+
+    @Test
+    fun `disallowed staff chat is skipped before notification state or outbox`() =
+        runBlocking {
+            val restrictedPolicy =
+                TelegramTrafficPolicy.from(
+                    MapApplicationConfig(
+                        "telegram.trafficPolicy" to "ALLOWLIST",
+                        "telegram.allowedUserIds" to "101",
+                        "telegram.allowedChatIds" to "101",
+                    ),
+                    appEnv = "staging",
+                )
+            val restrictedNotifier =
+                StaffChatNotifier(
+                    venueRepository = venueRepository,
+                    notificationRepository = notificationRepository,
+                    isTelegramActive = { true },
+                    trafficPolicy = restrictedPolicy,
+                    scope = CoroutineScope(Dispatchers.Unconfined),
+                )
+            coEvery { venueRepository.findVenueById(1L) } returns
+                VenueShort(id = 1L, name = "Venue", staffChatId = -100999L)
+
+            val result = restrictedNotifier.notifyTestMessageNow(1L)
+
+            assertEquals(StaffChatNotificationResult.SKIPPED_TRAFFIC_POLICY, result)
+            coVerify(exactly = 0) { notificationRepository.enqueue(any(), any(), any()) }
+            coVerify(exactly = 0) {
+                notificationRepository.tryClaimAndEnqueue(any(), any(), any(), any())
+            }
+        }
 
     @Test
     fun `notifyNewBatch sends only once for same batch`() =
@@ -939,6 +974,7 @@ class StaffChatNotifierTest {
                     venueRepository = venueRepository,
                     notificationRepository = notificationRepository,
                     isTelegramActive = { false },
+                    trafficPolicy = trafficPolicy,
                     scope = CoroutineScope(Dispatchers.Unconfined),
                 )
 
@@ -1949,6 +1985,7 @@ class StaffChatNotifierTest {
             notificationRepository = notificationRepository,
             venueSettingsRepository = venueSettingsRepository,
             isTelegramActive = { true },
+            trafficPolicy = trafficPolicy,
             scope = CoroutineScope(Dispatchers.Unconfined),
             venueOrdersRepository = venueOrdersRepository,
             staffCallRepository = staffCallRepository,

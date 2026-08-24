@@ -164,11 +164,11 @@ jobs:
               "com.hookah.platform.backend.telegram.TelegramKeyboardsTest",
           ]
           required_minimums = {
-              "com.hookah.platform.backend.support.SupportTicketRoutesTest": 13,
+              "com.hookah.platform.backend.support.SupportTicketRoutesTest": 15,
               "com.hookah.platform.backend.support.SupportThreadReadRepositoryTest": 21,
-              "com.hookah.platform.backend.telegram.BookingMessageStaffChatNotifierTest": 5,
-              "com.hookah.platform.backend.telegram.StaffChatNotifierTest": 39,
-              "com.hookah.platform.backend.telegram.TelegramOutboxWorkerTest": 8,
+              "com.hookah.platform.backend.telegram.BookingMessageStaffChatNotifierTest": 6,
+              "com.hookah.platform.backend.telegram.StaffChatNotifierTest": 40,
+              "com.hookah.platform.backend.telegram.TelegramOutboxWorkerTest": 13,
               "com.hookah.platform.backend.miniapp.guest.GuestOrderRoutesTest": 61,
               "com.hookah.platform.backend.telegram.db.GuestOrderIdempotencyFingerprintTest": 7,
               "com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepositoryTest": 54,
@@ -187,11 +187,24 @@ jobs:
           }
           required_test_names = {
               "com.hookah.platform.backend.support.SupportTicketRoutesTest": {
+                  "allowed generic guest notifications persist replies with queued true",
+                  "denied generic guest notifications persist replies with queued false",
                   "confirmed Platform Guest surface contract rejects cross inbox opens without raw marker mutation or facts",
               },
               "com.hookah.platform.backend.support.SupportThreadReadRepositoryTest": {
                   "NULL author venue chat participates in every unread projection and clears on exact open",
                   "NULL author support and unrelated threads stay excluded and unauthorized actors get no count facts",
+              },
+              "com.hookah.platform.backend.telegram.BookingMessageStaffChatNotifierTest": {
+                  "traffic policy rejects an unlisted staff chat without creating outbox state",
+              },
+              "com.hookah.platform.backend.telegram.StaffChatNotifierTest": {
+                  "disallowed staff chat is skipped before notification state or outbox",
+              },
+              "com.hookah.platform.backend.telegram.TelegramOutboxWorkerTest": {
+                  "claim skips disallowed rows without mutation and does not starve allowed rows",
+                  "disallowed producers create no outbox or staff notification state",
+                  "malformed payload is terminal local validation without transport fallback or metrics",
               },
               "com.hookah.platform.backend.telegram.TelegramBotRouterTableTokenTest": {
                   "bot booking create uses zone A once when resolver would next return zone B",
@@ -363,12 +376,16 @@ jobs:
                       "TEST-com.hookah.platform.backend.support."
                       "BookingMessageIdempotencyPostgresTest.xml"
                   ),
-                  17,
+                  19,
               ),
           ]
           problems = []
-          required_test_names = {
+          support_read_required_test_names = {
               "PostgreSQL NULL author venue chat is unread until locked exact open and preserves another actor marker",
+          }
+          booking_message_required_test_names = {
+              "traffic policy rejection rolls back and the same key commits once after allow",
+              "allowed guest message commits its ack while a denied staff group creates no alert",
           }
           for label, report, minimum_tests in required_suites:
               if not report.is_file():
@@ -398,7 +415,19 @@ jobs:
                       (case.attrib.get("name") or "").removesuffix("()")
                       for case in suite.iter("testcase")
                   ]
-                  for required_name in required_test_names:
+                  for required_name in support_read_required_test_names:
+                      occurrences = actual_names.count(required_name)
+                      if occurrences != 1:
+                          problems.append(
+                              "missing or duplicate mandatory PostgreSQL testcase: "
+                              f"name={required_name!r} actual={occurrences}"
+                          )
+              if report.name.endswith("BookingMessageIdempotencyPostgresTest.xml"):
+                  actual_names = [
+                      (case.attrib.get("name") or "").removesuffix("()")
+                      for case in suite.iter("testcase")
+                  ]
+                  for required_name in booking_message_required_test_names:
                       occurrences = actual_names.count(required_name)
                       if occurrences != 1:
                           problems.append(
@@ -476,7 +505,7 @@ jobs:
                       "TEST-com.hookah.platform.backend.miniapp.guest."
                       "BookingReminderWorkerTest.xml"
                   ),
-                  1,
+                  3,
               ),
               (
                   "venue booking routes",
@@ -484,7 +513,7 @@ jobs:
                       "TEST-com.hookah.platform.backend.miniapp.venue."
                       "VenueBookingRoutesTest.xml"
                   ),
-                  10,
+                  11,
               ),
               (
                   "venue RBAC routes",
@@ -500,7 +529,7 @@ jobs:
                       "TEST-com.hookah.platform.backend.support."
                   "BookingConversationRoutesTest.xml"
                   ),
-                  8,
+                  9,
               ),
               (
                   "booking conversation repository",
@@ -508,19 +537,28 @@ jobs:
                       "TEST-com.hookah.platform.backend.support."
                       "BookingConversationRepositoryTest.xml"
                   ),
-                  13,
+                  14,
               ),
           ]
           required_test_names = {
+              "TEST-com.hookah.platform.backend.miniapp.guest.BookingReminderWorkerTest.xml": {
+                  "traffic policy skip leaves reminder unchanged and does not starve later allowed reminder",
+                  "enqueue exception remains a failed reminder delivery",
+              },
               "TEST-com.hookah.platform.backend.miniapp.guest.GuestBookingRoutesTest.xml": {
                   "guest attendance missing timezone uses Moscow once for response staff and deadline under UTC",
                   "guest attendance Honolulu timezone wins once for response staff and deadline under UTC",
               },
               "TEST-com.hookah.platform.backend.miniapp.venue.VenueBookingRoutesTest.xml": {
+                  "direct venue booking reply denied by traffic policy creates no conversation state",
                   "valid Honolulu timezone wins over UTC host for persisted deadline reminder and notification",
               },
               "TEST-com.hookah.platform.backend.support.BookingConversationRoutesTest.xml": {
                   "ordinary Guest surface contract rejects cross inbox opens without raw marker mutation or message facts",
+                  "venue booking reply denied by traffic policy is atomic and the same key retries after allow",
+              },
+              "TEST-com.hookah.platform.backend.support.BookingConversationRepositoryTest.xml": {
+                  "rejected Mini App notification rolls back and leaves the same client key reusable",
               },
           }
           problems = []
@@ -575,13 +613,151 @@ jobs:
         uses: gradle/actions/setup-gradle@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d # v4
         with:
           cache-key-prefix: ${{ runner.os }}-gradle-${{ hashFiles('gradle.properties', 'gradle/libs.versions.toml', 'settings.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties') }}
-      - name: Run Telegram keyboard payload notifier tests
+      - name: Verify Docker availability (required for Testcontainers)
+        run: docker info
+      - name: Run Telegram traffic policy and lightweight tests
+        env:
+          TZ: UTC
         run: |
-          ./gradlew --no-daemon :backend:app:test \
+          echo "CI timezone contract: $TZ"
+          JAVA_TOOL_OPTIONS=-Dapi.version=1.44 _JAVA_OPTIONS=-Xmx4g \
+            ./gradlew --no-daemon --max-workers=1 :backend:app:test \
             --tests "com.hookah.platform.backend.telegram.TelegramKeyboardsTest" \
             --tests "com.hookah.platform.backend.telegram.SendMessagePayloadTest" \
             --tests "com.hookah.platform.backend.telegram.TelegramBotRouterLinkCommandTest" \
+            --tests "com.hookah.platform.backend.telegram.TelegramTrafficPolicyStartupTest" \
+            --tests "com.hookah.platform.backend.telegram.TelegramTrafficPolicyConfigTest" \
+            --tests "com.hookah.platform.backend.telegram.TelegramTrafficPolicyTest" \
+            --tests "com.hookah.platform.backend.telegram.TelegramTrafficPolicyLoggingTest" \
+            --tests "com.hookah.platform.backend.telegram.TelegramLongPollingWorkerTest" \
+            --tests "com.hookah.platform.backend.telegram.TelegramInboundUpdateWorkerTest" \
+            --tests "com.hookah.platform.backend.telegram.TelegramBotRouterIdempotencyTest" \
+            --tests "com.hookah.platform.backend.telegram.TelegramQueueDepthMetricsTest" \
+            --tests "com.hookah.platform.backend.telegram.TelegramWebhookConfigTest" \
+            --tests "com.hookah.platform.backend.telegram.TelegramWebhookRoutesTest" \
+            --tests "com.hookah.platform.backend.telegram.TelegramApiClientTrafficPolicyTest" \
+            --tests "com.hookah.platform.backend.miniapp.auth.TelegramAuthRouteTest" \
+            --tests "com.hookah.platform.backend.miniapp.auth.TelegramInitDataValidatorTest" \
+            --tests "com.hookah.platform.backend.miniapp.session.SessionAuthTest" \
+            --tests "com.hookah.platform.backend.miniapp.guest.VisitFeedbackWorkerTest" \
+            --tests "com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackRepositoryTest" \
             --console=plain
+      - name: Assert Telegram traffic policy test results
+        if: ${{ !cancelled() }}
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          from xml.etree import ElementTree
+
+          report_dir = Path("backend/app/build/test-results/test")
+          required_suites = {
+              "com.hookah.platform.backend.telegram.TelegramKeyboardsTest": 169,
+              "com.hookah.platform.backend.telegram.SendMessagePayloadTest": 1,
+              "com.hookah.platform.backend.telegram.TelegramBotRouterLinkCommandTest": 1,
+              "com.hookah.platform.backend.telegram.TelegramTrafficPolicyStartupTest": 1,
+              "com.hookah.platform.backend.telegram.TelegramTrafficPolicyConfigTest": 7,
+              "com.hookah.platform.backend.telegram.TelegramTrafficPolicyTest": 5,
+              "com.hookah.platform.backend.telegram.TelegramTrafficPolicyLoggingTest": 1,
+              "com.hookah.platform.backend.telegram.TelegramLongPollingWorkerTest": 5,
+              "com.hookah.platform.backend.telegram.TelegramInboundUpdateWorkerTest": 3,
+              "com.hookah.platform.backend.telegram.TelegramBotRouterIdempotencyTest": 2,
+              "com.hookah.platform.backend.telegram.TelegramQueueDepthMetricsTest": 2,
+              "com.hookah.platform.backend.telegram.TelegramWebhookConfigTest": 4,
+              "com.hookah.platform.backend.telegram.TelegramWebhookRoutesTest": 4,
+              "com.hookah.platform.backend.telegram.TelegramApiClientTrafficPolicyTest": 6,
+              "com.hookah.platform.backend.miniapp.auth.TelegramAuthRouteTest": 7,
+              "com.hookah.platform.backend.miniapp.auth.TelegramInitDataValidatorTest": 10,
+              "com.hookah.platform.backend.miniapp.session.SessionAuthTest": 6,
+              "com.hookah.platform.backend.miniapp.guest.VisitFeedbackWorkerTest": 4,
+              "com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackRepositoryTest": 11,
+          }
+          required_test_names = {
+              "com.hookah.platform.backend.telegram.TelegramTrafficPolicyStartupTest": {
+                  "staging application fails closed on invalid policy before database initialization",
+              },
+              "com.hookah.platform.backend.telegram.TelegramTrafficPolicyConfigTest": {
+                  "staging requires explicit allowlist with both lists",
+                  "invalid configuration emits no logs and errors do not expose raw identity values",
+              },
+              "com.hookah.platform.backend.telegram.TelegramTrafficPolicyTest": {
+                  "callback requires allowed actor and message chat",
+                  "missing or ambiguous inbound identity is denied",
+              },
+              "com.hookah.platform.backend.telegram.TelegramTrafficPolicyLoggingTest": {
+                  "policy diagnostics and configuration failures do not expose identities",
+              },
+              "com.hookah.platform.backend.telegram.TelegramLongPollingWorkerTest": {
+                  "denied updates advance offset without reaching router",
+                  "configured webhook blocks long polling preflight",
+                  "only one long poller can run in a JVM and lease is released after stop",
+              },
+              "com.hookah.platform.backend.telegram.TelegramInboundUpdateWorkerTest": {
+                  "worker does not route historical queued update denied by policy",
+              },
+              "com.hookah.platform.backend.telegram.TelegramBotRouterIdempotencyTest": {
+                  "same token worker restart and redelivery do not repeat side effects",
+              },
+              "com.hookah.platform.backend.telegram.TelegramWebhookConfigTest": {
+                  "webhook secret is required for every normalized restricted environment",
+              },
+              "com.hookah.platform.backend.telegram.TelegramWebhookRoutesTest": {
+                  "allowlist denial is acknowledged before webhook enqueue",
+                  "malformed webhook payload returns bad request without enqueue or sensitive logs",
+              },
+              "com.hookah.platform.backend.telegram.TelegramApiClientTrafficPolicyTest": {
+                  "denied direct chat operations do not call Telegram",
+                  "outbox dispatcher rejects unknown missing and mismatched targets without network",
+                  "provider failures do not log ids token or payload",
+              },
+              "com.hookah.platform.backend.miniapp.auth.TelegramAuthRouteTest": {
+                  "valid initData for disallowed user returns generic forbidden before user write",
+              },
+              "com.hookah.platform.backend.miniapp.session.SessionAuthTest": {
+                  "valid token issued before allowlist removal is forbidden on every protected request",
+              },
+              "com.hookah.platform.backend.miniapp.guest.VisitFeedbackWorkerTest": {
+                  "traffic policy skip leaves request unmarked and does not starve later allowed request",
+                  "runOnce does not count an enqueue whose sent transition was not applied",
+              },
+              "com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackRepositoryTest": {
+                  "pick due requests is read only and delivery outcome increments attempts",
+                  "allowlist filters before limit without mutating older denied request",
+              },
+          }
+          problems = []
+          for class_name, minimum in required_suites.items():
+              report = report_dir / f"TEST-{class_name}.xml"
+              if not report.is_file():
+                  problems.append(f"missing JUnit XML: {report}")
+                  continue
+              suite = ElementTree.parse(report).getroot()
+              counts = {
+                  key: int(suite.attrib.get(key, "0"))
+                  for key in ("tests", "skipped", "failures", "errors")
+              }
+              print(f"{class_name}: xml={report} minimum={minimum} counts={counts}")
+              if counts["tests"] < minimum:
+                  problems.append(
+                      f"incomplete suite: {class_name} "
+                      f"required={minimum} actual={counts['tests']}"
+                  )
+              if any(counts[key] for key in ("skipped", "failures", "errors")):
+                  problems.append(f"non-passing suite {class_name}: {counts}")
+              actual_names = [
+                  (case.attrib.get("name") or "").removesuffix("()")
+                  for case in suite.iter("testcase")
+              ]
+              for required_name in required_test_names.get(class_name, set()):
+                  occurrences = actual_names.count(required_name)
+                  if occurrences != 1:
+                      problems.append(
+                          f"missing or duplicate mandatory testcase: {class_name} "
+                          f"name={required_name!r} actual={occurrences}"
+                      )
+
+          if problems:
+              raise SystemExit("\n".join(problems))
+          PY
 
   backend-migration-sanity:
     runs-on: ubuntu-latest

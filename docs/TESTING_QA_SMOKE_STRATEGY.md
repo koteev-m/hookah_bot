@@ -35,6 +35,99 @@ requirements remain regression/release evidence; it is not the current slice and
 
 Quality gates must match the blast radius of the change. Do not claim a feature is release-ready from local-only checks when it changes backend runtime, Mini App behavior, Telegram bot, staff-chat, billing/security or migrations. Do not run staging deploy for docs-only changes.
 
+### Telegram traffic allowlist main-port quality gate
+
+The exact V125 prerequisite `b4e13da3179438fad69d2344e1cb136a56f95f6c` is already deployed on
+staging. Porting it onto main is a backend/configuration security change with no new migration and no
+Mini App product change. HT-05 is local-only: it must not contact Telegram or staging, create staging
+fixtures, build or deploy a release image, commit or push. Its mandatory automated matrix is:
+
+- `TelegramTrafficPolicyStartupTest`, `TelegramTrafficPolicyConfigTest` and
+  `TelegramTrafficPolicyTest`: staging startup/configuration
+  fails closed for missing, unknown, unrestricted, empty, duplicate, malformed, zero, wrong-sign or
+  overflowing values; dev/test/production keep their existing default behavior; positive 64-bit
+  user IDs, positive private chats, negative group/supergroup chats and whitespace are deterministic.
+- `TelegramLongPollingWorkerTest`, `TelegramInboundUpdateWorkerTest`,
+  `TelegramBotRouterIdempotencyTest` and `TelegramWebhookRoutesTest`: allowed/denied private and
+  group updates, callback actor/chat combinations, missing actor/chat and unsupported update shapes;
+  direct long-polling/webhook ingress denial occurs before router, idempotency, enqueue or any
+  database write. A denied long-polling update advances only the process-local offset. A historical
+  queued webhook row is first claimed and then marked processed by the defense-in-depth worker gate,
+  but never reaches router/idempotency/domain/outbox writes; future activation still requires zero
+  pending/claimed inbound rows. The same-token restart/redelivery composition test
+  starts the first worker, waits for its batch, cancels and joins its job/scope, then starts a distinct
+  worker with the same router/token configuration and redelivers the batch. With the shared
+  idempotency and outbox mocks, the denied update reaches neither dependency, while the replayed
+  allowed update makes two idempotency acquisition attempts (`true`, then `false`) and exactly one
+  outbound side effect. This is deterministic interaction evidence, not a database restore/restart
+  test; the long-polling path does not write the webhook inbound queue. Runtime configuration starts
+  only the selected long-polling or webhook path, never both.
+- `TelegramAuthRouteTest` and `SessionAuthTest`: signed initData is allowlisted before user upsert or
+  JWT issuance, a denied identity receives generic `403 FORBIDDEN`, and every protected request
+  rechecks the policy so a valid JWT issued before removal is denied after the configured restart.
+- `TelegramOutboxWorkerTest`, `StaffChatNotifierTest`,
+  `BookingMessageStaffChatNotifierTest` and `TelegramApiClientTrafficPolicyTest`: a disallowed chat row is not
+  claimed, sent or mutated (`attempts`, `status`, `nextAttemptAt`, `processedAt` stay unchanged),
+  while allowed rows retain normal retry/send semantics. Every direct chat-targeted send, edit and
+  callback-answer path, including otherwise valid non-zero disallowed envelopes, is denied through
+  the same policy; there is no raw-client bypass.
+- Captured-log assertions are explicit and scoped: `TelegramTrafficPolicyConfigTest` and
+  `TelegramTrafficPolicyLoggingTest` prove invalid
+  raw identity values are neither logged nor echoed in errors; `TelegramLongPollingWorkerTest`
+  captures a provider/preflight failure sentinel, while `TelegramInboundUpdateWorkerTest` and
+  `TelegramWebhookRoutesTest` capture queued and direct-webhook denial payload sentinels; each asserts
+  that logs retain only safe source/reason/error-type metadata;
+  `TelegramAuthRouteTest` captures the denied initData request and verifies that user IDs, bot token,
+  raw initData and user payload are absent; `TelegramApiClientTrafficPolicyTest` does the same for
+  provider error payloads. These tests do not claim that arbitrary third-party logging outside the
+  tested application paths is redacted.
+
+Run focused groups first, then the relevant extended Telegram suite and backend compile/lint:
+
+```bash
+./gradlew --no-daemon --max-workers=1 :backend:app:test \
+  --tests '*TelegramTrafficPolicyStartupTest*' \
+  --tests '*TelegramTrafficPolicyConfigTest*' \
+  --tests '*TelegramTrafficPolicyTest*' \
+  --tests '*TelegramTrafficPolicyLoggingTest*' \
+  --tests '*TelegramLongPollingWorkerTest*' \
+  --console=plain
+
+./gradlew --no-daemon --max-workers=1 :backend:app:test \
+  --tests '*TelegramInboundUpdateWorkerTest*' \
+  --tests '*TelegramBotRouterIdempotencyTest*' \
+  --tests '*TelegramWebhookConfigTest*' \
+  --tests '*TelegramWebhookRoutesTest*' \
+  --console=plain
+
+./gradlew --no-daemon --max-workers=1 :backend:app:test \
+  --tests '*TelegramAuthRouteTest*' \
+  --tests '*SessionAuthTest*' \
+  --console=plain
+
+./gradlew --no-daemon --max-workers=1 :backend:app:test \
+  --tests '*TelegramOutboxWorkerTest*' \
+  --tests '*StaffChatNotifierTest*' \
+  --tests '*BookingMessageStaffChatNotifierTest*' \
+  --tests '*TelegramApiClientTrafficPolicyTest*' \
+  --console=plain
+
+./gradlew --no-daemon --max-workers=1 :backend:app:test \
+  --tests '*TelegramBotRouter*' \
+  --tests '*MiniApp*Auth*' \
+  --console=plain
+
+./gradlew --no-daemon --max-workers=1 :backend:app:compileKotlin --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:ktlintCheck --console=plain
+git diff --check
+git status --short
+```
+
+HT-05 additionally runs the unchanged Mini App production build and the complete applicable
+structured Playwright smoke to prove the backend port did not disturb current main parity. Green
+local checks prove only readiness for independent review; commit/push, green Actions, main-port
+deploy, V126 and real Telegram/Mini App staging smoke belong to later separately authorized tasks.
+
 ### Booking test-only release hygiene
 
 `BOOKING-TEST-SUBSCRIPTION-WORKER-ISOLATION-001 = LOCAL_FIX_REVIEW_REQUIRED`. Before booking
@@ -84,7 +177,7 @@ The independent-review closure findings for this bounded timezone slice remain r
   jobs retain their existing timezone environment.
 - `BOOKING-CI-STAFF-NOTIFIER-XML-FLOOR-001 = LOCAL_FIX_REVIEW_REQUIRED`.
   `backend-release-critical-routes` parses the exact
-  `TEST-com.hookah.platform.backend.telegram.StaffChatNotifierTest.xml` report at minimum `39` and
+  `TEST-com.hookah.platform.backend.telegram.StaffChatNotifierTest.xml` report at minimum `40` and
   fails on a missing/below-minimum/zero, skipped, failed or errored suite.
 - `BOOKING-TIMEZONE-REREAD-RACE-EVIDENCE-001 = LOCAL_FIX_REVIEW_REQUIRED`. A single Bot booking
   operation uses a resolver prepared to return Zone A and then Zone B, requires exactly one
@@ -159,12 +252,12 @@ the current UX/unread closure gates; both remain mandatory where selected in CI:
   independent production repository calls visibly blocked on the canonical booking row and one
   resulting thread. Post-state must prove both callers returned the same authoritative id, exact
   booking/venue/guest/type/status, and zero messages and relevant audits.
-- `BookingConversationRepositoryTest`: minimum `13`, covering repeat convergence, distinct booking
+- `BookingConversationRepositoryTest`: minimum `14`, covering repeat convergence, distinct booking
   identity, Telegram retry idempotency, both message sources, authoritative actor/metadata checks,
   locked rejection of concurrently closed threads, positive generic-writer type allowlisting,
   ordinary chat/ticket regression, rollback and one-time Guest Bot transactional notification
   callback execution across replay.
-- `BookingConversationRoutesTest`: minimum `8`, covering two guests/two venues/multiple bookings,
+- `BookingConversationRoutesTest`: minimum `9`, covering two guests/two venues/multiple bookings,
   Guest and Venue generic booking replies through the authoritative writer, direct privacy denials,
   safe idempotency replay/mismatch `409`, required/strict Mini App key validation, cross-surface
   booking-label parity, actor/thread-scoped unread aggregation/read clearing and the exact ordinary
@@ -184,7 +277,7 @@ the current UX/unread closure gates; both remain mandatory where selected in CI:
   malformed/duplicate/oversized input rejection, complete one-result-per-request validation,
   repeated lookup, `Cache-Control: no-store` on exact/list/detail readers and zero
   thread/message/read/audit/outbox writes.
-- `BookingMessageIdempotencyPostgresTest`: minimum `17`, covering Guest/Venue same-key replay,
+- `BookingMessageIdempotencyPostgresTest`: minimum `19`, covering Guest/Venue same-key replay,
   mismatch, different keys, atomic outbox rollback/recovery and lost-response replay. The contention
   case uses independent connections/PIDs and an observer that proves the waiting caller has an
   ungranted `pg_locks` row and exact caller A in `pg_blocking_pids` before release. Exact and
@@ -192,18 +285,19 @@ the current UX/unread closure gates; both remain mandatory where selected in CI:
   closed and roll back. Assertions include one physical message/outbox/logical thread mutation and
   zero duplicate read markers/audits. New Guest Mini App/Bot coverage additionally requires one
   canonical-venue fact-only staff alert, no replay duplicate, safe missing/disabled configuration,
-  wrong-venue exclusion and full message/outbox rollback on strict enqueue failure. The legacy
-  suspend enqueue remains key-only and is covered by `TelegramOutboxWorkerTest` minimum `8`.
-- `BookingMessageStaffChatNotifierTest`: minimum `5`, executable without Docker and asserting exact
+  policy-skipped staff groups, wrong-venue exclusion and full message/outbox rollback on strict
+  enqueue failure. The legacy
+  suspend enqueue remains key-only and is covered by `TelegramOutboxWorkerTest` minimum `13`.
+- `BookingMessageStaffChatNotifierTest`: minimum `6`, executable without Docker and asserting exact
   canonical label/link payload, privacy-safe text, logical dedupe, caller-transaction rollback,
-  disabled/unlinked/missing-URL skip and stable product-timezone fallback.
-- `StaffChatNotifierTest`: exact XML minimum `39`, with zero skipped/failures/errors; the lifecycle
+  disabled/unlinked/missing-URL/policy skip and stable product-timezone fallback.
+- `StaffChatNotifierTest`: exact XML minimum `40`, with zero skipped/failures/errors; the lifecycle
   notifier must consume its caller-owned `ZoneId` without reading venue settings.
-- `SupportTicketRoutesTest` remains an exact support regression selector with minimum `13` and zero
+- `SupportTicketRoutesTest` remains an exact support regression selector with minimum `15` and zero
   skipped/failures/errors; its exact confirmed Platform Guest wrong-surface/raw-marker/no-facts
   testcase is mandatory.
 - Existing booking/RBAC regression remains exact: `GuestBookingRoutesTest` minimum `10`,
-  `BookingReminderWorkerTest` minimum `1`, `VenueBookingRoutesTest` minimum `10` and
+  `BookingReminderWorkerTest` minimum `3`, `VenueBookingRoutesTest` minimum `11` and
   `VenueRbacRoutesTest` minimum `36`. The valid Honolulu venue testcase name is mandatory evidence
   for persisted schedule/deadline, pending reminder and guest-notification precedence.
 - `TelegramBotRouterTableTokenTest` remains an exact production-router regression gate (current
@@ -2525,14 +2619,14 @@ Expectations:
   `PromotionConfigurationConcurrencyPostgresTest`, `VenueStaffMutationConcurrencyPostgresTest`,
   `GuestOrderIdempotencyConcurrencyPostgresTest`, `VenueOnboardingConcurrencyPostgresTest`,
   `BookingConversationConcurrencyPostgresTest` and `BookingMessageIdempotencyPostgresTest`, then
-  independently parses all eight XML reports at minimums `8 / 6 / 14 / 2 / 9 / 7 / 1 / 17`.
+  independently parses all eight XML reports at minimums `8 / 6 / 14 / 2 / 9 / 7 / 1 / 19`.
   Both parsers require `skipped=0`, `failures=0`, `errors=0`; a missing or below-minimum report is
   fatal. Docker availability alone is not evidence, and route failure must not silently skip the
   PostgreSQL gates.
 - The route/security selector runs with `TZ=UTC` and also executes and asserts
-  `SupportTicketRoutesTest=13`, `SupportThreadReadRepositoryTest=21`,
-  `BookingMessageStaffChatNotifierTest=5`, `StaffChatNotifierTest=39`,
-  `TelegramOutboxWorkerTest=8`, `GuestOrderRoutesTest=61` and
+  `SupportTicketRoutesTest=15`, `SupportThreadReadRepositoryTest=21`,
+  `BookingMessageStaffChatNotifierTest=6`, `StaffChatNotifierTest=40`,
+  `TelegramOutboxWorkerTest=13`, `GuestOrderRoutesTest=61` and
   `TelegramBotRouterTableTokenTest=553`, preserving cursor/RBAC behavior, fixed confirmed-Platform
   Guest surface denial, caller-owned booking-notifier timezone, privacy-safe staff alerts and
   legacy key-only enqueue/retry alongside the strict booking-only transaction API. The two
@@ -2540,9 +2634,9 @@ Expectations:
   and `bot booking create uses zone A once when resolver would next return zone B` are mandatory,
   so unrelated tests cannot satisfy the class floors.
 - `backend-venue-booking-rbac` asserts exact XML minima `BookingDisplayLabelTest=2`,
-  `GuestBookingRoutesTest=10`, `BookingReminderWorkerTest=1`, `VenueBookingRoutesTest=10`,
-  `VenueRbacRoutesTest=36`, `BookingConversationRoutesTest=8` and
-  `BookingConversationRepositoryTest=13`. It runs with `TZ=UTC` and requires the exact testcase
+  `GuestBookingRoutesTest=10`, `BookingReminderWorkerTest=3`, `VenueBookingRoutesTest=11`,
+  `VenueRbacRoutesTest=36`, `BookingConversationRoutesTest=9` and
+  `BookingConversationRepositoryTest=14`. It runs with `TZ=UTC` and requires the exact testcase
   names `guest attendance missing timezone uses Moscow once for response staff and deadline under
   UTC`, `guest attendance Honolulu timezone wins once for response staff and deadline under UTC`,
   `valid Honolulu timezone wins over UTC host for persisted

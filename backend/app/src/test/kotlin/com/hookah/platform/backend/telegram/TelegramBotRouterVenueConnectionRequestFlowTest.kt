@@ -110,6 +110,7 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
 
             val router =
                 TelegramBotRouter(
+                    trafficPolicy = TelegramTrafficPolicy.unrestricted(),
                     config =
                         TelegramBotConfig(
                             enabled = true,
@@ -292,6 +293,7 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
 
             val router =
                 TelegramBotRouter(
+                    trafficPolicy = TelegramTrafficPolicy.unrestricted(),
                     config =
                         TelegramBotConfig(
                             enabled = true,
@@ -466,6 +468,7 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
 
             val router =
                 TelegramBotRouter(
+                    trafficPolicy = TelegramTrafficPolicy.unrestricted(),
                     config =
                         TelegramBotConfig(
                             enabled = true,
@@ -664,6 +667,7 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
 
             val router =
                 TelegramBotRouter(
+                    trafficPolicy = TelegramTrafficPolicy.unrestricted(),
                     config =
                         TelegramBotConfig(
                             enabled = true,
@@ -837,6 +841,7 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
 
             val router =
                 TelegramBotRouter(
+                    trafficPolicy = TelegramTrafficPolicy.unrestricted(),
                     config =
                         TelegramBotConfig(
                             enabled = true,
@@ -935,6 +940,7 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
 
             val router =
                 TelegramBotRouter(
+                    trafficPolicy = TelegramTrafficPolicy.unrestricted(),
                     config =
                         TelegramBotConfig(
                             enabled = true,
@@ -1090,6 +1096,7 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
 
             val router =
                 TelegramBotRouter(
+                    trafficPolicy = TelegramTrafficPolicy.unrestricted(),
                     config =
                         TelegramBotConfig(
                             enabled = true,
@@ -1331,6 +1338,7 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
 
             val router =
                 TelegramBotRouter(
+                    trafficPolicy = TelegramTrafficPolicy.unrestricted(),
                     config =
                         TelegramBotConfig(
                             enabled = true,
@@ -1471,6 +1479,7 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
 
             val router =
                 TelegramBotRouter(
+                    trafficPolicy = TelegramTrafficPolicy.unrestricted(),
                     config =
                         TelegramBotConfig(
                             enabled = true,
@@ -1594,6 +1603,7 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
 
             val router =
                 TelegramBotRouter(
+                    trafficPolicy = TelegramTrafficPolicy.unrestricted(),
                     config =
                         TelegramBotConfig(
                             enabled = true,
@@ -1823,6 +1833,7 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
 
             val router =
                 TelegramBotRouter(
+                    trafficPolicy = TelegramTrafficPolicy.unrestricted(),
                     config =
                         TelegramBotConfig(
                             enabled = true,
@@ -1931,6 +1942,7 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
 
             val router =
                 TelegramBotRouter(
+                    trafficPolicy = TelegramTrafficPolicy.unrestricted(),
                     config =
                         TelegramBotConfig(
                             enabled = true,
@@ -2709,6 +2721,7 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
         platformSubscriptionSettingsRepository: PlatformSubscriptionSettingsRepository,
     ): TelegramBotRouter =
         TelegramBotRouter(
+            trafficPolicy = TelegramTrafficPolicy.unrestricted(),
             config =
                 TelegramBotConfig(
                     enabled = true,

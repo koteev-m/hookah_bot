@@ -289,10 +289,8 @@ fun Route.venueRoutes(
                     val role = VenueRoleMapping.fromDb(membership.role)
                     if (role == null) {
                         logger.warn(
-                            "Unknown venue role {} for userId={} venueId={}",
+                            "Unknown venue role {} in venue membership",
                             membership.role,
-                            userId,
-                            membership.venueId,
                         )
                         return@mapNotNull null
                     }
@@ -743,9 +741,7 @@ fun Route.venueRoutes(
                 staffChatLinkCodeRepository.createLinkCode(venueId, userId)
                     ?: throw DatabaseUnavailableException()
             logger.info(
-                "Generated staff chat link code venueId={} by userId={} expiresAt={}",
-                venueId,
-                userId,
+                "Generated staff chat link code expiresAt={}",
                 created.expiresAt,
             )
             call.respond(
@@ -1198,7 +1194,9 @@ private fun StaffChatNotificationResult.toStaffChatTestResponse(): StaffChatTest
                 queued = false,
                 message = "Telegram-бот не активен, тестовое сообщение не отправлено.",
             )
-        StaffChatNotificationResult.FAILED_ENQUEUE ->
+        StaffChatNotificationResult.FAILED_ENQUEUE,
+        StaffChatNotificationResult.SKIPPED_TRAFFIC_POLICY,
+        ->
             StaffChatTestResponse(
                 result = "FAILED",
                 queued = false,

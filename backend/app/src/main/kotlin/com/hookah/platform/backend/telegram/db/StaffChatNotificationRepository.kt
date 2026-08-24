@@ -1,7 +1,6 @@
 package com.hookah.platform.backend.telegram.db
 
-import com.hookah.platform.backend.telegram.debugTelegramException
-import com.hookah.platform.backend.telegram.sanitizeTelegramForLog
+import com.hookah.platform.backend.telegram.TelegramTrafficPolicy
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
@@ -16,13 +15,19 @@ data class StaffChatOrderMessage(
     val messageId: Long?,
 )
 
-open class StaffChatNotificationRepository(private val dataSource: DataSource?) {
+open class StaffChatNotificationRepository(
+    private val dataSource: DataSource?,
+    private val trafficPolicy: TelegramTrafficPolicy,
+) {
     private val logger = LoggerFactory.getLogger(StaffChatNotificationRepository::class.java)
 
     suspend fun tryClaim(
         batchId: Long,
         chatId: Long,
     ): StaffChatNotificationClaim {
+        if (!trafficPolicy.allowsOutboundChat(chatId)) {
+            return StaffChatNotificationClaim.SKIPPED_TRAFFIC_POLICY
+        }
         val ds = dataSource ?: return StaffChatNotificationClaim.ERROR
         return withContext(Dispatchers.IO) {
             ds.connection.use { connection ->
@@ -42,21 +47,11 @@ open class StaffChatNotificationRepository(private val dataSource: DataSource?) 
                     if (e.sqlState == "23505") {
                         StaffChatNotificationClaim.ALREADY
                     } else {
-                        logger.warn(
-                            "Failed to claim staff chat notification batchId={}: {}",
-                            batchId,
-                            sanitizeTelegramForLog(e.message),
-                        )
-                        logger.debugTelegramException(e) { "tryClaim exception batchId=$batchId" }
+                        logFailure("claim", e)
                         StaffChatNotificationClaim.ERROR
                     }
                 } catch (e: Exception) {
-                    logger.warn(
-                        "Failed to claim staff chat notification batchId={}: {}",
-                        batchId,
-                        sanitizeTelegramForLog(e.message),
-                    )
-                    logger.debugTelegramException(e) { "tryClaim exception batchId=$batchId" }
+                    logFailure("claim", e)
                     StaffChatNotificationClaim.ERROR
                 }
             }
@@ -69,6 +64,9 @@ open class StaffChatNotificationRepository(private val dataSource: DataSource?) 
         method: String,
         payloadJson: String,
     ): StaffChatNotificationClaim {
+        if (!trafficPolicy.allowsOutboundChat(chatId)) {
+            return StaffChatNotificationClaim.SKIPPED_TRAFFIC_POLICY
+        }
         val ds = dataSource ?: return StaffChatNotificationClaim.ERROR
         return withContext(Dispatchers.IO) {
             ds.connection.use { connection ->
@@ -102,22 +100,12 @@ open class StaffChatNotificationRepository(private val dataSource: DataSource?) 
                     if (e.sqlState == "23505") {
                         StaffChatNotificationClaim.ALREADY
                     } else {
-                        logger.warn(
-                            "Failed to claim and enqueue staff chat notification key={}: {}",
-                            notificationKey,
-                            sanitizeTelegramForLog(e.message),
-                        )
-                        logger.debugTelegramException(e) { "tryClaimAndEnqueue exception key=$notificationKey" }
+                        logFailure("claim and enqueue", e)
                         StaffChatNotificationClaim.ERROR
                     }
                 } catch (e: Exception) {
                     connection.rollback()
-                    logger.warn(
-                        "Failed to claim and enqueue staff chat notification key={}: {}",
-                        notificationKey,
-                        sanitizeTelegramForLog(e.message),
-                    )
-                    logger.debugTelegramException(e) { "tryClaimAndEnqueue exception key=$notificationKey" }
+                    logFailure("claim and enqueue", e)
                     StaffChatNotificationClaim.ERROR
                 } finally {
                     connection.autoCommit = true
@@ -134,6 +122,9 @@ open class StaffChatNotificationRepository(private val dataSource: DataSource?) 
         method: String,
         payloadJson: String,
     ): StaffChatNotificationClaim {
+        if (!trafficPolicy.allowsOutboundChat(chatId)) {
+            return StaffChatNotificationClaim.SKIPPED_TRAFFIC_POLICY
+        }
         val ds = dataSource ?: return StaffChatNotificationClaim.ERROR
         return withContext(Dispatchers.IO) {
             ds.connection.use { connection ->
@@ -169,26 +160,12 @@ open class StaffChatNotificationRepository(private val dataSource: DataSource?) 
                     if (e.sqlState == "23505") {
                         StaffChatNotificationClaim.ALREADY
                     } else {
-                        logger.warn(
-                            "Failed to claim and enqueue staff chat order message key={}: {}",
-                            notificationKey,
-                            sanitizeTelegramForLog(e.message),
-                        )
-                        logger.debugTelegramException(e) {
-                            "tryClaimAndEnqueueOrderMessage exception key=$notificationKey"
-                        }
+                        logFailure("claim and enqueue order message", e)
                         StaffChatNotificationClaim.ERROR
                     }
                 } catch (e: Exception) {
                     connection.rollback()
-                    logger.warn(
-                        "Failed to claim and enqueue staff chat order message key={}: {}",
-                        notificationKey,
-                        sanitizeTelegramForLog(e.message),
-                    )
-                    logger.debugTelegramException(e) {
-                        "tryClaimAndEnqueueOrderMessage exception key=$notificationKey"
-                    }
+                    logFailure("claim and enqueue order message", e)
                     StaffChatNotificationClaim.ERROR
                 } finally {
                     connection.autoCommit = true
@@ -202,6 +179,7 @@ open class StaffChatNotificationRepository(private val dataSource: DataSource?) 
         method: String,
         payloadJson: String,
     ): Boolean {
+        if (!trafficPolicy.allowsOutboundChat(chatId)) return false
         val ds = dataSource ?: return false
         return withContext(Dispatchers.IO) {
             ds.connection.use { connection ->
@@ -218,12 +196,7 @@ open class StaffChatNotificationRepository(private val dataSource: DataSource?) 
                         statement.executeUpdate() > 0
                     }
                 } catch (e: Exception) {
-                    logger.warn(
-                        "Failed to enqueue staff chat message chatId={}: {}",
-                        chatId,
-                        sanitizeTelegramForLog(e.message),
-                    )
-                    logger.debugTelegramException(e) { "enqueue staff chat message exception chatId=$chatId" }
+                    logFailure("enqueue", e)
                     false
                 }
             }
@@ -251,7 +224,7 @@ open class StaffChatNotificationRepository(private val dataSource: DataSource?) 
                             venueId = rs.getLong("venue_id"),
                             chatId = rs.getLong("chat_id"),
                             messageId = rs.getLong("message_id").takeIf { !rs.wasNull() },
-                        )
+                        ).takeIf { trafficPolicy.allowsOutboundChat(it.chatId) }
                     }
                 }
             }
@@ -264,6 +237,7 @@ open class StaffChatNotificationRepository(private val dataSource: DataSource?) 
         chatId: Long,
         messageId: Long?,
     ): Boolean {
+        if (!trafficPolicy.allowsOutboundChat(chatId)) return false
         val ds = dataSource ?: return false
         return withContext(Dispatchers.IO) {
             ds.connection.use { connection ->
@@ -309,12 +283,7 @@ open class StaffChatNotificationRepository(private val dataSource: DataSource?) 
                     true
                 } catch (e: Exception) {
                     runCatching { connection.rollback() }
-                    logger.warn(
-                        "Failed to upsert staff chat order message orderId={}: {}",
-                        orderId,
-                        sanitizeTelegramForLog(e.message),
-                    )
-                    logger.debugTelegramException(e) { "upsert staff chat order message exception orderId=$orderId" }
+                    logFailure("upsert order message", e)
                     false
                 } finally {
                     runCatching { connection.autoCommit = true }
@@ -330,6 +299,7 @@ open class StaffChatNotificationRepository(private val dataSource: DataSource?) 
         method: String,
         payloadJson: String,
     ): Boolean {
+        if (!trafficPolicy.allowsOutboundChat(chatId)) return false
         val ds = dataSource ?: return false
         return withContext(Dispatchers.IO) {
             ds.connection.use { connection ->
@@ -352,12 +322,7 @@ open class StaffChatNotificationRepository(private val dataSource: DataSource?) 
                     true
                 } catch (e: Exception) {
                     runCatching { connection.rollback() }
-                    logger.warn(
-                        "Failed to enqueue staff chat order message orderId={}: {}",
-                        orderId,
-                        sanitizeTelegramForLog(e.message),
-                    )
-                    logger.debugTelegramException(e) { "enqueue staff chat order message exception orderId=$orderId" }
+                    logFailure("enqueue order message", e)
                     false
                 } finally {
                     runCatching { connection.autoCommit = true }
@@ -378,12 +343,7 @@ open class StaffChatNotificationRepository(private val dataSource: DataSource?) 
                         statement.executeUpdate() > 0
                     }
                 } catch (e: Exception) {
-                    logger.warn(
-                        "Failed to release staff chat notification batchId={}: {}",
-                        batchId,
-                        sanitizeTelegramForLog(e.message),
-                    )
-                    logger.debugTelegramException(e) { "releaseClaim exception batchId=$batchId" }
+                    logFailure("release claim", e)
                     false
                 }
             }
@@ -462,10 +422,22 @@ open class StaffChatNotificationRepository(private val dataSource: DataSource?) 
             statement.executeUpdate()
         }
     }
+
+    private fun logFailure(
+        operation: String,
+        throwable: Throwable,
+    ) {
+        logger.warn(
+            "Staff chat notification repository operation failed operation={} error_type={}",
+            operation,
+            throwable::class.java.simpleName,
+        )
+    }
 }
 
 enum class StaffChatNotificationClaim {
     CLAIMED,
     ALREADY,
+    SKIPPED_TRAFFIC_POLICY,
     ERROR,
 }

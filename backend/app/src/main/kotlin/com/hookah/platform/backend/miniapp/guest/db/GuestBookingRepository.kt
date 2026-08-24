@@ -1,6 +1,7 @@
 package com.hookah.platform.backend.miniapp.guest.db
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.telegram.TelegramOutboundClaimScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.sql.SQLException
@@ -785,8 +786,11 @@ class GuestBookingRepository(
     suspend fun pickDueReminders(
         now: Instant = Instant.now(),
         limit: Int = DEFAULT_REMINDER_BATCH_SIZE,
+        outboundClaimScope: TelegramOutboundClaimScope,
     ): List<BookingReminderDelivery> {
         require(limit > 0) { "limit must be > 0" }
+        val eligibleUserIds = outboundClaimScope.eligiblePositiveRecipientIds
+        if (eligibleUserIds?.isEmpty() == true) return emptyList()
         val ds = dataSource ?: throw DatabaseUnavailableException()
         try {
             return withContext(Dispatchers.IO) {
@@ -794,7 +798,7 @@ class GuestBookingRepository(
                     val initialAutoCommit = connection.autoCommit
                     connection.autoCommit = false
                     try {
-                        val reminders = selectDueReminders(connection, now, limit)
+                        val reminders = selectDueReminders(connection, now, limit, eligibleUserIds)
                         connection.commit()
                         reminders
                     } catch (e: SQLException) {
@@ -1585,6 +1589,7 @@ class GuestBookingRepository(
         connection: java.sql.Connection,
         now: Instant,
         limit: Int,
+        eligibleUserIds: List<Long>?,
     ): List<BookingReminderDelivery> {
         val forUpdateClause =
             if (connection.metaData.databaseProductName.contains("H2", ignoreCase = true)) {
@@ -1592,6 +1597,10 @@ class GuestBookingRepository(
             } else {
                 "FOR UPDATE OF br SKIP LOCKED"
             }
+        val recipientPredicate =
+            eligibleUserIds?.let { ids ->
+                "AND b.user_id IN (${ids.joinToString(",") { "?" }})"
+            }.orEmpty()
         return connection.prepareStatement(
             """
             SELECT br.id AS reminder_id,
@@ -1616,6 +1625,7 @@ class GuestBookingRepository(
               AND br.status = 'PENDING'
               AND br.scheduled_for <= ?
               AND b.status IN ('CONFIRMED', 'CHANGED')
+              $recipientPredicate
             ORDER BY br.scheduled_for ASC, br.id ASC
             LIMIT ?
             $forUpdateClause
@@ -1623,7 +1633,11 @@ class GuestBookingRepository(
         ).use { statement ->
             statement.setString(1, REMINDER_POLICY_M7C)
             statement.setTimestamp(2, Timestamp.from(now))
-            statement.setInt(3, limit)
+            var parameterIndex = 3
+            eligibleUserIds?.forEach { userId ->
+                statement.setLong(parameterIndex++, userId)
+            }
+            statement.setInt(parameterIndex, limit)
             statement.executeQuery().use { rs ->
                 buildList {
                     while (rs.next()) {

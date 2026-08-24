@@ -18,19 +18,26 @@ import com.hookah.platform.backend.telegram.db.VenueAccessRepository
 import com.hookah.platform.backend.telegram.db.VenueBookingHoursRepository
 import com.hookah.platform.backend.telegram.db.VenueMenuSectionImagesRepository
 import com.hookah.platform.backend.telegram.db.VenueRepository
+import io.ktor.server.config.MapApplicationConfig
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import org.junit.jupiter.api.Test
 import java.time.Duration
 
 class TelegramBotRouterIdempotencyTest {
     @Test
-    fun `duplicate update id does not repeat side effects`() =
+    fun `same token worker restart and redelivery do not repeat side effects`() =
         runBlocking {
             val apiClient: TelegramApiClient = mockk(relaxed = true)
             val outboxEnqueuer: TelegramOutboxEnqueuer = mockk(relaxed = true)
@@ -54,8 +61,18 @@ class TelegramBotRouterIdempotencyTest {
 
             coEvery { idempotencyRepository.tryAcquire(any(), any(), any()) } returnsMany listOf(true, false)
 
+            val trafficPolicy =
+                TelegramTrafficPolicy.from(
+                    MapApplicationConfig(
+                        "telegram.trafficPolicy" to "ALLOWLIST",
+                        "telegram.allowedUserIds" to "200",
+                        "telegram.allowedChatIds" to "200",
+                    ),
+                    "staging",
+                )
             val router =
                 TelegramBotRouter(
+                    trafficPolicy = trafficPolicy,
                     config =
                         TelegramBotConfig(
                             enabled = true,
@@ -94,6 +111,18 @@ class TelegramBotRouterIdempotencyTest {
                     scope = CoroutineScope(Dispatchers.Unconfined),
                 )
 
+            val deniedUpdate =
+                TelegramUpdate(
+                    updateId = 100,
+                    message =
+                        Message(
+                            messageId = 10,
+                            chat = Chat(id = 300, type = "private"),
+                            fromUser = User(id = 300),
+                            text = "/start",
+                        ),
+                )
+
             val update =
                 TelegramUpdate(
                     updateId = 101,
@@ -101,14 +130,48 @@ class TelegramBotRouterIdempotencyTest {
                         Message(
                             messageId = 11,
                             chat = Chat(id = 200, type = "private"),
-                            fromUser = User(id = 300),
+                            fromUser = User(id = 200),
                             text = "/link ABC",
                         ),
                 )
 
-            router.process(update)
-            router.process(update)
+            suspend fun runWorkerUntilRedeliveryIsHandled() {
+                val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+                val processed = CompletableDeferred<Unit>()
+                var delivered = false
+                val worker =
+                    TelegramLongPollingWorker(
+                        getUpdates = { _, _ ->
+                            if (delivered) {
+                                awaitCancellation()
+                            } else {
+                                delivered = true
+                                listOf(deniedUpdate, update)
+                            }
+                        },
+                        getWebhookUrl = { "" },
+                        processUpdate = { incoming ->
+                            router.process(incoming)
+                            processed.complete(Unit)
+                        },
+                        trafficPolicy = trafficPolicy,
+                        timeoutSeconds = 1,
+                        scope = scope,
+                    )
+                val job = worker.start()
+                try {
+                    withTimeout(5_000) { processed.await() }
+                } finally {
+                    job.cancelAndJoin()
+                    scope.cancel()
+                }
+            }
 
+            runWorkerUntilRedeliveryIsHandled()
+            runWorkerUntilRedeliveryIsHandled()
+
+            coVerify(exactly = 0) { idempotencyRepository.tryAcquire(100, any(), any()) }
+            coVerify(exactly = 2) { idempotencyRepository.tryAcquire(101, 200, 11) }
             coVerify(exactly = 1) {
                 outboxEnqueuer.enqueueSendMessage(200, "Эту команду нужно отправить в групповом чате персонала.", any())
             }
@@ -141,6 +204,7 @@ class TelegramBotRouterIdempotencyTest {
 
             val router =
                 TelegramBotRouter(
+                    trafficPolicy = TelegramTrafficPolicy.unrestricted(),
                     config =
                         TelegramBotConfig(
                             enabled = true,

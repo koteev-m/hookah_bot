@@ -41,6 +41,37 @@ Rules:
 - Bot fallback must call the same backend/domain paths as Mini App or produce an explicitly marked fallback batch/task.
 - Staff-chat callbacks must resolve the entity server-side, check role/scope/state and handle stale/idempotent actions safely.
 
+### Permanent Staging Traffic Boundary
+
+Staging is fail-closed and permanently identity-allowlisted. `APP_ENV=staging` requires
+`TELEGRAM_TRAFFIC_POLICY=ALLOWLIST`, a nonempty positive user list and a nonempty chat list containing
+the matching positive private chats plus explicitly approved negative groups/supergroups.
+Unrestricted staging traffic is not a fallback.
+
+One centralized policy applies before long-polling routing/idempotency, before webhook enqueue,
+before Mini App user/session creation, on every protected JWT request, before outbox claim and before
+direct chat-targeted Bot API calls. Private updates require the same allowed positive actor/chat;
+group and callback updates require an allowed actor plus the exact allowed negative group. Missing or
+ambiguous actor/chat is denied. Denial does not create user, processed-update, inbound or outbox
+state, and logs contain only bounded reason/counts without IDs, token, payload or message text.
+
+The same staging bot token, username and configured mode remain in use. Test-bot token swapping is
+not an isolation mechanism because inbound/outbox/idempotency and stored staff-chat message state are
+not token-scoped. Exactly one backend/poller is an operational release gate.
+
+Real allowlist values are stored only in the restricted staging `.env` and
+`/etc/hookah-bot/staging/telegram-allowlist.manifest` outside Git. The manifest directory is
+`root:root` mode 0700 and the file is `root:root` mode 0600. Changing a list requires a controlled
+backend restart. Removal also denies already issued Mini App JWTs on their next protected request.
+Previous or familiar staging testers not listed lose access by design.
+
+A dedicated private non-topic staff supergroup is verified before it enters the allowlist: derive a
+candidate from an exact
+`https://t.me/c/<positive-internal-id>/<positive-message-id>` Telegram Desktop link, then compare its
+exact ID, exact `supergroup` type and exact pre-reviewed title with read-only Bot API `getChat` in a
+drained window without printing the token, ID, title or response. There is no bootstrap command that
+bypasses the group allowlist. See `docs/STAGING_DEPLOYMENT.md` for the operator procedure.
+
 ## Bot States
 
 | State | Context | Target behavior | Current / gap |

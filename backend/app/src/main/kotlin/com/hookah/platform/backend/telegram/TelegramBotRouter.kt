@@ -348,6 +348,7 @@ class TelegramBotRouter(
     private val platformGuestQrPendingTtl: Duration = Duration.ofMinutes(5),
     private val platformGuestQrNowProvider: () -> Instant = Instant::now,
     private val platformGuestQrCallbackTagFactory: () -> String = ::newPlatformGuestQrCallbackTag,
+    private val trafficPolicy: TelegramTrafficPolicy,
 ) {
     private val logger = LoggerFactory.getLogger(TelegramBotRouter::class.java)
     private val bookingMessageStaffChatNotifier =
@@ -830,6 +831,16 @@ class TelegramBotRouter(
     )
 
     suspend fun process(update: TelegramUpdate) {
+        when (val decision = trafficPolicy.evaluateInbound(update)) {
+            TelegramTrafficPolicy.InboundDecision.Allowed -> Unit
+            is TelegramTrafficPolicy.InboundDecision.Denied -> {
+                logger.info(
+                    "Telegram inbound update denied source=router reason={}",
+                    decision.reason,
+                )
+                return
+            }
+        }
         val chatId = update.message?.chat?.id ?: update.callbackQuery?.message?.chat?.id
         val messageId = update.message?.messageId
         val acquired =
@@ -848,7 +859,7 @@ class TelegramBotRouter(
         when {
             update.message != null -> handleMessage(update.message)
             update.callbackQuery != null -> handleCallback(update.callbackQuery)
-            else -> logger.debug("Ignored update without message or callback id={} ", update.updateId)
+            else -> logger.debug("Ignored update without message or callback")
         }
     }
 
@@ -1305,17 +1316,11 @@ class TelegramBotRouter(
             "open_active_order" -> showActiveOrder(chatId)
             null ->
                 if (logger.isDebugEnabled) {
-                    val keysSummary = summarizeJsonKeysForLog(obj)
-                    logger.debug(
-                        "web_app_data missing cmd keys_count={} keys={} raw_len={}",
-                        obj.size,
-                        keysSummary,
-                        data.length,
-                    )
+                    logger.debug("web_app_data missing cmd")
                 }
             else ->
                 if (logger.isDebugEnabled) {
-                    logger.debug("Unsupported web_app_data cmd: {}", sanitizeTelegramForLog(cmd))
+                    logger.debug("Unsupported web_app_data cmd")
                 }
         }
     }
@@ -1331,22 +1336,6 @@ class TelegramBotRouter(
         val sourceMessageId = callbackQuery.message?.messageId
         val sourceMessageText = callbackQuery.message?.text ?: callbackQuery.message?.caption
         val sourceChatType = callbackQuery.message?.chat?.type
-        if (
-            logger.isDebugEnabled &&
-            (
-                data == "bot_menu_back_categories" ||
-                    data?.startsWith("bot_menu_back_category:") == true ||
-                    data?.startsWith("bot_menu_category_page:") == true ||
-                    data?.startsWith("bot_menu_category:") == true
-            )
-        ) {
-            logger.debug(
-                "menu_callback chat_id={} message_id={} data={}",
-                chatId,
-                sourceMessageId,
-                sanitizeTelegramForLog(data),
-            )
-        }
         var callbackAnswered = false
         when {
             data?.startsWith(platformGuestQrConfirmCallbackPrefix) == true -> {
@@ -2175,26 +2164,14 @@ class TelegramBotRouter(
                     sourceMessageId = sourceMessageId,
                 )
             data == "bot_menu_back_categories" -> {
-                logger.warn(
-                    "CALLBACK back_categories data={}",
-                    sanitizeTelegramForLog(data),
-                )
                 showBotMenu(chatId, sourceMessageId = sourceMessageId)
             }
             data?.startsWith("bot_menu_back_category:") == true ->
                 showBotMenuCategoryItems(chatId, data, sourceMessageId = sourceMessageId)
             data?.startsWith("bot_menu_category_page:") == true -> {
-                logger.warn(
-                    "CALLBACK category_page data={}",
-                    sanitizeTelegramForLog(data),
-                )
                 showBotMenuCategoryItems(chatId, data, sourceMessageId = sourceMessageId)
             }
             data?.startsWith("bot_menu_category:") == true -> {
-                logger.warn(
-                    "CALLBACK category data={}",
-                    sanitizeTelegramForLog(data),
-                )
                 showBotMenuCategoryItems(chatId, data, sourceMessageId = sourceMessageId)
             }
             data?.startsWith("bot_menu_item_option_add_to_cart:") == true ->
@@ -3987,7 +3964,7 @@ class TelegramBotRouter(
             try {
                 ordersRepository.listActiveOrderSummariesForUser(userId = userId, limit = 5)
             } catch (e: DatabaseUnavailableException) {
-                logger.warn("failed to load my orders and bookings for user_id={}", userId, e)
+                logger.warn("failed to load my orders and bookings")
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
             }
@@ -4037,7 +4014,7 @@ class TelegramBotRouter(
             try {
                 visitRepository.listGuestVisitHistory(userId = userId, limit = 10)
             } catch (e: DatabaseUnavailableException) {
-                logger.warn("failed to load guest visit history for user_id={}", userId, e)
+                logger.warn("failed to load guest visit history")
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
             }
@@ -4082,7 +4059,7 @@ class TelegramBotRouter(
             try {
                 visitRepository.getGuestVisitDetail(userId = userId, visitId = visitId)
             } catch (e: DatabaseUnavailableException) {
-                logger.warn("failed to load guest visit detail visit_id={} user_id={}", visitId, userId, e)
+                logTelegramOperationFailure("guest_visit_detail_load", e)
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
             }
@@ -4153,7 +4130,7 @@ class TelegramBotRouter(
                 enqueueMessage(chatId, "Заказ не найден.")
                 return
             } catch (e: DatabaseUnavailableException) {
-                logger.warn("failed to load repeat plan for visit_id={} user_id={}", visitId, userId, e)
+                logTelegramOperationFailure("guest_visit_repeat_plan_load", e)
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
             }
@@ -4202,7 +4179,7 @@ class TelegramBotRouter(
                 enqueueMessage(chatId, "Заказ не найден.")
                 return
             } catch (e: DatabaseUnavailableException) {
-                logger.warn("failed to load repeat plan for visit_id={} user_id={}", visitId, userId, e)
+                logTelegramOperationFailure("guest_visit_repeat_plan_load", e)
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
             }
@@ -4258,7 +4235,7 @@ class TelegramBotRouter(
             try {
                 visitRepository.getGuestVisitDetail(userId = userId, visitId = visitId)
             } catch (e: DatabaseUnavailableException) {
-                logger.warn("failed to load guest visit detail for repeat visit_id={} user_id={}", visitId, userId, e)
+                logTelegramOperationFailure("guest_visit_detail_repeat_load", e)
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return null
             }
@@ -17008,7 +16985,7 @@ class TelegramBotRouter(
                     source = VenueStaffMutationSource.TELEGRAM_BOT,
                 )
             }
-                .onFailure { logVenueStaffMutationFailure("VENUE_STAFF_ROLE_CHANGED", venueId, it) }
+                .onFailure { logVenueStaffMutationFailure("VENUE_STAFF_ROLE_CHANGED", it) }
                 .getOrElse {
                     enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                     return
@@ -17130,7 +17107,7 @@ class TelegramBotRouter(
                     source = VenueStaffMutationSource.TELEGRAM_BOT,
                 )
             }
-                .onFailure { logVenueStaffMutationFailure("VENUE_STAFF_MEMBER_REMOVED", venueId, it) }
+                .onFailure { logVenueStaffMutationFailure("VENUE_STAFF_MEMBER_REMOVED", it) }
                 .getOrElse {
                     enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                     return
@@ -21870,8 +21847,7 @@ class TelegramBotRouter(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            logger.warn("staff chat order action failed: {}", sanitizeTelegramForLog(e.message))
-            logger.debugTelegramException(e) { "staff chat order action exception" }
+            logTelegramOperationFailure("staff_chat_order_action", e)
             enqueueCallbackAnswer(chatId, callbackQueryId, text = "Не удалось выполнить действие", showAlert = true)
         }
     }
@@ -21987,8 +21963,7 @@ class TelegramBotRouter(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            logger.warn("staff chat shift extension action failed: {}", sanitizeTelegramForLog(e.message))
-            logger.debugTelegramException(e) { "staff chat shift extension action exception" }
+            logTelegramOperationFailure("staff_chat_shift_extension", e)
             enqueueCallbackAnswer(chatId, callbackQueryId, text = "Не удалось выполнить действие", showAlert = true)
         }
     }
@@ -22134,8 +22109,7 @@ class TelegramBotRouter(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            logger.warn("staff chat close ask failed: {}", sanitizeTelegramForLog(e.message))
-            logger.debugTelegramException(e) { "staff chat close ask exception" }
+            logTelegramOperationFailure("staff_chat_close_ask", e)
             enqueueCallbackAnswer(chatId, callbackQueryId, text = "Не удалось выполнить действие", showAlert = true)
         }
     }
@@ -22202,8 +22176,7 @@ class TelegramBotRouter(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            logger.warn("staff chat close back failed: {}", sanitizeTelegramForLog(e.message))
-            logger.debugTelegramException(e) { "staff chat close back exception" }
+            logTelegramOperationFailure("staff_chat_close_back", e)
             enqueueCallbackAnswer(chatId, callbackQueryId, text = "Не удалось выполнить действие", showAlert = true)
         }
     }
@@ -22226,8 +22199,7 @@ class TelegramBotRouter(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            logger.warn("staff chat close confirm failed: {}", sanitizeTelegramForLog(e.message))
-            logger.debugTelegramException(e) { "staff chat close confirm exception" }
+            logTelegramOperationFailure("staff_chat_close_confirm", e)
             enqueueCallbackAnswer(chatId, callbackQueryId, text = "Не удалось закрыть счёт", showAlert = true)
         }
     }
@@ -22287,8 +22259,7 @@ class TelegramBotRouter(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            logger.warn("staff chat order refresh failed: {}", sanitizeTelegramForLog(e.message))
-            logger.debugTelegramException(e) { "staff chat order refresh exception" }
+            logTelegramOperationFailure("staff_chat_order_refresh", e)
             enqueueCallbackAnswer(chatId, callbackQueryId, text = "Не удалось обновить сообщение", showAlert = true)
         }
     }
@@ -22408,12 +22379,9 @@ class TelegramBotRouter(
                 )
             } catch (e: DatabaseUnavailableException) {
                 logger.warn(
-                    "Failed to resolve staff calls after staff-chat order close venue_id={} order_id={}: {}",
-                    venueId,
-                    orderId,
-                    sanitizeTelegramForLog(e.message),
+                    "Telegram operation failed operation=staff_chat_resolve_calls error_type={}",
+                    e::class.simpleName ?: "unknown",
                 )
-                logger.debugTelegramException(e) { "resolve staff calls after staff-chat order close" }
                 emptyList()
             }
         completed.forEach { completion ->
@@ -22451,8 +22419,7 @@ class TelegramBotRouter(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            logger.warn("staff chat call action failed: {}", sanitizeTelegramForLog(e.message))
-            logger.debugTelegramException(e) { "staff chat call action exception" }
+            logTelegramOperationFailure("staff_chat_call_action", e)
             enqueueCallbackAnswer(chatId, callbackQueryId, text = "Не удалось выполнить действие", showAlert = true)
         }
     }
@@ -25037,7 +25004,10 @@ class TelegramBotRouter(
                 limit = 20,
             )
         } catch (e: DatabaseUnavailableException) {
-            logger.warn("staff orders queue failed for venueId={}: {}", venueId, e.message)
+            logger.warn(
+                "Telegram operation failed operation=staff_orders_queue error_type={}",
+                e::class.simpleName ?: "unknown",
+            )
             enqueueMessage(chatId, "База недоступна, попробуйте позже.")
             null
         }
@@ -27773,7 +27743,6 @@ class TelegramBotRouter(
         reorderMode: Boolean = false,
         sourceMessageId: Long? = null,
     ) {
-        logger.warn("SHOW menu")
         val context = resolveGuestContext(chatId) ?: return
         val menu =
             try {
@@ -28013,23 +27982,9 @@ class TelegramBotRouter(
         data: String,
         sourceMessageId: Long? = null,
     ) {
-        logger.warn(
-            "SHOW category_items data={}",
-            sanitizeTelegramForLog(data),
-        )
         val parsed = parseBotMenuCategoryData(data)
-        logger.warn(
-            "SHOW category_items data={} parsed={}",
-            sanitizeTelegramForLog(data),
-            parsed?.let { "${it.first}:${it.second}" } ?: "null",
-        )
         if (parsed == null) {
-            logger.warn(
-                "Invalid menu category callback data chat_id={} message_id={} data={}",
-                chatId,
-                sourceMessageId,
-                sanitizeTelegramForLog(data),
-            )
+            logger.warn("Invalid menu category callback data")
             enqueueMessage(chatId, "Не удалось открыть категорию. Попробуйте ещё раз.")
             return
         }
@@ -30254,13 +30209,16 @@ class TelegramBotRouter(
         sourceMessageId: Long?,
     ) {
         if (sourceMessageId != null) {
-            outboxEnqueuer.enqueueEditMessageText(
-                chatId = chatId,
-                messageId = sourceMessageId,
-                text = text,
-                replyMarkup = replyMarkup,
-            )
-            botCartMessageIds[key] = sourceMessageId
+            val outcome =
+                outboxEnqueuer.enqueueEditMessageText(
+                    chatId = chatId,
+                    messageId = sourceMessageId,
+                    text = text,
+                    replyMarkup = replyMarkup,
+                )
+            if (outcome == TelegramOutboxEnqueueOutcome.ENQUEUED) {
+                botCartMessageIds[key] = sourceMessageId
+            }
             return
         }
         // Without callback source message id we can't reliably edit in place:
@@ -30690,12 +30648,7 @@ class TelegramBotRouter(
         messageId: Long,
     ) {
         runCatching {
-            val payload: JsonObject =
-                buildJsonObject {
-                    put("chat_id", chatId)
-                    put("message_id", messageId)
-                }
-            apiClient.callMethod("deleteMessage", payload)
+            apiClient.deleteMessage(chatId, messageId)
         }.onFailure { logBestEffort("telegram cart message delete", it) }
     }
 
@@ -34853,19 +34806,31 @@ class TelegramBotRouter(
         operation: String,
         throwable: Throwable,
     ) {
-        logger.warn("Best-effort {} failed: {}", operation, sanitizeTelegramForLog(throwable.message))
-        logger.debugTelegramException(throwable) { "Best-effort exception for $operation" }
+        logger.warn(
+            "Telegram best-effort operation failed operation={} error_type={}",
+            operation,
+            throwable::class.simpleName ?: "unknown",
+        )
+    }
+
+    private fun logTelegramOperationFailure(
+        operation: String,
+        throwable: Throwable,
+    ) {
+        logger.warn(
+            "Telegram operation failed operation={} error_type={}",
+            operation,
+            throwable::class.simpleName ?: "unknown",
+        )
     }
 
     private fun logVenueStaffMutationFailure(
         action: String,
-        venueId: Long,
         throwable: Throwable,
     ) {
         logger.warn(
-            "Venue staff membership mutation failed action={} venueId={} exceptionClass={}",
+            "Venue staff membership mutation failed action={} exceptionClass={}",
             action,
-            venueId,
             throwable::class.java.simpleName,
         )
     }

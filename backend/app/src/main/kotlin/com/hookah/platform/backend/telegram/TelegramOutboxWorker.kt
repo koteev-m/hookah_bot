@@ -40,8 +40,7 @@ class TelegramOutboxWorker(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    logger.warn("Telegram outbox worker tick failed: {}", sanitizeTelegramForLog(e.message))
-                    logger.debugTelegramException(e) { "Telegram outbox worker tick exception" }
+                    logWorkerException("tick", e)
                 }
                 delay(config.pollIntervalMillis)
             }
@@ -59,8 +58,7 @@ class TelegramOutboxWorker(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                logger.warn("Telegram outbox claim failed: {}", sanitizeTelegramForLog(e.message))
-                logger.debugTelegramException(e) { "Telegram outbox claim exception" }
+                logWorkerException("claim", e)
                 return
             }
         if (batch.isEmpty()) return
@@ -70,42 +68,61 @@ class TelegramOutboxWorker(
                 processMessage(message)
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: Exception) {
-                scheduleRetry(message, e.message, null)
+            } catch (_: Exception) {
+                scheduleRetry(message, "Telegram outbox processing exception", null)
             }
         }
     }
 
     private suspend fun processMessage(message: TelegramOutboxMessage) {
+        val payload =
+            runCatching { json.decodeFromString<JsonElement>(message.payloadJson) }
+                .getOrElse {
+                    rejectLocalValidation(message, LocalValidationFailure.MALFORMED_JSON)
+                    return
+                }
         val apiClient = apiClientProvider()
         if (apiClient == null) {
             scheduleRetry(message, "Telegram API client unavailable", null)
             return
         }
-        val payload =
-            runCatching { json.decodeFromString<JsonElement>(message.payloadJson) }
-                .getOrElse { error ->
-                    markFailed(message, "Invalid payload: ${sanitizeTelegramForLog(error.message)}")
-                    return
-                }
         if (message.method == "sendMessage") {
             rateLimiter.awaitPermit(message.chatId)
         }
 
         val result =
             try {
-                apiClient.callMethod(message.method, payload)
+                apiClient.dispatchOutbox(message.chatId, message.method, payload)
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: Exception) {
-                scheduleRetry(message, e.message, null)
+            } catch (_: Exception) {
+                scheduleRetry(message, "Telegram API dispatch exception", null)
                 return
             }
 
         when (result) {
             is TelegramCallResult.Success -> markSent(message, result)
-            is TelegramCallResult.Failure -> handleFailure(message, result)
+            is TelegramCallResult.Failure ->
+                if (result.origin == TelegramCallResult.Failure.Origin.LOCAL_ENVELOPE_VALIDATION) {
+                    rejectLocalValidation(message, LocalValidationFailure.INVALID_ENVELOPE)
+                } else {
+                    handleFailure(message, result)
+                }
+            TelegramCallResult.TrafficDenied ->
+                logger.warn("Telegram outbox dispatch denied by traffic policy")
         }
+    }
+
+    private suspend fun rejectLocalValidation(
+        message: TelegramOutboxMessage,
+        failure: LocalValidationFailure,
+    ) {
+        logger.warn("Telegram outbox local validation failed reason_code={}", failure.name)
+        markFailed(
+            message = message,
+            reason = failure.persistedReason,
+            incrementMetric = false,
+        )
     }
 
     private suspend fun handleFailure(
@@ -113,7 +130,7 @@ class TelegramOutboxWorker(
         result: TelegramCallResult.Failure,
     ) {
         if (message.method == "answerCallbackQuery") {
-            markFailed(message, result.description)
+            markFailed(message, telegramFailureReason(result))
             return
         }
         if (message.method == "editMessageText" && isMessageNotModified(result.description)) {
@@ -123,7 +140,7 @@ class TelegramOutboxWorker(
         if (shouldRetry(result.errorCode)) {
             scheduleRetry(
                 message,
-                result.description,
+                telegramFailureReason(result),
                 result.retryAfterSeconds,
                 result.errorCode,
             )
@@ -133,14 +150,12 @@ class TelegramOutboxWorker(
             enqueueLiveOrderFallback(message)
         }
         logger.warn(
-            "Telegram outbox permanent failure id={} method={} live_order_id={} error_code={} reason={}",
-            message.id,
-            message.method,
-            message.staffLiveOrderId,
+            "Telegram outbox permanent failure method={} error_code={} retry_after_seconds={}",
+            outboxMethodCategory(message.method),
             result.errorCode,
-            sanitizeTelegramForLog(result.description),
+            result.retryAfterSeconds,
         )
-        markFailed(message, result.description)
+        markFailed(message, telegramFailureReason(result))
     }
 
     private fun shouldRetry(errorCode: Int?): Boolean {
@@ -162,8 +177,7 @@ class TelegramOutboxWorker(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            logger.warn("Telegram outbox mark sent failed: {}", sanitizeTelegramForLog(e.message))
-            logger.debugTelegramException(e) { "Telegram outbox mark sent exception" }
+            logWorkerException("mark sent", e)
         }
     }
 
@@ -175,12 +189,7 @@ class TelegramOutboxWorker(
         val messageId =
             runCatching { json.decodeFromJsonElement(MessageId.serializer(), responseJson).messageId }
                 .onFailure { throwable ->
-                    logger.warn(
-                        "Telegram outbox live order message_id decode failed order_id={}: {}",
-                        orderId,
-                        sanitizeTelegramForLog(throwable.message),
-                    )
-                    logger.debugTelegramException(throwable) { "live order message_id decode exception" }
+                    logWorkerException("live order response decode", throwable)
                 }.getOrNull() ?: return
         try {
             repository.updateStaffChatOrderMessageId(
@@ -191,12 +200,7 @@ class TelegramOutboxWorker(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            logger.warn(
-                "Telegram outbox live order message_id save failed order_id={}: {}",
-                orderId,
-                sanitizeTelegramForLog(e.message),
-            )
-            logger.debugTelegramException(e) { "live order message_id save exception" }
+            logWorkerException("live order message save", e)
         }
     }
 
@@ -205,12 +209,7 @@ class TelegramOutboxWorker(
         val payload =
             runCatching { json.decodeFromString<EditMessageTextPayload>(message.payloadJson) }
                 .onFailure { throwable ->
-                    logger.warn(
-                        "Telegram outbox live order fallback payload decode failed order_id={}: {}",
-                        orderId,
-                        sanitizeTelegramForLog(throwable.message),
-                    )
-                    logger.debugTelegramException(throwable) { "live order fallback payload decode exception" }
+                    logWorkerException("live order fallback decode", throwable)
                 }.getOrNull() ?: return
         val fallbackPayload =
             SendMessagePayload(
@@ -224,16 +223,11 @@ class TelegramOutboxWorker(
                 chatId = payload.chatId,
                 payloadJson = json.encodeToString(SendMessagePayload.serializer(), fallbackPayload),
             )
-            logger.warn("Telegram outbox queued live order fallback message order_id={}", orderId)
+            logger.warn("Telegram outbox queued live order fallback message")
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            logger.warn(
-                "Telegram outbox live order fallback enqueue failed order_id={}: {}",
-                orderId,
-                sanitizeTelegramForLog(e.message),
-            )
-            logger.debugTelegramException(e) { "live order fallback enqueue exception" }
+            logWorkerException("live order fallback enqueue", e)
         }
     }
 
@@ -262,8 +256,7 @@ class TelegramOutboxWorker(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            logger.warn("Telegram outbox mark failed error: {}", sanitizeTelegramForLog(e.message))
-            logger.debugTelegramException(e) { "Telegram outbox mark failed exception" }
+            logWorkerException("mark failed", e)
         }
     }
 
@@ -304,8 +297,7 @@ class TelegramOutboxWorker(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            logger.warn("Telegram outbox retry scheduling failed: {}", sanitizeTelegramForLog(e.message))
-            logger.debugTelegramException(e) { "Telegram outbox retry scheduling exception" }
+            logWorkerException("retry scheduling", e)
         }
     }
 
@@ -313,5 +305,35 @@ class TelegramOutboxWorker(
         val multiplier = 2.0.pow(min(attempts, 6))
         val backoff = (config.minBackoffSeconds * multiplier).toLong()
         return backoff.coerceAtMost(config.maxBackoffSeconds)
+    }
+
+    private fun telegramFailureReason(result: TelegramCallResult.Failure): String =
+        result.errorCode?.let { "Telegram API error code $it" } ?: "Telegram API error"
+
+    private fun outboxMethodCategory(method: String): String =
+        method.takeIf {
+            it == "sendMessage" ||
+                it == "editMessageText" ||
+                it == "sendPhoto" ||
+                it == "sendDocument" ||
+                it == "answerCallbackQuery"
+        } ?: "UNKNOWN"
+
+    private fun logWorkerException(
+        operation: String,
+        throwable: Throwable,
+    ) {
+        logger.warn(
+            "Telegram outbox operation failed operation={} error_type={}",
+            operation,
+            throwable::class.java.simpleName,
+        )
+    }
+
+    private enum class LocalValidationFailure(
+        val persistedReason: String,
+    ) {
+        MALFORMED_JSON("Invalid Telegram outbox payload"),
+        INVALID_ENVELOPE("Telegram outbox envelope rejected locally"),
     }
 }
