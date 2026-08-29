@@ -3,6 +3,7 @@ package com.hookah.platform.backend.telegram.db
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.miniapp.subscription.SubscriptionStatus
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
+import com.hookah.platform.backend.telegram.TelegramRecipientLockRegistry
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
@@ -13,7 +14,10 @@ import java.sql.Types
 import java.time.Instant
 import javax.sql.DataSource
 
-open class VenueRepository(private val dataSource: DataSource?) {
+open class VenueRepository(
+    private val dataSource: DataSource?,
+    private val recipientLocks: TelegramRecipientLockRegistry = TelegramRecipientLockRegistry(),
+) {
     private val logger = LoggerFactory.getLogger(VenueRepository::class.java)
     private val botTestCatalogVenues =
         listOf(
@@ -328,9 +332,11 @@ open class VenueRepository(private val dataSource: DataSource?) {
         userId: Long,
     ): BindResult {
         val ds = dataSource ?: return BindResult.DatabaseError
-        return withContext(Dispatchers.IO) {
-            ds.connection.use { connection ->
-                bindStaffChatInternal(connection, venueId, chatId, userId, manageTransaction = true)
+        return recipientLocks.withRecipientLock(chatId) {
+            withContext(Dispatchers.IO) {
+                ds.connection.use { connection ->
+                    bindStaffChatInternal(connection, venueId, chatId, userId, manageTransaction = true)
+                }
             }
         }
     }
@@ -347,51 +353,64 @@ open class VenueRepository(private val dataSource: DataSource?) {
     suspend fun unlinkStaffChatByChatId(
         chatId: Long,
         userId: Long,
+        expectedVenueId: Long? = null,
+        authorize: (Connection, Long) -> Boolean = { _, _ -> true },
     ): UnlinkResult {
         val ds = dataSource ?: return UnlinkResult.DatabaseError
-        return withContext(Dispatchers.IO) {
-            ds.connection.use { connection ->
-                connection.autoCommit = false
-                try {
-                    val venue =
-                        connection.prepareStatement(
-                            """
-                            SELECT id, name FROM venues WHERE staff_chat_id = ? FOR UPDATE
-                            """.trimIndent(),
-                        ).use { statement ->
-                            statement.setLong(1, chatId)
-                            statement.executeQuery().use { rs ->
-                                if (rs.next()) VenueShort(rs.getLong("id"), rs.getString("name"), chatId) else null
+        return recipientLocks.withRecipientLock(chatId) {
+            withContext(Dispatchers.IO) {
+                ds.connection.use { connection ->
+                    connection.autoCommit = false
+                    try {
+                        val venue =
+                            connection.prepareStatement(
+                                """
+                                SELECT id, name FROM venues WHERE staff_chat_id = ? FOR UPDATE
+                                """.trimIndent(),
+                            ).use { statement ->
+                                statement.setLong(1, chatId)
+                                statement.executeQuery().use { rs ->
+                                    if (rs.next()) VenueShort(rs.getLong("id"), rs.getString("name"), chatId) else null
+                                }
+                            } ?: run {
+                                connection.rollback()
+                                return@withContext UnlinkResult.NotLinked
                             }
-                        } ?: run {
+                        if (expectedVenueId != null && venue.id != expectedVenueId) {
                             connection.rollback()
                             return@withContext UnlinkResult.NotLinked
                         }
-                    connection.prepareStatement(
-                        """
-                        UPDATE venues
-                        SET staff_chat_id = NULL,
-                            staff_chat_unlinked_at = now(),
-                            staff_chat_unlinked_by_user_id = ?,
-                            updated_at = now()
-                        WHERE id = ?
-                        """.trimIndent(),
-                    ).use { statement ->
-                        statement.setLong(1, userId)
-                        statement.setLong(2, venue.id)
-                        statement.executeUpdate()
+                        if (!authorize(connection, venue.id)) {
+                            connection.rollback()
+                            return@withContext UnlinkResult.NotLinked
+                        }
+                        connection.prepareStatement(
+                            """
+                            UPDATE venues
+                            SET staff_chat_id = NULL,
+                                staff_chat_unlinked_at = now(),
+                                staff_chat_unlinked_by_user_id = ?,
+                                updated_at = now()
+                            WHERE id = ?
+                            """.trimIndent(),
+                        ).use { statement ->
+                            statement.setLong(1, userId)
+                            statement.setLong(2, venue.id)
+                            statement.executeUpdate()
+                        }
+                        revokeStaffChatAuthority(connection, chatId)
+                        connection.commit()
+                        UnlinkResult.Success(venue.id, venue.name)
+                    } catch (e: Exception) {
+                        connection.rollback()
+                        logger.warn(
+                            "Staff chat unlink failed error_type={}",
+                            e::class.simpleName ?: "unknown",
+                        )
+                        UnlinkResult.DatabaseError
+                    } finally {
+                        connection.autoCommit = true
                     }
-                    connection.commit()
-                    UnlinkResult.Success(venue.id, venue.name)
-                } catch (e: Exception) {
-                    connection.rollback()
-                    logger.warn(
-                        "Staff chat unlink failed error_type={}",
-                        e::class.simpleName ?: "unknown",
-                    )
-                    UnlinkResult.DatabaseError
-                } finally {
-                    connection.autoCommit = true
                 }
             }
         }
@@ -402,64 +421,77 @@ open class VenueRepository(private val dataSource: DataSource?) {
         userId: Long,
     ): UnlinkResult {
         val ds = dataSource ?: return UnlinkResult.DatabaseError
-        return withContext(Dispatchers.IO) {
-            ds.connection.use { connection ->
-                connection.autoCommit = false
-                try {
-                    val venue =
-                        connection.prepareStatement(
-                            """
-                            SELECT id, name, staff_chat_id
-                            FROM venues
-                            WHERE id = ?
-                            FOR UPDATE
-                            """.trimIndent(),
-                        ).use { statement ->
-                            statement.setLong(1, venueId)
-                            statement.executeQuery().use { rs ->
-                                if (rs.next()) {
-                                    VenueShort(
-                                        id = rs.getLong("id"),
-                                        name = rs.getString("name"),
-                                        staffChatId = rs.getLong("staff_chat_id").takeIf { !rs.wasNull() },
-                                    )
-                                } else {
-                                    null
+        val currentChatId =
+            try {
+                findVenueById(venueId)?.staffChatId
+            } catch (_: Exception) {
+                return UnlinkResult.DatabaseError
+            } ?: return UnlinkResult.NotLinked
+        return recipientLocks.withRecipientLock(currentChatId) {
+            withContext(Dispatchers.IO) {
+                ds.connection.use { connection ->
+                    connection.autoCommit = false
+                    try {
+                        val venue =
+                            connection.prepareStatement(
+                                """
+                                SELECT id, name, staff_chat_id
+                                FROM venues
+                                WHERE id = ?
+                                FOR UPDATE
+                                """.trimIndent(),
+                            ).use { statement ->
+                                statement.setLong(1, venueId)
+                                statement.executeQuery().use { rs ->
+                                    if (rs.next()) {
+                                        VenueShort(
+                                            id = rs.getLong("id"),
+                                            name = rs.getString("name"),
+                                            staffChatId = rs.getLong("staff_chat_id").takeIf { !rs.wasNull() },
+                                        )
+                                    } else {
+                                        null
+                                    }
                                 }
+                            } ?: run {
+                                connection.rollback()
+                                return@withContext UnlinkResult.NotLinked
                             }
-                        } ?: run {
+                        if (venue.staffChatId == null) {
                             connection.rollback()
                             return@withContext UnlinkResult.NotLinked
                         }
-                    if (venue.staffChatId == null) {
+                        if (venue.staffChatId != currentChatId) {
+                            connection.rollback()
+                            return@withContext UnlinkResult.DatabaseError
+                        }
+                        connection.prepareStatement(
+                            """
+                            UPDATE venues
+                            SET staff_chat_id = NULL,
+                                staff_chat_unlinked_at = now(),
+                                staff_chat_unlinked_by_user_id = ?,
+                                updated_at = now()
+                            WHERE id = ?
+                            """.trimIndent(),
+                        ).use { statement ->
+                            statement.setLong(1, userId)
+                            statement.setLong(2, venue.id)
+                            statement.executeUpdate()
+                        }
+                        revokeStaffChatAuthority(connection, currentChatId)
+                        connection.commit()
+                        UnlinkResult.Success(venue.id, venue.name)
+                    } catch (e: Exception) {
                         connection.rollback()
-                        return@withContext UnlinkResult.NotLinked
+                        logger.warn(
+                            "Staff chat unlink failed error_type={}",
+                            e::class.simpleName ?: "unknown",
+                        )
+                        UnlinkResult.DatabaseError
+                    } finally {
+                        connection.autoCommit = true
                     }
-                    connection.prepareStatement(
-                        """
-                        UPDATE venues
-                        SET staff_chat_id = NULL,
-                            staff_chat_unlinked_at = now(),
-                            staff_chat_unlinked_by_user_id = ?,
-                            updated_at = now()
-                        WHERE id = ?
-                        """.trimIndent(),
-                    ).use { statement ->
-                        statement.setLong(1, userId)
-                        statement.setLong(2, venue.id)
-                        statement.executeUpdate()
-                    }
-                    connection.commit()
-                    UnlinkResult.Success(venue.id, venue.name)
-                } catch (e: Exception) {
-                    connection.rollback()
-                    logger.warn(
-                        "Staff chat unlink failed error_type={}",
-                        e::class.simpleName ?: "unknown",
-                    )
-                    UnlinkResult.DatabaseError
-                } finally {
-                    connection.autoCommit = true
                 }
             }
         }
@@ -559,6 +591,11 @@ open class VenueRepository(private val dataSource: DataSource?) {
                 }
             }
 
+            venueRow.staffChatId
+                ?.takeIf { it != chatId }
+                ?.let { revokeStaffChatAuthority(connection, it) }
+            revokeStaffChatAuthority(connection, chatId)
+
             val updated =
                 connection.prepareStatement(
                     """
@@ -605,6 +642,32 @@ open class VenueRepository(private val dataSource: DataSource?) {
             if (manageTransaction) {
                 connection.autoCommit = initialAutoCommit
             }
+        }
+    }
+
+    private fun revokeStaffChatAuthority(
+        connection: Connection,
+        chatId: Long,
+    ) {
+        connection.prepareStatement(
+            """
+            UPDATE telegram_outbox
+            SET status = 'FAILED',
+                last_error = 'Telegram recipient authority revoked',
+                processed_at = CURRENT_TIMESTAMP,
+                next_attempt_at = NULL
+            WHERE chat_id = ?
+              AND status IN ('NEW', 'SENDING')
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, chatId)
+            statement.executeUpdate()
+        }
+        connection.prepareStatement(
+            "DELETE FROM telegram_staff_chat_order_messages WHERE chat_id = ?",
+        ).use { statement ->
+            statement.setLong(1, chatId)
+            statement.executeUpdate()
         }
     }
 

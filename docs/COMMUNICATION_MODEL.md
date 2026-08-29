@@ -1,6 +1,6 @@
 # Guest Communication Model
 
-Дата актуализации: 2026-08-17.
+Дата актуализации: 2026-08-29.
 
 Статус: **current product reference**. Этот документ является single source of truth для guest communication routing после smoke-tested Support/Tickets and Venue Chat MVP. Старые audit notes про `Сообщения`, booking support и staff-chat нужно сверять с этой моделью перед будущими задачами Codex. Role/scoping decisions for these flows are governed by `docs/SECURITY_RBAC_MATRIX.md`; Venue operational handling is governed by `docs/VENUE_OPERATIONS.md`; booking lifecycle details are governed by `docs/BOOKING_LIFECYCLE.md`; Telegram fallback and staff-chat behavior is governed by `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`; validation strategy is governed by `docs/TESTING_QA_SMOKE_STRATEGY.md`; release/deploy operations are governed by `docs/DEPLOYMENT_RUNBOOK.md`.
 
@@ -14,6 +14,17 @@ Guest communication is split into four different product scenarios. Do not merge
 | `VENUE_CHAT` | Обычный вопрос заведению до визита или вне table context, включая ручный follow-up по низкой оценке после визита. | Catalog card `Задать вопрос`; venue detail `💬 Задать вопрос`; Venue Feedback `Связаться с гостем` for rating `1..3`. | Guest + Venue Owner/Manager. Staff denied. Platform does not see ordinary venue chats. | Does not post to staff-chat. |
 | `SUPPORT_TICKET` | Проблема, жалоба, technical/platform support or status-tracked escalation. | Global `Помощь` -> `Сообщить о проблеме`; table-context secondary help/problem entry. | Guest sees own tickets; Venue Owner/Manager sees own venue tickets; Platform Owner sees support tickets; Staff denied. | Does not post to staff-chat. |
 | `STAFF_CALL` | Быстрый live-вызов персонала за столом. | Table context `Вызвать персонал`. | Guest plus venue operational queue/staff according to existing staff-call permissions. | May use the existing operational staff queue/staff-chat behavior. |
+
+## Admission And Communication Identity
+
+- Public-pilot `PRODUCT` admission does not create a venue or platform role. Any valid Telegram user
+  without active membership remains Guest and can access only their own Guest communication facts.
+- A valid active OWNER/STAFF/MANAGER invite may be previewed and accepted by a previously unknown
+  Telegram identity without static-manifest changes. Acceptance grants only the exact stored role in
+  the exact stored venue; communication visibility then follows this document and server-side RBAC.
+- `ALLOWLIST` is an isolated-smoke traffic boundary, not product user management. Neither traffic
+  mode nor successful Telegram/Mini App authentication grants another user's thread, another venue,
+  Venue Mode or Platform Mode.
 
 ## Thread Types
 

@@ -17,6 +17,7 @@ data class StaffInviteConfig(
         fun from(
             config: ApplicationConfig,
             appEnv: String,
+            requireExplicitSecret: Boolean = false,
         ): StaffInviteConfig {
             val ttlSeconds =
                 config.propertyOrNull("venue.staffInviteTtlSeconds")
@@ -38,9 +39,9 @@ data class StaffInviteConfig(
             val secretPepper =
                 when {
                     !pepperRaw.isNullOrBlank() -> pepperRaw.trim()
-                    normalizedEnv == "prod" -> {
+                    normalizedEnv == "prod" || normalizedEnv == "production" || requireExplicitSecret -> {
                         val logger = LoggerFactory.getLogger(StaffInviteConfig::class.java)
-                        logger.error("venue.staffInviteSecretPepper is required in prod environment")
+                        logger.error("venue.staffInviteSecretPepper is required in this environment")
                         error("staff invite pepper must be configured")
                     }
                     else -> "dev-invite-pepper"

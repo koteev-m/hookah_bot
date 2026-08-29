@@ -4,6 +4,7 @@ import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.billing.BillingInvoiceRepository
 import com.hookah.platform.backend.billing.BillingOverviewService
 import com.hookah.platform.backend.billing.BillingService
+import com.hookah.platform.backend.miniapp.security.MiniAppAbuseProtection
 import com.hookah.platform.backend.miniapp.venue.requireUserId
 import com.hookah.platform.backend.onboarding.VenueOnboardingService
 import com.hookah.platform.backend.support.SupportThreadRepository
@@ -44,7 +45,7 @@ fun ApplicationCall.requirePlatformOwner(platformConfig: PlatformConfig): Long {
     return userId
 }
 
-fun Route.platformRoutes(
+internal fun Route.platformRoutes(
     platformConfig: PlatformConfig,
     platformVenueRepository: PlatformVenueRepository,
     platformUserRepository: PlatformUserRepository,
@@ -58,6 +59,7 @@ fun Route.platformRoutes(
     venueOwnerAccountRepository: VenueOwnerAccountRepository = VenueOwnerAccountRepository(null),
     staffInviteRepository: com.hookah.platform.backend.miniapp.venue.staff.StaffInviteRepository,
     staffInviteConfig: com.hookah.platform.backend.miniapp.venue.staff.StaffInviteConfig,
+    abuseProtection: MiniAppAbuseProtection,
     supportThreadRepository: SupportThreadRepository,
     outboxEnqueuer: TelegramOutboxEnqueuer,
     telegramBotUsername: String? = null,
@@ -88,6 +90,7 @@ fun Route.platformRoutes(
         venueOwnerAccountRepository = venueOwnerAccountRepository,
         staffInviteRepository = staffInviteRepository,
         staffInviteConfig = staffInviteConfig,
+        abuseProtection = abuseProtection,
         telegramBotUsername = telegramBotUsername,
     )
     platformOnboardingRoutes(

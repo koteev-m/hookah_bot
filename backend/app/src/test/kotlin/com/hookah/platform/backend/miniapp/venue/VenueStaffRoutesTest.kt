@@ -1,11 +1,16 @@
 package com.hookah.platform.backend.miniapp.venue
 
+import com.hookah.platform.backend.ModuleOverrides
 import com.hookah.platform.backend.api.ApiErrorCodes
+import com.hookah.platform.backend.miniapp.security.MiniAppAbuseConfig
+import com.hookah.platform.backend.miniapp.security.MiniAppAbuseProtection
+import com.hookah.platform.backend.miniapp.security.MiniAppRateLimitPolicy
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.miniapp.venue.staff.VENUE_STAFF_MEMBER_REMOVED_ACTION
 import com.hookah.platform.backend.miniapp.venue.staff.VENUE_STAFF_ROLE_CHANGED_ACTION
 import com.hookah.platform.backend.module
+import com.hookah.platform.backend.moduleWithOverrides
 import com.hookah.platform.backend.telegram.User
 import com.hookah.platform.backend.telegram.db.UserRepository
 import com.hookah.platform.backend.test.assertApiErrorEnvelope
@@ -21,9 +26,12 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.content.OutgoingContent
 import io.ktor.http.contentType
 import io.ktor.server.config.MapApplicationConfig
 import io.ktor.server.testing.testApplication
+import io.ktor.utils.io.ByteWriteChannel
+import io.ktor.utils.io.writeFully
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.Serializable
@@ -33,6 +41,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.h2.jdbcx.JdbcDataSource
 import java.sql.DriverManager
 import java.sql.Statement
+import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
@@ -753,6 +762,197 @@ class VenueStaffRoutesTest {
             assertEquals("STAFF", acceptPayload.member.role)
             assertTrue(acceptPayload.member.active)
             assertEquals("NOT_LINKED", acceptPayload.member.profileLinkState)
+        }
+
+    @Test
+    fun `oversized declared and chunked invite acceptance bodies are rejected before invite mutation`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("staff-invite-accept-body-bound")
+            val config = buildConfig(jdbcUrl)
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val ownerId = 2041L
+            val inviteeId = 2042L
+            val venueId = seedVenueMembership(jdbcUrl, ownerId, "OWNER")
+            seedUser(jdbcUrl, inviteeId)
+            val inviteResponse =
+                client.post("/api/venue/$venueId/staff/invites") {
+                    headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config, ownerId)}") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            StaffInviteRequest.serializer(),
+                            StaffInviteRequest(role = "STAFF"),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, inviteResponse.status)
+            val inviteCode =
+                json.decodeFromString(StaffInviteResponse.serializer(), inviteResponse.bodyAsText()).inviteCode
+            val padding = "x".repeat(STAFF_INVITE_ACCEPT_REQUEST_MAX_BYTES)
+            val oversizedBody = """{"inviteCode":"$inviteCode","padding":"$padding"}"""
+            val inviteeToken = issueToken(config, inviteeId)
+
+            val declaredLengthResponse =
+                client.post("/api/venue/staff/invites/accept") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $inviteeToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody(oversizedBody)
+                }
+            assertEquals(HttpStatusCode.PayloadTooLarge, declaredLengthResponse.status)
+            assertApiErrorEnvelope(declaredLengthResponse, ApiErrorCodes.INVALID_INPUT)
+            assertFalse(declaredLengthResponse.bodyAsText().contains(inviteCode))
+
+            val bodyBytes = oversizedBody.encodeToByteArray()
+            val chunkedResponse =
+                client.post("/api/venue/staff/invites/accept") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $inviteeToken") }
+                    setBody(
+                        object : OutgoingContent.WriteChannelContent() {
+                            override val contentType: ContentType = ContentType.Application.Json
+                            override val contentLength: Long? = null
+
+                            override suspend fun writeTo(channel: ByteWriteChannel) {
+                                channel.writeFully(bodyBytes)
+                            }
+                        },
+                    )
+                }
+            assertEquals(HttpStatusCode.PayloadTooLarge, chunkedResponse.status)
+            assertApiErrorEnvelope(chunkedResponse, ApiErrorCodes.INVALID_INPUT)
+            assertFalse(chunkedResponse.bodyAsText().contains(inviteCode))
+
+            val normalAcceptResponse =
+                client.post("/api/venue/staff/invites/accept") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $inviteeToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            StaffInviteAcceptRequest.serializer(),
+                            StaffInviteAcceptRequest(inviteCode = inviteCode),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, normalAcceptResponse.status)
+            val accepted =
+                json.decodeFromString(
+                    StaffInviteAcceptResponse.serializer(),
+                    normalAcceptResponse.bodyAsText(),
+                )
+            assertEquals(venueId, accepted.venueId)
+            assertEquals(inviteeId, accepted.member.userId)
+        }
+
+    @Test
+    fun `repeated invalid invite acceptance is rate limited with a generic response`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("staff-invite-accept-rate")
+            val config = buildConfig(jdbcUrl)
+            val protection =
+                MiniAppAbuseProtection(
+                    config =
+                        MiniAppAbuseConfig(
+                            inviteAcceptGlobal =
+                                MiniAppRateLimitPolicy(100, Duration.ofMinutes(1)),
+                            inviteAcceptSubject =
+                                MiniAppRateLimitPolicy(1, Duration.ofMinutes(1)),
+                            inviteAcceptDigest =
+                                MiniAppRateLimitPolicy(100, Duration.ofMinutes(1)),
+                        ),
+                    digestKey = ByteArray(32) { 5 },
+                )
+
+            environment { this.config = config }
+            application {
+                moduleWithOverrides(ModuleOverrides(miniAppAbuseProtection = protection))
+            }
+            client.get("/health")
+
+            val userId = 2051L
+            seedUser(jdbcUrl, userId)
+            val token = issueToken(config, userId)
+            val requestBody =
+                json.encodeToString(
+                    StaffInviteAcceptRequest.serializer(),
+                    StaffInviteAcceptRequest(inviteCode = "ABCDEFGHJK"),
+                )
+
+            val first =
+                client.post("/api/venue/staff/invites/accept") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody(requestBody)
+                }
+            assertEquals(HttpStatusCode.BadRequest, first.status)
+            assertApiErrorEnvelope(first, ApiErrorCodes.INVALID_INPUT)
+
+            val limited =
+                client.post("/api/venue/staff/invites/accept") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody(requestBody)
+                }
+            assertEquals(HttpStatusCode.TooManyRequests, limited.status)
+            assertApiErrorEnvelope(limited, ApiErrorCodes.RATE_LIMITED)
+            assertTrue(limited.headers[HttpHeaders.RetryAfter]?.toLongOrNull()?.let { it > 0L } == true)
+            assertFalse(limited.bodyAsText().contains("ABCDEFGHJK"))
+        }
+
+    @Test
+    fun `active pending invite cap returns 429 without a second row or audit`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("staff-invite-active-cap")
+            val config = buildConfig(jdbcUrl)
+            val protection =
+                MiniAppAbuseProtection(
+                    config =
+                        MiniAppAbuseConfig(
+                            inviteCreateGlobal =
+                                MiniAppRateLimitPolicy(100, Duration.ofMinutes(1)),
+                            inviteCreateActorVenue =
+                                MiniAppRateLimitPolicy(100, Duration.ofMinutes(1)),
+                            maxActivePendingInvitesPerVenueRole = 1,
+                        ),
+                    digestKey = ByteArray(32) { 6 },
+                )
+
+            environment { this.config = config }
+            application {
+                moduleWithOverrides(ModuleOverrides(miniAppAbuseProtection = protection))
+            }
+            client.get("/health")
+
+            val ownerId = 2061L
+            val venueId = seedVenueMembership(jdbcUrl, ownerId, "OWNER")
+            val token = issueToken(config, ownerId)
+            val requestBody =
+                json.encodeToString(
+                    StaffInviteRequest.serializer(),
+                    StaffInviteRequest(role = "STAFF"),
+                )
+
+            val first =
+                client.post("/api/venue/$venueId/staff/invites") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody(requestBody)
+                }
+            assertEquals(HttpStatusCode.OK, first.status)
+
+            val limited =
+                client.post("/api/venue/$venueId/staff/invites") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody(requestBody)
+                }
+            assertEquals(HttpStatusCode.TooManyRequests, limited.status)
+            assertApiErrorEnvelope(limited, ApiErrorCodes.RATE_LIMITED)
+            assertTrue(limited.headers[HttpHeaders.RetryAfter]?.toLongOrNull()?.let { it > 0L } == true)
+            assertEquals(1, countPendingStaffInvites(jdbcUrl, venueId, "STAFF"))
+            assertEquals(1, loadInviteAuditRows(jdbcUrl).count { it.action == "STAFF_INVITE_CREATED" })
         }
 
     @Test
@@ -2434,6 +2634,32 @@ class VenueStaffRoutesTest {
                             )
                         }
                     }
+                }
+            }
+        }
+
+    private fun countPendingStaffInvites(
+        jdbcUrl: String,
+        venueId: Long,
+        role: String,
+    ): Int =
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT COUNT(*)
+                FROM venue_staff_invites
+                WHERE venue_id = ?
+                  AND role = ?
+                  AND used_at IS NULL
+                  AND revoked_at IS NULL
+                  AND expires_at > CURRENT_TIMESTAMP
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.setString(2, role)
+                statement.executeQuery().use { resultSet ->
+                    check(resultSet.next())
+                    resultSet.getInt(1)
                 }
             }
         }

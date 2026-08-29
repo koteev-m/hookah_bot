@@ -67,6 +67,21 @@ Telegram fallback and staff-chat source of truth:
 - Canonical Telegram bot entrypoints, QR `/start`, fallback order, bot staff-call, staff-chat link/test/unlink, notification policy, callback security and Telegram/Mini App parity are tracked in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`.
 - Telegram bot and staff-chat are interaction surfaces. Backend domain tables and Mini App/Venue Mode remain source of truth; staff-chat is radar/shortcut only.
 
+Public-pilot Telegram admission source of truth:
+- `ALLOWLIST` remains the exact fail-closed identity boundary for isolated smoke environments.
+  `PRODUCT` is the explicit public-pilot mode; `UNRESTRICTED` is not a staging shortcut.
+- In `PRODUCT`, any structurally valid positive private Telegram identity with matching actor/chat,
+  and any normally signed and fresh positive Mini App identity, may enter the product as Guest.
+  No static manifest entry is required and absence of venue/platform membership remains Guest.
+- Any previously unknown Telegram user may preview and accept a valid active invite. The invite's
+  persisted venue, role, TTL, revoked/used state and one-time/concurrency checks are authoritative.
+  Platform Owner may invite a new Venue Owner; that active Owner may invite Staff or Manager only
+  into an own authorized venue. No acceptance grants another venue or Platform Mode.
+- Venue and Platform routes re-check membership/RBAC server-side on every request. Group traffic is
+  limited to one-time authorized staff-chat linking and current linked-venue operations. Private
+  and group outbound recipients come from current validated/product records or the exact active
+  venue staff-chat link, never a global static user-ID list.
+
 Testing/QA source of truth:
 - Canonical local validation, GitHub Actions expectations, change-type test matrix, staging smoke policy, manual smoke suites and failure reporting format are tracked in `docs/TESTING_QA_SMOKE_STRATEGY.md`.
 - Runtime changes must use area-appropriate checks; docs-only changes do not require staging deploy.
@@ -145,6 +160,9 @@ MUST:
 - Server-side RBAC checks on every admin/staff action.
 - Venue owner can grant/revoke supported staff/manager roles inside its venue with last-owner protection.
 - Platform Owner can create venues, invite/add venue OWNER users, list active OWNER memberships and revoke a venue OWNER only when another active OWNER remains.
+- Invite recipients do not need prior static admission. A new Owner becomes venue-authorized only
+  after accepting the exact Platform-issued OWNER invite; that Owner's later Staff/Manager invite is
+  restricted to the exact own venue and exact stored role.
 - Runtime venue ownership access is based on active `venue_members` rows with role `OWNER`; membership revoke does not relink `venues.owner_account_id` or legal/billing primary owner records.
 - Staff has no support-ticket, ordinary venue-chat, billing, settings or platform permissions in the MVP.
 - Manager may create/list/revoke only Staff invites, manage only display-only/active-Staff-linked

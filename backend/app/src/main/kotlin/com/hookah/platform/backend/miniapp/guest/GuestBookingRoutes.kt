@@ -309,7 +309,11 @@ private suspend fun notifyVenueStaffAboutBooking(
             notification.scheduledAtText?.let { append(" на ").append(it) }
             append('\n').append("Гость: ").append(notification.guestDisplayName?.takeIf { it.isNotBlank() } ?: "Гость")
         }
-    outboxEnqueuer.enqueueSendMessage(chatId = chatId, text = text)
+    outboxEnqueuer.enqueueVenueSendMessage(
+        venueId = notification.venueId,
+        chatId = chatId,
+        text = text,
+    )
 }
 
 private suspend fun notifyVenueStaffAboutGuestAttendance(
@@ -328,7 +332,8 @@ private suspend fun notifyVenueStaffAboutGuestAttendance(
             guestDisplayName = guestDisplayName,
             zoneId = venueSettingsRepository.resolveZoneId(booking.venueId),
         )
-    outboxEnqueuer.enqueueSendMessage(
+    outboxEnqueuer.enqueueVenueSendMessage(
+        venueId = booking.venueId,
         chatId = chatId,
         text = text,
         replyMarkup = ReplyKeyboardRemove(removeKeyboard = true),

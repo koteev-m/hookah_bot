@@ -110,13 +110,91 @@ ssh "${REMOTE}" "
   set -euo pipefail
   cd '${STAGING_PATH}'
   missing=0
-  for key in POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD DB_JDBC_URL DB_USER DB_PASSWORD TELEGRAM_WEBAPP_PUBLIC_URL MINIAPP_STATIC_DIR CORS_ALLOWED_HOSTS; do
+  for key in APP_ENV POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD DB_JDBC_URL DB_USER DB_PASSWORD TELEGRAM_TRAFFIC_POLICY TELEGRAM_WEBAPP_PUBLIC_URL MINIAPP_STATIC_DIR CORS_ALLOWED_HOSTS; do
     if ! grep -qE \"^\${key}=.+\" .env; then
       echo \"Missing or empty required env: \${key}\" >&2
       missing=1
     fi
   done
-  exit \${missing}
+  if [[ \${missing} -ne 0 ]]; then
+    exit \${missing}
+  fi
+
+  env_value() {
+    local key=\"\$1\"
+    awk -F= -v key=\"\${key}\" '\$1 == key { sub(/^[^=]*=/, \"\"); print; exit }' .env
+  }
+
+  require_single_env_key() {
+    local key=\"\$1\"
+    if ! awk -F= -v key=\"\${key}\" '\$1 == key { count++ } END { exit !(count == 1) }' .env; then
+      echo \"\${key} must appear exactly once in the staging env\" >&2
+      exit 4
+    fi
+  }
+
+  require_optional_unique_env_key() {
+    local key=\"\$1\"
+    if ! awk -F= -v key=\"\${key}\" '\$1 == key { count++ } END { exit !(count <= 1) }' .env; then
+      echo \"\${key} must not be duplicated in the staging env\" >&2
+      exit 4
+    fi
+  }
+
+  require_single_env_key APP_ENV
+  require_single_env_key TELEGRAM_TRAFFIC_POLICY
+
+  app_env=\"\$(env_value APP_ENV | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')\"
+  if [[ \"\${app_env}\" != \"staging\" ]]; then
+    echo \"APP_ENV must be staging for this deploy script\" >&2
+    exit 4
+  fi
+
+  traffic_policy=\"\$(env_value TELEGRAM_TRAFFIC_POLICY | tr '[:lower:]' '[:upper:]' | tr -d '[:space:]')\"
+  case \"\${traffic_policy}\" in
+    ALLOWLIST)
+      require_single_env_key TELEGRAM_ALLOWED_USER_IDS
+      require_single_env_key TELEGRAM_ALLOWED_CHAT_IDS
+      allowed_users=\"\$(env_value TELEGRAM_ALLOWED_USER_IDS)\"
+      allowed_chats=\"\$(env_value TELEGRAM_ALLOWED_CHAT_IDS)\"
+      if [[ ! \"\${allowed_users}\" =~ ^[1-9][0-9]*(,[1-9][0-9]*)*\$ ]]; then
+        echo \"TELEGRAM_ALLOWED_USER_IDS must be a nonempty canonical positive-ID list in ALLOWLIST\" >&2
+        exit 4
+      fi
+      if [[ ! \"\${allowed_chats}\" =~ ^-?[1-9][0-9]*(,-?[1-9][0-9]*)*\$ ]]; then
+        echo \"TELEGRAM_ALLOWED_CHAT_IDS must be a nonempty canonical signed-ID list in ALLOWLIST\" >&2
+        exit 4
+      fi
+      IFS=',' read -r -a allowed_user_entries <<< \"\${allowed_users}\"
+      for allowed_user in \"\${allowed_user_entries[@]}\"; do
+        if [[ \",\${allowed_chats},\" != *\",\${allowed_user},\"* ]]; then
+          echo \"Every ALLOWLIST user must have the matching positive private chat\" >&2
+          exit 4
+        fi
+      done
+      ;;
+    PRODUCT)
+      for key in TELEGRAM_ALLOWED_USER_IDS TELEGRAM_ALLOWED_CHAT_IDS; do
+        require_optional_unique_env_key \"\${key}\"
+        if grep -qE \"^\${key}=.+\" .env; then
+          echo \"\${key} must be empty or absent in PRODUCT\" >&2
+          exit 4
+        fi
+      done
+      require_single_env_key VENUE_STAFF_INVITE_SECRET_PEPPER
+      invite_pepper=\"\$(env_value VENUE_STAFF_INVITE_SECRET_PEPPER)\"
+      if [[ -z \"\${invite_pepper//[[:space:]]/}\" ||
+        \"\${invite_pepper}\" == \"change-me\" ||
+        \"\${invite_pepper}\" == \"please-set-when-enabled\" ]]; then
+        echo \"VENUE_STAFF_INVITE_SECRET_PEPPER must be explicitly configured for staging PRODUCT\" >&2
+        exit 4
+      fi
+      ;;
+    *)
+      echo \"TELEGRAM_TRAFFIC_POLICY must be ALLOWLIST or PRODUCT in staging\" >&2
+      exit 4
+      ;;
+  esac
 "
 
 echo "==> Building backend image locally: ${BACKEND_IMAGE} (${DOCKER_PLATFORM})"

@@ -2,7 +2,6 @@ package com.hookah.platform.backend.miniapp.venue.staff
 
 import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
 import com.hookah.platform.backend.miniapp.venue.VenueRole
-import com.hookah.platform.backend.telegram.sanitizeTelegramForLog
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.slf4j.Logger
@@ -36,12 +35,7 @@ suspend fun appendOwnerInviteCreateAuditBestEffort(
                 },
         )
     }.onFailure { error ->
-        logger.warn(
-            "Failed to append owner invite create audit venueId={} actorUserId={}: {}",
-            venueId,
-            actorUserId,
-            sanitizeTelegramForLog(error.message),
-        )
+        logger.warn("Failed to append owner invite create audit error_type={}", error::class.simpleName ?: "unknown")
     }
 }
 
@@ -71,11 +65,6 @@ suspend fun appendOwnerInviteAcceptAuditBestEffort(
                 },
         )
     }.onFailure { error ->
-        logger.warn(
-            "Failed to append owner invite accept audit venueId={} acceptedUserId={}: {}",
-            result.member.venueId,
-            result.member.userId,
-            sanitizeTelegramForLog(error.message),
-        )
+        logger.warn("Failed to append owner invite accept audit error_type={}", error::class.simpleName ?: "unknown")
     }
 }

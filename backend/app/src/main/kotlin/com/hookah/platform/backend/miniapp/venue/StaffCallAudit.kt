@@ -2,7 +2,6 @@ package com.hookah.platform.backend.miniapp.venue
 
 import com.hookah.platform.backend.telegram.db.StaffCallStatus
 import com.hookah.platform.backend.telegram.db.StaffCallStatusUpdateResult
-import com.hookah.platform.backend.telegram.sanitizeTelegramForLog
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.slf4j.Logger
@@ -48,13 +47,10 @@ suspend fun appendStaffCallStatusAuditBestEffort(
         )
     }.onFailure { error ->
         logger.warn(
-            "Failed to append staff call audit venueId={} staffCallId={} action={} actorUserId={} source={}: {}",
-            venueId,
-            result.staffCallId,
+            "Failed to append staff call audit action={} source={} error_type={}",
             action,
-            actorUserId,
             source,
-            sanitizeTelegramForLog(error.message),
+            error::class.simpleName ?: "unknown",
         )
     }
 }

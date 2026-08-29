@@ -3,8 +3,6 @@ package com.hookah.platform.backend.miniapp.venue.staff
 import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
 import com.hookah.platform.backend.miniapp.venue.VenueRole
 import com.hookah.platform.backend.miniapp.venue.VenueRoleMapping
-import com.hookah.platform.backend.telegram.debugTelegramException
-import com.hookah.platform.backend.telegram.sanitizeTelegramForLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.buildJsonObject
@@ -13,6 +11,7 @@ import org.slf4j.LoggerFactory
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.sql.Connection
+import java.time.Duration
 import java.time.Instant
 import java.util.Base64
 import java.util.Locale
@@ -44,7 +43,8 @@ class StaffInviteRepository(
             role = role,
             ttlSeconds = ttlSeconds,
             auditLogRepository = null,
-        )
+            maxActivePendingPerVenueRole = null,
+        ).inviteOrNull()
 
     suspend fun createInvite(
         venueId: Long,
@@ -59,7 +59,29 @@ class StaffInviteRepository(
             role = role,
             ttlSeconds = ttlSeconds,
             auditLogRepository = auditLogRepository,
+            maxActivePendingPerVenueRole = null,
+        ).inviteOrNull()
+
+    suspend fun createBoundedInvite(
+        venueId: Long,
+        createdByUserId: Long,
+        role: String,
+        ttlSeconds: Long,
+        maxActivePendingPerVenueRole: Int,
+        auditLogRepository: AuditLogRepository? = null,
+    ): StaffInviteCreateResult {
+        require(maxActivePendingPerVenueRole > 0) {
+            "maxActivePendingPerVenueRole must be positive"
+        }
+        return createInviteInternal(
+            venueId = venueId,
+            createdByUserId = createdByUserId,
+            role = role,
+            ttlSeconds = ttlSeconds,
+            auditLogRepository = auditLogRepository,
+            maxActivePendingPerVenueRole = maxActivePendingPerVenueRole,
         )
+    }
 
     private suspend fun createInviteInternal(
         venueId: Long,
@@ -67,8 +89,9 @@ class StaffInviteRepository(
         role: String,
         ttlSeconds: Long,
         auditLogRepository: AuditLogRepository?,
-    ): StaffInviteCodeResult? {
-        val ds = dataSource ?: return null
+        maxActivePendingPerVenueRole: Int?,
+    ): StaffInviteCreateResult {
+        val ds = dataSource ?: return StaffInviteCreateResult.DatabaseError
         val code = generateCode()
         val codeHash = hashCode(code)
         val handle = deriveOpaqueHandle(codeHash)
@@ -80,6 +103,24 @@ class StaffInviteRepository(
                 val initialAutoCommit = connection.autoCommit
                 connection.autoCommit = false
                 try {
+                    if (maxActivePendingPerVenueRole != null) {
+                        if (!lockVenueForInviteCreation(connection, venueId)) {
+                            return@use rollbackAndReturn(connection) {
+                                StaffInviteCreateResult.DatabaseError
+                            }
+                        }
+                        activePendingInviteRetryAfterSeconds(
+                            connection = connection,
+                            venueId = venueId,
+                            role = role,
+                            nowTs = nowTs,
+                            maxActivePending = maxActivePendingPerVenueRole,
+                        )?.let { retryAfterSeconds ->
+                            return@use rollbackAndReturn(connection) {
+                                StaffInviteCreateResult.RateLimited(retryAfterSeconds)
+                            }
+                        }
+                    }
                     connection.prepareStatement(
                         """
                         INSERT INTO venue_staff_invites (
@@ -109,28 +150,71 @@ class StaffInviteRepository(
                         )
                     }
                     connection.commit()
-                    StaffInviteCodeResult(
-                        code = code,
-                        expiresAt = expiresAt,
-                        ttlSeconds = ttlSeconds,
-                        handle = handle,
+                    StaffInviteCreateResult.Success(
+                        StaffInviteCodeResult(
+                            code = code,
+                            expiresAt = expiresAt,
+                            ttlSeconds = ttlSeconds,
+                            handle = handle,
+                        ),
                     )
                 } catch (e: Exception) {
                     rollbackBestEffort(connection)
-                    logger.warn(
-                        "Failed to create staff invite venueId={} createdByUserId={}: {}",
-                        venueId,
-                        createdByUserId,
-                        sanitizeTelegramForLog(e.message),
-                    )
-                    logger.debugTelegramException(e) { "createInvite exception venueId=$venueId" }
-                    null
+                    logger.warn("Failed to create staff invite error_type={}", e::class.simpleName ?: "unknown")
+                    StaffInviteCreateResult.DatabaseError
                 } finally {
                     connection.autoCommit = initialAutoCommit
                 }
             }
         }
     }
+
+    private fun lockVenueForInviteCreation(
+        connection: Connection,
+        venueId: Long,
+    ): Boolean =
+        connection.prepareStatement(
+            "SELECT id FROM venues WHERE id = ? FOR UPDATE",
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.executeQuery().use { resultSet -> resultSet.next() }
+        }
+
+    private fun activePendingInviteRetryAfterSeconds(
+        connection: Connection,
+        venueId: Long,
+        role: String,
+        nowTs: Instant,
+        maxActivePending: Int,
+    ): Long? =
+        connection.prepareStatement(
+            """
+            SELECT COUNT(*) AS active_count, MIN(expires_at) AS earliest_expiry
+            FROM venue_staff_invites
+            WHERE venue_id = ?
+              AND role = ?
+              AND used_at IS NULL
+              AND revoked_at IS NULL
+              AND expires_at > ?
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setString(2, role)
+            statement.setTimestamp(3, java.sql.Timestamp.from(nowTs))
+            statement.executeQuery().use { resultSet ->
+                check(resultSet.next()) { "active invite count query returned no row" }
+                if (resultSet.getLong("active_count") < maxActivePending) {
+                    null
+                } else {
+                    val earliestExpiry =
+                        resultSet.getTimestamp("earliest_expiry")?.toInstant()
+                            ?: return@use 1L
+                    val retryAfterMillis =
+                        Duration.between(nowTs, earliestExpiry).toMillis().coerceAtLeast(1L)
+                    ((retryAfterMillis + 999L) / 1_000L).coerceAtLeast(1L)
+                }
+            }
+        }
 
     suspend fun listPendingInvites(
         venueId: Long,
@@ -152,12 +236,7 @@ class StaffInviteRepository(
                         nowTs = nowTs,
                     ).map { row -> row.toPendingInvite() }
                 } catch (e: Exception) {
-                    logger.warn(
-                        "Failed to list pending staff invites venueId={}: {}",
-                        venueId,
-                        sanitizeTelegramForLog(e.message),
-                    )
-                    logger.debugTelegramException(e) { "listPendingInvites exception venueId=$venueId" }
+                    logger.warn("Failed to list pending staff invites error_type={}", e::class.simpleName ?: "unknown")
                     null
                 }
             }
@@ -234,15 +313,7 @@ class StaffInviteRepository(
                     )
                 } catch (e: Exception) {
                     rollbackBestEffort(connection)
-                    logger.warn(
-                        "Failed to revoke pending staff invite venueId={} actorUserId={}: {}",
-                        venueId,
-                        actorUserId,
-                        sanitizeTelegramForLog(e.message),
-                    )
-                    logger.debugTelegramException(e) {
-                        "revokePendingInvite exception venueId=$venueId actorUserId=$actorUserId"
-                    }
+                    logger.warn("Failed to revoke pending staff invite error_type={}", e::class.simpleName ?: "unknown")
                     StaffInviteRevokeResult.DatabaseError
                 } finally {
                     connection.autoCommit = initialAutoCommit
@@ -272,11 +343,7 @@ class StaffInviteRepository(
                         ),
                     )
                 } catch (e: Exception) {
-                    logger.warn(
-                        "Failed to preview staff invite: {}",
-                        sanitizeTelegramForLog(e.message),
-                    )
-                    logger.debugTelegramException(e) { "previewInvite exception" }
+                    logger.warn("Failed to preview staff invite error_type={}", e::class.simpleName ?: "unknown")
                     StaffInvitePreviewResult.DatabaseError
                 }
             }
@@ -372,12 +439,7 @@ class StaffInviteRepository(
                     )
                 } catch (e: Exception) {
                     rollbackBestEffort(connection)
-                    logger.warn(
-                        "Failed to accept staff invite userId={}: {}",
-                        userId,
-                        sanitizeTelegramForLog(e.message),
-                    )
-                    logger.debugTelegramException(e) { "acceptInvite exception userId=$userId" }
+                    logger.warn("Failed to accept staff invite error_type={}", e::class.simpleName ?: "unknown")
                     StaffInviteAcceptResult.DatabaseError
                 } finally {
                     connection.autoCommit = initialAutoCommit
@@ -411,12 +473,7 @@ class StaffInviteRepository(
                     StaffInviteDeclineResult.Success
                 } catch (e: Exception) {
                     rollbackBestEffort(connection)
-                    logger.warn(
-                        "Failed to decline staff invite userId={}: {}",
-                        userId,
-                        sanitizeTelegramForLog(e.message),
-                    )
-                    logger.debugTelegramException(e) { "declineInvite exception userId=$userId" }
+                    logger.warn("Failed to decline staff invite error_type={}", e::class.simpleName ?: "unknown")
                     StaffInviteDeclineResult.DatabaseError
                 } finally {
                     connection.autoCommit = initialAutoCommit
@@ -687,6 +744,17 @@ data class StaffInviteCodeResult(
     val ttlSeconds: Long,
     val handle: String = "",
 )
+
+sealed interface StaffInviteCreateResult {
+    data class Success(val invite: StaffInviteCodeResult) : StaffInviteCreateResult
+
+    data class RateLimited(val retryAfterSeconds: Long) : StaffInviteCreateResult
+
+    data object DatabaseError : StaffInviteCreateResult
+}
+
+private fun StaffInviteCreateResult.inviteOrNull(): StaffInviteCodeResult? =
+    (this as? StaffInviteCreateResult.Success)?.invite
 
 data class PendingStaffInvite(
     val handle: String,

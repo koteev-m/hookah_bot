@@ -5,6 +5,7 @@ import com.zaxxer.hikari.HikariConfig
 import com.zaxxer.hikari.HikariDataSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
@@ -18,6 +19,7 @@ import java.time.Instant
 import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.CyclicBarrier
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
@@ -207,6 +209,83 @@ class StaffInviteRepositoryTest {
         }
 
     @Test
+    fun `concurrent double accept commits one staff membership and one invite use`() =
+        withFixture {
+            val created = createInvite(role = "STAFF", audit = true)
+            val start = CyclicBarrier(2)
+            val createMemberCalls = AtomicInteger()
+
+            val results =
+                coroutineScope {
+                    List(2) {
+                        async(Dispatchers.IO) {
+                            start.await()
+                            repository.acceptInvite(created.code, inviteeUserId) {
+                                    connection,
+                                    targetVenueId,
+                                    role,
+                                    invitedBy,
+                                ->
+                                createMemberCalls.incrementAndGet()
+                                insertMember(connection, targetVenueId, inviteeUserId, role, invitedBy)
+                            }
+                        }
+                    }.awaitAll()
+                }
+
+            assertEquals(1, results.count { it is StaffInviteAcceptResult.Success })
+            assertEquals(1, results.count { it == StaffInviteAcceptResult.InvalidOrExpired })
+            val success =
+                assertIs<StaffInviteAcceptResult.Success>(
+                    results.single { it is StaffInviteAcceptResult.Success },
+                )
+            assertFalse(success.alreadyMember)
+            assertEquals("STAFF", success.invitedRole)
+            assertEquals("STAFF", success.member.role)
+            assertEquals(1, createMemberCalls.get())
+            assertEquals(1, memberCount(venueId, inviteeUserId))
+
+            val state = inviteState(created.handle)
+            assertNotNull(state.usedAt)
+            assertEquals(inviteeUserId, state.usedByUserId)
+            assertNull(state.revokedAt)
+            assertEquals(1, inviteCount())
+            assertEquals(listOf(STAFF_INVITE_CREATED_AUDIT_ACTION), auditRows().map { it.action })
+        }
+
+    @Test
+    fun `malformed invite codes are state free for preview accept and decline`() =
+        withFixture {
+            val pending = createInvite(role = "STAFF", audit = true)
+            val malformedCodes = listOf("", "INVALID0", "A".repeat(65), "staff_invite_token", "INVITE TOKEN")
+
+            malformedCodes.forEach { malformedCode ->
+                assertEquals(StaffInvitePreviewResult.InvalidOrExpired, repository.previewInvite(malformedCode))
+                assertEquals(
+                    StaffInviteAcceptResult.InvalidOrExpired,
+                    repository.acceptInvite(malformedCode, inviteeUserId) { _, _, _, _ ->
+                        error("malformed invite must not reach membership creation")
+                    },
+                )
+                assertEquals(
+                    StaffInviteDeclineResult.InvalidOrExpired,
+                    repository.declineInvite(malformedCode, inviteeUserId),
+                )
+            }
+
+            assertEquals(0, memberCount(venueId, inviteeUserId))
+            val state = inviteState(pending.handle)
+            assertNull(state.usedAt)
+            assertNull(state.usedByUserId)
+            assertNull(state.revokedAt)
+            assertEquals(
+                listOf(pending.handle),
+                repository.listPendingInvites(venueId, setOf("STAFF"))?.map { it.handle },
+            )
+            assertEquals(listOf(STAFF_INVITE_CREATED_AUDIT_ACTION), auditRows().map { it.action })
+        }
+
+    @Test
     fun `audit failure rolls back create and revoke mutations`() =
         withFixture {
             dropAuditTable()
@@ -241,6 +320,97 @@ class StaffInviteRepositoryTest {
                     allowedRoles = setOf("STAFF"),
                 )?.map { it.handle },
             )
+        }
+
+    @Test
+    fun `bounded create caps active pending invites per venue and role`() =
+        withFixture {
+            val first =
+                repository.createBoundedInvite(
+                    venueId = venueId,
+                    createdByUserId = ownerUserId,
+                    role = "STAFF",
+                    ttlSeconds = 300,
+                    maxActivePendingPerVenueRole = 1,
+                    auditLogRepository = auditLogRepository,
+                )
+            assertIs<StaffInviteCreateResult.Success>(first)
+
+            val capped =
+                repository.createBoundedInvite(
+                    venueId = venueId,
+                    createdByUserId = ownerUserId,
+                    role = "STAFF",
+                    ttlSeconds = 300,
+                    maxActivePendingPerVenueRole = 1,
+                    auditLogRepository = auditLogRepository,
+                )
+            assertEquals(300L, assertIs<StaffInviteCreateResult.RateLimited>(capped).retryAfterSeconds)
+
+            assertIs<StaffInviteCreateResult.Success>(
+                repository.createBoundedInvite(
+                    venueId = venueId,
+                    createdByUserId = ownerUserId,
+                    role = "MANAGER",
+                    ttlSeconds = 300,
+                    maxActivePendingPerVenueRole = 1,
+                    auditLogRepository = auditLogRepository,
+                ),
+            )
+            assertEquals(2, inviteCount())
+            assertEquals(2, auditRows().size)
+
+            nowRef.set(nowRef.get().plusSeconds(301))
+            assertIs<StaffInviteCreateResult.Success>(
+                repository.createBoundedInvite(
+                    venueId = venueId,
+                    createdByUserId = ownerUserId,
+                    role = "STAFF",
+                    ttlSeconds = 300,
+                    maxActivePendingPerVenueRole = 1,
+                    auditLogRepository = auditLogRepository,
+                ),
+            )
+            assertEquals(3, inviteCount())
+            assertEquals(3, auditRows().size)
+        }
+
+    @Test
+    fun `bounded create serializes concurrent attempts at the active cap`() =
+        withFixture {
+            val start = CyclicBarrier(2)
+            val results =
+                coroutineScope {
+                    listOf(
+                        async(Dispatchers.IO) {
+                            start.await()
+                            repository.createBoundedInvite(
+                                venueId = venueId,
+                                createdByUserId = ownerUserId,
+                                role = "STAFF",
+                                ttlSeconds = 300,
+                                maxActivePendingPerVenueRole = 1,
+                                auditLogRepository = auditLogRepository,
+                            )
+                        },
+                        async(Dispatchers.IO) {
+                            start.await()
+                            repository.createBoundedInvite(
+                                venueId = venueId,
+                                createdByUserId = ownerUserId,
+                                role = "STAFF",
+                                ttlSeconds = 300,
+                                maxActivePendingPerVenueRole = 1,
+                                auditLogRepository = auditLogRepository,
+                            )
+                        },
+                    ).awaitAll()
+                }
+
+            assertEquals(1, results.count { it is StaffInviteCreateResult.Success })
+            assertEquals(1, results.count { it is StaffInviteCreateResult.RateLimited })
+            assertEquals(1, inviteCount())
+            assertEquals(1, auditRows().size)
         }
 
     private fun withFixture(block: suspend Fixture.() -> Unit) =
@@ -317,7 +487,7 @@ class StaffInviteRepositoryTest {
             dataSource.connection.use { connection ->
                 connection.prepareStatement(
                     """
-                    SELECT code_hash, used_at, revoked_at, revoked_by_user_id
+                    SELECT code_hash, used_at, used_by_user_id, revoked_at, revoked_by_user_id
                     FROM venue_staff_invites
                     WHERE venue_id = ?
                     """.trimIndent(),
@@ -330,6 +500,7 @@ class StaffInviteRepositoryTest {
                             if (candidate == handle) {
                                 return InviteState(
                                     usedAt = rs.getTimestamp("used_at")?.toInstant(),
+                                    usedByUserId = rs.getLong("used_by_user_id").takeIf { !rs.wasNull() },
                                     revokedAt = rs.getTimestamp("revoked_at")?.toInstant(),
                                     revokedByUserId = rs.getLong("revoked_by_user_id").takeIf { !rs.wasNull() },
                                 )
@@ -392,6 +563,23 @@ class StaffInviteRepositoryTest {
                     statement.setLong(1, targetVenueId)
                     statement.setLong(2, userId)
                     statement.executeQuery().use { it.next() }
+                }
+            }
+
+        fun memberCount(
+            targetVenueId: Long,
+            userId: Long,
+        ): Int =
+            dataSource.connection.use { connection ->
+                connection.prepareStatement(
+                    "SELECT COUNT(*) FROM venue_members WHERE venue_id = ? AND user_id = ?",
+                ).use { statement ->
+                    statement.setLong(1, targetVenueId)
+                    statement.setLong(2, userId)
+                    statement.executeQuery().use { rs ->
+                        rs.next()
+                        rs.getInt(1)
+                    }
                 }
             }
 
@@ -508,6 +696,7 @@ class StaffInviteRepositoryTest {
 
     private data class InviteState(
         val usedAt: Instant?,
+        val usedByUserId: Long?,
         val revokedAt: Instant?,
         val revokedByUserId: Long?,
     )

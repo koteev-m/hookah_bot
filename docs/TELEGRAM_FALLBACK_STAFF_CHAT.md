@@ -1,8 +1,8 @@
 # Telegram Fallback And Staff-Chat Model
 
-Дата актуализации: 2026-08-05.
+Дата актуализации: 2026-08-29.
 
-Статус: **current product reference / SPEC UPDATED**. Telegram bot remains an entrypoint, fallback and notification surface for the same backend/Mini App product. Current docs/code evidence says fallback quick-order payload, Staff Call ACK/DONE, guest-visible staff-call `CANCELLED`, staff-chat link/test/unlink, state-aware booking staff-chat buttons, booking arrival callback guards and support/venue/booking-chat staff-chat denial are closed for current smoke paths. Platform guest QR status is **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / DONE / MVP / STAGING-SMOKE-PASSED** with schema verdict `NO_MIGRATION`; green Actions, staging deploy and the bounded real Telegram smoke are complete. The complete Telegram parity model is still **PARTIAL / needs verification** for broad Telegram-vs-Mini-App parity, platform menu placeholders, per-venue real staff-chat delivery, callback audit completeness and future notification history.
+Статус: **current product reference / SPEC UPDATED**. Telegram bot remains an entrypoint, fallback and notification surface for the same backend/Mini App product. Current docs/code evidence says fallback quick-order payload, Staff Call ACK/DONE, guest-visible staff-call `CANCELLED`, staff-chat link/test/unlink, state-aware booking staff-chat buttons, booking arrival callback guards and support/venue/booking-chat staff-chat denial are closed for current smoke paths. The V125 `PRODUCT` public-pilot admission hotfix is a feature-branch candidate; staging deployment/smoke is still required. Platform guest QR status is **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / DONE / MVP / STAGING-SMOKE-PASSED** with schema verdict `NO_MIGRATION`; green Actions, staging deploy and the bounded real Telegram smoke are complete. The complete Telegram parity model is still **PARTIAL / needs verification** for broad Telegram-vs-Mini-App parity, platform menu placeholders, per-venue real staff-chat delivery, callback audit completeness and future notification history.
 
 ## Core Rule
 
@@ -33,36 +33,47 @@ Rules:
 - Bot fallback must call the same backend/domain paths as Mini App or produce an explicitly marked fallback batch/task.
 - Staff-chat callbacks must resolve the entity server-side, check role/scope/state and handle stale/idempotent actions safely.
 
-### Permanent Staging Traffic Boundary
+### Staging Traffic Modes
 
-Staging is fail-closed and permanently identity-allowlisted. `APP_ENV=staging` requires
-`TELEGRAM_TRAFFIC_POLICY=ALLOWLIST`, a nonempty positive user list and a nonempty chat list containing
-the matching positive private chats plus explicitly approved negative groups/supergroups.
-Unrestricted staging traffic is not a fallback.
+Staging is always fail-closed and requires an explicit mode:
 
-One centralized policy applies before long-polling routing/idempotency, before webhook enqueue,
-before Mini App user/session creation, on every protected JWT request, before outbox claim and before
-direct chat-targeted Bot API calls. Private updates require the same allowed positive actor/chat;
-group and callback updates require an allowed actor plus the exact allowed negative group. Missing or
-ambiguous actor/chat is denied. Denial does not create user, processed-update, inbound or outbox
-state, and logs contain only bounded reason/counts without IDs, token, payload or message text.
+- `ALLOWLIST` is the exact static boundary for isolated smoke. It requires a nonempty canonical
+  positive user list and a nonempty signed chat list containing each matching positive private chat
+  plus only explicitly approved negative groups/supergroups. Exact Manifest B remains the current
+  rollback/smoke identity set until a separately authorized staging transition.
+- `PRODUCT` is the public-pilot product mode. Static user/chat lists must be absent or empty and an
+  explicit `VENUE_STAFF_INVITE_SECRET_PEPPER` is required. `UNRESTRICTED` is never a staging
+  fallback or pilot shortcut.
 
-The same staging bot token, username and configured mode remain in use. Test-bot token swapping is
-not an isolation mechanism because inbound/outbox/idempotency and stored staff-chat message state are
-not token-scoped. Exactly one backend/poller is an operational release gate.
+In `PRODUCT`, a private message or callback reaches the Router only when the update shape is
+supported, actor and private chat IDs are positive, and actor equals chat. A normally signed and
+fresh positive Mini App identity may authenticate and is upserted through the normal product flow.
+A user without active venue/platform membership remains Guest; authentication and traffic admission
+do not grant Venue or Platform Mode. A previously unknown Telegram user may preview and accept a
+valid active OWNER/STAFF/MANAGER invite, but acceptance grants only the invite's stored role in its
+stored venue and preserves TTL, revoked/used, audit, one-time and concurrency checks.
 
-Real allowlist values are stored only in the restricted staging `.env` and
-`/etc/hookah-bot/staging/telegram-allowlist.manifest` outside Git. The manifest directory is
-`root:root` mode 0700 and the file is `root:root` mode 0600. Changing a list requires a controlled
-backend restart. Removal also denies already issued Mini App JWTs on their next protected request.
-Previous or familiar staging testers not listed lose access by design.
+Product group traffic is intentionally narrow. Structurally supported `/link`, `/unlink` and
+`/link_test` messages and staff operational callbacks may enter the Router, where the server must
+still prove a valid one-time link code or exact current staff-chat link, exact venue, current actor
+permission and entity state before idempotency or mutation. Unrelated group messages/callbacks are
+state-free. A copied callback from another group or venue is denied.
 
-A dedicated private non-topic staff supergroup is verified before it enters the allowlist: derive a
-candidate from an exact
-`https://t.me/c/<positive-internal-id>/<positive-message-id>` Telegram Desktop link, then compare its
-exact ID, exact `supergroup` type and exact pre-reviewed title with read-only Bot API `getChat` in a
-drained window without printing the token, ID, title or response. There is no bootstrap command that
-bypasses the group allowlist. See `docs/STAGING_DEPLOYMENT.md` for the operator procedure.
+Outbound policy is structural at the Telegram boundary and server-authoritative at persistence and
+dispatch. Private recipients must resolve from the validated inbound/product user or exact booking,
+support, invite or venue workflow. Negative recipients and live-message edits require the exact
+current venue staff-chat link; unlink/relink invalidates queued/live authority. Typed Telegram
+payload/envelope checks, idempotency, retry/backoff and safe reason-only logging remain mandatory.
+
+The same staging bot token, username and configured long-polling mode remain in use. Exactly one
+backend/poller is an operational release gate. Test-bot swapping is not isolation because queues,
+idempotency and stored staff-chat message state are not token-scoped.
+
+For `ALLOWLIST`, real IDs remain only in the restricted staging `.env` and
+`/etc/hookah-bot/staging/telegram-allowlist.manifest` outside Git. The directory is `root:root` mode
+0700 and the file mode 0600. A dedicated test supergroup is verified through the existing restricted
+operator procedure before entering that smoke manifest. `PRODUCT` never expands the manifest for a
+Guest, Owner, Manager or Staff identity.
 
 ## Bot States
 
@@ -148,11 +159,16 @@ Target link flow:
 - Authorized user runs `/link@BotUsername <code>`.
 - Bot verifies code, venue scope, expiry and actor permission where possible.
 - Backend saves `chat_id`, linked timestamp and actor.
+- In `PRODUCT`, the unlinked group receives no general trust: only the narrow link bootstrap may
+  proceed, and success binds exactly the code's venue. Linked commands/callbacks must originate from
+  that venue's current staff chat and carry the same venue scope before any mutation.
 
 Unlink:
 - Owner-only unless product explicitly allows Manager.
 - Writes audit where implemented.
 - Clears active staff-chat binding without deleting historical notification records.
+- Cancels pending authority and invalidates live-message targets for the removed link so a later
+  bind cannot receive or edit the previous venue's queued content.
 
 Test:
 - Sends a diagnostic test message through Telegram outbox.
@@ -337,6 +353,9 @@ Rules:
 - Staff-chat messages include minimum PII and no secrets.
 - Support/chat text stays in domain message tables with RBAC; it must not be copied to analytics/staff-chat.
 - Rate-limit:
+  - unknown/new private users and spam commands;
+  - invite preview and repeated invalid-token attempts;
+  - group link and operational attempts;
   - fallback order attempts;
   - staff calls;
   - support create/messages;
@@ -351,6 +370,7 @@ Rules:
 - Fallback order: `CLOSED for payload contract / PARTIAL for real Telegram client smoke and shared-tab UX`.
 - Staff-call lifecycle: `CLOSED for ACK/DONE MVP plus guest-visible CANCELLED / PARTIAL for manual cancel UI, quick replies and row-level actor columns`.
 - Staff-chat policy: `DOCUMENTED`.
+- Public-pilot `PRODUCT` admission: `V125 FEATURE-BRANCH CANDIDATE / STAGING SMOKE REQUIRED`.
 - Staff-chat as source of truth: explicitly `NO`.
 - Telegram/Mini App parity: `PARTIAL`, with closed slices and documented exceptions.
 - Platform Telegram menu placeholders: `OPEN/PARTIAL / needs verification`.
@@ -396,3 +416,17 @@ Rules:
 36. Bot and Venue Mini App read the same public review URL; clearing it removes the Guest `5/5` CTA.
 37. No `VisitFeedbackWorker` or scheduled Telegram feedback prompt is started, and no Yandex link opens automatically.
 38. Feedback submit/follow-up context creates no staff-chat notification and no support ticket.
+39. A completely new identity absent from every static manifest starts the bot, receives Guest
+    navigation, authenticates with valid fresh initData and can read public Guest catalog/venue
+    information, while Venue and Platform APIs remain denied.
+40. Platform Owner creates one exact OWNER invite for a second completely new identity; that user
+    previews Accept/Decline, accepts once and gains only OWNER in the invited venue.
+41. The new Owner creates one exact STAFF or MANAGER invite for a third completely new external
+    identity. That recipient previews and accepts once, receives exactly one membership with the
+    selected role and opens only that venue. Automated coverage must exercise both role variants.
+42. Existing pilot Owner behavior remains compatible; no identity in this chain requires a static
+    manifest edit, and unrelated private users remain Guest.
+43. Malformed, expired, revoked, used and concurrent/double invite acceptance creates no extra
+    membership, preview, audit, update, outbox row or delivery.
+44. Unrelated group traffic creates no link or venue action. A valid one-time link code from an
+    authorized own-venue actor links only the intended group; foreign/copied callbacks are denied.

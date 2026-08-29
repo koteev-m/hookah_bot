@@ -194,6 +194,419 @@ class TelegramOutboxWorkerTest {
         }
 
     @Test
+    fun `product mode enqueues and claims only database-authorized recipients`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            val dataSource = PostgresTestEnv.createDataSource(database)
+            val productPolicy =
+                TelegramTrafficPolicy.from(
+                    MapApplicationConfig("telegram.trafficPolicy" to "PRODUCT"),
+                    appEnv = "staging",
+                )
+            val repository = TelegramOutboxRepository(dataSource, productPolicy)
+            val enqueuer = TelegramOutboxEnqueuer(repository, Json { ignoreUnknownKeys = true }, productPolicy)
+            val userChatId = 910_001L
+            val staffChatId = -100_910_001L
+
+            assertEquals(
+                TelegramOutboxEnqueueOutcome.SKIPPED_TRAFFIC_POLICY,
+                enqueuer.enqueueSendMessage(userChatId, "unknown user"),
+            )
+            assertEquals(
+                TelegramOutboxEnqueueOutcome.SKIPPED_TRAFFIC_POLICY,
+                enqueuer.enqueueSendMessage(staffChatId, "unknown group"),
+            )
+            DriverManager.getConnection(database.jdbcUrl, database.user, database.password).use { connection ->
+                connection.autoCommit = false
+                assertEquals(
+                    TelegramOutboxEnqueueOutcome.SKIPPED_TRAFFIC_POLICY,
+                    enqueuer.enqueueBookingSendMessageInTransaction(
+                        connection = connection,
+                        chatId = userChatId,
+                        text = "unknown booking user",
+                    ),
+                )
+                connection.rollback()
+            }
+
+            val staffVenueId =
+                DriverManager.getConnection(database.jdbcUrl, database.user, database.password).use { connection ->
+                    connection.prepareStatement(
+                        "INSERT INTO users (telegram_user_id, first_name) VALUES (?, 'Guest')",
+                    ).use { statement ->
+                        statement.setLong(1, userChatId)
+                        statement.executeUpdate()
+                    }
+                    connection.prepareStatement(
+                        """
+                        INSERT INTO venues (name, status, staff_chat_id)
+                        VALUES ('Venue', 'PUBLISHED', ?)
+                        RETURNING id
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setLong(1, staffChatId)
+                        statement.executeQuery().use { resultSet ->
+                            assertTrue(resultSet.next())
+                            resultSet.getLong("id")
+                        }
+                    }
+                }
+
+            assertEquals(
+                TelegramOutboxEnqueueOutcome.ENQUEUED,
+                enqueuer.enqueueSendMessage(userChatId, "known user"),
+            )
+            assertEquals(
+                TelegramOutboxEnqueueOutcome.SKIPPED_TRAFFIC_POLICY,
+                enqueuer.enqueueSendMessage(staffChatId, "linked group"),
+            )
+            assertEquals(
+                TelegramOutboxEnqueueOutcome.ENQUEUED,
+                enqueuer.enqueueVenueSendMessage(staffVenueId, staffChatId, "linked group"),
+            )
+            DriverManager.getConnection(database.jdbcUrl, database.user, database.password).use { connection ->
+                connection.autoCommit = false
+                assertEquals(
+                    TelegramOutboxEnqueueOutcome.ENQUEUED,
+                    enqueuer.enqueueBookingSendMessageInTransaction(
+                        connection = connection,
+                        chatId = userChatId,
+                        text = "known booking user",
+                    ),
+                )
+                connection.commit()
+            }
+            DriverManager.getConnection(database.jdbcUrl, database.user, database.password).use { connection ->
+                connection.prepareStatement(
+                    """
+                    INSERT INTO telegram_outbox (chat_id, method, payload_json)
+                    VALUES
+                        (910002, 'sendMessage', '{"chat_id":910002,"text":"unknown"}'),
+                        (-100910002, 'sendMessage', '{"chat_id":-100910002,"text":"unlinked"}')
+                    """.trimIndent(),
+                ).use { it.executeUpdate() }
+            }
+
+            val claimed =
+                repository.claimBatch(
+                    limit = 10,
+                    now = Instant.parse("2030-01-01T00:00:00Z"),
+                    visibilityTimeout = java.time.Duration.ofMinutes(2),
+                )
+
+            assertEquals(setOf(userChatId, staffChatId), claimed.map { it.chatId }.toSet())
+            assertEquals(3, claimed.size)
+            DriverManager.getConnection(database.jdbcUrl, database.user, database.password).use { connection ->
+                connection.prepareStatement(
+                    """
+                    SELECT chat_id, status, attempts
+                    FROM telegram_outbox
+                    WHERE chat_id IN (910002, -100910002)
+                    ORDER BY chat_id
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.executeQuery().use { resultSet ->
+                        repeat(2) {
+                            assertTrue(resultSet.next())
+                            assertEquals(TelegramOutboxStatus.NEW.name, resultSet.getString("status"))
+                            assertEquals(0, resultSet.getInt("attempts"))
+                        }
+                        assertFalse(resultSet.next())
+                    }
+                }
+            }
+
+            dataSource.close()
+        }
+
+    @Test
+    fun `product worker rechecks staff chat authority immediately before dispatch`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            val dataSource = PostgresTestEnv.createDataSource(database)
+            val productPolicy =
+                TelegramTrafficPolicy.from(
+                    MapApplicationConfig("telegram.trafficPolicy" to "PRODUCT"),
+                    appEnv = "staging",
+                )
+            val repository = TelegramOutboxRepository(dataSource, productPolicy)
+            val enqueuer = TelegramOutboxEnqueuer(repository, Json { ignoreUnknownKeys = true }, productPolicy)
+            val staffChatId = -100_915_001L
+            val venueId =
+                DriverManager.getConnection(database.jdbcUrl, database.user, database.password).use { connection ->
+                    connection.prepareStatement(
+                        """
+                        INSERT INTO venues (name, status, staff_chat_id)
+                        VALUES ('Venue', 'PUBLISHED', ?)
+                        RETURNING id
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setLong(1, staffChatId)
+                        statement.executeQuery().use { resultSet ->
+                            assertTrue(resultSet.next())
+                            resultSet.getLong("id")
+                        }
+                    }
+                }
+            assertEquals(
+                TelegramOutboxEnqueueOutcome.ENQUEUED,
+                enqueuer.enqueueVenueSendMessage(venueId, staffChatId, "linked group"),
+            )
+            val apiClient: TelegramApiClient = mockk(relaxed = true)
+            val worker =
+                TelegramOutboxWorker(
+                    repository = repository,
+                    apiClientProvider = { apiClient },
+                    json = Json { ignoreUnknownKeys = true },
+                    rateLimiter =
+                        TelegramRateLimiter {
+                            DriverManager
+                                .getConnection(database.jdbcUrl, database.user, database.password)
+                                .use { connection ->
+                                    connection.prepareStatement(
+                                        "UPDATE venues SET staff_chat_id = NULL WHERE staff_chat_id = ?",
+                                    ).use { statement ->
+                                        statement.setLong(1, staffChatId)
+                                        statement.executeUpdate()
+                                    }
+                                }
+                        },
+                    config = TelegramOutboxConfig(batchSize = 1, maxConcurrency = 1),
+                    scope = CoroutineScope(Dispatchers.IO),
+                    nowProvider = { Instant.parse("2030-01-01T00:00:00Z") },
+                )
+
+            worker.processOnce()
+
+            coVerify(exactly = 0) { apiClient.dispatchOutbox(any(), any(), any()) }
+            DriverManager.getConnection(database.jdbcUrl, database.user, database.password).use { connection ->
+                connection.prepareStatement(
+                    "SELECT status, last_error, next_attempt_at FROM telegram_outbox WHERE chat_id = ?",
+                ).use { statement ->
+                    statement.setLong(1, staffChatId)
+                    statement.executeQuery().use { resultSet ->
+                        assertTrue(resultSet.next())
+                        assertEquals(TelegramOutboxStatus.FAILED.name, resultSet.getString("status"))
+                        assertEquals(
+                            "Telegram outbox recipient no longer authorized",
+                            resultSet.getString("last_error"),
+                        )
+                        assertNull(resultSet.getTimestamp("next_attempt_at"))
+                    }
+                }
+            }
+
+            dataSource.close()
+        }
+
+    @Test
+    fun `traffic denial is terminal instead of leaving an outbox row sending`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            val dataSource = PostgresTestEnv.createDataSource(database)
+            val productPolicy =
+                TelegramTrafficPolicy.from(
+                    MapApplicationConfig("telegram.trafficPolicy" to "PRODUCT"),
+                    appEnv = "staging",
+                )
+            val repository = TelegramOutboxRepository(dataSource, productPolicy)
+            val enqueuer = TelegramOutboxEnqueuer(repository, Json { ignoreUnknownKeys = true }, productPolicy)
+            val userChatId = 915_002L
+            DriverManager.getConnection(database.jdbcUrl, database.user, database.password).use { connection ->
+                connection.prepareStatement(
+                    "INSERT INTO users (telegram_user_id, first_name) VALUES (?, 'Guest')",
+                ).use { statement ->
+                    statement.setLong(1, userChatId)
+                    statement.executeUpdate()
+                }
+            }
+            assertEquals(
+                TelegramOutboxEnqueueOutcome.ENQUEUED,
+                enqueuer.enqueueSendMessage(userChatId, "known user"),
+            )
+            val apiClient: TelegramApiClient = mockk(relaxed = true)
+            coEvery { apiClient.dispatchOutbox(userChatId, "sendMessage", any()) } returns
+                TelegramCallResult.TrafficDenied
+            val worker =
+                TelegramOutboxWorker(
+                    repository = repository,
+                    apiClientProvider = { apiClient },
+                    json = Json { ignoreUnknownKeys = true },
+                    rateLimiter = TelegramRateLimiter { },
+                    config = TelegramOutboxConfig(batchSize = 1, maxConcurrency = 1),
+                    scope = CoroutineScope(Dispatchers.IO),
+                    nowProvider = { Instant.parse("2030-01-01T00:00:00Z") },
+                )
+
+            worker.processOnce()
+
+            coVerify(exactly = 1) { apiClient.dispatchOutbox(userChatId, "sendMessage", any()) }
+            DriverManager.getConnection(database.jdbcUrl, database.user, database.password).use { connection ->
+                connection.prepareStatement(
+                    "SELECT status, last_error, next_attempt_at FROM telegram_outbox WHERE chat_id = ?",
+                ).use { statement ->
+                    statement.setLong(1, userChatId)
+                    statement.executeQuery().use { resultSet ->
+                        assertTrue(resultSet.next())
+                        assertEquals(TelegramOutboxStatus.FAILED.name, resultSet.getString("status"))
+                        assertEquals(
+                            "Telegram outbox dispatch denied by traffic policy",
+                            resultSet.getString("last_error"),
+                        )
+                        assertNull(resultSet.getTimestamp("next_attempt_at"))
+                    }
+                }
+            }
+
+            dataSource.close()
+        }
+
+    @Test
+    fun `product staff notifications require the exact venue staff chat`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            val dataSource = PostgresTestEnv.createDataSource(database)
+            val productPolicy =
+                TelegramTrafficPolicy.from(
+                    MapApplicationConfig("telegram.trafficPolicy" to "PRODUCT"),
+                    appEnv = "staging",
+                )
+            val repository = StaffChatNotificationRepository(dataSource, productPolicy)
+            val venueOneChatId = -100_920_001L
+            val venueTwoChatId = -100_920_002L
+            val venueIds = mutableListOf<Long>()
+            DriverManager.getConnection(database.jdbcUrl, database.user, database.password).use { connection ->
+                connection.prepareStatement(
+                    """
+                    INSERT INTO venues (name, status, staff_chat_id)
+                    VALUES (?, 'PUBLISHED', ?)
+                    RETURNING id
+                    """.trimIndent(),
+                ).use { statement ->
+                    listOf("One" to venueOneChatId, "Two" to venueTwoChatId).forEach { (name, chatId) ->
+                        statement.setString(1, name)
+                        statement.setLong(2, chatId)
+                        statement.executeQuery().use { resultSet ->
+                            assertTrue(resultSet.next())
+                            venueIds += resultSet.getLong("id")
+                        }
+                    }
+                }
+            }
+            val venueOneId = venueIds.first()
+            val payload = """{"chat_id":$venueOneChatId,"text":"staff"}"""
+
+            assertEquals(
+                StaffChatNotificationClaim.SKIPPED_TRAFFIC_POLICY,
+                repository.tryClaimAndEnqueue(70L, venueOneChatId, "sendMessage", payload),
+            )
+            assertEquals(
+                StaffChatNotificationClaim.SKIPPED_TRAFFIC_POLICY,
+                repository.tryClaimAndEnqueueForVenue(
+                    70L,
+                    venueOneId,
+                    venueTwoChatId,
+                    "sendMessage",
+                    payload,
+                ),
+            )
+            assertEquals(
+                StaffChatNotificationClaim.CLAIMED,
+                repository.tryClaimAndEnqueueForVenue(
+                    70L,
+                    venueOneId,
+                    venueOneChatId,
+                    "sendMessage",
+                    payload,
+                ),
+            )
+            assertFalse(repository.enqueueForVenue(venueOneId, venueTwoChatId, "sendMessage", payload))
+            assertTrue(repository.enqueueForVenue(venueOneId, venueOneChatId, "sendMessage", payload))
+
+            DriverManager.getConnection(database.jdbcUrl, database.user, database.password).use { connection ->
+                connection.prepareStatement("SELECT COUNT(*) FROM telegram_staff_chat_notifications").use { statement ->
+                    statement.executeQuery().use { resultSet ->
+                        assertTrue(resultSet.next())
+                        assertEquals(1L, resultSet.getLong(1))
+                    }
+                }
+                connection.prepareStatement("SELECT COUNT(*) FROM telegram_outbox").use { statement ->
+                    statement.executeQuery().use { resultSet ->
+                        assertTrue(resultSet.next())
+                        assertEquals(2L, resultSet.getLong(1))
+                    }
+                }
+            }
+
+            dataSource.close()
+        }
+
+    @Test
+    fun `product live order target is invalidated when a venue relinks its staff chat`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            val dataSource = PostgresTestEnv.createDataSource(database)
+            val productPolicy =
+                TelegramTrafficPolicy.from(
+                    MapApplicationConfig("telegram.trafficPolicy" to "PRODUCT"),
+                    appEnv = "staging",
+                )
+            val repository = StaffChatNotificationRepository(dataSource, productPolicy)
+            val oldChatId = -100_930_001L
+            val newChatId = -100_930_002L
+            val orderId =
+                DriverManager.getConnection(database.jdbcUrl, database.user, database.password).use { connection ->
+                    createLiveOrderFixture(connection, staffChatId = oldChatId)
+                }
+            val venueId =
+                DriverManager.getConnection(database.jdbcUrl, database.user, database.password).use { connection ->
+                    connection.prepareStatement("SELECT venue_id FROM orders WHERE id = ?").use { statement ->
+                        statement.setLong(1, orderId)
+                        statement.executeQuery().use { resultSet ->
+                            assertTrue(resultSet.next())
+                            resultSet.getLong("venue_id")
+                        }
+                    }
+                }
+            assertTrue(repository.upsertOrderMessage(orderId, venueId, oldChatId, 222L))
+            assertEquals(222L, repository.findOrderMessage(orderId)?.messageId)
+
+            DriverManager.getConnection(database.jdbcUrl, database.user, database.password).use { connection ->
+                connection.prepareStatement("UPDATE venues SET staff_chat_id = ? WHERE id = ?").use { statement ->
+                    statement.setLong(1, newChatId)
+                    statement.setLong(2, venueId)
+                    statement.executeUpdate()
+                }
+            }
+
+            assertNull(repository.findOrderMessage(orderId))
+            assertFalse(
+                repository.enqueueOrderMessage(
+                    orderId,
+                    venueId,
+                    oldChatId,
+                    "sendMessage",
+                    """{"chat_id":$oldChatId,"text":"stale"}""",
+                ),
+            )
+            assertTrue(
+                repository.enqueueOrderMessage(
+                    orderId,
+                    venueId,
+                    newChatId,
+                    "sendMessage",
+                    """{"chat_id":$newChatId,"text":"fresh"}""",
+                ),
+            )
+            val refreshed = repository.findOrderMessage(orderId)
+            assertNotNull(refreshed)
+            assertEquals(newChatId, refreshed.chatId)
+            assertNull(refreshed.messageId)
+
+            dataSource.close()
+        }
+
+    @Test
     fun `worker sends queued message`() =
         runBlocking {
             val database = PostgresTestEnv.createDatabase()
@@ -864,7 +1277,10 @@ class TelegramOutboxWorkerTest {
         const val MALFORMED_TOKEN_SENTINEL = "malformed-test-token-secret"
     }
 
-    private fun createLiveOrderFixture(connection: Connection): Long {
+    private fun createLiveOrderFixture(
+        connection: Connection,
+        staffChatId: Long = 777L,
+    ): Long {
         connection.prepareStatement(
             """
             INSERT INTO users (telegram_user_id, first_name)
@@ -876,10 +1292,11 @@ class TelegramOutboxWorkerTest {
             connection.prepareStatement(
                 """
                 INSERT INTO venues (name, status, staff_chat_id)
-                VALUES ('Venue', 'PUBLISHED', 777)
+                VALUES ('Venue', 'PUBLISHED', ?)
                 RETURNING id
                 """.trimIndent(),
             ).use { statement ->
+                statement.setLong(1, staffChatId)
                 statement.executeQuery().use { resultSet ->
                     resultSet.next()
                     resultSet.getLong("id")

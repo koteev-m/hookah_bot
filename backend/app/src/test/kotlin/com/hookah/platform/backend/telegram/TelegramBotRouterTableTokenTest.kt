@@ -59,6 +59,9 @@ import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackVenueFilter
 import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackVenueSummary
 import com.hookah.platform.backend.miniapp.guest.db.VisitRepository
 import com.hookah.platform.backend.miniapp.guest.db.VisitSource
+import com.hookah.platform.backend.miniapp.security.MiniAppAbuseConfig
+import com.hookah.platform.backend.miniapp.security.MiniAppAbuseProtection
+import com.hookah.platform.backend.miniapp.security.MiniAppRateLimitPolicy
 import com.hookah.platform.backend.miniapp.shift.ShiftExtensionDecisionResult
 import com.hookah.platform.backend.miniapp.shift.ShiftExtensionRepository
 import com.hookah.platform.backend.miniapp.shift.ShiftExtensionRequestRecord
@@ -107,6 +110,7 @@ import com.hookah.platform.backend.miniapp.venue.orders.OrderWorkflowStatus
 import com.hookah.platform.backend.miniapp.venue.orders.VenueOrdersRepository
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteAcceptResult
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteCodeResult
+import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteCreateResult
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInvitePreview
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInvitePreviewResult
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteRepository
@@ -239,6 +243,7 @@ import com.hookah.platform.backend.telegram.db.VenueSettingsRepository
 import com.hookah.platform.backend.telegram.db.VenueShort
 import com.hookah.platform.backend.telegram.db.VenueStatsReport
 import com.hookah.platform.backend.telegram.db.VenueStatsRepository
+import io.ktor.server.config.MapApplicationConfig
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.coVerifyOrder
@@ -340,9 +345,12 @@ class TelegramBotRouterTableTokenTest {
             "pgqr${platformGuestQrCallbackTagSequence.incrementAndGet().toString().padStart(8, '0')}"
         },
         venueMenuRepositoryOverride: VenueMenuRepository = venueMenuRepository,
+        trafficPolicyOverride: TelegramTrafficPolicy = TelegramTrafficPolicy.unrestricted(),
+        miniAppAbuseProtectionOverride: MiniAppAbuseProtection = MiniAppAbuseProtection(),
     ): TelegramBotRouter =
         TelegramBotRouter(
-            trafficPolicy = TelegramTrafficPolicy.unrestricted(),
+            trafficPolicy = trafficPolicyOverride,
+            miniAppAbuseProtection = miniAppAbuseProtectionOverride,
             config =
                 TelegramBotConfig(
                     enabled = true,
@@ -2893,17 +2901,20 @@ class TelegramBotRouterTableTokenTest {
                     ),
                 )
             coEvery {
-                staffInviteRepositoryForRouter.createInvite(
+                staffInviteRepositoryForRouter.createBoundedInvite(
                     venueId = 10L,
                     createdByUserId = 200L,
                     role = "STAFF",
                     ttlSeconds = any(),
+                    maxActivePendingPerVenueRole = any(),
                 )
             } returns
-                StaffInviteCodeResult(
-                    code = "ABC123",
-                    expiresAt = Instant.parse("2026-04-01T10:15:00Z"),
-                    ttlSeconds = 900L,
+                StaffInviteCreateResult.Success(
+                    StaffInviteCodeResult(
+                        code = "ABC123",
+                        expiresAt = Instant.parse("2026-04-01T10:15:00Z"),
+                        ttlSeconds = 900L,
+                    ),
                 )
 
             router.process(
@@ -2976,11 +2987,12 @@ class TelegramBotRouterTableTokenTest {
                 )
             }
             coVerify {
-                staffInviteRepositoryForRouter.createInvite(
+                staffInviteRepositoryForRouter.createBoundedInvite(
                     venueId = 10L,
                     createdByUserId = 200L,
                     role = "STAFF",
                     ttlSeconds = any(),
+                    maxActivePendingPerVenueRole = any(),
                 )
             }
         }
@@ -3007,17 +3019,20 @@ class TelegramBotRouterTableTokenTest {
                     deletedAt = null,
                 )
             coEvery {
-                staffInviteRepositoryForRouter.createInvite(
+                staffInviteRepositoryForRouter.createBoundedInvite(
                     venueId = 10L,
                     createdByUserId = 200L,
                     role = "MANAGER",
                     ttlSeconds = any(),
+                    maxActivePendingPerVenueRole = any(),
                 )
             } returns
-                StaffInviteCodeResult(
-                    code = inviteCode,
-                    expiresAt = Instant.parse("2026-04-08T10:15:00Z"),
-                    ttlSeconds = 604800L,
+                StaffInviteCreateResult.Success(
+                    StaffInviteCodeResult(
+                        code = inviteCode,
+                        expiresAt = Instant.parse("2026-04-08T10:15:00Z"),
+                        ttlSeconds = 604800L,
+                    ),
                 )
 
             inviteRouter.process(
@@ -3053,6 +3068,239 @@ class TelegramBotRouterTableTokenTest {
                     },
                 )
             }
+        }
+
+    @Test
+    fun `staff invite creation limiter blocks a repeated actor and venue before repository work`() =
+        runBlocking {
+            val abuseProtection =
+                MiniAppAbuseProtection(
+                    config =
+                        MiniAppAbuseConfig(
+                            inviteCreateGlobal =
+                                MiniAppRateLimitPolicy(100, Duration.ofMinutes(1)),
+                            inviteCreateActorVenue =
+                                MiniAppRateLimitPolicy(1, Duration.ofMinutes(1)),
+                        ),
+                    digestKey = ByteArray(32) { 8 },
+                )
+            val inviteRouter =
+                routerWithWebAppPublicUrl(
+                    webAppPublicUrl = null,
+                    miniAppAbuseProtectionOverride = abuseProtection,
+                )
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { platformVenueRepository.getVenueDetail(10L) } returns
+                PlatformVenueDetail(
+                    id = 10L,
+                    name = "Hookah Place",
+                    city = "City",
+                    address = "Address",
+                    status = VenueStatus.PUBLISHED,
+                    createdAt = Instant.parse("2026-04-01T10:00:00Z"),
+                    deletedAt = null,
+                )
+            coEvery {
+                staffInviteRepositoryForRouter.createBoundedInvite(
+                    venueId = 10L,
+                    createdByUserId = 200L,
+                    role = "STAFF",
+                    ttlSeconds = any(),
+                    maxActivePendingPerVenueRole = any(),
+                )
+            } returns
+                StaffInviteCreateResult.Success(
+                    StaffInviteCodeResult(
+                        code = "RATE234",
+                        expiresAt = Instant.parse("2026-04-08T10:15:00Z"),
+                        ttlSeconds = 604800L,
+                    ),
+                )
+
+            inviteRouter.process(
+                TelegramUpdate(
+                    updateId = 9_115,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "first-owner-invite",
+                            from = User(id = 200L),
+                            message = Message(messageId = 30, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_staff_role_select:10:staff",
+                        ),
+                ),
+            )
+            inviteRouter.process(
+                TelegramUpdate(
+                    updateId = 9_116,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "repeated-owner-invite",
+                            from = User(id = 200L),
+                            message = Message(messageId = 31, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_staff_role_select:10:manager",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 1) {
+                staffInviteRepositoryForRouter.createBoundedInvite(
+                    venueId = 10L,
+                    createdByUserId = 200L,
+                    role = "STAFF",
+                    ttlSeconds = any(),
+                    maxActivePendingPerVenueRole = any(),
+                )
+            }
+            coVerify(exactly = 1) {
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    "Слишком много попыток создания приглашения. Попробуйте позже.",
+                    any(),
+                )
+            }
+        }
+
+    @Test
+    fun `active staff invite cap returns guidance without emitting an invite token`() =
+        runBlocking {
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery {
+                staffInviteRepositoryForRouter.createBoundedInvite(
+                    venueId = 10L,
+                    createdByUserId = 200L,
+                    role = "MANAGER",
+                    ttlSeconds = any(),
+                    maxActivePendingPerVenueRole = any(),
+                )
+            } returns StaffInviteCreateResult.RateLimited(retryAfterSeconds = 60L)
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 9_117,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "owner-invite-at-cap",
+                            from = User(id = 200L),
+                            message = Message(messageId = 32, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_staff_role_select:10:manager",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 1) {
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    match {
+                        it.contains("лимит активных приглашений", ignoreCase = true) &&
+                            !it.contains("staff_invite_")
+                    },
+                    any(),
+                )
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(100L, match { it.contains("Приглашение для роли") }, any())
+            }
+        }
+
+    @Test
+    fun `allowlist denies an unlisted callback before the shared invite limiter`() =
+        runBlocking {
+            val allowlist =
+                TelegramTrafficPolicy.from(
+                    MapApplicationConfig(
+                        "telegram.trafficPolicy" to "ALLOWLIST",
+                        "telegram.allowedUserIds" to "200",
+                        "telegram.allowedChatIds" to "200",
+                    ),
+                    appEnv = "test",
+                )
+            val abuseProtection =
+                MiniAppAbuseProtection(
+                    config =
+                        MiniAppAbuseConfig(
+                            inviteCreateGlobal =
+                                MiniAppRateLimitPolicy(1, Duration.ofMinutes(1)),
+                            inviteCreateActorVenue =
+                                MiniAppRateLimitPolicy(10, Duration.ofMinutes(1)),
+                        ),
+                    digestKey = ByteArray(32) { 9 },
+                )
+            val allowlistRouter =
+                routerWithWebAppPublicUrl(
+                    webAppPublicUrl = null,
+                    trafficPolicyOverride = allowlist,
+                    miniAppAbuseProtectionOverride = abuseProtection,
+                )
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "OWNER")
+            coEvery { platformVenueRepository.getVenueDetail(10L) } returns
+                PlatformVenueDetail(
+                    id = 10L,
+                    name = "Hookah Place",
+                    city = "City",
+                    address = "Address",
+                    status = VenueStatus.PUBLISHED,
+                    createdAt = Instant.parse("2026-04-01T10:00:00Z"),
+                    deletedAt = null,
+                )
+            coEvery {
+                staffInviteRepositoryForRouter.createBoundedInvite(
+                    venueId = 10L,
+                    createdByUserId = 200L,
+                    role = "STAFF",
+                    ttlSeconds = any(),
+                    maxActivePendingPerVenueRole = any(),
+                )
+            } returns
+                StaffInviteCreateResult.Success(
+                    StaffInviteCodeResult(
+                        code = "ALLOW234",
+                        expiresAt = Instant.parse("2026-04-08T10:15:00Z"),
+                        ttlSeconds = 604800L,
+                    ),
+                )
+
+            allowlistRouter.process(
+                TelegramUpdate(
+                    updateId = 9_118,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "unlisted-owner-invite",
+                            from = User(id = 201L),
+                            message = Message(messageId = 33, chat = Chat(id = 201L, type = "private")),
+                            data = "owner_venue_staff_role_select:10:staff",
+                        ),
+                ),
+            )
+            allowlistRouter.process(
+                TelegramUpdate(
+                    updateId = 9_119,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "listed-owner-invite",
+                            from = User(id = 200L),
+                            message = Message(messageId = 34, chat = Chat(id = 200L, type = "private")),
+                            data = "owner_venue_staff_role_select:10:staff",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { idempotencyRepository.tryAcquire(9_118L, 201L, null) }
+            coVerify(exactly = 1) {
+                staffInviteRepositoryForRouter.createBoundedInvite(
+                    venueId = 10L,
+                    createdByUserId = 200L,
+                    role = "STAFF",
+                    ttlSeconds = any(),
+                    maxActivePendingPerVenueRole = any(),
+                )
+            }
+            coVerify(exactly = 0) { outboxEnqueuer.enqueueSendMessage(201L, any(), any()) }
         }
 
     @Test
@@ -3145,6 +3393,205 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
+    fun `product mode gives a brand new private identity the normal guest menu`() =
+        runBlocking {
+            val newUserId = 30_030L
+            val productRouter =
+                routerWithWebAppPublicUrl(
+                    webAppPublicUrl = null,
+                    trafficPolicyOverride = TelegramTrafficPolicy.product(),
+                )
+            coEvery { venueAccessRepository.listVenueMemberships(newUserId) } returns emptyList()
+            coEvery { venueAccessRepository.hasVenueRole(newUserId) } returns false
+
+            productRouter.process(
+                TelegramUpdate(
+                    updateId = 9_017,
+                    message =
+                        Message(
+                            messageId = 27,
+                            chat = Chat(id = newUserId, type = "private"),
+                            fromUser = User(id = newUserId),
+                            text = "/start",
+                        ),
+                ),
+            )
+
+            coVerify { userRepository.upsert(match { it.id == newUserId }) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    newUserId,
+                    "Добро пожаловать! Выберите действие.",
+                    match { it is ReplyKeyboardMarkup },
+                )
+            }
+        }
+
+    @Test
+    fun `product mode lets a brand new private identity preview an active staff invite`() =
+        runBlocking {
+            val newUserId = 30_031L
+            val inviteCode = "PILOT234"
+            val productRouter =
+                routerWithWebAppPublicUrl(
+                    webAppPublicUrl = null,
+                    trafficPolicyOverride = TelegramTrafficPolicy.product(),
+                )
+            coEvery { staffInviteRepositoryForRouter.previewInvite(inviteCode) } returns
+                StaffInvitePreviewResult.Success(
+                    StaffInvitePreview(
+                        venueId = 10L,
+                        role = "MANAGER",
+                        createdByUserId = 200L,
+                        expiresAt = Instant.parse("2026-09-01T10:15:00Z"),
+                    ),
+                )
+            coEvery { platformVenueRepository.getVenueDetail(10L) } returns
+                PlatformVenueDetail(
+                    id = 10L,
+                    name = "Hookah Place",
+                    city = "City",
+                    address = "Address",
+                    status = VenueStatus.PUBLISHED,
+                    createdAt = Instant.parse("2026-08-29T10:00:00Z"),
+                    deletedAt = null,
+                )
+
+            productRouter.process(
+                TelegramUpdate(
+                    updateId = 9_018,
+                    message =
+                        Message(
+                            messageId = 28,
+                            chat = Chat(id = newUserId, type = "private"),
+                            fromUser = User(id = newUserId),
+                            text = "/start staff_invite_$inviteCode",
+                        ),
+                ),
+            )
+
+            coVerify { staffInviteRepositoryForRouter.previewInvite(inviteCode) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    newUserId,
+                    match { it.contains("Роль: Manager") },
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.any { it.callbackData == "staff_invite_accept:$inviteCode" } &&
+                            buttons.any { it.callbackData == "staff_invite_decline:$inviteCode" }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `product mode rejects a staff callback copied into another group before idempotency`() =
+        runBlocking {
+            val productRouter =
+                routerWithWebAppPublicUrl(
+                    webAppPublicUrl = null,
+                    trafficPolicyOverride = TelegramTrafficPolicy.product(),
+                )
+            coEvery { venueRepository.findVenueByStaffChatId(-700L) } returns
+                VenueShort(id = 11L, name = "Other venue", staffChatId = -700L)
+
+            productRouter.process(
+                TelegramUpdate(
+                    updateId = 9_019,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "copied-staff-callback",
+                            from = User(id = 30_032L),
+                            message = Message(messageId = 29, chat = Chat(id = -700L, type = "supergroup")),
+                            data = "sc_ob_a:10:57",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { idempotencyRepository.tryAcquire(9_019L, -700L, null) }
+            coVerify(exactly = 0) { venueAccessRepository.findVenueMembership(any(), any()) }
+            coVerify(exactly = 0) { venueOrdersRepository.updateBatchStatus(any(), any(), any(), any(), any()) }
+        }
+
+    @Test
+    fun `product mode callback answer is enqueued only with exact venue group authority`() =
+        runBlocking {
+            val productRouter =
+                routerWithWebAppPublicUrl(
+                    webAppPublicUrl = null,
+                    trafficPolicyOverride = TelegramTrafficPolicy.product(),
+                )
+            coEvery { venueRepository.findVenueByStaffChatId(-777L) } returns
+                VenueShort(id = 10L, name = "Mix", staffChatId = -777L)
+            coEvery { venueAccessRepository.findVenueMembership(200L, 10L) } returns
+                VenueAccessRepository.VenueMembership(venueId = 10L, role = "MANAGER")
+            coEvery { guestBookingRepository.findByVenue(bookingId = 77L, venueId = 10L) } returns
+                BookingRecord(
+                    id = 77L,
+                    venueId = 10L,
+                    userId = 555L,
+                    scheduledAt = Instant.parse("2026-04-03T18:00:00Z"),
+                    partySize = 3,
+                    comment = null,
+                    status = BookingStatus.CONFIRMED,
+                    displayNumber = 7,
+                    displayDate = LocalDate.parse("2026-04-03"),
+                    guestDisplayName = "Максим",
+                )
+            coEvery {
+                guestBookingRepository.markSeated(venueId = 10L, bookingId = 77L, actorUserId = 200L)
+            } returns
+                BookingRecord(
+                    id = 77L,
+                    venueId = 10L,
+                    userId = 555L,
+                    scheduledAt = Instant.parse("2026-04-03T18:00:00Z"),
+                    partySize = 3,
+                    comment = null,
+                    status = BookingStatus.SEATED,
+                    displayNumber = 7,
+                    displayDate = LocalDate.parse("2026-04-03"),
+                    seatedAt = Instant.parse("2026-04-03T18:10:00Z"),
+                    guestDisplayName = "Максим",
+                )
+
+            productRouter.process(
+                TelegramUpdate(
+                    updateId = 9_020,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "product-group-callback",
+                            from = User(id = 200L),
+                            message = Message(messageId = 30L, chat = Chat(id = -777L, type = "supergroup")),
+                            data = "staff_booking_seated_yes:10:77",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueVenueEditMessageText(
+                    venueId = 10L,
+                    chatId = -777L,
+                    messageId = 30L,
+                    text = any(),
+                    replyMarkup = null,
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueVenueAnswerCallbackQuery(
+                    venueId = 10L,
+                    chatId = -777L,
+                    callbackQueryId = "product-group-callback",
+                    text = "Гость отмечен",
+                    showAlert = false,
+                )
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(-777L, "product-group-callback", any(), any())
+            }
+        }
+
+    @Test
     fun `manager cannot create manager invite by direct callback`() =
         runBlocking {
             coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
@@ -3171,7 +3618,9 @@ class TelegramBotRouterTableTokenTest {
                     any(),
                 )
             }
-            coVerify(exactly = 0) { staffInviteRepositoryForRouter.createInvite(any(), any(), any(), any()) }
+            coVerify(exactly = 0) {
+                staffInviteRepositoryForRouter.createBoundedInvite(any(), any(), any(), any(), any())
+            }
         }
 
     @Test
@@ -3196,7 +3645,9 @@ class TelegramBotRouterTableTokenTest {
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(100, "Нет доступа к заведению.", any())
             }
-            coVerify(exactly = 0) { staffInviteRepositoryForRouter.createInvite(any(), any(), any(), any()) }
+            coVerify(exactly = 0) {
+                staffInviteRepositoryForRouter.createBoundedInvite(any(), any(), any(), any(), any())
+            }
         }
 
     @Test
@@ -16493,7 +16944,7 @@ class TelegramBotRouterTableTokenTest {
                     now = any(),
                 )
             }
-            coVerify(exactly = 0) { outboxEnqueuer.enqueueSendMessage(-777L, any(), any()) }
+            coVerify(exactly = 0) { outboxEnqueuer.enqueueVenueSendMessage(10L, -777L, any(), any()) }
             coVerify { dialogStateRepository.clear(200L) }
             coVerify { outboxEnqueuer.enqueueSendMessage(200L, "✅ Ответ отправлен заведению.", any()) }
         }
@@ -17754,7 +18205,8 @@ class TelegramBotRouterTableTokenTest {
                 outboxEnqueuer.enqueueSendMessage(555L, any(), any())
             }
             coVerify {
-                outboxEnqueuer.enqueueEditMessageText(
+                outboxEnqueuer.enqueueVenueEditMessageText(
+                    10L,
                     -777,
                     20_002_34,
                     match {
@@ -17824,7 +18276,8 @@ class TelegramBotRouterTableTokenTest {
             )
 
             coVerify {
-                outboxEnqueuer.enqueueEditMessageText(
+                outboxEnqueuer.enqueueVenueEditMessageText(
+                    10L,
                     -777,
                     20_002_35,
                     match {
@@ -18169,7 +18622,8 @@ class TelegramBotRouterTableTokenTest {
             }
 
             coVerify(exactly = 1) {
-                outboxEnqueuer.enqueueSendMessage(
+                outboxEnqueuer.enqueueVenueSendMessage(
+                    10L,
                     900L,
                     match { text ->
                         text.contains("✅ Гость подтвердил визит") &&
@@ -18363,7 +18817,7 @@ class TelegramBotRouterTableTokenTest {
                 ),
             )
 
-            coVerify(exactly = 0) { outboxEnqueuer.enqueueSendMessage(-777L, any(), any()) }
+            coVerify(exactly = 0) { outboxEnqueuer.enqueueVenueSendMessage(10L, -777L, any(), any()) }
             coVerify {
                 supportThreadRepository.addBookingMessage(
                     bookingId = 77L,
@@ -18756,7 +19210,8 @@ class TelegramBotRouterTableTokenTest {
                 )
             }
             coVerify {
-                outboxEnqueuer.enqueueEditMessageText(
+                outboxEnqueuer.enqueueVenueEditMessageText(
+                    10L,
                     -777,
                     20_002_44,
                     match {
@@ -32470,7 +32925,8 @@ class TelegramBotRouterTableTokenTest {
                 )
             }
             coVerify {
-                outboxEnqueuer.enqueueEditMessageText(
+                outboxEnqueuer.enqueueVenueEditMessageText(
+                    10L,
                     -777L,
                     77L,
                     match { text ->
@@ -32551,7 +33007,8 @@ class TelegramBotRouterTableTokenTest {
                 )
             }
             coVerify {
-                outboxEnqueuer.enqueueEditMessageText(
+                outboxEnqueuer.enqueueVenueEditMessageText(
+                    10L,
                     -777L,
                     77L,
                     match { text ->
@@ -32622,7 +33079,8 @@ class TelegramBotRouterTableTokenTest {
             )
 
             coVerify {
-                outboxEnqueuer.enqueueEditMessageText(
+                outboxEnqueuer.enqueueVenueEditMessageText(
+                    10L,
                     -777L,
                     78L,
                     match { text ->
@@ -32688,7 +33146,8 @@ class TelegramBotRouterTableTokenTest {
             )
 
             coVerify {
-                outboxEnqueuer.enqueueEditMessageText(
+                outboxEnqueuer.enqueueVenueEditMessageText(
+                    10L,
                     -777L,
                     78L,
                     match { text ->
@@ -32750,7 +33209,8 @@ class TelegramBotRouterTableTokenTest {
             )
 
             coVerify {
-                outboxEnqueuer.enqueueEditMessageText(
+                outboxEnqueuer.enqueueVenueEditMessageText(
+                    10L,
                     -777L,
                     78L,
                     match { text ->
@@ -32817,7 +33277,8 @@ class TelegramBotRouterTableTokenTest {
             )
 
             coVerify {
-                outboxEnqueuer.enqueueEditMessageText(
+                outboxEnqueuer.enqueueVenueEditMessageText(
+                    10L,
                     -777L,
                     78L,
                     match { text ->
@@ -32872,7 +33333,8 @@ class TelegramBotRouterTableTokenTest {
                 venueOrdersRepository.updateOrderStatus(any(), any(), any(), any())
             }
             coVerify {
-                outboxEnqueuer.enqueueEditMessageText(
+                outboxEnqueuer.enqueueVenueEditMessageText(
+                    10L,
                     -777L,
                     77L,
                     "🆕 Новый заказ №12\n\n✅ Доставлено: Анна",
@@ -32913,7 +33375,8 @@ class TelegramBotRouterTableTokenTest {
             )
 
             coVerify {
-                outboxEnqueuer.enqueueEditMessageText(
+                outboxEnqueuer.enqueueVenueEditMessageText(
+                    10L,
                     -777L,
                     77L,
                     "🆕 Новый заказ №12\n\n✅ Доставлено: Анна",
@@ -33011,7 +33474,8 @@ class TelegramBotRouterTableTokenTest {
                 )
             }
             coVerify {
-                outboxEnqueuer.enqueueEditMessageText(
+                outboxEnqueuer.enqueueVenueEditMessageText(
+                    10L,
                     -777L,
                     77L,
                     match { text ->
@@ -33102,7 +33566,8 @@ class TelegramBotRouterTableTokenTest {
                 )
             }
             coVerify {
-                outboxEnqueuer.enqueueEditMessageText(
+                outboxEnqueuer.enqueueVenueEditMessageText(
+                    10L,
                     -777L,
                     78L,
                     match { text ->
@@ -33219,7 +33684,8 @@ class TelegramBotRouterTableTokenTest {
             )
 
             coVerify {
-                outboxEnqueuer.enqueueEditMessageText(
+                outboxEnqueuer.enqueueVenueEditMessageText(
+                    10L,
                     -777L,
                     77L,
                     match { text ->
@@ -33280,7 +33746,8 @@ class TelegramBotRouterTableTokenTest {
             )
 
             coVerify {
-                outboxEnqueuer.enqueueEditMessageText(
+                outboxEnqueuer.enqueueVenueEditMessageText(
+                    10L,
                     -777L,
                     77L,
                     match { text ->
@@ -33370,7 +33837,8 @@ class TelegramBotRouterTableTokenTest {
                 outboxEnqueuer.enqueueAnswerCallbackQuery(-777L, "cb-order-stale", "Уже обработано", false)
             }
             coVerify {
-                outboxEnqueuer.enqueueEditMessageText(
+                outboxEnqueuer.enqueueVenueEditMessageText(
+                    10L,
                     -777L,
                     77L,
                     match { text ->
@@ -33409,7 +33877,8 @@ class TelegramBotRouterTableTokenTest {
             )
 
             coVerify {
-                outboxEnqueuer.enqueueEditMessageText(
+                outboxEnqueuer.enqueueVenueEditMessageText(
+                    10L,
                     -777L,
                     77L,
                     match { text ->
@@ -33467,7 +33936,7 @@ class TelegramBotRouterTableTokenTest {
                 )
             }
             coVerify(exactly = 0) {
-                outboxEnqueuer.enqueueEditMessageText(-777L, 77L, any(), any())
+                outboxEnqueuer.enqueueVenueEditMessageText(10L, -777L, 77L, any(), any())
             }
             coVerify {
                 outboxEnqueuer.enqueueAnswerCallbackQuery(-777L, "cb-order-refresh-activity", "Обновлено", false)
@@ -33534,7 +34003,7 @@ class TelegramBotRouterTableTokenTest {
                 )
             }
             coVerify(exactly = 0) {
-                outboxEnqueuer.enqueueEditMessageText(-777L, 77L, any(), any())
+                outboxEnqueuer.enqueueVenueEditMessageText(10L, -777L, 77L, any(), any())
             }
             coVerify {
                 outboxEnqueuer.enqueueAnswerCallbackQuery(-777L, "cb-order-accept-activity", "Готово", false)
@@ -33593,7 +34062,8 @@ class TelegramBotRouterTableTokenTest {
                 )
             }
             coVerify {
-                outboxEnqueuer.enqueueEditMessageText(
+                outboxEnqueuer.enqueueVenueEditMessageText(
+                    10L,
                     -777L,
                     77L,
                     match { text ->
@@ -33672,7 +34142,8 @@ class TelegramBotRouterTableTokenTest {
                 )
             }
             coVerify {
-                outboxEnqueuer.enqueueEditMessageText(
+                outboxEnqueuer.enqueueVenueEditMessageText(
+                    10L,
                     -777L,
                     77L,
                     match { text ->
@@ -33749,7 +34220,8 @@ class TelegramBotRouterTableTokenTest {
                 )
             }
             coVerify {
-                outboxEnqueuer.enqueueEditMessageText(
+                outboxEnqueuer.enqueueVenueEditMessageText(
+                    10L,
                     -777L,
                     77L,
                     match { text ->
@@ -33902,7 +34374,8 @@ class TelegramBotRouterTableTokenTest {
             )
 
             coVerify {
-                outboxEnqueuer.enqueueEditMessageText(
+                outboxEnqueuer.enqueueVenueEditMessageText(
+                    10L,
                     -777L,
                     88L,
                     match { text ->
@@ -33918,7 +34391,8 @@ class TelegramBotRouterTableTokenTest {
                 )
             }
             coVerify {
-                outboxEnqueuer.enqueueEditMessageText(
+                outboxEnqueuer.enqueueVenueEditMessageText(
+                    10L,
                     -777L,
                     88L,
                     match { text ->
@@ -34013,7 +34487,8 @@ class TelegramBotRouterTableTokenTest {
                 )
             }
             coVerify(exactly = 0) {
-                outboxEnqueuer.enqueueEditMessageText(
+                outboxEnqueuer.enqueueVenueEditMessageText(
+                    10L,
                     -777L,
                     88L,
                     match { it.contains("🛎 Вызов персонала") },
@@ -34821,7 +35296,8 @@ class TelegramBotRouterTableTokenTest {
                 )
             }
             coVerify {
-                outboxEnqueuer.enqueueSendMessage(
+                outboxEnqueuer.enqueueVenueSendMessage(
+                    10L,
                     -777L,
                     match { text ->
                         text.contains("Заказ №12") &&
@@ -34879,7 +35355,8 @@ class TelegramBotRouterTableTokenTest {
                 )
             }
             coVerify {
-                outboxEnqueuer.enqueueSendMessage(
+                outboxEnqueuer.enqueueVenueSendMessage(
+                    10L,
                     -777L,
                     match { text ->
                         text.contains("Заказ №12") &&
@@ -34941,7 +35418,8 @@ class TelegramBotRouterTableTokenTest {
                 )
             }
             coVerify {
-                outboxEnqueuer.enqueueSendMessage(
+                outboxEnqueuer.enqueueVenueSendMessage(
+                    10L,
                     -777L,
                     match { text ->
                         text.contains("Заказ №12") &&

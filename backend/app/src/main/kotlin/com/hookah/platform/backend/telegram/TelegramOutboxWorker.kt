@@ -29,6 +29,7 @@ class TelegramOutboxWorker(
     private val scope: CoroutineScope,
     private val nowProvider: () -> Instant = Instant::now,
     private val metrics: AppMetrics? = null,
+    private val recipientLocks: TelegramRecipientLockRegistry = TelegramRecipientLockRegistry(),
 ) {
     private val logger = LoggerFactory.getLogger(TelegramOutboxWorker::class.java)
 
@@ -65,7 +66,9 @@ class TelegramOutboxWorker(
 
         for (message in batch) {
             try {
-                processMessage(message)
+                recipientLocks.withRecipientLock(message.chatId) {
+                    processMessage(message)
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
@@ -89,6 +92,10 @@ class TelegramOutboxWorker(
         if (message.method == "sendMessage") {
             rateLimiter.awaitPermit(message.chatId)
         }
+        if (!repository.isRecipientAuthorized(message.chatId, message.staffLiveOrderId)) {
+            rejectLocalValidation(message, LocalValidationFailure.RECIPIENT_NOT_AUTHORIZED)
+            return
+        }
 
         val result =
             try {
@@ -109,7 +116,7 @@ class TelegramOutboxWorker(
                     handleFailure(message, result)
                 }
             TelegramCallResult.TrafficDenied ->
-                logger.warn("Telegram outbox dispatch denied by traffic policy")
+                rejectLocalValidation(message, LocalValidationFailure.TRAFFIC_POLICY_DENIED)
         }
     }
 
@@ -335,5 +342,7 @@ class TelegramOutboxWorker(
     ) {
         MALFORMED_JSON("Invalid Telegram outbox payload"),
         INVALID_ENVELOPE("Telegram outbox envelope rejected locally"),
+        RECIPIENT_NOT_AUTHORIZED("Telegram outbox recipient no longer authorized"),
+        TRAFFIC_POLICY_DENIED("Telegram outbox dispatch denied by traffic policy"),
     }
 }

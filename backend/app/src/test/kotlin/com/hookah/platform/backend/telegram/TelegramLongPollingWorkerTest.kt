@@ -39,7 +39,7 @@ class TelegramLongPollingWorkerTest {
         }
 
     @Test
-    fun `router failure still advances offset and later updates continue`() =
+    fun `router failure preserves offset and defers later updates for retry`() =
         runBlocking {
             val processed = mutableListOf<Long>()
             val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -58,13 +58,14 @@ class TelegramLongPollingWorkerTest {
 
             worker.processBatch(
                 listOf(
+                    privateUpdate(updateId = 19, userId = 101),
                     privateUpdate(updateId = 20, userId = 101),
                     privateUpdate(updateId = 21, userId = 101),
                 ),
             )
 
-            assertEquals(listOf(20L, 21L), processed)
-            assertEquals(22L, worker.currentOffset())
+            assertEquals(listOf(19L, 20L), processed)
+            assertEquals(20L, worker.currentOffset())
             scope.cancel()
         }
 

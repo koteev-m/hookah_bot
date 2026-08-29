@@ -13,7 +13,7 @@ import kotlin.test.assertTrue
 
 class TelegramTrafficPolicyConfigTest {
     @Test
-    fun `staging requires explicit allowlist with both lists`() {
+    fun `staging requires explicit allowlist or product policy`() {
         val missing =
             assertFailsWith<IllegalStateException> {
                 TelegramTrafficPolicy.from(MapApplicationConfig(), "staging")
@@ -38,6 +38,54 @@ class TelegramTrafficPolicyConfigTest {
                 "staging",
             )
         }
+    }
+
+    @Test
+    fun `staging product policy is explicit and needs no static identities`() {
+        val policy =
+            TelegramTrafficPolicy.from(
+                MapApplicationConfig("telegram.trafficPolicy" to " product "),
+                " STAGING ",
+            )
+
+        assertTrue(policy.productMode)
+        assertTrue(policy.allowsMiniAppUser(712345678901234567))
+        assertTrue(policy.allowsOutboundChat(-1002222222222))
+        assertTrue(policy.outboundClaimScope.productAuthoritative)
+        assertFalse(policy.outboundClaimScope.unrestricted)
+    }
+
+    @Test
+    fun `product rejects nonempty static identity configuration without echoing values`() {
+        listOf(
+            "telegram.allowedUserIds" to SENSITIVE_USER_ID,
+            "telegram.allowedChatIds" to SENSITIVE_GROUP_ID,
+        ).forEach { (key, value) ->
+            val error =
+                assertFailsWith<IllegalStateException> {
+                    TelegramTrafficPolicy.from(
+                        MapApplicationConfig(
+                            "telegram.trafficPolicy" to "PRODUCT",
+                            key to value,
+                        ),
+                        "staging",
+                    )
+                }
+
+            assertContains(error.message.orEmpty(), key)
+            assertFalse(error.message.orEmpty().contains(value))
+        }
+
+        val blankLists =
+            TelegramTrafficPolicy.from(
+                MapApplicationConfig(
+                    "telegram.trafficPolicy" to "PRODUCT",
+                    "telegram.allowedUserIds" to " ",
+                    "telegram.allowedChatIds" to "",
+                ),
+                "staging",
+            )
+        assertTrue(blankLists.productMode)
     }
 
     @Test

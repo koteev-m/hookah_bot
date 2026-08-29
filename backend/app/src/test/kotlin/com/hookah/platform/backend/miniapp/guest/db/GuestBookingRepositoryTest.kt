@@ -206,6 +206,14 @@ class GuestBookingRepositoryTest {
             val expired =
                 repository.create(fixture.venueId, fixture.userId, Instant.now().minus(Duration.ofHours(2)), 2, null)
 
+            assertEquals(
+                BookingStatus.CONFIRMED,
+                repository.updateByVenue(seated.id, fixture.venueId, BookingStatus.CONFIRMED)?.status,
+            )
+            assertEquals(
+                BookingStatus.CONFIRMED,
+                repository.updateByVenue(noShow.id, fixture.venueId, BookingStatus.CONFIRMED)?.status,
+            )
             val seatedResult = repository.markSeated(fixture.venueId, seated.id, actorUserId = 900L)
             val noShowResult = repository.markNoShow(fixture.venueId, noShow.id, actorUserId = 900L)
             val expiredCount = repository.expireOverdue(now = Instant.now())
@@ -250,6 +258,14 @@ class GuestBookingRepositoryTest {
             assertEquals(
                 BookingStatus.CANCELED,
                 repository.updateByVenue(canceled.id, fixture.venueId, BookingStatus.CANCELED)?.status,
+            )
+            assertEquals(
+                BookingStatus.CONFIRMED,
+                repository.updateByVenue(seated.id, fixture.venueId, BookingStatus.CONFIRMED)?.status,
+            )
+            assertEquals(
+                BookingStatus.CONFIRMED,
+                repository.updateByVenue(noShow.id, fixture.venueId, BookingStatus.CONFIRMED)?.status,
             )
             assertEquals(BookingStatus.SEATED, repository.markSeated(fixture.venueId, seated.id)?.status)
             assertEquals(BookingStatus.NO_SHOW, repository.markNoShow(fixture.venueId, noShow.id)?.status)
@@ -338,6 +354,10 @@ class GuestBookingRepositoryTest {
                     comment = null,
                 )
 
+            assertEquals(
+                BookingStatus.CONFIRMED,
+                repository.updateByVenue(booking.id, fixture.venueId, BookingStatus.CONFIRMED)?.status,
+            )
             assertNotNull(repository.markSeated(fixture.venueId, booking.id, actorUserId = 900L))
 
             assertNull(repository.markNoShow(fixture.venueId, booking.id, actorUserId = 900L))

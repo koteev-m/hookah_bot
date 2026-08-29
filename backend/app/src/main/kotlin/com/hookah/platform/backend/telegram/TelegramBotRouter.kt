@@ -47,6 +47,8 @@ import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackVenueSummary
 import com.hookah.platform.backend.miniapp.guest.db.VisitRepository
 import com.hookah.platform.backend.miniapp.guest.db.attendanceScheduleVersionEpochSeconds
 import com.hookah.platform.backend.miniapp.guest.requireConfirmedPlatformGuestMutation
+import com.hookah.platform.backend.miniapp.security.MiniAppAbuseProtection
+import com.hookah.platform.backend.miniapp.security.MiniAppRateLimitDecision
 import com.hookah.platform.backend.miniapp.shift.CreateShiftExtensionRequestCommand
 import com.hookah.platform.backend.miniapp.shift.ShiftExtensionRepository
 import com.hookah.platform.backend.miniapp.shift.ShiftExtensionRequestRecord
@@ -89,6 +91,7 @@ import com.hookah.platform.backend.miniapp.venue.orders.VenueOrdersRepository
 import com.hookah.platform.backend.miniapp.venue.orders.toOrderBillSnapshot
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteAcceptResult
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteConfig
+import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteCreateResult
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteDeclineResult
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInvitePreviewResult
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteRepository
@@ -270,7 +273,7 @@ private fun newPlatformGuestQrCallbackTag(): String =
         .also(platformGuestQrCallbackRandom::nextBytes)
         .let { Base64.getUrlEncoder().withoutPadding().encodeToString(it) }
 
-class TelegramBotRouter(
+class TelegramBotRouter internal constructor(
     private val config: TelegramBotConfig,
     private val apiClient: TelegramApiClient,
     private val outboxEnqueuer: TelegramOutboxEnqueuer,
@@ -348,6 +351,9 @@ class TelegramBotRouter(
     private val platformGuestQrNowProvider: () -> Instant = Instant::now,
     private val platformGuestQrCallbackTagFactory: () -> String = ::newPlatformGuestQrCallbackTag,
     private val trafficPolicy: TelegramTrafficPolicy,
+    private val productAbuseLimiter: TelegramProductAbuseLimiter = TelegramProductAbuseLimiter(),
+    private val miniAppAbuseProtection: MiniAppAbuseProtection = MiniAppAbuseProtection(),
+    private val recipientLocks: TelegramRecipientLockRegistry = TelegramRecipientLockRegistry(),
 ) {
     private val logger = LoggerFactory.getLogger(TelegramBotRouter::class.java)
     private val aiTelegramHandler =
@@ -390,6 +396,7 @@ class TelegramBotRouter(
     private val botBookingPendingConfirmations = ConcurrentHashMap<Long, BotBookingDraft>()
     private val botBookingEditContexts = ConcurrentHashMap<Long, BotBookingEditContext>()
     private val botBookingScreenMessageIds = ConcurrentHashMap<BotBookingScreenKey, Long>()
+    private val productCallbackVenueIds = ConcurrentHashMap<String, Long>()
     private val platformGuestQrPendingStore = PlatformGuestQrPendingConfirmationStore()
     private val venueBookingCancelReasonDrafts = ConcurrentHashMap<Long, VenueBookingCancelReasonDraft>()
     private val botVenuePreviewContexts = ConcurrentHashMap<Long, BotVenuePreviewContext>()
@@ -835,6 +842,22 @@ class TelegramBotRouter(
                 return
             }
         }
+        if (trafficPolicy.productMode) {
+            when (val decision = productAbuseLimiter.evaluate(update)) {
+                TelegramProductAbuseLimiter.Decision.Allowed -> Unit
+                is TelegramProductAbuseLimiter.Decision.Denied -> {
+                    logger.info(
+                        "Telegram inbound update denied source=router reason=RATE_LIMIT_{}",
+                        decision.category.name,
+                    )
+                    return
+                }
+            }
+            if (!isProductInboundAuthorized(update)) {
+                logger.info("Telegram inbound update denied source=router reason=PRODUCT_AUTHORITY_REQUIRED")
+                return
+            }
+        }
         val chatId = update.message?.chat?.id ?: update.callbackQuery?.message?.chat?.id
         val messageId = update.message?.messageId
         val acquired =
@@ -855,6 +878,80 @@ class TelegramBotRouter(
             update.callbackQuery != null -> handleCallback(update.callbackQuery)
             else -> logger.debug("Ignored update without message or callback")
         }
+    }
+
+    private suspend fun isProductInboundAuthorized(update: TelegramUpdate): Boolean {
+        val message = update.message
+        val callback = update.callbackQuery
+        val chat = message?.chat ?: callback?.message?.chat ?: return false
+        if (chat.type == "private") return true
+        if (!isGroupChat(chat.type)) return false
+
+        if (message != null) {
+            val actorId = message.fromUser?.id ?: return false
+            val command = parseCommand(message.text)
+            if (command?.name == "/link") return true
+            val venue = venueRepository.findVenueByStaffChatId(chat.id) ?: return false
+            return when (command?.name) {
+                "/unlink" -> venueAccessRepository.hasVenueOwner(actorId, venue.id)
+                "/link_test" -> venueAccessRepository.hasVenueAdminOrOwner(actorId, venue.id)
+                else -> false
+            }
+        }
+
+        val actorId = callback?.from?.id ?: return false
+        val venueId =
+            productStaffChatCallbackVenueId(callback.data)
+                ?: productFeedbackCallbackVenueId(callback.data)
+                ?: return false
+        val linkedVenue = venueRepository.findVenueByStaffChatId(chat.id) ?: return false
+        if (linkedVenue.id != venueId) return false
+        return venueAccessRepository.findVenueMembership(actorId, venueId) != null
+    }
+
+    private suspend fun productFeedbackCallbackVenueId(data: String?): Long? {
+        val feedbackId =
+            data
+                ?.takeIf { it.startsWith("fb_reply:") }
+                ?.removePrefix("fb_reply:")
+                ?.toLongOrNull()
+                ?.takeIf { it > 0 }
+                ?: return null
+        return visitFeedbackRepository.findFeedbackThread(feedbackId)?.venueId
+    }
+
+    private fun productStaffChatCallbackVenueId(data: String?): Long? {
+        val value = data ?: return null
+        val decimalPrefixes =
+            listOf(
+                "staff_booking_confirm:",
+                "staff_booking_message:",
+                "staff_booking_seated_ask:",
+                "staff_booking_noshow_ask:",
+                "staff_booking_seated_yes:",
+                "staff_booking_noshow_yes:",
+                "staff_booking_cancel_ask:",
+                "staff_booking_cancel_back:",
+                "staff_booking_cancel_yes:",
+                "sbc_r:",
+                "sbc_y:",
+                "sc_ob_a:",
+                "sc_ob_d:",
+                "sc_se_a:",
+                "sc_se_r:",
+                "sc_call_ack:",
+                "sc_call_done:",
+            )
+        decimalPrefixes.firstOrNull(value::startsWith)?.let { prefix ->
+            return value.removePrefix(prefix).substringBefore(':').toLongOrNull()?.takeIf { it > 0 }
+        }
+        val compactPrefixes = listOf("sc_oc_ask:", "sc_oc_back:", "sc_oc_yes:", "sc_or:")
+        compactPrefixes.firstOrNull(value::startsWith)?.let { prefix ->
+            return runCatching {
+                java.lang.Long.parseLong(value.removePrefix(prefix).substringBefore(':'), 36)
+            }.getOrNull()?.takeIf { it > 0 }
+        }
+        return null
     }
 
     private suspend fun handleMessage(message: Message) {
@@ -1320,6 +1417,27 @@ class TelegramBotRouter(
     }
 
     private suspend fun handleCallback(callbackQuery: CallbackQuery) {
+        val chat = callbackQuery.message?.chat
+        val venueId =
+            if (trafficPolicy.productMode && chat != null && isGroupChat(chat.type)) {
+                productStaffChatCallbackVenueId(callbackQuery.data)
+                    ?: productFeedbackCallbackVenueId(callbackQuery.data)
+            } else {
+                null
+            }
+        if (venueId == null) {
+            handleCallbackWithAuthority(callbackQuery)
+            return
+        }
+        productCallbackVenueIds[callbackQuery.id] = venueId
+        try {
+            handleCallbackWithAuthority(callbackQuery)
+        } finally {
+            productCallbackVenueIds.remove(callbackQuery.id, venueId)
+        }
+    }
+
+    private suspend fun handleCallbackWithAuthority(callbackQuery: CallbackQuery) {
         val chatId = callbackQuery.message?.chat?.id
         if (chatId == null) {
             enqueueCallbackAnswer(null, callbackQuery.id)
@@ -4789,9 +4907,9 @@ class TelegramBotRouter(
                 canMarkVisit = true,
             )
         if (sourceMessageId != null) {
-            enqueueEditMessage(chatId, sourceMessageId, text, replyMarkup)
+            enqueueVenueEditMessage(venueId, chatId, sourceMessageId, text, replyMarkup)
         } else {
-            enqueueMessage(chatId, text, replyMarkup)
+            enqueueVenueMessage(venueId, chatId, text, replyMarkup)
         }
         answerBookingCallbackOrMessage(
             chatId = chatId,
@@ -4956,9 +5074,9 @@ class TelegramBotRouter(
                 status = replyStatus,
             )
         if (sourceMessageId != null) {
-            enqueueEditMessage(chatId, sourceMessageId, text, replyMarkup)
+            enqueueVenueEditMessage(displayBooking.venueId, chatId, sourceMessageId, text, replyMarkup)
         } else {
-            enqueueMessage(chatId, text, replyMarkup)
+            enqueueVenueMessage(displayBooking.venueId, chatId, text, replyMarkup)
         }
         answerBookingCallbackOrMessage(
             chatId = chatId,
@@ -4996,9 +5114,9 @@ class TelegramBotRouter(
                 displayBooking.id,
             )
         if (sourceMessageId != null) {
-            enqueueEditMessage(chatId, sourceMessageId, text, replyMarkup)
+            enqueueVenueEditMessage(displayBooking.venueId, chatId, sourceMessageId, text, replyMarkup)
         } else {
-            enqueueMessage(chatId, text, replyMarkup)
+            enqueueVenueMessage(displayBooking.venueId, chatId, text, replyMarkup)
         }
         answerBookingCallbackOrMessage(
             chatId = chatId,
@@ -5173,9 +5291,9 @@ class TelegramBotRouter(
                 reasonToken = reasonToken,
             )
         if (sourceMessageId != null) {
-            enqueueEditMessage(chatId, sourceMessageId, text, replyMarkup)
+            enqueueVenueEditMessage(booking.venueId, chatId, sourceMessageId, text, replyMarkup)
         } else {
-            enqueueMessage(chatId, text, replyMarkup)
+            enqueueVenueMessage(booking.venueId, chatId, text, replyMarkup)
         }
         answerBookingCallbackOrMessage(
             chatId = chatId,
@@ -5206,14 +5324,16 @@ class TelegramBotRouter(
         val replyMarkup =
             venueStaffBookingActionsForRole(role, displayBooking)
         if (sourceMessageId != null) {
-            enqueueEditMessage(
+            enqueueVenueEditMessage(
+                displayBooking.venueId,
                 chatId,
                 sourceMessageId,
                 buildVenueStaffBookingText(displayBooking, zoneId = resolveVenueZoneId(displayBooking.venueId)),
                 replyMarkup,
             )
         } else {
-            enqueueMessage(
+            enqueueVenueMessage(
+                displayBooking.venueId,
                 chatId,
                 buildVenueStaffBookingText(displayBooking, zoneId = resolveVenueZoneId(displayBooking.venueId)),
                 replyMarkup,
@@ -5333,16 +5453,22 @@ class TelegramBotRouter(
                 zoneId = resolveVenueZoneId(booking.venueId),
             )
         if (sourceMessageId != null) {
-            enqueueEditMessage(chatId, sourceMessageId, text, null)
+            enqueueVenueEditMessage(booking.venueId, chatId, sourceMessageId, text, null)
         } else {
-            enqueueMessage(chatId, text)
+            enqueueVenueMessage(booking.venueId, chatId, text)
         }
         if (
             reasonDraft?.sourceChatId != null &&
             reasonDraft.sourceMessageId != null &&
             reasonDraft.sourceChatId != chatId
         ) {
-            enqueueEditMessage(reasonDraft.sourceChatId, reasonDraft.sourceMessageId, text, null)
+            enqueueVenueEditMessage(
+                venueId = reasonDraft.venueId,
+                chatId = reasonDraft.sourceChatId,
+                messageId = reasonDraft.sourceMessageId,
+                text = text,
+                replyMarkup = null,
+            )
         }
         answerBookingCallbackOrMessage(
             chatId = chatId,
@@ -5444,9 +5570,9 @@ class TelegramBotRouter(
                 else -> buildVenueStaffBookingText(booking, zoneId = resolveVenueZoneId(venueId))
             }
         if (sourceMessageId != null) {
-            enqueueEditMessage(chatId, sourceMessageId, text, null)
+            enqueueVenueEditMessage(venueId, chatId, sourceMessageId, text, null)
         } else {
-            enqueueMessage(chatId, text)
+            enqueueVenueMessage(venueId, chatId, text)
         }
         answerBookingCallbackOrMessage(
             chatId = chatId,
@@ -5471,7 +5597,8 @@ class TelegramBotRouter(
         val displayBooking = withEffectiveBookingDeadline(booking)
         val role = resolveVenueRoleForVenueSilently(userId, displayBooking.venueId)
         if (sourceMessageId != null && role != null) {
-            enqueueEditMessage(
+            enqueueVenueEditMessage(
+                displayBooking.venueId,
                 chatId,
                 sourceMessageId,
                 buildVenueStaffBookingText(displayBooking, zoneId = resolveVenueZoneId(displayBooking.venueId)),
@@ -6926,7 +7053,8 @@ class TelegramBotRouter(
                 zoneId = resolveVenueZoneId(booking.venueId),
             )
         runCatching {
-            outboxEnqueuer.enqueueSendMessage(
+            outboxEnqueuer.enqueueVenueSendMessage(
+                venueId = booking.venueId,
                 chatId = staffChatId,
                 text = text,
                 replyMarkup = ReplyKeyboardRemove(removeKeyboard = true),
@@ -16761,17 +16889,39 @@ class TelegramBotRouter(
             enqueueMessage(chatId, "Менеджер может приглашать только Staff / Оператор смены.")
             return
         }
-        val invite =
-            staffInviteRepository.createInvite(
-                venueId = venueId,
-                createdByUserId = userId,
-                role = roleDb,
-                ttlSeconds = staffInviteConfig.defaultTtlSeconds,
-            )
-        if (invite == null) {
-            enqueueMessage(chatId, "База недоступна, попробуйте позже.")
-            return
+        when (miniAppAbuseProtection.tryInviteCreate(userId, venueId)) {
+            MiniAppRateLimitDecision.Allowed -> Unit
+            is MiniAppRateLimitDecision.Denied -> {
+                enqueueMessage(chatId, "Слишком много попыток создания приглашения. Попробуйте позже.")
+                return
+            }
         }
+        val invite =
+            when (
+                val createResult =
+                    staffInviteRepository.createBoundedInvite(
+                        venueId = venueId,
+                        createdByUserId = userId,
+                        role = roleDb,
+                        ttlSeconds = staffInviteConfig.defaultTtlSeconds,
+                        maxActivePendingPerVenueRole =
+                            miniAppAbuseProtection.maxActivePendingInvitesPerVenueRole,
+                    )
+            ) {
+                is StaffInviteCreateResult.Success -> createResult.invite
+                is StaffInviteCreateResult.RateLimited -> {
+                    enqueueMessage(
+                        chatId,
+                        "Достигнут лимит активных приглашений для этой роли. " +
+                            "Отзовите ненужное приглашение или дождитесь его истечения.",
+                    )
+                    return
+                }
+                StaffInviteCreateResult.DatabaseError -> {
+                    enqueueMessage(chatId, "База недоступна, попробуйте позже.")
+                    return
+                }
+            }
         val roleLabel = humanizeOwnerVenueStaffRoleForChoice(roleKey)
         val botUsername = config.botUsername?.trim()?.removePrefix("@")?.takeIf { it.isNotBlank() }
         val startPayload = "$staffInviteStartPrefix${invite.code}"
@@ -20462,9 +20612,10 @@ class TelegramBotRouter(
         val role = resolveVenueRoleForVenue(chatId, userId, venueId) ?: return
         val venueName = loadVenueNameForStaffInvite(venueId)
         val ts = Instant.now().toString()
-        enqueueGroupMessageWithoutReplyKeyboard(
-            staffChatId,
-            "✅ Тестовое уведомление. Чат привязан к $venueName. (ts=$ts)",
+        enqueueVenueGroupMessageWithoutReplyKeyboard(
+            venueId = venueId,
+            chatId = staffChatId,
+            text = "✅ Тестовое уведомление. Чат привязан к $venueName. (ts=$ts)",
         )
         enqueueMessage(
             chatId,
@@ -22535,7 +22686,7 @@ class TelegramBotRouter(
             chatId = chatId,
             messageId = messageId,
         )
-        enqueueEditMessage(chatId, messageId, text, replyMarkup)
+        enqueueVenueEditMessage(venueId, chatId, messageId, text, replyMarkup)
     }
 
     private suspend fun buildStaffChatOrderBatchText(
@@ -22807,7 +22958,7 @@ class TelegramBotRouter(
                     guestDisplayName = result.guestDisplayName,
                 )
             }
-        enqueueEditMessage(chatId, messageId, text, replyMarkup)
+        enqueueVenueEditMessage(venueId, chatId, messageId, text, replyMarkup)
     }
 
     private data class StaffCallBillRequestTotal(
@@ -25553,7 +25704,7 @@ class TelegramBotRouter(
                 logBestEffort("load venue for staff chat status update", e)
                 null
             } ?: return
-        enqueueMessage(staffChatId, text)
+        enqueueVenueMessage(venueId, staffChatId, text)
     }
 
     private fun pendingNewVenueOrderBatches(
@@ -34082,7 +34233,13 @@ class TelegramBotRouter(
     ) {
         val chatId = context.table.staffChatId ?: return
         if (!isVenueStaffNotificationEnabled(context.table.venueId, kind, staffChatLinked = true)) return
-        scope.launch { enqueueGroupMessageWithoutReplyKeyboard(chatId, message) }
+        scope.launch {
+            enqueueVenueGroupMessageWithoutReplyKeyboard(
+                venueId = context.table.venueId,
+                chatId = chatId,
+                text = message,
+            )
+        }
     }
 
     private suspend fun isVenueStaffNotificationEnabled(
@@ -34393,69 +34550,87 @@ class TelegramBotRouter(
         val chatId = context.chatId
         val userId = context.userId
         if (code.isNullOrBlank()) {
-            enqueueGroupMessageWithoutReplyKeyboard(
-                chatId,
-                "Использование: /link <код>. Код генерируется в режиме заведения.",
+            enqueueGroupCommandFeedback(
+                groupChatId = chatId,
+                actorUserId = userId,
+                text = "Использование: /link <код>. Код генерируется в режиме заведения.",
             )
             return
         }
         val normalizedCode = StaffChatLinkCodeFormat.normalizeCode(code)
         if (normalizedCode == null) {
-            enqueueGroupMessageWithoutReplyKeyboard(
-                chatId,
-                "Код недействителен или истёк. Сгенерируйте новый в режиме заведения.",
+            enqueueGroupCommandFeedback(
+                groupChatId = chatId,
+                actorUserId = userId,
+                text = "Код недействителен или истёк. Сгенерируйте новый в режиме заведения.",
             )
             return
         }
         val consumeResult =
-            staffChatLinkCodeRepository.linkAndBindWithCode(
-                normalizedCode,
-                userId,
-                chatId,
-                message.messageId,
-                authorize = { connection, venueId ->
-                    venueAccessRepository.hasVenueAdminOrOwner(connection, userId, venueId)
-                },
-                bind = { connection, venueId ->
-                    venueRepository.bindStaffChatInTransaction(connection, venueId, chatId, userId)
-                },
-            )
+            recipientLocks.withRecipientLock(chatId) {
+                staffChatLinkCodeRepository.linkAndBindWithCode(
+                    normalizedCode,
+                    userId,
+                    chatId,
+                    message.messageId,
+                    authorize = { connection, venueId ->
+                        venueAccessRepository.hasVenueAdminOrOwner(connection, userId, venueId)
+                    },
+                    bind = { connection, venueId ->
+                        venueRepository.bindStaffChatInTransaction(connection, venueId, chatId, userId)
+                    },
+                )
+            }
         when (consumeResult) {
             is LinkAndBindResult.Success -> {
-                enqueueGroupMessageWithoutReplyKeyboard(
-                    chatId,
-                    "✅ Чат привязан к заведению ${consumeResult.venueName}. " +
-                        "Уведомления о заказах будут приходить сюда.",
+                enqueueVenueGroupMessageWithoutReplyKeyboard(
+                    venueId = consumeResult.venueId,
+                    chatId = chatId,
+                    text =
+                        "✅ Чат привязан к заведению ${consumeResult.venueName}. " +
+                            "Уведомления о заказах будут приходить сюда.",
                 )
             }
 
             is LinkAndBindResult.AlreadyBoundSameChat -> {
-                enqueueGroupMessageWithoutReplyKeyboard(
-                    chatId,
-                    "Этот чат уже привязан к заведению ${consumeResult.venueName}.",
+                enqueueVenueGroupMessageWithoutReplyKeyboard(
+                    venueId = consumeResult.venueId,
+                    chatId = chatId,
+                    text = "Этот чат уже привязан к заведению ${consumeResult.venueName}.",
                 )
             }
 
             is LinkAndBindResult.ChatAlreadyLinked -> {
-                enqueueGroupMessageWithoutReplyKeyboard(
-                    chatId,
-                    "Этот чат уже привязан к другому заведению. Сначала выполните /unlink в этом чате.",
-                )
+                val linkedVenueId = consumeResult.venueId
+                if (linkedVenueId != null) {
+                    enqueueVenueGroupMessageWithoutReplyKeyboard(
+                        venueId = linkedVenueId,
+                        chatId = chatId,
+                        text = "Этот чат уже привязан к другому заведению. Сначала выполните /unlink в этом чате.",
+                    )
+                } else {
+                    enqueueGroupCommandFeedback(
+                        groupChatId = chatId,
+                        actorUserId = userId,
+                        text = "Этот чат уже привязан к другому заведению. Сначала выполните /unlink в этом чате.",
+                    )
+                }
             }
 
             is LinkAndBindResult.Unauthorized -> {
-                enqueueGroupMessageWithoutReplyKeyboard(chatId, "Недостаточно прав.")
+                enqueueGroupCommandFeedback(chatId, userId, "Недостаточно прав.")
             }
 
             LinkAndBindResult.InvalidOrExpired -> {
-                enqueueGroupMessageWithoutReplyKeyboard(
-                    chatId,
-                    "Код недействителен или истёк. Сгенерируйте новый в режиме заведения.",
+                enqueueGroupCommandFeedback(
+                    groupChatId = chatId,
+                    actorUserId = userId,
+                    text = "Код недействителен или истёк. Сгенерируйте новый в режиме заведения.",
                 )
             }
 
             LinkAndBindResult.DatabaseError -> {
-                enqueueGroupMessageWithoutReplyKeyboard(chatId, "База недоступна, попробуйте позже.")
+                enqueueGroupCommandFeedback(chatId, userId, "База недоступна, попробуйте позже.")
             }
         }
     }
@@ -34463,50 +34638,77 @@ class TelegramBotRouter(
     private suspend fun handleUnlinkCommand(message: Message) {
         val context = resolveGroupCommandContext(message) ?: return
         val chatId = context.chatId
+        val userId = context.userId
         val venue = venueRepository.findVenueByStaffChatId(chatId)
         if (venue == null) {
-            enqueueGroupMessageWithoutReplyKeyboard(chatId, "Этот чат не привязан.")
+            enqueueGroupCommandFeedback(chatId, userId, "Этот чат не привязан.")
             return
         }
-        val userId = context.userId
         val hasRole = venueAccessRepository.hasVenueOwner(userId, venue.id)
         if (!hasRole) {
-            enqueueGroupMessageWithoutReplyKeyboard(chatId, "Недостаточно прав.")
+            enqueueVenueGroupMessageWithoutReplyKeyboard(venue.id, chatId, "Недостаточно прав.")
             return
         }
-        when (val result = venueRepository.unlinkStaffChatByChatId(chatId, userId)) {
+        when (
+            val result =
+                venueRepository.unlinkStaffChatByChatId(
+                    chatId = chatId,
+                    userId = userId,
+                    expectedVenueId = venue.id,
+                    authorize = { connection, venueId ->
+                        venueAccessRepository.hasVenueOwner(connection, userId, venueId)
+                    },
+                )
+        ) {
             is UnlinkResult.Success -> {
-                enqueueGroupMessageWithoutReplyKeyboard(chatId, "✅ Чат отвязан.")
+                if (trafficPolicy.productMode) {
+                    enqueueMessage(userId, "✅ Чат отвязан.")
+                } else {
+                    enqueueGroupMessageWithoutReplyKeyboard(chatId, "✅ Чат отвязан.")
+                }
             }
             UnlinkResult.NotLinked -> {
-                enqueueGroupMessageWithoutReplyKeyboard(chatId, "Этот чат не привязан.")
+                enqueueGroupCommandFeedback(chatId, userId, "Этот чат не привязан.")
             }
             UnlinkResult.DatabaseError -> {
-                enqueueGroupMessageWithoutReplyKeyboard(chatId, "База недоступна, попробуйте позже.")
+                enqueueGroupCommandFeedback(chatId, userId, "База недоступна, попробуйте позже.")
             }
+        }
+    }
+
+    private suspend fun enqueueGroupCommandFeedback(
+        groupChatId: Long,
+        actorUserId: Long,
+        text: String,
+    ) {
+        if (trafficPolicy.productMode) {
+            enqueueMessage(actorUserId, text)
+        } else {
+            enqueueGroupMessageWithoutReplyKeyboard(groupChatId, text)
         }
     }
 
     private suspend fun handleLinkTestCommand(message: Message) {
         val context = resolveGroupCommandContext(message) ?: return
         val chatId = context.chatId
+        val userId = context.userId
         val venue = venueRepository.findVenueByStaffChatId(chatId)
         if (venue == null) {
-            enqueueGroupMessageWithoutReplyKeyboard(
-                chatId,
-                "Этот чат не привязан. Сгенерируйте код и выполните /link <код>.",
+            enqueueGroupCommandFeedback(
+                groupChatId = chatId,
+                actorUserId = userId,
+                text = "Этот чат не привязан. Сгенерируйте код и выполните /link <код>.",
             )
             return
         }
-        val userId = context.userId
         val hasRole = venueAccessRepository.hasVenueAdminOrOwner(userId, venue.id)
         if (!hasRole) {
-            enqueueGroupMessageWithoutReplyKeyboard(chatId, "Недостаточно прав.")
+            enqueueVenueGroupMessageWithoutReplyKeyboard(venue.id, chatId, "Недостаточно прав.")
             return
         }
         val ts = Instant.now().toString()
         val text = "✅ Тестовое уведомление. Чат привязан к ${venue.name}. (ts=$ts)"
-        enqueueGroupMessageWithoutReplyKeyboard(chatId, text)
+        enqueueVenueGroupMessageWithoutReplyKeyboard(venue.id, chatId, text)
     }
 
     private suspend fun ensureChatAdmin(
@@ -34529,16 +34731,18 @@ class TelegramBotRouter(
         }
         val userId = message.fromUser?.id
         if (userId == null) {
-            enqueueMessage(chatId, "Недостаточно прав.")
+            if (!trafficPolicy.productMode) {
+                enqueueGroupMessageWithoutReplyKeyboard(chatId, "Недостаточно прав.")
+            }
             return null
         }
         return when (val chatAdminCheck = ensureChatAdmin(chatId, userId)) {
             ChatAdminCheckResult.Failed -> {
-                enqueueMessage(chatId, "Не удалось проверить права в чате, попробуйте позже.")
+                enqueueGroupCommandFeedback(chatId, userId, "Не удалось проверить права в чате, попробуйте позже.")
                 null
             }
             ChatAdminCheckResult.NotAllowed -> {
-                enqueueMessage(chatId, "Недостаточно прав.")
+                enqueueGroupCommandFeedback(chatId, userId, "Недостаточно прав.")
                 null
             }
             ChatAdminCheckResult.Allowed -> GroupCommandContext(chatId, userId)
@@ -34669,11 +34873,43 @@ class TelegramBotRouter(
         }.onFailure { logBestEffort("outbox enqueue", it) }
     }
 
+    private suspend fun enqueueVenueMessage(
+        venueId: Long,
+        chatId: Long,
+        text: String,
+        replyMarkup: ReplyMarkup? = null,
+        parseMode: String? = null,
+        dedupeKey: String? = null,
+    ) {
+        if (chatId > 0) {
+            enqueueMessage(chatId, text, replyMarkup, parseMode, dedupeKey)
+            return
+        }
+        runCatching {
+            outboxEnqueuer.enqueueVenueSendMessage(
+                venueId = venueId,
+                chatId = chatId,
+                text = text,
+                replyMarkup = replyMarkup,
+                parseMode = parseMode,
+                dedupeKey = dedupeKey,
+            )
+        }.onFailure { logBestEffort("venue outbox enqueue", it) }
+    }
+
     private suspend fun enqueueGroupMessageWithoutReplyKeyboard(
         chatId: Long,
         text: String,
     ) {
         enqueueMessage(chatId, text, ReplyKeyboardRemove(removeKeyboard = true))
+    }
+
+    private suspend fun enqueueVenueGroupMessageWithoutReplyKeyboard(
+        venueId: Long,
+        chatId: Long,
+        text: String,
+    ) {
+        enqueueVenueMessage(venueId, chatId, text, ReplyKeyboardRemove(removeKeyboard = true))
     }
 
     private suspend fun enqueueEditMessage(
@@ -34686,6 +34922,30 @@ class TelegramBotRouter(
         runCatching {
             outboxEnqueuer.enqueueEditMessageText(chatId, messageId, text, replyMarkup, dedupeKey)
         }.onFailure { logBestEffort("outbox enqueue edit message", it) }
+    }
+
+    private suspend fun enqueueVenueEditMessage(
+        venueId: Long,
+        chatId: Long,
+        messageId: Long,
+        text: String,
+        replyMarkup: ReplyMarkup? = null,
+        dedupeKey: String? = null,
+    ) {
+        if (chatId > 0) {
+            enqueueEditMessage(chatId, messageId, text, replyMarkup, dedupeKey)
+            return
+        }
+        runCatching {
+            outboxEnqueuer.enqueueVenueEditMessageText(
+                venueId = venueId,
+                chatId = chatId,
+                messageId = messageId,
+                text = text,
+                replyMarkup = replyMarkup,
+                dedupeKey = dedupeKey,
+            )
+        }.onFailure { logBestEffort("venue outbox enqueue edit message", it) }
     }
 
     private suspend fun enqueuePhoto(
@@ -34718,7 +34978,18 @@ class TelegramBotRouter(
     ) {
         val outboxChatId = chatId ?: 0L
         runCatching {
-            outboxEnqueuer.enqueueAnswerCallbackQuery(outboxChatId, callbackQueryId, text, showAlert)
+            val venueId = productCallbackVenueIds[callbackQueryId]
+            if (venueId != null && outboxChatId < 0) {
+                outboxEnqueuer.enqueueVenueAnswerCallbackQuery(
+                    venueId = venueId,
+                    chatId = outboxChatId,
+                    callbackQueryId = callbackQueryId,
+                    text = text,
+                    showAlert = showAlert,
+                )
+            } else {
+                outboxEnqueuer.enqueueAnswerCallbackQuery(outboxChatId, callbackQueryId, text, showAlert)
+            }
         }.onFailure { logBestEffort("outbox enqueue callback", it) }
     }
 

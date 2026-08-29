@@ -1,26 +1,31 @@
 # Project Status
 
-Last verified: 2026-08-21.
+Last verified: 2026-08-29.
 
 ## 1. Current stage
 
-**V125 STAGING TELEGRAM TRAFFIC ALLOWLIST PREREQUISITE / FEATURE-WORKTREE IMPLEMENTED /
-LOCAL VALIDATION COMPLETE / INDEPENDENT REVIEW REQUIRED**.
+**V125 PUBLIC PILOT TELEGRAM ADMISSION HOTFIX / FEATURE-BRANCH CANDIDATE /
+STAGING DEPLOY REQUIRED**.
 
-The prerequisite is being implemented only on the V125-compatible feature worktree based on exact
-SHA `e7aed9cdc243a7be158841a00d214716c21beb94`. It adds a centralized fail-closed staging identity
-policy across Telegram ingress, Mini App auth and protected JWT requests, outbox claim and direct
-chat-targeted calls, plus restricted operator/configuration documentation. It contains no database
-migration or Mini App frontend change. This status does not record review, commit, push, GitHub
-Actions, V125 staging deploy, manual Telegram/Mini App smoke, backup, V126 or any staging/runtime/data
-change. The focused policy/config/lifecycle, webhook/inbound, Mini App auth/session/RBAC,
-outbox/staff-notification and complete Telegram Router suites pass, as do `compileKotlin` and
-`ktlintCheck`. The final comparable full backend suite executed 2080 tests with zero errors and zero
-skips and reported exactly five confirmed V125 baseline failures: three in
-`GuestBookingRepositoryTest` and two in `StaffProfileLinkConcurrencyPostgresTest`. The failure set,
-expected/actual values and assertion lines match the recorded exact-V125 baseline. This is local
-evidence only; independent review, commit, push, green
-Actions and a separately authorized V125 staging phase remain outstanding.
+The hotfix candidate is isolated on a V125-compatible feature branch based on exact deployed source
+`b4e13da3179438fad69d2344e1cb136a56f95f6c`. It adds explicit `PRODUCT` Telegram traffic mode for
+the platform-wide public pilot while preserving exact fail-closed `ALLOWLIST` behavior for isolated
+smoke environments. In `PRODUCT`, structurally valid private Telegram identities and valid signed
+Mini App identities can enter as Guest without static IDs; venue and platform access still comes
+only from active membership/RBAC, and active one-time invites grant only their stored role in their
+stored venue. Staff groups and outbound traffic remain server-authoritative and venue-scoped.
+
+The candidate adds or touches no database migration and has no PostgreSQL V126; PostgreSQL staging
+therefore remains V125-compatible. Local H2 regression naturally applies the base's pre-existing H2
+`V126__booking_miniapp_message_idempotency.sql` fixture. There is no Mini App frontend change. The
+candidate does not change staging, Manifest B, Caddy, PostgreSQL, the active image or production.
+Local validation, independent review, an explicit candidate commit and a green branch Actions run
+are release gates for the separately authorized staging deploy/smoke task. That later task changes
+staging from
+`ALLOWLIST` plus exact Manifest B to `PRODUCT` with empty static identity lists and an explicit staff
+invite pepper; rollback is the base V125 image/source plus exact prior Manifest B. A rollback of
+traffic policy never deletes or reverses memberships already committed through normal product
+flows.
 
 The independent booking release line below remains unchanged context and is not part of this
 V125-compatible prerequisite branch.

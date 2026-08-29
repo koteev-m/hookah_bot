@@ -57,9 +57,13 @@ class TelegramBotRouterLinkCommandTest {
     private val guestTabsRepository: GuestTabsRepository = mockk(relaxed = true)
     private val router = createRouter()
 
-    private fun createRouter(botUsername: String? = "TestBot"): TelegramBotRouter =
+    private fun createRouter(
+        botUsername: String? = "TestBot",
+        trafficPolicy: TelegramTrafficPolicy = TelegramTrafficPolicy.unrestricted(),
+        requireStaffChatAdmin: Boolean = false,
+    ): TelegramBotRouter =
         TelegramBotRouter(
-            trafficPolicy = TelegramTrafficPolicy.unrestricted(),
+            trafficPolicy = trafficPolicy,
             config =
                 TelegramBotConfig(
                     enabled = true,
@@ -73,7 +77,7 @@ class TelegramBotRouterLinkCommandTest {
                     longPollingTimeoutSeconds = 25,
                     staffChatLinkTtlSeconds = 900,
                     staffChatLinkSecretPepper = "pepper",
-                    requireStaffChatAdmin = false,
+                    requireStaffChatAdmin = requireStaffChatAdmin,
                 ),
             apiClient = apiClient,
             outboxEnqueuer = outboxEnqueuer,
@@ -211,7 +215,14 @@ class TelegramBotRouterLinkCommandTest {
 
             router.process(update)
 
-            coVerify { outboxEnqueuer.enqueueSendMessage(-700, "Этот чат уже привязан к заведению Venue.", any()) }
+            coVerify {
+                outboxEnqueuer.enqueueVenueSendMessage(
+                    42L,
+                    -700L,
+                    "Этот чат уже привязан к заведению Venue.",
+                    any(),
+                )
+            }
         }
 
     @Test
@@ -236,8 +247,9 @@ class TelegramBotRouterLinkCommandTest {
             router.process(update)
 
             coVerify {
-                outboxEnqueuer.enqueueSendMessage(
-                    -700,
+                outboxEnqueuer.enqueueVenueSendMessage(
+                    1L,
+                    -700L,
                     "✅ Чат привязан к заведению Venue. Уведомления о заказах будут приходить сюда.",
                     any(),
                 )
@@ -283,12 +295,138 @@ class TelegramBotRouterLinkCommandTest {
             router.process(update)
 
             coVerify {
-                outboxEnqueuer.enqueueSendMessage(
-                    -700,
+                outboxEnqueuer.enqueueVenueSendMessage(
+                    10L,
+                    -700L,
                     "✅ Чат привязан к заведению Venue. Уведомления о заказах будут приходить сюда.",
                     any(),
                 )
             }
+        }
+
+    @Test
+    fun `product mode lets an authorized actor use a one time code for only the intended staff chat`() =
+        runBlocking {
+            val productRouter = createRouter(trafficPolicy = TelegramTrafficPolicy.product())
+            val connection: Connection = mockk()
+            every { venueAccessRepository.hasVenueAdminOrOwner(connection, 300L, 10L) } returns true
+            coEvery {
+                staffChatLinkCodeRepository.linkAndBindWithCode(
+                    "GHJK234",
+                    300L,
+                    -700L,
+                    118L,
+                    any(),
+                    any(),
+                )
+            } coAnswers {
+                @Suppress("UNCHECKED_CAST")
+                val authorize = invocation.args[4] as suspend (Connection, Long) -> Boolean
+
+                @Suppress("UNCHECKED_CAST")
+                val bind =
+                    invocation.args[5] as suspend (
+                        Connection,
+                        Long,
+                    ) -> com.hookah.platform.backend.telegram.db.BindResult
+                if (!authorize(connection, 10L)) {
+                    LinkAndBindResult.Unauthorized(venueId = 10L)
+                } else {
+                    bind(connection, 10L)
+                    LinkAndBindResult.Success(venueId = 10L, venueName = "Venue")
+                }
+            }
+            every { venueRepository.bindStaffChatInTransaction(connection, 10L, -700L, 300L) } returns
+                com.hookah.platform.backend.telegram.db.BindResult.Success(10L, "Venue")
+
+            productRouter.process(
+                TelegramUpdate(
+                    updateId = 109,
+                    message =
+                        Message(
+                            messageId = 118,
+                            chat = Chat(id = -700, type = "supergroup"),
+                            fromUser = User(id = 300),
+                            text = "/link ghjk234",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 1) {
+                staffChatLinkCodeRepository.linkAndBindWithCode("GHJK234", 300L, -700L, 118L, any(), any())
+            }
+            coVerify(exactly = 1) {
+                outboxEnqueuer.enqueueVenueSendMessage(
+                    10L,
+                    -700L,
+                    "✅ Чат привязан к заведению Venue. Уведомления о заказах будут приходить сюда.",
+                    any(),
+                )
+            }
+        }
+
+    @Test
+    fun `product mode leaves unrelated group text state free`() =
+        runBlocking {
+            val productRouter = createRouter(trafficPolicy = TelegramTrafficPolicy.product())
+
+            productRouter.process(
+                TelegramUpdate(
+                    updateId = 110,
+                    message =
+                        Message(
+                            messageId = 119,
+                            chat = Chat(id = -701, type = "supergroup"),
+                            fromUser = User(id = 301),
+                            text = "unrelated message",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { idempotencyRepository.tryAcquire(110L, -701L, 119L) }
+            coVerify(exactly = 0) { userRepository.upsert(any()) }
+            coVerify(exactly = 0) { outboxEnqueuer.enqueueSendMessage(any(), any(), any()) }
+        }
+
+    @Test
+    fun `product mode rejects malformed link syntax before provider idempotency or repository work`() =
+        runBlocking {
+            val productRouter =
+                createRouter(
+                    trafficPolicy = TelegramTrafficPolicy.product(),
+                    requireStaffChatAdmin = true,
+                )
+            val invalidCommands =
+                listOf(
+                    "/link",
+                    "/link ABCD2345 EXTRA",
+                    "/link ABCD-EFGH",
+                    "/link код",
+                    "/link ${"A".repeat(65)}",
+                )
+
+            invalidCommands.forEachIndexed { index, command ->
+                productRouter.process(
+                    TelegramUpdate(
+                        updateId = 200L + index,
+                        message =
+                            Message(
+                                messageId = 300L + index,
+                                chat = Chat(id = -900L - index, type = "supergroup"),
+                                fromUser = User(id = 400L + index),
+                                text = command,
+                            ),
+                    ),
+                )
+            }
+
+            coVerify(exactly = 0) { idempotencyRepository.tryAcquire(any(), any(), any()) }
+            coVerify(exactly = 0) { apiClient.getChatMember(any(), any()) }
+            coVerify(exactly = 0) {
+                staffChatLinkCodeRepository.linkAndBindWithCode(any(), any(), any(), any(), any(), any())
+            }
+            coVerify(exactly = 0) { venueRepository.findVenueByStaffChatId(any()) }
+            coVerify(exactly = 0) { outboxEnqueuer.enqueueSendMessage(any(), any(), any()) }
         }
 
     @Test
@@ -798,7 +936,8 @@ class TelegramBotRouterLinkCommandTest {
             )
 
             coVerify {
-                outboxEnqueuer.enqueueSendMessage(
+                outboxEnqueuer.enqueueVenueSendMessage(
+                    10L,
                     -100L,
                     match { it.contains("✅ Тестовое уведомление. Чат привязан к Venue.") },
                     any(),

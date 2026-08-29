@@ -1,8 +1,6 @@
 package com.hookah.platform.backend.miniapp.venue
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
-import com.hookah.platform.backend.telegram.debugTelegramException
-import com.hookah.platform.backend.telegram.sanitizeTelegramForLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -65,18 +63,12 @@ class AuditLogRepository(
                 }
             } catch (e: SQLException) {
                 logger.warn(
-                    "Failed to append audit log actorUserId={} action={} entityType={} entityId={} payloadBytes={}: {}",
-                    actorUserId,
+                    "Failed to append audit log action={} entityType={} payloadBytes={} error_type={}",
                     action,
                     entityType,
-                    entityId,
                     payloadSize,
-                    sanitizeTelegramForLog(e.message),
+                    e::class.simpleName ?: "unknown",
                 )
-                logger.debugTelegramException(e) {
-                    "appendAuditLog exception actorUserId=$actorUserId action=$action " +
-                        "entityType=$entityType entityId=$entityId"
-                }
                 throw DatabaseUnavailableException()
             }
         }

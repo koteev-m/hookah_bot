@@ -1,6 +1,6 @@
 # Deployment / Runbook / Operations
 
-Дата актуализации: 2026-08-17.
+Дата актуализации: 2026-08-29.
 
 Статус: **current operations reference / UPDATED**. This document is the canonical deploy, release and operations runbook for the Telegram bot + Mini App platform. Use it together with `docs/TESTING_QA_SMOKE_STRATEGY.md` for validation scope, `docs/STAGING_DEPLOYMENT.md` for one-VPS staging details, `docs/OPERATIONS.md` for metrics/queue incident basics and `docs/MIGRATION_POLICY.md` for Flyway policy.
 
@@ -140,55 +140,81 @@ Rules:
 - Commit only safe examples such as `docs/env/staging.env.example`.
 - Secret presence checks may mask values; raw secret values must not be printed in logs, docs, PR comments or ChatGPT/Codex messages.
 
-### V125 Staging Telegram Traffic Allowlist Prerequisite
+### V125 Public-Pilot Telegram Admission Hotfix
 
-This is a separate prerequisite release based on the exact deployed V125-compatible source. It does
-not include V126, a staging deploy, smoke fixture creation or any schema change. Its local phase is
-complete only after the focused policy, inbound, webhook, Mini App session, outbox and direct API
-tests plus compile/lint pass. Commit/push, green Actions, V125 deployment and real-client smoke are
-separate later phases.
+The hotfix is based on exact deployed V125 source
+`b4e13da3179438fad69d2344e1cb136a56f95f6c`. The candidate adds or touches no migration and has no
+PostgreSQL V126, so PostgreSQL staging remains V125-compatible; local H2 regression naturally
+applies the base's pre-existing H2 `V126__booking_miniapp_message_idempotency.sql` fixture. It has no
+frontend change or current staging mutation. Local tests, independent read-only review,
+explicit commit/push and green branch Actions precede the separately authorized HT-INC-01D deploy.
 
-Security contract:
+Traffic-mode contract:
 
-- `APP_ENV=staging` accepts only explicit `TELEGRAM_TRAFFIC_POLICY=ALLOWLIST` with nonempty valid
-  `TELEGRAM_ALLOWED_USER_IDS` and `TELEGRAM_ALLOWED_CHAT_IDS`; invalid or incomplete configuration
-  fails startup before DB initialization.
-- The same immutable policy gates long-polling before router/idempotency/DB writes, webhook before
-  enqueue, signed Mini App initData before user/session creation, every protected JWT request,
-  outbox claim and every direct chat-targeted Telegram API call.
-- A positive private identity must appear in both lists. A staff group/supergroup uses its exact
-  negative Bot API chat ID. Denial produces no user, idempotency, inbound-queue or outbound state.
-- Denied long-polling updates are intentionally acknowledged only by advancing the in-memory Telegram
-  offset. Same-token restart may redeliver an unconfirmed update; the central gate/idempotency must
-  still create no duplicate state.
-- The bot token, username and mode are unchanged. The process starts either one long poller or one
-  webhook worker, never both. The deployment phase must additionally prove exactly one backend
-  container and no second poller/webhook for the token.
-- Long-polling startup synchronously requires `getWebhookInfo.url` to be empty before the worker is
-  launched. Webhook mode in `staging`, `prod` or `production` requires a nonempty webhook secret
-  before the route is installed; mandatory Telegram traffic `ALLOWLIST` remains staging-only.
-- Unrestricted staging Telegram traffic remains prohibited after this prerequisite. Testers not in
-  the restricted manifest intentionally lose private-bot and Mini App access.
+- `APP_ENV=staging` accepts only explicit `TELEGRAM_TRAFFIC_POLICY=ALLOWLIST` or `PRODUCT`.
+  Missing/blank/unknown and `UNRESTRICTED` fail before database initialization.
+- `ALLOWLIST` remains the exact fail-closed smoke mode with canonical nonempty user/chat lists and
+  matching private chats. Exact restricted Manifest B remains its rollback identity set.
+- `PRODUCT` is the public-pilot mode. `TELEGRAM_ALLOWED_USER_IDS` and
+  `TELEGRAM_ALLOWED_CHAT_IDS` must be absent/empty; `VENUE_STAFF_INVITE_SECRET_PEPPER` must be an
+  explicit restricted secret. No Guest, Owner, Manager or Staff requires a manifest edit.
+- Structurally valid private traffic requires positive actor/chat IDs with actor equal to chat.
+  Signed/fresh Mini App initData for a positive identity creates a normal Guest session; active
+  membership/RBAC still gates every Venue/Platform request.
+- Previously unknown identities may preview/accept valid OWNER/STAFF/MANAGER invites. The stored
+  exact venue/role, TTL, revoked/used, audit, one-time and concurrency guards remain authoritative.
+  Platform Owner may create the exact Venue Owner; that active Owner may invite Staff/Manager only
+  into an own venue.
+- Group ingress is limited to authorized one-time staff-chat link bootstrap and current exact linked
+  venue commands/callbacks. Private outbound resolves from validated inbound/product/workflow facts;
+  group outbound resolves from the exact current venue staff-chat link. Unlink/relink invalidates
+  stale queued/live authority. Static lists are not normal outbound product authority.
+- Bounded rate limits cover new private traffic, invite/token attempts, group link/operations and
+  spam. Logs, errors and audit exclude raw IDs, invite values, initData, bodies, names and secrets.
 
-Real IDs live only in the mode-0600 staging `.env` and
-`/etc/hookah-bot/staging/telegram-allowlist.manifest`, never in Git, build artifacts, logs or release
-chat. The manifest directory is `root:root` mode 0700 and the manifest is `root:root` mode 0600.
-Updating the manifest/list requires review and a controlled backend restart; already issued JWTs are
-checked again on every protected request and therefore become generic `403 FORBIDDEN` after the
-identity is removed and the backend restarts.
+The same bot token, username and long-polling mode remain. Long-polling startup still requires an
+empty webhook, and deployment must prove exactly one backend/poller. Telegram update acknowledgement
+and provider delivery are not application exactly-once guarantees; domain mutation and outbox
+idempotency remain the bounded contract.
 
-The exact staff group must be a dedicated private non-topic test supergroup with a pre-reviewed exact
-title. Accept only an exact Telegram Desktop
-`https://t.me/c/<positive-internal-id>/<positive-message-id>` link and derive the candidate negative
-ID, then—in a later drained V125 window—verify it with read-only Bot API `getChat` using a token-safe
-temporary mode-0600 client config. Require exact ID, exact `supergroup` type and exact expected title
-while emitting only PASS/FAIL. Do not add an application bootstrap bypass. Any ambiguity, mismatch or
-token exposure is STOP. See `docs/STAGING_DEPLOYMENT.md` for the full operator procedure.
+#### Exact later staging transition
 
-Before a later V125 deploy, read-only evidence must show active inbound states and outbox
-`NEW/SENDING` counts are zero. After deploy, a deliberately excluded test identity must yield no
-changes to `users`, `telegram_processed_updates`, `telegram_inbound_updates` or `telegram_outbox`.
-Real venues/users, including venue 2, are not disposable fixtures.
+HT-INC-01D must first verify green Actions, exact candidate SHA/image, empty webhook, one
+backend/poller, healthy PostgreSQL and zero active inbound/outbox queues. Keep Caddy, PostgreSQL,
+Compose topology, Flyway/schema and production unchanged. In the restricted mode-0600 staging
+`.env`, change only the admission configuration from:
+
+```dotenv
+TELEGRAM_TRAFFIC_POLICY=ALLOWLIST
+TELEGRAM_ALLOWED_USER_IDS=<exact Manifest B users>
+TELEGRAM_ALLOWED_CHAT_IDS=<exact Manifest B chats>
+```
+
+to:
+
+```dotenv
+TELEGRAM_TRAFFIC_POLICY=PRODUCT
+TELEGRAM_ALLOWED_USER_IDS=
+TELEGRAM_ALLOWED_CHAT_IDS=
+VENUE_STAFF_INVITE_SECRET_PEPPER=<explicit restricted secret>
+```
+
+Preserve the bot token, username, long-polling mode and other secrets. Recreate exactly one backend
+with the reviewed candidate image, then execute the public Guest and
+Platform Owner -> new Venue Owner -> new external Staff/Manager smoke defined in
+`docs/TESTING_QA_SMOKE_STRATEGY.md`. Do not manually capture or allowlist those identities.
+
+#### Exact rollback point
+
+The code/image rollback point is `b4e13da3179438fad69d2344e1cb136a56f95f6c`; the configuration
+rollback point is exact prior restricted Manifest B with `TELEGRAM_TRAFFIC_POLICY=ALLOWLIST`.
+Before any invite acceptance, restore both points and start exactly one backend/poller, then verify
+health, empty webhook and healthy queues. Do not change Caddy/PostgreSQL or run SQL cleanup.
+
+If an invite acceptance committed before a later failure, restoring base V125/Manifest B does not
+reverse membership. Do not delete memberships or edit invite state through SQL; stop and return a
+partial-commit reconciliation for a separate decision. Exact image-selection commands remain subject
+to the existing runbook gap; never substitute an unverified image tag.
 
 ## Migrations Runbook
 

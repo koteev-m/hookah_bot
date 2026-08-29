@@ -44,13 +44,28 @@ class TelegramOutboxRepository(
         method: String,
         payloadJson: String,
         dedupeKey: String? = null,
-    ) {
-        if (!trafficPolicy.allowsOutboundChat(chatId)) return
+    ): Boolean {
+        if (!trafficPolicy.allowsOutboundChat(chatId)) return false
         val ds = dataSource ?: throw DatabaseUnavailableException()
-        withContext(Dispatchers.IO) {
+        return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    enqueueLegacyOnConnection(connection, chatId, method, payloadJson, dedupeKey)
+                    connection.autoCommit = false
+                    try {
+                        if (!isProductGenericEnqueueRecipientAuthorized(connection, chatId)) {
+                            connection.rollback()
+                            false
+                        } else {
+                            enqueueLegacyOnConnection(connection, chatId, method, payloadJson, dedupeKey)
+                            connection.commit()
+                            true
+                        }
+                    } catch (e: Exception) {
+                        connection.rollback()
+                        throw e
+                    } finally {
+                        connection.autoCommit = true
+                    }
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -64,18 +79,60 @@ class TelegramOutboxRepository(
         }
     }
 
+    suspend fun enqueueForVenue(
+        venueId: Long,
+        chatId: Long,
+        method: String,
+        payloadJson: String,
+        dedupeKey: String? = null,
+    ): Boolean {
+        if (!trafficPolicy.allowsOutboundChat(chatId)) return false
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    connection.autoCommit = false
+                    try {
+                        if (!isProductVenueStaffChatAuthorized(connection, venueId, chatId)) {
+                            connection.rollback()
+                            false
+                        } else {
+                            enqueueLegacyOnConnection(connection, chatId, method, payloadJson, dedupeKey)
+                            connection.commit()
+                            true
+                        }
+                    } catch (e: Exception) {
+                        connection.rollback()
+                        throw e
+                    } finally {
+                        connection.autoCommit = true
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: SQLException) {
+                logFailure("enqueue for venue", e)
+                throw DatabaseUnavailableException()
+            } catch (e: Throwable) {
+                logFailure("enqueue for venue", e)
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
     fun enqueueStrictBookingOnConnection(
         connection: Connection,
         chatId: Long,
         method: String,
         payloadJson: String,
         dedupeKey: String? = null,
-    ) {
-        if (!trafficPolicy.allowsOutboundChat(chatId)) return
+    ): Boolean {
+        if (!trafficPolicy.allowsOutboundChat(chatId)) return false
+        if (!isProductGenericEnqueueRecipientAuthorized(connection, chatId)) return false
         val normalizedDedupeKey = normalizeDedupeKey(dedupeKey)
         if (normalizedDedupeKey != null) {
             findOutboxEnvelope(connection, normalizedDedupeKey)?.let { existing ->
-                if (existing.matchesStrict(chatId, method, payloadJson)) return
+                if (existing.matchesStrict(chatId, method, payloadJson)) return true
                 throw outboxDedupeConflict()
             }
         }
@@ -116,7 +173,7 @@ class TelegramOutboxRepository(
             }
             if (normalizedDedupeKey != null && isUniqueViolation(e)) {
                 findOutboxEnvelope(connection, normalizedDedupeKey)?.let { existing ->
-                    if (existing.matchesStrict(chatId, method, payloadJson)) return
+                    if (existing.matchesStrict(chatId, method, payloadJson)) return true
                     throw outboxDedupeConflict()
                 }
             }
@@ -126,6 +183,7 @@ class TelegramOutboxRepository(
                 runCatching { connection.releaseSavepoint(savepoint) }
             }
         }
+        return true
     }
 
     private fun enqueueLegacyOnConnection(
@@ -255,7 +313,9 @@ class TelegramOutboxRepository(
     ): List<TelegramOutboxMessage> {
         val claimScope = trafficPolicy.outboundClaimScope
         val eligibleChatIds = claimScope.eligibleChatIds.sorted()
-        if (!claimScope.unrestricted && eligibleChatIds.isEmpty()) return emptyList()
+        if (!claimScope.unrestricted && !claimScope.productAuthoritative && eligibleChatIds.isEmpty()) {
+            return emptyList()
+        }
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
@@ -263,10 +323,43 @@ class TelegramOutboxRepository(
                     connection.autoCommit = false
                     try {
                         val chatEligibilitySql =
-                            if (claimScope.unrestricted) {
-                                ""
-                            } else {
-                                "AND o.chat_id IN (${eligibleChatIds.joinToString(",") { "?" }})"
+                            when {
+                                claimScope.unrestricted -> ""
+                                claimScope.productAuthoritative ->
+                                    """
+                                    AND (
+                                        (o.chat_id > 0 AND EXISTS (
+                                            SELECT 1
+                                            FROM users recipient_user
+                                            WHERE recipient_user.telegram_user_id = o.chat_id
+                                        ))
+                                        OR
+                                        (o.chat_id < 0 AND EXISTS (
+                                            SELECT 1
+                                            FROM venues recipient_venue
+                                            WHERE recipient_venue.staff_chat_id = o.chat_id
+                                        ))
+                                    )
+                                    AND (
+                                        NOT EXISTS (
+                                            SELECT 1
+                                            FROM telegram_staff_chat_order_outbox_links live_guard
+                                            WHERE live_guard.outbox_id = o.id
+                                        )
+                                        OR EXISTS (
+                                            SELECT 1
+                                            FROM telegram_staff_chat_order_outbox_links live_guard
+                                            JOIN telegram_staff_chat_order_messages live_message
+                                              ON live_message.order_id = live_guard.order_id
+                                            JOIN venues live_venue
+                                              ON live_venue.id = live_message.venue_id
+                                            WHERE live_guard.outbox_id = o.id
+                                              AND live_message.chat_id = o.chat_id
+                                              AND live_venue.staff_chat_id = o.chat_id
+                                        )
+                                    )
+                                    """.trimIndent()
+                                else -> "AND o.chat_id IN (${eligibleChatIds.joinToString(",") { "?" }})"
                             }
                         val selectSql =
                             """
@@ -295,9 +388,11 @@ class TelegramOutboxRepository(
                             statement.setString(2, TelegramOutboxStatus.SENDING.name)
                             statement.setTimestamp(3, Timestamp.from(now))
                             var parameterIndex = 4
-                            eligibleChatIds.takeIf { !claimScope.unrestricted }?.forEach { chatId ->
-                                statement.setLong(parameterIndex++, chatId)
-                            }
+                            eligibleChatIds
+                                .takeIf { !claimScope.unrestricted && !claimScope.productAuthoritative }
+                                ?.forEach { chatId ->
+                                    statement.setLong(parameterIndex++, chatId)
+                                }
                             statement.setInt(parameterIndex, limit)
                             statement.executeQuery().use { resultSet ->
                                 while (resultSet.next()) {
@@ -357,6 +452,34 @@ class TelegramOutboxRepository(
                 throw DatabaseUnavailableException()
             } catch (e: Throwable) {
                 logFailure("claimBatch", e)
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    suspend fun isRecipientAuthorized(
+        chatId: Long,
+        staffLiveOrderId: Long? = null,
+    ): Boolean {
+        if (!trafficPolicy.allowsOutboundChat(chatId)) return false
+        if (!trafficPolicy.productMode) return true
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    if (staffLiveOrderId != null) {
+                        isProductOrderStaffChatAuthorized(connection, staffLiveOrderId, chatId)
+                    } else {
+                        isProductRecipientAuthorized(connection, chatId)
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: SQLException) {
+                logFailure("authorize recipient", e)
+                throw DatabaseUnavailableException()
+            } catch (e: Throwable) {
+                logFailure("authorize recipient", e)
                 throw DatabaseUnavailableException()
             }
         }
@@ -435,6 +558,7 @@ class TelegramOutboxRepository(
         withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
+                    if (!isProductOrderStaffChatAuthorized(connection, orderId, chatId)) return@use
                     connection.prepareStatement(
                         """
                         UPDATE telegram_staff_chat_order_messages
@@ -472,6 +596,10 @@ class TelegramOutboxRepository(
                 ds.connection.use { connection ->
                     connection.autoCommit = false
                     try {
+                        if (!isProductOrderStaffChatAuthorized(connection, orderId, chatId)) {
+                            connection.rollback()
+                            return@use
+                        }
                         val outboxId =
                             connection.prepareStatement(
                                 """
@@ -519,6 +647,84 @@ class TelegramOutboxRepository(
                 logFailure("enqueueStaffChatOrderFallback", e)
                 throw DatabaseUnavailableException()
             }
+        }
+    }
+
+    private fun isProductRecipientAuthorized(
+        connection: Connection,
+        chatId: Long,
+    ): Boolean {
+        if (!trafficPolicy.productMode) return true
+        val sql =
+            if (chatId > 0) {
+                "SELECT 1 FROM users WHERE telegram_user_id = ? LIMIT 1 FOR SHARE"
+            } else {
+                "SELECT 1 FROM venues WHERE staff_chat_id = ? LIMIT 1 FOR SHARE"
+            }
+        return connection.prepareStatement(sql).use { statement ->
+            statement.setLong(1, chatId)
+            statement.executeQuery().use { resultSet -> resultSet.next() }
+        }
+    }
+
+    private fun isProductGenericEnqueueRecipientAuthorized(
+        connection: Connection,
+        chatId: Long,
+    ): Boolean {
+        if (!trafficPolicy.productMode) return true
+        if (chatId <= 0) return false
+        return connection.prepareStatement(
+            "SELECT 1 FROM users WHERE telegram_user_id = ? LIMIT 1 FOR SHARE",
+        ).use { statement ->
+            statement.setLong(1, chatId)
+            statement.executeQuery().use { resultSet -> resultSet.next() }
+        }
+    }
+
+    private fun isProductVenueStaffChatAuthorized(
+        connection: Connection,
+        venueId: Long,
+        chatId: Long,
+    ): Boolean {
+        if (!trafficPolicy.productMode) return true
+        return connection.prepareStatement(
+            """
+            SELECT 1
+            FROM venues
+            WHERE id = ?
+              AND staff_chat_id = ?
+            LIMIT 1
+            FOR SHARE
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, chatId)
+            statement.executeQuery().use { resultSet -> resultSet.next() }
+        }
+    }
+
+    private fun isProductOrderStaffChatAuthorized(
+        connection: Connection,
+        orderId: Long,
+        chatId: Long,
+    ): Boolean {
+        if (!trafficPolicy.productMode) return true
+        return connection.prepareStatement(
+            """
+            SELECT 1
+            FROM telegram_staff_chat_order_messages live_message
+            JOIN venues live_venue ON live_venue.id = live_message.venue_id
+            WHERE live_message.order_id = ?
+              AND live_message.chat_id = ?
+              AND live_venue.staff_chat_id = ?
+            LIMIT 1
+            FOR SHARE OF live_venue
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, orderId)
+            statement.setLong(2, chatId)
+            statement.setLong(3, chatId)
+            statement.executeQuery().use { resultSet -> resultSet.next() }
         }
     }
 

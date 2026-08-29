@@ -752,12 +752,22 @@ class StaffChatNotifier(
                 ),
             )
         val claimResult =
-            notificationRepository.tryClaimAndEnqueue(
-                notificationKey = notificationKey,
-                chatId = chatId,
-                method = "sendMessage",
-                payloadJson = payloadJson,
-            )
+            if (trafficPolicy.productMode) {
+                notificationRepository.tryClaimAndEnqueueForVenue(
+                    notificationKey = notificationKey,
+                    venueId = venueId,
+                    chatId = chatId,
+                    method = "sendMessage",
+                    payloadJson = payloadJson,
+                )
+            } else {
+                notificationRepository.tryClaimAndEnqueue(
+                    notificationKey = notificationKey,
+                    chatId = chatId,
+                    method = "sendMessage",
+                    payloadJson = payloadJson,
+                )
+            }
         val result =
             when (claimResult) {
                 StaffChatNotificationClaim.CLAIMED -> StaffChatNotificationResult.SENT_OR_QUEUED
@@ -805,7 +815,13 @@ class StaffChatNotifier(
                 ),
             )
         val result =
-            if (notificationRepository.enqueue(chatId, "sendMessage", payloadJson)) {
+            if (
+                if (trafficPolicy.productMode) {
+                    notificationRepository.enqueueForVenue(venueId, chatId, "sendMessage", payloadJson)
+                } else {
+                    notificationRepository.enqueue(chatId, "sendMessage", payloadJson)
+                }
+            ) {
                 StaffChatNotificationResult.SENT_OR_QUEUED
             } else {
                 StaffChatNotificationResult.FAILED_ENQUEUE
