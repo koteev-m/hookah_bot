@@ -1010,6 +1010,23 @@ class VenueStaffRoutesTest {
 
             assertEquals(HttpStatusCode.BadRequest, repeatAcceptResponse.status)
             assertApiErrorEnvelope(repeatAcceptResponse, ApiErrorCodes.INVALID_INPUT)
+            val acceptAudit =
+                loadInviteAuditRows(jdbcUrl).single { it.action == "STAFF_INVITE_ACCEPTED" }
+            val acceptPayload = json.parseToJsonElement(acceptAudit.payload).jsonObject
+            assertEquals(
+                setOf(
+                    "venueId",
+                    "inviteHandle",
+                    "targetRole",
+                    "alreadyMember",
+                    "roleChanged",
+                    "keptHigherRole",
+                ),
+                acceptPayload.keys,
+            )
+            assertEquals("STAFF", acceptPayload.getValue("targetRole").jsonPrimitive.content)
+            assertFalse(acceptAudit.payload.contains(invitePayload.inviteCode))
+            assertEquals(1, loadInviteAuditRows(jdbcUrl).count { it.action == "STAFF_INVITE_ACCEPTED" })
         }
 
     @Test

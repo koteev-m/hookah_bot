@@ -2907,6 +2907,7 @@ class TelegramBotRouterTableTokenTest {
                     role = "STAFF",
                     ttlSeconds = any(),
                     maxActivePendingPerVenueRole = any(),
+                    auditLogRepository = auditLogRepository,
                 )
             } returns
                 StaffInviteCreateResult.Success(
@@ -2993,6 +2994,7 @@ class TelegramBotRouterTableTokenTest {
                     role = "STAFF",
                     ttlSeconds = any(),
                     maxActivePendingPerVenueRole = any(),
+                    auditLogRepository = auditLogRepository,
                 )
             }
         }
@@ -3025,6 +3027,7 @@ class TelegramBotRouterTableTokenTest {
                     role = "MANAGER",
                     ttlSeconds = any(),
                     maxActivePendingPerVenueRole = any(),
+                    auditLogRepository = auditLogRepository,
                 )
             } returns
                 StaffInviteCreateResult.Success(
@@ -3109,6 +3112,7 @@ class TelegramBotRouterTableTokenTest {
                     role = "STAFF",
                     ttlSeconds = any(),
                     maxActivePendingPerVenueRole = any(),
+                    auditLogRepository = auditLogRepository,
                 )
             } returns
                 StaffInviteCreateResult.Success(
@@ -3151,6 +3155,7 @@ class TelegramBotRouterTableTokenTest {
                     role = "STAFF",
                     ttlSeconds = any(),
                     maxActivePendingPerVenueRole = any(),
+                    auditLogRepository = auditLogRepository,
                 )
             }
             coVerify(exactly = 1) {
@@ -3175,6 +3180,7 @@ class TelegramBotRouterTableTokenTest {
                     role = "MANAGER",
                     ttlSeconds = any(),
                     maxActivePendingPerVenueRole = any(),
+                    auditLogRepository = auditLogRepository,
                 )
             } returns StaffInviteCreateResult.RateLimited(retryAfterSeconds = 60L)
 
@@ -3255,6 +3261,7 @@ class TelegramBotRouterTableTokenTest {
                     role = "STAFF",
                     ttlSeconds = any(),
                     maxActivePendingPerVenueRole = any(),
+                    auditLogRepository = auditLogRepository,
                 )
             } returns
                 StaffInviteCreateResult.Success(
@@ -3298,6 +3305,7 @@ class TelegramBotRouterTableTokenTest {
                     role = "STAFF",
                     ttlSeconds = any(),
                     maxActivePendingPerVenueRole = any(),
+                    auditLogRepository = auditLogRepository,
                 )
             }
             coVerify(exactly = 0) { outboxEnqueuer.enqueueSendMessage(201L, any(), any()) }
@@ -3326,7 +3334,9 @@ class TelegramBotRouterTableTokenTest {
                     createdAt = Instant.parse("2026-04-01T10:00:00Z"),
                     deletedAt = null,
                 )
-            coEvery { staffInviteRepositoryForRouter.acceptInvite(inviteCode, 300L, any()) } returns
+            coEvery {
+                staffInviteRepositoryForRouter.acceptInvite(inviteCode, 300L, auditLogRepository, any())
+            } returns
                 StaffInviteAcceptResult.Success(
                     member =
                         VenueStaffMember(
@@ -3338,7 +3348,6 @@ class TelegramBotRouterTableTokenTest {
                         ),
                     alreadyMember = false,
                     invitedRole = "STAFF",
-                    inviteCreatedByUserId = 200L,
                 )
 
             router.process(
@@ -3382,7 +3391,9 @@ class TelegramBotRouterTableTokenTest {
                     },
                 )
             }
-            coVerify { staffInviteRepositoryForRouter.acceptInvite(inviteCode, 300L, any()) }
+            coVerify {
+                staffInviteRepositoryForRouter.acceptInvite(inviteCode, 300L, auditLogRepository, any())
+            }
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
@@ -3619,7 +3630,7 @@ class TelegramBotRouterTableTokenTest {
                 )
             }
             coVerify(exactly = 0) {
-                staffInviteRepositoryForRouter.createBoundedInvite(any(), any(), any(), any(), any())
+                staffInviteRepositoryForRouter.createBoundedInvite(any(), any(), any(), any(), any(), any())
             }
         }
 
@@ -3646,7 +3657,7 @@ class TelegramBotRouterTableTokenTest {
                 outboxEnqueuer.enqueueSendMessage(100, "Нет доступа к заведению.", any())
             }
             coVerify(exactly = 0) {
-                staffInviteRepositoryForRouter.createBoundedInvite(any(), any(), any(), any(), any())
+                staffInviteRepositoryForRouter.createBoundedInvite(any(), any(), any(), any(), any(), any())
             }
         }
 

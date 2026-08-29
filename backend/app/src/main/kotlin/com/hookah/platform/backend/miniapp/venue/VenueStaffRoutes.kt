@@ -30,7 +30,6 @@ import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffRemoveResult
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffRepository
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffShift
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffUpdateResult
-import com.hookah.platform.backend.miniapp.venue.staff.appendOwnerInviteAcceptAuditBestEffort
 import com.hookah.platform.backend.platform.OwnerAccountAssignmentPreparationResult
 import com.hookah.platform.backend.platform.VenueOwnerAccountRepository
 import com.hookah.platform.backend.telegram.buildTelegramStartUrl
@@ -404,6 +403,7 @@ internal fun Route.venueStaffRoutes(
                 staffInviteRepository.acceptInvite(
                     code = request.inviteCode,
                     userId = userId,
+                    auditLogWriter = auditLogRepository,
                     createMember = createMember@{ connection, venueId, role, invitedByUserId ->
                         if (role.equals(VenueRole.OWNER.name, ignoreCase = true)) {
                             when (
@@ -430,7 +430,6 @@ internal fun Route.venueStaffRoutes(
                 )
             when (result) {
                 is StaffInviteAcceptResult.Success -> {
-                    appendOwnerInviteAcceptAuditBestEffort(auditLogRepository, result, logger)
                     val member =
                         venueStaffRepository.findMember(result.member.venueId, result.member.userId)
                             ?: result.member

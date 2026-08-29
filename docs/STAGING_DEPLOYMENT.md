@@ -185,6 +185,11 @@ RBAC remain required for Venue/Platform access. Product groups and outbound targ
 only through the exact current server-owned staff-chat/product workflow rules. The deploy preflight
 rejects nonempty static lists and a missing/placeholder invite pepper in this mode.
 
+Preserve an already explicit invite pepper byte-for-byte during this transition. If the old
+`ALLOWLIST` process used the built-in development fallback instead, capture only that fact (never the
+value), install a new restricted explicit pepper, and reconcile/reissue every still-pending
+staff/owner invite before relying on it; existing links cannot validate after the pepper changes.
+
 The policy is immutable for the lifetime of a backend process. In `ALLOWLIST`, updating either list
 requires:
 

@@ -10,7 +10,6 @@ import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteConfig
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteCreateResult
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteRepository
-import com.hookah.platform.backend.miniapp.venue.staff.appendOwnerInviteCreateAuditBestEffort
 import com.hookah.platform.backend.telegram.buildTelegramStartUrl
 import io.ktor.server.application.call
 import io.ktor.server.request.receive
@@ -567,6 +566,7 @@ internal fun Route.platformVenueRoutes(
                             ttlSeconds = ttlSeconds,
                             maxActivePendingPerVenueRole =
                                 abuseProtection.maxActivePendingInvitesPerVenueRole,
+                            auditLogRepository = auditLogRepository,
                         )
                 ) {
                     is StaffInviteCreateResult.Success -> createResult.invite
@@ -583,15 +583,6 @@ internal fun Route.platformVenueRoutes(
                     ?.takeIf { it.isNotBlank() }
                     ?.let { buildTelegramStartUrl(it, startPayload) }
             val copyText = deepLink ?: "/start $startPayload"
-            appendOwnerInviteCreateAuditBestEffort(
-                auditLogRepository = auditLogRepository,
-                actorUserId = actorUserId,
-                venueId = venueId,
-                ttlSeconds = result.ttlSeconds,
-                expiresAt = result.expiresAt,
-                deepLinkAvailable = deepLink != null,
-                logger = logger,
-            )
             call.respond(
                 PlatformOwnerInviteResponse(
                     code = result.code,

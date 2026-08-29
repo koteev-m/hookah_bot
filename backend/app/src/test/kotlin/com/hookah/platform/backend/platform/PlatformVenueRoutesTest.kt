@@ -20,6 +20,8 @@ import io.ktor.server.config.MapApplicationConfig
 import io.ktor.server.testing.testApplication
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import java.sql.DriverManager
 import java.sql.Statement
 import java.sql.Timestamp
@@ -645,11 +647,17 @@ class PlatformVenueRoutesTest {
             assertEquals("https://t.me/HookahInviteBot?start=$startPayload", invitePayload.deepLink)
             assertEquals(invitePayload.deepLink, invitePayload.copyText)
             assertTrue(invitePayload.instructions.contains("/start $startPayload"))
-            val createAuditPayloads = loadAuditPayloads(jdbcUrl, "VENUE_OWNER_INVITE_CREATE")
-            assertEquals(1, createAuditPayloads.size)
-            assertTrue(createAuditPayloads.single().contains("\"venueId\":$venueId"))
-            assertTrue(createAuditPayloads.single().contains("\"role\":\"OWNER\""))
-            assertFalse(createAuditPayloads.single().contains(invitePayload.code))
+            val createAudit = loadInviteAuditRows(jdbcUrl, "VENUE_OWNER_INVITE_CREATE").single()
+            assertEquals(ownerId, createAudit.actorUserId)
+            assertEquals(null, createAudit.targetUserId)
+            assertEquals("venue", createAudit.entityType)
+            assertEquals(venueId, createAudit.entityId)
+            val createAuditPayload = Json.parseToJsonElement(createAudit.payload).jsonObject
+            assertEquals(setOf("venueId", "inviteHandle", "targetRole"), createAuditPayload.keys)
+            assertEquals(venueId, createAuditPayload.getValue("venueId").jsonPrimitive.content.toLong())
+            assertTrue(createAuditPayload.getValue("inviteHandle").jsonPrimitive.content.startsWith("sih_"))
+            assertEquals("OWNER", createAuditPayload.getValue("targetRole").jsonPrimitive.content)
+            assertFalse(createAudit.payload.contains(invitePayload.code))
 
             val inviteeToken = issueToken(config, userId = inviteeId)
             val acceptResponse =
@@ -682,12 +690,107 @@ class PlatformVenueRoutesTest {
             assertEquals("NOT_LINKED", acceptPayload.member.profileLinkState)
             assertEquals("OWNER", loadVenueMemberRole(jdbcUrl, venueId, inviteeId))
             assertEquals(inviteeId, loadPrimaryOwnerForVenueAccount(jdbcUrl, venueId))
-            val acceptAuditPayloads = loadAuditPayloads(jdbcUrl, "VENUE_OWNER_INVITE_ACCEPT")
-            assertEquals(1, acceptAuditPayloads.size)
-            assertTrue(acceptAuditPayloads.single().contains("\"venueId\":$venueId"))
-            assertTrue(acceptAuditPayloads.single().contains("\"acceptedUserId\":$inviteeId"))
-            assertTrue(acceptAuditPayloads.single().contains("\"role\":\"OWNER\""))
-            assertFalse(acceptAuditPayloads.single().contains(invitePayload.code))
+            val acceptAudit = loadInviteAuditRows(jdbcUrl, "VENUE_OWNER_INVITE_ACCEPT").single()
+            assertEquals(inviteeId, acceptAudit.actorUserId)
+            assertEquals(inviteeId, acceptAudit.targetUserId)
+            assertEquals("venue", acceptAudit.entityType)
+            assertEquals(venueId, acceptAudit.entityId)
+            val acceptAuditPayload = Json.parseToJsonElement(acceptAudit.payload).jsonObject
+            assertEquals(
+                setOf(
+                    "venueId",
+                    "inviteHandle",
+                    "targetRole",
+                    "alreadyMember",
+                    "roleChanged",
+                    "keptHigherRole",
+                ),
+                acceptAuditPayload.keys,
+            )
+            assertEquals(venueId, acceptAuditPayload.getValue("venueId").jsonPrimitive.content.toLong())
+            assertEquals("OWNER", acceptAuditPayload.getValue("targetRole").jsonPrimitive.content)
+            assertEquals("false", acceptAuditPayload.getValue("alreadyMember").jsonPrimitive.content)
+            assertEquals("false", acceptAuditPayload.getValue("roleChanged").jsonPrimitive.content)
+            assertEquals("false", acceptAuditPayload.getValue("keptHigherRole").jsonPrimitive.content)
+            assertFalse(acceptAudit.payload.contains(invitePayload.code))
+            assertFalse(acceptAuditPayload.containsKey("acceptedUserId"))
+            assertFalse(acceptAuditPayload.containsKey("inviteCreatedByUserId"))
+        }
+
+    @Test
+    fun `owner invite acceptance audit failure rolls back owner assignment and invite use`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("platform-owner-invite-audit-rollback")
+            val platformOwnerId = 9_021L
+            val inviteeId = 9_022L
+            val config = buildConfig(jdbcUrl, platformOwnerId)
+
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl)
+            seedUser(jdbcUrl, platformOwnerId)
+            seedUser(jdbcUrl, inviteeId)
+            val inviteResponse =
+                client.post("/api/platform/venues/$venueId/owner-invite") {
+                    headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config, platformOwnerId)}") }
+                    contentType(ContentType.Application.Json)
+                    setBody(json.encodeToString(PlatformOwnerInviteRequest.serializer(), PlatformOwnerInviteRequest()))
+                }
+            assertEquals(HttpStatusCode.OK, inviteResponse.status)
+            val invite =
+                json.decodeFromString(PlatformOwnerInviteResponse.serializer(), inviteResponse.bodyAsText())
+            val inviteeToken = issueToken(config, inviteeId)
+
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                connection.prepareStatement(
+                    """
+                    ALTER TABLE audit_log
+                    ADD CONSTRAINT reject_owner_invite_accept
+                    CHECK (action <> 'VENUE_OWNER_INVITE_ACCEPT')
+                    """.trimIndent(),
+                ).use { it.executeUpdate() }
+            }
+
+            val failedAccept =
+                client.post("/api/venue/staff/invites/accept") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $inviteeToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            StaffInviteAcceptRequest.serializer(),
+                            StaffInviteAcceptRequest(inviteCode = invite.code),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.ServiceUnavailable, failedAccept.status)
+            assertApiErrorEnvelope(failedAccept, ApiErrorCodes.DATABASE_UNAVAILABLE)
+            assertEquals(null, loadVenueMemberRole(jdbcUrl, venueId, inviteeId))
+            assertEquals(null, loadVenueOwnerAccountId(jdbcUrl, venueId))
+            assertTrue(loadInviteAuditRows(jdbcUrl, "VENUE_OWNER_INVITE_ACCEPT").isEmpty())
+
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                connection.prepareStatement(
+                    "ALTER TABLE audit_log DROP CONSTRAINT reject_owner_invite_accept",
+                ).use { it.executeUpdate() }
+            }
+
+            val retry =
+                client.post("/api/venue/staff/invites/accept") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $inviteeToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            StaffInviteAcceptRequest.serializer(),
+                            StaffInviteAcceptRequest(inviteCode = invite.code),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, retry.status)
+            assertEquals("OWNER", loadVenueMemberRole(jdbcUrl, venueId, inviteeId))
+            assertEquals(inviteeId, loadPrimaryOwnerForVenueAccount(jdbcUrl, venueId))
+            assertEquals(1, loadInviteAuditRows(jdbcUrl, "VENUE_OWNER_INVITE_ACCEPT").size)
         }
 
     @Test
@@ -1075,9 +1178,50 @@ class PlatformVenueRoutesTest {
         }
     }
 
+    private fun loadInviteAuditRows(
+        jdbcUrl: String,
+        action: String,
+    ): List<InviteAuditRow> {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT actor_user_id, target_user_id, entity_type, entity_id, payload_json
+                FROM audit_log
+                WHERE action = ?
+                ORDER BY created_at
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setString(1, action)
+                statement.executeQuery().use { rs ->
+                    val result = mutableListOf<InviteAuditRow>()
+                    while (rs.next()) {
+                        result.add(
+                            InviteAuditRow(
+                                actorUserId = rs.getLong("actor_user_id"),
+                                targetUserId = rs.getLong("target_user_id").takeIf { !rs.wasNull() },
+                                entityType = rs.getString("entity_type"),
+                                entityId = rs.getLong("entity_id").takeIf { !rs.wasNull() },
+                                payload = rs.getString("payload_json"),
+                            ),
+                        )
+                    }
+                    return result
+                }
+            }
+        }
+    }
+
     @Serializable
     private data class PlatformVenueResponse(
         val venue: PlatformVenueDetailDto,
+    )
+
+    private data class InviteAuditRow(
+        val actorUserId: Long,
+        val targetUserId: Long?,
+        val entityType: String,
+        val entityId: Long?,
+        val payload: String,
     )
 
     @Serializable

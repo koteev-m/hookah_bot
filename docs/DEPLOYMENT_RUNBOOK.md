@@ -199,8 +199,12 @@ TELEGRAM_ALLOWED_CHAT_IDS=
 VENUE_STAFF_INVITE_SECRET_PEPPER=<explicit restricted secret>
 ```
 
-Preserve the bot token, username, long-polling mode and other secrets. Recreate exactly one backend
-with the reviewed candidate image, then execute the public Guest and
+Preserve the bot token, username, long-polling mode and every other secret. Preserve the current
+invite pepper byte-for-byte when it is already explicit. If the prior `ALLOWLIST` runtime relied on
+the old built-in development pepper, record that fact before restart, install a new restricted
+explicit pepper and reconcile/reissue every still-pending staff/owner invite because those links
+cannot validate under the new pepper. Recreate exactly one backend with the reviewed candidate image,
+then execute the public Guest and
 Platform Owner -> new Venue Owner -> new external Staff/Manager smoke defined in
 `docs/TESTING_QA_SMOKE_STRATEGY.md`. Do not manually capture or allowlist those identities.
 

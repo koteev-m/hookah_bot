@@ -99,7 +99,6 @@ import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffMutationSource
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffRemoveResult
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffRepository
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffUpdateResult
-import com.hookah.platform.backend.miniapp.venue.staff.appendOwnerInviteAcceptAuditBestEffort
 import com.hookah.platform.backend.miniapp.venue.tables.TableNumberConflictException
 import com.hookah.platform.backend.miniapp.venue.tables.VenueTableOwnerSummary
 import com.hookah.platform.backend.miniapp.venue.tables.VenueTableRepository
@@ -16906,6 +16905,7 @@ class TelegramBotRouter internal constructor(
                         ttlSeconds = staffInviteConfig.defaultTtlSeconds,
                         maxActivePendingPerVenueRole =
                             miniAppAbuseProtection.maxActivePendingInvitesPerVenueRole,
+                        auditLogRepository = auditLogRepository,
                     )
             ) {
                 is StaffInviteCreateResult.Success -> createResult.invite
@@ -17240,6 +17240,7 @@ class TelegramBotRouter internal constructor(
             staffInviteRepository.acceptInvite(
                 code = inviteCode,
                 userId = userId,
+                auditLogWriter = auditLogRepository,
                 createMember = createMember@{ connection, venueId, role, invitedByUserId ->
                     if (role.equals("OWNER", ignoreCase = true)) {
                         when (
@@ -17266,7 +17267,6 @@ class TelegramBotRouter internal constructor(
             )
         when (result) {
             is StaffInviteAcceptResult.Success -> {
-                appendOwnerInviteAcceptAuditBestEffort(auditLogRepository, result, logger)
                 enqueueMessage(
                     chatId,
                     buildStaffInviteAcceptedText(result),

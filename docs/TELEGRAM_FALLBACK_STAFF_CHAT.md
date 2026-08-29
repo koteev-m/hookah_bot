@@ -54,10 +54,11 @@ valid active OWNER/STAFF/MANAGER invite, but acceptance grants only the invite's
 stored venue and preserves TTL, revoked/used, audit, one-time and concurrency checks.
 
 Product group traffic is intentionally narrow. Structurally supported `/link`, `/unlink` and
-`/link_test` messages and staff operational callbacks may enter the Router, where the server must
-still prove a valid one-time link code or exact current staff-chat link, exact venue, current actor
-permission and entity state before idempotency or mutation. Unrelated group messages/callbacks are
-state-free. A copied callback from another group or venue is denied.
+`/link_test` messages and staff operational callbacks may enter the Router. Structural shape and
+current-link/callback authority are checked before idempotency. `/link` then verifies the one-time
+code, exact venue and current actor permission after the harmless idempotency acquisition but before
+any link mutation. Unrelated group messages/callbacks are state-free. A copied callback from another
+group or venue is denied.
 
 Outbound policy is structural at the Telegram boundary and server-authoritative at persistence and
 dispatch. Private recipients must resolve from the validated inbound/product user or exact booking,

@@ -181,8 +181,8 @@ MUST:
   Staff/Guest/foreign/Platform-only mutation is denied.
 - Platform Owner sees support tickets but not ordinary `VENUE_CHAT` unless future product policy explicitly changes it.
 SHOULD:
-- Transaction-bound safe audit for staff invite create/revoke and profile create/update/publish/hide,
-  plus existing owner invite/revoke. Staff role change/removal already has transaction-bound targeted
+- Transaction-bound safe audit for staff invite create/accept/revoke and profile create/update/publish/hide,
+  plus existing owner invite create/accept/revoke. Staff role change/removal already has transaction-bound targeted
   audit; never store invite secrets or profile/Telegram PII in audit payloads. Profile lifecycle
   audit remains a separate contract where not already implemented.
 
@@ -503,7 +503,7 @@ MUST:
   quota and limit-request management remain separate commercial contracts and existing pilot-created
   venues are preserved without history rewrite.
 - Platform Owner can create venue, invite/add venue OWNER users, list active OWNER memberships and revoke one OWNER only when another active OWNER remains.
-- OWNER invite/revoke actions are audited; membership revoke does not relink primary/legal/billing owner linkage.
+- OWNER invite create/accept/revoke actions are audited; membership revoke does not relink primary/legal/billing owner linkage.
 - Current implementation lifecycle statuses are `DRAFT`, `PUBLISHED`, `HIDDEN`, `PAUSED`, `SUSPENDED`, `ARCHIVED`, `DELETED`.
 - Target product lifecycle is `draft`, `onboarding`, `published`, `hidden`, `paused_by_owner`, `suspended_by_platform`, `archived`, `deletion_requested`, `deleted`; currently `onboarding` is folded into `DRAFT`, `paused_by_owner` into `PAUSED`, `suspended_by_platform` into `SUSPENDED`, and `deletion_requested` into `DELETED`.
 - Ability to hide/archive/delete venues; clean inactive venues.

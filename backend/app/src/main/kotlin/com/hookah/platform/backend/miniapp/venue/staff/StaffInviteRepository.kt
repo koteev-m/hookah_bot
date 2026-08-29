@@ -1,6 +1,7 @@
 package com.hookah.platform.backend.miniapp.venue.staff
 
-import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
+import com.hookah.platform.backend.miniapp.venue.TransactionalAuditLogWriter
+import com.hookah.platform.backend.miniapp.venue.TransactionalTargetedAuditLogWriter
 import com.hookah.platform.backend.miniapp.venue.VenueRole
 import com.hookah.platform.backend.miniapp.venue.VenueRoleMapping
 import kotlinx.coroutines.Dispatchers
@@ -36,29 +37,14 @@ class StaffInviteRepository(
         createdByUserId: Long,
         role: String,
         ttlSeconds: Long,
+        auditLogRepository: TransactionalAuditLogWriter,
     ): StaffInviteCodeResult? =
         createInviteInternal(
             venueId = venueId,
             createdByUserId = createdByUserId,
             role = role,
             ttlSeconds = ttlSeconds,
-            auditLogRepository = null,
-            maxActivePendingPerVenueRole = null,
-        ).inviteOrNull()
-
-    suspend fun createInvite(
-        venueId: Long,
-        createdByUserId: Long,
-        role: String,
-        ttlSeconds: Long,
-        auditLogRepository: AuditLogRepository,
-    ): StaffInviteCodeResult? =
-        createInviteInternal(
-            venueId = venueId,
-            createdByUserId = createdByUserId,
-            role = role,
-            ttlSeconds = ttlSeconds,
-            auditLogRepository = auditLogRepository,
+            auditLogWriter = auditLogRepository,
             maxActivePendingPerVenueRole = null,
         ).inviteOrNull()
 
@@ -68,7 +54,7 @@ class StaffInviteRepository(
         role: String,
         ttlSeconds: Long,
         maxActivePendingPerVenueRole: Int,
-        auditLogRepository: AuditLogRepository? = null,
+        auditLogRepository: TransactionalAuditLogWriter,
     ): StaffInviteCreateResult {
         require(maxActivePendingPerVenueRole > 0) {
             "maxActivePendingPerVenueRole must be positive"
@@ -78,7 +64,7 @@ class StaffInviteRepository(
             createdByUserId = createdByUserId,
             role = role,
             ttlSeconds = ttlSeconds,
-            auditLogRepository = auditLogRepository,
+            auditLogWriter = auditLogRepository,
             maxActivePendingPerVenueRole = maxActivePendingPerVenueRole,
         )
     }
@@ -88,7 +74,7 @@ class StaffInviteRepository(
         createdByUserId: Long,
         role: String,
         ttlSeconds: Long,
-        auditLogRepository: AuditLogRepository?,
+        auditLogWriter: TransactionalAuditLogWriter?,
         maxActivePendingPerVenueRole: Int?,
     ): StaffInviteCreateResult {
         val ds = dataSource ?: return StaffInviteCreateResult.DatabaseError
@@ -138,12 +124,12 @@ class StaffInviteRepository(
                         statement.setTimestamp(7, java.sql.Timestamp.from(expiresAt))
                         statement.executeUpdate()
                     }
-                    if (auditLogRepository != null) {
+                    if (auditLogWriter != null) {
                         appendInviteAudit(
                             connection = connection,
-                            auditLogRepository = auditLogRepository,
+                            auditLogWriter = auditLogWriter,
                             actorUserId = createdByUserId,
-                            action = STAFF_INVITE_CREATED_AUDIT_ACTION,
+                            action = createAuditActionFor(role),
                             venueId = venueId,
                             handle = handle,
                             targetRole = role,
@@ -248,7 +234,7 @@ class StaffInviteRepository(
         handle: String,
         actorUserId: Long,
         allowedRoles: Set<String>,
-        auditLogRepository: AuditLogRepository,
+        auditLogRepository: TransactionalAuditLogWriter,
     ): StaffInviteRevokeResult {
         val ds = dataSource ?: return StaffInviteRevokeResult.DatabaseError
         val normalizedHandle = normalizeOpaqueHandle(handle) ?: return StaffInviteRevokeResult.InvalidOrExpired
@@ -299,7 +285,7 @@ class StaffInviteRepository(
                     }
                     appendInviteAudit(
                         connection = connection,
-                        auditLogRepository = auditLogRepository,
+                        auditLogWriter = auditLogRepository,
                         actorUserId = actorUserId,
                         action = STAFF_INVITE_REVOKED_AUDIT_ACTION,
                         venueId = venueId,
@@ -353,6 +339,7 @@ class StaffInviteRepository(
     suspend fun acceptInvite(
         code: String,
         userId: Long,
+        auditLogWriter: TransactionalTargetedAuditLogWriter,
         createMember: suspend (Connection, Long, String, Long?) -> VenueStaffMember?,
     ): StaffInviteAcceptResult {
         val ds = dataSource ?: return StaffInviteAcceptResult.DatabaseError
@@ -387,25 +374,35 @@ class StaffInviteRepository(
                                     StaffInviteAcceptResult.InvalidOrExpired
                                 }
                             }
-                            connection.commit()
-                            return@use StaffInviteAcceptResult.Success(
-                                member = updatedMember,
-                                alreadyMember = true,
-                                invitedRole = invite.role,
-                                inviteCreatedByUserId = invite.createdByUserId,
-                                roleChanged = true,
+                            return@use commitAcceptedInvite(
+                                connection = connection,
+                                auditLogWriter = auditLogWriter,
+                                codeHash = codeHash,
+                                actorUserId = userId,
+                                result =
+                                    StaffInviteAcceptResult.Success(
+                                        member = updatedMember,
+                                        alreadyMember = true,
+                                        invitedRole = invite.role,
+                                        roleChanged = true,
+                                    ),
                             )
                         }
                         if (!markInviteUsed(connection, codeHash, nowTs, userId)) {
                             return@use rollbackAndReturn(connection) { StaffInviteAcceptResult.InvalidOrExpired }
                         }
-                        connection.commit()
-                        return@use StaffInviteAcceptResult.Success(
-                            member = normalizedExistingMember,
-                            alreadyMember = true,
-                            invitedRole = invite.role,
-                            inviteCreatedByUserId = invite.createdByUserId,
-                            keptHigherRole = existingRank > invitedRank,
+                        return@use commitAcceptedInvite(
+                            connection = connection,
+                            auditLogWriter = auditLogWriter,
+                            codeHash = codeHash,
+                            actorUserId = userId,
+                            result =
+                                StaffInviteAcceptResult.Success(
+                                    member = normalizedExistingMember,
+                                    alreadyMember = true,
+                                    invitedRole = invite.role,
+                                    keptHigherRole = existingRank > invitedRank,
+                                ),
                         )
                     }
                     val member = createMember(connection, invite.venueId, invite.role, invite.createdByUserId)
@@ -417,12 +414,17 @@ class StaffInviteRepository(
                                     StaffInviteAcceptResult.InvalidOrExpired
                                 }
                             }
-                            connection.commit()
-                            return@use StaffInviteAcceptResult.Success(
-                                member = existingAfterInsert,
-                                alreadyMember = true,
-                                invitedRole = invite.role,
-                                inviteCreatedByUserId = invite.createdByUserId,
+                            return@use commitAcceptedInvite(
+                                connection = connection,
+                                auditLogWriter = auditLogWriter,
+                                codeHash = codeHash,
+                                actorUserId = userId,
+                                result =
+                                    StaffInviteAcceptResult.Success(
+                                        member = existingAfterInsert,
+                                        alreadyMember = true,
+                                        invitedRole = invite.role,
+                                    ),
                             )
                         }
                         return@use rollbackAndReturn(connection) { StaffInviteAcceptResult.DatabaseError }
@@ -430,12 +432,17 @@ class StaffInviteRepository(
                     if (!markInviteUsed(connection, codeHash, nowTs, userId)) {
                         return@use rollbackAndReturn(connection) { StaffInviteAcceptResult.InvalidOrExpired }
                     }
-                    connection.commit()
-                    StaffInviteAcceptResult.Success(
-                        member = member,
-                        alreadyMember = false,
-                        invitedRole = invite.role,
-                        inviteCreatedByUserId = invite.createdByUserId,
+                    commitAcceptedInvite(
+                        connection = connection,
+                        auditLogWriter = auditLogWriter,
+                        codeHash = codeHash,
+                        actorUserId = userId,
+                        result =
+                            StaffInviteAcceptResult.Success(
+                                member = member,
+                                alreadyMember = false,
+                                invitedRole = invite.role,
+                            ),
                     )
                 } catch (e: Exception) {
                     rollbackBestEffort(connection)
@@ -686,19 +693,20 @@ class StaffInviteRepository(
 
     private fun appendInviteAudit(
         connection: Connection,
-        auditLogRepository: AuditLogRepository,
+        auditLogWriter: TransactionalAuditLogWriter,
         actorUserId: Long,
         action: String,
         venueId: Long,
         handle: String,
         targetRole: String,
     ) {
-        auditLogRepository.appendJson(
+        val ownerAction = action == VENUE_OWNER_INVITE_CREATE_AUDIT_ACTION
+        auditLogWriter.appendJson(
             connection = connection,
             actorUserId = actorUserId,
             action = action,
-            entityType = STAFF_INVITE_AUDIT_ENTITY_TYPE,
-            entityId = null,
+            entityType = if (ownerAction) VENUE_OWNER_INVITE_AUDIT_ENTITY_TYPE else STAFF_INVITE_AUDIT_ENTITY_TYPE,
+            entityId = venueId.takeIf { ownerAction },
             payload =
                 buildJsonObject {
                     put("venueId", venueId)
@@ -707,6 +715,50 @@ class StaffInviteRepository(
                 },
         )
     }
+
+    private fun commitAcceptedInvite(
+        connection: Connection,
+        auditLogWriter: TransactionalTargetedAuditLogWriter,
+        codeHash: String,
+        actorUserId: Long,
+        result: StaffInviteAcceptResult.Success,
+    ): StaffInviteAcceptResult.Success {
+        val action = acceptAuditActionFor(result.invitedRole)
+        val ownerAction = action == VENUE_OWNER_INVITE_ACCEPT_AUDIT_ACTION
+        auditLogWriter.appendTargetedJson(
+            connection = connection,
+            actorUserId = actorUserId,
+            targetUserId = result.member.userId,
+            action = action,
+            entityType = if (ownerAction) VENUE_OWNER_INVITE_AUDIT_ENTITY_TYPE else STAFF_INVITE_AUDIT_ENTITY_TYPE,
+            entityId = result.member.venueId.takeIf { ownerAction },
+            payload =
+                buildJsonObject {
+                    put("venueId", result.member.venueId)
+                    put("inviteHandle", deriveOpaqueHandle(codeHash))
+                    put("targetRole", result.invitedRole.trim().uppercase(Locale.ROOT))
+                    put("alreadyMember", result.alreadyMember)
+                    put("roleChanged", result.roleChanged)
+                    put("keptHigherRole", result.keptHigherRole)
+                },
+        )
+        connection.commit()
+        return result
+    }
+
+    private fun createAuditActionFor(role: String): String =
+        if (role.equals(VenueRole.OWNER.name, ignoreCase = true)) {
+            VENUE_OWNER_INVITE_CREATE_AUDIT_ACTION
+        } else {
+            STAFF_INVITE_CREATED_AUDIT_ACTION
+        }
+
+    private fun acceptAuditActionFor(role: String): String =
+        if (role.equals(VenueRole.OWNER.name, ignoreCase = true)) {
+            VENUE_OWNER_INVITE_ACCEPT_AUDIT_ACTION
+        } else {
+            STAFF_INVITE_ACCEPTED_AUDIT_ACTION
+        }
 
     private fun generateCode(length: Int = 10): String {
         val builder = StringBuilder(length)
@@ -794,7 +846,6 @@ sealed interface StaffInviteAcceptResult {
         val member: VenueStaffMember,
         val alreadyMember: Boolean,
         val invitedRole: String,
-        val inviteCreatedByUserId: Long,
         val roleChanged: Boolean = false,
         val keptHigherRole: Boolean = false,
     ) : StaffInviteAcceptResult
@@ -827,9 +878,13 @@ private data class PendingStaffInviteRow(
 )
 
 const val STAFF_INVITE_CREATED_AUDIT_ACTION = "STAFF_INVITE_CREATED"
+const val STAFF_INVITE_ACCEPTED_AUDIT_ACTION = "STAFF_INVITE_ACCEPTED"
 const val STAFF_INVITE_REVOKED_AUDIT_ACTION = "STAFF_INVITE_REVOKED"
+const val VENUE_OWNER_INVITE_CREATE_AUDIT_ACTION = "VENUE_OWNER_INVITE_CREATE"
+const val VENUE_OWNER_INVITE_ACCEPT_AUDIT_ACTION = "VENUE_OWNER_INVITE_ACCEPT"
 
 private const val STAFF_INVITE_AUDIT_ENTITY_TYPE = "staff_invite"
+private const val VENUE_OWNER_INVITE_AUDIT_ENTITY_TYPE = "venue"
 private const val STAFF_INVITE_HANDLE_PREFIX = "sih_"
 private const val STAFF_INVITE_HANDLE_CONTEXT = "staff-invite-handle-v1"
 private const val STAFF_INVITE_HANDLE_LENGTH = 47

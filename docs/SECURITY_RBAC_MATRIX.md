@@ -71,7 +71,8 @@ Tokens and client-provided ids are context pointers, not authority:
   Telegram initData signature/freshness validation and a positive identity. Authentication upserts
   the user and yields Guest authority only when no active venue/platform role exists.
 - A valid active invite can be previewed and accepted by a previously unknown identity. The server
-  derives venue and role from the invite and preserves TTL, revoked/used, one-time, audit and
+  derives venue and role from the invite and preserves TTL, revoked/used, one-time, transaction-bound
+  create/accept audit and
   concurrency checks. Platform Owner may grant OWNER for the exact venue; an active Venue Owner may
   grant STAFF or MANAGER only for an own venue. No invite grants cross-venue or Platform authority.
 - Every Venue and Platform request continues to re-check active membership/role and tenant scope.
@@ -235,7 +236,7 @@ These actions require server-side authorization and should require confirmation,
 | Support ticket transferred/closed/assignee changed | Audit status/scope/actor/source; no message text/raw Telegram payloads. |
 | Analytics export | If implemented, audit export actor/scope and exclude raw PII/message text/payment secrets. |
 | Staff profile published/hidden, public photo changed, Today Shift marked active/canceled, future tip method updated/approved/disabled | Audit actor/target/old-new safe fields; never expose private Telegram ids or raw external payment/provider data. |
-| Staff invite created/revoked | Transaction-bound `STAFF_INVITE_CREATED` / `STAFF_INVITE_REVOKED`; actor column plus venue, opaque handle and safe Staff/Manager role only. No code/hash/deep link or identity payload. |
+| Staff invite created/accepted/revoked | Transaction-bound `STAFF_INVITE_CREATED`, `STAFF_INVITE_ACCEPTED` and `STAFF_INVITE_REVOKED`; OWNER preserves the established `VENUE_OWNER_INVITE_CREATE` / `VENUE_OWNER_INVITE_ACCEPT` action names. Acceptance writes exactly one targeted audit before commit on the same connection as membership and invite use; failure rolls back all three. Actor/target stay only in their dedicated columns. Payload is limited to venue, opaque handle, stored safe role and acceptance-state booleans; no code/hash/deep link or identity payload. Invalid, expired, revoked, used, replayed, denied and concurrent-loser paths write no acceptance audit. |
 | Staff profile created/updated/published/hidden | Transaction-bound `STAFF_PROFILE_*`; target membership and one-active-link check share the transaction. Audit contains safe venue/profile id, linkage/target-role class, changed field names and old/new visibility/linkage only. Denial/duplicate/no-op/rollback has no success audit or Telegram identity. |
 | Staff Schedule shift created/updated/canceled/restored | Owner/Manager own venue only; update preview and cancel confirmation; active cancel has stronger warning; optimistic stale rejection; `STAFF_SHIFT_CREATED/UPDATED/CANCELED/RESTORED` audit is atomic with safe old/new interval/lifecycle/timezone fields and no private linkage/raw request. |
 | Staff module settings updated | Owner/Manager own venue only through `STAFF_MODULE_SETTINGS_MANAGE`; full-object CAS and `STAFF_MODULE_SETTINGS_UPDATED` audit are atomic. No-op, stale, denial, audit failure or rollback writes no success audit; payload contains only safe old/new setting values and changed field names. |
@@ -251,7 +252,9 @@ H2 V123 add nullable `audit_log.target_user_id BIGINT`, the named foreign key
 inserts keep `target_user_id = NULL`.
 
 - Actor identity remains only in `audit_log.actor_user_id`; target identity remains only in
-  `audit_log.target_user_id`. Neither identity is duplicated in `payload_json`.
+  `audit_log.target_user_id`. Neither identity is duplicated in `payload_json`. Invite acceptance is
+  self-service, so the acceptor is both the authenticated actor and the affected membership target;
+  the inviter is not misattributed as the acceptance actor.
 - `VENUE_STAFF_ROLE_CHANGED` uses entity `venue` / `venueId` and payload `oldRole`, `newRole`,
   `source`. `VENUE_STAFF_MEMBER_REMOVED` uses the same entity and payload `oldRole`, `source`.
   Source is server-owned `VENUE_MINI_APP` or `TELEGRAM_BOT`; `venueId` is not duplicated in payload.

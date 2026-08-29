@@ -1,6 +1,8 @@
 package com.hookah.platform.backend.miniapp.venue.staff
 
 import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
+import com.hookah.platform.backend.miniapp.venue.TransactionalAuditLogWriter
+import com.hookah.platform.backend.miniapp.venue.TransactionalTargetedAuditLogWriter
 import com.zaxxer.hikari.HikariConfig
 import com.zaxxer.hikari.HikariDataSource
 import kotlinx.coroutines.Dispatchers
@@ -14,6 +16,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.flywaydb.core.Flyway
 import org.junit.jupiter.api.Test
 import java.sql.Connection
+import java.sql.SQLException
 import java.sql.Statement
 import java.time.Instant
 import java.util.Base64
@@ -37,7 +40,7 @@ class StaffInviteRepositoryTest {
         withFixture {
             val staff = createInvite(role = "STAFF", audit = true)
             val manager = createInvite(role = "MANAGER", audit = true)
-            createInvite(role = "OWNER", audit = false)
+            val owner = createInvite(role = "OWNER", audit = true)
 
             val managerView = repository.listPendingInvites(venueId, setOf("STAFF"))
             assertEquals(listOf(staff.handle), managerView?.map { it.handle })
@@ -52,22 +55,32 @@ class StaffInviteRepositoryTest {
             assertFalse(staff.handle.contains(staff.code))
 
             val audits = auditRows()
-            assertEquals(2, audits.size)
+            assertEquals(3, audits.size)
             val storedHashes = storedInviteHashes()
             audits.forEach { audit ->
                 assertEquals(ownerUserId, audit.actorUserId)
-                assertEquals(STAFF_INVITE_CREATED_AUDIT_ACTION, audit.action)
-                assertEquals("staff_invite", audit.entityType)
-                assertNull(audit.entityId)
+                assertNull(audit.targetUserId)
                 val payload = Json.parseToJsonElement(audit.payloadJson).jsonObject
                 assertEquals(setOf("venueId", "inviteHandle", "targetRole"), payload.keys)
                 assertEquals(venueId, payload.getValue("venueId").jsonPrimitive.content.toLong())
-                assertTrue(payload.getValue("targetRole").jsonPrimitive.content in setOf("STAFF", "MANAGER"))
+                val targetRole = payload.getValue("targetRole").jsonPrimitive.content
+                assertTrue(targetRole in setOf("STAFF", "MANAGER", "OWNER"))
+                assertEquals(if (targetRole == "OWNER") "venue" else "staff_invite", audit.entityType)
+                assertEquals(venueId.takeIf { targetRole == "OWNER" }, audit.entityId)
                 assertTrue(payload.getValue("inviteHandle").jsonPrimitive.content.startsWith("sih_"))
                 assertFalse(audit.payloadJson.contains(staff.code))
                 assertFalse(audit.payloadJson.contains(manager.code))
+                assertFalse(audit.payloadJson.contains(owner.code))
                 assertTrue(storedHashes.none { audit.payloadJson.contains(it) })
             }
+            assertEquals(
+                listOf(
+                    STAFF_INVITE_CREATED_AUDIT_ACTION,
+                    STAFF_INVITE_CREATED_AUDIT_ACTION,
+                    VENUE_OWNER_INVITE_CREATE_AUDIT_ACTION,
+                ),
+                audits.map { it.action },
+            )
         }
 
     @Test
@@ -91,7 +104,7 @@ class StaffInviteRepositoryTest {
             assertEquals(StaffInvitePreviewResult.InvalidOrExpired, repository.previewInvite(created.code))
             assertEquals(
                 StaffInviteAcceptResult.InvalidOrExpired,
-                repository.acceptInvite(created.code, inviteeUserId) { _, _, _, _ ->
+                repository.acceptInvite(created.code, inviteeUserId, auditLogRepository) { _, _, _, _ ->
                     error("revoked invite must not reach membership creation")
                 },
             )
@@ -129,7 +142,11 @@ class StaffInviteRepositoryTest {
         withFixture {
             val used = createInvite(role = "STAFF", audit = false)
             val accepted =
-                repository.acceptInvite(used.code, inviteeUserId) { connection, targetVenueId, role, invitedBy ->
+                repository.acceptInvite(
+                    used.code,
+                    inviteeUserId,
+                    auditLogRepository,
+                ) { connection, targetVenueId, role, invitedBy ->
                     insertMember(connection, targetVenueId, inviteeUserId, role, invitedBy)
                 }
             assertIs<StaffInviteAcceptResult.Success>(accepted)
@@ -159,7 +176,7 @@ class StaffInviteRepositoryTest {
                 ),
             )
             assertNull(inviteState(expired.handle).revokedAt)
-            assertTrue(auditRows().isEmpty())
+            assertEquals(listOf(STAFF_INVITE_ACCEPTED_AUDIT_ACTION), auditRows().map { it.action })
         }
 
     @Test
@@ -173,7 +190,7 @@ class StaffInviteRepositoryTest {
                     val accept =
                         async(Dispatchers.IO) {
                             start.await()
-                            repository.acceptInvite(created.code, inviteeUserId) {
+                            repository.acceptInvite(created.code, inviteeUserId, auditLogRepository) {
                                     connection,
                                     targetVenueId,
                                     role,
@@ -205,7 +222,10 @@ class StaffInviteRepositoryTest {
             assertNotEquals(state.usedAt != null, state.revokedAt != null)
             assertEquals(acceptWon, state.usedAt != null)
             assertEquals(revokeWon, state.revokedAt != null)
-            assertEquals(if (revokeWon) 1 else 0, auditRows().size)
+            assertEquals(
+                if (acceptWon) STAFF_INVITE_ACCEPTED_AUDIT_ACTION else STAFF_INVITE_REVOKED_AUDIT_ACTION,
+                auditRows().single().action,
+            )
         }
 
     @Test
@@ -220,7 +240,7 @@ class StaffInviteRepositoryTest {
                     List(2) {
                         async(Dispatchers.IO) {
                             start.await()
-                            repository.acceptInvite(created.code, inviteeUserId) {
+                            repository.acceptInvite(created.code, inviteeUserId, auditLogRepository) {
                                     connection,
                                     targetVenueId,
                                     role,
@@ -250,7 +270,107 @@ class StaffInviteRepositoryTest {
             assertEquals(inviteeUserId, state.usedByUserId)
             assertNull(state.revokedAt)
             assertEquals(1, inviteCount())
-            assertEquals(listOf(STAFF_INVITE_CREATED_AUDIT_ACTION), auditRows().map { it.action })
+            assertEquals(
+                listOf(STAFF_INVITE_CREATED_AUDIT_ACTION, STAFF_INVITE_ACCEPTED_AUDIT_ACTION),
+                auditRows().map { it.action },
+            )
+        }
+
+    @Test
+    fun `staff manager and owner acceptance write one exact safe targeted audit each`() =
+        withFixture {
+            val createdByRole =
+                listOf("STAFF", "MANAGER", "OWNER").associateWith { role ->
+                    createInvite(role = role, audit = false)
+                }
+
+            createdByRole.forEach { (role, created) ->
+                val accepted =
+                    repository.acceptInvite(created.code, inviteeUserId, auditLogRepository) {
+                            connection,
+                            targetVenueId,
+                            invitedRole,
+                            invitedBy,
+                        ->
+                        insertMember(connection, targetVenueId, inviteeUserId, invitedRole, invitedBy)
+                    }
+                val success = assertIs<StaffInviteAcceptResult.Success>(accepted)
+                assertEquals(role, success.invitedRole)
+            }
+
+            val audits = auditRows()
+            assertEquals(3, audits.size)
+            assertEquals(
+                listOf(
+                    STAFF_INVITE_ACCEPTED_AUDIT_ACTION,
+                    STAFF_INVITE_ACCEPTED_AUDIT_ACTION,
+                    VENUE_OWNER_INVITE_ACCEPT_AUDIT_ACTION,
+                ),
+                audits.map { it.action },
+            )
+            audits.forEachIndexed { index, audit ->
+                val role = listOf("STAFF", "MANAGER", "OWNER")[index]
+                val created = createdByRole.getValue(role)
+                assertEquals(inviteeUserId, audit.actorUserId)
+                assertEquals(inviteeUserId, audit.targetUserId)
+                assertEquals(if (role == "OWNER") "venue" else "staff_invite", audit.entityType)
+                assertEquals(venueId.takeIf { role == "OWNER" }, audit.entityId)
+                val payload = Json.parseToJsonElement(audit.payloadJson).jsonObject
+                assertEquals(
+                    setOf(
+                        "venueId",
+                        "inviteHandle",
+                        "targetRole",
+                        "alreadyMember",
+                        "roleChanged",
+                        "keptHigherRole",
+                    ),
+                    payload.keys,
+                )
+                assertEquals(venueId, payload.getValue("venueId").jsonPrimitive.content.toLong())
+                assertEquals(created.handle, payload.getValue("inviteHandle").jsonPrimitive.content)
+                assertEquals(role, payload.getValue("targetRole").jsonPrimitive.content)
+                assertEquals(index > 0, payload.getValue("alreadyMember").jsonPrimitive.content.toBoolean())
+                assertEquals(index > 0, payload.getValue("roleChanged").jsonPrimitive.content.toBoolean())
+                assertFalse(payload.getValue("keptHigherRole").jsonPrimitive.content.toBoolean())
+                assertFalse(audit.payloadJson.contains(created.code))
+                assertTrue(storedInviteHashes().none { audit.payloadJson.contains(it) })
+                assertFalse(payload.containsKey("acceptedUserId"))
+                assertFalse(payload.containsKey("inviteCreatedByUserId"))
+                assertFalse(payload.containsKey("actorUserId"))
+                assertFalse(payload.containsKey("targetUserId"))
+            }
+        }
+
+    @Test
+    fun `accept audit failure rolls back membership and invite use`() =
+        withFixture {
+            val created = createInvite(role = "STAFF", audit = false)
+            val failingAuditWriter =
+                TransactionalTargetedAuditLogWriter { _, _, _, _, _, _, _ ->
+                    throw SQLException("forced acceptance audit failure")
+                }
+
+            val result =
+                repository.acceptInvite(created.code, inviteeUserId, failingAuditWriter) {
+                        connection,
+                        targetVenueId,
+                        role,
+                        invitedBy,
+                    ->
+                    insertMember(connection, targetVenueId, inviteeUserId, role, invitedBy)
+                }
+
+            assertEquals(StaffInviteAcceptResult.DatabaseError, result)
+            assertEquals(0, memberCount(venueId, inviteeUserId))
+            val state = inviteState(created.handle)
+            assertNull(state.usedAt)
+            assertNull(state.usedByUserId)
+            assertTrue(auditRows().isEmpty())
+            assertEquals(
+                listOf(created.handle),
+                repository.listPendingInvites(venueId, setOf("STAFF"))?.map { it.handle },
+            )
         }
 
     @Test
@@ -263,7 +383,7 @@ class StaffInviteRepositoryTest {
                 assertEquals(StaffInvitePreviewResult.InvalidOrExpired, repository.previewInvite(malformedCode))
                 assertEquals(
                     StaffInviteAcceptResult.InvalidOrExpired,
-                    repository.acceptInvite(malformedCode, inviteeUserId) { _, _, _, _ ->
+                    repository.acceptInvite(malformedCode, inviteeUserId, auditLogRepository) { _, _, _, _ ->
                         error("malformed invite must not reach membership creation")
                     },
                 )
@@ -452,6 +572,7 @@ class StaffInviteRepositoryTest {
                     createdByUserId = ownerUserId,
                     role = role,
                     ttlSeconds = ttlSeconds,
+                    auditLogRepository = NO_OP_AUDIT_LOG_WRITER,
                 )
             } ?: error("Failed to create invite")
 
@@ -515,7 +636,7 @@ class StaffInviteRepositoryTest {
             dataSource.connection.use { connection ->
                 connection.prepareStatement(
                     """
-                    SELECT actor_user_id, action, entity_type, entity_id, payload_json
+                    SELECT actor_user_id, target_user_id, action, entity_type, entity_id, payload_json
                     FROM audit_log
                     ORDER BY id
                     """.trimIndent(),
@@ -526,6 +647,7 @@ class StaffInviteRepositoryTest {
                                 add(
                                     AuditRow(
                                         actorUserId = rs.getLong("actor_user_id"),
+                                        targetUserId = rs.getLong("target_user_id").takeIf { !rs.wasNull() },
                                         action = rs.getString("action"),
                                         entityType = rs.getString("entity_type"),
                                         entityId = rs.getLong("entity_id").takeIf { !rs.wasNull() },
@@ -688,6 +810,7 @@ class StaffInviteRepositoryTest {
 
     private data class AuditRow(
         val actorUserId: Long,
+        val targetUserId: Long?,
         val action: String,
         val entityType: String,
         val entityId: Long?,
@@ -703,6 +826,9 @@ class StaffInviteRepositoryTest {
 }
 
 private const val INVITE_PEPPER = "repository-test-invite-pepper"
+
+private val NO_OP_AUDIT_LOG_WRITER =
+    TransactionalAuditLogWriter { _, _, _, _, _, _ -> Unit }
 
 private fun deriveHandleForTest(
     codeHash: String,
