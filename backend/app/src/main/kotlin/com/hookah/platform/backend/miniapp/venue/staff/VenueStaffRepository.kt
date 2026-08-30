@@ -4,8 +4,6 @@ import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
 import com.hookah.platform.backend.miniapp.venue.TransactionalTargetedAuditLogWriter
 import com.hookah.platform.backend.miniapp.venue.VenueRole
 import com.hookah.platform.backend.miniapp.venue.VenueRoleMapping
-import com.hookah.platform.backend.telegram.debugTelegramException
-import com.hookah.platform.backend.telegram.sanitizeTelegramForLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.buildJsonObject
@@ -253,13 +251,7 @@ class VenueStaffRepository(
             }
             loadMemberProjections(connection, venueId, userId = userId).singleOrNull()
         } catch (e: Exception) {
-            logger.warn(
-                "Failed to create venue member venueId={} userId={}: {}",
-                venueId,
-                userId,
-                sanitizeTelegramForLog(e.message),
-            )
-            logger.debugTelegramException(e) { "createMember exception venueId=$venueId userId=$userId" }
+            logger.warn("Failed to create venue member error_type={}", e::class.simpleName ?: "unknown")
             null
         }
     }
@@ -360,12 +352,7 @@ class VenueStaffRepository(
                         val rawRole = rs.getString("role")
                         val role = VenueRoleMapping.fromDb(rawRole)
                         if (role == null) {
-                            logger.warn(
-                                "Unknown venue role {} for venueId={} userId={}",
-                                rawRole,
-                                venueId,
-                                memberUserId,
-                            )
+                            logger.warn("Unknown venue role in membership projection")
                         } else {
                             val username = normalizeTelegramUsername(rs.getString("username"))
                             val activeProfileCount = rs.getInt("active_profile_count")

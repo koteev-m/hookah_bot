@@ -85,6 +85,7 @@ class TelegramLongPollingWorker(
                             decision.reason,
                         )
                 }
+                offset = nextOffset(update.updateId)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -92,8 +93,7 @@ class TelegramLongPollingWorker(
                     "Telegram update processing failed source=long_polling errorType={}",
                     e::class.simpleName ?: "unknown",
                 )
-            } finally {
-                offset = nextOffset(update.updateId)
+                return
             }
         }
     }

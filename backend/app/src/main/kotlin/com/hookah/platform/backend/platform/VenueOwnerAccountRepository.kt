@@ -374,6 +374,47 @@ class VenueOwnerAccountRepository(private val dataSource: DataSource?) {
         defaultLimit: Int,
         updatedByUserId: Long?,
     ): OwnerAccountAssignmentPreparationResult {
+        val venue =
+            loadVenueOwnerAccountForUpdate(connection, venueId)
+                ?: return OwnerAccountAssignmentPreparationResult.NotFound
+        return prepareOwnerAssignmentForLockedVenue(
+            connection = connection,
+            venueId = venueId,
+            venue = venue,
+            ownerUserId = ownerUserId,
+            defaultLimit = defaultLimit,
+            updatedByUserId = updatedByUserId,
+        )
+    }
+
+    internal fun prepareOperationalOwnerInviteInTransaction(
+        connection: Connection,
+        venueId: Long,
+        ownerUserId: Long,
+        defaultLimit: Int,
+        updatedByUserId: Long?,
+    ): Boolean {
+        val venue = loadVenueOwnerAccountForUpdate(connection, venueId) ?: return false
+        // Operational OWNER membership is independent of the venue's commercial account owner.
+        if (venue.ownerAccountId != null) return true
+        return prepareOwnerAssignmentForLockedVenue(
+            connection = connection,
+            venueId = venueId,
+            venue = venue,
+            ownerUserId = ownerUserId,
+            defaultLimit = defaultLimit,
+            updatedByUserId = updatedByUserId,
+        ) is OwnerAccountAssignmentPreparationResult.Success
+    }
+
+    private fun prepareOwnerAssignmentForLockedVenue(
+        connection: Connection,
+        venueId: Long,
+        venue: VenueOwnerAccountLink,
+        ownerUserId: Long,
+        defaultLimit: Int,
+        updatedByUserId: Long?,
+    ): OwnerAccountAssignmentPreparationResult {
         val account =
             getOrCreateForOwnerInTransaction(
                 connection = connection,
@@ -381,9 +422,6 @@ class VenueOwnerAccountRepository(private val dataSource: DataSource?) {
                 defaultLimit = defaultLimit,
                 updatedByUserId = updatedByUserId,
             )
-        val venue =
-            loadVenueOwnerAccountForUpdate(connection, venueId)
-                ?: return OwnerAccountAssignmentPreparationResult.NotFound
         if (venue.ownerAccountId == account.id) {
             val summary =
                 buildQuotaSummary(connection, account.id)

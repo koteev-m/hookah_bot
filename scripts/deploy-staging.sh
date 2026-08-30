@@ -14,6 +14,7 @@ GRADLE_JVM_ARGS="${GRADLE_JVM_ARGS:--Xmx2048m -XX:MaxMetaspaceSize=768m}"
 RUN_PUBLIC_CHECKS="${RUN_PUBLIC_CHECKS:-true}"
 HEALTHCHECK_ATTEMPTS="${HEALTHCHECK_ATTEMPTS:-20}"
 HEALTHCHECK_SLEEP_SECONDS="${HEALTHCHECK_SLEEP_SECONDS:-3}"
+STAGING_ADMISSION_PROFILE="${STAGING_ADMISSION_PROFILE:-public-pilot}"
 
 if [[ -z "${REMOTE}" ]]; then
   echo "Usage: $0 user@vps-host"
@@ -26,8 +27,18 @@ if [[ -z "${REMOTE}" ]]; then
   echo "  DOCKER_PLATFORM=${DOCKER_PLATFORM}"
   echo "  HEALTHCHECK_ATTEMPTS=${HEALTHCHECK_ATTEMPTS}"
   echo "  HEALTHCHECK_SLEEP_SECONDS=${HEALTHCHECK_SLEEP_SECONDS}"
+  echo "  STAGING_ADMISSION_PROFILE=public-pilot"
+  echo "    Use isolated-allowlist only for a separately reviewed isolated smoke."
   exit 2
 fi
+
+case "${STAGING_ADMISSION_PROFILE}" in
+  public-pilot | isolated-allowlist) ;;
+  *)
+    echo "STAGING_ADMISSION_PROFILE must be public-pilot or isolated-allowlist" >&2
+    exit 2
+    ;;
+esac
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -77,19 +88,15 @@ fi
 
 cd "${REPO_ROOT}"
 
-echo "==> Validating compose config"
-BACKEND_IMAGE="${BACKEND_IMAGE}" \
-VITE_BACKEND_PUBLIC_URL="${STAGING_PUBLIC_URL}" \
-MINIAPP_DEV_SERVER_URL= \
-MINIAPP_STATIC_DIR=/app/miniapp \
-CORS_ALLOWED_HOSTS="${STAGING_PUBLIC_URL}" \
-docker compose config --quiet
+echo "==> Validating staging admission guard fixtures"
+bash scripts/validate-staging-admission.sh --self-test docker-compose.yml
 
-echo "==> Uploading compose files to ${REMOTE}:${STAGING_PATH}"
+echo "==> Uploading deployment metadata to ${REMOTE}:${STAGING_PATH}"
 ssh "${REMOTE}" "mkdir -p '${STAGING_PATH}'"
 rsync -azR \
   docker-compose.yml \
   backend/Dockerfile \
+  scripts/validate-staging-admission.sh \
   scripts/seed-staging.sh \
   docs/env/staging.env.example \
   docs/STAGING_DEPLOYMENT.md \
@@ -110,13 +117,21 @@ ssh "${REMOTE}" "
   set -euo pipefail
   cd '${STAGING_PATH}'
   missing=0
-  for key in POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD DB_JDBC_URL DB_USER DB_PASSWORD TELEGRAM_WEBAPP_PUBLIC_URL MINIAPP_STATIC_DIR CORS_ALLOWED_HOSTS; do
+  for key in APP_ENV POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD DB_JDBC_URL DB_USER DB_PASSWORD TELEGRAM_TRAFFIC_POLICY TELEGRAM_WEBAPP_PUBLIC_URL MINIAPP_STATIC_DIR CORS_ALLOWED_HOSTS; do
     if ! grep -qE \"^\${key}=.+\" .env; then
       echo \"Missing or empty required env: \${key}\" >&2
       missing=1
     fi
   done
-  exit \${missing}
+  if [[ \${missing} -ne 0 ]]; then
+    exit \${missing}
+  fi
+
+  BACKEND_IMAGE='${BACKEND_IMAGE}' \
+    bash scripts/validate-staging-admission.sh \
+      --profile '${STAGING_ADMISSION_PROFILE}' \
+      --env-file .env \
+      --compose-file docker-compose.yml
 "
 
 echo "==> Building backend image locally: ${BACKEND_IMAGE} (${DOCKER_PLATFORM})"
@@ -164,8 +179,19 @@ ssh "${REMOTE}" "
     return 1
   }
 
-  BACKEND_IMAGE='${BACKEND_IMAGE}' docker compose up -d --no-build postgres backend
-  BACKEND_IMAGE='${BACKEND_IMAGE}' docker compose ps
+  compose_staging() {
+    env \
+      -u APP_ENV \
+      -u TELEGRAM_TRAFFIC_POLICY \
+      -u TELEGRAM_ALLOWED_USER_IDS \
+      -u TELEGRAM_ALLOWED_CHAT_IDS \
+      -u VENUE_STAFF_INVITE_SECRET_PEPPER \
+      BACKEND_IMAGE='${BACKEND_IMAGE}' \
+      docker compose --env-file .env \"\$@\"
+  }
+
+  compose_staging up -d --no-build postgres backend
+  compose_staging ps
   wait_http 'local backend health' GET http://127.0.0.1:8080/health
   wait_http 'local database health' GET http://127.0.0.1:8080/db/health
   wait_http 'local Mini App static' HEAD http://127.0.0.1:8080/miniapp/

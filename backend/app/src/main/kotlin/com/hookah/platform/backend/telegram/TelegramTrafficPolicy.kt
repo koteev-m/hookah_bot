@@ -1,5 +1,6 @@
 package com.hookah.platform.backend.telegram
 
+import com.hookah.platform.backend.telegram.db.StaffChatLinkCodeFormat
 import io.ktor.server.config.ApplicationConfig
 import java.util.Locale
 
@@ -10,6 +11,7 @@ class TelegramTrafficPolicy private constructor(
 ) {
     enum class Mode {
         ALLOWLIST,
+        PRODUCT,
         UNRESTRICTED,
     }
 
@@ -23,6 +25,7 @@ class TelegramTrafficPolicy private constructor(
         CHAT_NOT_ALLOWED,
         PRIVATE_ACTOR_CHAT_MISMATCH,
         UNSUPPORTED_CHAT_TYPE,
+        UNSUPPORTED_GROUP_TRAFFIC,
     }
 
     sealed interface InboundDecision {
@@ -37,12 +40,14 @@ class TelegramTrafficPolicy private constructor(
 
     private val allowedUserIds = allowedUserIds.toSet()
     private val allowedChatIds = allowedChatIds.toSet()
+    internal val productMode: Boolean = mode == Mode.PRODUCT
 
     internal val outboundClaimScope: TelegramOutboundClaimScope =
         TelegramOutboundClaimScope(
             unrestricted = mode == Mode.UNRESTRICTED,
+            productAuthoritative = mode == Mode.PRODUCT,
             eligibleChatIds =
-                if (mode == Mode.UNRESTRICTED) {
+                if (mode != Mode.ALLOWLIST) {
                     emptySet()
                 } else {
                     allowedChatIds.filterTo(mutableSetOf()) { chatId ->
@@ -77,26 +82,26 @@ class TelegramTrafficPolicy private constructor(
         if (actorId <= 0) {
             return denied(InboundDenialReason.INVALID_ACTOR)
         }
-        if (actorId !in allowedUserIds) {
+        if (mode == Mode.ALLOWLIST && actorId !in allowedUserIds) {
             return denied(InboundDenialReason.ACTOR_NOT_ALLOWED)
         }
 
         return when (chat.type) {
             "private" -> evaluatePrivateChat(actorId, chat.id)
-            "group", "supergroup" -> evaluateGroupChat(chat.id)
+            "group", "supergroup" -> evaluateGroupChat(update, chat.id)
             else -> denied(InboundDenialReason.UNSUPPORTED_CHAT_TYPE)
         }
     }
 
     fun allowsMiniAppUser(userId: Long): Boolean {
         if (userId <= 0) return false
-        return mode == Mode.UNRESTRICTED ||
+        return mode != Mode.ALLOWLIST ||
             (userId in allowedUserIds && userId in allowedChatIds)
     }
 
     fun allowsOutboundChat(chatId: Long): Boolean {
         if (chatId == 0L) return false
-        if (mode == Mode.UNRESTRICTED) {
+        if (mode != Mode.ALLOWLIST) {
             return true
         }
         return when {
@@ -113,6 +118,9 @@ class TelegramTrafficPolicy private constructor(
         if (chatId == 0L || userId <= 0) return false
         if (mode == Mode.UNRESTRICTED) {
             return true
+        }
+        if (mode == Mode.PRODUCT) {
+            return chatId < 0 || chatId == userId
         }
         if (userId !in allowedUserIds) {
             return false
@@ -137,20 +145,47 @@ class TelegramTrafficPolicy private constructor(
         if (actorId != chatId) {
             return denied(InboundDenialReason.PRIVATE_ACTOR_CHAT_MISMATCH)
         }
-        if (chatId !in allowedChatIds) {
+        if (mode == Mode.ALLOWLIST && chatId !in allowedChatIds) {
             return denied(InboundDenialReason.CHAT_NOT_ALLOWED)
         }
         return InboundDecision.Allowed
     }
 
-    private fun evaluateGroupChat(chatId: Long): InboundDecision {
+    private fun evaluateGroupChat(
+        update: TelegramUpdate,
+        chatId: Long,
+    ): InboundDecision {
         if (chatId >= 0) {
             return denied(InboundDenialReason.INVALID_CHAT)
         }
-        if (chatId !in allowedChatIds) {
+        if (mode == Mode.ALLOWLIST && chatId !in allowedChatIds) {
             return denied(InboundDenialReason.CHAT_NOT_ALLOWED)
         }
+        if (mode == Mode.PRODUCT && !isSupportedProductGroupTraffic(update)) {
+            return denied(InboundDenialReason.UNSUPPORTED_GROUP_TRAFFIC)
+        }
         return InboundDecision.Allowed
+    }
+
+    private fun isSupportedProductGroupTraffic(update: TelegramUpdate): Boolean {
+        update.message?.let { message ->
+            val text = message.text?.trim() ?: return false
+            val commandToken = text.takeWhile { !it.isWhitespace() }
+            val commandName =
+                commandToken
+                    .takeIf { it.startsWith('/') }
+                    ?.substringBefore('@')
+                    ?.lowercase(Locale.ROOT)
+            if (commandName !in PRODUCT_GROUP_COMMANDS) return false
+            if (commandName != "/link") return true
+            val arguments = text.drop(commandToken.length).trim().split(Regex("\\s+"))
+            return arguments.size == 1 && StaffChatLinkCodeFormat.normalizeCode(arguments.single()) != null
+        }
+
+        val callbackData = update.callbackQuery?.data ?: return false
+        return PRODUCT_GROUP_CALLBACK_PREFIXES.any { prefix ->
+            callbackData.length > prefix.length && callbackData.startsWith(prefix)
+        }
     }
 
     private fun denied(reason: InboundDenialReason): InboundDecision = InboundDecision.Denied(reason)
@@ -170,14 +205,14 @@ class TelegramTrafficPolicy private constructor(
             val rawChatIds = config.optionalString(CHAT_IDS_KEY)
             val mode = resolveMode(rawPolicy, normalizedEnv)
 
-            if (mode == Mode.UNRESTRICTED) {
+            if (mode != Mode.ALLOWLIST) {
                 if (!rawUserIds.isNullOrBlank()) {
-                    invalidConfig(USER_IDS_KEY, null, "must be absent when policy is UNRESTRICTED")
+                    invalidConfig(USER_IDS_KEY, null, "must be absent when policy is ${mode.name}")
                 }
                 if (!rawChatIds.isNullOrBlank()) {
-                    invalidConfig(CHAT_IDS_KEY, null, "must be absent when policy is UNRESTRICTED")
+                    invalidConfig(CHAT_IDS_KEY, null, "must be absent when policy is ${mode.name}")
                 }
-                return unrestricted()
+                return if (mode == Mode.PRODUCT) product() else unrestricted()
             }
 
             val userIds = parseIds(rawUserIds, USER_IDS_KEY, allowNegative = false)
@@ -196,13 +231,20 @@ class TelegramTrafficPolicy private constructor(
                 allowedChatIds = emptySet(),
             )
 
+        fun product(): TelegramTrafficPolicy =
+            TelegramTrafficPolicy(
+                mode = Mode.PRODUCT,
+                allowedUserIds = emptySet(),
+                allowedChatIds = emptySet(),
+            )
+
         private fun resolveMode(
             rawPolicy: String?,
             appEnv: String,
         ): Mode {
             if (rawPolicy == null) {
                 if (appEnv == "staging") {
-                    invalidConfig(POLICY_KEY, null, "ALLOWLIST is required in staging")
+                    invalidConfig(POLICY_KEY, null, "ALLOWLIST or PRODUCT is required in staging")
                 }
                 return Mode.UNRESTRICTED
             }
@@ -213,8 +255,8 @@ class TelegramTrafficPolicy private constructor(
             val mode =
                 Mode.entries.firstOrNull { it.name == normalized }
                     ?: invalidConfig(POLICY_KEY, null, "contains an unknown value")
-            if (appEnv == "staging" && mode != Mode.ALLOWLIST) {
-                invalidConfig(POLICY_KEY, null, "ALLOWLIST is required in staging")
+            if (appEnv == "staging" && mode == Mode.UNRESTRICTED) {
+                invalidConfig(POLICY_KEY, null, "ALLOWLIST or PRODUCT is required in staging")
             }
             return mode
         }
@@ -260,23 +302,53 @@ class TelegramTrafficPolicy private constructor(
 
         private val USER_ID_PATTERN = Regex("[1-9][0-9]*")
         private val CHAT_ID_PATTERN = Regex("-?[1-9][0-9]*")
+        private val PRODUCT_GROUP_COMMANDS = setOf("/link", "/unlink", "/link_test")
+        private val PRODUCT_GROUP_CALLBACK_PREFIXES =
+            listOf(
+                "staff_booking_confirm:",
+                "staff_booking_message:",
+                "staff_booking_seated_ask:",
+                "staff_booking_noshow_ask:",
+                "staff_booking_seated_yes:",
+                "staff_booking_noshow_yes:",
+                "staff_booking_cancel_ask:",
+                "staff_booking_cancel_back:",
+                "staff_booking_cancel_yes:",
+                "sbc_r:",
+                "sbc_y:",
+                "fb_reply:",
+                "sc_ob_a:",
+                "sc_ob_d:",
+                "sc_se_a:",
+                "sc_se_r:",
+                "sc_oc_ask:",
+                "sc_oc_back:",
+                "sc_or:",
+                "sc_oc_yes:",
+                "sc_call_ack:",
+                "sc_call_done:",
+            )
     }
 }
 
 class TelegramOutboundClaimScope internal constructor(
     internal val unrestricted: Boolean,
+    internal val productAuthoritative: Boolean = false,
     eligibleChatIds: Set<Long>,
 ) {
     internal val eligibleChatIds: Set<Long> = eligibleChatIds.toSet()
     internal val eligiblePositiveRecipientIds: List<Long>? =
-        if (unrestricted) {
+        if (unrestricted || productAuthoritative) {
             null
         } else {
             this.eligibleChatIds.asSequence().filter { it > 0 }.sorted().toList()
         }
 
     override fun toString(): String =
-        "TelegramOutboundClaimScope(unrestricted=$unrestricted, eligibleChats=${eligibleChatIds.size})"
+        "TelegramOutboundClaimScope(" +
+            "unrestricted=$unrestricted, " +
+            "productAuthoritative=$productAuthoritative, " +
+            "eligibleChats=${eligibleChatIds.size})"
 }
 
 private fun ApplicationConfig.optionalString(path: String): String? = propertyOrNull(path)?.getString()

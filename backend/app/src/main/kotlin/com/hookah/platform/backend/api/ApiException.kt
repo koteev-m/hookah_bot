@@ -103,6 +103,12 @@ class TooManyRequestsException(
         details = details,
     )
 
+class RequestBodyTooLargeException : ApiException(
+    code = ApiErrorCodes.INVALID_INPUT,
+    httpStatus = HttpStatusCode.PayloadTooLarge,
+    message = "Request body is too large",
+)
+
 class DatabaseUnavailableException(
     details: JsonObject? = null,
 ) : ApiException(

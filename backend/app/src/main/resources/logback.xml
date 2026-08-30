@@ -6,6 +6,10 @@
     </appender>
 
     <logger name="io.ktor.client" level="INFO" />
+    <!-- Ktor diagnostics render concrete request URIs; HttpAccess owns safe request summaries. -->
+    <logger name="io.ktor.server" level="INFO" />
+    <logger name="io.ktor.server.plugins.cors.CORS" level="WARN" />
+    <logger name="io.ktor.auth" level="INFO" />
     <root level="INFO">
         <appender-ref ref="STDOUT" />
     </root>

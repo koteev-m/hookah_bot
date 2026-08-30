@@ -2,13 +2,15 @@ package com.hookah.platform.backend.platform
 
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.NotFoundException
+import com.hookah.platform.backend.miniapp.security.MiniAppAbuseProtection
+import com.hookah.platform.backend.miniapp.security.enforceMiniAppRateLimit
+import com.hookah.platform.backend.miniapp.security.throwMiniAppRateLimited
 import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteConfig
+import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteCreateResult
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteRepository
-import com.hookah.platform.backend.miniapp.venue.staff.appendOwnerInviteCreateAuditBestEffort
 import com.hookah.platform.backend.telegram.buildTelegramStartUrl
-import com.hookah.platform.backend.telegram.sanitizeTelegramForLog
 import io.ktor.server.application.call
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
@@ -215,7 +217,7 @@ data class PlatformVenueOwnerQuotaUpdateRequest(
     val commercialNote: String? = null,
 )
 
-fun Route.platformVenueRoutes(
+internal fun Route.platformVenueRoutes(
     platformConfig: PlatformConfig,
     venueRepository: PlatformVenueRepository,
     auditLogRepository: AuditLogRepository,
@@ -224,6 +226,7 @@ fun Route.platformVenueRoutes(
     venueOwnerAccountRepository: VenueOwnerAccountRepository = VenueOwnerAccountRepository(null),
     staffInviteRepository: StaffInviteRepository,
     staffInviteConfig: StaffInviteConfig,
+    abuseProtection: MiniAppAbuseProtection,
     telegramBotUsername: String? = null,
 ) {
     val logger = org.slf4j.LoggerFactory.getLogger("PlatformVenueRoutes")
@@ -519,11 +522,8 @@ fun Route.platformVenueRoutes(
                         )
                     }.onFailure { error ->
                         logger.warn(
-                            "Failed to append owner revoke audit venueId={} actorUserId={} revokedUserId={}: {}",
-                            venueId,
-                            actorUserId,
-                            revokedUserId,
-                            sanitizeTelegramForLog(error.message),
+                            "Failed to append owner revoke audit error_type={}",
+                            error::class.simpleName ?: "unknown",
                         )
                     }
                     call.respond(
@@ -552,13 +552,29 @@ fun Route.platformVenueRoutes(
                     ?: throw InvalidInputException("venueId must be a number")
             val request = call.receive<PlatformOwnerInviteRequest>()
             val ttlSeconds = resolveInviteTtl(request.ttlSeconds, staffInviteConfig)
+            enforceMiniAppRateLimit(
+                call,
+                abuseProtection.tryInviteCreate(actorUserId, venueId),
+            )
             val result =
-                staffInviteRepository.createInvite(
-                    venueId = venueId,
-                    createdByUserId = actorUserId,
-                    role = "OWNER",
-                    ttlSeconds = ttlSeconds,
-                ) ?: throw com.hookah.platform.backend.api.DatabaseUnavailableException()
+                when (
+                    val createResult =
+                        staffInviteRepository.createBoundedInvite(
+                            venueId = venueId,
+                            createdByUserId = actorUserId,
+                            role = "OWNER",
+                            ttlSeconds = ttlSeconds,
+                            maxActivePendingPerVenueRole =
+                                abuseProtection.maxActivePendingInvitesPerVenueRole,
+                            auditLogRepository = auditLogRepository,
+                        )
+                ) {
+                    is StaffInviteCreateResult.Success -> createResult.invite
+                    is StaffInviteCreateResult.RateLimited ->
+                        throwMiniAppRateLimited(call, createResult.retryAfterSeconds)
+                    StaffInviteCreateResult.DatabaseError ->
+                        throw com.hookah.platform.backend.api.DatabaseUnavailableException()
+                }
             val startPayload = buildStaffInviteStartPayload(result.code)
             val deepLink =
                 telegramBotUsername
@@ -567,15 +583,6 @@ fun Route.platformVenueRoutes(
                     ?.takeIf { it.isNotBlank() }
                     ?.let { buildTelegramStartUrl(it, startPayload) }
             val copyText = deepLink ?: "/start $startPayload"
-            appendOwnerInviteCreateAuditBestEffort(
-                auditLogRepository = auditLogRepository,
-                actorUserId = actorUserId,
-                venueId = venueId,
-                ttlSeconds = result.ttlSeconds,
-                expiresAt = result.expiresAt,
-                deepLinkAvailable = deepLink != null,
-                logger = logger,
-            )
             call.respond(
                 PlatformOwnerInviteResponse(
                     code = result.code,

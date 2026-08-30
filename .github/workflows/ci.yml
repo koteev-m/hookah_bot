@@ -96,6 +96,7 @@ jobs:
             --tests "com.hookah.platform.backend.support.SupportThreadReadRepositoryTest" \
             --tests "com.hookah.platform.backend.telegram.BookingMessageStaffChatNotifierTest" \
             --tests "com.hookah.platform.backend.telegram.StaffChatNotifierTest" \
+            --tests "com.hookah.platform.backend.telegram.TelegramOutboxVenueAuthorityTest" \
             --tests "com.hookah.platform.backend.telegram.TelegramOutboxWorkerTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.VenueOrderRoutesTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.promotions.VenuePromotionRoutesTest" \
@@ -104,6 +105,7 @@ jobs:
             --tests "com.hookah.platform.backend.miniapp.venue.VenueMenuRoutesTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.AuditLogRepositoryTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.VenueStaffRoutesTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.staff.StaffInviteRepositoryTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.staff.VenueStaffRepositoryTest" \
             --tests "com.hookah.platform.backend.platform.PlatformVenueRoutesTest" \
             --tests "com.hookah.platform.backend.platform.PlatformRoutesTest" \
@@ -111,6 +113,7 @@ jobs:
             --tests "com.hookah.platform.backend.platform.PlatformVenueMemberRepositoryTest" \
             --tests "com.hookah.platform.backend.platform.VenueOwnerAccountRepositoryTest" \
             --tests "com.hookah.platform.backend.telegram.db.VenueConnectionRequestRepositoryTest" \
+            --tests "com.hookah.platform.backend.telegram.db.VenueRepositoryTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.VenueOnboardingRoutesTest" \
             --tests "com.hookah.platform.backend.platform.PlatformOnboardingRoutesTest" \
             --tests "com.hookah.platform.backend.telegram.TelegramBotRouterVenueConnectionRequestFlowTest" \
@@ -142,6 +145,7 @@ jobs:
               "com.hookah.platform.backend.support.SupportThreadReadRepositoryTest",
               "com.hookah.platform.backend.telegram.BookingMessageStaffChatNotifierTest",
               "com.hookah.platform.backend.telegram.StaffChatNotifierTest",
+              "com.hookah.platform.backend.telegram.TelegramOutboxVenueAuthorityTest",
               "com.hookah.platform.backend.telegram.TelegramOutboxWorkerTest",
               "com.hookah.platform.backend.miniapp.venue.VenueOrderRoutesTest",
               "com.hookah.platform.backend.miniapp.venue.promotions.VenuePromotionRoutesTest",
@@ -150,6 +154,7 @@ jobs:
               "com.hookah.platform.backend.miniapp.venue.VenueMenuRoutesTest",
               "com.hookah.platform.backend.miniapp.venue.AuditLogRepositoryTest",
               "com.hookah.platform.backend.miniapp.venue.VenueStaffRoutesTest",
+              "com.hookah.platform.backend.miniapp.venue.staff.StaffInviteRepositoryTest",
               "com.hookah.platform.backend.miniapp.venue.staff.VenueStaffRepositoryTest",
               "com.hookah.platform.backend.platform.PlatformVenueRoutesTest",
               "com.hookah.platform.backend.platform.PlatformRoutesTest",
@@ -157,6 +162,7 @@ jobs:
               "com.hookah.platform.backend.platform.PlatformVenueMemberRepositoryTest",
               "com.hookah.platform.backend.platform.VenueOwnerAccountRepositoryTest",
               "com.hookah.platform.backend.telegram.db.VenueConnectionRequestRepositoryTest",
+              "com.hookah.platform.backend.telegram.db.VenueRepositoryTest",
               "com.hookah.platform.backend.miniapp.venue.VenueOnboardingRoutesTest",
               "com.hookah.platform.backend.platform.PlatformOnboardingRoutesTest",
               "com.hookah.platform.backend.telegram.TelegramBotRouterVenueConnectionRequestFlowTest",
@@ -168,21 +174,25 @@ jobs:
               "com.hookah.platform.backend.support.SupportThreadReadRepositoryTest": 21,
               "com.hookah.platform.backend.telegram.BookingMessageStaffChatNotifierTest": 6,
               "com.hookah.platform.backend.telegram.StaffChatNotifierTest": 40,
-              "com.hookah.platform.backend.telegram.TelegramOutboxWorkerTest": 13,
+              "com.hookah.platform.backend.telegram.TelegramOutboxVenueAuthorityTest": 2,
+              "com.hookah.platform.backend.telegram.TelegramOutboxWorkerTest": 18,
               "com.hookah.platform.backend.miniapp.guest.GuestOrderRoutesTest": 61,
               "com.hookah.platform.backend.telegram.db.GuestOrderIdempotencyFingerprintTest": 7,
               "com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepositoryTest": 54,
               "com.hookah.platform.backend.miniapp.venue.VenueMenuRoutesTest": 46,
-              "com.hookah.platform.backend.platform.PlatformVenueRoutesTest": 13,
+              "com.hookah.platform.backend.miniapp.venue.VenueStaffRoutesTest": 34,
+              "com.hookah.platform.backend.miniapp.venue.staff.StaffInviteRepositoryTest": 11,
+              "com.hookah.platform.backend.platform.PlatformVenueRoutesTest": 16,
               "com.hookah.platform.backend.platform.PlatformRoutesTest": 9,
               "com.hookah.platform.backend.platform.PlatformVenueRepositoryTest": 1,
               "com.hookah.platform.backend.platform.PlatformVenueMemberRepositoryTest": 1,
               "com.hookah.platform.backend.platform.VenueOwnerAccountRepositoryTest": 9,
               "com.hookah.platform.backend.telegram.db.VenueConnectionRequestRepositoryTest": 11,
+              "com.hookah.platform.backend.telegram.db.VenueRepositoryTest": 7,
               "com.hookah.platform.backend.miniapp.venue.VenueOnboardingRoutesTest": 8,
               "com.hookah.platform.backend.platform.PlatformOnboardingRoutesTest": 15,
               "com.hookah.platform.backend.telegram.TelegramBotRouterVenueConnectionRequestFlowTest": 18,
-              "com.hookah.platform.backend.telegram.TelegramBotRouterTableTokenTest": 553,
+              "com.hookah.platform.backend.telegram.TelegramBotRouterTableTokenTest": 560,
               "com.hookah.platform.backend.telegram.TelegramKeyboardsTest": 169,
           }
           required_test_names = {
@@ -205,9 +215,32 @@ jobs:
                   "claim skips disallowed rows without mutation and does not starve allowed rows",
                   "disallowed producers create no outbox or staff notification state",
                   "malformed payload is terminal local validation without transport fallback or metrics",
+                  "product staff notifications require the exact venue staff chat",
+                  "product worker rechecks staff chat authority immediately before dispatch",
+              },
+              "com.hookah.platform.backend.telegram.TelegramOutboxVenueAuthorityTest": {
+                  "product venue enqueue rejects stale staff chat after relink",
+              },
+              "com.hookah.platform.backend.miniapp.venue.VenueStaffRoutesTest": {
+                  "audit failure returns safe error and rolls back role change and removal",
+              },
+              "com.hookah.platform.backend.miniapp.venue.staff.StaffInviteRepositoryTest": {
+                  "staff manager and owner acceptance write one exact safe targeted audit each",
+                  "accept audit failure rolls back membership and invite use",
+                  "concurrent double accept commits one staff membership and one invite use",
+                  "accept versus revoke race has exactly one winner without partial membership",
+              },
+              "com.hookah.platform.backend.platform.PlatformVenueRoutesTest": {
+                  "owner invite acceptance audit failure rolls back owner assignment and invite use",
+                  "second operational owner invite preserves existing commercial owner across audit rollback and retry",
+                  "product admission supports platform owner to new venue owner to external staff and manager",
               },
               "com.hookah.platform.backend.telegram.TelegramBotRouterTableTokenTest": {
                   "bot booking create uses zone A once when resolver would next return zone B",
+                  "product mode gives a brand new private identity the normal guest menu",
+                  "product mode lets unknown identities preview and accept staff manager and owner invites",
+                  "product mode rejects a staff callback copied into another group before idempotency",
+                  "product mode callback answer is enqueued only with exact venue group authority",
               },
           }
           totals = {key: 0 for key in ("tests", "skipped", "failures", "errors")}
@@ -622,9 +655,13 @@ jobs:
           echo "CI timezone contract: $TZ"
           JAVA_TOOL_OPTIONS=-Dapi.version=1.44 _JAVA_OPTIONS=-Xmx4g \
             ./gradlew --no-daemon --max-workers=1 :backend:app:test \
+            --tests "com.hookah.platform.backend.HttpAccessLogPrivacyTest" \
+            --tests "com.hookah.platform.backend.miniapp.security.MiniAppAbuseProtectionTest" \
             --tests "com.hookah.platform.backend.telegram.TelegramKeyboardsTest" \
             --tests "com.hookah.platform.backend.telegram.SendMessagePayloadTest" \
             --tests "com.hookah.platform.backend.telegram.TelegramBotRouterLinkCommandTest" \
+            --tests "com.hookah.platform.backend.telegram.TelegramProductAbuseLimiterTest" \
+            --tests "com.hookah.platform.backend.telegram.TelegramRateLimiterTest" \
             --tests "com.hookah.platform.backend.telegram.TelegramTrafficPolicyStartupTest" \
             --tests "com.hookah.platform.backend.telegram.TelegramTrafficPolicyConfigTest" \
             --tests "com.hookah.platform.backend.telegram.TelegramTrafficPolicyTest" \
@@ -651,33 +688,45 @@ jobs:
 
           report_dir = Path("backend/app/build/test-results/test")
           required_suites = {
+              "com.hookah.platform.backend.HttpAccessLogPrivacyTest": 1,
+              "com.hookah.platform.backend.miniapp.security.MiniAppAbuseProtectionTest": 3,
               "com.hookah.platform.backend.telegram.TelegramKeyboardsTest": 169,
               "com.hookah.platform.backend.telegram.SendMessagePayloadTest": 1,
-              "com.hookah.platform.backend.telegram.TelegramBotRouterLinkCommandTest": 1,
-              "com.hookah.platform.backend.telegram.TelegramTrafficPolicyStartupTest": 1,
-              "com.hookah.platform.backend.telegram.TelegramTrafficPolicyConfigTest": 7,
-              "com.hookah.platform.backend.telegram.TelegramTrafficPolicyTest": 5,
+              "com.hookah.platform.backend.telegram.TelegramBotRouterLinkCommandTest": 23,
+              "com.hookah.platform.backend.telegram.TelegramProductAbuseLimiterTest": 7,
+              "com.hookah.platform.backend.telegram.TelegramRateLimiterTest": 2,
+              "com.hookah.platform.backend.telegram.TelegramTrafficPolicyStartupTest": 4,
+              "com.hookah.platform.backend.telegram.TelegramTrafficPolicyConfigTest": 9,
+              "com.hookah.platform.backend.telegram.TelegramTrafficPolicyTest": 8,
               "com.hookah.platform.backend.telegram.TelegramTrafficPolicyLoggingTest": 1,
               "com.hookah.platform.backend.telegram.TelegramLongPollingWorkerTest": 5,
               "com.hookah.platform.backend.telegram.TelegramInboundUpdateWorkerTest": 3,
               "com.hookah.platform.backend.telegram.TelegramBotRouterIdempotencyTest": 2,
               "com.hookah.platform.backend.telegram.TelegramQueueDepthMetricsTest": 2,
               "com.hookah.platform.backend.telegram.TelegramWebhookConfigTest": 4,
-              "com.hookah.platform.backend.telegram.TelegramWebhookRoutesTest": 4,
+              "com.hookah.platform.backend.telegram.TelegramWebhookRoutesTest": 5,
               "com.hookah.platform.backend.telegram.TelegramApiClientTrafficPolicyTest": 6,
-              "com.hookah.platform.backend.miniapp.auth.TelegramAuthRouteTest": 7,
+              "com.hookah.platform.backend.miniapp.auth.TelegramAuthRouteTest": 11,
               "com.hookah.platform.backend.miniapp.auth.TelegramInitDataValidatorTest": 10,
               "com.hookah.platform.backend.miniapp.session.SessionAuthTest": 6,
               "com.hookah.platform.backend.miniapp.guest.VisitFeedbackWorkerTest": 4,
               "com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackRepositoryTest": 11,
           }
           required_test_names = {
+              "com.hookah.platform.backend.HttpAccessLogPrivacyTest": {
+                  "product access logs use safe categories and canonical request ids only",
+              },
+              "com.hookah.platform.backend.telegram.TelegramBotRouterLinkCommandTest": {
+                  "product mode leaves unrelated group text state free",
+              },
               "com.hookah.platform.backend.telegram.TelegramTrafficPolicyStartupTest": {
                   "staging application fails closed on invalid policy before database initialization",
+                  "staging product rejects missing blank and normalized placeholder pepper before database initialization",
               },
               "com.hookah.platform.backend.telegram.TelegramTrafficPolicyConfigTest": {
-                  "staging requires explicit allowlist with both lists",
+                  "staging requires explicit allowlist or product policy",
                   "invalid configuration emits no logs and errors do not expose raw identity values",
+                  "product rejects nonempty static identity configuration without echoing values",
               },
               "com.hookah.platform.backend.telegram.TelegramTrafficPolicyTest": {
                   "callback requires allowed actor and message chat",
@@ -690,6 +739,7 @@ jobs:
                   "denied updates advance offset without reaching router",
                   "configured webhook blocks long polling preflight",
                   "only one long poller can run in a JVM and lease is released after stop",
+                  "router failure preserves offset and defers later updates for retry",
               },
               "com.hookah.platform.backend.telegram.TelegramInboundUpdateWorkerTest": {
                   "worker does not route historical queued update denied by policy",
@@ -711,6 +761,7 @@ jobs:
               },
               "com.hookah.platform.backend.miniapp.auth.TelegramAuthRouteTest": {
                   "valid initData for disallowed user returns generic forbidden before user write",
+                  "product mode authenticates a new identity as guest without granting venue or platform access",
               },
               "com.hookah.platform.backend.miniapp.session.SessionAuthTest": {
                   "valid token issued before allowlist removal is forbidden on every protected request",
@@ -989,6 +1040,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Validate staging admission guard syntax
+        run: |
+          bash -n scripts/validate-staging-admission.sh
+          bash -n scripts/deploy-staging.sh
+      - name: Exercise staging admission guard fixtures
+        run: bash scripts/validate-staging-admission.sh --self-test docker-compose.yml
       - name: Create CI compose env
         run: |
           cat > .env <<'EOF'

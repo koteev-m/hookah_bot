@@ -62,14 +62,15 @@ Required staging values:
 - `TELEGRAM_BOT_ENABLED=true`
 - `TELEGRAM_BOT_MODE=long_polling`
 - `TELEGRAM_BOT_TOKEN`
-- `TELEGRAM_TRAFFIC_POLICY=ALLOWLIST`
-- `TELEGRAM_ALLOWED_USER_IDS`
-- `TELEGRAM_ALLOWED_CHAT_IDS`
+- `TELEGRAM_TRAFFIC_POLICY=PRODUCT` for the public pilot, or `ALLOWLIST` for isolated smoke
+- `TELEGRAM_ALLOWED_USER_IDS` and `TELEGRAM_ALLOWED_CHAT_IDS` empty/absent in `PRODUCT`; both
+  nonempty and canonical in `ALLOWLIST`
 - `TELEGRAM_WEBAPP_PUBLIC_URL=https://staging.hookahtootah.club/miniapp/`
 - `TELEGRAM_BOT_USERNAME`
 - `PLATFORM_OWNER_TELEGRAM_ID`
 - `PLATFORM_OWNER_USER_ID=` optional legacy compatibility alias; leave empty when `users.telegram_user_id` is the platform owner identity.
 - `TELEGRAM_STAFF_CHAT_LINK_SECRET_PEPPER`
+- `VENUE_STAFF_INVITE_SECRET_PEPPER` explicit and restricted in staging `PRODUCT`
 - `MINIAPP_ENTRY_ENABLED=true`
 - `MINIAPP_DEV_SERVER_URL=`
 - `MINIAPP_STATIC_DIR=/app/miniapp`
@@ -96,20 +97,24 @@ Before deploy, verify the non-secret part of the server env:
 
 ```bash
 cd /opt/hookah-bot
-grep -E '^(POSTGRES_DB|POSTGRES_USER|DB_JDBC_URL|DB_USER|TELEGRAM_TRAFFIC_POLICY|TELEGRAM_WEBAPP_PUBLIC_URL|MINIAPP_STATIC_DIR|MINIAPP_DEV_SERVER_URL|CORS_ALLOWED_HOSTS)=' .env
+grep -E '^(APP_ENV|POSTGRES_DB|POSTGRES_USER|DB_JDBC_URL|DB_USER|TELEGRAM_TRAFFIC_POLICY|TELEGRAM_WEBAPP_PUBLIC_URL|MINIAPP_STATIC_DIR|MINIAPP_DEV_SERVER_URL|CORS_ALLOWED_HOSTS)=' .env
 ```
 
 Check secret presence only with masking:
 
 ```bash
-for key in \
+required_secret_keys=( \
   POSTGRES_PASSWORD \
   DB_PASSWORD \
   TELEGRAM_BOT_TOKEN \
-  TELEGRAM_ALLOWED_USER_IDS \
-  TELEGRAM_ALLOWED_CHAT_IDS \
   API_SESSION_JWT_SECRET \
-  TELEGRAM_STAFF_CHAT_LINK_SECRET_PEPPER
+  TELEGRAM_STAFF_CHAT_LINK_SECRET_PEPPER \
+)
+if awk -F= '$1 == "TELEGRAM_TRAFFIC_POLICY" && toupper($2) == "PRODUCT" { found++ } END { exit !(found == 1) }' .env
+then
+  required_secret_keys+=(VENUE_STAFF_INVITE_SECRET_PEPPER)
+fi
+for key in "${required_secret_keys[@]}"
 do
   if awk -v expected="$key" '
     index($0, "=") > 0 && substr($0, 1, index($0, "=") - 1) == expected {
@@ -133,15 +138,18 @@ do
 done
 ```
 
-This check exits non-zero for a missing, blank, explicitly empty-quoted or duplicate required key and
-never prints its value. `AI_API_KEY` is optional; if the AI provider is enabled, validate it with the
-same masked single-value check. Do not print raw `POSTGRES_PASSWORD`, `DB_PASSWORD`, Telegram tokens,
-JWT secrets, peppers, API keys or allowlist IDs.
+This check includes `VENUE_STAFF_INVITE_SECRET_PEPPER` only in `PRODUCT`, exits non-zero for a
+missing, blank, explicitly empty-quoted or duplicate required key and never prints its value.
+`AI_API_KEY` is optional; if the AI provider is enabled, validate it with the same masked
+single-value check. Do not print raw `POSTGRES_PASSWORD`, `DB_PASSWORD`, Telegram tokens, JWT
+secrets, peppers, API keys or allowlist IDs.
 
-### Mandatory Staging Telegram Traffic Allowlist
+### Mandatory Staging Telegram Traffic Mode
 
-Unrestricted Telegram traffic is forbidden when `APP_ENV=staging`. Backend startup must fail before
-database initialization unless all three variables are present and valid:
+`UNRESTRICTED` Telegram traffic is forbidden when `APP_ENV=staging`. Backend startup must fail
+before database initialization unless the explicit configuration matches one of these modes.
+
+Isolated smoke:
 
 ```dotenv
 TELEGRAM_TRAFFIC_POLICY=ALLOWLIST
@@ -162,12 +170,29 @@ and is never uploaded from or copied into the repository. Familiar people and pr
 testers lose bot and Mini App access unless their exact IDs are present. That is intended fail-closed
 behavior.
 
-The allowlist-enabled V125 commit `b4e13da3179438fad69d2344e1cb136a56f95f6c` is already deployed
-and restricted Manifest B remains active. Until V126 is separately authorized and executed, this
-V125 image is the staging rollback image; an older unrestricted staging image is forbidden. The
-local main-port changeset does not change the manifest, staging environment or running backend.
+Public pilot:
 
-The policy is immutable for the lifetime of a backend process. Updating either list requires:
+```dotenv
+TELEGRAM_TRAFFIC_POLICY=PRODUCT
+TELEGRAM_ALLOWED_USER_IDS=
+TELEGRAM_ALLOWED_CHAT_IDS=
+VENUE_STAFF_INVITE_SECRET_PEPPER=<explicit-restricted-secret>
+```
+
+`PRODUCT` never requires a per-user or per-chat manifest entry. Positive matching private
+actor/chat and valid signed Mini App identities enter as Guest; active memberships and server-side
+RBAC remain required for Venue/Platform access. Product groups and outbound targets are accepted
+only through the exact current server-owned staff-chat/product workflow rules. The normal deploy
+profile requires this exact mode and rejects nonempty static lists or a missing, blank or normalized
+known-placeholder invite pepper before build/upload/restart.
+
+The active restricted invite pepper is never stored in Git. Preserve it byte-for-byte unless a
+rotation is explicitly intended. Changing it invalidates all still-pending staff/owner links;
+reconcile and reissue them before relying on the new value. A rollback to an older `ALLOWLIST`
+runtime does not undo already committed memberships or used invites.
+
+The policy is immutable for the lifetime of a backend process. In `ALLOWLIST`, updating either list
+requires:
 
 1. review and update the restricted manifest;
 2. update only the staging `.env`;
@@ -179,17 +204,18 @@ Do not test startup failure against the live staging database. The automated
 proves fail-closed startup. A controlled deploy must also treat the expected policy/config exception
 as a startup failure, never fall back to unrestricted mode.
 
-To prove denied traffic creates no state after a later authorized deploy, snapshot the relevant
+To prove `ALLOWLIST` denied traffic creates no state after a later authorized isolated-smoke deploy,
+snapshot the relevant
 `users`, `telegram_processed_updates`, `telegram_inbound_updates` and `telegram_outbox` facts, submit
 one update and one signed Mini App auth attempt from a deliberately excluded test identity, and
 compare the snapshots. The denied webhook response may be HTTP 200 to acknowledge intentional
 discard, but it must enqueue nothing. Logs may contain only bounded denial reason/counts, never IDs,
 token, initData, update payload or message text.
 
-#### Safe private staff-group ID bootstrap
+#### Safe private staff-group ID bootstrap for ALLOWLIST smoke
 
-No application bootstrap endpoint or weakened group policy is needed. Use this procedure before any
-future staff group ID is placed in the allowlist:
+No application bootstrap endpoint or weakened group policy is needed. An `ALLOWLIST` smoke operator
+must use this procedure before placing a staff group ID in the restricted manifest:
 
 1. Create a dedicated, private, non-topic Telegram supergroup with a pre-reviewed exact title and
    post one disposable non-topic message from the operator's account. Do not reuse a real venue group.
@@ -197,9 +223,9 @@ future staff group ID is placed in the allowlist:
    `https://t.me/c/<positive-internal-id>/<positive-message-id>` shape and derive the candidate Bot
    API ID as `-100<positive-internal-id>`. Any public, topic, malformed, ambiguous, non-positive or
    overflowing link is a STOP.
-3. During a controlled maintenance window, drain and stop the current allowlist-enabled staging
-   backend before adding the unchanged staging bot to this group. Never run a second poller or
-   webhook, and never restore unrestricted traffic.
+3. During a separately authorized isolated-ALLOWLIST window, drain and stop only the current staging
+   poller before adding the unchanged staging bot to this group. Never run a second poller or webhook,
+   and restore the reviewed public-pilot `PRODUCT` configuration after the isolated smoke closes.
 4. Read the unchanged bot token from its restricted secret store into a temporary mode-0600 curl
    config outside Git. The token must not appear in shell history, process arguments or command
    output. Call the read-only Bot API `getChat` for the candidate.
@@ -230,12 +256,34 @@ Current staging alias example:
 
 The script:
 
-1. validates `docker compose config`;
-2. checks that required server `.env` keys are present without printing secrets;
-3. builds the backend Docker image locally for `linux/amd64`, including the Mini App production build;
-4. uploads `docker-compose.yml`, `scripts/seed-staging.sh`, safe docs/templates, and the Docker image to the VPS;
-5. runs `docker compose up -d --no-build postgres backend` on the VPS;
+1. runs the secret-free admission-guard fixtures locally;
+2. uploads `docker-compose.yml`, the admission validator, `scripts/seed-staging.sh` and safe
+   docs/templates;
+3. checks required server `.env` keys without printing values and validates the scrubbed effective
+   Compose backend environment as the default `public-pilot` profile;
+4. builds the backend Docker image locally for `linux/amd64`, including the Mini App production
+   build, then uploads the reviewed image;
+5. runs `docker compose --env-file .env up -d --no-build postgres backend` through the same scrubbed
+   admission environment so shell variables cannot replace the reviewed policy, lists or pepper;
 6. waits and retries local VPS health endpoints and the public staging URL.
+
+CI and local release validation use the same secret-free checks:
+
+```bash
+bash -n scripts/validate-staging-admission.sh
+bash -n scripts/deploy-staging.sh
+bash scripts/validate-staging-admission.sh --self-test docker-compose.yml
+```
+
+The ordinary command always means public-pilot `PRODUCT`. A separately authorized isolated smoke
+must first use an exact fail-closed ALLOWLIST server `.env` and then opt in explicitly:
+
+```bash
+STAGING_ADMISSION_PROFILE=isolated-allowlist ./scripts/deploy-staging.sh <ssh-alias>
+```
+
+That opt-in is not a public-pilot deployment path. Restore and revalidate the reviewed PRODUCT
+`.env` before the next normal deploy.
 
 The health wait handles short backend startup windows and transient reverse-proxy connection resets. If the script still fails after all attempts, do not redeploy blindly; inspect container status and backend logs first.
 

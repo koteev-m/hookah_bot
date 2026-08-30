@@ -5,8 +5,13 @@ import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.NotFoundException
 import com.hookah.platform.backend.api.StaffProfileLinkConflictException
+import com.hookah.platform.backend.miniapp.security.MiniAppAbuseProtection
+import com.hookah.platform.backend.miniapp.security.enforceMiniAppRateLimit
+import com.hookah.platform.backend.miniapp.security.receiveBoundedJson
+import com.hookah.platform.backend.miniapp.security.throwMiniAppRateLimited
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteAcceptResult
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteConfig
+import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteCreateResult
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteRepository
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteRevokeResult
 import com.hookah.platform.backend.miniapp.venue.staff.StaffProfileMutationResult
@@ -25,8 +30,6 @@ import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffRemoveResult
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffRepository
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffShift
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffUpdateResult
-import com.hookah.platform.backend.miniapp.venue.staff.appendOwnerInviteAcceptAuditBestEffort
-import com.hookah.platform.backend.platform.OwnerAccountAssignmentPreparationResult
 import com.hookah.platform.backend.platform.VenueOwnerAccountRepository
 import com.hookah.platform.backend.telegram.buildTelegramStartUrl
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
@@ -41,6 +44,7 @@ import io.ktor.server.routing.patch
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.slf4j.LoggerFactory
@@ -218,7 +222,7 @@ data class VenueStaffTodayShiftsResponse(
     val shifts: List<VenueStaffShiftDto>,
 )
 
-fun Route.venueStaffRoutes(
+internal fun Route.venueStaffRoutes(
     venueAccessRepository: VenueAccessRepository,
     venueStaffRepository: VenueStaffRepository,
     venueStaffProfileRepository: VenueStaffProfileRepository,
@@ -228,9 +232,11 @@ fun Route.venueStaffRoutes(
     venueOwnerAccountRepository: VenueOwnerAccountRepository = VenueOwnerAccountRepository(null),
     auditLogRepository: AuditLogRepository = AuditLogRepository(null),
     staffModuleGuard: VenueStaffModuleGuard,
+    abuseProtection: MiniAppAbuseProtection,
     telegramBotUsername: String? = null,
 ) {
     val logger = LoggerFactory.getLogger("VenueStaffRoutes")
+    val requestJson = Json { ignoreUnknownKeys = true }
     route("/venue") {
         get("/{venueId}/staff") {
             val userId = call.requireUserId()
@@ -271,14 +277,28 @@ fun Route.venueStaffRoutes(
                 VenueRole.OWNER -> error("OWNER invite was rejected above")
             }
             val ttlSeconds = resolveInviteTtl(request.expiresIn, staffInviteConfig)
+            enforceMiniAppRateLimit(
+                call,
+                abuseProtection.tryInviteCreate(userId, venueId),
+            )
             val result =
-                staffInviteRepository.createInvite(
-                    venueId = venueId,
-                    createdByUserId = userId,
-                    role = targetRole.name,
-                    ttlSeconds = ttlSeconds,
-                    auditLogRepository = auditLogRepository,
-                ) ?: throw DatabaseUnavailableException()
+                when (
+                    val createResult =
+                        staffInviteRepository.createBoundedInvite(
+                            venueId = venueId,
+                            createdByUserId = userId,
+                            role = targetRole.name,
+                            ttlSeconds = ttlSeconds,
+                            maxActivePendingPerVenueRole =
+                                abuseProtection.maxActivePendingInvitesPerVenueRole,
+                            auditLogRepository = auditLogRepository,
+                        )
+                ) {
+                    is StaffInviteCreateResult.Success -> createResult.invite
+                    is StaffInviteCreateResult.RateLimited ->
+                        throwMiniAppRateLimited(call, createResult.retryAfterSeconds)
+                    StaffInviteCreateResult.DatabaseError -> throw DatabaseUnavailableException()
+                }
             val startPayload = buildStaffInviteStartPayload(result.code)
             val deepLink =
                 telegramBotUsername
@@ -369,15 +389,24 @@ fun Route.venueStaffRoutes(
 
         post("/staff/invites/accept") {
             val userId = call.requireUserId()
-            val request = call.receive<StaffInviteAcceptRequest>()
+            val request =
+                call.receiveBoundedJson<StaffInviteAcceptRequest>(
+                    json = requestJson,
+                    maxBytes = STAFF_INVITE_ACCEPT_REQUEST_MAX_BYTES,
+                )
+            enforceMiniAppRateLimit(
+                call,
+                abuseProtection.tryInviteAccept(userId, request.inviteCode),
+            )
             val result =
                 staffInviteRepository.acceptInvite(
                     code = request.inviteCode,
                     userId = userId,
-                    createMember = createMember@{ connection, venueId, role, invitedByUserId ->
+                    auditLogWriter = auditLogRepository,
+                    prepareMember = prepareMember@{ connection, venueId, role, invitedByUserId ->
                         if (role.equals(VenueRole.OWNER.name, ignoreCase = true)) {
-                            when (
-                                venueOwnerAccountRepository.prepareOwnerAssignmentInTransaction(
+                            if (
+                                !venueOwnerAccountRepository.prepareOperationalOwnerInviteInTransaction(
                                     connection = connection,
                                     venueId = venueId,
                                     ownerUserId = userId,
@@ -385,10 +414,12 @@ fun Route.venueStaffRoutes(
                                     updatedByUserId = invitedByUserId,
                                 )
                             ) {
-                                is OwnerAccountAssignmentPreparationResult.Success -> Unit
-                                else -> return@createMember null
+                                return@prepareMember false
                             }
                         }
+                        true
+                    },
+                    createMember = { connection, venueId, role, invitedByUserId ->
                         venueStaffRepository.createMemberInTransaction(
                             connection,
                             venueId,
@@ -400,7 +431,6 @@ fun Route.venueStaffRoutes(
                 )
             when (result) {
                 is StaffInviteAcceptResult.Success -> {
-                    appendOwnerInviteAcceptAuditBestEffort(auditLogRepository, result, logger)
                     val member =
                         venueStaffRepository.findMember(result.member.venueId, result.member.userId)
                             ?: result.member
@@ -806,6 +836,7 @@ private fun resolveInviteTtl(
 
 private fun buildStaffInviteStartPayload(code: String): String = "staff_invite_$code"
 
+internal const val STAFF_INVITE_ACCEPT_REQUEST_MAX_BYTES = 4 * 1024
 private const val STAFF_INVITE_PENDING_STATUS = "PENDING"
 
 private fun buildStaffInviteInstructions(

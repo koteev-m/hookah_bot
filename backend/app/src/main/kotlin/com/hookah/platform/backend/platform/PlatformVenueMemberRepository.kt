@@ -1,7 +1,5 @@
 package com.hookah.platform.backend.platform
 
-import com.hookah.platform.backend.telegram.debugTelegramException
-import com.hookah.platform.backend.telegram.sanitizeTelegramForLog
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -98,12 +96,9 @@ class PlatformVenueMemberRepository(private val dataSource: DataSource?) {
                     } catch (e: Exception) {
                         rollbackBestEffort(connection)
                         logger.warn(
-                            "Failed to assign venue owner venueId={} userId={}: {}",
-                            venueId,
-                            userId,
-                            sanitizeTelegramForLog(e.message),
+                            "Failed to assign venue owner error_type={}",
+                            e::class.simpleName ?: "unknown",
                         )
-                        logger.debugTelegramException(e) { "assignOwner exception venueId=$venueId userId=$userId" }
                         PlatformOwnerAssignmentResult.DatabaseError
                     } finally {
                         runCatching { connection.autoCommit = initialAutoCommit }
@@ -166,12 +161,9 @@ class PlatformVenueMemberRepository(private val dataSource: DataSource?) {
                     } catch (e: Exception) {
                         rollbackBestEffort(connection)
                         logger.warn(
-                            "Failed to revoke venue owner venueId={} userId={}: {}",
-                            venueId,
-                            userId,
-                            sanitizeTelegramForLog(e.message),
+                            "Failed to revoke venue owner error_type={}",
+                            e::class.simpleName ?: "unknown",
                         )
-                        logger.debugTelegramException(e) { "revokeOwner exception venueId=$venueId userId=$userId" }
                         PlatformOwnerRevokeResult.DatabaseError
                     } finally {
                         runCatching { connection.autoCommit = initialAutoCommit }
@@ -325,7 +317,7 @@ class PlatformVenueMemberRepository(private val dataSource: DataSource?) {
                 invitedByUserId = invitedByUserId,
             )
         } catch (e: SQLException) {
-            logger.debugTelegramException(e) { "insertMember exception venueId=$venueId userId=$userId" }
+            logger.debug("Failed to insert venue owner membership error_type={}", e::class.simpleName ?: "unknown")
             null
         }
     }

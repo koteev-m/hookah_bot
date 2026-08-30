@@ -1,28 +1,48 @@
 # Project Status
 
-Last verified: 2026-08-23.
+Last verified: 2026-08-30.
 
 ## 1. Current stage
 
-**TELEGRAM TRAFFIC ALLOWLIST / MAIN PORT IMPLEMENTED LOCALLY /
-PORT-SCOPED LOCAL VALIDATION PASSED / READY FOR INDEPENDENT REVIEW / UNCOMMITTED**.
+**HT-INC-02 PUBLIC-PILOT PRODUCT ADMISSION / MAIN PORT IN PROGRESS /
+LIVE ACCEPTANCE RECONCILED / LOCAL VALIDATION COMPLETE / INDEPENDENT REVIEW PASSED /
+MAIN INTEGRATION REQUIRES EXPLICIT AUTHORIZATION**.
 
-The reviewed V125 prerequisite commit `b4e13da3179438fad69d2344e1cb136a56f95f6c` is already the
-allowlist-enabled staging rollback baseline. HT-05 ports that behavior onto exact main
-`84e8c798b3d8ce3d789f79bbdbf10e565a2dfd33` in a separate worktree while preserving the booking
-conversation, unread cursor, timezone, PostgreSQL V126/H2 V127 and deployment-preflight changes
-that landed after the common base. The changeset is local and uncommitted. Required
-allowlist/booking tests, the full Telegram router suite, H2/PostgreSQL migration parity, backend
-compile/style, the Mini App production build and the structured `216/216` browser smoke pass with
-zero skips in the scoped gates. Task-local read-only audits found a CI XML-floor mismatch, unsafe
-rollback wording, stale policy-test expectations and four unbounded best-effort Telegram log
-contexts; those findings are fixed and the final task-local re-audits report no remaining actionable
-issue. A separate independent review remains pending. The complete backend run reports `2127`
-tests, `2` failures, `0` errors and `0` skips; exact main reproduces both failures in
-`StaffProfileLinkConcurrencyPostgresTest` with the same two-waiter lock-observation assertion,
-outside this port's changed paths. No push, PR, merge, main-port deploy, V126 execution or staging
-mutation is recorded. Staging Manifest B remains active and unrestricted staging rollback is
-prohibited.
+Fresh `origin/main` is `4daf5546fb622a6b967398f5c25b7bed41d7fa05`. HT-INC-02 ports the exact
+reviewed V125 hotfix range
+`b4e13da3179438fad69d2344e1cb136a56f95f6c..be5d62a5e9058f89cd72be6c313c71fa46ccdbf2`
+from source tree `8806a4cb7a5f1af0f2e4cecdd166c7ff585ca19c` into a clean isolated
+feature worktree. The 59-path mapping preserves all main-only booking/conversation behavior and
+the byte-identical PostgreSQL V126/H2 V127 migrations; the source range contains no migration path.
+
+The permanent contract is `PRODUCT` for public-pilot staging and explicit fail-closed `ALLOWLIST`
+only for separately isolated smoke. In `PRODUCT`, structurally valid matching private Telegram
+actor/chat identities and valid signed fresh Mini App identities enter as Guest without static IDs.
+Venue and Platform authority still comes only from active membership/RBAC; invitations grant only
+their stored role and venue; groups, staff-chat actions and outbound recipients remain
+server-authoritative.
+
+Read-only staging reconciliation confirms the exact source candidate is running with `PRODUCT`,
+empty static user/chat lists, a restricted non-placeholder invite pepper, one backend/long poller,
+Flyway V125 with V126 absent, healthy inactive queues and the existing Caddy TLS 1.2 mitigation.
+Alias-only transactional evidence reconciles the two reported external acceptance identities;
+later explicit audited membership changes are separate from the committed acceptance events.
+
+`LIVE_EXTERNAL_NEW_USER_INVITE_ACCEPTANCE = PASS`
+
+The original dirty main worktree remains untouched. Focused PRODUCT/RBAC/invite/outbox/abuse/privacy
+tests, the 110-test PostgreSQL integration/concurrency gate, compile, ktlint, the Mini App build,
+`216/216` browser smoke, Compose admission self-tests, deploy-script syntax, diff checks and
+migration-diff proof pass. The final full backend run executes all `2185` tests with no skips under the
+required Docker/API-version harness: two Staff-profile-link lock-observation assertions fail
+identically on exact main and in the candidate. The earlier candidate full-run-only Manager parity
+failure does not recur and passes isolated runs. This is recorded as exact-main baseline debt with no
+deterministic candidate regression, not as a fully green backend suite. Independent review identified
+and the candidate fixes second-operational-Owner invite acceptance without transferring the existing
+commercial owner account; the rollback/retry regression and narrow re-review pass. Exact feature-branch
+Actions remain mandatory for the committed candidate before any separately authorized main integration.
+No main integration, V126 execution, staging mutation, production access or Caddy restart/reload is
+authorized in this phase.
 
 The booking release line below remains unchanged product context and is preserved by this port.
 
@@ -117,6 +137,36 @@ Recorded smoke outcomes:
 
 This closes only the bounded onboarding/ownership release, not the whole Platform/Venue product or
 overall production readiness.
+
+### HT-11 V125 dry-run closure
+
+HT-11 closed on 2026-08-27 as
+`HT11_CLOSED_PASS_WITH_EXPLICIT_LIVE_LIMITATION`. Live staging evidence passed the Telegram
+allowlist and MIX/CLIENT/non-MIX isolation gates, the V125 collision pair creation and Guest/Owner
+visibility checks, exact `V126_BOOKING_THREAD` identity and isolation, one exact Owner open and
+reply, the message transition `2/0/0 -> 2/1/0`, one terminal private Guest delivery, and the exact
+Guest unread `0 -> 1 -> 0` transition after the Owner reply and Guest exact-thread open. Collision
+A/B are retained as `HISTORICAL_V125_COLLISION_EVIDENCE`. No duplicate marker row appeared;
+`V126_READ_BASELINE`, other threads, CLIENT and non-MIX state remained unchanged.
+
+Exactly one V125 real-client assertion remains explicitly unexecuted:
+`LIVE_V125_GUEST_REPLY_TO_OWNER_UNREAD_CLEAR = NOT_EXECUTED_OPERATIONALLY_BLOCKED`. The Guest did
+not send the planned reply; consequently, the corresponding Owner unread creation and exact-thread
+clear were not exercised live. This is neither failed behavior, a live pass nor a waiver.
+`VenueBookingRoutesTest` and the Mini App Guest smoke provide passing automated regression coverage,
+but they do not replace the mandatory post-V126 live smoke:
+
+`AUTOMATED_REGRESSION = PASS`
+
+`LIVE_REAL_CLIENT_V125_ASSERTION = NOT_EXECUTED_OPERATIONALLY_BLOCKED`
+
+HT-14 must retain `HT14_MANDATORY_LIVE_GATE_GUEST_REPLY_OWNER_UNREAD_CLEAR`: one exact Guest reply,
+one persisted Guest message, one expected Telegram/outbox delivery, exact-thread-only Owner unread
+creation and clear, no duplicate marker row or unread resurrection, and no other-thread, CLIENT or
+non-MIX mutation. HT-14 cannot conclude PASS while this gate is pending, waived or represented only
+by automated evidence. No manual window or retained WebView/session remains. After HT-INC-02 is
+fully integrated, the exact next task is **HT-12J-R1 — Patched Caddy Retry Baseline Refresh and
+Resume**; HT-INC-02 does not start it or authorize a Caddy restart/reload.
 
 ## 3. Remaining-work audit snapshot
 

@@ -70,6 +70,7 @@ import com.hookah.platform.backend.miniapp.guest.guestTabsRoutes
 import com.hookah.platform.backend.miniapp.guest.guestVenueInfoMediaRoutes
 import com.hookah.platform.backend.miniapp.guest.guestVenueRoutes
 import com.hookah.platform.backend.miniapp.guest.guestVisitRoutes
+import com.hookah.platform.backend.miniapp.security.MiniAppAbuseProtection
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.miniapp.shift.ShiftExtensionRepository
@@ -129,6 +130,8 @@ import com.hookah.platform.backend.telegram.TelegramInboundUpdateWorker
 import com.hookah.platform.backend.telegram.TelegramLongPollingWorker
 import com.hookah.platform.backend.telegram.TelegramOutboxEnqueuer
 import com.hookah.platform.backend.telegram.TelegramOutboxWorker
+import com.hookah.platform.backend.telegram.TelegramProductAbuseLimiter
+import com.hookah.platform.backend.telegram.TelegramRecipientLockRegistry
 import com.hookah.platform.backend.telegram.TelegramTrafficPolicy
 import com.hookah.platform.backend.telegram.TelegramUpdate
 import com.hookah.platform.backend.telegram.buildWebAppUrl
@@ -178,7 +181,9 @@ import io.ktor.server.application.ApplicationStarted
 import io.ktor.server.application.ApplicationStopped
 import io.ktor.server.application.ApplicationStopping
 import io.ktor.server.application.call
+import io.ktor.server.application.createApplicationPlugin
 import io.ktor.server.application.createRouteScopedPlugin
+import io.ktor.server.application.hooks.CallSetup
 import io.ktor.server.application.install
 import io.ktor.server.auth.Authentication
 import io.ktor.server.auth.AuthenticationChecked
@@ -191,9 +196,6 @@ import io.ktor.server.http.content.staticFiles
 import io.ktor.server.metrics.micrometer.MicrometerMetrics
 import io.ktor.server.plugins.BadRequestException
 import io.ktor.server.plugins.ContentTransformationException
-import io.ktor.server.plugins.callid.CallId
-import io.ktor.server.plugins.callid.callId
-import io.ktor.server.plugins.callid.callIdMdc
 import io.ktor.server.plugins.calllogging.CallLogging
 import io.ktor.server.plugins.cors.routing.CORS
 import io.ktor.server.plugins.statuspages.StatusPages
@@ -203,6 +205,7 @@ import io.ktor.server.request.path
 import io.ktor.server.request.queryString
 import io.ktor.server.request.receiveText
 import io.ktor.server.request.uri
+import io.ktor.server.response.header
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondBytes
 import io.ktor.server.response.respondFile
@@ -214,6 +217,7 @@ import io.ktor.server.routing.head
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
+import io.ktor.util.AttributeKey
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineScope
@@ -243,6 +247,22 @@ import java.util.UUID
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation as ServerContentNegotiation
 
 private val logger = LoggerFactory.getLogger("Application")
+private val httpAccessLogger = LoggerFactory.getLogger("HttpAccess")
+private val canonicalRequestIdPattern =
+    Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+private val safeHttpMethods = setOf("DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT")
+private val safeRequestIdKey = AttributeKey<String>("SafeRequestId")
+private val safeRequestIdPlugin =
+    createApplicationPlugin("SafeRequestId") {
+        on(CallSetup) { call ->
+            val requestId =
+                call.request.headers[ApiHeaders.REQUEST_ID]
+                    ?.takeIf(::isCanonicalRequestId)
+                    ?: UUID.randomUUID().toString()
+            call.attributes.put(safeRequestIdKey, requestId)
+            call.response.header(ApiHeaders.REQUEST_ID, requestId)
+        }
+    }
 
 @Serializable
 private data class HealthResponse(val status: String)
@@ -271,6 +291,8 @@ internal data class ModuleOverrides(
     val afterPlatformGuestTeardown: (suspend (chatId: Long, actorUserId: Long) -> Unit)? = null,
     val guestOrderContextCheckpoint: (GuestOrderContextCheckpoint) -> Unit = {},
     val guestOrderWriteCheckpoint: (GuestOrderWriteCheckpoint) -> Unit = {},
+    val telegramWebhookProductAbuseLimiter: TelegramProductAbuseLimiter? = null,
+    val miniAppAbuseProtection: MiniAppAbuseProtection? = null,
     val telegramCommandMenuConfigurator: suspend (TelegramApiClient) -> Unit =
         ::configureTelegramCommandMenuSafely,
 )
@@ -300,6 +322,45 @@ private fun ApplicationCall.isApiRequest(): Boolean {
     return p == "/api" || p.startsWith("/api/")
 }
 
+internal fun isCanonicalRequestId(value: String): Boolean = canonicalRequestIdPattern.matches(value)
+
+private val ApplicationCall.safeRequestId: String?
+    get() = attributes.getOrNull(safeRequestIdKey)
+
+private fun ApplicationCall.safeHttpMethod(): String =
+    request.httpMethod.value.takeIf { it in safeHttpMethods } ?: "OTHER"
+
+private fun ApplicationCall.safeHttpRouteCategory(): String {
+    val path = request.path()
+    return when {
+        path == "/api/auth/telegram" -> "MINIAPP_AUTH"
+        path == "/api/telegram" || path.startsWith("/api/telegram/") -> "TELEGRAM_API"
+        path == "/api/guest" || path.startsWith("/api/guest/") -> "GUEST_API"
+        path == "/api/venue" || path.startsWith("/api/venue/") -> "VENUE_API"
+        path == "/api/platform" || path.startsWith("/api/platform/") -> "PLATFORM_API"
+        path == "/api" || path.startsWith("/api/") -> "API_OTHER"
+        path == "/health" || path == "/db/health" || path == "/telegram/queue/health" -> "HEALTH"
+        path == "/metrics" -> "METRICS"
+        path == "/version" -> "VERSION"
+        path == "/miniapp" || path.startsWith("/miniapp/") -> "MINIAPP_STATIC"
+        else -> "OTHER"
+    }
+}
+
+internal fun Application.installSafeHttpRequestObservability() {
+    install(safeRequestIdPlugin)
+
+    install(CallLogging) {
+        logger = httpAccessLogger
+        mdc("requestId") { call -> call.safeRequestId.orEmpty() }
+        format { call ->
+            val status = call.response.status()?.value?.toString() ?: "UNSET"
+            "HTTP access method=${call.safeHttpMethod()} " +
+                "status=$status category=${call.safeHttpRouteCategory()}"
+        }
+    }
+}
+
 private suspend fun ApplicationCall.respondApiError(
     status: HttpStatusCode,
     code: String,
@@ -310,7 +371,7 @@ private suspend fun ApplicationCall.respondApiError(
         status,
         ApiErrorEnvelope(
             error = ApiError(code = code, message = message, details = details),
-            requestId = callId,
+            requestId = safeRequestId,
         ),
     )
 }
@@ -348,6 +409,19 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                 ?: "dev"
         ).trim().lowercase(Locale.ROOT)
     val telegramTrafficPolicy = TelegramTrafficPolicy.from(appConfig, appEnv)
+    val earlyStagingProductStaffInviteConfig =
+        if (telegramTrafficPolicy.productMode && appEnv == "staging") {
+            StaffInviteConfig.from(
+                config = appConfig,
+                appEnv = appEnv,
+                requireExplicitSecret = true,
+            )
+        } else {
+            null
+        }
+    val telegramWebhookProductAbuseLimiter =
+        overrides.telegramWebhookProductAbuseLimiter ?: TelegramProductAbuseLimiter()
+    val miniAppAbuseProtection = overrides.miniAppAbuseProtection ?: MiniAppAbuseProtection()
     val telegramConfig = TelegramBotConfig.from(appConfig, appEnv)
     val dbConfig = DbConfig.from(appConfig)
     val appVersion = appConfig.optionalString("app.version") ?: "dev"
@@ -378,7 +452,8 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
         overrides.venueLocationProvider ?: createVenueLocationProvider(appConfig, httpClient, json)
 
     val dataSource = DatabaseFactory.init(dbConfig)
-    val venueRepository = VenueRepository(dataSource)
+    val telegramRecipientLocks = TelegramRecipientLockRegistry()
+    val venueRepository = VenueRepository(dataSource, telegramRecipientLocks)
     val venueBookingHoursRepository = VenueBookingHoursRepository(dataSource)
     val venueInfoSectionsRepository = VenueInfoSectionsRepository(dataSource)
     val venueInfoSectionMediaRepository = VenueInfoSectionMediaRepository(dataSource)
@@ -569,7 +644,13 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
         logger.error("Webhook mode requires database configuration in production")
         throw IllegalStateException("Webhook mode requires database configuration in production")
     }
-    val staffInviteConfig = StaffInviteConfig.from(appConfig, appEnv)
+    val staffInviteConfig =
+        earlyStagingProductStaffInviteConfig
+            ?: StaffInviteConfig.from(
+                config = appConfig,
+                appEnv = appEnv,
+                requireExplicitSecret = false,
+            )
     var telegramScope: CoroutineScope? = null
     var telegramApiClient: TelegramApiClient? = null
     var telegramRouter: TelegramBotRouter? = null
@@ -776,6 +857,8 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                 repeatOrderResolver = repeatOrderResolver,
                 guestTableContextLifecycleRepository = guestTableContextLifecycleRepository,
                 trafficPolicy = telegramTrafficPolicy,
+                miniAppAbuseProtection = miniAppAbuseProtection,
+                recipientLocks = telegramRecipientLocks,
             )
 
         when (telegramConfig.mode) {
@@ -836,6 +919,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     config = telegramConfig.outbox,
                     scope = telegramOutboxWorkerScope!!,
                     metrics = appMetrics,
+                    recipientLocks = telegramRecipientLocks,
                 )
             telegramOutboxWorkerJob = outboxWorker.start()
         } else {
@@ -900,16 +984,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
         logger.info("Application stopped")
     }
 
-    install(CallId) {
-        header(ApiHeaders.REQUEST_ID)
-        replyToHeader(ApiHeaders.REQUEST_ID)
-        generate { UUID.randomUUID().toString() }
-        verify { it.isNotBlank() }
-    }
-
-    install(CallLogging) {
-        callIdMdc("requestId")
-    }
+    installSafeHttpRequestObservability()
 
     install(CORS) {
         allowMethod(HttpMethod.Options)
@@ -964,19 +1039,13 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
             if (cause is CancellationException) {
                 throw cause
             }
-            val safeMessage =
-                (cause.message ?: "unknown error")
-                    .replace(Regex("[\\r\\n\\t]"), " ")
-                    .take(200)
             logger.warn(
-                "Unhandled API error requestId={} method={} path={} error={} message={}",
-                call.callId,
-                call.request.httpMethod.value,
-                call.request.path(),
+                "Unhandled API error requestId={} method={} category={} errorType={}",
+                call.safeRequestId,
+                call.safeHttpMethod(),
+                call.safeHttpRouteCategory(),
                 cause::class.qualifiedName ?: cause::class.simpleName,
-                safeMessage,
             )
-            logger.debug("Unhandled API error", cause)
             call.respondApiError(
                 status = HttpStatusCode.InternalServerError,
                 code = ApiErrorCodes.INTERNAL_ERROR,
@@ -1118,7 +1187,13 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
             billingService = billingService,
         )
 
-        miniAppAuthRoutes(appConfig, sessionTokenService, userRepository, telegramTrafficPolicy)
+        miniAppAuthRoutes(
+            appConfig = appConfig,
+            sessionTokenService = sessionTokenService,
+            userRepository = userRepository,
+            telegramTrafficPolicy = telegramTrafficPolicy,
+            abuseProtection = miniAppAbuseProtection,
+        )
 
         val guestInfoMediaDownloader: (suspend (String) -> TelegramDownloadedFile?)? =
             overrides.telegramFileDownloader ?: telegramApiClient?.let { client ->
@@ -1304,6 +1379,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     venueOwnerAccountRepository = venueOwnerAccountRepository,
                     auditLogRepository = auditLogRepository,
                     staffModuleGuard = venueStaffModuleGuard,
+                    abuseProtection = miniAppAbuseProtection,
                     telegramBotUsername = telegramConfig.botUsername,
                 )
                 venueStaffScheduleRoutes(
@@ -1391,6 +1467,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     venueOwnerAccountRepository = venueOwnerAccountRepository,
                     staffInviteRepository = staffInviteRepository,
                     staffInviteConfig = staffInviteConfig,
+                    abuseProtection = miniAppAbuseProtection,
                     supportThreadRepository = supportThreadRepository,
                     outboxEnqueuer = telegramOutboxEnqueuer,
                     telegramBotUsername = telegramConfig.botUsername,
@@ -1422,6 +1499,19 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                             )
                             call.respond(HttpStatusCode.OK)
                             return@post
+                        }
+                        if (telegramTrafficPolicy.productMode) {
+                            when (val abuseDecision = telegramWebhookProductAbuseLimiter.evaluateCoarse(update)) {
+                                TelegramProductAbuseLimiter.Decision.Allowed -> Unit
+                                is TelegramProductAbuseLimiter.Decision.Denied -> {
+                                    logger.info(
+                                        "Telegram inbound update denied source=webhook reason=RATE_LIMIT_{}",
+                                        abuseDecision.category.name,
+                                    )
+                                    call.respond(HttpStatusCode.OK)
+                                    return@post
+                                }
+                            }
                         }
                         telegramInboundUpdateQueueRepository.enqueue(update.updateId, payload)
                         call.respond(HttpStatusCode.OK)

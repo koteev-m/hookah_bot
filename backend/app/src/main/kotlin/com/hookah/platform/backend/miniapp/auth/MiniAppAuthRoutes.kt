@@ -8,31 +8,37 @@ import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.miniapp.api.MiniAppUserDto
 import com.hookah.platform.backend.miniapp.api.TelegramAuthRequest
 import com.hookah.platform.backend.miniapp.api.TelegramAuthResponse
+import com.hookah.platform.backend.miniapp.security.MiniAppAbuseProtection
+import com.hookah.platform.backend.miniapp.security.enforceMiniAppRateLimit
+import com.hookah.platform.backend.miniapp.security.receiveBoundedJson
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.telegram.TelegramTrafficPolicy
 import com.hookah.platform.backend.telegram.User
 import com.hookah.platform.backend.telegram.db.UserRepository
 import io.ktor.server.application.call
 import io.ktor.server.config.ApplicationConfig
-import io.ktor.server.request.receive
 import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
+import kotlinx.serialization.json.Json
 import java.sql.SQLException
 import java.time.Instant
 
 private const val INIT_DATA_MAX_LENGTH = 8192
+internal const val TELEGRAM_AUTH_REQUEST_MAX_BYTES = 64 * 1024
 private const val DEFAULT_INIT_DATA_MAX_AGE_SECONDS = 300L
 private const val DEFAULT_INIT_DATA_MAX_FUTURE_SKEW_SECONDS = 30L
 
-fun Route.miniAppAuthRoutes(
+internal fun Route.miniAppAuthRoutes(
     appConfig: ApplicationConfig,
     sessionTokenService: SessionTokenService,
     userRepository: UserRepository,
     telegramTrafficPolicy: TelegramTrafficPolicy,
+    abuseProtection: MiniAppAbuseProtection,
 ) {
     val initDataConfig = initDataValidationConfig(appConfig)
+    val requestJson = Json { ignoreUnknownKeys = true }
     val authService =
         TelegramAuthService(
             appConfig = appConfig,
@@ -43,11 +49,25 @@ fun Route.miniAppAuthRoutes(
         )
     route("/api") {
         post("/auth/telegram") {
-            val request = call.receive<TelegramAuthRequest>()
+            enforceMiniAppRateLimit(
+                call,
+                abuseProtection.tryAuthPreValidation(call.request.local.remoteHost),
+            )
+            val request =
+                call.receiveBoundedJson<TelegramAuthRequest>(
+                    json = requestJson,
+                    maxBytes = TELEGRAM_AUTH_REQUEST_MAX_BYTES,
+                )
             val initData = request.initData
             validateInitData(initData, initDataConfig)
 
-            val result = authService.authenticate(initData)
+            val result =
+                authService.authenticate(initData) { userId ->
+                    enforceMiniAppRateLimit(
+                        call,
+                        abuseProtection.tryAuthPostValidation(userId),
+                    )
+                }
 
             call.respond(
                 TelegramAuthResponse(
@@ -93,7 +113,10 @@ private class TelegramAuthService(
             maxFutureSkewSeconds = initDataConfig.maxFutureSkewSeconds,
         )
 
-    suspend fun authenticate(initData: String): TelegramAuthResult {
+    suspend fun authenticate(
+        initData: String,
+        afterIdentityValidation: (Long) -> Unit,
+    ): TelegramAuthResult {
         val validated =
             try {
                 validator.validate(initData)
@@ -113,6 +136,7 @@ private class TelegramAuthService(
                 }
             }
 
+        afterIdentityValidation(validated.user.id)
         if (!telegramTrafficPolicy.allowsMiniAppUser(validated.user.id)) {
             throw ForbiddenException()
         }

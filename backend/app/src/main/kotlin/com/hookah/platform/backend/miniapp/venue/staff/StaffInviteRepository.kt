@@ -1,10 +1,9 @@
 package com.hookah.platform.backend.miniapp.venue.staff
 
-import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
+import com.hookah.platform.backend.miniapp.venue.TransactionalAuditLogWriter
+import com.hookah.platform.backend.miniapp.venue.TransactionalTargetedAuditLogWriter
 import com.hookah.platform.backend.miniapp.venue.VenueRole
 import com.hookah.platform.backend.miniapp.venue.VenueRoleMapping
-import com.hookah.platform.backend.telegram.debugTelegramException
-import com.hookah.platform.backend.telegram.sanitizeTelegramForLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.buildJsonObject
@@ -13,6 +12,7 @@ import org.slf4j.LoggerFactory
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.sql.Connection
+import java.time.Duration
 import java.time.Instant
 import java.util.Base64
 import java.util.Locale
@@ -37,38 +37,47 @@ class StaffInviteRepository(
         createdByUserId: Long,
         role: String,
         ttlSeconds: Long,
+        auditLogRepository: TransactionalAuditLogWriter,
     ): StaffInviteCodeResult? =
         createInviteInternal(
             venueId = venueId,
             createdByUserId = createdByUserId,
             role = role,
             ttlSeconds = ttlSeconds,
-            auditLogRepository = null,
-        )
+            auditLogWriter = auditLogRepository,
+            maxActivePendingPerVenueRole = null,
+        ).inviteOrNull()
 
-    suspend fun createInvite(
+    suspend fun createBoundedInvite(
         venueId: Long,
         createdByUserId: Long,
         role: String,
         ttlSeconds: Long,
-        auditLogRepository: AuditLogRepository,
-    ): StaffInviteCodeResult? =
-        createInviteInternal(
+        maxActivePendingPerVenueRole: Int,
+        auditLogRepository: TransactionalAuditLogWriter,
+    ): StaffInviteCreateResult {
+        require(maxActivePendingPerVenueRole > 0) {
+            "maxActivePendingPerVenueRole must be positive"
+        }
+        return createInviteInternal(
             venueId = venueId,
             createdByUserId = createdByUserId,
             role = role,
             ttlSeconds = ttlSeconds,
-            auditLogRepository = auditLogRepository,
+            auditLogWriter = auditLogRepository,
+            maxActivePendingPerVenueRole = maxActivePendingPerVenueRole,
         )
+    }
 
     private suspend fun createInviteInternal(
         venueId: Long,
         createdByUserId: Long,
         role: String,
         ttlSeconds: Long,
-        auditLogRepository: AuditLogRepository?,
-    ): StaffInviteCodeResult? {
-        val ds = dataSource ?: return null
+        auditLogWriter: TransactionalAuditLogWriter?,
+        maxActivePendingPerVenueRole: Int?,
+    ): StaffInviteCreateResult {
+        val ds = dataSource ?: return StaffInviteCreateResult.DatabaseError
         val code = generateCode()
         val codeHash = hashCode(code)
         val handle = deriveOpaqueHandle(codeHash)
@@ -80,6 +89,24 @@ class StaffInviteRepository(
                 val initialAutoCommit = connection.autoCommit
                 connection.autoCommit = false
                 try {
+                    if (maxActivePendingPerVenueRole != null) {
+                        if (!lockVenueForInviteCreation(connection, venueId)) {
+                            return@use rollbackAndReturn(connection) {
+                                StaffInviteCreateResult.DatabaseError
+                            }
+                        }
+                        activePendingInviteRetryAfterSeconds(
+                            connection = connection,
+                            venueId = venueId,
+                            role = role,
+                            nowTs = nowTs,
+                            maxActivePending = maxActivePendingPerVenueRole,
+                        )?.let { retryAfterSeconds ->
+                            return@use rollbackAndReturn(connection) {
+                                StaffInviteCreateResult.RateLimited(retryAfterSeconds)
+                            }
+                        }
+                    }
                     connection.prepareStatement(
                         """
                         INSERT INTO venue_staff_invites (
@@ -97,40 +124,83 @@ class StaffInviteRepository(
                         statement.setTimestamp(7, java.sql.Timestamp.from(expiresAt))
                         statement.executeUpdate()
                     }
-                    if (auditLogRepository != null) {
+                    if (auditLogWriter != null) {
                         appendInviteAudit(
                             connection = connection,
-                            auditLogRepository = auditLogRepository,
+                            auditLogWriter = auditLogWriter,
                             actorUserId = createdByUserId,
-                            action = STAFF_INVITE_CREATED_AUDIT_ACTION,
+                            action = createAuditActionFor(role),
                             venueId = venueId,
                             handle = handle,
                             targetRole = role,
                         )
                     }
                     connection.commit()
-                    StaffInviteCodeResult(
-                        code = code,
-                        expiresAt = expiresAt,
-                        ttlSeconds = ttlSeconds,
-                        handle = handle,
+                    StaffInviteCreateResult.Success(
+                        StaffInviteCodeResult(
+                            code = code,
+                            expiresAt = expiresAt,
+                            ttlSeconds = ttlSeconds,
+                            handle = handle,
+                        ),
                     )
                 } catch (e: Exception) {
                     rollbackBestEffort(connection)
-                    logger.warn(
-                        "Failed to create staff invite venueId={} createdByUserId={}: {}",
-                        venueId,
-                        createdByUserId,
-                        sanitizeTelegramForLog(e.message),
-                    )
-                    logger.debugTelegramException(e) { "createInvite exception venueId=$venueId" }
-                    null
+                    logger.warn("Failed to create staff invite error_type={}", e::class.simpleName ?: "unknown")
+                    StaffInviteCreateResult.DatabaseError
                 } finally {
                     connection.autoCommit = initialAutoCommit
                 }
             }
         }
     }
+
+    private fun lockVenueForInviteCreation(
+        connection: Connection,
+        venueId: Long,
+    ): Boolean =
+        connection.prepareStatement(
+            "SELECT id FROM venues WHERE id = ? FOR UPDATE",
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.executeQuery().use { resultSet -> resultSet.next() }
+        }
+
+    private fun activePendingInviteRetryAfterSeconds(
+        connection: Connection,
+        venueId: Long,
+        role: String,
+        nowTs: Instant,
+        maxActivePending: Int,
+    ): Long? =
+        connection.prepareStatement(
+            """
+            SELECT COUNT(*) AS active_count, MIN(expires_at) AS earliest_expiry
+            FROM venue_staff_invites
+            WHERE venue_id = ?
+              AND role = ?
+              AND used_at IS NULL
+              AND revoked_at IS NULL
+              AND expires_at > ?
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setString(2, role)
+            statement.setTimestamp(3, java.sql.Timestamp.from(nowTs))
+            statement.executeQuery().use { resultSet ->
+                check(resultSet.next()) { "active invite count query returned no row" }
+                if (resultSet.getLong("active_count") < maxActivePending) {
+                    null
+                } else {
+                    val earliestExpiry =
+                        resultSet.getTimestamp("earliest_expiry")?.toInstant()
+                            ?: return@use 1L
+                    val retryAfterMillis =
+                        Duration.between(nowTs, earliestExpiry).toMillis().coerceAtLeast(1L)
+                    ((retryAfterMillis + 999L) / 1_000L).coerceAtLeast(1L)
+                }
+            }
+        }
 
     suspend fun listPendingInvites(
         venueId: Long,
@@ -152,12 +222,7 @@ class StaffInviteRepository(
                         nowTs = nowTs,
                     ).map { row -> row.toPendingInvite() }
                 } catch (e: Exception) {
-                    logger.warn(
-                        "Failed to list pending staff invites venueId={}: {}",
-                        venueId,
-                        sanitizeTelegramForLog(e.message),
-                    )
-                    logger.debugTelegramException(e) { "listPendingInvites exception venueId=$venueId" }
+                    logger.warn("Failed to list pending staff invites error_type={}", e::class.simpleName ?: "unknown")
                     null
                 }
             }
@@ -169,7 +234,7 @@ class StaffInviteRepository(
         handle: String,
         actorUserId: Long,
         allowedRoles: Set<String>,
-        auditLogRepository: AuditLogRepository,
+        auditLogRepository: TransactionalAuditLogWriter,
     ): StaffInviteRevokeResult {
         val ds = dataSource ?: return StaffInviteRevokeResult.DatabaseError
         val normalizedHandle = normalizeOpaqueHandle(handle) ?: return StaffInviteRevokeResult.InvalidOrExpired
@@ -220,7 +285,7 @@ class StaffInviteRepository(
                     }
                     appendInviteAudit(
                         connection = connection,
-                        auditLogRepository = auditLogRepository,
+                        auditLogWriter = auditLogRepository,
                         actorUserId = actorUserId,
                         action = STAFF_INVITE_REVOKED_AUDIT_ACTION,
                         venueId = venueId,
@@ -234,15 +299,7 @@ class StaffInviteRepository(
                     )
                 } catch (e: Exception) {
                     rollbackBestEffort(connection)
-                    logger.warn(
-                        "Failed to revoke pending staff invite venueId={} actorUserId={}: {}",
-                        venueId,
-                        actorUserId,
-                        sanitizeTelegramForLog(e.message),
-                    )
-                    logger.debugTelegramException(e) {
-                        "revokePendingInvite exception venueId=$venueId actorUserId=$actorUserId"
-                    }
+                    logger.warn("Failed to revoke pending staff invite error_type={}", e::class.simpleName ?: "unknown")
                     StaffInviteRevokeResult.DatabaseError
                 } finally {
                     connection.autoCommit = initialAutoCommit
@@ -272,11 +329,7 @@ class StaffInviteRepository(
                         ),
                     )
                 } catch (e: Exception) {
-                    logger.warn(
-                        "Failed to preview staff invite: {}",
-                        sanitizeTelegramForLog(e.message),
-                    )
-                    logger.debugTelegramException(e) { "previewInvite exception" }
+                    logger.warn("Failed to preview staff invite error_type={}", e::class.simpleName ?: "unknown")
                     StaffInvitePreviewResult.DatabaseError
                 }
             }
@@ -286,6 +339,8 @@ class StaffInviteRepository(
     suspend fun acceptInvite(
         code: String,
         userId: Long,
+        auditLogWriter: TransactionalTargetedAuditLogWriter,
+        prepareMember: suspend (Connection, Long, String, Long?) -> Boolean = { _, _, _, _ -> true },
         createMember: suspend (Connection, Long, String, Long?) -> VenueStaffMember?,
     ): StaffInviteAcceptResult {
         val ds = dataSource ?: return StaffInviteAcceptResult.DatabaseError
@@ -302,6 +357,9 @@ class StaffInviteRepository(
                         loadActiveInvite(connection, codeHash, nowTs) ?: return@use rollbackAndReturn(connection) {
                             StaffInviteAcceptResult.InvalidOrExpired
                         }
+                    if (!prepareMember(connection, invite.venueId, invite.role, invite.createdByUserId)) {
+                        return@use rollbackAndReturn(connection) { StaffInviteAcceptResult.DatabaseError }
+                    }
                     val existingMember = loadMember(connection, invite.venueId, userId, forUpdate = true)
                     if (existingMember != null) {
                         val resolvedExisting = VenueRoleMapping.fromDb(existingMember.role)
@@ -320,25 +378,35 @@ class StaffInviteRepository(
                                     StaffInviteAcceptResult.InvalidOrExpired
                                 }
                             }
-                            connection.commit()
-                            return@use StaffInviteAcceptResult.Success(
-                                member = updatedMember,
-                                alreadyMember = true,
-                                invitedRole = invite.role,
-                                inviteCreatedByUserId = invite.createdByUserId,
-                                roleChanged = true,
+                            return@use commitAcceptedInvite(
+                                connection = connection,
+                                auditLogWriter = auditLogWriter,
+                                codeHash = codeHash,
+                                actorUserId = userId,
+                                result =
+                                    StaffInviteAcceptResult.Success(
+                                        member = updatedMember,
+                                        alreadyMember = true,
+                                        invitedRole = invite.role,
+                                        roleChanged = true,
+                                    ),
                             )
                         }
                         if (!markInviteUsed(connection, codeHash, nowTs, userId)) {
                             return@use rollbackAndReturn(connection) { StaffInviteAcceptResult.InvalidOrExpired }
                         }
-                        connection.commit()
-                        return@use StaffInviteAcceptResult.Success(
-                            member = normalizedExistingMember,
-                            alreadyMember = true,
-                            invitedRole = invite.role,
-                            inviteCreatedByUserId = invite.createdByUserId,
-                            keptHigherRole = existingRank > invitedRank,
+                        return@use commitAcceptedInvite(
+                            connection = connection,
+                            auditLogWriter = auditLogWriter,
+                            codeHash = codeHash,
+                            actorUserId = userId,
+                            result =
+                                StaffInviteAcceptResult.Success(
+                                    member = normalizedExistingMember,
+                                    alreadyMember = true,
+                                    invitedRole = invite.role,
+                                    keptHigherRole = existingRank > invitedRank,
+                                ),
                         )
                     }
                     val member = createMember(connection, invite.venueId, invite.role, invite.createdByUserId)
@@ -350,12 +418,17 @@ class StaffInviteRepository(
                                     StaffInviteAcceptResult.InvalidOrExpired
                                 }
                             }
-                            connection.commit()
-                            return@use StaffInviteAcceptResult.Success(
-                                member = existingAfterInsert,
-                                alreadyMember = true,
-                                invitedRole = invite.role,
-                                inviteCreatedByUserId = invite.createdByUserId,
+                            return@use commitAcceptedInvite(
+                                connection = connection,
+                                auditLogWriter = auditLogWriter,
+                                codeHash = codeHash,
+                                actorUserId = userId,
+                                result =
+                                    StaffInviteAcceptResult.Success(
+                                        member = existingAfterInsert,
+                                        alreadyMember = true,
+                                        invitedRole = invite.role,
+                                    ),
                             )
                         }
                         return@use rollbackAndReturn(connection) { StaffInviteAcceptResult.DatabaseError }
@@ -363,21 +436,21 @@ class StaffInviteRepository(
                     if (!markInviteUsed(connection, codeHash, nowTs, userId)) {
                         return@use rollbackAndReturn(connection) { StaffInviteAcceptResult.InvalidOrExpired }
                     }
-                    connection.commit()
-                    StaffInviteAcceptResult.Success(
-                        member = member,
-                        alreadyMember = false,
-                        invitedRole = invite.role,
-                        inviteCreatedByUserId = invite.createdByUserId,
+                    commitAcceptedInvite(
+                        connection = connection,
+                        auditLogWriter = auditLogWriter,
+                        codeHash = codeHash,
+                        actorUserId = userId,
+                        result =
+                            StaffInviteAcceptResult.Success(
+                                member = member,
+                                alreadyMember = false,
+                                invitedRole = invite.role,
+                            ),
                     )
                 } catch (e: Exception) {
                     rollbackBestEffort(connection)
-                    logger.warn(
-                        "Failed to accept staff invite userId={}: {}",
-                        userId,
-                        sanitizeTelegramForLog(e.message),
-                    )
-                    logger.debugTelegramException(e) { "acceptInvite exception userId=$userId" }
+                    logger.warn("Failed to accept staff invite error_type={}", e::class.simpleName ?: "unknown")
                     StaffInviteAcceptResult.DatabaseError
                 } finally {
                     connection.autoCommit = initialAutoCommit
@@ -411,12 +484,7 @@ class StaffInviteRepository(
                     StaffInviteDeclineResult.Success
                 } catch (e: Exception) {
                     rollbackBestEffort(connection)
-                    logger.warn(
-                        "Failed to decline staff invite userId={}: {}",
-                        userId,
-                        sanitizeTelegramForLog(e.message),
-                    )
-                    logger.debugTelegramException(e) { "declineInvite exception userId=$userId" }
+                    logger.warn("Failed to decline staff invite error_type={}", e::class.simpleName ?: "unknown")
                     StaffInviteDeclineResult.DatabaseError
                 } finally {
                     connection.autoCommit = initialAutoCommit
@@ -629,19 +697,20 @@ class StaffInviteRepository(
 
     private fun appendInviteAudit(
         connection: Connection,
-        auditLogRepository: AuditLogRepository,
+        auditLogWriter: TransactionalAuditLogWriter,
         actorUserId: Long,
         action: String,
         venueId: Long,
         handle: String,
         targetRole: String,
     ) {
-        auditLogRepository.appendJson(
+        val ownerAction = action == VENUE_OWNER_INVITE_CREATE_AUDIT_ACTION
+        auditLogWriter.appendJson(
             connection = connection,
             actorUserId = actorUserId,
             action = action,
-            entityType = STAFF_INVITE_AUDIT_ENTITY_TYPE,
-            entityId = null,
+            entityType = if (ownerAction) VENUE_OWNER_INVITE_AUDIT_ENTITY_TYPE else STAFF_INVITE_AUDIT_ENTITY_TYPE,
+            entityId = venueId.takeIf { ownerAction },
             payload =
                 buildJsonObject {
                     put("venueId", venueId)
@@ -650,6 +719,50 @@ class StaffInviteRepository(
                 },
         )
     }
+
+    private fun commitAcceptedInvite(
+        connection: Connection,
+        auditLogWriter: TransactionalTargetedAuditLogWriter,
+        codeHash: String,
+        actorUserId: Long,
+        result: StaffInviteAcceptResult.Success,
+    ): StaffInviteAcceptResult.Success {
+        val action = acceptAuditActionFor(result.invitedRole)
+        val ownerAction = action == VENUE_OWNER_INVITE_ACCEPT_AUDIT_ACTION
+        auditLogWriter.appendTargetedJson(
+            connection = connection,
+            actorUserId = actorUserId,
+            targetUserId = result.member.userId,
+            action = action,
+            entityType = if (ownerAction) VENUE_OWNER_INVITE_AUDIT_ENTITY_TYPE else STAFF_INVITE_AUDIT_ENTITY_TYPE,
+            entityId = result.member.venueId.takeIf { ownerAction },
+            payload =
+                buildJsonObject {
+                    put("venueId", result.member.venueId)
+                    put("inviteHandle", deriveOpaqueHandle(codeHash))
+                    put("targetRole", result.invitedRole.trim().uppercase(Locale.ROOT))
+                    put("alreadyMember", result.alreadyMember)
+                    put("roleChanged", result.roleChanged)
+                    put("keptHigherRole", result.keptHigherRole)
+                },
+        )
+        connection.commit()
+        return result
+    }
+
+    private fun createAuditActionFor(role: String): String =
+        if (role.equals(VenueRole.OWNER.name, ignoreCase = true)) {
+            VENUE_OWNER_INVITE_CREATE_AUDIT_ACTION
+        } else {
+            STAFF_INVITE_CREATED_AUDIT_ACTION
+        }
+
+    private fun acceptAuditActionFor(role: String): String =
+        if (role.equals(VenueRole.OWNER.name, ignoreCase = true)) {
+            VENUE_OWNER_INVITE_ACCEPT_AUDIT_ACTION
+        } else {
+            STAFF_INVITE_ACCEPTED_AUDIT_ACTION
+        }
 
     private fun generateCode(length: Int = 10): String {
         val builder = StringBuilder(length)
@@ -687,6 +800,17 @@ data class StaffInviteCodeResult(
     val ttlSeconds: Long,
     val handle: String = "",
 )
+
+sealed interface StaffInviteCreateResult {
+    data class Success(val invite: StaffInviteCodeResult) : StaffInviteCreateResult
+
+    data class RateLimited(val retryAfterSeconds: Long) : StaffInviteCreateResult
+
+    data object DatabaseError : StaffInviteCreateResult
+}
+
+private fun StaffInviteCreateResult.inviteOrNull(): StaffInviteCodeResult? =
+    (this as? StaffInviteCreateResult.Success)?.invite
 
 data class PendingStaffInvite(
     val handle: String,
@@ -726,7 +850,6 @@ sealed interface StaffInviteAcceptResult {
         val member: VenueStaffMember,
         val alreadyMember: Boolean,
         val invitedRole: String,
-        val inviteCreatedByUserId: Long,
         val roleChanged: Boolean = false,
         val keptHigherRole: Boolean = false,
     ) : StaffInviteAcceptResult
@@ -759,9 +882,13 @@ private data class PendingStaffInviteRow(
 )
 
 const val STAFF_INVITE_CREATED_AUDIT_ACTION = "STAFF_INVITE_CREATED"
+const val STAFF_INVITE_ACCEPTED_AUDIT_ACTION = "STAFF_INVITE_ACCEPTED"
 const val STAFF_INVITE_REVOKED_AUDIT_ACTION = "STAFF_INVITE_REVOKED"
+const val VENUE_OWNER_INVITE_CREATE_AUDIT_ACTION = "VENUE_OWNER_INVITE_CREATE"
+const val VENUE_OWNER_INVITE_ACCEPT_AUDIT_ACTION = "VENUE_OWNER_INVITE_ACCEPT"
 
 private const val STAFF_INVITE_AUDIT_ENTITY_TYPE = "staff_invite"
+private const val VENUE_OWNER_INVITE_AUDIT_ENTITY_TYPE = "venue"
 private const val STAFF_INVITE_HANDLE_PREFIX = "sih_"
 private const val STAFF_INVITE_HANDLE_CONTEXT = "staff-invite-handle-v1"
 private const val STAFF_INVITE_HANDLE_LENGTH = 47

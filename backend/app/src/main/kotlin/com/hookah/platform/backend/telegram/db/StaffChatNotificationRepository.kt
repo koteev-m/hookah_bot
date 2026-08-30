@@ -32,6 +32,9 @@ open class StaffChatNotificationRepository(
         return withContext(Dispatchers.IO) {
             ds.connection.use { connection ->
                 try {
+                    if (!isProductRecipientAuthorized(connection, chatId)) {
+                        return@use StaffChatNotificationClaim.SKIPPED_TRAFFIC_POLICY
+                    }
                     connection.prepareStatement(
                         """
                         INSERT INTO telegram_staff_chat_notifications (batch_id, chat_id, sent_at)
@@ -64,6 +67,25 @@ open class StaffChatNotificationRepository(
         method: String,
         payloadJson: String,
     ): StaffChatNotificationClaim {
+        if (trafficPolicy.productMode) {
+            return StaffChatNotificationClaim.SKIPPED_TRAFFIC_POLICY
+        }
+        return tryClaimAndEnqueueForVenue(
+            notificationKey = notificationKey,
+            venueId = 0L,
+            chatId = chatId,
+            method = method,
+            payloadJson = payloadJson,
+        )
+    }
+
+    suspend fun tryClaimAndEnqueueForVenue(
+        notificationKey: Long,
+        venueId: Long,
+        chatId: Long,
+        method: String,
+        payloadJson: String,
+    ): StaffChatNotificationClaim {
         if (!trafficPolicy.allowsOutboundChat(chatId)) {
             return StaffChatNotificationClaim.SKIPPED_TRAFFIC_POLICY
         }
@@ -72,6 +94,10 @@ open class StaffChatNotificationRepository(
             ds.connection.use { connection ->
                 connection.autoCommit = false
                 try {
+                    if (!isProductVenueStaffChatAuthorized(connection, venueId, chatId)) {
+                        connection.rollback()
+                        return@use StaffChatNotificationClaim.SKIPPED_TRAFFIC_POLICY
+                    }
                     connection.prepareStatement(
                         """
                         INSERT INTO telegram_staff_chat_notifications (batch_id, chat_id, sent_at)
@@ -130,6 +156,10 @@ open class StaffChatNotificationRepository(
             ds.connection.use { connection ->
                 connection.autoCommit = false
                 try {
+                    if (!isProductVenueStaffChatAuthorized(connection, venueId, chatId)) {
+                        connection.rollback()
+                        return@use StaffChatNotificationClaim.SKIPPED_TRAFFIC_POLICY
+                    }
                     connection.prepareStatement(
                         """
                         INSERT INTO telegram_staff_chat_notifications (batch_id, chat_id, sent_at)
@@ -179,25 +209,52 @@ open class StaffChatNotificationRepository(
         method: String,
         payloadJson: String,
     ): Boolean {
+        if (trafficPolicy.productMode) return false
+        return enqueueForVenue(
+            venueId = 0L,
+            chatId = chatId,
+            method = method,
+            payloadJson = payloadJson,
+        )
+    }
+
+    suspend fun enqueueForVenue(
+        venueId: Long,
+        chatId: Long,
+        method: String,
+        payloadJson: String,
+    ): Boolean {
         if (!trafficPolicy.allowsOutboundChat(chatId)) return false
         val ds = dataSource ?: return false
         return withContext(Dispatchers.IO) {
             ds.connection.use { connection ->
                 try {
-                    connection.prepareStatement(
-                        """
-                        INSERT INTO telegram_outbox (chat_id, method, payload_json)
-                        VALUES (?, ?, ?)
-                        """.trimIndent(),
-                    ).use { statement ->
-                        statement.setLong(1, chatId)
-                        statement.setString(2, method)
-                        statement.setString(3, payloadJson)
-                        statement.executeUpdate() > 0
+                    connection.autoCommit = false
+                    if (!isProductVenueStaffChatAuthorized(connection, venueId, chatId)) {
+                        connection.rollback()
+                        false
+                    } else {
+                        val inserted =
+                            connection.prepareStatement(
+                                """
+                                INSERT INTO telegram_outbox (chat_id, method, payload_json)
+                                VALUES (?, ?, ?)
+                                """.trimIndent(),
+                            ).use { statement ->
+                                statement.setLong(1, chatId)
+                                statement.setString(2, method)
+                                statement.setString(3, payloadJson)
+                                statement.executeUpdate() > 0
+                            }
+                        connection.commit()
+                        inserted
                     }
                 } catch (e: Exception) {
+                    runCatching { connection.rollback() }
                     logFailure("enqueue", e)
                     false
+                } finally {
+                    runCatching { connection.autoCommit = true }
                 }
             }
         }
@@ -207,12 +264,28 @@ open class StaffChatNotificationRepository(
         val ds = dataSource ?: return null
         return withContext(Dispatchers.IO) {
             ds.connection.use { connection ->
+                val sql =
+                    if (trafficPolicy.productMode) {
+                        """
+                        SELECT live_message.order_id,
+                               live_message.venue_id,
+                               live_message.chat_id,
+                               live_message.message_id
+                        FROM telegram_staff_chat_order_messages live_message
+                        JOIN venues live_venue
+                          ON live_venue.id = live_message.venue_id
+                         AND live_venue.staff_chat_id = live_message.chat_id
+                        WHERE live_message.order_id = ?
+                        """.trimIndent()
+                    } else {
+                        """
+                        SELECT order_id, venue_id, chat_id, message_id
+                        FROM telegram_staff_chat_order_messages
+                        WHERE order_id = ?
+                        """.trimIndent()
+                    }
                 connection.prepareStatement(
-                    """
-                    SELECT order_id, venue_id, chat_id, message_id
-                    FROM telegram_staff_chat_order_messages
-                    WHERE order_id = ?
-                    """.trimIndent(),
+                    sql,
                 ).use { statement ->
                     statement.setLong(1, orderId)
                     statement.executeQuery().use { rs ->
@@ -243,22 +316,37 @@ open class StaffChatNotificationRepository(
             ds.connection.use { connection ->
                 try {
                     connection.autoCommit = false
+                    if (!isProductVenueStaffChatAuthorized(connection, venueId, chatId)) {
+                        connection.rollback()
+                        return@use false
+                    }
                     val updated =
                         connection.prepareStatement(
                             """
                             UPDATE telegram_staff_chat_order_messages
-                            SET venue_id = ?, chat_id = ?, message_id = COALESCE(?, message_id), updated_at = CURRENT_TIMESTAMP
+                            SET venue_id = ?,
+                                chat_id = ?,
+                                message_id =
+                                    CASE
+                                        WHEN venue_id = ? AND chat_id = ? THEN COALESCE(?, message_id)
+                                        ELSE ?
+                                    END,
+                                updated_at = CURRENT_TIMESTAMP
                             WHERE order_id = ?
                             """.trimIndent(),
                         ).use { statement ->
                             statement.setLong(1, venueId)
                             statement.setLong(2, chatId)
+                            statement.setLong(3, venueId)
+                            statement.setLong(4, chatId)
                             if (messageId != null) {
-                                statement.setLong(3, messageId)
+                                statement.setLong(5, messageId)
+                                statement.setLong(6, messageId)
                             } else {
-                                statement.setNull(3, java.sql.Types.BIGINT)
+                                statement.setNull(5, java.sql.Types.BIGINT)
+                                statement.setNull(6, java.sql.Types.BIGINT)
                             }
-                            statement.setLong(4, orderId)
+                            statement.setLong(7, orderId)
                             statement.executeUpdate()
                         }
                     if (updated == 0) {
@@ -305,6 +393,10 @@ open class StaffChatNotificationRepository(
             ds.connection.use { connection ->
                 try {
                     connection.autoCommit = false
+                    if (!isProductVenueStaffChatAuthorized(connection, venueId, chatId)) {
+                        connection.rollback()
+                        return@use false
+                    }
                     upsertOrderMessageInTransaction(
                         connection = connection,
                         orderId = orderId,
@@ -360,13 +452,22 @@ open class StaffChatNotificationRepository(
             connection.prepareStatement(
                 """
                 UPDATE telegram_staff_chat_order_messages
-                SET venue_id = ?, chat_id = ?, updated_at = CURRENT_TIMESTAMP
+                SET venue_id = ?,
+                    chat_id = ?,
+                    message_id =
+                        CASE
+                            WHEN venue_id = ? AND chat_id = ? THEN message_id
+                            ELSE NULL
+                        END,
+                    updated_at = CURRENT_TIMESTAMP
                 WHERE order_id = ?
                 """.trimIndent(),
             ).use { statement ->
                 statement.setLong(1, venueId)
                 statement.setLong(2, chatId)
-                statement.setLong(3, orderId)
+                statement.setLong(3, venueId)
+                statement.setLong(4, chatId)
+                statement.setLong(5, orderId)
                 statement.executeUpdate()
             }
         if (updated == 0) {
@@ -420,6 +521,45 @@ open class StaffChatNotificationRepository(
             statement.setLong(1, outboxId)
             statement.setLong(2, orderId)
             statement.executeUpdate()
+        }
+    }
+
+    private fun isProductRecipientAuthorized(
+        connection: java.sql.Connection,
+        chatId: Long,
+    ): Boolean {
+        if (!trafficPolicy.productMode) return true
+        val sql =
+            if (chatId > 0) {
+                "SELECT 1 FROM users WHERE telegram_user_id = ? LIMIT 1 FOR SHARE"
+            } else {
+                "SELECT 1 FROM venues WHERE staff_chat_id = ? LIMIT 1 FOR SHARE"
+            }
+        return connection.prepareStatement(sql).use { statement ->
+            statement.setLong(1, chatId)
+            statement.executeQuery().use { resultSet -> resultSet.next() }
+        }
+    }
+
+    private fun isProductVenueStaffChatAuthorized(
+        connection: java.sql.Connection,
+        venueId: Long,
+        chatId: Long,
+    ): Boolean {
+        if (!trafficPolicy.productMode) return true
+        return connection.prepareStatement(
+            """
+            SELECT 1
+            FROM venues
+            WHERE id = ?
+              AND staff_chat_id = ?
+            LIMIT 1
+            FOR SHARE
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, chatId)
+            statement.executeQuery().use { resultSet -> resultSet.next() }
         }
     }
 

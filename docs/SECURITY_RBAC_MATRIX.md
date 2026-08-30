@@ -1,6 +1,6 @@
 # Security / RBAC Permission Matrix
 
-Дата актуализации: 2026-08-18.
+Дата актуализации: 2026-08-30.
 
 Статус: **current product reference / UPDATED**. Runtime permission parity and the broader
 dangerous-action audit remain **PARTIAL** unless a specific route, test or smoke result is cited.
@@ -90,6 +90,36 @@ Tokens and client-provided ids are context pointers, not authority:
 - Staff-chat callbacks are shortcuts only; every callback must re-check actor role, venue scope and entity state server-side.
 - Client analytics events are low-trust diagnostics and cannot drive money, access, billing, order state or venue lifecycle.
 
+### Public-pilot admission boundary
+
+- `ALLOWLIST` is an exact, static, fail-closed smoke boundary. `PRODUCT` is the explicit public-pilot
+  admission mode; it never uses per-user static IDs and `UNRESTRICTED` is prohibited in staging.
+- A `PRODUCT` private update is eligible for routing only when the actor and private chat IDs are
+  positive and equal and the update shape is supported. Mini App admission still requires normal
+  Telegram initData signature/freshness validation and a positive identity. Authentication upserts
+  the user and yields Guest authority only when no active venue/platform role exists.
+- A valid active invite can be previewed and accepted by a previously unknown identity. The server
+  derives venue and role from the invite and preserves TTL, revoked/used, one-time, transaction-bound
+  create/accept audit and
+  concurrency checks. Platform Owner may grant OWNER for the exact venue; an active Venue Owner may
+  grant STAFF or MANAGER only for an own venue. A second operational OWNER does not replace the
+  venue's existing commercial owner account or create a commercial account for the invitee; only an
+  unlinked venue takes the first-owner preparation path. No invite grants cross-venue or Platform
+  authority.
+- Every Venue and Platform request continues to re-check active membership/role and tenant scope.
+  UI mode selection, a Telegram session, invite token or traffic-policy admission is never enough.
+- Product group admission is structural only. `/link` still requires a valid one-time link code,
+  current actor authority for the exact venue and Telegram group/admin checks. Other group commands
+  and callbacks require the exact currently linked staff chat, matching venue payload and current
+  actor permission before idempotency or mutation; unrelated group traffic is state-free.
+- Private outbound recipients must resolve from a validated private inbound/product record or exact
+  domain workflow. Group outbound and live-message edits require the exact current venue staff-chat
+  link. Unlink/relink invalidates pending authority. Static user/chat IDs are not outbound product
+  authority.
+- Rate limits cover new/unknown private traffic, invite preview and invalid-token attempts, group
+  link/operations and spam commands. Logs/audit exclude raw Telegram IDs, invite token/hash,
+  initData, message bodies, private names and secrets.
+
 ## Scopes
 
 | Scope | Meaning | Boundary |
@@ -113,7 +143,7 @@ Tokens and client-provided ids are context pointers, not authority:
 
 | Role | Product meaning | Current / target note |
 | --- | --- | --- |
-| Guest | End user without venue/platform role. | Can browse, book, order in verified table session, use own chats/tickets and own tabs. |
+| Guest | End user without venue/platform role. | Any valid public-pilot Telegram identity remains Guest until an exact membership is granted. Can browse, book, order in verified table session, use own chats/tickets and own tabs. |
 | Tab Host | Guest who creates/hosts a shared tab. | Derived responsibility inside `tab` scope, not a global role. |
 | Tab Member | Guest who joined a shared tab by invitation/consent. | Derived responsibility inside `tab` scope, not a global role. |
 | Staff | Shift operations role. | Orders, operational calls, allowed booking arrival/no-show and stop-list availability; Schedule Phase 1 provides own-shift plus safe-overlap read only while the optional module is enabled. No schedule mutation, support tickets, venue chats, feedback dashboard/follow-up, billing, settings or platform. |
@@ -166,7 +196,7 @@ Target decision: remove `ADMIN` from the product model and keep it only as a com
 | Venue Manager | `support_ticket.manage_own_venue`, `venue_chat.manage_own_venue` | Own venue only | Current support/chat MVP. Venue cannot reply when support ticket is assigned to Platform unless product policy explicitly allows it. |
 | Venue Manager | `feedback.view_own_venue`, `feedback.follow_up_low` | Own venue only | Current MVP. Read-only aggregate/list; rating `1..3` follow-up opens exact `VENUE_CHAT`. Public review link edit denied. |
 | Venue Manager | `promotion.manage` | Own venue only | Current for informational Phase 1 and the Happy Hours percentage schedule/target/reward/status slice through server-validated routes. |
-| Venue Manager | `STAFF_ACCESS_VIEW`, `STAFF_INVITE_CREATE_STAFF`, `STAFF_INVITE_REVOKE_STAFF` | Own venue | Lists current active Staff through the safe identity/link-state projection and pending Staff invites without recipient identity; creates/revokes Staff only. Owner/Manager/Admin identities are not returned as link targets. |
+| Venue Manager | `STAFF_ACCESS_VIEW`, `STAFF_INVITE_CREATE_STAFF`, `STAFF_INVITE_REVOKE_STAFF` | Own venue | Lists current active Staff through the safe identity/link-state projection and pending Staff invites without recipient identity; creates/revokes Staff only, including previously unknown Telegram recipients without manifest edits. Owner/Manager/Admin identities are not returned as link targets. |
 | Venue Manager | `STAFF_PROFILE_MANAGE_STAFF`, `STAFF_PROFILE_PUBLISH_STAFF` | Own venue | Creates/opens and manages display-only/active-Staff-linked cards. One active member has at most one active linked card. Duplicate state is read-only and offers no repair/open/edit/link/unlink authority. Owner/Manager/missing/foreign linkage is protected, `linkedUserId` is redacted and `canManage=false`; duplicate repair is Owner-only. |
 | Venue Manager | `staff_shift.manage_today` | Own venue | Current conservative Phase 1 in source `MANUAL`. Source `SCHEDULE` rejects direct manual Today mutation with a typed safe conflict. Manager does not approve public profiles or future tip methods by default. |
 | Venue Manager | `STAFF_SCHEDULE_VIEW`, `STAFF_SCHEDULE_MANAGE` | Own venue only | Current Schedule Phase 1 runtime. Same bounded future-shift create/update/cancel authority as Owner; distinct from current Today Shift policy. |
@@ -174,7 +204,7 @@ Target decision: remove `ADMIN` from the product model and keep it only as a com
 | Venue Manager | `venue_preview.view` | Own venue only | Current. One endpoint selects `PUBLISHED_PUBLIC` through exact Guest guards or `PRIVATE_DRAFT` through the saved public-facing allowlist. |
 | Venue Manager | `billing.none`, dangerous lifecycle none | Billing/platform/lifecycle | Current product rule. |
 | Venue Owner | All venue operations inside own venue | Own venue | Current via active `venue_members(role=OWNER)`. |
-| Venue Owner | `staff.manage`, `STAFF_ACCESS_VIEW`, `STAFF_INVITE_CREATE_STAFF`, `STAFF_INVITE_CREATE_MANAGER`, `STAFF_INVITE_REVOKE_STAFF`, `STAFF_INVITE_REVOKE_MANAGER`, `menu.manage`, `stop_list.manage`, `table_qr.manage/rotate/export`, `settings.manage`, `staff_chat.link/unlink/test` | Own venue | Keeps the current broad active-member identity projection and staff/profile controls. One-active-link and duplicate guards apply without weakening protected/last-owner constraints; Owner/Admin invite targets remain outside venue flow. Dangerous actions need confirmation/audit. |
+| Venue Owner | `staff.manage`, `STAFF_ACCESS_VIEW`, `STAFF_INVITE_CREATE_STAFF`, `STAFF_INVITE_CREATE_MANAGER`, `STAFF_INVITE_REVOKE_STAFF`, `STAFF_INVITE_REVOKE_MANAGER`, `menu.manage`, `stop_list.manage`, `table_qr.manage/rotate/export`, `settings.manage`, `staff_chat.link/unlink/test` | Own venue | May invite arbitrary new Staff/Manager Telegram identities without manifest edits, but only into an own authorized venue and only with the selected stored role. One-active-link, duplicate and protected/last-owner guards remain; Owner/Admin invite targets stay outside venue flow. Dangerous actions need confirmation/audit. |
 | Venue Owner | `MENU_SHIFT_CHECK` | Own venue only | Phase 1 staging-smoke-passed. May prepare a local draft and atomically confirm one bounded availability batch, including no-op completion. |
 | Venue Owner | `staff_profile.manage`, `staff_profile.publish`, `staff_shift.manage_today`, `staff_tip_method.approve` | Own venue | Current for Phase 1 profiles + today shift; future for tip method approval. |
 | Venue Owner | `STAFF_SCHEDULE_VIEW`, `STAFF_SCHEDULE_MANAGE` | Own venue only | Current Schedule Phase 1 runtime. Bounded list/create/update/cancel with lifecycle, stale-write and audit guards. |
@@ -186,7 +216,7 @@ Target decision: remove `ADMIN` from the product model and keep it only as a com
 | Venue Owner | `feedback.view_own_venue`, `feedback.follow_up_low`, `public_review_url.manage` | Own venue only | Current MVP. Public review URL setting is Owner-only and shared by Bot/Mini App. |
 | Venue Owner | `promotion.manage` | Own venue only | Current for informational Phase 1 and the Happy Hours percentage schedule/target/reward/status slice. |
 | Venue Owner | `venue.lifecycle.request_pause/archive/delete` | Own venue | Target only if product implements owner-requested lifecycle; Platform lifecycle remains Platform Owner. |
-| Platform Owner | `platform.venues.manage`, `platform.lifecycle.manage`, `platform.owner_access.manage` | Platform | Current for implemented cockpit/lifecycle/owner access. |
+| Platform Owner | `platform.venues.manage`, `platform.lifecycle.manage`, `platform.owner_access.manage` | Platform | Current for implemented cockpit/lifecycle/owner access, including inviting a previously unknown OWNER into one exact venue without manifest edits. This does not grant the Owner platform scope. |
 | Platform Owner | `platform.billing.manage`, `platform.support.manage_all`, `platform.analytics.view`, `platform.audit.view`, `platform.settings.manage` | Platform | Billing/support MVP current; analytics/audit explorer partial/future. |
 | Platform Owner | no ordinary `booking_chat.*` | Booking conversations | Current explicit denial. Platform support list/detail/message/assignment/status paths accept `SUPPORT_TICKET` only and deny before exposing booking messages. |
 | Platform Owner | Ordinary `VENUE_CHAT` access | Venue chats | Denied by current target unless a future product policy explicitly changes it. |
@@ -237,7 +267,7 @@ These actions require server-side authorization and should require confirmation,
 | Support ticket transferred/closed/assignee changed | Audit status/scope/actor/source; no message text/raw Telegram payloads. |
 | Analytics export | If implemented, audit export actor/scope and exclude raw PII/message text/payment secrets. |
 | Staff profile published/hidden, public photo changed, Today Shift marked active/canceled, future tip method updated/approved/disabled | Audit actor/target/old-new safe fields; never expose private Telegram ids or raw external payment/provider data. |
-| Staff invite created/revoked | Transaction-bound `STAFF_INVITE_CREATED` / `STAFF_INVITE_REVOKED`; actor column plus venue, opaque handle and safe Staff/Manager role only. No code/hash/deep link or identity payload. |
+| Staff invite created/accepted/revoked | Transaction-bound `STAFF_INVITE_CREATED`, `STAFF_INVITE_ACCEPTED` and `STAFF_INVITE_REVOKED`; OWNER preserves the established `VENUE_OWNER_INVITE_CREATE` / `VENUE_OWNER_INVITE_ACCEPT` action names. Acceptance writes exactly one targeted audit before commit on the same connection as membership and invite use; failure rolls back all three. Actor/target stay only in their dedicated columns. Payload is limited to venue, opaque handle, stored safe role and acceptance-state booleans; no code/hash/deep link or identity payload. Invalid, expired, revoked, used, replayed, denied and concurrent-loser paths write no acceptance audit. |
 | Staff profile created/updated/published/hidden | Transaction-bound `STAFF_PROFILE_*`; target membership and one-active-link check share the transaction. Audit contains safe venue/profile id, linkage/target-role class, changed field names and old/new visibility/linkage only. Denial/duplicate/no-op/rollback has no success audit or Telegram identity. |
 | Staff Schedule shift created/updated/canceled/restored | Owner/Manager own venue only; update preview and cancel confirmation; active cancel has stronger warning; optimistic stale rejection; `STAFF_SHIFT_CREATED/UPDATED/CANCELED/RESTORED` audit is atomic with safe old/new interval/lifecycle/timezone fields and no private linkage/raw request. |
 | Staff module settings updated | Owner/Manager own venue only through `STAFF_MODULE_SETTINGS_MANAGE`; full-object CAS and `STAFF_MODULE_SETTINGS_UPDATED` audit are atomic. No-op, stale, denial, audit failure or rollback writes no success audit; payload contains only safe old/new setting values and changed field names. |
@@ -253,7 +283,9 @@ H2 V123 add nullable `audit_log.target_user_id BIGINT`, the named foreign key
 inserts keep `target_user_id = NULL`.
 
 - Actor identity remains only in `audit_log.actor_user_id`; target identity remains only in
-  `audit_log.target_user_id`. Neither identity is duplicated in `payload_json`.
+  `audit_log.target_user_id`. Neither identity is duplicated in `payload_json`. Invite acceptance is
+  self-service, so the acceptor is both the authenticated actor and the affected membership target;
+  the inviter is not misattributed as the acceptance actor.
 - `VENUE_STAFF_ROLE_CHANGED` uses entity `venue` / `venueId` and payload `oldRole`, `newRole`,
   `source`. `VENUE_STAFF_MEMBER_REMOVED` uses the same entity and payload `oldRole`, `source`.
   Source is server-owned `VENUE_MINI_APP` or `TELEGRAM_BOT`; `venueId` is not duplicated in payload.

@@ -1,6 +1,6 @@
 # Testing / QA Smoke Strategy
 
-Дата актуализации: 2026-08-19.
+Дата актуализации: 2026-08-30.
 
 Статус: **current product reference / UPDATED**. This document is the canonical QA/smoke strategy for the Telegram bot + Mini App platform. It consolidates local validation, GitHub Actions expectations, area-specific smoke suites, staging policy, failure reporting and Codex handoff rules. Deployment and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
 
@@ -35,18 +35,21 @@ requirements remain regression/release evidence; it is not the current slice and
 
 Quality gates must match the blast radius of the change. Do not claim a feature is release-ready from local-only checks when it changes backend runtime, Mini App behavior, Telegram bot, staff-chat, billing/security or migrations. Do not run staging deploy for docs-only changes.
 
-### Telegram traffic allowlist main-port quality gate
+### Permanent public-pilot Telegram admission quality gate
 
-The exact V125 prerequisite `b4e13da3179438fad69d2344e1cb136a56f95f6c` is already deployed on
-staging. Porting it onto main is a backend/configuration security change with no new migration and no
-Mini App product change. HT-05 is local-only: it must not contact Telegram or staging, create staging
-fixtures, build or deploy a release image, commit or push. Its mandatory automated matrix is:
+The authoritative V125 hotfix is
+`b4e13da3179438fad69d2344e1cb136a56f95f6c..be5d62a5e9058f89cd72be6c313c71fa46ccdbf2`.
+HT-INC-02 ports it onto main without changing either migration tree and preserves PostgreSQL V126 /
+H2 V127 plus all main-only booking behavior. Public-pilot staging uses `PRODUCT`; `ALLOWLIST` is a
+separately reviewed isolated-smoke mode only. Every future main/V126 release must keep this matrix
+and the deployment guards below mandatory:
 
 - `TelegramTrafficPolicyStartupTest`, `TelegramTrafficPolicyConfigTest` and
-  `TelegramTrafficPolicyTest`: staging startup/configuration
-  fails closed for missing, unknown, unrestricted, empty, duplicate, malformed, zero, wrong-sign or
-  overflowing values; dev/test/production keep their existing default behavior; positive 64-bit
-  user IDs, positive private chats, negative group/supergroup chats and whitespace are deterministic.
+  `TelegramTrafficPolicyTest`: staging accepts only explicit `ALLOWLIST` or `PRODUCT` and rejects
+  missing, unknown and `UNRESTRICTED`. `ALLOWLIST` retains exact canonical list parsing and
+  fail-closed identity behavior. `PRODUCT` rejects nonempty static lists, permits positive matching
+  private actor/chat identities without manifest membership and admits only the narrow supported
+  staff-group bootstrap/operational shapes.
 - `TelegramLongPollingWorkerTest`, `TelegramInboundUpdateWorkerTest`,
   `TelegramBotRouterIdempotencyTest` and `TelegramWebhookRoutesTest`: allowed/denied private and
   group updates, callback actor/chat combinations, missing actor/chat and unsupported update shapes;
@@ -61,16 +64,33 @@ fixtures, build or deploy a release image, commit or push. Its mandatory automat
   allowed update makes two idempotency acquisition attempts (`true`, then `false`) and exactly one
   outbound side effect. This is deterministic interaction evidence, not a database restore/restart
   test; the long-polling path does not write the webhook inbound queue. Runtime configuration starts
-  only the selected long-polling or webhook path, never both.
-- `TelegramAuthRouteTest` and `SessionAuthTest`: signed initData is allowlisted before user upsert or
-  JWT issuance, a denied identity receives generic `403 FORBIDDEN`, and every protected request
-  rechecks the policy so a valid JWT issued before removal is denied after the configured restart.
-- `TelegramOutboxWorkerTest`, `StaffChatNotifierTest`,
-  `BookingMessageStaffChatNotifierTest` and `TelegramApiClientTrafficPolicyTest`: a disallowed chat row is not
-  claimed, sent or mutated (`attempts`, `status`, `nextAttemptAt`, `processedAt` stay unchanged),
-  while allowed rows retain normal retry/send semantics. Every direct chat-targeted send, edit and
-  callback-answer path, including otherwise valid non-zero disallowed envelopes, is denied through
-  the same policy; there is no raw-client bypass.
+  only the selected long-polling or webhook path, never both. Product group tests additionally prove
+  unrelated traffic is state-free, valid link bootstrap remains role/code/group checked and a linked
+  callback must match the exact current staff chat and venue.
+- `TelegramAuthRouteTest`, `SessionAuthTest`, venue RBAC and Platform route tests: valid fresh signed
+  initData for a previously unknown positive user upserts and issues a Guest session without static
+  IDs. Public Guest reads work; Venue and Platform APIs remain denied until exact server-side role
+  authority exists. Protected routes keep checking membership/RBAC on every request.
+- Staff invite/router/repository and Platform owner-access tests prove the complete
+  Platform Owner -> new Venue Owner -> new external Staff/Manager chain. OWNER, MANAGER and STAFF
+  are previewable and acceptable by previously unknown identities and are derived only from valid
+  active invite rows; expired, revoked, malformed, used and concurrent double acceptance creates
+  no extra membership or audit. Invite create/accept audit is committed in the same transaction.
+  A second operational Owner invitation preserves the venue's existing commercial owner account
+  and creates no commercial account for the invitee; an unlinked venue retains the first-owner
+  preparation path.
+  Injected audit failure rolls back membership creation, role change, invite use and Owner
+  preparation. Each membership is exact-role, exact-venue and tenant isolated, and audit JSON
+  contains no raw Telegram identity fields.
+- `TelegramProductAbuseLimiterTest` and Router tests prove bounded limits for unknown/private
+  traffic, invite attempts, group link/operations and spam without logging raw keys or payloads.
+- `TelegramOutboxWorkerTest`, `StaffChatNotifierTest` and
+  `BookingMessageStaffChatNotifierTest` and `TelegramApiClientTrafficPolicyTest`: `ALLOWLIST` claim
+  behavior remains unchanged. `PRODUCT`
+  private recipients require a current server-authoritative user/workflow record and group
+  recipients require the exact current venue staff-chat link at enqueue, claim and dispatch.
+  Unlink/relink cancels stale authority/live targets; payload/envelope mismatch remains terminal and
+  there is no raw-client bypass or cross-venue delivery.
 - Captured-log assertions are explicit and scoped: `TelegramTrafficPolicyConfigTest` and
   `TelegramTrafficPolicyLoggingTest` prove invalid
   raw identity values are neither logged nor echoed in errors; `TelegramLongPollingWorkerTest`
@@ -82,6 +102,44 @@ fixtures, build or deploy a release image, commit or push. Its mandatory automat
   provider error payloads. These tests do not claim that arbitrary third-party logging outside the
   tested application paths is redacted.
 
+The mandatory PRODUCT admission contract is the following complete matrix; future changes may add
+coverage but may not silently remove any item:
+
+1. Unknown private user receives normal Guest bot behavior in `PRODUCT`.
+2. Unknown valid signed and fresh Mini App identity receives a Guest session.
+3. Guest remains denied from Venue and Platform APIs without exact server-side authority.
+4. Unknown user can preview and accept the exact stored Staff invitation.
+5. Unknown user can preview and accept the exact stored Manager invitation.
+6. Unknown user can preview and accept the exact stored Owner invitation; a second operational
+   Owner preserves the existing commercial owner account across audit rollback and retry.
+7. Platform Owner -> new Venue Owner -> new external Staff/Manager succeeds without static IDs.
+8. Invite expiry, revocation, one-time use and concurrency remain enforced.
+9. Invite creation/acceptance and its audit commit in one transaction.
+10. Audit failure rolls back membership creation, role change, invite use and Owner preparation.
+11. Audit JSON contains no raw Telegram identity fields.
+12. Foreign-venue and Platform escalation remain denied.
+13. Unknown group traffic is harmless and creates no product state.
+14. Linked staff-chat actions require exact actor, venue and current-chat authority.
+15. Outbound authority never falls back to an arbitrary chat ID.
+16. Abuse-limit and privacy-log assertions remain green.
+17. `ALLOWLIST` remains exact and fail-closed, including state-free denial.
+18. `PRODUCT` never requires static user/chat IDs.
+19. Staging rejects PRODUCT with static IDs, missing/blank/normalized-placeholder invite pepper,
+    and every `UNRESTRICTED` configuration.
+
+CI enforces exact JUnit XML presence, zero skipped/failures/errors, pinned security-critical test
+names and these minimum floors: route/security `VenueStaffRoutesTest 34`,
+`StaffInviteRepositoryTest 11`, `PlatformVenueRoutesTest 16`,
+`TelegramBotRouterTableTokenTest 560`, `TelegramOutboxWorkerTest 18`,
+`TelegramOutboxVenueAuthorityTest 2`, `VenueRepositoryTest 7`; lightweight
+`HttpAccessLogPrivacyTest 1`, `MiniAppAbuseProtectionTest 3`,
+`TelegramBotRouterLinkCommandTest 23`, `TelegramProductAbuseLimiterTest 7`,
+`TelegramRateLimiterTest 2`, `TelegramTrafficPolicyStartupTest 4`,
+`TelegramTrafficPolicyConfigTest 9`, `TelegramTrafficPolicyTest 8`,
+`TelegramWebhookRoutesTest 5`, and `TelegramAuthRouteTest 11`. The Compose job must also run
+`bash -n scripts/validate-staging-admission.sh`, `bash -n scripts/deploy-staging.sh`, and
+`bash scripts/validate-staging-admission.sh --self-test docker-compose.yml`.
+
 Run focused groups first, then the relevant extended Telegram suite and backend compile/lint:
 
 ```bash
@@ -89,6 +147,7 @@ Run focused groups first, then the relevant extended Telegram suite and backend 
   --tests '*TelegramTrafficPolicyStartupTest*' \
   --tests '*TelegramTrafficPolicyConfigTest*' \
   --tests '*TelegramTrafficPolicyTest*' \
+  --tests '*TelegramProductAbuseLimiterTest*' \
   --tests '*TelegramTrafficPolicyLoggingTest*' \
   --tests '*TelegramLongPollingWorkerTest*' \
   --console=plain
@@ -103,6 +162,8 @@ Run focused groups first, then the relevant extended Telegram suite and backend 
 ./gradlew --no-daemon --max-workers=1 :backend:app:test \
   --tests '*TelegramAuthRouteTest*' \
   --tests '*SessionAuthTest*' \
+  --tests '*VenueRbacRoutesTest*' \
+  --tests '*PlatformVenueRoutesTest*' \
   --console=plain
 
 ./gradlew --no-daemon --max-workers=1 :backend:app:test \
@@ -114,6 +175,8 @@ Run focused groups first, then the relevant extended Telegram suite and backend 
 
 ./gradlew --no-daemon --max-workers=1 :backend:app:test \
   --tests '*TelegramBotRouter*' \
+  --tests '*StaffInvite*' \
+  --tests '*VenueStaff*' \
   --tests '*MiniApp*Auth*' \
   --console=plain
 
@@ -123,10 +186,26 @@ git diff --check
 git status --short
 ```
 
-HT-05 additionally runs the unchanged Mini App production build and the complete applicable
-structured Playwright smoke to prove the backend port did not disturb current main parity. Green
-local checks prove only readiness for independent review; commit/push, green Actions, main-port
-deploy, V126 and real Telegram/Mini App staging smoke belong to later separately authorized tasks.
+HT-INC-02 also runs the full backend suite, PostgreSQL-backed integration/concurrency selectors,
+compile, ktlint, the unchanged Mini App production build and complete structured Playwright smoke,
+Compose validation, deploy-script syntax/fixture guards and an empty migration diff. Exact JUnit XML
+files must exist, meet or exceed their declared floors and report zero skipped/failures/errors; a
+selector name alone is not coverage. Green local checks prove readiness for independent review only.
+
+#### Recorded public-pilot staging acceptance
+
+Read-only reconciliation on 2026-08-30 confirms the exact candidate
+`be5d62a5e9058f89cd72be6c313c71fa46ccdbf2`, runtime `PRODUCT`, empty static lists, restricted
+non-placeholder invite pepper, one backend/long poller, Flyway V125 with V126 absent, healthy
+inactive queues and unchanged Caddy TLS 1.2 mitigation. Alias-only transactional evidence
+corroborates the two reported external acceptance identities; later explicit audited membership
+changes remain separate events and do not rewrite the acceptance ledger.
+
+`LIVE_EXTERNAL_NEW_USER_INVITE_ACCEPTANCE = PASS`
+
+This closes HT-INC-01E. Do not create another coordinated client window. Runtime behavior changes in
+future releases still require the normal green-Actions/staging-smoke policy, but HT-INC-02 itself
+must not redeploy staging, apply V126, access production or restart/reload Caddy.
 
 ### Booking test-only release hygiene
 
@@ -552,6 +631,31 @@ With exactly one new backend and old image running count zero, the bounded stagi
 - Guest, Venue and account/venue isolation hold;
 - a real staff-chat Telegram notification reaches the canonical linked chat;
 - Support and Conversations remain separate and do not mix.
+
+HT-11's pre-V126 V125 dry run is closed as
+`HT11_CLOSED_PASS_WITH_EXPLICIT_LIVE_LIMITATION`. Its completed live direction proved one exact
+Owner reply, the corresponding Guest unread creation and exact Guest-open clearing, without
+duplicate markers or cross-scope mutation. Collision A/B remain retained as
+`HISTORICAL_V125_COLLISION_EVIDENCE`. The reverse live direction remains exactly:
+
+`LIVE_V125_GUEST_REPLY_TO_OWNER_UNREAD_CLEAR = NOT_EXECUTED_OPERATIONALLY_BLOCKED`
+
+Recorded `VenueBookingRoutesTest` and Mini App `guest-smoke.spec.ts` coverage is
+`AUTOMATED_REGRESSION = PASS`, but automated evidence does not turn the unexecuted real-client V125
+assertion into a live PASS or waiver.
+
+The post-V126 smoke therefore includes the mandatory non-substitutable gate
+`HT14_MANDATORY_LIVE_GATE_GUEST_REPLY_OWNER_UNREAD_CLEAR`. It must prove:
+
+- one exact Guest reply creates exactly one persisted Guest message;
+- exactly one expected Telegram/outbox delivery occurs;
+- Owner unread is created only for the exact booking thread;
+- one exact Owner open clears only that unread;
+- no duplicate marker row or unread resurrection occurs;
+- no other-thread, CLIENT or non-MIX state changes.
+
+HT-14 may not conclude PASS while this gate is pending, waived or supported only by automated
+evidence.
 
 The exact label-collision acceptance scenario is mandatory:
 

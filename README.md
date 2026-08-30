@@ -81,13 +81,13 @@ docker build -f backend/Dockerfile .
 ### Auth: `POST /api/auth/telegram`
 `initData` — это строка, которую Telegram Mini App передаёт клиентскому приложению. Её нельзя «пересобирать» или менять — отправляйте на сервер ровно как есть. На сервере подпись `initData` проверяется с использованием `TELEGRAM_BOT_TOKEN` (даже если бот/поллинг не используются), плюс применяются ограничения по времени: `TELEGRAM_MINIAPP_INITDATA_MAX_AGE_SECONDS` и `TELEGRAM_MINIAPP_INITDATA_MAX_FUTURE_SKEW_SECONDS`.
 
-Staging additionally requires `TELEGRAM_TRAFFIC_POLICY=ALLOWLIST` with non-empty
-`TELEGRAM_ALLOWED_USER_IDS` and `TELEGRAM_ALLOWED_CHAT_IDS`. The signed initData user must be
-allowed before a user row or session token is created. Every later protected request rechecks the
-current allowlist, so removing a user and restarting the backend also revokes already issued JWTs.
-Denied identities receive only generic `FORBIDDEN`; the response never reveals the allowlist.
-Development, test and production retain their existing unrestricted behavior when the policy is
-absent; an explicit `ALLOWLIST` enables the same checks there.
+Staging requires an explicit Telegram traffic policy. The public-pilot contract is
+`TELEGRAM_TRAFFIC_POLICY=PRODUCT`: both static ID lists stay empty and any valid signed, fresh
+Telegram identity may receive a Guest session. Venue and Platform APIs still require their exact
+server-side membership/RBAC; a valid invite grants only its stored role and venue. `ALLOWLIST`
+remains available only for a separately reviewed isolated smoke and stays fail-closed. Staging
+rejects `UNRESTRICTED`, PRODUCT with static IDs, and PRODUCT without an explicit non-placeholder
+`VENUE_STAFF_INVITE_SECRET_PEPPER`.
 
 Пример запроса:
 ```json
@@ -242,15 +242,18 @@ Telegram webhook (если используете webhook-режим бота):
 - `TELEGRAM_WEBHOOK_SECRET_TOKEN=<telegram-webhook-secret>`
 - `TELEGRAM_WEBHOOK_PATH=/telegram/webhook`
 
-Обязательная изоляция Telegram на staging:
-- `TELEGRAM_TRAFFIC_POLICY=ALLOWLIST`
-- `TELEGRAM_ALLOWED_USER_IDS=<comma-separated-positive-user-ids>`
-- `TELEGRAM_ALLOWED_CHAT_IDS=<comma-separated-positive-private-and-negative-group-ids>`
+Публичный пилот Telegram на staging:
+- `TELEGRAM_TRAFFIC_POLICY=PRODUCT`
+- `TELEGRAM_ALLOWED_USER_IDS=`
+- `TELEGRAM_ALLOWED_CHAT_IDS=`
+- `VENUE_STAFF_INVITE_SECRET_PEPPER=<restricted-non-placeholder-secret>`
 
-Реальные идентификаторы не хранятся в Git. Их размещают только в server-side `.env` и restricted
+Персонал подключается через действующее приглашение, а не через редактирование статических списков
+ID. Активный pepper хранится только в server-side `.env` с ограниченным доступом и никогда не
+попадает в Git; его замена делает все ожидающие ссылки недействительными. Для отдельно
+согласованного `ALLOWLIST` smoke реальные идентификаторы размещают только в `.env` и restricted
 `/etc/hookah-bot/staging/telegram-allowlist.manifest` (directory `root:root` 0700, file `root:root`
-0600); изменение любого списка требует controlled backend restart. Подробная процедура, включая
-безопасную проверку staff-group ID, находится в
+0600). Подробная процедура находится в
 `docs/STAGING_DEPLOYMENT.md` и `docs/DEPLOYMENT_RUNBOOK.md`.
 
 ### HTTPS termination через reverse proxy
@@ -339,6 +342,10 @@ One-command deploy from local machine:
 ```bash
 ./scripts/deploy-staging.sh hookah-staging
 ```
+
+This defaults to the public-pilot `PRODUCT` profile. `ALLOWLIST` is available only through the
+separately reviewed explicit `STAGING_ADMISSION_PROFILE=isolated-allowlist` path documented in the
+staging runbook.
 
 If fresh SSH connections are unreliable during deploy, use the explicitly opt-in persistent SSH wrapper documented in the staging runbook:
 ```bash
