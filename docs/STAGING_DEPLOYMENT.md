@@ -71,6 +71,9 @@ Required staging values:
 - `PLATFORM_OWNER_USER_ID=` optional legacy compatibility alias; leave empty when `users.telegram_user_id` is the platform owner identity.
 - `TELEGRAM_STAFF_CHAT_LINK_SECRET_PEPPER`
 - `VENUE_STAFF_INVITE_SECRET_PEPPER` explicit and restricted in staging `PRODUCT`
+- `STAGING_MAINTENANCE_MODE=OFF` for normal public-pilot operation
+- `STAGING_MAINTENANCE_ALLOWED_USER_IDS` and `STAGING_MAINTENANCE_ALLOWED_CHAT_IDS` empty in the
+  normal example; exact restricted values exist only in an authorized `V126_SMOKE` window
 - `MINIAPP_ENTRY_ENABLED=true`
 - `MINIAPP_DEV_SERVER_URL=`
 - `MINIAPP_STATIC_DIR=/app/miniapp`
@@ -185,6 +188,69 @@ RBAC remain required for Venue/Platform access. Product groups and outbound targ
 only through the exact current server-owned staff-chat/product workflow rules. The deploy preflight
 rejects nonempty static lists and a missing/placeholder invite pepper in this mode.
 
+### Temporary identity-gated V126 maintenance overlay
+
+The V126 migration window does not use `TELEGRAM_TRAFFIC_POLICY=ALLOWLIST` and does not use client
+IP/CIDR attribution. Underlying policy remains `PRODUCT`; the separate overlay defaults to `OFF` and
+has no authorization effect in normal public-pilot operation:
+
+```dotenv
+TELEGRAM_TRAFFIC_POLICY=PRODUCT
+STAGING_MAINTENANCE_MODE=OFF
+STAGING_MAINTENANCE_ALLOWED_USER_IDS=
+STAGING_MAINTENANCE_ALLOWED_CHAT_IDS=
+```
+
+Only a separately reviewed drain/cutover may put exact identities in the mode-0600 server `.env`:
+
+```dotenv
+TELEGRAM_TRAFFIC_POLICY=PRODUCT
+STAGING_MAINTENANCE_MODE=V126_SMOKE
+STAGING_MAINTENANCE_ALLOWED_USER_IDS=<restricted-positive-test-identities>
+STAGING_MAINTENANCE_ALLOWED_CHAT_IDS=<same-positive-private-chats-and-reviewed-negative-staff-chat>
+```
+
+Real values are restricted operational evidence and must never appear in Git, terminal capture,
+deploy output, logs or a task/PR comment. The positive chat set exactly equals the user set; negative
+entries are exact test staff chats. Active startup fails closed on a missing, malformed, duplicate,
+zero, overflow or inconsistent value. Editing `.env` does not hot-reload the process; activation and
+deactivation require the controlled backend stop/start sequence in `docs/DEPLOYMENT_RUNBOOK.md`.
+
+`scripts/check-staging-maintenance-config.sh` is the deploy preflight. When—and only when—the active
+transition has separate authorization, pass the non-secret one-shot process flag to the reviewed
+deploy invocation:
+
+```bash
+STAGING_MAINTENANCE_V126_SMOKE_AUTHORIZED=true \
+RUN_PUBLIC_CHECKS=false \
+./scripts/deploy-staging-controlmaster.sh <ssh-alias>
+```
+
+The flag is not stored in `.env`, contains no identity and cannot activate the overlay. It only
+prevents the normal deploy path from silently accepting an already-active environment. After V126
+PASS, drain again, stop the backend, set `OFF`, clear both maintenance lists, omit the flag and
+restart. The normal preflight must then report `OFF`.
+
+`RUN_PUBLIC_CHECKS=false` is mandatory for this active start because Caddy must keep returning the
+drain `503` until the deploy script has completed its loopback backend/DB/static checks and the
+separate SSH schema/queue gates pass. It does not authorize restoring public routing. After ordinary
+reverse proxy routing is restored, explicitly require unauthenticated protected traffic to remain
+generic `503`, then repeat with one valid excluded Telegram identity and compare the SSH/loopback
+state snapshots before running allowed smoke:
+
+```bash
+status="$(curl -sS -o /dev/null -w '%{http_code}' \
+  "${STAGING_PUBLIC_URL}/api/guest/_ping")"
+test "${status}" = "503"
+```
+
+Do not put initData or an identity in this command or its output. The excluded signed-initData check
+runs only through the canonical client, with its value redacted; zero-state evidence stays on
+SSH/loopback. Before the first migration-window start, record the current backend's exact image
+reference plus Docker image ID (and digest when present) from the VPS. Authorization is invalid
+without that immutable predeploy rollback evidence; an application/source SHA alone is not an image
+identity.
+
 Preserve an already explicit invite pepper byte-for-byte during this transition. If the old
 `ALLOWLIST` process used the built-in development fallback instead, capture only that fact (never the
 value), install a new restricted explicit pepper, and reconcile/reissue every still-pending
@@ -255,7 +321,8 @@ Current staging alias example:
 The script:
 
 1. validates `docker compose config`;
-2. checks that required server `.env` keys are present without printing secrets;
+2. checks that required server `.env` keys and the maintenance deploy guard are valid without
+   printing secrets or identities;
 3. builds the backend Docker image locally for `linux/amd64`, including the Mini App production build;
 4. uploads `docker-compose.yml`, `scripts/seed-staging.sh`, safe docs/templates, and the Docker image to the VPS;
 5. runs `docker compose up -d --no-build postgres backend` on the VPS;

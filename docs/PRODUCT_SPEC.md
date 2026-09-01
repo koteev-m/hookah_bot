@@ -82,6 +82,25 @@ Public-pilot Telegram admission source of truth:
   and group outbound recipients come from current validated/product records or the exact active
   venue staff-chat link, never a global static user-ID list.
 
+Identity-gated migration maintenance source of truth:
+- `PRODUCT` remains the normal public-pilot policy. `STAGING_MAINTENANCE_MODE=OFF` is the default and
+  maintenance identity lists have no authorization effect in that state. The overlay is temporary
+  migration protection, not user management and not a replacement for invitations, memberships or
+  RBAC.
+- A separately reviewed `V126_SMOKE` start fails closed unless its restricted user/chat identity
+  sets are exact, canonical, nonempty and internally consistent. The values are restricted
+  operational evidence stored outside Git. Enabling or disabling the overlay requires a controlled
+  backend start; there is no hot reload.
+- An admitted maintenance identity still enters only through the ordinary PRODUCT contract. Private
+  Telegram actor and chat must be the same allowed positive identity; staff groups must be exact
+  allowed negative chats and retain linked-venue/actor/RBAC checks. Validated Mini App and JWT
+  subjects are rechecked before domain work on every request. Maintenance admission never grants a
+  venue role or Platform authority.
+- During the overlay, excluded Telegram ingress is state-free and protected HTTP traffic receives a
+  generic `503`. Excluded outbox rows are not claimed or changed, and direct Telegram calls cannot
+  bypass the same recipient decision. Operator health/version reads and static Mini App assets may
+  remain readable, but provide no stateful capability.
+
 Testing/QA source of truth:
 - Canonical local validation, GitHub Actions expectations, change-type test matrix, staging smoke policy, manual smoke suites and failure reporting format are tracked in `docs/TESTING_QA_SMOKE_STRATEGY.md`.
 - Runtime changes must use area-appropriate checks; docs-only changes do not require staging deploy.

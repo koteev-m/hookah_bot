@@ -1,5 +1,6 @@
 package com.hookah.platform.backend.telegram
 
+import com.hookah.platform.backend.maintenance.StagingMaintenancePolicy
 import com.hookah.platform.backend.metrics.AppMetrics
 import com.hookah.platform.backend.telegram.db.TelegramInboundUpdate
 import com.hookah.platform.backend.telegram.db.TelegramInboundUpdateQueueRepository
@@ -23,6 +24,7 @@ class TelegramInboundUpdateWorker(
     private val json: Json,
     private val scope: CoroutineScope,
     private val trafficPolicy: TelegramTrafficPolicy,
+    private val maintenancePolicy: StagingMaintenancePolicy = StagingMaintenancePolicy.off(),
     private val pollInterval: Duration = Duration.ofMillis(500),
     private val batchSize: Int = 10,
     private val maxAttempts: Int = 5,
@@ -54,7 +56,12 @@ class TelegramInboundUpdateWorker(
     }
 
     suspend fun processOnce(now: Instant = Instant.now()): Boolean {
-        val batch = repository.claimBatch(batchSize, now, visibilityTimeout)
+        val batch =
+            if (maintenancePolicy.active) {
+                claimMaintenanceEligibleBatch(now)
+            } else {
+                repository.claimBatch(batchSize, now, visibilityTimeout)
+            }
         if (batch.isEmpty()) {
             return false
         }
@@ -84,6 +91,17 @@ class TelegramInboundUpdateWorker(
                 )
                 return
             }
+
+        when (val decision = maintenancePolicy.evaluateInbound(parsed)) {
+            StagingMaintenancePolicy.InboundDecision.Allowed -> Unit
+            is StagingMaintenancePolicy.InboundDecision.Denied -> {
+                logger.info(
+                    "Telegram inbound update denied source=webhook_queue reason=MAINTENANCE_{}",
+                    decision.reason,
+                )
+                return
+            }
+        }
 
         when (val decision = trafficPolicy.evaluateInbound(parsed)) {
             TelegramTrafficPolicy.InboundDecision.Allowed -> Unit
@@ -136,5 +154,50 @@ class TelegramInboundUpdateWorker(
         val base = 500L
         val exponential = base * (1L shl min(attempts.coerceAtLeast(1), 6))
         return min(exponential, 60_000L)
+    }
+
+    private suspend fun claimMaintenanceEligibleBatch(now: Instant): List<TelegramInboundUpdate> {
+        val eligibleIds = mutableListOf<Long>()
+        var afterId = 0L
+        while (eligibleIds.size < batchSize) {
+            val candidates = repository.listReadyAfterId(afterId, MAINTENANCE_SCAN_PAGE_SIZE, now)
+            if (candidates.isEmpty()) break
+            candidates.forEach { candidate ->
+                afterId = candidate.id
+                val parsed =
+                    try {
+                        json.decodeFromString(TelegramUpdate.serializer(), candidate.payloadJson)
+                    } catch (_: SerializationException) {
+                        logger.info(
+                            "Telegram inbound update denied source=webhook_queue_scan " +
+                                "reason=MAINTENANCE_INVALID_PAYLOAD",
+                        )
+                        return@forEach
+                    }
+                val maintenanceDecision = maintenancePolicy.evaluateInbound(parsed)
+                if (maintenanceDecision is StagingMaintenancePolicy.InboundDecision.Denied) {
+                    logger.info(
+                        "Telegram inbound update denied source=webhook_queue_scan reason=MAINTENANCE_{}",
+                        maintenanceDecision.reason,
+                    )
+                    return@forEach
+                }
+                val productDecision = trafficPolicy.evaluateInbound(parsed)
+                if (productDecision is TelegramTrafficPolicy.InboundDecision.Denied) {
+                    logger.info(
+                        "Telegram inbound update denied source=webhook_queue_scan reason={}",
+                        productDecision.reason,
+                    )
+                    return@forEach
+                }
+                if (eligibleIds.size < batchSize) eligibleIds += candidate.id
+            }
+            if (candidates.size < MAINTENANCE_SCAN_PAGE_SIZE) break
+        }
+        return repository.claimReadyIds(eligibleIds, now, visibilityTimeout)
+    }
+
+    private companion object {
+        const val MAINTENANCE_SCAN_PAGE_SIZE = 100
     }
 }

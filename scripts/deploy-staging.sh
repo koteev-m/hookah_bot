@@ -14,6 +14,13 @@ GRADLE_JVM_ARGS="${GRADLE_JVM_ARGS:--Xmx2048m -XX:MaxMetaspaceSize=768m}"
 RUN_PUBLIC_CHECKS="${RUN_PUBLIC_CHECKS:-true}"
 HEALTHCHECK_ATTEMPTS="${HEALTHCHECK_ATTEMPTS:-20}"
 HEALTHCHECK_SLEEP_SECONDS="${HEALTHCHECK_SLEEP_SECONDS:-3}"
+STAGING_MAINTENANCE_V126_SMOKE_AUTHORIZED="${STAGING_MAINTENANCE_V126_SMOKE_AUTHORIZED:-false}"
+
+if [[ "${STAGING_MAINTENANCE_V126_SMOKE_AUTHORIZED}" != "true" &&
+  "${STAGING_MAINTENANCE_V126_SMOKE_AUTHORIZED}" != "false" ]]; then
+  echo "STAGING_MAINTENANCE_V126_SMOKE_AUTHORIZED must be true or false" >&2
+  exit 2
+fi
 
 if [[ -z "${REMOTE}" ]]; then
   echo "Usage: $0 user@vps-host"
@@ -91,6 +98,7 @@ rsync -azR \
   docker-compose.yml \
   backend/Dockerfile \
   scripts/seed-staging.sh \
+  scripts/check-staging-maintenance-config.sh \
   docs/env/staging.env.example \
   docs/STAGING_DEPLOYMENT.md \
   "${REMOTE}:${STAGING_PATH}/"
@@ -195,6 +203,15 @@ ssh "${REMOTE}" "
       exit 4
       ;;
   esac
+"
+
+echo "==> Checking staging maintenance policy"
+ssh "${REMOTE}" "
+  set -euo pipefail
+  cd '${STAGING_PATH}'
+  chmod +x scripts/check-staging-maintenance-config.sh
+  STAGING_MAINTENANCE_V126_SMOKE_AUTHORIZED='${STAGING_MAINTENANCE_V126_SMOKE_AUTHORIZED}' \\
+    ./scripts/check-staging-maintenance-config.sh .env
 "
 
 echo "==> Building backend image locally: ${BACKEND_IMAGE} (${DOCKER_PLATFORM})"

@@ -1,5 +1,6 @@
 package com.hookah.platform.backend.telegram
 
+import com.hookah.platform.backend.maintenance.StagingMaintenancePolicy
 import com.hookah.platform.backend.miniapp.guest.db.BookingStatus
 import com.hookah.platform.backend.miniapp.venue.orders.OrderBillActiveItemSnapshot
 import com.hookah.platform.backend.miniapp.venue.orders.OrderBillDiscountSnapshot
@@ -194,6 +195,7 @@ class StaffChatNotifier(
     private val venueSettingsRepository: VenueSettingsRepository? = null,
     private val isTelegramActive: () -> Boolean,
     private val trafficPolicy: TelegramTrafficPolicy,
+    private val maintenancePolicy: StagingMaintenancePolicy = StagingMaintenancePolicy.off(),
     private val scope: CoroutineScope,
     private val json: Json = Json { ignoreUnknownKeys = true },
     private val venueMiniAppUrl: (Long) -> String? = { null },
@@ -520,7 +522,7 @@ class StaffChatNotifier(
             logResult(event.venueId, logKey, StaffChatNotificationResult.SKIPPED_NO_STAFF_CHAT)
             return StaffChatNotificationResult.SKIPPED_NO_STAFF_CHAT
         }
-        if (!trafficPolicy.allowsOutboundChat(chatId)) {
+        if (!allowsOutboundChat(chatId)) {
             logResult(event.venueId, logKey, StaffChatNotificationResult.SKIPPED_TRAFFIC_POLICY)
             return StaffChatNotificationResult.SKIPPED_TRAFFIC_POLICY
         }
@@ -732,7 +734,7 @@ class StaffChatNotifier(
             logResult(venueId, notificationKey, StaffChatNotificationResult.SKIPPED_NO_STAFF_CHAT)
             return StaffChatNotificationResult.SKIPPED_NO_STAFF_CHAT
         }
-        if (!trafficPolicy.allowsOutboundChat(chatId)) {
+        if (!allowsOutboundChat(chatId)) {
             logResult(venueId, notificationKey, StaffChatNotificationResult.SKIPPED_TRAFFIC_POLICY)
             return StaffChatNotificationResult.SKIPPED_TRAFFIC_POLICY
         }
@@ -796,7 +798,7 @@ class StaffChatNotifier(
             logResult(venueId, notificationKey = 0L, StaffChatNotificationResult.SKIPPED_NO_STAFF_CHAT)
             return StaffChatNotificationResult.SKIPPED_NO_STAFF_CHAT
         }
-        if (!trafficPolicy.allowsOutboundChat(chatId)) {
+        if (!allowsOutboundChat(chatId)) {
             logResult(venueId, notificationKey = 0L, StaffChatNotificationResult.SKIPPED_TRAFFIC_POLICY)
             return StaffChatNotificationResult.SKIPPED_TRAFFIC_POLICY
         }
@@ -893,6 +895,9 @@ class StaffChatNotifier(
                 logger.warn("Staff chat notification result={}", result)
         }
     }
+
+    private fun allowsOutboundChat(chatId: Long): Boolean =
+        trafficPolicy.allowsOutboundChat(chatId) && maintenancePolicy.allowsOutboundChat(chatId)
 }
 
 private fun extractLinks(text: String): List<String> {

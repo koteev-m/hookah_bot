@@ -150,6 +150,131 @@ class TelegramInboundUpdateQueueRepository(private val dataSource: DataSource?) 
         }
     }
 
+    suspend fun listReadyAfterId(
+        afterId: Long,
+        limit: Int,
+        now: Instant,
+    ): List<TelegramInboundUpdate> {
+        if (limit <= 0) return emptyList()
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    connection.prepareStatement(
+                        """
+                        SELECT id, update_id, payload_json, attempts, received_at
+                        FROM telegram_inbound_updates
+                        WHERE id > ?
+                          AND status IN (?, ?, ?)
+                          AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+                        ORDER BY id
+                        LIMIT ?
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setLong(1, afterId)
+                        statement.setString(2, TelegramInboundUpdateStatus.PENDING.name)
+                        statement.setString(3, TelegramInboundUpdateStatus.RETRY.name)
+                        statement.setString(4, TelegramInboundUpdateStatus.PROCESSING.name)
+                        statement.setTimestamp(5, Timestamp.from(now))
+                        statement.setInt(6, limit)
+                        statement.executeQuery().use { resultSet ->
+                            buildList {
+                                while (resultSet.next()) {
+                                    add(resultSet.toInboundUpdate(incrementAttempts = false))
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: SQLException) {
+                logFailure("listReadyAfterId", e)
+                throw DatabaseUnavailableException()
+            } catch (e: Throwable) {
+                logFailure("listReadyAfterId", e)
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    suspend fun claimReadyIds(
+        ids: List<Long>,
+        now: Instant,
+        visibilityTimeout: Duration,
+    ): List<TelegramInboundUpdate> {
+        val distinctIds = ids.distinct()
+        if (distinctIds.isEmpty()) return emptyList()
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    connection.autoCommit = false
+                    try {
+                        val placeholders = distinctIds.joinToString(",") { "?" }
+                        val selectSql =
+                            """
+                            SELECT id, update_id, payload_json, attempts, received_at
+                            FROM telegram_inbound_updates
+                            WHERE id IN ($placeholders)
+                              AND status IN (?, ?, ?)
+                              AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+                            ORDER BY id
+                            FOR UPDATE SKIP LOCKED
+                            """.trimIndent()
+                        val updates = mutableListOf<TelegramInboundUpdate>()
+                        connection.prepareStatement(selectSql).use { statement ->
+                            var parameterIndex = 1
+                            distinctIds.forEach { id -> statement.setLong(parameterIndex++, id) }
+                            statement.setString(parameterIndex++, TelegramInboundUpdateStatus.PENDING.name)
+                            statement.setString(parameterIndex++, TelegramInboundUpdateStatus.RETRY.name)
+                            statement.setString(parameterIndex++, TelegramInboundUpdateStatus.PROCESSING.name)
+                            statement.setTimestamp(parameterIndex, Timestamp.from(now))
+                            statement.executeQuery().use { resultSet ->
+                                while (resultSet.next()) {
+                                    updates += resultSet.toInboundUpdate(incrementAttempts = true)
+                                }
+                            }
+                        }
+
+                        val lockUntil = now.plus(visibilityTimeout)
+                        connection.prepareStatement(
+                            """
+                            UPDATE telegram_inbound_updates
+                            SET status = ?, attempts = ?, last_error = NULL, next_attempt_at = ?
+                            WHERE id = ?
+                            """.trimIndent(),
+                        ).use { statement ->
+                            updates.forEach { update ->
+                                statement.setString(1, TelegramInboundUpdateStatus.PROCESSING.name)
+                                statement.setInt(2, update.attempts)
+                                statement.setTimestamp(3, Timestamp.from(lockUntil))
+                                statement.setLong(4, update.id)
+                                statement.addBatch()
+                            }
+                            if (updates.isNotEmpty()) statement.executeBatch()
+                        }
+                        connection.commit()
+                        updates
+                    } catch (e: Exception) {
+                        connection.rollback()
+                        throw e
+                    } finally {
+                        connection.autoCommit = true
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: SQLException) {
+                logFailure("claimReadyIds", e)
+                throw DatabaseUnavailableException()
+            } catch (e: Throwable) {
+                logFailure("claimReadyIds", e)
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
     suspend fun markProcessed(
         id: Long,
         processedAt: Instant,
@@ -273,4 +398,13 @@ class TelegramInboundUpdateQueueRepository(private val dataSource: DataSource?) 
             throwable::class.simpleName ?: "unknown",
         )
     }
+
+    private fun java.sql.ResultSet.toInboundUpdate(incrementAttempts: Boolean): TelegramInboundUpdate =
+        TelegramInboundUpdate(
+            id = getLong("id"),
+            updateId = getLong("update_id"),
+            payloadJson = getString("payload_json"),
+            attempts = getInt("attempts") + if (incrementAttempts) 1 else 0,
+            receivedAt = getTimestamp("received_at").toInstant(),
+        )
 }

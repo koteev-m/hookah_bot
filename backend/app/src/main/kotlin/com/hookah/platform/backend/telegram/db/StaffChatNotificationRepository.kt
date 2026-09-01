@@ -1,5 +1,6 @@
 package com.hookah.platform.backend.telegram.db
 
+import com.hookah.platform.backend.maintenance.StagingMaintenancePolicy
 import com.hookah.platform.backend.telegram.TelegramTrafficPolicy
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -18,6 +19,7 @@ data class StaffChatOrderMessage(
 open class StaffChatNotificationRepository(
     private val dataSource: DataSource?,
     private val trafficPolicy: TelegramTrafficPolicy,
+    private val maintenancePolicy: StagingMaintenancePolicy = StagingMaintenancePolicy.off(),
 ) {
     private val logger = LoggerFactory.getLogger(StaffChatNotificationRepository::class.java)
 
@@ -25,7 +27,7 @@ open class StaffChatNotificationRepository(
         batchId: Long,
         chatId: Long,
     ): StaffChatNotificationClaim {
-        if (!trafficPolicy.allowsOutboundChat(chatId)) {
+        if (!allowsOutboundChat(chatId)) {
             return StaffChatNotificationClaim.SKIPPED_TRAFFIC_POLICY
         }
         val ds = dataSource ?: return StaffChatNotificationClaim.ERROR
@@ -86,7 +88,7 @@ open class StaffChatNotificationRepository(
         method: String,
         payloadJson: String,
     ): StaffChatNotificationClaim {
-        if (!trafficPolicy.allowsOutboundChat(chatId)) {
+        if (!allowsOutboundChat(chatId)) {
             return StaffChatNotificationClaim.SKIPPED_TRAFFIC_POLICY
         }
         val ds = dataSource ?: return StaffChatNotificationClaim.ERROR
@@ -148,7 +150,7 @@ open class StaffChatNotificationRepository(
         method: String,
         payloadJson: String,
     ): StaffChatNotificationClaim {
-        if (!trafficPolicy.allowsOutboundChat(chatId)) {
+        if (!allowsOutboundChat(chatId)) {
             return StaffChatNotificationClaim.SKIPPED_TRAFFIC_POLICY
         }
         val ds = dataSource ?: return StaffChatNotificationClaim.ERROR
@@ -224,7 +226,7 @@ open class StaffChatNotificationRepository(
         method: String,
         payloadJson: String,
     ): Boolean {
-        if (!trafficPolicy.allowsOutboundChat(chatId)) return false
+        if (!allowsOutboundChat(chatId)) return false
         val ds = dataSource ?: return false
         return withContext(Dispatchers.IO) {
             ds.connection.use { connection ->
@@ -297,7 +299,7 @@ open class StaffChatNotificationRepository(
                             venueId = rs.getLong("venue_id"),
                             chatId = rs.getLong("chat_id"),
                             messageId = rs.getLong("message_id").takeIf { !rs.wasNull() },
-                        ).takeIf { trafficPolicy.allowsOutboundChat(it.chatId) }
+                        ).takeIf { allowsOutboundChat(it.chatId) }
                     }
                 }
             }
@@ -310,7 +312,7 @@ open class StaffChatNotificationRepository(
         chatId: Long,
         messageId: Long?,
     ): Boolean {
-        if (!trafficPolicy.allowsOutboundChat(chatId)) return false
+        if (!allowsOutboundChat(chatId)) return false
         val ds = dataSource ?: return false
         return withContext(Dispatchers.IO) {
             ds.connection.use { connection ->
@@ -387,7 +389,7 @@ open class StaffChatNotificationRepository(
         method: String,
         payloadJson: String,
     ): Boolean {
-        if (!trafficPolicy.allowsOutboundChat(chatId)) return false
+        if (!allowsOutboundChat(chatId)) return false
         val ds = dataSource ?: return false
         return withContext(Dispatchers.IO) {
             ds.connection.use { connection ->
@@ -573,6 +575,9 @@ open class StaffChatNotificationRepository(
             throwable::class.java.simpleName,
         )
     }
+
+    private fun allowsOutboundChat(chatId: Long): Boolean =
+        trafficPolicy.allowsOutboundChat(chatId) && maintenancePolicy.allowsOutboundChat(chatId)
 }
 
 enum class StaffChatNotificationClaim {

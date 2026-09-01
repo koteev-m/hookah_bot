@@ -34,6 +34,64 @@ class SessionAuthTest {
         )
 
     @Test
+    fun `maintenance rechecks every old jwt and returns generic 503 for denied or unauthenticated callers`() {
+        val tokenConfig = buildConfig()
+        val tokenService = SessionTokenService(SessionTokenConfig.from(tokenConfig, appEnv))
+        val issuedAt = Instant.now().truncatedTo(ChronoUnit.SECONDS)
+        val allowedToken = tokenService.issueToken(TELEGRAM_USER_ID, now = issuedAt).token
+        val deniedToken = tokenService.issueToken(OTHER_TELEGRAM_USER_ID, now = issuedAt).token
+
+        testApplication {
+            environment {
+                config =
+                    MapApplicationConfig(
+                        "app.env" to appEnv,
+                        "api.session.jwtSecret" to "test-secret",
+                        "api.session.ttlSeconds" to "7200",
+                        "api.session.issuer" to "test-issuer",
+                        "api.session.audience" to "test-audience",
+                        "telegram.trafficPolicy" to "PRODUCT",
+                        "staging.maintenance.mode" to "V126_SMOKE",
+                        "staging.maintenance.allowedUserIds" to TELEGRAM_USER_ID.toString(),
+                        "staging.maintenance.allowedChatIds" to TELEGRAM_USER_ID.toString(),
+                    )
+            }
+            application { module() }
+
+            val allowedResponse =
+                client.get("/api/guest/_ping") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $allowedToken") }
+                }
+            assertEquals(HttpStatusCode.OK, allowedResponse.status)
+
+            listOf(
+                "/api/guest/_ping",
+                "/api/venue/1/public-card",
+                "/api/platform/me",
+            ).forEach { path ->
+                val deniedResponse =
+                    client.get(path) {
+                        headers { append(HttpHeaders.Authorization, "Bearer $deniedToken") }
+                    }
+                assertEquals(HttpStatusCode.ServiceUnavailable, deniedResponse.status, path)
+                assertApiErrorEnvelope(deniedResponse, ApiErrorCodes.SERVICE_UNAVAILABLE)
+            }
+
+            val unauthenticated = client.get("/api/guest/_ping")
+            assertEquals(HttpStatusCode.ServiceUnavailable, unauthenticated.status)
+            assertApiErrorEnvelope(unauthenticated, ApiErrorCodes.SERVICE_UNAVAILABLE)
+
+            val publicMedia = client.get("/api/guest/venue/1/info-sections/1/media/1")
+            assertEquals(HttpStatusCode.ServiceUnavailable, publicMedia.status)
+            assertApiErrorEnvelope(publicMedia, ApiErrorCodes.SERVICE_UNAVAILABLE)
+
+            val billingWebhook = client.post("/api/billing/webhook")
+            assertEquals(HttpStatusCode.ServiceUnavailable, billingWebhook.status)
+            assertApiErrorEnvelope(billingWebhook, ApiErrorCodes.SERVICE_UNAVAILABLE)
+        }
+    }
+
+    @Test
     fun `should reject request without Authorization header`() =
         testApplication {
             environment {

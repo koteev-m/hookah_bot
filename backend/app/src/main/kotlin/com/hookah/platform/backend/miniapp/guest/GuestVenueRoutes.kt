@@ -2,10 +2,12 @@ package com.hookah.platform.backend.miniapp.guest
 
 import com.hookah.platform.backend.api.ConfigException
 import com.hookah.platform.backend.api.InvalidInputException
+import com.hookah.platform.backend.api.MaintenanceUnavailableException
 import com.hookah.platform.backend.api.NotFoundException
 import com.hookah.platform.backend.location.VenueLocationDisplay
 import com.hookah.platform.backend.location.buildYandexVenueRouteUrl
 import com.hookah.platform.backend.location.formatVenueDisplayAddress
+import com.hookah.platform.backend.maintenance.StagingMaintenancePolicy
 import com.hookah.platform.backend.miniapp.guest.api.CatalogResponse
 import com.hookah.platform.backend.miniapp.guest.api.CatalogVenueDto
 import com.hookah.platform.backend.miniapp.guest.api.GuestTodayStaffResponse
@@ -109,8 +111,10 @@ fun Route.guestVenueInfoMediaRoutes(
     venueInfoSectionMediaRepository: VenueInfoSectionMediaRepository,
     subscriptionRepository: SubscriptionRepository,
     telegramFileDownloader: (suspend (String) -> TelegramDownloadedFile?)? = null,
+    maintenancePolicy: StagingMaintenancePolicy = StagingMaintenancePolicy.off(),
 ) {
     get("/venue/{id}/info-sections/{sectionId}/media/{mediaId}") {
+        if (maintenancePolicy.active) throw MaintenanceUnavailableException()
         val venueId = call.requireLongParameter("id")
         val sectionId = call.requireLongParameter("sectionId")
         val mediaId = call.requireLongParameter("mediaId")

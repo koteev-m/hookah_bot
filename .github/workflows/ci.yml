@@ -705,6 +705,8 @@ jobs:
           EOF
       - name: Validate Docker Compose config
         run: docker compose config --quiet
+      - name: Validate staging maintenance deploy guard
+        run: bash scripts/check-staging-maintenance-config.sh --self-test
 
   miniapp:
     runs-on: ubuntu-latest

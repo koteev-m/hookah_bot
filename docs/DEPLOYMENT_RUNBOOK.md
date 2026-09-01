@@ -1,6 +1,6 @@
 # Deployment / Runbook / Operations
 
-Дата актуализации: 2026-08-29.
+Дата актуализации: 2026-09-01.
 
 Статус: **current operations reference / UPDATED**. This document is the canonical deploy, release and operations runbook for the Telegram bot + Mini App platform. Use it together with `docs/TESTING_QA_SMOKE_STRATEGY.md` for validation scope, `docs/STAGING_DEPLOYMENT.md` for one-VPS staging details, `docs/OPERATIONS.md` for metrics/queue incident basics and `docs/MIGRATION_POLICY.md` for Flyway policy.
 
@@ -219,6 +219,133 @@ If an invite acceptance committed before a later failure, restoring base V125/Ma
 reverse membership. Do not delete memberships or edit invite state through SQL; stop and return a
 partial-commit reconciliation for a separate decision. Exact image-selection commands remain subject
 to the existing runbook gap; never substitute an unverified image tag.
+
+### IDENTITY_GATED_MAINTENANCE_PREREQUISITE (HT-12M)
+
+This prerequisite replaces the rejected stable-client-CIDR attribution rule for the V126 migration
+window. HT-12J-R2 is closed as recovered to the Ubuntu baseline, HT-12K is closed because the current
+Caddy exact-URL client identity was not provable, and HT-12L was not authorized. Source IP, forwarded
+headers, TLS fingerprints and stable CIDRs are not authority in this design. Do not resume a Caddy
+sidecar, patched-Caddy, packet observer or exact-path experiment. Historical HT-12D through HT-12K
+evidence remains history and must not be erased.
+
+The starting infrastructure remains Ubuntu Caddy 2.6.2 with TLS 1.2 and HTTP/1.1 or HTTP/2;
+TLS 1.3, HTTP/3 and UDP 443 remain disabled. Staging runs application release
+`be5d62a5e9058f89cd72be6c313c71fa46ccdbf2` under `PRODUCT`, with empty PRODUCT static user/chat
+lists, PostgreSQL/Flyway V125 and no V126. HT-12M changes none of those runtime facts during its
+implementation phase.
+
+The V125-compatible implementation starts from exact running candidate
+`be5d62a5e9058f89cd72be6c313c71fa46ccdbf2`, contains no migration change and must first deploy with
+the overlay `OFF`. Only after that separate deploy passes may the reviewed source mapping be applied
+to fresh main `b49a89a299d8c9864fcfc5937d455141563b388a`; preserve its PostgreSQL V126/H2 migration blobs and
+main-only booking/conversation behavior. This is a manual semantic port, not a blind cherry-pick
+equivalence claim.
+
+Runtime contract:
+
+```dotenv
+TELEGRAM_TRAFFIC_POLICY=PRODUCT
+STAGING_MAINTENANCE_MODE=OFF
+STAGING_MAINTENANCE_ALLOWED_USER_IDS=
+STAGING_MAINTENANCE_ALLOWED_CHAT_IDS=
+```
+
+- `OFF` is the default. The two maintenance lists are not parsed for authorization and PRODUCT
+  remains byte-for-byte/semantically the public-pilot contract: unknown valid Guests and valid
+  external staff/manager/owner invitations continue to work without operator-edited IDs.
+- `V126_SMOKE` is accepted only in staging (or automated tests), only over underlying `PRODUCT`, and
+  only with canonical nonempty restricted sets. User IDs are positive. Positive chat IDs exactly
+  equal the user set; optional staff chats are exact negative IDs. Missing, blank, malformed,
+  duplicate, zero, overflowing, mismatched or noncanonical values fail before database
+  initialization. Errors and startup logs expose no values.
+- The values live only in the restricted mode-0600 staging environment/operator evidence. They are
+  never Git data, application user management, a venue roster or a permanent admission list.
+- Policy is immutable for the backend process lifetime. Activation and deactivation each require a
+  reviewed environment edit and controlled backend start. There is no hot reload or fallback to
+  PRODUCT after an invalid active configuration.
+
+#### Complete V125 stateful and outbound boundary inventory
+
+No V125 stateful application route is outside this classification:
+
+| Boundary | `V126_SMOKE` enforcement and mutation ordering |
+| --- | --- |
+| Telegram long polling | The exact actor/chat decision runs before Router, idempotency, user/domain repositories and outbox. A denied update advances only the process-local Bot API offset and receives no reply. |
+| Telegram webhook | Telegram update parsing and PRODUCT shape checks remain; the maintenance decision runs before `telegram_inbound_updates` persistence. Denial is acknowledged without enqueue. |
+| Inbound queue worker | Defense-in-depth scans ready rows read-only, parses and applies maintenance plus PRODUCT, then claims only eligible IDs. Malformed or denied ready rows retain status, attempts, errors and timestamps unchanged and do not starve a later eligible row. The Router repeats the decision before idempotency. |
+| Mini App Telegram authentication | Telegram signature/freshness validation remains first. The validated positive Telegram user ID is gated before post-validation limiting, user upsert and JWT issue. A valid excluded identity gets only generic `503` and creates no user/session/domain state. Invalid initData retains ordinary validation behavior. |
+| Existing JWT and protected APIs | JWT signature/issuer/audience/expiry validation remains first; the trusted positive subject is rechecked by one route-scoped overlay on every `/api/guest`, `/api/venue` and `/api/platform` request before route/domain work. A token issued before activation cannot bypass the overlay. Missing/invalid or excluded credentials receive the same generic `503` while active. |
+| Guest/Venue/Platform domains | Catalog, booking, booking/venue conversations, orders/tabs/table/session/staff calls, support, favorites/history/promotions, staff/invites/settings/billing and platform lifecycle routes are all below the common JWT gate. PRODUCT membership and RBAC execute after admission and still deny a foreign venue or Platform escalation. |
+| Other public API writers | `/api/billing/webhook` is disabled with generic `503` before IP/secret/body/provider/payment handling. Public Guest Telegram-media delivery is disabled before DB lookup or Bot file download. Unknown/nonstateful API paths add no capability. |
+| Outbox and staff notification persistence | All enqueuers and staff notification claims first require the maintenance recipient and then ordinary PRODUCT user/workflow or exact current venue staff-chat authority. Active claim SQL intersects PRODUCT eligibility with exact maintenance chat IDs. Denied `NEW`, retry-ready or stale `SENDING` rows are never locked/claimed: payload, status, attempts, `last_error`, `processed_at` and `next_attempt_at` remain unchanged. Query ordering still reaches later eligible rows. |
+| Direct Telegram API calls | Send/edit/photo/document/delete, outbox dispatch, chat lookup/member lookup and callback-answer envelopes use the same exact chat decision in addition to PRODUCT. Staff group operations still require exact venue linkage and actor membership/RBAC. Bot-global `getUpdates`, `getWebhookInfo` and gated file fetches are separately typed; command/menu configuration is disabled while active. |
+| Background/scheduled writers | Subscription billing, table-session cleanup, booking expiry and booking reminders do not start while active. Visit-feedback writing was already disabled. These autonomous jobs are neither silently treated as client traffic nor allowed to mutate during the smoke window. Inbound/outbox workers run only with the scoped behavior above. |
+| Operator/static reads | `/health`, `/db/health`, `/version`, read-only queue health/metrics and Mini App static assets may remain readable. They issue no session and bypass no protected route. Operator DB/schema evidence remains SSH/loopback based. |
+
+The read-only inventory of exact fresh main
+`b49a89a299d8c9864fcfc5937d455141563b388a` found the same single Ktor routing composition and the
+same public/authenticated/Telegram/background boundary families. Its main-only booking and
+conversation writes remain below the common JWT or Telegram Router gates. The added
+`BookingMessageStaffChatNotifier` writes transactionally through
+`TelegramOutboxEnqueuer.enqueueBookingSendMessageInTransaction`; the later semantic port must pass
+the maintenance policy through that shared enqueuer so the exact PRODUCT venue staff-chat check and
+maintenance recipient check both run before the outbox insert. Main also validates the explicit
+PRODUCT staff-invite secret early; maintenance parsing and the PRODUCT-only assertion must stay
+before database initialization without weakening that existing guard. The PostgreSQL V126 and H2
+companion migration blobs are immutable port inputs, not cherry-pick conflict resolutions. These
+are the exact V125-to-main mapping points; no main port starts before the separately authorized V125
+deploy passes.
+
+The overlay uses identity only after Telegram/Mini App/JWT validation. Private Telegram admission
+requires positive actor/chat IDs, actor equal to chat and membership in both maintenance sets. Group
+admission requires an allowed positive actor plus an exact allowed negative chat; PRODUCT then
+performs the existing one-time link, venue/chat and role checks. Maintenance never substitutes for
+PRODUCT RBAC.
+
+#### V126 drain, activation and recovery sequence
+
+The later V126 authorization must execute this order without client-IP attribution:
+
+1. Keep current PRODUCT configuration. Make Caddy return one generic `503` for public application
+   traffic using the already reviewed drain operation; stop the backend; prove one stopped writer,
+   empty/acceptable queues and run the existing read-only writer/preflight gates. This prerequisite
+   does not modify Caddy.
+2. Put the exact reviewed restricted IDs into the mode-0600 staging environment and set
+   `STAGING_MAINTENANCE_MODE=V126_SMOKE` while leaving `TELEGRAM_TRAFFIC_POLICY=PRODUCT`. Start the
+   new V126 backend with the overlay already active. Startup/config, health, DB, Flyway/schema and
+   one-backend/poller evidence must pass before routing is restored.
+3. Restore ordinary Caddy reverse proxy routing. An unauthenticated protected request and a valid
+   excluded test identity must each receive generic `503`; snapshot comparisons must show zero user,
+   session, inbound, idempotency, domain, notification or outbox state. Do not log identities or
+   payloads.
+4. Run mandatory Guest and Owner smoke only through the canonical Telegram clients and public URLs.
+   The allowed Guest covers auth/catalog/table/order/conversation as applicable; the allowed Owner
+   covers exact own-venue Venue Mode, staff chat and a negative foreign-venue/Platform escalation.
+   Verify an unrelated group is state-free and public excluded traffic still receives `503`.
+5. Only after every schema/queue/product assertion passes, drain public application traffic again,
+   stop the backend, set the mode to `OFF` and clear the restricted list values without changing
+   `TELEGRAM_TRAFFIC_POLICY=PRODUCT`, then start the reviewed backend and restore routing. Repeat
+   `/health`, `/db/health`, `/version`, Flyway/schema, one-poller, queue and ordinary unknown-Guest
+   plus Owner checks. Retain the redacted OFF transition as cutover evidence.
+
+The normal deploy path runs `scripts/check-staging-maintenance-config.sh`. `OFF` is accepted without
+an authorization override. An active environment is rejected unless the operator supplies the
+separate reviewed boolean `STAGING_MAINTENANCE_V126_SMOKE_AUTHORIZED=true`; the flag contains no IDs
+and does not activate maintenance by itself. After cutover, ordinary deploys omit the flag, so a
+silently retained active environment fails preflight. The script self-test and Compose validation
+are mandatory CI gates.
+
+Before authorization, capture the current backend's exact image reference and Docker image ID (plus
+digest when present) from the VPS and bind that immutable evidence to application/source release
+`be5d62a5e9058f89cd72be6c313c71fa46ccdbf2`. The SHA is not itself an image identity. If the new
+backend fails before schema mutation, keep public Caddy `503`, stop it and return only to that
+verified image ID/reference and the captured configuration. This old V125 application release has
+no maintenance overlay and must never be started behind restored public routing as a substitute for
+active maintenance. After V126 or any real smoke write, image/runtime rollback does not undo
+committed memberships, messages, orders, callbacks or other domain facts and does not roll back
+Flyway; use the documented V126 forward-fix/restore decision and reconcile partial facts. Do not
+delete them through ad-hoc SQL.
 
 ## Migrations Runbook
 

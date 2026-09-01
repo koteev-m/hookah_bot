@@ -1,6 +1,6 @@
 # Testing / QA Smoke Strategy
 
-Дата актуализации: 2026-08-29.
+Дата актуализации: 2026-09-01.
 
 Статус: **current product reference / UPDATED**. This document is the canonical QA/smoke strategy for the Telegram bot + Mini App platform. It consolidates local validation, GitHub Actions expectations, area-specific smoke suites, staging policy, failure reporting and Codex handoff rules. Deployment and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
 
@@ -169,6 +169,94 @@ On pre-acceptance failure, restore the base V125 image/source
 `b4e13da3179438fad69d2344e1cb136a56f95f6c` and exact prior Manifest B, then run exactly one backend.
 If any membership committed, do not delete it or edit invite state through SQL: rollback does not
 reverse product facts, so stop and reconcile separately.
+
+### HT-12M identity-gated V126 maintenance prerequisite quality gate
+
+This runtime/security prerequisite is based on exact current V125 staging source
+`be5d62a5e9058f89cd72be6c313c71fa46ccdbf2`. It adds no PostgreSQL or H2 migration and must preserve
+all normal `PRODUCT` admission when `STAGING_MAINTENANCE_MODE=OFF`. Client IP/CIDR attribution is not
+part of the proof. Validate V125 first; do not deploy, run Flyway/V126 or start the main port during
+implementation.
+
+Required focused proof:
+
+- `StagingMaintenancePolicyTest` and `StagingMaintenanceStartupTest`: OFF default/ignored lists,
+  canonical active identities, exact positive private chat/user equality, optional negative groups,
+  staging-only/product-only activation, fail-before-DB malformed/incomplete configuration,
+  restricted-value privacy, process-lifetime immutability, autonomous-writer and command setup
+  disablement.
+- `TelegramLongPollingWorkerTest`, `TelegramWebhookRoutesTest`,
+  `TelegramInboundUpdateWorkerTest`, `TelegramBotRouterIdempotencyTest` and Router group/link suites:
+  denial before Router/queue/idempotency/user/domain/outbox, webhook and queue defense in depth,
+  denied/malformed queue rows byte-for-byte unchanged, a later allowed row processed, exact private
+  and group admission, and PRODUCT staff-chat/role authority after maintenance admission.
+- `TelegramAuthRouteTest`, `SessionAuthTest`, `MiniAppRoutesTest`, `VenueRbacRoutesTest` and
+  `PlatformRoutesTest`: signature/freshness precedes the auth overlay; valid allowed initData creates
+  a session, valid excluded initData creates no user/session and gets generic `503`; old allowed JWT
+  works and old excluded JWT is rechecked on Guest/Venue/Platform; missing auth is also generic `503`
+  while active; billing webhook and public Telegram-media API are disabled; health/version/static
+  remain readable; admitted users still cannot cross venue or Platform RBAC.
+- `TelegramOutboxWorkerTest`, `StaffChatNotifierTest` and
+  `TelegramApiClientTrafficPolicyTest`: exact allowed user and linked staff-group enqueue/claim/send,
+  excluded `NEW`/retry/`SENDING` state unchanged with no attempts/error/timestamp mutation, later
+  eligible rows not starved, direct sends/member/chat/delete/media/callback paths non-bypassable and
+  separately typed bot-global operations bounded.
+- Existing `StaffInvite*`, venue staff and public PRODUCT tests remain the OFF-mode regression proof:
+  arbitrary fresh Guest and valid exact-role OWNER/MANAGER/STAFF invite acceptance never requires a
+  maintenance ID. Full Router and backend suites must remain green.
+- Captured-log tests must assert that startup failures, direct/webhook/queued/Router denials and API
+  failures expose at most bounded source/reason/error-type metadata: no raw IDs, lists, initData,
+  JWT, bot token, webhook secret, payload or message text.
+
+Run the focused groups before broad regression:
+
+```bash
+./gradlew --no-daemon --max-workers=1 :backend:app:test \
+  --tests '*StagingMaintenance*' \
+  --tests '*TelegramAuthRouteTest*' \
+  --tests '*SessionAuthTest*' \
+  --tests '*MiniAppRoutesTest*' \
+  --tests '*VenueRbacRoutesTest*' \
+  --tests '*PlatformRoutesTest*' \
+  --console=plain
+
+./gradlew --no-daemon --max-workers=1 :backend:app:test \
+  --tests '*TelegramLongPollingWorkerTest*' \
+  --tests '*TelegramWebhookRoutesTest*' \
+  --tests '*TelegramInboundUpdateWorkerTest*' \
+  --tests '*TelegramBotRouterIdempotencyTest*' \
+  --tests '*TelegramApiClientTrafficPolicyTest*' \
+  --tests '*TelegramOutboxWorkerTest*' \
+  --console=plain
+
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*TelegramBotRouter*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:test \
+  --tests '*StaffInvite*' --tests '*VenueStaff*' --tests '*GuestOrder*' \
+  --tests '*VenueOrder*' --tests '*Support*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:test --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:compileKotlin --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:ktlintCheck --console=plain
+npm --prefix miniapp run build
+MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke
+bash scripts/check-staging-maintenance-config.sh --self-test
+docker compose config --quiet
+git diff --check
+```
+
+Run relevant production-migration/Testcontainers PostgreSQL concurrency and integrity selectors from
+the current CI matrix even though this branch adds no migration. Prove migration identity with a
+name/blob comparison of both migration trees between the exact base and candidate; any difference
+is a STOP. Branch Actions, including Mini App build/browser smoke, Compose, migration sanity and
+Docker, must be green. An independent read-only security reviewer must inspect the complete final
+diff and report unclassified mutation paths, pre-gate writes, outbound bypasses, unsafe old-image
+rollback or sensitive logging before commit/release evidence is accepted.
+
+The later authorized smoke follows the ordered drain in `docs/DEPLOYMENT_RUNBOOK.md`. While active,
+verify public generic `503` and zero-state with an excluded valid identity, then run canonical live
+Guest/Owner Telegram smoke. After full PASS, activate the second drain and restart with `OFF`, empty
+maintenance values and underlying PRODUCT unchanged; repeat health/DB/schema/queue gates and prove a
+fresh ordinary Guest again enters. An active mode left after cutover is a release failure, not a
+degraded success.
 
 ### Booking test-only release hygiene
 

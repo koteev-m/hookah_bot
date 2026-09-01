@@ -768,6 +768,42 @@ class VenueRbacRoutesTest {
         }
 
     @Test
+    fun `maintenance admission does not grant authority over a foreign venue`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("venue-public-card-maintenance-rbac")
+            val config = buildConfig(jdbcUrl, maintenanceUserId = TELEGRAM_USER_ID)
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val ownVenueId = seedVenueMembership(jdbcUrl, TELEGRAM_USER_ID, "OWNER")
+            val foreignVenueId = seedVenueMembership(jdbcUrl, 777L, "OWNER")
+            val token = issueToken(config)
+
+            val ownResponse =
+                client.get("/api/venue/$ownVenueId/public-card") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.OK, ownResponse.status)
+
+            val foreignResponse =
+                client.put("/api/venue/$foreignVenueId/public-card") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            VenuePublicCardSettingsUpdateRequest.serializer(),
+                            VenuePublicCardSettingsUpdateRequest(city = "Москва"),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.Forbidden, foreignResponse.status)
+            assertApiErrorEnvelope(foreignResponse, ApiErrorCodes.FORBIDDEN)
+        }
+
+    @Test
     fun `invalid public card settings update preserves existing values`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("venue-public-card-invalid")
@@ -1485,14 +1521,25 @@ class VenueRbacRoutesTest {
         return "jdbc:h2:mem:$dbName;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1"
     }
 
-    private fun buildConfig(jdbcUrl: String): MapApplicationConfig {
-        return MapApplicationConfig(
-            "app.env" to appEnv,
-            "api.session.jwtSecret" to "test-secret",
-            "db.jdbcUrl" to jdbcUrl,
-            "db.user" to "sa",
-            "db.password" to "",
-        )
+    private fun buildConfig(
+        jdbcUrl: String,
+        maintenanceUserId: Long? = null,
+    ): MapApplicationConfig {
+        val entries =
+            mutableListOf(
+                "app.env" to appEnv,
+                "api.session.jwtSecret" to "test-secret",
+                "db.jdbcUrl" to jdbcUrl,
+                "db.user" to "sa",
+                "db.password" to "",
+            )
+        maintenanceUserId?.let { userId ->
+            entries += "telegram.trafficPolicy" to "PRODUCT"
+            entries += "staging.maintenance.mode" to "V126_SMOKE"
+            entries += "staging.maintenance.allowedUserIds" to userId.toString()
+            entries += "staging.maintenance.allowedChatIds" to userId.toString()
+        }
+        return MapApplicationConfig(*entries.toTypedArray())
     }
 
     private fun issueToken(

@@ -1,6 +1,8 @@
 package com.hookah.platform.backend.billing
 
 import com.hookah.platform.backend.api.ForbiddenException
+import com.hookah.platform.backend.api.MaintenanceUnavailableException
+import com.hookah.platform.backend.maintenance.StagingMaintenancePolicy
 import com.hookah.platform.backend.security.constantTimeEquals
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.call
@@ -14,9 +16,11 @@ fun Route.billingWebhookRoutes(
     config: BillingConfig,
     providerRegistry: BillingProviderRegistry,
     billingService: BillingService,
+    maintenancePolicy: StagingMaintenancePolicy = StagingMaintenancePolicy.off(),
 ) {
     route("/api/billing") {
         post("/webhook/{provider?}") {
+            if (maintenancePolicy.active) throw MaintenanceUnavailableException()
             val allowlist = config.webhookIpAllowlist
             if (allowlist != null) {
                 val clientIp =

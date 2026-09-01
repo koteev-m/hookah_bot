@@ -1,6 +1,7 @@
 package com.hookah.platform.backend.telegram
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.maintenance.StagingMaintenancePolicy
 import com.hookah.platform.backend.miniapp.guest.db.GuestBookingRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestMenuRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestTabsRepository
@@ -37,7 +38,7 @@ import java.time.Duration
 
 class TelegramBotRouterIdempotencyTest {
     @Test
-    fun `same token worker restart and redelivery do not repeat side effects`() =
+    fun `maintenance router gate and same token redelivery do not repeat side effects`() =
         runBlocking {
             val apiClient: TelegramApiClient = mockk(relaxed = true)
             val outboxEnqueuer: TelegramOutboxEnqueuer = mockk(relaxed = true)
@@ -61,18 +62,20 @@ class TelegramBotRouterIdempotencyTest {
 
             coEvery { idempotencyRepository.tryAcquire(any(), any(), any()) } returnsMany listOf(true, false)
 
-            val trafficPolicy =
-                TelegramTrafficPolicy.from(
+            val trafficPolicy = TelegramTrafficPolicy.product()
+            val maintenancePolicy =
+                StagingMaintenancePolicy.from(
                     MapApplicationConfig(
-                        "telegram.trafficPolicy" to "ALLOWLIST",
-                        "telegram.allowedUserIds" to "200",
-                        "telegram.allowedChatIds" to "200",
+                        "staging.maintenance.mode" to "V126_SMOKE",
+                        "staging.maintenance.allowedUserIds" to "200",
+                        "staging.maintenance.allowedChatIds" to "200",
                     ),
                     "staging",
                 )
             val router =
                 TelegramBotRouter(
                     trafficPolicy = trafficPolicy,
+                    maintenancePolicy = maintenancePolicy,
                     config =
                         TelegramBotConfig(
                             enabled = true,
@@ -155,6 +158,7 @@ class TelegramBotRouterIdempotencyTest {
                             processed.complete(Unit)
                         },
                         trafficPolicy = trafficPolicy,
+                        maintenancePolicy = maintenancePolicy,
                         timeoutSeconds = 1,
                         scope = scope,
                     )

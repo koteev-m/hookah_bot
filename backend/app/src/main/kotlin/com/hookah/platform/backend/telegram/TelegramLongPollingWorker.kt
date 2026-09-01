@@ -1,5 +1,6 @@
 package com.hookah.platform.backend.telegram
 
+import com.hookah.platform.backend.maintenance.StagingMaintenancePolicy
 import com.hookah.platform.backend.tools.retryWithBackoff
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -15,6 +16,7 @@ class TelegramLongPollingWorker(
     private val getWebhookUrl: suspend () -> String,
     private val processUpdate: suspend (TelegramUpdate) -> Unit,
     private val trafficPolicy: TelegramTrafficPolicy,
+    private val maintenancePolicy: StagingMaintenancePolicy = StagingMaintenancePolicy.off(),
     private val timeoutSeconds: Int,
     private val scope: CoroutineScope,
     private val errorDelayMillis: Long = 1_000,
@@ -77,6 +79,17 @@ class TelegramLongPollingWorker(
     internal suspend fun processBatch(updates: List<TelegramUpdate>) {
         updates.sortedBy { it.updateId }.forEach { update ->
             try {
+                when (val maintenanceDecision = maintenancePolicy.evaluateInbound(update)) {
+                    StagingMaintenancePolicy.InboundDecision.Allowed -> Unit
+                    is StagingMaintenancePolicy.InboundDecision.Denied -> {
+                        logger.info(
+                            "Telegram inbound update denied source=long_polling reason=MAINTENANCE_{}",
+                            maintenanceDecision.reason,
+                        )
+                        offset = nextOffset(update.updateId)
+                        return@forEach
+                    }
+                }
                 when (val decision = trafficPolicy.evaluateInbound(update)) {
                     TelegramTrafficPolicy.InboundDecision.Allowed -> processUpdate(update)
                     is TelegramTrafficPolicy.InboundDecision.Denied ->

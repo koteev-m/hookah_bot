@@ -1,31 +1,43 @@
 # Project Status
 
-Last verified: 2026-08-29.
+Last verified: 2026-09-01.
 
 ## 1. Current stage
 
-**V125 PUBLIC PILOT TELEGRAM ADMISSION HOTFIX / FEATURE-BRANCH CANDIDATE /
-STAGING DEPLOY REQUIRED**.
+**HT-12M IDENTITY-GATED MAINTENANCE / V125-COMPATIBLE IMPLEMENTATION /
+LOCAL VALIDATION AND INDEPENDENT SECURITY REVIEW COMPLETE / CANDIDATE EVIDENCE PENDING / NO DEPLOY**.
 
-The hotfix candidate is isolated on a V125-compatible feature branch based on exact deployed source
-`b4e13da3179438fad69d2344e1cb136a56f95f6c`. It adds explicit `PRODUCT` Telegram traffic mode for
-the platform-wide public pilot while preserving exact fail-closed `ALLOWLIST` behavior for isolated
-smoke environments. In `PRODUCT`, structurally valid private Telegram identities and valid signed
-Mini App identities can enter as Guest without static IDs; venue and platform access still comes
-only from active membership/RBAC, and active one-time invites grant only their stored role in their
-stored venue. Staff groups and outbound traffic remain server-authoritative and venue-scoped.
+The isolated feature branch is based on exact currently running V125 candidate
+`be5d62a5e9058f89cd72be6c313c71fa46ccdbf2`. Normal staging remains `PRODUCT`, with public Guest
+admission, invitation roles and membership/RBAC unchanged. The new maintenance overlay defaults to
+`OFF`; separately reviewed `V126_SMOKE` starts fail closed with restricted exact Telegram identities,
+rechecks validated Mini App/JWT subjects before domain work, scopes Telegram ingress/outbound, and
+disables unrelated autonomous writers. Denied protected HTTP receives generic `503`; denied inbound
+and outbox rows are not mutated or allowed to starve later eligible work.
 
-The candidate adds or touches no database migration and has no PostgreSQL V126; PostgreSQL staging
-therefore remains V125-compatible. Local H2 regression naturally applies the base's pre-existing H2
-`V126__booking_miniapp_message_idempotency.sql` fixture. There is no Mini App frontend change. The
-candidate does not change staging, Manifest B, Caddy, PostgreSQL, the active image or production.
-Local validation, independent review, an explicit candidate commit and a green branch Actions run
-are release gates for the separately authorized staging deploy/smoke task. That later task changes
-staging from
-`ALLOWLIST` plus exact Manifest B to `PRODUCT` with empty static identity lists and an explicit staff
-invite pepper; rollback is the base V125 image/source plus exact prior Manifest B. A rollback of
-traffic policy never deletes or reverses memberships already committed through normal product
-flows.
+This branch adds no migration and has not run Flyway/V126, contacted staging, modified Caddy, written
+staging data or accessed production. Focused policy/auth/session/queue/outbox/direct-send/RBAC,
+full Router, PRODUCT invite/staff/order/support and real-PostgreSQL maintenance queue/outbox plus
+concurrency/integrity selectors are green. Compile, ktlint, Mini App build, `206/206` browser smoke,
+Compose, deploy-guard self-test and diff checks are green. PostgreSQL and H2 migration subtree hashes
+match the exact base. The final full local backend run is green: `2,154` tests, zero skipped,
+failures or errors. Its initial run exposed an unchanged-base defect in the read-only
+`StaffProfileLinkConcurrencyPostgresTest` lock observer: the recursive graph counted the direct
+membership waiter but not the second request waiting transitively through the production venue-row
+lock. The test-only CTE now starts from both exact production `FOR UPDATE` queries and still requires
+both chains to reach the external membership blocker; the class passes `2/2` with no runtime change.
+Remaining gates are explicit candidate commit/push, green branch Actions and immutable image
+evidence. It must then stop at separate V125 deploy authorization with the overlay `OFF`. The main
+port from exact
+`b49a89a299d8c9864fcfc5937d455141563b388a` begins only after that later V125 deploy passes.
+
+The required independent read-only security review inspected the complete code/test/config/docs
+diff. Its two P2 documentation findings were fixed: the active deploy invocation now preserves the
+Caddy drain with `RUN_PUBLIC_CHECKS=false` and explicit post-routing `503`/zero-state proof, while
+rollback now requires a captured immutable image reference plus Docker image ID/digest rather than
+treating a source SHA as an image identity. Bounded re-review returned PASS with no remaining P0-P3
+finding. The remaining candidate gates are the explicit commit/push, branch Actions and immutable
+image evidence.
 
 The independent booking release line below remains unchanged context and is not part of this
 V125-compatible prerequisite branch.

@@ -120,6 +120,37 @@ class MiniAppRoutesTest {
         }
     }
 
+    @Test
+    fun `maintenance keeps operator reads and static assets readable without granting an api session`() {
+        val staticDir = createTempDirectory("miniapp-maintenance-static").toFile()
+        try {
+            File(staticDir, "index.html").writeText("<!doctype html><title>Maintenance Static Mini App</title>")
+            testApplication {
+                environment {
+                    config =
+                        MapApplicationConfig(
+                            "app.env" to "test",
+                            "api.session.jwtSecret" to "test-secret",
+                            "db.jdbcUrl" to "",
+                            "miniapp.staticDir" to staticDir.absolutePath,
+                            "telegram.trafficPolicy" to "PRODUCT",
+                            "staging.maintenance.mode" to "V126_SMOKE",
+                            "staging.maintenance.allowedUserIds" to "1234",
+                            "staging.maintenance.allowedChatIds" to "1234",
+                        )
+                }
+                application { module() }
+
+                assertEquals(HttpStatusCode.OK, client.get("/health").status)
+                assertEquals(HttpStatusCode.OK, client.get("/version").status)
+                assertEquals(HttpStatusCode.OK, client.get("/miniapp/").status)
+                assertEquals(HttpStatusCode.ServiceUnavailable, client.get("/api/guest/_ping").status)
+            }
+        } finally {
+            staticDir.deleteRecursively()
+        }
+    }
+
     private fun withMiniAppDevServer(block: (String) -> Unit) {
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         server.createContext("/") { exchange ->
