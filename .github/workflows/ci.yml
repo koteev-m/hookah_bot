@@ -706,7 +706,9 @@ jobs:
       - name: Validate Docker Compose config
         run: docker compose config --quiet
       - name: Validate staging maintenance deploy guard
-        run: bash scripts/check-staging-maintenance-config.sh --self-test
+        run: |
+          bash scripts/check-staging-maintenance-config.sh --self-test
+          bash scripts/check-staging-image-identity.sh --self-test scripts/deploy-staging.sh
 
   miniapp:
     runs-on: ubuntu-latest

@@ -15,6 +15,7 @@ RUN_PUBLIC_CHECKS="${RUN_PUBLIC_CHECKS:-true}"
 HEALTHCHECK_ATTEMPTS="${HEALTHCHECK_ATTEMPTS:-20}"
 HEALTHCHECK_SLEEP_SECONDS="${HEALTHCHECK_SLEEP_SECONDS:-3}"
 STAGING_MAINTENANCE_V126_SMOKE_AUTHORIZED="${STAGING_MAINTENANCE_V126_SMOKE_AUTHORIZED:-false}"
+EXPECTED_BACKEND_IMAGE_ID="${EXPECTED_BACKEND_IMAGE_ID:-}"
 
 if [[ "${STAGING_MAINTENANCE_V126_SMOKE_AUTHORIZED}" != "true" &&
   "${STAGING_MAINTENANCE_V126_SMOKE_AUTHORIZED}" != "false" ]]; then
@@ -30,6 +31,7 @@ if [[ -z "${REMOTE}" ]]; then
   echo "  STAGING_DOMAIN=${STAGING_DOMAIN}"
   echo "  STAGING_PUBLIC_URL=${STAGING_PUBLIC_URL}"
   echo "  BACKEND_IMAGE=${BACKEND_IMAGE}"
+  echo "  EXPECTED_BACKEND_IMAGE_ID=<optional canonical sha256 image ID>"
   echo "  DOCKER_PLATFORM=${DOCKER_PLATFORM}"
   echo "  HEALTHCHECK_ATTEMPTS=${HEALTHCHECK_ATTEMPTS}"
   echo "  HEALTHCHECK_SLEEP_SECONDS=${HEALTHCHECK_SLEEP_SECONDS}"
@@ -48,6 +50,12 @@ require_cmd ssh
 require_cmd rsync
 require_cmd gzip
 require_cmd curl
+
+if [[ -n "${EXPECTED_BACKEND_IMAGE_ID}" &&
+  ! "${EXPECTED_BACKEND_IMAGE_ID}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+  echo "EXPECTED_BACKEND_IMAGE_ID must be a canonical sha256 image ID" >&2
+  exit 2
+fi
 
 wait_http() {
   local label="$1"
@@ -92,6 +100,26 @@ MINIAPP_STATIC_DIR=/app/miniapp \
 CORS_ALLOWED_HOSTS="${STAGING_PUBLIC_URL}" \
 docker compose config --quiet
 
+echo "==> Building backend image locally: ${BACKEND_IMAGE} (${DOCKER_PLATFORM})"
+docker buildx build \
+  --platform "${DOCKER_PLATFORM}" \
+  --provenance=false \
+  --load \
+  --tag "${BACKEND_IMAGE}" \
+  --build-arg "VITE_BACKEND_PUBLIC_URL=${STAGING_PUBLIC_URL}" \
+  --build-arg "GRADLE_JVM_ARGS=${GRADLE_JVM_ARGS}" \
+  -f backend/Dockerfile \
+  .
+
+if [[ -n "${EXPECTED_BACKEND_IMAGE_ID}" ]]; then
+  built_image_id="$(docker image inspect --format '{{.Id}}' "${BACKEND_IMAGE}")"
+  "${SCRIPT_DIR}/check-staging-image-identity.sh" \
+    "${built_image_id}" \
+    "${EXPECTED_BACKEND_IMAGE_ID}"
+else
+  echo "==> No expected backend image ID supplied; exact artifact identity was not pre-authorized"
+fi
+
 echo "==> Uploading compose files to ${REMOTE}:${STAGING_PATH}"
 ssh "${REMOTE}" "mkdir -p '${STAGING_PATH}'"
 rsync -azR \
@@ -99,6 +127,7 @@ rsync -azR \
   backend/Dockerfile \
   scripts/seed-staging.sh \
   scripts/check-staging-maintenance-config.sh \
+  scripts/check-staging-image-identity.sh \
   docs/env/staging.env.example \
   docs/STAGING_DEPLOYMENT.md \
   "${REMOTE}:${STAGING_PATH}/"
@@ -213,16 +242,6 @@ ssh "${REMOTE}" "
   STAGING_MAINTENANCE_V126_SMOKE_AUTHORIZED='${STAGING_MAINTENANCE_V126_SMOKE_AUTHORIZED}' \\
     ./scripts/check-staging-maintenance-config.sh .env
 "
-
-echo "==> Building backend image locally: ${BACKEND_IMAGE} (${DOCKER_PLATFORM})"
-docker buildx build \
-  --platform "${DOCKER_PLATFORM}" \
-  --load \
-  --tag "${BACKEND_IMAGE}" \
-  --build-arg "VITE_BACKEND_PUBLIC_URL=${STAGING_PUBLIC_URL}" \
-  --build-arg "GRADLE_JVM_ARGS=${GRADLE_JVM_ARGS}" \
-  -f backend/Dockerfile \
-  .
 
 echo "==> Uploading Docker image to VPS"
 docker save "${BACKEND_IMAGE}" | gzip | ssh "${REMOTE}" "gzip -dc | docker load"

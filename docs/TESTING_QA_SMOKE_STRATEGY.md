@@ -239,6 +239,7 @@ Run the focused groups before broad regression:
 npm --prefix miniapp run build
 MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke
 bash scripts/check-staging-maintenance-config.sh --self-test
+bash scripts/check-staging-image-identity.sh --self-test scripts/deploy-staging.sh
 docker compose config --quiet
 git diff --check
 ```
@@ -250,6 +251,12 @@ is a STOP. Branch Actions, including Mini App build/browser smoke, Compose, migr
 Docker, must be green. An independent read-only security reviewer must inspect the complete final
 diff and report unclassified mutation paths, pre-gate writes, outbound bypasses, unsafe old-image
 rollback or sensitive logging before commit/release evidence is accepted.
+
+For a digest-authorized deploy, build with the same `--provenance=false` path used by the deploy
+script, record the canonical image ID, rebuild once and require the same ID, then pass it as
+`EXPECTED_BACKEND_IMAGE_ID`. The identity guard must pass on an exact match and fail on malformed or
+different values before any upload. A mismatch after authorization is an automatic rollback/STOP,
+even when executable layers appear equivalent.
 
 The later authorized smoke follows the ordered drain in `docs/DEPLOYMENT_RUNBOOK.md`. While active,
 verify public generic `503` and zero-state with an excluded valid identity, then run canonical live

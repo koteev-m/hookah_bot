@@ -336,6 +336,14 @@ and does not activate maintenance by itself. After cutover, ordinary deploys omi
 silently retained active environment fails preflight. The script self-test and Compose validation
 are mandatory CI gates.
 
+Digest-specific authorization also supplies `EXPECTED_BACKEND_IMAGE_ID=sha256:<reviewed-image-id>`.
+The deploy builds with provenance attestations disabled and calls
+`scripts/check-staging-image-identity.sh` before upload; a malformed or different ID fails before
+the backend image is uploaded or services restart. BuildKit attestation manifests are not accepted
+as stable runtime identity because their digest can change across otherwise identical rebuilds. The exact
+source SHA, reviewed diff, green Actions and deterministic runtime image ID form the release
+evidence for this local Docker-save path.
+
 Before authorization, capture the current backend's exact image reference and Docker image ID (plus
 digest when present) from the VPS and bind that immutable evidence to application/source release
 `be5d62a5e9058f89cd72be6c313c71fa46ccdbf2`. The SHA is not itself an image identity. If the new

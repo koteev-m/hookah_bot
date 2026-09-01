@@ -321,16 +321,37 @@ Current staging alias example:
 The script:
 
 1. validates `docker compose config`;
-2. checks that required server `.env` keys and the maintenance deploy guard are valid without
-   printing secrets or identities;
-3. builds the backend Docker image locally for `linux/amd64`, including the Mini App production build;
-4. uploads `docker-compose.yml`, `scripts/seed-staging.sh`, safe docs/templates, and the Docker image to the VPS;
-5. runs `docker compose up -d --no-build postgres backend` on the VPS;
-6. waits and retries local VPS health endpoints and the public staging URL.
+2. builds the backend Docker image locally for `linux/amd64` with BuildKit provenance disabled,
+   including the Mini App production build;
+3. when `EXPECTED_BACKEND_IMAGE_ID` is supplied, compares the built canonical `sha256` image ID to
+   that reviewed value and stops before upload on any mismatch;
+4. uploads Compose/control files, then checks that required server `.env` keys and the maintenance
+   deploy guard are valid without printing secrets or identities;
+5. uploads the already verified Docker image to the VPS;
+6. runs `docker compose up -d --no-build postgres backend` on the VPS;
+7. waits and retries local VPS health endpoints and the public staging URL.
 
 The health wait handles short backend startup windows and transient reverse-proxy connection resets. If the script still fails after all attempts, do not redeploy blindly; inspect container status and backend logs first.
 
-On Mac Apple Silicon the script uses `docker buildx build --platform linux/amd64 --load` so the uploaded image matches a typical x86_64/amd64 VPS.
+For a digest-authorized release, build the reviewed candidate once, record the ID returned by
+`docker image inspect`, and pass that exact value to the deploy. The deploy uses
+`--provenance=false` because BuildKit provenance attestations can change the top-level manifest-list
+digest between otherwise identical rebuilds. This local Docker-save deployment does not publish an
+attestation; source SHA, green Actions and the independently reviewed diff remain the provenance
+evidence. The expected-ID comparison runs after build but before any image upload or service restart:
+
+```bash
+BACKEND_IMAGE=hookah_bot_ant-backend:<candidate-sha> \
+EXPECTED_BACKEND_IMAGE_ID=sha256:<reviewed-image-id> \
+./scripts/deploy-staging-controlmaster.sh <ssh-alias>
+```
+
+Omitting `EXPECTED_BACKEND_IMAGE_ID` retains the general deploy path but records that exact artifact
+identity was not pre-authorized. A release gate that names a digest must never omit it.
+
+On Mac Apple Silicon the script uses
+`docker buildx build --platform linux/amd64 --provenance=false --load` so the uploaded image matches
+a typical x86_64/amd64 VPS and has a stable preupload identity for the expected-ID gate.
 
 The backend Dockerfile uses BuildKit cache mounts for Gradle wrapper and dependency caches. If Docker build fails while downloading the Gradle distribution or Maven dependencies with a transient `SocketTimeoutException`, rerun the same deploy command after confirming it is a network timeout, not a Kotlin compile/test failure. The wrapper network timeout is intentionally higher than the default, and a successful retry should reuse the warmed Docker/Gradle cache.
 
