@@ -1,11 +1,12 @@
 # Telegram Fallback And Staff-Chat Model
 
-Дата актуализации: 2026-08-30.
+Дата актуализации: 2026-09-01.
 
 Статус: **current product reference / SPEC UPDATED**. Telegram bot remains an entrypoint,
 fallback and notification surface for the same backend/Mini App product. Public-pilot staging now
 runs the reviewed V125 `PRODUCT` admission candidate with natural external invite acceptance
-reconciled as PASS; HT-INC-02 is porting that contract to main. Existing smoke-closed paths cover
+reconciled as PASS; HT-12M integrated that contract into main and is complete as
+`IDENTITY_GATED_MAINTENANCE_PREREQUISITE_COMPLETE`. Existing smoke-closed paths cover
 fallback ordering, Staff Call, staff-chat link/test/unlink and state-aware booking lifecycle
 buttons. The bounded fact-only new-Guest-booking-message radar alert remains the only booking-chat
 content allowed in staff-chat; full booking-chat streams, venue chats and support tickets remain
@@ -47,10 +48,10 @@ Rules:
 
 Staging is always fail-closed and requires an explicit mode:
 
-- `ALLOWLIST` is the exact static boundary for isolated smoke. It requires a nonempty canonical
-  positive user list and a nonempty signed chat list containing each matching positive private chat
-  plus only explicitly approved negative groups/supergroups. Exact Manifest B remains the current
-  rollback/smoke identity set until a separately authorized staging transition.
+- `ALLOWLIST` is retained as exact, static, fail-closed implementation/test compatibility only. Its
+  former isolated-smoke and Manifest B roles are historical and operationally superseded; it has no
+  current normal-staging, public-pilot, rollback or V126 authorization. A future separately reviewed
+  task would have to reauthorize any operational use.
 - `PRODUCT` is the public-pilot product mode. Static user/chat lists must be absent or empty and an
   explicit `VENUE_STAFF_INVITE_SECRET_PEPPER` is required. `UNRESTRICTED` is never a staging
   fallback or pilot shortcut.
@@ -80,11 +81,10 @@ The same staging bot token, username and configured long-polling mode remain in 
 backend/poller is an operational release gate. Test-bot swapping is not isolation because queues,
 idempotency and stored staff-chat message state are not token-scoped.
 
-For `ALLOWLIST`, real IDs remain only in the restricted staging `.env` and
-`/etc/hookah-bot/staging/telegram-allowlist.manifest` outside Git. The directory is `root:root` mode
-0700 and the file mode 0600. A dedicated test supergroup is verified through the existing restricted
-operator procedure before entering that smoke manifest. `PRODUCT` never expands the manifest for a
-Guest, Owner, Manager or Staff identity.
+Historical `ALLOWLIST` evidence kept real IDs only in the restricted staging `.env` and
+`/etc/hookah-bot/staging/telegram-allowlist.manifest` outside Git. That retained evidence is not an
+active operator procedure or authorization. Current `PRODUCT` staging keeps both static lists empty
+for every Guest, Owner, Manager and Staff identity.
 
 ## Bot States
 

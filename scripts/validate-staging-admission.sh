@@ -14,7 +14,7 @@ Usage:
   validate-staging-admission.sh --self-test [docker-compose.yml]
 
 The default profile is public-pilot. The isolated-allowlist profile is an explicit,
-separately reviewed smoke-only path. No validated values are printed.
+separately reviewed smoke-only compatibility path. No validated values are printed.
 EOF
 }
 
@@ -511,9 +511,51 @@ expect_self_test_fail() {
   fi
 }
 
+expect_effective_maintenance() {
+  local label="$1"
+  local env_file="$2"
+  local compose_file="$3"
+  local expected_mode="$4"
+  local expected_users="$5"
+  local expected_chats="$6"
+  local effective
+  local token
+  local actual_mode
+  local actual_users
+  local actual_chats
+
+  effective="$(effective_admission_json "${compose_file}" "${env_file}")" || {
+    fail "self-test could not render effective Compose fixture: ${label}"
+    return
+  }
+  token="$(effective_token "${effective}" STAGING_MAINTENANCE_MODE)" || {
+    fail "self-test fixture is missing effective maintenance mode: ${label}"
+    return
+  }
+  actual_mode="$(json_string_value "${token}")" || return
+  token="$(effective_token "${effective}" STAGING_MAINTENANCE_ALLOWED_USER_IDS)" || {
+    fail "self-test fixture is missing effective maintenance users: ${label}"
+    return
+  }
+  actual_users="$(json_string_value "${token}")" || return
+  token="$(effective_token "${effective}" STAGING_MAINTENANCE_ALLOWED_CHAT_IDS)" || {
+    fail "self-test fixture is missing effective maintenance chats: ${label}"
+    return
+  }
+  actual_chats="$(json_string_value "${token}")" || return
+
+  if [[ "${actual_mode}" != "${expected_mode}" ||
+    "${actual_users}" != "${expected_users}" ||
+    "${actual_chats}" != "${expected_chats}" ]]; then
+    fail "effective Compose maintenance fixture mismatch: ${label}"
+    return
+  fi
+}
+
 self_test() {
   local source_compose="$1"
   local fixture_dir
+  local script_dir
   local compose_file
   local env_file
   local placeholder
@@ -532,6 +574,7 @@ self_test() {
 
   fixture_dir="$(mktemp -d "${TMPDIR:-/tmp}/staging-admission-guard.XXXXXX")"
   SELF_TEST_FIXTURE_DIR="${fixture_dir}"
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   trap cleanup_self_test EXIT
   compose_file="${fixture_dir}/docker-compose.yml"
   env_file="${fixture_dir}/.env"
@@ -539,6 +582,8 @@ self_test() {
 
   write_self_test_env "${env_file}" PRODUCT '' '' fixture-strong-invite-secret-2026
   expect_self_test_pass "public pilot PRODUCT" "${PUBLIC_PILOT_PROFILE}" "${env_file}" "${compose_file}"
+  expect_effective_maintenance "PRODUCT/OFF" "${env_file}" "${compose_file}" OFF '' ''
+  bash "${script_dir}/check-staging-maintenance-config.sh" "${env_file}" >/dev/null
   if ! APP_ENV=production \
     TELEGRAM_TRAFFIC_POLICY=UNRESTRICTED \
     TELEGRAM_ALLOWED_USER_IDS=999 \
@@ -551,6 +596,27 @@ self_test() {
     fail "self-test expected scrubbed shell overrides to preserve reviewed PRODUCT config"
     return
   fi
+
+  sed \
+    -e 's/STAGING_MAINTENANCE_MODE=OFF/STAGING_MAINTENANCE_MODE=V126_SMOKE/' \
+    -e 's/STAGING_MAINTENANCE_ALLOWED_USER_IDS=/STAGING_MAINTENANCE_ALLOWED_USER_IDS=101,202/' \
+    -e 's/STAGING_MAINTENANCE_ALLOWED_CHAT_IDS=/STAGING_MAINTENANCE_ALLOWED_CHAT_IDS=101,202,-303/' \
+    "${env_file}" > "${fixture_dir}/active.env"
+  mv "${fixture_dir}/active.env" "${env_file}"
+  expect_self_test_pass \
+    "public pilot PRODUCT with reviewed V126_SMOKE overlay" \
+    "${PUBLIC_PILOT_PROFILE}" \
+    "${env_file}" \
+    "${compose_file}"
+  expect_effective_maintenance \
+    "PRODUCT/V126_SMOKE" \
+    "${env_file}" \
+    "${compose_file}" \
+    V126_SMOKE \
+    '101,202' \
+    '101,202,-303'
+  STAGING_MAINTENANCE_V126_SMOKE_AUTHORIZED=true \
+    bash "${script_dir}/check-staging-maintenance-config.sh" "${env_file}" >/dev/null
 
   write_self_test_env "${env_file}" ALLOWLIST 101 101 __ABSENT__
   expect_self_test_fail "ALLOWLIST is not the default public-pilot path" "${PUBLIC_PILOT_PROFILE}" "${env_file}" "${compose_file}"

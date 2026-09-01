@@ -22,9 +22,10 @@ Guest communication is split into four different product scenarios. Do not merge
 - A valid active OWNER/STAFF/MANAGER invite may be previewed and accepted by a previously unknown
   Telegram identity without static-manifest changes. Acceptance grants only the exact stored role in
   the exact stored venue; communication visibility then follows this document and server-side RBAC.
-- `ALLOWLIST` is an isolated-smoke traffic boundary, not product user management. Neither traffic
-  mode nor successful Telegram/Mini App authentication grants another user's thread, another venue,
-  Venue Mode or Platform Mode.
+- `ALLOWLIST` is retained as fail-closed implementation/test compatibility, not product user
+  management. Its operational isolated-smoke role is superseded and has no current normal-staging,
+  public-pilot, rollback or V126 authorization. Neither traffic mode nor successful Telegram/Mini App
+  authentication grants another user's thread, another venue, Venue Mode or Platform Mode.
 
 ## Thread Types
 
