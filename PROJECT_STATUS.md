@@ -8,7 +8,9 @@ Last verified: 2026-09-01.
 LOCAL VALIDATION AND INDEPENDENT SECURITY REVIEW COMPLETE / CANDIDATE COMMITTED AND PUSHED /
 BRANCH ACTIONS GREEN / FIRST OFF DEPLOY ATTEMPT ROLLED BACK ON ARTIFACT-ID MISMATCH /
 STAGING RUNTIME IMAGE/CONFIG RECOVERED TO EXACT V125 BASE /
-REVISED CANDIDATE EVIDENCE REQUIRED / NO ACTIVE DEPLOY**.
+REVISED CANDIDATE COMMITTED AND PUSHED / FINAL-HEAD ACTIONS GREEN /
+DETERMINISTIC IMAGE EVIDENCE CAPTURED / V125 REDEPLOY AUTHORIZATION REQUIRED /
+NO ACTIVE CANDIDATE DEPLOY**.
 
 The isolated feature branch is based on exact currently running V125 candidate
 `be5d62a5e9058f89cd72be6c313c71fa46ccdbf2`. Normal staging remains `PRODUCT`, with public Guest
@@ -46,8 +48,10 @@ users/Telegram queue/outbox counts all matched the predeploy evidence. No mutati
 aggregate equality does not prove that arbitrary row values were unchanged, and runtime rollback
 cannot undo committed facts. The revised deploy now
 builds without nondeterministic provenance attestations and can require an expected canonical image
-ID before upload. A new candidate commit, image, Actions and authorization are required before a
-second attempt. The main port from exact
+ID before any remote mutation. The revised candidate is committed and pushed; its final-head
+Actions are green, two independent builds produced the same canonical image ID, and independent
+re-review reports no P0-P3 finding. Work is stopped at a new explicit V125 redeploy authorization
+gate. The main port from exact
 `b49a89a299d8c9864fcfc5937d455141563b388a` begins only after that later V125 deploy passes.
 
 The required independent read-only security review inspected the complete code/test/config/docs
@@ -55,9 +59,9 @@ diff. Its two P2 documentation findings were fixed: the active deploy invocation
 Caddy drain with `RUN_PUBLIC_CHECKS=false` and explicit post-routing `503`/zero-state proof, while
 rollback now requires a captured immutable image reference plus Docker image ID/digest rather than
 treating a source SHA as an image identity. Bounded re-review returned PASS with no remaining P0-P3
-finding. That review predates the deployment image-identity hardening; the complete revised diff
-requires another independent read-only review. No staging deploy or maintenance activation is
-currently authorized.
+finding. The same reviewer inspected the deployment image-identity hardening, guard ordering,
+self-test, rollback evidence and complete revised diff and returned PASS with no remaining P0-P3
+finding. No staging redeploy or maintenance activation is currently authorized.
 
 The independent booking release line below remains unchanged context and is not part of this
 V125-compatible prerequisite branch.
