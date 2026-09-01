@@ -217,7 +217,7 @@ jobs:
                   "claim skips disallowed rows without mutation and does not starve allowed rows",
                   "disallowed producers create no outbox or staff notification state",
                   "malformed payload is terminal local validation without transport fallback or metrics",
-                  "product staff notifications require the exact venue staff chat",
+                  "maintenance staff notifications require the exact reviewed and product linked venue staff chat",
                   "product worker rechecks staff chat authority immediately before dispatch",
               },
               "com.hookah.platform.backend.telegram.TelegramOutboxVenueAuthorityTest": {
@@ -764,7 +764,7 @@ jobs:
                   "worker does not route historical queued update denied by policy",
               },
               "com.hookah.platform.backend.telegram.TelegramBotRouterIdempotencyTest": {
-                  "same token worker restart and redelivery do not repeat side effects",
+                  "maintenance router gate and same token redelivery do not repeat side effects",
               },
               "com.hookah.platform.backend.telegram.TelegramWebhookConfigTest": {
                   "webhook secret is required for every normalized restricted environment",
