@@ -17,19 +17,21 @@ staging deploy and the bounded cross-surface smoke close only that bootstrap sli
 
 Latest onboarding release closure: **PLATFORM & VENUE ONBOARDING / OWNERSHIP COCKPIT / DONE / MVP /
 STAGING-SMOKE-PASSED** for release HEAD `e35def99ea8429462e5fdaaeee914f57da72e775`, with user-confirmed
-green Actions, staging deploy, consolidated smoke and cleanup. Local GitHub CLI authentication is
-invalid, so Actions are recorded as user-confirmed evidence.
+green Actions, staging deploy, consolidated smoke and cleanup. At that historical closure, local
+GitHub CLI authentication was invalid, so its Actions result was recorded as user-confirmed evidence.
 
-Current review-ready slice: **BOOKING CONVERSATION UX / DISTINCT LABELS, INBOX AND UNREAD
-DISCOVERABILITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
-This records bounded local implementation evidence only. Independent review, green Actions,
-PostgreSQL V126/H2 V127 rollout, staging redeploy and a fresh Guest/Venue/Telegram smoke remain
-required before release.
+Current predeploy QA slice: **HT-12C / V126 DOCUMENTATION AND RELEASE IDENTITY CLOSURE / STATIC
+VALIDATION IN PROGRESS / NO EXECUTION GATE PASSED**. Exact fetched main
+`9f51ebbd2dae0702b4b2f6333c1b42fc94cd1fc1` (tree
+`4071962a6850d977c4d7c319bfecc7cd4c2273d1`) is the documentation branch base, not the final V126
+release SHA. Final release identity requires later authorized main integration and a new exact green
+main Actions run. PostgreSQL V126, staging mutation and the real Guest/Owner/Telegram smoke remain
+execution-time work governed only by `docs/V126_STAGING_CUTOVER_CONTRACT.md`.
 
-Historical review-ready slice (still separately awaiting its release gates): **BOOKING CONVERSATION
-INTEGRITY / THREAD UNIQUENESS AND REAL MULTI-TENANT ISOLATION / MVP IMPLEMENTED / LOCAL VALIDATION
-PASSED / REVIEW REQUIRED BEFORE COMMIT**. Its V124/V125 preflight, migration and two-account staging
-requirements remain regression/release evidence; it is not the current slice and is not marked done.
+Historical implementation slice: **BOOKING CONVERSATION INTEGRITY / THREAD UNIQUENESS AND REAL
+MULTI-TENANT ISOLATION / IMPLEMENTED ON HT-12C BASE / RELEASE EXECUTION STILL REQUIRED**. Its
+V124/V125 preflight, migration and two-account staging requirements remain regression/release
+evidence; it is not the current slice and is not marked staging-complete.
 
 ## Core Rule
 
@@ -43,10 +45,13 @@ HT-INC-02 ported that admission contract onto main without changing either migra
 successfully deployed HT-12M V125 candidate
 `f577934691a1a7a79ba327c54e2055425142b7be` adds the separate maintenance overlay and currently runs
 on staging with `PRODUCT`, `STAGING_MAINTENANCE_MODE=OFF` and empty PRODUCT and maintenance lists.
-The active HT-12M main port must preserve PostgreSQL V126/H2 V127 plus all main-only booking
-behavior. `ALLOWLIST` remains a separately reviewed isolated-smoke mode only; it is not the V126
-maintenance mechanism. Every future main/V126 release must keep this matrix and the deployment
-guards below mandatory:
+The HT-12M main port is complete on exact HT-12C base
+`9f51ebbd2dae0702b4b2f6333c1b42fc94cd1fc1`; its evidence remains in
+`docs/HT12M_IDENTITY_MAINTENANCE_MAIN_PORT_EVIDENCE.md`. Runtime `ALLOWLIST` compatibility and its
+tests remain, but permanent `ALLOWLIST` staging isolation is superseded: normal public-pilot staging
+and the V126 rollback target are `PRODUCT` with maintenance `OFF` and empty static lists, while V126
+isolation uses the temporary identity-gated `V126_SMOKE` overlay. Every future main/V126 release
+must keep this matrix and the deployment guards below mandatory:
 
 - `TelegramTrafficPolicyStartupTest`, `TelegramTrafficPolicyConfigTest` and
   `TelegramTrafficPolicyTest`: staging accepts only explicit `ALLOWLIST` or `PRODUCT` and rejects
@@ -190,22 +195,26 @@ git diff --check
 git status --short
 ```
 
-The current HT-12M main-port gate retains the full backend suite, PostgreSQL-backed
+The completed HT-12M main-port gate retained the full backend suite, PostgreSQL-backed
 integration/concurrency selectors, compile, ktlint, the unchanged Mini App production build and
 complete structured Playwright smoke, Compose validation, deploy-script syntax/fixture guards and an
-empty migration diff. Exact JUnit XML files must exist, meet or exceed their declared floors and
-report zero skipped/failures/errors; a selector name alone is not coverage. Green local checks prove
-readiness for independent review only.
+empty migration diff. That historical proof is a prerequisite, not V126 execution evidence. HT-12C
+must keep the same migration trees and run the bounded static/configuration checks required by the
+single cutover contract. Exact JUnit XML files must exist, meet or exceed their declared floors and
+report zero skipped/failures/errors; a selector name alone is not coverage.
 
 ### HT-12M identity-gated V126 maintenance prerequisite quality gate
 
-This runtime/security prerequisite started from exact V125 staging source
+This completed runtime/security prerequisite started from exact V125 staging source
 `be5d62a5e9058f89cd72be6c313c71fa46ccdbf2` and produced reviewed candidate
 `f577934691a1a7a79ba327c54e2055425142b7be` without a PostgreSQL or H2 migration change. Its
 authorized staging deploy passed under `PRODUCT` with `STAGING_MAINTENANCE_MODE=OFF`, empty
-maintenance lists, Flyway V125 and V126 absent. The active main port must preserve all normal PRODUCT
-admission, both existing migration trees and all main-only behavior. Client IP/CIDR attribution is
-not part of the proof. Do not integrate main, redeploy staging or run Flyway/V126 during the port.
+maintenance lists, Flyway V125 and V126 absent. Its main port is included in exact HT-12C base
+`9f51ebbd2dae0702b4b2f6333c1b42fc94cd1fc1` and is closed as
+`IDENTITY_GATED_MAINTENANCE_PREREQUISITE_COMPLETE`. Client IP/CIDR attribution was not part of the
+proof and remains prohibited as V126 authority. The historical port restriction against staging
+redeploy, Flyway/V126 and Caddy mutation is superseded by the still-stricter HT-12C documentation
+boundary and, later, by the separately authorized canonical cutover contract.
 
 Required focused proof:
 
@@ -315,12 +324,13 @@ invite smoke was repeated; exact-head automated coverage remains authoritative f
 
 This historical evidence closes HT-INC-01E. Do not create another coordinated client window merely
 to repeat it. Runtime behavior changes still require the normal green-Actions/staging-smoke policy;
-the active HT-12M main port must not redeploy staging, apply V126, access production or
-restart/reload Caddy.
+during the now-completed HT-12M main port, staging redeploy, Flyway/V126, production access and
+Caddy restart/reload were prohibited. Those restrictions remain historical evidence; HT-12C and
+any later authorized V126 execution follow the stricter boundaries in the current cutover contract.
 
 ### Booking test-only release hygiene
 
-`BOOKING-TEST-SUBSCRIPTION-WORKER-ISOLATION-001 = LOCAL_FIX_REVIEW_REQUIRED`. Before booking
+`BOOKING-TEST-SUBSCRIPTION-WORKER-ISOLATION-001 = INTEGRATED_ON_HT12C_BASE`. Before booking
 assertions, `SubscriptionBillingJob` could race a strict `seedSubscription` fixture insert by
 creating a TRIAL row. H2 then reported SQLState `23505`, duplicate `venue_subscriptions` primary
 key. Every fixture-bearing `GuestBookingRoutesTest` and `VenueBookingRoutesTest` configuration now
@@ -330,7 +340,7 @@ non-fixture configurations explicitly retain normal worker behavior. Non-fixture
 are also unchanged. The fixture remains a strict `INSERT`, so an accidental background insert
 still fails fast. Production billing defaults, runtime and schema are unchanged.
 
-`BOOKING-TIMEZONE-ATTENDANCE-SINGLE-RESOLUTION-001 = LOCAL_FIX_REVIEW_REQUIRED`. Guest attendance
+`BOOKING-TIMEZONE-ATTENDANCE-SINGLE-RESOLUTION-001 = INTEGRATED_ON_HT12C_BASE`. Guest attendance
 staff-chat coverage deliberately omits a venue timezone and must also pass with the host timezone
 set to UTC. The route resolves one operation zone with the deterministic booking product fallback,
 then passes that exact `ZoneId` to both the staff-chat formatter and response DTO. The focused test
@@ -338,53 +348,55 @@ retains the one-row outbox, safe guest label, copy and Telegram-ID privacy asser
 and reminder attendance callbacks likewise reuse one resolved zone for the staff alert and refreshed
 guest message.
 
-`BOOKING-TIMEZONE-STAFF-NOTIFIER-PROPAGATION-001 = LOCAL_FIX_REVIEW_REQUIRED`. Booking lifecycle
+`BOOKING-TIMEZONE-STAFF-NOTIFIER-PROPAGATION-001 = INTEGRATED_ON_HT12C_BASE`. Booking lifecycle
 staff notifications require their caller's resolved operation `ZoneId`; `notifyBookingNow` cannot
 re-read venue timezone independently. Guest Mini App create/update/cancel and Bot
 create/update/cancellation paths reuse their one operation zone for persisted/local semantics,
 labels and notifier delivery. The unrelated order live-card timezone resolver and the separate
 transactional fact-only booking-message radar path keep their existing contracts.
 
-`BOOKING-TIMEZONE-FALLBACK-CONSISTENCY-001 = LOCAL_FIX_REVIEW_REQUIRED`. Attendance, Guest
+`BOOKING-TIMEZONE-FALLBACK-CONSISTENCY-001 = INTEGRATED_ON_HT12C_BASE`. Attendance, Guest
 create/update and Venue confirm/change now resolve one canonical booking zone per operation and
 reuse it for booking-hours validation, local-time interpretation, service/display date and number,
 hold/deadline presentation, reminder scheduling and response/notification labels. A valid persisted
 venue timezone still wins; missing, blank or invalid settings use `Europe/Moscow` through
 `defaultBookingDisplayZoneId()`, so the host timezone no longer changes those booking semantics.
 UTC production-route regressions assert persisted instants, display dates/numbers, deadlines,
-reminder due times and labels at UTC/Moscow calendar boundaries. This is local validation only:
-green Actions and deploy/staging evidence are not claimed. The billing-race isolation above remains
-strictly test-only; production billing defaults and runtime behavior are unchanged.
+reminder due times and labels at UTC/Moscow calendar boundaries. The exact HT-12C base and its
+successful main Actions include this implementation, but no V126 deploy/staging evidence is claimed.
+The billing-race isolation above remains strictly test-only; production billing defaults and runtime
+behavior are unchanged.
 
-The independent-review closure findings for this bounded timezone slice remain review-required:
+The bounded timezone findings are integrated on the exact HT-12C base and remain release
+regressions:
 
-- `BOOKING-TIMEZONE-TELEGRAM-CREATE-UPDATE-DOUBLE-RESOLUTION-001 = LOCAL_FIX_REVIEW_REQUIRED`.
+- `BOOKING-TIMEZONE-TELEGRAM-CREATE-UPDATE-DOUBLE-RESOLUTION-001 = INTEGRATED_ON_HT12C_BASE`.
   Telegram Bot booking create/update resolves the authoritative venue zone exactly once before the
   first timezone-dependent range check, then reuses it for the local instant, persisted schedule,
   service date/number, deadline, reminder, response and staff-chat notification.
-- `BOOKING-CI-TZ-UTC-GATE-001 = LOCAL_FIX_REVIEW_REQUIRED`. The affected release-critical
+- `BOOKING-CI-TZ-UTC-GATE-001 = INTEGRATED_ON_HT12C_BASE`. The affected release-critical
   route/security and booking/RBAC GitHub Actions test steps declare and log `TZ=UTC`; unrelated
   jobs retain their existing timezone environment.
-- `BOOKING-CI-STAFF-NOTIFIER-XML-FLOOR-001 = LOCAL_FIX_REVIEW_REQUIRED`.
+- `BOOKING-CI-STAFF-NOTIFIER-XML-FLOOR-001 = INTEGRATED_ON_HT12C_BASE`.
   `backend-release-critical-routes` parses the exact
   `TEST-com.hookah.platform.backend.telegram.StaffChatNotifierTest.xml` report at minimum `40` and
   fails on a missing/below-minimum/zero, skipped, failed or errored suite.
-- `BOOKING-TIMEZONE-REREAD-RACE-EVIDENCE-001 = LOCAL_FIX_REVIEW_REQUIRED`. A single Bot booking
+- `BOOKING-TIMEZONE-REREAD-RACE-EVIDENCE-001 = INTEGRATED_ON_HT12C_BASE`. A single Bot booking
   operation uses a resolver prepared to return Zone A and then Zone B, requires exactly one
   resolver call and proves every range/persistence/deadline/Telegram/staff-chat result remains in
   Zone A. Bot create preserves the lifecycle's `PENDING` state, so its authoritative reminder
   result is no `due_at`/status row and zero scheduling calls; the valid-zone Venue-confirm
   regression separately proves the actual pending reminder's due time and status.
-- `BOOKING-TIMEZONE-VALID-PRECEDENCE-EVIDENCE-001 = LOCAL_FIX_REVIEW_REQUIRED`. With host
+- `BOOKING-TIMEZONE-VALID-PRECEDENCE-EVIDENCE-001 = INTEGRATED_ON_HT12C_BASE`. With host
   `TZ=UTC`, a valid persisted non-Moscow venue zone wins over the Moscow fallback for the persisted
   instant, display date/number, deadline, pending reminder, response label and notification label.
-- `BOOKING-TIMEZONE-ATTENDANCE-CONTRACT-EVIDENCE-001 = LOCAL_FIX_REVIEW_REQUIRED`. Production-route
+- `BOOKING-TIMEZONE-ATTENDANCE-CONTRACT-EVIDENCE-001 = INTEGRATED_ON_HT12C_BASE`. Production-route
   attendance regressions cover both a missing timezone/Moscow fallback and a valid non-Moscow
   timezone with one resolver call, matching response/staff-chat schedule and deadline semantics,
   and unchanged one-row outbox/dedupe behavior.
 
-These statuses record local implementation and automated evidence only. They do not claim green
-GitHub Actions, deploy, staging smoke or production readiness.
+These statuses record inclusion in the exact green main base. They do not claim a V126 deploy,
+staging smoke or production readiness.
 
 ### Booking conversation automated regression matrix
 
@@ -593,15 +605,13 @@ V124/V125 migration, thread-uniqueness or broad outbox design verdicts:
   Actions, staging redeploy and a fresh real Telegram/Mini App smoke; local success is not staging
   evidence.
 
-#### PostgreSQL V126 controlled mixed-version release and smoke boundary
+#### PostgreSQL V126 QA and live-smoke boundary
 
-This is a required future release check, not evidence that green Actions, a deploy, migration or
-staging smoke has run.
-
-This current-section wording addresses only the two remaining commit-blocking documentation
-findings `BOOKING-UNREAD-ROLLOUT-PREFLIGHT-HEAD-001` and
-`BOOKING-UNREAD-ROLLOUT-MANUAL-DB-CLEANUP-001`. The already approved label smoke remains unchanged;
-this wording does not raise the epic or release status.
+This section defines QA assertions, not a second rollout procedure. The former controlled
+mixed-version order in this document is historical and superseded; do not execute it. The single
+current state machine, backup/rehearsal contract, release-identity process, drain/maintenance
+transitions and recovery boundaries are in `docs/V126_STAGING_CUTOVER_CONTRACT.md`. This
+documentation task does not mark any execution-time gate passed.
 
 PostgreSQL V126 is additive. It adds nullable `BIGINT support_thread_reads.last_read_message_id`
 with no default, no backfill and no destructive rewrite;
@@ -614,152 +624,24 @@ same nullable `BIGINT last_read_message_id` with no default, no backfill and no 
 preserves `last_read_at` and primary key `(thread_id, user_id)`, and applies only in H2/local/test
 environments. Staging PostgreSQL applies PostgreSQL V126, never H2 V127.
 
-`EXPECTED_RELEASE_SHA` comes only from the exact commit SHA shown by a fully green GitHub Actions
-run after commit and push. The operator copies the full 40-character lowercase SHA from that run
-and passes it explicitly; GitHub CLI is optional because the value may be copied from the Actions
-UI. Validate it with `^[0-9a-f]{40}$`, fetch `origin`, and require
-`origin/main = EXPECTED_RELEASE_SHA`. Never derive the expected value from local `HEAD` or from the
-checkout being verified; `EXPECTED_RELEASE_SHA="$(git rev-parse HEAD)"` and equivalent contracts are
-forbidden.
+The exact fetched main SHA `9f51ebbd2dae0702b4b2f6333c1b42fc94cd1fc1` and tree
+`4071962a6850d977c4d7c319bfecc7cd4c2273d1` are only the HT-12C branch base. They are not the final
+V126 release identity. Branch review, explicit main-integration authorization, the resulting exact
+main SHA/tree/parents and a new successful main Actions run must precede final release selection;
+the exact identity and deterministic two-build proof are defined in the canonical contract.
 
-Use the exact executable procedure in `docs/DEPLOYMENT_RUNBOOK.md` to create a separate detached
-`RELEASE_WORKTREE` at `EXPECTED_RELEASE_SHA`. Its `HEAD` must equal the expected SHA and
-`git status --porcelain --untracked-files=all` must be empty. A dirty release worktree, `scripts/dev/`
-or any other untracked file is a STOP. The development worktree is not used for preflight, build or
-deploy; mutable branches and mutable image tags are not release identity.
+V126 is an explicit exception to generic canary or rolling mixed-version deployment. No V125 and
+V126 backends may run together. The generic public `503` drain, stopped V125 backend, zero-session
+and zero-writer gates, verified backup/rehearsal and final preflight must precede the single V126
+startup under underlying `PRODUCT` plus temporary `V126_SMOKE`. Once V126 is committed, no V125
+backend may start over that database. Keep public traffic drained and use a reviewed forward fix;
+only a separately authorized full consistent V125 restore may select the exact V125 runtime again,
+and that outcome is recovered disaster recovery rather than a successful V126 deployment.
 
-Build the backend image only from that detached exact-SHA worktree. Its tag contains the full
-`EXPECTED_RELEASE_SHA`, and its immutable image ID is recorded before cutover. If the image really
-contains `org.opencontainers.image.revision`, it must equal `EXPECTED_RELEASE_SHA`; if the build
-does not create that label, do not invent it. Exact-worktree provenance, the full-SHA tag and the
-recorded immutable image ID then remain mandatory. A mutable `staging` tag alone is insufficient,
-and the deploy command must use this exact prepared image with an explicit
-`DEPLOY_SHA = EXPECTED_RELEASE_SHA`.
-
-The release equality is unconditional:
-`green Actions SHA = origin/main = release worktree HEAD = prepared backend image release SHA =
-DEPLOY_SHA`. Any mismatch is a STOP.
-
-The final preflight must be extracted at operation time from
-`$RELEASE_WORKTREE/docs/DEPLOYMENT_RUNBOOK.md` by the documented Python standard-library extractor.
-It requires exactly one `BOOKING_UNREAD_PREFLIGHT_BEGIN` and exactly one
-`BOOKING_UNREAD_PREFLIGHT_END`, rejects missing, duplicate, reversed, empty or ambiguous ranges,
-selects the current marker-bounded block rather than a first similar fence or historical section,
-and writes the exact nonempty body to a timestamped temporary file. The current fenced artifact is
-a `bash` wrapper around `psql`, not pure SQL, so the exact extracted file is executed with `bash`,
-not `psql -f`. Its SHA-256 is recorded immediately after extraction, and the artifact is never
-edited before execution.
-
-SQL or shell text from a ChatGPT message, terminal history, clipboard history, a previously saved
-SQL/shell file, cached snippet, another branch, another commit, a historical runbook section or any
-other stale copy is forbidden. Manual editing of the extracted artifact and deleting, omitting or
-weakening a guard merely to obtain exit code 0 are forbidden. Incomplete or ambiguous extraction
-is a STOP. An initial pre-drain preflight never replaces the final post-drain extraction and
-execution. The final preflight runs only after `hookah_backend_container_count = 0`,
-`hookah_application_writer_session_count = 0` and
-`unidentified_candidate_session_count = 0`, and before any new backend starts.
-
-The authorized release must use this exact order:
-
-1. Pin `EXPECTED_RELEASE_SHA` externally from the exact fully green GitHub Actions run and create
-   the separate clean detached worktree at that SHA.
-2. Verify that the same exact commit/push has fully green Actions and that
-   `origin/main = release worktree HEAD = EXPECTED_RELEASE_SHA`; any mismatch is a STOP.
-3. Create and verify the database backup and the approved full-database restore path.
-4. Before downtime, prepare the exact image only from the detached release worktree, use the full
-   SHA tag, verify any real OCI revision label and record the immutable image ID.
-5. Keep `TELEGRAM_TRAFFIC_POLICY=PRODUCT`, activate the reviewed Caddy drain so public application
-   traffic receives generic `503`, and stop/drain every old hookah backend instance. Keep Caddy
-   drained through the stopped-writer preflight and new-backend loopback gates.
-6. Confirm `hookah_backend_container_count = 0` for the exact staging Compose project and `backend`
-   service while PostgreSQL remains running.
-7. Inspect `pg_stat_activity` and confirm
-   `hookah_application_writer_session_count = 0`, including idle application connections.
-8. Confirm `unidentified_candidate_session_count = 0`; every unidentified candidate is a STOP.
-9. Extract the final preflight from the exact release worktree, record its SHA-256, execute the exact
-   unedited shell artifact and retain its result, including the expected pre-cutover Flyway head.
-10. Install only the reviewed restricted maintenance identities in the mode-0600 staging environment,
-    set `STAGING_MAINTENANCE_MODE=V126_SMOKE`, leave PRODUCT static lists empty and supply the separate
-    active-mode authorization flag without printing any identity.
-11. Verify `DEPLOY_SHA = prepared image release SHA = EXPECTED_RELEASE_SHA`, then start exactly one
-    new backend from the recorded prepared image with the overlay already active; do not start an old
-    instance.
-12. Allow that backend's normal startup to apply PostgreSQL V126.
-13. Verify the Flyway head is V126 and verify its checksum and successful history row/startup log.
-14. Confirm every running hookah backend container uses the recorded new image and that old image
-    running count is zero.
-15. While Caddy remains drained, run loopback health, database health, version, V126 schema,
-    one-backend/poller and queue gates.
-16. Restore ordinary Caddy reverse proxy routing with `V126_SMOKE` still active. An unauthenticated
-    protected request and a valid excluded identity must each receive generic `503`; compare
-    SSH/loopback snapshots to prove zero user, session, inbound, idempotency, domain, notification or
-    outbox mutation.
-17. Run the complete bounded staging smoke below through the canonical public Telegram clients and
-    URLs with exactly one allowed Guest and Owner. Include the exact HT-14 live gate, linked
-    staff-chat delivery, tenant/RBAC negatives and label-collision scenario while excluded public
-    traffic remains generic `503` and state-free.
-18. After full PASS, activate the Caddy drain again, stop the backend, set maintenance `OFF`, clear
-    both maintenance lists, omit the active-mode authorization flag and keep underlying PRODUCT plus
-    empty PRODUCT static lists unchanged.
-19. Start exactly one reviewed V126 backend in OFF mode; while Caddy remains drained, repeat config,
-    health, database health, version, Flyway/schema, one-backend/poller and queue gates.
-20. Restore ordinary routing and prove fresh unknown-Guest plus Owner PRODUCT behavior. A retained
-    active mode, nonempty maintenance list or ALLOWLIST transition is a release failure.
-
-The sequence `stop container -> immediately start new backend` is forbidden. The PostgreSQL session
-gate and final read-only preflight must occur between stop/drain and the one-new-backend start.
-Cutover requires `hookah_backend_container_count = 0`,
-`hookah_application_writer_session_count = 0` and
-`unidentified_candidate_session_count = 0`; any non-zero value blocks PostgreSQL V126. This is the
-mandatory **zero application writer sessions** gate, not an active-query-only check.
-
-The current backend does not configure a unique PostgreSQL `application_name`; staging uses
-`DB_USER = POSTGRES_USER` and the Compose network. Apply the fail-closed runbook predicate: inspect
-every `client backend` on the current database/user except the gate session itself and classify it
-using recorded old-container PID/client address and Compose network, observed `application_name`,
-and individually proved operator PIDs. `idle` is not drained. Any unidentified row is
-`STOP_FOR_BOOKING_MIXED_VERSION_ROLLOUT_DECISION`, not an optimistic continue.
-
-After PostgreSQL V126 has applied successfully, improvised manual DB/schema/data cleanup is
-forbidden. The following are unconditionally forbidden in every release recovery plan after V126:
-restoring one table; restoring a set of selected tables; restoring only `support_thread_reads`;
-restoring only `support_messages`; restoring schema objects separately from data; any other
-partial-table restore; a partial restore over the migrated schema; or manually merging data from a
-backup. Do not run manual `UPDATE`, `DELETE` or `INSERT` statements on read-marker/cursor rows;
-manually `ALTER`, `DROP` or recreate schema objects; edit `flyway_schema_history`; mutate migration
-versions or checksums; run cleanup SQL; downgrade the schema; run automatic or manual
-`flyway repair`; or start the old backend to "repair" state. This prohibition has no
-operator-confidence, exceptional-case or separately approved partial-recovery-plan override.
-
-If startup or verification fails after schema cutover:
-
-1. Make or keep Caddy return the generic drain `503` and stop the failed backend.
-2. Do not start the old backend.
-3. Perform no manual DB/schema/data cleanup.
-4. Preserve the verified backup, evidence and logs.
-5. Prepare a reviewed V126-compatible forward-fix binary that retains the identity overlay.
-6. Start only that forward-fixed backend with underlying PRODUCT and `V126_SMOKE` already active.
-7. While Caddy remains drained, repeat loopback health, database health, version, schema,
-   one-backend/poller and queue gates.
-8. Restore routing with the overlay still active; repeat excluded-identity generic `503` plus
-   zero-state evidence and complete the allowed canonical Guest/Owner, HT-14, booking and staff-chat
-   smoke.
-9. After full PASS, drain and stop again, switch to `OFF`, clear both maintenance lists and restart
-   the same reviewed forward-fixed V126 backend over unchanged PRODUCT. Repeat final gates before
-   restoring ordinary PRODUCT routing and admission.
-
-The only restore path permitted by this release recovery contract is a full, consistent restore of
-the entire database as a separate disaster-recovery decision. It is not an ordinary release
-rollback and requires separate explicit confirmation from the user/product owner. After the full
-restore, select a reviewed identity-overlay-capable backend binary compatible with the restored
-Flyway state and reassess migrations. Resuming V126 requires the complete active-overlay sequence;
-abandoning the cutover on a restored pre-V126 state requires a controlled OFF/empty-list PRODUCT
-restart and repeated health, database health, schema, queue and normal-admission gates before routing
-returns. Never combine a full-database restore with a partial transfer of tables, rows or schema
-objects over V126. A long mixed deployment is prohibited. No old binary may be started to repair
-the V126 database, and only the new or reviewed forward-fixed backend may run before the controlled
-OFF transition, unless a separately approved full-database disaster recovery has first restored a
-Flyway state compatible with the selected binary.
+Partial restore, `flyway repair`, migration-history edits, manual cursor changes and ad-hoc SQL
+domain-data repair remain prohibited. The operational contract owns the exact backup, restoration,
+session-classification, maintenance deactivation and Caddy restoration commands; this QA document
+owns only the assertions below.
 
 With ordinary Caddy routing restored, `V126_SMOKE` still active, exactly one new backend and old
 image running count zero, the bounded staging smoke must prove before the second drain and controlled
@@ -796,7 +678,7 @@ The post-V126 smoke therefore includes the mandatory non-substitutable gate
 - no other-thread, CLIENT or non-MIX state changes.
 
 HT-14 may not conclude PASS while this gate is pending, waived or supported only by automated
-evidence.
+evidence. Automated evidence does not replace this live assertion.
 
 The exact label-collision acceptance scenario is mandatory:
 
@@ -817,10 +699,10 @@ on different service dates, record that capability as a smoke setup prerequisite
 smoke to different numbers.
 
 The associated findings `BOOKING-UNREAD-NULL-AUTHOR-001`,
-`BOOKING-UNREAD-GUEST-TYPE-GUARD-001` and `BOOKING-UNREAD-MIXED-VERSION-ROLLOUT-001` remain
-`LOCAL_FIX_REVIEW_REQUIRED`. The epic stays **BOOKING CONVERSATION UX / DISTINCT LABELS, INBOX AND
-UNREAD DISCOVERABILITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE
-COMMIT**.
+`BOOKING-UNREAD-GUEST-TYPE-GUARD-001` and `BOOKING-UNREAD-MIXED-VERSION-ROLLOUT-001` are incorporated
+into the exact HT-12C base and retained as regression requirements. Their remaining proof is the
+execution-time V126 schema/runtime and live-smoke gates; this docs-only task does not claim those
+gates or staging release complete.
 
 Before the previous integrity V124/V125 migration, run the exact read-only PostgreSQL preflight from
 `docs/DEPLOYMENT_RUNBOOK.md`. Stop under `STOP_FOR_BOOKING_THREAD_DEDUPLICATION_DECISION` if any
@@ -3012,7 +2894,8 @@ grep -R "<failure\|<error" backend/app/build/test-results/test || true
 Docs:
 ```bash
 git diff --check
-grep -n '[[:blank:]]$' <new_doc_file>
+: "${NEW_DOC_FILE:?set the documentation file to inspect}"
+grep -n '[[:blank:]]$' "${NEW_DOC_FILE}"
 ```
 
 If Gradle OOM occurs:
@@ -3339,12 +3222,11 @@ Telegram/staff-chat:
 
 - Testing/QA smoke strategy: `UPDATED`.
 - Booking conversation UX / distinct labels, inbox and unread discoverability:
-  **MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**. The current local
-  closure includes NULL-author system unread, fixed Guest queue/type guards and the documented V126
-  mixed-version boundary, but still requires independent review, green Actions, a drained
-  single-new-image migration rollout and bounded staging smoke. The preceding V124/V125 integrity /
-  real-isolation slice remains historical regression evidence and separately review-required; it is
-  not reopened or marked done here.
+  **IMPLEMENTED ON HT-12C BASE / AUTOMATED REGRESSION RETAINED / V126 EXECUTION REQUIRED**. The
+  exact base includes NULL-author system unread and fixed Guest queue/type guards; the sole current
+  V126 contract forbids a mixed-version rollout and still requires final release identity, a drained
+  single-new-image migration and the bounded live smoke. The preceding V124/V125 integrity /
+  real-isolation slice remains historical regression evidence and is not reopened here.
 - Catalog search/filter: **CATALOG SEARCH AND FILTER PHASE 1 / DONE / MVP /
   STAGING-SMOKE-PASSED** after green Actions, staging deploy and limited-dataset manual smoke.
   Extended dataset coverage remains non-blocking deferred manual smoke in

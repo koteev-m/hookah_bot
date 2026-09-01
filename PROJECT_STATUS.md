@@ -4,65 +4,49 @@ Last verified: 2026-09-01.
 
 ## 1. Current stage
 
-**HT-12M IDENTITY-GATED MAINTENANCE / MAIN PORT IMPLEMENTED /
-V125 STAGING DEPLOY PASS / EXACT MAIN BASE VERIFIED / SOURCE MAPPING CLOSED /
-LOCAL VALIDATION AND INDEPENDENT REVIEW PASSED / COMMIT AND BRANCH ACTIONS PENDING /
-NO MAIN INTEGRATION**.
+**HT-12C V126 PREDEPLOY DOCUMENTATION AND RELEASE-IDENTITY CLOSURE /
+EXACT MAIN BASE AND V125 STAGING BASELINE VERIFIED / HT-12M COMPLETE /
+FEATURE-BRANCH REVIEW, ACTIONS AND EXPLICIT MAIN-INTEGRATION AUTHORIZATION REQUIRED /
+NO CUTOVER STARTED**.
 
-Fresh `origin/main` is exact commit `b49a89a299d8c9864fcfc5937d455141563b388a`, tree
-`662c6df77ba757e57f9e49f9f75d62f1f0654a15`, parent
-`4daf5546fb622a6b967398f5c25b7bed41d7fa05`. The isolated main-port branch is
-`codex/ht-12m-identity-maintenance-main-port`; the original dirty main worktree and the dirty V125
-deployment-evidence worktree remain untouched.
+Fresh `origin/main` is exact commit `9f51ebbd2dae0702b4b2f6333c1b42fc94cd1fc1`, tree
+`4071962a6850d977c4d7c319bfecc7cd4c2273d1`, parent
+`f837b0ed01f68832b305d5a2ed61b3927583f1e9`. Exact main Actions run `33514472076`
+is workflow `CI`, event `push`, branch `main`, attempt `1`, exact head SHA, and
+`completed/success`; all `11/11` jobs succeeded with zero adverse conclusions. Commit
+`9f51ebbd2dae0702b4b2f6333c1b42fc94cd1fc1` is the exact HT-12C base, not automatically the final
+V126 release SHA.
 
-The authoritative V125 source candidate is
-`f577934691a1a7a79ba327c54e2055425142b7be`, tree
-`f21f7114bf021ddc8f862294e5f54a841200c179`, based on exact V125 source
-`be5d62a5e9058f89cd72be6c313c71fa46ccdbf2`. All 43 changed paths are mapped in
-`docs/HT12M_IDENTITY_MAINTENANCE_MAIN_PORT_EVIDENCE.md`: `PORTED_AS_IS=29`,
-`MERGED_WITH_MAIN_CHANGE=13`, `OBSOLETE_WITH_PROVEN_REPLACEMENT=1`, `MISSING=0` and unresolved
-`CONTRACT_CONFLICT=0`. Base-compatible paths are byte-identical; explicit merges preserve current
-main-only Application, Telegram, booking/conversation, deployment, CI and canonical-document
-behavior.
+HT-12M is integrated and closed with final verdict
+`IDENTITY_GATED_MAINTENANCE_PREREQUISITE_COMPLETE`. Its historical port base was
+`b49a89a299d8c9864fcfc5937d455141563b388a`; the integration commit is
+`f837b0ed01f68832b305d5a2ed61b3927583f1e9`. The authoritative V125 staging source remains
+`f577934691a1a7a79ba327c54e2055425142b7be`, with image ID
+`sha256:6a8aed7c85374efd89aa2db2e3dbcbed6d84f63087a757ad077856b78bce24a8`,
+`TELEGRAM_TRAFFIC_POLICY=PRODUCT`, maintenance `OFF`, empty product and maintenance lists, one
+backend/poller, healthy PostgreSQL, Flyway V125 and V126 absent. Detailed immutable mapping,
+validation and review evidence remains in
+`docs/HT12M_IDENTITY_MAINTENANCE_MAIN_PORT_EVIDENCE.md`.
 
-Staging successfully runs that V125 candidate as
-`hookah_bot_ant-backend:f577934691a1a7a79ba327c54e2055425142b7be`, canonical image ID
-`sha256:6a8aed7c85374efd89aa2db2e3dbcbed6d84f63087a757ad077856b78bce24a8`, with
-`TELEGRAM_TRAFFIC_POLICY=PRODUCT`, maintenance `OFF`, empty product/maintenance lists, Flyway V125,
-V126 absent, one backend/poller, empty active queues and unchanged Caddy. Exact image, health,
-authenticated read-only Guest/Venue/Platform, negative tenant/Platform RBAC, Bot API and privacy-log
-checks passed. No live mutating Guest/invite smoke was repeated; exact-head automated coverage
-remains the evidence for those mutations.
+HT-12C reconciles the single current V126 cutover contract in
+`docs/V126_STAGING_CUTOVER_CONTRACT.md`, bounded static operational checks, backup/rehearsal and
+recovery boundaries, immutable migration identities and the final-release selection process. Normal
+public-pilot staging remains `PRODUCT` with maintenance `OFF`; temporary `V126_SMOKE` is an
+identity-gated migration-window overlay, never a replacement for membership or RBAC. Permanent
+staging `ALLOWLIST`, stable client CIDRs and Caddy/source-IP attribution are historical experiments
+rather than current authorization mechanisms.
 
-The main port adds, removes or edits no migration. The current PostgreSQL and H2 migration trees,
-including PostgreSQL V126 and the H2 V126/V127 identities, were recorded before editing and must
-remain byte-identical at the candidate. `PRODUCT` stays the normal public-pilot admission mode;
-identity-gated `V126_SMOKE` is a separate temporary fail-closed overlay and never substitutes for
-membership/RBAC or static user management.
+This task authorizes documentation and static verification, independent read-only review,
+feature-branch commit/push and branch Actions. It does not authorize main integration, a staging
+deploy, backup creation, maintenance activation, Caddy reload/restart, Flyway/V126, staging-data
+mutation or cutover. After the reviewed feature branch and its exact Actions run are green, the
+next gate is `HT12C_MAIN_INTEGRATION_AUTHORIZATION_REQUIRED`. Only a later exact authorization may
+integrate the branch and select the final release SHA after a new green main Actions run; the
+two-build image proof and final read-only staging baseline follow that integration and do not upload
+or deploy the image.
 
-This phase authorizes implementation, local validation, independent read-only security review,
-feature-branch commit/push and branch Actions only. It does not authorize main integration, staging
-deploy, maintenance activation, Flyway/V126, production access or any Caddy change. The next gate
-after a complete green main-port candidate is
-`IDENTITY_MAINTENANCE_MAIN_INTEGRATION_AUTHORIZATION_REQUIRED`.
-
-Current local evidence is green: focused maintenance/config/auth/JWT/RBAC and main-only booking
-tests; zero-skip Telegram ingress/outbox/direct/staff-notification selectors; the full Router suite;
-the mandatory PostgreSQL concurrency/integrity and H2/PostgreSQL migration-sanity matrices; the
-full backend suite under its UTC contract; compile and ktlint; Mini App production build and
-`216/216` browser smoke; Compose; fixed-env admission, maintenance fail-closed, image-identity and
-pre-SSH deployment self-tests; `git diff --check`; and a zero-path, byte-identical migration proof.
-One non-required oversized repeat selector exhausted the JVM instrumentation agent after its early
-classes passed; it is not counted as evidence, and all classes it did not reach passed in the
-bounded standalone selectors used by CI.
-
-The independent final read-only security review inspected the complete frozen 50-path staged diff
-and returned PASS with no P0, P1 or blocking P2. It independently verified admission ordering,
-existing-JWT rechecking, unchanged denied queue/outbox rows, direct/staff outbound gates, tenant and
-RBAC preservation, autonomous-writer suppression, fail-closed startup/deploy controls, all 43 source
-mapping entries, unchanged migration identities and nondecreasing CI floors.
-
-The booking release line below remains unchanged product context and is preserved by this port.
+The booking release line below is a preserved historical preintegration task snapshot. It is not
+the current HT-12C stage, release identity or G0-G9 execution status.
 
 **BOOKING CONVERSATION UX / DISTINCT LABELS, INBOX AND UNREAD DISCOVERABILITY /
 MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
@@ -134,7 +118,7 @@ preflight/deploy or post-failure release-DB migration has been performed.
 **PLATFORM & VENUE ONBOARDING / OWNERSHIP COCKPIT / DONE / MVP /
 STAGING-SMOKE-PASSED**.
 
-Release HEAD `e35def99ea8429462e5fdaaeee914f57da72e775` matches `origin/main`.
+Release HEAD `e35def99ea8429462e5fdaaeee914f57da72e775` matched `origin/main` at that recorded closure.
 The user confirmed fully green GitHub Actions for that HEAD, staging deploy, the consolidated
 onboarding/ownership smoke and cleanup. Local GitHub CLI authentication is invalid, so Actions are
 recorded as user-confirmed rather than independently queried in this docs-only closure.
@@ -293,8 +277,10 @@ Still open by design:
 - `BOOKING-QUEUE-POLISH-001` — `OPEN`;
 - `BOOKING-PREORDER-001` — `OPEN`.
 
-Media/object-storage work remains blocked by `MEDIA-STORAGE-DECISION-001`; this Goal did not
-implement or modify Media/R2. Next step for this slice: independent review, explicit commit, green
-Actions, apply the additive cursor migration, staging redeploy and bounded Guest/Venue/Telegram
-conversation smoke. The previous integrity release retains its separate V124/V125
-preflight/migration sequence.
+Media/object-storage work remains blocked by `MEDIA-STORAGE-DECISION-001`; that historical Goal did
+not implement or modify Media/R2. Its then-recorded next step was independent review, explicit
+commit, green Actions, the additive cursor migration, staging redeploy and bounded
+Guest/Venue/Telegram conversation smoke. The current repository has since integrated the code and
+HT-12M prerequisite; HT-12C's only current next gate is the explicit main-integration authorization
+recorded in section 1. The previous integrity release retains its separate historical V124/V125
+preflight/migration evidence.

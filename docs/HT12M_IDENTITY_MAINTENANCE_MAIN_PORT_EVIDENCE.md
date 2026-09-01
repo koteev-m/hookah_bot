@@ -1,6 +1,6 @@
 # HT-12M Identity Maintenance Main-Port Evidence
 
-Status: **feature branch only / main integration not authorized**.
+Status: **integrated in main / prerequisite complete**.
 
 This document records the exact V125-to-main source mapping and the immutable migration boundary for
 the identity-gated V126 maintenance prerequisite. It is release evidence, not an activation record;
@@ -13,10 +13,19 @@ maintenance identities remain restricted operator data and never belong in Git.
 - Reviewed V125 candidate: `f577934691a1a7a79ba327c54e2055425142b7be`, tree
   `f21f7114bf021ddc8f862294e5f54a841200c179`, branch
   `codex/ht-12m-identity-maintenance-v125`.
-- Fresh main base: `b49a89a299d8c9864fcfc5937d455141563b388a`, tree
+- Historical main-port base: `b49a89a299d8c9864fcfc5937d455141563b388a`, tree
   `662c6df77ba757e57f9e49f9f75d62f1f0654a15`, parent
   `4daf5546fb622a6b967398f5c25b7bed41d7fa05`.
 - Main-port branch: `codex/ht-12m-identity-maintenance-main-port`.
+- Main integration commit: `f837b0ed01f68832b305d5a2ed61b3927583f1e9`, tree
+  `fe1685020b7bb6f9f097f72f8977be167fa74bb3`, parent
+  `b49a89a299d8c9864fcfc5937d455141563b388a`.
+- Verified current main: `9f51ebbd2dae0702b4b2f6333c1b42fc94cd1fc1`, tree
+  `4071962a6850d977c4d7c319bfecc7cd4c2273d1`, parent
+  `f837b0ed01f68832b305d5a2ed61b3927583f1e9`.
+- Exact main Actions: run `33514472076`; workflow `CI`; event `push`; branch `main`; exact head
+  `9f51ebbd2dae0702b4b2f6333c1b42fc94cd1fc1`; attempt `1`; `completed/success`; `11/11` jobs
+  successful; zero adverse conclusions.
 - Port method: semantic path mapping from the exact V125 base-to-candidate diff; no cherry-pick
   equivalence claim.
 
@@ -166,8 +175,8 @@ main baseline identities are:
 - H2 V127 and PostgreSQL V126 `support_thread_read_message_cursor`:
   `6f39f7d33b1976d0f5eb7a70051bfc5351d12e56` in both trees.
 
-The final candidate must reproduce all five identities exactly. No Flyway migration is run by this
-feature-branch task.
+The integrated main result reproduced all five identities exactly. HT-12M ran no Flyway migration,
+and HT-12C must keep the same migration trees and blobs byte-identical.
 
 ## Local validation
 
@@ -206,9 +215,17 @@ tenant/RBAC preservation, autonomous-writer suppression, fail-closed startup/dep
 restricted-value privacy, all 43 source mappings, immutable migration identities and nondecreasing
 CI floors.
 
-## Release boundary
+## Final verdict and successor boundary
 
-This branch may be committed and pushed for branch Actions only after local validation and an
-independent read-only security review. It does not authorize main integration, staging deployment,
-maintenance activation, Caddy work or Flyway/V126. The terminal state is
-`IDENTITY_MAINTENANCE_MAIN_INTEGRATION_AUTHORIZATION_REQUIRED`.
+The reviewed branch was integrated by non-force commit
+`f837b0ed01f68832b305d5a2ed61b3927583f1e9`; the following exact-main CI correction produced
+`9f51ebbd2dae0702b4b2f6333c1b42fc94cd1fc1` and exact successful main Actions run `33514472076`.
+HT-12M is therefore closed with final verdict
+`IDENTITY_GATED_MAINTENANCE_PREREQUISITE_COMPLETE`.
+
+That main SHA is the exact HT-12C base, not automatically the final V126 release SHA. HT-12C may
+reconcile documentation and bounded static operational verification without changing production
+code or migrations. It does not authorize a staging deploy, maintenance activation, Caddy reload,
+backup, Flyway/V126 or cutover. After its reviewed feature branch and exact branch Actions are
+green, its next gate is `HT12C_MAIN_INTEGRATION_AUTHORIZATION_REQUIRED`; only a later explicit
+authorization may integrate it and begin final release-identity selection.

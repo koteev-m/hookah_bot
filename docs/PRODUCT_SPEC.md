@@ -68,8 +68,10 @@ Telegram fallback and staff-chat source of truth:
 - Telegram bot and staff-chat are interaction surfaces. Backend domain tables and Mini App/Venue Mode remain source of truth; staff-chat is radar/shortcut only.
 
 Public-pilot Telegram admission source of truth:
-- `ALLOWLIST` remains the exact fail-closed identity boundary for isolated smoke environments.
-  `PRODUCT` is the explicit public-pilot mode; `UNRESTRICTED` is not a staging shortcut.
+- `ALLOWLIST` remains exact, fail-closed implementation/test compatibility, but its operational
+  isolated-smoke role is superseded and has no current normal-staging, public-pilot, rollback or
+  V126 authorization. `PRODUCT` is the explicit public-pilot mode; `UNRESTRICTED` is not a staging
+  shortcut.
 - In `PRODUCT`, any structurally valid positive private Telegram identity with matching actor/chat,
   and any normally signed and fresh positive Mini App identity, may enter the product as Guest.
   No static manifest entry is required and absence of venue/platform membership remains Guest.
@@ -83,6 +85,9 @@ Public-pilot Telegram admission source of truth:
   venue staff-chat link, never a global static user-ID list.
 
 Identity-gated migration maintenance source of truth:
+- The single current PostgreSQL V126 release order, backup/rehearsal, Caddy drain, disable and
+  recovery contract is `docs/V126_STAGING_CUTOVER_CONTRACT.md`; product documents do not define a
+  second execution sequence.
 - `PRODUCT` remains the normal public-pilot policy. `STAGING_MAINTENANCE_MODE=OFF` is the default and
   maintenance identity lists have no authorization effect in that state. The overlay is temporary
   migration protection, not user management and not a replacement for invitations, memberships or

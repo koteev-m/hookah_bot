@@ -1,6 +1,8 @@
 # Staging Deployment
 
-Canonical release/deploy policy is `docs/DEPLOYMENT_RUNBOOK.md`. This file remains the one-VPS staging implementation detail runbook.
+Canonical release/deploy policy is `docs/DEPLOYMENT_RUNBOOK.md`. The single PostgreSQL V126 ordered
+contract is `docs/V126_STAGING_CUTOVER_CONTRACT.md`. This file remains the one-VPS staging
+implementation-detail runbook and must not define another V126 sequence.
 
 This runbook describes the minimal staging setup for the Telegram bot + Mini App on one VPS with Docker Compose, PostgreSQL on the same host, and the Mini App production build served by the backend at `/miniapp/`.
 
@@ -62,9 +64,9 @@ Required staging values:
 - `TELEGRAM_BOT_ENABLED=true`
 - `TELEGRAM_BOT_MODE=long_polling`
 - `TELEGRAM_BOT_TOKEN`
-- `TELEGRAM_TRAFFIC_POLICY=PRODUCT` for the public pilot, or `ALLOWLIST` for isolated smoke
-- `TELEGRAM_ALLOWED_USER_IDS` and `TELEGRAM_ALLOWED_CHAT_IDS` empty/absent in `PRODUCT`; both
-  nonempty and canonical in `ALLOWLIST`
+- `TELEGRAM_TRAFFIC_POLICY=PRODUCT` for current normal staging and the V126 window
+- `TELEGRAM_ALLOWED_USER_IDS` and `TELEGRAM_ALLOWED_CHAT_IDS` empty/absent in `PRODUCT`; retained
+  runtime `ALLOWLIST` compatibility is not a current public-pilot or V126 deployment profile
 - `TELEGRAM_WEBAPP_PUBLIC_URL=https://staging.hookahtootah.club/miniapp/`
 - `TELEGRAM_BOT_USERNAME`
 - `PLATFORM_OWNER_TELEGRAM_ID`
@@ -152,7 +154,7 @@ secrets, peppers, API keys or allowlist IDs.
 `UNRESTRICTED` Telegram traffic is forbidden when `APP_ENV=staging`. Backend startup must fail
 before database initialization unless the explicit configuration matches one of these modes.
 
-Isolated smoke:
+Historical compatibility only (no current staging or V126 authorization):
 
 ```dotenv
 TELEGRAM_TRAFFIC_POLICY=ALLOWLIST
@@ -165,7 +167,8 @@ trimmed; empty elements, zero, overflow, non-decimal values and duplicates are r
 must be positive. Chat IDs may be positive private chats or negative groups/supergroups. For every
 allowed Mini App/private-bot user, place the positive ID in both lists. Never commit real IDs.
 
-Store the runtime values only in the mode-0600 server `.env`. Maintain a second restricted operator
+If a separate future task explicitly authorizes this compatibility path, store runtime values only
+in the mode-0600 server `.env` and maintain a second restricted operator
 manifest at `/etc/hookah-bot/staging/telegram-allowlist.manifest`. The directory is `root:root` mode
 0700 and the file is `root:root` mode 0600. The manifest maps non-sensitive tester aliases to the
 exact user/private-chat/staff-chat IDs, purpose, approval and review date; it contains no bot token
@@ -202,6 +205,11 @@ STAGING_MAINTENANCE_ALLOWED_USER_IDS=
 STAGING_MAINTENANCE_ALLOWED_CHAT_IDS=
 ```
 
+Application runtime defaults to OFF, but the staging deploy guard requires all three maintenance
+keys explicitly. OFF deploys require both lists empty, reject any stored authorization key and
+require the one-shot process flag to be absent or false, preventing a silent stale maintenance
+configuration.
+
 Only a separately reviewed drain/cutover may put exact identities in the mode-0600 server `.env`:
 
 ```dotenv
@@ -215,7 +223,8 @@ Real values are restricted operational evidence and must never appear in Git, te
 deploy output, logs or a task/PR comment. The positive chat set exactly equals the user set; negative
 entries are exact test staff chats. Active startup fails closed on a missing, malformed, duplicate,
 zero, overflow or inconsistent value. Editing `.env` does not hot-reload the process; activation and
-deactivation require the controlled backend stop/start sequence in `docs/DEPLOYMENT_RUNBOOK.md`.
+deactivation require the single controlled sequence in
+`docs/V126_STAGING_CUTOVER_CONTRACT.md`.
 
 `scripts/check-staging-maintenance-config.sh` is the deploy preflight. When—and only when—the active
 transition has separate authorization, pass the non-secret one-shot process flag to the reviewed
@@ -224,9 +233,9 @@ deploy invocation:
 ```bash
 STAGING_MAINTENANCE_V126_SMOKE_AUTHORIZED=true \
 RUN_PUBLIC_CHECKS=false \
-BACKEND_IMAGE=hookah_bot_ant-backend:<candidate-sha> \
-EXPECTED_BACKEND_IMAGE_ID=sha256:<reviewed-image-id> \
-./scripts/deploy-staging-controlmaster.sh <ssh-alias>
+BACKEND_IMAGE='hookah_bot_ant-backend:<candidate-sha>' \
+EXPECTED_BACKEND_IMAGE_ID='sha256:<reviewed-image-id>' \
+./scripts/deploy-staging-controlmaster.sh '<ssh-alias>'
 ```
 
 The flag is not stored in `.env`, contains no identity and cannot activate the overlay. It only
@@ -264,8 +273,8 @@ Preserve an already explicit invite pepper byte-for-byte during this transition.
 value), install a new restricted explicit pepper, and reconcile/reissue every still-pending
 staff/owner invite before relying on it; existing links cannot validate after the pepper changes.
 
-The policy is immutable for the lifetime of a backend process. In `ALLOWLIST`, updating either list
-requires:
+The retained ALLOWLIST compatibility policy is immutable for the lifetime of a backend process and
+has no current staging authorization. A separately scoped future use would require:
 
 1. review and update the restricted manifest;
 2. update only the staging `.env`;
@@ -277,18 +286,18 @@ Do not test startup failure against the live staging database. The automated
 proves fail-closed startup. A controlled deploy must also treat the expected policy/config exception
 as a startup failure, never fall back to unrestricted mode.
 
-To prove `ALLOWLIST` denied traffic creates no state after a later authorized isolated-smoke deploy,
-snapshot the relevant
+If a separate future task authorizes ALLOWLIST, its denial proof must snapshot the relevant
 `users`, `telegram_processed_updates`, `telegram_inbound_updates` and `telegram_outbox` facts, submit
 one update and one signed Mini App auth attempt from a deliberately excluded test identity, and
 compare the snapshots. The denied webhook response may be HTTP 200 to acknowledge intentional
 discard, but it must enqueue nothing. Logs may contain only bounded denial reason/counts, never IDs,
 token, initData, update payload or message text.
 
-#### Safe private staff-group ID bootstrap for ALLOWLIST smoke
+#### Historical ALLOWLIST staff-group bootstrap — no current authorization
 
-No application bootstrap endpoint or weakened group policy is needed. An `ALLOWLIST` smoke operator
-must use this procedure before placing a staff group ID in the restricted manifest:
+This procedure is retained as historical compatibility evidence and is not part of normal staging,
+V126, rollback or current operations. A separately authorized future ALLOWLIST task would have to
+review it again before placing a staff group ID in a restricted manifest:
 
 1. Create a dedicated, private, non-topic Telegram supergroup with a pre-reviewed exact title and
    post one disposable non-topic message from the operator's account. Do not reuse a real venue group.
@@ -315,19 +324,19 @@ For temporary tunnel-based local dev, keep using local env files and set public 
 
 ## 5. Build And Deploy
 
-Standard local one-command deploy:
+Standard local one-command deploy for ordinary public-pilot releases only:
 
 ```bash
-BACKEND_IMAGE=hookah_bot_ant-backend:<candidate-sha> \
-EXPECTED_BACKEND_IMAGE_ID=sha256:<reviewed-image-id> \
-./scripts/deploy-staging.sh <ssh-alias>
+BACKEND_IMAGE='hookah_bot_ant-backend:<candidate-sha>' \
+EXPECTED_BACKEND_IMAGE_ID='sha256:<reviewed-image-id>' \
+./scripts/deploy-staging.sh '<ssh-alias>'
 ```
 
 Current staging alias example:
 
 ```bash
-BACKEND_IMAGE=hookah_bot_ant-backend:<candidate-sha> \
-EXPECTED_BACKEND_IMAGE_ID=sha256:<reviewed-image-id> \
+BACKEND_IMAGE='hookah_bot_ant-backend:<candidate-sha>' \
+EXPECTED_BACKEND_IMAGE_ID='sha256:<reviewed-image-id>' \
 ./scripts/deploy-staging.sh hookah-staging
 ```
 
@@ -355,32 +364,34 @@ bash -n scripts/deploy-staging.sh
 bash scripts/validate-staging-admission.sh --self-test docker-compose.yml
 ```
 
-The ordinary command always means public-pilot `PRODUCT`. A separately authorized isolated smoke
-must first use an exact fail-closed ALLOWLIST server `.env` and then opt in explicitly:
+The ordinary command always means public-pilot `PRODUCT`. The retained compatibility invocation
+below is historical and has no current staging or V126 authorization:
 
 ```bash
 STAGING_ADMISSION_PROFILE=isolated-allowlist \
-BACKEND_IMAGE=hookah_bot_ant-backend:<candidate-sha> \
-EXPECTED_BACKEND_IMAGE_ID=sha256:<reviewed-image-id> \
-./scripts/deploy-staging.sh <ssh-alias>
+BACKEND_IMAGE='hookah_bot_ant-backend:<candidate-sha>' \
+EXPECTED_BACKEND_IMAGE_ID='sha256:<reviewed-image-id>' \
+./scripts/deploy-staging.sh '<ssh-alias>'
 ```
 
-That opt-in is not a public-pilot deployment path. Restore and revalidate the reviewed PRODUCT
-`.env` before the next normal deploy.
+That compatibility opt-in is not a public-pilot, V126 or rollback path. A future task needs separate
+explicit authorization before use.
 
 The health wait handles short backend startup windows and transient reverse-proxy connection resets. If the script still fails after all attempts, do not redeploy blindly; inspect container status and backend logs first.
 
-For a digest-authorized release, build the reviewed candidate once, record the ID returned by
-`docker image inspect`, and pass that exact value to the deploy. The deploy uses
+For an ordinary digest-authorized release, record the reviewed ID returned by
+`docker image inspect` and pass that exact value to the deploy. The V126 final-release proof instead
+performs the mandatory two identical provenance-disabled builds in
+`docs/V126_STAGING_CUTOVER_CONTRACT.md`. The deploy uses
 `--provenance=false` because BuildKit provenance attestations can change the top-level manifest-list
 digest between otherwise identical rebuilds. This local Docker-save deployment does not publish an
 attestation; source SHA, green Actions and the independently reviewed diff remain the provenance
 evidence. The expected-ID comparison runs after build but before any image upload or service restart:
 
 ```bash
-BACKEND_IMAGE=hookah_bot_ant-backend:<candidate-sha> \
-EXPECTED_BACKEND_IMAGE_ID=sha256:<reviewed-image-id> \
-./scripts/deploy-staging-controlmaster.sh <ssh-alias>
+BACKEND_IMAGE='hookah_bot_ant-backend:<candidate-sha>' \
+EXPECTED_BACKEND_IMAGE_ID='sha256:<reviewed-image-id>' \
+./scripts/deploy-staging-controlmaster.sh '<ssh-alias>'
 ```
 
 `EXPECTED_BACKEND_IMAGE_ID` is mandatory for every deploy. Omitting it, supplying a malformed ID or
@@ -399,9 +410,9 @@ Direct deployment remains supported. Use the ControlMaster helper when repeated 
 Resilient command:
 
 ```bash
-BACKEND_IMAGE=hookah_bot_ant-backend:<candidate-sha> \
-EXPECTED_BACKEND_IMAGE_ID=sha256:<reviewed-image-id> \
-./scripts/deploy-staging-controlmaster.sh <ssh-alias>
+BACKEND_IMAGE='hookah_bot_ant-backend:<candidate-sha>' \
+EXPECTED_BACKEND_IMAGE_ID='sha256:<reviewed-image-id>' \
+./scripts/deploy-staging-controlmaster.sh '<ssh-alias>'
 ```
 
 Current staging alias example with optional overrides:
@@ -410,8 +421,8 @@ Current staging alias example with optional overrides:
 STAGING_PATH=/opt/hookah-bot \
 STAGING_DOMAIN=staging.example.com \
 DOCKER_PLATFORM=linux/amd64 \
-BACKEND_IMAGE=example-backend:<candidate-sha> \
-EXPECTED_BACKEND_IMAGE_ID=sha256:<reviewed-image-id> \
+BACKEND_IMAGE='example-backend:<candidate-sha>' \
+EXPECTED_BACKEND_IMAGE_ID='sha256:<reviewed-image-id>' \
 ./scripts/deploy-staging-controlmaster.sh staging-alias
 ```
 
@@ -530,7 +541,7 @@ cp docs/env/staging.env.example .env
 chmod 600 .env
 ```
 
-Edit `.env`, then build and start:
+For ordinary initial setup only, edit `.env`, then build and start:
 
 ```bash
 docker compose build
@@ -549,6 +560,10 @@ Restart after env changes:
 ```bash
 docker compose up -d --build backend
 ```
+
+These generic `up`/restart commands are prohibited as a substitute for any V126 phase. They do not
+enforce the two backups, Caddy drain, zero-session gates, final preflight, identity overlay or
+controlled OFF transition.
 
 ## 6. Reverse Proxy
 
@@ -586,6 +601,9 @@ server {
   }
 }
 ```
+
+Forwarded or client-supplied IP headers are diagnostics only. They are never identity, RBAC or V126
+authorization, even when the proxy overwrites them. Caddy is not an identity provider.
 
 ## 7. Health Checks
 
@@ -737,22 +755,15 @@ curl -f https://staging.hookahtootah.club/telegram/queue/health
 
 ## 11. Backups
 
-Create a timestamped PostgreSQL backup:
+The earlier single-dump/in-place-restore example is superseded and must not be used for V126. The
+single current staging V126 contract requires a pre-drain and a quiesced full custom-format backup,
+a separate restricted globals artifact, mode 0600, SHA-256, successful `pg_restore --list`, the
+exact free-space gate and an isolated same-version rehearsal for each full backup. Use only the
+marker-bounded commands in `docs/V126_STAGING_CUTOVER_CONTRACT.md`.
 
-```bash
-mkdir -p backups
-docker compose exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom' \
-  > "backups/hookah_staging_$(date +%Y%m%d_%H%M%S).dump"
-```
-
-Restore into a fresh database only after stopping backend writes:
-
-```bash
-docker compose stop backend
-docker compose exec -T postgres sh -c 'pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists' \
-  < backups/<backup-file>.dump
-docker compose up -d backend
-```
+Never restore over the live staging database as an ordinary release rollback. A full consistent
+restore is separately authorized recovered DR; partial restore and automatic globals restore are
+prohibited.
 
 ## 12. Rollback And Restart
 
@@ -781,8 +792,8 @@ curl -I https://staging.hookahtootah.club/miniapp/
 The deploy script uploads a Docker image selected by `BACKEND_IMAGE`. For rollback-friendly releases, deploy with an immutable image tag, for example:
 
 ```bash
-BACKEND_IMAGE=hookah_bot_ant-backend:<known-good-full-sha> \
-EXPECTED_BACKEND_IMAGE_ID=sha256:<reviewed-known-good-image-id> \
+BACKEND_IMAGE='hookah_bot_ant-backend:<known-good-full-sha>' \
+EXPECTED_BACKEND_IMAGE_ID='sha256:<reviewed-known-good-image-id>' \
 ./scripts/deploy-staging.sh hookah-staging
 ```
 
@@ -791,14 +802,16 @@ point is identity-overlay-capable V125 candidate
 `f577934691a1a7a79ba327c54e2055425142b7be`, image ID
 `sha256:6a8aed7c85374efd89aa2db2e3dbcbed6d84f63087a757ad077856b78bce24a8`. Normal operation uses that
 image only with `TELEGRAM_TRAFFIC_POLICY=PRODUCT`, maintenance `OFF` and empty PRODUCT and
-maintenance lists. During a separately authorized V126 window, a rollback before any schema
-mutation keeps Caddy on the generic drain `503`, starts only this exact reviewed image with
-`V126_SMOKE` already active, and passes loopback gates before routing can return. A pre-overlay,
-`ALLOWLIST`-as-maintenance or unrestricted image must never substitute for that contract.
+maintenance lists. A rollback before any V126 schema or smoke mutation keeps Caddy on the generic
+drain `503`, proves Flyway remains at V125, stops the failed candidate and starts only this exact
+reviewed V125 image with `PRODUCT`, maintenance `OFF` and all static/maintenance lists empty. It must
+pass loopback, schema, queue and admission gates before ordinary routing can return. A pre-overlay,
+`ALLOWLIST`-as-maintenance, `V126_SMOKE` rollback configuration or unrestricted image must never
+substitute for that contract.
 
 After V126 has been applied, do not start any previous writer over that database; use the reviewed
 forward-fix or separately authorized full database-restore procedure in
-`docs/DEPLOYMENT_RUNBOOK.md`. Any full restore must stop all backend writers first and pair the
+`docs/V126_STAGING_CUTOVER_CONTRACT.md`. Any full restore must stop all backend writers first and pair the
 restored schema with a reviewed identity-overlay-capable image compatible with the restored Flyway
 state.
 
@@ -808,8 +821,8 @@ To roll back to an image that is already loaded on the VPS:
 ssh hookah-staging
 cd /opt/hookah-bot
 docker images 'hookah_bot_ant-backend'
-ROLLBACK_BACKEND_IMAGE=hookah_bot_ant-backend:<known-good-full-sha>
-EXPECTED_ROLLBACK_IMAGE_ID=sha256:<reviewed-known-good-image-id>
+ROLLBACK_BACKEND_IMAGE='hookah_bot_ant-backend:<known-good-full-sha>'
+EXPECTED_ROLLBACK_IMAGE_ID='sha256:<reviewed-known-good-image-id>'
 actual_rollback_image_id="$(docker image inspect --format '{{.Id}}' "${ROLLBACK_BACKEND_IMAGE}")"
 bash scripts/check-staging-image-identity.sh \
   "${actual_rollback_image_id}" \
@@ -834,7 +847,7 @@ If the approved compatible image is not available on the VPS, rebuild and redepl
 reviewed identity-overlay-capable commit from the developer machine using its full-SHA
 `BACKEND_IMAGE=<known-good-tag>` and exact `EXPECTED_BACKEND_IMAGE_ID`. Do not substitute another
 commit or accept a digest mismatch. An active maintenance-window recovery must use the controlled
-drain/active-overlay/routed-smoke/OFF transition in `docs/DEPLOYMENT_RUNBOOK.md`, not the ordinary
+drain/active-overlay/routed-smoke/OFF transition in `docs/V126_STAGING_CUTOVER_CONTRACT.md`, not the ordinary
 public sanity sequence above.
 
 Database caution: if the failed release applied migrations, code rollback may not be enough. In

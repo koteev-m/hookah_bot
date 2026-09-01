@@ -375,15 +375,13 @@ Current vs target:
 - `BOOKING-SAVEPOINT-COLLISION-001` stays `OPEN`: unique-conflict recovery is defensive-only behind
   the canonical booking-row lock and must not be removed without a separate concurrency review.
 
-### PostgreSQL V126 Controlled Mixed-Version Rollout Boundary
+### PostgreSQL V126 behavioral and rollout invariants
 
-This is an operational contract for a future release, not evidence that green Actions, a staging
-migration, deploy or smoke has happened.
-
-This current-section wording addresses only the two remaining commit-blocking documentation
-findings `BOOKING-UNREAD-ROLLOUT-PREFLIGHT-HEAD-001` and
-`BOOKING-UNREAD-ROLLOUT-MANUAL-DB-CLEANUP-001`. The already approved label smoke remains unchanged;
-this wording does not raise the epic or release status.
+This section defines booking/read-cursor behavior and smoke assertions only. The single current
+ordered release, backup, drain, maintenance, migration, disable and recovery contract is
+`docs/V126_STAGING_CUTOVER_CONTRACT.md`; do not reconstruct an execution order from this product
+document or from historical task evidence. Nothing here records a staging migration, deploy or
+smoke.
 
 PostgreSQL V126 is additive. It adds nullable `BIGINT support_thread_reads.last_read_message_id`
 with no default, no backfill and no destructive rewrite;
@@ -396,127 +394,20 @@ same nullable `BIGINT last_read_message_id` with no default, no backfill and no 
 preserves `last_read_at` and primary key `(thread_id, user_id)`, and applies only to H2/local/test.
 Staging PostgreSQL applies PostgreSQL V126, never H2 V127.
 
-`EXPECTED_RELEASE_SHA` comes only from the exact commit SHA shown by a fully green GitHub Actions
-run after commit and push. The operator copies the full 40-character lowercase SHA from that run
-and passes it explicitly; GitHub CLI is optional because the value may be copied from the Actions
-UI. Validate it with `^[0-9a-f]{40}$`, fetch `origin`, and require
-`origin/main = EXPECTED_RELEASE_SHA`. Never derive the expected value from local `HEAD` or from the
-checkout being verified; `EXPECTED_RELEASE_SHA="$(git rev-parse HEAD)"` and equivalent contracts are
-forbidden.
+V126 never permits a mixed V125/V126 canary. Before the new backend starts, every old backend and
+application writer must be drained, PostgreSQL must remain ready, unidentified/idle-in-transaction
+sessions, prepared transactions and replication slots must all be zero, the quiesced backup must
+pass its own isolated rehearsal, and the final exact preflight must pass. Exactly one reviewed V126
+backend then applies the migration under the identity-gated maintenance overlay. Release SHA,
+two-build image identity, exact commands and ordering are authoritative only in the canonical
+cutover contract.
 
-Use the exact executable procedure in `docs/DEPLOYMENT_RUNBOOK.md` to create a separate detached
-`RELEASE_WORKTREE` at `EXPECTED_RELEASE_SHA`. Its `HEAD` must equal the expected SHA and
-`git status --porcelain --untracked-files=all` must be empty. A dirty release worktree, `scripts/dev/`
-or any other untracked file is a STOP. The development worktree is not used for preflight, build or
-deploy; mutable branches and mutable image tags are not release identity.
-
-Build the backend image only from that detached exact-SHA worktree. Its tag contains the full
-`EXPECTED_RELEASE_SHA`, and its immutable image ID is recorded before cutover. If the image really
-contains `org.opencontainers.image.revision`, it must equal `EXPECTED_RELEASE_SHA`; if the build
-does not create that label, do not invent it. Exact-worktree provenance, the full-SHA tag and the
-recorded immutable image ID then remain mandatory. A mutable `staging` tag alone is insufficient,
-and the deploy command must use this exact prepared image with an explicit
-`DEPLOY_SHA = EXPECTED_RELEASE_SHA`.
-
-The release equality is unconditional:
-`green Actions SHA = origin/main = release worktree HEAD = prepared backend image release SHA =
-DEPLOY_SHA`. Any mismatch is a STOP.
-
-The final preflight must be extracted at operation time from
-`$RELEASE_WORKTREE/docs/DEPLOYMENT_RUNBOOK.md` by the documented Python standard-library extractor.
-It requires exactly one `BOOKING_UNREAD_PREFLIGHT_BEGIN` and exactly one
-`BOOKING_UNREAD_PREFLIGHT_END`, rejects missing, duplicate, reversed, empty or ambiguous ranges,
-selects the current marker-bounded block rather than a first similar fence or historical section,
-and writes the exact nonempty body to a timestamped temporary file. The current fenced artifact is
-a `bash` wrapper around `psql`, not pure SQL, so the exact extracted file is executed with `bash`,
-not `psql -f`. Its SHA-256 is recorded immediately after extraction, and the artifact is never
-edited before execution.
-
-SQL or shell text from a ChatGPT message, terminal history, clipboard history, a previously saved
-SQL/shell file, cached snippet, another branch, another commit, a historical runbook section or any
-other stale copy is forbidden. Manual editing of the extracted artifact and deleting, omitting or
-weakening a guard merely to obtain exit code 0 are forbidden. Incomplete or ambiguous extraction
-is a STOP. An initial pre-drain preflight never replaces the final post-drain extraction and
-execution. The final preflight runs only after `hookah_backend_container_count = 0`,
-`hookah_application_writer_session_count = 0` and
-`unidentified_candidate_session_count = 0`, and before any new backend starts.
-
-The authorized release must use this exact order:
-
-1. Pin `EXPECTED_RELEASE_SHA` externally from the exact fully green GitHub Actions run and create
-   the separate clean detached worktree at that SHA.
-2. Verify that the same exact commit/push has fully green Actions and that
-   `origin/main = release worktree HEAD = EXPECTED_RELEASE_SHA`; any mismatch is a STOP.
-3. Create and verify the database backup and the approved full-database restore path.
-4. Before downtime, prepare the exact image only from the detached release worktree, use the full
-   SHA tag, verify any real OCI revision label and record the immutable image ID.
-5. Drain normal traffic and stop/drain every old hookah backend instance; keep traffic drained
-   through migration and the complete smoke.
-6. Confirm `hookah_backend_container_count = 0` for the exact staging Compose project and `backend`
-   service while PostgreSQL remains running.
-7. Inspect `pg_stat_activity` and confirm
-   `hookah_application_writer_session_count = 0`, including idle application connections.
-8. Confirm `unidentified_candidate_session_count = 0`; every unidentified candidate is a STOP.
-9. Extract the final preflight from the exact release worktree, record its SHA-256, execute the exact
-   unedited shell artifact and retain its result, including the expected pre-cutover Flyway head.
-10. Verify `DEPLOY_SHA = prepared image release SHA = EXPECTED_RELEASE_SHA`, then start exactly one
-    new backend from the recorded prepared image; do not start an old instance.
-11. Allow that backend's normal startup to apply PostgreSQL V126.
-12. Verify the Flyway head is V126 and verify its checksum and successful history row/startup log.
-13. Confirm every running hookah backend container uses the recorded new image and that old image
-    running count is zero.
-14. Run health, database health and the V126 schema invariants.
-15. Run the complete bounded staging smoke below with exactly one new backend.
-16. Restore normal traffic only after every smoke check passes completely.
-
-The sequence `stop container -> immediately start new backend` is forbidden. The PostgreSQL session
-gate and final read-only preflight must occur between stop/drain and the one-new-backend start.
-Cutover requires `hookah_backend_container_count = 0`,
-`hookah_application_writer_session_count = 0` and
-`unidentified_candidate_session_count = 0`; any non-zero value blocks PostgreSQL V126. This is the
-mandatory **zero application writer sessions** gate, not an active-query-only check.
-
-The current backend does not configure a unique PostgreSQL `application_name`; staging uses
-`DB_USER = POSTGRES_USER` and the Compose network. The release operator must therefore apply the
-fail-closed predicate from `docs/DEPLOYMENT_RUNBOOK.md`: inspect every `client backend` on the
-current database/user other than the gate session itself and classify it using recorded old-container
-PID/client address and Compose network, observed `application_name`, and individually proved
-operator PIDs. `idle` is not drained. Any unidentified row is
-`STOP_FOR_BOOKING_MIXED_VERSION_ROLLOUT_DECISION`, not an optimistic continue.
-
-After PostgreSQL V126 has applied successfully, improvised manual DB/schema/data cleanup is
-forbidden. The following are unconditionally forbidden in every release recovery plan after V126:
-restoring one table; restoring a set of selected tables; restoring only `support_thread_reads`;
-restoring only `support_messages`; restoring schema objects separately from data; any other
-partial-table restore; a partial restore over the migrated schema; or manually merging data from a
-backup. Do not run manual `UPDATE`, `DELETE` or `INSERT` statements on read-marker/cursor rows;
-manually `ALTER`, `DROP` or recreate schema objects; edit `flyway_schema_history`; mutate migration
-versions or checksums; run cleanup SQL; downgrade the schema; run automatic or manual
-`flyway repair`; or start the old backend to "repair" state. This prohibition has no
-operator-confidence, exceptional-case or separately approved partial-recovery-plan override.
-
-If startup or verification fails after schema cutover:
-
-1. Keep normal traffic drained.
-2. Do not start the old backend.
-3. Perform no manual DB/schema/data cleanup.
-4. Preserve the verified backup, evidence and logs.
-5. Prepare a reviewed forward-fix binary.
-6. Start only the reviewed forward-fixed backend.
-7. Repeat health, database health, schema invariants and the complete smoke before reopening
-   traffic.
-8. Reopen traffic only after every repeated check succeeds completely.
-
-The only restore path permitted by this release recovery contract is a full, consistent restore of
-the entire database as a separate disaster-recovery decision. It is not an ordinary release
-rollback and requires separate explicit confirmation from the user/product owner. After the full
-restore, select a backend binary compatible with the restored Flyway state, reassess migrations,
-then repeat health, database health, schema invariants and the complete smoke before reopening
-traffic. Never combine a full-database restore with a partial transfer of tables, rows or schema
-objects over V126. A long mixed deployment is prohibited. No old binary may be started to repair
-the V126 database, and only the new or reviewed forward-fixed backend may run before traffic
-reopens, unless a separately approved full-database disaster recovery has first restored a Flyway
-state compatible with the selected binary.
+After V126 applies, no V125 backend may start over that database. Partial restore, Flyway repair,
+migration-history or cursor edits, and manual schema/domain-data repair are prohibited. Keep public
+traffic drained and use a reviewed forward fix. A full consistent V125 restore is a separately
+authorized recovered-DR outcome using a verified complete backup and zero-writer/session/prepared/
+slot gates; it is not a successful V126 deployment. Runtime rollback never reverses committed
+messages, memberships, invites or other product facts.
 
 With exactly one new backend and old image running count zero, the bounded staging smoke must prove:
 
@@ -546,10 +437,12 @@ substitute for this scenario. If staging fixtures cannot naturally produce the s
 on different service dates, record that capability as a smoke setup prerequisite; do not weaken the
 smoke to different numbers.
 
-`BOOKING-UNREAD-NULL-AUTHOR-001`, `BOOKING-UNREAD-GUEST-TYPE-GUARD-001` and
-`BOOKING-UNREAD-MIXED-VERSION-ROLLOUT-001` remain `LOCAL_FIX_REVIEW_REQUIRED` until the next
-independent review. The epic remains **BOOKING CONVERSATION UX / DISTINCT LABELS, INBOX AND UNREAD
-DISCOVERABILITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
+The historical preintegration record classified `BOOKING-UNREAD-NULL-AUTHOR-001`,
+`BOOKING-UNREAD-GUEST-TYPE-GUARD-001` and `BOOKING-UNREAD-MIXED-VERSION-ROLLOUT-001` as
+`LOCAL_FIX_REVIEW_REQUIRED` and the epic as **BOOKING CONVERSATION UX / DISTINCT LABELS, INBOX AND
+UNREAD DISCOVERABILITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE
+COMMIT**. Preserve that task result as history; it is not the current V126 release gate. Current
+execution readiness is classified only by the G0-G9 matrix in the canonical cutover contract.
 
 ## Staff-Chat Notification Policy
 

@@ -85,7 +85,8 @@ Staging requires an explicit Telegram traffic policy. The public-pilot contract 
 `TELEGRAM_TRAFFIC_POLICY=PRODUCT`: both static ID lists stay empty and any valid signed, fresh
 Telegram identity may receive a Guest session. Venue and Platform APIs still require their exact
 server-side membership/RBAC; a valid invite grants only its stored role and venue. `ALLOWLIST`
-remains available only for a separately reviewed isolated smoke and stays fail-closed. Staging
+remains fail-closed implementation/test compatibility, but its operational isolated-smoke role is
+superseded and has no current normal-staging, public-pilot, rollback or V126 authorization. Staging
 rejects `UNRESTRICTED`, PRODUCT with static IDs, and PRODUCT without an explicit non-placeholder
 `VENUE_STAFF_INVITE_SECRET_PEPPER`.
 
@@ -250,11 +251,11 @@ Telegram webhook (если используете webhook-режим бота):
 
 Персонал подключается через действующее приглашение, а не через редактирование статических списков
 ID. Активный pepper хранится только в server-side `.env` с ограниченным доступом и никогда не
-попадает в Git; его замена делает все ожидающие ссылки недействительными. Для отдельно
-согласованного `ALLOWLIST` smoke реальные идентификаторы размещают только в `.env` и restricted
-`/etc/hookah-bot/staging/telegram-allowlist.manifest` (directory `root:root` 0700, file `root:root`
-0600). Подробная процедура находится в
-`docs/STAGING_DEPLOYMENT.md` и `docs/DEPLOYMENT_RUNBOOK.md`.
+попадает в Git; его замена делает все ожидающие ссылки недействительными. Историческая
+`ALLOWLIST`-процедура с restricted `.env` и
+`/etc/hookah-bot/staging/telegram-allowlist.manifest` сохранена только как совместимость/
+свидетельство; она операционно устарела и не авторизует normal staging, public pilot,
+rollback или V126.
 
 ### HTTPS termination через reverse proxy
 Backend слушает HTTP, TLS завершается на edge. Пример для Nginx:
@@ -345,9 +346,10 @@ EXPECTED_BACKEND_IMAGE_ID=sha256:<reviewed-image-id> \
 ./scripts/deploy-staging.sh hookah-staging
 ```
 
-This defaults to the public-pilot `PRODUCT` profile. `ALLOWLIST` is available only through the
-separately reviewed explicit `STAGING_ADMISSION_PROFILE=isolated-allowlist` path documented in the
-staging runbook.
+This defaults to the public-pilot `PRODUCT` profile. The fail-closed
+`STAGING_ADMISSION_PROFILE=isolated-allowlist` implementation/test compatibility path is retained,
+but is operationally superseded and has no current normal-staging, public-pilot, rollback or V126
+authorization.
 
 If fresh SSH connections are unreliable during deploy, use the explicitly opt-in persistent SSH wrapper documented in the staging runbook:
 ```bash

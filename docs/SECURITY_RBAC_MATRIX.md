@@ -92,8 +92,10 @@ Tokens and client-provided ids are context pointers, not authority:
 
 ### Public-pilot admission boundary
 
-- `ALLOWLIST` is an exact, static, fail-closed smoke boundary. `PRODUCT` is the explicit public-pilot
-  admission mode; it never uses per-user static IDs and `UNRESTRICTED` is prohibited in staging.
+- `ALLOWLIST` is retained as exact, static, fail-closed implementation/test compatibility. Its
+  operational isolated-smoke role is superseded and has no current normal-staging, public-pilot,
+  rollback or V126 authorization. `PRODUCT` is the explicit public-pilot admission mode; it never
+  uses per-user static IDs and `UNRESTRICTED` is prohibited in staging.
 - A `PRODUCT` private update is eligible for routing only when the actor and private chat IDs are
   positive and equal and the update shape is supported. Mini App admission still requires normal
   Telegram initData signature/freshness validation and a positive identity. Authentication upserts
