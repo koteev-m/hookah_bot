@@ -1,48 +1,66 @@
 # Project Status
 
-Last verified: 2026-08-30.
+Last verified: 2026-09-01.
 
 ## 1. Current stage
 
-**HT-INC-02 PUBLIC-PILOT PRODUCT ADMISSION / MAIN PORT IN PROGRESS /
-LIVE ACCEPTANCE RECONCILED / LOCAL VALIDATION COMPLETE / INDEPENDENT REVIEW PASSED /
-MAIN INTEGRATION REQUIRES EXPLICIT AUTHORIZATION**.
+**HT-12M IDENTITY-GATED MAINTENANCE / MAIN PORT IMPLEMENTED /
+V125 STAGING DEPLOY PASS / EXACT MAIN BASE VERIFIED / SOURCE MAPPING CLOSED /
+LOCAL VALIDATION AND INDEPENDENT REVIEW PASSED / COMMIT AND BRANCH ACTIONS PENDING /
+NO MAIN INTEGRATION**.
 
-Fresh `origin/main` is `4daf5546fb622a6b967398f5c25b7bed41d7fa05`. HT-INC-02 ports the exact
-reviewed V125 hotfix range
-`b4e13da3179438fad69d2344e1cb136a56f95f6c..be5d62a5e9058f89cd72be6c313c71fa46ccdbf2`
-from source tree `8806a4cb7a5f1af0f2e4cecdd166c7ff585ca19c` into a clean isolated
-feature worktree. The 59-path mapping preserves all main-only booking/conversation behavior and
-the byte-identical PostgreSQL V126/H2 V127 migrations; the source range contains no migration path.
+Fresh `origin/main` is exact commit `b49a89a299d8c9864fcfc5937d455141563b388a`, tree
+`662c6df77ba757e57f9e49f9f75d62f1f0654a15`, parent
+`4daf5546fb622a6b967398f5c25b7bed41d7fa05`. The isolated main-port branch is
+`codex/ht-12m-identity-maintenance-main-port`; the original dirty main worktree and the dirty V125
+deployment-evidence worktree remain untouched.
 
-The permanent contract is `PRODUCT` for public-pilot staging and explicit fail-closed `ALLOWLIST`
-only for separately isolated smoke. In `PRODUCT`, structurally valid matching private Telegram
-actor/chat identities and valid signed fresh Mini App identities enter as Guest without static IDs.
-Venue and Platform authority still comes only from active membership/RBAC; invitations grant only
-their stored role and venue; groups, staff-chat actions and outbound recipients remain
-server-authoritative.
+The authoritative V125 source candidate is
+`f577934691a1a7a79ba327c54e2055425142b7be`, tree
+`f21f7114bf021ddc8f862294e5f54a841200c179`, based on exact V125 source
+`be5d62a5e9058f89cd72be6c313c71fa46ccdbf2`. All 43 changed paths are mapped in
+`docs/HT12M_IDENTITY_MAINTENANCE_MAIN_PORT_EVIDENCE.md`: `PORTED_AS_IS=29`,
+`MERGED_WITH_MAIN_CHANGE=13`, `OBSOLETE_WITH_PROVEN_REPLACEMENT=1`, `MISSING=0` and unresolved
+`CONTRACT_CONFLICT=0`. Base-compatible paths are byte-identical; explicit merges preserve current
+main-only Application, Telegram, booking/conversation, deployment, CI and canonical-document
+behavior.
 
-Read-only staging reconciliation confirms the exact source candidate is running with `PRODUCT`,
-empty static user/chat lists, a restricted non-placeholder invite pepper, one backend/long poller,
-Flyway V125 with V126 absent, healthy inactive queues and the existing Caddy TLS 1.2 mitigation.
-Alias-only transactional evidence reconciles the two reported external acceptance identities;
-later explicit audited membership changes are separate from the committed acceptance events.
+Staging successfully runs that V125 candidate as
+`hookah_bot_ant-backend:f577934691a1a7a79ba327c54e2055425142b7be`, canonical image ID
+`sha256:6a8aed7c85374efd89aa2db2e3dbcbed6d84f63087a757ad077856b78bce24a8`, with
+`TELEGRAM_TRAFFIC_POLICY=PRODUCT`, maintenance `OFF`, empty product/maintenance lists, Flyway V125,
+V126 absent, one backend/poller, empty active queues and unchanged Caddy. Exact image, health,
+authenticated read-only Guest/Venue/Platform, negative tenant/Platform RBAC, Bot API and privacy-log
+checks passed. No live mutating Guest/invite smoke was repeated; exact-head automated coverage
+remains the evidence for those mutations.
 
-`LIVE_EXTERNAL_NEW_USER_INVITE_ACCEPTANCE = PASS`
+The main port adds, removes or edits no migration. The current PostgreSQL and H2 migration trees,
+including PostgreSQL V126 and the H2 V126/V127 identities, were recorded before editing and must
+remain byte-identical at the candidate. `PRODUCT` stays the normal public-pilot admission mode;
+identity-gated `V126_SMOKE` is a separate temporary fail-closed overlay and never substitutes for
+membership/RBAC or static user management.
 
-The original dirty main worktree remains untouched. Focused PRODUCT/RBAC/invite/outbox/abuse/privacy
-tests, the 110-test PostgreSQL integration/concurrency gate, compile, ktlint, the Mini App build,
-`216/216` browser smoke, Compose admission self-tests, deploy-script syntax, diff checks and
-migration-diff proof pass. The final full backend run executes all `2185` tests with no skips under the
-required Docker/API-version harness: two Staff-profile-link lock-observation assertions fail
-identically on exact main and in the candidate. The earlier candidate full-run-only Manager parity
-failure does not recur and passes isolated runs. This is recorded as exact-main baseline debt with no
-deterministic candidate regression, not as a fully green backend suite. Independent review identified
-and the candidate fixes second-operational-Owner invite acceptance without transferring the existing
-commercial owner account; the rollback/retry regression and narrow re-review pass. Exact feature-branch
-Actions remain mandatory for the committed candidate before any separately authorized main integration.
-No main integration, V126 execution, staging mutation, production access or Caddy restart/reload is
-authorized in this phase.
+This phase authorizes implementation, local validation, independent read-only security review,
+feature-branch commit/push and branch Actions only. It does not authorize main integration, staging
+deploy, maintenance activation, Flyway/V126, production access or any Caddy change. The next gate
+after a complete green main-port candidate is
+`IDENTITY_MAINTENANCE_MAIN_INTEGRATION_AUTHORIZATION_REQUIRED`.
+
+Current local evidence is green: focused maintenance/config/auth/JWT/RBAC and main-only booking
+tests; zero-skip Telegram ingress/outbox/direct/staff-notification selectors; the full Router suite;
+the mandatory PostgreSQL concurrency/integrity and H2/PostgreSQL migration-sanity matrices; the
+full backend suite under its UTC contract; compile and ktlint; Mini App production build and
+`216/216` browser smoke; Compose; fixed-env admission, maintenance fail-closed, image-identity and
+pre-SSH deployment self-tests; `git diff --check`; and a zero-path, byte-identical migration proof.
+One non-required oversized repeat selector exhausted the JVM instrumentation agent after its early
+classes passed; it is not counted as evidence, and all classes it did not reach passed in the
+bounded standalone selectors used by CI.
+
+The independent final read-only security review inspected the complete frozen 50-path staged diff
+and returned PASS with no P0, P1 or blocking P2. It independently verified admission ordering,
+existing-JWT rechecking, unchanged denied queue/outbox rows, direct/staff outbound gates, tenant and
+RBAC preservation, autonomous-writer suppression, fail-closed startup/deploy controls, all 43 source
+mapping entries, unchanged migration identities and nondecreasing CI floors.
 
 The booking release line below remains unchanged product context and is preserved by this port.
 
@@ -165,8 +183,11 @@ one persisted Guest message, one expected Telegram/outbox delivery, exact-thread
 creation and clear, no duplicate marker row or unread resurrection, and no other-thread, CLIENT or
 non-MIX mutation. HT-14 cannot conclude PASS while this gate is pending, waived or represented only
 by automated evidence. No manual window or retained WebView/session remains. After HT-INC-02 is
-fully integrated, the exact next task is **HT-12J-R1 — Patched Caddy Retry Baseline Refresh and
-Resume**; HT-INC-02 does not start it or authorize a Caddy restart/reload.
+fully integrated, the then-recorded next task was **HT-12J-R1 — Patched Caddy Retry Baseline Refresh
+and Resume**. That historical direction is now superseded: HT-12J-R2 is closed as
+`FAILED_SEALED_EXECUTION_RECOVERED_TO_UBUNTU_BASELINE`, HT-12K is closed as
+`CURRENT_CADDY_EXACT_URL_IDENTITY_NOT_PROVABLE`, and no Caddy sidecar, patched-Caddy,
+packet-observer or exact-path work is authorized.
 
 ## 3. Remaining-work audit snapshot
 

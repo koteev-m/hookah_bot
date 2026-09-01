@@ -351,8 +351,8 @@ Current vs target:
   coverage. The current cursor gate requires repository `21`, real PostgreSQL read-race `6` and
   H2/PostgreSQL cursor-migration wrappers `4/4`; label parity requires Kotlin `2` plus the shared
   JSON fixture's dedicated TypeScript/Playwright cases; notification coverage requires real
-  PostgreSQL booking idempotency `19`, notifier unit `6` and legacy outbox `13`. Guest surface
-  guards require exact route XML floors `BookingConversationRoutesTest=9` and
+  PostgreSQL booking idempotency `19`, notifier unit `8` and legacy outbox `13`. Guest surface
+  guards require exact route XML floors `BookingConversationRoutesTest=10` and
   `SupportTicketRoutesTest=15` plus the structured Playwright floor `216`. Historical V124/V125
   semantic/recursive and message-metadata gates remain mandatory regression evidence. Independent
   review is still required; green Actions, cursor migration rollout and staging/two-account

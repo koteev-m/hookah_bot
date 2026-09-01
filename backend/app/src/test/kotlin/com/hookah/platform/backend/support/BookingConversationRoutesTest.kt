@@ -4,6 +4,7 @@ import com.hookah.platform.backend.api.ApiErrorCodes
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.module
+import com.hookah.platform.backend.test.assertApiErrorEnvelope
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
 import io.ktor.client.request.post
@@ -38,6 +39,70 @@ import kotlin.test.assertTrue
 
 class BookingConversationRoutesTest {
     private val json = Json { ignoreUnknownKeys = true }
+
+    @Test
+    fun `v126 smoke rechecks old jwt before main conversation writes and venue unread work`() {
+        val jdbcUrl = buildJdbcUrl("maintenance-old-jwt-main-conversation")
+        val productConfig =
+            buildConfig(
+                jdbcUrl,
+                "telegram.trafficPolicy" to "PRODUCT",
+                "staging.maintenance.mode" to "OFF",
+            )
+        val deniedGuestToken = issueToken(productConfig, GUEST_A)
+        val deniedManagerToken = issueToken(productConfig, MANAGER_A)
+        val allowedManagerToken = issueToken(productConfig, MAINTENANCE_ALLOWED_MANAGER)
+
+        testApplication {
+            val maintenanceConfig =
+                buildConfig(
+                    jdbcUrl,
+                    "telegram.trafficPolicy" to "PRODUCT",
+                    "staging.maintenance.mode" to "V126_SMOKE",
+                    "staging.maintenance.allowedUserIds" to MAINTENANCE_ALLOWED_MANAGER.toString(),
+                    "staging.maintenance.allowedChatIds" to MAINTENANCE_ALLOWED_MANAGER.toString(),
+                )
+            environment { config = maintenanceConfig }
+            application { module() }
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, "Maintenance Venue")
+            seedUsers(jdbcUrl, GUEST_A, MANAGER_A, MAINTENANCE_ALLOWED_MANAGER)
+            seedVenueMember(jdbcUrl, venueId, MANAGER_A, "MANAGER")
+            seedVenueMember(jdbcUrl, venueId, MAINTENANCE_ALLOWED_MANAGER, "MANAGER")
+            val stateBefore = lookupMutationCounts(jdbcUrl)
+
+            val allowedUnread =
+                client.get("/api/venue/$venueId/support/unread-count") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $allowedManagerToken") }
+                }
+            assertEquals(HttpStatusCode.OK, allowedUnread.status, allowedUnread.bodyAsText())
+            assertEquals(stateBefore, lookupMutationCounts(jdbcUrl))
+
+            val deniedSupportCreate =
+                client.post("/api/guest/support/threads") {
+                    authorizedJson(deniedGuestToken)
+                    setBody(
+                        """
+                        {
+                          "category":"MINIAPP_TECHNICAL",
+                          "title":"Maintenance denied",
+                          "message":"must-not-reach-support-repository"
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            assertMaintenanceUnavailable(deniedSupportCreate, "must-not-reach-support-repository")
+            assertEquals(stateBefore, lookupMutationCounts(jdbcUrl))
+
+            val deniedUnread =
+                client.get("/api/venue/$venueId/support/unread-count") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $deniedManagerToken") }
+                }
+            assertMaintenanceUnavailable(deniedUnread, "Maintenance Venue")
+            assertEquals(stateBefore, lookupMutationCounts(jdbcUrl))
+        }
+    }
 
     @Test
     fun `guest open keeps one isolated booking thread per booking and tenant`() =
@@ -1392,6 +1457,18 @@ class BookingConversationRoutesTest {
         privateFacts.forEach { fact -> assertFalse(body.contains(fact), body) }
     }
 
+    private suspend fun assertMaintenanceUnavailable(
+        response: HttpResponse,
+        vararg privateFacts: String,
+    ) {
+        assertEquals(HttpStatusCode.ServiceUnavailable, response.status, response.bodyAsText())
+        val envelope = assertApiErrorEnvelope(response, ApiErrorCodes.SERVICE_UNAVAILABLE)
+        assertEquals("Service unavailable", envelope.error.message)
+        assertEquals(null, envelope.error.details)
+        val body = response.bodyAsText()
+        privateFacts.forEach { fact -> assertFalse(body.contains(fact), body) }
+    }
+
     private fun io.ktor.client.request.HttpRequestBuilder.authorizedJson(token: String) {
         headers {
             append(HttpHeaders.Authorization, "Bearer $token")
@@ -1403,7 +1480,10 @@ class BookingConversationRoutesTest {
         "jdbc:h2:mem:$prefix-${UUID.randomUUID()};MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;" +
             "DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1"
 
-    private fun buildConfig(jdbcUrl: String): MapApplicationConfig =
+    private fun buildConfig(
+        jdbcUrl: String,
+        vararg additionalConfig: Pair<String, String>,
+    ): MapApplicationConfig =
         MapApplicationConfig(
             "ktor.environment" to "test",
             "app.env" to "test",
@@ -1417,6 +1497,7 @@ class BookingConversationRoutesTest {
             "platform.ownerUserId" to PLATFORM_OWNER.toString(),
             "billing.subscription.intervalSeconds" to "0",
             "venue.staffInviteSecretPepper" to "invite-pepper",
+            *additionalConfig,
         )
 
     private fun buildAllowlistConfig(
@@ -2069,5 +2150,6 @@ class BookingConversationRoutesTest {
         const val MANAGER_B = 420002L
         const val STAFF_B = 430002L
         const val PLATFORM_OWNER = 440001L
+        const val MAINTENANCE_ALLOWED_MANAGER = 450001L
     }
 }

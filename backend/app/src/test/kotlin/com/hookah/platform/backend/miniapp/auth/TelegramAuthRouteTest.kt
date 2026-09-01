@@ -45,6 +45,71 @@ class TelegramAuthRouteTest {
     private val botToken = "test-bot-token"
 
     @Test
+    fun `maintenance auth issues allowed session and denies valid unlisted identity before user write`() =
+        testApplication {
+            val allowedUserId = 711111111111111111L
+            val deniedUserId = 722222222222222222L
+            val jdbcUrl =
+                "jdbc:h2:mem:miniapp-auth-maintenance;MODE=PostgreSQL;" +
+                    "DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1"
+            environment {
+                config =
+                    MapApplicationConfig(
+                        "app.env" to "test",
+                        "api.session.jwtSecret" to "test-secret",
+                        "api.session.issuer" to "test-issuer",
+                        "api.session.audience" to "test-audience",
+                        "db.jdbcUrl" to jdbcUrl,
+                        "db.user" to "sa",
+                        "db.password" to "",
+                        "telegram.token" to botToken,
+                        "telegram.trafficPolicy" to "PRODUCT",
+                        "staging.maintenance.mode" to "V126_SMOKE",
+                        "staging.maintenance.allowedUserIds" to allowedUserId.toString(),
+                        "staging.maintenance.allowedChatIds" to allowedUserId.toString(),
+                    )
+            }
+            application { module() }
+
+            suspend fun authenticate(userId: Long): io.ktor.client.statement.HttpResponse {
+                val initData =
+                    generateValidInitData(
+                        botToken,
+                        """{"id":$userId,"username":"maintenance_user","first_name":"Test"}""",
+                        Instant.now().epochSecond,
+                    )
+                return client.post("/api/auth/telegram") {
+                    contentType(ContentType.Application.Json)
+                    setBody(json.encodeToString(TelegramAuthRequest(initData)))
+                }
+            }
+
+            val allowedResponse = authenticate(allowedUserId)
+            assertEquals(HttpStatusCode.OK, allowedResponse.status)
+            assertTrue(json.decodeFromString<TelegramAuthResponse>(allowedResponse.bodyAsText()).token.isNotBlank())
+
+            val deniedResponse = authenticate(deniedUserId)
+            assertEquals(HttpStatusCode.ServiceUnavailable, deniedResponse.status)
+            assertApiErrorEnvelope(deniedResponse, ApiErrorCodes.SERVICE_UNAVAILABLE)
+            assertFalse(deniedResponse.bodyAsText().contains(deniedUserId.toString()))
+            assertFalse(deniedResponse.bodyAsText().contains(allowedUserId.toString()))
+
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                connection.prepareStatement(
+                    "SELECT telegram_user_id FROM users WHERE telegram_user_id IN (?, ?) ORDER BY telegram_user_id",
+                ).use { statement ->
+                    statement.setLong(1, allowedUserId)
+                    statement.setLong(2, deniedUserId)
+                    statement.executeQuery().use { resultSet ->
+                        assertTrue(resultSet.next())
+                        assertEquals(allowedUserId, resultSet.getLong("telegram_user_id"))
+                        assertFalse(resultSet.next())
+                    }
+                }
+            }
+        }
+
+    @Test
     fun `valid initData returns token`() =
         testApplication {
             environment {

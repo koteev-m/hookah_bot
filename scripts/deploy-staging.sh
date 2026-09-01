@@ -8,22 +8,39 @@ REMOTE="${1:-${STAGING_SSH:-}}"
 STAGING_PATH="${STAGING_PATH:-/opt/hookah-bot}"
 STAGING_DOMAIN="${STAGING_DOMAIN:-staging.hookahtootah.club}"
 STAGING_PUBLIC_URL="${STAGING_PUBLIC_URL:-https://${STAGING_DOMAIN}}"
-BACKEND_IMAGE="${BACKEND_IMAGE:-hookah_bot_ant-backend:staging}"
+BACKEND_IMAGE="${BACKEND_IMAGE:-}"
 DOCKER_PLATFORM="${DOCKER_PLATFORM:-linux/amd64}"
 GRADLE_JVM_ARGS="${GRADLE_JVM_ARGS:--Xmx2048m -XX:MaxMetaspaceSize=768m}"
 RUN_PUBLIC_CHECKS="${RUN_PUBLIC_CHECKS:-true}"
 HEALTHCHECK_ATTEMPTS="${HEALTHCHECK_ATTEMPTS:-20}"
 HEALTHCHECK_SLEEP_SECONDS="${HEALTHCHECK_SLEEP_SECONDS:-3}"
 STAGING_ADMISSION_PROFILE="${STAGING_ADMISSION_PROFILE:-public-pilot}"
+STAGING_MAINTENANCE_V126_SMOKE_AUTHORIZED="${STAGING_MAINTENANCE_V126_SMOKE_AUTHORIZED:-false}"
+EXPECTED_BACKEND_IMAGE_ID="${EXPECTED_BACKEND_IMAGE_ID:-}"
+STAGING_ARTIFACT_PREFLIGHT_ONLY="${STAGING_ARTIFACT_PREFLIGHT_ONLY:-false}"
+
+if [[ "${STAGING_MAINTENANCE_V126_SMOKE_AUTHORIZED}" != "true" &&
+  "${STAGING_MAINTENANCE_V126_SMOKE_AUTHORIZED}" != "false" ]]; then
+  echo "STAGING_MAINTENANCE_V126_SMOKE_AUTHORIZED must be true or false" >&2
+  exit 2
+fi
+if [[ "${STAGING_ARTIFACT_PREFLIGHT_ONLY}" != "true" &&
+  "${STAGING_ARTIFACT_PREFLIGHT_ONLY}" != "false" ]]; then
+  echo "STAGING_ARTIFACT_PREFLIGHT_ONLY must be true or false" >&2
+  exit 2
+fi
 
 if [[ -z "${REMOTE}" ]]; then
   echo "Usage: $0 user@vps-host"
+  echo
+  echo "Required env:"
+  echo "  BACKEND_IMAGE=hookah_bot_ant-backend:<full-commit-sha>"
+  echo "  EXPECTED_BACKEND_IMAGE_ID=sha256:<reviewed canonical image ID>"
   echo
   echo "Optional env:"
   echo "  STAGING_PATH=${STAGING_PATH}"
   echo "  STAGING_DOMAIN=${STAGING_DOMAIN}"
   echo "  STAGING_PUBLIC_URL=${STAGING_PUBLIC_URL}"
-  echo "  BACKEND_IMAGE=${BACKEND_IMAGE}"
   echo "  DOCKER_PLATFORM=${DOCKER_PLATFORM}"
   echo "  HEALTHCHECK_ATTEMPTS=${HEALTHCHECK_ATTEMPTS}"
   echo "  HEALTHCHECK_SLEEP_SECONDS=${HEALTHCHECK_SLEEP_SECONDS}"
@@ -40,6 +57,12 @@ case "${STAGING_ADMISSION_PROFILE}" in
     ;;
 esac
 
+if [[ "${STAGING_MAINTENANCE_V126_SMOKE_AUTHORIZED}" == "true" &&
+  "${STAGING_ADMISSION_PROFILE}" != "public-pilot" ]]; then
+  echo "V126_SMOKE authorization requires the public-pilot PRODUCT admission profile" >&2
+  exit 2
+fi
+
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
     echo "Missing required command: $1" >&2
@@ -52,6 +75,15 @@ require_cmd ssh
 require_cmd rsync
 require_cmd gzip
 require_cmd curl
+
+if [[ ! "${BACKEND_IMAGE}" =~ :[0-9a-f]{40}$ ]]; then
+  echo "BACKEND_IMAGE is required and must use a full lowercase commit-SHA tag" >&2
+  exit 2
+fi
+if [[ ! "${EXPECTED_BACKEND_IMAGE_ID}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+  echo "EXPECTED_BACKEND_IMAGE_ID is required and must be a canonical sha256 image ID" >&2
+  exit 2
+fi
 
 wait_http() {
   local label="$1"
@@ -91,13 +123,37 @@ cd "${REPO_ROOT}"
 echo "==> Validating staging admission guard fixtures"
 bash scripts/validate-staging-admission.sh --self-test docker-compose.yml
 
-echo "==> Uploading deployment metadata to ${REMOTE}:${STAGING_PATH}"
+echo "==> Building backend image locally: ${BACKEND_IMAGE} (${DOCKER_PLATFORM})"
+docker buildx build \
+  --platform "${DOCKER_PLATFORM}" \
+  --provenance=false \
+  --load \
+  --tag "${BACKEND_IMAGE}" \
+  --build-arg "VITE_BACKEND_PUBLIC_URL=${STAGING_PUBLIC_URL}" \
+  --build-arg "GRADLE_JVM_ARGS=${GRADLE_JVM_ARGS}" \
+  -f backend/Dockerfile \
+  .
+
+## This comparison must stay before every SSH, rsync, image upload, or remote mutation.
+built_image_id="$(docker image inspect --format '{{.Id}}' "${BACKEND_IMAGE}")"
+"${SCRIPT_DIR}/check-staging-image-identity.sh" \
+  "${built_image_id}" \
+  "${EXPECTED_BACKEND_IMAGE_ID}"
+
+if [[ "${STAGING_ARTIFACT_PREFLIGHT_ONLY}" == "true" ]]; then
+  echo "==> Local staging artifact preflight finished before SSH"
+  exit 0
+fi
+
+echo "==> Uploading compose files to ${REMOTE}:${STAGING_PATH}"
 ssh "${REMOTE}" "mkdir -p '${STAGING_PATH}'"
 rsync -azR \
   docker-compose.yml \
   backend/Dockerfile \
   scripts/validate-staging-admission.sh \
   scripts/seed-staging.sh \
+  scripts/check-staging-maintenance-config.sh \
+  scripts/check-staging-image-identity.sh \
   docs/env/staging.env.example \
   docs/STAGING_DEPLOYMENT.md \
   "${REMOTE}:${STAGING_PATH}/"
@@ -134,15 +190,14 @@ ssh "${REMOTE}" "
       --compose-file docker-compose.yml
 "
 
-echo "==> Building backend image locally: ${BACKEND_IMAGE} (${DOCKER_PLATFORM})"
-docker buildx build \
-  --platform "${DOCKER_PLATFORM}" \
-  --load \
-  --tag "${BACKEND_IMAGE}" \
-  --build-arg "VITE_BACKEND_PUBLIC_URL=${STAGING_PUBLIC_URL}" \
-  --build-arg "GRADLE_JVM_ARGS=${GRADLE_JVM_ARGS}" \
-  -f backend/Dockerfile \
-  .
+echo "==> Checking staging maintenance policy"
+ssh "${REMOTE}" "
+  set -euo pipefail
+  cd '${STAGING_PATH}'
+  chmod +x scripts/check-staging-maintenance-config.sh
+  STAGING_MAINTENANCE_V126_SMOKE_AUTHORIZED='${STAGING_MAINTENANCE_V126_SMOKE_AUTHORIZED}' \\
+    ./scripts/check-staging-maintenance-config.sh .env
+"
 
 echo "==> Uploading Docker image to VPS"
 docker save "${BACKEND_IMAGE}" | gzip | ssh "${REMOTE}" "gzip -dc | docker load"
@@ -185,6 +240,9 @@ ssh "${REMOTE}" "
       -u TELEGRAM_TRAFFIC_POLICY \
       -u TELEGRAM_ALLOWED_USER_IDS \
       -u TELEGRAM_ALLOWED_CHAT_IDS \
+      -u STAGING_MAINTENANCE_MODE \
+      -u STAGING_MAINTENANCE_ALLOWED_USER_IDS \
+      -u STAGING_MAINTENANCE_ALLOWED_CHAT_IDS \
       -u VENUE_STAFF_INVITE_SECRET_PEPPER \
       BACKEND_IMAGE='${BACKEND_IMAGE}' \
       docker compose --env-file .env \"\$@\"

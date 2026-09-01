@@ -4,6 +4,7 @@ import ch.qos.logback.classic.Logger
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.read.ListAppender
 import com.hookah.platform.backend.configureTelegramCommandMenuSafely
+import com.hookah.platform.backend.maintenance.StagingMaintenancePolicy
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.MockRequestHandleScope
@@ -39,6 +40,65 @@ class TelegramApiClientTrafficPolicyTest {
             ),
             appEnv = "staging",
         )
+
+    @Test
+    fun `maintenance blocks every denied direct chat operation and command mutation`() =
+        runBlocking {
+            val paths = mutableListOf<String>()
+            val maintenancePolicy =
+                StagingMaintenancePolicy.from(
+                    MapApplicationConfig(
+                        "staging.maintenance.mode" to "V126_SMOKE",
+                        "staging.maintenance.allowedUserIds" to ALLOWED_PRIVATE_CHAT.toString(),
+                        "staging.maintenance.allowedChatIds" to
+                            "$ALLOWED_PRIVATE_CHAT,$ALLOWED_GROUP_CHAT",
+                    ),
+                    "staging",
+                )
+            val apiClient =
+                apiClient(
+                    paths = paths,
+                    policy = TelegramTrafficPolicy.product(),
+                    maintenancePolicy = maintenancePolicy,
+                )
+            try {
+                assertNull(apiClient.sendMessage(DENIED_CHAT, "blocked"))
+                assertFalse(apiClient.deleteMessage(DENIED_CHAT, 1L))
+                assertNull(apiClient.getChat(DENIED_CHAT))
+                assertNull(apiClient.getChatMember(ALLOWED_GROUP_CHAT, DENIED_CHAT))
+                assertIs<TelegramCallResult.TrafficDenied>(
+                    apiClient.dispatchOutbox(DENIED_CHAT, "sendMessage", sendMessagePayload(DENIED_CHAT)),
+                )
+                assertIs<TelegramCallResult.TrafficDenied>(apiClient.setMyCommands(null, buildJsonArray {}))
+                assertTrue(paths.isEmpty())
+
+                assertIs<TelegramCallResult.Success>(
+                    apiClient.dispatchOutbox(
+                        ALLOWED_PRIVATE_CHAT,
+                        "sendMessage",
+                        sendMessagePayload(ALLOWED_PRIVATE_CHAT),
+                    ),
+                )
+                assertIs<TelegramCallResult.Success>(
+                    apiClient.dispatchOutbox(
+                        ALLOWED_GROUP_CHAT,
+                        "answerCallbackQuery",
+                        answerCallbackPayload(),
+                    ),
+                )
+                assertEquals("", apiClient.getWebhookInfo().url)
+                assertEquals(
+                    listOf(
+                        "/bot$FAKE_TOKEN/sendMessage",
+                        "/bot$FAKE_TOKEN/answerCallbackQuery",
+                        "/bot$FAKE_TOKEN/getWebhookInfo",
+                    ),
+                    paths,
+                )
+            } finally {
+                apiClient.close()
+            }
+        }
 
     @Test
     fun `denied direct chat operations do not call Telegram`() =
@@ -322,6 +382,7 @@ class TelegramApiClientTrafficPolicyTest {
         forcedResponse: String? = null,
         forcedFailure: Throwable? = null,
         policy: TelegramTrafficPolicy = trafficPolicy,
+        maintenancePolicy: StagingMaintenancePolicy = StagingMaintenancePolicy.off(),
     ): TelegramApiClient {
         val client =
             HttpClient(
@@ -344,6 +405,7 @@ class TelegramApiClientTrafficPolicyTest {
             client = client,
             json = json,
             trafficPolicy = policy,
+            maintenancePolicy = maintenancePolicy,
         )
     }
 

@@ -13,6 +13,7 @@ import com.hookah.platform.backend.booking.formatBookingDisplayLabel
 import com.hookah.platform.backend.location.VenueLocationDisplay
 import com.hookah.platform.backend.location.buildYandexVenueRouteUrl
 import com.hookah.platform.backend.location.formatVenueDisplayAddress
+import com.hookah.platform.backend.maintenance.StagingMaintenancePolicy
 import com.hookah.platform.backend.miniapp.guest.PLATFORM_GUEST_RECONFIRM_MESSAGE
 import com.hookah.platform.backend.miniapp.guest.RepeatOrderPlan
 import com.hookah.platform.backend.miniapp.guest.RepeatOrderResolver
@@ -350,6 +351,7 @@ class TelegramBotRouter internal constructor(
     private val platformGuestQrNowProvider: () -> Instant = Instant::now,
     private val platformGuestQrCallbackTagFactory: () -> String = ::newPlatformGuestQrCallbackTag,
     private val trafficPolicy: TelegramTrafficPolicy,
+    private val maintenancePolicy: StagingMaintenancePolicy = StagingMaintenancePolicy.off(),
     private val productAbuseLimiter: TelegramProductAbuseLimiter = TelegramProductAbuseLimiter(),
     private val miniAppAbuseProtection: MiniAppAbuseProtection = MiniAppAbuseProtection(),
     private val recipientLocks: TelegramRecipientLockRegistry = TelegramRecipientLockRegistry(),
@@ -836,6 +838,16 @@ class TelegramBotRouter internal constructor(
     )
 
     suspend fun process(update: TelegramUpdate) {
+        when (val decision = maintenancePolicy.evaluateInbound(update)) {
+            StagingMaintenancePolicy.InboundDecision.Allowed -> Unit
+            is StagingMaintenancePolicy.InboundDecision.Denied -> {
+                logger.info(
+                    "Telegram inbound update denied source=router reason=MAINTENANCE_{}",
+                    decision.reason,
+                )
+                return
+            }
+        }
         when (val decision = trafficPolicy.evaluateInbound(update)) {
             TelegramTrafficPolicy.InboundDecision.Allowed -> Unit
             is TelegramTrafficPolicy.InboundDecision.Denied -> {

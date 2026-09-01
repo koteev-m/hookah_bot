@@ -37,15 +37,18 @@ Example:
   STAGING_PATH=/opt/hookah-bot \
   STAGING_DOMAIN=staging.example.com \
   DOCKER_PLATFORM=linux/amd64 \
-  BACKEND_IMAGE=example-backend:staging \
+  BACKEND_IMAGE=example-backend:<candidate-sha> \
+  EXPECTED_BACKEND_IMAGE_ID=sha256:<reviewed-image-id> \
   ./scripts/deploy-staging-controlmaster.sh staging-alias
 
 Behavior:
+  - Completes the local deterministic image build and exact identity check before
+    opening any SSH connection.
   - Reuses ./scripts/deploy-staging.sh for build, upload, restart, and health checks.
   - Makes ssh and rsync in the child deploy process reuse one control socket.
   - Does not alter SSH server configuration, firewall, fail2ban, credentials, or ~/.ssh.
-  - Leaves the normal deploy command available:
-      ./scripts/deploy-staging.sh <ssh-host-alias>
+  - Leaves the normal deploy command available with the same required full-SHA
+    BACKEND_IMAGE and EXPECTED_BACKEND_IMAGE_ID inputs.
 
 Optional controls:
   HOOKAH_STAGING_CM_CONNECT_RETRIES=3
@@ -180,6 +183,10 @@ if ! docker buildx version >/dev/null 2>&1; then
   exit 2
 fi
 
+echo "==> Running local artifact identity preflight before SSH"
+STAGING_ARTIFACT_PREFLIGHT_ONLY=true \
+  "${DEPLOY_SCRIPT}" "${REMOTE}"
+
 TMP_ROOT="${TMPDIR:-/tmp}"
 TMP_ROOT="${TMP_ROOT%/}"
 if [[ -z "${TMP_ROOT}" || "${TMP_ROOT}" == "/" ]]; then
@@ -248,14 +255,16 @@ done
 if [[ "${MASTER_STARTED}" != "true" ]]; then
   echo "Could not establish the persistent SSH ControlMaster after ${CONNECT_RETRIES} attempt(s)." >&2
   echo "No fallback deploy was attempted. Normal deploy remains available manually:" >&2
-  echo "  ./scripts/deploy-staging.sh <ssh-host-alias>" >&2
+  echo "  BACKEND_IMAGE=<full-commit-sha-tag> EXPECTED_BACKEND_IMAGE_ID=sha256:<reviewed-image-id> \\" >&2
+  echo "    ./scripts/deploy-staging.sh <ssh-host-alias>" >&2
   exit 255
 fi
 
 if ! "${REAL_SSH}" -O check -S "${CONTROL_PATH}" "${REMOTE}" >/dev/null 2>&1; then
   echo "ControlMaster was opened but failed verification with ssh -O check." >&2
   echo "No fallback deploy was attempted. Normal deploy remains available manually:" >&2
-  echo "  ./scripts/deploy-staging.sh <ssh-host-alias>" >&2
+  echo "  BACKEND_IMAGE=<full-commit-sha-tag> EXPECTED_BACKEND_IMAGE_ID=sha256:<reviewed-image-id> \\" >&2
+  echo "    ./scripts/deploy-staging.sh <ssh-host-alias>" >&2
   exit 255
 fi
 
@@ -280,7 +289,8 @@ fi
 if (( deploy_status != 0 )); then
   echo "Persistent SSH deploy failed with exit code ${deploy_status}." >&2
   echo "No fallback deploy was attempted. Normal deploy remains available manually:" >&2
-  echo "  ./scripts/deploy-staging.sh <ssh-host-alias>" >&2
+  echo "  BACKEND_IMAGE=<full-commit-sha-tag> EXPECTED_BACKEND_IMAGE_ID=sha256:<reviewed-image-id> \\" >&2
+  echo "    ./scripts/deploy-staging.sh <ssh-host-alias>" >&2
 fi
 
 exit "${deploy_status}"

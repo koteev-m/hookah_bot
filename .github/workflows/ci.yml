@@ -172,7 +172,7 @@ jobs:
           required_minimums = {
               "com.hookah.platform.backend.support.SupportTicketRoutesTest": 15,
               "com.hookah.platform.backend.support.SupportThreadReadRepositoryTest": 21,
-              "com.hookah.platform.backend.telegram.BookingMessageStaffChatNotifierTest": 6,
+              "com.hookah.platform.backend.telegram.BookingMessageStaffChatNotifierTest": 8,
               "com.hookah.platform.backend.telegram.StaffChatNotifierTest": 40,
               "com.hookah.platform.backend.telegram.TelegramOutboxVenueAuthorityTest": 2,
               "com.hookah.platform.backend.telegram.TelegramOutboxWorkerTest": 18,
@@ -207,6 +207,8 @@ jobs:
               },
               "com.hookah.platform.backend.telegram.BookingMessageStaffChatNotifierTest": {
                   "traffic policy rejects an unlisted staff chat without creating outbox state",
+                  "product linked allowed staff group enqueues once during v126 smoke",
+                  "product linked maintenance denied staff group creates zero outbox state",
               },
               "com.hookah.platform.backend.telegram.StaffChatNotifierTest": {
                   "disallowed staff chat is skipped before notification state or outbox",
@@ -562,7 +564,7 @@ jobs:
                       "TEST-com.hookah.platform.backend.support."
                   "BookingConversationRoutesTest.xml"
                   ),
-                  9,
+                  10,
               ),
               (
                   "booking conversation repository",
@@ -589,6 +591,7 @@ jobs:
               "TEST-com.hookah.platform.backend.support.BookingConversationRoutesTest.xml": {
                   "ordinary Guest surface contract rejects cross inbox opens without raw marker mutation or message facts",
                   "venue booking reply denied by traffic policy is atomic and the same key retries after allow",
+                  "v126 smoke rechecks old jwt before main conversation writes and venue unread work",
               },
               "TEST-com.hookah.platform.backend.support.BookingConversationRepositoryTest.xml": {
                   "rejected Mini App notification rolls back and leaves the same client key reusable",
@@ -666,6 +669,8 @@ jobs:
             --tests "com.hookah.platform.backend.telegram.TelegramTrafficPolicyConfigTest" \
             --tests "com.hookah.platform.backend.telegram.TelegramTrafficPolicyTest" \
             --tests "com.hookah.platform.backend.telegram.TelegramTrafficPolicyLoggingTest" \
+            --tests "com.hookah.platform.backend.maintenance.StagingMaintenancePolicyTest" \
+            --tests "com.hookah.platform.backend.maintenance.StagingMaintenanceStartupTest" \
             --tests "com.hookah.platform.backend.telegram.TelegramLongPollingWorkerTest" \
             --tests "com.hookah.platform.backend.telegram.TelegramInboundUpdateWorkerTest" \
             --tests "com.hookah.platform.backend.telegram.TelegramBotRouterIdempotencyTest" \
@@ -699,6 +704,8 @@ jobs:
               "com.hookah.platform.backend.telegram.TelegramTrafficPolicyConfigTest": 9,
               "com.hookah.platform.backend.telegram.TelegramTrafficPolicyTest": 8,
               "com.hookah.platform.backend.telegram.TelegramTrafficPolicyLoggingTest": 1,
+              "com.hookah.platform.backend.maintenance.StagingMaintenancePolicyTest": 4,
+              "com.hookah.platform.backend.maintenance.StagingMaintenanceStartupTest": 4,
               "com.hookah.platform.backend.telegram.TelegramLongPollingWorkerTest": 5,
               "com.hookah.platform.backend.telegram.TelegramInboundUpdateWorkerTest": 3,
               "com.hookah.platform.backend.telegram.TelegramBotRouterIdempotencyTest": 2,
@@ -734,6 +741,18 @@ jobs:
               },
               "com.hookah.platform.backend.telegram.TelegramTrafficPolicyLoggingTest": {
                   "policy diagnostics and configuration failures do not expose identities",
+              },
+              "com.hookah.platform.backend.maintenance.StagingMaintenancePolicyTest": {
+                  "off is the default and ignores maintenance lists",
+                  "v126 smoke admits only exact reviewed private and group identities",
+                  "v126 smoke configuration fails closed without exposing restricted values",
+                  "v126 smoke is rejected outside staging and test",
+              },
+              "com.hookah.platform.backend.maintenance.StagingMaintenanceStartupTest": {
+                  "staging active mode fails closed before database initialization for every invalid identity contract",
+                  "active mode requires underlying product policy",
+                  "active mode starts without command configuration while off ignores maintenance lists",
+                  "active mode does not start autonomous writers or mutate due work",
               },
               "com.hookah.platform.backend.telegram.TelegramLongPollingWorkerTest": {
                   "denied updates advance offset without reaching router",
@@ -1044,6 +1063,9 @@ jobs:
         run: |
           bash -n scripts/validate-staging-admission.sh
           bash -n scripts/deploy-staging.sh
+          bash -n scripts/deploy-staging-controlmaster.sh
+          bash -n scripts/check-staging-maintenance-config.sh
+          bash -n scripts/check-staging-image-identity.sh
       - name: Exercise staging admission guard fixtures
         run: bash scripts/validate-staging-admission.sh --self-test docker-compose.yml
       - name: Create CI compose env
@@ -1055,6 +1077,12 @@ jobs:
           EOF
       - name: Validate Docker Compose config
         run: docker compose config --quiet
+      - name: Validate staging maintenance deploy guard
+        run: |
+          bash scripts/check-staging-maintenance-config.sh --self-test
+          bash scripts/check-staging-image-identity.sh --self-test \
+            scripts/deploy-staging.sh \
+            scripts/deploy-staging-controlmaster.sh
 
   miniapp:
     runs-on: ubuntu-latest

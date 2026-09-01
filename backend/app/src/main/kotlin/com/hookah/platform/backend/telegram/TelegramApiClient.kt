@@ -1,5 +1,6 @@
 package com.hookah.platform.backend.telegram
 
+import com.hookah.platform.backend.maintenance.StagingMaintenancePolicy
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.request.forms.formData
@@ -59,6 +60,7 @@ class TelegramApiClient(
     private val client: HttpClient,
     private val json: Json,
     private val trafficPolicy: TelegramTrafficPolicy,
+    private val maintenancePolicy: StagingMaintenancePolicy = StagingMaintenancePolicy.off(),
 ) {
     private val logger = LoggerFactory.getLogger(TelegramApiClient::class.java)
     private val baseUrl = "https://api.telegram.org/bot$token"
@@ -67,6 +69,11 @@ class TelegramApiClient(
         offset: Long?,
         timeoutSeconds: Int,
     ): List<TelegramUpdate> {
+        check(
+            maintenancePolicy.allowsBotGlobalOperation(
+                StagingMaintenancePolicy.BotGlobalOperation.GET_UPDATES,
+            ),
+        )
         val response: TelegramResponse<List<TelegramUpdate>> =
             client.get("$baseUrl/getUpdates") {
                 offset?.let { parameter("offset", it) }
@@ -80,6 +87,11 @@ class TelegramApiClient(
     }
 
     suspend fun getWebhookInfo(): TelegramWebhookInfo {
+        check(
+            maintenancePolicy.allowsBotGlobalOperation(
+                StagingMaintenancePolicy.BotGlobalOperation.GET_WEBHOOK_INFO,
+            ),
+        )
         val response: TelegramResponse<TelegramWebhookInfo> =
             client.get("$baseUrl/getWebhookInfo").safeBody()
         if (response.ok.not()) {
@@ -95,7 +107,7 @@ class TelegramApiClient(
         replyMarkup: ReplyMarkup? = null,
         parseMode: String? = null,
     ): MessageId? {
-        if (!trafficPolicy.allowsOutboundChat(chatId)) return null
+        if (!trafficPolicy.allowsOutboundChat(chatId) || !maintenancePolicy.allowsOutboundChat(chatId)) return null
         val payload = buildSendMessagePayload(json, chatId, text, replyMarkup, parseMode)
         val payloadJson = json.encodeToJsonElement(payload)
         return runCatching {
@@ -124,7 +136,12 @@ class TelegramApiClient(
         method: String,
         payload: JsonElement,
     ): TelegramCallResult {
-        if (!trafficPolicy.allowsOutboundChat(envelopeChatId)) return TelegramCallResult.TrafficDenied
+        if (
+            !trafficPolicy.allowsOutboundChat(envelopeChatId) ||
+            !maintenancePolicy.allowsOutboundChat(envelopeChatId)
+        ) {
+            return TelegramCallResult.TrafficDenied
+        }
         if (!isValidOutboxEnvelope(envelopeChatId, method, payload)) {
             return TelegramCallResult.Failure(
                 errorCode = null,
@@ -137,6 +154,13 @@ class TelegramApiClient(
     }
 
     suspend fun deleteMyCommands(scopeType: String): TelegramCallResult {
+        if (
+            !maintenancePolicy.allowsBotGlobalOperation(
+                StagingMaintenancePolicy.BotGlobalOperation.COMMAND_CONFIGURATION,
+            )
+        ) {
+            return TelegramCallResult.TrafficDenied
+        }
         require(scopeType in commandScopeTypes) { "Unsupported Telegram command scope" }
         return callMethod(
             "deleteMyCommands",
@@ -155,6 +179,13 @@ class TelegramApiClient(
         scopeType: String?,
         commands: JsonArray,
     ): TelegramCallResult {
+        if (
+            !maintenancePolicy.allowsBotGlobalOperation(
+                StagingMaintenancePolicy.BotGlobalOperation.COMMAND_CONFIGURATION,
+            )
+        ) {
+            return TelegramCallResult.TrafficDenied
+        }
         require(scopeType == null || scopeType in commandScopeTypes) { "Unsupported Telegram command scope" }
         return callMethod(
             "setMyCommands",
@@ -172,8 +203,15 @@ class TelegramApiClient(
         )
     }
 
-    suspend fun setCommandsMenuButton(): TelegramCallResult =
-        callMethod(
+    suspend fun setCommandsMenuButton(): TelegramCallResult {
+        if (
+            !maintenancePolicy.allowsBotGlobalOperation(
+                StagingMaintenancePolicy.BotGlobalOperation.COMMAND_CONFIGURATION,
+            )
+        ) {
+            return TelegramCallResult.TrafficDenied
+        }
+        return callMethod(
             "setChatMenuButton",
             buildJsonObject {
                 put(
@@ -184,6 +222,7 @@ class TelegramApiClient(
                 )
             },
         )
+    }
 
     private suspend fun callMethod(
         method: String,
@@ -205,6 +244,13 @@ class TelegramApiClient(
     }
 
     suspend fun downloadFile(fileId: String): TelegramDownloadedFile? {
+        if (
+            !maintenancePolicy.allowsBotGlobalOperation(
+                StagingMaintenancePolicy.BotGlobalOperation.FILE_DOWNLOAD,
+            )
+        ) {
+            return null
+        }
         val trimmedFileId = fileId.trim()
         if (trimmedFileId.isBlank()) {
             return null
@@ -242,7 +288,12 @@ class TelegramApiClient(
         chatId: Long,
         userId: Long,
     ): ChatMember? {
-        if (!trafficPolicy.allowsChatMemberLookup(chatId, userId)) return null
+        if (
+            !trafficPolicy.allowsChatMemberLookup(chatId, userId) ||
+            !maintenancePolicy.allowsChatMemberLookup(chatId, userId)
+        ) {
+            return null
+        }
         return runCatching {
             val response: TelegramResponse<ChatMember> =
                 client.get("$baseUrl/getChatMember") {
@@ -261,7 +312,7 @@ class TelegramApiClient(
     }
 
     suspend fun getChat(chatId: Long): Chat? {
-        if (!trafficPolicy.allowsOutboundChat(chatId)) return null
+        if (!trafficPolicy.allowsOutboundChat(chatId) || !maintenancePolicy.allowsOutboundChat(chatId)) return null
         return runCatching {
             val response: TelegramResponse<Chat> =
                 client.get("$baseUrl/getChat") {
@@ -285,7 +336,7 @@ class TelegramApiClient(
         caption: String? = null,
         replyMarkup: ReplyMarkup? = null,
     ): Boolean {
-        if (!trafficPolicy.allowsOutboundChat(chatId)) return false
+        if (!trafficPolicy.allowsOutboundChat(chatId) || !maintenancePolicy.allowsOutboundChat(chatId)) return false
         return runCatching {
             val replyMarkupJson = buildReplyMarkupPayload(json, replyMarkup)
             val response: TelegramResponse<JsonObject> =
@@ -330,7 +381,7 @@ class TelegramApiClient(
         chatId: Long,
         messageId: Long,
     ): Boolean {
-        if (!trafficPolicy.allowsOutboundChat(chatId)) return false
+        if (!trafficPolicy.allowsOutboundChat(chatId) || !maintenancePolicy.allowsOutboundChat(chatId)) return false
         val result =
             runCatching {
                 callMethod(

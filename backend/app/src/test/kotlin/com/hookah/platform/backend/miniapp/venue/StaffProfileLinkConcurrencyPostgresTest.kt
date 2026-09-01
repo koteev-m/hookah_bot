@@ -258,17 +258,20 @@ class StaffProfileLinkConcurrencyPostgresTest {
     ): Set<Int> =
         observer.prepareStatement(
             """
-            WITH RECURSIVE target_waiters(pid) AS (
+            WITH RECURSIVE production_request_waiters(pid) AS (
                 SELECT pid
                 FROM pg_stat_activity
                 WHERE datname = current_database()
                   AND wait_event_type = 'Lock'
-                  AND lower(query) LIKE '%venue_members%'
                   AND lower(query) LIKE '%for update%'
+                  AND (
+                      lower(query) LIKE '%from venue_members%'
+                      OR lower(query) LIKE '%from venues%'
+                  )
             ),
             lock_chain(root_pid, pid, path) AS (
                 SELECT pid, pid, ARRAY[pid]
-                FROM target_waiters
+                FROM production_request_waiters
                 UNION ALL
                 SELECT lock_chain.root_pid, blocker.pid, lock_chain.path || blocker.pid
                 FROM lock_chain

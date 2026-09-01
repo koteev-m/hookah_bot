@@ -3,6 +3,7 @@ package com.hookah.platform.backend.telegram
 import ch.qos.logback.classic.Logger
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.read.ListAppender
+import com.hookah.platform.backend.maintenance.StagingMaintenancePolicy
 import com.hookah.platform.backend.metrics.AppMetrics
 import com.hookah.platform.backend.telegram.db.StaffChatNotificationClaim
 import com.hookah.platform.backend.telegram.db.StaffChatNotificationRepository
@@ -38,6 +39,72 @@ import kotlin.test.assertTrue
 
 class TelegramOutboxWorkerTest {
     private val trafficPolicy = TelegramTrafficPolicy.unrestricted()
+
+    @Test
+    fun `maintenance claim leaves denied rows byte identical and reaches later allowed rows`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            val dataSource = PostgresTestEnv.createDataSource(database)
+            val productPolicy = TelegramTrafficPolicy.product()
+            val maintenancePolicy =
+                StagingMaintenancePolicy.from(
+                    MapApplicationConfig(
+                        "staging.maintenance.mode" to "V126_SMOKE",
+                        "staging.maintenance.allowedUserIds" to "123",
+                        "staging.maintenance.allowedChatIds" to "123,-100123",
+                    ),
+                    "staging",
+                )
+            val repository = TelegramOutboxRepository(dataSource, productPolicy, maintenancePolicy)
+            val enqueuer =
+                TelegramOutboxEnqueuer(
+                    repository,
+                    Json { ignoreUnknownKeys = true },
+                    productPolicy,
+                    maintenancePolicy,
+                )
+            val now = Instant.parse("2030-01-01T00:00:00Z")
+
+            DriverManager.getConnection(database.jdbcUrl, database.user, database.password).use { connection ->
+                connection.prepareStatement(
+                    "INSERT INTO users (telegram_user_id, first_name) " +
+                        "VALUES (123, 'Allowed'), (888, 'Denied'), (999, 'Denied')",
+                ).use { it.executeUpdate() }
+                connection.prepareStatement(
+                    """
+                    INSERT INTO telegram_outbox (
+                        chat_id, method, payload_json, status, attempts, last_error,
+                        created_at, processed_at, next_attempt_at
+                    )
+                    VALUES
+                        (999, 'sendMessage', '{"chat_id":999,"text":"denied-new"}',
+                         'NEW', 2, 'preserve-new', TIMESTAMPTZ '2025-01-01 00:00:00Z', NULL, NULL),
+                        (888, 'sendMessage', '{"chat_id":888,"text":"denied-sending"}',
+                         'SENDING', 4, 'preserve-sending', TIMESTAMPTZ '2025-01-02 00:00:00Z',
+                         TIMESTAMPTZ '2025-01-03 00:00:00Z', TIMESTAMPTZ '2025-01-04 00:00:00Z')
+                    """.trimIndent(),
+                ).use { it.executeUpdate() }
+            }
+            val deniedBefore = outboxSnapshots(database.jdbcUrl, database.user, database.password, setOf(888L, 999L))
+
+            assertEquals(
+                TelegramOutboxEnqueueOutcome.ENQUEUED,
+                enqueuer.enqueueSendMessage(123L, "allowed behind denied"),
+            )
+            assertEquals(
+                TelegramOutboxEnqueueOutcome.SKIPPED_TRAFFIC_POLICY,
+                enqueuer.enqueueSendMessage(999L, "must not be inserted"),
+            )
+
+            val claimed = repository.claimBatch(10, now, java.time.Duration.ofMinutes(2))
+
+            assertEquals(listOf(123L), claimed.map { it.chatId })
+            assertEquals(
+                deniedBefore,
+                outboxSnapshots(database.jdbcUrl, database.user, database.password, setOf(888L, 999L)),
+            )
+            dataSource.close()
+        }
 
     @Test
     fun `zero chat callback row is never claimed in unrestricted mode`() =
@@ -462,7 +529,7 @@ class TelegramOutboxWorkerTest {
         }
 
     @Test
-    fun `product staff notifications require the exact venue staff chat`() =
+    fun `maintenance staff notifications require the exact reviewed and product linked venue staff chat`() =
         runBlocking {
             val database = PostgresTestEnv.createDatabase()
             val dataSource = PostgresTestEnv.createDataSource(database)
@@ -471,9 +538,18 @@ class TelegramOutboxWorkerTest {
                     MapApplicationConfig("telegram.trafficPolicy" to "PRODUCT"),
                     appEnv = "staging",
                 )
-            val repository = StaffChatNotificationRepository(dataSource, productPolicy)
             val venueOneChatId = -100_920_001L
             val venueTwoChatId = -100_920_002L
+            val maintenancePolicy =
+                StagingMaintenancePolicy.from(
+                    MapApplicationConfig(
+                        "staging.maintenance.mode" to "V126_SMOKE",
+                        "staging.maintenance.allowedUserIds" to "300",
+                        "staging.maintenance.allowedChatIds" to "300,$venueOneChatId",
+                    ),
+                    "staging",
+                )
+            val repository = StaffChatNotificationRepository(dataSource, productPolicy, maintenancePolicy)
             val venueIds = mutableListOf<Long>()
             DriverManager.getConnection(database.jdbcUrl, database.user, database.password).use { connection ->
                 connection.prepareStatement(

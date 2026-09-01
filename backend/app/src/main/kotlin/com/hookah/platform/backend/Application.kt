@@ -18,6 +18,7 @@ import com.hookah.platform.backend.api.ApiException
 import com.hookah.platform.backend.api.ApiHeaders
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.api.ForbiddenException
+import com.hookah.platform.backend.api.MaintenanceUnavailableException
 import com.hookah.platform.backend.billing.BillingAdjustmentRepository
 import com.hookah.platform.backend.billing.BillingConfig
 import com.hookah.platform.backend.billing.BillingInvoiceRepository
@@ -37,6 +38,7 @@ import com.hookah.platform.backend.billing.subscription.SubscriptionBillingJob
 import com.hookah.platform.backend.billing.subscription.SubscriptionBillingVenueRepository
 import com.hookah.platform.backend.db.DatabaseFactory
 import com.hookah.platform.backend.db.DbConfig
+import com.hookah.platform.backend.maintenance.StagingMaintenancePolicy
 import com.hookah.platform.backend.metrics.AppMetrics
 import com.hookah.platform.backend.miniapp.auth.miniAppAuthRoutes
 import com.hookah.platform.backend.miniapp.guest.BookingExpiryWorker
@@ -299,6 +301,7 @@ internal data class ModuleOverrides(
 
 private class TelegramTrafficPolicySessionGuardConfig {
     lateinit var trafficPolicy: TelegramTrafficPolicy
+    lateinit var maintenancePolicy: StagingMaintenancePolicy
 }
 
 private val TelegramTrafficPolicySessionGuard =
@@ -307,12 +310,16 @@ private val TelegramTrafficPolicySessionGuard =
         createConfiguration = ::TelegramTrafficPolicySessionGuardConfig,
     ) {
         val trafficPolicy = pluginConfig.trafficPolicy
+        val maintenancePolicy = pluginConfig.maintenancePolicy
         on(AuthenticationChecked) { call ->
             val telegramUserId =
                 call.principal<JWTPrincipal>()?.payload?.subject?.toLongOrNull()
                     ?: return@on
             if (!trafficPolicy.allowsMiniAppUser(telegramUserId)) {
                 throw ForbiddenException()
+            }
+            if (!maintenancePolicy.allowsMiniAppUser(telegramUserId)) {
+                throw MaintenanceUnavailableException()
             }
         }
     }
@@ -409,6 +416,10 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                 ?: "dev"
         ).trim().lowercase(Locale.ROOT)
     val telegramTrafficPolicy = TelegramTrafficPolicy.from(appConfig, appEnv)
+    val stagingMaintenancePolicy = StagingMaintenancePolicy.from(appConfig, appEnv)
+    check(!stagingMaintenancePolicy.active || telegramTrafficPolicy.productMode) {
+        "V126_SMOKE requires TELEGRAM_TRAFFIC_POLICY=PRODUCT"
+    }
     val earlyStagingProductStaffInviteConfig =
         if (telegramTrafficPolicy.productMode && appEnv == "staging") {
             StaffInviteConfig.from(
@@ -660,9 +671,15 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
     var telegramOutboxWorkerScope: CoroutineScope? = null
     var telegramOutboxWorkerJob: Job? = null
     val telegramInboundUpdateQueueRepository = TelegramInboundUpdateQueueRepository(dataSource)
-    val telegramOutboxRepository = TelegramOutboxRepository(dataSource, telegramTrafficPolicy)
+    val telegramOutboxRepository =
+        TelegramOutboxRepository(dataSource, telegramTrafficPolicy, stagingMaintenancePolicy)
     val telegramOutboxEnqueuer =
-        TelegramOutboxEnqueuer(telegramOutboxRepository, telegramJson, telegramTrafficPolicy)
+        TelegramOutboxEnqueuer(
+            telegramOutboxRepository,
+            telegramJson,
+            telegramTrafficPolicy,
+            stagingMaintenancePolicy,
+        )
     val bookingMessageStaffChatNotifier =
         BookingMessageStaffChatNotifier(
             outboxEnqueuer = telegramOutboxEnqueuer,
@@ -749,7 +766,8 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
             dataSource = dataSource,
             pepper = staffInviteConfig.secretPepper,
         )
-    val staffChatNotificationRepository = StaffChatNotificationRepository(dataSource, telegramTrafficPolicy)
+    val staffChatNotificationRepository =
+        StaffChatNotificationRepository(dataSource, telegramTrafficPolicy, stagingMaintenancePolicy)
     val staffChatNotifier =
         StaffChatNotifier(
             venueRepository = venueRepository,
@@ -757,6 +775,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
             venueSettingsRepository = venueSettingsRepository,
             isTelegramActive = { telegramConfig.enabled && !telegramConfig.token.isNullOrBlank() },
             trafficPolicy = telegramTrafficPolicy,
+            maintenancePolicy = stagingMaintenancePolicy,
             scope = staffChatNotifierScope,
             json = telegramJson,
             venueMiniAppUrl = { venueId ->
@@ -796,6 +815,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     },
                 json = telegramJson,
                 trafficPolicy = telegramTrafficPolicy,
+                maintenancePolicy = stagingMaintenancePolicy,
             )
         telegramRouter =
             TelegramBotRouter(
@@ -857,6 +877,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                 repeatOrderResolver = repeatOrderResolver,
                 guestTableContextLifecycleRepository = guestTableContextLifecycleRepository,
                 trafficPolicy = telegramTrafficPolicy,
+                maintenancePolicy = stagingMaintenancePolicy,
                 miniAppAbuseProtection = miniAppAbuseProtection,
                 recipientLocks = telegramRecipientLocks,
             )
@@ -871,6 +892,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                             getWebhookUrl = { telegramApiClient.getWebhookInfo().url },
                             processUpdate = router::process,
                             trafficPolicy = telegramTrafficPolicy,
+                            maintenancePolicy = stagingMaintenancePolicy,
                             timeoutSeconds = telegramConfig.longPollingTimeoutSeconds,
                             scope = botScope,
                         ).start()
@@ -892,6 +914,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                             json = telegramJson,
                             scope = telegramWebhookWorkerScope!!,
                             trafficPolicy = telegramTrafficPolicy,
+                            maintenancePolicy = stagingMaintenancePolicy,
                             metrics = appMetrics,
                         )
                     telegramWebhookWorkerJob = worker.start()
@@ -929,17 +952,21 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
 
     monitor.subscribe(ApplicationStarted) {
         if (dataSource != null) {
-            subscriptionBillingJob.start(subscriptionBillingScope)
-            tableSessionCleanupJob = tableSessionCleanupWorker.start()
-            if (bookingExpiryWorkerConfig.enabled) {
-                bookingExpiryJob = bookingExpiryWorker.start()
+            if (stagingMaintenancePolicy.allowsAutonomousWrites) {
+                subscriptionBillingJob.start(subscriptionBillingScope)
+                tableSessionCleanupJob = tableSessionCleanupWorker.start()
+                if (bookingExpiryWorkerConfig.enabled) {
+                    bookingExpiryJob = bookingExpiryWorker.start()
+                } else {
+                    logger.info("Booking expiry worker disabled by config")
+                }
+                if (bookingReminderWorkerConfig.enabled) {
+                    bookingReminderJob = bookingReminderWorker.start()
+                } else {
+                    logger.info("Booking reminder worker disabled by config")
+                }
             } else {
-                logger.info("Booking expiry worker disabled by config")
-            }
-            if (bookingReminderWorkerConfig.enabled) {
-                bookingReminderJob = bookingReminderWorker.start()
-            } else {
-                logger.info("Booking reminder worker disabled by config")
+                logger.info("Autonomous application writers disabled by staging maintenance policy")
             }
             logger.info("Visit feedback worker disabled for History-only feedback MVP")
         } else {
@@ -949,7 +976,13 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
             logger.info("Booking reminder worker disabled: database is not configured")
             logger.info("Visit feedback worker disabled for History-only feedback MVP")
         }
-        if (telegramConfig.enabled && !telegramConfig.token.isNullOrBlank()) {
+        if (
+            telegramConfig.enabled &&
+            !telegramConfig.token.isNullOrBlank() &&
+            stagingMaintenancePolicy.allowsBotGlobalOperation(
+                StagingMaintenancePolicy.BotGlobalOperation.COMMAND_CONFIGURATION,
+            )
+        ) {
             val apiClient = telegramApiClient
             val scope = telegramScope
             if (apiClient != null && scope != null) {
@@ -1088,11 +1121,19 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                 JWTPrincipal(credentials.payload)
             }
             challenge { _, _ ->
-                call.respondApiError(
-                    status = HttpStatusCode.Unauthorized,
-                    code = ApiErrorCodes.UNAUTHORIZED,
-                    message = "Unauthorized",
-                )
+                if (stagingMaintenancePolicy.active) {
+                    call.respondApiError(
+                        status = HttpStatusCode.ServiceUnavailable,
+                        code = ApiErrorCodes.SERVICE_UNAVAILABLE,
+                        message = "Service unavailable",
+                    )
+                } else {
+                    call.respondApiError(
+                        status = HttpStatusCode.Unauthorized,
+                        code = ApiErrorCodes.UNAUTHORIZED,
+                        message = "Unauthorized",
+                    )
+                }
             }
         }
     }
@@ -1185,6 +1226,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
             config = billingConfig,
             providerRegistry = billingProviderRegistry,
             billingService = billingService,
+            maintenancePolicy = stagingMaintenancePolicy,
         )
 
         miniAppAuthRoutes(
@@ -1192,6 +1234,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
             sessionTokenService = sessionTokenService,
             userRepository = userRepository,
             telegramTrafficPolicy = telegramTrafficPolicy,
+            maintenancePolicy = stagingMaintenancePolicy,
             abuseProtection = miniAppAbuseProtection,
         )
 
@@ -1208,6 +1251,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     venueInfoSectionMediaRepository = venueInfoSectionMediaRepository,
                     subscriptionRepository = subscriptionRepository,
                     telegramFileDownloader = guestInfoMediaDownloader,
+                    maintenancePolicy = stagingMaintenancePolicy,
                 )
             }
         }
@@ -1215,6 +1259,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
         authenticate("miniapp-session") {
             install(TelegramTrafficPolicySessionGuard) {
                 trafficPolicy = telegramTrafficPolicy
+                maintenancePolicy = stagingMaintenancePolicy
             }
             route("/api") {
                 route("/guest") {
@@ -1496,6 +1541,15 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                             logger.info(
                                 "Telegram inbound update denied source=webhook reason={}",
                                 decision.reason,
+                            )
+                            call.respond(HttpStatusCode.OK)
+                            return@post
+                        }
+                        val maintenanceDecision = stagingMaintenancePolicy.evaluateInbound(update)
+                        if (maintenanceDecision is StagingMaintenancePolicy.InboundDecision.Denied) {
+                            logger.info(
+                                "Telegram inbound update denied source=webhook reason=MAINTENANCE_{}",
+                                maintenanceDecision.reason,
                             )
                             call.respond(HttpStatusCode.OK)
                             return@post

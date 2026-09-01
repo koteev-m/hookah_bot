@@ -1,5 +1,6 @@
 package com.hookah.platform.backend.telegram
 
+import com.hookah.platform.backend.maintenance.StagingMaintenancePolicy
 import com.hookah.platform.backend.miniapp.guest.db.GuestBookingRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestMenuRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestTabsRepository
@@ -21,6 +22,7 @@ import com.hookah.platform.backend.telegram.db.VenueBookingHoursRepository
 import com.hookah.platform.backend.telegram.db.VenueMenuSectionImagesRepository
 import com.hookah.platform.backend.telegram.db.VenueRepository
 import com.hookah.platform.backend.telegram.db.VenueShort
+import io.ktor.server.config.MapApplicationConfig
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -60,10 +62,12 @@ class TelegramBotRouterLinkCommandTest {
     private fun createRouter(
         botUsername: String? = "TestBot",
         trafficPolicy: TelegramTrafficPolicy = TelegramTrafficPolicy.unrestricted(),
+        maintenancePolicy: StagingMaintenancePolicy = StagingMaintenancePolicy.off(),
         requireStaffChatAdmin: Boolean = false,
     ): TelegramBotRouter =
         TelegramBotRouter(
             trafficPolicy = trafficPolicy,
+            maintenancePolicy = maintenancePolicy,
             config =
                 TelegramBotConfig(
                     enabled = true,
@@ -363,6 +367,88 @@ class TelegramBotRouterLinkCommandTest {
                     any(),
                 )
             }
+        }
+
+    @Test
+    fun `maintenance admits exact staff group while product role and link authority remain required`() =
+        runBlocking {
+            val maintenancePolicy =
+                StagingMaintenancePolicy.from(
+                    MapApplicationConfig(
+                        "staging.maintenance.mode" to "V126_SMOKE",
+                        "staging.maintenance.allowedUserIds" to "300",
+                        "staging.maintenance.allowedChatIds" to "300,-700",
+                    ),
+                    "staging",
+                )
+            val maintenanceRouter =
+                createRouter(
+                    trafficPolicy = TelegramTrafficPolicy.product(),
+                    maintenancePolicy = maintenancePolicy,
+                )
+            val connection: Connection = mockk()
+            every { venueAccessRepository.hasVenueAdminOrOwner(connection, 300L, 10L) } returns true
+            coEvery {
+                staffChatLinkCodeRepository.linkAndBindWithCode(
+                    "GHJK234",
+                    300L,
+                    -700L,
+                    218L,
+                    any(),
+                    any(),
+                )
+            } coAnswers {
+                @Suppress("UNCHECKED_CAST")
+                val authorize = invocation.args[4] as suspend (Connection, Long) -> Boolean
+
+                @Suppress("UNCHECKED_CAST")
+                val bind =
+                    invocation.args[5] as suspend (
+                        Connection,
+                        Long,
+                    ) -> com.hookah.platform.backend.telegram.db.BindResult
+                if (!authorize(connection, 10L)) {
+                    LinkAndBindResult.Unauthorized(venueId = 10L)
+                } else {
+                    bind(connection, 10L)
+                    LinkAndBindResult.Success(venueId = 10L, venueName = "Venue")
+                }
+            }
+            every { venueRepository.bindStaffChatInTransaction(connection, 10L, -700L, 300L) } returns
+                com.hookah.platform.backend.telegram.db.BindResult.Success(10L, "Venue")
+
+            maintenanceRouter.process(
+                TelegramUpdate(
+                    updateId = 209,
+                    message =
+                        Message(
+                            messageId = 218,
+                            chat = Chat(id = -700, type = "supergroup"),
+                            fromUser = User(id = 300),
+                            text = "/link ghjk234",
+                        ),
+                ),
+            )
+            maintenanceRouter.process(
+                TelegramUpdate(
+                    updateId = 210,
+                    message =
+                        Message(
+                            messageId = 219,
+                            chat = Chat(id = -701, type = "supergroup"),
+                            fromUser = User(id = 300),
+                            text = "/link ghjk234",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 1) {
+                staffChatLinkCodeRepository.linkAndBindWithCode("GHJK234", 300L, -700L, 218L, any(), any())
+            }
+            coVerify(exactly = 1) {
+                outboxEnqueuer.enqueueVenueSendMessage(10L, -700L, any(), any())
+            }
+            coVerify(exactly = 0) { idempotencyRepository.tryAcquire(210L, -701L, 219L) }
         }
 
     @Test

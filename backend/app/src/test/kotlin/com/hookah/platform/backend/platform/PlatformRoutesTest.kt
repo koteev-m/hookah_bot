@@ -46,6 +46,33 @@ class PlatformRoutesTest {
         }
 
     @Test
+    fun `maintenance admission does not grant platform authority`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("platform-maintenance-non-owner")
+            val allowedNonOwnerId = 202L
+            val config =
+                buildConfig(
+                    jdbcUrl,
+                    platformOwnerId = 101L,
+                    maintenanceAllowedUserId = allowedNonOwnerId,
+                )
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val token = issueToken(config, userId = allowedNonOwnerId)
+            val response =
+                client.get("/api/platform/me") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+
+            assertEquals(HttpStatusCode.Forbidden, response.status)
+            assertApiErrorEnvelope(response, ApiErrorCodes.FORBIDDEN)
+        }
+
+    @Test
     fun `owner can access platform me`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("platform-owner")
@@ -259,6 +286,7 @@ class PlatformRoutesTest {
         telegramPlatformOwnerId: Long? = null,
         legacyOwnerTelegramId: Long? = null,
         includeEmptyPlatformOwnerUserId: Boolean = false,
+        maintenanceAllowedUserId: Long? = null,
     ): MapApplicationConfig {
         val values =
             mutableListOf(
@@ -280,6 +308,12 @@ class PlatformRoutesTest {
         }
         if (legacyOwnerTelegramId != null) {
             values.add("platform.legacyOwnerTelegramId" to legacyOwnerTelegramId.toString())
+        }
+        if (maintenanceAllowedUserId != null) {
+            values.add("telegram.trafficPolicy" to "PRODUCT")
+            values.add("staging.maintenance.mode" to "V126_SMOKE")
+            values.add("staging.maintenance.allowedUserIds" to maintenanceAllowedUserId.toString())
+            values.add("staging.maintenance.allowedChatIds" to maintenanceAllowedUserId.toString())
         }
 
         return MapApplicationConfig(*values.toTypedArray())

@@ -45,8 +45,9 @@ class BookingMessageStaffChatNotifier(
                         ),
                     ),
             )
-        outboxEnqueuer.enqueueBookingSendMessageInTransaction(
+        outboxEnqueuer.enqueueVenueBookingSendMessageInTransaction(
             connection = connection,
+            venueId = venueId,
             chatId = target.chatId,
             text = buildBookingMessageStaffChatAlertText(bookingLabel, thread.guestDisplayName),
             replyMarkup = replyMarkup,

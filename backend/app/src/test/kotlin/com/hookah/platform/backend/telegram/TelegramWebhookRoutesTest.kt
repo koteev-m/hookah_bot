@@ -24,6 +24,61 @@ import kotlin.test.assertTrue
 
 class TelegramWebhookRoutesTest {
     @Test
+    fun `maintenance webhook gate acknowledges denied identity before queue persistence`() =
+        testApplication {
+            val database = PostgresTestEnv.createDatabase()
+            environment {
+                config =
+                    MapApplicationConfig(
+                        "app.env" to "test",
+                        "api.session.jwtSecret" to "test-secret",
+                        "db.jdbcUrl" to database.jdbcUrl,
+                        "db.user" to database.user,
+                        "db.password" to database.password,
+                        "db.maxPoolSize" to "3",
+                        "telegram.enabled" to "true",
+                        "telegram.token" to "test-token",
+                        "telegram.mode" to "webhook",
+                        "telegram.webhookSecretToken" to "secret",
+                        "telegram.staffChatLinkSecretPepper" to "pepper",
+                        "telegram.trafficPolicy" to "PRODUCT",
+                        "staging.maintenance.mode" to "V126_SMOKE",
+                        "staging.maintenance.allowedUserIds" to ALLOWED_USER_ID.toString(),
+                        "staging.maintenance.allowedChatIds" to ALLOWED_USER_ID.toString(),
+                    )
+            }
+            application {
+                moduleWithOverrides(ModuleOverrides(telegramCommandMenuConfigurator = {}))
+            }
+
+            listOf(30L to DENIED_USER_ID, 31L to ALLOWED_USER_ID).forEach { (updateId, userId) ->
+                val response =
+                    client.post("/telegram/webhook") {
+                        contentType(ContentType.Application.Json)
+                        headers { append("X-Telegram-Bot-Api-Secret-Token", "secret") }
+                        setBody(
+                            "{\"update_id\":$updateId,\"message\":{\"message_id\":1," +
+                                "\"chat\":{\"id\":$userId,\"type\":\"private\"}," +
+                                "\"from\":{\"id\":$userId},\"text\":\"/start\"}}",
+                        )
+                    }
+                assertEquals(HttpStatusCode.OK, response.status)
+            }
+
+            DriverManager.getConnection(database.jdbcUrl, database.user, database.password).use { connection ->
+                connection.prepareStatement(
+                    "SELECT update_id FROM telegram_inbound_updates WHERE update_id IN (30, 31)",
+                ).use { statement ->
+                    statement.executeQuery().use { resultSet ->
+                        assertTrue(resultSet.next())
+                        assertEquals(31L, resultSet.getLong("update_id"))
+                        assertFalse(resultSet.next())
+                    }
+                }
+            }
+        }
+
+    @Test
     fun `missing telegram webhook secret returns forbidden`() =
         testApplication {
             environment {

@@ -1,6 +1,7 @@
 package com.hookah.platform.backend.telegram.db
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.maintenance.StagingMaintenancePolicy
 import com.hookah.platform.backend.telegram.TelegramTrafficPolicy
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -36,6 +37,7 @@ data class TelegramOutboxMessage(
 class TelegramOutboxRepository(
     private val dataSource: DataSource?,
     private val trafficPolicy: TelegramTrafficPolicy,
+    private val maintenancePolicy: StagingMaintenancePolicy = StagingMaintenancePolicy.off(),
 ) {
     private val logger = LoggerFactory.getLogger(TelegramOutboxRepository::class.java)
 
@@ -45,7 +47,7 @@ class TelegramOutboxRepository(
         payloadJson: String,
         dedupeKey: String? = null,
     ): Boolean {
-        if (!trafficPolicy.allowsOutboundChat(chatId)) return false
+        if (!allowsOutboundChat(chatId)) return false
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
@@ -86,7 +88,7 @@ class TelegramOutboxRepository(
         payloadJson: String,
         dedupeKey: String? = null,
     ): Boolean {
-        if (!trafficPolicy.allowsOutboundChat(chatId)) return false
+        if (!allowsOutboundChat(chatId)) return false
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
@@ -127,8 +129,43 @@ class TelegramOutboxRepository(
         payloadJson: String,
         dedupeKey: String? = null,
     ): Boolean {
-        if (!trafficPolicy.allowsOutboundChat(chatId)) return false
+        if (!allowsOutboundChat(chatId)) return false
         if (!isProductGenericEnqueueRecipientAuthorized(connection, chatId)) return false
+        return enqueueStrictBookingEnvelopeOnConnection(
+            connection = connection,
+            chatId = chatId,
+            method = method,
+            payloadJson = payloadJson,
+            dedupeKey = dedupeKey,
+        )
+    }
+
+    fun enqueueStrictVenueBookingOnConnection(
+        connection: Connection,
+        venueId: Long,
+        chatId: Long,
+        method: String,
+        payloadJson: String,
+        dedupeKey: String? = null,
+    ): Boolean {
+        if (!allowsOutboundChat(chatId)) return false
+        if (!isProductStrictVenueStaffChatAuthorized(connection, venueId, chatId)) return false
+        return enqueueStrictBookingEnvelopeOnConnection(
+            connection = connection,
+            chatId = chatId,
+            method = method,
+            payloadJson = payloadJson,
+            dedupeKey = dedupeKey,
+        )
+    }
+
+    private fun enqueueStrictBookingEnvelopeOnConnection(
+        connection: Connection,
+        chatId: Long,
+        method: String,
+        payloadJson: String,
+        dedupeKey: String?,
+    ): Boolean {
         val normalizedDedupeKey = normalizeDedupeKey(dedupeKey)
         if (normalizedDedupeKey != null) {
             findOutboxEnvelope(connection, normalizedDedupeKey)?.let { existing ->
@@ -313,6 +350,7 @@ class TelegramOutboxRepository(
     ): List<TelegramOutboxMessage> {
         val claimScope = trafficPolicy.outboundClaimScope
         val eligibleChatIds = claimScope.eligibleChatIds.sorted()
+        val maintenanceEligibleChatIds = maintenancePolicy.outboundEligibleChatIds.sorted()
         if (!claimScope.unrestricted && !claimScope.productAuthoritative && eligibleChatIds.isEmpty()) {
             return emptyList()
         }
@@ -361,6 +399,12 @@ class TelegramOutboxRepository(
                                     """.trimIndent()
                                 else -> "AND o.chat_id IN (${eligibleChatIds.joinToString(",") { "?" }})"
                             }
+                        val maintenanceEligibilitySql =
+                            if (maintenancePolicy.active) {
+                                "AND o.chat_id IN (${maintenanceEligibleChatIds.joinToString(",") { "?" }})"
+                            } else {
+                                ""
+                            }
                         val selectSql =
                             """
                             SELECT o.id,
@@ -378,6 +422,7 @@ class TelegramOutboxRepository(
                               AND o.chat_id <> 0
                               AND (o.next_attempt_at IS NULL OR o.next_attempt_at <= ?)
                               $chatEligibilitySql
+                              $maintenanceEligibilitySql
                             ORDER BY o.created_at, o.id
                             LIMIT ?
                             FOR UPDATE SKIP LOCKED
@@ -390,6 +435,11 @@ class TelegramOutboxRepository(
                             var parameterIndex = 4
                             eligibleChatIds
                                 .takeIf { !claimScope.unrestricted && !claimScope.productAuthoritative }
+                                ?.forEach { chatId ->
+                                    statement.setLong(parameterIndex++, chatId)
+                                }
+                            maintenanceEligibleChatIds
+                                .takeIf { maintenancePolicy.active }
                                 ?.forEach { chatId ->
                                     statement.setLong(parameterIndex++, chatId)
                                 }
@@ -461,7 +511,7 @@ class TelegramOutboxRepository(
         chatId: Long,
         staffLiveOrderId: Long? = null,
     ): Boolean {
-        if (!trafficPolicy.allowsOutboundChat(chatId)) return false
+        if (!allowsOutboundChat(chatId)) return false
         if (!trafficPolicy.productMode) return true
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
@@ -553,7 +603,7 @@ class TelegramOutboxRepository(
         chatId: Long,
         messageId: Long,
     ) {
-        if (!trafficPolicy.allowsOutboundChat(chatId)) return
+        if (!allowsOutboundChat(chatId)) return
         val ds = dataSource ?: throw DatabaseUnavailableException()
         withContext(Dispatchers.IO) {
             try {
@@ -589,7 +639,7 @@ class TelegramOutboxRepository(
         chatId: Long,
         payloadJson: String,
     ) {
-        if (!trafficPolicy.allowsOutboundChat(chatId)) return
+        if (!allowsOutboundChat(chatId)) return
         val ds = dataSource ?: throw DatabaseUnavailableException()
         withContext(Dispatchers.IO) {
             try {
@@ -703,6 +753,28 @@ class TelegramOutboxRepository(
         }
     }
 
+    private fun isProductStrictVenueStaffChatAuthorized(
+        connection: Connection,
+        venueId: Long,
+        chatId: Long,
+    ): Boolean {
+        if (!trafficPolicy.productMode) return true
+        return connection.prepareStatement(
+            """
+            SELECT 1
+            FROM venues
+            WHERE id = ?
+              AND staff_chat_id = ?
+            LIMIT 1
+            FOR UPDATE
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, chatId)
+            statement.executeQuery().use { resultSet -> resultSet.next() }
+        }
+    }
+
     private fun isProductOrderStaffChatAuthorized(
         connection: Connection,
         orderId: Long,
@@ -788,4 +860,7 @@ class TelegramOutboxRepository(
             throwable::class.simpleName ?: "unknown",
         )
     }
+
+    private fun allowsOutboundChat(chatId: Long): Boolean =
+        trafficPolicy.allowsOutboundChat(chatId) && maintenancePolicy.allowsOutboundChat(chatId)
 }

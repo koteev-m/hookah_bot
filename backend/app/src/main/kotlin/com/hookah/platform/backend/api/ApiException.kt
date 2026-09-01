@@ -109,6 +109,12 @@ class RequestBodyTooLargeException : ApiException(
     message = "Request body is too large",
 )
 
+class MaintenanceUnavailableException : ApiException(
+    code = ApiErrorCodes.SERVICE_UNAVAILABLE,
+    httpStatus = HttpStatusCode.ServiceUnavailable,
+    message = "Service unavailable",
+)
+
 class DatabaseUnavailableException(
     details: JsonObject? = null,
 ) : ApiException(

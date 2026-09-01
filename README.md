@@ -340,6 +340,8 @@ Docker build собирает production Mini App и копирует стати
 
 One-command deploy from local machine:
 ```bash
+BACKEND_IMAGE=hookah_bot_ant-backend:<candidate-sha> \
+EXPECTED_BACKEND_IMAGE_ID=sha256:<reviewed-image-id> \
 ./scripts/deploy-staging.sh hookah-staging
 ```
 
@@ -349,6 +351,8 @@ staging runbook.
 
 If fresh SSH connections are unreliable during deploy, use the explicitly opt-in persistent SSH wrapper documented in the staging runbook:
 ```bash
+BACKEND_IMAGE=hookah_bot_ant-backend:<candidate-sha> \
+EXPECTED_BACKEND_IMAGE_ID=sha256:<reviewed-image-id> \
 ./scripts/deploy-staging-controlmaster.sh hookah-staging
 ```
 

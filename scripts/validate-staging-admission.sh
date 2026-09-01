@@ -208,6 +208,9 @@ require_env_file_only_admission() {
     TELEGRAM_TRAFFIC_POLICY \
     TELEGRAM_ALLOWED_USER_IDS \
     TELEGRAM_ALLOWED_CHAT_IDS \
+    STAGING_MAINTENANCE_MODE \
+    STAGING_MAINTENANCE_ALLOWED_USER_IDS \
+    STAGING_MAINTENANCE_ALLOWED_CHAT_IDS \
     VENUE_STAFF_INVITE_SECRET_PEPPER; do
     if awk -v key="${key}" '$0 ~ "^[[:space:]]+" key ":[[:space:]]*" { found=1 } END { exit !found }' "${compose_file}"; then
       fail "${key} must come only from the fixed backend env_file, not Compose interpolation"
@@ -257,6 +260,9 @@ effective_admission_json() {
       -u TELEGRAM_TRAFFIC_POLICY \
       -u TELEGRAM_ALLOWED_USER_IDS \
       -u TELEGRAM_ALLOWED_CHAT_IDS \
+      -u STAGING_MAINTENANCE_MODE \
+      -u STAGING_MAINTENANCE_ALLOWED_USER_IDS \
+      -u STAGING_MAINTENANCE_ALLOWED_CHAT_IDS \
       -u VENUE_STAFF_INVITE_SECRET_PEPPER \
       docker compose --env-file "${env_name}" -f "${compose_name}" config --format json 2>/dev/null
   ) | awk '
@@ -265,6 +271,9 @@ effective_admission_json() {
       wanted["TELEGRAM_TRAFFIC_POLICY"]=1
       wanted["TELEGRAM_ALLOWED_USER_IDS"]=1
       wanted["TELEGRAM_ALLOWED_CHAT_IDS"]=1
+      wanted["STAGING_MAINTENANCE_MODE"]=1
+      wanted["STAGING_MAINTENANCE_ALLOWED_USER_IDS"]=1
+      wanted["STAGING_MAINTENANCE_ALLOWED_CHAT_IDS"]=1
       wanted["VENUE_STAFF_INVITE_SECRET_PEPPER"]=1
     }
     /^    "backend": \{$/ { in_backend=1; next }
@@ -470,7 +479,10 @@ write_self_test_env() {
       'POSTGRES_PASSWORD=fixture-password' \
       "TELEGRAM_TRAFFIC_POLICY=${policy}" \
       "TELEGRAM_ALLOWED_USER_IDS=${users}" \
-      "TELEGRAM_ALLOWED_CHAT_IDS=${chats}"
+      "TELEGRAM_ALLOWED_CHAT_IDS=${chats}" \
+      'STAGING_MAINTENANCE_MODE=OFF' \
+      'STAGING_MAINTENANCE_ALLOWED_USER_IDS=' \
+      'STAGING_MAINTENANCE_ALLOWED_CHAT_IDS='
     if [[ "${pepper}" != "__ABSENT__" ]]; then
       printf '%s\n' "VENUE_STAFF_INVITE_SECRET_PEPPER=${pepper}"
     fi
@@ -531,6 +543,9 @@ self_test() {
     TELEGRAM_TRAFFIC_POLICY=UNRESTRICTED \
     TELEGRAM_ALLOWED_USER_IDS=999 \
     TELEGRAM_ALLOWED_CHAT_IDS=999 \
+    STAGING_MAINTENANCE_MODE=V126_SMOKE \
+    STAGING_MAINTENANCE_ALLOWED_USER_IDS=999 \
+    STAGING_MAINTENANCE_ALLOWED_CHAT_IDS=999 \
     VENUE_STAFF_INVITE_SECRET_PEPPER=change-me \
     validate_admission "${PUBLIC_PILOT_PROFILE}" "${env_file}" "${compose_file}" >/dev/null 2>&1; then
     fail "self-test expected scrubbed shell overrides to preserve reviewed PRODUCT config"

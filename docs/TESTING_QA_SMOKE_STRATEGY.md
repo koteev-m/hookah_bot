@@ -1,6 +1,6 @@
 # Testing / QA Smoke Strategy
 
-Дата актуализации: 2026-08-30.
+Дата актуализации: 2026-09-01.
 
 Статус: **current product reference / UPDATED**. This document is the canonical QA/smoke strategy for the Telegram bot + Mini App platform. It consolidates local validation, GitHub Actions expectations, area-specific smoke suites, staging policy, failure reporting and Codex handoff rules. Deployment and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
 
@@ -37,12 +37,16 @@ Quality gates must match the blast radius of the change. Do not claim a feature 
 
 ### Permanent public-pilot Telegram admission quality gate
 
-The authoritative V125 hotfix is
+The historical authoritative V125 admission hotfix is
 `b4e13da3179438fad69d2344e1cb136a56f95f6c..be5d62a5e9058f89cd72be6c313c71fa46ccdbf2`.
-HT-INC-02 ports it onto main without changing either migration tree and preserves PostgreSQL V126 /
-H2 V127 plus all main-only booking behavior. Public-pilot staging uses `PRODUCT`; `ALLOWLIST` is a
-separately reviewed isolated-smoke mode only. Every future main/V126 release must keep this matrix
-and the deployment guards below mandatory:
+HT-INC-02 ported that admission contract onto main without changing either migration tree. The
+successfully deployed HT-12M V125 candidate
+`f577934691a1a7a79ba327c54e2055425142b7be` adds the separate maintenance overlay and currently runs
+on staging with `PRODUCT`, `STAGING_MAINTENANCE_MODE=OFF` and empty PRODUCT and maintenance lists.
+The active HT-12M main port must preserve PostgreSQL V126/H2 V127 plus all main-only booking
+behavior. `ALLOWLIST` remains a separately reviewed isolated-smoke mode only; it is not the V126
+maintenance mechanism. Every future main/V126 release must keep this matrix and the deployment
+guards below mandatory:
 
 - `TelegramTrafficPolicyStartupTest`, `TelegramTrafficPolicyConfigTest` and
   `TelegramTrafficPolicyTest`: staging accepts only explicit `ALLOWLIST` or `PRODUCT` and rejects
@@ -186,26 +190,133 @@ git diff --check
 git status --short
 ```
 
-HT-INC-02 also runs the full backend suite, PostgreSQL-backed integration/concurrency selectors,
-compile, ktlint, the unchanged Mini App production build and complete structured Playwright smoke,
-Compose validation, deploy-script syntax/fixture guards and an empty migration diff. Exact JUnit XML
-files must exist, meet or exceed their declared floors and report zero skipped/failures/errors; a
-selector name alone is not coverage. Green local checks prove readiness for independent review only.
+The current HT-12M main-port gate retains the full backend suite, PostgreSQL-backed
+integration/concurrency selectors, compile, ktlint, the unchanged Mini App production build and
+complete structured Playwright smoke, Compose validation, deploy-script syntax/fixture guards and an
+empty migration diff. Exact JUnit XML files must exist, meet or exceed their declared floors and
+report zero skipped/failures/errors; a selector name alone is not coverage. Green local checks prove
+readiness for independent review only.
+
+### HT-12M identity-gated V126 maintenance prerequisite quality gate
+
+This runtime/security prerequisite started from exact V125 staging source
+`be5d62a5e9058f89cd72be6c313c71fa46ccdbf2` and produced reviewed candidate
+`f577934691a1a7a79ba327c54e2055425142b7be` without a PostgreSQL or H2 migration change. Its
+authorized staging deploy passed under `PRODUCT` with `STAGING_MAINTENANCE_MODE=OFF`, empty
+maintenance lists, Flyway V125 and V126 absent. The active main port must preserve all normal PRODUCT
+admission, both existing migration trees and all main-only behavior. Client IP/CIDR attribution is
+not part of the proof. Do not integrate main, redeploy staging or run Flyway/V126 during the port.
+
+Required focused proof:
+
+- `StagingMaintenancePolicyTest` and `StagingMaintenanceStartupTest`: OFF default/ignored lists,
+  canonical active identities, exact positive private chat/user equality, optional negative groups,
+  staging-only/product-only activation, fail-before-DB malformed/incomplete configuration,
+  restricted-value privacy, process-lifetime immutability, autonomous-writer and command setup
+  disablement.
+- `TelegramLongPollingWorkerTest`, `TelegramWebhookRoutesTest`,
+  `TelegramInboundUpdateWorkerTest`, `TelegramBotRouterIdempotencyTest` and Router group/link suites:
+  denial before Router/queue/idempotency/user/domain/outbox, webhook and queue defense in depth,
+  denied/malformed queue rows byte-for-byte unchanged, a later allowed row processed, exact private
+  and group admission, and PRODUCT staff-chat/role authority after maintenance admission.
+- `TelegramAuthRouteTest`, `SessionAuthTest`, `MiniAppRoutesTest`, `VenueRbacRoutesTest` and
+  `PlatformRoutesTest`: signature/freshness precedes the auth overlay; valid allowed initData creates
+  a session, valid excluded initData creates no user/session and gets generic `503`; old allowed JWT
+  works and old excluded JWT is rechecked on Guest/Venue/Platform; missing auth is also generic `503`
+  while active; billing webhook and public Telegram-media API are disabled; health/version/static
+  remain readable; admitted users still cannot cross venue or Platform RBAC.
+- `TelegramOutboxWorkerTest`, `StaffChatNotifierTest` and
+  `TelegramApiClientTrafficPolicyTest`: exact allowed user and linked staff-group enqueue/claim/send,
+  excluded `NEW`/retry/`SENDING` state unchanged with no attempts/error/timestamp mutation, later
+  eligible rows not starved, direct sends/member/chat/delete/media/callback paths non-bypassable and
+  separately typed bot-global operations bounded.
+- Existing `StaffInvite*`, venue staff and public PRODUCT tests remain the OFF-mode regression proof:
+  arbitrary fresh Guest and valid exact-role OWNER/MANAGER/STAFF invite acceptance never requires a
+  maintenance ID. Full Router and backend suites must remain green.
+- Captured-log tests must assert that startup failures, direct/webhook/queued/Router denials and API
+  failures expose at most bounded source/reason/error-type metadata: no raw IDs, lists, initData,
+  JWT, bot token, webhook secret, payload or message text.
+
+Run the focused groups before broad regression:
+
+```bash
+./gradlew --no-daemon --max-workers=1 :backend:app:test \
+  --tests '*StagingMaintenance*' \
+  --tests '*TelegramAuthRouteTest*' \
+  --tests '*SessionAuthTest*' \
+  --tests '*MiniAppRoutesTest*' \
+  --tests '*VenueRbacRoutesTest*' \
+  --tests '*PlatformRoutesTest*' \
+  --console=plain
+
+./gradlew --no-daemon --max-workers=1 :backend:app:test \
+  --tests '*TelegramLongPollingWorkerTest*' \
+  --tests '*TelegramWebhookRoutesTest*' \
+  --tests '*TelegramInboundUpdateWorkerTest*' \
+  --tests '*TelegramBotRouterIdempotencyTest*' \
+  --tests '*TelegramApiClientTrafficPolicyTest*' \
+  --tests '*TelegramOutboxWorkerTest*' \
+  --console=plain
+
+./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*TelegramBotRouter*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:test \
+  --tests '*StaffInvite*' --tests '*VenueStaff*' --tests '*GuestOrder*' \
+  --tests '*VenueOrder*' --tests '*Support*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:test --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:compileKotlin --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:ktlintCheck --console=plain
+npm --prefix miniapp run build
+MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke
+bash scripts/check-staging-maintenance-config.sh --self-test
+bash scripts/check-staging-image-identity.sh --self-test scripts/deploy-staging.sh
+docker compose config --quiet
+git diff --check
+```
+
+Run relevant production-migration/Testcontainers PostgreSQL concurrency and integrity selectors from
+the current CI matrix even though this branch adds no migration. Prove migration identity with a
+name/blob comparison of both migration trees between the exact base and candidate; any difference
+is a STOP. Branch Actions, including Mini App build/browser smoke, Compose, migration sanity and
+Docker, must be green. An independent read-only security reviewer must inspect the complete final
+diff and report unclassified mutation paths, pre-gate writes, outbound bypasses, unsafe old-image
+rollback or sensitive logging before commit/release evidence is accepted.
+
+For a digest-authorized deploy, build with the same `--provenance=false` path used by the deploy
+script, record the canonical image ID, rebuild once and require the same ID, then pass it as
+`EXPECTED_BACKEND_IMAGE_ID`. The identity guard must pass on an exact match and fail on malformed or
+different values before any upload. A mismatch after authorization is an automatic rollback/STOP,
+even when executable layers appear equivalent.
+
+The later authorized smoke follows the ordered drain in `docs/DEPLOYMENT_RUNBOOK.md`. While active,
+verify public generic `503` and zero-state with an excluded valid identity, then run canonical live
+Guest/Owner Telegram smoke. After full PASS, activate the second drain and restart with `OFF`, empty
+maintenance values and underlying PRODUCT unchanged; repeat health/DB/schema/queue gates and prove a
+fresh ordinary Guest again enters. An active mode left after cutover is a release failure, not a
+degraded success.
 
 #### Recorded public-pilot staging acceptance
 
-Read-only reconciliation on 2026-08-30 confirms the exact candidate
+Historical read-only reconciliation on 2026-08-30 confirmed admission baseline
 `be5d62a5e9058f89cd72be6c313c71fa46ccdbf2`, runtime `PRODUCT`, empty static lists, restricted
 non-placeholder invite pepper, one backend/long poller, Flyway V125 with V126 absent, healthy
 inactive queues and unchanged Caddy TLS 1.2 mitigation. Alias-only transactional evidence
 corroborates the two reported external acceptance identities; later explicit audited membership
 changes remain separate events and do not rewrite the acceptance ledger.
 
+The later authorized HT-12M V125 deploy now runs exact candidate
+`f577934691a1a7a79ba327c54e2055425142b7be` and image ID
+`sha256:6a8aed7c85374efd89aa2db2e3dbcbed6d84f63087a757ad077856b78bce24a8`, with one backend/poller,
+underlying `PRODUCT`, maintenance `OFF`, empty PRODUCT and maintenance lists, Flyway V125, V126
+absent, healthy inactive queues and unchanged Caddy. Authenticated Guest, Venue and Platform
+read-only checks plus foreign-venue and Platform-escalation denials passed. No fresh mutating Guest or
+invite smoke was repeated; exact-head automated coverage remains authoritative for those mutations.
+
 `LIVE_EXTERNAL_NEW_USER_INVITE_ACCEPTANCE = PASS`
 
-This closes HT-INC-01E. Do not create another coordinated client window. Runtime behavior changes in
-future releases still require the normal green-Actions/staging-smoke policy, but HT-INC-02 itself
-must not redeploy staging, apply V126, access production or restart/reload Caddy.
+This historical evidence closes HT-INC-01E. Do not create another coordinated client window merely
+to repeat it. Runtime behavior changes still require the normal green-Actions/staging-smoke policy;
+the active HT-12M main port must not redeploy staging, apply V126, access production or
+restart/reload Caddy.
 
 ### Booking test-only release hygiene
 
@@ -336,11 +447,12 @@ the current UX/unread closure gates; both remain mandatory where selected in CI:
   locked rejection of concurrently closed threads, positive generic-writer type allowlisting,
   ordinary chat/ticket regression, rollback and one-time Guest Bot transactional notification
   callback execution across replay.
-- `BookingConversationRoutesTest`: minimum `9`, covering two guests/two venues/multiple bookings,
+- `BookingConversationRoutesTest`: minimum `10`, covering two guests/two venues/multiple bookings,
   Guest and Venue generic booking replies through the authoritative writer, direct privacy denials,
   safe idempotency replay/mismatch `409`, required/strict Mini App key validation, cross-surface
   booking-label parity, actor/thread-scoped unread aggregation/read clearing and the exact ordinary
-  Guest wrong-surface/raw-marker/no-facts contract.
+  Guest wrong-surface/raw-marker/no-facts contract, plus per-request maintenance rechecking of
+  pre-existing Guest and Manager JWTs before conversation or unread-state work.
 - `BookingDisplayLabelTest`: minimum `2`, loading the shared JSON case fixture and exercising the
   production Kotlin formatter for positive-number formatting, stable booking-id fallback, venue
   timezone conversion and deterministic product-default timezone fallback. The dedicated
@@ -367,9 +479,10 @@ the current UX/unread closure gates; both remain mandatory where selected in CI:
   policy-skipped staff groups, wrong-venue exclusion and full message/outbox rollback on strict
   enqueue failure. The legacy
   suspend enqueue remains key-only and is covered by `TelegramOutboxWorkerTest` minimum `13`.
-- `BookingMessageStaffChatNotifierTest`: minimum `6`, executable without Docker and asserting exact
+- `BookingMessageStaffChatNotifierTest`: minimum `8`, executable without Docker and asserting exact
   canonical label/link payload, privacy-safe text, logical dedupe, caller-transaction rollback,
-  disabled/unlinked/missing-URL/policy skip and stable product-timezone fallback.
+  disabled/unlinked/missing-URL/policy skip, stable product-timezone fallback and the combined
+  maintenance-plus-PRODUCT venue staff-chat gate with zero outbox state on denial.
 - `StaffChatNotifierTest`: exact XML minimum `40`, with zero skipped/failures/errors; the lifecycle
   notifier must consume its caller-owned `ZoneId` without reading venue settings.
 - `SupportTicketRoutesTest` remains an exact support regression selector with minimum `15` and zero
@@ -555,8 +668,9 @@ The authorized release must use this exact order:
 3. Create and verify the database backup and the approved full-database restore path.
 4. Before downtime, prepare the exact image only from the detached release worktree, use the full
    SHA tag, verify any real OCI revision label and record the immutable image ID.
-5. Drain normal traffic and stop/drain every old hookah backend instance; keep traffic drained
-   through migration and the complete smoke.
+5. Keep `TELEGRAM_TRAFFIC_POLICY=PRODUCT`, activate the reviewed Caddy drain so public application
+   traffic receives generic `503`, and stop/drain every old hookah backend instance. Keep Caddy
+   drained through the stopped-writer preflight and new-backend loopback gates.
 6. Confirm `hookah_backend_container_count = 0` for the exact staging Compose project and `backend`
    service while PostgreSQL remains running.
 7. Inspect `pg_stat_activity` and confirm
@@ -564,15 +678,33 @@ The authorized release must use this exact order:
 8. Confirm `unidentified_candidate_session_count = 0`; every unidentified candidate is a STOP.
 9. Extract the final preflight from the exact release worktree, record its SHA-256, execute the exact
    unedited shell artifact and retain its result, including the expected pre-cutover Flyway head.
-10. Verify `DEPLOY_SHA = prepared image release SHA = EXPECTED_RELEASE_SHA`, then start exactly one
-    new backend from the recorded prepared image; do not start an old instance.
-11. Allow that backend's normal startup to apply PostgreSQL V126.
-12. Verify the Flyway head is V126 and verify its checksum and successful history row/startup log.
-13. Confirm every running hookah backend container uses the recorded new image and that old image
+10. Install only the reviewed restricted maintenance identities in the mode-0600 staging environment,
+    set `STAGING_MAINTENANCE_MODE=V126_SMOKE`, leave PRODUCT static lists empty and supply the separate
+    active-mode authorization flag without printing any identity.
+11. Verify `DEPLOY_SHA = prepared image release SHA = EXPECTED_RELEASE_SHA`, then start exactly one
+    new backend from the recorded prepared image with the overlay already active; do not start an old
+    instance.
+12. Allow that backend's normal startup to apply PostgreSQL V126.
+13. Verify the Flyway head is V126 and verify its checksum and successful history row/startup log.
+14. Confirm every running hookah backend container uses the recorded new image and that old image
     running count is zero.
-14. Run health, database health and the V126 schema invariants.
-15. Run the complete bounded staging smoke below with exactly one new backend.
-16. Restore normal traffic only after every smoke check passes completely.
+15. While Caddy remains drained, run loopback health, database health, version, V126 schema,
+    one-backend/poller and queue gates.
+16. Restore ordinary Caddy reverse proxy routing with `V126_SMOKE` still active. An unauthenticated
+    protected request and a valid excluded identity must each receive generic `503`; compare
+    SSH/loopback snapshots to prove zero user, session, inbound, idempotency, domain, notification or
+    outbox mutation.
+17. Run the complete bounded staging smoke below through the canonical public Telegram clients and
+    URLs with exactly one allowed Guest and Owner. Include the exact HT-14 live gate, linked
+    staff-chat delivery, tenant/RBAC negatives and label-collision scenario while excluded public
+    traffic remains generic `503` and state-free.
+18. After full PASS, activate the Caddy drain again, stop the backend, set maintenance `OFF`, clear
+    both maintenance lists, omit the active-mode authorization flag and keep underlying PRODUCT plus
+    empty PRODUCT static lists unchanged.
+19. Start exactly one reviewed V126 backend in OFF mode; while Caddy remains drained, repeat config,
+    health, database health, version, Flyway/schema, one-backend/poller and queue gates.
+20. Restore ordinary routing and prove fresh unknown-Guest plus Owner PRODUCT behavior. A retained
+    active mode, nonempty maintenance list or ALLOWLIST transition is a release failure.
 
 The sequence `stop container -> immediately start new backend` is forbidden. The PostgreSQL session
 gate and final read-only preflight must occur between stop/drain and the one-new-backend start.
@@ -601,28 +733,37 @@ operator-confidence, exceptional-case or separately approved partial-recovery-pl
 
 If startup or verification fails after schema cutover:
 
-1. Keep normal traffic drained.
+1. Make or keep Caddy return the generic drain `503` and stop the failed backend.
 2. Do not start the old backend.
 3. Perform no manual DB/schema/data cleanup.
 4. Preserve the verified backup, evidence and logs.
-5. Prepare a reviewed forward-fix binary.
-6. Start only the reviewed forward-fixed backend.
-7. Repeat health, database health, schema invariants and the complete smoke before reopening
-   traffic.
-8. Reopen traffic only after every repeated check succeeds completely.
+5. Prepare a reviewed V126-compatible forward-fix binary that retains the identity overlay.
+6. Start only that forward-fixed backend with underlying PRODUCT and `V126_SMOKE` already active.
+7. While Caddy remains drained, repeat loopback health, database health, version, schema,
+   one-backend/poller and queue gates.
+8. Restore routing with the overlay still active; repeat excluded-identity generic `503` plus
+   zero-state evidence and complete the allowed canonical Guest/Owner, HT-14, booking and staff-chat
+   smoke.
+9. After full PASS, drain and stop again, switch to `OFF`, clear both maintenance lists and restart
+   the same reviewed forward-fixed V126 backend over unchanged PRODUCT. Repeat final gates before
+   restoring ordinary PRODUCT routing and admission.
 
 The only restore path permitted by this release recovery contract is a full, consistent restore of
 the entire database as a separate disaster-recovery decision. It is not an ordinary release
 rollback and requires separate explicit confirmation from the user/product owner. After the full
-restore, select a backend binary compatible with the restored Flyway state, reassess migrations,
-then repeat health, database health, schema invariants and the complete smoke before reopening
-traffic. Never combine a full-database restore with a partial transfer of tables, rows or schema
+restore, select a reviewed identity-overlay-capable backend binary compatible with the restored
+Flyway state and reassess migrations. Resuming V126 requires the complete active-overlay sequence;
+abandoning the cutover on a restored pre-V126 state requires a controlled OFF/empty-list PRODUCT
+restart and repeated health, database health, schema, queue and normal-admission gates before routing
+returns. Never combine a full-database restore with a partial transfer of tables, rows or schema
 objects over V126. A long mixed deployment is prohibited. No old binary may be started to repair
-the V126 database, and only the new or reviewed forward-fixed backend may run before traffic
-reopens, unless a separately approved full-database disaster recovery has first restored a Flyway
-state compatible with the selected binary.
+the V126 database, and only the new or reviewed forward-fixed backend may run before the controlled
+OFF transition, unless a separately approved full-database disaster recovery has first restored a
+Flyway state compatible with the selected binary.
 
-With exactly one new backend and old image running count zero, the bounded staging smoke must prove:
+With ordinary Caddy routing restored, `V126_SMOKE` still active, exactly one new backend and old
+image running count zero, the bounded staging smoke must prove before the second drain and controlled
+OFF transition:
 
 - a user-visible NULL-author system message in a real `VENUE_CHAT` produces an unread badge;
 - exact open clears the badge, and a new system message after open becomes unread again;
@@ -2729,7 +2870,7 @@ Expectations:
   PostgreSQL gates.
 - The route/security selector runs with `TZ=UTC` and also executes and asserts
   `SupportTicketRoutesTest=15`, `SupportThreadReadRepositoryTest=21`,
-  `BookingMessageStaffChatNotifierTest=6`, `StaffChatNotifierTest=40`,
+  `BookingMessageStaffChatNotifierTest=8`, `StaffChatNotifierTest=40`,
   `TelegramOutboxWorkerTest=13`, `GuestOrderRoutesTest=61` and
   `TelegramBotRouterTableTokenTest=553`, preserving cursor/RBAC behavior, fixed confirmed-Platform
   Guest surface denial, caller-owned booking-notifier timezone, privacy-safe staff alerts and
@@ -2739,7 +2880,7 @@ Expectations:
   so unrelated tests cannot satisfy the class floors.
 - `backend-venue-booking-rbac` asserts exact XML minima `BookingDisplayLabelTest=2`,
   `GuestBookingRoutesTest=10`, `BookingReminderWorkerTest=3`, `VenueBookingRoutesTest=11`,
-  `VenueRbacRoutesTest=36`, `BookingConversationRoutesTest=9` and
+  `VenueRbacRoutesTest=36`, `BookingConversationRoutesTest=10` and
   `BookingConversationRepositoryTest=14`. It runs with `TZ=UTC` and requires the exact testcase
   names `guest attendance missing timezone uses Moscow once for response staff and deadline under
   UTC`, `guest attendance Honolulu timezone wins once for response staff and deadline under UTC`,
@@ -2916,7 +3057,8 @@ Current staging deploy command is canonical in `docs/DEPLOYMENT_RUNBOOK.md`:
 STAGING_PATH=/opt/hookah-bot \
 STAGING_DOMAIN=staging.hookahtootah.club \
 DOCKER_PLATFORM=linux/amd64 \
-BACKEND_IMAGE=hookah_bot_ant-backend:staging \
+BACKEND_IMAGE=hookah_bot_ant-backend:<candidate-sha> \
+EXPECTED_BACKEND_IMAGE_ID=sha256:<reviewed-image-id> \
 ./scripts/deploy-staging-controlmaster.sh hookah-staging
 ```
 

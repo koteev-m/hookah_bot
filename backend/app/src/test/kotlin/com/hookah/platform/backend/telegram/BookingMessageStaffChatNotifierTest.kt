@@ -1,5 +1,6 @@
 package com.hookah.platform.backend.telegram
 
+import com.hookah.platform.backend.maintenance.StagingMaintenancePolicy
 import com.hookah.platform.backend.support.SupportAssigneeScope
 import com.hookah.platform.backend.support.SupportBookingContextRecord
 import com.hookah.platform.backend.support.SupportThreadCategory
@@ -190,6 +191,46 @@ class BookingMessageStaffChatNotifierTest {
         }
 
     @Test
+    fun `product linked allowed staff group enqueues once during v126 smoke`() =
+        withFixture { fixture ->
+            fixture.seedVenue(venueId = 10L, staffChatId = -777L, timezone = "Europe/Moscow")
+            val notifier =
+                fixture.notifier(
+                    trafficPolicy = productTrafficPolicy(),
+                    maintenancePolicy = v126SmokeMaintenancePolicy(-777L),
+                )
+
+            fixture.commit { connection ->
+                notifier.enqueueGuestMessageAlertInTransaction(
+                    connection = connection,
+                    thread = bookingThread(),
+                    messageId = 7_011L,
+                )
+            }
+
+            assertEquals(1, fixture.outboxCountForChat(-777L))
+        }
+
+    @Test
+    fun `product linked maintenance denied staff group creates zero outbox state`() =
+        withFixture { fixture ->
+            fixture.seedVenue(venueId = 10L, staffChatId = -777L, timezone = "Europe/Moscow")
+
+            fixture.commit { connection ->
+                fixture.notifier(
+                    trafficPolicy = productTrafficPolicy(),
+                    maintenancePolicy = v126SmokeMaintenancePolicy(-888L),
+                ).enqueueGuestMessageAlertInTransaction(
+                    connection = connection,
+                    thread = bookingThread(),
+                    messageId = 7_012L,
+                )
+            }
+
+            assertEquals(0, fixture.outboxCount())
+        }
+
+    @Test
     fun `fallback booking identity and guest label are stable in the product timezone`() =
         withFixture { fixture ->
             fixture.seedVenue(venueId = 10L, staffChatId = -777L, timezone = null)
@@ -232,6 +273,24 @@ class BookingMessageStaffChatNotifierTest {
                     "telegram.trafficPolicy" to "ALLOWLIST",
                     "telegram.allowedUserIds" to "100",
                     "telegram.allowedChatIds" to (listOf(100L) + allowedGroupIds.toList()).joinToString(","),
+                ),
+            appEnv = "test",
+        )
+
+    private fun productTrafficPolicy(): TelegramTrafficPolicy =
+        TelegramTrafficPolicy.from(
+            config = MapApplicationConfig("telegram.trafficPolicy" to "PRODUCT"),
+            appEnv = "test",
+        )
+
+    private fun v126SmokeMaintenancePolicy(vararg allowedGroupIds: Long): StagingMaintenancePolicy =
+        StagingMaintenancePolicy.from(
+            config =
+                MapApplicationConfig(
+                    "staging.maintenance.mode" to "V126_SMOKE",
+                    "staging.maintenance.allowedUserIds" to TEST_MAINTENANCE_USER_ID.toString(),
+                    "staging.maintenance.allowedChatIds" to
+                        (listOf(TEST_MAINTENANCE_USER_ID) + allowedGroupIds.toList()).joinToString(","),
                 ),
             appEnv = "test",
         )
@@ -312,13 +371,15 @@ class BookingMessageStaffChatNotifierTest {
             telegramActive: Boolean = true,
             webAppPublicUrl: String? = "https://miniapp.example/entry?existing=1#old-fragment",
             trafficPolicy: TelegramTrafficPolicy = TelegramTrafficPolicy.unrestricted(),
+            maintenancePolicy: StagingMaintenancePolicy = StagingMaintenancePolicy.off(),
         ): BookingMessageStaffChatNotifier =
             BookingMessageStaffChatNotifier(
                 outboxEnqueuer =
                     TelegramOutboxEnqueuer(
-                        repository = TelegramOutboxRepository(dataSource, trafficPolicy),
+                        repository = TelegramOutboxRepository(dataSource, trafficPolicy, maintenancePolicy),
                         json = json,
                         trafficPolicy = trafficPolicy,
+                        maintenancePolicy = maintenancePolicy,
                     ),
                 isTelegramActive = { telegramActive },
                 webAppPublicUrl = { webAppPublicUrl },
@@ -424,4 +485,8 @@ class BookingMessageStaffChatNotifierTest {
         val payloadJson: String,
         val dedupeKey: String,
     )
+
+    private companion object {
+        const val TEST_MAINTENANCE_USER_ID = 123_456L
+    }
 }

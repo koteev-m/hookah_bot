@@ -71,6 +71,9 @@ Required staging values:
 - `PLATFORM_OWNER_USER_ID=` optional legacy compatibility alias; leave empty when `users.telegram_user_id` is the platform owner identity.
 - `TELEGRAM_STAFF_CHAT_LINK_SECRET_PEPPER`
 - `VENUE_STAFF_INVITE_SECRET_PEPPER` explicit and restricted in staging `PRODUCT`
+- `STAGING_MAINTENANCE_MODE=OFF` for normal public-pilot operation
+- `STAGING_MAINTENANCE_ALLOWED_USER_IDS` and `STAGING_MAINTENANCE_ALLOWED_CHAT_IDS` empty in the
+  normal example; exact restricted values exist only in an authorized `V126_SMOKE` window
 - `MINIAPP_ENTRY_ENABLED=true`
 - `MINIAPP_DEV_SERVER_URL=`
 - `MINIAPP_STATIC_DIR=/app/miniapp`
@@ -186,10 +189,80 @@ only through the exact current server-owned staff-chat/product workflow rules. T
 profile requires this exact mode and rejects nonempty static lists or a missing, blank or normalized
 known-placeholder invite pepper before build/upload/restart.
 
-The active restricted invite pepper is never stored in Git. Preserve it byte-for-byte unless a
-rotation is explicitly intended. Changing it invalidates all still-pending staff/owner links;
-reconcile and reissue them before relying on the new value. A rollback to an older `ALLOWLIST`
-runtime does not undo already committed memberships or used invites.
+### Temporary identity-gated V126 maintenance overlay
+
+The V126 migration window does not use `TELEGRAM_TRAFFIC_POLICY=ALLOWLIST` and does not use client
+IP/CIDR attribution. Underlying policy remains `PRODUCT`; the separate overlay defaults to `OFF` and
+has no authorization effect in normal public-pilot operation:
+
+```dotenv
+TELEGRAM_TRAFFIC_POLICY=PRODUCT
+STAGING_MAINTENANCE_MODE=OFF
+STAGING_MAINTENANCE_ALLOWED_USER_IDS=
+STAGING_MAINTENANCE_ALLOWED_CHAT_IDS=
+```
+
+Only a separately reviewed drain/cutover may put exact identities in the mode-0600 server `.env`:
+
+```dotenv
+TELEGRAM_TRAFFIC_POLICY=PRODUCT
+STAGING_MAINTENANCE_MODE=V126_SMOKE
+STAGING_MAINTENANCE_ALLOWED_USER_IDS=<restricted-positive-test-identities>
+STAGING_MAINTENANCE_ALLOWED_CHAT_IDS=<same-positive-private-chats-and-reviewed-negative-staff-chat>
+```
+
+Real values are restricted operational evidence and must never appear in Git, terminal capture,
+deploy output, logs or a task/PR comment. The positive chat set exactly equals the user set; negative
+entries are exact test staff chats. Active startup fails closed on a missing, malformed, duplicate,
+zero, overflow or inconsistent value. Editing `.env` does not hot-reload the process; activation and
+deactivation require the controlled backend stop/start sequence in `docs/DEPLOYMENT_RUNBOOK.md`.
+
+`scripts/check-staging-maintenance-config.sh` is the deploy preflight. When—and only when—the active
+transition has separate authorization, pass the non-secret one-shot process flag to the reviewed
+deploy invocation:
+
+```bash
+STAGING_MAINTENANCE_V126_SMOKE_AUTHORIZED=true \
+RUN_PUBLIC_CHECKS=false \
+BACKEND_IMAGE=hookah_bot_ant-backend:<candidate-sha> \
+EXPECTED_BACKEND_IMAGE_ID=sha256:<reviewed-image-id> \
+./scripts/deploy-staging-controlmaster.sh <ssh-alias>
+```
+
+The flag is not stored in `.env`, contains no identity and cannot activate the overlay. It only
+prevents the normal deploy path from silently accepting an already-active environment. After full
+V126 PASS, make Caddy return the generic drain `503` again, stop the backend, set `OFF`, clear both
+maintenance lists, omit the flag and keep `TELEGRAM_TRAFFIC_POLICY=PRODUCT` plus empty PRODUCT static
+lists unchanged. Start exactly one reviewed V126 backend and, while Caddy remains drained, repeat
+the normal config preflight, loopback health/DB/version, Flyway/schema, one-backend/poller and queue
+gates. Only then restore ordinary routing and prove fresh unknown-Guest plus Owner PRODUCT behavior.
+The normal preflight must report `OFF`; a retained active mode or nonempty maintenance list is a
+release failure.
+
+`RUN_PUBLIC_CHECKS=false` is mandatory for this active start because Caddy must keep returning the
+drain `503` until the deploy script has completed its loopback backend/DB/static checks and the
+separate SSH schema/queue gates pass. It does not authorize restoring public routing. After ordinary
+reverse proxy routing is restored, explicitly require unauthenticated protected traffic to remain
+generic `503`, then repeat with one valid excluded Telegram identity and compare the SSH/loopback
+state snapshots before running allowed smoke:
+
+```bash
+status="$(curl -sS -o /dev/null -w '%{http_code}' \
+  "${STAGING_PUBLIC_URL}/api/guest/_ping")"
+test "${status}" = "503"
+```
+
+Do not put initData or an identity in this command or its output. The excluded signed-initData check
+runs only through the canonical client, with its value redacted; zero-state evidence stays on
+SSH/loopback. Before the first migration-window start, record the current backend's exact image
+reference plus Docker image ID (and digest when present) from the VPS. Authorization is invalid
+without that immutable predeploy rollback evidence; an application/source SHA alone is not an image
+identity.
+
+Preserve an already explicit invite pepper byte-for-byte during this transition. If the old
+`ALLOWLIST` process used the built-in development fallback instead, capture only that fact (never the
+value), install a new restricted explicit pepper, and reconcile/reissue every still-pending
+staff/owner invite before relying on it; existing links cannot validate after the pepper changes.
 
 The policy is immutable for the lifetime of a backend process. In `ALLOWLIST`, updating either list
 requires:
@@ -245,27 +318,34 @@ For temporary tunnel-based local dev, keep using local env files and set public 
 Standard local one-command deploy:
 
 ```bash
+BACKEND_IMAGE=hookah_bot_ant-backend:<candidate-sha> \
+EXPECTED_BACKEND_IMAGE_ID=sha256:<reviewed-image-id> \
 ./scripts/deploy-staging.sh <ssh-alias>
 ```
 
 Current staging alias example:
 
 ```bash
+BACKEND_IMAGE=hookah_bot_ant-backend:<candidate-sha> \
+EXPECTED_BACKEND_IMAGE_ID=sha256:<reviewed-image-id> \
 ./scripts/deploy-staging.sh hookah-staging
 ```
 
 The script:
 
-1. runs the secret-free admission-guard fixtures locally;
-2. uploads `docker-compose.yml`, the admission validator, `scripts/seed-staging.sh` and safe
-   docs/templates;
-3. checks required server `.env` keys without printing values and validates the scrubbed effective
-   Compose backend environment as the default `public-pilot` profile;
-4. builds the backend Docker image locally for `linux/amd64`, including the Mini App production
-   build, then uploads the reviewed image;
-5. runs `docker compose --env-file .env up -d --no-build postgres backend` through the same scrubbed
-   admission environment so shell variables cannot replace the reviewed policy, lists or pepper;
-6. waits and retries local VPS health endpoints and the public staging URL.
+1. runs the secret-free admission and maintenance guard fixtures locally;
+2. requires a reviewed canonical `EXPECTED_BACKEND_IMAGE_ID`, then builds the backend image locally
+   for `linux/amd64` with BuildKit provenance disabled,
+   including the Mini App production build;
+3. compares the built canonical `sha256` image ID to the reviewed value and stops before opening
+   SSH, uploading files or making any remote change on a missing, malformed or different value;
+4. uploads Compose/control files, then validates the fixed `.env` through the scrubbed effective
+   Compose admission guard and the separate maintenance authorization guard without printing
+   secrets or identities;
+5. uploads the already verified Docker image;
+6. runs `docker compose --env-file .env up -d --no-build postgres backend` through the same scrubbed
+   admission and maintenance environment so shell values cannot replace reviewed configuration;
+7. waits and retries loopback health/DB/static checks and, when enabled, the public staging URL.
 
 CI and local release validation use the same secret-free checks:
 
@@ -279,7 +359,10 @@ The ordinary command always means public-pilot `PRODUCT`. A separately authorize
 must first use an exact fail-closed ALLOWLIST server `.env` and then opt in explicitly:
 
 ```bash
-STAGING_ADMISSION_PROFILE=isolated-allowlist ./scripts/deploy-staging.sh <ssh-alias>
+STAGING_ADMISSION_PROFILE=isolated-allowlist \
+BACKEND_IMAGE=hookah_bot_ant-backend:<candidate-sha> \
+EXPECTED_BACKEND_IMAGE_ID=sha256:<reviewed-image-id> \
+./scripts/deploy-staging.sh <ssh-alias>
 ```
 
 That opt-in is not a public-pilot deployment path. Restore and revalidate the reviewed PRODUCT
@@ -287,17 +370,37 @@ That opt-in is not a public-pilot deployment path. Restore and revalidate the re
 
 The health wait handles short backend startup windows and transient reverse-proxy connection resets. If the script still fails after all attempts, do not redeploy blindly; inspect container status and backend logs first.
 
-On Mac Apple Silicon the script uses `docker buildx build --platform linux/amd64 --load` so the uploaded image matches a typical x86_64/amd64 VPS.
+For a digest-authorized release, build the reviewed candidate once, record the ID returned by
+`docker image inspect`, and pass that exact value to the deploy. The deploy uses
+`--provenance=false` because BuildKit provenance attestations can change the top-level manifest-list
+digest between otherwise identical rebuilds. This local Docker-save deployment does not publish an
+attestation; source SHA, green Actions and the independently reviewed diff remain the provenance
+evidence. The expected-ID comparison runs after build but before any image upload or service restart:
+
+```bash
+BACKEND_IMAGE=hookah_bot_ant-backend:<candidate-sha> \
+EXPECTED_BACKEND_IMAGE_ID=sha256:<reviewed-image-id> \
+./scripts/deploy-staging-controlmaster.sh <ssh-alias>
+```
+
+`EXPECTED_BACKEND_IMAGE_ID` is mandatory for every deploy. Omitting it, supplying a malformed ID or
+building a different image fails locally before SSH, upload or service mutation.
+
+On Mac Apple Silicon the script uses
+`docker buildx build --platform linux/amd64 --provenance=false --load` so the uploaded image matches
+a typical x86_64/amd64 VPS and has a stable preupload identity for the expected-ID gate.
 
 The backend Dockerfile uses BuildKit cache mounts for Gradle wrapper and dependency caches. If Docker build fails while downloading the Gradle distribution or Maven dependencies with a transient `SocketTimeoutException`, rerun the same deploy command after confirming it is a network timeout, not a Kotlin compile/test failure. The wrapper network timeout is intentionally higher than the default, and a successful retry should reuse the warmed Docker/Gradle cache.
 
 ### Opt-In Persistent SSH Deploy
 
-Normal deployment remains supported and unchanged. Use the ControlMaster helper only when repeated new SSH connection establishment is unreliable during deploy.
+Direct deployment remains supported. Use the ControlMaster helper when repeated new SSH connection establishment is unreliable during deploy; both paths require the same exact image identity.
 
 Resilient command:
 
 ```bash
+BACKEND_IMAGE=hookah_bot_ant-backend:<candidate-sha> \
+EXPECTED_BACKEND_IMAGE_ID=sha256:<reviewed-image-id> \
 ./scripts/deploy-staging-controlmaster.sh <ssh-alias>
 ```
 
@@ -307,7 +410,8 @@ Current staging alias example with optional overrides:
 STAGING_PATH=/opt/hookah-bot \
 STAGING_DOMAIN=staging.example.com \
 DOCKER_PLATFORM=linux/amd64 \
-BACKEND_IMAGE=example-backend:staging \
+BACKEND_IMAGE=example-backend:<candidate-sha> \
+EXPECTED_BACKEND_IMAGE_ID=sha256:<reviewed-image-id> \
 ./scripts/deploy-staging-controlmaster.sh staging-alias
 ```
 
@@ -391,10 +495,11 @@ Optional overrides:
 ```bash
 STAGING_PATH=/opt/hookah-bot \
 STAGING_DOMAIN=staging.hookahtootah.club \
-BACKEND_IMAGE=hookah_bot_ant-backend:staging \
+BACKEND_IMAGE=hookah_bot_ant-backend:<candidate-sha> \
 DOCKER_PLATFORM=linux/amd64 \
 HEALTHCHECK_ATTEMPTS=20 \
 HEALTHCHECK_SLEEP_SECONDS=3 \
+EXPECTED_BACKEND_IMAGE_ID=sha256:<reviewed-image-id> \
 ./scripts/deploy-staging.sh hookah-staging
 ```
 
@@ -676,17 +781,26 @@ curl -I https://staging.hookahtootah.club/miniapp/
 The deploy script uploads a Docker image selected by `BACKEND_IMAGE`. For rollback-friendly releases, deploy with an immutable image tag, for example:
 
 ```bash
-BACKEND_IMAGE=hookah_bot_ant-backend:85f1b1e ./scripts/deploy-staging.sh hookah-staging
+BACKEND_IMAGE=hookah_bot_ant-backend:<known-good-full-sha> \
+EXPECTED_BACKEND_IMAGE_ID=sha256:<reviewed-known-good-image-id> \
+./scripts/deploy-staging.sh hookah-staging
 ```
 
-For staging, `<known-good-tag>` is never an arbitrary older image. Before PostgreSQL V126, the
-rollback image must be the allowlist-enabled V125 image built from
-`b4e13da3179438fad69d2344e1cb136a56f95f6c` (or a reviewed descendant with the same fail-closed
-traffic boundary), and Manifest B must remain active. A pre-allowlist or unrestricted image must
-not be started or rebuilt. After V126 has been applied, do not start any previous writer over that
-database; use the forward-fix or full database-restore procedure in `docs/DEPLOYMENT_RUNBOOK.md`.
-Any full restore must stop all backend writers first and pair the restored schema with a reviewed,
-allowlist-enabled compatible image.
+For staging, `<known-good-tag>` is never an arbitrary older image. The verified pre-V126 rollback
+point is identity-overlay-capable V125 candidate
+`f577934691a1a7a79ba327c54e2055425142b7be`, image ID
+`sha256:6a8aed7c85374efd89aa2db2e3dbcbed6d84f63087a757ad077856b78bce24a8`. Normal operation uses that
+image only with `TELEGRAM_TRAFFIC_POLICY=PRODUCT`, maintenance `OFF` and empty PRODUCT and
+maintenance lists. During a separately authorized V126 window, a rollback before any schema
+mutation keeps Caddy on the generic drain `503`, starts only this exact reviewed image with
+`V126_SMOKE` already active, and passes loopback gates before routing can return. A pre-overlay,
+`ALLOWLIST`-as-maintenance or unrestricted image must never substitute for that contract.
+
+After V126 has been applied, do not start any previous writer over that database; use the reviewed
+forward-fix or separately authorized full database-restore procedure in
+`docs/DEPLOYMENT_RUNBOOK.md`. Any full restore must stop all backend writers first and pair the
+restored schema with a reviewed identity-overlay-capable image compatible with the restored Flyway
+state.
 
 To roll back to an image that is already loaded on the VPS:
 
@@ -694,12 +808,21 @@ To roll back to an image that is already loaded on the VPS:
 ssh hookah-staging
 cd /opt/hookah-bot
 docker images 'hookah_bot_ant-backend'
-BACKEND_IMAGE=hookah_bot_ant-backend:<known-good-tag> docker compose up -d --no-build backend
+ROLLBACK_BACKEND_IMAGE=hookah_bot_ant-backend:<known-good-full-sha>
+EXPECTED_ROLLBACK_IMAGE_ID=sha256:<reviewed-known-good-image-id>
+actual_rollback_image_id="$(docker image inspect --format '{{.Id}}' "${ROLLBACK_BACKEND_IMAGE}")"
+bash scripts/check-staging-image-identity.sh \
+  "${actual_rollback_image_id}" \
+  "${EXPECTED_ROLLBACK_IMAGE_ID}"
+BACKEND_IMAGE="${ROLLBACK_BACKEND_IMAGE}" docker compose up -d --no-build backend
+running_backend_image_id="$(docker inspect --format '{{.Image}}' "$(docker compose ps -q backend)")"
+test "${running_backend_image_id}" = "${EXPECTED_ROLLBACK_IMAGE_ID}"
 docker compose ps
 docker compose logs --tail=120 backend
 ```
 
-Then run the public sanity checks:
+For an ordinary OFF-mode rollback, pass loopback config/health/DB/schema/queue gates before restoring
+routing, then run the public sanity checks:
 
 ```bash
 curl -f https://staging.hookahtootah.club/health
@@ -708,8 +831,11 @@ curl -I https://staging.hookahtootah.club/miniapp/
 ```
 
 If the approved compatible image is not available on the VPS, rebuild and redeploy that exact
-reviewed allowlist-enabled commit from the developer machine using the same
-`BACKEND_IMAGE=<known-good-tag>` value. Do not substitute a pre-allowlist commit.
+reviewed identity-overlay-capable commit from the developer machine using its full-SHA
+`BACKEND_IMAGE=<known-good-tag>` and exact `EXPECTED_BACKEND_IMAGE_ID`. Do not substitute another
+commit or accept a digest mismatch. An active maintenance-window recovery must use the controlled
+drain/active-overlay/routed-smoke/OFF transition in `docs/DEPLOYMENT_RUNBOOK.md`, not the ordinary
+public sanity sequence above.
 
 Database caution: if the failed release applied migrations, code rollback may not be enough. In
 particular, after V126 the old-writer rollback path is forbidden. Restore a PostgreSQL backup only

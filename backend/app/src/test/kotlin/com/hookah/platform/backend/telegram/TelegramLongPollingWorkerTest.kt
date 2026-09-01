@@ -4,6 +4,7 @@ import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.read.ListAppender
+import com.hookah.platform.backend.maintenance.StagingMaintenancePolicy
 import io.ktor.server.config.MapApplicationConfig
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -20,6 +21,41 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class TelegramLongPollingWorkerTest {
+    @Test
+    fun `maintenance denial advances offset before router`() =
+        runBlocking {
+            val processed = mutableListOf<Long>()
+            val maintenancePolicy =
+                StagingMaintenancePolicy.from(
+                    MapApplicationConfig(
+                        "staging.maintenance.mode" to "V126_SMOKE",
+                        "staging.maintenance.allowedUserIds" to "101",
+                        "staging.maintenance.allowedChatIds" to "101,-100500",
+                    ),
+                    "staging",
+                )
+            val worker =
+                TelegramLongPollingWorker(
+                    getUpdates = { _, _ -> emptyList() },
+                    getWebhookUrl = { "" },
+                    processUpdate = { update -> processed += update.updateId },
+                    trafficPolicy = TelegramTrafficPolicy.product(),
+                    maintenancePolicy = maintenancePolicy,
+                    timeoutSeconds = 1,
+                    scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+                )
+
+            worker.processBatch(
+                listOf(
+                    privateUpdate(updateId = 30, userId = 999),
+                    privateUpdate(updateId = 31, userId = 101),
+                ),
+            )
+
+            assertEquals(listOf(31L), processed)
+            assertEquals(32L, worker.currentOffset())
+        }
+
     @Test
     fun `denied updates advance offset without reaching router`() =
         runBlocking {
