@@ -5,7 +5,9 @@ Last verified: 2026-09-01.
 ## 1. Current stage
 
 **HT-12M IDENTITY-GATED MAINTENANCE / V125-COMPATIBLE IMPLEMENTATION /
-LOCAL VALIDATION AND INDEPENDENT SECURITY REVIEW COMPLETE / CANDIDATE EVIDENCE PENDING / NO DEPLOY**.
+LOCAL VALIDATION AND INDEPENDENT SECURITY REVIEW COMPLETE / CANDIDATE COMMITTED AND PUSHED /
+BRANCH ACTIONS GREEN / IMMUTABLE IMAGE EVIDENCE CAPTURED /
+V125 DEPLOY AUTHORIZATION REQUIRED / NO DEPLOY**.
 
 The isolated feature branch is based on exact currently running V125 candidate
 `be5d62a5e9058f89cd72be6c313c71fa46ccdbf2`. Normal staging remains `PRODUCT`, with public Guest
@@ -15,8 +17,10 @@ rechecks validated Mini App/JWT subjects before domain work, scopes Telegram ing
 disables unrelated autonomous writers. Denied protected HTTP receives generic `503`; denied inbound
 and outbox rows are not mutated or allowed to starve later eligible work.
 
-This branch adds no migration and has not run Flyway/V126, contacted staging, modified Caddy, written
-staging data or accessed production. Focused policy/auth/session/queue/outbox/direct-send/RBAC,
+This branch adds no migration and has not run Flyway/V126, modified Caddy, written staging data or
+accessed production. The only staging access was a read-only SSH/Docker inspection that captured
+the current backend image reference and digest as the immutable rollback point; no process,
+configuration, image or data was changed. Focused policy/auth/session/queue/outbox/direct-send/RBAC,
 full Router, PRODUCT invite/staff/order/support and real-PostgreSQL maintenance queue/outbox plus
 concurrency/integrity selectors are green. Compile, ktlint, Mini App build, `206/206` browser smoke,
 Compose, deploy-guard self-test and diff checks are green. PostgreSQL and H2 migration subtree hashes
@@ -26,9 +30,10 @@ failures or errors. Its initial run exposed an unchanged-base defect in the read
 membership waiter but not the second request waiting transitively through the production venue-row
 lock. The test-only CTE now starts from both exact production `FOR UPDATE` queries and still requires
 both chains to reach the external membership blocker; the class passes `2/2` with no runtime change.
-Remaining gates are explicit candidate commit/push, green branch Actions and immutable image
-evidence. It must then stop at separate V125 deploy authorization with the overlay `OFF`. The main
-port from exact
+The isolated feature branch is committed and pushed, all ten branch Actions jobs are green for its
+exact head, and immutable current/candidate image evidence is captured. Work is stopped at the
+separate V125 deploy authorization gate; the first candidate deploy must keep the overlay `OFF` and
+prove no public-pilot regression. The main port from exact
 `b49a89a299d8c9864fcfc5937d455141563b388a` begins only after that later V125 deploy passes.
 
 The required independent read-only security review inspected the complete code/test/config/docs
@@ -36,8 +41,8 @@ diff. Its two P2 documentation findings were fixed: the active deploy invocation
 Caddy drain with `RUN_PUBLIC_CHECKS=false` and explicit post-routing `503`/zero-state proof, while
 rollback now requires a captured immutable image reference plus Docker image ID/digest rather than
 treating a source SHA as an image identity. Bounded re-review returned PASS with no remaining P0-P3
-finding. The remaining candidate gates are the explicit commit/push, branch Actions and immutable
-image evidence.
+finding. The candidate commit/push, branch Actions and immutable image evidence gates are complete.
+No staging deploy or maintenance activation is authorized by that completion.
 
 The independent booking release line below remains unchanged context and is not part of this
 V125-compatible prerequisite branch.
