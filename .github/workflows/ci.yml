@@ -1066,8 +1066,12 @@ jobs:
           bash -n scripts/deploy-staging-controlmaster.sh
           bash -n scripts/check-staging-maintenance-config.sh
           bash -n scripts/check-staging-image-identity.sh
+          bash -n scripts/v126-cutover.sh
+          bash -n scripts/test-v126-cutover.sh
       - name: Exercise staging admission guard fixtures
         run: bash scripts/validate-staging-admission.sh --self-test docker-compose.yml
+      - name: Exercise V126 executable cutover contract fixtures
+        run: bash scripts/test-v126-cutover.sh
       - name: Create CI compose env
         run: |
           cat > .env <<'EOF'

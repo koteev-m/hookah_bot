@@ -85,9 +85,21 @@ Public-pilot Telegram admission source of truth:
   venue staff-chat link, never a global static user-ID list.
 
 Identity-gated migration maintenance source of truth:
-- The single current PostgreSQL V126 release order, backup/rehearsal, Caddy drain, disable and
-  recovery contract is `docs/V126_STAGING_CUTOVER_CONTRACT.md`; product documents do not define a
-  second execution sequence.
+- `docs/V126_STAGING_CUTOVER_CONTRACT.md` is the single PostgreSQL V126 policy/state-machine
+  authority. `scripts/v126-cutover.sh` is the only command authority, and
+  `scripts/test-v126-cutover.sh` is its static/fixture test authority. Product and general runbook
+  documents do not define a second execution sequence.
+- The sequencer enforces exactly 20 predecessor-bound states through immutable intents/receipts and
+  separate Gate A/B/C authorizations. Each receipt has an exact state-specific artifact inventory
+  and replays its real operation log; remote action is reachable only through the internal
+  run/script/intent-bound stdin envelope, not a public helper. Baseline content-binds the restricted
+  database/identity files, exact-release Compose/maintenance/admission sources, the complete
+  staging `.env` bytes and the ordinary Caddyfile bytes. Every dependent remote action rechecks the
+  applicable immutable baseline or completed maintenance/Caddy receipt; only the exact inverse-
+  reconstructable partial maintenance or Caddy transition at its bounded recovery predecessor is
+  accepted. The sequencer never builds an image, keeps transfer separate from one-start/restart-
+  disabled backend startup, activates Caddy before creating the drain marker and exposes only
+  bounded pre-V126, post-V126-stop and full-DR-prerequisite recovery branches.
 - `PRODUCT` remains the normal public-pilot policy. `STAGING_MAINTENANCE_MODE=OFF` is the default and
   maintenance identity lists have no authorization effect in that state. The overlay is temporary
   migration protection, not user management and not a replacement for invitations, memberships or
@@ -112,6 +124,8 @@ Testing/QA source of truth:
 
 Deployment/runbook source of truth:
 - Canonical release model, staging deploy command, environment inventory, migrations runbook, rollback policy, incident response and Codex/ChatGPT handoff are tracked in `docs/DEPLOYMENT_RUNBOOK.md`.
+- The ordinary staging deploy command is not a V126 command and must not be called from the V126
+  sequencer or recovery paths.
 - Exact production deploy, rollback and backup commands remain `needs verification` unless a future operations task confirms them.
 
 ## Core surfaces

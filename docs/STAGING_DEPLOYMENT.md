@@ -1,8 +1,9 @@
 # Staging Deployment
 
-Canonical release/deploy policy is `docs/DEPLOYMENT_RUNBOOK.md`. The single PostgreSQL V126 ordered
-contract is `docs/V126_STAGING_CUTOVER_CONTRACT.md`. This file remains the one-VPS staging
-implementation-detail runbook and must not define another V126 sequence.
+Canonical release/deploy policy is `docs/DEPLOYMENT_RUNBOOK.md`. The single PostgreSQL V126
+policy/state-machine contract is `docs/V126_STAGING_CUTOVER_CONTRACT.md`; its only executable command
+authority is `scripts/v126-cutover.sh`. This file remains the one-VPS staging implementation-detail
+runbook and must not define another V126 sequence or command path.
 
 This runbook describes the minimal staging setup for the Telegram bot + Mini App on one VPS with Docker Compose, PostgreSQL on the same host, and the Mini App production build served by the backend at `/miniapp/`.
 
@@ -226,44 +227,29 @@ zero, overflow or inconsistent value. Editing `.env` does not hot-reload the pro
 deactivation require the single controlled sequence in
 `docs/V126_STAGING_CUTOVER_CONTRACT.md`.
 
-`scripts/check-staging-maintenance-config.sh` is the deploy preflight. When—and only when—the active
-transition has separate authorization, pass the non-secret one-shot process flag to the reviewed
-deploy invocation:
+`scripts/check-staging-maintenance-config.sh` remains the underlying configuration guard, but the
+ordinary deploy script is not a V126 command. Only `scripts/v126-cutover.sh` may prepare active
+maintenance, transfer the already-built image, start it later in a separate state, authorize manual
+smoke, return maintenance to OFF and restore ordinary routing. The one-shot
+`STAGING_MAINTENANCE_V126_SMOKE_AUTHORIZED=true` value contains no identities, is never stored in
+`.env` and may be supplied only inside the exact sequencer stage that validates the active
+configuration.
 
-```bash
-STAGING_MAINTENANCE_V126_SMOKE_AUTHORIZED=true \
-RUN_PUBLIC_CHECKS=false \
-BACKEND_IMAGE='hookah_bot_ant-backend:<candidate-sha>' \
-EXPECTED_BACKEND_IMAGE_ID='sha256:<reviewed-image-id>' \
-./scripts/deploy-staging-controlmaster.sh '<ssh-alias>'
-```
+Gate A ends after automated schema/runtime verification while public Caddy drain remains active.
+Gate B separately authorizes the exact manual-client window and cannot disable maintenance. Gate C
+is unavailable until complete manual-smoke evidence exists; it reactivates the public drain before
+stopping the backend, verifies explicit OFF with empty maintenance lists, starts the same exact V126
+image and restores the original Caddyfile only after loopback gates pass. A retained active mode or
+nonempty maintenance list is a release failure.
 
-The flag is not stored in `.env`, contains no identity and cannot activate the overlay. It only
-prevents the normal deploy path from silently accepting an already-active environment. After full
-V126 PASS, make Caddy return the generic drain `503` again, stop the backend, set `OFF`, clear both
-maintenance lists, omit the flag and keep `TELEGRAM_TRAFFIC_POLICY=PRODUCT` plus empty PRODUCT static
-lists unchanged. Start exactly one reviewed V126 backend and, while Caddy remains drained, repeat
-the normal config preflight, loopback health/DB/version, Flyway/schema, one-backend/poller and queue
-gates. Only then restore ordinary routing and prove fresh unknown-Guest plus Owner PRODUCT behavior.
-The normal preflight must report `OFF`; a retained active mode or nonempty maintenance list is a
-release failure.
+After the Gate-B state removes the already-loaded drain marker, explicitly require unauthenticated
+protected traffic to remain generic `503`, then repeat with one valid excluded Telegram identity and
+compare the restricted SSH/loopback state snapshots before running allowed smoke:
 
-`RUN_PUBLIC_CHECKS=false` is mandatory for this active start because Caddy must keep returning the
-drain `503` until the deploy script has completed its loopback backend/DB/static checks and the
-separate SSH schema/queue gates pass. It does not authorize restoring public routing. After ordinary
-reverse proxy routing is restored, explicitly require unauthenticated protected traffic to remain
-generic `503`, then repeat with one valid excluded Telegram identity and compare the SSH/loopback
-state snapshots before running allowed smoke:
-
-```bash
-status="$(curl -sS -o /dev/null -w '%{http_code}' \
-  "${STAGING_PUBLIC_URL}/api/guest/_ping")"
-test "${status}" = "503"
-```
-
-Do not put initData or an identity in this command or its output. The excluded signed-initData check
-runs only through the canonical client, with its value redacted; zero-state evidence stays on
-SSH/loopback. Before the first migration-window start, record the current backend's exact image
+The sequencer owns the unauthenticated probe; do not put initData or an identity in a command or its
+output. The excluded signed-initData check runs only through the canonical client, with its value
+redacted; zero-state evidence stays in restricted operator artifacts. Before the first
+migration-window start, the baseline receipt records the current backend's exact image
 reference plus Docker image ID (and digest when present) from the VPS. Authorization is invalid
 without that immutable predeploy rollback evidence; an application/source SHA alone is not an image
 identity.
@@ -326,6 +312,10 @@ For temporary tunnel-based local dev, keep using local env files and set public 
 
 Standard local one-command deploy for ordinary public-pilot releases only:
 
+This command intentionally builds, uploads and starts in one path. Therefore it is prohibited for
+every V126 state and recovery branch; V126 uses the no-build transfer and separately gated startup
+implemented only by `scripts/v126-cutover.sh`.
+
 ```bash
 BACKEND_IMAGE='hookah_bot_ant-backend:<candidate-sha>' \
 EXPECTED_BACKEND_IMAGE_ID='sha256:<reviewed-image-id>' \
@@ -380,9 +370,9 @@ explicit authorization before use.
 The health wait handles short backend startup windows and transient reverse-proxy connection resets. If the script still fails after all attempts, do not redeploy blindly; inspect container status and backend logs first.
 
 For an ordinary digest-authorized release, record the reviewed ID returned by
-`docker image inspect` and pass that exact value to the deploy. The V126 final-release proof instead
-performs the mandatory two identical provenance-disabled builds in
-`docs/V126_STAGING_CUTOVER_CONTRACT.md`. The deploy uses
+`docker image inspect` and pass that exact value to the deploy. The V126 final-release selection
+instead requires a separate two-build proof after HT-12P integration; the resulting already-built
+full-SHA tag and exact image ID become immutable sequencer inputs. The ordinary deploy uses
 `--provenance=false` because BuildKit provenance attestations can change the top-level manifest-list
 digest between otherwise identical rebuilds. This local Docker-save deployment does not publish an
 attestation; source SHA, green Actions and the independently reviewed diff remain the provenance
@@ -396,6 +386,29 @@ EXPECTED_BACKEND_IMAGE_ID='sha256:<reviewed-image-id>' \
 
 `EXPECTED_BACKEND_IMAGE_ID` is mandatory for every deploy. Omitting it, supplying a malformed ID or
 building a different image fails locally before SSH, upload or service mutation.
+
+The V126 sequencer additionally requires the existing remote `docker-compose.yml`,
+`scripts/check-staging-maintenance-config.sh` and `scripts/validate-staging-admission.sh` to be
+operator-owned, non-symlink files whose bytes equal their exact `RELEASE_SHA` Git objects. It seals
+those hashes together with the restricted database-target and maintenance-identity content hashes,
+the complete staging `.env` bytes and ordinary Caddyfile bytes at baseline. Every dependent remote
+action revalidates the exact applicable baseline or completed maintenance/Caddy receipt. Release
+objects are read only through sanitized Git plumbing with inherited `GIT_*` controls removed and
+replacement objects disabled. Only a
+deterministic, inverse-reconstructable partial transition at its exact recovery predecessor can be
+recognized without the missing stage receipt. Preparing the exact release execution surface is a
+separate HT-13 prerequisite; `scripts/v126-cutover.sh` neither uploads nor repairs it, and it rejects
+a mutable, V125 or locally edited copy.
+
+V126 image transfer and startup are separate states. The transfer gate validates the rendered
+Compose JSON for the `backend` service specifically. Docker-save bytes are captured in an unlinked
+mode-0400 descriptor, and that exact descriptor is parsed, hashed and transferred using
+Bash-3.2/openrsync-compatible syntax. The remote loader re-parses and hashes its own unlinked
+descriptor and feeds the same bytes to `docker load`; it never reopens the retained archive path for
+execution. Each V126 startup uses create-only
+`--no-build`, forces restart policy `no`, requires `RestartCount=0`, issues exactly one explicit
+start, and then proves one total/running Compose backend with the exact V126 image and long-polling
+configuration, zero global live V125 containers and zero old-image backend in the staging project.
 
 On Mac Apple Silicon the script uses
 `docker buildx build --platform linux/amd64 --provenance=false --load` so the uploaded image matches
@@ -759,7 +772,8 @@ The earlier single-dump/in-place-restore example is superseded and must not be u
 single current staging V126 contract requires a pre-drain and a quiesced full custom-format backup,
 a separate restricted globals artifact, mode 0600, SHA-256, successful `pg_restore --list`, the
 exact free-space gate and an isolated same-version rehearsal for each full backup. Use only the
-marker-bounded commands in `docs/V126_STAGING_CUTOVER_CONTRACT.md`.
+receipt-gated backup states in `scripts/v126-cutover.sh`; policy and artifact requirements remain in
+`docs/V126_STAGING_CUTOVER_CONTRACT.md`.
 
 Never restore over the live staging database as an ordinary release rollback. A full consistent
 restore is separately authorized recovered DR; partial restore and automatic globals restore are
@@ -769,7 +783,8 @@ prohibited.
 
 ### Restart
 
-Use this for a controlled backend restart without changing image or database state:
+Use this for an ordinary controlled backend restart without changing image or database state. It is
+not permitted while a V126 run exists; the sequencer owns both V126 startup states:
 
 ```bash
 ssh hookah-staging
@@ -789,6 +804,11 @@ curl -I https://staging.hookahtootah.club/miniapp/
 
 ### Rollback
 
+The examples in this subsection are ordinary OFF-mode rollback references only. They are not V126
+commands and must not be composed with a V126 run. V126 recovery uses only
+`scripts/v126-cutover.sh recover ...` under the exact policy in
+`docs/V126_STAGING_CUTOVER_CONTRACT.md`.
+
 The deploy script uploads a Docker image selected by `BACKEND_IMAGE`. For rollback-friendly releases, deploy with an immutable image tag, for example:
 
 ```bash
@@ -797,25 +817,24 @@ EXPECTED_BACKEND_IMAGE_ID='sha256:<reviewed-known-good-image-id>' \
 ./scripts/deploy-staging.sh hookah-staging
 ```
 
-For staging, `<known-good-tag>` is never an arbitrary older image. The verified pre-V126 rollback
-point is identity-overlay-capable V125 candidate
+For V126 specifically, pre-V126 recovery first requires live Flyway V125/V126-absent proof before
+mutation, then establishes and proves public drain, and may select only source
 `f577934691a1a7a79ba327c54e2055425142b7be`, image ID
-`sha256:6a8aed7c85374efd89aa2db2e3dbcbed6d84f63087a757ad077856b78bce24a8`. Normal operation uses that
-image only with `TELEGRAM_TRAFFIC_POLICY=PRODUCT`, maintenance `OFF` and empty PRODUCT and
-maintenance lists. A rollback before any V126 schema or smoke mutation keeps Caddy on the generic
-drain `503`, proves Flyway remains at V125, stops the failed candidate and starts only this exact
-reviewed V125 image with `PRODUCT`, maintenance `OFF` and all static/maintenance lists empty. It must
-pass loopback, schema, queue and admission gates before ordinary routing can return. A pre-overlay,
-`ALLOWLIST`-as-maintenance, `V126_SMOKE` rollback configuration or unrestricted image must never
-substitute for that contract.
+`sha256:6a8aed7c85374efd89aa2db2e3dbcbed6d84f63087a757ad077856b78bce24a8`, PRODUCT, maintenance OFF
+and empty lists. It classifies Flyway before any Caddy/backend mutation and can finish the drain from
+a partial activation only after validating the root-owned original/candidate bytes and checksums.
+The bounded command refuses after V126 is present. Post-V126 recovery likewise classifies exact
+successful V126 before Caddy/backend mutation and keeps or restores drain. It stops only the scoped
+Compose backend and succeeds only after proving zero global V125 and run-bound V126 containers; an
+outside-project match is left untouched and fails closed for operator resolution. Its terminal
+scoped-image result is one of `EXACT_V126_STOPPED`,
+`NO_BACKEND_ALREADY_STOPPED`, `V125_REFUSED_AND_STOPPED` or
+`UNKNOWN_REFUSED_AND_STOPPED`; none permits a V125 or forward-fix start. The full-DR verifier checks
+the backup and zero-writer/session boundary and stops before restore authorization.
+An exact successful post-V126-stop recovery receipt may anchor that separately authorized full-DR
+prerequisite verifier, but neither command can resume the normal cutover chain or perform a restore.
 
-After V126 has been applied, do not start any previous writer over that database; use the reviewed
-forward-fix or separately authorized full database-restore procedure in
-`docs/V126_STAGING_CUTOVER_CONTRACT.md`. Any full restore must stop all backend writers first and pair the
-restored schema with a reviewed identity-overlay-capable image compatible with the restored Flyway
-state.
-
-To roll back to an image that is already loaded on the VPS:
+For an ordinary non-V126 rollback to an image already loaded on the VPS:
 
 ```bash
 ssh hookah-staging
@@ -843,17 +862,15 @@ curl -f https://staging.hookahtootah.club/db/health
 curl -I https://staging.hookahtootah.club/miniapp/
 ```
 
-If the approved compatible image is not available on the VPS, rebuild and redeploy that exact
-reviewed identity-overlay-capable commit from the developer machine using its full-SHA
-`BACKEND_IMAGE=<known-good-tag>` and exact `EXPECTED_BACKEND_IMAGE_ID`. Do not substitute another
-commit or accept a digest mismatch. An active maintenance-window recovery must use the controlled
-drain/active-overlay/routed-smoke/OFF transition in `docs/V126_STAGING_CUTOVER_CONTRACT.md`, not the ordinary
-public sanity sequence above.
+For an ordinary non-V126 rollback, if the approved compatible image is not available on the VPS,
+rebuild and redeploy only the exact reviewed commit with its full-SHA tag and expected image ID. This
+fallback is categorically unavailable to the V126 sequencer: V126 accepts only its already-built,
+verified image inputs and separates transfer from startup.
 
 Database caution: if the failed release applied migrations, code rollback may not be enough. In
-particular, after V126 the old-writer rollback path is forbidden. Restore a PostgreSQL backup only
-after stopping backend writes, only through the reviewed runbook procedure, and only when the
-operator accepts the documented data-loss and restore implications.
+particular, after V126 the old-writer rollback path is forbidden. The HT-12P full-DR command only
+verifies prerequisites and records the accepted recovery point/data-loss boundary; it does not
+perform a restore. Any later full restore requires a separate explicit authorization.
 
 ## 13. Local Development Remains Separate
 

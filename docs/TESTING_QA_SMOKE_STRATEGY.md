@@ -1,6 +1,6 @@
 # Testing / QA Smoke Strategy
 
-Дата актуализации: 2026-09-01.
+Дата актуализации: 2026-09-02.
 
 Статус: **current product reference / UPDATED**. This document is the canonical QA/smoke strategy for the Telegram bot + Mini App platform. It consolidates local validation, GitHub Actions expectations, area-specific smoke suites, staging policy, failure reporting and Codex handoff rules. Deployment and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
 
@@ -20,13 +20,20 @@ STAGING-SMOKE-PASSED** for release HEAD `e35def99ea8429462e5fdaaeee914f57da72e77
 green Actions, staging deploy, consolidated smoke and cleanup. At that historical closure, local
 GitHub CLI authentication was invalid, so its Actions result was recorded as user-confirmed evidence.
 
-Current predeploy QA slice: **HT-12C / V126 DOCUMENTATION AND RELEASE IDENTITY CLOSURE / STATIC
-VALIDATION IN PROGRESS / NO EXECUTION GATE PASSED**. Exact fetched main
-`9f51ebbd2dae0702b4b2f6333c1b42fc94cd1fc1` (tree
-`4071962a6850d977c4d7c319bfecc7cd4c2273d1`) is the documentation branch base, not the final V126
-release SHA. Final release identity requires later authorized main integration and a new exact green
-main Actions run. PostgreSQL V126, staging mutation and the real Guest/Owner/Telegram smoke remain
-execution-time work governed only by `docs/V126_STAGING_CUTOVER_CONTRACT.md`.
+Current predeploy QA slice: **HT-12P / V126 EXECUTABLE CUTOVER CONTRACT AND SEQUENCER CLOSURE /
+HARDENED CANDIDATE IMPLEMENTED / LOCAL ADVERSARIAL VALIDATION PASSED / INDEPENDENT READ-ONLY
+RE-REVIEW REQUIRED BEFORE COMMIT AND PUSH / EXACT GREEN FEATURE-BRANCH ACTIONS REQUIRED AFTER PUSH /
+NO EXECUTION GATE PASSED**. Exact required main is
+`ecb09601975678a41d89e5c824cc7812c7876481`, tree
+`8c97996e317f0182b4871d2a2537a732d4830f64`, ordered parents
+`9f51ebbd2dae0702b4b2f6333c1b42fc94cd1fc1` then
+`d9c656b1c5feb757b79558209f130c08cba81cf5`; exact main CI run `33536142005` passed `11/11` jobs.
+This is the HT-12P base, not the final V126 release SHA. HT-13 stopped before run-namespace and
+sealed-input creation with `PREDEPLOY_CONTRACT_NOT_PROVABLE`; no package or staging mutation exists.
+Final release identity requires later authorized HT-12P main integration and a new exact green main
+Actions run. PostgreSQL V126, staging access and real Guest/Owner/Telegram smoke remain
+execution-time work. Command authority is `scripts/v126-cutover.sh`; policy/state-machine authority
+is `docs/V126_STAGING_CUTOVER_CONTRACT.md`.
 
 Historical implementation slice: **BOOKING CONVERSATION INTEGRITY / THREAD UNIQUENESS AND REAL
 MULTI-TENANT ISOLATION / IMPLEMENTED ON HT-12C BASE / RELEASE EXECUTION STILL REQUIRED**. Its
@@ -146,8 +153,10 @@ names and these minimum floors: route/security `VenueStaffRoutesTest 34`,
 `TelegramRateLimiterTest 2`, `TelegramTrafficPolicyStartupTest 4`,
 `TelegramTrafficPolicyConfigTest 9`, `TelegramTrafficPolicyTest 8`,
 `TelegramWebhookRoutesTest 5`, and `TelegramAuthRouteTest 11`. The Compose job must also run
-`bash -n scripts/validate-staging-admission.sh`, `bash -n scripts/deploy-staging.sh`, and
-`bash scripts/validate-staging-admission.sh --self-test docker-compose.yml`.
+syntax checks for `scripts/validate-staging-admission.sh`, both ordinary deploy wrappers and both
+V126 sequencer scripts, then execute
+`bash scripts/validate-staging-admission.sh --self-test docker-compose.yml` and
+`bash scripts/test-v126-cutover.sh`.
 
 Run focused groups first, then the relevant extended Telegram suite and backend compile/lint:
 
@@ -198,10 +207,10 @@ git status --short
 The completed HT-12M main-port gate retained the full backend suite, PostgreSQL-backed
 integration/concurrency selectors, compile, ktlint, the unchanged Mini App production build and
 complete structured Playwright smoke, Compose validation, deploy-script syntax/fixture guards and an
-empty migration diff. That historical proof is a prerequisite, not V126 execution evidence. HT-12C
-must keep the same migration trees and run the bounded static/configuration checks required by the
-single cutover contract. Exact JUnit XML files must exist, meet or exceed their declared floors and
-report zero skipped/failures/errors; a selector name alone is not coverage.
+empty migration diff. That historical proof is a prerequisite, not V126 execution evidence. HT-12P
+must keep the same migration trees and prove the sequencer with bounded static/fixture tests. Exact
+JUnit XML files must exist, meet or exceed their declared floors and report zero
+skipped/failures/errors; a selector name alone is not coverage.
 
 ### HT-12M identity-gated V126 maintenance prerequisite quality gate
 
@@ -209,11 +218,12 @@ This completed runtime/security prerequisite started from exact V125 staging sou
 `be5d62a5e9058f89cd72be6c313c71fa46ccdbf2` and produced reviewed candidate
 `f577934691a1a7a79ba327c54e2055425142b7be` without a PostgreSQL or H2 migration change. Its
 authorized staging deploy passed under `PRODUCT` with `STAGING_MAINTENANCE_MODE=OFF`, empty
-maintenance lists, Flyway V125 and V126 absent. Its main port is included in exact HT-12C base
+maintenance lists, Flyway V125 and V126 absent. Its main port is included in HT-12P base
+`ecb09601975678a41d89e5c824cc7812c7876481` through ancestor
 `9f51ebbd2dae0702b4b2f6333c1b42fc94cd1fc1` and is closed as
 `IDENTITY_GATED_MAINTENANCE_PREREQUISITE_COMPLETE`. Client IP/CIDR attribution was not part of the
 proof and remains prohibited as V126 authority. The historical port restriction against staging
-redeploy, Flyway/V126 and Caddy mutation is superseded by the still-stricter HT-12C documentation
+redeploy, Flyway/V126 and Caddy mutation is superseded by the still-stricter HT-12P implementation
 boundary and, later, by the separately authorized canonical cutover contract.
 
 Required focused proof:
@@ -290,18 +300,103 @@ Docker, must be green. An independent read-only security reviewer must inspect t
 diff and report unclassified mutation paths, pre-gate writes, outbound bypasses, unsafe old-image
 rollback or sensitive logging before commit/release evidence is accepted.
 
-For a digest-authorized deploy, build with the same `--provenance=false` path used by the deploy
-script, record the canonical image ID, rebuild once and require the same ID, then pass it as
-`EXPECTED_BACKEND_IMAGE_ID`. The identity guard must pass on an exact match and fail on malformed or
-different values before any upload. A mismatch after authorization is an automatic rollback/STOP,
-even when executable layers appear equivalent.
+The V126 cutover consumes the already reviewed and sealed image; it never builds. Image transfer and
+the first V126 start are separate receipt-gated states. The sequencer rejects a malformed or
+different image ID before remote mutation and does not fall back to an ordinary deploy wrapper. Its
+actual macOS execution fixture must prove Bash 3.2 and the installed openrsync can copy the exact
+unlinked descriptor bytes with mode 0600; unsupported modern-only FD or rsync syntax is a STOP.
 
-The later authorized smoke follows the ordered drain in `docs/DEPLOYMENT_RUNBOOK.md`. While active,
-verify public generic `503` and zero-state with an excluded valid identity, then run canonical live
-Guest/Owner Telegram smoke. After full PASS, activate the second drain and restart with `OFF`, empty
-maintenance values and underlying PRODUCT unchanged; repeat health/DB/schema/queue gates and prove a
-fresh ordinary Guest again enters. An active mode left after cutover is a release failure, not a
-degraded success.
+The later authorized smoke follows the exact state machine in
+`docs/V126_STAGING_CUTOVER_CONTRACT.md`, executed only through `scripts/v126-cutover.sh`. Gate A
+authorizes cutover only after the baseline receipt, Gate B opens the manual-smoke window only after
+the V126 schema/runtime receipt, and Gate C authorizes the OFF transition only after sealed smoke
+evidence. After full PASS, the sequencer reactivates the public drain, stops V126, verifies PRODUCT /
+OFF with empty maintenance values, starts final V126, restores ordinary Caddy, and proves the final
+public gates. An active maintenance mode left after cutover is a release failure, not degraded
+success.
+
+### HT-12P executable V126 cutover quality gate
+
+`scripts/test-v126-cutover.sh` is the executable fixture authority for the sequencer; the canonical
+policy and state meanings remain in `docs/V126_STAGING_CUTOVER_CONTRACT.md`. Local and CI validation
+must run:
+
+```bash
+bash -n scripts/v126-cutover.sh
+bash -n scripts/test-v126-cutover.sh
+bash scripts/test-v126-cutover.sh
+bash scripts/check-staging-maintenance-config.sh --self-test
+bash scripts/check-staging-image-identity.sh --self-test \
+  scripts/deploy-staging.sh scripts/deploy-staging-controlmaster.sh
+bash scripts/validate-staging-admission.sh --self-test docker-compose.yml
+docker compose config --quiet
+git diff --check
+```
+
+The fixture suite must fail closed unless all 20 markers exist exactly once and in canonical order;
+the run manifest and predecessor receipts are intact; an intent precedes each state action; and the
+correct Gate A/B/C token is bound to its immutable anchor receipt. Every state must have its exact
+artifact-name inventory plus the real operation log. Tests must mutate/rechecksum substituted,
+missing and additional artifact receipts and prove rejection through canonical operation-log hash
+and `ARTIFACT`-line replay. Stale, duplicate, out-of-order and retry attempts must also be rejected.
+
+The remote surface tests must reject a public helper invocation, a direct internal-dispatch bypass
+and an envelope with the wrong script/run/stage/intent/predecessor/authorization or action tuple.
+Lock fixtures must cover signal exit, live and dead owners, live/pending orphan children and one-winner
+atomic concurrent recovery takeover. Baseline fixtures must swap each restricted database/identity
+file, exact-release Compose/maintenance/admission source, complete `.env` and ordinary Caddyfile
+independently and prove fail-closed content-hash binding without leaking secret canaries. Caddy and
+maintenance fixtures must mutate the current bytes and immutable receipt-bound proofs, exercise the
+only exact inverse-reconstructable partial transitions, and prove arbitrary drift is rejected. They
+must also swap `.env`/identity bytes between outer validation and candidate derivation and reject a
+Caddy source swap whose captured original no longer matches the baseline receipt. The
+baseline fixture must also reject a running V125 container whose eight critical Config.Env values
+do not match the sealed PRODUCT/OFF `.env`. The stage-17 exact-OFF/no-receipt chain must remain valid
+through terminal post-V126 stop and its one-way,
+post-stop-receipt-bound full-DR prerequisite escalation.
+
+Runtime fixtures must prove backend-specific rendered Compose identity, create-only `--no-build`,
+restart policy `no`, `RestartCount=0`, exactly one explicit start, one total/running exact-image
+backend configured for long polling, and saved-archive tag/config-name/config-content identity before
+the first remote action. They must prove that one mode-0400 unlinked descriptor supplies the exact
+local parse/hash/upload bytes and one independent remote descriptor supplies the exact
+parse/hash/`docker load` bytes despite post-capture pathname swaps. Unsafe, linked, device, wrong or
+duplicate archive members must fail before image preparation, transfer or load; a remote checksum
+mismatch must fail before Docker mutation. First/final-start fixtures must reject `.env` drift during
+create and wrong stopped-container PRODUCT/poller/V126_SMOKE-or-OFF values before any start. Runtime
+fixtures also require
+state 12 and the state-13 public-window transition to reject a same-image running container with
+stale critical Config.Env values. They also require zero global V125 and zero project old-image backend. Every
+Compose/Docker inventory command failure must fail closed rather than appearing as an empty set;
+competing default/override Compose filenames must never alter the explicitly bound
+`docker-compose.yml` execution surface. Every
+recovery must stop only the scoped backend and refuse if a matching outside-project container
+remains. Gate B
+must require exactly these 17 `PASS` assertions with no extra/missing key:
+
+- `MATRIX_GUEST`, `MATRIX_OWNER`, `MATRIX_MIX`, `MATRIX_MIX_STAFF_CHAT`;
+- `TENANT_RBAC_NEGATIVES`, `LINKED_STAFF_CHAT_DELIVERY`;
+- `NULL_AUTHOR_UNREAD_CREATE_CLEAR_RESURRECT`, `WRONG_SURFACE_MARKERS_UNCHANGED`,
+  `EXACT_SURFACE_ONLY_CLEAR`, `SUPPORT_CONVERSATIONS_SEPARATION`, `LABEL_COLLISION`;
+- `LIVE_ONE_GUEST_REPLY`, `LIVE_ONE_PERSISTED_GUEST_MESSAGE`,
+  `LIVE_EXACTLY_ONE_TELEGRAM_OUTBOX_DELIVERY`,
+  `LIVE_OWNER_EXACT_THREAD_UNREAD_CREATED_AND_CLEARED`,
+  `LIVE_NO_DUPLICATE_OR_RESURRECTED_MARKER`,
+  `LIVE_NO_OTHER_THREAD_CLIENT_OR_NON_MIX_MUTATION`.
+
+State 13 and 14 fixtures must retain the unauthenticated protected generic-`503` probe while public
+health is live. Caddy tests must prove derive/validate/install/reload while the marker is absent,
+then marker activation. Recovery tests must prove Flyway classification precedes any Caddy/backend
+mutation, validated partial-activation completion, pre-V126 `.env` drift rejection both before and
+during create, exact stopped-container PRODUCT/OFF/long-polling values before start, all four post-
+V126 safe-stop classifications and no restore operation in the full-DR verifier. PRODUCT/OFF/
+V126_SMOKE fixtures, broad no-build scanning, database-client target enumeration—including a URL
+swap immediately before libpq-file derivation—placeholder/missing-input rejection, migration
+identity equality, booking-preflight extraction from the immutable release Git object despite a
+mutated working-tree copy, and release/object verification despite inherited Git directory,
+worktree, index, object-store/config variables and replacement refs, and secret-canary exclusion
+from output/run state are
+fatal gates. These are static/fixture assertions only: they do not pass any execution-time V126 gate.
 
 #### Recorded public-pilot staging acceptance
 
@@ -325,7 +420,7 @@ invite smoke was repeated; exact-head automated coverage remains authoritative f
 This historical evidence closes HT-INC-01E. Do not create another coordinated client window merely
 to repeat it. Runtime behavior changes still require the normal green-Actions/staging-smoke policy;
 during the now-completed HT-12M main port, staging redeploy, Flyway/V126, production access and
-Caddy restart/reload were prohibited. Those restrictions remain historical evidence; HT-12C and
+Caddy restart/reload were prohibited. Those restrictions remain historical evidence; HT-12P and
 any later authorized V126 execution follow the stricter boundaries in the current cutover contract.
 
 ### Booking test-only release hygiene
@@ -490,7 +585,7 @@ the current UX/unread closure gates; both remain mandatory where selected in CI:
   canonical-venue fact-only staff alert, no replay duplicate, safe missing/disabled configuration,
   policy-skipped staff groups, wrong-venue exclusion and full message/outbox rollback on strict
   enqueue failure. The legacy
-  suspend enqueue remains key-only and is covered by `TelegramOutboxWorkerTest` minimum `13`.
+  suspend enqueue remains key-only and is covered by `TelegramOutboxWorkerTest` minimum `18`.
 - `BookingMessageStaffChatNotifierTest`: minimum `8`, executable without Docker and asserting exact
   canonical label/link payload, privacy-safe text, logical dedupe, caller-transaction rollback,
   disabled/unlinked/missing-URL/policy skip, stable product-timezone fallback and the combined
@@ -505,7 +600,7 @@ the current UX/unread closure gates; both remain mandatory where selected in CI:
   `VenueRbacRoutesTest` minimum `36`. The valid Honolulu venue testcase name is mandatory evidence
   for persisted schedule/deadline, pending reminder and guest-notification precedence.
 - `TelegramBotRouterTableTokenTest` remains an exact production-router regression gate (current
-  minimum `553`) and verifies persisted inbound Telegram message ids plus stable outbox dedupe keys.
+  minimum `560`) and verifies persisted inbound Telegram message ids plus stable outbox dedupe keys.
   Its exact single-operation Zone A then Zone B testcase name is mandatory.
 - Production Mini App build and the full deterministic browser smoke are required. The current
   structured floor is `216`. CI must require exact passing results for
@@ -610,8 +705,9 @@ V124/V125 migration, thread-uniqueness or broad outbox design verdicts:
 This section defines QA assertions, not a second rollout procedure. The former controlled
 mixed-version order in this document is historical and superseded; do not execute it. The single
 current state machine, backup/rehearsal contract, release-identity process, drain/maintenance
-transitions and recovery boundaries are in `docs/V126_STAGING_CUTOVER_CONTRACT.md`. This
-documentation task does not mark any execution-time gate passed.
+transitions and recovery boundaries are in `docs/V126_STAGING_CUTOVER_CONTRACT.md`; the only command
+authority is `scripts/v126-cutover.sh`, with fixture authority in `scripts/test-v126-cutover.sh`.
+This implementation task does not mark any execution-time gate passed.
 
 PostgreSQL V126 is additive. It adds nullable `BIGINT support_thread_reads.last_read_message_id`
 with no default, no backfill and no destructive rewrite;
@@ -624,11 +720,14 @@ same nullable `BIGINT last_read_message_id` with no default, no backfill and no 
 preserves `last_read_at` and primary key `(thread_id, user_id)`, and applies only in H2/local/test
 environments. Staging PostgreSQL applies PostgreSQL V126, never H2 V127.
 
-The exact fetched main SHA `9f51ebbd2dae0702b4b2f6333c1b42fc94cd1fc1` and tree
-`4071962a6850d977c4d7c319bfecc7cd4c2273d1` are only the HT-12C branch base. They are not the final
-V126 release identity. Branch review, explicit main-integration authorization, the resulting exact
-main SHA/tree/parents and a new successful main Actions run must precede final release selection;
-the exact identity and deterministic two-build proof are defined in the canonical contract.
+The exact HT-12P required main SHA `ecb09601975678a41d89e5c824cc7812c7876481`, tree
+`8c97996e317f0182b4871d2a2537a732d4830f64`, ordered parents
+`9f51ebbd2dae0702b4b2f6333c1b42fc94cd1fc1` then
+`d9c656b1c5feb757b79558209f130c08cba81cf5`, and successful main Actions run `33536142005`
+(`11/11`) are the implementation baseline. They are not the final V126 release identity. Explicit
+HT-12P main-integration authorization, the resulting exact main SHA/tree/ordered parents and a new
+successful main Actions run must precede final release selection; the exact identity proof is
+defined in the canonical contract and no build is permitted inside the cutover.
 
 V126 is an explicit exception to generic canary or rolling mixed-version deployment. No V125 and
 V126 backends may run together. The generic public `503` drain, stopped V125 backend, zero-session
@@ -639,13 +738,13 @@ only a separately authorized full consistent V125 restore may select the exact V
 and that outcome is recovered disaster recovery rather than a successful V126 deployment.
 
 Partial restore, `flyway repair`, migration-history edits, manual cursor changes and ad-hoc SQL
-domain-data repair remain prohibited. The operational contract owns the exact backup, restoration,
-session-classification, maintenance deactivation and Caddy restoration commands; this QA document
-owns only the assertions below.
+domain-data repair remain prohibited. The sequencer owns the exact backup/rehearsal,
+session-classification, maintenance deactivation and Caddy commands; the contract owns their policy
+and stop semantics. This QA document owns only the assertions below.
 
-With ordinary Caddy routing restored, `V126_SMOKE` still active, exactly one new backend and old
-image running count zero, the bounded staging smoke must prove before the second drain and controlled
-OFF transition:
+With the reviewed Caddy candidate active, its drain marker removed by the authorized smoke-window
+state, `V126_SMOKE` active, exactly one new backend and old-image running count zero, the bounded
+staging smoke must prove before the second drain and controlled OFF transition:
 
 - a user-visible NULL-author system message in a real `VENUE_CHAT` produces an unread badge;
 - exact open clears the badge, and a new system message after open becomes unread again;
@@ -700,9 +799,9 @@ smoke to different numbers.
 
 The associated findings `BOOKING-UNREAD-NULL-AUTHOR-001`,
 `BOOKING-UNREAD-GUEST-TYPE-GUARD-001` and `BOOKING-UNREAD-MIXED-VERSION-ROLLOUT-001` are incorporated
-into the exact HT-12C base and retained as regression requirements. Their remaining proof is the
-execution-time V126 schema/runtime and live-smoke gates; this docs-only task does not claim those
-gates or staging release complete.
+through the HT-12C ancestor into the exact HT-12P baseline and retained as regression requirements.
+Their remaining proof is the execution-time V126 schema/runtime and live-smoke gates; this
+implementation task does not claim those gates or staging release complete.
 
 Before the previous integrity V124/V125 migration, run the exact read-only PostgreSQL preflight from
 `docs/DEPLOYMENT_RUNBOOK.md`. Stop under `STOP_FOR_BOOKING_THREAD_DEDUPLICATION_DECISION` if any
@@ -2753,8 +2852,8 @@ Expectations:
 - The route/security selector runs with `TZ=UTC` and also executes and asserts
   `SupportTicketRoutesTest=15`, `SupportThreadReadRepositoryTest=21`,
   `BookingMessageStaffChatNotifierTest=8`, `StaffChatNotifierTest=40`,
-  `TelegramOutboxWorkerTest=13`, `GuestOrderRoutesTest=61` and
-  `TelegramBotRouterTableTokenTest=553`, preserving cursor/RBAC behavior, fixed confirmed-Platform
+  `TelegramOutboxWorkerTest=18`, `GuestOrderRoutesTest=61` and
+  `TelegramBotRouterTableTokenTest=560`, preserving cursor/RBAC behavior, fixed confirmed-Platform
   Guest surface denial, caller-owned booking-notifier timezone, privacy-safe staff alerts and
   legacy key-only enqueue/retry alongside the strict booking-only transaction API. The two
   NULL-author repository testcase names, the confirmed Platform Guest wrong-surface testcase name
@@ -2775,6 +2874,9 @@ Expectations:
   H2/PostgreSQL `5 / 5`, cursor H2/PostgreSQL `4 / 4`, and real PostgreSQL migration-lock
   concurrency `2`. Missing, below-minimum, skipped, failed or errored reports fail the existing
   mandatory job.
+- `compose` syntax-checks both V126 scripts and executes `bash scripts/test-v126-cutover.sh` in
+  addition to the existing admission, maintenance, image-identity and Compose guards. The fixture
+  suite is mandatory; a skipped or missing sequencer test is not equivalent evidence.
 - `miniapp-e2e-smoke` parses the full structured Playwright JSON and requires at least `216`
   executed with zero failure, flaky, skipped, runner error, missing result, non-passing expectation
   or failed attempt. It additionally fails unless both exact `booking-label-parity.spec.ts` cases,
@@ -2935,7 +3037,8 @@ Runtime change touching backend/Mini App/Telegram:
 - deploy staging only after CI is green unless explicitly doing a debug deploy;
 - run product smoke relevant to the changed area.
 
-Current staging deploy command is canonical in `docs/DEPLOYMENT_RUNBOOK.md`:
+The following ordinary staging deploy command is canonical in `docs/DEPLOYMENT_RUNBOOK.md` for
+non-V126 releases only:
 ```bash
 STAGING_PATH=/opt/hookah-bot \
 STAGING_DOMAIN=staging.hookahtootah.club \
@@ -2944,6 +3047,9 @@ BACKEND_IMAGE=hookah_bot_ant-backend:<candidate-sha> \
 EXPECTED_BACKEND_IMAGE_ID=sha256:<reviewed-image-id> \
 ./scripts/deploy-staging-controlmaster.sh hookah-staging
 ```
+
+V126 must never use that build/upload/start wrapper. It is executed only one receipt-gated state at
+a time through `scripts/v126-cutover.sh`, after a separately sealed image exists.
 
 Post-deploy minimum:
 - `/health`;
@@ -3221,9 +3327,20 @@ Telegram/staff-chat:
 ## Roadmap Status
 
 - Testing/QA smoke strategy: `UPDATED`.
+- HT-12P executable V126 cutover contract: **HARDENED CANDIDATE IMPLEMENTED / LOCAL ADVERSARIAL
+  VALIDATION PASSED / INDEPENDENT READ-ONLY RE-REVIEW REQUIRED BEFORE COMMIT AND PUSH / EXACT GREEN
+  FEATURE-BRANCH ACTIONS REQUIRED AFTER PUSH / NO REVIEW OR ACTIONS PASS CLAIMED / NO EXECUTION GATE
+  PASSED** on exact required main
+  `ecb09601975678a41d89e5c824cc7812c7876481`, tree
+  `8c97996e317f0182b4871d2a2537a732d4830f64`, ordered parents
+  `9f51ebbd2dae0702b4b2f6333c1b42fc94cd1fc1` then
+  `d9c656b1c5feb757b79558209f130c08cba81cf5`, with main Actions `33536142005` green `11/11`.
+  HT-13 stopped before creating the run namespace or sealed input under
+  `PREDEPLOY_CONTRACT_NOT_PROVABLE`; no package or staging mutation exists.
 - Booking conversation UX / distinct labels, inbox and unread discoverability:
-  **IMPLEMENTED ON HT-12C BASE / AUTOMATED REGRESSION RETAINED / V126 EXECUTION REQUIRED**. The
-  exact base includes NULL-author system unread and fixed Guest queue/type guards; the sole current
+  **INCLUDED THROUGH HT-12C ANCESTRY / AUTOMATED REGRESSION RETAINED / V126 EXECUTION REQUIRED**.
+  The exact HT-12P baseline includes NULL-author system unread and fixed Guest queue/type guards; the
+  sole current
   V126 contract forbids a mixed-version rollout and still requires final release identity, a drained
   single-new-image migration and the bounded live smoke. The preceding V124/V125 integrity /
   real-isolation slice remains historical regression evidence and is not reopened here.

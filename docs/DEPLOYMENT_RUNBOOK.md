@@ -1,6 +1,6 @@
 # Deployment / Runbook / Operations
 
-Дата актуализации: 2026-09-01.
+Дата актуализации: 2026-09-02.
 
 Статус: **current operations reference / UPDATED**. This document is the canonical deploy, release and operations runbook for the Telegram bot + Mini App platform. Use it together with `docs/TESTING_QA_SMOKE_STRATEGY.md` for validation scope, `docs/STAGING_DEPLOYMENT.md` for one-VPS staging details, `docs/OPERATIONS.md` for metrics/queue incident basics and `docs/MIGRATION_POLICY.md` for Flyway policy.
 
@@ -101,7 +101,9 @@ Last local validation that passed: <commands>.
 
 ## Current Staging Deploy Command
 
-Use this only after GitHub Actions are green for runtime changes, unless explicitly doing a debug deploy:
+Use this only for an ordinary public-pilot deployment after GitHub Actions are green for runtime
+changes, unless explicitly doing a debug deploy. It is never a PostgreSQL V126 cutover, transfer,
+startup or recovery command:
 
 ```bash
 STAGING_PATH=/opt/hookah-bot \
@@ -115,8 +117,9 @@ EXPECTED_BACKEND_IMAGE_ID=sha256:<reviewed-image-id> \
 Notes:
 - Standard deploy is still documented in `docs/STAGING_DEPLOYMENT.md`.
 - The ControlMaster command is the current preferred reliability path when fresh SSH connections are unstable.
-- The script behavior and exact pre-/post-V126 rollback boundaries are documented in
-  `docs/STAGING_DEPLOYMENT.md` and the recovery section below.
+- The V126 command authority is `scripts/v126-cutover.sh`; its policy/state-machine authority is
+  `docs/V126_STAGING_CUTOVER_CONTRACT.md`. The ordinary deploy script must not be called by a V126
+  stage or recovery path.
 - Docs-only commits do not require staging deploy.
 
 ## Environment / Config Inventory
@@ -286,45 +289,70 @@ PRODUCT RBAC.
 
 #### V126 drain, activation and recovery contract
 
-The single current ordered state machine, backup/rehearsal commands, Caddy two-reload boundary,
-release selection, recovery rules and G0-G9 matrix are in
-`docs/V126_STAGING_CUTOVER_CONTRACT.md`. Do not reconstruct the order from historical task evidence
-or older sections below.
+The single policy/state-machine authority is `docs/V126_STAGING_CUTOVER_CONTRACT.md`. The only
+executable command authority is `scripts/v126-cutover.sh`; its static/fixture authority is
+`scripts/test-v126-cutover.sh`. Do not reconstruct commands from historical task evidence or older
+sections below.
 
-The non-negotiable summary is: underlying PRODUCT never changes; Caddy provides transport drain but
-no identity authority; both verified backups precede the final preflight; one new backend applies
-V126 under `V126_SMOKE`; the mandatory live smoke precedes the controlled OFF/empty-list restart;
-and the original Caddyfile is restored byte-for-byte. Exact ordering exists only in the linked
-contract.
+The sequencer initializes one immutable run manifest, writes an intent before each operation,
+executes exactly one of the 20 ordered states per invocation and accepts a state only through a
+hash-chained receipt bound to the run, release, script, exact predecessor and authorization. Each
+state has one fixed artifact-name set plus the real mode-0400 operation log; verification hashes that
+file and replays its exact `ARTIFACT` lines, so a rechecksummed receipt with a substituted, missing or
+additional artifact is invalid. Remote action dispatch has no public helper command: it is reachable
+only through the stdin-streamed internal envelope bound to the script hash, stage/recovery, intent,
+predecessor and authorization. Gate A ends after automated V126 schema/runtime verification; Gate B
+owns only the manual smoke; Gate C cannot begin before the complete manual-smoke receipt.
 
-The normal deploy path runs `scripts/check-staging-maintenance-config.sh`. Explicit `OFF` is accepted
-without an authorization override only with empty lists and no stored authorization key. An active
-environment is rejected unless the operator supplies the separate reviewed process boolean
-`STAGING_MAINTENANCE_V126_SMOKE_AUTHORIZED=true`; the flag contains no IDs, must never be stored in
-`.env` and does not activate maintenance by itself. After cutover, ordinary deploys omit the flag,
-so a silently retained active environment fails preflight. The script self-test and Compose
-validation are mandatory CI gates.
+The baseline content-binds the restricted database/identity files, the remote Compose, maintenance
+guard and admission guard, the complete staging `.env` bytes and the ordinary Caddyfile bytes. The
+three executable sources must byte-match the exact `RELEASE_SHA` Git objects before state 1 can pass;
+all seven authorities are sealed in the baseline receipt and reverified before dependent remote
+actions. Every local release/object read clears inherited `GIT_*` state, disables replacement
+objects and reads blob bytes with sanitized Git plumbing, so an alternate index, object store or
+replace ref cannot redefine that authority. Later actions accept only the exact applicable baseline
+or completed maintenance/Caddy
+receipt state. A recovery may recognize an unreceipted partial transition only at its exact
+predecessor and only when the deterministic inverse reconstructs the immutable source bytes. Making
+the remote release execution surface exact is an HT-13 prerequisite; the sequencer does not upload
+or repair it.
 
-Digest-specific authorization also supplies `EXPECTED_BACKEND_IMAGE_ID=sha256:<reviewed-image-id>`.
-The deploy builds with provenance attestations disabled and calls
-`scripts/check-staging-image-identity.sh` before upload; a malformed or different ID fails before
-the backend image is uploaded or services restart. BuildKit attestation manifests are not accepted
-as stable runtime identity because their digest can change across otherwise identical rebuilds. The exact
-source SHA, reviewed diff, green Actions and deterministic runtime image ID form the release
-evidence for this local Docker-save path.
+Underlying PRODUCT never changes. Caddy provides transport drain but no identity authority. The
+activation order is candidate creation/validation, installation, one reload, active-config proof,
+then marker creation and generic public `503`. Both verified backups precede the final preflight.
+The already-built V126 image is transferred/verified separately from startup; no cutover path builds
+an image or calls the ordinary deploy script. The mandatory live smoke precedes the controlled
+OFF/empty-list restart, and the original Caddyfile is restored byte-for-byte.
 
-Before V126 authorization, capture the current backend's exact image reference and Docker image ID
-(plus digest when present) from the VPS. Bind that immutable rollback evidence to V125 candidate
-`f577934691a1a7a79ba327c54e2055425142b7be` and its reviewed image ID
-`sha256:6a8aed7c85374efd89aa2db2e3dbcbed6d84f63087a757ad077856b78bce24a8`; a source SHA alone is not
-image identity. If the new backend fails before any schema mutation, keep public Caddy `503`, stop
-it, prove Flyway remains at V125 and return only to that exact V125 image with `PRODUCT`, maintenance
-`OFF` and empty PRODUCT/maintenance lists. Routing stays drained until loopback health, schema,
-queue and admission gates pass. Never use `V126_SMOKE`, `ALLOWLIST`, a pre-overlay binary or an
-otherwise unreviewed V125 image as rollback configuration. After V126 or any real smoke write,
-image/runtime rollback does not undo committed memberships, messages, orders, callbacks or other
-domain facts and does not roll back Flyway; use the documented V126 forward-fix or separately
-authorized full-DR decision. Do not reconcile partial facts or delete them through ad-hoc SQL.
+State 10 snapshots Docker-save bytes into an unlinked mode-0400 descriptor. The exact descriptor is
+structure-checked, hashed and transferred with Bash-3.2/openrsync-compatible flags. The remote side
+repeats the snapshot, structure and checksum checks and passes that same descriptor—not a re-opened
+pathname—to `docker load`; the retained run archive is independently hashed before and after load.
+Local archive mismatch stops before the first remote action, and remote byte mismatch stops before
+Docker mutation.
+
+Both V126 starts resolve the Compose `backend` service specifically, use create-only `--no-build`,
+set restart policy `no`, require `RestartCount=0` and issue exactly one explicit start. Runtime proof
+requires one total/running Compose backend with long-polling enabled, the exact V126 image, no live
+V125 container globally and no live old-image backend in the staging Compose project. Gate B accepts
+only the canonical 17-assertion smoke evidence and re-proves an unauthenticated protected request as
+the generic application `503` both when opening and when sealing the window.
+
+Recovery also uses only bounded sequencer commands. It classifies Flyway before any Caddy/backend
+mutation. Pre-V126 rollback requires exact V125/V126-absent proof, can finish and drain a validated
+partial candidate activation, and may start only the exact reviewed V125 image. Once V126 is present,
+the forward-fix stop drains and stops only the scoped Compose backend; it then requires global V125
+and run-bound V126 counts to be zero and refuses if an outside-project matching container remains.
+Exact V126, already-stopped, unexpected V125 and unknown/multiple scoped states are terminally
+classified; the latter two never authorize a V125 or forward-fix start. The full-DR command verifies
+the exact post-stop receipt when escalating from that terminal state, then verifies backup/session
+prerequisites and records the accepted data-loss boundary before restore. Any recorded recovery
+intent terminalizes the run even if recovery fails ambiguously. The lock tracks owner, stage worker, SSH and rsync
+children; signal handling terminates them and exits. Only recovery may atomically take over a
+validated dead lock after every owner/child liveness check. Partial restore, Flyway repair and ad-hoc
+data/schema repair remain prohibited. A completed post-V126 stop may anchor only the separately
+authorized full-DR prerequisite verifier; that one-way escalation does not resume a stage or perform
+a restore.
 
 ## Migrations Runbook
 
@@ -332,7 +360,8 @@ Current practice:
 - PostgreSQL and H2 migrations both exist.
 - Flyway migration policy is documented in `docs/MIGRATION_POLICY.md`.
 - Staging applies Flyway migrations during normal backend startup through `DatabaseFactory`. The
-  exact V126 single-backend sequence is fixed in `docs/V126_STAGING_CUTOVER_CONTRACT.md`.
+  exact V126 policy/order is fixed in `docs/V126_STAGING_CUTOVER_CONTRACT.md`; only
+  `scripts/v126-cutover.sh` may execute that single-backend sequence.
 
 Target process for runtime migrations:
 1. Inspect PostgreSQL and H2 migration directories before choosing migration versions.
@@ -365,11 +394,16 @@ PostgreSQL V124. It is repeatable, read-only and does not apply the migration. E
 is present; that is `STOP_FOR_BOOKING_THREAD_DEDUPLICATION_DECISION` and blocks deploy. The
 informational rows must be attached to the release evidence and reconciled with post-migration
 counts, but duplicate groups or a survivor that is not the earliest-created row are not unsafe by
-themselves.
+themselves. The shell wrapper requires `DATABASE_URL` before `psql` starts; absent or empty binding
+must fail before any database client process is launched. During V126, only the sequencer extracts
+and executes this marker-bounded source from the immutable `RELEASE_SHA` Git blob through its
+sanitized Git boundary.
 
 <!-- BOOKING_UNREAD_PREFLIGHT_BEGIN -->
 ```bash
-psql "$DATABASE_URL" -X --set=ON_ERROR_STOP=1 <<'SQL'
+set -euo pipefail
+: "${DATABASE_URL:?DATABASE_URL must bind the exact target}"
+psql "${DATABASE_URL}" -X --set=ON_ERROR_STOP=1 <<'SQL'
 \pset pager off
 \set VERBOSITY terse
 BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;
@@ -1872,413 +1906,59 @@ persisted Mini App key or same-transaction notification contract. Use a forward 
 database restore path. A failed V124 transaction leaves its schema version and domain facts
 unchanged; still investigate the exact guard/lock failure before retrying.
 
-### Support Read Cursor PostgreSQL V126 Controlled Mixed-Version Boundary
+### Support Read Cursor PostgreSQL V126 Compatibility And Cutover Boundary
 
-The current ordered contract is `docs/V126_STAGING_CUTOVER_CONTRACT.md`. This section retains the
-migration shape and exact preflight extractor plus clearly labeled historical review drafts. It is
-not evidence that a backup, Caddy reload, deploy, migration or staging smoke happened.
+The current ordered policy/state-machine contract is `docs/V126_STAGING_CUTOVER_CONTRACT.md`, and
+the only executable sequencer is `scripts/v126-cutover.sh`. This section retains the migration shape
+and summarizes the uniquely marker-bounded preflight linkage. It is not command authority or
+evidence that a backup, Caddy reload, deploy, migration or staging smoke happened.
 
 PostgreSQL V126 is additive. It adds nullable `BIGINT support_thread_reads.last_read_message_id`
 with no default, no backfill and no destructive rewrite;
 `last_read_at` and the existing primary key `(thread_id, user_id)` are preserved. The old binary is
 schema-compatible but updates only `last_read_at`. The new binary treats a NULL cursor as every
 foreign-authored message unread, including a user-visible system message whose `author_user_id` is
-NULL. No message or marker data is lost, but badges can repeat or be inaccurate during mixed-version
-operation.
+NULL. No message or marker data is lost, but badges can repeat or be inaccurate if mixed-version
+operation occurs; the current contract prohibits that operation rather than treating compatibility
+as rollout authorization.
 
 H2 V127 is the additive dialect-parity/test migration. It adds the same nullable
 `BIGINT last_read_message_id` with no default, no backfill and no destructive rewrite, while preserving
 `last_read_at` and primary key `(thread_id, user_id)`. H2 V127 applies only in H2/local/test
 environments. Staging PostgreSQL applies PostgreSQL V126, never H2 V127.
 
-#### Historical exact-release provenance draft — superseded by HT-12C
+#### HT-12P executable linkage and final-preflight extraction
 
-This subsection is retained as pre-HT-12C evidence only. It is not the current release-selection
-procedure. Use `docs/V126_STAGING_CUTOVER_CONTRACT.md`.
+The pre-HT-12P standalone release, rollout, session-gate, recovery and bounded-smoke command drafts
+have been removed from this runbook so they cannot become a second executable path. Use only
+`scripts/v126-cutover.sh` for run initialization, one-state execution, authorization, status and
+bounded recovery; use `docs/V126_STAGING_CUTOVER_CONTRACT.md` for release identity, ordering,
+evidence and stop policy.
 
-`EXPECTED_RELEASE_SHA` comes only from the exact commit SHA shown by a fully green GitHub Actions
-run after commit and push. The operator copies the complete 40-character lowercase SHA from that
-run and passes it explicitly as `EXPECTED_RELEASE_SHA`; GitHub CLI is optional because the value may
-be copied manually from the Actions UI. The expected value must never be derived from local `HEAD`,
-the checkout being inspected, a mutable branch name or a mutable image tag. In particular,
-`EXPECTED_RELEASE_SHA="$(git rev-parse HEAD)"` and every equivalent self-derived contract are
-forbidden.
-
-Starting from the repository that owns the worktrees, create a separate detached release worktree:
+The current final V125 booking-integrity preflight source is the one block between
+`BOOKING_UNREAD_PREFLIGHT_BEGIN` and `BOOKING_UNREAD_PREFLIGHT_END` earlier in this file. The
+sequencer extractor requires both markers exactly once and in order, exactly one `bash` fence, and
+this exact prefix:
 
 ```bash
-EXPECTED_RELEASE_SHA='<full 40-character lowercase SHA copied from fully green GitHub Actions run>'
-
-if [[ ! "$EXPECTED_RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-  echo "Invalid EXPECTED_RELEASE_SHA" >&2
-  exit 1
-fi
-
-git fetch --prune origin
-
-REMOTE_MAIN_SHA="$(git rev-parse origin/main)"
-test "$REMOTE_MAIN_SHA" = "$EXPECTED_RELEASE_SHA"
-
-RELEASE_WORKTREE="/tmp/hookah-release-${EXPECTED_RELEASE_SHA}"
-test ! -e "$RELEASE_WORKTREE"
-
-git worktree add \
-  --detach \
-  "$RELEASE_WORKTREE" \
-  "$EXPECTED_RELEASE_SHA"
-
-cd "$RELEASE_WORKTREE"
-
-test "$(git rev-parse HEAD)" = "$EXPECTED_RELEASE_SHA"
-test -z "$(git status --porcelain --untracked-files=all)"
+set -euo pipefail
+: "${DATABASE_URL:?DATABASE_URL must bind the exact target}"
+psql "${DATABASE_URL}" -X --set=ON_ERROR_STOP=1 <<'SQL'
 ```
 
-Failure of the regex `^[0-9a-f]{40}$`, the `origin/main` equality, the detached release-worktree
-`HEAD` equality or the clean-worktree check is a STOP. The release worktree must contain no
-`scripts/dev/` or any other untracked file. A dirty checkout is a STOP. The development worktree is
-used only to fetch and create the worktree; it is never used for release preflight, image build or
-deploy. A mutable branch name or mutable tag is not release identity.
+It extracts the shell body byte-for-byte from the immutable `RELEASE_SHA` Git blob through the
+sanitized Git boundary, rejects any missing, duplicate, reversed, empty or ambiguous marker/fence,
+rejects an unexpected client surface, records the SHA-256 and transfers only the mode-0600 artifact
+into the sealed run namespace. The remote stage reads and hashes that source once, then feeds those
+same in-memory bytes to Bash; a later pathname swap cannot change credentialed execution. The remote
+stage reads `DATABASE_URL` only from the exact restricted
+mode-0600 target file and fails before `psql` if that binding is missing, blank or malformed. The
+artifact runs only after the quiesced-backup receipt and zero-writer/public-drain proofs validate.
 
-The release identity invariant is exact and unconditional:
-
-```text
-green Actions SHA
-= origin/main
-= release worktree HEAD
-= prepared backend image release SHA
-= DEPLOY_SHA
-```
-
-The backend image is built only with the detached exact-SHA release worktree as its build context.
-Its tag contains the full `EXPECTED_RELEASE_SHA`, and its immutable image ID is recorded before
-cutover. If the built image actually contains the OCI label
-`org.opencontainers.image.revision`, that label must equal `EXPECTED_RELEASE_SHA`; if the current
-build produces no such label, do not invent one. In that case provenance is the exact detached
-worktree plus the full-SHA tag plus the recorded immutable image ID. A mutable `staging` tag alone is
-insufficient. Set and pass `DEPLOY_SHA` explicitly, require
-`DEPLOY_SHA = EXPECTED_RELEASE_SHA`, and make the deploy command use the exact image prepared from
-that release worktree. Any SHA, tag/revision or image-ID mismatch is a STOP.
-
-#### Executable final-preflight provenance
-
-The current final preflight artifact is the uniquely marker-bounded `bash` fenced block under
-`Booking Thread Integrity Preflight (PostgreSQL V124)` in this runbook. It is a shell wrapper around
-`psql`, not a pure SQL artifact, so it must be executed as the exact extracted shell file; running
-it with `psql -f` would be the wrong artifact contract. The marker-only change does not alter its
-SQL or guard semantics.
-
-Only after the project-scoped backend, application-writer and unidentified-session counts have all
-reached zero and the separate quiesced full backup has passed its own SHA/inventory/isolated-restore
-rehearsal, extract, checksum and execute that exact current block from the release worktree:
-
-```bash
-PREFLIGHT_SOURCE="$RELEASE_WORKTREE/docs/DEPLOYMENT_RUNBOOK.md"
-PREFLIGHT_TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
-PREFLIGHT_TMP_DIR="$(
-  mktemp -d "${TMPDIR:-/tmp}/booking-unread-preflight-${EXPECTED_RELEASE_SHA}-${PREFLIGHT_TIMESTAMP}.XXXXXX"
-)"
-PREFLIGHT_ARTIFACT="${PREFLIGHT_TMP_DIR}/preflight.sh"
-trap 'rm -rf "$PREFLIGHT_TMP_DIR"' EXIT
-export PREFLIGHT_SOURCE PREFLIGHT_ARTIFACT
-
-PREFLIGHT_SHA256="$(
-  python3 - <<'PY'
-from hashlib import sha256
-from os import environ
-from pathlib import Path
-
-source_path = Path(environ["PREFLIGHT_SOURCE"])
-artifact_path = Path(environ["PREFLIGHT_ARTIFACT"])
-source = source_path.read_bytes()
-begin = b"<!-- BOOKING_UNREAD_PREFLIGHT_" + b"BEGIN -->"
-end = b"<!-- BOOKING_UNREAD_PREFLIGHT_" + b"END -->"
-
-if source.count(begin) != 1 or source.count(end) != 1:
-    raise SystemExit("STOP: missing or duplicate booking-unread preflight markers")
-
-begin_at = source.index(begin) + len(begin)
-end_at = source.index(end)
-if begin_at >= end_at:
-    raise SystemExit("STOP: booking-unread preflight markers are reversed or empty")
-
-marked = source[begin_at:end_at]
-fence = bytes([96]) * 3
-prefix = b"\n" + fence + b"bash\n"
-suffix = fence + b"\n"
-if (
-    not marked.startswith(prefix)
-    or not marked.endswith(suffix)
-    or marked.count(fence) != 2
-):
-    raise SystemExit("STOP: marker range is not exactly one bash fenced artifact")
-
-artifact = marked[len(prefix):-len(suffix)]
-expected_start = b"psql \"$DATABASE_URL\" -X --set=ON_ERROR_STOP=1 <<'SQL'\n"
-if not artifact or not artifact.strip() or not artifact.startswith(expected_start):
-    raise SystemExit("STOP: extracted shell preflight is empty or has an unexpected type")
-
-artifact_path.write_bytes(artifact)
-print(sha256(artifact).hexdigest())
-PY
-)"
-
-if [[ ! "$PREFLIGHT_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
-  echo "Invalid extracted preflight SHA-256" >&2
-  exit 1
-fi
-
-printf 'PREFLIGHT_ARTIFACT=%s\nPREFLIGHT_SHA256=%s\n' \
-  "$PREFLIGHT_ARTIFACT" \
-  "$PREFLIGHT_SHA256"
-
-bash "$PREFLIGHT_ARTIFACT"
-```
-
-This extraction fails closed on missing, duplicate, reversed or ambiguous markers, on a range that
-is not exactly one `bash` fence, and on an empty or unexpected artifact. It selects the marker-bound
-current block, not the first similar fence and not a historical runbook section. The timestamped temporary directory contains `preflight.sh` with the fenced
-shell body byte-for-byte; after extraction its SHA-256 is recorded, and the file is not edited
-before the exact `bash` execution. Incomplete or ambiguous
-extraction is a STOP.
-
-SQL or shell text from a ChatGPT message, terminal history, clipboard history, a previously saved
-SQL/shell file, cached snippet, another branch, another commit, a historical runbook section or any
-other stale copy is forbidden. Manual editing of the extracted artifact is forbidden. Do not omit,
-delete or weaken its guard merely to obtain exit code 0. An initial pre-drain preflight may expose a
-blocker early, but it never replaces the final post-drain extraction and execution from the exact
-release worktree. Unsafe, ambiguous, truncated or incomplete output is a STOP and never authorizes
-manual deletion of a check or data.
-
-#### Historical controlled rollout draft — superseded, do not execute
-
-The ordered sequence below is retained only to preserve review history. It is incomplete under
-HT-12C and must not be executed. The sole current sequence is
-`docs/V126_STAGING_CUTOVER_CONTRACT.md`.
-
-The historical draft prescribed this now-superseded order:
-
-1. Pin `EXPECTED_RELEASE_SHA` externally from the exact fully green GitHub Actions run and create
-   the separate clean detached worktree at that SHA.
-2. Verify that the same exact commit/push has fully green Actions and that
-   `origin/main = release worktree HEAD = EXPECTED_RELEASE_SHA`; any mismatch is a STOP.
-3. Create the database backup, verify that the backup artifact is readable, and confirm the approved
-   full-database restore path.
-4. Before downtime, build the exact backend image only from the detached release worktree, use a
-   full-`EXPECTED_RELEASE_SHA` tag, verify any real OCI revision label, and record the immutable image
-   ID. Do not use a mutable `staging` tag as identity.
-5. Keep `TELEGRAM_TRAFFIC_POLICY=PRODUCT`. Activate the reviewed Caddy drain so public application
-   traffic receives one generic `503`, then stop/drain every old hookah backend instance. Caddy
-   remains drained through the stopped-writer preflight and the new backend's loopback gates.
-6. Confirm `hookah_backend_container_count = 0` for the exact staging Compose project and `backend`
-   service, while its PostgreSQL service remains running and ready.
-7. Inspect `pg_stat_activity` and confirm
-   `hookah_application_writer_session_count = 0`, including `idle` application connections.
-8. Confirm `unidentified_candidate_session_count = 0`. The operator/gate session and proven
-   PostgreSQL maintenance/system sessions are not hookah backend writers; every unidentified
-   candidate session is a STOP.
-9. Extract the marker-bounded final preflight from the exact release worktree, record the extracted
-   artifact SHA-256, execute that exact unedited shell artifact, and retain the result including the
-   expected pre-cutover Flyway head.
-10. Put only the exact reviewed restricted identities into the mode-0600 staging environment, set
-    `STAGING_MAINTENANCE_MODE=V126_SMOKE`, keep the PRODUCT static lists empty and supply the separate
-    `STAGING_MAINTENANCE_V126_SMOKE_AUTHORIZED=true` process flag. Do not print any identity.
-11. Pass `DEPLOY_SHA` explicitly, verify
-    `DEPLOY_SHA = prepared image release SHA = EXPECTED_RELEASE_SHA`, and start exactly one new
-    backend from the recorded prepared image with the maintenance overlay already active. Do not
-    start any old instance.
-12. Allow that backend's normal startup to apply PostgreSQL V126.
-13. Verify the Flyway head is V126 and verify its checksum and successful history row/startup log.
-14. Confirm every running hookah backend container uses the recorded new image and that the old
-    image running count is zero.
-15. While Caddy still returns the drain `503`, run loopback `/health`, `/db/health`, `/version`, V126
-    schema invariants, one-backend/poller and queue gates. Any failure is a STOP before public routing.
-16. Restore ordinary Caddy reverse proxy routing while `V126_SMOKE` remains active. Prove an
-    unauthenticated protected request and one valid excluded identity each receive generic `503`, and
-    compare SSH/loopback snapshots to prove zero user, session, inbound, idempotency, domain,
-    notification or outbox mutation.
-17. With exactly one new backend and the overlay still active, run the complete bounded staging smoke
-    below through the canonical public Telegram clients and URLs. It includes the allowed Guest and
-    Owner paths, the exact `HT14_MANDATORY_LIVE_GATE_GUEST_REPLY_OWNER_UNREAD_CLEAR`, linked
-    staff-chat delivery, tenant/RBAC negatives and the label-collision scenario. Excluded public
-    traffic must continue receiving generic `503` with zero state.
-18. Only after every migration, queue, privacy and product assertion passes, activate the Caddy drain
-    again and stop the backend. Set `STAGING_MAINTENANCE_MODE=OFF`, clear both maintenance lists,
-    omit the active-mode authorization flag and keep `TELEGRAM_TRAFFIC_POLICY=PRODUCT` with empty
-    PRODUCT static lists.
-19. Start exactly one reviewed V126 backend in OFF mode. Before restoring routing, repeat loopback
-    config, `/health`, `/db/health`, `/version`, Flyway/schema, one-backend/poller and queue gates.
-20. Restore ordinary routing, prove a fresh ordinary Guest and Owner path use normal PRODUCT
-    admission, and retain the redacted OFF transition plus final gate results as cutover evidence.
-
-The sequence `stop container -> immediately start new backend` is forbidden: the PostgreSQL session
-gate and final read-only preflight must occur between stop/drain and the one-new-backend start.
-Cutover may continue only when all conditions are true:
-
-```text
-hookah_backend_container_count = 0
-AND hookah_application_writer_session_count = 0
-AND unidentified_candidate_session_count = 0
-```
-
-Any non-zero value blocks PostgreSQL V126 cutover. In release evidence this is the mandatory
-**zero application writer sessions** gate, not an active-query-only check.
-
-#### Historical container/process gate — superseded, do not execute
-
-Run from the exact staging project directory and compose file:
-
-```bash
-cd /opt/hookah-bot
-docker compose config --services
-test "$(docker compose ps --status running -q backend | wc -l | tr -d ' ')" = "0"
-test "$(docker compose ps --status running -q postgres | wc -l | tr -d ' ')" = "1"
-docker compose exec -T postgres sh -c 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
-```
-
-Record `hookah_backend_container_count = 0` and PostgreSQL readiness in release evidence. These
-commands are deliberately scoped by `/opt/hookah-bot/docker-compose.yml`, its resolved Compose
-project and the exact `backend`/`postgres` services. Do not replace them with a global `docker ps`
-text or label match that could count a different Docker project or similarly named service.
-PostgreSQL must stay running; stopping it is not a substitute for draining application writers.
-
-#### Historical PostgreSQL session gate — superseded, do not execute
-
-The current staging configuration uses `DB_USER = POSTGRES_USER`, the database named by
-`DB_JDBC_URL`/`POSTGRES_DB`, and a backend client address on the Compose container network. Neither
-`application.conf` nor `DatabaseFactory` sets a PostgreSQL `application_name`, so do not invent or
-filter on a presumed value. Capture the old backend container IDs and Compose network addresses
-before drain, then, after the container gate reaches zero, inspect every candidate session:
-
-```bash
-cd /opt/hookah-bot
-docker compose exec -T postgres sh -c \
-  'psql -X -U "$POSTGRES_USER" -d "$POSTGRES_DB" --set=ON_ERROR_STOP=1' <<'SQL'
-\pset pager off
-SELECT
-    pg_backend_pid() AS zero_writer_gate_operator_pid,
-    current_database() AS database_name,
-    current_user AS database_user;
-
-SELECT
-    pid,
-    usename,
-    application_name,
-    client_addr,
-    client_port,
-    state,
-    backend_start,
-    xact_start,
-    query_start,
-    wait_event_type,
-    wait_event
-FROM pg_stat_activity
-WHERE backend_type = 'client backend'
-  AND datname = current_database()
-  AND usename = current_user
-  AND pid <> pg_backend_pid()
-ORDER BY backend_start, pid;
-SQL
-```
-
-The actual candidate predicate is therefore the current staging database plus its shared
-`DB_USER`/`POSTGRES_USER`, `backend_type = 'client backend'`, excluding only the PID of this gate's
-operator session. Classify returned rows using the recorded old-container PID/client address and
-Compose network, the observed (not assumed) `application_name`, and an individually identified
-operator PID when applicable. `idle`, `idle in transaction` and active connections all count as
-application writers when they belong to the hookah backend. The current gate query itself is
-excluded by `pg_backend_pid()`; the later read-only preflight operator session is likewise not an
-application writer. PostgreSQL system workers are excluded by `backend_type`; a separate
-maintenance or operator client counts as non-application only when its PID and purpose are proved
-and recorded.
-
-Because the backend does not set a unique `application_name`, this inspection is intentionally
-fail-closed. A row attributable to an old hookah container makes
-`hookah_application_writer_session_count > 0`; terminate/drain its owning old process and repeat
-both gates. Any row that cannot be conclusively attributed is
-`STOP_FOR_BOOKING_MIXED_VERSION_ROLLOUT_DECISION`, not permission to continue optimistically. Do not
-weaken the check to active queries: an idle old connection proves that the old binary is not fully
-drained.
-
-#### Historical recovery draft — superseded, do not execute
-
-After PostgreSQL V126 has applied successfully, improvised manual DB/schema/data cleanup is
-forbidden. The following are unconditionally forbidden in every release recovery plan after V126:
-restoring one table; restoring a set of selected tables; restoring only `support_thread_reads`;
-restoring only `support_messages`; restoring schema objects separately from data; any other
-partial-table restore; a partial restore over the migrated schema; or manually merging data from a
-backup. Do not run manual `UPDATE`, `DELETE` or `INSERT` statements on read-marker/cursor rows;
-manually `ALTER`, `DROP` or recreate schema objects; edit `flyway_schema_history`; mutate migration
-versions or checksums; run cleanup SQL; downgrade the schema; run automatic or manual
-`flyway repair`; or start the old backend to "repair" state. This prohibition has no
-operator-confidence, exceptional-case or separately approved partial-recovery-plan override.
-
-If startup or verification fails after schema cutover:
-
-1. Make or keep Caddy return the generic drain `503`; stop the failed backend before any replacement
-   starts.
-2. Do not start the old backend.
-3. Perform no manual DB/schema/data cleanup.
-4. Preserve the verified backup, evidence and logs.
-5. Prepare a reviewed forward-fix binary that retains the identity maintenance overlay and is
-   compatible with the applied V126 schema.
-6. With underlying `PRODUCT`, the exact restricted values and the explicit active-mode authorization
-   flag, start only the reviewed forward-fixed backend in `V126_SMOKE`.
-7. While Caddy remains drained, repeat loopback health, database health, version, schema,
-   one-backend/poller and queue gates.
-8. Restore ordinary routing with the overlay still active; repeat public excluded-identity generic
-   `503` plus zero-state proof, then complete the allowed canonical Guest/Owner, HT-14, booking and
-   staff-chat smoke.
-9. After full PASS, drain and stop again, switch to `OFF`, clear both maintenance lists and restart
-   the same reviewed forward-fixed V126 backend over unchanged `PRODUCT`. Repeat the final loopback
-   gates before restoring ordinary PRODUCT routing and admission.
-
-The only restore path permitted by this release recovery contract is a full, consistent restore of
-the entire database as a separate disaster-recovery decision. It is not an ordinary release
-rollback and requires separate explicit confirmation from the user/product owner. After the full
-restore, select a reviewed identity-overlay-capable backend binary compatible with the restored
-Flyway state and reassess migrations. If the V126 cutover resumes, execute the complete active-overlay
-sequence above; if the cutover is abandoned on the restored pre-V126 state, keep Caddy drained until
-one reviewed compatible backend has started with `OFF`, empty maintenance lists and unchanged
-`PRODUCT`, and repeat health, database health, schema, queue and ordinary admission gates before
-restoring routing. Never combine a full-database restore with a partial transfer of tables, rows or
-schema objects over V126. A long mixed deployment is prohibited. No old binary may be started to
-repair the V126 database, and only the new or reviewed forward-fixed backend may run before the
-controlled OFF transition, unless a separately approved full-database disaster recovery has first
-restored a Flyway state compatible with the selected binary.
-
-#### Historical bounded-smoke draft — superseded, do not execute
-
-With ordinary Caddy reverse proxy routing restored, `V126_SMOKE` still active, exactly one new
-backend instance and old image running count zero, verify all of the following before the second
-drain and controlled OFF transition:
-
-- a user-visible NULL-author system message in a real `VENUE_CHAT` produces an unread badge;
-- exact open clears that badge, and a new system message after the open becomes unread again;
-- crafted wrong-surface deep links do not change raw read markers;
-- the correct surface clears only the exact marker;
-- Guest, Venue and account/venue isolation hold;
-- a real staff-chat Telegram notification reaches the canonical linked chat;
-- Support and Conversations remain separate and do not mix.
-
-The exact label-collision acceptance scenario is mandatory:
-
-1. Create or select two test bookings for the same venue with the same display number (the
-   authoritative `display_number`), but different service dates (`display_date`).
-2. Confirm that the two records really have the same number, for example №1 and №1.
-3. Confirm that their user-visible labels differ because of venue-local date/time:
-   `Бронь №1 · <дата A>, <время A>` and `Бронь №1 · <дата B>, <время B>`.
-4. Verify both labels in Guest booking list/detail, Venue booking list/detail, conversation
-   list/detail, and the staff-chat notification if one is created in this smoke.
-5. Confirm that no surface shortens both records to identical `Бронь 1` or `Бронь №1` labels.
-6. Confirm that each label and its associated open action resolves to the exact corresponding
-   booking/thread.
-
-Two bookings with different display numbers do not reproduce the original collision and cannot
-substitute for this scenario. If staging fixtures cannot naturally produce the same display number
-on different service dates, record that capability as a smoke setup prerequisite; do not weaken the
-smoke to different numbers.
-
-Do not run this cutover, PostgreSQL V126, H2 V127 or staging preflight from a docs-only task.
+A clipboard copy, task-message snippet, cached script, historical branch or manually edited extract
+is not evidence and must not be executed. Release identity, no-build image transfer, Caddy drain,
+manual smoke, OFF transition and all three recovery branches remain summaries in this runbook; their
+complete policy is the contract and their complete commands are the sequencer.
 
 ### Guest Order Payload-Bound Idempotency Rollout Boundary
 
@@ -2463,6 +2143,11 @@ Needs verification:
 
 Do not promise a rollback command that the repo/runbook does not currently prove. Mark missing rollback commands as **RUNBOOK GAP** and add a follow-up task.
 
+For PostgreSQL V126 staging, do not use the ordinary deployment or rollback examples. The only
+approved executable branches are `scripts/v126-cutover.sh recover ...` under the exact pre-V126,
+post-V126-stop and full-DR-prerequisite policies in
+`docs/V126_STAGING_CUTOVER_CONTRACT.md`. None is an automatic fallback.
+
 For the booking-thread V124/message-idempotency cutover specifically, an old backend binary is
 semantically prohibited after the schema cutover because it omits the required Mini App replay key
 and atomic outbox write. The only approved recovery directions are a forward fix or the previously
@@ -2522,12 +2207,15 @@ ChatGPT should return:
 ## Roadmap Status
 
 - Deployment/runbook docs: `UPDATED`.
-- PostgreSQL V126 staging contract: `HT-12C PRE-MAIN-INTEGRATION`; no backup, Caddy reload,
-  maintenance activation, migration, deploy or staging smoke is recorded. The sole current contract
-  is `docs/V126_STAGING_CUTOVER_CONTRACT.md`.
+- PostgreSQL V126 staging contract: `HT-12P HARDENED CANDIDATE IMPLEMENTED AFTER FIRST REVIEW BLOCK /
+  LOCAL ADVERSARIAL VALIDATION PASSED / INDEPENDENT READ-ONLY RE-REVIEW REQUIRED BEFORE COMMIT AND
+  PUSH / EXACT GREEN FEATURE-BRANCH ACTIONS REQUIRED AFTER PUSH`; no staging access,
+  backup, Caddy reload, maintenance activation, image transfer, migration, deploy or smoke is
+  recorded. Command authority is `scripts/v126-cutover.sh`; policy/state-machine authority is
+  `docs/V126_STAGING_CUTOVER_CONTRACT.md`.
 - Staging deploy policy: `DOCUMENTED`.
-- Rollback policy: V126-specific runtime/forward-fix/full-DR boundaries are exact in the canonical
-  V126 contract; unrelated production rollback remains `PARTIAL`.
+- Rollback policy: V126 pre-runtime rollback, post-V126 forward-fix stop and full-DR prerequisite
+  verification are bounded sequencer branches; unrelated production rollback remains `PARTIAL`.
 - Operations troubleshooting: `PARTIAL`; exact production log and provider diagnostic commands need verification.
 - Production release process: `FUTURE / PARTIAL`; the V126 commands are staging-only and are not
   production authorization.

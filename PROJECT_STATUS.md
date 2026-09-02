@@ -1,21 +1,24 @@
 # Project Status
 
-Last verified: 2026-09-01.
+Last verified: 2026-09-02.
 
 ## 1. Current stage
 
-**HT-12C V126 PREDEPLOY DOCUMENTATION AND RELEASE-IDENTITY CLOSURE /
-EXACT MAIN BASE AND V125 STAGING BASELINE VERIFIED / HT-12M COMPLETE /
-FEATURE-BRANCH REVIEW, ACTIONS AND EXPLICIT MAIN-INTEGRATION AUTHORIZATION REQUIRED /
-NO CUTOVER STARTED**.
+**HT-12P V126 EXECUTABLE CUTOVER CONTRACT AND SEQUENCER CLOSURE /
+EXACT MAIN BASE VERIFIED / HT-13 PREDEPLOY CONTRACT STOP RECORDED /
+HARDENED CANDIDATE IMPLEMENTED AFTER THE FIRST REVIEW BLOCK /
+LOCAL ADVERSARIAL VALIDATION PASSED / INDEPENDENT READ-ONLY RE-REVIEW REQUIRED BEFORE COMMIT AND PUSH /
+EXACT GREEN FEATURE-BRANCH ACTIONS REQUIRED AFTER PUSH /
+NO STAGING ACCESS OR CUTOVER STARTED**.
 
-Fresh `origin/main` is exact commit `9f51ebbd2dae0702b4b2f6333c1b42fc94cd1fc1`, tree
-`4071962a6850d977c4d7c319bfecc7cd4c2273d1`, parent
-`f837b0ed01f68832b305d5a2ed61b3927583f1e9`. Exact main Actions run `33514472076`
-is workflow `CI`, event `push`, branch `main`, attempt `1`, exact head SHA, and
-`completed/success`; all `11/11` jobs succeeded with zero adverse conclusions. Commit
-`9f51ebbd2dae0702b4b2f6333c1b42fc94cd1fc1` is the exact HT-12C base, not automatically the final
-V126 release SHA.
+Fresh required `origin/main` is exact merge commit
+`ecb09601975678a41d89e5c824cc7812c7876481`, tree
+`8c97996e317f0182b4871d2a2537a732d4830f64`, with ordered parents
+`9f51ebbd2dae0702b4b2f6333c1b42fc94cd1fc1` then
+`d9c656b1c5feb757b79558209f130c08cba81cf5`. Exact main Actions run `33536142005` is workflow
+`CI`, event `push`, branch `main`, attempt `1`, exact head SHA and `completed/success`; all `11/11`
+jobs succeeded with zero adverse conclusions. Any fresh-base mismatch stops as
+`MAIN_BASE_DIVERGED_BEFORE_HT12P`. This merge is the HT-12P base, not the final V126 release SHA.
 
 HT-12M is integrated and closed with final verdict
 `IDENTITY_GATED_MAINTENANCE_PREREQUISITE_COMPLETE`. Its historical port base was
@@ -28,25 +31,63 @@ backend/poller, healthy PostgreSQL, Flyway V125 and V126 absent. Detailed immuta
 validation and review evidence remains in
 `docs/HT12M_IDENTITY_MAINTENANCE_MAIN_PORT_EVIDENCE.md`.
 
-HT-12C reconciles the single current V126 cutover contract in
-`docs/V126_STAGING_CUTOVER_CONTRACT.md`, bounded static operational checks, backup/rehearsal and
-recovery boundaries, immutable migration identities and the final-release selection process. Normal
-public-pilot staging remains `PRODUCT` with maintenance `OFF`; temporary `V126_SMOKE` is an
-identity-gated migration-window overlay, never a replacement for membership or RBAC. Permanent
-staging `ALLOWLIST`, stable client CIDRs and Caddy/source-IP attribution are historical experiments
-rather than current authorization mechanisms.
+HT-13 stopped before run-namespace allocation and before sealed-input creation with
+`PREDEPLOY_CONTRACT_NOT_PROVABLE`. No HT-13 package was created and no staging mutation occurred.
+That attempt and every historical HT-12D through HT-12K artifact remain rejected background
+evidence, not reusable cutover authority.
 
-This task authorizes documentation and static verification, independent read-only review,
-feature-branch commit/push and branch Actions. It does not authorize main integration, a staging
-deploy, backup creation, maintenance activation, Caddy reload/restart, Flyway/V126, staging-data
-mutation or cutover. After the reviewed feature branch and its exact Actions run are green, the
-next gate is `HT12C_MAIN_INTEGRATION_AUTHORIZATION_REQUIRED`. Only a later exact authorization may
-integrate the branch and select the final release SHA after a new green main Actions run; the
-two-build image proof and final read-only staging baseline follow that integration and do not upload
-or deploy the image.
+HT-12P makes the contract executable through `scripts/v126-cutover.sh`, with bounded static and
+fixture proof in `scripts/test-v126-cutover.sh`. The scripts are command/test authority;
+`docs/V126_STAGING_CUTOVER_CONTRACT.md` is ordered policy and state-machine authority; other runbooks
+link to them rather than duplicating commands. One immutable run manifest, intent-before-action
+records, hash-chained stage receipts and separate Gate A/B/C authorizations enforce all 20 stages.
+Every state has an exact artifact inventory plus a real mode-0400 operation log whose emitted
+artifact lines are replayed; a rechecksummed substituted, missing or extra artifact is rejected.
+Remote actions exist only behind a streamed stdin envelope bound to the run/script/intent/gate and
+exact stage-action tuple, not a public helper command. The state lock tracks owner, worker, SSH and
+rsync children, exits on signals and allows only an atomic dead-lock recovery takeover after all
+liveness is disproved.
+
+State 1 content-binds the restricted database/identity files and the exact `RELEASE_SHA` Compose,
+maintenance-guard and admission-guard sources; the later HT-13 preparation must make that remote
+execution surface exact before baseline can pass. Release/object reads clear inherited Git controls,
+disable replacement objects and use exact blob plumbing. The no-build image transfer snapshots one
+mode-0400 unlinked descriptor for local parse/hash/upload and another for remote parse/hash/load, with
+actual Bash-3.2/openrsync-compatible syntax; no post-verification pathname is executed. Transfer and
+later startup are separate states. Startup resolves the backend service specifically, disables
+restart, requires `RestartCount=0`, executes one explicit start and proves one long-polling V126
+backend with global
+V125 zero and staging-project old-image zero. Caddy candidate activation is proved before the drain
+marker; Gate B requires the exact 17-assertion evidence schema and a protected unauthenticated
+generic-`503` proof.
+Recovery classifies Flyway before Caddy/backend mutation, covers partial Caddy activation and
+terminalizes exact-V126, already-stopped, unexpected-V125 or unknown-image post-V126 states safely.
+Pre-V126 rollback, post-V126 forward-fix stop and full-DR prerequisite verification remain bounded
+executable branches.
+
+The frozen sequencer SHA-256 is
+`2994e1eb5a8ab2940e15bd005106822fda85527d0b97577982fb8578b6c10108`; the frozen harness SHA-256 is
+`2764fcd19555e622decf7d67693889d1ccd4f8c6e024dab032b595c601b9b5a3`. The complete local harness
+passed all 426 bounded assertions after documentation reconciliation. This is local fixture evidence
+only; independent
+read-only re-review and exact feature-branch Actions are not yet claimed.
+
+Normal public-pilot staging remains `PRODUCT` with maintenance `OFF`; temporary `V126_SMOKE` remains
+an identity-gated migration-window overlay, never a replacement for membership or RBAC. Permanent
+staging `ALLOWLIST`, stable client CIDRs and Caddy/source-IP attribution remain rejected historical
+experiments. The immutable PostgreSQL/H2 migration trees, blobs and runtime behavior are unchanged.
+
+This task authorizes local implementation and tests, independent read-only review, feature-branch
+commit/push and branch Actions. It does not authorize main integration, staging or production access,
+SSH, backup/rehearsal creation, image build/transfer, service mutation, maintenance activation,
+Caddy reload/restart, Flyway/V126, Telegram/database writes or cutover. After local/review PASS and
+an exact green feature-branch Actions run, the next gate is
+`HT12P_MAIN_INTEGRATION_AUTHORIZATION_REQUIRED`. Only a later exact authorization may integrate the
+branch, select the final release SHA after a new green main Actions run and repeat deterministic
+two-build image proof.
 
 The booking release line below is a preserved historical preintegration task snapshot. It is not
-the current HT-12C stage, release identity or G0-G9 execution status.
+the current HT-12P stage, release identity or executable state/receipt status.
 
 **BOOKING CONVERSATION UX / DISTINCT LABELS, INBOX AND UNREAD DISCOVERABILITY /
 MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**.
@@ -280,7 +321,8 @@ Still open by design:
 Media/object-storage work remains blocked by `MEDIA-STORAGE-DECISION-001`; that historical Goal did
 not implement or modify Media/R2. Its then-recorded next step was independent review, explicit
 commit, green Actions, the additive cursor migration, staging redeploy and bounded
-Guest/Venue/Telegram conversation smoke. The current repository has since integrated the code and
-HT-12M prerequisite; HT-12C's only current next gate is the explicit main-integration authorization
-recorded in section 1. The previous integrity release retains its separate historical V124/V125
-preflight/migration evidence.
+Guest/Venue/Telegram conversation smoke. The current repository has since integrated the code,
+HT-12M prerequisite and HT-12C policy baseline. HT-12P's only current next gate after complete
+local validation, independent review, commit/push and exact green branch Actions is the explicit
+main-integration authorization recorded in section 1. The previous integrity release retains its
+separate historical V124/V125 preflight/migration evidence.
