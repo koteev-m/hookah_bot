@@ -4,6 +4,86 @@ Last verified: 2026-09-02.
 
 ## 1. Current stage
 
+**HT-12Q REPRODUCIBLE GRADLE ARCHIVE AND DETERMINISTIC V126 IMAGE CLOSURE /
+EXACT MAIN BASE AND 11/11 MAIN ACTIONS VERIFIED /
+PRE-FIX WALL-CLOCK JAR TIMESTAMP DEFECT REPRODUCED /
+MINIMAL BACKEND APPLICATION ARCHIVE CONFIGURATION IMPLEMENTED /
+POST-FIX JAR AND INSTALLDIST REPRODUCIBILITY PROVED /
+TWO INDEPENDENT CACHE-FREE LINUX/AMD64 IMAGE BUILDS IDENTICAL /
+LOCAL RELEASE GUARDS AND INDEPENDENT READ-ONLY REVIEW PASSED / NO P0, P1 OR BLOCKING P2 /
+FEATURE-BRANCH COMMIT, NON-FORCE PUSH AND EXACT GREEN ACTIONS REQUIRED /
+NO MAIN INTEGRATION, STAGING ACCESS OR CUTOVER STARTED**.
+
+Fresh required `origin/main` is exact commit
+`15a996575dcb863d7f4fe2f8110d3d56399fa354`, tree
+`3802e89a61190066c369cfe3293dd5e6ff1ad809`. Exact main Actions run `33632063646` is workflow
+`CI`, event `push`, branch `main`, attempt `1`, exact head SHA and `completed/success`; all `11/11`
+jobs succeeded with zero adverse job conclusions. HT-12Q runs only in the clean isolated worktree
+for branch `codex/ht-12q-reproducible-gradle-image`; the original local main worktree is unchanged.
+
+The exact `:backend:app:installDist` task graph is
+`checkKotlinGradlePluginConfigurationErrors -> compileKotlin/compileJava -> processResources ->
+classes -> jar -> startScripts -> installDist`. The only archive task consumed by this graph is
+`:backend:app:jar`, producing `backend/app/build/libs/app-0.1.0.jar` and installing the same bytes as
+`lib/app-0.1.0.jar`. Two independent pre-fix clean, no-build-cache, forced builds produced raw JAR
+SHA-256 values `b491acaf9aaf59d67396b1340431e164f16b5df36a30af16408c62652abee189` and
+`47a579ff54afbe6ff017a073ae4d0afb24bcd4181518ee0e99c670560a595979`. All `4216` entry names,
+their order and uncompressed contents matched, but all `4216` ZIP timestamps differed. The complete
+`installDist` path/type/mode manifest retained `96` regular files, no symlinks and no unexpected
+types; only the application JAR hash differed.
+
+`backend/app/build.gradle.kts` now configures every `AbstractArchiveTask` in the backend application
+project with `isPreserveFileTimestamps = false` and `isReproducibleFileOrder = true`. This is the
+smallest scope covering the complete current `installDist` archive graph while also preventing a
+future backend-app archive task from silently retaining timestamps. No compression, permission,
+manifest, version, Dockerfile, runtime, sequencer or migration semantics changed.
+
+`scripts/check-gradle-archive-reproducibility.sh` performs two independent `clean` plus
+`installDist` builds with `--no-build-cache` and `--rerun-tasks`, separated beyond ZIP timestamp
+granularity. It requires raw JAR equality, equal unique entry names and order, Gradle's fixed
+`1980-02-01T00:00:00` timestamps, a complete equal regular-file SHA-256/type/mode manifest, exact
+launcher and library modes, the generated/installed application JAR identity and zero symlinks or
+unexpected paths/types. The check reports only relative distribution paths, labels and hashes. It
+failed on the uncorrected base for raw JAR/timestamp/installDist inequality, then passed after the
+Gradle correction with both JARs equal to
+`34e9b501171df13ea9d84ca8e620c8b81302f2dd7630cb9e9734445688738935`. A dedicated
+`backend-archive-reproducibility` CI job runs the guard on Java 21 and is a mandatory dependency of
+the existing `backend` aggregate; no existing job, selector or minimum was removed.
+
+Two separate run-created Buildx docker-container builders independently built the same candidate
+working tree for `linux/amd64` with `--pull`, `--no-cache`, `--provenance=false`, identical staging
+public URL and Gradle JVM arguments, and `SOURCE_DATE_EPOCH=1788351553` derived from the exact source
+HEAD timestamp. BuildKit rewrote layer timestamps to that epoch. Both builds produced application
+JAR SHA-256 `34e9b501171df13ea9d84ca8e620c8b81302f2dd7630cb9e9734445688738935`, application-layer DiffID
+`sha256:8e76286006db24b72ccb0d3c3fcae4099724252de9e10fb337af344d86ebf4a3`, compressed application
+layer digest `sha256:4722a47e4a36e34031010d1e08223bed2fab42d49b56ac168e5f4fc0e07b22e1`, image config
+`sha256:486427e6721401e8bbcac082d6bfbf5cd91aa7e6eab73af53020b726f7f86b44` and final image ID
+`sha256:872df96da5f5f0948b00572617dd7a521c9f7057f6ee52da8886dfcd4bf5893f`. Both complete ten-layer
+inventories matched. Only the run-created stopped extraction containers, test tags, builders,
+builder caches and temporary evidence directories were removed after hashes were recorded.
+
+Local validation passes the new double-build guard, backend compile and ktlint, the full HT-12P
+sequencer harness, maintenance/image/admission guards and Compose validation. The immutable complete,
+PostgreSQL and H2 migration trees remain `765956602de896b4498a956753272a6bc2d2971e`,
+`bb2778e26e03e03211eab9f149777313f4a6f24b` and
+`07b5ba6ccf25e79c9cc419b9095bb664f2cfae18`; PostgreSQL V126/H2 V127 retain blob
+`6f39f7d33b1976d0f5eb7a70051bfc5351d12e56`, SHA-256
+`ad11b2f95a6c73db226d3cd1ba53ac800a514c72d454b9255f379566195e08b5` and Flyway checksum
+`1701638026`.
+
+The independent read-only build/release review passed with no P0, P1, P2 or P3 findings. The
+remaining HT-12Q gates are a minimum cohesive feature-branch commit, ordinary non-force push and an
+exact green branch Actions run whose remote SHA equals the reviewed candidate. Main integration,
+staging/production access, SSH, upload, deployment and V126 execution remain unauthorized. The
+required stop after those gates is `HT12Q_MAIN_INTEGRATION_AUTHORIZATION_REQUIRED`; HT-13 must not
+start automatically.
+
+### Preserved HT-12P preintegration evidence
+
+The historical HT-12P snapshot below is preserved as sequencer evidence. Its then-pending branch
+state and its narrower image-build restriction are not current HT-12Q authority; HT-12P is already
+integrated into the exact HT-12Q main base above.
+
 **HT-12P V126 EXECUTABLE CUTOVER CONTRACT AND SEQUENCER CLOSURE /
 EXACT MAIN BASE VERIFIED / HT-13 PREDEPLOY CONTRACT STOP RECORDED /
 FEATURE-BRANCH ACTIONS EXPOSED A CLEANUP-TRAP ERROR-UNWIND DEFECT /

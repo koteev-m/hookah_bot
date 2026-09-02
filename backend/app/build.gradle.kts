@@ -1,3 +1,4 @@
+import org.gradle.api.tasks.bundling.AbstractArchiveTask
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 
 plugins {
@@ -58,6 +59,11 @@ tasks.withType<KotlinCompile>().configureEach {
     compilerOptions.freeCompilerArgs.addAll(
         listOf("-Xjsr305=strict"),
     )
+}
+
+tasks.withType<AbstractArchiveTask>().configureEach {
+    isPreserveFileTimestamps = false
+    isReproducibleFileOrder = true
 }
 
 tasks.test {

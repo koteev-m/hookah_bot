@@ -20,7 +20,14 @@ STAGING-SMOKE-PASSED** for release HEAD `e35def99ea8429462e5fdaaeee914f57da72e77
 green Actions, staging deploy, consolidated smoke and cleanup. At that historical closure, local
 GitHub CLI authentication was invalid, so its Actions result was recorded as user-confirmed evidence.
 
-Current predeploy QA slice: **HT-12P / V126 EXECUTABLE CUTOVER CONTRACT AND SEQUENCER CLOSURE /
+Current build/release QA slice: **HT-12Q / REPRODUCIBLE GRADLE ARCHIVE AND DETERMINISTIC V126 IMAGE /
+PRE-FIX DEFECT REPRODUCED / MINIMAL BACKEND-APP ARCHIVE CONFIGURATION IMPLEMENTED /
+POST-FIX ARCHIVE, INSTALLDIST AND TWO-BUILD IMAGE EQUALITY PROVED LOCALLY /
+INDEPENDENT READ-ONLY REVIEW PASSED WITH NO FINDINGS / FEATURE-BRANCH COMMIT AND EXACT GREEN ACTIONS REQUIRED /
+NO MAIN INTEGRATION OR STAGING EXECUTION AUTHORIZED**. The dedicated
+`backend-archive-reproducibility` job is a required dependency of the `backend` aggregate.
+
+Preserved preceding predeploy QA slice: **HT-12P / V126 EXECUTABLE CUTOVER CONTRACT AND SEQUENCER CLOSURE /
 HARDENED CANDIDATE IMPLEMENTED / LOCAL ADVERSARIAL VALIDATION PASSED / INDEPENDENT READ-ONLY
 RE-REVIEW REQUIRED BEFORE COMMIT AND PUSH / EXACT GREEN FEATURE-BRANCH ACTIONS REQUIRED AFTER PUSH /
 NO EXECUTION GATE PASSED**. Exact required main is
@@ -43,6 +50,46 @@ evidence; it is not the current slice and is not marked staging-complete.
 ## Core Rule
 
 Quality gates must match the blast radius of the change. Do not claim a feature is release-ready from local-only checks when it changes backend runtime, Mini App behavior, Telegram bot, staff-chat, billing/security or migrations. Do not run staging deploy for docs-only changes.
+
+### HT-12Q Gradle archive and image reproducibility quality gate
+
+The Docker backend build consumes `:backend:app:installDist`. Its current task graph has exactly one
+archive-producing dependency, `:backend:app:jar`. Every `AbstractArchiveTask` in that application
+project must disable file timestamp preservation and enable reproducible file order; configuring
+only the current `jar` task name is insufficient because a later backend-app archive could otherwise
+silently reintroduce the same defect.
+
+Local and CI validation must run:
+
+```bash
+bash -n scripts/check-gradle-archive-reproducibility.sh
+bash scripts/check-gradle-archive-reproducibility.sh
+```
+
+The guard must perform two separate `clean` plus `installDist` executions with `--no-build-cache`
+and `--rerun-tasks`, separated beyond ZIP timestamp granularity. It must fail unless:
+
+- raw backend application JAR SHA-256 values are equal;
+- JAR entry names are equal, unique and in the same order;
+- every JAR entry has Gradle's fixed reproducible timestamp;
+- complete `installDist` regular-file SHA-256/type/mode manifests are equal;
+- generated and installed application JAR bytes are identical;
+- both launcher files have the expected executable mode and library files remain non-executable;
+- only the expected `bin`/`lib` regular-file layout exists, with no symlink or special file.
+
+The script may copy each independently generated JAR only into a run-created temporary evidence
+directory for comparison. It must not normalize, touch, repack, replace or reuse either build output,
+must remove only that run-created evidence directory and must print only sanitized relative paths,
+labels and hashes. Dependency caches are permitted; Gradle task-output build-cache reuse is not.
+
+The regular CI gate deliberately proves archive and distribution reproducibility rather than doing
+two full Docker builds per commit. Before a release candidate is committed, and again from the exact
+final main SHA after separately authorized integration, two independent cache-free Docker builds
+remain mandatory. They must use separate clean builders, `linux/amd64`, `--pull`, `--no-cache`,
+`--provenance=false`, identical build arguments and the same deterministic `SOURCE_DATE_EPOCH` when
+BuildKit timestamp rewriting is part of the proof. The application JAR, application-layer digest and
+final image ID must all match. If the JAR matches but the image does not, identify the first differing
+config field or layer and stop; do not silently pin bases or add another normalization mechanism.
 
 ### Permanent public-pilot Telegram admission quality gate
 
@@ -2822,6 +2869,7 @@ runtime or release evidence.
 Current CI jobs:
 - `backend-ktlint`;
 - `backend-compile`;
+- `backend-archive-reproducibility`;
 - `backend-release-critical-routes`;
 - `backend-venue-booking-rbac`;
 - `backend-telegram-lightweight`;
