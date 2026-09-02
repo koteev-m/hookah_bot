@@ -67,7 +67,7 @@ executable branches.
 
 The frozen sequencer SHA-256 is
 `2994e1eb5a8ab2940e15bd005106822fda85527d0b97577982fb8578b6c10108`; the frozen harness SHA-256 is
-`2764fcd19555e622decf7d67693889d1ccd4f8c6e024dab032b595c601b9b5a3`. The complete local harness
+`c715a94aef1fb812adfa2110db79f04055be3b20f39d2145c116de0e009f87bb`. The complete local harness
 passed all 426 bounded assertions after documentation reconciliation. This is local fixture evidence
 only; independent
 read-only re-review and exact feature-branch Actions are not yet claimed.

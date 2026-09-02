@@ -4230,7 +4230,16 @@ test_sensitive_consumer_secret_redaction() {
     "${maintenance_staging}/.env" >/dev/null || fail 'maintenance user identity was not installed exactly'
   grep -Fx "STAGING_MAINTENANCE_ALLOWED_CHAT_IDS=${chat_canary}" \
     "${maintenance_staging}/.env" >/dev/null || fail 'maintenance chat identity was not installed exactly'
-  [[ "$(stat -f '%Lp' "${maintenance_staging}/.env" 2>/dev/null || stat -c '%a' "${maintenance_staging}/.env")" == 600 ]] ||
+  local maintenance_env_mode
+  maintenance_env_mode="$(python3 - "${maintenance_staging}/.env" <<'PY'
+import os
+import stat
+import sys
+
+print(f"{stat.S_IMODE(os.stat(sys.argv[1]).st_mode):o}")
+PY
+)"
+  [[ "${maintenance_env_mode}" == 600 ]] ||
     fail 'maintenance .env is not restricted mode 0600'
   assert_sensitive_value_locations "${TEST_ROOT}" \
     "${maintenance_staging}/.env,${identities_file}" "${user_canary}" "${chat_canary}"
