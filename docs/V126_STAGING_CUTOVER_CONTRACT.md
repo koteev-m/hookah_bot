@@ -353,6 +353,14 @@ owner PID without any lock-directory disappearance window. A live, malformed or 
 a STOP. Dead-lock takeover does not resume the normal chain; it may enter only the one explicitly
 authorized recovery branch.
 
+Secret-bearing Telegram and preflight files, environment-transform temporaries and Caddy admin
+snapshots bind their concrete cleanup targets into one-shot `EXIT`/`HUP`/`INT`/`TERM` handlers
+before use. Each handler clears the cleanup traps before acting, preserves the original exit status
+or the exact signal status and reports a cleanup failure without masking the primary failure.
+Restore-rehearsal container and volume cleanup is pre-armed with exact names and a run-specific
+ownership label. The sequencer proves that label before mount/use or deletion, removes the container
+before the volume and refuses to delete a wrong-owner resource.
+
 ### Pre-V126 runtime rollback
 
 Exact token: `AUTHORIZE_V126_PRE_V126_ROLLBACK`.

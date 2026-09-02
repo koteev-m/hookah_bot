@@ -1437,6 +1437,137 @@ EOF
   grep -F -- '${DATABASE_URL:?' "${CUTOVER_SCRIPT}" >/dev/null ||
     fail 'host-side database URL is not fail-closed'
   pass 'database URL has a fail-closed required binding'
+
+  [[ "$(grep -F -c 'printf -v cleanup_command' "${CUTOVER_SCRIPT}" || true)" == 7 ]] ||
+    fail 'all seven resource cleanup families must bind a literal command'
+  [[ "$(grep -F -c 'v126_cleanup_exit_status=\$?; trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then' \
+    "${CUTOVER_SCRIPT}" || true)" == 7 ]] ||
+    fail 'cleanup EXIT traps must be one-shot and preserve the original exit status'
+  local signal_name signal_status
+  while IFS=: read -r signal_name signal_status; do
+    [[ "$(grep -F -c \
+      "fi; exit ${signal_status}\" ${signal_name}" "${CUTOVER_SCRIPT}" || true)" == 7 ]] ||
+      fail "cleanup ${signal_name} traps must be one-shot with exact status ${signal_status}"
+  done <<'EOF'
+INT:130
+TERM:143
+HUP:129
+EOF
+  ! grep -E \
+    "trap ('rm -rf -- .*temp_dir|remote_cleanup_(rehearsal|caddy_admin_snapshot|preflight_credentials|maintenance_temporaries|restored_caddy_snapshot|recovery_env_temporaries)(;|['\"]|[[:space:]]))" \
+    "${CUTOVER_SCRIPT}" >/dev/null ||
+    fail 'a cleanup trap still defers expansion of dynamic function locals'
+  grep -F "printf -v cleanup_command 'remote_cleanup_rehearsal %q %q %q'" \
+    "${CUTOVER_SCRIPT}" >/dev/null || fail 'rehearsal cleanup lacks exact literal name/owner binding'
+  grep -F -- '--label "hookah.v126.rehearsal-owner=${rehearsal_owner}"' \
+    "${CUTOVER_SCRIPT}" >/dev/null || fail 'rehearsal resources lack unique ownership labels'
+  pass 'all cleanup traps bind literal targets and clear themselves before exact signal exits'
+}
+
+run_real_telegram_cleanup_fixture() {
+  local fixture_root="$1"
+  local cleanup_log="$2"
+  local fixture_mode="${3:-rejection}"
+  /bin/bash -s -- "${CUTOVER_SCRIPT}" "${fixture_root}" "${cleanup_log}" \
+    "${SECRET_CANARY}" "${fixture_mode}" <<'SH'
+set -Eeuo pipefail
+source "$1"
+fixture_root="$2"
+fixture_cleanup_log="$3"
+fixture_canary="$4"
+fixture_mode="$5"
+fixture_tmp="${fixture_root}/tmp"
+mkdir -m 0700 -p "${fixture_tmp}"
+export TMPDIR="${fixture_tmp}"
+remote_env_value() {
+  [[ "$2" == TELEGRAM_BOT_TOKEN ]] || die 'unexpected Telegram environment lookup'
+  printf '123456:%s_TELEGRAM\n' "${fixture_canary}"
+}
+curl() {
+  local config=''
+  local output=''
+  while (( $# > 0 )); do
+    case "$1" in
+      --config) config="$2"; shift 2 ;;
+      --output) output="$2"; shift 2 ;;
+      *) die "unexpected Telegram curl argument: $1" ;;
+    esac
+  done
+  [[ -f "${config}" && "${output}" == "${config%/curl.conf}/response.json" ]] ||
+    die 'Telegram cleanup fixture path mismatch'
+  if [[ "${fixture_mode}" == signal-term ]]; then
+    kill -TERM "$$"
+    return 99
+  fi
+  printf '%s\n' '{"ok":true,"result":{"url":"","pending_update_count":1}}' > "${output}"
+}
+rm() {
+  if (( $# == 3 )) && [[ "$1" == -rf && "$2" == -- &&
+    "$3" == "${fixture_tmp}"/v126-telegram-idle.* ]]; then
+    printf '%s\n' "$3" >> "${fixture_cleanup_log}"
+    if [[ "${fixture_mode}" == cleanup-failure ]]; then
+      return 88
+    fi
+  fi
+  command rm "$@"
+}
+remote_assert_telegram_idle "${fixture_root}/restricted.env"
+SH
+}
+
+test_telegram_cleanup_trap() {
+  local fixture_root="${TEST_ROOT}/telegram-cleanup"
+  local cleanup_log="${fixture_root}/cleanup.log"
+  mkdir -m 0700 "${fixture_root}"
+  expect_failure 'Telegram idle rejection cleans its token-bearing temporary directory once' \
+    'Telegram webhook or pending update gate failed' \
+    run_real_telegram_cleanup_fixture "${fixture_root}" "${cleanup_log}"
+  [[ -f "${cleanup_log}" && "$(wc -l < "${cleanup_log}" | tr -d ' ')" == 1 ]] ||
+    fail 'Telegram token temporary cleanup did not run exactly once'
+  local cleaned_path
+  cleaned_path="$(< "${cleanup_log}")"
+  [[ "${cleaned_path}" == "${fixture_root}/tmp"/v126-telegram-idle.* &&
+    ! -e "${cleaned_path}" && ! -L "${cleaned_path}" ]] ||
+    fail 'Telegram cleanup did not target the exact generated temporary directory'
+  [[ -z "$(find "${fixture_root}/tmp" -mindepth 1 -print -quit)" ]] ||
+    fail 'Telegram cleanup retained token-bearing temporary state'
+
+  local failed_root="${TEST_ROOT}/telegram-cleanup-failure"
+  local failed_log="${failed_root}/cleanup.log"
+  mkdir -m 0700 "${failed_root}"
+  capture_path
+  local failed_status=0
+  run_real_telegram_cleanup_fixture "${failed_root}" "${failed_log}" cleanup-failure \
+    > "${LAST_OUTPUT}" 2>&1 || failed_status=$?
+  [[ "${failed_status}" == 1 ]] ||
+    fail "EXIT cleanup failure replaced the original Telegram rejection status: ${failed_status}"
+  grep -F 'Telegram webhook or pending update gate failed' "${LAST_OUTPUT}" >/dev/null ||
+    fail 'EXIT cleanup failure hid the original Telegram rejection'
+  grep -F 'cleanup failed after EXIT' "${LAST_OUTPUT}" >/dev/null ||
+    fail 'EXIT cleanup failure lacked a generic cleanup diagnostic'
+  [[ "$(wc -l < "${failed_log}" | tr -d ' ')" == 1 ]] ||
+    fail 'failed EXIT cleanup retried its destructive command'
+  assert_no_canary_file "${LAST_OUTPUT}"
+  command rm -rf -- "${failed_root}/tmp"
+  pass 'EXIT cleanup failure preserves the original rejection and never retries'
+
+  local signal_root="${TEST_ROOT}/telegram-cleanup-signal"
+  local signal_log="${signal_root}/cleanup.log"
+  mkdir -m 0700 "${signal_root}"
+  capture_path
+  local signal_status=0
+  run_real_telegram_cleanup_fixture "${signal_root}" "${signal_log}" signal-term \
+    > "${LAST_OUTPUT}" 2>&1 || signal_status=$?
+  [[ "${signal_status}" == 143 ]] ||
+    fail 'TERM cleanup did not preserve exact signal status 143'
+  [[ "$(wc -l < "${signal_log}" | tr -d ' ')" == 1 ]] ||
+    fail 'TERM cleanup invoked its destructive command more than once'
+  cleaned_path="$(< "${signal_log}")"
+  [[ ! -e "${cleaned_path}" && ! -L "${cleaned_path}" ]] ||
+    fail 'TERM cleanup retained the token-bearing temporary directory'
+  assert_no_canary_file "${LAST_OUTPUT}"
+  pass 'TERM cleanup clears EXIT first, runs once, and exits exactly 143'
+  pass 'Telegram temporary cleanup is literal-bound, exact-once, and fail-closed'
 }
 
 run_direct_dispatch_bypass_fixture() {
@@ -1610,6 +1741,344 @@ test_caddy_ordering_contract() {
     'sudo rm -f -- /etc/caddy/v126-drain.enabled' \
     'remote_assert_public_live'
   pass 'Caddy install/reload/active-proof/marker and restoration prerequisites are ordered'
+}
+
+run_real_caddy_admin_snapshot_failure_fixture() {
+  local fixture_mode="$1"
+  local fixture_root="$2"
+
+  /bin/bash -s -- "${CUTOVER_SCRIPT}" "${fixture_mode}" "${fixture_root}" \
+    "${RELEASE_SHA}" "${V126_IMAGE_ID}" <<'SH'
+set -Eeuo pipefail
+source "$1"
+
+fixture_mode="$2"
+fixture_root="$3"
+fixture_release="$4"
+fixture_image_id="$5"
+fixture_run_id='fixture-caddy-admin'
+fixture_staging="${fixture_root}/staging"
+fixture_run_root="${fixture_root}/run-root"
+fixture_tmp="${fixture_root}/tmp"
+fixture_evidence="${fixture_root}/evidence"
+fixture_active_state="${fixture_root}/active.state"
+fixture_marker_state="${fixture_root}/marker.state"
+fixture_mutations="${fixture_root}/mutations.log"
+fixture_cleanup="${fixture_root}/cleanup.log"
+fixture_snapshot="${fixture_root}/snapshot.path"
+
+fixture_original_sha='1111111111111111111111111111111111111111111111111111111111111111'
+fixture_candidate_sha='2222222222222222222222222222222222222222222222222222222222222222'
+fixture_diff_sha='3333333333333333333333333333333333333333333333333333333333333333'
+
+mkdir -m 0700 -p \
+  "${fixture_staging}" "${fixture_run_root}" "${fixture_tmp}"
+export TMPDIR="${fixture_tmp}"
+
+case "${fixture_mode}" in
+  activate)
+    printf '%s\n' "${fixture_original_sha}" > "${fixture_active_state}"
+    printf '%s\n' false > "${fixture_marker_state}"
+    ;;
+  restore)
+    printf '%s\n' "${fixture_candidate_sha}" > "${fixture_active_state}"
+    printf '%s\n' true > "${fixture_marker_state}"
+    ;;
+  *) die 'unknown Caddy admin cleanup fixture mode' ;;
+esac
+
+V126_INTERNAL_REMOTE_BASELINE_CADDY_SHA256="${fixture_original_sha}"
+V126_INTERNAL_REMOTE_CADDY_ORIGINAL_SHA256="${fixture_original_sha}"
+V126_INTERNAL_REMOTE_MAINTENANCE_OFF_SHA256='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+
+remote_require_run_root() {
+  [[ "$1" == "${fixture_staging}" && "$2" == "${fixture_run_id}" ]] ||
+    die 'fixture run-root binding mismatch'
+  printf '%s\n' "${fixture_run_root}"
+}
+
+remote_verify_baseline_authority() {
+  [[ "$1" == "${fixture_staging}" &&
+    "$2" == "${fixture_run_id}" &&
+    "$3" == "${fixture_release}" ]] ||
+    die 'fixture baseline binding mismatch'
+}
+
+remote_caddy_evidence_root() {
+  [[ "$1" == "${fixture_release}" && "$2" == "${fixture_run_id}" ]] ||
+    die 'fixture Caddy evidence binding mismatch'
+  printf '%s\n' "${fixture_evidence}"
+}
+
+remote_sudo_require_root_file() {
+  :
+}
+
+remote_sudo_read_sha256_checksum() {
+  case "$1" in
+    */Caddyfile.original.sha256) printf '%s\n' "${fixture_original_sha}" ;;
+    */Caddyfile.drain.sha256) printf '%s\n' "${fixture_candidate_sha}" ;;
+    *) die "unexpected fixture checksum read: $1" ;;
+  esac
+}
+
+remote_initialize_compose() {
+  [[ "$1" == "${fixture_staging}" &&
+    "$2" == "${fixture_run_id}" &&
+    "$3" == "${fixture_release}" &&
+    "$4" == "hookah-v126:${fixture_release}" ]] ||
+    die 'fixture Compose binding mismatch'
+}
+
+remote_verify_proof() {
+  [[ "$1" == "${fixture_run_root}/v126-backend-final-started.proof" ]] ||
+    die 'fixture prerequisite-proof binding mismatch'
+}
+
+remote_verify_maintenance_env_binding() {
+  [[ "$1" == "${fixture_staging}" &&
+    "$2" == "${fixture_run_root}" &&
+    "$3" == "${fixture_run_id}" &&
+    "$4" == "${fixture_release}" &&
+    "$5" == OFF &&
+    "$6" == "${V126_INTERNAL_REMOTE_MAINTENANCE_OFF_SHA256}" ]] ||
+    die 'fixture maintenance binding mismatch'
+}
+
+remote_assert_runtime() {
+  [[ "$1" == "${fixture_staging}" &&
+    "$2" == "${fixture_release}" &&
+    "$3" == "${fixture_image_id}" &&
+    "$4" == OFF &&
+    "$5" == true ]] ||
+    die 'fixture runtime binding mismatch'
+}
+
+remote_assert_caddy_candidate_active() {
+  [[ "$1" == "${fixture_release}" &&
+    "$2" == "${fixture_run_id}" &&
+    "$(< "${fixture_active_state}")" == "${fixture_candidate_sha}" ]] ||
+    die 'fixture candidate-active prerequisite mismatch'
+}
+
+remote_assert_caddy_drain_marker() {
+  [[ "$(< "${fixture_marker_state}")" == true ]] ||
+    die 'fixture drain-marker prerequisite mismatch'
+}
+
+remote_assert_public_live() {
+  printf '%s\n' FORBIDDEN-public-continuation >> "${fixture_mutations}"
+}
+
+sudo() {
+  local last_argument=''
+  local argument
+
+  for argument in "$@"; do
+    last_argument="${argument}"
+  done
+
+  case "${1:-}" in
+    test)
+      case "$*" in
+        'test -e /etc/caddy/v126-evidence'|\
+        "test -e /etc/caddy/v126-evidence/${fixture_release}")
+          return 1
+          ;;
+        'test -e /etc/caddy/v126-drain.enabled')
+          [[ "$(< "${fixture_marker_state}")" == true ]]
+          ;;
+        *)
+          return 0
+          ;;
+      esac
+      ;;
+    install)
+      if [[ "${last_argument}" == /etc/caddy/Caddyfile ]]; then
+        case "${fixture_mode}" in
+          activate)
+            printf '%s\n' "${fixture_candidate_sha}" > "${fixture_active_state}"
+            printf '%s\n' candidate-installed >> "${fixture_mutations}"
+            ;;
+          restore)
+            printf '%s\n' "${fixture_original_sha}" > "${fixture_active_state}"
+            printf '%s\n' original-restored >> "${fixture_mutations}"
+            ;;
+        esac
+      fi
+      ;;
+    sha256sum)
+      case "$2" in
+        /etc/caddy/Caddyfile)
+          printf '%s  %s\n' "$(< "${fixture_active_state}")" "$2"
+          ;;
+        */Caddyfile.original)
+          printf '%s  %s\n' "${fixture_original_sha}" "$2"
+          ;;
+        */Caddyfile.drain)
+          printf '%s  %s\n' "${fixture_candidate_sha}" "$2"
+          ;;
+        */Caddyfile.drain.diff)
+          printf '%s  %s\n' "${fixture_diff_sha}" "$2"
+          ;;
+        *)
+          die "unexpected fixture SHA-256 target: $2"
+          ;;
+      esac
+      ;;
+    diff)
+      return 1
+      ;;
+    tee)
+      command cat >/dev/null
+      ;;
+    awk)
+      case "$2" in
+        'NR > 2 && /^-/{count++} END {print count + 0}')
+          printf '%s\n' 0
+          ;;
+        'NR > 2 && /^+/{count++} END {print count + 0}')
+          printf '%s\n' 5
+          ;;
+        'NR > 2 && /^+/{sub(/^+[[:space:]]*/, ""); print}')
+          printf '%s\n' \
+            '@v126_staging_drain file {' \
+            'root /' \
+            'try_files /etc/caddy/v126-drain.enabled' \
+            '}' \
+            'respond @v126_staging_drain "Service temporarily unavailable" 503'
+          ;;
+        *) die "unexpected fixture awk program: $2" ;;
+      esac
+      ;;
+    systemctl)
+      case "$2 $3" in
+        'reload caddy')
+          printf '%s\n' caddy-reloaded >> "${fixture_mutations}"
+          ;;
+        'is-active caddy')
+          printf '%s\n' active
+          ;;
+        *) die "unexpected fixture systemctl command: $*" ;;
+      esac
+      ;;
+    rm)
+      [[ "$2" == -f && "$3" == -- &&
+        "$4" == /etc/caddy/v126-drain.enabled ]] ||
+        die "unexpected fixture sudo rm: $*"
+      printf '%s\n' false > "${fixture_marker_state}"
+      printf '%s\n' drain-marker-removed >> "${fixture_mutations}"
+      ;;
+    python3|caddy|chown|chmod)
+      :
+      ;;
+    stat)
+      printf '%s\n' 700:root:root
+      ;;
+    *)
+      printf 'FORBIDDEN sudo %s\n' "$*" >> "${fixture_mutations}"
+      return 98
+      ;;
+  esac
+}
+
+curl() {
+  [[ "$*" == '-fsS http://127.0.0.1:2019/config/' ]] ||
+    die "unexpected fixture curl: $*"
+
+  local -a snapshots=()
+  case "${fixture_mode}" in
+    activate) snapshots=("${fixture_tmp}"/v126-caddy-admin.*) ;;
+    restore) snapshots=("${fixture_tmp}"/v126-caddy-restored.*) ;;
+  esac
+
+  (( ${#snapshots[@]} == 1 )) &&
+    [[ -f "${snapshots[0]}" && ! -L "${snapshots[0]}" ]] ||
+    die 'Caddy admin snapshot was not created exactly once'
+
+  printf '%s\n' "${snapshots[0]}" > "${fixture_snapshot}"
+  printf '%s\n' admin-fetch >> "${fixture_mutations}"
+  return 55
+}
+
+rm() {
+  if (( $# == 3 )) &&
+    [[ "$1" == -f && "$2" == -- ]] &&
+    [[ "$3" == "${fixture_tmp}"/v126-caddy-admin.* ||
+      "$3" == "${fixture_tmp}"/v126-caddy-restored.* ]]; then
+    printf '%s\n' "$3" >> "${fixture_cleanup}"
+  fi
+  command rm "$@"
+}
+
+case "${fixture_mode}" in
+  activate)
+    remote_caddy_activate \
+      "${fixture_staging}" "${fixture_run_id}" "${fixture_release}"
+    ;;
+  restore)
+    remote_restore_caddy \
+      "${fixture_staging}" "${fixture_run_id}" "${fixture_release}" \
+      "hookah-v126:${fixture_release}" "${fixture_image_id}"
+    ;;
+esac
+SH
+}
+
+test_real_caddy_admin_snapshot_cleanup_contract() {
+  local mode fixture_root expected_error expected_mutations expected_state
+  local snapshot cleaned_path
+
+  for mode in activate restore; do
+    fixture_root="${TEST_ROOT}/real-caddy-admin-cleanup-${mode}"
+    case "${mode}" in
+      activate)
+        expected_error='Caddy admin config proof is unavailable after reload'
+        expected_mutations=$'candidate-installed\ncaddy-reloaded\nadmin-fetch'
+        expected_state='2222222222222222222222222222222222222222222222222222222222222222'
+        ;;
+      restore)
+        expected_error='restored Caddy admin config proof is unavailable'
+        expected_mutations=$'original-restored\ncaddy-reloaded\ndrain-marker-removed\nadmin-fetch'
+        expected_state='1111111111111111111111111111111111111111111111111111111111111111'
+        ;;
+    esac
+
+    expect_failure "real Caddy ${mode} rejection cleans its admin snapshot once" \
+      "${expected_error}" \
+      run_real_caddy_admin_snapshot_failure_fixture "${mode}" "${fixture_root}"
+
+    [[ -f "${fixture_root}/cleanup.log" &&
+      "$(wc -l < "${fixture_root}/cleanup.log" | tr -d ' ')" == 1 ]] ||
+      fail "real Caddy ${mode} cleanup was not exact-once"
+
+    snapshot="$(< "${fixture_root}/snapshot.path")"
+    cleaned_path="$(< "${fixture_root}/cleanup.log")"
+    [[ "${snapshot}" == "${cleaned_path}" &&
+      ! -e "${snapshot}" && ! -L "${snapshot}" ]] ||
+      fail "real Caddy ${mode} retained or mis-targeted its admin snapshot"
+
+    [[ -z "$(find "${fixture_root}/tmp" -mindepth 1 -print -quit)" ]] ||
+      fail "real Caddy ${mode} retained temporary admin state"
+
+    [[ "$(< "${fixture_root}/mutations.log")" == "${expected_mutations}" ]] ||
+      fail "real Caddy ${mode} crossed its exact failure mutation boundary"
+
+    [[ "$(< "${fixture_root}/active.state")" == "${expected_state}" &&
+      "$(< "${fixture_root}/marker.state")" == false ]] ||
+      fail "real Caddy ${mode} stopped at the wrong active/marker state"
+
+    ! grep -F $'ARTIFACT\t' "${LAST_OUTPUT}" >/dev/null ||
+      fail "real Caddy ${mode} emitted an artifact after admin-proof failure"
+
+    [[ ! -e "${fixture_root}/evidence/activation.proof" &&
+      ! -e "${fixture_root}/evidence/activation.proof.sha256" &&
+      ! -e "${fixture_root}/run-root/ordinary-caddy-restored.proof" &&
+      ! -e "${fixture_root}/run-root/ordinary-caddy-restored.proof.sha256" ]] ||
+      fail "real Caddy ${mode} sealed a proof after admin-proof failure"
+  done
+
+  pass 'real Caddy admin snapshots clean exact-once before proof, artifact, or public continuation'
 }
 
 run_partial_caddy_recovery_fixture() {
@@ -2567,6 +3036,430 @@ if any("compose.yaml" in line or "compose.override.yaml" in line for line in act
     raise SystemExit("competing Compose default reached the command surface")
 PY
   pass 'every real Compose invocation carries the explicit canonical file and ignores competing defaults'
+}
+
+run_real_backup_rehearsal_cleanup_fixture() {
+  local fixture_mode="$1"
+  local fixture_root="$2"
+  /bin/bash -s -- "${CUTOVER_SCRIPT}" "${fixture_mode}" "${fixture_root}" \
+    "${RELEASE_SHA}" <<'SH'
+set -Eeuo pipefail
+source "$1"
+fixture_mode="$2"
+fixture_root="$3"
+fixture_release="$4"
+fixture_staging="${fixture_root}/staging"
+fixture_run_id=fixture-rehearsal
+fixture_run_root="${fixture_staging}/.v126-runs/${fixture_run_id}"
+fixture_backup_root="${fixture_root}/backup"
+fixture_sudo_root="${fixture_root}/sudo-root"
+fixture_docker_root="${fixture_root}/docker-root"
+fixture_log="${fixture_root}/lifecycle.log"
+fixture_volume_state="${fixture_root}/volume.state"
+fixture_volume_owner="${fixture_root}/volume.owner"
+fixture_container_state="${fixture_root}/container.state"
+fixture_container_owner="${fixture_root}/container.owner"
+fixture_expected_owner_file="${fixture_root}/expected-owner"
+fixture_sentinel_guard="${fixture_root}/sentinel.guard"
+fixture_postgres_id=aaaaaaaaaaaa
+fixture_postgres_image=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+fixture_expected_name="hookah-v126-fixture-rehearsal-quiesced-$$"
+fixture_expected_owner="v126:${fixture_release}:fixture-rehearsal:quiesced:$$"
+fixture_sentinel_name="${fixture_expected_name}-sentinel"
+
+mkdir -m 0700 -p \
+  "${fixture_staging}" \
+  "${fixture_run_root}" \
+  "${fixture_backup_root}" \
+  "${fixture_sudo_root}/var/backups/hookah-bot" \
+  "${fixture_docker_root}"
+printf '%s\n' "${fixture_expected_owner}" > "${fixture_expected_owner_file}"
+printf '%s\n' SENTINEL_UNTOUCHED > "${fixture_sentinel_guard}"
+
+remote_require_run_root() {
+  [[ "$1" == "${fixture_staging}" && "$2" == "${fixture_run_id}" ]] ||
+    die 'rehearsal run-root fixture binding mismatch'
+  printf '%s\n' "${fixture_run_root}"
+}
+remote_verify_baseline_authority() {
+  [[ "$1" == "${fixture_staging}" && "$2" == "${fixture_run_id}" &&
+    "$3" == "${fixture_release}" ]] ||
+    die 'rehearsal baseline-authority fixture binding mismatch'
+}
+remote_assert_compose_backend_image() {
+  [[ "$1" == "hookah-v125:${V125_SOURCE_SHA}" ]] ||
+    die 'rehearsal Compose-image fixture binding mismatch'
+}
+remote_assert_zero_writer() {
+  [[ "$1" == 125:0:0 ]] ||
+    die 'rehearsal zero-writer fixture binding mismatch'
+}
+remote_backup_root() {
+  [[ "$1" == "${fixture_release}" && "$2" == "${fixture_run_id}" ]] ||
+    die 'rehearsal backup-root fixture binding mismatch'
+  printf '%s\n' "${fixture_backup_root}"
+}
+remote_capture_compose_ids() {
+  [[ "$*" == 'running postgres' ]] ||
+    die "unexpected rehearsal Compose inventory call: $*"
+  REMOTE_CAPTURED_CONTAINER_IDS=("${fixture_postgres_id}")
+}
+remote_compose() {
+  case "$*" in
+    *'printf %s "$POSTGRES_USER"'*) printf '%s\n' fixture_user ;;
+    *'SHOW server_version_num'*) printf '%s\n' 160004 ;;
+    *'SELECT pg_database_size(current_database())'*) printf '%s\n' 1024 ;;
+    *'pg_dump '*'--format=custom'*) printf '%s\n' fixture-dump ;;
+    *'pg_restore --list'*)
+      cat >/dev/null
+      printf '%s\n' fixture-inventory
+      ;;
+    *) die "unexpected rehearsal Compose fixture call: $*" ;;
+  esac
+}
+
+fixture_map_sudo_path() {
+  case "$1" in
+    /var/backups/hookah-bot*) printf '%s%s\n' "${fixture_sudo_root}" "$1" ;;
+    *) printf '%s\n' "$1" ;;
+  esac
+}
+stat() {
+  if [[ "${1:-}" == -c ]]; then
+    python3 - "${2:-}" "${3:-}" "$(id -un)" "$(id -gn)" <<'PY'
+import os
+import stat
+import sys
+
+fmt, path, user, group = sys.argv[1:]
+info = os.stat(path)
+if fmt == "%a:%U:%G":
+    print(f"{stat.S_IMODE(info.st_mode):o}:{user}:{group}")
+elif fmt == "%a":
+    print(f"{stat.S_IMODE(info.st_mode):o}")
+elif fmt == "%s":
+    print(info.st_size)
+else:
+    raise SystemExit(f"unexpected rehearsal stat format: {fmt}")
+PY
+    return
+  fi
+  command stat "$@"
+}
+sudo() {
+  local verb="$1"
+  local target
+  shift
+  case "${verb}" in
+    test)
+      if [[ "${1:-}" == '!' ]]; then
+        target="$(fixture_map_sudo_path "$3")"
+        builtin test ! "$2" "${target}"
+      else
+        target="$(fixture_map_sudo_path "$2")"
+        builtin test "$1" "${target}"
+      fi
+      ;;
+    install)
+      target=''
+      while (( $# > 0 )); do
+        target="$1"
+        shift
+      done
+      target="$(fixture_map_sudo_path "${target}")"
+      mkdir -p "${target}"
+      chmod 0700 "${target}"
+      ;;
+    stat)
+      [[ "$1" == -c ]] || die 'unexpected rehearsal sudo-stat fixture call'
+      stat -c "$2" "$(fixture_map_sudo_path "$3")"
+      ;;
+    *) die "unexpected rehearsal sudo fixture call: ${verb} $*" ;;
+  esac
+}
+df() {
+  [[ "$*" == '--output=avail -B1 '* ]] ||
+    die "unexpected rehearsal df fixture call: $*"
+  printf '%s\n' Avail 10737418240
+}
+sleep() { die 'rehearsal fixture unexpectedly slept'; }
+
+docker() {
+  local rendered="$*"
+  local name=''
+  local owner=''
+  local actual_owner=''
+  local network=''
+  local mount=''
+  local image=''
+  case "${1:-}" in
+    ps)
+      [[ "${rendered}" == 'ps --all --format {{.Names}}' ]] ||
+        die "unexpected rehearsal Docker ps call: ${rendered}"
+      printf '%s\n' "${fixture_sentinel_name}"
+      [[ ! -f "${fixture_container_state}" ]] || cat "${fixture_container_state}"
+      ;;
+    info)
+      [[ "${2:-}" == --format && "${3:-}" == '{{.DockerRootDir}}' ]] ||
+        die "unexpected rehearsal Docker info call: ${rendered}"
+      printf '%s\n' "${fixture_docker_root}"
+      ;;
+    container)
+      [[ "${2:-}" == inspect && "${3:-}" == --format &&
+        "${4:-}" == '{{ index .Config.Labels "hookah.v126.rehearsal-owner" }}' ]] ||
+        die "unexpected rehearsal Docker container call: ${rendered}"
+      name="${5:-}"
+      [[ -f "${fixture_container_state}" &&
+        "$(< "${fixture_container_state}")" == "${name}" ]] || return 1
+      actual_owner="$(< "${fixture_container_owner}")"
+      if [[ "${actual_owner}" == "${fixture_expected_owner}" ]]; then
+        printf '%s\n' CONTAINER_OWNER_EXACT >> "${fixture_log}"
+      else
+        printf '%s\n' CONTAINER_OWNER_WRONG >> "${fixture_log}"
+      fi
+      printf '%s\n' "${actual_owner}"
+      ;;
+    volume)
+      case "${2:-}" in
+        ls)
+          [[ "${rendered}" == 'volume ls --format {{.Name}}' ]] ||
+            die "unexpected rehearsal Docker volume-ls call: ${rendered}"
+          printf '%s\n' "${fixture_sentinel_name}"
+          [[ ! -f "${fixture_volume_state}" ]] || cat "${fixture_volume_state}"
+          ;;
+        create)
+          [[ "${3:-}" == --label ]] ||
+            die "unexpected rehearsal volume-create call: ${rendered}"
+          owner="${4#hookah.v126.rehearsal-owner=}"
+          name="${5:-}"
+          [[ "${owner}" == "${fixture_expected_owner}" &&
+            "${name}" == "${fixture_expected_name}" ]] ||
+            die 'rehearsal volume creation lost its exact name/owner binding'
+          actual_owner="${owner}"
+          [[ "${fixture_mode}" != wrong-owner-volume ]] || actual_owner=WRONG_OWNER
+          printf '%s\n' "${name}" > "${fixture_volume_state}"
+          printf '%s\n' "${actual_owner}" > "${fixture_volume_owner}"
+          printf '%s\n' VOLUME_CREATE >> "${fixture_log}"
+          case "${fixture_mode}" in
+            post-volume) return 86 ;;
+            cleanup-failure) return 88 ;;
+          esac
+          printf '%s\n' "${name}"
+          ;;
+        inspect)
+          [[ "${3:-}" == --format &&
+            "${4:-}" == '{{ index .Labels "hookah.v126.rehearsal-owner" }}' ]] ||
+            die "unexpected rehearsal Docker volume-inspect call: ${rendered}"
+          name="${5:-}"
+          [[ -f "${fixture_volume_state}" &&
+            "$(< "${fixture_volume_state}")" == "${name}" ]] || return 1
+          actual_owner="$(< "${fixture_volume_owner}")"
+          if [[ "${actual_owner}" == "${fixture_expected_owner}" ]]; then
+            printf '%s\n' VOLUME_OWNER_EXACT >> "${fixture_log}"
+          else
+            printf '%s\n' VOLUME_OWNER_WRONG >> "${fixture_log}"
+          fi
+          printf '%s\n' "${actual_owner}"
+          ;;
+        rm)
+          name="${3:-}"
+          [[ "${name}" == "${fixture_expected_name}" &&
+            -f "${fixture_volume_state}" &&
+            "$(< "${fixture_volume_state}")" == "${name}" ]] ||
+            die 'rehearsal cleanup targeted a wrong or absent volume'
+          printf '%s\n' VOLUME_RM_ATTEMPT >> "${fixture_log}"
+          [[ "${fixture_mode}" != cleanup-failure ]] || return 93
+          rm -f -- "${fixture_volume_state}" "${fixture_volume_owner}"
+          printf '%s\n' VOLUME_RM >> "${fixture_log}"
+          printf '%s\n' "${name}"
+          ;;
+        *) die "unexpected rehearsal Docker volume call: ${rendered}" ;;
+      esac
+      ;;
+    run)
+      shift
+      printf '%s\n' CONTAINER_RUN >> "${fixture_log}"
+      while (( $# > 0 )); do
+        case "$1" in
+          --name) name="$2"; shift 2 ;;
+          --label) owner="${2#hookah.v126.rehearsal-owner=}"; shift 2 ;;
+          --network) network="$2"; shift 2 ;;
+          --mount) mount="$2"; shift 2 ;;
+          --env) shift 2 ;;
+          --detach) shift ;;
+          *) image="$1"; shift ;;
+        esac
+      done
+      [[ "${name}" == "${fixture_expected_name}" &&
+        "${owner}" == "${fixture_expected_owner}" &&
+        "${network}" == none &&
+        "${mount}" == "type=volume,source=${fixture_expected_name},target=/var/lib/postgresql/data" &&
+        "${image}" == "${fixture_postgres_image}" ]] ||
+        die 'rehearsal Docker run lost its isolated owned-resource binding'
+      printf '%s\n' "${name}" > "${fixture_container_state}"
+      printf '%s\n' "${owner}" > "${fixture_container_owner}"
+      printf '%s\n' CONTAINER_CREATE >> "${fixture_log}"
+      [[ "${fixture_mode}" != post-container ]] || return 87
+      printf '%s\n' fixture-container-id
+      ;;
+    inspect)
+      [[ "${2:-}" == --format ]] ||
+        die "unexpected rehearsal Docker inspect call: ${rendered}"
+      if [[ "${3:-}" == '{{.Image}}' && "${4:-}" == "${fixture_postgres_id}" ]]; then
+        printf '%s\n' "${fixture_postgres_image}"
+        return
+      fi
+      name="${4:-}"
+      [[ -f "${fixture_container_state}" &&
+        "$(< "${fixture_container_state}")" == "${name}" ]] ||
+        die 'rehearsal inspection targeted the wrong container'
+      case "${3:-}" in
+        '{{.HostConfig.NetworkMode}}') printf '%s\n' none ;;
+        '{{len .HostConfig.PortBindings}}') printf '%s\n' 0 ;;
+        '{{len .Mounts}}') printf '%s\n' 1 ;;
+        '{{(index .Mounts 0).Type}}') printf '%s\n' volume ;;
+        '{{(index .Mounts 0).Name}}') printf '%s\n' "${fixture_expected_name}" ;;
+        '{{(index .Mounts 0).Destination}}') printf '%s\n' /var/lib/postgresql/data ;;
+        *) die "unexpected rehearsal Docker inspection format: ${3:-}" ;;
+      esac
+      ;;
+    exec)
+      name="${2:-}"
+      [[ -f "${fixture_container_state}" &&
+        "$(< "${fixture_container_state}")" == "${name}" ]] ||
+        die 'rehearsal exec targeted the wrong container'
+      case "${3:-}" in
+        pg_isready|createdb|pg_restore) : ;;
+        psql)
+          case "${rendered}" in
+            *'SHOW server_version_num'*) printf '%s\n' 160004 ;;
+            *flyway_schema_history*) printf '%s\n' 125:0:0 ;;
+            *) die "unexpected rehearsal psql fixture call: ${rendered}" ;;
+          esac
+          ;;
+        *) die "unexpected rehearsal Docker exec call: ${rendered}" ;;
+      esac
+      ;;
+    cp)
+      [[ -s "${2:-}" && -f "${fixture_container_state}" &&
+        "${3:-}" == "$(< "${fixture_container_state}"):/tmp/v126-rehearsal.dump" ]] ||
+        die "unexpected rehearsal Docker cp call: ${rendered}"
+      ;;
+    rm)
+      [[ "${2:-}" == -f ]] || die "unexpected rehearsal Docker rm call: ${rendered}"
+      name="${3:-}"
+      [[ "${name}" == "${fixture_expected_name}" &&
+        -f "${fixture_container_state}" &&
+        "$(< "${fixture_container_state}")" == "${name}" ]] ||
+        die 'rehearsal cleanup targeted a wrong or absent container'
+      printf '%s\n' CONTAINER_RM_ATTEMPT >> "${fixture_log}"
+      rm -f -- "${fixture_container_state}" "${fixture_container_owner}"
+      printf '%s\n' CONTAINER_RM >> "${fixture_log}"
+      printf '%s\n' "${name}"
+      ;;
+    *) die "unexpected rehearsal Docker fixture call: ${rendered}" ;;
+  esac
+}
+
+remote_backup_rehearsal "${fixture_staging}" "${fixture_run_id}" "${fixture_release}" \
+  quiesced "hookah-v125:${V125_SOURCE_SHA}"
+[[ "${fixture_mode}" == success ]] || die 'failure rehearsal fixture returned unexpectedly'
+[[ ! -e "${fixture_volume_state}" && ! -e "${fixture_volume_owner}" &&
+  ! -e "${fixture_container_state}" && ! -e "${fixture_container_owner}" ]] ||
+  die 'successful rehearsal left a fake Docker resource allocated'
+! declare -p V126_REMOTE_REHEARSAL_CLEANUP_VOLUME >/dev/null 2>&1 ||
+  die 'successful rehearsal retained its cleanup-volume global'
+! declare -p V126_REMOTE_REHEARSAL_CLEANUP_CONTAINER >/dev/null 2>&1 ||
+  die 'successful rehearsal retained its cleanup-container global'
+[[ -z "$(trap -p EXIT INT TERM HUP)" ]] ||
+  die 'successful rehearsal retained a resource-cleanup trap'
+printf '%s\n' SUCCESS_CLEANUP_GLOBALS_RESET
+SH
+}
+
+assert_real_backup_rehearsal_lifecycle() {
+  local fixture_mode="$1"
+  local fixture_root="$2"
+  local expected=''
+  case "${fixture_mode}" in
+    post-volume)
+      expected=$'VOLUME_CREATE\nVOLUME_OWNER_EXACT\nVOLUME_RM_ATTEMPT\nVOLUME_RM'
+      ;;
+    post-container)
+      expected=$'VOLUME_CREATE\nVOLUME_OWNER_EXACT\nCONTAINER_RUN\nCONTAINER_CREATE\nCONTAINER_OWNER_EXACT\nCONTAINER_RM_ATTEMPT\nCONTAINER_RM\nVOLUME_OWNER_EXACT\nVOLUME_RM_ATTEMPT\nVOLUME_RM'
+      ;;
+    success)
+      expected=$'VOLUME_CREATE\nVOLUME_OWNER_EXACT\nCONTAINER_RUN\nCONTAINER_CREATE\nCONTAINER_OWNER_EXACT\nCONTAINER_OWNER_EXACT\nCONTAINER_RM_ATTEMPT\nCONTAINER_RM\nVOLUME_OWNER_EXACT\nVOLUME_RM_ATTEMPT\nVOLUME_RM'
+      ;;
+    wrong-owner-volume)
+      expected=$'VOLUME_CREATE\nVOLUME_OWNER_WRONG\nVOLUME_OWNER_WRONG'
+      ;;
+    cleanup-failure)
+      expected=$'VOLUME_CREATE\nVOLUME_OWNER_EXACT\nVOLUME_RM_ATTEMPT'
+      ;;
+    *) fail "unknown rehearsal lifecycle fixture mode: ${fixture_mode}" ;;
+  esac
+  [[ "$(< "${fixture_root}/lifecycle.log")" == "${expected}" ]] || {
+    sed -n '1,120p' "${fixture_root}/lifecycle.log" >&2
+    fail "rehearsal lifecycle mismatch: ${fixture_mode}"
+  }
+  [[ "$(< "${fixture_root}/sentinel.guard")" == SENTINEL_UNTOUCHED ]] ||
+    fail "${fixture_mode} touched the similarly named sentinel"
+}
+
+test_real_backup_rehearsal_cleanup_contract() {
+  local fixture_mode fixture_root actual_status expected_status
+  for fixture_mode in post-volume post-container success wrong-owner-volume cleanup-failure; do
+    fixture_root="${TEST_ROOT}/real-rehearsal-${fixture_mode}"
+    mkdir -m 0700 -p "${fixture_root}"
+    capture_path
+    if run_real_backup_rehearsal_cleanup_fixture \
+      "${fixture_mode}" "${fixture_root}" > "${LAST_OUTPUT}" 2>&1; then
+      actual_status=0
+    else
+      actual_status=$?
+    fi
+    assert_no_canary_file "${LAST_OUTPUT}"
+    case "${fixture_mode}" in
+      post-volume) expected_status=86 ;;
+      post-container) expected_status=87 ;;
+      success) expected_status=0 ;;
+      wrong-owner-volume) expected_status=4 ;;
+      cleanup-failure) expected_status=88 ;;
+    esac
+    [[ "${actual_status}" == "${expected_status}" ]] ||
+      fail "${fixture_mode} rehearsal status mismatch: expected=${expected_status} actual=${actual_status}"
+    assert_real_backup_rehearsal_lifecycle "${fixture_mode}" "${fixture_root}"
+    case "${fixture_mode}" in
+      post-volume|post-container|success)
+        [[ ! -e "${fixture_root}/volume.state" && ! -e "${fixture_root}/volume.owner" &&
+          ! -e "${fixture_root}/container.state" && ! -e "${fixture_root}/container.owner" ]] ||
+          fail "${fixture_mode} rehearsal retained an owned fake resource"
+        ;;
+      wrong-owner-volume)
+        [[ -f "${fixture_root}/volume.state" &&
+          "$(< "${fixture_root}/volume.owner")" == WRONG_OWNER &&
+          ! -e "${fixture_root}/container.state" ]] ||
+          fail 'wrong-owner rehearsal resource was deleted or mutated'
+        grep -F 'created rehearsal volume ownership mismatch' "${LAST_OUTPUT}" >/dev/null ||
+          fail 'wrong-owner race did not fail at the immediate ownership check'
+        grep -F 'rehearsal cleanup failed after EXIT' "${LAST_OUTPUT}" >/dev/null ||
+          fail 'wrong-owner cleanup refusal was not reported'
+        ;;
+      cleanup-failure)
+        [[ -f "${fixture_root}/volume.state" && ! -e "${fixture_root}/container.state" ]] ||
+          fail 'cleanup-failure fixture did not retain only the failed volume'
+        cmp -s "${fixture_root}/volume.owner" "${fixture_root}/expected-owner" ||
+          fail 'cleanup-failure fixture changed the owned volume identity'
+        grep -F 'rehearsal volume cleanup removal failed' "${LAST_OUTPUT}" >/dev/null ||
+          fail 'cleanup removal failure was not reported'
+        grep -F 'rehearsal cleanup failed after EXIT' "${LAST_OUTPUT}" >/dev/null ||
+          fail 'EXIT cleanup failure was not reported'
+        ;;
+    esac
+    pass "real rehearsal cleanup contract: ${fixture_mode}"
+  done
+  pass 'real rehearsal prearms exact ownership, cleans partial resources, and preserves original failures'
 }
 
 run_inventory_failure_fixture() {
@@ -3915,6 +4808,7 @@ fixture_fake_bin="$6"
 fixture_mutation_mode="$7"
 fixture_alternate_marker="$8"
 fixture_run_root="${fixture_staging}/.v126-runs/${fixture_run_id}"
+fixture_cleanup_log="${fixture_run_root}/preflight-cleanup.log"
 uploaded="${fixture_run_root}/final-v125-preflight.sh.partial"
 database_sha="$(remote_hash_file "${fixture_database_file}")"
 script_sha="$(remote_hash_file "${uploaded}")"
@@ -3937,6 +4831,14 @@ remote_assert_public_drain() { :; }
 remote_assert_zero_writer() { [[ "$1" == 125:0:0 ]]; }
 remote_require_operator_file() {
   original_remote_require_operator_file "$@"
+  if [[ "${fixture_mutation_mode}" == credential-guard-failure &&
+    "$1" == "${fixture_run_root}/final-v125-preflight.pg_service.conf" ]]; then
+    [[ -f "${fixture_run_root}/final-v125-preflight.pg_service.conf" &&
+      -f "${fixture_run_root}/final-v125-preflight.pgpass" ]] ||
+      die 'preflight credential fixture did not create both restricted files'
+    printf '%s\n' CREDENTIALS-CREATED >> "${fixture_cleanup_log}"
+    return 97
+  fi
   if [[ "${fixture_mutation_mode}" == script-swap-after-hash &&
     "$1" == "${fixture_run_root}/final-v125-preflight.pg_service.conf" ]]; then
     chmod 0600 "${fixture_run_root}/final-v125-preflight.sh"
@@ -3946,6 +4848,15 @@ remote_require_operator_file() {
       "${fixture_run_root}/final-v125-preflight.sh"
     chmod 0500 "${fixture_run_root}/final-v125-preflight.sh"
   fi
+}
+rm() {
+  if [[ "${fixture_mutation_mode}" == credential-guard-failure && $# == 4 &&
+    "$1" == -f && "$2" == -- &&
+    "$3" == "${fixture_run_root}/final-v125-preflight.pg_service.conf" &&
+    "$4" == "${fixture_run_root}/final-v125-preflight.pgpass" ]]; then
+    printf '%s\n' PREFLIGHT-CLEANUP-EXACT >> "${fixture_cleanup_log}"
+  fi
+  command rm "$@"
 }
 stat() {
   if [[ "${1:-}" == -c && "${2:-}" == '%a' ]]; then
@@ -4039,6 +4950,17 @@ cp() {
     shift
   fi
   command cp "$@"
+  if [[ "${fixture_mutation_mode}" == identity-swap-at-run-root &&
+    "${2:-}" == "${fixture_run_root}/env.before-V126_SMOKE" ]]; then
+    printf '%s\n' IDENTITY-BEFORE-CREATED >> "${fixture_mutation_log}"
+  fi
+}
+rm() {
+  if [[ "${fixture_mutation_mode}" == identity-swap-at-run-root &&
+    "$*" == "-f -- ${fixture_run_root}/env.V126_SMOKE.candidate ${fixture_run_root}/env.before-V126_SMOKE ${fixture_run_root}/.env.next" ]]; then
+    printf '%s\n' IDENTITY-CLEANUP-EXACT >> "${fixture_mutation_log}"
+  fi
+  command rm "$@"
 }
 stat() {
   if [[ "${1:-}" == -c && "${2:-}" == '%a:%U:%G' ]]; then
@@ -4154,6 +5076,33 @@ test_sensitive_consumer_secret_redaction() {
     fail 'database URL same-read swap retained credentials or sealed a proof'
   ! grep -F "${SECRET_CANARY}_DB_PASSWORD" "${LAST_OUTPUT}" >/dev/null ||
     fail 'database URL same-read rejection leaked its credential sentinel'
+
+  local preflight_guard_run_id='preflight-credential-guard-run'
+  local preflight_guard_root="${preflight_staging}/.v126-runs/${preflight_guard_run_id}"
+  mkdir -m 0700 "${preflight_guard_root}"
+  printf 'postgresql://operator:%s_DB_PASSWORD@db.invalid:5432/exact?sslmode=require\n' \
+    "${SECRET_CANARY}" > "${database_file}"
+  printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'set -Eeuo pipefail' \
+    'printf "%s\n" FORBIDDEN_CLIENT_LAUNCH' > \
+    "${preflight_guard_root}/final-v125-preflight.sh.partial"
+  chmod 0600 "${database_file}" \
+    "${preflight_guard_root}/final-v125-preflight.sh.partial"
+  leaf_lines_before_swap="$(wc -l < "${leaf_log}" | tr -d ' ')"
+  expect_failure 'preflight credential guard failure cleans both restricted files exactly once' '' \
+    run_real_final_preflight_secret_fixture "${preflight_staging}" \
+    "${preflight_guard_run_id}" "${database_file}" "${fake_bin}" credential-guard-failure
+  [[ "$(wc -l < "${leaf_log}" | tr -d ' ')" == "${leaf_lines_before_swap}" ]] ||
+    fail 'preflight credential guard failure launched the client'
+  [[ "$(cat "${preflight_guard_root}/preflight-cleanup.log")" == \
+    $'CREDENTIALS-CREATED\nPREFLIGHT-CLEANUP-EXACT' ]] ||
+    fail 'preflight restricted credentials were not cleaned exactly once'
+  [[ ! -e "${preflight_guard_root}/final-v125-preflight.pgpass" &&
+    ! -e "${preflight_guard_root}/final-v125-preflight.pg_service.conf" &&
+    ! -e "${preflight_guard_root}/final-v125-preflight.output" &&
+    ! -e "${preflight_guard_root}/final-v125-preflight.proof" ]] ||
+    fail 'preflight credential guard failure retained credentials/output or sealed a proof'
 
   local preflight_script_swap_run_id='preflight-script-swap-run'
   local preflight_script_swap_root="${preflight_staging}/.v126-runs/${preflight_script_swap_run_id}"
@@ -4292,6 +5241,10 @@ PY
       ! -e "${same_read_run_root}/env.before-V126_SMOKE" &&
       ! -e "${same_read_run_root}/.env.next" ]] ||
       fail "maintenance ${same_read_mode} retained transform state or sealed a receipt"
+    if [[ "${same_read_mode}" == identity-swap-at-run-root ]]; then
+      [[ "$(cat "${mutation_log}")" == $'authority-verified\nMUTATION-run-root\nMUTATION-caddy\nIDENTITY-BEFORE-CREATED\nIDENTITY-CLEANUP-EXACT' ]] ||
+        fail 'maintenance identity-swap did not create then exactly clean all transform paths'
+    fi
     ! grep -F $'ARTIFACT\t' "${LAST_OUTPUT}" >/dev/null ||
       fail "maintenance ${same_read_mode} emitted a receipt artifact"
     ! grep -E "${user_canary}|${chat_canary}" "${maintenance_staging}/.env" >/dev/null ||
@@ -6040,8 +6993,23 @@ cp() {
   if [[ "${fixture_failure_mode}" == recovery-source-drift &&
     "${1:-}" == .env && "${2:-}" == "${fixture_run_root}/recovery-env.before" ]]; then
     printf '%s\n' 'UNRELATED_RECOVERY_SOURCE_DRIFT=1' >> "${fixture_staging}/.env"
+    remote_hash_file "${fixture_staging}/.env" > "${fixture_root}/recovery-source-drift.sha256"
   fi
   command cp "$@"
+  if [[ "${fixture_failure_mode}" == recovery-source-drift &&
+    "${1:-}" == .env && "${2:-}" == "${fixture_run_root}/recovery-env.before" ]]; then
+    log_command 'recovery-before-created'
+  fi
+}
+rm() {
+  if [[ "${fixture_failure_mode}" == recovery-source-drift && $# == 5 &&
+    "$1" == -f && "$2" == -- &&
+    "$3" == "${fixture_run_root}/recovery-product-off.env" &&
+    "$4" == "${fixture_run_root}/recovery-env.before" &&
+    "$5" == "${fixture_run_root}/recovery-env.next" ]]; then
+    log_command 'recovery-cleanup-exact'
+  fi
+  command rm "$@"
 }
 remote_assert_compose_backend_image() {
   [[ "$1" == "hookah-v125:${V125_SOURCE_SHA}" && "${REMOTE_BACKEND_IMAGE}" == "$1" ]] ||
@@ -6592,6 +7560,17 @@ EOF
     ! -e "${pre_recovery_source_drift_root}/run-root/recovery-env.before" &&
     ! -e "${pre_recovery_source_drift_root}/run-root/recovery-env.next" ]] ||
     fail 'pre-V126 recovery source drift retained transform state or sealed a proof'
+  [[ "$(grep -F -c 'recovery-before-created' \
+      "${pre_recovery_source_drift_root}/commands.log" || true)" == 1 &&
+    "$(grep -F -c 'recovery-cleanup-exact' \
+      "${pre_recovery_source_drift_root}/commands.log" || true)" == 1 ]] ||
+    fail 'pre-V126 recovery source drift did not create then clean exact transform paths once'
+  assert_literals_in_order "${pre_recovery_source_drift_root}/commands.log" \
+    'pre-V126 recovery source-drift cleanup' \
+    'recovery-before-created' 'recovery-cleanup-exact'
+  [[ "$(sha256_file "${pre_recovery_source_drift_root}/staging/.env")" == \
+    "$(< "${pre_recovery_source_drift_root}/recovery-source-drift.sha256")" ]] ||
+    fail 'pre-V126 recovery source drift installed transformed environment bytes'
 
   local pre_start_failure_root="${TEST_ROOT}/real-pre-v126-start-failure"
   expect_failure 'pre-V126 Docker start failure receives exactly one attempt and no retry' '' \
@@ -6854,9 +7833,11 @@ main() {
   test_receipt_integrity
   test_gate_and_sequence_contract
   test_static_safety_contract
+  test_telegram_cleanup_trap
   test_internal_remote_dispatch_boundary
   test_remote_loader_same_use_body
   test_caddy_ordering_contract
+  test_real_caddy_admin_snapshot_cleanup_contract
   test_partial_caddy_activation_recovery
   test_caddy_receipt_binding_contract
   test_caddy_source_same_read_binding
@@ -6866,6 +7847,7 @@ main() {
   test_backend_specific_compose_mapping
   test_explicit_compose_file_selection
   test_inventory_failure_contract
+  test_real_backup_rehearsal_cleanup_contract
   test_runtime_poller_and_old_image_gates
   test_runtime_environment_rebind_gates
   test_restart_disabled_single_start

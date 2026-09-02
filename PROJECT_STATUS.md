@@ -6,9 +6,10 @@ Last verified: 2026-09-02.
 
 **HT-12P V126 EXECUTABLE CUTOVER CONTRACT AND SEQUENCER CLOSURE /
 EXACT MAIN BASE VERIFIED / HT-13 PREDEPLOY CONTRACT STOP RECORDED /
-HARDENED CANDIDATE IMPLEMENTED AFTER THE FIRST REVIEW BLOCK /
-LOCAL ADVERSARIAL VALIDATION PASSED / INDEPENDENT READ-ONLY RE-REVIEW REQUIRED BEFORE COMMIT AND PUSH /
-EXACT GREEN FEATURE-BRANCH ACTIONS REQUIRED AFTER PUSH /
+FEATURE-BRANCH ACTIONS EXPOSED A CLEANUP-TRAP ERROR-UNWIND DEFECT /
+EXPLICITLY APPROVED CLEANUP HARDENING IMPLEMENTED / LOCAL 441-ASSERTION ADVERSARIAL VALIDATION PASSED /
+INDEPENDENT READ-ONLY RE-REVIEW PASSED / FINAL CLEANUP COMMIT AND NON-FORCE PUSH REQUIRED /
+EXACT GREEN POST-FIX FEATURE-BRANCH ACTIONS REQUIRED /
 NO STAGING ACCESS OR CUTOVER STARTED**.
 
 Fresh required `origin/main` is exact merge commit
@@ -65,12 +66,22 @@ terminalizes exact-V126, already-stopped, unexpected-V125 or unknown-image post-
 Pre-V126 rollback, post-V126 forward-fix stop and full-DR prerequisite verification remain bounded
 executable branches.
 
+Feature-branch Compose run `33595906441` first exposed a harness-only GNU `stat` portability defect;
+normal commit `4a33dd79b54ca2bbc8ee6d7296fabec0668696d8` corrected it. The next exact branch run
+`33596741034` then exposed a real Bash error-unwind defect: cleanup traps referenced function-local
+paths after those locals had left scope. With explicit
+`APPROVE_HT12P_CLEANUP_TRAP_HARDENING`, all seven cleanup families now bind concrete targets before
+use, preserve the primary exit/signal status and exercise exact mocked cleanup. Restore-rehearsal
+container/volume cleanup additionally pre-arms exact names and verifies a run-owner label before use
+or deletion. Neither failed CI run nor this local hardening accessed staging or created real Docker
+resources.
+
 The frozen sequencer SHA-256 is
-`2994e1eb5a8ab2940e15bd005106822fda85527d0b97577982fb8578b6c10108`; the frozen harness SHA-256 is
-`c715a94aef1fb812adfa2110db79f04055be3b20f39d2145c116de0e009f87bb`. The complete local harness
-passed all 426 bounded assertions after documentation reconciliation. This is local fixture evidence
-only; independent
-read-only re-review and exact feature-branch Actions are not yet claimed.
+`41f0b1d98e848e65b3bc4b605cb1f53ce28081c3e6ecf9153328d4b77486d1d4`; the frozen harness SHA-256 is
+`6f6e746d3f16eb4bf0090aecec1513d23071f87046242fb99cba9754ad5a5e17`. The complete local harness
+passed all 441 bounded assertions after cleanup and documentation reconciliation. This is local
+fixture evidence only. Independent read-only final re-review passed with no P0, P1 or blocking P2;
+exact post-fix feature-branch Actions are not yet claimed.
 
 Normal public-pilot staging remains `PRODUCT` with maintenance `OFF`; temporary `V126_SMOKE` remains
 an identity-gated migration-window overlay, never a replacement for membership or RBAC. Permanent

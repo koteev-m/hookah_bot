@@ -2632,10 +2632,12 @@ remote_assert_telegram_idle() {
   local temp_dir
   temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/v126-telegram-idle.XXXXXX")"
   chmod 0700 "${temp_dir}"
-  trap 'rm -rf -- "${temp_dir}"' EXIT
-  trap 'rm -rf -- "${temp_dir}"; exit 130' INT
-  trap 'rm -rf -- "${temp_dir}"; exit 143' TERM
-  trap 'rm -rf -- "${temp_dir}"; exit 129' HUP
+  local cleanup_command
+  printf -v cleanup_command 'rm -rf -- %q' "${temp_dir}"
+  trap "v126_cleanup_exit_status=\$?; trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after EXIT' >&2; fi; exit \"\${v126_cleanup_exit_status}\"" EXIT
+  trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after INT' >&2; fi; exit 130" INT
+  trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after TERM' >&2; fi; exit 143" TERM
+  trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after HUP' >&2; fi; exit 129" HUP
   local config="${temp_dir}/curl.conf"
   local response="${temp_dir}/response.json"
   local error_file="${temp_dir}/curl.err"
@@ -2646,7 +2648,6 @@ remote_assert_telegram_idle() {
     "url = \"https://api.telegram.org/bot${token}/getWebhookInfo\"" > "${config}"
   chmod 0600 "${config}"
   if ! curl --config "${config}" --output "${response}" 2> "${error_file}"; then
-    rm -rf -- "${temp_dir}"
     die 'Telegram getWebhookInfo failed; restricted response was discarded'
   fi
   python3 - "${response}" <<'PY'
@@ -3137,34 +3138,150 @@ remote_backup_rehearsal() {
   local safe_run="${run_id//[^a-z0-9-]/-}"
   local rehearsal_volume="hookah-v126-${safe_run}-${phase}-$$"
   local rehearsal_container="hookah-v126-${safe_run}-${phase}-$$"
+  local rehearsal_owner="v126:${release_sha}:${safe_run}:${phase}:$$"
   [[ "${rehearsal_volume}" =~ ^hookah-v126-[a-z0-9-]+$ ]] || die 'invalid rehearsal volume name'
   [[ "${rehearsal_container}" =~ ^hookah-v126-[a-z0-9-]+$ ]] || die 'invalid rehearsal container name'
-  ! docker container inspect "${rehearsal_container}" >/dev/null 2>&1 || die 'rehearsal container already exists'
-  ! docker volume inspect "${rehearsal_volume}" >/dev/null 2>&1 || die 'rehearsal volume already exists'
-  local cleanup_container=''
-  local cleanup_volume=''
-  remote_cleanup_rehearsal() {
-    if [[ -n "${cleanup_container}" && "${cleanup_container}" == "${rehearsal_container}" ]]; then
-      docker rm -f "${cleanup_container}" >/dev/null 2>&1 || true
-    fi
-    if [[ -n "${cleanup_volume}" && "${cleanup_volume}" == "${rehearsal_volume}" ]]; then
-      docker volume rm "${cleanup_volume}" >/dev/null 2>&1 || true
-    fi
+  [[ "${rehearsal_owner}" =~ ^v126:[0-9a-f]{40}:[a-z0-9-]+:(pre-drain|quiesced):[0-9]+$ ]] ||
+    die 'invalid rehearsal ownership label'
+  remote_rehearsal_exact_name_count() {
+    local expected_name="$1"
+    local inventory="$2"
+    local item
+    local count=0
+    while IFS= read -r item; do
+      [[ "${item}" == "${expected_name}" ]] && count=$((count + 1))
+    done <<< "${inventory}"
+    printf '%s\n' "${count}"
   }
-  trap remote_cleanup_rehearsal EXIT
-  trap 'remote_cleanup_rehearsal; exit 130' INT
-  trap 'remote_cleanup_rehearsal; exit 143' TERM
-  trap 'remote_cleanup_rehearsal; exit 129' HUP
-  docker volume create --label hookah.v126.rehearsal=true "${rehearsal_volume}" >/dev/null
-  cleanup_volume="${rehearsal_volume}"
+  local container_inventory
+  local volume_inventory
+  container_inventory="$(docker ps --all --format '{{.Names}}')" ||
+    die 'rehearsal container inventory failed before creation'
+  volume_inventory="$(docker volume ls --format '{{.Name}}')" ||
+    die 'rehearsal volume inventory failed before creation'
+  [[ "$(remote_rehearsal_exact_name_count "${rehearsal_container}" "${container_inventory}")" == 0 ]] ||
+    die 'rehearsal container already exists'
+  [[ "$(remote_rehearsal_exact_name_count "${rehearsal_volume}" "${volume_inventory}")" == 0 ]] ||
+    die 'rehearsal volume already exists'
+  V126_REMOTE_REHEARSAL_CLEANUP_CONTAINER="${rehearsal_container}"
+  V126_REMOTE_REHEARSAL_CLEANUP_VOLUME="${rehearsal_volume}"
+  remote_cleanup_owned_rehearsal_container() {
+    local expected_container="$1"
+    local expected_owner="$2"
+    local inventory
+    local count
+    local actual_owner
+    inventory="$(docker ps --all --format '{{.Names}}')" || {
+      printf '%s\n' 'rehearsal container cleanup inventory failed' >&2
+      return 1
+    }
+    count="$(remote_rehearsal_exact_name_count "${expected_container}" "${inventory}")"
+    [[ "${count}" == 0 ]] && return 0
+    [[ "${count}" == 1 ]] || {
+      printf '%s\n' 'rehearsal container cleanup inventory is ambiguous' >&2
+      return 1
+    }
+    actual_owner="$(docker container inspect --format \
+      '{{ index .Config.Labels "hookah.v126.rehearsal-owner" }}' "${expected_container}")" || {
+      printf '%s\n' 'rehearsal container cleanup ownership proof failed' >&2
+      return 1
+    }
+    [[ "${actual_owner}" == "${expected_owner}" ]] || {
+      printf '%s\n' 'rehearsal container cleanup ownership mismatch' >&2
+      return 1
+    }
+    docker rm -f "${expected_container}" >/dev/null 2>&1 || {
+      printf '%s\n' 'rehearsal container cleanup removal failed' >&2
+      return 1
+    }
+  }
+  remote_cleanup_owned_rehearsal_volume() {
+    local expected_volume="$1"
+    local expected_owner="$2"
+    local inventory
+    local count
+    local actual_owner
+    inventory="$(docker volume ls --format '{{.Name}}')" || {
+      printf '%s\n' 'rehearsal volume cleanup inventory failed' >&2
+      return 1
+    }
+    count="$(remote_rehearsal_exact_name_count "${expected_volume}" "${inventory}")"
+    [[ "${count}" == 0 ]] && return 0
+    [[ "${count}" == 1 ]] || {
+      printf '%s\n' 'rehearsal volume cleanup inventory is ambiguous' >&2
+      return 1
+    }
+    actual_owner="$(docker volume inspect --format \
+      '{{ index .Labels "hookah.v126.rehearsal-owner" }}' "${expected_volume}")" || {
+      printf '%s\n' 'rehearsal volume cleanup ownership proof failed' >&2
+      return 1
+    }
+    [[ "${actual_owner}" == "${expected_owner}" ]] || {
+      printf '%s\n' 'rehearsal volume cleanup ownership mismatch' >&2
+      return 1
+    }
+    docker volume rm "${expected_volume}" >/dev/null 2>&1 || {
+      printf '%s\n' 'rehearsal volume cleanup removal failed' >&2
+      return 1
+    }
+  }
+  remote_cleanup_rehearsal() {
+    local expected_container="$1"
+    local expected_volume="$2"
+    local expected_owner="$3"
+    local cleanup_container="${V126_REMOTE_REHEARSAL_CLEANUP_CONTAINER:-}"
+    local cleanup_volume="${V126_REMOTE_REHEARSAL_CLEANUP_VOLUME:-}"
+    local cleanup_status=0
+    [[ -z "${cleanup_container}" || "${cleanup_container}" == "${expected_container}" ]] || {
+      printf '%s\n' 'rehearsal container cleanup state mismatch' >&2
+      return 1
+    }
+    [[ -z "${cleanup_volume}" || "${cleanup_volume}" == "${expected_volume}" ]] || {
+      printf '%s\n' 'rehearsal volume cleanup state mismatch' >&2
+      return 1
+    }
+    V126_REMOTE_REHEARSAL_CLEANUP_CONTAINER=''
+    V126_REMOTE_REHEARSAL_CLEANUP_VOLUME=''
+    if [[ -n "${cleanup_container}" ]] &&
+      ! remote_cleanup_owned_rehearsal_container "${expected_container}" "${expected_owner}"; then
+      cleanup_status=1
+    fi
+    if [[ -n "${cleanup_volume}" ]] &&
+      ! remote_cleanup_owned_rehearsal_volume "${expected_volume}" "${expected_owner}"; then
+      cleanup_status=1
+    fi
+    return "${cleanup_status}"
+  }
+  local cleanup_command
+  printf -v cleanup_command 'remote_cleanup_rehearsal %q %q %q' \
+    "${rehearsal_container}" "${rehearsal_volume}" "${rehearsal_owner}"
+  trap "v126_cleanup_exit_status=\$?; trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'rehearsal cleanup failed after EXIT' >&2; fi; exit \"\${v126_cleanup_exit_status}\"" EXIT
+  trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'rehearsal cleanup failed after INT' >&2; fi; exit 130" INT
+  trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'rehearsal cleanup failed after TERM' >&2; fi; exit 143" TERM
+  trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'rehearsal cleanup failed after HUP' >&2; fi; exit 129" HUP
+  docker volume create \
+    --label "hookah.v126.rehearsal-owner=${rehearsal_owner}" \
+    "${rehearsal_volume}" >/dev/null
+  local created_volume_owner
+  created_volume_owner="$(docker volume inspect --format \
+    '{{ index .Labels "hookah.v126.rehearsal-owner" }}' "${rehearsal_volume}")" ||
+    die 'created rehearsal volume ownership proof failed'
+  [[ "${created_volume_owner}" == "${rehearsal_owner}" ]] ||
+    die 'created rehearsal volume ownership mismatch'
   docker run --detach \
     --name "${rehearsal_container}" \
+    --label "hookah.v126.rehearsal-owner=${rehearsal_owner}" \
     --network none \
     --mount "type=volume,source=${rehearsal_volume},target=/var/lib/postgresql/data" \
     --env "POSTGRES_USER=${source_db_user}" \
     --env POSTGRES_HOST_AUTH_METHOD=trust \
     "${source_image_id}" >/dev/null
-  cleanup_container="${rehearsal_container}"
+  local created_container_owner
+  created_container_owner="$(docker container inspect --format \
+    '{{ index .Config.Labels "hookah.v126.rehearsal-owner" }}' "${rehearsal_container}")" ||
+    die 'created rehearsal container ownership proof failed'
+  [[ "${created_container_owner}" == "${rehearsal_owner}" ]] ||
+    die 'created rehearsal container ownership mismatch'
   [[ "$(docker inspect --format '{{.HostConfig.NetworkMode}}' "${rehearsal_container}")" == none ]] ||
     die 'rehearsal network mode mismatch'
   [[ "$(docker inspect --format '{{len .HostConfig.PortBindings}}' "${rehearsal_container}")" == 0 ]] ||
@@ -3204,11 +3321,14 @@ remote_backup_rehearsal() {
     psql -X -U "${source_db_user}" -d v126_restore_rehearsal -Atqc \
     "SELECT CONCAT(MAX(version::integer), ':', COUNT(*) FILTER (WHERE version = '126'), ':', COUNT(*) FILTER (WHERE NOT success)) FROM flyway_schema_history")"
   [[ "${restored_migration_state}" == '125:0:0' ]] || die 'rehearsal Flyway state mismatch'
-  docker rm -f "${rehearsal_container}" >/dev/null
-  cleanup_container=''
-  docker volume rm "${rehearsal_volume}" >/dev/null
-  cleanup_volume=''
+  if ! remote_cleanup_rehearsal \
+    "${rehearsal_container}" "${rehearsal_volume}" "${rehearsal_owner}"; then
+    trap - EXIT INT TERM HUP
+    unset V126_REMOTE_REHEARSAL_CLEANUP_CONTAINER V126_REMOTE_REHEARSAL_CLEANUP_VOLUME
+    die 'rehearsal resource cleanup failed'
+  fi
   trap - EXIT INT TERM HUP
+  unset V126_REMOTE_REHEARSAL_CLEANUP_CONTAINER V126_REMOTE_REHEARSAL_CLEANUP_VOLUME
 
   printf '%s\n' \
     "run_id=${run_id}" \
@@ -3503,12 +3623,15 @@ PY
   admin_config="$(mktemp "${TMPDIR:-/tmp}/v126-caddy-admin.XXXXXX")"
   chmod 0600 "${admin_config}"
   remote_cleanup_caddy_admin_snapshot() {
-    rm -f -- "${admin_config}"
+    local cleanup_admin_config="$1"
+    rm -f -- "${cleanup_admin_config}"
   }
-  trap remote_cleanup_caddy_admin_snapshot EXIT
-  trap 'remote_cleanup_caddy_admin_snapshot; exit 130' INT
-  trap 'remote_cleanup_caddy_admin_snapshot; exit 143' TERM
-  trap 'remote_cleanup_caddy_admin_snapshot; exit 129' HUP
+  local cleanup_command
+  printf -v cleanup_command 'remote_cleanup_caddy_admin_snapshot %q' "${admin_config}"
+  trap "v126_cleanup_exit_status=\$?; trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after EXIT' >&2; fi; exit \"\${v126_cleanup_exit_status}\"" EXIT
+  trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after INT' >&2; fi; exit 130" INT
+  trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after TERM' >&2; fi; exit 143" TERM
+  trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after HUP' >&2; fi; exit 129" HUP
   if ! curl -fsS http://127.0.0.1:2019/config/ > "${admin_config}" 2>/dev/null; then
     die 'Caddy admin config proof is unavailable after reload'
   fi
@@ -3800,12 +3923,17 @@ remote_final_v125_preflight() {
   [[ ! -e "${service_file}" && ! -L "${service_file}" && ! -e "${pass_file}" && ! -L "${pass_file}" ]] ||
     die 'preflight database credential artifacts already exist'
   remote_cleanup_preflight_credentials() {
-    rm -f -- "${service_file}" "${pass_file}"
+    local cleanup_service_file="$1"
+    local cleanup_pass_file="$2"
+    rm -f -- "${cleanup_service_file}" "${cleanup_pass_file}"
   }
-  trap remote_cleanup_preflight_credentials EXIT
-  trap 'remote_cleanup_preflight_credentials; exit 130' INT
-  trap 'remote_cleanup_preflight_credentials; exit 143' TERM
-  trap 'remote_cleanup_preflight_credentials; exit 129' HUP
+  local cleanup_command
+  printf -v cleanup_command 'remote_cleanup_preflight_credentials %q %q' \
+    "${service_file}" "${pass_file}"
+  trap "v126_cleanup_exit_status=\$?; trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after EXIT' >&2; fi; exit \"\${v126_cleanup_exit_status}\"" EXIT
+  trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after INT' >&2; fi; exit 130" INT
+  trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after TERM' >&2; fi; exit 143" TERM
+  trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after HUP' >&2; fi; exit 129" HUP
   python3 - "${database_url_file}" "${expected_database_sha}" "${service_file}" "${pass_file}" <<'PY'
 from hashlib import sha256
 from pathlib import Path
@@ -3913,7 +4041,6 @@ with os.fdopen(fd, "wb") as output:
 raise SystemExit(completed.returncode)
 PY
   then
-    rm -f -- "${service_file}" "${pass_file}"
     if [[ -f "${restricted_output}" && ! -L "${restricted_output}" ]]; then
       chmod 0600 "${restricted_output}"
     fi
@@ -3980,12 +4107,18 @@ remote_transform_maintenance_config() {
     ! -e "${next_env}" && ! -L "${next_env}" ]] ||
     die 'maintenance transformation artifacts already exist'
   remote_cleanup_maintenance_temporaries() {
-    rm -f -- "${candidate}" "${before}" "${next_env}"
+    local cleanup_candidate="$1"
+    local cleanup_before="$2"
+    local cleanup_next_env="$3"
+    rm -f -- "${cleanup_candidate}" "${cleanup_before}" "${cleanup_next_env}"
   }
-  trap remote_cleanup_maintenance_temporaries EXIT
-  trap 'remote_cleanup_maintenance_temporaries; exit 130' INT
-  trap 'remote_cleanup_maintenance_temporaries; exit 143' TERM
-  trap 'remote_cleanup_maintenance_temporaries; exit 129' HUP
+  local cleanup_command
+  printf -v cleanup_command 'remote_cleanup_maintenance_temporaries %q %q %q' \
+    "${candidate}" "${before}" "${next_env}"
+  trap "v126_cleanup_exit_status=\$?; trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after EXIT' >&2; fi; exit \"\${v126_cleanup_exit_status}\"" EXIT
+  trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after INT' >&2; fi; exit 130" INT
+  trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after TERM' >&2; fi; exit 143" TERM
+  trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after HUP' >&2; fi; exit 129" HUP
   cp --preserve=mode,ownership,timestamps .env "${before}"
   chmod 0600 "${before}"
   python3 - "${before}" "${expected_source_sha}" "${identities_file}" \
@@ -4072,7 +4205,7 @@ PY
   local after_sha
   before_sha="$(remote_hash_file "${before}")"
   after_sha="$(remote_hash_file .env)"
-  remote_cleanup_maintenance_temporaries
+  remote_cleanup_maintenance_temporaries "${candidate}" "${before}" "${next_env}"
   trap - EXIT INT TERM HUP
   local lower_mode
   lower_mode="$(printf '%s' "${target_mode}" | tr '[:upper:]' '[:lower:]')"
@@ -4607,12 +4740,15 @@ remote_restore_caddy() {
   admin_config="$(mktemp "${TMPDIR:-/tmp}/v126-caddy-restored.XXXXXX")"
   chmod 0600 "${admin_config}"
   remote_cleanup_restored_caddy_snapshot() {
-    rm -f -- "${admin_config}"
+    local cleanup_admin_config="$1"
+    rm -f -- "${cleanup_admin_config}"
   }
-  trap remote_cleanup_restored_caddy_snapshot EXIT
-  trap 'remote_cleanup_restored_caddy_snapshot; exit 130' INT
-  trap 'remote_cleanup_restored_caddy_snapshot; exit 143' TERM
-  trap 'remote_cleanup_restored_caddy_snapshot; exit 129' HUP
+  local cleanup_command
+  printf -v cleanup_command 'remote_cleanup_restored_caddy_snapshot %q' "${admin_config}"
+  trap "v126_cleanup_exit_status=\$?; trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after EXIT' >&2; fi; exit \"\${v126_cleanup_exit_status}\"" EXIT
+  trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after INT' >&2; fi; exit 130" INT
+  trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after TERM' >&2; fi; exit 143" TERM
+  trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after HUP' >&2; fi; exit 129" HUP
   curl -fsS http://127.0.0.1:2019/config/ > "${admin_config}" 2>/dev/null || {
     die 'restored Caddy admin config proof is unavailable'
   }
@@ -5153,12 +5289,18 @@ remote_recovery_product_off() {
     ! -e "${next_env}" && ! -L "${next_env}" ]] ||
     die 'recovery environment artifact exists'
   remote_cleanup_recovery_env_temporaries() {
-    rm -f -- "${candidate}" "${before}" "${next_env}"
+    local cleanup_candidate="$1"
+    local cleanup_before="$2"
+    local cleanup_next_env="$3"
+    rm -f -- "${cleanup_candidate}" "${cleanup_before}" "${cleanup_next_env}"
   }
-  trap remote_cleanup_recovery_env_temporaries EXIT
-  trap 'remote_cleanup_recovery_env_temporaries; exit 130' INT
-  trap 'remote_cleanup_recovery_env_temporaries; exit 143' TERM
-  trap 'remote_cleanup_recovery_env_temporaries; exit 129' HUP
+  local cleanup_command
+  printf -v cleanup_command 'remote_cleanup_recovery_env_temporaries %q %q %q' \
+    "${candidate}" "${before}" "${next_env}"
+  trap "v126_cleanup_exit_status=\$?; trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after EXIT' >&2; fi; exit \"\${v126_cleanup_exit_status}\"" EXIT
+  trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after INT' >&2; fi; exit 130" INT
+  trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after TERM' >&2; fi; exit 143" TERM
+  trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after HUP' >&2; fi; exit 129" HUP
   cp --preserve=mode,ownership,timestamps .env "${before}"
   chmod 0600 "${before}"
   python3 - "${before}" "${expected_source_sha}" "${candidate}" <<'PY'
@@ -5206,7 +5348,7 @@ PY
     --profile public-pilot --env-file .env --compose-file docker-compose.yml >/dev/null
   local after_sha
   after_sha="$(remote_hash_file .env)"
-  remote_cleanup_recovery_env_temporaries
+  remote_cleanup_recovery_env_temporaries "${candidate}" "${before}" "${next_env}"
   trap - EXIT INT TERM HUP
   REMOTE_RECOVERY_ENV_BEFORE_SHA256="${before_sha}"
   REMOTE_RECOVERY_ENV_AFTER_SHA256="${after_sha}"
