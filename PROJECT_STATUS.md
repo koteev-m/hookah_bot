@@ -76,6 +76,13 @@ container/volume cleanup additionally pre-arms exact names and verifies a run-ow
 or deletion. Neither failed CI run nor this local hardening accessed staging or created real Docker
 resources.
 
+Post-hardening branch run `33628764473` passed the sequencer through the cleanup/rehearsal fixtures,
+then proved that the Compose job's depth-1 checkout omitted immutable base object
+`ecb09601975678a41d89e5c824cc7812c7876481:docs/DEPLOYMENT_RUNBOOK.md`. The exact-base rejection test
+therefore stopped before its intended assertion. The Compose job now fetches full history so that
+the frozen baseline object is actually present and tested; no test assertion or execution boundary
+was weakened.
+
 The frozen sequencer SHA-256 is
 `41f0b1d98e848e65b3bc4b605cb1f53ce28081c3e6ecf9153328d4b77486d1d4`; the frozen harness SHA-256 is
 `6f6e746d3f16eb4bf0090aecec1513d23071f87046242fb99cba9754ad5a5e17`. The complete local harness
