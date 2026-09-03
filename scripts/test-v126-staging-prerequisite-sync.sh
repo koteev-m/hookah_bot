@@ -529,8 +529,8 @@ bash -n "${source_root}/scripts/v126-staging-prerequisite-sync.sh"
 bash -n "${source_root}/scripts/test-v126-staging-prerequisite-sync.sh"
 PYTHONPYCACHEPREFIX="${fixture_root}/pycache" python3 -m py_compile "${source_root}/scripts/v126-staging-prerequisite-sync-helper.py"
 awk -F '\t' 'BEGIN{ok=1} {if($1!=NR || NF!=3 || seen[$1]++ || names[$2]++ || $2 !~ /^[A-Z][A-Z0-9_]*$/ || $3 !~ /^[A-Za-z0-9_.\/:;=,-]+$/) ok=0} END{exit !(NR==40 && ok)}' "${source_root}/scripts/v126-staging-prerequisite-sync-checks.tsv"
-[[ "$(rg -c '^check_[0-9]+\(\)' "${source_root}/scripts/v126-staging-prerequisite-sync.sh")" == 40 ]]
-if rg -n '^[[:space:]]*(sudo[[:space:]]+)?docker[[:space:]]+(build|load|save|create|start|stop|restart|run)|^[[:space:]]*(sudo[[:space:]]+)?docker[[:space:]]+compose[[:space:]]+(up|down|create|start|stop|restart|run)|^[[:space:]]*(sudo[[:space:]]+)?(pg_dump|pg_restore)([[:space:]]|$)|(^|[;&|()])[[:space:]]*eval([[:space:]]|$)|api\.telegram\.org[^[:space:]]*getUpdates' \
+[[ "$(grep -Ec '^check_[0-9]+\(\)' "${source_root}/scripts/v126-staging-prerequisite-sync.sh")" == 40 ]]
+if grep -En '^[[:space:]]*(sudo[[:space:]]+)?docker[[:space:]]+(build|load|save|create|start|stop|restart|run)|^[[:space:]]*(sudo[[:space:]]+)?docker[[:space:]]+compose[[:space:]]+(up|down|create|start|stop|restart|run)|^[[:space:]]*(sudo[[:space:]]+)?(pg_dump|pg_restore)([[:space:]]|$)|(^|[;&|()])[[:space:]]*eval([[:space:]]|$)|api\.telegram\.org[^[:space:]]*getUpdates' \
   "${source_root}/scripts/v126-staging-prerequisite-sync.sh" "${source_root}/scripts/v126-staging-prerequisite-sync-helper.py"; then
   fail 'forbidden runtime mutation or dynamic evaluation surface exists'
 fi
@@ -594,7 +594,7 @@ cmp -s <(dd if="${live_env_path}" bs=1 skip="${pre_env_size}" 2>/dev/null) \
   <(printf '%s\n' 'STAGING_MAINTENANCE_MODE=OFF' 'STAGING_MAINTENANCE_ALLOWED_USER_IDS=' 'STAGING_MAINTENANCE_ALLOWED_CHAT_IDS=') ||
   fail 'independent environment suffix oracle failed'
 grep -q '^ssh-mock$' "${root}/mock-calls.log" || fail 'serialized mock SSH path was not exercised'
-if rg -n 'Gate A|AUTHORIZE_V126_CUTOVER_GATE_A|docker (start|stop|restart|load)|pg_dump|pg_restore' "${root}/mock-calls.log"; then fail 'success fixture crossed the prerequisite boundary'; fi
+if grep -En 'Gate A|AUTHORIZE_V126_CUTOVER_GATE_A|docker (start|stop|restart|load)|pg_dump|pg_restore' "${root}/mock-calls.log"; then fail 'success fixture crossed the prerequisite boundary'; fi
 pass
 
 # Failure before any write creates no rollback.
@@ -741,7 +741,23 @@ root="$(make_case staging-wrong-mode)"; chmod 0666 "${root}/remote/staging/.env"
 pass
 
 # The mocked harness never reaches a real external integration or mutation command.
-if rg -n 'forbidden external command escaped fixture|forbidden mock docker mutation' "${fixture_root}" --glob 'stderr' --glob 'mock-calls.log'; then
+escaped_commands=''
+fixture_log_paths="$(find "${fixture_root}" -type f \( -name stderr -o -name mock-calls.log \) -print)" ||
+  fail 'fixture external-command file inventory failed'
+while IFS= read -r fixture_log; do
+  [[ -n "${fixture_log}" ]] || continue
+  set +e
+  fixture_matches="$(grep -EnH 'forbidden external command escaped fixture|forbidden mock docker mutation' "${fixture_log}")"
+  grep_exit=$?
+  set -e
+  case "${grep_exit}" in
+    0) escaped_commands="${escaped_commands}${escaped_commands:+$'\n'}${fixture_matches}" ;;
+    1) ;;
+    *) fail 'fixture external-command scan failed' ;;
+  esac
+done <<< "${fixture_log_paths}"
+if [[ -n "${escaped_commands}" ]]; then
+  printf '%s\n' "${escaped_commands}"
   fail 'real or forbidden external command escaped fixture isolation'
 fi
 pass
