@@ -35,6 +35,14 @@ Venue operations source of truth:
 - Canonical Venue Mode operating model for dashboard, orders, batches, tabs/bill, staff calls, bookings, menu/stop-list, tables/QR, staff/invites, staff-chat, settings and stats is tracked in `docs/VENUE_OPERATIONS.md`.
 - Venue Mode is the source of truth for operations; staff-chat is notification/radar/shortcut only.
 
+Catalog map and public venue links source of truth:
+- Automatic one-link-per-venue lifecycle, own-domain/Telegram routing, Guest catalog map,
+  coordinates, provider boundaries and licensing decisions are **ЗАПЛАНИРОВАНО** in
+  [`docs/CATALOG_MAP_AND_VENUE_LINKS.md`](CATALOG_MAP_AND_VENUE_LINKS.md).
+- These capabilities are platform-wide future behavior, not a manually configured pilot link and
+  not an implementation claim based on existing catalog, coordinates, table QR or `startapp`
+  primitives.
+
 Staff profiles, Today Shift, Staff Schedule and staff tips source of truth:
 - Canonical `STAFF_PROFILE`, manual `SHIFT_TODAY`, optional `STAFF_SCHEDULE` and future `STAFF_TIP`
   model is tracked in `docs/STAFF_PROFILES_SHIFTS_TIPS.md`.

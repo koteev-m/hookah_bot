@@ -13,6 +13,10 @@ Transactional flows remain separate:
 - Booking lifecycle, hold/deadline, no-show/seated and reminder semantics are governed by `docs/BOOKING_LIFECYCLE.md`.
 - Order/session/tab semantics for history, repeat and feedback dependencies are governed by `docs/ORDER_SESSION_TAB_CORE.md`.
 - Growth analytics events and KPI formulas are governed by `docs/ANALYTICS_EVENTS.md`.
+- Planned catalog discovery/sharing through one automatically created canonical link per venue and
+  an optional Guest map view is governed by
+  [`docs/CATALOG_MAP_AND_VENUE_LINKS.md`](CATALOG_MAP_AND_VENUE_LINKS.md); neither block is a
+  current implementation claim.
 - Staff public profiles, today shift visibility and future staff-tip boundaries are governed by `docs/STAFF_PROFILES_SHIFTS_TIPS.md`.
 - Booking reminders are transactional booking operations, not growth marketing.
 - Staff-chat is operational and must not receive marketing/growth events unless a separate operational event already exists.
