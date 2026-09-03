@@ -1,8 +1,62 @@
 # Project Status
 
-Last verified: 2026-09-02.
+Last verified: 2026-09-03.
 
 ## 1. Current stage
+
+**HT-12R TRACKED V126 PRE-GATE-A PREREQUISITE SYNC ORCHESTRATOR /
+EXACT MAIN BASE AND 12/12 MAIN ACTIONS VERIFIED /
+TRACKED FAIL-CLOSED IMPLEMENTATION AND COMPLETE LOCAL FIXTURE HARNESS ADDED /
+COMPLETE LOCAL VALIDATION PASSED /
+INDEPENDENT READ-ONLY REVIEW AND EXACT GREEN FEATURE-BRANCH ACTIONS ARE MANDATORY BEFORE INTEGRATION /
+NO MAIN INTEGRATION, STAGING ACCESS OR CUTOVER STARTED**.
+
+Fresh required `origin/main` is exact commit
+`a648e75179975c97daa4b3dae03070e6476d8a9a`, tree
+`14f2400434c8546f5aba7c4bcc94fd20622625d1`, parent
+`15a996575dcb863d7f4fe2f8110d3d56399fa354`. Exact main Actions run `33658844231` is workflow
+`CI`, event `push`, branch `main`, attempt `1`, exact head SHA and `completed/success`; all `12/12`
+jobs succeeded. HT-12R runs only in a clean isolated worktree on branch
+`codex/ht-12r-tracked-prerequisite-sync`; the original local main worktree remains untouched.
+
+`scripts/v126-staging-prerequisite-sync.sh` is the sole tracked command authority for synchronizing
+the exact release Compose file, maintenance guard, admission guard and three maintenance-`OFF`
+`.env` keys before Gate A. Its helper, 40-entry named check map and local-only mocked harness are
+tracked beside it. The command verifies exact release Git-object bytes, the green main release
+identity, V125/Flyway/Caddy/runtime baseline, durable hash-chained checkpoints and rollback inputs;
+then it permits only four atomic staging-file writes, executes independent post-sync checks, records
+the first failure before one bounded rollback, reverifies the restored V125 baseline, and preserves
+the original nonzero exit status. Every remote argv is serialized into one shell-quoted SSH command;
+each action is timeout-bounded and holds the same restricted per-run lock, so signal handling waits
+for mutation quiescence before rollback. Successful completion stops with `GATE_A=NOT_STARTED`.
+
+The complete local mocked harness passed all `17/17` fixture groups: the success path; `4/4`
+during-write and `4/4` after-write failures; `40/40` independently checkpointed post-sync
+failures; exact one-rollback, original-status and no-later-phase assertions; active-remote
+SIGINT/SIGTERM with repeated-trap handling; natural health/version `curl`, read-only database,
+TLS-1.3 client, `docker logs` and `ss` execution failures in prewrite and the corresponding
+post-sync checks; strict canonical/status-bound first-failure
+and tri-state write-evidence rejection; real helper-backed parent-directory-fsynced unlink;
+zero/partial transfers; source/helper/checkpoint integrity; exact `.env` preservation; PRODUCT and
+Caddy helper plus inline-prewrite matrices; and zero real external calls. The unchanged 20-stage V126 sequencer harness and
+the maintenance, image-identity and admission guard self-tests also passed. Compose parsed from a
+disposable copy using `.env.example`; immutable migration identities remain exact.
+
+The HT-13 R1-R5 temporary controllers, including the terminal R5 false Caddy-prefix assertion, are
+rejected historical evidence only. Installed Caddy output `2.6.2` is accepted as the same exact
+semantic version as `v2.6.2`; malformed, ambiguous or different versions still fail while the
+Caddyfile hash, active service, validation, drain, TLS, Alt-Svc and UDP checks remain independent.
+No R6, temporary dispatcher, temporary execution package or external dispatcher is permitted.
+
+Prerequisite sync is separate from `scripts/v126-cutover.sh` Gate A. A successful sync does not
+authorize backup or rehearsal creation, drain activation, Caddy change, image transfer/load,
+container restart/start, maintenance `V126_SMOKE`, Flyway/V126, product/database/Telegram writes or
+any cutover stage. After later authorized HT-12R integration, the exact main release SHA and V126
+image tag/ID must be reselected and proved again; no historical HT-13 authorization or image
+identity is reusable. The current required stop after local validation, review, feature-branch push
+and exact green branch Actions is `HT12R_MAIN_INTEGRATION_AUTHORIZATION_REQUIRED`.
+
+### Preserved HT-12Q preintegration evidence
 
 **HT-12Q REPRODUCIBLE GRADLE ARCHIVE AND DETERMINISTIC V126 IMAGE CLOSURE /
 EXACT MAIN BASE AND 11/11 MAIN ACTIONS VERIFIED /

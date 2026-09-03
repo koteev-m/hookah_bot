@@ -1080,7 +1080,7 @@ jobs:
 
   compose:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -1095,10 +1095,15 @@ jobs:
           bash -n scripts/check-staging-image-identity.sh
           bash -n scripts/v126-cutover.sh
           bash -n scripts/test-v126-cutover.sh
+          bash -n scripts/v126-staging-prerequisite-sync.sh
+          bash -n scripts/test-v126-staging-prerequisite-sync.sh
+          PYTHONPYCACHEPREFIX="${RUNNER_TEMP}/ht12r-pycache" python3 -m py_compile scripts/v126-staging-prerequisite-sync-helper.py
       - name: Exercise staging admission guard fixtures
         run: bash scripts/validate-staging-admission.sh --self-test docker-compose.yml
       - name: Exercise V126 executable cutover contract fixtures
         run: bash scripts/test-v126-cutover.sh
+      - name: Exercise V126 pre-Gate-A prerequisite sync fixtures
+        run: bash scripts/test-v126-staging-prerequisite-sync.sh
       - name: Create CI compose env
         run: |
           cat > .env <<'EOF'

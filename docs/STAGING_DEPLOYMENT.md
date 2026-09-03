@@ -1,9 +1,10 @@
 # Staging Deployment
 
 Canonical release/deploy policy is `docs/DEPLOYMENT_RUNBOOK.md`. The single PostgreSQL V126
-policy/state-machine contract is `docs/V126_STAGING_CUTOVER_CONTRACT.md`; its only executable command
-authority is `scripts/v126-cutover.sh`. This file remains the one-VPS staging implementation-detail
-runbook and must not define another V126 sequence or command path.
+policy/state-machine contract is `docs/V126_STAGING_CUTOVER_CONTRACT.md`. The only pre-Gate-A
+prerequisite-sync command is `scripts/v126-staging-prerequisite-sync.sh`; the separate cutover
+command is `scripts/v126-cutover.sh`. This file remains the one-VPS staging implementation-detail
+runbook and must not define another prerequisite or V126 command path.
 
 This runbook describes the minimal staging setup for the Telegram bot + Mini App on one VPS with Docker Compose, PostgreSQL on the same host, and the Mini App production build served by the backend at `/miniapp/`.
 
@@ -387,7 +388,7 @@ EXPECTED_BACKEND_IMAGE_ID='sha256:<reviewed-image-id>' \
 `EXPECTED_BACKEND_IMAGE_ID` is mandatory for every deploy. Omitting it, supplying a malformed ID or
 building a different image fails locally before SSH, upload or service mutation.
 
-The V126 sequencer additionally requires the existing remote `docker-compose.yml`,
+The V126 sequencer requires the existing remote `docker-compose.yml`,
 `scripts/check-staging-maintenance-config.sh` and `scripts/validate-staging-admission.sh` to be
 operator-owned, non-symlink files whose bytes equal their exact `RELEASE_SHA` Git objects. It seals
 those hashes together with the restricted database-target and maintenance-identity content hashes,
@@ -396,9 +397,24 @@ action revalidates the exact applicable baseline or completed maintenance/Caddy 
 objects are read only through sanitized Git plumbing with inherited `GIT_*` controls removed and
 replacement objects disabled. Only a
 deterministic, inverse-reconstructable partial transition at its exact recovery predecessor can be
-recognized without the missing stage receipt. Preparing the exact release execution surface is a
-separate HT-13 prerequisite; `scripts/v126-cutover.sh` neither uploads nor repairs it, and it rejects
-a mutable, V125 or locally edited copy.
+recognized without the missing stage receipt. Only the tracked
+`scripts/v126-staging-prerequisite-sync.sh` may prepare that exact release execution surface before
+Gate A. Its success stops with `GATE_A=NOT_STARTED` and does not authorize backup, rehearsal, drain,
+Caddy change, image load/transfer, container start/restart, `V126_SMOKE`, Flyway/V126 or product
+writes. `scripts/v126-cutover.sh` still neither uploads nor repairs the surface and rejects a mutable,
+V125 or locally edited copy.
+
+The tracked prerequisite command treats health/version `curl`, read-only database, TLS-1.3 client,
+`docker logs` and UDP/443 inventory execution errors as fatal, including errors after exact-looking
+output; TLS 1.3 absence requires an explicit server protocol-version rejection. Its rollback
+distinguishes proven no-write, proven-write and indeterminate evidence; only
+canonical status-bound first-failure evidence may authorize restoration, and admission-guard
+removal is persisted through the helper's parent-directory `fsync` path.
+
+HT-13 R1-R5 temporary orchestration is rejected historical evidence. No temporary dispatcher, R6
+or external dispatcher may substitute for the tracked prerequisite command. After HT-12R main
+integration, reselect and prove the exact release SHA and V126 image tag/ID before any separately
+authorized staging work; rejected package inputs and old authorizations are not reusable.
 
 V126 image transfer and startup are separate states. The transfer gate validates the rendered
 Compose JSON for the `backend` service specifically. Docker-save bytes are captured in an unlinked

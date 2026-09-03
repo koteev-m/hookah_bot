@@ -1,6 +1,6 @@
 # Testing / QA Smoke Strategy
 
-Дата актуализации: 2026-09-02.
+Дата актуализации: 2026-09-03.
 
 Статус: **current product reference / UPDATED**. This document is the canonical QA/smoke strategy for the Telegram bot + Mini App platform. It consolidates local validation, GitHub Actions expectations, area-specific smoke suites, staging policy, failure reporting and Codex handoff rules. Deployment and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
 
@@ -20,7 +20,13 @@ STAGING-SMOKE-PASSED** for release HEAD `e35def99ea8429462e5fdaaeee914f57da72e77
 green Actions, staging deploy, consolidated smoke and cleanup. At that historical closure, local
 GitHub CLI authentication was invalid, so its Actions result was recorded as user-confirmed evidence.
 
-Current build/release QA slice: **HT-12Q / REPRODUCIBLE GRADLE ARCHIVE AND DETERMINISTIC V126 IMAGE /
+Current build/release QA slice: **HT-12R / TRACKED V126 PRE-GATE-A PREREQUISITE SYNC /
+EXACT MAIN AND 12/12 MAIN ACTIONS VERIFIED / TRACKED ORCHESTRATOR, HELPER, 40-CHECK MAP AND
+LOCAL-ONLY MOCKED HARNESS IMPLEMENTED / COMPLETE LOCAL VALIDATION PASSED / INDEPENDENT READ-ONLY
+REVIEW AND EXACT GREEN FEATURE-BRANCH ACTIONS ARE MANDATORY BEFORE INTEGRATION / NO MAIN INTEGRATION, STAGING ACCESS OR
+CUTOVER AUTHORIZED**. The prerequisite command must stop with `GATE_A=NOT_STARTED`.
+
+Preserved preceding build QA slice: **HT-12Q / REPRODUCIBLE GRADLE ARCHIVE AND DETERMINISTIC V126 IMAGE /
 PRE-FIX DEFECT REPRODUCED / MINIMAL BACKEND-APP ARCHIVE CONFIGURATION IMPLEMENTED /
 POST-FIX ARCHIVE, INSTALLDIST AND TWO-BUILD IMAGE EQUALITY PROVED LOCALLY /
 INDEPENDENT READ-ONLY REVIEW PASSED WITH NO FINDINGS / FEATURE-BRANCH COMMIT AND EXACT GREEN ACTIONS REQUIRED /
@@ -201,9 +207,10 @@ names and these minimum floors: route/security `VenueStaffRoutesTest 34`,
 `TelegramTrafficPolicyConfigTest 9`, `TelegramTrafficPolicyTest 8`,
 `TelegramWebhookRoutesTest 5`, and `TelegramAuthRouteTest 11`. The Compose job must also run
 syntax checks for `scripts/validate-staging-admission.sh`, both ordinary deploy wrappers and both
-V126 sequencer scripts, then execute
+V126 sequencer scripts, the tracked prerequisite-sync scripts and its Python helper, then execute
 `bash scripts/validate-staging-admission.sh --self-test docker-compose.yml` and
-`bash scripts/test-v126-cutover.sh`.
+both `bash scripts/test-v126-cutover.sh` and
+`bash scripts/test-v126-staging-prerequisite-sync.sh`.
 
 Run focused groups first, then the relevant extended Telegram suite and backend compile/lint:
 
@@ -361,6 +368,58 @@ evidence. After full PASS, the sequencer reactivates the public drain, stops V12
 OFF with empty maintenance values, starts final V126, restores ordinary Caddy, and proves the final
 public gates. An active maintenance mode left after cutover is a release failure, not degraded
 success.
+
+### HT-12R tracked pre-Gate-A prerequisite-sync quality gate
+
+`scripts/v126-staging-prerequisite-sync.sh` is the only prerequisite-sync command authority;
+`scripts/test-v126-staging-prerequisite-sync.sh` is its local-only fixture authority. HT-13 R1-R5
+packages are rejected historical evidence, and no temporary dispatcher, R6 or external dispatcher
+is permitted. The exact ordered post-sync manifest is
+`scripts/v126-staging-prerequisite-sync-checks.tsv`. Local and CI validation must run:
+
+```bash
+bash -n scripts/v126-staging-prerequisite-sync.sh
+bash -n scripts/test-v126-staging-prerequisite-sync.sh
+python3 -m py_compile scripts/v126-staging-prerequisite-sync-helper.py
+bash scripts/test-v126-staging-prerequisite-sync.sh
+bash scripts/test-v126-cutover.sh
+bash scripts/check-staging-maintenance-config.sh --self-test
+bash scripts/check-staging-image-identity.sh --self-test \
+  scripts/deploy-staging.sh scripts/deploy-staging-controlmaster.sh
+bash scripts/validate-staging-admission.sh --self-test docker-compose.yml
+docker compose config --quiet
+git diff --check
+```
+
+The prerequisite fixture must use only a local mocked PATH and fail if SSH, SCP/rsync, Docker,
+PostgreSQL, Caddy, systemd, Telegram or a staging/production endpoint escapes isolation. It proves a
+complete success that stops before Gate A; a failure before writes; during/after failures for each
+of four writes; first-failure stop at each of 40 named post-sync checks; exact source/helper/check
+closure; zero/partial transfer rejection; duplicate/stale/symlink/wrong-mode evidence rejection;
+natural health/version `curl`, read-only database, TLS-1.3 client, `docker logs` and `ss` execution
+errors in both prewrite and their named post-sync checks, including exact-looking output followed
+by a nonzero producer status;
+an active remote write interrupted by SIGINT/SIGTERM, quiescence before rollback and repeated-trap
+handling; rollback failure without losing the original failure identity; an independent prefix and
+suffix oracle for exact unrelated `.env` byte preservation; absent/empty/mixed PRODUCT-list zero
+semantics with nonempty/malformed rejection; and the full semantic Caddy matrix through both the
+helper and actual inline prewrite parser (`2.6.2`, optional lowercase `v`, explicitly parsed safe
+metadata, wrong/substring/empty/malformed/ambiguous cases).
+
+Every meaningful local/remote phase and each post-sync check requires STARTED plus PASSED/FAILED
+records bound to the run, exact ordinal/name, release and script, expected sanitized result and
+predecessor hash. Raw result files and records use same-directory durable no-replace promotion; file
+presence is never PASS. All SSH argv is represented as one shell-quoted remote command. Remote
+actions are timeout-bounded, run under a minimal environment and share an exclusive per-run lock;
+the controller terminates and waits for its local process group, while rollback waits for remote
+lock release. Rollback requires a canonical first-failure record bound to the exact original status,
+treats no-write/write/indeterminate evidence as distinct states, and removes the create-only
+admission guard through the real helper's parent-directory `fsync` path. The first failure precedes
+at most one rollback, restored-baseline proof is
+mandatory after any write, and the original nonzero status is returned. Successful prerequisite
+sync does not authorize backup/rehearsal, drain, Caddy change, image load/transfer, container
+start/restart, `V126_SMOKE`, Flyway/V126 or product/database/Telegram writes. After HT-12R main
+integration, reselect and prove the exact release SHA and V126 image tag/ID.
 
 ### HT-12P executable V126 cutover quality gate
 
@@ -2922,9 +2981,11 @@ Expectations:
   H2/PostgreSQL `5 / 5`, cursor H2/PostgreSQL `4 / 4`, and real PostgreSQL migration-lock
   concurrency `2`. Missing, below-minimum, skipped, failed or errored reports fail the existing
   mandatory job.
-- `compose` syntax-checks both V126 scripts and executes `bash scripts/test-v126-cutover.sh` in
-  addition to the existing admission, maintenance, image-identity and Compose guards. The fixture
-  suite is mandatory; a skipped or missing sequencer test is not equivalent evidence.
+- `compose` syntax-checks the V126 sequencer and prerequisite-sync shell scripts, compiles the
+  prerequisite Python helper, and executes both complete mocked harnesses in addition to the
+  existing admission, maintenance, image-identity and Compose guards. Both fixture suites are
+  mandatory; a skipped or missing sequencer/prerequisite test is not equivalent evidence. Neither
+  harness may call real SSH, Docker, PostgreSQL, Caddy, systemd, Telegram or staging.
 - `miniapp-e2e-smoke` parses the full structured Playwright JSON and requires at least `216`
   executed with zero failure, flaky, skipped, runner error, missing result, non-passing expectation
   or failed attempt. It additionally fails unless both exact `booking-label-parity.spec.ts` cases,
@@ -3375,6 +3436,11 @@ Telegram/staff-chat:
 ## Roadmap Status
 
 - Testing/QA smoke strategy: `UPDATED`.
+- HT-12R tracked V126 prerequisite sync: **TRACKED CANDIDATE IMPLEMENTED ON EXACT MAIN
+  `a648e75179975c97daa4b3dae03070e6476d8a9a` / LOCAL FIXTURE VALIDATION, INDEPENDENT REVIEW,
+  FEATURE-BRANCH COMMIT AND EXACT GREEN ACTIONS REQUIRED / NO MAIN INTEGRATION OR STAGING ACCESS /
+  GATE A NOT STARTED**. R1-R5 remain rejected history; the tracked command is the only future
+  prerequisite-sync authority and final release/image identity must be reselected after integration.
 - HT-12P executable V126 cutover contract: **HARDENED CANDIDATE IMPLEMENTED / LOCAL ADVERSARIAL
   VALIDATION PASSED / INDEPENDENT READ-ONLY RE-REVIEW REQUIRED BEFORE COMMIT AND PUSH / EXACT GREEN
   FEATURE-BRANCH ACTIONS REQUIRED AFTER PUSH / NO REVIEW OR ACTIONS PASS CLAIMED / NO EXECUTION GATE

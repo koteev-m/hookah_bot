@@ -1,20 +1,64 @@
 # PostgreSQL V126 Staging Cutover Contract
 
-Status: **HT-12P hardened executable candidate / local adversarial validation passed / independent
-read-only re-review required before commit and push / exact green feature-branch Actions required
-after push / no cutover started**.
+Status: **HT-12R tracked pre-Gate-A prerequisite-sync candidate / exact main baseline verified /
+local fixture validation, independent review and exact green feature-branch Actions required / no
+staging access or cutover started**.
 
 This document is the single policy and state-machine authority for the PostgreSQL V126 staging
-cutover. Executable command authority is only:
+cutover. Tracked executable authority is divided without overlap:
 
+- `scripts/v126-staging-prerequisite-sync.sh` is the only pre-Gate-A prerequisite-sync command;
+- `scripts/test-v126-staging-prerequisite-sync.sh` is its local-only static/fixture authority;
 - `scripts/v126-cutover.sh` for run initialization, authorization, one-stage execution, status and
   bounded recovery;
 - `scripts/test-v126-cutover.sh` for static and fixture validation of that command authority.
 
 Other product, QA, deployment and migration documents may summarize this contract and link to those
 files. They must not reproduce a second V126 command sequence. Neither this document nor the
-presence of the scripts authorizes staging access, backup creation, Caddy mutation, backend
+presence of the scripts or successful prerequisite sync authorizes staging access, backup creation, Caddy mutation, backend
 stop/start, maintenance activation, image transfer, Flyway/V126, manual smoke or recovery.
+
+## HT-12R tracked prerequisite-sync boundary
+
+HT-12R starts from exact main `a648e75179975c97daa4b3dae03070e6476d8a9a`, tree
+`14f2400434c8546f5aba7c4bcc94fd20622625d1`, parent
+`15a996575dcb863d7f4fe2f8110d3d56399fa354`, and successful main CI run `33658844231` with
+`12/12` successful jobs. A different fresh `origin/main` stops as
+`MAIN_BASE_DIVERGED_BEFORE_HT12R`.
+
+The tracked prerequisite command owns one ordered path: exact self/release identity, release-object
+selection, read-only V125/Flyway/Caddy/runtime baseline, restricted run evidence, exact rollback
+capture, proof that the admission guard was absent, four atomic file synchronizations, 40 named
+independently checkpointed post-sync checks, exact post-sync `125:1:0:0` Flyway proof and canonical
+success. It may synchronize only the release Compose file, maintenance guard, create-only admission
+guard and the three maintenance-`OFF` keys while preserving all other `.env` bytes. It never creates
+a backup or rehearsal resource, changes Caddy, creates the drain marker, recreates/restarts/starts a
+container, loads an image, enables `V126_SMOKE`, executes Flyway, writes product data or enters Gate
+A. Every first failure is persisted before at most one rollback; a rollback restores exact bytes and
+metadata, durably unlinks the create-only admission guard with parent-directory `fsync`, verifies
+the complete V125 baseline and returns the original nonzero status. Rollback begins only after the
+canonical first-failure record matches the run/source/original status, and it distinguishes proven
+no-write, proven-write and indeterminate evidence instead of treating evidence errors as no writes.
+The controller transports every remote argv as one shell-quoted SSH command, clears the remote
+environment, applies a bounded command timeout and serializes post-allocation actions with one
+restricted per-run lock. On SIGINT/SIGTERM it terminates and waits for the active local process
+group; rollback cannot acquire the remote lock until any prior remote mutation has quiesced.
+
+HT-13 R1-R5 temporary orchestration is rejected historical evidence and cannot be a runtime
+dependency, receipt or authorization. No R6, temporary dispatcher or external dispatcher is
+permitted. Caddy `2.6.2` and `v2.6.2` are safely parsed as the same exact semantic version with only
+an optional lowercase `v`; different, substring, malformed and ambiguous output fails. The exact
+active Caddyfile hash and remaining Caddy/runtime checks are not weakened.
+Health/version response, read-only database, poller-conflict log, TLS-1.3 and UDP/443 probe
+execution failures are fatal in both the prewrite baseline and their separately checkpointed
+post-sync checks, even if a failing producer emitted exact-looking output first. TLS 1.3 is proved
+unavailable only by an explicit server protocol-version rejection; a missing client capability or
+other probe error is not evidence of the required baseline.
+
+Successful prerequisite sync only makes the tracked release execution surface eligible for a later
+separately authorized Gate-A baseline. After HT-12R main integration, the exact release SHA and V126
+image tag/ID must be selected and proved anew; no rejected HT-13 package, authorization string or
+old candidate image identity may be reused.
 
 ## HT-12P baseline and current stop
 
@@ -136,9 +180,9 @@ action revalidates the proof, current source/input files, modes, owners and the 
 baseline, `V126_SMOKE` or maintenance-`OFF` environment hash before Compose or a database client may
 run. The unique running baseline V125 container must also match all eight PRODUCT/OFF, empty-list
 and long-polling values in the exact baseline `.env`; a stale container is a STOP. Preparing that
-exact release execution surface is a later HT-13 prerequisite outside the
-sequencer: baseline verification fails closed if it is absent and never uploads, repairs or silently
-selects another copy.
+exact release execution surface is the separate tracked HT-12R prerequisite outside the sequencer.
+The sequencer still fails closed if it is absent and never uploads, repairs or silently selects
+another copy; successful prerequisite sync does not authorize Gate A.
 
 Before a stage performs any remote or exposure-changing action, the sequencer writes a canonical
 mode-0400 intent bound to the run, release, script, stage, exact predecessor receipt hash and exact

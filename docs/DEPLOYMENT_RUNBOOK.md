@@ -117,9 +117,14 @@ EXPECTED_BACKEND_IMAGE_ID=sha256:<reviewed-image-id> \
 Notes:
 - Standard deploy is still documented in `docs/STAGING_DEPLOYMENT.md`.
 - The ControlMaster command is the current preferred reliability path when fresh SSH connections are unstable.
-- The V126 command authority is `scripts/v126-cutover.sh`; its policy/state-machine authority is
-  `docs/V126_STAGING_CUTOVER_CONTRACT.md`. The ordinary deploy script must not be called by a V126
-  stage or recovery path.
+- The only V126 pre-Gate-A prerequisite-sync command is
+  `scripts/v126-staging-prerequisite-sync.sh`; the separate cutover command authority is
+  `scripts/v126-cutover.sh`. Their shared policy/state-machine authority is
+  `docs/V126_STAGING_CUTOVER_CONTRACT.md`. The ordinary deploy script must not be called by either
+  path. Its rollback requires canonical status-bound failure evidence, fails closed on indeterminate
+  write evidence, and uses the tracked helper's durable parent-directory-fsynced unlink for the
+  create-only admission guard. Exact-looking health/version/database output never masks a nonzero
+  producer status, and TLS 1.3 absence requires an explicit server protocol-version rejection.
 - Docs-only commits do not require staging deploy.
 
 ## Environment / Config Inventory
@@ -290,8 +295,9 @@ PRODUCT RBAC.
 #### V126 drain, activation and recovery contract
 
 The single policy/state-machine authority is `docs/V126_STAGING_CUTOVER_CONTRACT.md`. The only
-executable command authority is `scripts/v126-cutover.sh`; its static/fixture authority is
-`scripts/test-v126-cutover.sh`. Do not reconstruct commands from historical task evidence or older
+pre-Gate-A synchronization command is `scripts/v126-staging-prerequisite-sync.sh`; the only cutover
+command is `scripts/v126-cutover.sh`. Their fixture authorities are the correspondingly named
+`scripts/test-*.sh` files. Do not reconstruct commands from historical task evidence or older
 sections below.
 
 The sequencer initializes one immutable run manifest, writes an intent before each operation,
@@ -313,9 +319,10 @@ objects and reads blob bytes with sanitized Git plumbing, so an alternate index,
 replace ref cannot redefine that authority. Later actions accept only the exact applicable baseline
 or completed maintenance/Caddy
 receipt state. A recovery may recognize an unreceipted partial transition only at its exact
-predecessor and only when the deterministic inverse reconstructs the immutable source bytes. Making
-the remote release execution surface exact is an HT-13 prerequisite; the sequencer does not upload
-or repair it.
+predecessor and only when the deterministic inverse reconstructs the immutable source bytes. Only
+the tracked prerequisite-sync command may make the remote release execution surface exact; it stops
+before Gate A and does not authorize backup, drain, restart, image operations, `V126_SMOKE` or
+Flyway/V126. The sequencer does not upload or repair the surface.
 
 Underlying PRODUCT never changes. Caddy provides transport drain but no identity authority. The
 activation order is candidate creation/validation, installation, one reload, active-config proof,
