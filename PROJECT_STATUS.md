@@ -1,8 +1,49 @@
 # Project Status
 
-Last verified: 2026-09-03.
+Last verified: 2026-09-04.
 
 ## 1. Current stage
+
+**HT-12S DETERMINISTIC BACKEND FULL-IMAGE REPRODUCIBILITY CLOSURE /
+EXACT MAIN BASE AND 12/12 MAIN ACTIONS VERIFIED /
+EXACT FILESYSTEM ROOT CAUSE PROVED AS BUILDKIT EXPORTER/TIMESTAMP CONTRACT /
+IMMUTABLE BASE PINS, EXPLICIT TIMESTAMP-REWRITING EXPORT AND FULL-IMAGE CI GUARD IMPLEMENTED /
+LOCAL FULL-IMAGE VALIDATION, INDEPENDENT REVIEW AND GREEN FEATURE-BRANCH ACTIONS REQUIRED /
+NO MAIN INTEGRATION, STAGING ACCESS OR HT-13 RESUMPTION**.
+
+Fresh required `origin/main` is exact commit
+`9547ebc0738257e60b262104cecee9c8ee1bfdfc`, tree
+`54db71be7b5983c3a6d64da14d1494e7bb6e8866`. Exact main Actions run `33834936070` is workflow
+`CI`, event `push`, branch `main`, attempt `1`, exact head SHA and `completed/success`; all `12/12`
+jobs succeeded. HT-12S runs only in a clean isolated worktree on branch
+`codex/ht-12s-deterministic-backend-image`; the original dirty main worktree remains untouched.
+
+The retained failed HT-13 images have manifests
+`sha256:e05131bbad7be60b3cd83e9e9690648bd15cfec7f7a721e8de4f1421840085b3` and
+`sha256:125d55204d197d5ceef4b291a4ab1309f62b6aea8ed163fbb3bd4b234944ea8e`, and configs
+`sha256:b6d436ac4f240d1c62294b14c46728fdcebcdab08e464dfeda8fc8e95e879901` and
+`sha256:329801345ec7052fb9d67b5d0fb570850ba3a2fdcb46de2aa240f54ef6faab0b`.
+History-to-DiffID alignment proves the first differing one-based filesystem layer is layer 8,
+`RUN groupadd -r appuser && useradd -r -g appuser appuser`. The first differing tar byte is byte 144,
+the `mtime` field of `etc`; eight account-layer paths differ only in mtime. Layers 9 and 10 contain
+equal backend and Mini App path order, types, modes, owners, link/device/PAX/xattr/whiteout metadata
+and regular-file contents, but all 100 backend entries and all six Mini App entries have build-time
+mtimes. Account-file bytes, 93 dependency JARs, both launchers, the application JAR and three Mini App
+files are identical. The exact classification is `BUILDKIT_EXPORTER_OR_TIMESTAMP_CONTRACT`.
+
+`backend/Dockerfile` pins the Node build, Temurin JDK build and Temurin JRE runtime bases by both
+reviewable tag and immutable index digest, with the exact resolved `linux/amd64` platform digest
+recorded beside each pin. Backend image builds use the explicit
+`type=docker,oci-mediatypes=true,rewrite-timestamp=true` exporter with the commit-derived
+`SOURCE_DATE_EPOCH`. `scripts/check-backend-image-reproducibility.sh` and its standard-library-only
+comparator perform two independent no-cache builds and compare the complete image, including final
+image ID. The existing Gradle archive gate remains mandatory. The Docker CI job now executes the
+comparator fixtures and the complete double-build guard, and the backend aggregate requires that
+job. The required stop after local validation, independent review, ordinary feature-branch push and
+exact green branch Actions is `HT12S_MAIN_INTEGRATION_AUTHORIZATION_REQUIRED`; HT-13 and staging
+remain unauthorized.
+
+### Preserved HT-12R preintegration evidence
 
 **HT-12R TRACKED V126 PRE-GATE-A PREREQUISITE SYNC ORCHESTRATOR /
 EXACT MAIN BASE AND 12/12 MAIN ACTIONS VERIFIED /

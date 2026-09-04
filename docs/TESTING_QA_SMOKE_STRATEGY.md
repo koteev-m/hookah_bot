@@ -57,7 +57,7 @@ evidence; it is not the current slice and is not marked staging-complete.
 
 Quality gates must match the blast radius of the change. Do not claim a feature is release-ready from local-only checks when it changes backend runtime, Mini App behavior, Telegram bot, staff-chat, billing/security or migrations. Do not run staging deploy for docs-only changes.
 
-### HT-12Q Gradle archive and image reproducibility quality gate
+### HT-12S Gradle archive and full-image reproducibility quality gate
 
 The Docker backend build consumes `:backend:app:installDist`. Its current task graph has exactly one
 archive-producing dependency, `:backend:app:jar`. Every `AbstractArchiveTask` in that application
@@ -88,14 +88,44 @@ directory for comparison. It must not normalize, touch, repack, replace or reuse
 must remove only that run-created evidence directory and must print only sanitized relative paths,
 labels and hashes. Dependency caches are permitted; Gradle task-output build-cache reuse is not.
 
-The regular CI gate deliberately proves archive and distribution reproducibility rather than doing
-two full Docker builds per commit. Before a release candidate is committed, and again from the exact
-final main SHA after separately authorized integration, two independent cache-free Docker builds
-remain mandatory. They must use separate clean builders, `linux/amd64`, `--pull`, `--no-cache`,
-`--provenance=false`, identical build arguments and the same deterministic `SOURCE_DATE_EPOCH` when
-BuildKit timestamp rewriting is part of the proof. The application JAR, application-layer digest and
-final image ID must all match. If the JAR matches but the image does not, identify the first differing
-config field or layer and stop; do not silently pin bases or add another normalization mechanism.
+The HT-13 failure proved that `SOURCE_DATE_EPOCH` alone fixed the image/config creation time but did
+not rewrite filesystem mtimes. The first differing filesystem layer was one-based layer 8,
+`RUN groupadd -r appuser && useradd -r -g appuser appuser`: the first differing byte was the `mtime`
+field in the `etc` tar header. Eight account-layer entries differed only in mtime. All 100 backend
+`installDist` entries and all six Mini App entries in the next two layers also differed only in
+mtime; their path order, types, modes, owners, sizes, link/device/PAX/xattr/whiteout metadata and
+regular-file content hashes were equal. The exact internal classification is
+`BUILDKIT_EXPORTER_OR_TIMESTAMP_CONTRACT`.
+
+Every backend image build must use the immutable base indexes and reviewed `linux/amd64` platform
+manifests recorded beside the three `FROM` instructions in `backend/Dockerfile`. Release and CI
+builds use the explicit BuildKit exporter contract
+`type=docker,oci-mediatypes=true,rewrite-timestamp=true`, `SOURCE_DATE_EPOCH` derived from the exact
+Git commit, `--provenance=false`, `--pull`, and the exact revision/source labels. The separate OCI
+output made by the guard is restricted comparison evidence from the same build, not a registry or
+staging export.
+
+Local validation from a clean exact Git worktree and the mandatory Docker CI job run:
+
+```bash
+bash -n scripts/check-backend-image-reproducibility.sh
+PYTHONPYCACHEPREFIX="${TMPDIR:-/tmp}/ht12s-pycache" \
+  python3 -m py_compile scripts/backend-image-reproducibility.py
+bash scripts/check-backend-image-reproducibility.sh --self-test
+bash scripts/check-backend-image-reproducibility.sh
+```
+
+The full-image guard creates two unique Docker-container builders with no shared cache, builds
+`linux/amd64` twice, and fails unless the application JAR, complete `installDist` and Mini App trees,
+generated launchers, dependency JARs, complete ordered history, history-to-DiffID mapping, every
+rootfs DiffID, every compressed layer descriptor, config digest, manifest digest, loaded final image
+ID, OCI labels and complete per-layer inventory are exactly equal. It also rejects an unpinned or
+unexpected base index/platform manifest and a root runtime user. Its fixture harness independently
+mutates content, tar metadata, compression bytes, config, history, labels, manifest and final image
+identity so the comparator cannot silently false-PASS. Builders, tags and temporary evidence are
+owned by a unique run namespace and removed by default; setting `PRESERVE_REPRO_EVIDENCE=true`
+preserves the mode-restricted local evidence directory, including useful partial evidence after a
+failure. The guard never contacts staging or a release registry.
 
 ### Permanent public-pilot Telegram admission quality gate
 

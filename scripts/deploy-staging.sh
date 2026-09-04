@@ -11,6 +11,7 @@ STAGING_PUBLIC_URL="${STAGING_PUBLIC_URL:-https://${STAGING_DOMAIN}}"
 BACKEND_IMAGE="${BACKEND_IMAGE:-}"
 DOCKER_PLATFORM="${DOCKER_PLATFORM:-linux/amd64}"
 GRADLE_JVM_ARGS="${GRADLE_JVM_ARGS:--Xmx2048m -XX:MaxMetaspaceSize=768m}"
+BACKEND_IMAGE_SOURCE="https://github.com/koteev-m/hookah_bot"
 RUN_PUBLIC_CHECKS="${RUN_PUBLIC_CHECKS:-true}"
 HEALTHCHECK_ATTEMPTS="${HEALTHCHECK_ATTEMPTS:-20}"
 HEALTHCHECK_SLEEP_SECONDS="${HEALTHCHECK_SLEEP_SECONDS:-3}"
@@ -71,6 +72,7 @@ require_cmd() {
 }
 
 require_cmd docker
+require_cmd git
 require_cmd ssh
 require_cmd rsync
 require_cmd gzip
@@ -82,6 +84,18 @@ if [[ ! "${BACKEND_IMAGE}" =~ :[0-9a-f]{40}$ ]]; then
 fi
 if [[ ! "${EXPECTED_BACKEND_IMAGE_ID}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
   echo "EXPECTED_BACKEND_IMAGE_ID is required and must be a canonical sha256 image ID" >&2
+  exit 2
+fi
+
+release_sha="${BACKEND_IMAGE##*:}"
+if [[ "$(git -C "${REPO_ROOT}" rev-parse --verify HEAD^{commit})" != "${release_sha}" ||
+  -n "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=all)" ]]; then
+  echo "Backend image builds require the clean exact Git worktree named by BACKEND_IMAGE" >&2
+  exit 2
+fi
+source_date_epoch="$(git -C "${REPO_ROOT}" show -s --format=%ct "${release_sha}")"
+if [[ ! "${source_date_epoch}" =~ ^[0-9]+$ ]]; then
+  echo "Cannot derive SOURCE_DATE_EPOCH from BACKEND_IMAGE commit" >&2
   exit 2
 fi
 
@@ -126,11 +140,16 @@ bash scripts/validate-staging-admission.sh --self-test docker-compose.yml
 echo "==> Building backend image locally: ${BACKEND_IMAGE} (${DOCKER_PLATFORM})"
 docker buildx build \
   --platform "${DOCKER_PLATFORM}" \
+  --pull \
+  --no-cache \
   --provenance=false \
-  --load \
+  --output "type=docker,oci-mediatypes=true,rewrite-timestamp=true" \
   --tag "${BACKEND_IMAGE}" \
   --build-arg "VITE_BACKEND_PUBLIC_URL=${STAGING_PUBLIC_URL}" \
   --build-arg "GRADLE_JVM_ARGS=${GRADLE_JVM_ARGS}" \
+  --build-arg "SOURCE_DATE_EPOCH=${source_date_epoch}" \
+  --label "org.opencontainers.image.revision=${release_sha}" \
+  --label "org.opencontainers.image.source=${BACKEND_IMAGE_SOURCE}" \
   -f backend/Dockerfile \
   .
 

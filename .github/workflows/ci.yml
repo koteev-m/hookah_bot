@@ -1050,6 +1050,7 @@ jobs:
       - backend-ktlint
       - backend-compile
       - backend-archive-reproducibility
+      - docker
       - backend-release-critical-routes
       - backend-venue-booking-rbac
       - backend-telegram-lightweight
@@ -1060,6 +1061,7 @@ jobs:
           echo "backend-ktlint result: ${{ needs.backend-ktlint.result }}"
           echo "backend-compile result: ${{ needs.backend-compile.result }}"
           echo "backend-archive-reproducibility result: ${{ needs.backend-archive-reproducibility.result }}"
+          echo "docker result: ${{ needs.docker.result }}"
           echo "backend-release-critical-routes result: ${{ needs.backend-release-critical-routes.result }}"
           echo "backend-venue-booking-rbac result: ${{ needs.backend-venue-booking-rbac.result }}"
           echo "backend-telegram-lightweight result: ${{ needs.backend-telegram-lightweight.result }}"
@@ -1068,6 +1070,7 @@ jobs:
           if [[ "${{ needs.backend-ktlint.result }}" != "success" || \
                 "${{ needs.backend-compile.result }}" != "success" || \
                 "${{ needs.backend-archive-reproducibility.result }}" != "success" || \
+                "${{ needs.docker.result }}" != "success" || \
                 "${{ needs.backend-release-critical-routes.result }}" != "success" || \
                 "${{ needs.backend-venue-booking-rbac.result }}" != "success" || \
                 "${{ needs.backend-telegram-lightweight.result }}" != "success" || \
@@ -1428,7 +1431,7 @@ jobs:
 
   docker:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     strategy:
       fail-fast: true
       matrix:
@@ -1436,5 +1439,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - name: Build backend image
-        run: docker build -f backend/Dockerfile .
+      - name: Validate full-image reproducibility guard
+        run: |
+          bash -n scripts/check-backend-image-reproducibility.sh
+          PYTHONPYCACHEPREFIX="${RUNNER_TEMP}/ht12s-pycache" \
+            python3 -m py_compile scripts/backend-image-reproducibility.py
+          bash scripts/check-backend-image-reproducibility.sh --self-test
+      - name: Reproduce complete backend image twice
+        run: bash scripts/check-backend-image-reproducibility.sh

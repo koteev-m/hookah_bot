@@ -426,9 +426,13 @@ execution. Each V126 startup uses create-only
 start, and then proves one total/running Compose backend with the exact V126 image and long-polling
 configuration, zero global live V125 containers and zero old-image backend in the staging project.
 
-On Mac Apple Silicon the script uses
-`docker buildx build --platform linux/amd64 --provenance=false --load` so the uploaded image matches
-a typical x86_64/amd64 VPS and has a stable preupload identity for the expected-ID gate.
+On Mac Apple Silicon the script uses `docker buildx build --platform linux/amd64`, disables
+provenance export, requires `--pull` and `--no-cache`, derives `SOURCE_DATE_EPOCH` from the exact
+clean `BACKEND_IMAGE` commit, and uses the explicit
+`type=docker,oci-mediatypes=true,rewrite-timestamp=true` exporter. The three
+human-readable base tags are pinned to the immutable indexes and reviewed `linux/amd64` manifests
+recorded in `backend/Dockerfile`. This makes the uploaded image match a typical x86_64/amd64 VPS and
+keeps a stable preupload identity for the expected-ID gate.
 
 The backend Dockerfile uses BuildKit cache mounts for Gradle wrapper and dependency caches. If Docker build fails while downloading the Gradle distribution or Maven dependencies with a transient `SocketTimeoutException`, rerun the same deploy command after confirming it is a network timeout, not a Kotlin compile/test failure. The wrapper network timeout is intentionally higher than the default, and a successful retry should reuse the warmed Docker/Gradle cache.
 
