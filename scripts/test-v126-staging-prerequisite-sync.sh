@@ -33,6 +33,12 @@ fail() {
   exit 1
 }
 
+unexpected_error() {
+  local command_status="$1" source_line="$2"
+  printf 'HT-12R fixture unexpected command failure at line %s (status %s)\n' "${source_line}" "${command_status}" >&2
+}
+trap 'unexpected_error "$?" "${LINENO}"' ERR
+
 pass() {
   passes=$((passes + 1))
 }
@@ -580,12 +586,20 @@ root="$(make_case success)"
 original_env="$(hash_file "${root}/remote/staging/.env")"
 run_case "${root}" 0
 run_id="$(< "${root}/run-id")"
-[[ "$(grep -c '"state":"PASSED"' "${root}/remote/backups/${run_id}/checkpoints/phases"/*.passed.json)" == 48 ]]
-[[ -f "${root}/remote/backups/${run_id}/checkpoints/phases/R08-CANONICAL_SUCCESS.passed.json" ]]
-[[ ! -e "${root}/remote/backups/${run_id}/rollback.started.json" ]]
-grep -q 'GATE_A=NOT_STARTED' "${root}/stdout"
-[[ "$(awk -F= '$1~/^STAGING_MAINTENANCE_/ {print}' "${root}/remote/staging/.env" | tr '\n' ':')" == 'STAGING_MAINTENANCE_MODE=OFF:STAGING_MAINTENANCE_ALLOWED_USER_IDS=:STAGING_MAINTENANCE_ALLOWED_CHAT_IDS=:' ]]
-[[ "${original_env}" != "$(hash_file "${root}/remote/staging/.env")" ]]
+passed_file_paths="$(find "${root}/remote/backups/${run_id}/checkpoints/phases" -type f -name '*.passed.json' -print)" ||
+  fail 'success fixture PASSED-file inventory failed'
+passed_file_count="$(printf '%s\n' "${passed_file_paths}" | awk 'NF {count++} END {print count+0}')"
+[[ "${passed_file_count}" == 48 ]] || fail "success fixture has ${passed_file_count}/48 PASSED files"
+while IFS= read -r passed_file; do
+  [[ -n "${passed_file}" ]] || continue
+  grep -q '"state":"PASSED"' "${passed_file}" || fail "success fixture state missing from $(basename "${passed_file}")"
+done <<< "${passed_file_paths}"
+[[ -f "${root}/remote/backups/${run_id}/checkpoints/phases/R08-CANONICAL_SUCCESS.passed.json" ]] || fail 'canonical success checkpoint missing'
+[[ ! -e "${root}/remote/backups/${run_id}/rollback.started.json" ]] || fail 'success fixture unexpectedly rolled back'
+grep -q 'GATE_A=NOT_STARTED' "${root}/stdout" || fail 'success fixture did not stop before Gate A'
+[[ "$(awk -F= '$1~/^STAGING_MAINTENANCE_/ {print}' "${root}/remote/staging/.env" | tr '\n' ':')" == 'STAGING_MAINTENANCE_MODE=OFF:STAGING_MAINTENANCE_ALLOWED_USER_IDS=:STAGING_MAINTENANCE_ALLOWED_CHAT_IDS=:' ]] ||
+  fail 'success fixture maintenance environment suffix mismatch'
+[[ "${original_env}" != "$(hash_file "${root}/remote/staging/.env")" ]] || fail 'success fixture environment hash did not change'
 pre_env_path="${root}/remote/backups/${run_id}/pre-sync/.env"
 live_env_path="${root}/remote/staging/.env"
 pre_env_size="$(wc -c < "${pre_env_path}" | tr -d ' ')"
@@ -746,10 +760,11 @@ fixture_log_paths="$(find "${fixture_root}" -type f \( -name stderr -o -name moc
   fail 'fixture external-command file inventory failed'
 while IFS= read -r fixture_log; do
   [[ -n "${fixture_log}" ]] || continue
-  set +e
-  fixture_matches="$(grep -EnH 'forbidden external command escaped fixture|forbidden mock docker mutation' "${fixture_log}")"
-  grep_exit=$?
-  set -e
+  if fixture_matches="$(grep -EnH 'forbidden external command escaped fixture|forbidden mock docker mutation' "${fixture_log}")"; then
+    grep_exit=0
+  else
+    grep_exit=$?
+  fi
   case "${grep_exit}" in
     0) escaped_commands="${escaped_commands}${escaped_commands:+$'\n'}${fixture_matches}" ;;
     1) ;;
