@@ -12,7 +12,7 @@ readonly RELEASE_SHA='ecb09601975678a41d89e5c824cc7812c7876481'
 readonly RELEASE_TREE='8c97996e317f0182b4871d2a2537a732d4830f64'
 readonly RELEASE_PARENTS='9f51ebbd2dae0702b4b2f6333c1b42fc94cd1fc1,d9c656b1c5feb757b79558209f130c08cba81cf5'
 readonly MAIN_ACTIONS_RUN_ID='33536142005'
-readonly V126_IMAGE_ID='sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a'
+readonly V126_IMAGE_ID='sha256:352b6087716da18bdad422d5facf87df6b20ff45dec42a4c3559dc0e84c87772'
 readonly V125_SOURCE_SHA='f577934691a1a7a79ba327c54e2055425142b7be'
 readonly SECRET_CANARY='HT12P_SECRET_CANARY_8f91e9cd2eaa4a6596e4'
 readonly FIXTURE_BASELINE_CADDY_SHA='7777777777777777777777777777777777777777777777777777777777777777'
@@ -955,13 +955,30 @@ docker() {
   if [[ "${1:-}" == save && "${2:-}" == --output && "${4:-}" == "${V126_IMAGE_TAG}" ]]; then
     python3 - "$3" "${V126_IMAGE_TAG}" "${V126_IMAGE_ID#sha256:}" <<'PY'
 import io
+import hashlib
 import json
 import tarfile
 import sys
 
 target, tag, digest = sys.argv[1:]
-config = b"{}"
 layer = b"fixture-layer"
+config = json.dumps({
+    "architecture": "amd64",
+    "os": "linux",
+    "config": {
+        "User": "appuser",
+        "Labels": {
+            "org.opencontainers.image.revision": tag.rsplit(":", 1)[-1],
+            "org.opencontainers.image.source": "https://github.com/koteev-m/hookah_bot",
+        },
+    },
+    "rootfs": {
+        "type": "layers",
+        "diff_ids": ["sha256:" + hashlib.sha256(layer).hexdigest()],
+    },
+}, sort_keys=True, separators=(",", ":")).encode()
+if hashlib.sha256(config).hexdigest() != digest:
+    raise SystemExit("stage fixture config digest constant is stale")
 manifest = json.dumps([{
     "Config": digest + ".json",
     "RepoTags": [tag],
@@ -2488,13 +2505,32 @@ make_saved_image_archive_fixture() {
   python3 - "${target}" "${mode}" "hookah-v126:${RELEASE_SHA}" \
     "${V126_IMAGE_ID#sha256:}" <<'PY'
 import io
+import hashlib
 import json
 import tarfile
 import sys
 
 target, mode, expected_tag, expected_digest = sys.argv[1:]
 config_name = expected_digest + ".json"
-config_bytes = b"{}"
+layer_bytes = b"fixture-layer"
+config = {
+    "architecture": "amd64",
+    "os": "linux",
+    "config": {
+        "User": "appuser",
+        "Labels": {
+            "org.opencontainers.image.revision": expected_tag.rsplit(":", 1)[-1],
+            "org.opencontainers.image.source": "https://github.com/koteev-m/hookah_bot",
+        },
+    },
+    "rootfs": {
+        "type": "layers",
+        "diff_ids": ["sha256:" + hashlib.sha256(layer_bytes).hexdigest()],
+    },
+}
+config_bytes = json.dumps(config, sort_keys=True, separators=(",", ":")).encode()
+if hashlib.sha256(config_bytes).hexdigest() != expected_digest:
+    raise SystemExit("saved-image fixture config digest constant is stale")
 layer_name = "fixture-layer/layer.tar"
 directories = ["fixture-layer"]
 repo_tag = expected_tag
@@ -2530,7 +2566,7 @@ manifest_images = [image, dict(image)] if mode == "multiple-images" else [image]
 manifest = json.dumps(manifest_images, separators=(",", ":")).encode()
 members = [("manifest.json", manifest), (config_name, config_bytes)]
 if mode != "missing-member":
-    members.append((layer_name, b"fixture-layer"))
+    members.append((layer_name, layer_bytes))
 if mode == "duplicate-member":
     members.append(("manifest.json", manifest))
 with tarfile.open(target, "w") as archive:
@@ -2697,8 +2733,8 @@ test_saved_image_archive_binding() {
     [[ ! -e "${upload_capture}" ]] || fail "${mode} saved-image archive reached the upload FD"
   done <<'EOF'
 wrong-tag|tag association mismatch
-wrong-config-name|config name differs from expected image ID
-wrong-config-bytes|config digest differs from expected image ID
+wrong-config-name|config name differs from its content digest
+wrong-config-bytes|config name differs from its content digest
 duplicate-member|duplicate members
 missing-member|layer is missing or non-regular
 multiple-images|exactly one image manifest

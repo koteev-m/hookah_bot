@@ -4,6 +4,54 @@ Last verified: 2026-09-04.
 
 ## 1. Current stage
 
+**HT-12T CANONICAL DOCKER-SAVE RELEASE ARTIFACT EXPORT /
+EXACT MAIN BASE, TREE, PARENT AND 12/12 MAIN ACTIONS VERIFIED /
+TERMINAL HT-13 ARCHIVE FAILURE CLASSIFIED AS `ARCHIVE_VALIDATOR_CONTRACT_MISMATCH` /
+SAME-RUN ATOMIC EXPORT, STRICT ARCHIVE VERIFIER, EXACT LOAD PROOF AND CI ENFORCEMENT IMPLEMENTED /
+LOCAL STATIC/FIXTURE/HARNESS VALIDATION AND INDEPENDENT NON-BLOCKING REVIEW PASSED /
+FROZEN-CANDIDATE DOUBLE BUILD/ARCHIVE/LOAD AND GREEN FEATURE-BRANCH ACTIONS REQUIRED /
+NO MAIN INTEGRATION, STAGING ACCESS OR HT-13 RESUMPTION**.
+
+Fresh `origin/main` is exact commit `364e04640dbd53b79084faba61362c02f1ba6301`, tree
+`20b9a6cf7acd3cfed5c9ae18169bc07a8fb7b5dc`, direct parent
+`9547ebc0738257e60b262104cecee9c8ee1bfdfc`. Main Actions run `33894927720` is workflow `CI`,
+event `push`, branch `main`, attempt `1`, exact head SHA and `completed/success`; all `12/12` jobs
+succeeded, including the Docker backend comparator fixtures and two independent complete no-cache
+builds. HT-12T runs only in the clean isolated worktree on branch
+`codex/ht-12t-canonical-docker-save-artifact`; the original dirty main worktree and `scripts/dev/`
+remain untouched.
+
+The retained latest HT-13 Phase-0 evidence contains two equal complete images. The proven
+daemon-facing final image/OCI manifest ID is
+`sha256:a8ef37c18a2e6054ba8c1b010cb94eeab20d5cbe5774516ed25e9f8c8150cd0c`, while the exact config
+digest is `sha256:024446fe04b9e81fe170f9885bcff6fafd971f19b670bf4633bdb0edfcf785f0`.
+The retained Docker-save archive has the correct full-SHA RepoTag, config bytes, ten layers and OCI
+manifest linkage, but the previous sequencer verifier compared its config path to the distinct
+containerd manifest ID and stopped at `saved image archive config name differs from expected image
+ID`. The exact classification is `ARCHIVE_VALIDATOR_CONTRACT_MISMATCH`; Docker load was never the
+failed boundary.
+
+The same double-build guard now exports one canonical mode-0600 Docker-save archive from proven
+image A before cleanup. It fixes the archive SHA-256 before load, validates tag/config/final-ID,
+platform, runtime user, labels, compressed layers and ordered DiffIDs, removes the run-owned image
+records, proves the tag/ID absent, loads the exact archive, re-inspects the complete identity and
+publishes only through an explicit new absolute path using a no-replace atomic link. Normal CI
+validates and removes the archive. The standard-library verifier has a 29-case archive corpus plus
+publication and cleanup fixtures; those same archive cases require exact accept/reject equivalence
+with the sequencer's embedded verifier. No third build, OCI post-cleanup reconstruction, registry
+publish or staging action exists.
+
+The independent read-only build/release review found no open P0, P1 or blocking P2. Remaining gates
+are a cohesive frozen-candidate commit, complete two-build validation including one exact candidate
+archive and load proof, ordinary feature-branch push and exact green branch Actions with the Docker
+archive gate executed. Main integration requires separate exact authorization. The required stop is
+`HT12T_MAIN_INTEGRATION_AUTHORIZATION_REQUIRED`.
+
+### Preserved HT-12S preintegration evidence
+
+The historical HT-12S snapshot below is retained as reproducibility evidence. Its then-pending
+branch/integration wording is superseded by the exact HT-12T main base and green main run above.
+
 **HT-12S DETERMINISTIC BACKEND FULL-IMAGE REPRODUCIBILITY CLOSURE /
 EXACT MAIN BASE AND 12/12 MAIN ACTIONS VERIFIED /
 EXACT FILESYSTEM ROOT CAUSE PROVED AS BUILDKIT EXPORTER/TIMESTAMP CONTRACT /

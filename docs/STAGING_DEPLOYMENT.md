@@ -426,6 +426,17 @@ execution. Each V126 startup uses create-only
 start, and then proves one total/running Compose backend with the exact V126 image and long-polling
 configuration, zero global live V125 containers and zero old-image backend in the staging project.
 
+HT-12T release selection extends the mandatory two-build guard with the canonical Docker-save
+boundary. After complete image equality, one proven image receives the exact full-SHA release tag;
+only that tag is saved, verified, unloaded, loaded from the fixed archive bytes, re-inspected and
+then atomically published when an explicit new absolute output path is supplied. Classic archives
+bind the config digest directly as image ID. Docker Desktop's containerd archive form instead binds
+the daemon-facing OCI manifest ID to its separately self-hashed config and every ordered layer;
+both forms require exact `linux/amd64`, `appuser`, revision/source labels and rootfs DiffIDs. The
+shared corpus proves the release verifier and the sequencer's embedded verifier have the same
+accept/reject behavior. This is local deployment evidence only and does not itself authorize
+transfer, staging access or any V126 state.
+
 On Mac Apple Silicon the script uses `docker buildx build --platform linux/amd64`, disables
 provenance export, requires `--pull` and `--no-cache`, derives `SOURCE_DATE_EPOCH` from the exact
 clean `BACKEND_IMAGE` commit, and uses the explicit

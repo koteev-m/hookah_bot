@@ -1096,6 +1096,7 @@ jobs:
           bash -n scripts/deploy-staging-controlmaster.sh
           bash -n scripts/check-staging-maintenance-config.sh
           bash -n scripts/check-staging-image-identity.sh
+          bash -n scripts/backend-image-release-artifact.sh
           bash -n scripts/v126-cutover.sh
           bash -n scripts/test-v126-cutover.sh
           bash -n scripts/v126-staging-prerequisite-sync.sh
@@ -1439,11 +1440,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - name: Validate full-image reproducibility guard
+      - name: Validate full-image and Docker-save reproducibility guards
         run: |
           bash -n scripts/check-backend-image-reproducibility.sh
+          bash -n scripts/backend-image-release-artifact.sh
           PYTHONPYCACHEPREFIX="${RUNNER_TEMP}/ht12s-pycache" \
-            python3 -m py_compile scripts/backend-image-reproducibility.py
+            python3 -m py_compile \
+              scripts/backend-image-reproducibility.py \
+              scripts/docker-save-archive.py
           bash scripts/check-backend-image-reproducibility.sh --self-test
-      - name: Reproduce complete backend image twice
+      - name: Reproduce image twice and verify canonical Docker-save archive
         run: bash scripts/check-backend-image-reproducibility.sh

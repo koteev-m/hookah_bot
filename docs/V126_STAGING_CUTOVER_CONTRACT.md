@@ -316,11 +316,16 @@ default discovery and automatic override merging are not part of the execution s
 
 State 10 verifies the local tag and ID, exports the image and captures it into a mode-0400 unlinked
 snapshot. The same read-only file descriptor is parsed without extraction, hashed and transferred;
-there is no later pathname reopen. The archive must contain only safe regular/directory members, one
-exact image/tag association, a config member whose name and actual SHA-256 both equal the expected
-image ID, and a unique regular layer inventory. A local mismatch therefore stops before the first
-remote action. The remote side captures the uploaded file into its own mode-0400 unlinked snapshot,
-re-parses and hashes that exact descriptor, and feeds the same rewound descriptor to `docker load`.
+there is no later pathname reopen. The archive must contain only safe regular/directory members,
+one exact image/tag association, one self-hashed config, exact `linux/amd64`, `appuser`, revision and
+source labels, and a nonempty unique layer inventory whose decompressed bytes match every ordered
+rootfs DiffID. A classic Docker-save archive must bind the config name and bytes directly to the
+expected image ID. A containerd/OCI-layout Docker-save archive may have a distinct config digest
+only when its single exact OCI index and content-hashed manifest bind the expected daemon-facing
+image ID to that config and the exact ordered layer descriptors. A local mismatch therefore stops
+before the first remote action. The remote side captures the uploaded file into its own mode-0400
+unlinked snapshot, re-parses and hashes that exact descriptor, and feeds the same rewound descriptor
+to `docker load`.
 The separately retained run archive is rehashed before and after load. A transfer-byte mismatch stops
 before Docker mutation, while loaded image ID and Compose resolution must still match exactly. The
 portable transfer uses the host's Bash-3.2-compatible fixed descriptor and supported rsync mode

@@ -1,6 +1,6 @@
 # Testing / QA Smoke Strategy
 
-Дата актуализации: 2026-09-03.
+Дата актуализации: 2026-09-04.
 
 Статус: **current product reference / UPDATED**. This document is the canonical QA/smoke strategy for the Telegram bot + Mini App platform. It consolidates local validation, GitHub Actions expectations, area-specific smoke suites, staging policy, failure reporting and Codex handoff rules. Deployment and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
 
@@ -20,11 +20,17 @@ STAGING-SMOKE-PASSED** for release HEAD `e35def99ea8429462e5fdaaeee914f57da72e77
 green Actions, staging deploy, consolidated smoke and cleanup. At that historical closure, local
 GitHub CLI authentication was invalid, so its Actions result was recorded as user-confirmed evidence.
 
-Current build/release QA slice: **HT-12R / TRACKED V126 PRE-GATE-A PREREQUISITE SYNC /
-EXACT MAIN AND 12/12 MAIN ACTIONS VERIFIED / TRACKED ORCHESTRATOR, HELPER, 40-CHECK MAP AND
-LOCAL-ONLY MOCKED HARNESS IMPLEMENTED / COMPLETE LOCAL VALIDATION PASSED / INDEPENDENT READ-ONLY
-REVIEW AND EXACT GREEN FEATURE-BRANCH ACTIONS ARE MANDATORY BEFORE INTEGRATION / NO MAIN INTEGRATION, STAGING ACCESS OR
-CUTOVER AUTHORIZED**. The prerequisite command must stop with `GATE_A=NOT_STARTED`.
+Current build/release QA slice: **HT-12T / CANONICAL DOCKER-SAVE RELEASE ARTIFACT EXPORT /
+EXACT MAIN AND 12/12 MAIN ACTIONS VERIFIED / RETAINED HT-13 ARCHIVE FAILURE CLASSIFIED AS
+`ARCHIVE_VALIDATOR_CONTRACT_MISMATCH` / ATOMIC EXPORT, STRICT ARCHIVE VERIFICATION AND NO-PREEXISTING-
+IMAGE LOAD PROOF IMPLEMENTED / COMPLETE LOCAL VALIDATION, INDEPENDENT READ-ONLY REVIEW AND EXACT GREEN
+FEATURE-BRANCH ACTIONS ARE MANDATORY BEFORE INTEGRATION / NO MAIN INTEGRATION, STAGING ACCESS OR
+CUTOVER AUTHORIZED**. The final task stop is `HT12T_MAIN_INTEGRATION_AUTHORIZATION_REQUIRED`.
+
+Preserved preceding build/release QA slice: **HT-12R / TRACKED V126 PRE-GATE-A PREREQUISITE SYNC /
+TRACKED ORCHESTRATOR, HELPER, 40-CHECK MAP AND LOCAL-ONLY MOCKED HARNESS IMPLEMENTED / COMPLETE LOCAL
+VALIDATION AND MAIN INTEGRATION CLOSED / NO CURRENT STAGING OR CUTOVER AUTHORIZATION**. The
+prerequisite command must stop with `GATE_A=NOT_STARTED`.
 
 Preserved preceding build QA slice: **HT-12Q / REPRODUCIBLE GRADLE ARCHIVE AND DETERMINISTIC V126 IMAGE /
 PRE-FIX DEFECT REPRODUCED / MINIMAL BACKEND-APP ARCHIVE CONFIGURATION IMPLEMENTED /
@@ -110,7 +116,10 @@ Local validation from a clean exact Git worktree and the mandatory Docker CI job
 ```bash
 bash -n scripts/check-backend-image-reproducibility.sh
 PYTHONPYCACHEPREFIX="${TMPDIR:-/tmp}/ht12s-pycache" \
-  python3 -m py_compile scripts/backend-image-reproducibility.py
+  python3 -m py_compile \
+    scripts/backend-image-reproducibility.py \
+    scripts/docker-save-archive.py
+bash -n scripts/backend-image-release-artifact.sh
 bash scripts/check-backend-image-reproducibility.sh --self-test
 bash scripts/check-backend-image-reproducibility.sh
 ```
@@ -126,6 +135,44 @@ identity so the comparator cannot silently false-PASS. Builders, tags and tempor
 owned by a unique run namespace and removed by default; setting `PRESERVE_REPRO_EVIDENCE=true`
 preserves the mode-restricted local evidence directory, including useful partial evidence after a
 failure. The guard never contacts staging or a release registry.
+
+### HT-12T canonical Docker-save artifact quality gate
+
+The same double-build guard creates the deployment archive only after complete image equality; it
+never performs a third build or reconstructs the image from either OCI comparison archive. Image A
+receives one run-owned canonical tag ending in the exact full `HEAD` SHA. `docker image save` writes
+only that tag to a unique mode-0600 temporary file. The guard flushes and validates the file,
+removes every run-owned image tag, proves the tag and image ID are absent, loads the exact fixed
+archive bytes, and rechecks the loaded ID, sole RepoTag, platform, `appuser`, revision/source labels
+and ordered rootfs DiffIDs. The archive SHA-256 is fixed before load and unchanged afterward.
+
+`scripts/docker-save-archive.py` is the standard-library-only verification authority used by the
+release guard. Its fixture corpus proves valid one-image input and rejects wrong/missing/multiple
+tags, wrong/missing/config-digest data, empty/duplicate/missing layers, duplicate or unsafe tar
+members, links, multiple manifests, wrong platform/user/labels, DiffID mismatch and layer-order
+mismatch. It also covers pre-existing output and interruption before publication. The self-test
+executes the exact verifier embedded in `scripts/v126-cutover.sh` against the same corpus and
+requires identical accept/reject results.
+
+Classic Docker-save archives bind the expected image ID directly to the config filename and config
+bytes. Docker's containerd image store emits a hybrid Docker-save/OCI layout whose daemon-facing
+image ID is the OCI manifest digest and whose config filename uses the separate config digest. That
+form is accepted only when the one-entry OCI index, manifest bytes, config descriptor, ordered layer
+descriptors, compressed layer bytes and DiffIDs prove both identities exactly. This strict
+dual-identity rule fixes the retained HT-13 false rejection without weakening the legacy config-ID
+rule.
+
+Normal CI validates and deletes the archive. A preserved deployment artifact requires an explicit
+new absolute output path; any pre-existing path is an unconditional stop. Publication uses a
+flushed same-directory temporary file, mode 0600 and a no-replace atomic link. Run cleanup may
+remove only recorded builders, tags, temporary files/images and evidence; it never removes the
+published archive or an unowned path. Example:
+
+```bash
+scripts/check-backend-image-reproducibility.sh \
+  --release-tag "hookah_bot_ant-backend:$(git rev-parse HEAD)" \
+  --docker-save-output "/absolute/new/path/backend-$(git rev-parse HEAD).docker-save.tar"
+```
 
 ### Permanent public-pilot Telegram admission quality gate
 

@@ -202,6 +202,8 @@ verify_saved_image_archive_fd() {
   require_image_id expected-image-id "${expected_image_id}"
   python3 - "${archive_fd}" "${expected_tag}" "${expected_image_id#sha256:}" <<'PY'
 import hashlib
+import gzip
+import io
 import json
 import os
 import posixpath
@@ -241,6 +243,66 @@ def safe_member_name(value):
     )
 
 
+def read_member(archive_file, member, label):
+    if member.size > 16 * 1024 * 1024:
+        raise SystemExit(f"{label} exceeds the bounded JSON size")
+    handle = archive_file.extractfile(member)
+    if handle is None:
+        raise SystemExit(f"{label} is unreadable")
+    return handle.read()
+
+
+def read_json_member(archive_file, by_name, name, label):
+    member = by_name.get(name)
+    if member is None or not member.isfile():
+        raise SystemExit(f"{label} is missing or non-regular")
+    payload = read_member(archive_file, member, label)
+    try:
+        return json.loads(payload), payload
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise SystemExit(f"{label} is invalid JSON") from error
+
+
+def digest_layer(archive_file, member, expected_diff_id, number):
+    raw_handle = archive_file.extractfile(member)
+    if raw_handle is None:
+        raise SystemExit(f"saved image archive layer {number} is unreadable")
+    raw_digest = hashlib.sha256()
+    uncompressed_digest = hashlib.sha256()
+
+    class HashingReader(io.RawIOBase):
+        def readable(self):
+            return True
+
+        def readinto(self, target):
+            chunk = raw_handle.read(len(target))
+            if not chunk:
+                return 0
+            raw_digest.update(chunk)
+            target[:len(chunk)] = chunk
+            return len(chunk)
+
+    buffered = io.BufferedReader(HashingReader(), buffer_size=1024 * 1024)
+    prefix = buffered.peek(2)[:2]
+    try:
+        content = gzip.GzipFile(fileobj=buffered, mode="rb") if prefix == b"\x1f\x8b" else buffered
+        while True:
+            chunk = content.read(1024 * 1024)
+            if not chunk:
+                break
+            uncompressed_digest.update(chunk)
+        if content is not buffered:
+            content.close()
+    except (gzip.BadGzipFile, EOFError, OSError) as error:
+        raise SystemExit(f"saved image archive layer {number} gzip payload is invalid") from error
+    finally:
+        buffered.close()
+    actual_diff_id = "sha256:" + uncompressed_digest.hexdigest()
+    if actual_diff_id != expected_diff_id:
+        raise SystemExit(f"saved image archive layer {number} DiffID mismatch")
+    return "sha256:" + raw_digest.hexdigest()
+
+
 with os.fdopen(os.dup(archive_fd), "rb") as archive_stream, tarfile.open(
     fileobj=archive_stream, mode="r:*"
 ) as archive_file:
@@ -254,13 +316,9 @@ with os.fdopen(os.dup(archive_fd), "rb") as archive_stream, tarfile.open(
         if not (member.isfile() or member.isdir()):
             raise SystemExit("saved image archive contains a non-regular member")
     by_name = {member.name: member for member in members}
-    manifest_member = by_name.get("manifest.json")
-    if manifest_member is None or not manifest_member.isfile():
-        raise SystemExit("saved image archive lacks one regular manifest.json")
-    manifest_handle = archive_file.extractfile(manifest_member)
-    if manifest_handle is None:
-        raise SystemExit("saved image archive manifest is unreadable")
-    manifest = json.load(manifest_handle)
+    manifest, _ = read_json_member(
+        archive_file, by_name, "manifest.json", "saved image archive manifest.json"
+    )
     if not isinstance(manifest, list) or len(manifest) != 1 or not isinstance(manifest[0], dict):
         raise SystemExit("saved image archive must contain exactly one image manifest")
     image = manifest[0]
@@ -274,24 +332,115 @@ with os.fdopen(os.dup(archive_fd), "rb") as archive_stream, tarfile.open(
     config_match = re.fullmatch(
         r"(?:blobs/sha256/)?([0-9a-f]{64})(?:\.json)?", config_name
     )
-    if config_match is None or config_match.group(1) != expected_digest:
-        raise SystemExit("saved image archive config name differs from expected image ID")
+    if config_match is None:
+        raise SystemExit("saved image archive config name has no canonical digest")
     config_member = by_name.get(config_name)
     if config_member is None or not config_member.isfile():
         raise SystemExit("saved image archive config is missing or non-regular")
-    config_handle = archive_file.extractfile(config_member)
-    if config_handle is None:
-        raise SystemExit("saved image archive config is unreadable")
-    if hashlib.sha256(config_handle.read()).hexdigest() != expected_digest:
-        raise SystemExit("saved image archive config digest differs from expected image ID")
-    if not isinstance(layers, list) or not layers or len(layers) != len(set(layers)):
+    config_bytes = read_member(archive_file, config_member, "saved image archive config")
+    config_digest = hashlib.sha256(config_bytes).hexdigest()
+    if config_match.group(1) != config_digest:
+        raise SystemExit("saved image archive config name differs from its content digest")
+    try:
+        config = json.loads(config_bytes)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise SystemExit("saved image archive config is invalid JSON") from error
+    if not isinstance(config, dict):
+        raise SystemExit("saved image archive config is not an object")
+    if config.get("os") != "linux" or config.get("architecture") != "amd64":
+        raise SystemExit("saved image archive platform is not linux/amd64")
+    runtime = config.get("config")
+    if not isinstance(runtime, dict) or runtime.get("User") != "appuser":
+        raise SystemExit("saved image archive runtime user is not appuser")
+    labels = runtime.get("Labels")
+    expected_revision = expected_tag.rsplit(":", 1)[-1]
+    if not re.fullmatch(r"[0-9a-f]{40}", expected_revision):
+        raise SystemExit("saved image archive tag has no exact Git revision")
+    if not isinstance(labels, dict) or labels.get("org.opencontainers.image.revision") != expected_revision:
+        raise SystemExit("saved image archive revision label is not exact")
+    if labels.get("org.opencontainers.image.source") != "https://github.com/koteev-m/hookah_bot":
+        raise SystemExit("saved image archive source label is not exact")
+    rootfs = config.get("rootfs")
+    diff_ids = rootfs.get("diff_ids") if isinstance(rootfs, dict) else None
+    if (
+        not isinstance(rootfs, dict)
+        or rootfs.get("type") != "layers"
+        or not isinstance(diff_ids, list)
+        or not diff_ids
+        or any(not isinstance(value, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", value) is None for value in diff_ids)
+    ):
+        raise SystemExit("saved image archive rootfs DiffIDs are invalid")
+    if (
+        not isinstance(layers, list)
+        or not layers
+        or len(layers) != len(set(layers))
+        or len(layers) != len(diff_ids)
+    ):
         raise SystemExit("saved image archive layer inventory is invalid")
-    for layer_name in layers:
+    layer_digests = []
+    for number, (layer_name, expected_diff_id) in enumerate(zip(layers, diff_ids), start=1):
         if not safe_member_name(layer_name):
             raise SystemExit("saved image archive layer path is unsafe")
         layer_member = by_name.get(layer_name)
         if layer_member is None or not layer_member.isfile():
             raise SystemExit("saved image archive layer is missing or non-regular")
+        layer_digests.append(
+            digest_layer(archive_file, layer_member, expected_diff_id, number)
+        )
+
+    has_oci = "oci-layout" in by_name or "index.json" in by_name
+    if has_oci or config_digest != expected_digest:
+        if "oci-layout" not in by_name or "index.json" not in by_name:
+            raise SystemExit("saved image archive OCI identity metadata is incomplete")
+        layout, _ = read_json_member(
+            archive_file, by_name, "oci-layout", "saved image archive oci-layout"
+        )
+        if layout != {"imageLayoutVersion": "1.0.0"}:
+            raise SystemExit("saved image archive OCI layout version is invalid")
+        index, _ = read_json_member(
+            archive_file, by_name, "index.json", "saved image archive OCI index"
+        )
+        descriptors = index.get("manifests") if isinstance(index, dict) else None
+        if not isinstance(descriptors, list) or len(descriptors) != 1 or not isinstance(descriptors[0], dict):
+            raise SystemExit("saved image archive OCI index must contain exactly one manifest")
+        descriptor = descriptors[0]
+        manifest_digest = descriptor.get("digest")
+        if not isinstance(manifest_digest, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", manifest_digest) is None:
+            raise SystemExit("saved image archive OCI manifest digest is invalid")
+        manifest_name = "blobs/sha256/" + manifest_digest.removeprefix("sha256:")
+        oci_manifest, oci_manifest_bytes = read_json_member(
+            archive_file, by_name, manifest_name, "saved image archive OCI manifest"
+        )
+        if hashlib.sha256(oci_manifest_bytes).hexdigest() != manifest_digest.removeprefix("sha256:"):
+            raise SystemExit("saved image archive OCI manifest digest differs from its bytes")
+        if descriptor.get("size") != len(oci_manifest_bytes):
+            raise SystemExit("saved image archive OCI manifest size is invalid")
+        if config_digest != expected_digest and manifest_digest.removeprefix("sha256:") != expected_digest:
+            raise SystemExit("saved image archive OCI manifest differs from expected image ID")
+        oci_config = oci_manifest.get("config") if isinstance(oci_manifest, dict) else None
+        oci_layers = oci_manifest.get("layers") if isinstance(oci_manifest, dict) else None
+        if (
+            not isinstance(oci_config, dict)
+            or oci_config.get("digest") != "sha256:" + config_digest
+            or oci_config.get("size") != len(config_bytes)
+        ):
+            raise SystemExit("saved image archive OCI manifest does not bind exact config")
+        if not isinstance(oci_layers, list) or len(oci_layers) != len(layers):
+            raise SystemExit("saved image archive OCI layer inventory is invalid")
+        for number, (layer_name, layer_digest, layer_descriptor) in enumerate(
+            zip(layers, layer_digests, oci_layers), start=1
+        ):
+            if not isinstance(layer_descriptor, dict):
+                raise SystemExit("saved image archive OCI layer descriptor is invalid")
+            descriptor_digest = layer_descriptor.get("digest")
+            if (
+                descriptor_digest != layer_digest
+                or layer_name != "blobs/sha256/" + descriptor_digest.removeprefix("sha256:")
+                or layer_descriptor.get("size") != by_name[layer_name].size
+            ):
+                raise SystemExit(f"saved image archive OCI layer {number} identity is invalid")
+    elif config_digest != expected_digest:
+        raise SystemExit("saved image archive config digest differs from expected image ID")
 os.lseek(archive_fd, 0, os.SEEK_SET)
 print(archive_sha256)
 PY

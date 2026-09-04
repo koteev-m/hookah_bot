@@ -332,11 +332,30 @@ an image or calls the ordinary deploy script. The mandatory live smoke precedes 
 OFF/empty-list restart, and the original Caddyfile is restored byte-for-byte.
 
 State 10 snapshots Docker-save bytes into an unlinked mode-0400 descriptor. The exact descriptor is
-structure-checked, hashed and transferred with Bash-3.2/openrsync-compatible flags. The remote side
-repeats the snapshot, structure and checksum checks and passes that same descriptor—not a re-opened
-pathname—to `docker load`; the retained run archive is independently hashed before and after load.
-Local archive mismatch stops before the first remote action, and remote byte mismatch stops before
-Docker mutation.
+structure-checked, hashed and transferred with Bash-3.2/openrsync-compatible flags. The verifier
+requires one exact full-SHA tag, a self-hashed config, `linux/amd64`, `appuser`, exact labels and
+layer bytes matching every ordered rootfs DiffID. Classic config-ID archives remain exact; a
+containerd/OCI-layout archive is accepted only when its one content-hashed OCI manifest binds the
+daemon-facing image ID to the separate config and ordered layers. The remote side repeats the
+snapshot, structure and checksum checks and passes that same descriptor—not a re-opened pathname—to
+`docker load`; the retained run archive is independently hashed before and after load. Local
+archive mismatch stops before the first remote action, and remote byte mismatch stops before Docker
+mutation.
+
+Final-release selection may preserve the already-proven deployment archive only through a new
+absolute output path supplied to the same two-build guard:
+
+```bash
+release_sha="$(git rev-parse HEAD)"
+scripts/check-backend-image-reproducibility.sh \
+  --release-tag "hookah_bot_ant-backend:${release_sha}" \
+  --docker-save-output "/absolute/new/path/backend-${release_sha}.docker-save.tar"
+```
+
+The command refuses a pre-existing destination, builds exactly twice, exports from one proven image
+before tag cleanup, verifies an absent-image exact reload, and publishes by a mode-0600 no-replace
+atomic link. Without the output option, CI performs the same archive and load gates and removes the
+temporary archive. It does not upload, publish to a registry, contact staging or authorize HT-13.
 
 Both V126 starts resolve the Compose `backend` service specifically, use create-only `--no-build`,
 set restart policy `no`, require `RestartCount=0` and issue exactly one explicit start. Runtime proof
