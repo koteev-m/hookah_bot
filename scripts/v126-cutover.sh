@@ -384,12 +384,12 @@ with os.fdopen(os.dup(archive_fd), "rb") as archive_stream, tarfile.open(
         layer_member = by_name.get(layer_name)
         if layer_member is None or not layer_member.isfile():
             raise SystemExit("saved image archive layer is missing or non-regular")
-        layer_digests.append(
-            digest_layer(archive_file, layer_member, expected_diff_id, number)
-        )
+        layer_digest = digest_layer(archive_file, layer_member, expected_diff_id, number)
+        layer_digests.append(layer_digest)
 
     has_oci = "oci-layout" in by_name or "index.json" in by_name
-    if has_oci or config_digest != expected_digest:
+    manifest_identity_mode = config_digest != expected_digest
+    if has_oci or manifest_identity_mode:
         if "oci-layout" not in by_name or "index.json" not in by_name:
             raise SystemExit("saved image archive OCI identity metadata is incomplete")
         layout, _ = read_json_member(
@@ -415,7 +415,7 @@ with os.fdopen(os.dup(archive_fd), "rb") as archive_stream, tarfile.open(
             raise SystemExit("saved image archive OCI manifest digest differs from its bytes")
         if descriptor.get("size") != len(oci_manifest_bytes):
             raise SystemExit("saved image archive OCI manifest size is invalid")
-        if config_digest != expected_digest and manifest_digest.removeprefix("sha256:") != expected_digest:
+        if manifest_identity_mode and manifest_digest.removeprefix("sha256:") != expected_digest:
             raise SystemExit("saved image archive OCI manifest differs from expected image ID")
         oci_config = oci_manifest.get("config") if isinstance(oci_manifest, dict) else None
         oci_layers = oci_manifest.get("layers") if isinstance(oci_manifest, dict) else None
@@ -425,22 +425,41 @@ with os.fdopen(os.dup(archive_fd), "rb") as archive_stream, tarfile.open(
             or oci_config.get("size") != len(config_bytes)
         ):
             raise SystemExit("saved image archive OCI manifest does not bind exact config")
+        oci_config_name = "blobs/sha256/" + config_digest
+        oci_config_member = by_name.get(oci_config_name)
+        if (
+            oci_config_member is None
+            or not oci_config_member.isfile()
+            or read_member(
+                archive_file, oci_config_member, "saved image archive OCI config blob"
+            ) != config_bytes
+        ):
+            raise SystemExit("saved image archive OCI config blob is not exact")
         if not isinstance(oci_layers, list) or len(oci_layers) != len(layers):
             raise SystemExit("saved image archive OCI layer inventory is invalid")
-        for number, (layer_name, layer_digest, layer_descriptor) in enumerate(
-            zip(layers, layer_digests, oci_layers), start=1
+        for number, (expected_diff_id, layer_descriptor) in enumerate(
+            zip(diff_ids, oci_layers), start=1
         ):
             if not isinstance(layer_descriptor, dict):
                 raise SystemExit("saved image archive OCI layer descriptor is invalid")
             descriptor_digest = layer_descriptor.get("digest")
             if (
-                descriptor_digest != layer_digest
-                or layer_name != "blobs/sha256/" + descriptor_digest.removeprefix("sha256:")
-                or layer_descriptor.get("size") != by_name[layer_name].size
+                not isinstance(descriptor_digest, str)
+                or re.fullmatch(r"sha256:[0-9a-f]{64}", descriptor_digest) is None
+            ):
+                raise SystemExit("saved image archive OCI layer digest is invalid")
+            descriptor_name = "blobs/sha256/" + descriptor_digest.removeprefix("sha256:")
+            descriptor_member = by_name.get(descriptor_name)
+            if descriptor_member is None or not descriptor_member.isfile():
+                raise SystemExit("saved image archive OCI layer blob is missing or non-regular")
+            observed_digest = digest_layer(
+                archive_file, descriptor_member, expected_diff_id, number
+            )
+            if (
+                descriptor_digest != observed_digest
+                or layer_descriptor.get("size") != descriptor_member.size
             ):
                 raise SystemExit(f"saved image archive OCI layer {number} identity is invalid")
-    elif config_digest != expected_digest:
-        raise SystemExit("saved image archive config digest differs from expected image ID")
 os.lseek(archive_fd, 0, os.SEEK_SET)
 print(archive_sha256)
 PY

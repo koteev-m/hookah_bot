@@ -36,7 +36,7 @@ image A before cleanup. It fixes the archive SHA-256 before load, validates tag/
 platform, runtime user, labels, compressed layers and ordered DiffIDs, removes the run-owned image
 records, proves the tag/ID absent, loads the exact archive, re-inspects the complete identity and
 publishes only through an explicit new absolute path using a no-replace atomic link. Normal CI
-validates and removes the archive. The standard-library verifier has a 29-case archive corpus plus
+validates and removes the archive. The standard-library verifier has a 37-case archive corpus plus
 publication and cleanup fixtures; those same archive cases require exact accept/reject equivalence
 with the sequencer's embedded verifier. No third build, OCI post-cleanup reconstruction, registry
 publish or staging action exists.
@@ -46,6 +46,18 @@ are a cohesive frozen-candidate commit, complete two-build validation including 
 archive and load proof, ordinary feature-branch push and exact green branch Actions with the Docker
 archive gate executed. Main integration requires separate exact authorization. The required stop is
 `HT12T_MAIN_INTEGRATION_AUTHORIZATION_REQUIRED`.
+
+The first feature run `33916435202` was correctly non-green: Docker Engine 28 proved both images
+equal with config/final ID `sha256:acce75da6b132b5be59ff3c715c8576d072ba8737b667af0b835f91bef57e474`,
+but its Docker-save output also carried a reserialized OCI side manifest distinct from the original
+build manifest. The first implementation incorrectly treated the mere presence of that side metadata
+as manifest-ID mode and stopped at `Docker-save OCI manifest differs from the proven manifest`.
+The correction selects strict OCI-manifest identity only when the proven final ID differs from the
+config digest; config-ID archives remain bound through config bytes plus ordered DiffIDs even when
+Docker includes OCI side metadata, while every present OCI sidecar is still checked for internally
+exact config and ordered layer-blob linkage. The absent-image exact reload remains mandatory. Run
+`33916435202` is regression evidence only and is not release authority; a succeeding exact feature
+run is required.
 
 ### Preserved HT-12S preintegration evidence
 

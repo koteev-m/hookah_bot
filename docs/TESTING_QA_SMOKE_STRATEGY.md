@@ -154,13 +154,15 @@ mismatch. It also covers pre-existing output and interruption before publication
 executes the exact verifier embedded in `scripts/v126-cutover.sh` against the same corpus and
 requires identical accept/reject results.
 
-Classic Docker-save archives bind the expected image ID directly to the config filename and config
-bytes. Docker's containerd image store emits a hybrid Docker-save/OCI layout whose daemon-facing
-image ID is the OCI manifest digest and whose config filename uses the separate config digest. That
-form is accepted only when the one-entry OCI index, manifest bytes, config descriptor, ordered layer
-descriptors, compressed layer bytes and DiffIDs prove both identities exactly. This strict
-dual-identity rule fixes the retained HT-13 false rejection without weakening the legacy config-ID
-rule.
+Config-ID Docker-save archives bind the expected image ID directly to the config filename and config
+bytes; incidental OCI side metadata does not change that proven identity mode, but must still be
+complete and internally bind the exact config and equivalent ordered layer bytes. Docker's containerd
+image store emits a hybrid form whose daemon-facing image ID can instead be the OCI manifest digest
+and whose config filename uses the separate config digest. When those proven IDs differ, the
+one-entry OCI index, manifest bytes, config descriptor, ordered layer descriptors, compressed layer
+bytes and DiffIDs must prove both identities exactly. This explicit final-ID/config discriminator
+fixes the retained HT-13 false rejection without weakening either format or accepting a malformed
+sidecar.
 
 Normal CI validates and deletes the archive. A preserved deployment artifact requires an explicit
 new absolute output path; any pre-existing path is an unconditional stop. Publication uses a

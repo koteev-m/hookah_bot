@@ -429,9 +429,11 @@ configuration, zero global live V125 containers and zero old-image backend in th
 HT-12T release selection extends the mandatory two-build guard with the canonical Docker-save
 boundary. After complete image equality, one proven image receives the exact full-SHA release tag;
 only that tag is saved, verified, unloaded, loaded from the fixed archive bytes, re-inspected and
-then atomically published when an explicit new absolute output path is supplied. Classic archives
-bind the config digest directly as image ID. Docker Desktop's containerd archive form instead binds
-the daemon-facing OCI manifest ID to its separately self-hashed config and every ordered layer;
+then atomically published when an explicit new absolute output path is supplied. Config-ID archives
+bind the config digest directly as image ID, even when Docker includes incidental OCI side metadata;
+any such sidecar must still be complete and internally bind the exact config and equivalent ordered
+layer content. A containerd archive whose proven final ID differs from that config instead binds the
+daemon-facing OCI manifest ID to its separately self-hashed config and every proven ordered compressed layer;
 both forms require exact `linux/amd64`, `appuser`, revision/source labels and rootfs DiffIDs. The
 shared corpus proves the release verifier and the sequencer's embedded verifier have the same
 accept/reject behavior. This is local deployment evidence only and does not itself authorize

@@ -334,9 +334,11 @@ OFF/empty-list restart, and the original Caddyfile is restored byte-for-byte.
 State 10 snapshots Docker-save bytes into an unlinked mode-0400 descriptor. The exact descriptor is
 structure-checked, hashed and transferred with Bash-3.2/openrsync-compatible flags. The verifier
 requires one exact full-SHA tag, a self-hashed config, `linux/amd64`, `appuser`, exact labels and
-layer bytes matching every ordered rootfs DiffID. Classic config-ID archives remain exact; a
-containerd/OCI-layout archive is accepted only when its one content-hashed OCI manifest binds the
-daemon-facing image ID to the separate config and ordered layers. The remote side repeats the
+layer bytes matching every ordered rootfs DiffID. When the proven final ID equals the config digest,
+the archive remains in config-ID mode even if Docker adds OCI side metadata; that sidecar must still
+be complete and internally bind the exact config and equivalent ordered layer content. When those
+identities differ, the one content-hashed OCI manifest must also bind the daemon-facing image ID to
+the separate config and proven ordered compressed layers. The remote side repeats the
 snapshot, structure and checksum checks and passes that same descriptor—not a re-opened pathname—to
 `docker load`; the retained run archive is independently hashed before and after load. Local
 archive mismatch stops before the first remote action, and remote byte mismatch stops before Docker

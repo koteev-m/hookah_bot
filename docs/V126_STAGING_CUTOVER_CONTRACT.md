@@ -319,10 +319,12 @@ snapshot. The same read-only file descriptor is parsed without extraction, hashe
 there is no later pathname reopen. The archive must contain only safe regular/directory members,
 one exact image/tag association, one self-hashed config, exact `linux/amd64`, `appuser`, revision and
 source labels, and a nonempty unique layer inventory whose decompressed bytes match every ordered
-rootfs DiffID. A classic Docker-save archive must bind the config name and bytes directly to the
-expected image ID. A containerd/OCI-layout Docker-save archive may have a distinct config digest
-only when its single exact OCI index and content-hashed manifest bind the expected daemon-facing
-image ID to that config and the exact ordered layer descriptors. A local mismatch therefore stops
+rootfs DiffID. A config-ID Docker-save archive must bind the config name and bytes directly to the
+expected image ID; incidental OCI side metadata does not override that identity mode but must still
+be complete and internally bind the exact config and equivalent ordered layer blobs. When the proven
+final image ID differs from the config digest, the archive is valid only if its single exact OCI
+index and content-hashed manifest also bind the expected daemon-facing image ID to that config and
+the proven ordered compressed-layer descriptors. A local mismatch therefore stops
 before the first remote action. The remote side captures the uploaded file into its own mode-0400
 unlinked snapshot, re-parses and hashes that exact descriptor, and feeds the same rewound descriptor
 to `docker load`.

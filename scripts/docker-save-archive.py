@@ -307,10 +307,18 @@ def verify_archive(
                 raise ArchiveError("Docker-save OCI manifest digest differs from its bytes")
             if descriptor.get("size") != len(oci_manifest_bytes):
                 raise ArchiveError("Docker-save OCI manifest size is invalid")
-            if expected_manifest_digest is not None and oci_manifest_digest != expected_manifest_digest:
-                raise ArchiveError("Docker-save OCI manifest differs from the proven manifest")
-            if must_verify_oci and oci_manifest_digest != expected_image_id:
-                raise ArchiveError("Docker-save OCI manifest differs from the expected image ID")
+            if must_verify_oci:
+                if (
+                    expected_manifest_digest is not None
+                    and oci_manifest_digest != expected_manifest_digest
+                ):
+                    raise ArchiveError(
+                        "Docker-save OCI manifest differs from the proven manifest"
+                    )
+                if oci_manifest_digest != expected_image_id:
+                    raise ArchiveError(
+                        "Docker-save OCI manifest differs from the expected image ID"
+                    )
             oci_config = oci_manifest.get("config") if isinstance(oci_manifest, dict) else None
             oci_layers = oci_manifest.get("layers") if isinstance(oci_manifest, dict) else None
             if (
@@ -319,11 +327,22 @@ def verify_archive(
                 or oci_config.get("size") != len(config_bytes)
             ):
                 raise ArchiveError("Docker-save OCI manifest does not bind the exact config")
+            oci_config_name = "blobs/sha256/" + config_digest.removeprefix("sha256:")
+            oci_config_member = members.get(oci_config_name)
+            if (
+                oci_config_member is None
+                or not oci_config_member.isfile()
+                or read_member(
+                    archive, oci_config_member, "Docker-save OCI config blob"
+                )
+                != config_bytes
+            ):
+                raise ArchiveError("Docker-save OCI config blob is not exact")
             if not isinstance(oci_layers, list) or len(oci_layers) != len(layer_names):
                 raise ArchiveError("Docker-save OCI manifest layer inventory is invalid")
             descriptor_digests: list[str] = []
-            for number, (layer_name, raw_digest, layer_descriptor) in enumerate(
-                zip(layer_names, raw_layer_digests, oci_layers, strict=True), start=1
+            for number, (expected_diff_id, layer_descriptor) in enumerate(
+                zip(diff_ids, oci_layers, strict=True), start=1
             ):
                 if not isinstance(layer_descriptor, dict):
                     raise ArchiveError(f"Docker-save OCI layer {number} descriptor is invalid")
@@ -331,23 +350,30 @@ def verify_archive(
                     f"Docker-save OCI layer {number} digest", layer_descriptor.get("digest")
                 )
                 descriptor_name = "blobs/sha256/" + descriptor_digest.removeprefix("sha256:")
-                if layer_name != descriptor_name or raw_digest != descriptor_digest:
+                descriptor_member = members.get(descriptor_name)
+                if descriptor_member is None or not descriptor_member.isfile():
+                    raise ArchiveError(
+                        f"Docker-save OCI layer {number} blob is missing or non-regular"
+                    )
+                observed_digest, _ = digest_layer(
+                    archive, descriptor_member, expected_diff_id, number
+                )
+                if observed_digest != descriptor_digest:
                     raise ArchiveError(
                         f"Docker-save OCI layer {number} does not bind the exact layer bytes"
                     )
-                if layer_descriptor.get("size") != members[layer_name].size:
+                if layer_descriptor.get("size") != descriptor_member.size:
                     raise ArchiveError(f"Docker-save OCI layer {number} size is invalid")
                 descriptor_digests.append(descriptor_digest)
             if (
-                expected_compressed_layers is not None
+                must_verify_oci
+                and expected_compressed_layers is not None
                 and descriptor_digests != expected_compressed_layers
             ):
                 raise ArchiveError(
                     "Docker-save OCI layer digests/order differ from the proven build"
                 )
-            identity_mode = "oci-manifest" if config_digest != expected_image_id else "config+oci"
-        elif config_digest != expected_image_id:
-            raise ArchiveError("Docker-save config digest differs from the expected image ID")
+            identity_mode = "oci-manifest" if must_verify_oci else "config+oci-sidecar"
         if config_digest == expected_image_id and expected_config_digest not in (None, expected_image_id):
             raise ArchiveError("Docker-save expected config/image identity is contradictory")
 
@@ -628,9 +654,21 @@ def build_classic_fixture(
     revision: str,
     source: str,
     reverse_layers: bool,
+    oci_sidecar_mode: str | None = None,
 ) -> tuple[str, list[str], list[str]]:
     layer_bytes = [b"classic-layer-a", b"classic-layer-b"]
-    layer_names = ["classic-a/layer.tar", "classic-b/layer.tar"]
+    shared_blob_paths = oci_sidecar_mode in {
+        "shared-valid",
+        "shared-wrong-layer-order",
+    }
+    layer_names = (
+        [
+            "blobs/sha256/" + sha256_bytes(layer).removeprefix("sha256:")
+            for layer in layer_bytes
+        ]
+        if shared_blob_paths
+        else ["classic-a/layer.tar", "classic-b/layer.tar"]
+    )
     diff_ids = [sha256_bytes(layer) for layer in layer_bytes]
     config = {
         "architecture": "amd64",
@@ -664,6 +702,76 @@ def build_classic_fixture(
         (name, payload, None)
         for name, payload in zip(layer_names, layer_bytes, strict=True)
     )
+    if oci_sidecar_mode is not None:
+        sidecar_layer_bytes = list(layer_bytes)
+        if oci_sidecar_mode in {"wrong-layer-order", "shared-wrong-layer-order"}:
+            sidecar_layer_bytes.reverse()
+        sidecar_layers = [
+            {
+                "mediaType": "application/vnd.oci.image.layer.v1.tar",
+                "digest": sha256_bytes(payload),
+                "size": len(payload),
+            }
+            for payload in sidecar_layer_bytes
+        ]
+        sidecar_config_digest = config_digest
+        if oci_sidecar_mode == "wrong-config-binding":
+            sidecar_config_digest = "sha256:" + "e" * 64
+        sidecar_manifest = canonical_json(
+            {
+                "schemaVersion": 2,
+                "config": {
+                    "digest": sidecar_config_digest,
+                    "size": len(config_bytes),
+                },
+                "layers": sidecar_layers,
+            }
+        )
+        sidecar_digest = sha256_bytes(sidecar_manifest)
+        sidecar_index = (
+            b"not-json-at-all"
+            if oci_sidecar_mode == "corrupt-index"
+            else canonical_json(
+                {
+                    "schemaVersion": 2,
+                    "manifests": [
+                        {"digest": sidecar_digest, "size": len(sidecar_manifest)}
+                    ],
+                }
+            )
+        )
+        sidecar_entries: list[tuple[str, bytes | None, bytes | None]] = [
+            ("oci-layout", canonical_json({"imageLayoutVersion": "1.0.0"}), None),
+            ("index.json", sidecar_index, None),
+            (
+                "blobs/sha256/" + sidecar_digest.removeprefix("sha256:"),
+                sidecar_manifest,
+                None,
+            ),
+            (
+                "blobs/sha256/" + config_digest.removeprefix("sha256:"),
+                config_bytes,
+                None,
+            ),
+        ]
+        if oci_sidecar_mode == "missing-layout":
+            sidecar_entries.pop(0)
+        entries.extend(sidecar_entries)
+        sidecar_layer_entries = [
+            (
+                "blobs/sha256/" + sha256_bytes(payload).removeprefix("sha256:"),
+                payload,
+                None,
+            )
+            for payload in layer_bytes
+        ]
+        existing_names = {name for name, _, _ in entries}
+        sidecar_layer_entries = [
+            entry for entry in sidecar_layer_entries if entry[0] not in existing_names
+        ]
+        if oci_sidecar_mode == "missing-layer-blob":
+            sidecar_layer_entries.pop()
+        entries.extend(sidecar_layer_entries)
     path.write_bytes(fixture_tar(entries))
     os.chmod(path, 0o600)
     comparison_compressed = [sha256_bytes(gzip_payload(layer)) for layer in layer_bytes]
@@ -770,9 +878,22 @@ def self_test(cutover_script: Path) -> None:
                     f"helper={helper_result} embedded={embedded_result}"
                 )
 
-        for label, reverse_layers, expected in (
-            ("classic-valid", False, True),
-            ("classic-layer-order", True, False),
+        for label, reverse_layers, oci_sidecar_mode, expected in (
+            ("classic-valid", False, None, True),
+            ("classic-sidecar-valid", False, "valid", True),
+            ("classic-sidecar-corrupt-index", False, "corrupt-index", False),
+            ("classic-sidecar-missing-layout", False, "missing-layout", False),
+            ("classic-sidecar-wrong-config", False, "wrong-config-binding", False),
+            ("classic-sidecar-wrong-layer-order", False, "wrong-layer-order", False),
+            ("classic-sidecar-missing-layer", False, "missing-layer-blob", False),
+            ("classic-sidecar-shared-valid", False, "shared-valid", True),
+            (
+                "classic-sidecar-shared-wrong-layer-order",
+                False,
+                "shared-wrong-layer-order",
+                False,
+            ),
+            ("classic-layer-order", True, None, False),
         ):
             fixture = root / f"classic-{label}.tar"
             image_id, diff_ids, compressed_layers = build_classic_fixture(
@@ -781,6 +902,7 @@ def self_test(cutover_script: Path) -> None:
                 revision=revision,
                 source=source,
                 reverse_layers=reverse_layers,
+                oci_sidecar_mode=oci_sidecar_mode,
             )
             helper_result = True
             try:
@@ -789,6 +911,7 @@ def self_test(cutover_script: Path) -> None:
                     expected_tag=tag,
                     expected_image_id=image_id,
                     expected_config_digest=image_id,
+                    expected_manifest_digest="sha256:" + "d" * 64,
                     expected_revision=revision,
                     expected_source=source,
                     expected_diff_ids=diff_ids,
@@ -845,7 +968,7 @@ def self_test(cutover_script: Path) -> None:
             raise AssertionError("interrupted export left an authoritative output path")
     print(
         "Docker-save verifier self-test passed: "
-        f"{len(corpus) + 2} archive fixtures, exact embedded equivalence, and 3 publication fixtures"
+        f"{len(corpus) + 10} archive fixtures, exact embedded equivalence, and 3 publication fixtures"
     )
 
 
