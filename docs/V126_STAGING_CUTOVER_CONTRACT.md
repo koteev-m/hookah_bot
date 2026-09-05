@@ -55,6 +55,25 @@ post-sync checks, even if a failing producer emitted exact-looking output first.
 unavailable only by an explicit server protocol-version rejection; a missing client capability or
 other probe error is not evidence of the required baseline.
 
+Public response-header acquisition uses bounded, certificate-verified **GET `/health`** with the
+body discarded. The shared prerequisite verifier serves the prewrite/restored baseline and checks
+32/34: curl must complete successfully, the final status must be exactly 200, and complete valid
+HTTP response headers must be present. Redirects are not followed. Check 32 preserves its capture
+token; the baseline and check 34 reject any case spelling of `Alt-Svc`, including an empty value.
+Raw headers, sensitive values, bodies and curl diagnostics are never emitted by this verifier.
+The separate healthy-JSON, TLS 1.2, server-rejected TLS 1.3 and UDP/443 gates remain mandatory.
+Cutover has no equivalent HEAD `/health` header probe; its existing GET health checks and all
+Mini App probes remain unchanged.
+
+HT-12U health-header evidence is deliberately separated: the retained terminal run
+`V126-PRE-GATE-A-SYNC-20260905T191804Z` observed HEAD `/health` 405/curl 22 at L06 before config
+writes; code uses that request for response headers/Alt-Svc, while V125 and main define GET
+`/health` without `AutoHeadResponse` or a health HEAD handler. A real loopback HTTP fixture models
+GET 200 with healthy JSON and HEAD 405 and verifies the repaired contract. This does not establish
+the network origin of the historical live 405, complete that failed baseline/Flyway gate, or
+change the previous Mini App verdict `MINIAPP_405_ROOT_CAUSE_NOT_PROVABLE`. Both historical runs
+and their consumed authorizations remain terminal.
+
 Successful prerequisite sync only makes the tracked release execution surface eligible for a later
 separately authorized Gate-A baseline. After HT-12R main integration, the exact release SHA and V126
 image tag/ID must be selected and proved anew; no rejected HT-13 package, authorization string or

@@ -460,6 +460,7 @@ is permitted. The exact ordered post-sync manifest is
 bash -n scripts/v126-staging-prerequisite-sync.sh
 bash -n scripts/test-v126-staging-prerequisite-sync.sh
 python3 -m py_compile scripts/v126-staging-prerequisite-sync-helper.py
+python3 -m py_compile scripts/test-v126-health-headers.py
 bash scripts/test-v126-staging-prerequisite-sync.sh
 bash scripts/test-v126-cutover.sh
 bash scripts/check-staging-maintenance-config.sh --self-test
@@ -484,6 +485,13 @@ suffix oracle for exact unrelated `.env` byte preservation; absent/empty/mixed P
 semantics with nonempty/malformed rejection; and the full semantic Caddy matrix through both the
 helper and actual inline prewrite parser (`2.6.2`, optional lowercase `v`, explicitly parsed safe
 metadata, wrong/substring/empty/malformed/ambiguous cases).
+
+The harness also runs `scripts/test-v126-health-headers.py` against a real loopback-only HTTP
+server (GET health 200/healthy JSON, HEAD 405). It proves the old HEAD refusal and new GET success,
+case-insensitive Alt-Svc refusal, strict status/header parsing, redirect/timeout/connection/partial
+transfer rejection, curl failure after exact-looking output, and body/sensitive-header privacy.
+The full mocked controller separately verifies header failures before any of the four config
+writes, natural producer failures at checks 32/34, and restored-baseline/rollback-once behavior.
 
 Every meaningful local/remote phase and each post-sync check requires STARTED plus PASSED/FAILED
 records bound to the run, exact ordinal/name, release and script, expected sanitized result and

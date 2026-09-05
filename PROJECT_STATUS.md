@@ -4,6 +4,25 @@ Last verified: 2026-09-04.
 
 ## 1. Current stage
 
+**HT-12U HEALTH RESPONSE HEADERS / LOCAL GET-PROBE REPAIR AND FULL FIXTURES PASSED /
+INDEPENDENT REVIEW AND EXACT FEATURE CI REQUIRED BEFORE MAIN INTEGRATION**.
+
+This bounded stage starts from main `47b79ca86574024f60be6dcbdf3533c561f24d02`, tree
+`f3d0330366a9af30650e885609c970dc7233973e`, with CI run `33946844132` successful at 12/12 jobs.
+Public header acquisition in the prerequisite baseline and checks 32/34 now uses bounded GET
+`/health`, exact 200 and strict header parsing. Alt-Svc refusal, healthy-JSON/TLS/UDP checks,
+four-write/rollback boundaries, migrations, application behavior and Mini App probes are preserved.
+The retained L06 HEAD `/health` 405 is historical evidence with unestablished network origin;
+the earlier `MINIAPP_405_ROOT_CAUSE_NOT_PROVABLE` verdict is unchanged. No staging access or
+HT-13 resumption is authorized here. Main integration requires separate authorization after the
+complete local and feature-CI gates. The earlier build evidence below remains historical.
+
+Local evidence: 8 HTTP regression methods, prerequisite harness 17/17 groups with 40/40 named
+post-sync failures and 8/8 prewrite plus 8/8 post-sync command errors, complete cutover harness,
+syntax/Python compile, Compose and admission/maintenance/image/archive guard self-tests passed.
+
+### Preserved HT-12T preintegration evidence
+
 **HT-12T CANONICAL DOCKER-SAVE RELEASE ARTIFACT EXPORT /
 EXACT MAIN BASE, TREE, PARENT AND 12/12 MAIN ACTIONS VERIFIED /
 TERMINAL HT-13 ARCHIVE FAILURE CLASSIFIED AS `ARCHIVE_VALIDATOR_CONTRACT_MISMATCH` /

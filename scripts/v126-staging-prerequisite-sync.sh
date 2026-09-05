@@ -343,6 +343,7 @@ remote_python() {
       V126_PREREQ_FIXTURE_ROLLBACK_FAIL="${V126_PREREQ_FIXTURE_ROLLBACK_FAIL:-0}" \
       V126_PREREQ_FIXTURE_FAIL_COMMAND_CHECK="${V126_PREREQ_FIXTURE_FAIL_COMMAND_CHECK:-}" \
       V126_FIXTURE_CURL_HEALTH_ERROR="${V126_FIXTURE_CURL_HEALTH_ERROR:-0}" \
+      V126_FIXTURE_HEALTH_HEADERS_ERROR="${V126_FIXTURE_HEALTH_HEADERS_ERROR:-0}" \
       V126_FIXTURE_CURL_VERSION_ERROR="${V126_FIXTURE_CURL_VERSION_ERROR:-0}" \
       V126_FIXTURE_DB_OUTPUT_ERROR="${V126_FIXTURE_DB_OUTPUT_ERROR:-0}" \
       V126_FIXTURE_DOCKER_LOGS_ERROR="${V126_FIXTURE_DOCKER_LOGS_ERROR:-0}" \
@@ -1082,6 +1083,54 @@ require_health_body() {
   [[ "${body}" == '{"status":"ok"}' ]] || remote_die 'health response mismatch'
 }
 
+# HT12U_HEALTH_HEADERS_BEGIN
+require_public_health_headers() {
+  local policy="${1:-absent}" headers
+  # Keep response bytes in memory only; never echo headers or curl diagnostics.
+  headers="$(curl --disable --silent --fail --connect-timeout 5 --max-time 15 \
+    --proto '=https' --suppress-connect-headers --request GET \
+    --dump-header - --output /dev/null --write-out 'HT12U_STATUS=%{http_code}' \
+    "https://${REMOTE_DOMAIN}/health" 2>/dev/null)" || {
+    remote_die 'public health header transfer failed'
+    return 1
+  }
+  printf '%s' "${headers}" | python3 -c '
+import re, sys
+policy = sys.argv[1]
+data = sys.stdin.buffer.read()
+def reject():
+    raise SystemExit(1)
+if policy not in ("capture", "absent") or len(data) > 65536:
+    reject()
+blocks = data.split(b"\r\n\r\n")
+if len(blocks) < 2 or blocks.pop() != b"HT12U_STATUS=200":
+    reject()
+for index, block in enumerate(blocks):
+    lines = block.split(b"\r\n")
+    status = re.fullmatch(rb"HTTP/(?:1\.0|1\.1|2|3) ([0-9]{3})(?: [\x20-\x7e]*)?", lines[0])
+    if status is None:
+        reject()
+    code = int(status[1])
+    if index == len(blocks) - 1:
+        if code != 200 or len(lines) < 2:
+            reject()
+    elif not 100 <= code < 200 or code == 101:
+        reject()
+    for line in lines[1:]:
+        name, separator, value = line.partition(b":")
+        if not separator or not re.fullmatch(rb"[!#$%&\x27*+.^_`|~0-9A-Za-z-]+", name):
+            reject()
+        if any(byte < 32 and byte != 9 or byte == 127 for byte in value):
+            reject()
+        if policy == "absent" and name.lower() == b"alt-svc":
+            reject()
+' "${policy}" || {
+    remote_die 'public health headers invalid or forbidden Alt-Svc present'
+    return 1
+  }
+}
+# HT12U_HEALTH_HEADERS_END
+
 require_v125_version() {
   local body observed
   body="$(curl -fsS "$1")" || remote_die 'backend version request failed'
@@ -1138,7 +1187,7 @@ require_pre_file_baseline() {
 
 baseline_full() {
   require_pre_file_baseline || return $?
-  local backend postgres queue db_size headers competing logs udp_inventory
+  local backend postgres queue db_size competing logs udp_inventory
   backend="$(one_running_id backend)" || return $?
   postgres="$(one_running_id postgres)" || return $?
   [[ "$(docker inspect --format '{{.Image}}' "${backend}")" == "${V125_IMAGE_ID}" ]] || remote_die 'backend image ID differs from exact V125 image'
@@ -1166,8 +1215,7 @@ baseline_full() {
   caddy validate --config "${CADDYFILE}" --adapter caddyfile >/dev/null || remote_die 'Caddy validation failed'
   [[ ! -e "${DRAIN_MARKER}" && ! -L "${DRAIN_MARKER}" ]] || remote_die 'Caddy drain marker is present'
   require_tls_profile || return $?
-  headers="$(curl -fsSI "https://${REMOTE_DOMAIN}/health")" || remote_die 'public response headers could not be read'
-  if printf '%s\n' "${headers}" | grep -i '^alt-svc:'; then remote_die 'Alt-Svc is unexpectedly present'; fi
+  require_public_health_headers absent || return $?
   udp_inventory="$(ss -H -lun 'sport = :443')" || remote_die 'UDP port 443 inventory failed'
   [[ -z "${udp_inventory}" ]] || remote_die 'UDP port 443 is unexpectedly bound'
   competing="$(ps -eo pid=,args= | awk -v self="$$" -v parent="${PPID}" '$1!=self && $1!=parent && $0 ~ /(v126-cutover|v126-staging-prerequisite-sync|pg_dump|pg_restore|caddy[[:space:]]+(reload|stop|start)|docker[[:space:]]+compose[[:space:]]+(up|down|stop|start|restart|create|run))/ {count++} END {print count+0}')" || remote_die 'competing-process inventory failed'
@@ -1468,9 +1516,9 @@ check_28() { [[ "$(systemctl is-active caddy)" == active ]] || remote_die 'Caddy
 check_29() { [[ "$(remote_hash "${CADDYFILE}")" == "${CADDYFILE_SHA256}" ]] || remote_die 'Caddyfile bytes changed'; printf '%s\n' 'CADDYFILE=EXACT_SHA256'; }
 check_30() { caddy validate --config "${CADDYFILE}" --adapter caddyfile >/dev/null || remote_die 'Caddy validation failed'; printf '%s\n' 'CADDY_VALIDATE=PASS'; }
 check_31() { [[ ! -e "${DRAIN_MARKER}" && ! -L "${DRAIN_MARKER}" ]] || remote_die 'drain marker appeared'; printf '%s\n' 'DRAIN_MARKER=ABSENT'; }
-check_32() { curl -fsSI "https://${REMOTE_DOMAIN}/health" >/dev/null || remote_die 'public headers unavailable'; printf '%s\n' 'PUBLIC_HEADERS=CAPTURED'; }
+check_32() { require_public_health_headers capture || return $?; printf '%s\n' 'PUBLIC_HEADERS=CAPTURED'; }
 check_33() { require_tls_profile || return $?; printf '%s\n' 'TLS12=AVAILABLE;TLS13=UNAVAILABLE'; }
-check_34() { local headers; headers="$(curl -fsSI "https://${REMOTE_DOMAIN}/health")" || remote_die 'public headers unavailable'; if printf '%s\n' "${headers}" | grep -i '^alt-svc:'; then remote_die 'Alt-Svc unexpectedly present'; fi; printf '%s\n' 'ALT_SVC=ABSENT'; }
+check_34() { require_public_health_headers absent || return $?; printf '%s\n' 'ALT_SVC=ABSENT'; }
 check_35() { local udp_inventory; udp_inventory="$(ss -H -lun 'sport = :443')" || remote_die 'UDP port 443 inventory failed'; [[ -z "${udp_inventory}" ]] || remote_die 'UDP port 443 unexpectedly bound'; printf '%s\n' 'UDP_443=ABSENT'; }
 check_36() { local queue size; read_db_snapshot queue size || return $?; [[ "${size}" =~ ^[1-9][0-9]*$ ]] || remote_die 'database size is not positive'; printf '%s\n' 'POSTGRESQL_SIZE=POSITIVE_BYTES'; }
 check_37() { local queue size required free; read_db_snapshot queue size || return $?; [[ "${size}" =~ ^[1-9][0-9]*$ ]] || remote_die 'database size malformed'; required=$((4 * size)); ((required >= 2147483648)) || required=2147483648; free="$(df --output=avail -B1 "${BACKUP_BASE}" | awk 'NR==2 {print $1}')" || remote_die 'free space unavailable'; [[ "${free}" =~ ^[0-9]+$ ]] && ((free >= required)) || remote_die 'free space below required threshold'; printf '%s\n' 'FREE_SPACE=AT_LEAST_MAX_4X_DB_OR_2G'; }
@@ -1499,6 +1547,7 @@ run_check_action() {
   function="check_${ordinal}"
   [[ "$(type -t "${function}")" == function ]] || remote_die 'post-sync check implementation is missing'
   if [[ "${V126_PREREQ_FIXTURE_FAIL_COMMAND_CHECK:-}" == 17 && "${ordinal}" == 17 ]]; then export V126_FIXTURE_CURL_HEALTH_ERROR=1; fi
+  if [[ "${V126_PREREQ_FIXTURE_FAIL_COMMAND_CHECK:-}" == "${ordinal}" && ( "${ordinal}" == 32 || "${ordinal}" == 34 ) ]]; then export V126_FIXTURE_HEALTH_HEADERS_ERROR=1; fi
   if [[ "${V126_PREREQ_FIXTURE_FAIL_COMMAND_CHECK:-}" == 23 && "${ordinal}" == 23 ]]; then export V126_FIXTURE_CURL_VERSION_ERROR=1; fi
   if [[ "${V126_PREREQ_FIXTURE_FAIL_COMMAND_CHECK:-}" == 24 && "${ordinal}" == 24 ]]; then export V126_FIXTURE_DB_OUTPUT_ERROR=1; fi
   if [[ "${V126_PREREQ_FIXTURE_FAIL_COMMAND_CHECK:-}" == 26 && "${ordinal}" == 26 ]]; then export V126_FIXTURE_DOCKER_LOGS_ERROR=1; fi

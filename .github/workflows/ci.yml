@@ -1102,6 +1102,7 @@ jobs:
           bash -n scripts/v126-staging-prerequisite-sync.sh
           bash -n scripts/test-v126-staging-prerequisite-sync.sh
           PYTHONPYCACHEPREFIX="${RUNNER_TEMP}/ht12r-pycache" python3 -m py_compile scripts/v126-staging-prerequisite-sync-helper.py
+          PYTHONPYCACHEPREFIX="${RUNNER_TEMP}/ht12u-pycache" python3 -m py_compile scripts/test-v126-health-headers.py
       - name: Exercise staging admission guard fixtures
         run: bash scripts/validate-staging-admission.sh --self-test docker-compose.yml
       - name: Exercise V126 executable cutover contract fixtures

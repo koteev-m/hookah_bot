@@ -200,15 +200,28 @@ write_remote_mocks() {
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' curl >> "${V126_FIXTURE_MOCK_LOG}"
-if [[ " $* " == *' --config - '* ]]; then /bin/cat >/dev/null; printf '%s\n' '{"ok":true,"result":{"url":"","pending_update_count":0}}'; exit 0; fi
-if [[ "$*" == *'/version'* ]]; then
-  printf '%s\n' '{"version":"f577934691a1a7a79ba327c54e2055425142b7be"}'
-  if [[ "${V126_FIXTURE_CURL_VERSION_ERROR:-0}" == 1 ]]; then exit 18; fi
-  exit 0
-fi
-if [[ " $* " == *' -fsSI '* ]]; then printf '%s\n' 'HTTP/2 200' 'content-type: application/json'; exit 0; fi
-printf '%s\n' '{"status":"ok"}'
-if [[ "${V126_FIXTURE_CURL_HEALTH_ERROR:-0}" == 1 ]]; then exit 18; fi
+case "$*" in
+  '--config -')
+    input="$(/bin/cat)"
+    [[ "${input}" == *'/getWebhookInfo"' ]] || exit 95
+    printf '%s\n' '{"ok":true,"result":{"url":"","pending_update_count":0}}' ;;
+  '-fsS http://127.0.0.1:8080/version')
+    printf '%s\n' '{"version":"f577934691a1a7a79ba327c54e2055425142b7be"}'
+    if [[ "${V126_FIXTURE_CURL_VERSION_ERROR:-0}" == 1 ]]; then exit 18; fi ;;
+  '-fsSI http://127.0.0.1:8080/miniapp/'|'-fsSI https://staging.hookahtootah.club/miniapp/')
+    printf 'HTTP/2 200\r\ncontent-type: text/html\r\n\r\n' ;;
+  '-fsSI https://staging.hookahtootah.club/health') exit 22 ;;
+  '-fsS http://127.0.0.1:8080/health'|'-fsS http://127.0.0.1:8080/db/health'|\
+  '-fsS https://staging.hookahtootah.club/health'|'-fsS https://staging.hookahtootah.club/db/health')
+    printf '%s\n' '{"status":"ok"}'
+    if [[ "${V126_FIXTURE_CURL_HEALTH_ERROR:-0}" == 1 ]]; then exit 18; fi ;;
+  '--disable --silent --fail --connect-timeout 5 --max-time 15 --proto =https --suppress-connect-headers --request GET --dump-header - --output /dev/null --write-out HT12U_STATUS=%{http_code} https://staging.hookahtootah.club/health')
+    printf 'HTTP/2 200\r\ncontent-type: application/json\r\n'
+    if [[ "${V126_FIXTURE_HEALTH_HEADERS_ERROR:-0}" == 2 ]]; then printf 'aLt-SvC: PRIVATE_HEADER_SENTINEL\r\n'; fi
+    printf '\r\nHT12U_STATUS=200'
+    if [[ "${V126_FIXTURE_HEALTH_HEADERS_ERROR:-0}" == 1 ]]; then exit 18; fi ;;
+  *) printf '%s\n' 'unexpected mock curl method/URL/options' >&2; exit 95 ;;
+esac
 MOCK
   cat > "${mock}/caddy" <<'MOCK'
 #!/usr/bin/env bash
@@ -479,13 +492,16 @@ run_signal_matrix() {
 }
 
 run_negative_command_matrix() {
-  local command_name root ordinal_batch ordinal run_id name next next_name pid
+  local command_name root ordinal_batch ordinal run_id name next next_name pid pre_files
   local pids
-  for command_name in curl-health curl-version db-output docker-logs tls13-client ss; do
+  for command_name in curl-health curl-version health-headers health-alt-svc db-output docker-logs tls13-client ss; do
     root="$(make_case "prewrite-${command_name}-error")"
+    pre_files="$(shasum -a 256 "${root}/remote/staging/docker-compose.yml" "${root}/remote/staging/.env" "${root}/remote/staging/scripts/check-staging-maintenance-config.sh")"
     case "${command_name}" in
       curl-health) run_case "${root}" 1 V126_PREREQ_FIXTURE_STOP_AFTER_PREWRITE=1 V126_FIXTURE_CURL_HEALTH_ERROR=1 ;;
       curl-version) run_case "${root}" 1 V126_PREREQ_FIXTURE_STOP_AFTER_PREWRITE=1 V126_FIXTURE_CURL_VERSION_ERROR=1 ;;
+      health-headers) run_case "${root}" 1 V126_PREREQ_FIXTURE_STOP_AFTER_PREWRITE=1 V126_FIXTURE_HEALTH_HEADERS_ERROR=1 ;;
+      health-alt-svc) run_case "${root}" 1 V126_PREREQ_FIXTURE_STOP_AFTER_PREWRITE=1 V126_FIXTURE_HEALTH_HEADERS_ERROR=2 ;;
       db-output) run_case "${root}" 1 V126_PREREQ_FIXTURE_STOP_AFTER_PREWRITE=1 V126_FIXTURE_DB_OUTPUT_ERROR=1 ;;
       docker-logs) run_case "${root}" 1 V126_PREREQ_FIXTURE_STOP_AFTER_PREWRITE=1 V126_FIXTURE_DOCKER_LOGS_ERROR=1 ;;
       tls13-client) run_case "${root}" 1 V126_PREREQ_FIXTURE_STOP_AFTER_PREWRITE=1 V126_FIXTURE_TLS13_CLIENT_ERROR=1 ;;
@@ -493,8 +509,11 @@ run_negative_command_matrix() {
     esac
     [[ ! -e "${root}/remote/staging/scripts/validate-staging-admission.sh" ]]
     [[ "$(find "${root}/remote/backups" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" == 0 ]]
+    [[ ! -e "${root}/local-evidence/checkpoints/L13-SYNC_WRITE_COMPOSE_COMPLETED.started.json" ]]
+    [[ "$(shasum -a 256 "${root}/remote/staging/docker-compose.yml" "${root}/remote/staging/.env" "${root}/remote/staging/scripts/check-staging-maintenance-config.sh")" == "${pre_files}" ]]
+    if grep -Rq 'PRIVATE_HEADER_SENTINEL' "${root}/local-evidence" "${root}/stdout" "${root}/stderr"; then fail 'health header leaked into evidence'; fi
   done
-  for ordinal_batch in '17 23 24' '26 33 35'; do
+  for ordinal_batch in '17 23 24' '26 33 35' '32 34'; do
     pids=()
     for ordinal in ${ordinal_batch}; do
       (
@@ -516,6 +535,7 @@ run_negative_command_matrix() {
   done
 }
 
+python3 "${source_root}/scripts/test-v126-health-headers.py"
 make_release_template
 
 if [[ "${V126_PREREQ_FIXTURE_ONLY_SIGNAL:-0}" == 1 ]]; then
@@ -782,7 +802,8 @@ printf '%s\n' \
   'SUCCESS_PATH=PASS;GATE_A=NOT_STARTED' \
   'WRITE_FAILURES=DURING_4/4;AFTER_4/4;ROLLBACK_ONCE=PASS' \
   'POST_SYNC_FAILURES=40/40;NO_LATER_PHASE=PASS' \
-  'NEGATIVE_COMMAND_ERRORS=PREWRITE_6/6;POST_SYNC_6/6' \
+  'NEGATIVE_COMMAND_ERRORS=PREWRITE_8/8;POST_SYNC_8/8' \
+  'HEALTH_HEADERS=GET_200;ALT_SVC_CASE_INSENSITIVE;PREWRITE_CONFIG_WRITES_ON_FAILURE=0' \
   'ROLLBACK_EVIDENCE=STRICT;DURABLE_UNLINK=FSYNCED' \
   'SIGNALS=SIGINT_130,SIGTERM_143;REPEATED_TRAP_ROLLBACK=ONCE' \
   'TRANSFER_REJECTIONS=ZERO_AND_PARTIAL' \
