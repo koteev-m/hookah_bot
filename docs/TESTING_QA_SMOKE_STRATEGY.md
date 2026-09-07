@@ -529,6 +529,24 @@ sync does not authorize backup/rehearsal, drain, Caddy change, image load/transf
 start/restart, `V126_SMOKE`, Flyway/V126 or product/database/Telegram writes. After HT-12R main
 integration, reselect and prove the exact release SHA and V126 image tag/ID.
 
+### HT-12W release CI / prerequisite-to-cutover regressions
+
+`python3 scripts/test-v126-release-ci.py` sources the real sequencer validator, proof writer and
+receipt consumer; it is mandatory inside the existing complete cutover harness/`compose` CI gate.
+The confirmed 12-job main projection is independent of the embedded tracked release job contract;
+a bounded workflow-shape check rejects drift or unsupported matrix/name syntax. Regressions reject
+every missing required job, duplicates, same-length substitutions, unexpected jobs, failed/skipped/
+in-progress jobs, wrong or absent run fields, malformed data and plausible stdout with command
+failure. Rechecksummed receipt/log fixtures must still reject old or forged local proof and invalid,
+missing, unsealed or symlinked Actions evidence. Required existing CI/image gates remain unchanged.
+
+Synthetic metadata exercises actual prerequisite `atomic_install` and the actual cutover owner
+predicate: preserving 501:0 is not root readiness. The real remote-baseline fixture separately
+accepts agreed metadata and rejects owner/group/mode/symlink/byte mismatches and missing protected
+inputs; existing receipt-bound authority substitutions cover unbound database/identity hashes.
+These are local fixtures, not staging readiness evidence. No server ownership or protected file is
+changed for tests. Run process-sensitive cutover/prerequisite/real-process harnesses serially.
+
 ### HT-12P executable V126 cutover quality gate
 
 `scripts/test-v126-cutover.sh` is the executable fixture authority for the sequencer; the canonical

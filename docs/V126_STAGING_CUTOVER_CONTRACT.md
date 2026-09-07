@@ -1,8 +1,8 @@
 # PostgreSQL V126 Staging Cutover Contract
 
-Status: **HT-12R tracked pre-Gate-A prerequisite-sync candidate / exact main baseline verified /
-local fixture validation, independent review and exact green feature-branch Actions required / no
-staging access or cutover started**.
+Status: **HT-12W release CI contract repair / bounded review PASS / final local and feature CI gates pending /
+ownership and protected-input readiness remain blocked / no cutover authorization**.
+Earlier task sections below retain their historical release evidence.
 
 This document is the single policy and state-machine authority for the PostgreSQL V126 staging
 cutover. Tracked executable authority is divided without overlap:
@@ -17,6 +17,95 @@ Other product, QA, deployment and migration documents may summarize this contrac
 files. They must not reproduce a second V126 command sequence. Neither this document nor the
 presence of the scripts or successful prerequisite sync authorizes staging access, backup creation, Caddy mutation, backend
 stop/start, maintenance activation, image transfer, Flyway/V126, manual smoke or recovery.
+
+## HT-12W current release CI and readiness boundary
+
+HT-12W starts from main `8436ee7b219ca6074aceecc47d6bf5f24803621d`, tree
+`ea5ffc713337ce01c2ad7a0308363a99dbbf31dd`. Fresh main Actions `34146214650` is workflow
+`CI` / `.github/workflows/ci.yml` / workflow ID `230370033`, `push/main`, attempt `1`, exact
+base SHA, completed/success with 12 distinct successful jobs. This is base evidence, not
+candidate or future integrated-release CI. Historical 11/11 reports and frozen receipts remain
+valid evidence of their own releases and are not rewritten or accepted as the new proof schema.
+
+The sequencer's embedded `release_ci_python` is the tracked release CI contract. It enumerates
+exact expanded job names independently of the response being checked; the mandatory cutover
+harness verifies agreement with the current workflow's literal job/matrix definitions. All
+required jobs must appear exactly once and be completed/success. Missing, duplicated, renamed
+or unexpected jobs fail closed, including an arbitrary set of twelve successes. Workflow ID/name,
+repository (explicit `gh --repo`), run ID, event, branch, SHA, attempt and terminal result remain
+exact. A command failure cannot produce a baseline PASS even after plausible stdout.
+
+The local baseline proof now records `main_actions_jobs=12/12`, the tracked CI contract hash
+and the exact Actions JSON hash. Non-secret Actions JSON is retained as operator-owned mode-0400
+`artifacts/main-actions.json`; every receipt-chain verification revalidates it and reconstructs
+the expected local proof hash from the immutable run manifest. Old, missing or forged metadata
+has no compatibility bypass. The changed script identity requires a newly bound future run;
+this feature does not reinterpret old runs or permit cutover initialization.
+
+### Ownership observation and separately approved repair
+
+The successful prerequisite `V126-PRE-GATE-A-SYNC-20260907T181340Z` remains terminal PASS
+(exit 0, four writes, 40/40 checks). It intentionally preserved captured owners; prerequisite
+PASS does **not** prove ownership readiness for cutover. Admission already exists and the
+maintenance keys are OFF/empty/empty. Do not repeat or undo this sync to repair metadata.
+
+Scoped read-only SSH at `2026-09-07T19:39:20Z` confirms operator `0:0`, `.env` `0:0/0600`,
+Compose `501:0/0644`, and both guards `501:0/0755`. All four file hashes still equal the
+post-sync evidence. `/`, `/opt`, `/opt/hookah-bot` are `0:0/0755`; critically,
+`/opt/hookah-bot/scripts` is **501:0/0755**. These paths are non-symlinks without POSIX access
+or default ACL attributes. UID 501 has no server passwd mapping; it is the local operator UID.
+The ordinary deploy script uses `rsync -azR`, which preserves ownership when permitted, including
+implied directories. This is a plausible source of imported UID 501, not proven historical
+attribution or an approved server service identity.
+
+Changing only the three files to root would leave the scripts directory owner able to replace
+the guards. The minimal proposed follow-up therefore needs **separate explicit approval for
+the directory as well as the three files**:
+
+1. Recheck root operator, exact paths/non-symlinks, owners/modes/ACLs and pre-change hashes;
+   stop on drift. Confirm that no authorized deployment consumer depends on UID 501 writes.
+2. Separately approve `/opt/hookah-bot/scripts` owner/group `501:0 → 0:0`, retaining mode 0755
+   and its contents. No recursive ownership change or permission expansion is proposed.
+3. Approve only `docker-compose.yml`, `scripts/check-staging-maintenance-config.sh` and
+   `scripts/validate-staging-admission.sh` under `/opt/hookah-bot` for `501:0 → 0:0`, retaining
+   exact bytes and modes 0644/0755/0755. `.env` needs no metadata change.
+4. Record before/after hashes, modes, ownership and parent/ACL checks; require the unchanged
+   executing-operator guard to pass. Review the next ordinary deploy's owner-preservation
+   behavior separately, because it can reintroduce this metadata. No deploy is part of the repair.
+
+This task performs none of these metadata changes and adds no ownership-policy code. No parent
+ACL or group/other write repair was observed as necessary in the checked paths; unobserved drift
+must be evaluated separately. Removing UID 501 directory write authority is an access change,
+not merely a cosmetic file correction. No whole-host account/process inventory was performed.
+
+### Protected-input readiness (bounded observation, no file preparation)
+
+| Purpose | Observed / proposed path | Provenance | Approval evidence | Required schema | Owner/mode | Missing before baseline readiness |
+| --- | --- | --- | --- | --- | --- | --- |
+| Exact remote database target | Approved path not found. **Proposed**, not observed: `/etc/hookah-bot/staging/v126-database-target.uri` | Derive from an existing authoritative staging secret/config source via its operator; a proposed filename or `.env` existence is not target provenance. | No current path/source approval found in scoped HT-13 or operator evidence. | One nonempty UTF-8 postgres/postgresql URI line; explicit host/user/database/password, valid port, no fragment/control values, only unique sequencer-allowed options. | Proposed `0:0/0600`, regular non-symlink. | Approve source and exact staging binding/consumer endpoint, then separately prepare outside Git and verify schema/hash/metadata without printing URI or credentials. No database password is requested in chat. |
+| Temporary maintenance identities | Approved path not found. **Proposed**, not observed: `/etc/hookah-bot/staging/v126-maintenance-identities.env` | Existing controlled alias authority; historic HT-11 alias ledger and the observed old manifest are leads, not current identity/role authority. | No current numeric mapping, exact subset or V126 input approval established. | Exactly two unique keys: `STAGING_MAINTENANCE_ALLOWED_USER_IDS` and `STAGING_MAINTENANCE_ALLOWED_CHAT_IDS`, with explicit nonempty comma-separated integer lists; subsequently require canonical, consistent valid users/private chats/linked group under the maintenance guard. | Proposed `0:0/0600`, regular non-symlink. | Approve only required controlled Guest/Owner/MIX and linked staff-group identities from an authoritative alias source; verify current mapping/permissions separately, exclude CLIENT/non-MIX by default. Then separately prepare and bind hash/path. No IDs in ordinary chat or pilot staff attendance is needed for preparation. |
+| Historical alias/provenance lead (not a cutover input) | **Observed** `/etc/hookah-bot/staging/telegram-allowlist.manifest` | UTF-8, nonempty, hash `e0c1ddec26924a193e3f6eeebc5c9157ca0d978c0772e2716a6b3693e65c4e8b`; labels TEST_GUEST_ALLOWED, TEST_VENUE_OWNER, TEST_STAFF_GROUP and old traffic-policy keys present. Local HT-11 alias-ledger also names MIX. | Historical only; no current approval established. | Does not match the maintenance two-key schema. Label presence proves neither numeric IDs nor current authority. | Observed `0:0/0600`, regular non-symlink. | Reconcile approved aliases only; never copy all Manifest B, restore ALLOWLIST or infer that every historical participant belongs in the new input. |
+
+`/etc/hookah-bot` and `/etc/hookah-bot/staging` were observed as root-owned mode-0700,
+non-symlink directories without POSIX ACL attributes; `/etc` is `0:0/0755`. Proposed paths
+were not probed or created. Scoped references were searched in existing HT-13 evidence and
+`/Users/Shared/hookah-bot-operator/staging/v126`, excluding worktrees/release subtrees and raw
+archives; no approved database/maintenance-input path emerged. This is not a host-global absence
+claim. The source HT-11 alias-ledger is
+`HT11-V126-20260824T100218-MSK/alias-ledger.txt` under that operator directory. Evidence summaries
+are in `/private/tmp/ht12w-evidence`; secret and numeric identity contents were not emitted.
+
+Init checks path shape; baseline checks protected-file existence, metadata and content binding;
+detailed database/identity parsing occurs in later consumers. Therefore baseline hashes alone do
+not establish provenance, approval, semantic target correctness or role/client readiness. Establish
+these before any newly authorized init/baseline; missing inputs do not block this independent CI fix.
+
+The retained archive for source `8436ee7b219ca6074aceecc47d6bf5f24803621d` (SHA-256
+`7bccdd9ad4c20d92f4a3a3a3470d4e1d73df8ec063452b1e5246839036717e17`) remains evidence for that
+source. This feature changes source/script identity, so it cannot claim that archive as an exact
+candidate/future-main image or retag it. Reassess artifact applicability after a separately chosen
+integrated release; no new local release-image cycle or old archive change occurs here. Feature CI,
+main integration, input/ownership readiness and later Gate A/B/C remain separate decisions.
 
 ## HT-12R tracked prerequisite-sync boundary
 

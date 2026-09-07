@@ -857,9 +857,9 @@ verify_receipt() {
   for expected_stage in "${V126_STAGES[@]}"; do
     expected_artifact_specs+=("$(stage_expected_artifacts "${expected_stage}")")
   done
-  python3 - "${STATE_DIR}/run.json" "${STATE_DIR}/receipts" "${STATE_DIR}/authorizations" \
-    "${STATE_DIR}/artifacts" "${stage}" "${SCRIPT_SHA256}" "${GATE_A_TOKEN}" \
-    "${GATE_B_TOKEN}" "${GATE_C_TOKEN}" "${expected_artifact_specs[@]}" <<'PY'
+  {
+    release_ci_python
+    cat <<'PY'
 import hashlib
 import json
 import os
@@ -1042,6 +1042,16 @@ for index, stage in enumerate(stages[: stages.index(requested) + 1], start=1):
     for name in expected_logged:
         if artifact_hashes[name] != logged_artifacts[name]:
             raise SystemExit(f"operation log ARTIFACT hash mismatch: {stage} name={name}")
+    if stage == "BASELINE_VERIFIED":
+        actions_sha = read_main_actions(
+            os.path.join(artifacts_dir, "main-actions.json"),
+            manifest["release_sha"], manifest["main_actions_run_id"], sealed=True,
+        )
+        if artifact_hashes["main-actions"] != actions_sha:
+            raise SystemExit("main Actions evidence hash mismatch")
+        expected_local = hashlib.sha256(local_baseline_bytes(manifest, actions_sha)).hexdigest()
+        if artifact_hashes["local-baseline"] != expected_local:
+            raise SystemExit("local baseline proof differs from current release CI contract")
     intent_path = os.path.join(os.path.dirname(receipts_dir), "intents", f"{index:02d}-{stage}.intent.json")
     intent, intent_hash = read_canonical(intent_path, intent_path + ".sha256")
     expected_intent_keys = {
@@ -1066,6 +1076,9 @@ for index, stage in enumerate(stages[: stages.index(requested) + 1], start=1):
     anchor_hashes[stage] = digest
 print(previous_hash)
 PY
+  } | python3 - "${STATE_DIR}/run.json" "${STATE_DIR}/receipts" "${STATE_DIR}/authorizations" \
+    "${STATE_DIR}/artifacts" "${stage}" "${SCRIPT_SHA256}" "${GATE_A_TOKEN}" \
+    "${GATE_B_TOKEN}" "${GATE_C_TOKEN}" "${expected_artifact_specs[@]}"
 }
 
 receipt_artifact_hash() {
@@ -5011,32 +5024,121 @@ for line in sys.stdin.buffer.read().splitlines(): value=zlib.crc32(line,value)
 print(value if value < 2**31 else value-2**32)'
 }
 
+# Release CI contract: exact expanded job names from .github/workflows/ci.yml.
+# The cutover harness checks workflow agreement; the release binds this entire script.
+release_ci_python() {
+  cat <<'PY_CI'
+import hashlib
+import json
+import os
+import stat
+
+CI_REPOSITORY = "koteev-m/hookah_bot"
+CI_WORKFLOW_ID = 230370033
+CI_REQUIRED_JOBS = (
+    "backend",
+    "backend-archive-reproducibility (21)",
+    "backend-compile (21)",
+    "backend-ktlint (21)",
+    "backend-migration-sanity (21)",
+    "backend-release-critical-routes (21)",
+    "backend-telegram-lightweight (21)",
+    "backend-venue-booking-rbac (21)",
+    "compose",
+    "docker (backend)",
+    "miniapp (20)",
+    "miniapp-e2e-smoke (20)",
+)
+CI_CONTRACT_SHA256 = hashlib.sha256(json.dumps({
+    "repository": CI_REPOSITORY, "workflow_id": CI_WORKFLOW_ID,
+    "workflow_path": ".github/workflows/ci.yml", "workflow_name": "CI",
+    "event": "push", "branch": "main", "attempt": 1,
+    "jobs": CI_REQUIRED_JOBS, "unexpected_jobs": "reject",
+}, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+def ci_unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise SystemExit("main Actions duplicate JSON key")
+        result[key] = value
+    return result
+
+def read_main_actions(path, release_sha, run_id, sealed=False):
+    info = os.lstat(path)
+    modes = (0o400,) if sealed else (0o400, 0o600)
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) not in modes:
+        raise SystemExit("main Actions evidence file mode or ownership mismatch")
+    with open(path, "rb") as handle:
+        raw = handle.read()
+    try:
+        doc = json.loads(raw, object_pairs_hook=ci_unique_object)
+    except (ValueError, UnicodeError):
+        raise SystemExit("main Actions malformed JSON")
+    if not isinstance(doc, dict):
+        raise SystemExit("main Actions must be an object")
+    required = {
+        "databaseId": int(run_id), "workflowName": "CI", "workflowDatabaseId": CI_WORKFLOW_ID,
+        "event": "push", "headBranch": "main", "headSha": release_sha,
+        "attempt": 1, "status": "completed", "conclusion": "success",
+    }
+    for key, value in required.items():
+        if type(doc.get(key)) is not type(value) or doc[key] != value:
+            raise SystemExit(f"main Actions mismatch: {key}")
+    jobs = doc.get("jobs")
+    if not isinstance(jobs, list) or any(not isinstance(job, dict) for job in jobs):
+        raise SystemExit("main Actions jobs must be an object list")
+    names = [job.get("name") for job in jobs]
+    if any(not isinstance(name, str) for name in names) or len(set(names)) != len(names):
+        raise SystemExit("main Actions job names are invalid or duplicated")
+    if set(names) != set(CI_REQUIRED_JOBS):
+        raise SystemExit("main Actions job set differs from tracked release CI contract")
+    if any(job.get("status") != "completed" or job.get("conclusion") != "success" for job in jobs):
+        raise SystemExit("main Actions required jobs are not completed successes")
+    return hashlib.sha256(raw).hexdigest()
+
+def local_baseline_bytes(manifest, actions_sha):
+    rows = [
+        ("run_id", manifest["run_id"]), ("release_sha", manifest["release_sha"]),
+        ("release_tree", manifest["release_tree"]),
+        ("release_parents", ",".join(manifest["release_parents"])),
+        ("main_actions_run_id", manifest["main_actions_run_id"]),
+        ("main_actions_jobs", f"{len(CI_REQUIRED_JOBS)}/{len(CI_REQUIRED_JOBS)}"),
+        ("main_actions_contract_sha256", CI_CONTRACT_SHA256),
+        ("main_actions_sha256", actions_sha),
+        ("migration_sha256", "ad11b2f95a6c73db226d3cd1ba53ac800a514c72d454b9255f379566195e08b5"),
+        ("flyway_checksum", "1701638026"), ("v126_image_id", manifest["v126_image_id"]),
+        ("result", "PASS"),
+    ]
+    return "".join(f"{key}={value}\n" for key, value in rows).encode()
+PY_CI
+}
+
 validate_main_actions_run() {
   local target="$1"
-  python3 - "${target}" "${RELEASE_SHA}" <<'PY'
-import json
+  {
+    release_ci_python
+    cat <<'PY'
 import sys
-with open(sys.argv[1], "rt", encoding="utf-8") as handle:
-    doc = json.load(handle)
-required = {
-    "name": "CI",
-    "event": "push",
-    "headBranch": "main",
-    "headSha": sys.argv[2],
-    "attempt": 1,
-    "status": "completed",
-    "conclusion": "success",
-}
-for key, value in required.items():
-    if doc.get(key) != value:
-        raise SystemExit(f"main Actions mismatch: {key}")
-jobs = doc.get("jobs")
-if not isinstance(jobs, list) or len(jobs) != 11:
-    raise SystemExit("main Actions must contain exactly 11 jobs")
-names = [job.get("name") for job in jobs]
-if len(set(names)) != 11 or any(job.get("status") != "completed" or job.get("conclusion") != "success" for job in jobs):
-    raise SystemExit("main Actions jobs are not 11/11 distinct completed successes")
+read_main_actions(sys.argv[1], sys.argv[2], sys.argv[3])
 PY
+  } | python3 - "${target}" "${RELEASE_SHA}" "${MAIN_ACTIONS_RUN_ID}"
+}
+
+write_local_baseline_proof() {
+  local target="$1"
+  local actions="$2"
+  {
+    release_ci_python
+    cat <<'PY'
+import sys
+manifest = json.load(open(sys.argv[1], "rt", encoding="utf-8"))
+actions_sha = read_main_actions(sys.argv[2], manifest["release_sha"], manifest["main_actions_run_id"], sealed=True)
+fd = os.open(sys.argv[3], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+with os.fdopen(fd, "wb") as handle:
+    handle.write(local_baseline_bytes(manifest, actions_sha))
+PY
+  } | python3 - "${STATE_DIR}/run.json" "${actions}" "${target}"
 }
 
 verify_release_baseline_local() {
@@ -5063,12 +5165,17 @@ verify_release_baseline_local() {
     die 'executing sequencer does not match the release-tracked sequencer identity'
   local actions_json="${STATE_DIR}/tmp/main-actions-${MAIN_ACTIONS_RUN_ID}.json"
   [[ ! -e "${actions_json}" && ! -L "${actions_json}" ]] || die 'main Actions temporary artifact exists'
-  gh run view "${MAIN_ACTIONS_RUN_ID}" --json name,event,headBranch,headSha,attempt,status,conclusion,jobs > "${actions_json}"
+  gh run view "${MAIN_ACTIONS_RUN_ID}" --repo koteev-m/hookah_bot \
+    --json databaseId,workflowName,workflowDatabaseId,event,headBranch,headSha,attempt,status,conclusion,jobs > "${actions_json}" ||
+    die 'main Actions evidence command failed'
   chmod 0600 "${actions_json}"
-  validate_main_actions_run "${actions_json}"
+  validate_main_actions_run "${actions_json}" || die 'main Actions release contract rejected'
   local actions_hash
   actions_hash="$(hash_file "${actions_json}")"
-  rm -f -- "${actions_json}"
+  local sealed_actions="${STATE_DIR}/artifacts/main-actions.json"
+  [[ ! -e "${sealed_actions}" && ! -L "${sealed_actions}" ]] || die 'sealed main Actions evidence exists'
+  chmod 0400 "${actions_json}"
+  mv "${actions_json}" "${sealed_actions}"
 
   local migration_root='backend/app/src/main/resources/db/migration'
   local pg_path="${migration_root}/postgresql/V126__support_thread_read_message_cursor.sql"
@@ -5092,12 +5199,7 @@ verify_release_baseline_local() {
   [[ "$(docker image inspect --format '{{.Id}}' "${V126_IMAGE_TAG}")" == "${V126_IMAGE_ID}" ]] ||
     die 'local V126 image ID mismatch before any remote call'
   local record="${STATE_DIR}/tmp/local-baseline.proof"
-  printf '%s\n' \
-    "run_id=${RUN_ID}" "release_sha=${RELEASE_SHA}" "release_tree=${RELEASE_TREE}" \
-    "release_parents=${RELEASE_PARENTS}" "main_actions_run_id=${MAIN_ACTIONS_RUN_ID}" \
-    'main_actions_jobs=11/11' "migration_sha256=${V126_MIGRATION_SHA256}" \
-    "flyway_checksum=${V126_FLYWAY_CHECKSUM}" "v126_image_id=${V126_IMAGE_ID}" 'result=PASS' > "${record}"
-  chmod 0600 "${record}"
+  write_local_baseline_proof "${record}" "${sealed_actions}" || die 'local baseline proof failed'
   local_emit_artifact local-baseline "$(hash_file "${record}")"
   local_emit_artifact main-actions "${actions_hash}"
   rm -f -- "${record}"

@@ -565,12 +565,12 @@ make_instrumented_script() {
     oracle_specs+="$(stage_artifacts_oracle "${oracle_stage}")"$'\n'
   done
   validate_stage_markers "${source}"
-  python3 - "${source}" "${target}" "$(stage_csv)" "${keep_stage}" "${oracle_specs}" <<'PY'
+  python3 - "${source}" "${target}" "$(stage_csv)" "${keep_stage}" "${oracle_specs}" "${SCRIPT_DIR}/test-v126-release-ci.py" <<'PY'
 import hashlib
 import os
 import sys
 
-source, target, stages_csv, keep_stage, oracle_specs = sys.argv[1:]
+source, target, stages_csv, keep_stage, oracle_specs, ci_fixture = sys.argv[1:]
 stages = stages_csv.split(",")
 spec_lines = oracle_specs.splitlines()
 if len(spec_lines) != len(stages):
@@ -593,7 +593,9 @@ for stage in stages:
             [
                 f"{name}() {{\n",
                 "  local artifact_name\n",
+                (f"  python3 '{ci_fixture}' --emit-state \"${{STATE_DIR}}\"\n" if stage == "BASELINE_VERIFIED" else ""),
                 f"  while IFS= read -r artifact_name; do\n",
+                ("    [[ \"${artifact_name}\" != local-baseline && \"${artifact_name}\" != main-actions ]] || continue\n" if stage == "BASELINE_VERIFIED" else ""),
                 "    printf 'ARTIFACT\\t%s\\t%s\\n' \"${artifact_name}\" "
                 f"\"$(hash_text 'fixture:{stage}:'\"${{artifact_name}}\")\"\n",
                 f"  done < <(printf '%s\\n' '{expected_artifacts[stage]}' | tr ',' '\\n')\n",
@@ -668,13 +670,18 @@ seed_chain() {
   for fixture_stage in "${STAGES[@]}"; do
     expected_specs+="$(stage_artifacts_oracle "${fixture_stage}")"$'\n'
   done
-  python3 - "${state_dir}" "${count}" "$(stage_csv)" "${expected_specs}" <<'PY'
+  local ci_hashes='{}'
+  if (( count > 0 )); then
+    ci_hashes="$(python3 "${SCRIPT_DIR}/test-v126-release-ci.py" --seed-state "${state_dir}")"
+  fi
+  python3 - "${state_dir}" "${count}" "$(stage_csv)" "${expected_specs}" "${ci_hashes}" <<'PY'
 import hashlib
 import json
 import os
 import sys
 
-state_dir, raw_count, stages_csv, expected_specs_raw = sys.argv[1:]
+state_dir, raw_count, stages_csv, expected_specs_raw, ci_hashes_raw = sys.argv[1:]
+ci_hashes = json.loads(ci_hashes_raw)
 count = int(raw_count)
 stages = stages_csv.split(",")
 spec_lines = expected_specs_raw.splitlines()
@@ -753,7 +760,8 @@ for index, stage in enumerate(stages[:count], start=1):
     artifact_pairs = [
         (
             name,
-            hashlib.sha256(("artifact:" + stage + ":" + name).encode()).hexdigest(),
+            (ci_hashes[name] if stage == "BASELINE_VERIFIED" and name in ci_hashes else
+             hashlib.sha256(("artifact:" + stage + ":" + name).encode()).hexdigest()),
         )
         for name in expected_artifacts[stage]
     ]
@@ -4025,11 +4033,12 @@ run_real_baseline_fixture() {
   local expected_maintenance_sha="$6"
   local expected_admission_sha="$7"
   local container_environment_mode="${8:-exact}"
+  local metadata_mode="${9:-agreed}"
   bash -s -- "${CUTOVER_SCRIPT}" "${staging}" "${run_id}" "${RELEASE_SHA}" \
     "${database_file}" "${identities_file}" "${expected_compose_sha}" \
     "${expected_maintenance_sha}" "${expected_admission_sha}" \
     "${container_environment_mode}" "${V126_IMAGE_ID}" \
-    "${FIXTURE_BASELINE_CADDY_SHA}" <<'SH'
+    "${FIXTURE_BASELINE_CADDY_SHA}" "${metadata_mode}" <<'SH'
 set -Eeuo pipefail
 source "$1"
 fixture_staging="$2"
@@ -4043,6 +4052,7 @@ fixture_admission_sha="$9"
 fixture_container_environment_mode="${10}"
 fixture_v126_image_id="${11}"
 fixture_caddy_sha="${12}"
+fixture_metadata_mode="${13}"
 V126_INTERNAL_REMOTE_OPERATION_KIND=STAGE
 V126_INTERNAL_REMOTE_OPERATION_NAME=BASELINE_VERIFIED
 V126_INTERNAL_REMOTE_ACTION=baseline
@@ -4055,9 +4065,22 @@ V126_INTERNAL_REMOTE_BASELINE_CADDY_SHA256=NONE
 V126_INTERNAL_REMOTE_BASELINE_ENV_SHA256=NONE
 V126_INTERNAL_REMOTE_V126_IMAGE_ID="${fixture_v126_image_id}"
 
+id() {
+  case "$*" in
+    -un|-gn) printf '%s\n' root ;;
+    *) command id "$@" ;;
+  esac
+}
 stat() {
   if [[ "${1:-}" == -c && "${2:-}" == '%a:%U:%G' ]]; then
-    python3 - "$3" "$(id -un)" "$(id -gn)" <<'PY'
+    local owner="$(id -un)" group="$(id -gn)"
+    case "$3" in
+      docker-compose.yml|scripts/check-staging-maintenance-config.sh|scripts/validate-staging-admission.sh)
+        [[ "${fixture_metadata_mode}" != post-sync-501 ]] || owner=501
+        [[ "${fixture_metadata_mode}" != wrong-group ]] || group=501
+        ;;
+    esac
+    python3 - "$3" "${owner}" "${group}" <<'PY'
 import os
 import stat
 import sys
@@ -4206,6 +4229,37 @@ test_real_baseline_secret_egress() {
   compose_sha="$(sha256_file "${staging}/docker-compose.yml")"
   maintenance_sha="$(sha256_file "${staging}/scripts/check-staging-maintenance-config.sh")"
   admission_sha="$(sha256_file "${staging}/scripts/validate-staging-admission.sh")"
+
+  local metadata_mode
+  for metadata_mode in post-sync-501 wrong-group; do
+    expect_failure "root cutover rejects ${metadata_mode} prerequisite metadata" \
+      'operator file ownership or mode mismatch' \
+      run_real_baseline_fixture "${staging}" "${metadata_mode}" "${database_file}" \
+      "${identities_file}" "${compose_sha}" "${maintenance_sha}" "${admission_sha}" exact "${metadata_mode}"
+    [[ ! -e "${staging}/.v126-runs/${metadata_mode}" ]] || fail 'ownership rejection created baseline state'
+    ! grep -F $'ARTIFACT\t' "${LAST_OUTPUT}" >/dev/null || fail 'ownership rejection emitted PASS artifacts'
+  done
+  local missing
+  for missing in database identities; do
+    local db_input="${database_file}" identities_input="${identities_file}"
+    if [[ "${missing}" == database ]]; then db_input+='.missing'; else identities_input+='.missing'; fi
+    expect_failure "missing protected ${missing} input refuses baseline" 'operator file is unavailable' \
+      run_real_baseline_fixture "${staging}" "missing-${missing}" "${db_input}" \
+      "${identities_input}" "${compose_sha}" "${maintenance_sha}" "${admission_sha}"
+    [[ ! -e "${staging}/.v126-runs/missing-${missing}" ]] || fail 'missing input sealed baseline'
+  done
+  chmod 0600 "${staging}/docker-compose.yml"
+  expect_failure 'baseline rejects incorrect Compose mode' 'operator file ownership or mode mismatch' \
+    run_real_baseline_fixture "${staging}" wrong-mode "${database_file}" \
+    "${identities_file}" "${compose_sha}" "${maintenance_sha}" "${admission_sha}"
+  chmod 0644 "${staging}/docker-compose.yml"
+  mv "${staging}/scripts/validate-staging-admission.sh" "${staging}/scripts/admission-original"
+  ln -s admission-original "${staging}/scripts/validate-staging-admission.sh"
+  expect_failure 'baseline rejects symlink despite exact bytes and metadata' 'operator file is unavailable or a symlink' \
+    run_real_baseline_fixture "${staging}" symlink-source "${database_file}" \
+    "${identities_file}" "${compose_sha}" "${maintenance_sha}" "${admission_sha}"
+  rm "${staging}/scripts/validate-staging-admission.sh"
+  mv "${staging}/scripts/admission-original" "${staging}/scripts/validate-staging-admission.sh"
 
   expect_success 'real baseline consumes restricted secret-bearing authority inputs without egress' \
     run_real_baseline_fixture "${staging}" "${run_id}" "${database_file}" \
@@ -7863,6 +7917,8 @@ main() {
   export STAGING_MAINTENANCE_ALLOWED_USER_IDS="${SECRET_CANARY}"
   export STAGING_MAINTENANCE_ALLOWED_CHAT_IDS="${SECRET_CANARY}"
 
+  expect_success 'release CI exact set and downstream proof regressions' \
+    python3 "${SCRIPT_DIR}/test-v126-release-ci.py"
   test_syntax_and_markers
   test_independent_stage_artifact_contract
   test_init_contract
@@ -7910,4 +7966,6 @@ main() {
   printf 'V126 executable cutover contract tests: PASS\n'
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

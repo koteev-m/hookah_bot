@@ -5,6 +5,38 @@
 Read the matching task entry first; preserved snapshots below are evidence/history, not
 fresh instructions or authorization. Update concurrent tasks separately at meaningful boundaries.
 
+### HT-12W — 2026-09-07
+
+- Goal: repair tracked cutover CI contract and prepare ownership/protected-input resolution;
+  stop at a green feature candidate, without HT-13 or main integration.
+- Worktree `/private/tmp/hookah-ht-12w-ci-contract`, branch `codex/ht-12w-ci-contract`;
+  base `8436ee7b219ca6074aceecc47d6bf5f24803621d`, tree
+  `ea5ffc713337ce01c2ad7a0308363a99dbbf31dd`. Fresh remote main matches; exact base
+  CI `34146214650`, workflow `CI`, push/main, attempt 1, 12/12 success.
+- Decision: embedded exact release job-name contract checked against the tracked workflow;
+  explicit repository/workflow/run provenance; retained mode-0400 Actions evidence;
+  downstream receipt replay validates CI and reconstructs the new local proof. No old-proof bypass.
+- Validation: focused suite 9/9, full cutover harness 448 PASS assertions, real-process 7/7,
+  syntax/compile and diff sanity pass. Initial sandbox ps denial was resolved by an authorized
+  local rerun. Full unchanged prerequisite harness is running; final results are in
+  `/private/tmp/ht12w-evidence/REPORT.md`. One independent read-only reviewer returned PASS
+  with no blockers. Feature commit/push and exact feature CI are next; no live operation exists.
+- External blockers: root cutover rejects three 501:0 release files. Parent `scripts` is also
+  501:0/0755, so three-file chown alone is insufficient. Separately approve that one directory
+  plus the three exact file ownership changes, preserving bytes/modes. No metadata change made.
+  Old alias manifest exists at 0:0/0600 but is not an approved maintenance input. Database and
+  maintenance input paths/provenance/approval remain unconfirmed; proposed paths and minimal
+  preparation are in the canonical cutover contract's HT-12W readiness table.
+- Preserved: successful sync `V126-PRE-GATE-A-SYNC-20260907T181340Z` (four writes, 40/40)
+  and old release archive; no repeat, rollback, retag or rebuild. A changed source SHA requires
+  separate archive applicability review. Original dirty/release worktrees and scripts/dev untouched.
+- Authorized remainder: one read-only independent review, explicit-file feature commit and
+  ordinary non-force feature push, exact CI wait. No PR/merge/deploy, remote writes, cutover
+  init/stage/authorize, new protected inputs, product/DB/Telegram writes or Gate A/B/C.
+- Next: complete the remaining local prerequisite gate and exact feature CI; candidate SHA/tree,
+  CI receipt and final Git status are recorded in `/private/tmp/ht12w-evidence/REPORT.md`.
+  Stop for a separate main-integration decision. Ownership/inputs are not declared ready.
+
 ### HT-12V — 2026-09-07
 
 - Goal: repair prerequisite process-observer self-match, verify one feature candidate and stop
