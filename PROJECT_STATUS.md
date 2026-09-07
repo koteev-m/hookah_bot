@@ -5,6 +5,32 @@
 Read the matching task entry first; preserved snapshots below are evidence/history, not
 fresh instructions or authorization. Update concurrent tasks separately at meaningful boundaries.
 
+### HT-12U — 2026-09-07
+
+- Goal: reconcile the already reviewed health-response-header GET probe with the integrated
+  workflow instructions; no new health/405 diagnosis or product behavior work.
+- Sources: main `4785070623611043d23778ece047edf43ba00662`, tree
+  `dc602e8c51038a55628aff9a88a659b83f2192f3`, has CI `34086765241` successful at 12/12;
+  reviewed HT-12U `71e7a8fbfe3617204c983b7e381b3def6626d40a`, tree
+  `de0ddda7b3fb06ed2c3476bef0899f314d9684f3`, has feature CI `33990992887` successful at
+  12/12. Their exact common parent is `47b79ca86574024f60be6dcbdf3533c561f24d02`.
+- State/decision: ordinary merge `4dc821c2c27838e93481fb15db79d085146c4830` has parents
+  HT-12U then main. It preserves main `AGENTS.md` and `docs/MODEL_WORKFLOW.md`, and preserves
+  HT-12U health-header scripts/tests, CI and release docs byte-for-byte. The only remaining
+  reconciliation is this checkpoint update; main integration, V126 deploy and HT-13 remain
+  unperformed and unauthorized.
+- Checks/evidence: Git object/ancestry and both exact CI runs verified. Existing candidate
+  validation remains applicable after byte identity confirmation; docs sanity and diff check
+  are required on the final feature candidate. A new exact feature CI is mandatory after push.
+- Authorization: one checkpoint-only commit and ordinary non-force push of this feature are
+  authorized. No rebase, cherry-pick, squash, amend, force push, PR, main mutation, SSH,
+  staging/production, sync/cutover/deploy, backup, Flyway/V126 or global configuration work.
+  `scripts/dev/` is not read or changed. Historical release artifacts/evidence are not reused
+  or renamed for this candidate.
+- Next: verify final byte identity, push the reconciled feature candidate, require its 12/12
+  Actions including health-header regression, prerequisite/cutover and image/archive gates,
+  then stop for separate main-integration authorization.
+
 ### HT-WORKFLOW-MODELS — 2026-09-07
 
 - Goal: common instructions, temporary Astra coding priority and portable continuation;
