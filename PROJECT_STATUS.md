@@ -1,5 +1,66 @@
 # Project Status
 
+## Task checkpoints
+
+Read the matching task entry first; preserved snapshots below are evidence/history, not
+fresh instructions or authorization. Update concurrent tasks separately at meaningful boundaries.
+
+### HT-WORKFLOW-MODELS — 2026-09-07
+
+- Goal: common instructions, temporary Astra coding priority and portable continuation;
+  docs-only local draft, not a product audit or release task.
+- Worktree: `/private/tmp/hookah-ht-workflow-models`; branch `codex/ht-workflow-models`;
+  base/HEAD `47b79ca86574024f60be6dcbdf3533c561f24d02`. A fresh fetch in the authorized
+  commit/push phase found `origin/main` unchanged at that same SHA; no merge or rebase.
+  Original dirty `main` is `4daf5546fb622a6b967398f5c25b7bed41d7fa05`, 16 commits behind
+  that local ref. No fetch/live remote freshness claim; no foreign changes copied.
+- State/decisions: draft in `AGENTS.md`, [model policy](docs/MODEL_WORKFLOW.md) and this
+  existing checkpoint; no second memory file. `ASTRA_CODE_PRIORITY` is the requested
+  policy; `BALANCED_COST` requires the user's explicit decision. The task instructions
+  govern this run; draft files are uncommitted/unintegrated and do not update other worktrees.
+- Direct workflow review: user reports ChatGPT read the full package and verified SHA-256
+  `d0335364c8a73986785b86e548b8d2b55406d4245c04a5d6b9d9a3b4418846bb`.
+  Structure/model policy accepted; requested final-report, policy-reference, Astra-link and
+  checkpoint corrections applied locally. User then authorized one feature commit and ordinary
+  non-force push of the three reviewed files; main integration remains unperformed. Follow-up
+  docs checks are recorded separately in
+  [review correction results](/private/tmp/ht-workflow-models-review-corrections-20260907.md).
+- Checks/evidence: initial worktree clean; Git refs/log and ancestry checked;
+  official sources and safe local client observations are linked in the model policy.
+  Docs sanity, seven manual policy scenarios and `git diff --check` passed;
+  [local validation record](/private/tmp/ht-workflow-models-validation.txt) (temporary artifact).
+  Original dirty tracked files/global config and preserved release snapshot are unchanged.
+  Shared model-cache bytes changed during inspection; cause unknown, selected defaults/efforts
+  unchanged, no explicit write or restoration. No runtime tests/build/deploy required or run.
+- Unfinished operations: none started; no mutation/rollback or release run to resume here.
+- Authorization: one explicit-file feature commit and ordinary non-force push are authorized
+  for `AGENTS.md`, `PROJECT_STATUS.md` and `docs/MODEL_WORKFLOW.md` only. Main integration,
+  merge, rebase, force push, SSH, staging/production, Docker builds, sync/cutover/deploy/
+  migrations, product code, global config/catalog/account changes and Google-journal writes
+  remain unauthorized. `scripts/dev/` not read or changed. Existing release evidence,
+  procedures and one-time permissions remain intact.
+- Blocker: none for this docs task; exact experimental-key/client/account support remains
+  partly unverified as documented, with no paid probe. Next: final docs check, authorized
+  feature commit/push and candidate-specific Actions check; main integration needs separate
+  authorization.
+
+### Other task boundaries — observed 2026-09-07, not resumed
+
+- HT-12U/HT-13: local HT-12U ref `codex/ht-12u-health-response-headers` is
+  `71e7a8fbfe3617204c983b7e381b3def6626d40a`; `git merge-base --is-ancestor` against this
+  base returns `1`. No HT-12U integration into this base is established. V126 deployment,
+  live migration state and fresh release evidence were not checked. No task is closed or
+  authorized to resume by this workflow update.
+- Separate product audit: user reports via ChatGPT that it was received and reviewed there;
+  audited checkout was `4daf5546fb622a6b967398f5c25b7bed41d7fa05`. This is not a fresh
+  current-main or staging check. Codex has not read that audit in this task; no findings are
+  imported or acted on here, and its checkpoint/worktree remains outside this task.
+
+## Preserved product/release snapshot
+
+The dated text below is retained unchanged. Its "fresh/current/pending" statements refer to
+their recorded task boundary, not a fresh Git/CI/runtime verification by HT-WORKFLOW-MODELS.
+
 Last verified: 2026-09-04.
 
 ## 1. Current stage
