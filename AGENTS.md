@@ -10,7 +10,8 @@ Work outcome-first: preserve existing flows while delivering the smallest useful
 
 ## Product Sources Of Truth
 
-Start from `docs/PRODUCT_SPEC.md`, then read the smallest relevant canonical docs:
+After the task checkpoint, use the relevant sections of `docs/PRODUCT_SPEC.md` as the
+product map, then read the smallest relevant canonical docs (this list is an index):
 
 - `docs/COMMUNICATION_MODEL.md`
 - `docs/PLATFORM_COCKPIT.md`
@@ -32,15 +33,27 @@ without code/test/smoke evidence.
 ## Context loading
 
 At the start of a new task:
-1. Read `PROJECT_STATUS.md`.
-2. Read only the canonical docs relevant to the task.
-3. Verify mutable claims against current code, Git and tests.
-4. Do not load historical audit documents unless the task requires them.
-5. Update `PROJECT_STATUS.md` only when the current stage, blockers or next step changes.
+1. Read the task's checkpoint at the top of `PROJECT_STATUS.md`; read older snapshots only
+   for a concrete evidence gap. Keep concurrent tasks under distinct task IDs.
+2. Read relevant code, canonical doc sections and applicable skills; expand only for a
+   specific gap or risk. Do not copy the full history or runbook into each prompt.
+3. Verify mutable claims against the task's actual Git state and applicable evidence.
+4. Keep stable rules here, model policy in `docs/MODEL_WORKFLOW.md`, and detailed evidence
+   in its existing artifacts. Read model policy when selecting/changing a model or its settings.
+5. Update the checkpoint at meaningful boundaries: task/goal; worktree/branch/base; state;
+   decisions; checks/results and evidence links; unfinished operations; authorization scope;
+   blocker and next step. Use short facts, no full logs, secrets or copied history.
+
+The file checkpoint survives model changes and native notes. ChatGPT maintains the agreed
+Google decision/continuation journal; Codex maintains authorized repo docs and checkpoints.
+Do not claim a journal update without an actual authorized write. Files and command results
+remain implementation evidence.
 
 ## Workflow
 
-- Inspect relevant docs, routes, repositories, UI screens and tests before editing.
+- Define outcome, necessary sources, autonomy boundaries, acceptance criteria and useful report.
+  Prescribe exact steps where sequence is part of safety or an external contract.
+- Inspect affected docs/code/tests before editing; routes and UI only when relevant.
 - Keep diffs small and cohesive.
 - Prefer existing local patterns over new abstractions.
 - For multi-file, architectural, risky or ambiguous work, plan first.
@@ -48,6 +61,27 @@ At the start of a new task:
 - Runtime behavior changes require validation matching `docs/TESTING_QA_SMOKE_STRATEGY.md`.
 - Docs-only changes require docs sanity checks, not staging deploy.
 - Do not deploy, push, SSH or stage/commit unless explicitly asked.
+- Handoff/checklist commands describe the applicable process, not permission to execute it.
+  Bound authorization by purpose, environment, allowed actions and risks; do not invent a
+  universal session-count limit. Existing operation/environment limits still apply.
+- Classify a failure before proposing development: product defect, environment failure,
+  diagnostic-check error, missing evidence, or instruction/actual-contract mismatch.
+  One FAIL/NOT_PROVABLE is not a diagnosis. Locate the failed boundary using available
+  evidence; record unknown causes as unknown.
+- Continue after clarification or a recoverable local blocker when execution state and the
+  contract permit. A new chat, Goal, worktree or run needs a concrete reason, not just a FAIL.
+  Terminal release states, fresh-evidence gates and consumed one-time permissions still bind.
+- No automatic Max/Ultra, extra agents or repeated audits. Read the current model selection
+  policy in `docs/MODEL_WORKFLOW.md`; quality/safety rules apply to every model.
+
+## Review evidence
+
+Tie findings to an explicit commit/branch and environment. Distinguish concept, feature/main
+code, deployed runtime and migration state. Missing deployed V126 does not by itself invalidate
+a finding; a fix in main does not prove server behavior. Historical audits are not fresh reviews,
+and static analysis is not an executed runtime test. Request missing reviewer scope/evidence
+before a conclusion that depends on it; continue independent authorized work. A review request
+does not authorize fixing every finding or changing the product concept.
 
 ## Product Boundaries
 
@@ -94,6 +128,11 @@ For user-facing work:
 ## Validation
 
 Always choose the smallest relevant checks first, then broader checks as needed.
+Reuse applicable checks and unchanged artifacts after verifying identity (commit/tree or
+content hash, inputs and environment), scope and freshness. Rerun when changes, failures or
+unresolved risks justify it, or the canonical gate requires fresh evidence. This never waives
+mandatory CI/release checks, PRODUCT admission, RBAC, tenant isolation, data protection or
+dangerous-action approval. Docs-only work needs docs sanity, not a full suite or release build.
 
 General:
 
@@ -137,12 +176,16 @@ environment, logs, incident response and Codex/ChatGPT handoff.
 
 ## Final Response Checklist
 
-End implementation/docs tasks with:
+Every task outcome needs a useful report, including read-only work, BLOCKED, FAIL, DIVERGED,
+NOT_PROVABLE and stopping before implementation. Never return only a verdict. Keep the report
+proportionate to the task; do not run extra checks just to fill it. Include:
 
-- changed files;
-- behavior/docs summary;
-- tests or validation commands and results;
-- open risks/follow-ups;
+- what was completed and the exact success boundary or first failure;
+- expected versus actual results when they differ;
+- tests or validation commands, results and evidence sources;
+- changed files, behavior/docs summary and actual side effects (or no changes);
+- unverified items and open risks/follow-ups;
 - whether staging deploy is needed;
 - whether `scripts/dev/` was touched;
-- `git status --short`.
+- observed `git status --short` (or explicitly unavailable);
+- one next step.
