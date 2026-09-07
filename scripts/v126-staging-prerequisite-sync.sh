@@ -348,6 +348,7 @@ remote_python() {
       V126_FIXTURE_DB_OUTPUT_ERROR="${V126_FIXTURE_DB_OUTPUT_ERROR:-0}" \
       V126_FIXTURE_DOCKER_LOGS_ERROR="${V126_FIXTURE_DOCKER_LOGS_ERROR:-0}" \
       V126_FIXTURE_SS_ERROR="${V126_FIXTURE_SS_ERROR:-0}" \
+      V126_FIXTURE_PROCESS_MODE="${V126_FIXTURE_PROCESS_MODE:-valid}" \
       V126_FIXTURE_TLS13_CLIENT_ERROR="${V126_FIXTURE_TLS13_CLIENT_ERROR:-0}" \
       V126_PREREQ_FIXTURE_TAMPER_FIRST_FAILURE_MODE="${V126_PREREQ_FIXTURE_TAMPER_FIRST_FAILURE_MODE:-0}" \
       V126_PREREQ_FIXTURE_TAMPER_WRITE_MARKER="${V126_PREREQ_FIXTURE_TAMPER_WRITE_MARKER:-}" \
@@ -1185,9 +1186,90 @@ require_pre_file_baseline() {
   [[ "$(env_key_count "${STAGING_PATH}/.env" STAGING_MAINTENANCE_MODE):$(env_key_count "${STAGING_PATH}/.env" STAGING_MAINTENANCE_ALLOWED_USER_IDS):$(env_key_count "${STAGING_PATH}/.env" STAGING_MAINTENANCE_ALLOWED_CHAT_IDS)" == '0:0:0' ]] || remote_die 'pre-sync environment already contains prerequisite keys'
 }
 
+# HT12V_PROCESS_GUARD_BEGIN
+require_no_competing_processes() {
+  local result status=0
+  # The program travels on stdin, never in ps-visible argv. No remote files are needed.
+  result="$(python3 - "$$" "${PPID}" 2>/dev/null <<'PY_PROCESS_GUARD'
+import os
+import re
+import subprocess
+import sys
+
+
+def refuse(pid, category, reason):
+    print(f"PROCESS_GUARD pid={pid} category={category} reason={reason}")
+    raise SystemExit(1)
+
+
+try:
+    observer = os.getpid()
+    excluded = {observer, os.getppid(), int(sys.argv[1]), int(sys.argv[2])}
+    try:
+        producer = subprocess.Popen(
+            ["ps", "-ww", "-eo", "pid=,ppid=,args="],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            env=dict(os.environ, LC_ALL="C"),
+        )
+    except OSError:
+        refuse(0, "INVENTORY", "launch_failed")
+    try:
+        inventory, _ = producer.communicate(timeout=10)
+    except subprocess.TimeoutExpired:
+        producer.kill()
+        producer.communicate()
+        refuse(producer.pid, "INVENTORY", "timeout")
+    if producer.returncode != 0:
+        refuse(producer.pid, "INVENTORY", "producer_failed")
+    if not inventory or not inventory.endswith(b"\n"):
+        refuse(0, "INVENTORY", "incomplete")
+    rows = {}
+    for line in inventory.split(b"\n")[:-1]:
+        match = re.fullmatch(rb"[ \t]*([1-9][0-9]{0,9})[ \t]+(0|[1-9][0-9]{0,9})[ \t]+([^\x00-\x1f\x7f]+)", line)
+        if match is None:
+            refuse(0, "INVENTORY", "malformed")
+        pid, parent = int(match[1]), int(match[2])
+        if pid in rows or not match[3].strip():
+            refuse(pid, "INVENTORY", "malformed")
+        rows[pid] = (parent, match[3])
+    # A successful all-process snapshot must include this live observer and its ps child.
+    if observer not in rows or producer.pid not in rows or rows[producer.pid][0] != observer:
+        refuse(0, "INVENTORY", "incomplete")
+    patterns = (
+        ("CUTOVER", rb"v126-cutover"),
+        ("PREREQUISITE", rb"v126-staging-prerequisite-sync"),
+        ("BACKUP", rb"pg_dump"),
+        ("RESTORE", rb"pg_restore"),
+        ("CADDY", rb"caddy\s+(reload|stop|start)"),
+        ("COMPOSE", rb"docker\s+compose\s+(up|down|stop|start|restart|create|run)"),
+    )
+    for pid, (_, command) in rows.items():
+        if pid in excluded:
+            continue
+        for category, pattern in patterns:
+            if re.search(pattern, command):
+                refuse(pid, category, "competing_operation")
+    print("PROCESS_INVENTORY=PASS")
+except Exception:
+    refuse(0, "PARSER", "parser_failed")
+PY_PROCESS_GUARD
+)" || status=$?
+  if [[ "${status}" == 0 && "${result}" == 'PROCESS_INVENTORY=PASS' ]]; then
+    return 0
+  fi
+  # Never forward arbitrary parser/producer output, even on a plausible nonzero result.
+  if [[ "${status}" != 0 && "${result}" =~ ^PROCESS_GUARD\ pid=[0-9]{1,10}\ category=(INVENTORY|PARSER|CUTOVER|PREREQUISITE|BACKUP|RESTORE|CADDY|COMPOSE)\ reason=(launch_failed|timeout|producer_failed|incomplete|malformed|parser_failed|competing_operation)$ ]]; then
+    printf '%s\n' "${result}" >&2
+  else
+    printf '%s\n' 'PROCESS_GUARD pid=0 category=PARSER reason=parser_failed' >&2
+  fi
+  remote_die 'competing-process guard refused continuation'
+}
+# HT12V_PROCESS_GUARD_END
+
 baseline_full() {
   require_pre_file_baseline || return $?
-  local backend postgres queue db_size competing logs udp_inventory
+  local backend postgres queue db_size logs udp_inventory
   backend="$(one_running_id backend)" || return $?
   postgres="$(one_running_id postgres)" || return $?
   [[ "$(docker inspect --format '{{.Image}}' "${backend}")" == "${V125_IMAGE_ID}" ]] || remote_die 'backend image ID differs from exact V125 image'
@@ -1218,8 +1300,7 @@ baseline_full() {
   require_public_health_headers absent || return $?
   udp_inventory="$(ss -H -lun 'sport = :443')" || remote_die 'UDP port 443 inventory failed'
   [[ -z "${udp_inventory}" ]] || remote_die 'UDP port 443 is unexpectedly bound'
-  competing="$(ps -eo pid=,args= | awk -v self="$$" -v parent="${PPID}" '$1!=self && $1!=parent && $0 ~ /(v126-cutover|v126-staging-prerequisite-sync|pg_dump|pg_restore|caddy[[:space:]]+(reload|stop|start)|docker[[:space:]]+compose[[:space:]]+(up|down|stop|start|restart|create|run))/ {count++} END {print count+0}')" || remote_die 'competing-process inventory failed'
-  [[ "${competing}" == 0 ]] || remote_die 'competing mutation-capable process detected'
+  require_no_competing_processes || return $?
 }
 
 phase_started_path() { printf '%s/phases/%s-%s.started.json\n' "${CHECKPOINT_ROOT}" "$1" "$2"; }

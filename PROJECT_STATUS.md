@@ -5,6 +5,36 @@
 Read the matching task entry first; preserved snapshots below are evidence/history, not
 fresh instructions or authorization. Update concurrent tasks separately at meaningful boundaries.
 
+### HT-12V — 2026-09-07
+
+- Goal: repair prerequisite process-observer self-match, verify one feature candidate and stop
+  before main integration. Worktree `/private/tmp/hookah-ht-12v-process-guard`, branch
+  `codex/ht-12v-process-guard`; exact base `55721216febf00111db26ad6e37cdd02728424a5`, tree
+  `7874153749dee12f763f9b6d176aef370399841e`. Fresh remote main matches; the original dirty
+  checkout's local main remains `4daf5546fb622a6b967398f5c25b7bed41d7fa05` and is untouched.
+- Decision: stdin-embedded observer, checked full-width ps inventory and status, exact PID
+  exclusions, bounded sanitized refusal. Shared prewrite/capture/restored-baseline callsite;
+  no equivalent host-process guard in cutover. No new lock or later-source-file dependency.
+- Checks: real macOS production-process regression 7/7; full prerequisite harness 18 groups,
+  40/40 post-sync failures, seven process prewrite refusals with zero config writes, existing
+  command/signal/rollback-once gates; unchanged health regression 8/8; complete cutover harness,
+  syntax/compile, maintenance/image/admission self-tests, Compose fixture and diff check PASS.
+  Only the final harness display denominator was corrected from 17 to 18 after that full run;
+  the executed fixture body is byte-identical. A parallel local real-ps attempt correctly
+  detected this task's running prerequisite harness; the final serial rerun passed.
+- Review/state: one independent read-only full-diff review found no blockers. Feature commit,
+  ordinary push and exact CI remain within this task; candidate/CI receipts and final status
+  are recorded in `/private/tmp/ht12v-report.md` after those operations. No main authorization.
+- Boundary: application/Mini App/migrations/PRODUCT/maintenance/GET-health remain unchanged;
+  four config writes, rollback-once and `GATE_A=NOT_STARTED` preserved. No SSH, live diagnosis,
+  sync/cutover outside fixtures, deploy, new HT-13 artifact or main integration. No unfinished
+  live operation. `scripts/dev/`, dirty/release worktrees and frozen evidence remain untouched.
+- Historical source: `/private/tmp/ht13-preparation-20260907T.yDuLOJ/SYNC-EXECUTION-REPORT.md`;
+  original L06 matching rows unavailable. No claim that fixing the reproduced self-match proves
+  the absence of an original transient competitor or future HT-13 success.
+- Next boundary: after exact feature CI succeeds, separately authorized main integration only.
+  Do not resume HT-13 or reuse its consumed sync authorization.
+
 ### HT-12U — 2026-09-07
 
 - Goal: reconcile the already reviewed health-response-header GET probe with the integrated

@@ -55,6 +55,27 @@ post-sync checks, even if a failing producer emitted exact-looking output first.
 unavailable only by an explicit server protocol-version rejection; a missing client capability or
 other probe error is not evidence of the required baseline.
 
+The prerequisite process guard is embedded in the streamed payload, so it is available before
+remote evidence/source allocation. It reads full-width `ps -ww -eo pid=,ppid=,args=` through a
+bounded child, checks the producer status before parsing, and requires a nonempty, newline-complete,
+structurally valid inventory with unique PIDs and the live observer/collector relationship.
+A missing/failed/timed-out producer, invalid/incomplete inventory or failed parser refuses
+continuation, including plausible stdout before nonzero exit. The observer program travels on stdin;
+only exact observer/caller shell PIDs and the existing shell/parent exclusions are exempt. No
+interpreter class or descendant subtree is exempt. Existing cutover/prerequisite, PostgreSQL backup/
+restore, Caddy action and Compose mutation predicates remain blocking. Refusal emits only PID
+(`0` when unavailable), a fixed category and reason; raw argv, environment and producer/parser
+stderr are neither emitted nor persisted. This is a point-in-time process guard, not a new lock
+or proof against a process starting after the snapshot.
+
+The same guard serves prewrite, rollback-input capture and restored-baseline verification through
+`baseline_full`. Cutover has no equivalent host-process predicate; its container/session inventories
+are separate and unchanged. HT-12V reproduces the old observer self-match separately from the
+terminal L06 run `V126-PRE-GATE-A-SYNC-20260907T134859Z`: its original matching rows were not retained,
+so a separate transient original competitor cannot be retrospectively excluded. Historical evidence,
+archive and consumed authorization remain unchanged; repairing this guard does not prove the rest
+of HT-13 will succeed or authorize another sync.
+
 Public response-header acquisition uses bounded, certificate-verified **GET `/health`** with the
 body discarded. The shared prerequisite verifier serves the prewrite/restored baseline and checks
 32/34: curl must complete successfully, the final status must be exactly 200, and complete valid

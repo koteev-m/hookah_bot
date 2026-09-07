@@ -258,11 +258,34 @@ fi
 exit 0
 MOCK
   cat > "${mock}/ps" <<'MOCK'
-#!/usr/bin/env bash
-set -euo pipefail
-printf '%s\n' ps >> "${V126_FIXTURE_MOCK_LOG}"
-exit 0
+#!/usr/bin/env python3
+import os,sys
+assert sys.argv[1:] == ['-ww', '-eo', 'pid=,ppid=,args=']
+with open(os.environ['V126_FIXTURE_MOCK_LOG'], 'a') as log: log.write('ps\n')
+observer, collector = os.getppid(), os.getpid()
+rows = f'{observer} 1 python3 -\n{collector} {observer} ps -ww -eo pid=,ppid=,args=\n'
+mode = os.environ.get('V126_FIXTURE_PROCESS_MODE', 'valid')
+if mode == 'empty': rows = ''
+elif mode == 'malformed': rows += 'PRIVATE_PROCESS_ARG_SENTINEL\n'
+elif mode == 'incomplete': rows = f'{observer} 1 python3 -\n'
+elif mode == 'conflict': rows += f'2000000000 {observer} python3 inert pg_dump PRIVATE_PROCESS_ARG_SENTINEL\n'
+elif mode == 'ps-error': rows = ''
+elif mode not in ('valid', 'valid-error'): raise SystemExit(99)
+sys.stdout.write(rows)
+sys.stderr.write('PRIVATE_PROCESS_ARG_SENTINEL')
+raise SystemExit(23 if mode in ('ps-error', 'valid-error') else 0)
 MOCK
+  # Fail only the production guard's inline parser; other harness Python remains real.
+  printf '#!/usr/bin/env bash\n' > "${mock}/python3"
+  cat >> "${mock}/python3" <<'MOCK'
+if [[ "${V126_FIXTURE_PROCESS_MODE:-valid}" == parser-error && "$#" == 3 && "$1" == - && "$2" =~ ^[0-9]+$ && "$3" =~ ^[0-9]+$ ]]; then
+  cat >/dev/null
+  printf 'PROCESS_INVENTORY=PASS'
+  printf 'PRIVATE_PROCESS_ARG_SENTINEL' >&2
+  exit 23
+fi
+MOCK
+  printf 'exec %q "$@"\n' "$(command -v python3)" >> "${mock}/python3"
   cat > "${mock}/df" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -535,6 +558,22 @@ run_negative_command_matrix() {
   done
 }
 
+run_process_prewrite_matrix() {
+  local mode root pre_files
+  for mode in conflict empty malformed incomplete ps-error valid-error parser-error; do
+    root="$(make_case "process-${mode}")"
+    pre_files="$(shasum -a 256 "${root}/remote/staging/docker-compose.yml" "${root}/remote/staging/.env" "${root}/remote/staging/scripts/check-staging-maintenance-config.sh")"
+    run_case "${root}" 1 V126_FIXTURE_PROCESS_MODE="${mode}"
+    [[ ! -e "${root}/remote/staging/scripts/validate-staging-admission.sh" ]]
+    [[ "$(find "${root}/remote/backups" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" == 0 ]]
+    [[ ! -e "${root}/local-evidence/checkpoints/L13-SYNC_WRITE_COMPOSE_COMPLETED.started.json" ]]
+    [[ -f "${root}/local-evidence/checkpoints/L06-PREWRITE_BASELINE_PASSED.failed.json" ]]
+    [[ "$(shasum -a 256 "${root}/remote/staging/docker-compose.yml" "${root}/remote/staging/.env" "${root}/remote/staging/scripts/check-staging-maintenance-config.sh")" == "${pre_files}" ]]
+    grep -Rq 'PROCESS_GUARD pid=' "${root}/local-evidence" || fail 'process refusal diagnostic missing'
+    if grep -Rq 'PRIVATE_PROCESS_ARG_SENTINEL' "${root}/local-evidence" "${root}/stdout" "${root}/stderr"; then fail 'process argv leaked into evidence'; fi
+  done
+}
+
 python3 "${source_root}/scripts/test-v126-health-headers.py"
 make_release_template
 
@@ -677,6 +716,10 @@ for batch_start in $(seq 1 4 40); do
 done
 pass
 
+# Process inventory failures/conflicts stop at L06 with zero writes and no remote allocation.
+run_process_prewrite_matrix
+pass
+
 # Natural command failures in prewrite health/version/DB/TLS, conflict-log and UDP probes fail closed.
 run_negative_command_matrix
 pass
@@ -812,4 +855,4 @@ printf '%s\n' \
   'PRODUCT_MATRIX=4_PASS/7_FAIL' \
   'CADDY_VERSION_MATRIX=4_PASS/8_FAIL' \
   'REAL_SSH=0;REAL_DOCKER=0;REAL_POSTGRESQL=0;REAL_CADDY=0;REAL_TELEGRAM=0' \
-  "FIXTURE_GROUPS=${passes}/17"
+  "FIXTURE_GROUPS=${passes}/18"

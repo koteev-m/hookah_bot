@@ -461,6 +461,8 @@ bash -n scripts/v126-staging-prerequisite-sync.sh
 bash -n scripts/test-v126-staging-prerequisite-sync.sh
 python3 -m py_compile scripts/v126-staging-prerequisite-sync-helper.py
 python3 -m py_compile scripts/test-v126-health-headers.py
+python3 -m py_compile scripts/test-v126-process-guard.py
+python3 scripts/test-v126-process-guard.py
 bash scripts/test-v126-staging-prerequisite-sync.sh
 bash scripts/test-v126-cutover.sh
 bash scripts/check-staging-maintenance-config.sh --self-test
@@ -492,6 +494,25 @@ case-insensitive Alt-Svc refusal, strict status/header parsing, redirect/timeout
 transfer rejection, curl failure after exact-looking output, and body/sensitive-header privacy.
 The full mocked controller separately verifies header failures before any of the four config
 writes, natural producer failures at checks 32/34, and restored-baseline/rollback-once behavior.
+
+HT-12V adds a separate mandatory `python3 scripts/test-v126-process-guard.py` CI step with real
+Linux `ps` and owned inert Python/Bash/awk processes. It executes the exact embedded production
+function through Bash stdin, including conditional invocation with errexit disabled. Fixtures cover
+all existing predicate categories, interpreter/child competitors, valid versus empty/partial/
+malformed/duplicate inventory, failed producer with valid-looking stdout, parser failure and privacy.
+The old predicate is extracted from base `55721216febf00111db26ad6e37cdd02728424a5`; FIFO readiness
+and release barriers keep its awk alive during the real snapshot, without retry-until-pass races.
+On macOS, the old-predicate reproduction uses full-width BSD ps and equivalent BEGIN bindings
+because BSD awk rewrites `-v` argv. The new production path is identical on Linux and macOS.
+No deploy/backup/restart argument is executed; tests clean up only their owned processes. Run this
+standalone test separately from the prerequisite/cutover harnesses, whose real command names are
+intentionally competitors under the contract. A local sandbox that forbids ps or loopback bind
+must fail visibly; it is not a skip or a successful absence check.
+
+The controller harness now supplies positive structured observer/collector rows instead of the old
+empty-success ps mock. Seven natural process conflict/error cases fail at L06 with zero configuration
+writes, no remote allocation or rollback and no secret marker in persisted evidence. Existing
+four-write, 40 post-sync failure, rollback-once and unchanged health-header gates remain required.
 
 Every meaningful local/remote phase and each post-sync check requires STARTED plus PASSED/FAILED
 records bound to the run, exact ordinal/name, release and script, expected sanitized result and
