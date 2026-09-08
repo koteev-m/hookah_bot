@@ -5222,6 +5222,36 @@ test_sensitive_consumer_secret_redaction() {
     ! -e "${preflight_script_swap_root}/final-v125-preflight.pg_service.conf" &&
     ! -e "${preflight_script_swap_root}/final-v125-preflight.output" ]] ||
     fail 'post-hash preflight substitution retained credentials or sealed a proof'
+  local failure_case failure_root failure_run_id
+  for failure_case in producer consumer; do
+    failure_run_id="preflight-${failure_case}-failure"
+    failure_root="${preflight_staging}/.v126-runs/${failure_run_id}"
+    mkdir -m 0700 "${failure_root}"
+    printf 'postgresql://operator:%s_DB_PASSWORD@db.invalid:5432/exact?sslmode=require\n' \
+      "${SECRET_CANARY}" > "${database_file}"
+    if [[ "${failure_case}" == producer ]]; then
+      printf '?malformed=%s&bad-option\n' "${SECRET_CANARY}" >> "${database_file}"
+    fi
+    printf '%s\n' '#!/usr/bin/env bash' 'set -Eeuo pipefail' \
+      'printf "%s\n" "safe-to-continue result=PASS"' 'exit 23' > \
+      "${failure_root}/final-v125-preflight.sh.partial"
+    chmod 0600 "${database_file}" "${failure_root}/final-v125-preflight.sh.partial"
+    leaf_lines_before_swap="$(wc -l < "${leaf_log}" | tr -d ' ')"
+    expect_failure "${failure_case} error cannot seal PASS from plausible stdout" '' \
+      run_real_final_preflight_secret_fixture "${preflight_staging}" "${failure_run_id}" \
+      "${database_file}" "${fake_bin}"
+    [[ ! -e "${failure_root}/final-v125-preflight.proof" &&
+      ! -e "${failure_root}/final-v125-preflight.pgpass" &&
+      ! -e "${failure_root}/final-v125-preflight.pg_service.conf" ]] ||
+      fail 'failed producer/consumer retained credentials or sealed PASS'
+    if [[ "${failure_case}" == producer ]]; then
+      [[ "$(wc -l < "${leaf_log}" | tr -d ' ')" == "${leaf_lines_before_swap}" ]] ||
+        fail 'failed producer launched consumer'
+    fi
+    assert_tree_has_no_canary "${failure_root}"
+    ! grep -F "${SECRET_CANARY}" "${LAST_OUTPUT}" >/dev/null ||
+      fail 'producer/consumer failure leaked credential sentinel'
+  done
   rm -f -- "${database_file}" "${fake_bin}/bash"
 
   local maintenance_staging="${TEST_ROOT}/real-maintenance-secret-staging"
@@ -7919,6 +7949,8 @@ main() {
 
   expect_success 'release CI exact set and downstream proof regressions' \
     python3 "${SCRIPT_DIR}/test-v126-release-ci.py"
+  python3 "${SCRIPT_DIR}/test-v126-libpq.py"
+  pass 'real libpq serialization and disposable PostgreSQL17 authentication'
   test_syntax_and_markers
   test_independent_stage_artifact_contract
   test_init_contract

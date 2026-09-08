@@ -1103,10 +1103,20 @@ jobs:
           bash -n scripts/test-v126-staging-prerequisite-sync.sh
           PYTHONPYCACHEPREFIX="${RUNNER_TEMP}/ht12r-pycache" python3 -m py_compile scripts/v126-staging-prerequisite-sync-helper.py
           PYTHONPYCACHEPREFIX="${RUNNER_TEMP}/ht12u-pycache" python3 -m py_compile scripts/test-v126-health-headers.py
+          PYTHONPYCACHEPREFIX="${RUNNER_TEMP}/ht12x-pycache" python3 -m py_compile scripts/test-v126-libpq.py
           PYTHONPYCACHEPREFIX="${RUNNER_TEMP}/ht12v-pycache" python3 -m py_compile scripts/test-v126-process-guard.py
       - name: Exercise staging admission guard fixtures
         run: bash scripts/validate-staging-admission.sh --self-test docker-compose.yml
+      - name: Install real psql17 and libpq18 consumer (isolated CI runner)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends postgresql-common ca-certificates curl
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y --no-install-recommends postgresql-client-17 'libpq5=18.*'
+          echo /usr/lib/postgresql/17/bin >> "$GITHUB_PATH"
       - name: Exercise V126 executable cutover contract fixtures
+        env:
+          HT12X_REQUIRE_LIBPQ_MAJOR: '18'
         run: bash scripts/test-v126-cutover.sh
       - name: Exercise V126 real process guard regression
         run: python3 scripts/test-v126-process-guard.py

@@ -4116,71 +4116,119 @@ remote_final_v125_preflight() {
   trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after TERM' >&2; fi; exit 143" TERM
   trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after HUP' >&2; fi; exit 129" HUP
   python3 - "${database_url_file}" "${expected_database_sha}" "${service_file}" "${pass_file}" <<'PY'
+# HT12X_LIBPQ_DERIVATION_BEGIN
 from hashlib import sha256
 from pathlib import Path
-from urllib.parse import parse_qsl, unquote, urlsplit
+from urllib.parse import unquote, urlsplit
 import os
 import re
 import sys
 
-source_path, expected_sha, service_path, pass_path = sys.argv[1:]
-raw = Path(source_path).read_bytes()
-if not re.fullmatch(r"[0-9a-f]{64}", expected_sha) or sha256(raw).hexdigest() != expected_sha:
-    raise SystemExit("database URL bytes differ from immutable authority at derivation")
-if not raw or b"\x00" in raw or raw.count(b"\n") > 1 or (b"\n" in raw and not raw.endswith(b"\n")):
-    raise SystemExit("database URL binding must contain exactly one nonempty line")
-try:
-    value = raw.rstrip(b"\r\n").decode("utf-8")
-except UnicodeDecodeError:
-    raise SystemExit("database URL binding is not UTF-8")
-parsed = urlsplit(value)
-if parsed.scheme not in ("postgres", "postgresql") or parsed.fragment:
-    raise SystemExit("database URL binding is not an exact PostgreSQL URI")
-if not parsed.hostname or not parsed.username or not parsed.path.startswith("/") or parsed.path.count("/") != 1:
-    raise SystemExit("database URL binding lacks an exact host, user, or database")
-try:
-    port = parsed.port or 5432
-except ValueError:
-    raise SystemExit("database URL binding port is invalid")
-host = unquote(parsed.hostname)
-user = unquote(parsed.username)
-password = unquote(parsed.password) if parsed.password is not None else None
-database = unquote(parsed.path[1:])
-if not database or password is None:
-    raise SystemExit("database URL binding requires an explicit database and password")
-allowed_options = {
-    "application_name", "channel_binding", "connect_timeout", "gssencmode", "keepalives",
-    "keepalives_count", "keepalives_idle", "keepalives_interval", "options", "sslcert",
-    "sslcrl", "sslkey", "sslmode", "sslrootcert", "target_session_attrs",
-}
-options = {}
-for key, option_value in parse_qsl(parsed.query, keep_blank_values=True, strict_parsing=True):
-    if key not in allowed_options or key in options:
-        raise SystemExit("database URL binding contains an unsupported or duplicate option")
-    options[key] = option_value
-for item in (host, user, password, database, *options.values()):
-    if not item or any(ord(ch) < 32 or ord(ch) == 127 for ch in item):
-        raise SystemExit("database URL binding contains an invalid empty or control value")
-def service_quote(item):
-    return "'" + item.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+def uri_decode(item):
+    if re.search(r"%(?![0-9A-Fa-f]{2})", item):
+        raise SystemExit("database URL binding contains invalid percent encoding")
+    return unquote(item, encoding="utf-8", errors="strict")
+
+
+def service_line(key, item):
+    # libpq's service parser takes literal bytes after '=' and trims line-end
+    # whitespace. Conninfo quoting/escaping would become part of the value.
+    if not item or any(ord(ch) < 32 or ord(ch) == 127 for ch in item) or item.endswith(" "):
+        raise SystemExit("database URL value is not exactly representable in a service file")
+    line = f"{key}={item}\n"
+    # parseServiceFile uses a 1024-byte buffer and rejects strlen >= 1023.
+    if len(line.encode("utf-8")) >= 1023:
+        raise SystemExit("database URL value exceeds the service-file line limit")
+    return line
+
+
 def pgpass_escape(item):
-    return item.replace("\\", "\\\\").replace(":", "\\:")
-pass_payload = ":".join(pgpass_escape(item) for item in (host, str(port), database, user, password)) + "\n"
-fd = os.open(pass_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-with os.fdopen(fd, "wt", encoding="utf-8", newline="") as handle:
-    handle.write(pass_payload)
-service = {
-    "host": host,
-    "port": str(port),
-    "dbname": database,
-    "user": user,
-    "passfile": pass_path,
-    **options,
-}
-lines = ["[v126_preflight]"] + [f"{key}={service_quote(service[key])}" for key in sorted(service)]
-fd = os.open(service_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-with os.fdopen(fd, "wt", encoding="utf-8", newline="") as handle:
-    handle.write("\n".join(lines) + "\n")
+    # Escape literal wildcard/comment characters too: these are exact targets.
+    return "".join("\\" + ch if ch in "\\:*#" else ch for ch in item)
+
+
+def derive():
+    source_path, expected_sha, service_path, pass_path = sys.argv[1:]
+    raw = Path(source_path).read_bytes()
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_sha) or sha256(raw).hexdigest() != expected_sha:
+        raise SystemExit("database URL bytes differ from immutable authority at derivation")
+    # Permit one terminal LF, never let urlsplit discard URI controls for us.
+    value = raw.removesuffix(b"\n").decode("utf-8")
+    if not value or any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
+        raise SystemExit("database URL binding must contain exactly one nonempty line without controls")
+    parsed = urlsplit(value)
+    if not value.startswith(("postgres://", "postgresql://")) or "#" in value:
+        raise SystemExit("database URL binding is not an exact PostgreSQL URI")
+    if not parsed.username or not parsed.path.startswith("/") or parsed.path.count("/") != 1:
+        raise SystemExit("database URL binding lacks an exact host, user, or database")
+    # Preserve host spelling; SplitResult.hostname silently lowercases it.
+    authority = parsed.netloc.rsplit("@", 1)[-1]
+    if authority.startswith("["):
+        host, separator, suffix = authority[1:].partition("]")
+        if not separator or (suffix and not suffix.startswith(":")):
+            raise SystemExit("database URL binding host is invalid")
+        port = uri_decode(suffix[1:]) if suffix else "5432"
+    else:
+        host, separator, port = authority.partition(":")
+        port = uri_decode(port) if separator else "5432"
+    if not re.fullmatch(r"[0-9]+", port) or not 1 <= int(port) <= 65535:
+        raise SystemExit("database URL binding port is invalid")
+    host = uri_decode(host)
+    user = uri_decode(parsed.username)
+    password = uri_decode(parsed.password) if parsed.password is not None else None
+    database = uri_decode(parsed.path[1:])
+    if not database or password is None or not host or "," in host:
+        raise SystemExit("database URL binding requires one exact host, database and password")
+    allowed_options = {
+        "application_name", "channel_binding", "connect_timeout", "gssencmode", "keepalives",
+        "keepalives_count", "keepalives_idle", "keepalives_interval", "options", "sslcert",
+        "sslcrl", "sslkey", "sslmode", "sslrootcert", "target_session_attrs",
+    }
+    options = {}
+    for pair in parsed.query.split("&") if parsed.query else ():
+        key, separator, option_value = pair.partition("=")
+        if not separator:
+            raise SystemExit("database URL binding contains a malformed option")
+        # URI percent decoding, not HTML form decoding: '+' stays '+'.
+        key, option_value = uri_decode(key), uri_decode(option_value)
+        if key not in allowed_options or key in options:
+            raise SystemExit("database URL binding contains an unsupported or duplicate option")
+        options[key] = option_value
+    for item in (host, user, password, database, *options.values()):
+        if not item or any(ord(ch) < 32 or ord(ch) == 127 for ch in item):
+            raise SystemExit("database URL binding contains an invalid empty or control value")
+    service = {
+        "host": host,
+        "port": port,
+        "dbname": database,
+        "user": user,
+        "passfile": pass_path,
+        **options,
+    }
+    service_payload = "[v126_preflight]\n" + "".join(service_line(key, service[key]) for key in sorted(service))
+    pass_payload = ":".join(pgpass_escape(item) for item in (host, port, database, user, password)) + "\n"
+    if service_path == pass_path or any(os.path.lexists(path) for path in (service_path, pass_path)):
+        raise SystemExit("preflight database credential artifacts already exist")
+    created = []
+    try:
+        for path, payload in ((pass_path, pass_payload), (service_path, service_payload)):
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            created.append(path)
+            with os.fdopen(fd, "wt", encoding="utf-8", newline="") as handle:
+                handle.write(payload)
+    except BaseException:
+        for path in created:
+            os.unlink(path)
+        raise
+
+
+try:
+    derive()
+except (OSError, ValueError, UnicodeError):
+    # Parser/IO exception text may contain input or credential-bearing paths.
+    raise SystemExit("preflight database credential derivation failed") from None
+# HT12X_LIBPQ_DERIVATION_END
 PY
   remote_require_operator_file "${service_file}" 600
   remote_require_operator_file "${pass_file}" 600

@@ -5,6 +5,33 @@
 Read the matching task entry first; preserved snapshots below are evidence/history, not
 fresh instructions or authorization. Update concurrent tasks separately at meaningful boundaries.
 
+### HT-12X — 2026-09-08
+
+- Goal: repair tracked URI → service/pgpass serialization; stop at a reviewed green feature
+  candidate before separate main integration. No server action, PR or release authority granted.
+- Worktree `/private/tmp/hookah-ht-12x-libpq-service-serialization`, branch
+  `codex/ht-12x-libpq-service-serialization`; base `5b205a8c53dfb374eed2803b7a120fe593149ddd`,
+  tree `c59d82e3cbc807687c4e9ac7b6c187801b1c50c8`. Fresh remote main matches; base CI
+  `34181927285`, push/main attempt 1, 12/12 success, independently verified.
+- Decision: literal service values with explicit representability checks; strict URI decoding;
+  distinct pgpass escaping; real linked-libpq coverage in the existing mandatory cutover harness.
+  Allowed options, stages/receipts/recovery/gates and CI provenance remain unchanged.
+- Evidence: local psql 14.18 / `PQlibVersion=140018` reproduces old quoted-port exit2 and verifies
+  fixed values; disposable PostgreSQL17 SCRAM proof passes exact role/database/read-only and
+  password-used checks. Full cutover harness: 451 PASS assertions; final real-libpq suite 11/11;
+  standalone process guard 7/7 and health headers 8/8; shell/47 embedded Python blocks/compile/diff
+  sanity PASS. The initial bundled process-check command contaminated its own inventory; the
+  unchanged standalone rerun passed. One independent read-only reviewer returned PASS after two
+  test-only lifecycle/privacy findings were fixed. Exact candidate/CI and detailed evidence are
+  recorded in `/private/tmp/ht12x-evidence/REPORT.md`; no Linux18 or live claim rests on local14.
+- Boundary: original/release worktrees have no writes; initial mistaken root-doc read is recorded
+  in the report. scripts/dev and frozen evidence untouched. No server client install, protected
+  input, prerequisite write, cutover, product/DB/Telegram action or live host proof.
+- Authorized remainder: explicit-file feature commit/non-force push and exact feature CI, then
+  stop for separate main integration; consult the final report for publication/CI state. No PR.
+  HT-13 remains blocked:
+  HOST_CONNECTION_VERIFIED=NO, DB_INPUT_CREATED=NO, CUTOVER_INIT=NOT_STARTED, GATE_A=NOT_AUTHORIZED.
+
 ### HT-12W — 2026-09-07
 
 - Goal: repair tracked cutover CI contract and prepare ownership/protected-input resolution;

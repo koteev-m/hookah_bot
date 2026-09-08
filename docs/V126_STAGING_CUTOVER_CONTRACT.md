@@ -412,6 +412,35 @@ isolated PostgreSQL container must require explicit user and database variables 
 unambiguous maintenance database. Local socket, OS-user, default-database and inherited
 `PGHOST`/`PGDATABASE` fallback are forbidden.
 
+### Libpq serialization (HT-12X)
+
+The production derivation in `remote_final_v125_preflight` keeps four formats separate:
+URI components use strict UTF-8 percent decoding once (`+` is literal, not form-space);
+service values use literal `key=value` lines; conninfo uses only the fixed nonsecret
+`service=v126_preflight` alias; pgpass escapes backslash/colon and literal wildcard/comment
+characters. User quotes and backslashes are preserved, not stripped or conninfo-escaped in
+service values. Host spelling and explicit port spelling are preserved; an omitted port is 5432.
+Only one exact host is accepted; port zero is not a default-port shortcut.
+
+The URI may have one terminal LF. Embedded/raw or decoded ASCII controls, CR, LF, NUL,
+invalid UTF-8/percent encoding, malformed/duplicate/unknown options and fragment delimiters are
+refused before creating credential files. The option allowlist is unchanged. Leading/internal
+spaces are representable; a trailing ASCII space in any service value (including the generated
+passfile path) is refused because libpq trims it. Each complete UTF-8 service line, including LF,
+must be shorter than 1023 bytes. Unrepresentable values fail explicitly without normalization.
+All payloads are validated before create-only mode-0600 writes; producer IO failures have bounded
+messages and clean their own partial outputs. Existing stage cleanup and consumer exit-status
+checks remain in force. Neither PGPASSWORD nor credentials in argv/environment are introduced.
+
+These rules follow the PostgreSQL [service-file format](https://www.postgresql.org/docs/17/libpq-pgservice.html),
+[password-file format](https://www.postgresql.org/docs/18/libpq-pgpass.html) and the authoritative
+[`parseServiceFile`/`passwordFromFile` implementation](https://raw.githubusercontent.com/postgres/postgres/REL_18_STABLE/src/interfaces/libpq/fe-connect.c).
+The required harness reads generated files with actual libpq, reproduces the immutable base's
+quoted-port failure, and authenticates to a disposable PostgreSQL 17. Linux CI requires psql 17
+linked to libpq 18 and records `PQlibVersion` from that exact linked library. This is isolated
+consumer evidence, not a live host proof, database-target publication or HT-13 completion.
+Main integration and every subsequent server/cutover action require separate authorization.
+
 ## Caddy activation and restoration
 
 The only allowed candidate change is the secret-free file-presence switch for

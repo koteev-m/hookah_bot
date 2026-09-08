@@ -547,6 +547,41 @@ inputs; existing receipt-bound authority substitutions cover unbound database/id
 These are local fixtures, not staging readiness evidence. No server ownership or protected file is
 changed for tests. Run process-sensitive cutover/prerequisite/real-process harnesses serially.
 
+### HT-12X libpq service/pass serialization gate
+
+`python3 scripts/test-v126-libpq.py` is mandatory inside the complete
+`scripts/test-v126-cutover.sh` harness and the existing `compose` CI job. It executes the exact
+embedded production derivation; the before case executes the entire producer from immutable
+base `5b205a8c53dfb374eed2803b7a120fe593149ddd`. The previous
+`test_sensitive_consumer_secret_redaction` checked file presence, a password marker and
+`passfile=` using a bash/grep consumer, so it could accept syntactically wrong service values.
+Those privacy/boundary tests remain and now also reject producer failure and a consumer that
+prints plausible PASS output but exits nonzero.
+
+The new gate verifies values after `PQconndefaults` reads the service, without DNS or a network
+connection. It covers every allowed option and host/port/dbname/user/passfile; literal spaces,
+quotes, backslashes, colons, percent/plus, Unicode and byte-length boundaries; strict rejection
+of malformed input, controls, injection, duplicate/unknown options, hash mismatch and conflicting
+paths. Pgpass literal wildcard/comment matching is checked with real libpq against a reserved
+non-listening loopback port. Error output is checked for synthetic secret canaries without
+printing the canaries or raw client diagnostics.
+
+A disposable `postgres:17` container binds an ephemeral loopback port and uses SCRAM host auth.
+Only fixture provisioning uses the container bootstrap role; consumer proof uses generated files,
+`PQconnectionUsedPassword=1`, exact password equality in memory and psql SELECT inside a read-only
+transaction with exact database/role/server-major assertions. Wrong password, missing pgpass and
+connection failure must fail. Client environment is rebuilt without inherited PG settings.
+Owned container, tmpfs database, bootstrap input and credential files are cleaned. No staging
+inputs/secrets or user database are used.
+
+Linux CI installs psql 17 with libpq 18 on its ephemeral runner and sets
+`HT12X_REQUIRE_LIBPQ_MAJOR=18`; missing/wrong versions fail, never skip. `ldd` (Linux) or `otool`
+(macOS) resolves psql's actual linked library and `PQlibVersion` records its loaded version.
+`--parse-only` is an explicit smaller diagnostic requiring local libpq; it is not the mandatory
+harness result or authenticated evidence. A local older-client pass does not prove libpq 18.
+Run process-sensitive harnesses serially. Existing image/archive, CI provenance and release
+job-name gates remain mandatory and unchanged.
+
 ### HT-12P executable V126 cutover quality gate
 
 `scripts/test-v126-cutover.sh` is the executable fixture authority for the sequencer; the canonical
