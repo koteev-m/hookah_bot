@@ -1914,8 +1914,11 @@ run_remote() {
   fi
   local stream="${STATE_DIR}/tmp/remote-stream-$$-${action}.sh"
   [[ ! -e "${stream}" && ! -L "${stream}" ]] || die 'internal remote stream already exists'
-  {
+  local status=0
+  (
     cat <<'REMOTE_LOADER'
+# Bash must parse the entire loader before any read consumes the following data.
+{
 set -Eeuo pipefail
 umask 077
 export LC_ALL=C
@@ -1923,8 +1926,16 @@ loader_die() {
   printf 'V126 cutover contract rejected: %s\n' "$*" >&2
   exit 4
 }
+# An explicit NUL delimiter prevents Bash from silently discarding NUL bytes.
+# EOF (read status 1) preserves the complete text, including trailing newlines.
+remote_envelope_content=''
+loader_status=0
+IFS= read -r -d '' remote_envelope_content || loader_status=$?
+[[ "${loader_status}" == 1 ]] || loader_die 'invalid internal remote envelope encoding'
 loader_read() {
-  IFS= read -r "$1" || loader_die "truncated internal remote envelope: $1"
+  [[ "${remote_envelope_content}" == *$'\n'* ]] || loader_die "truncated internal remote envelope: $1"
+  printf -v "$1" '%s' "${remote_envelope_content%%$'\n'*}"
+  remote_envelope_content="${remote_envelope_content#*$'\n'}"
 }
 loader_read magic
 loader_read action
@@ -1962,14 +1973,11 @@ for ((loader_index = 0; loader_index < raw_arg_count; loader_index++)); do
   [[ "${loader_argument}" != *$'\t'* && "${loader_argument}" != *$'\r'* ]] || loader_die 'invalid internal remote argument encoding'
   remote_args+=("${loader_argument}")
 done
-remote_body_sentinel='V126_REMOTE_BODY_SENTINEL_7f3bf5d9'
-remote_body_content="$({ cat || exit $?; printf '%s' "${remote_body_sentinel}"; })" ||
-  loader_die 'streamed sequencer body could not be read'
-[[ "${remote_body_content}" == *"${remote_body_sentinel}" ]] ||
-  loader_die 'streamed sequencer body sentinel is absent'
-remote_body_content="${remote_body_content%"${remote_body_sentinel}"}"
-[[ "$(printf '%s' "${remote_body_content}" | sha256sum | awk '{print $1}')" == \
-  "${envelope_script_sha}" ]] || loader_die 'streamed sequencer identity mismatch'
+remote_body_content="${remote_envelope_content}"
+unset remote_envelope_content
+remote_body_sha="$(printf '%s' "${remote_body_content}" | sha256sum | awk '{print $1}')" ||
+  loader_die 'streamed sequencer body could not be hashed'
+[[ "${remote_body_sha}" == "${envelope_script_sha}" ]] || loader_die 'streamed sequencer identity mismatch'
 export V126_INTERNAL_REMOTE_MODE=true
 export V126_INTERNAL_REMOTE_ENVELOPE_VALIDATED=V126_INTERNAL_REMOTE_ENVELOPE_V1
 export V126_INTERNAL_REMOTE_ACTION="${action}"
@@ -2003,7 +2011,9 @@ unset remote_body_content
 remote_dispatch_enveloped "${action}" "${remote_args[@]}"
 loader_status=$?
 exit "${loader_status}"
+}
 REMOTE_LOADER
+    [[ $? == 0 ]] || exit 4
     printf '%s\n' \
       V126_INTERNAL_REMOTE_ENVELOPE_V1 \
       "${action}" \
@@ -2032,12 +2042,18 @@ REMOTE_LOADER
       "${caddy_activation_sha}" \
       "${maintenance_smoke_sha}" \
       "${maintenance_off_sha}" \
-      "$#"
-    printf '%s\n' "$@"
-    cat "${SCRIPT_PATH}"
-  } > "${stream}"
-  chmod 0600 "${stream}"
-  local status=0
+      "$#" || exit 4
+    printf '%s\n' "$@" || exit 4
+    cat "${SCRIPT_PATH}" || exit 4
+  ) > "${stream}" || status=$?
+  if (( status != 0 )); then
+    rm -f -- "${stream}"
+    die 'internal remote stream could not be produced'
+  fi
+  if ! chmod 0600 "${stream}"; then
+    rm -f -- "${stream}"
+    die 'internal remote stream could not be protected'
+  fi
   if run_tracked_command_with_input remote-ssh "${stream}" ssh "${REMOTE}" bash -s; then
     status=0
   else

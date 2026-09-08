@@ -582,6 +582,34 @@ harness result or authenticated evidence. A local older-client pass does not pro
 Run process-sensitive harnesses serially. Existing image/archive, CI provenance and release
 job-name gates remain mandatory and unchanged.
 
+### HT-12Y real remote-envelope stdin regression
+
+`scripts/test-v126-remote-stdin.py` is mandatory within `scripts/test-v126-cutover.sh` and
+the existing Linux `compose` CI job; the exact 12-job contract is unchanged. It executes the
+production builder with synthetic receipt bindings, replaces only the SSH/process boundary
+with a local pipe into real `bash -s`, and retains production dispatcher validation while
+substituting safe leaf actions. No SSH, host database, Docker, Caddy or cutover operation is
+called by this regression. Its immutable before source requires full Git history, already
+provided by the existing job.
+
+The unchanged base must fail with exit4 before dispatch. A separately instrumented copy
+must identify the first read as `loader_read action`. The repaired stream must preserve every
+envelope field, valid argument and complete body byte (including trailing newlines), and
+dispatch exactly once. Coverage includes all three recovery actions; bad magic, count,
+run/release/path/image/action/receipt bindings; truncated envelope/arguments/body; changed
+body/hash; NUL rejection in every field/argument and body; tab/CR/LF argument rejection;
+literal shell metacharacters; EOF with zero/one/multiple body newlines; producer/protection/transport
+failures under conditional invocation; a failing hash command with plausible stdout; zero
+leaf calls after rejection; canary-free diagnostics; and cleanup of the producer's temporaries.
+
+The older loader test runs `bash loader.sh` with independently assembled data on stdin.
+It remains useful for buffer identity but cannot prove the production `bash -s` code/data
+boundary. The new before/after regression uses actual Bash stdin on both local macOS and
+Linux CI and prints the executed Bash version. Local HT-12Y evidence uses Apple Bash
+3.2.57; Linux coverage must come from the exact candidate CI, not that local result.
+These are local transport fixtures, not an SSH/session, successful live baseline or HT-13
+completion. Run process-sensitive cutover/prerequisite/process-guard checks sequentially.
+
 ### HT-12P executable V126 cutover quality gate
 
 `scripts/test-v126-cutover.sh` is the executable fixture authority for the sequencer; the canonical
@@ -3145,8 +3173,10 @@ Expectations:
 - `compose` syntax-checks the V126 sequencer and prerequisite-sync shell scripts, compiles the
   prerequisite Python helper, and executes both complete mocked harnesses in addition to the
   existing admission, maintenance, image-identity and Compose guards. Both fixture suites are
-  mandatory; a skipped or missing sequencer/prerequisite test is not equivalent evidence. Neither
-  harness may call real SSH, Docker, PostgreSQL, Caddy, systemd, Telegram or staging.
+  mandatory; a skipped or missing sequencer/prerequisite test is not equivalent evidence.
+  The cutover harness includes the explicitly scoped HT-12X disposable loopback PostgreSQL17
+  container and real libpq consumer described above. All other external operations are mocked;
+  neither harness may call real SSH, host PostgreSQL, Caddy, systemd, Telegram or staging.
 - `miniapp-e2e-smoke` parses the full structured Playwright JSON and requires at least `216`
   executed with zero failure, flaky, skipped, runner error, missing result, non-passing expectation
   or failed attempt. It additionally fails unless both exact `booking-label-parity.spec.ts` cases,

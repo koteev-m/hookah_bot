@@ -1695,10 +1695,10 @@ test_remote_loader_same_use_body() {
     "${safe_marker}"
   [[ ! -e "${safe_marker}" && ! -e "${malicious_marker}" ]] ||
     fail 'remote loader hash mismatch reached a body dispatcher'
-  grep -F 'remote_body_content="$({ cat || exit $?; printf' "${loader}" >/dev/null ||
-    fail 'remote loader no longer captures a newline-preserved body buffer'
+  grep -F "IFS= read -r -d '' remote_envelope_content" "${loader}" >/dev/null ||
+    fail 'remote loader no longer reads a NUL-rejecting newline-preserved envelope buffer'
   assert_literals_in_order "${loader}" 'remote loader body same-use order' \
-    'remote_body_content="$({ cat || exit $?; printf' \
+    'remote_body_content="${remote_envelope_content}"' \
     'printf '\''%s'\'' "${remote_body_content}" | sha256sum' \
     'source /dev/stdin <<< "${remote_body_content}"' \
     'unset remote_body_content'
@@ -7949,6 +7949,8 @@ main() {
 
   expect_success 'release CI exact set and downstream proof regressions' \
     python3 "${SCRIPT_DIR}/test-v126-release-ci.py"
+  python3 "${SCRIPT_DIR}/test-v126-remote-stdin.py"
+  pass 'production remote stream through real Bash stdin'
   python3 "${SCRIPT_DIR}/test-v126-libpq.py"
   pass 'real libpq serialization and disposable PostgreSQL17 authentication'
   test_syntax_and_markers

@@ -5,6 +5,34 @@
 Read the matching task entry first; preserved snapshots below are evidence/history, not
 fresh instructions or authorization. Update concurrent tasks separately at meaningful boundaries.
 
+### HT-12Y — 2026-09-08
+
+- Goal: repair remote-envelope stdin framing; deliver one reviewed feature candidate with exact
+  green CI and stop before separately authorized main integration.
+- Worktree `/private/tmp/hookah-ht-12y-remote-envelope-stdin`, branch
+  `codex/ht-12y-remote-envelope-stdin`; exact base `67fbfd4d587244712b15e974f485e08316ffd486`,
+  tree `4cc8c18192f1f09116f9918c6123b960fda0dfc3`. Fresh origin/main matches; main CI
+  `34210477394`, CI/230370033, push/main attempt1, exact 12/12 success verified.
+- Cause: unchanged production builder/loader through real local `bash -s` fails exit4 before
+  dispatch; a separate instrumented copy reads `loader_read action` as magic. Old loader tests
+  read code from a file and only data from stdin. Historical SSH magic bytes remain unavailable.
+- Decision: parse the complete loader as one Bash compound command before reading data; retain
+  exact envelope/body/action/receipt checks and explicitly reject producer/protection/hash-command
+  errors. Review also reproduced Bash NUL normalization; a NUL-rejecting capture now preserves
+  exact text bytes before field parsing/hash. One transport covers stages and all three recovery
+  modes; no new executor or fallback.
+- Local evidence: Apple Bash3.2.57 stdin regression 9/9; full cutover harness 452 PASS assertions,
+  including real libpq14.18 / isolated PostgreSQL17 authentication; process guard 7/7 and health
+  headers 8/8; syntax, Python compile and diff sanity PASS. The complete cutover harness passed
+  again after NUL remediation. One focused independent read-only reviewer returned final PASS.
+  Exact final SHA/tree, Linux Bash/CI, review and publication results are recorded in
+  `/private/tmp/ht12y-evidence/REPORT.md`; local evidence is not a Linux or live baseline claim.
+- Boundary: only feature commit/non-force push and exact candidate CI are authorized. No PR,
+  main change, SSH, server/product write, stage/init/retry, Gate A/B/C or archive rebuild/retag.
+  The failed HT-13 intent remains without PASS and non-retryable. Dirty/release worktree files,
+  scripts/dev, prior evidence and resources of other projects are not used or changed.
+- Next boundary after feature CI succeeds: separately authorized main integration only.
+
 ### HT-12X — 2026-09-08
 
 - Goal: repair tracked URI → service/pgpass serialization; stop at a reviewed green feature

@@ -349,6 +349,25 @@ completed maintenance-transform proof hashes. Its internal dispatcher accepts on
 operation/action tuple assigned to the current stage or recovery. Arguments, environment flags or
 direct invocation cannot select an unbound remote action.
 
+The streamed loader is one complete Bash compound command. `bash -s` must parse its closing
+brace before the first envelope read; the loader exits inside that command, so the following
+envelope and body are consumed as data and never resumed as shell commands. Magic/schema and
+field order are exact; there is no scan for a later magic, substitution or legacy fallback.
+The initial NUL-delimited read rejects a NUL anywhere in the envelope/body before Bash can
+normalize it away. Expected EOF preserves trailing newlines; fields are split literally from
+that captured buffer, and the remaining body is hashed and sourced from the same buffer.
+The local producer checks each write and protection step before transport, removes its own
+stream on failure/completion, and propagates a nonzero transport status regardless of stdout.
+The loader checks the hash command status as well as the full newline-preserved body hash
+before sourcing the verified buffer. Stage and all three recovery actions share this transport.
+
+HT-12Y reproduces the old framing failure using the immutable `67fbfd4d` production builder
+and loader through a real local pipe into `bash -s`. A separate instrumented copy observes
+`loader_read action` as the first read. This is local synthetic evidence, not recovered bytes
+from the historical SSH failure. The HT-13 baseline intent without PASS remains non-retryable;
+this feature does not authorize a new run, main integration, release or Gate A/B/C. Existing
+archive applicability to any future release requires a separate decision; do not rebuild or retag it.
+
 ## Exact 20-state machine
 
 The following order is complete and immutable:
