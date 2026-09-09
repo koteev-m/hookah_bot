@@ -37,7 +37,7 @@ WORKER = b'''remote_dispatch_action() {
     delayed) printf ready > "$2/ready"; sleep 2; printf x >> "$2/effects" ;;
     after-effect) printf x >> "$2/effects"; printf ready > "$2/ready"; sleep 2 ;;
     detached)
-      python3 -c 'import os,pathlib,subprocess,sys; subprocess.Popen([sys.executable,"-c","import pathlib,time,sys; time.sleep(2); pathlib.Path(sys.argv[1]).write_text(\"x\")",sys.argv[1]],start_new_session=True,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)' "$2/effects"
+      python3 -c 'import os,pathlib,subprocess,sys; subprocess.Popen([sys.executable,"-c","import pathlib,time,sys; time.sleep(2); pathlib.Path(sys.argv[1]).write_text(chr(120))",sys.argv[1]],start_new_session=True,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)' "$2/effects"
       ;;
     failed-child) sh -c 'sleep .1; exit 42' & ;;
     *) return 98 ;;
@@ -94,6 +94,16 @@ class Supervisor(unittest.TestCase):
         self.assertEqual(result.returncode, 75)
         self.assertIn(b'linux_subreaper_required', result.stderr)
         self.assertEqual(list(self.target.iterdir()), [])
+
+    def test_detached_fixture_executes_the_exact_nested_payload(self):
+        # Run the same leaf submitted to the Linux supervisor. This portability
+        # check catches nested quoting errors without simulating subreaper proof.
+        result = subprocess.run(['bash', '-c', WORKER.decode() +
+                                 '\nremote_dispatch_action unused "$1" unused unused detached\n',
+                                 'detached-fixture', str(self.target)], capture_output=True, timeout=6)
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.wait_file(self.target / 'effects')
+        self.assertEqual((self.target / 'effects').read_text(), 'x')
 
     @unittest.skipUnless(sys.platform == 'linux', 'Linux subreaper runtime unavailable')
     def test_exact_ack_and_no_repeat_or_second_run(self):
@@ -163,8 +173,8 @@ class Supervisor(unittest.TestCase):
         path = self.root / 'handoff.json'
         path.write_bytes(bindings.binding_canonical(handoff)); path.chmod(0o400)
         from unittest.mock import patch
-        with patch.object(sys, 'argv', ['retire', str(self.target), *owner.values(), 'd'*64, str(path),
-                                      *next_owner.values(), 'V126', handoff['image_id'], 'retire']):
+        with patch.object(sys, 'argv', ['retire', str(self.target), *[owner[key] for key in ('run_id', 'release_sha', 'script_sha256')], 'd'*64, str(path),
+                                      *[next_owner[key] for key in ('run_id', 'release_sha', 'script_sha256')], 'V126', handoff['image_id'], 'retire']):
             bindings.binding_entry('retire')
         self.assertEqual(self.run_operation(intent='d').returncode, 75)
         self.assertEqual(self.run_operation(intent='e', run=next_owner['run_id'], kind='RECOVERY').returncode, 75)

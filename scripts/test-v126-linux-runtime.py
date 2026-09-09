@@ -15,13 +15,16 @@ import hashlib
 import http.client
 import importlib.util
 import io
+import ipaddress
 import json
 import os
 from pathlib import Path
 import re
+import select
 import shutil
 import signal
 import socket
+import socketserver
 import ssl
 import subprocess
 import sys
@@ -123,9 +126,17 @@ class Diagnostics:
         return self.retain(record)
 
     def failure(self, phase, error):
+        locations = []
+        traceback = error.__traceback__
+        while traceback:
+            frame = traceback.tb_frame
+            if Path(frame.f_code.co_filename).resolve() == Path(__file__).resolve():
+                locations.append({'file': 'scripts/test-v126-linux-runtime.py',
+                                  'function': frame.f_code.co_name, 'line': traceback.tb_lineno})
+            traceback = traceback.tb_next
         record = {'category': 'failure', 'phase': phase, 'type': type(error).__name__,
                   'message': self.stream(str(error).encode(), isinstance(error, FixtureAssertionError)),
-                  'source_sha256': self.source_hash, 'harness_sha256': self.harness_hash}
+                  'locations': locations[-8:], 'source_sha256': self.source_hash, 'harness_sha256': self.harness_hash}
         with self.lock:
             self.failures.append(record)
         self.retain(record)
@@ -151,6 +162,102 @@ class Diagnostics:
                 print('V126_RUNTIME_DIAGNOSTIC ' + payload)
 
 
+class LoopbackRelay:
+    """Fixture-only byte transport; every connection resolves an owned endpoint anew."""
+    def __init__(self, resolve_target, port=0, *, idle_seconds=20, total_seconds=60, max_connections=16):
+        self.resolve_target = resolve_target
+        self.idle_seconds, self.total_seconds = idle_seconds, total_seconds
+        self.max_connections = max_connections
+        self.stop = threading.Event()
+        self.lock = threading.Lock()
+        self.sockets, self.workers = set(), set()
+        self.connections, self.refusals = 0, 0
+        self.listener = socket.socket()
+        self.listener.bind(('127.0.0.1', port))
+        self.listener.listen(16)
+        self.listener.settimeout(.1)
+        self.port = self.listener.getsockname()[1]
+        self.thread = threading.Thread(target=self.accept, name='v126-owned-loopback-relay', daemon=True)
+        self.thread.start()
+
+    def accept(self):
+        while not self.stop.is_set():
+            try:
+                client, _ = self.listener.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+            with self.lock:
+                if self.stop.is_set():
+                    client.close()
+                    continue
+                if len(self.workers) >= self.max_connections:
+                    self.refusals += 1
+                    client.close()
+                    continue
+                worker = threading.Thread(target=self.forward, args=(client,), daemon=True)
+                self.sockets.add(client)
+                self.workers.add(worker)
+                self.connections += 1
+            worker.start()
+
+    def forward(self, client):
+        upstream = None
+        try:
+            host, port = self.resolve_target()
+            address = ipaddress.IPv4Address(host)
+            require(address.is_private and not address.is_unspecified and not address.is_multicast
+                    and type(port) is int and 0 < port < 65536, 'relay endpoint is not an explicit private fixture address')
+            if self.stop.is_set():
+                return
+            upstream = socket.create_connection((str(address), port), timeout=3)
+            with self.lock:
+                self.sockets.add(upstream)
+            client.settimeout(1)
+            upstream.settimeout(1)
+            started = last_data = time.monotonic()
+            while not self.stop.is_set():
+                now = time.monotonic()
+                remaining = min(self.total_seconds - (now - started), self.idle_seconds - (now - last_data))
+                if remaining <= 0:
+                    break
+                readable, _, _ = select.select([client, upstream], [], [], min(.1, remaining))
+                for origin in readable:
+                    payload = origin.recv(65536)
+                    if not payload:
+                        return
+                    (upstream if origin is client else client).sendall(payload)
+                    last_data = time.monotonic()
+        except (OSError, ValueError, FixtureAssertionError, KeyError, TypeError):
+            with self.lock:
+                self.refusals += 1
+        finally:
+            with self.lock:
+                for connection in (client, upstream):
+                    if connection is not None:
+                        self.sockets.discard(connection)
+                        connection.close()
+                self.workers.discard(threading.current_thread())
+
+    def close(self):
+        self.stop.set()
+        self.listener.close()
+        self.thread.join(timeout=1)
+        with self.lock:
+            for connection in self.sockets:
+                try:
+                    connection.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+            workers = list(self.workers)
+        deadline = time.monotonic() + 15
+        for worker in workers:
+            worker.join(timeout=max(0, deadline - time.monotonic()))
+        require(not self.thread.is_alive() and not any(worker.is_alive() for worker in workers),
+                'owned loopback relay did not stop within its cleanup bound')
+
+
 class Integration:
     def __init__(self, evidence):
         self.evidence = evidence
@@ -167,6 +274,8 @@ class Integration:
         self.copy_container = None
         self.events = []
         self.starts = {}
+        self.relays = []
+        self.backend_relay_cid = None
         self.source_hash = hashlib.sha256(SOURCE.read_bytes()).hexdigest()
         self.diagnostics = Diagnostics(self.evidence, self.source_hash, lambda: getattr(self, 'values', {}))
         self.release = self.run(['git', 'rev-parse', 'HEAD'], cwd=ROOT).stdout.decode().strip()
@@ -198,7 +307,6 @@ class Integration:
             'services': {
                 'postgres': {'image': 'postgres:17', 'restart': 'no', 'labels': {LABEL: self.token},
                              'environment': {k: self.values[k] for k in ('POSTGRES_USER', 'POSTGRES_PASSWORD', 'POSTGRES_DB')},
-                             'ports': ['127.0.0.1::5432', '127.0.0.1::443'],
                              'networks': {'default': {'aliases': ['api.telegram.org']}},
                              'volumes': ['pgdata:/var/lib/postgresql/data']},
                 'provider': {'image': 'python:3.13-slim', 'restart': 'no', 'labels': {LABEL: self.token},
@@ -209,7 +317,7 @@ class Integration:
                              # must still see only source+backend on the database network.
                              'network_mode': 'service:postgres'},
                 'backend': {'image': '${BACKEND_IMAGE}', 'restart': 'no', 'labels': {LABEL: self.token},
-                            'env_file': ['.env'], 'ports': ['127.0.0.1:8080:8080'],
+                            'env_file': ['.env'],
                             'volumes': [str(self.fixture) + ':/fixture:ro'],
                             'command': ['/bin/sh', '-c', 'sleep 3; exec /app/app/bin/app']},
             },
@@ -266,11 +374,70 @@ class Integration:
         (self.root / 'docker-compose.yml').chmod(0o600)
         self.env_sha = hashlib.sha256((self.root / '.env').read_bytes()).hexdigest()
 
-    def inspect(self, cid):
-        rows = json.loads(self.run(['docker', 'inspect', cid]).stdout)
+    def inspect(self, cid, *, timeout=90):
+        rows = json.loads(self.run(['docker', 'inspect', cid], timeout=timeout).stdout)
         require(len(rows) == 1 and rows[0]['Id'] == cid and rows[0]['Config']['Labels'].get(LABEL) == self.token,
                 'owned container identity mismatch')
         return rows[0]
+
+    def owned_endpoint(self, cid, port):
+        require(re.fullmatch('[0-9a-f]{64}', cid or ''), 'relay requires one exact owned container ID')
+        service = 'postgres' if cid == self.postgres and port in (5432, 443) else 'backend'
+        require(service == 'postgres' or (cid == self.backend_relay_cid and port == 8080),
+                'relay target is outside the selected source/backend services')
+        row = self.inspect(cid, timeout=5)
+        labels = row['Config']['Labels']
+        require(labels.get('com.docker.compose.project') == self.project
+                and labels.get('com.docker.compose.service') == service
+                and row['State'].get('Running') is True and row['State'].get('Status') == 'running'
+                and not row['State'].get('OOMKilled'), 'owned relay container is not running in the exact fixture')
+        endpoints = row['NetworkSettings']['Networks']
+        require(set(endpoints) == {self.network}, 'owned relay requires exactly the internal fixture network')
+        endpoint = endpoints[self.network]
+        network_rows = json.loads(self.run(['docker', 'network', 'inspect', self.network], timeout=5).stdout)
+        require(len(network_rows) == 1, 'owned relay network is not unique')
+        network = network_rows[0]
+        require(network.get('Internal') is True and network.get('Name') == self.network
+                and network.get('Labels', {}).get(LABEL) == self.token
+                and network.get('Id') == endpoint.get('NetworkID')
+                and network.get('Containers', {}).get(cid, {}).get('EndpointID') == endpoint.get('EndpointID')
+                and endpoint.get('EndpointID'), 'owned relay network identity or endpoint differs')
+        address = ipaddress.IPv4Address(endpoint.get('IPAddress', ''))
+        require(address.is_private and not address.is_loopback and not address.is_unspecified
+                and not address.is_link_local and not address.is_multicast
+                and ipaddress.ip_interface(network['Containers'][cid]['IPv4Address']).ip == address,
+                'owned relay bridge address differs from the exact container endpoint')
+        return str(address), port
+
+    def relay(self, resolver, port=0):
+        relay = LoopbackRelay(resolver, port)
+        self.relays.append(relay)
+        return relay
+
+    def wait_for_source_ready(self):
+        deadline = time.monotonic() + 60
+        previous = None
+        while True:
+            source = self.inspect(self.postgres, timeout=5)
+            fact = {'checkpoint': 'OWNED_PG17_STATE', 'running': source['State'].get('Running'),
+                    'state': source['State'].get('Status'), 'exit_code': source['State'].get('ExitCode'),
+                    'oom_killed': source['State'].get('OOMKilled'),
+                    'docker_published_ports': sorted(source['NetworkSettings'].get('Ports', {}))}
+            if fact != previous:
+                self.events.append(fact)
+                previous = fact
+            require(source['State'].get('Running') is True and source['State'].get('Status') == 'running'
+                    and not source['State'].get('OOMKilled'), 'owned PostgreSQL exited before readiness')
+            check = self.run(['docker', 'exec', self.postgres, 'pg_isready', '-h', '127.0.0.1', '-U', 'runtime_fixture',
+                              '-d', 'runtime_fixture'], check=False, timeout=5)
+            if check.returncode == 0:
+                break
+            require(time.monotonic() < deadline, 'owned PG17 did not become ready')
+            time.sleep(0.25)
+        require(self.sql('SHOW server_version_num;').startswith(b'17'), 'owned server must be PG17')
+        self.events.append({'checkpoint': 'OWNED_PG17_READY_BEFORE_RELAY', 'running': source['State']['Running'],
+                            'state': source['State']['Status'], 'exit_code': source['State'].get('ExitCode'),
+                            'docker_published_ports': sorted(source['NetworkSettings'].get('Ports', {}))})
 
     def cid(self, service):
         ids = self.compose('ps', '-aq', '--no-trunc', service).stdout.decode().splitlines()
@@ -290,6 +457,10 @@ class Integration:
         require(cid not in self.starts, 'test attempted a second backend start')
         self.starts[cid] = 1
         self.run(['docker', 'start', cid])
+        # Container creation already bound this ID/label. Resolve and revalidate its
+        # current bridge address only when a real HTTP consumer opens a connection;
+        # an immediately exited JVM must still reach the actual readiness observer.
+        self.backend_relay_cid = cid
 
     def observe(self, cid, *, expected_release=None):
         before = time.monotonic()
@@ -371,17 +542,16 @@ class Integration:
         network = json.loads(self.run(['docker', 'network', 'inspect', self.project + '_default']).stdout)[0]
         require(network['Internal'] is True and network['Labels'].get(LABEL) == self.token, 'external network egress was not disabled')
         self.network = network['Name']
-        self.provider_port = int(self.inspect(self.postgres)['NetworkSettings']['Ports']['443/tcp'][0]['HostPort'])
-        pgport = int(self.inspect(self.postgres)['NetworkSettings']['Ports']['5432/tcp'][0]['HostPort'])
+        self.wait_for_source_ready()
+        self.owned_endpoint(self.postgres, 443)
+        self.owned_endpoint(self.postgres, 5432)
+        self.provider_port = self.relay(lambda: self.owned_endpoint(self.postgres, 443)).port
+        pgport = self.relay(lambda: self.owned_endpoint(self.postgres, 5432)).port
+        self.relay(lambda: self.owned_endpoint(self.backend_relay_cid, 8080), port=8080)
         self.uri = 'postgresql://runtime_fixture:' + self.password + '@127.0.0.1:' + str(pgport) + '/runtime_fixture'
-        deadline = time.monotonic() + 60
-        while True:
-            check = self.run(['docker', 'exec', self.postgres, 'pg_isready', '-h', '127.0.0.1', '-U', 'runtime_fixture', '-d', 'runtime_fixture'], check=False)
-            if check.returncode == 0:
-                break
-            require(time.monotonic() < deadline, 'owned PG17 did not become ready')
-            time.sleep(0.25)
-        require(self.sql('SHOW server_version_num;').startswith(b'17'), 'owned server must be PG17')
+        self.events.append({'checkpoint': 'OWNED_LOOPBACK_RELAY_TRANSPORT', 'internal_network': True,
+                            'source_ports': [443, 5432], 'backend_port': 8080,
+                            'scope': 'test-only byte relay; real libpq/curl/JVM consumers unchanged'})
         self.run(['docker', 'run', '--rm', '--label', LABEL + '=' + self.token, '--network', self.network,
                   '--env-file', str(self.root / '.env'), '-v', str(self.fixture) + ':/fixture:ro', self.image,
                   'java', '-cp', '/app/app/lib/*:/fixture', 'V126RuntimeFixture', 'migrate125'], timeout=180)
@@ -458,7 +628,7 @@ class Integration:
                 self.run(['docker', 'start', self.postgres])
                 # Rejoin the restarted source network namespace; never restart the backend.
                 self.run(['docker', 'restart', '--time', '1', self.provider])
-                self.provider_port = int(self.inspect(self.postgres)['NetworkSettings']['Ports']['443/tcp'][0]['HostPort'])
+                self.owned_endpoint(self.postgres, 443)
             except BaseException as error:
                 errors.append(error)
         restoring = threading.Thread(target=restore_own_database)
@@ -507,6 +677,21 @@ class Integration:
         require(self.stats()['unexpected'] == 0, 'synthetic provider observed unexpected operation')
 
     def cleanup(self):
+        try:
+            self.cleanup_containers()
+        finally:
+            failures = []
+            for relay in self.relays:
+                try:
+                    relay.close()
+                except FixtureAssertionError:
+                    failures.append(relay)
+            self.events.append({'checkpoint': 'OWNED_LOOPBACK_RELAYS_CLOSED', 'count': len(self.relays),
+                                'connection_count': sum(relay.connections for relay in self.relays),
+                                'refused_connections': sum(relay.refusals for relay in self.relays)})
+            require(not failures, 'owned loopback relay cleanup incomplete')
+
+    def cleanup_containers(self):
         failed = []
         if self.copy_container:
             if self.run(['docker', 'rm', '--force', self.copy_container], check=False).returncode:
@@ -705,6 +890,184 @@ class DiagnosticsTest(unittest.TestCase):
         self.assertEqual(output.getvalue(), '')
         self.assertEqual(json.loads((self.evidence / 'result.json').read_text())['status'], 'PASSED')
 
+    def test_unknown_failure_keeps_only_safe_own_traceback_locations(self):
+        try:
+            raise KeyError('SYNTHETIC_PRIVATE_EXCEPTION_VALUE')
+        except KeyError as error:
+            self.diagnostics.failure('integration', error)
+        record = self.diagnostics.failures[0]
+        self.assertNotIn('excerpt', record['message'])
+        self.assertNotIn('SYNTHETIC_PRIVATE_EXCEPTION_VALUE', json.dumps(record))
+        self.assertEqual(record['locations'][-1]['function'], 'test_unknown_failure_keeps_only_safe_own_traceback_locations')
+        self.assertEqual(record['locations'][-1]['file'], 'scripts/test-v126-linux-runtime.py')
+        self.assertGreater(record['locations'][-1]['line'], 0)
+
+
+class TransportTest(unittest.TestCase):
+    def setUp(self):
+        self.relays, self.servers = [], []
+
+    def tearDown(self):
+        for relay in self.relays:
+            relay.close()
+        for server, thread, release in self.servers:
+            release.set()
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+            self.assertFalse(thread.is_alive())
+
+    def server(self, idle=False):
+        release = threading.Event()
+        class Handler(socketserver.BaseRequestHandler):
+            def handle(inner):
+                if idle:
+                    release.wait(3)
+                    return
+                inner.request.settimeout(2)
+                try:
+                    while payload := inner.request.recv(65536):
+                        inner.request.sendall(payload)
+                except OSError:
+                    pass
+        server = socketserver.ThreadingTCPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, kwargs={'poll_interval': .02})
+        thread.start()
+        self.servers.append((server, thread, release))
+        return server.server_address
+
+    def relay(self, resolver, **kwargs):
+        relay = LoopbackRelay(resolver, **kwargs)
+        self.relays.append(relay)
+        return relay
+
+    def fixture(self):
+        fixture = Integration.__new__(Integration)
+        fixture.postgres, fixture.backend_relay_cid = 'a' * 64, 'b' * 64
+        fixture.project, fixture.network, fixture.token = 'own-fixture', 'own-network', 'own-token'
+        fixture.events, fixture.starts = [], {}
+        row = {'Id': fixture.postgres, 'Config': {'Labels': {LABEL: fixture.token,
+               'com.docker.compose.project': fixture.project, 'com.docker.compose.service': 'postgres'}},
+               'State': {'Running': True, 'Status': 'running', 'OOMKilled': False, 'ExitCode': 0},
+               'NetworkSettings': {'Ports': {}, 'Networks': {fixture.network: {
+                   'NetworkID': 'network-id', 'EndpointID': 'endpoint-id', 'IPAddress': '172.29.0.2'}}}}
+        network = {'Id': 'network-id', 'Name': fixture.network, 'Internal': True, 'Labels': {LABEL: fixture.token},
+                   'Containers': {fixture.postgres: {'EndpointID': 'endpoint-id', 'IPv4Address': '172.29.0.2/16'}}}
+        calls = []
+        def run(argv, **kwargs):
+            calls.append(argv)
+            if argv == ['docker', 'inspect', fixture.postgres]:
+                payload = json.dumps([row]).encode()
+            elif argv == ['docker', 'network', 'inspect', fixture.network]:
+                payload = json.dumps([network]).encode()
+            elif argv[:4] == ['docker', 'exec', fixture.postgres, 'pg_isready']:
+                payload = b''
+            elif argv[:3] == ['docker', 'exec', '-i'] and kwargs.get('input') == b'SHOW server_version_num;':
+                payload = b'170011\n'
+            else:
+                raise AssertionError('unexpected synthetic Docker dependency call')
+            return subprocess.CompletedProcess(argv, 0, payload, b'')
+        fixture.run = run
+        return fixture, row, network, calls
+
+    def test_absent_published_ports_use_exact_owned_endpoint_after_native_pg_ready(self):
+        fixture, row, _, calls = self.fixture()
+        fixture.wait_for_source_ready()
+        self.assertEqual(fixture.events[-1]['docker_published_ports'], [])
+        self.assertEqual(fixture.owned_endpoint(fixture.postgres, 443), ('172.29.0.2', 443))
+        self.assertEqual(fixture.owned_endpoint(fixture.postgres, 5432), ('172.29.0.2', 5432))
+        self.assertTrue(any('pg_isready' in call for call in calls))
+        self.assertEqual(row['NetworkSettings']['Ports'], {})
+
+    def test_exited_pg_and_changed_container_network_address_fail_closed(self):
+        fixture, row, _, calls = self.fixture()
+        row['State'].update(Running=False, Status='exited', ExitCode=1)
+        with self.assertRaisesRegex(FixtureAssertionError, 'PostgreSQL exited before readiness'):
+            fixture.wait_for_source_ready()
+        self.assertFalse(any('pg_isready' in call for call in calls))
+        self.assertEqual((fixture.events[-1]['state'], fixture.events[-1]['exit_code']), ('exited', 1))
+        mutations = [lambda row, net: row.update(Id='c' * 64),
+                     lambda row, net: row['Config']['Labels'].update({LABEL: 'another-owner'}),
+                     lambda row, net: net.update(Internal=False),
+                     lambda row, net: net['Containers']['a' * 64].update(IPv4Address='172.29.0.3/16')]
+        for mutate in mutations:
+            fixture, row, network, _ = self.fixture()
+            mutate(row, network)
+            with self.assertRaises(FixtureAssertionError):
+                fixture.owned_endpoint(fixture.postgres, 443)
+
+    def test_real_tcp_bytes_and_per_connection_resolution(self):
+        target = self.server()
+        resolved = []
+        relay = self.relay(lambda: (resolved.append('owned-endpoint') or target))
+        for _ in range(2):
+            with socket.create_connection(('127.0.0.1', relay.port), timeout=2) as client:
+                payload = bytes(range(256)) * 256
+                client.sendall(payload)
+                actual = bytearray()
+                while len(actual) < len(payload):
+                    actual.extend(client.recv(65536))
+                self.assertEqual(bytes(actual), payload)
+        self.assertEqual(resolved, ['owned-endpoint', 'owned-endpoint'])
+        relay.close()
+        self.assertFalse(relay.workers or relay.sockets)
+
+    def test_actual_readiness_consumer_503_to_200_through_real_tcp_relay(self):
+        specification = importlib.util.spec_from_file_location('owned_readiness_fixture', ROOT / 'scripts/test-v126-readiness.py')
+        readiness = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(readiness)
+        class RelayedReadiness(readiness.ReadinessTest):
+            def setUp(inner):
+                super().setUp()
+                inner.relay = LoopbackRelay(lambda: ('127.0.0.1', inner.server.server_address[1]))
+                inner.env['FIXTURE_PORT'] = str(inner.relay.port)
+
+            def tearDown(inner):
+                inner.relay.close()
+                super().tearDown()
+        result = unittest.TestResult()
+        RelayedReadiness('test_503_then_200_same_container_single_start').run(result)
+        self.assertEqual((len(result.errors), len(result.failures)), (0, 0),
+                         'actual source readiness/curl/HTTP through relay failed')
+
+    def test_real_tcp_idle_deadline_and_active_cleanup_are_bounded(self):
+        target = self.server(idle=True)
+        relay = self.relay(lambda: target, idle_seconds=.2, total_seconds=.5)
+        with socket.create_connection(('127.0.0.1', relay.port), timeout=2) as client:
+            before = time.monotonic()
+            self.assertEqual(client.recv(1), b'')
+            self.assertLess(time.monotonic() - before, 1.5)
+        active = self.relay(lambda: target)
+        with socket.create_connection(('127.0.0.1', active.port), timeout=2) as client:
+            client.sendall(b'synthetic')
+            deadline = time.monotonic() + 1
+            while len(active.sockets) < 2 and time.monotonic() < deadline:
+                time.sleep(.01)
+            self.assertEqual(len(active.sockets), 2)
+            before = time.monotonic()
+            active.close()
+            self.assertLess(time.monotonic() - before, 1.5)
+        self.assertFalse(active.workers or active.sockets)
+
+    def test_real_tcp_connection_cap_and_public_target_refusal(self):
+        target = self.server(idle=True)
+        opened = threading.Event()
+        relay = self.relay(lambda: (opened.set() or target), max_connections=1)
+        with socket.create_connection(('127.0.0.1', relay.port), timeout=2):
+            self.assertTrue(opened.wait(1))
+            with socket.create_connection(('127.0.0.1', relay.port), timeout=2) as second:
+                self.assertEqual(second.recv(1), b'')
+        denied = self.relay(lambda: ('8.8.8.8', 443))
+        client = socket.socket()
+        client.settimeout(2)
+        with patch.object(socket, 'create_connection') as connect:
+            try:
+                client.connect(('127.0.0.1', denied.port))
+                self.assertEqual(client.recv(1), b'')
+            finally:
+                client.close()
+            connect.assert_not_called()
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -714,7 +1077,9 @@ def main():
     parser.add_argument('--evidence-dir', type=Path)
     args = parser.parse_args()
     if args.diagnostics_self_test:
-        result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(DiagnosticsTest))
+        suite = unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(case)
+                                  for case in (DiagnosticsTest, TransportTest))
+        result = unittest.TextTestRunner(verbosity=2).run(suite)
         return 0 if result.wasSuccessful() else 1
     hosted_only()
     evidence = args.evidence_dir or Path(os.environ['RUNNER_TEMP']) / ('v126-linux-runtime-evidence-' + uuid.uuid4().hex)

@@ -1160,9 +1160,6 @@ jobs:
       - name: Exercise V126 real process guard regression
         if: ${{ !cancelled() }}
         run: python3 scripts/v126-test-endpoint-guard.py --run "$RUNNER_TEMP/v126-process-endpoints" -- python3 scripts/test-v126-process-guard.py
-      - name: Exercise V126 pre-Gate-A prerequisite sync fixtures
-        if: ${{ !cancelled() }}
-        run: python3 scripts/v126-test-endpoint-guard.py --run "$RUNNER_TEMP/v126-sync-endpoints" -- bash scripts/test-v126-staging-prerequisite-sync.sh
       - name: Exercise real Caddy disk and active configuration consumers
         if: ${{ !cancelled() }}
         run: python3 scripts/v126-test-endpoint-guard.py --run "$RUNNER_TEMP/v126-caddy-endpoints" -- python3 scripts/test-v126-caddy-linux.py --require-linux-caddy
@@ -1183,6 +1180,12 @@ jobs:
           else
             echo 'No runtime result was produced; connected runtime is unverified.'
           fi
+      - name: Exercise prerequisite fixture deadlines and cleanup
+        if: ${{ !cancelled() }}
+        run: python3 scripts/v126-test-endpoint-guard.py --run "$RUNNER_TEMP/v126-sync-fixture-endpoints" -- python3 scripts/test-v126-prerequisite-timeout.py
+      - name: Exercise V126 pre-Gate-A prerequisite sync fixtures
+        if: ${{ !cancelled() }}
+        run: python3 scripts/v126-test-endpoint-guard.py --run "$RUNNER_TEMP/v126-sync-endpoints" -- bash scripts/test-v126-staging-prerequisite-sync.sh
       - name: Create CI compose env
         if: ${{ !cancelled() }}
         run: |

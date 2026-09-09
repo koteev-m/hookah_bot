@@ -23,8 +23,19 @@ Local mandatory entrypoint:81 PASS then required-Linux refusal; separate legacy
 without suite completion; preserved, not PASS. Same unified review is complete for the
 validation candidate, with Linux and decision gaps explicit.
 
-Next: publish only this validation candidate, inspect exact SHA/tree CI12 jobs/mandatory steps,
-fix demonstrated defects in this feature branch, update this report, then stop.
+Candidate01 `d97c405c27ed06204af31d4db93284311900fae0` / tree
+`02f4d859b6ae370405e2c1d5bc72b60143e2aa8f` was committed/pushed normally; exact
+CI34390646421 completed11 jobs PASS, compose FAIL. Full sync40/40, real Caddy and
+root guard passed; all28 prior PostgreSQL skips executed. Full harness stopped at
+two supervisor fixture errors; runtime fixture failed before backend start after
+successful image build. First logs and per-step outcomes are preserved.
+
+Focused corrections and the same-review addendum are complete: local relay14 PASS,
+deadline11 PASS/1 Linux SKIP, and syntax/diff checks pass. Actual Docker transport and
+the full corrected Linux sequence remain unverified.
+
+Next: explicitly commit/push the corrective files to the same branch, verify all12 jobs/mandatory
+steps for its exact SHA/tree, finalize report/coverage, then stop.
 G01–G04 and17 live manual assertions remain explicit in REPAIR-COVERAGE.md.
 Original dirty checkout, scripts/dev, migration bytes and frozen runs remain untouched.
 

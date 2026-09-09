@@ -11,6 +11,16 @@ the existing12-job feature CI. G01 operational DR/RPO/auth custody, G02 daemon/V
 G03/G04 real manual assertions and delivery ambiguity remain open after synthetic CI.
 
 
+Candidate01 Linux evidence (`d97c405`, CI34390646421) supersedes the pending portions
+of the preserved local matrix only where specified: PG17.11/clients17.11+18.6 full
+extracted SQL/TOC/whole-DB10 PASS, configuration7 PASS with real Compose, Caddy8 PASS,
+actual root guard7 PASS, canonical Docker IDs and process7 PASS, prerequisite-sync
+40/40 injected failures plus retained positive/recovery paths PASS. All28 former
+PostgreSQL skips execute successfully in source-bound test jobs. The full harness
+fails at two supervisor fixture errors before its legacy/libpq/backup segment;
+connected Docker/JVM fails after image build and before backend start. Corrective
+CI must verify these and repeat affected fixture checks. Overall CI is not green.
+
 This updates the supplied audit map; unchanged findings are not silently promoted.
 R = actual production consumer/tool in an owned fixture; M = explicit external dependency
 mock; S = source review; U = required runtime proof unavailable. No row is live evidence.

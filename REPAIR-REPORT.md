@@ -73,10 +73,56 @@ remaining actionable code defect before publication. It retains F05/F09 and runt
 gaps. Exact command/exit/version records and preserved failures are under
 `/private/tmp/ht-release-repair-01.RKbe7q/evidence/feature-ci-lqfjbouh/`.
 
-Current feature CI outcome is pending; no runtime finding is upgraded from planned
-checks. First-failure and subsequent logs are saved in the phase evidence directory.
-The earlier local findings below describe their original evidence boundary; final
-feature disposition will be recorded after the exact candidate CI is inspected.
+First validation candidate `d97c405c27ed06204af31d4db93284311900fae0`, tree
+`02f4d859b6ae370405e2c1d5bc72b60143e2aa8f`, was committed and normally pushed only
+to `codex/ht-release-repair-01-rkbe7q` (both exit0). Exact push CI
+[34390646421](https://github.com/koteev-m/hookah_bot/actions/runs/34390646421)
+completed with11 jobs PASS and compose FAIL; all12 jobs and step outcomes/log hashes
+are preserved in `candidate-01/result-ledger.json` under the phase evidence directory.
+No rerun, PR, main integration, deployment or authentication/settings repair occurred.
+
+Established Linux results in that candidate: all81 leading regressions passed,
+including real PostgreSQL17.11 full extracted safe/unsafe preflight with psql17.11/18.6,
+TOC/timezone and whole-DB roles/ACL/settings/synthetic authentication. Container-ID
+checks and process7 passed. The complete prerequisite-sync suite passed in40m11s,
+including40/40 injected post-sync failures and the existing successful/recovery paths.
+Actual Caddy2.6.2 passed8 methods and actual root/Compose guard passed7. All28 previously
+skipped PostgreSQL cases executed:9 have individual counts; Outbox19 is established
+by the exact selector/floor/mandatory-name zero-skip validator. See the saved database
+proof map for exact lines and the distinction from per-job image inventory.
+
+The full harness stopped at two Linux fixture defects: nested Python quoting made the
+detached leaf fail with SyntaxError; a retirement test used JSON dict value order for
+positional CLI fields. The real supervisor correctly refused the broken leaf. Both
+fixtures are corrected, and the exact detached payload now runs in a portable local
+regression; Linux lifecycle re-verification remains required. The later full legacy,
+real libpq and backup portions of that failed harness were not executed.
+The connected runtime built the real test image and verified all126 migration resource
+bytes, then failed with KeyError('443/tcp') before any backend start. Its internal
+Docker inspection lacked the assumed published port; its cause was not established.
+The corrected fixture checks PG readiness separately and uses bounded owned loopback
+TCP relays to exact validated container/network endpoints. The internal network and
+actual libpq/curl/readiness consumers remain. Local diagnostic/relay14 tests PASS with
+zero unexpected endpoint calls; actual Docker reachability and JVM/migration/progress
+remain pending corrective CI. Synthetic Docker inventory is explicit in local tests.
+
+Addressed local test-runner defects are also source-bound: normal timeout1s previously
+allowed a sleep3s child to exit0; ordinary deadlines and external INT/TERM now preserve
+non-success even if a child handler returns0. Failed/aborted private fixtures retain
+mocks instead of deleting them under exiting children. The aborted local sync03
+recorded five refused SSH fallbacks after its900s timeout; no external SSH was executed.
+These refusals are distinct from zero-refusal completed harness/legacy runs. Native
+Linux stat/SHA consumers replace costly portability wrappers while retaining every
+metadata/hash request; equivalent behavior and full matrix must pass in the corrective
+CI. Caddy/root/JVM now precede the long matrix, with every existing gate retained.
+Abort quiescence across detached fixture sessions remains unproved; retained files and
+PID observations are not remote/daemon completion evidence.
+Final local deadline regression run:12 discovered,11 PASS and1 Linux-only SKIP,
+exit0 with zero unexpected endpoints. The same unified review of all corrective joins
+found no remaining actionable defect; AST/extracted-Python/Bash/diff checks pass.
+
+The earlier local findings below retain their original boundary. Final feature
+findings will be updated against the exact corrective candidate and individual steps.
 
 ## Preserved local-phase result (before feature authorization)
 

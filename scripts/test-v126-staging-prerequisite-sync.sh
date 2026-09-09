@@ -17,16 +17,23 @@ passes=0
 case_counter=0
 
 cleanup() {
+  local status="${1:-0}" reason="${2:-EXIT}"
   trap - EXIT INT TERM
-  if [[ "${V126_PREREQ_KEEP_FIXTURES:-0}" == 1 ]]; then
-    printf 'fixtures retained: %s\n' "${fixture_root}" >&2
+  # A failed controller can still own children in another process group. Keep
+  # its mocks/evidence until explicit quiescence; removing PATH entries here
+  # could make an exiting child fall through to an outer real executable.
+  if [[ "${status}" != 0 || "${reason}" != EXIT || "${V126_PREREQ_KEEP_FIXTURES:-0}" == 1 ]]; then
+    printf 'fixtures retained (status=%s reason=%s; abort quiescence not established): %s\n' \
+      "${status}" "${reason}" "${fixture_root}" >&2
     return 0
   fi
   [[ -d "${fixture_root}" && ! -L "${fixture_root}" && "$(basename "${fixture_root}")" == ht12r-prerequisite-fixtures.* ]] || return 0
   chmod -R u+w "${fixture_root}"
   rm -rf -- "${fixture_root}"
 }
-trap cleanup EXIT INT TERM
+trap 'cleanup "$?" EXIT' EXIT
+trap 'cleanup 130 INT; exit 130' INT
+trap 'cleanup 143 TERM; exit 143' TERM
 
 fail() {
   printf 'HT-12R fixture failure: %s\n' "$1" >&2
@@ -292,12 +299,22 @@ set -euo pipefail
 printf '%s\n' df >> "${V126_FIXTURE_MOCK_LOG}"
 printf '%s\n' 'Avail' '10737418240'
 MOCK
-  cat > "${mock}/sha256sum" <<'MOCK'
+  # Use native GNU consumers on Linux, retaining the portability adapters on
+  # macOS. These are regular wrappers: chmod below must never follow a link
+  # into /usr/bin. Every metadata/hash call still reads the actual input.
+  if [[ "$(uname -s)" == Linux ]] && /usr/bin/sha256sum --version >/dev/null 2>&1; then
+    printf '#!/usr/bin/env bash\nexec /usr/bin/sha256sum "$@"\n' > "${mock}/sha256sum"
+  else
+    cat > "${mock}/sha256sum" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
 exec shasum -a 256 "$@"
 MOCK
-  cat > "${mock}/stat" <<'MOCK'
+  fi
+  if [[ "$(uname -s)" == Linux ]] && /usr/bin/stat --version >/dev/null 2>&1; then
+    printf '#!/usr/bin/env bash\nexec /usr/bin/stat "$@"\n' > "${mock}/stat"
+  else
+    cat > "${mock}/stat" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
 if [[ "${1:-}" != -c ]]; then exec /usr/bin/stat "$@"; fi
@@ -311,6 +328,7 @@ for key in ("%U","%G","%a","%u","%g","%s"): fmt=fmt.replace(key,values[key])
 print(fmt)
 PY
 MOCK
+  fi
   cat > "${mock}/ssh" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -355,14 +373,16 @@ if not duration_text.endswith("s") or not duration_text[:-1].isdigit():
 duration = int(duration_text[:-1])
 if not arguments:
     raise SystemExit(97)
-if not os.environ.get("V126_PREREQ_FIXTURE_SIGNAL_DURING_WRITE"):
-    os.execvp(arguments[0], arguments)
 child = subprocess.Popen(arguments, start_new_session=True)
-interrupted = False
+expired = False
+forced_kill = False
+received_signal = None
 
 def forward(signum, _frame):
-    global interrupted
-    interrupted = True
+    global received_signal
+    # A later signal must not replace an already expired deadline.
+    if received_signal is None and not expired:
+        received_signal = signum
     try:
         os.killpg(child.pid, signum)
     except ProcessLookupError:
@@ -373,7 +393,7 @@ signal.signal(signal.SIGTERM, forward)
 try:
     returncode = child.wait(timeout=duration)
 except subprocess.TimeoutExpired:
-    interrupted = True
+    expired = True
     try:
         os.killpg(child.pid, timeout_signal)
     except ProcessLookupError:
@@ -381,16 +401,22 @@ except subprocess.TimeoutExpired:
     try:
         returncode = child.wait(timeout=kill_after)
     except subprocess.TimeoutExpired:
+        forced_kill = True
         try:
             os.killpg(child.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
         returncode = child.wait()
-if interrupted:
-    try:
-        os.killpg(child.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
+# This session contains only this fixture invocation. Even an early successful
+# parent must not leave a descendant using the private mock PATH after cleanup.
+try:
+    os.killpg(child.pid, signal.SIGKILL)
+except ProcessLookupError:
+    pass
+if received_signal is not None:
+    raise SystemExit(128 + received_signal)
+if expired:
+    raise SystemExit(137 if forced_kill else 124)
 raise SystemExit(returncode if returncode >= 0 else 128 - returncode)
 MOCK
   local name
@@ -441,7 +467,9 @@ run_case() {
   local root="$1" expected_status="$2"
   shift 2
   case_counter=$((case_counter + 1))
-  local run_id local_evidence status caddy_sha pre_compose pre_guard pre_env
+  local run_id local_evidence status caddy_sha pre_compose pre_guard pre_env case_started
+  case_started="${SECONDS}"
+  printf 'HT12R_CASE START name=%s expected=%s\n' "$(basename "${root}")" "${expected_status}"
   run_id="V126-PRE-GATE-A-SYNC-20990101T$(printf '%06d' "${case_counter}")Z"
   local_evidence="${root}/local-evidence"
   caddy_sha="$(hash_file "${root}/remote/etc/caddy/Caddyfile")"
@@ -476,6 +504,8 @@ run_case() {
       --authorization AUTHORIZE_V126_STAGING_PREREQUISITE_SYNC > "${root}/stdout" 2> "${root}/stderr"
   status=$?
   set -e
+  printf 'HT12R_CASE END name=%s status=%s elapsed_seconds=%s\n' \
+    "$(basename "${root}")" "${status}" "$((SECONDS - case_started))"
   [[ "${status}" == "${expected_status}" ]] || {
     sed -n '1,160p' "${root}/stderr" >&2
     if [[ -f "${local_evidence}/first-failure.json" ]]; then
@@ -692,6 +722,7 @@ pass
 # Every named post-sync check stops at the first failure and preserves its status. Cases are
 # isolated and run in bounded batches; ordering and predecessor validation within each case remain serial.
 for batch_start in $(seq 1 4 40); do
+  printf 'HT12R_BATCH START first=%s last=%s\n' "${batch_start}" "$((batch_start + 3))"
   pids=()
   for ordinal in $(seq "${batch_start}" "$((batch_start + 3))"); do
     (
@@ -713,6 +744,7 @@ for batch_start in $(seq 1 4 40); do
   for pid in "${pids[@]}"; do
     wait "${pid}" || fail "post-sync failure fixture batch starting ${batch_start} failed"
   done
+  printf 'HT12R_BATCH END first=%s last=%s\n' "${batch_start}" "$((batch_start + 3))"
 done
 pass
 

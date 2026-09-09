@@ -18,13 +18,18 @@ fresh instructions or authorization. Update concurrent tasks separately at meani
   remains immutable, next binding requires a fresh baseline. UNKNOWN daemon reconciliation
   and full ordinary-deploy locking remain OPEN. F09 target policy is accepted, with
   separate V125 schema125 and completed-V126 handoffs; no live application moment selected.
-- Local PG17/clients17–18, Compose/Bash/HTTP, CLI15 and Kotlin compile/lint evidence exists.
-  Full mandatory harness is being repeated with endpoint confinement; actual Linux
-  Caddy/SSH/Docker/JVM/PG Testcontainers CI is pending. Runtime gaps are not declared PASS.
+- Candidate01 `d97c405c27ed06204af31d4db93284311900fae0`, exact push CI34390646421:
+  11 jobs PASS, compose FAIL. Linux PG17.11/clients17.11–18.6, whole-DB synthetic checks,
+  Caddy8, root guard7, full prerequisite-sync40/40 and all28 former PostgreSQL skips pass.
+  Full harness stopped at two supervisor fixture errors; connected JVM fixture failed
+  on an absent published port before backend startup. First logs are preserved.
+  Focused fixture corrections, bounded test timeouts and CI ordering passed the same
+  review; local relay14 and deadline11 PASS (1 Linux skip). Complete harness/libpq/backup
+  and connected runtime must pass in corrective CI.
 - G01 operational DR/RPO/loss, G02 VM/daemon reboot and G03/G04 real17 manual assertions
   remain open. Canonical PASS1–8/intent9 and historical V125 observation remain unchanged.
-- Next: targeted review, feature validation publication, exact candidate CI inspection,
-  authorized corrective fixes if needed, final report and stop. No new V126 attempt or
+- Next: commit/push the reviewed cohesive corrective candidate only
+  to this feature branch, inspect exact12-job CI, finalize the report and stop. No new V126 attempt or
   archive. Original dirty checkout, frozen evidence, migrations and scripts/dev untouched.
   See REPAIR-REPORT.md, REPAIR-COVERAGE.md and REPAIR-CHECKPOINT.md.
 
