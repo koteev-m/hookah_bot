@@ -3175,7 +3175,12 @@ Expectations:
   existing admission, maintenance, image-identity and Compose guards. Both fixture suites are
   mandatory; a skipped or missing sequencer/prerequisite test is not equivalent evidence.
   The cutover harness includes the explicitly scoped HT-12X disposable loopback PostgreSQL17
-  container and real libpq consumer described above. All other external operations are mocked;
+  container and real libpq consumer described above. HT-12Z adds argument-sensitive canonical
+  container-ID fixtures to that harness and a mandatory real Docker/Compose check in the same
+  `compose` job (`python3 scripts/test-v126-container-ids.py --real-cli`). The latter requires an
+  empty default daemon on a GitHub-hosted Linux runner and uses only test-owned, network-disabled
+  inert containers; it records actual CLI/server versions and verifies cleanup. Local fixture
+  results without daemon isolation do not satisfy this CI gate. All other external operations are mocked;
   neither harness may call real SSH, host PostgreSQL, Caddy, systemd, Telegram or staging.
 - `miniapp-e2e-smoke` parses the full structured Playwright JSON and requires at least `216`
   executed with zero failure, flaky, skipped, runner error, missing result, non-passing expectation

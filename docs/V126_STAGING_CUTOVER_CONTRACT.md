@@ -313,6 +313,17 @@ exact release execution surface is the separate tracked HT-12R prerequisite outs
 The sequencer still fails closed if it is absent and never uploads, repairs or silently selects
 another copy; successful prerequisite sync does not authorize Gate A.
 
+All shared Compose inventories (`running` and `all`, including PostgreSQL) and Docker running
+inventories request `--no-trunc` and accept only unique lowercase 64-hex container IDs. Baseline,
+runtime, stop/zero-writer and recovery consumers retain their separate count requirements. The
+unique global image match must equal the bound Compose backend's complete container ID; a shared
+12-character prefix or equal image ID cannot establish container identity. The global scan still
+reads only IDs and formatted `.Image`, never additional fields from outside-project containers.
+Failed commands (even with plausible stdout), duplicate/short/malformed IDs, malformed image IDs
+and disappearance during inspect refuse; successful empty inventory alone may establish count0.
+Raw inventory command stderr is discarded in favor of bounded diagnostics. NUL is made invalid
+before shell capture instead of being silently removed. No alias-resolution fallback is permitted.
+
 Before a stage performs any remote or exposure-changing action, the sequencer writes a canonical
 mode-0400 intent bound to the run, release, script, stage, exact predecessor receipt hash and exact
 authorization receipt hash. An existing intent without a PASS receipt means the result is ambiguous:
@@ -689,6 +700,22 @@ stage-17 OFF/no-receipt post-stop-to-full-DR chain, safe-stop classification, DR
 and immutable migration identities. Current maintenance/admission guards, PRODUCT/OFF and V126_SMOKE
 Compose fixtures, affected deploy self-tests, `git diff --check` and clean-worktree verification
 remain required. Existing CI floors must not be reduced.
+
+HT-12Z adds `scripts/test-v126-container-ids.py` to the complete cutover harness. It sources the
+immutable c67 production functions to reproduce Compose64/Docker12 refusal, then the current
+production collectors/comparator with argument-sensitive CLI fixtures. Coverage includes canonical
+equality, synthetic shared-prefix distinct IDs, each inventory's count0/1/>1, outside-bound image
+matches, duplicate/malformed/short output, nonzero exits with empty or plausible stdout, inspect
+disappearance and privacy. Previous runtime/baseline mocks supplied equal short IDs from both
+sources, concealing the CLI representation mismatch.
+The existing mandatory `compose` CI job also runs `--real-cli` on its disposable GitHub-hosted
+Linux runner, requiring an empty default daemon before creating test-owned, network-disabled inert
+BusyBox containers. It records actual Docker client/server and Compose versions, verifies unchanged
+before64/12 and fixed after64/64, count transitions and an outside-Compose same-image refusal, then
+cleans only its own resources. There is no additional job or staging/application access. Local
+fixtures do not substitute for this mandatory CI check when daemon isolation is unavailable.
+These regressions do not validate a live baseline, authorize retry of a consumed intent, or rebind
+historical manifests, receipts or release archives to the feature candidate.
 
 After the final diff and local tests, one independent read-only release/security reviewer must inspect
 ordering, authorizations, database binding, no-build transfer, Caddy safety, all recovery branches,

@@ -5,6 +5,32 @@
 Read the matching task entry first; preserved snapshots below are evidence/history, not
 fresh instructions or authorization. Update concurrent tasks separately at meaningful boundaries.
 
+### HT-12Z — 2026-09-09
+
+- Goal: repair canonical container-ID comparison; deliver one reviewed feature candidate with
+  exact green feature CI, then stop before separately authorized main integration.
+- Worktree `/private/tmp/hookah-ht-12z-feature`, branch `codex/ht-12z-canonical-container-id`;
+  freshly verified origin/main/base `c67c364eb1c7d48a1919aabbc65f7ce7caa1d3e7`, tree
+  `5d11052342eddeec9db810048f0905cd1834c2c3`; base CI34256848456, CI/230370033,
+  push/main attempt1, 12/12 success.
+- Before: unchanged production collectors/comparator reproduce Compose64/Docker12 count1 then
+  identity refusal exit4. Previous baseline/runtime mocks returned the same short IDs from both
+  sources. After: both collectors request `--no-trunc`, require unique canonical64 IDs, preserve
+  full equality and separate image/count guards; malformed/error inventory remains fail-closed.
+- Validation: argument-sensitive production fixtures, full cutover CI harness and real inert
+  Docker/Compose regression in the existing `compose` job; no CI gate/job removed or weakened.
+  Local daemon isolation is unconfirmed, so local fixture selection excludes real Docker/libpq
+  authentication; those full checks remain mandatory in CI. Exact results, candidate SHA/tree,
+  versions, one focused independent read-only review and CI evidence are recorded in
+  `/private/tmp/ht12z-evidence/REPORT.md`.
+- Local selection: 451 PASS assertions, canonical IDs 10/10; adjacent process guard 7/7 and health
+  headers 8/8 after resolving local sandbox access limits; syntax/compile/diff sanity PASS.
+- Boundary: explicit-file feature commit and ordinary feature push only; no PR/main integration,
+  SSH, live inventory, cutover init/stage/retry, Gate A/B/C, prerequisite sync, server/product
+  action or archive rebuild/retag. The consumed HT-13 intent still has no PASS and is not retryable.
+  Original dirty/release worktrees, scripts/dev and frozen evidence remain untouched.
+- Next boundary after exact feature CI succeeds: separately authorized main integration only.
+
 ### HT-12Y — 2026-09-08
 
 - Goal: repair remote-envelope stdin framing; deliver one reviewed feature candidate with exact

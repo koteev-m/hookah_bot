@@ -2376,12 +2376,12 @@ remote_capture_compose_ids() {
   local output=''
   case "${scope}" in
     running)
-      if ! output="$(remote_compose ps --status running -q "${service}")"; then
+      if ! output="$(remote_compose ps --status running -q --no-trunc "${service}" 2>/dev/null | tr '\000' '?')"; then
         die "Compose running-container inventory failed: ${service}"
       fi
       ;;
     all)
-      if ! output="$(remote_compose ps -aq "${service}")"; then
+      if ! output="$(remote_compose ps -aq --no-trunc "${service}" 2>/dev/null | tr '\000' '?')"; then
         die "Compose all-container inventory failed: ${service}"
       fi
       ;;
@@ -2391,7 +2391,7 @@ remote_capture_compose_ids() {
   [[ -n "${output}" ]] || return 0
   local container_id
   while IFS= read -r container_id; do
-    [[ "${container_id}" =~ ^[0-9a-f]{12,64}$ ]] ||
+    [[ "${container_id}" =~ ^[0-9a-f]{64}$ ]] ||
       die "Compose returned an invalid container identity: ${service}"
     if (( ${#REMOTE_CAPTURED_CONTAINER_IDS[@]} > 0 )); then
       local existing
@@ -2406,14 +2406,15 @@ remote_capture_compose_ids() {
 
 remote_capture_docker_running_ids() {
   local output=''
-  if ! output="$(docker ps -q "$@")"; then
+  # Keep NUL invalid before Bash capture; pipefail retains the producer's exit status.
+  if ! output="$(docker ps -q --no-trunc "$@" 2>/dev/null | tr '\000' '?')"; then
     die 'Docker running-container inventory failed'
   fi
   REMOTE_CAPTURED_CONTAINER_IDS=()
   [[ -n "${output}" ]] || return 0
   local container_id
   while IFS= read -r container_id; do
-    [[ "${container_id}" =~ ^[0-9a-f]{12,64}$ ]] ||
+    [[ "${container_id}" =~ ^[0-9a-f]{64}$ ]] ||
       die 'Docker returned an invalid running-container identity'
     if (( ${#REMOTE_CAPTURED_CONTAINER_IDS[@]} > 0 )); then
       local existing
@@ -2439,9 +2440,10 @@ remote_capture_running_image_ids() {
   local observed_image_id
   if (( ${#running_ids[@]} > 0 )); then
     for container_id in "${running_ids[@]}"; do
-      if ! observed_image_id="$(docker inspect --format '{{.Image}}' "${container_id}")"; then
+      if ! observed_image_id="$(docker inspect --format '{{.Image}}' "${container_id}" 2>/dev/null | tr '\000' '?')"; then
         die 'Docker image inventory became unobservable'
       fi
+      remote_require_image_id "${observed_image_id}"
       [[ "${observed_image_id}" == "${expected_image_id}" ]] || continue
       REMOTE_CAPTURED_CONTAINER_IDS[${#REMOTE_CAPTURED_CONTAINER_IDS[@]}]="${container_id}"
     done

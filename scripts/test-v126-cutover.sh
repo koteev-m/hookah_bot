@@ -3105,7 +3105,7 @@ fixture_container_state="${fixture_root}/container.state"
 fixture_container_owner="${fixture_root}/container.owner"
 fixture_expected_owner_file="${fixture_root}/expected-owner"
 fixture_sentinel_guard="${fixture_root}/sentinel.guard"
-fixture_postgres_id=aaaaaaaaaaaa
+fixture_postgres_id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 fixture_postgres_image=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 fixture_expected_name="hookah-v126-fixture-rehearsal-quiesced-$$"
 fixture_expected_owner="v126:${fixture_release}:fixture-rehearsal:quiesced:$$"
@@ -3518,14 +3518,14 @@ fixture_log="$3"
 remote_compose() {
   case "${fixture_mode}" in
     compose-running|compose-all) return 91 ;;
-    compose-duplicate) printf '%s\n%s\n' aaaaaaaaaaaa aaaaaaaaaaaa ;;
+    compose-duplicate) printf '%s\n%s\n' aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ;;
     *) return 92 ;;
   esac
 }
 docker() {
   case "${fixture_mode}:$1:$2" in
     docker-ps:ps:-q) return 93 ;;
-    docker-inspect:ps:-q) printf '%s\n' bbbbbbbbbbbb ;;
+    docker-inspect:ps:-q) printf '%s\n' bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb ;;
     docker-inspect:inspect:--format) return 94 ;;
     *) return 95 ;;
   esac
@@ -3580,7 +3580,7 @@ fixture_live_v125="$5"
 fixture_live_old="$6"
 remote_compose() {
   case "$*" in
-    'ps -aq backend'|'ps --status running -q backend') printf '%s\n' aaaaaaaaaaaa ;;
+    'ps -aq --no-trunc backend'|'ps --status running -q --no-trunc backend') printf '%s\n' aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ;;
     *) return 97 ;;
   esac
 }
@@ -3588,27 +3588,27 @@ docker() {
   local command="${1:-}"
   shift || true
   case "${command} $*" in
-    "inspect --format {{.Image}} aaaaaaaaaaaa") printf '%s\n' "${expected_id}" ;;
-    "inspect --format {{.Image}} bbbbbbbbbbbb") printf '%s\n' \
+    "inspect --format {{.Image}} aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") printf '%s\n' "${expected_id}" ;;
+    "inspect --format {{.Image}} bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb") printf '%s\n' \
       'sha256:9999999999999999999999999999999999999999999999999999999999999999' ;;
-    "inspect --format {{.Image}} cccccccccccc") printf '%s\n' "${V125_IMAGE_ID}" ;;
-    "inspect --format {{.HostConfig.RestartPolicy.Name}}:{{.RestartCount}} aaaaaaaaaaaa")
+    "inspect --format {{.Image}} cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc") printf '%s\n' "${V125_IMAGE_ID}" ;;
+    "inspect --format {{.HostConfig.RestartPolicy.Name}}:{{.RestartCount}} aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
       printf '%s\n' "${fixture_restart}"
       ;;
-    "inspect --format {{index .Config.Labels \"com.docker.compose.project\"}} aaaaaaaaaaaa")
+    "inspect --format {{index .Config.Labels \"com.docker.compose.project\"}} aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
       printf '%s\n' fixture-project
       ;;
-    'exec aaaaaaaaaaaa sh -c test "${TELEGRAM_BOT_ENABLED:-}" = true && test "${TELEGRAM_BOT_MODE:-}" = long_polling')
+    'exec aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa sh -c test "${TELEGRAM_BOT_ENABLED:-}" = true && test "${TELEGRAM_BOT_MODE:-}" = long_polling')
       [[ "${fixture_poller}" == exact ]]
       ;;
-    "ps -q")
-      printf '%s\n' aaaaaaaaaaaa
-      [[ "${fixture_live_v125}" == true ]] && printf '%s\n' cccccccccccc
+    "ps -q --no-trunc")
+      printf '%s\n' aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      [[ "${fixture_live_v125}" == true ]] && printf '%s\n' cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       return 0
       ;;
-    "ps -q --filter label=com.docker.compose.project=fixture-project --filter label=com.docker.compose.service=backend")
-      printf '%s\n' aaaaaaaaaaaa
-      [[ "${fixture_live_old}" == true ]] && printf '%s\n' bbbbbbbbbbbb
+    "ps -q --no-trunc --filter label=com.docker.compose.project=fixture-project --filter label=com.docker.compose.service=backend")
+      printf '%s\n' aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      [[ "${fixture_live_old}" == true ]] && printf '%s\n' bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
       return 0
       ;;
     *) printf 'unexpected docker fixture call: %s %s\n' "${command}" "$*" >&2; return 98 ;;
@@ -3652,7 +3652,7 @@ fixture_staging="${fixture_root}/staging"
 fixture_run_root="${fixture_root}/run-root"
 fixture_marker="${fixture_root}/v126-drain.enabled"
 fixture_log="${fixture_root}/commands.log"
-fixture_backend_id=aaaaaaaaaaaa
+fixture_backend_id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 mkdir -m 0700 -p "${fixture_staging}/scripts" "${fixture_run_root}"
 printf '%s\n' \
   'TELEGRAM_BOT_ENABLED=true' \
@@ -3710,8 +3710,8 @@ remote_write_proof() {
 remote_emit_artifact() { log_command "artifact $1"; }
 remote_compose() {
   case "$*" in
-    'ps --status running -q backend') printf '%s\n' "${fixture_backend_id}" ;;
-    'ps --status running -q postgres') printf '%s\n' bbbbbbbbbbbb ;;
+    'ps --status running -q --no-trunc backend') printf '%s\n' "${fixture_backend_id}" ;;
+    'ps --status running -q --no-trunc postgres') printf '%s\n' bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb ;;
     'exec -T postgres sh -c '*)
       cat >/dev/null
       printf '%s\n' 0:0
@@ -3848,7 +3848,7 @@ fixture_failure_mode="$4"
 fixture_log="$5"
 fixture_release="$6"
 fixture_image_id="$7"
-fixture_backend_id=aaaaaaaaaaaa
+fixture_backend_id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 case "${fixture_phase}" in
   first)
     fixture_maintenance_mode=V126_SMOKE
@@ -3894,14 +3894,14 @@ remote_write_proof() { :; }
 remote_emit_artifact() { :; }
 remote_compose() {
   case "$*" in
-    'ps --status running -q backend') : ;;
+    'ps --status running -q --no-trunc backend') : ;;
     'create --force-recreate --no-build --no-deps --pull never backend')
       printf '%s\n' compose-create >> "${fixture_log}"
       if [[ "${fixture_failure_mode}" == drift-during-create ]]; then
         printf '%s\n' 'UNRELATED_DRIFT=1' >> .env
       fi
       ;;
-    'ps -aq backend') printf '%s\n' "${fixture_backend_id}" ;;
+    'ps -aq --no-trunc backend') printf '%s\n' "${fixture_backend_id}" ;;
     *) printf 'unexpected remote_compose start fixture: %s\n' "$*" >&2; return 97 ;;
   esac
 }
@@ -4098,8 +4098,8 @@ remote_compose() {
     'config --format json')
       printf '{"services":{"backend":{"image":"hookah-v125:%s"}}}\n' "${V125_SOURCE_SHA}"
       ;;
-    'ps --status running -q backend'|'ps -aq backend') printf '%s\n' aaaaaaaaaaaa ;;
-    'ps --status running -q postgres') printf '%s\n' bbbbbbbbbbbb ;;
+    'ps --status running -q --no-trunc backend'|'ps -aq --no-trunc backend') printf '%s\n' aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ;;
+    'ps --status running -q --no-trunc postgres') printf '%s\n' bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb ;;
     'exec -T postgres sh -c '*)
       local query
       query="$(cat)"
@@ -4116,7 +4116,7 @@ remote_compose() {
 }
 docker() {
   case "$*" in
-    'inspect --format {{json .Config.Env}} aaaaaaaaaaaa')
+    'inspect --format {{json .Config.Env}} aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')
       if [[ "${fixture_container_environment_mode}" == stale ]]; then
         python3 - <<'PY'
 import json
@@ -4147,17 +4147,17 @@ print(json.dumps([
 PY
       fi
       ;;
-    'inspect --format {{.Image}} aaaaaaaaaaaa'|'image inspect --format {{.Id}} '*)
+    'inspect --format {{.Image}} aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'|'image inspect --format {{.Id}} '*)
       printf '%s\n' "${V125_IMAGE_ID}"
       ;;
-    'inspect --format {{.Image}} bbbbbbbbbbbb')
+    'inspect --format {{.Image}} bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb')
       printf 'sha256:%064d\n' 3
       ;;
-    'exec aaaaaaaaaaaa sh -c test "${TELEGRAM_BOT_ENABLED:-}" = true && test "${TELEGRAM_BOT_MODE:-}" = long_polling')
+    'exec aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa sh -c test "${TELEGRAM_BOT_ENABLED:-}" = true && test "${TELEGRAM_BOT_MODE:-}" = long_polling')
       return 0
       ;;
-    'ps -q')
-      printf '%s\n' aaaaaaaaaaaa bbbbbbbbbbbb
+    'ps -q --no-trunc')
+      printf '%s\n' aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
       ;;
     *) die "unexpected baseline Docker call: $*" ;;
   esac
@@ -5031,7 +5031,7 @@ remote_assert_caddy_drain_marker() {
 }
 remote_assert_public_drain() { :; }
 remote_compose() {
-  [[ "$*" == 'ps --status running -q backend' ]] || return 97
+  [[ "$*" == 'ps --status running -q --no-trunc backend' ]] || return 97
 }
 remote_verify_proof() { :; }
 remote_assert_zero_writer() { [[ "$1" == 125:0:0 ]]; }
@@ -6433,7 +6433,7 @@ fixture_run_root="${fixture_staging}/.v126-runs/${fixture_run_id}"
 fixture_backup_root="${fixture_root}/backup"
 fixture_database_file="${fixture_root}/database-url"
 fixture_identities_file="${fixture_root}/identities"
-fixture_backend_id=aaaaaaaaaaaa
+fixture_backend_id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 fixture_backend_running=true
 fixture_post_receipt_sha=6666666666666666666666666666666666666666666666666666666666666666
 V126_INTERNAL_REMOTE_V126_IMAGE_ID="${fixture_v126_image_id}"
@@ -6488,7 +6488,7 @@ remote_backup_root() { printf '%s\n' "${fixture_backup_root}"; }
 remote_emit_artifact() { log_command "artifact $1 $2"; }
 remote_compose() {
   case "$*" in
-    'ps --status running -q backend')
+    'ps --status running -q --no-trunc backend')
       if [[ "${fixture_backend_running}" == true ]]; then
         printf '%s\n' "${fixture_backend_id}"
       fi
@@ -6936,9 +6936,9 @@ sudo() { return 0; }
 fixture_backend_running=false
 [[ -n "${fixture_running_image}" ]] && fixture_backend_running=true
 remote_compose() {
-  if [[ "${1:-}" == ps && "$*" == *'running -q backend'* ]]; then
+  if [[ "$*" == 'ps --status running -q --no-trunc backend' ]]; then
     if [[ "${fixture_backend_running}" == true ]]; then
-      printf '%s\n' cccccccccccc
+      printf '%s\n' cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
     fi
     return 0
   fi
@@ -6991,7 +6991,7 @@ fixture_running_image="$5"
 fixture_v126_image_id="$6"
 fixture_failure_mode="$7"
 fixture_secret_canary="$8"
-fixture_backend_id=aaaaaaaaaaaa
+fixture_backend_id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 fixture_staging="${fixture_root}/staging"
 fixture_run_root="${fixture_root}/run-root"
 fixture_log="${fixture_root}/commands.log"
@@ -7163,8 +7163,8 @@ remote_compose() {
       [[ "${fixture_failure_mode}" != compose-stop ]] || return 91
       printf '%s\n' stopped > "${backend_state_file}"
       ;;
-    'ps --status running -q backend')
-      log_command 'compose ps --status running -q backend'
+    'ps --status running -q --no-trunc backend')
+      log_command 'compose ps --status running -q --no-trunc backend'
       if [[ "$(< "${backend_state_file}")" == running ]]; then
         printf '%s\n' "${fixture_backend_id}"
       fi
@@ -7179,8 +7179,8 @@ remote_compose() {
         printf '%s\n' 'UNRELATED_CREATE_DRIFT=1' >> "${fixture_staging}/.env"
       fi
       ;;
-    'ps -aq backend')
-      log_command 'compose ps -aq backend'
+    'ps -aq --no-trunc backend')
+      log_command 'compose ps -aq --no-trunc backend'
       printf '%s\n' "${fixture_backend_id}"
       ;;
     *) log_command "FORBIDDEN compose $*"; return 97 ;;
@@ -7280,7 +7280,7 @@ import sys
 mode, root_raw, release, v125_sha = sys.argv[1:]
 root = pathlib.Path(root_raw)
 staging = root_raw.rstrip("/") + "/staging"
-backend = "aaaaaaaaaaaa"
+backend = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 if mode == "pre":
     expected = [
         f"initialize {staging} fixture-run {release} hookah-v126:{release}",
@@ -7288,19 +7288,19 @@ if mode == "pre":
         "flyway 125:0:0:0",
         "caddy drain",
         "compose stop backend",
-        "compose ps --status running -q backend",
+        "compose ps --status running -q --no-trunc backend",
         "zero-writer 125:0:0",
         "product PRODUCT OFF EMPTY",
         f"docker image inspect --format {{{{.Id}}}} hookah-v125:{v125_sha}",
         f"compose-image hookah-v125:{v125_sha}",
         "compose create --force-recreate --no-build --no-deps --pull never backend",
-        "compose ps -aq backend",
+        "compose ps -aq --no-trunc backend",
         f"docker inspect --format {{{{.Image}}}} {backend}",
         f"docker inspect --format {{{{json .Config.Env}}}} {backend}",
         f"docker update --restart=no {backend}",
         f"docker inspect --format {{{{.HostConfig.RestartPolicy.Name}}}}:{{{{.RestartCount}}}} {backend}",
         f"docker start {backend}",
-        "compose ps --status running -q backend",
+        "compose ps --status running -q --no-trunc backend",
         f"runtime-v125 hookah-v125:{v125_sha}",
         "caddy restore-original",
     ]
@@ -7310,10 +7310,10 @@ else:
         f"run-root {staging} fixture-run",
         "flyway 126:1:1:0",
         "caddy drain",
-        "compose ps --status running -q backend",
+        "compose ps --status running -q --no-trunc backend",
         f"docker inspect --format {{{{.Image}}}} {backend}",
         "compose stop backend",
-        "compose ps --status running -q backend",
+        "compose ps --status running -q --no-trunc backend",
         "zero-writer 126:1:0",
     ]
 actual = (root / "commands.log").read_text(encoding="utf-8").splitlines()
@@ -7700,7 +7700,7 @@ EOF
     "$(< "${pre_start_failure_root}/start.count")" == 1 &&
     ! -e "${pre_start_failure_root}/run-root/recovery-pre-v126.proof" ]] ||
     fail 'failed pre-V126 Docker start retried, ran, or sealed a proof'
-  [[ "$(grep -F -c 'docker start aaaaaaaaaaaa' \
+  [[ "$(grep -F -c 'docker start aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
     "${pre_start_failure_root}/commands.log" || true)" == 1 ]] ||
     fail 'failed pre-V126 Docker start did not remain exactly one attempt'
   ! grep -F 'runtime-v125' "${pre_start_failure_root}/commands.log" >/dev/null ||
@@ -7972,6 +7972,7 @@ main() {
   test_image_separation_and_mismatch
   test_backend_specific_compose_mapping
   test_explicit_compose_file_selection
+  python3 "${SCRIPT_DIR}/test-v126-container-ids.py"
   test_inventory_failure_contract
   test_real_backup_rehearsal_cleanup_contract
   test_runtime_poller_and_old_image_gates
