@@ -86,6 +86,11 @@ fixture_check() {
       remote_require_unique_global_image_container "$3" "${bound}"
       ;;
     count) remote_require_global_image_count "$3" "$4" ;;
+    outside)
+      remote_capture_compose_ids all backend
+      (( ${#REMOTE_CAPTURED_CONTAINER_IDS[@]} == 1 )) || die 'fixture bound count is not one'
+      remote_require_unique_global_image_container "$3" "${REMOTE_CAPTURED_CONTAINER_IDS[0]}"
+      ;;
     running|all)
       remote_capture_compose_ids "$2" backend
       (( ${#REMOTE_CAPTURED_CONTAINER_IDS[@]} == $4 )) || die 'fixture Compose count mismatch'
@@ -170,6 +175,8 @@ class ContainerIds(unittest.TestCase):
         self.refused(self.run_fixture(), "outside the bound Compose backend")
         self.doc.update(docker=[ID], images={ID: OTHER_IMAGE})
         self.refused(self.run_fixture(), "global running-container count mismatch")
+        self.doc.update({"compose-running": [], "docker": [OTHER], "images": {OTHER: IMAGE}})
+        self.refused(self.run_fixture("outside"), "outside the bound Compose backend")
 
     def test_count_zero_one_many_for_every_inventory(self):
         for count in (0, 1, 2):
@@ -240,8 +247,8 @@ class RealCli(unittest.TestCase):
         self.assertEqual(result.returncode, 0, "real Docker command failed; output withheld")
         return result.stdout.strip()
 
-    def production(self, action="unique", count=1, source=None, body=DRIVER):
-        result = subprocess.run(["bash", "-c", body, "fixture",
+    def production(self, action="unique", count=1, source=None):
+        result = subprocess.run(["bash", "-c", DRIVER, "fixture",
                                  str(source or ROOT / "v126-cutover.sh"), action,
                                  self.image_id, str(count)], cwd=self.root, env=self.env,
                                 capture_output=True, text=True, timeout=30)
@@ -261,6 +268,7 @@ class RealCli(unittest.TestCase):
             self.assertTrue(len(ids) == 64 and all(c in "0123456789abcdef" for c in ids))
             self.cli("rm", "--force", ids)
         self.assertTrue(self.cli("ps", "-aq", "--no-trunc") == "", "test daemon cleanup incomplete")
+        print("real CLI: owned containers removed; empty daemon verified", flush=True)
 
     def test_real_cli_identity_and_counts(self):
         self.assertTrue(sys.platform == "linux" and os.environ.get("GITHUB_ACTIONS") == "true"
@@ -324,11 +332,7 @@ services:
                  "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
                  "--entrypoint", "sleep", "busybox:1.37.0", "300")
         self.check("count", 1)
-        outside = self.production(body='''source "$1"
-remote_capture_compose_ids all backend
-remote_require_unique_global_image_container "$3" "${REMOTE_CAPTURED_CONTAINER_IDS[0]}"
-printf 'ACCEPTED\\n'
-''')
+        outside = self.production("outside")
         self.assertEqual(outside.returncode, 4)
         self.assertIn("outside the bound Compose backend", outside.stderr)
         print("real CLI: counts0/1/2, stopped Compose scope and outside-bound image refusal PASS", flush=True)
