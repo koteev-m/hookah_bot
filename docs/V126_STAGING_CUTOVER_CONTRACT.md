@@ -596,6 +596,18 @@ Secret-bearing Telegram and preflight files, environment-transform temporaries a
 snapshots bind their concrete cleanup targets into one-shot `EXIT`/`HUP`/`INT`/`TERM` handlers
 before use. Each handler clears the cleanup traps before acting, preserves the original exit status
 or the exact signal status and reports a cleanup failure without masking the primary failure.
+The pre-drain globals artifact uses the exact source Compose PostgreSQL container and
+`POSTGRES_USER`, with `pg_dumpall -l "$POSTGRES_DB" --globals-only --no-role-passwords`.
+In PostgreSQL 17, `-l` selects the initial database; `-d`/`--dbname` accepts connection
+parameters and must not receive a bare database name. An explicit missing database fails;
+there is no intentional `postgres`/`template1` fallback. See the
+[PostgreSQL 17 client contract](https://www.postgresql.org/docs/17/app-pg-dumpall.html).
+The full custom-format database dump, inventory and checksums remain distinct from globals.
+Quiesced backup uses the same function but does not regenerate or apply globals. Neither
+rehearsal nor this correction applies globals to a live database or authorizes a new recovery
+process. An intent without PASS and its partial artifacts are not a validated recovery point
+and must not be retried, overwritten or promoted by this correction.
+
 Restore-rehearsal container and volume cleanup is pre-armed with exact names and a run-specific
 ownership label. The sequencer proves that label before mount/use or deletion, removes the container
 before the volume and refuses to delete a wrong-owner resource.

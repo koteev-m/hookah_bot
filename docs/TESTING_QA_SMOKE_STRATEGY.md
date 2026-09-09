@@ -610,6 +610,46 @@ Linux CI and prints the executed Bash version. Local HT-12Y evidence uses Apple 
 These are local transport fixtures, not an SSH/session, successful live baseline or HT-13
 completion. Run process-sensitive cutover/prerequisite/process-guard checks sequentially.
 
+### HT-12AA PostgreSQL17 globals and backup regression
+
+`python3 scripts/test-v126-backup.py` is mandatory inside the complete cutover harness
+and existing `compose` CI job, without a Docker/PG skip. The workflow's exact 12 jobs and
+all image/archive gates remain unchanged. It sources the complete production backup
+function, including the immutable before source from `724dbe931c0af969b761cc174eb289a3e46b17ca`.
+The before case must fail at pg_dumpall's conninfo parser after a real custom dump,
+inventory and checksum, leaving empty globals and no rehearsal/PASS. The old
+`run_real_backup_rehearsal_cleanup_fixture` exercised only quiesced, omitted globals,
+and returned strings for dump/inventory/restore; it could not detect this client misuse.
+The static database-target scanner also grouped pg_dumpall with psql/pg_dump, accepting
+the wrong `-d` and rejecting `-l`. It now checks `-l`/`--database` for pg_dumpall only,
+with positive/negative selector fixtures and the existing unset-variable guard retained.
+
+The positive path runs real container pg_dump, pg_restore --list, sha256sum, pg_dumpall,
+isolated restore and production verification/ownership cleanup for both phases. Additional
+oracles check rows, sequence state, known global roles/comment/membership, actual password
+verifier presence in the source and its absence from globals/logs. Globals is never applied.
+The source forbids connections to postgres/template1; real connection logs must identify
+the specified database and role. A database containing spaces, both quote types and shell
+metacharacters must remain literal. The verbatim extracted production globals call also
+checks a complex role, missing/empty/unset databases, unavailable defaults and a wrong role.
+The full rehearsal uses a normal bootstrap-role name: arbitrary quoted initdb role names
+are not claimed by this regression.
+
+Negative cases cover utility failure, empty success output, a truncated custom archive,
+partial globals with nonzero exit, real plausible stdout followed by nonzero exit, dump
+and globals checksum mismatch, restore failure and wrong-owner cleanup refusal. They must
+stop before later backup/rehearsal work, emit no PASS artifacts, preserve existing output
+and leave the task-owned foreign-owner sentinel untouched. Existing lifecycle fixtures
+continue to cover cleanup errors and post-create failures. Source/rehearsal containers use
+no network or published ports; test inventory and final cleanup are scoped to a random
+task label. Host paths and authority prerequisites are synthetic bindings; no Gate A,
+Caddy, bot, staging connection or cutover initialization is executed. Diagnostics are
+asserted without printing captured secrets on failure.
+
+Record actual server/client versions and image ID/digest/platform from each execution.
+A local or CI PG17 result is not a new live PostgreSQL17.10 observation, a Gate A PASS
+or HT-13 completion. Run process-sensitive harnesses sequentially.
+
 ### HT-12P executable V126 cutover quality gate
 
 `scripts/test-v126-cutover.sh` is the executable fixture authority for the sequencer; the canonical

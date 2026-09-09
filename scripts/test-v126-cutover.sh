@@ -397,7 +397,10 @@ for command in commands:
         client = " ".join(command_segment(match.start()).split())
         context = " ".join((before + client).split())
         if command in ("psql", "pg_dump", "pg_dumpall", "pg_isready"):
-            target = re.search(r"(?:^|\s)(?:-d\s+(\S+)|--dbname(?:=|\s+)(\S+))", client)
+            # pg_dumpall -d is conninfo, not its initial database selector.
+            selector = (r"(?:-l\s+(\S+)|--database(?:=|\s+)(\S+))" if command == "pg_dumpall"
+                        else r"(?:-d\s+(\S+)|--dbname(?:=|\s+)(\S+))")
+            target = re.search(r"(?:^|\s)" + selector, client)
             if not target:
                 line = text.count("\n", 0, match.start()) + 1
                 raise SystemExit(f"{command} lacks an explicit database target at {path}:{line}: {context}")
@@ -5570,11 +5573,23 @@ test_database_target_binding() {
 psql|psql -X -Atqc 'SELECT 1'
 pg_dump|pg_dump -Fc > backup.dump
 pg_dumpall|pg_dumpall --globals-only > globals.sql
+pg_dumpall-bare-d|pg_dumpall -d fixture_database --globals-only
+pg_dumpall-bare-dbname|pg_dumpall --dbname=fixture_database --globals-only
 pg_restore|pg_restore backup.dump
 createdb|createdb restored_database
 dropdb|dropdb restored_database
 pg_isready|pg_isready -U postgres
 EOF
+  local selector
+  for selector in '-l fixture_database' '--database=fixture_database'; do
+    printf '%s\n' 'psql -d fixture_database' 'pg_dump -d fixture_database --format=custom' \
+      'pg_restore --list' "pg_dumpall ${selector} --globals-only --no-role-passwords" > "${bad_client}"
+    expect_success "database scanner accepts pg_dumpall initial database ${selector}" \
+      validate_database_client_targets "${bad_client}"
+  done
+  printf '%s\n' 'pg_dumpall -l "$POSTGRES_DB" --globals-only' > "${bad_client}"
+  expect_failure 'pg_dumpall initial database must fail closed when unset' \
+    'target is not fail-closed' validate_database_client_targets "${bad_client}"
   printf '%s\n' \
     "psql -X -Atqc 'SELECT 1'; psql -d exact_database -X -Atqc 'SELECT 2'" > "${bad_client}"
   expect_failure 'database scanner does not borrow a later command target' \
@@ -7975,6 +7990,8 @@ main() {
   python3 "${SCRIPT_DIR}/test-v126-container-ids.py"
   test_inventory_failure_contract
   test_real_backup_rehearsal_cleanup_contract
+  python3 "${SCRIPT_DIR}/test-v126-backup.py"
+  pass 'real PostgreSQL17 globals selection and both backup/rehearsal phases'
   test_runtime_poller_and_old_image_gates
   test_runtime_environment_rebind_gates
   test_restart_disabled_single_start

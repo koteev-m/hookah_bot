@@ -3316,7 +3316,7 @@ remote_backup_rehearsal() {
     [[ ! -e "${globals_file}" && ! -L "${globals_file}" ]] || die 'globals artifact already exists'
     [[ ! -e "${globals_file}.sha256" && ! -L "${globals_file}.sha256" ]] || die 'globals checksum already exists'
     remote_compose exec -T postgres sh -c \
-      ': "${POSTGRES_USER:?}" "${POSTGRES_DB:?}"; pg_dumpall -U "$POSTGRES_USER" -d "$POSTGRES_DB" --globals-only --no-role-passwords' \
+      ': "${POSTGRES_USER:?}" "${POSTGRES_DB:?}"; pg_dumpall -U "$POSTGRES_USER" -l "$POSTGRES_DB" --globals-only --no-role-passwords' \
       > "${globals_file}"
     [[ -s "${globals_file}" ]] || die 'globals artifact is empty'
     chmod 0600 "${globals_file}"

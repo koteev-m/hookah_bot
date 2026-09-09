@@ -5,6 +5,35 @@
 Read the matching task entry first; preserved snapshots below are evidence/history, not
 fresh instructions or authorization. Update concurrent tasks separately at meaningful boundaries.
 
+### HT-12AA — 2026-09-09
+
+- Goal: correct pg_dumpall initial database selection; deliver one reviewed feature
+  candidate with exact green CI, then stop before separately authorized main integration.
+- Worktree `/private/tmp/hookah-ht-12aa-pg-dumpall`, branch `codex/ht-12aa-pg-dumpall`;
+  fresh remote main/base `724dbe931c0af969b761cc174eb289a3e46b17ca`, tree
+  `2c1d6577cc9b3aa338544370691abaef3149cff0`; base CI34301190566, workflow230370033,
+  push/main attempt1, exact12/12 success verified. The different local main ref is untouched.
+- Production change: only pg_dumpall `-d` to `-l`; exact source container/user/database,
+  globals-only/no-role-passwords, dump/inventory/checksum, rehearsal/cleanup remain intact.
+  Immutable before failure reproduced with container PostgreSQL17.8 linux/arm64; old
+  harness only exercised quiesced with mocked clients and never reached globals; its
+  static scanner also required the wrong -d for pg_dumpall. Both gaps now have regressions.
+- Regression: real PG17 both-phase backup/rehearsal and explicit database/role proof;
+  fault injection, privacy, create-only and ownership assertions in mandatory cutover/compose
+  harness. Local full cutover458 PASS assertions, process guard7/7, health headers8/8,
+  shell/Python/47 embedded-block compile and diff sanity PASS. One independent read-only
+  review PASS after the scanner finding was fixed within that review. Final adjacent-harness
+  results, candidate SHA/tree, exact feature CI and publication status are recorded in
+  `/private/tmp/ht12aa-evidence/REPORT.md`; local PG17.8 is not live17.10 or Gate A evidence.
+- Separate fixture finding: PG17.8 initdb failed for a bootstrap role containing a double
+  quote; no producer/rehearsal workaround added. Full restore uses a normal synthetic role;
+  complex role selection is checked by the real production globals command separately.
+- Boundary: feature explicit-file commit/non-force push only. No PR/main integration,
+  SSH/server/deploy, failed-stage retry, cutover init/authorization, Gate A/B/C/recovery,
+  product writes or HT-13 artifact build. Frozen failed-run/partial files, dirty/release
+  checkouts, scripts/dev and other-project resources are untouched.
+- Next boundary after exact feature CI succeeds: separately authorized main integration only.
+
 ### HT-12Z — 2026-09-09
 
 - Goal: repair canonical container-ID comparison; deliver one reviewed feature candidate with
