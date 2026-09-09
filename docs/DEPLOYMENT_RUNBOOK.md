@@ -1859,8 +1859,10 @@ COMMIT;
 \echo 'unsafe_row_count=' :unsafe_row_count
 \if :booking_preflight_unsafe
   \echo 'STOP_FOR_BOOKING_THREAD_DEDUPLICATION_DECISION'
-  \quit 3
+  -- The \quit command has no exit-code argument. ON_ERROR_STOP propagates this SQL error.
+  SELECT 1 / 0;
 \endif
+\echo 'V126_PREFLIGHT_RESULT={"version":1,"safe":true,"unsafe_count":' :unsafe_row_count '}'
 \echo 'BOOKING_THREAD_PREFLIGHT_SAFE_TO_CONTINUE'
 SQL
 ```

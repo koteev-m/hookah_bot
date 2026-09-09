@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Production builder -> local pipe -> real bash -s -> production dispatch validation.
 
-Only receipt lookups, the SSH/process boundary and leaf actions are fixtures. No
-network, database, Docker, Caddy or cutover state is used. Never print child output.
+Receipt lookups, the SSH/process boundary, Linux remote supervisor and leaf actions
+are fixtures. The supervisor fixture captures the leaf log and emits a canonical
+identity-bound acknowledgement; the production acknowledgement validator remains
+real. Separate Linux tests own subreaper/lock/crash coverage. No network, database,
+Docker, Caddy or cutover state is used. Never print child output.
 """
 import hashlib
 import json
@@ -10,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -25,13 +29,15 @@ FIELDS = [
     "ENVELOPE_VALIDATED", "ACTION", "RUN_ID", "RELEASE_SHA", "STAGING_PATH",
     "SCRIPT_SHA256", "V126_IMAGE_ID", "OPERATION_KIND", "OPERATION_NAME",
     "PREDECESSOR_STAGE", "PREDECESSOR_HASH", "AUTHORIZATION_GATE",
-    "AUTHORIZATION_HASH", "INTENT_HASH", "BASELINE_DATABASE_URL_SHA256",
+    "AUTHORIZATION_HASH", "INTENT_HASH", "BASELINE_DATABASE_URL_SHA256", "DATABASE_TARGET_IDENTITY_SHA256",
     "BASELINE_MAINTENANCE_IDENTITIES_SHA256", "BASELINE_COMPOSE_SOURCE_SHA256",
     "BASELINE_MAINTENANCE_CHECK_SOURCE_SHA256", "BASELINE_ADMISSION_SOURCE_SHA256",
     "BASELINE_CADDY_SHA256", "BASELINE_ENV_SHA256", "CADDY_ORIGINAL_SHA256",
     "CADDY_CANDIDATE_SHA256", "CADDY_DIFF_SHA256", "CADDY_ACTIVATION_SHA256",
     "MAINTENANCE_SMOKE_SHA256", "MAINTENANCE_OFF_SHA256",
 ]
+# The immutable HT12Y before source predates the DB target identity field.
+LEGACY_FIELDS = [name for name in FIELDS if name != "DATABASE_TARGET_IDENTITY_SHA256"]
 
 
 def run(argv, **kwargs):
@@ -52,7 +58,27 @@ def transport(stream_path, command):
         print("PASS\nARTIFACT\tfixture\t" + HASH)
         return 79
     result = run([os.environ["FRAME_BASH"], "-s"], input=payload, env=os.environ.copy())
-    sys.stdout.buffer.write(result.stdout)
+    output = result.stdout
+    if os.environ["FRAME_FAULT"].startswith("ack-"):
+        prefix = b"\nREMOTE_OPERATION_ACK\t"
+        if output.count(prefix) != 1:
+            return 97
+        log, encoded = output.split(prefix)
+        acknowledgement = json.loads(encoded)
+        fault = os.environ["FRAME_FAULT"]
+        if fault == "ack-identity":
+            acknowledgement["identity"]["intent_sha256"] = "c" * 64
+        elif fault == "ack-children":
+            acknowledgement["children"] = "UNKNOWN"
+        elif fault == "ack-log":
+            log += b"changed log\n"
+        encoded = (json.dumps(acknowledgement, sort_keys=True, separators=(",", ":")) + "\n").encode()
+        output = log + prefix + encoded
+        if fault == "ack-missing":
+            output = log
+        elif fault == "ack-duplicate":
+            output += prefix + encoded
+    sys.stdout.buffer.write(output)
     sys.stderr.buffer.write(result.stderr)
     return result.returncode
 
@@ -122,7 +148,7 @@ chmod() {
 }
 printf() {
   builtin printf "$@" || return $?
-  if [[ "$FRAME_FAULT" == fields-producer && $# == 29 ]]; then return 73; fi
+  if [[ "$FRAME_FAULT" == fields-producer && $# -eq $((FRAME_FIELD_COUNT + 2)) ]]; then return 73; fi
   if [[ "$FRAME_FAULT" == args-producer && $# == 4 ]]; then return 74; fi
 }
 shift
@@ -186,23 +212,73 @@ PY
 '''.encode()
         for leaf in leaves:
             recorder += leaf + b'() { frame_record ' + leaf + b' "$@"; }\n'
+        if b"remote_supervise_action() {" in source:
+            recorder += r'''
+# Only the OS supervisor is synthetic; call the real leaf dispatcher and retain
+# its exact output bytes for the real parent-side acknowledgement consumer.
+remote_supervise_action() {
+  local fixture_log="$FRAME_ROOT/supervisor.log"
+  local fixture_status
+  if remote_dispatch_action "$@" > "$fixture_log"; then
+    fixture_status=0
+  else
+    fixture_status=$?
+  fi
+  python3 - "$fixture_log" "$fixture_status" <<'PY'
+import hashlib, json, os, sys
+from pathlib import Path
+fields = {
+    "run_id": "RUN_ID", "release_sha": "RELEASE_SHA", "script_sha256": "SCRIPT_SHA256",
+    "intent_sha256": "INTENT_HASH", "kind": "OPERATION_KIND", "name": "OPERATION_NAME",
+    "action": "ACTION",
+}
+identity = {key: os.environ["V126_INTERNAL_REMOTE_" + env] for key, env in fields.items()}
+canonical = lambda data: (json.dumps(data, sort_keys=True, separators=(",", ":")) + "\n").encode()
+log = Path(sys.argv[1]).read_bytes()
+status = int(sys.argv[2])
+acknowledgement = dict(identity=identity, operation_id=hashlib.sha256(canonical(identity)).hexdigest(),
+                      exit=status, outcome="SUCCEEDED" if status == 0 else "UNKNOWN",
+                      children="REAPED", log_sha256=hashlib.sha256(log).hexdigest(),
+                      completed_at="2026-09-09T00:00:00+00:00")
+sys.stdout.buffer.write(log + b"\nREMOTE_OPERATION_ACK\t" + canonical(acknowledgement))
+PY
+  return "$fixture_status"
+}
+'''.encode()
         return source + recorder + b"# trailing body bytes: \\ ' \" $() ; \t\n\n\n"
 
     def build(self, *, old=False, operation="baseline", args=None, fault="none"):
         source = self.old if old else self.source
+        self.fields = LEGACY_FIELDS if old else FIELDS
         body = self.body(source)
         (self.root / "source.sh").write_bytes(source)
         (self.root / "body.sh").write_bytes(body)
         (self.root / "driver.sh").write_text(DRIVER)
         self.env.update(FRAME_BODY_SHA=hashlib.sha256(body).hexdigest(),
-                        FRAME_OPERATION=operation, FRAME_FAULT=fault)
+                        FRAME_OPERATION=operation, FRAME_FAULT=fault,
+                        FRAME_FIELD_COUNT=str(len(self.fields)))
         action = {"baseline": "baseline", "recovery": "recover-pre-v126",
                   "late-recovery": "recover-post-v126-stop", "full-dr": "verify-full-dr"}[operation]
         arguments = [action, "/fixture/staging", "fixture-run", BASE] + (args or [])
+        existing = {file.name: hashlib.sha256(file.read_bytes()).hexdigest()
+                    for file in (self.root / "tmp").iterdir()}
         result = run([BASH, str(self.root / "driver.sh"), str(self.root / "source.sh"), *arguments],
                      env=self.env)
         self.private(result)
-        self.assertFalse(any((self.root / "tmp").iterdir()), "producer did not clean its stream")
+        remaining = {file.name: file for file in (self.root / "tmp").iterdir()}
+        for name, digest in existing.items():
+            self.assertIn(name, remaining, "previous attempt evidence was removed")
+            self.assertEqual(hashlib.sha256(remaining[name].read_bytes()).hexdigest(), digest,
+                             "previous attempt evidence changed")
+        for name in set(remaining) - set(existing):
+            file = remaining[name]
+            metadata = file.lstat()
+            self.assertTrue(name.startswith("remote-stream-") and name.endswith(".sh.output"),
+                            "producer did not clean its executable stream")
+            self.assertTrue(stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1 and
+                            stat.S_IMODE(metadata.st_mode) == 0o400 and metadata.st_uid == os.getuid(),
+                            "retained failed transport evidence is not protected")
+            self.assertNotEqual(result.returncode, 0, "successful transport retained failure evidence")
         self.assertFalse((self.root / "external").exists(), "external tool reached")
         return result, body
 
@@ -226,10 +302,11 @@ PY
         source = (self.root / "source.sh").read_bytes()
         loader = source.split(b"    cat <<'REMOTE_LOADER'\n", 1)[1].split(b"\nREMOTE_LOADER\n", 1)[0] + b"\n"
         self.assertTrue(payload.startswith(loader), "builder changed the production loader bytes")
-        lines = payload[len(loader):].split(b"\n", 28)
-        count = int(lines[27])
-        args_body = lines[28].split(b"\n", count)
-        return loader, lines[:28], args_body[:count], args_body[count]
+        field_count = len(self.fields)
+        lines = payload[len(loader):].split(b"\n", field_count + 1)
+        count = int(lines[field_count])
+        args_body = lines[field_count + 1].split(b"\n", count)
+        return loader, lines[:field_count + 1], args_body[:count], args_body[count]
 
     def denied(self, result, *, before_source=False):
         self.assertNotEqual(result.returncode, 0, "failure was accepted")
@@ -269,8 +346,10 @@ PY
         _, fields, wire_args, wire_body = self.stream_parts()
         expected = [MAGIC.rstrip(b"\n").decode(), "baseline", "fixture-run", BASE, "/fixture/staging",
                     hashlib.sha256(body).hexdigest(), "sha256:" + "a" * 64, "STAGE", "BASELINE_VERIFIED",
-                    "NONE", "NONE", "NONE", "NONE", HASH] + ["NONE"] * 13
-        self.assertTrue(fields[:27] == [v.encode() for v in expected], "production envelope bytes differ")
+                    "NONE", "NONE", "NONE", "NONE", HASH]
+        expected += ["NONE"] * (len(FIELDS) - len(expected))
+        self.assertEqual(len(fields), len(FIELDS) + 1)
+        self.assertTrue(fields[:len(FIELDS)] == [v.encode() for v in expected], "production envelope bytes differ")
         self.assertTrue(wire_args == [v.encode() for v in row["args"][1:]], "wire argument bytes differ")
         self.assertTrue(wire_body == body, "wire body bytes differ")
         for name, value in zip(FIELDS, expected):
@@ -294,9 +373,11 @@ PY
                 for name, value in zip(FIELDS, fields):
                     self.assertTrue(row["envelope"]["V126_INTERNAL_REMOTE_" + name].encode() == value,
                                     "recovery field differs: " + name)
-                self.assertTrue(all(v == HASH.encode() for v in fields[14:21]))
+                baseline_start = FIELDS.index("BASELINE_DATABASE_URL_SHA256")
+                caddy_start = FIELDS.index("CADDY_ORIGINAL_SHA256")
+                self.assertTrue(all(v == HASH.encode() for v in fields[baseline_start:caddy_start]))
                 self.assertTrue(all(v == ("NONE" if operation == "recovery" else HASH).encode()
-                                    for v in fields[21:27]))
+                                    for v in fields[caddy_start:len(FIELDS)]))
 
     def test_07_loader_consumer_failure_is_not_hidden_by_valid_hash(self):
         self.build()
@@ -349,8 +430,11 @@ PY
             ("kind", 7, b"INVALID"), ("stage", 8, b"V125_BACKEND_STOPPED"),
             ("predecessor", 9, b"BASELINE_VERIFIED"), ("predecessor-hash", 10, HASH.encode()),
             ("gate", 11, b"A"), ("authorization", 12, HASH.encode()), ("intent", 13, b"bad"),
-            ("baseline-authority", 14, HASH.encode()), ("caddy-authority", 21, HASH.encode()),
-            ("maintenance-authority", 25, HASH.encode()), ("arg-count", 27, b"33"),
+            ("baseline-authority", FIELDS.index("BASELINE_DATABASE_URL_SHA256"), HASH.encode()),
+            ("database-target-identity", FIELDS.index("DATABASE_TARGET_IDENTITY_SHA256"), HASH.encode()),
+            ("caddy-authority", FIELDS.index("CADDY_ORIGINAL_SHA256"), HASH.encode()),
+            ("maintenance-authority", FIELDS.index("MAINTENANCE_SMOKE_SHA256"), HASH.encode()),
+            ("arg-count", len(FIELDS), b"33"),
             ("action", 1, b"stop-backend"),
             ("action-code", 1, ('$(touch "$FRAME_ROOT/external")' + CANARY).encode()),
         ]:
@@ -388,9 +472,23 @@ PY
                 self.denied(result, before_source=True)
                 if fault == "transport":
                     self.assertEqual(result.returncode, 79)
-                    self.assertIn(b"PASS\nARTIFACT", result.stdout)
+                    self.assertNotIn(b"PASS\nARTIFACT", result.stdout,
+                                     "failed transport output reached artifact consumers")
+                    self.assertTrue(any(b"PASS\nARTIFACT" in file.read_bytes()
+                                        for file in (self.root / "tmp").iterdir()),
+                                    "failed transport output was not retained as evidence")
                 else:
                     self.assertFalse((self.root / "stream").exists(), "failed producer reached transport")
+
+    def test_10_actual_acknowledgement_consumer_rejects_tampering(self):
+        for fault in ("ack-missing", "ack-duplicate", "ack-identity", "ack-children", "ack-log"):
+            with self.subTest(fault=fault):
+                self.reset_markers()
+                result, _ = self.build(fault=fault)
+                self.assertNotEqual(result.returncode, 0, "invalid acknowledgement was accepted")
+                self.assertFalse((self.root / "accepted").exists())
+                self.assertEqual(len((self.root / "dispatch").read_text().splitlines()), 1,
+                                 "acknowledgement failure repeated or suppressed the leaf operation")
 
 
 if __name__ == "__main__":

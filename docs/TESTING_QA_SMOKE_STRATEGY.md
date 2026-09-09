@@ -650,6 +650,33 @@ Record actual server/client versions and image ID/digest/platform from each exec
 A local or CI PG17 result is not a new live PostgreSQL17.10 observation, a Gate A PASS
 or HT-13 completion. Run process-sensitive harnesses sequentially.
 
+### HT-RELEASE-REPAIR-01 combined regression gate
+
+The existing complete cutover/compose job now requires the actual attempt/status,
+readiness, runtime-consumer, configuration, database-evidence and remote-operation regressions in addition
+to every existing test. No job, gate or floor is removed. The exact release CI validator
+must continue to agree with the unchanged twelve job names. The compose job installs
+PG17 server/tools, psql/pg_restore18 and OpenSSH only on its disposable Linux runner.
+
+`test-v126-database-evidence.py` requires real PG17 and both clients: extracted immutable
+before vs current full safe/unsafe SQL and consumer, semantic DB/schema mismatches,
+TOC timezone/client checks and whole-DB synthetic roles/owners/ACL/settings/auth restore.
+`test-v126-configuration.py` runs real guards+Compose for all four env transitions and
+actual Bash Caddy callers with explicit external process fixtures. `test-v126-readiness.py`
+uses real loopback HTTP and mocked Docker inventory for three phases, delayed/hung/error
+and wrong-identity cases; it is not Docker/JVM readiness evidence.
+`test-v126-runtime-consumers.py` preserves nonzero producers and actual nested Bash guards
+under command substitution/conditional callers, including symlink/checksum failures.
+`test-v126-remote-operation.py --require-linux-ssh` requires real Linux subreaper and its
+own SSH endpoint, with synthetic leaf effects only. No shared or staging daemon is used.
+Missing runtime is a failing mandatory gate; optional local unit selections/skips must
+be reported separately and cannot be called a complete harness PASS.
+
+Process-sensitive suites run serially. Local targeted Kotlin/H2 tests, or synthetic
+Telegram/HTTP fixtures, never replace worker-progress evidence and the seventeen live
+manual assertions. Retain historical records and each failed local validation attempt.
+Do not publish CI or perform staging actions during local-only repair.
+
 ### HT-12P executable V126 cutover quality gate
 
 `scripts/test-v126-cutover.sh` is the executable fixture authority for the sequencer; the canonical
@@ -3791,3 +3818,15 @@ ChatGPT should return:
 - commit message;
 - push instructions;
 - deploy/staging smoke instructions where needed.
+
+
+The HT-RELEASE-REPAIR-01 feature candidate uses the same12 GitHub-hosted Ubuntu jobs.
+The compose job runs the full Linux-required harness plus real owned Caddy and connected
+PG17/Docker/JVM tests; no self-hosted/VPS endpoint is permitted. Endpoint wrappers reject
+unexpected authenticated gh, nonloopback SSH/HTTP and proxy/redirect indirection. Synthetic
+provider fixtures use an internal network and CA, and do not redefine denied-update
+storage/replay. PostgreSQL Testcontainers17 cases must execute without skips; floors and
+required test names include maintenance progress/denial cases. Version and sanitized
+runtime result summaries are retained in CI logs. Independent checks continue after a
+failure while the job remains failed. No green feature job substitutes for17 real smoke
+assertions, daemon/VM reboot proof, accepted RPO or whole operational DR.

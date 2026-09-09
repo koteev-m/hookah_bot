@@ -14,6 +14,7 @@ readonly RELEASE_PARENTS='9f51ebbd2dae0702b4b2f6333c1b42fc94cd1fc1,d9c656b1c5feb
 readonly MAIN_ACTIONS_RUN_ID='33536142005'
 readonly V126_IMAGE_ID='sha256:352b6087716da18bdad422d5facf87df6b20ff45dec42a4c3559dc0e84c87772'
 readonly V125_SOURCE_SHA='f577934691a1a7a79ba327c54e2055425142b7be'
+readonly V125_IMAGE_ID='sha256:6a8aed7c85374efd89aa2db2e3dbcbed6d84f63087a757ad077856b78bce24a8'
 readonly SECRET_CANARY='HT12P_SECRET_CANARY_8f91e9cd2eaa4a6596e4'
 readonly FIXTURE_BASELINE_CADDY_SHA='7777777777777777777777777777777777777777777777777777777777777777'
 
@@ -120,6 +121,28 @@ sha256_file() {
   fi
 }
 
+# Legacy leaf fixtures keep their real guard/consumer; only new independent
+# scheduling, semantic-DB and OS-supervision dependencies are synthetic here.
+# Their real implementations run in the mandatory dedicated regression suites.
+fixture_legacy_dependencies() {
+  cutover_bounded_command() { [[ "$1" =~ ^[0-9]+$ ]] || return 98; shift; "$@"; }
+  remote_assert_database_target() {
+    REMOTE_DATABASE_TARGET_IDENTITY_SHA256="$(hash_text fixture-semantic-database-target)"
+  }
+  remote_supervise_action() { remote_dispatch_action "$@"; }
+}
+export -f fixture_legacy_dependencies
+
+fixture_write_toc() {
+  printf '%s\n' ';' '; Archive created at 2026-09-09 00:00:00 UTC' \
+    '; dbname: fixture' '; TOC Entries: 1' '; Compression: none' \
+    '; Dump Version: 1.16-0' '; Format: CUSTOM' '; Integer: 4 bytes' \
+    '; Offset: 8 bytes' '; Dumped from database version: 17.10' \
+    '; Dumped by pg_dump version: 17.10' '; Selected TOC Entries:' \
+    '1; 0 0 TABLE public fixture_table fixture_owner'
+}
+export -f fixture_write_toc
+
 invoke_script() {
   local script="$1"
   shift
@@ -134,7 +157,7 @@ stage_csv() {
 stage_artifacts_oracle() {
   case "$1" in
     BASELINE_VERIFIED)
-      printf '%s\n' 'baseline-caddy,baseline-env,database-url-binding,local-baseline,main-actions,maintenance-identities,remote-admission-source,remote-compose-source,remote-maintenance-check-source,staging-baseline'
+      printf '%s\n' 'baseline-caddy,baseline-env,database-target-identity,database-url-binding,local-baseline,main-actions,maintenance-identities,remote-admission-source,remote-compose-source,remote-maintenance-check-source,staging-baseline'
       ;;
     PRE_DRAIN_BACKUP_REHEARSED)
       printf '%s\n' 'pre-drain-backup-dump,pre-drain-backup-inventory,pre-drain-backup-proof,pre-drain-backup-rehearsal,pre-drain-globals'
@@ -382,6 +405,9 @@ if start >= 0:
     text = text[:start] + ("\n" * text[start:end].count("\n")) + text[end:]
 
 text = text.replace("\\\n", " ")
+# Comments and this TOC metadata key are data, not executable database clients.
+text = re.sub(r"(?m)^\s*#.*$", "", text)
+text = text.replace("b'Dumped by pg_dump version'", "b'Dumped by archive-client version'")
 commands = ("psql", "pg_dump", "pg_dumpall", "pg_restore", "createdb", "dropdb", "pg_isready")
 seen = {command: 0 for command in commands}
 
@@ -443,7 +469,7 @@ expected = {
     "remote_baseline": [
         "database-url-binding", "maintenance-identities", "remote-compose-source",
         "remote-maintenance-check-source", "remote-admission-source", "baseline-caddy",
-        "baseline-env", "staging-baseline",
+        "baseline-env", "staging-baseline", "database-target-identity",
     ],
     "remote_backup_rehearsal": [
         "${phase}-backup-dump", "${phase}-backup-inventory",
@@ -608,6 +634,11 @@ for stage in stages:
     result.append(lines[end])
     cursor = end + 1
 result.extend(lines[cursor:])
+if keep_stage != "BASELINE_VERIFIED":
+    payload = "".join(result)
+    entry = 'if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then'
+    payload = payload.replace(entry, "verify_release_baseline_local() { printf 'FIXTURE_READ_ONLY_BASELINE=PASS\\n'; }\n\n" + entry, 1)
+    result = [payload]
 with open(target, "wt", encoding="utf-8", newline="") as handle:
     handle.writelines(result)
 os.chmod(target, 0o700)
@@ -917,6 +948,7 @@ run_real_stage_artifact_fixture() {
     "${remote_artifacts}" "${fixture_root}" "${RELEASE_SHA}" "${V126_IMAGE_ID}" <<'SH'
 set -Eeuo pipefail
 source "$1"
+fixture_legacy_dependencies
 fixture_stage="$2"
 fixture_expected_actions="$3"
 fixture_remote_artifacts="$4"
@@ -1056,6 +1088,7 @@ test_independent_stage_artifact_contract() {
   source_specs="$(bash -s -- "${CUTOVER_SCRIPT}" "$(stage_csv)" <<'SH'
 set -Eeuo pipefail
 source "$1"
+fixture_legacy_dependencies
 IFS=, read -r -a fixture_stages <<< "$2"
 for fixture_stage in "${fixture_stages[@]}"; do
   stage_expected_artifacts "${fixture_stage}"
@@ -1466,15 +1499,15 @@ EOF
     fail 'host-side database URL is not fail-closed'
   pass 'database URL has a fail-closed required binding'
 
-  [[ "$(grep -F -c 'printf -v cleanup_command' "${CUTOVER_SCRIPT}" || true)" == 7 ]] ||
-    fail 'all seven resource cleanup families must bind a literal command'
+  [[ "$(grep -F -c 'printf -v cleanup_command' "${CUTOVER_SCRIPT}" || true)" == 9 ]] ||
+    fail 'all nine resource cleanup families must bind a literal command'
   [[ "$(grep -F -c 'v126_cleanup_exit_status=\$?; trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then' \
-    "${CUTOVER_SCRIPT}" || true)" == 7 ]] ||
+    "${CUTOVER_SCRIPT}" || true)" == 9 ]] ||
     fail 'cleanup EXIT traps must be one-shot and preserve the original exit status'
   local signal_name signal_status
   while IFS=: read -r signal_name signal_status; do
     [[ "$(grep -F -c \
-      "fi; exit ${signal_status}\" ${signal_name}" "${CUTOVER_SCRIPT}" || true)" == 7 ]] ||
+      "fi; exit ${signal_status}\" ${signal_name}" "${CUTOVER_SCRIPT}" || true)" == 9 ]] ||
       fail "cleanup ${signal_name} traps must be one-shot with exact status ${signal_status}"
   done <<'EOF'
 INT:130
@@ -1500,6 +1533,7 @@ run_real_telegram_cleanup_fixture() {
     "${SECRET_CANARY}" "${fixture_mode}" <<'SH'
 set -Eeuo pipefail
 source "$1"
+fixture_legacy_dependencies
 fixture_root="$2"
 fixture_cleanup_log="$3"
 fixture_canary="$4"
@@ -1512,6 +1546,17 @@ remote_env_value() {
   printf '123456:%s_TELEGRAM\n' "${fixture_canary}"
 }
 curl() {
+  local -a fixture_curl_args=()
+  while (( $# > 0 )); do
+    case "$1" in
+      --disable) shift ;;
+      --connect-timeout|--max-time) [[ "$2" =~ ^[0-9]+$ ]] || return 98; shift 2 ;;
+      --noproxy) [[ "$2" == '*' ]] || return 98; shift 2 ;;
+      --proto) [[ "$2" == '=http' ]] || return 98; shift 2 ;;
+      *) fixture_curl_args+=("$1"); shift ;;
+    esac
+  done
+  set -- "${fixture_curl_args[@]}"
   local config=''
   local output=''
   while (( $# > 0 )); do
@@ -1567,7 +1612,7 @@ test_telegram_cleanup_trap() {
   local failed_status=0
   run_real_telegram_cleanup_fixture "${failed_root}" "${failed_log}" cleanup-failure \
     > "${LAST_OUTPUT}" 2>&1 || failed_status=$?
-  [[ "${failed_status}" == 1 ]] ||
+  [[ "${failed_status}" == 4 ]] ||
     fail "EXIT cleanup failure replaced the original Telegram rejection status: ${failed_status}"
   grep -F 'Telegram webhook or pending update gate failed' "${LAST_OUTPUT}" >/dev/null ||
     fail 'EXIT cleanup failure hid the original Telegram rejection'
@@ -1604,6 +1649,7 @@ run_direct_dispatch_bypass_fixture() {
     "${RELEASE_SHA}" <<'SH'
 set -Eeuo pipefail
 source "$1"
+fixture_legacy_dependencies
 fixture_log="$2"
 fixture_staging="$3"
 fixture_release="$4"
@@ -1658,7 +1704,7 @@ run_remote_loader_fixture() {
       NONE \
       NONE \
       9999999999999999999999999999999999999999999999999999999999999999 \
-      NONE NONE NONE NONE NONE NONE NONE \
+      NONE NONE NONE NONE NONE NONE NONE NONE \
       NONE NONE NONE NONE \
       NONE NONE \
       1 \
@@ -1779,6 +1825,7 @@ run_real_caddy_admin_snapshot_failure_fixture() {
     "${RELEASE_SHA}" "${V126_IMAGE_ID}" <<'SH'
 set -Eeuo pipefail
 source "$1"
+fixture_legacy_dependencies
 
 fixture_mode="$2"
 fixture_root="$3"
@@ -1997,7 +2044,18 @@ sudo() {
       printf '%s\n' false > "${fixture_marker_state}"
       printf '%s\n' drain-marker-removed >> "${fixture_mutations}"
       ;;
-    python3|caddy|chown|chmod)
+    caddy)
+      if [[ "$2" == adapt ]]; then
+        case "$4" in
+          */Caddyfile.original) printf '{"fixture":"%s"}\n' "${fixture_original_sha}" ;;
+          */Caddyfile.drain) printf '{"fixture":"%s"}\n' "${fixture_candidate_sha}" ;;
+          *) return 98 ;;
+        esac
+      else
+        [[ "$2" == validate ]] || return 98
+      fi
+      ;;
+    python3|chown|chmod)
       :
       ;;
     stat)
@@ -2011,8 +2069,26 @@ sudo() {
 }
 
 curl() {
+  local -a fixture_curl_args=()
+  while (( $# > 0 )); do
+    case "$1" in
+      --disable) shift ;;
+      --connect-timeout|--max-time) [[ "$2" =~ ^[0-9]+$ ]] || return 98; shift 2 ;;
+      --noproxy) [[ "$2" == '*' ]] || return 98; shift 2 ;;
+      --proto) [[ "$2" == '=http' ]] || return 98; shift 2 ;;
+      *) fixture_curl_args+=("$1"); shift ;;
+    esac
+  done
+  set -- "${fixture_curl_args[@]}"
   [[ "$*" == '-fsS http://127.0.0.1:2019/config/' ]] ||
     die "unexpected fixture curl: $*"
+
+  # Keep the actual runtime equality guard; only its Caddy/network data are synthetic.
+  local -a runtime_proofs=("${fixture_tmp}"/v126-caddy-proof.*)
+  if [[ -d "${runtime_proofs[0]}" ]]; then
+    printf '{"fixture":"%s"}\n' "$(< "${fixture_active_state}")"
+    return 0
+  fi
 
   local -a snapshots=()
   case "${fixture_mode}" in
@@ -2115,6 +2191,7 @@ run_partial_caddy_recovery_fixture() {
   bash -s -- "${CUTOVER_SCRIPT}" "${active_kind}" "${mutation_log}" <<'SH'
 set -Eeuo pipefail
 source "$1"
+fixture_legacy_dependencies
 fixture_active="$2"
 fixture_log="$3"
 fixture_marker=false
@@ -2152,6 +2229,8 @@ sudo() {
         unknown) printf '%064d  %s\n' 9 /etc/caddy/Caddyfile ;;
       esac
       ;;
+    'caddy adapt --config /fixture/evidence/Caddyfile.original --adapter caddyfile') printf '%s\n' '{"fixture":"original"}' ;;
+    'caddy adapt --config /fixture/evidence/Caddyfile.drain --adapter caddyfile') printf '%s\n' '{"fixture":"candidate"}' ;;
     'caddy validate --config /fixture/evidence/Caddyfile.original --adapter caddyfile') : ;;
     'caddy validate --config /fixture/evidence/Caddyfile.drain --adapter caddyfile') : ;;
     'install -o root -g root -m 0644 /fixture/evidence/Caddyfile.drain /etc/caddy/Caddyfile')
@@ -2169,6 +2248,10 @@ sudo() {
     *) printf 'unexpected sudo Caddy fixture: %s\n' "$*" >&2; return 98 ;;
   esac
 }
+curl() {
+  [[ "$*" == "--disable --noproxy * --proto =http --connect-timeout 3 --max-time 10 -fsS http://127.0.0.1:2019/config/" ]] || return 98
+  printf '{"fixture":"%s"}\n' "${fixture_active}"
+}
 remote_recovery_ensure_pre_v126_drain fixture-release fixture-run
 SH
 }
@@ -2179,6 +2262,7 @@ run_unknown_active_caddy_fixture() {
   bash -s -- "${CUTOVER_SCRIPT}" "${mode}" "${mutation_log}" <<'SH'
 set -Eeuo pipefail
 source "$1"
+fixture_legacy_dependencies
 fixture_mode="$2"
 fixture_log="$3"
 fixture_original_sha=1111111111111111111111111111111111111111111111111111111111111111
@@ -2304,6 +2388,7 @@ run_caddy_receipt_binding_fixture() {
     "${expected_activation}" <<'SH'
 set -Eeuo pipefail
 source "$1"
+fixture_legacy_dependencies
 fixture_evidence_root="$2"
 fixture_run_id="$3"
 fixture_release="$4"
@@ -2405,6 +2490,7 @@ run_caddy_source_swap_fixture() {
     "${RELEASE_SHA}" <<'SH'
 set -Eeuo pipefail
 source "$1"
+fixture_legacy_dependencies
 fixture_root="$2"
 fixture_log="$3"
 fixture_release="$4"
@@ -2638,6 +2724,7 @@ run_saved_image_archive_stage_fixture() {
     "${fixture_root}" "${RELEASE_SHA}" "${V126_IMAGE_ID}" "${upload_capture}" <<'SH'
 set -Eeuo pipefail
 source "$1"
+fixture_legacy_dependencies
 fixture_archive="$2"
 fixture_action_log="$3"
 STATE_DIR="$4"
@@ -2769,6 +2856,7 @@ run_remote_image_fd_fixture() {
     "${action_log}" "${load_capture}" "${RELEASE_SHA}" "${V126_IMAGE_ID}" <<'SH'
 set -Eeuo pipefail
 source "$1"
+fixture_legacy_dependencies
 fixture_archive="$2"
 fixture_root="$3"
 fixture_action_log="$4"
@@ -2922,7 +3010,7 @@ test_image_separation_and_mismatch() {
     'docker update --restart=no "${backend_container}"' \
     "'{{.HostConfig.RestartPolicy.Name}}:{{.RestartCount}}'" \
     'docker start "${backend_container}"' \
-    'remote_wait_backend_running "${backend_container}"' \
+    'remote_wait_backend_ready "${backend_container}"' \
     'remote_assert_single_v126_backend_poller "${image_id}"'
   [[ "$(grep -F -c 'docker start "${backend_container}"' "${remote_start}" || true)" == 1 ]] ||
     fail 'V126 startup must contain exactly one start command'
@@ -2981,6 +3069,7 @@ run_compose_mapping_fixture() {
   bash -s -- "${CUTOVER_SCRIPT}" "${compose_json}" "${expected_image}" "${mutation_log}" <<'SH'
 set -Eeuo pipefail
 source "$1"
+fixture_legacy_dependencies
 fixture_json="$2"
 fixture_expected="$3"
 fixture_mutation_log="$4"
@@ -3024,6 +3113,7 @@ run_explicit_compose_file_fixture() {
     "${expected_image}" <<'SH'
 set -Eeuo pipefail
 source "$1"
+fixture_legacy_dependencies
 fixture_staging="$2"
 fixture_fake_bin="$3"
 fixture_expected="$4"
@@ -3092,6 +3182,7 @@ run_real_backup_rehearsal_cleanup_fixture() {
     "${RELEASE_SHA}" <<'SH'
 set -Eeuo pipefail
 source "$1"
+fixture_legacy_dependencies
 fixture_mode="$2"
 fixture_root="$3"
 fixture_release="$4"
@@ -3515,6 +3606,7 @@ run_inventory_failure_fixture() {
   bash -s -- "${CUTOVER_SCRIPT}" "${mode}" "${mutation_log}" <<'SH'
 set -Eeuo pipefail
 source "$1"
+fixture_legacy_dependencies
 set +u # macOS Bash 3 treats an explicitly empty indexed array as unset under nounset.
 fixture_mode="$2"
 fixture_log="$3"
@@ -3576,6 +3668,7 @@ run_backend_runtime_guard_fixture() {
     "${poller_state}" "${live_v125}" "${live_old}" <<'SH'
 set -Eeuo pipefail
 source "$1"
+fixture_legacy_dependencies
 expected_id="$2"
 fixture_restart="$3"
 fixture_poller="$4"
@@ -3646,6 +3739,7 @@ run_runtime_environment_binding_fixture() {
     "${container_environment_mode}" "${RELEASE_SHA}" "${V126_IMAGE_ID}" <<'SH'
 set -Eeuo pipefail
 source "$1"
+fixture_legacy_dependencies
 fixture_action="$2"
 fixture_root="$3"
 fixture_container_environment_mode="$4"
@@ -3758,6 +3852,17 @@ PY
   esac
 }
 curl() {
+  local -a fixture_curl_args=()
+  while (( $# > 0 )); do
+    case "$1" in
+      --disable) shift ;;
+      --connect-timeout|--max-time) [[ "$2" =~ ^[0-9]+$ ]] || return 98; shift 2 ;;
+      --noproxy) [[ "$2" == '*' ]] || return 98; shift 2 ;;
+      --proto) [[ "$2" == '=http' ]] || return 98; shift 2 ;;
+      *) fixture_curl_args+=("$1"); shift ;;
+    esac
+  done
+  set -- "${fixture_curl_args[@]}"
   case "$*" in
     '-fsS http://127.0.0.1:8080/health'|'-fsS http://127.0.0.1:8080/db/health')
       printf '%s\n' '{"status":"ok"}'
@@ -3845,6 +3950,7 @@ run_single_start_fixture() {
     "${failure_mode}" "${mutation_log}" "${RELEASE_SHA}" "${V126_IMAGE_ID}" <<'SH'
 set -Eeuo pipefail
 source "$1"
+fixture_legacy_dependencies
 fixture_staging="$2"
 fixture_phase="$3"
 fixture_failure_mode="$4"
@@ -3888,7 +3994,7 @@ remote_verify_maintenance_env_binding() {
   REMOTE_BOUND_ENV_SHA256="$(remote_hash_file .env)"
 }
 remote_assert_compose_backend_image() { :; }
-remote_wait_backend_running() { :; }
+remote_wait_backend_ready() { :; }
 remote_assert_single_v126_backend_poller() { :; }
 remote_assert_health_json() { :; }
 remote_assert_version() { :; }
@@ -4044,6 +4150,7 @@ run_real_baseline_fixture() {
     "${FIXTURE_BASELINE_CADDY_SHA}" "${metadata_mode}" <<'SH'
 set -Eeuo pipefail
 source "$1"
+fixture_legacy_dependencies
 fixture_staging="$2"
 fixture_run_id="$3"
 fixture_release="$4"
@@ -4166,6 +4273,17 @@ PY
   esac
 }
 curl() {
+  local -a fixture_curl_args=()
+  while (( $# > 0 )); do
+    case "$1" in
+      --disable) shift ;;
+      --connect-timeout|--max-time) [[ "$2" =~ ^[0-9]+$ ]] || return 98; shift 2 ;;
+      --noproxy) [[ "$2" == '*' ]] || return 98; shift 2 ;;
+      --proto) [[ "$2" == '=http' ]] || return 98; shift 2 ;;
+      *) fixture_curl_args+=("$1"); shift ;;
+    esac
+  done
+  set -- "${fixture_curl_args[@]}"
   case "$*" in
     '-fsS http://127.0.0.1:8080/health'|'-fsS http://127.0.0.1:8080/db/health'|\
     '-fsS https://staging.hookahtootah.club/health'|\
@@ -4321,6 +4439,7 @@ run_authority_verification_fixture() {
     "${expected_env_sha}" <<'SH'
 set -Eeuo pipefail
 source "$1"
+fixture_legacy_dependencies
 fixture_staging="$2"
 fixture_run_root="$3"
 fixture_release="$4"
@@ -4357,6 +4476,7 @@ run_real_authority_verification_fixture() {
   bash -s -- "${CUTOVER_SCRIPT}" "${staging}" "${run_id}" "${RELEASE_SHA}" "$@" <<'SH'
 set -Eeuo pipefail
 source "$1"
+fixture_legacy_dependencies
 fixture_staging="$2"
 fixture_run_id="$3"
 fixture_release="$4"
@@ -4367,6 +4487,7 @@ V126_INTERNAL_REMOTE_OPERATION_KIND=RECOVERY
 V126_INTERNAL_REMOTE_OPERATION_NAME=pre-v126
 V126_INTERNAL_REMOTE_ACTION=recover-pre-v126
 V126_INTERNAL_REMOTE_BASELINE_DATABASE_URL_SHA256="${fixture_hashes[0]}"
+V126_INTERNAL_REMOTE_DATABASE_TARGET_IDENTITY_SHA256="${fixture_hashes[0]}"
 V126_INTERNAL_REMOTE_BASELINE_MAINTENANCE_IDENTITIES_SHA256="${fixture_hashes[1]}"
 V126_INTERNAL_REMOTE_BASELINE_COMPOSE_SOURCE_SHA256="${fixture_hashes[2]}"
 V126_INTERNAL_REMOTE_BASELINE_MAINTENANCE_CHECK_SOURCE_SHA256="${fixture_hashes[3]}"
@@ -4400,6 +4521,7 @@ run_remote_envelope_authority_fixture() {
     "${TEST_ROOT}/remote-staging" "${RELEASE_SHA}" "${V126_IMAGE_ID}" <<'SH'
 set -Eeuo pipefail
 source "$1"
+fixture_legacy_dependencies
 fixture_mode="$2"
 fixture_mutation="$3"
 fixture_log="$4"
@@ -4424,6 +4546,7 @@ V126_INTERNAL_REMOTE_SCRIPT_SHA256=fffffffffffffffffffffffffffffffffffffffffffff
 V126_INTERNAL_REMOTE_V126_IMAGE_ID="${fixture_v126_image_id}"
 V126_INTERNAL_REMOTE_INTENT_HASH=9999999999999999999999999999999999999999999999999999999999999999
 V126_INTERNAL_REMOTE_BASELINE_DATABASE_URL_SHA256="${fixture_hashes[0]}"
+V126_INTERNAL_REMOTE_DATABASE_TARGET_IDENTITY_SHA256="${fixture_hashes[0]}"
 V126_INTERNAL_REMOTE_BASELINE_MAINTENANCE_IDENTITIES_SHA256="${fixture_hashes[1]}"
 V126_INTERNAL_REMOTE_BASELINE_COMPOSE_SOURCE_SHA256="${fixture_hashes[2]}"
 V126_INTERNAL_REMOTE_BASELINE_MAINTENANCE_CHECK_SOURCE_SHA256="${fixture_hashes[3]}"
@@ -4438,6 +4561,7 @@ V126_INTERNAL_REMOTE_MAINTENANCE_SMOKE_SHA256=NONE
 V126_INTERNAL_REMOTE_MAINTENANCE_OFF_SHA256=NONE
 case "${fixture_mutation}" in
   database) V126_INTERNAL_REMOTE_BASELINE_DATABASE_URL_SHA256=NONE ;;
+  target) V126_INTERNAL_REMOTE_DATABASE_TARGET_IDENTITY_SHA256=NONE ;;
   identities) V126_INTERNAL_REMOTE_BASELINE_MAINTENANCE_IDENTITIES_SHA256=NONE ;;
   compose) V126_INTERNAL_REMOTE_BASELINE_COMPOSE_SOURCE_SHA256=NONE ;;
   maintenance) V126_INTERNAL_REMOTE_BASELINE_MAINTENANCE_CHECK_SOURCE_SHA256=NONE ;;
@@ -4464,6 +4588,8 @@ remote_recover_pre_v126() {
   [[ "${actual}" == "${fixture_hashes[5]}" ]] || die 'recovery Caddy authority delivery mismatch'
   actual="$(remote_bound_authority_hash baseline-environment V126_INTERNAL_REMOTE_BASELINE_ENV_SHA256)"
   [[ "${actual}" == "${fixture_hashes[6]}" ]] || die 'recovery environment authority delivery mismatch'
+  [[ "${V126_INTERNAL_REMOTE_DATABASE_TARGET_IDENTITY_SHA256}" == "${fixture_hashes[0]}" ]] ||
+    die 'recovery semantic database authority delivery mismatch'
   printf '%s\n' recovery >> "${fixture_log}"
 }
 case "${fixture_mode}" in
@@ -4477,6 +4603,7 @@ case "${fixture_mode}" in
     V126_INTERNAL_REMOTE_AUTHORIZATION_HASH=NONE
     if [[ "${fixture_mutation}" == none ]]; then
       V126_INTERNAL_REMOTE_BASELINE_DATABASE_URL_SHA256=NONE
+      V126_INTERNAL_REMOTE_DATABASE_TARGET_IDENTITY_SHA256=NONE
       V126_INTERNAL_REMOTE_BASELINE_MAINTENANCE_IDENTITIES_SHA256=NONE
       V126_INTERNAL_REMOTE_BASELINE_COMPOSE_SOURCE_SHA256=NONE
       V126_INTERNAL_REMOTE_BASELINE_MAINTENANCE_CHECK_SOURCE_SHA256=NONE
@@ -4646,12 +4773,12 @@ EOF
 
 test_baseline_authority_envelope_contract() {
   local mutation_log="${TEST_ROOT}/authority-envelope-mutation.log"
-  expect_success 'baseline envelope carries exactly seven NONE authority bindings' \
+  expect_success 'baseline envelope carries exactly eight NONE authority bindings' \
     run_remote_envelope_authority_fixture baseline none "${mutation_log}"
   [[ "$(cat "${mutation_log}")" == baseline ]] ||
     fail 'exact baseline NONE envelope did not reach its bounded helper'
   local authority
-  for authority in database identities compose maintenance admission caddy environment; do
+  for authority in database target identities compose maintenance admission caddy environment; do
     : > "${mutation_log}"
     expect_failure "baseline envelope rejects pre-existing ${authority} authority" \
       'must not claim a pre-existing authority receipt' \
@@ -4661,11 +4788,11 @@ test_baseline_authority_envelope_contract() {
   done
 
   : > "${mutation_log}"
-  expect_success 'recovery receives all seven exact baseline authority hashes' \
+  expect_success 'recovery receives all eight exact baseline authority hashes' \
     run_remote_envelope_authority_fixture recovery none "${mutation_log}"
   [[ "$(cat "${mutation_log}")" == recovery ]] ||
-    fail 'seven-hash recovery envelope did not reach its bounded helper'
-  for authority in database identities compose maintenance admission caddy environment; do
+    fail 'eight-hash recovery envelope did not reach its bounded helper'
+  for authority in database target identities compose maintenance admission caddy environment; do
     : > "${mutation_log}"
     expect_failure "recovery rejects missing ${authority} authority hash" \
       'lacks an exact baseline authority receipt binding' \
@@ -4673,7 +4800,7 @@ test_baseline_authority_envelope_contract() {
     [[ ! -s "${mutation_log}" ]] ||
       fail "recovery with missing ${authority} authority reached its helper"
   done
-  pass 'baseline and recovery envelopes enforce all seven authority hash positions'
+  pass 'baseline and recovery envelopes enforce all eight authority hash positions'
 }
 
 write_maintenance_env_proof_fixture() {
@@ -4737,6 +4864,7 @@ run_environment_binding_fixture() {
     "${mode}" "${mutation_log}" "$@" <<'SH'
 set -Eeuo pipefail
 source "$1"
+fixture_legacy_dependencies
 fixture_staging="$2"
 fixture_run_id="$3"
 fixture_release="$4"
@@ -4891,6 +5019,7 @@ run_real_final_preflight_secret_fixture() {
     "${database_file}" "${fake_bin}" "${mutation_mode}" "${alternate_marker}" <<'SH'
 set -Eeuo pipefail
 source "$1"
+fixture_legacy_dependencies
 eval "$(declare -f remote_require_operator_file | \
   sed '1s/^remote_require_operator_file/original_remote_require_operator_file/')"
 fixture_staging="$2"
@@ -4992,6 +5121,7 @@ run_real_maintenance_secret_fixture() {
     "${mutation_mode}" <<'SH'
 set -Eeuo pipefail
 source "$1"
+fixture_legacy_dependencies
 fixture_staging="$2"
 fixture_run_id="$3"
 fixture_release="$4"
@@ -5002,11 +5132,16 @@ fixture_mutation_mode="$8"
 fixture_run_root="${fixture_staging}/.v126-runs/${fixture_run_id}"
 fixture_env_sha="$(remote_hash_file "${fixture_staging}/.env")"
 V126_INTERNAL_REMOTE_BASELINE_ENV_SHA256="${fixture_env_sha}"
-if [[ "${fixture_mutation_mode}" == current-env-drift-before-install ]]; then
-  export HT12P_MAINTENANCE_GUARD_MUTATE=true
-  export HT12P_MAINTENANCE_LIVE_ENV="${fixture_staging}/.env"
-  export HT12P_MAINTENANCE_GUARD_MARKER="${fixture_run_root}/guard-mutated.marker"
-fi
+# Inject concurrent live-file drift after the real sanitized candidate validation.
+# The new env -i boundary deliberately does not pass test environment variables.
+eval "$(declare -f remote_validate_environment_candidate | \
+  sed '1s/^remote_validate_environment_candidate/original_remote_validate_environment_candidate/')"
+remote_validate_environment_candidate() {
+  original_remote_validate_environment_candidate "$@" || return
+  if [[ "${fixture_mutation_mode}" == current-env-drift-before-install ]]; then
+    printf '%s\n' 'UNRELATED_GUARD_TIME_DRIFT=1' >> "${fixture_staging}/.env"
+  fi
+}
 
 remote_initialize_compose() {
   [[ "$1" == "${fixture_staging}" && "$2" == "${fixture_run_id}" &&
@@ -5118,7 +5253,7 @@ test_sensitive_consumer_secret_redaction() {
     'set -Eeuo pipefail' \
     '[[ "${DATABASE_URL:?}" == service=v126_preflight ]]' \
     '[[ -f "${PGSERVICEFILE:?}" && -f "${PGPASSFILE:?}" ]]' \
-    'printf "%s\n" preflight-leaf-pass' > \
+    'printf "%s\n" "V126_PREFLIGHT_RESULT={\"version\":1,\"safe\":true,\"unsafe_count\":0}" BOOKING_THREAD_PREFLIGHT_SAFE_TO_CONTINUE' > \
     "${preflight_run_root}/final-v125-preflight.sh.partial"
   chmod 0600 "${preflight_run_root}/final-v125-preflight.sh.partial"
   printf '%s\n' \
@@ -5236,7 +5371,7 @@ test_sensitive_consumer_secret_redaction() {
       printf '?malformed=%s&bad-option\n' "${SECRET_CANARY}" >> "${database_file}"
     fi
     printf '%s\n' '#!/usr/bin/env bash' 'set -Eeuo pipefail' \
-      'printf "%s\n" "safe-to-continue result=PASS"' 'exit 23' > \
+      'printf "%s\n" "V126_PREFLIGHT_RESULT={\"version\":1,\"safe\":true,\"unsafe_count\":0}" BOOKING_THREAD_PREFLIGHT_SAFE_TO_CONTINUE' 'exit 23' > \
       "${failure_root}/final-v125-preflight.sh.partial"
     chmod 0600 "${database_file}" "${failure_root}/final-v125-preflight.sh.partial"
     leaf_lines_before_swap="$(wc -l < "${leaf_log}" | tr -d ' ')"
@@ -5280,11 +5415,6 @@ test_sensitive_consumer_secret_redaction() {
   printf '%s\n' \
     '#!/usr/bin/env bash' \
     'set -Eeuo pipefail' \
-    'if [[ "${HT12P_MAINTENANCE_GUARD_MUTATE:-false}" == true && "$1" == *candidate &&' \
-    '  ! -e "${HT12P_MAINTENANCE_GUARD_MARKER:?}" ]]; then' \
-    '  printf "%s\n" "UNRELATED_GUARD_TIME_DRIFT=1" >> "${HT12P_MAINTENANCE_LIVE_ENV:?}"' \
-    '  : > "${HT12P_MAINTENANCE_GUARD_MARKER}"' \
-    'fi' \
     'exit 0' > "${maintenance_staging}/scripts/check-staging-maintenance-config.sh"
   printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > \
     "${maintenance_staging}/scripts/validate-staging-admission.sh"
@@ -5390,6 +5520,7 @@ extract_real_booking_preflight() {
     "${release_sha}" <<'SH'
 set -Eeuo pipefail
 source "$1"
+fixture_legacy_dependencies
 RELEASE_WORKTREE="$2"
 fixture_target="$3"
 RELEASE_SHA="$4"
@@ -5443,6 +5574,7 @@ run_release_git_sanitization_fixture() {
       "${original_tree}" "${original_doc_sha}" "${target}" <<'SH'
 set -Eeuo pipefail
 source "$1"
+fixture_legacy_dependencies
 RELEASE_WORKTREE="$2"
 RELEASE_SHA="$3"
 expected_tree="$4"
@@ -5796,43 +5928,53 @@ PY
 }
 
 make_success_ssh() {
-  local target="$1"
-  local artifact_name="$2"
-  printf '%s\n' \
-    '#!/usr/bin/env bash' \
-    'printf "ssh %s\\n" "$*" >> "${HT12P_REMOTE_LOG:?}"' \
-    'if [[ -n "${HT12P_REMOTE_STREAM_LOG:-}" ]]; then' \
-    '  cat >> "${HT12P_REMOTE_STREAM_LOG}"' \
-    'else' \
-    '  while IFS= read -r _line; do :; done' \
-    'fi' \
-    "printf 'ARTIFACT\\t${artifact_name}\\t%s\\n' '4444444444444444444444444444444444444444444444444444444444444444'" \
-    > "${target}"
-  chmod 0700 "${target}"
+  make_artifact_ssh "$1" "$2=4444444444444444444444444444444444444444444444444444444444444444"
 }
 
 make_artifact_ssh() {
   local target="$1"
   shift
-  {
-    printf '%s\n' \
-      '#!/usr/bin/env bash' \
-      'if [[ -n "${HT12P_REMOTE_STREAM_LOG:-}" ]]; then' \
-      '  cat > "${HT12P_REMOTE_STREAM_LOG}"' \
-      'else' \
-      '  while IFS= read -r _line; do :; done' \
-      'fi'
-    local item name digest
-    for item in "$@"; do
-      name="${item%%=*}"
-      digest="${item#*=}"
-      [[ "${name}" != "${item}" && "${digest}" =~ ^[0-9a-f]{64}$ ]] ||
-        fail "invalid fake SSH artifact fixture: ${item}"
-      printf "printf 'ARTIFACT\\t%%s\\t%%s\\n' '%s' '%s'\n" \
-        "${name}" "${digest}"
-    done
-  } > "${target}"
-  chmod 0700 "${target}"
+  python3 - "${target}" "$@" <<'PY'
+from pathlib import Path
+import re
+import sys
+items = sys.argv[2:]
+if any(not re.fullmatch(r"[a-z0-9-]+=[0-9a-f]{64}", item) for item in items):
+    raise SystemExit("invalid fake SSH artifact fixture")
+source = r'''#!/usr/bin/env python3
+import hashlib, json, os, sys, time
+from pathlib import Path
+stream = sys.stdin.buffer.read()
+if os.environ.get("HT12P_REMOTE_STREAM_LOG"):
+    Path(os.environ["HT12P_REMOTE_STREAM_LOG"]).write_bytes(stream)
+if os.environ.get("HT12P_REMOTE_LOG"):
+    with Path(os.environ["HT12P_REMOTE_LOG"]).open("a") as handle:
+        handle.write("ssh " + " ".join(sys.argv[1:]) + "\n")
+if os.environ.get("HT12P_RACE_READY"):
+    Path(os.environ["HT12P_RACE_READY"]).write_text("ready\n")
+    deadline = time.monotonic() + 5
+    while not Path(os.environ["HT12P_RACE_RELEASE"]).is_file():
+        if time.monotonic() >= deadline:
+            raise SystemExit(96)
+        time.sleep(0.02)
+marker = b"\nV126_INTERNAL_REMOTE_ENVELOPE_V1\n"
+if stream.count(marker) != 1:
+    raise SystemExit("fixture remote envelope marker mismatch")
+fields = stream.split(marker, 1)[1].splitlines()
+identity = dict(action=fields[0].decode(), run_id=fields[1].decode(),
+                release_sha=fields[2].decode(), script_sha256=fields[4].decode(),
+                kind=fields[6].decode(), name=fields[7].decode(), intent_sha256=fields[12].decode())
+canonical = lambda doc: (json.dumps(doc, sort_keys=True, separators=(",", ":")) + "\n").encode()
+items = ITEMS
+log = b"".join(("ARTIFACT\t" + item.replace("=", "\t", 1) + "\n").encode() for item in items)
+ack = dict(identity=identity, operation_id=hashlib.sha256(canonical(identity)).hexdigest(),
+           exit=0, outcome="SUCCEEDED", children="REAPED",
+           log_sha256=hashlib.sha256(log).hexdigest(), completed_at="2026-09-09T00:00:00+00:00")
+sys.stdout.buffer.write(log + b"\nREMOTE_OPERATION_ACK\t" + canonical(ack))
+'''
+Path(sys.argv[1]).write_text(source.replace("ITEMS", repr(items)))
+Path(sys.argv[1]).chmod(0o700)
+PY
 }
 
 make_state_lock() {
@@ -6014,6 +6156,7 @@ run_pre_exec_errexit_fixture() {
   bash -s -- "${CUTOVER_SCRIPT}" "${variant}" "${state}" "${payload}" <<'SH'
 set -Eeuo pipefail
 source "$1"
+fixture_legacy_dependencies
 fixture_variant="$2"
 STATE_DIR="$3"
 fixture_payload="$4"
@@ -6062,6 +6205,7 @@ test_pre_exec_child_binding_barrier() {
   bash -c '
 set -Eeuo pipefail
 source "$1"
+fixture_legacy_dependencies
 STATE_DIR="$2"
 ready="$3"
 payload="$4"
@@ -6110,6 +6254,7 @@ run_tracked_command pending-child /bin/sh -c '\''printf "MUTATED\n" > "$1"'\'' p
   bash -c '
 set -Eeuo pipefail
 source "$1"
+fixture_legacy_dependencies
 STATE_DIR="$2"
 started="$3"
 completed="$4"
@@ -6309,20 +6454,7 @@ test_authorization_recovery_lock_order() {
   local old_path="${PATH}"
   local state attempt recovery_pid recovery_status
   mkdir -m 0700 "${fake_bin}"
-  printf '%s\n' \
-    '#!/usr/bin/env bash' \
-    'printf "ssh %s\n" "$*" >> "${HT12P_REMOTE_LOG:?}"' \
-    'while IFS= read -r _line; do :; done' \
-    'printf "%s\n" ready > "${HT12P_RACE_READY:?}"' \
-    'attempt=0' \
-    'while [[ ! -f "${HT12P_RACE_RELEASE:?}" ]]; do' \
-    '  attempt=$((attempt + 1))' \
-    '  (( attempt <= 250 )) || exit 96' \
-    '  sleep 0.02' \
-    'done' \
-    "printf 'ARTIFACT\\trecovery-pre-v126\\t%s\\n' '4444444444444444444444444444444444444444444444444444444444444444'" \
-    > "${fake_bin}/ssh"
-  chmod 0700 "${fake_bin}/ssh"
+  make_success_ssh "${fake_bin}/ssh" recovery-pre-v126
   export HT12P_REMOTE_LOG="${remote_log}"
   export HT12P_RACE_READY="${ready}"
   export HT12P_RACE_RELEASE="${release}"
@@ -6414,7 +6546,7 @@ prepare_partial_off_dr_fixture() {
     "${database_file}" "${identities_file}" "${run_id}"
   write_maintenance_env_proof_fixture "${run_root}" "${run_id}" V126_SMOKE \
     "$(sha256_file "${smoke_env}")" "$(sha256_file "${staging}/.env")"
-  printf '%s\n' fixture-list-only-inventory > "${backup_root}/quiesced.dump"
+  fixture_write_toc > "${backup_root}/quiesced.dump"
   cp "${backup_root}/quiesced.dump" "${backup_root}/quiesced.dump.pg_restore.list"
   chmod 0600 "${backup_root}/quiesced.dump" \
     "${backup_root}/quiesced.dump.pg_restore.list"
@@ -6432,6 +6564,7 @@ run_partial_off_dr_fixture() {
     "${FIXTURE_BASELINE_CADDY_SHA}" <<'SH'
 set -Eeuo pipefail
 source "$1"
+fixture_legacy_dependencies
 eval "$(declare -f remote_read_maintenance_after_sha | \
   sed '1s/^remote_read_maintenance_after_sha/original_remote_read_maintenance_after_sha/')"
 set +u
@@ -6908,6 +7041,7 @@ run_recovery_refusal_fixture() {
     "${mutation_log}" "${TEST_ROOT}/remote-staging" "${RELEASE_SHA}" "${V126_IMAGE_ID}" <<'SH'
 set -Eeuo pipefail
 source "$1"
+fixture_legacy_dependencies
 set +u # macOS Bash 3 treats an explicitly empty indexed array as unset under nounset.
 mode="$2"
 fixture_flyway="$3"
@@ -6926,7 +7060,7 @@ remote_assert_zero_writer() { printf '%s\n' zero-writer >> "${mutation_log}"; }
 remote_flyway_state() { printf '%s\n' "${fixture_flyway}"; }
 remote_recovery_product_off() { printf '%s\n' product-off >> "${mutation_log}"; }
 remote_assert_compose_backend_image() { :; }
-remote_wait_backend_running() { :; }
+remote_wait_backend_ready() { :; }
 remote_assert_v125_runtime() { :; }
 remote_recovery_restore_original_caddy() { printf '%s\n' fixture-caddy; }
 remote_write_proof() {
@@ -6996,6 +7130,7 @@ run_real_recovery_transition_fixture() {
     "${running_image}" "${V126_IMAGE_ID}" "${failure_mode}" "${SECRET_CANARY}" <<'SH'
 set -Eeuo pipefail
 source "$1"
+fixture_legacy_dependencies
 set +u # macOS Bash 3 treats an explicitly empty indexed array as unset under nounset.
 eval "$(declare -f remote_recovery_product_off | \
   sed '1s/^remote_recovery_product_off/original_remote_recovery_product_off/')"
@@ -7048,6 +7183,9 @@ else
     "${fixture_staging}/.env"
 fi
 chmod 0600 "${fixture_staging}/.env"
+printf '%s\n' 'services:' '  backend:' '    image: ${BACKEND_IMAGE}' '    env_file: .env' > \
+  "${fixture_staging}/docker-compose.yml"
+chmod 0644 "${fixture_staging}/docker-compose.yml"
 printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > \
   "${fixture_staging}/scripts/check-staging-maintenance-config.sh"
 printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > \
@@ -7153,6 +7291,13 @@ remote_assert_compose_backend_image() {
   if [[ "${fixture_failure_mode}" == env-before-create ]]; then
     printf '%s\n' 'UNRELATED_PRE_CREATE_DRIFT=1' >> "${fixture_staging}/.env"
   fi
+}
+remote_wait_backend_ready() {
+  [[ "$1" == "${fixture_backend_id}" && "$2" == "${V125_IMAGE_ID}" && "$3" == "${V125_SOURCE_SHA}" ]] ||
+    die 'recovery readiness identity mismatch'
+  [[ "$(< "${backend_state_file}")" == running && "$(< "${start_count_file}")" == 1 ]] ||
+    die 'recovery readiness preceded its single start'
+  log_command "readiness $1 $2 $3"
 }
 remote_assert_v125_runtime() {
   [[ "$1" == "${fixture_staging}" && "$2" == "hookah-v125:${V125_SOURCE_SHA}" ]] ||
@@ -7288,11 +7433,11 @@ SH
 assert_real_recovery_transition() {
   local mode="$1"
   local fixture_root="$2"
-  python3 - "${mode}" "${fixture_root}" "${RELEASE_SHA}" "${V125_SOURCE_SHA}" <<'PY'
+  python3 - "${mode}" "${fixture_root}" "${RELEASE_SHA}" "${V125_SOURCE_SHA}" "${V125_IMAGE_ID}" <<'PY'
 import pathlib
 import sys
 
-mode, root_raw, release, v125_sha = sys.argv[1:]
+mode, root_raw, release, v125_sha, v125_image = sys.argv[1:]
 root = pathlib.Path(root_raw)
 staging = root_raw.rstrip("/") + "/staging"
 backend = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -7315,7 +7460,7 @@ if mode == "pre":
         f"docker update --restart=no {backend}",
         f"docker inspect --format {{{{.HostConfig.RestartPolicy.Name}}}}:{{{{.RestartCount}}}} {backend}",
         f"docker start {backend}",
-        "compose ps --status running -q --no-trunc backend",
+        f"readiness {backend} {v125_image} {v125_sha}",
         f"runtime-v125 hookah-v125:{v125_sha}",
         "caddy restore-original",
     ]
@@ -7353,6 +7498,7 @@ run_real_full_dr_fixture() {
     "${RELEASE_SHA}" "${mode}" <<'SH'
 set -Eeuo pipefail
 source "$1"
+fixture_legacy_dependencies
 fixture_root="$2"
 mutation_log="$3"
 command_log="$4"
@@ -7364,7 +7510,7 @@ fixture_backup_root="${fixture_root}/backup-root"
 mkdir -m 0700 -p "${fixture_staging}" "${fixture_run_root}" "${fixture_backup_root}"
 dump="${fixture_backup_root}/quiesced.dump"
 inventory="${dump}.pg_restore.list"
-printf '%s\n' fixture-list-only-inventory > "${dump}"
+fixture_write_toc > "${dump}"
 cp "${dump}" "${inventory}"
 chmod 0600 "${dump}" "${inventory}"
 dump_sha="$(remote_hash_file "${dump}")"
@@ -7965,6 +8111,13 @@ main() {
   expect_success 'release CI exact set and downstream proof regressions' \
     python3 "${SCRIPT_DIR}/test-v126-release-ci.py"
   python3 "${SCRIPT_DIR}/test-v126-remote-stdin.py"
+  python3 "${SCRIPT_DIR}/test-v126-attempt-status.py"
+  python3 "${SCRIPT_DIR}/test-v126-bindings.py"
+  python3 "${SCRIPT_DIR}/test-v126-readiness.py"
+  python3 "${SCRIPT_DIR}/test-v126-runtime-consumers.py"
+  python3 "${SCRIPT_DIR}/test-v126-configuration.py"
+  python3 "${SCRIPT_DIR}/test-v126-database-evidence.py"
+  python3 "${SCRIPT_DIR}/test-v126-remote-operation.py" --require-linux-ssh
   pass 'production remote stream through real Bash stdin'
   python3 "${SCRIPT_DIR}/test-v126-libpq.py"
   pass 'real libpq serialization and disposable PostgreSQL17 authentication'

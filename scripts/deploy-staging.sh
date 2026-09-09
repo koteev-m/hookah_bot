@@ -164,9 +164,17 @@ if [[ "${STAGING_ARTIFACT_PREFLIGHT_ONLY}" == "true" ]]; then
   exit 0
 fi
 
+# A handoff must already be approved and applied. This read-only consumer does
+# not select the application moment and refuses every protocol-managed target.
+[[ "${STAGING_PATH}" =~ ^/[A-Za-z0-9_./-]+$ ]] || { echo 'Unsafe staging target path' >&2; exit 2; }
+echo "==> Checking fixed operational image, ownership and cutover fence"
+ssh "${REMOTE}" "python3 - '${STAGING_PATH}' '${BACKEND_IMAGE}'" < "${SCRIPT_DIR}/check-staging-operational-handoff.py"
+
 echo "==> Uploading compose files to ${REMOTE}:${STAGING_PATH}"
 ssh "${REMOTE}" "mkdir -p '${STAGING_PATH}'"
 rsync -azR \
+  --no-owner --no-group \
+  --exclude=.v126-target-operations \
   docker-compose.yml \
   backend/Dockerfile \
   scripts/validate-staging-admission.sh \
@@ -218,6 +226,9 @@ ssh "${REMOTE}" "
     ./scripts/check-staging-maintenance-config.sh .env
 "
 
+echo "==> Rechecking effective uploaded Compose against fixed operational authority"
+ssh "${REMOTE}" "python3 - '${STAGING_PATH}' '${BACKEND_IMAGE}'" < "${SCRIPT_DIR}/check-staging-operational-handoff.py"
+
 echo "==> Uploading Docker image to VPS"
 docker save "${BACKEND_IMAGE}" | gzip | ssh "${REMOTE}" "gzip -dc | docker load"
 
@@ -267,7 +278,9 @@ ssh "${REMOTE}" "
       docker compose --env-file .env \"\$@\"
   }
 
-  compose_staging up -d --no-build postgres backend
+  actual_image_id=\"\$(docker image inspect --format '{{.Id}}' '${BACKEND_IMAGE}')\"
+  bash scripts/check-staging-image-identity.sh \"\${actual_image_id}\" '${EXPECTED_BACKEND_IMAGE_ID}'
+  compose_staging up -d --no-build --pull never postgres backend
   compose_staging ps
   wait_http 'local backend health' GET http://127.0.0.1:8080/health
   wait_http 'local database health' GET http://127.0.0.1:8080/db/health

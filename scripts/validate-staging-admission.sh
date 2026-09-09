@@ -462,6 +462,27 @@ validate_admission() {
       ;;
   esac
 
+  local maintenance_key
+  local raw_maintenance
+  local effective_maintenance
+  for maintenance_key in STAGING_MAINTENANCE_MODE \
+    STAGING_MAINTENANCE_ALLOWED_USER_IDS STAGING_MAINTENANCE_ALLOWED_CHAT_IDS; do
+    require_exactly_one_key "${env_file}" "${maintenance_key}" || return
+    require_literal_env_value "${env_file}" "${maintenance_key}" || return
+    raw_maintenance="$(strip_optional_quotes "$(dotenv_value "${env_file}" "${maintenance_key}")")"
+    if ! token="$(effective_token "${effective}" "${maintenance_key}")"; then
+      fail "effective Compose config is missing a maintenance value"
+      return
+    fi
+    if ! effective_maintenance="$(json_string_value "${token}")"; then
+      return
+    fi
+    if [[ "${effective_maintenance}" != "${raw_maintenance}" ]]; then
+      fail "effective Compose maintenance value differs from the validated fixed env"
+      return
+    fi
+  done
+
   echo "Staging admission guard: PASS (${profile})"
 }
 

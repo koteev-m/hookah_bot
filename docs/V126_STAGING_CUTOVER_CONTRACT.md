@@ -18,6 +18,47 @@ files. They must not reproduce a second V126 command sequence. Neither this docu
 presence of the scripts or successful prerequisite sync authorizes staging access, backup creation, Caddy mutation, backend
 stop/start, maintenance activation, image transfer, Flyway/V126, manual smoke or recovery.
 
+## HT-RELEASE-REPAIR-01 local repair boundary
+
+This local package addresses F01–F11 together. It does not adopt or resume historical
+runs. Source, migration bytes, Gate A/B/C, the exact twenty states and receipt artifact
+sets remain bound. Unsafe preflight requires a successful real SQL decision **and**
+one structured safe/count0 outcome; the old PASS8 is insufficient evidence of count0.
+Candidate validation places exact Compose and candidate bytes together at fixed `.env`,
+then validates the installed fixed environment again. Caddy completion requires checked
+validate/install/reload and canonical equality of adapted disk and active admin JSON.
+One checked start is followed by monotonic bounded readiness for the same container,
+image, environment, restart=no, health and version. No start retry is introduced.
+
+Read-only baseline prechecks run before mutation intent under a bounded subprocess.
+Each attempt retains its own immutable log/result and hashes. Only a complete validated
+NOT_DISPATCHED attempt permits another read. Missing/corrupted attempts, intent without
+PASS, lost transport or unknown dispatch require reconciliation; no cached PASS, erased
+intent, automatic run or build is permitted. Status distinguishes NOT_STARTED,
+RECONCILIATION_REQUIRED and INVALID_EVIDENCE and never reports live availability.
+
+Remote action lifetime and target exclusion are described in
+[V126_REPAIR_OPERATION_PROTOCOL.md](V126_REPAIR_OPERATION_PROTOCOL.md). A matching durable
+acknowledgement, zero transport exit and exact output hash are required before artifact
+consumption. Linux subreaper/SSH/crash validation is a mandatory separate runtime need;
+a successful local PID check or expired lease cannot substitute for it. New run bindings
+and the persistent operational policy remain explicit decisions in
+[V126_OPERATIONAL_HANDOFF.md](V126_OPERATIONAL_HANDOFF.md).
+
+Database checks compare actual source and protected-URI server/database/schema/role,
+persist the semantic identity as the source-bound `database-target-identity` baseline artifact,
+recheck it at every dependent consumer, and bind actual/future backend credentials, JDBC target and exact Docker network.
+Stopped/created configurations provide planned network evidence; a running backend must
+also prove its actual DNS endpoint. No authority is granted by a URI hash alone. The
+full-DR verifier retains exact dump and inventory hashes, canonicalizing only the
+validated archive-creation display timestamp; arbitrary TOC differences still refuse.
+Schema/data rehearsal is not full operational DR. Synthetic roles/ACL/settings/auth
+verification and its limits do not choose a recovery point or allowed data loss.
+
+Historical policy/task sections below are preserved as history. Current local outcome,
+coverage, exact commands and blockers are recorded in the repair report; none of these
+changes establishes staging release readiness or authorizes publication/live actions.
+
 ## HT-12W current release CI and readiness boundary
 
 HT-12W starts from main `8436ee7b219ca6074aceecc47d6bf5f24803621d`, tree
@@ -388,7 +429,7 @@ verifier rejects any different set.
 
 | # | State | Gate | Exact artifacts besides `operation-log` | Required outcome |
 | --- | --- | --- | --- | --- |
-| 1 | `BASELINE_VERIFIED` | None | `baseline-caddy`, `baseline-env`, `database-url-binding`, `local-baseline`, `main-actions`, `maintenance-identities`, `remote-admission-source`, `remote-compose-source`, `remote-maintenance-check-source`, `staging-baseline` | Exact final release/worktree/Actions/migrations, immutable V126 and V125 images, one global V125 long-polling backend and no V126 backend, ordinary public/loopback runtime, queues, Flyway V125, complete `.env` bytes, Caddy baseline, restricted-input content hashes and exact release execution surface are validated without mutation. |
+| 1 | `BASELINE_VERIFIED` | None | `baseline-caddy`, `baseline-env`, `database-target-identity`, `database-url-binding`, `local-baseline`, `main-actions`, `maintenance-identities`, `remote-admission-source`, `remote-compose-source`, `remote-maintenance-check-source`, `staging-baseline` | Exact final release/worktree/Actions/migrations, immutable V126 and V125 images, one global V125 long-polling backend and no V126 backend, ordinary public/loopback runtime, queues, Flyway V125, complete `.env` bytes, Caddy baseline, restricted-input content hashes and exact release execution surface are validated without mutation. |
 | 2 | `PRE_DRAIN_BACKUP_REHEARSED` | A | `pre-drain-backup-dump`, `pre-drain-backup-inventory`, `pre-drain-backup-proof`, `pre-drain-backup-rehearsal`, `pre-drain-globals` | Fresh full custom-format backup, inventory, SHA-256, separate globals artifact and isolated same-version restore rehearsal pass. |
 | 3 | `CADDY_CANDIDATE_INSTALLED_AND_RELOADED` | A | `caddy-activation`, `caddy-candidate`, `caddy-diff`, `caddy-original` | Complete candidate is derived from the active file, adds only the generic marker switch in the exact staging site, validates, installs, reloads once and is proved active while the marker is still absent. |
 | 4 | `PUBLIC_DRAIN_ACTIVE` | A | `public-drain-active` | Marker creation is allowed only from state 3; public staging returns the exact generic `503`. |
@@ -770,3 +811,18 @@ Return exactly one at the applicable root-task boundary:
 5. `EXECUTION_SEQUENCE_NOT_PROVABLE`
 6. `RECOVERY_BOUNDARY_NOT_PROVABLE`
 7. `SECURITY_BLOCKER`
+
+
+### HT-RELEASE-REPAIR-01 feature validation disposition
+
+The repaired baseline requires11 named artifacts plus operation-log,12 total. The
+historical11-artifact receipts and canonical PASS1–8/intent9 keep their original bytes
+and interpretation; earlier PASS8 is not safe/count0 proof. The accepted target handoff
+policy and explicit completed binding retirement are in V126_OPERATIONAL_HANDOFF.md
+and V126_REPAIR_OPERATION_PROTOCOL.md. UNKNOWN daemon reconciliation remains OPEN.
+
+Only feature validation publication/ordinary Ubuntu CI is currently authorized. Older
+release sequencing text above does not authorize a new HT13 archive, Gate A/B/C, staging
+attempt or recovery. After feature CI and unified review, stop for the remaining decisions
+and separate main/deployment authorization. Reboot/operational DR and17 live assertions
+are not proved by connected synthetic consumer tests.

@@ -119,6 +119,17 @@ Usage:
     --authorization AUTHORIZE_V126_FULL_DR_PREREQUISITE_VERIFICATION \
     --backup-phase pre-drain|quiesced --boundary-file <absolute-path>
 
+  scripts/v126-cutover.sh inspect-target --target <absolute-local-target>
+  scripts/v126-cutover.sh retire-target --target <absolute-local-target> \
+    --state-dir <dir> --handoff-file <protected-approved-applied-handoff.json> \
+    --operational-version V125|V126 --next-run-id <new-id> \
+    --next-release-sha <40-hex> --next-script-sha256 <64-hex> \
+    --authorization AUTHORIZE_V126_TARGET_BINDING_RETIREMENT
+
+Binding commands run on the target filesystem, without SSH or daemon changes.
+Retirement appends history only after terminal receipts and applied handoff proof.
+UNKNOWN operations require a separate external daemon reconciliation decision.
+
 Every `stage` invocation executes exactly one state. There is no multi-stage, retry,
 fallback, deploy, build, restore, or automatic authorization command.
 
@@ -135,13 +146,16 @@ require_cmd() {
 
 hash_file() {
   local path="$1"
+  local digest
   if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "${path}" | awk '{print $1}'
+    digest="$(sha256sum "${path}" | awk '{print $1}')" || die 'file hash consumer failed'
   elif command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 "${path}" | awk '{print $1}'
+    digest="$(shasum -a 256 "${path}" | awk '{print $1}')" || die 'file hash consumer failed'
   else
     die 'sha256sum or shasum is required'
   fi
+  [[ "${digest}" =~ ^[0-9a-f]{64}$ ]] || die 'file hash result is invalid'
+  printf '%s\n' "${digest}"
 }
 
 hash_text() {
@@ -549,7 +563,7 @@ gate_token() {
 stage_expected_artifacts() {
   case "$1" in
     BASELINE_VERIFIED)
-      printf '%s\n' 'baseline-caddy,baseline-env,database-url-binding,local-baseline,main-actions,maintenance-identities,remote-admission-source,remote-compose-source,remote-maintenance-check-source,staging-baseline'
+      printf '%s\n' 'baseline-caddy,baseline-env,database-target-identity,database-url-binding,local-baseline,main-actions,maintenance-identities,remote-admission-source,remote-compose-source,remote-maintenance-check-source,staging-baseline'
       ;;
     PRE_DRAIN_BACKUP_REHEARSED)
       printf '%s\n' 'pre-drain-backup-dump,pre-drain-backup-inventory,pre-drain-backup-proof,pre-drain-backup-rehearsal,pre-drain-globals'
@@ -1777,7 +1791,7 @@ run_tracked_command() {
   gate_path="$(tracked_child_gate_path "${token}")"
   [[ ! -e "${gate_path}" && ! -L "${gate_path}" ]] || die 'tracked process release gate already exists'
   lock_child_pending "${token}" || die "tracked process pending marker failed: ${token}"
-  ( tracked_child_wait_for_release "${gate_path}" || exit $?; exec "$@" ) &
+  ( tracked_child_wait_for_release "${gate_path}" || exit $?; cutover_bounded_command 1860 "$@" ) &
   local launch_status=$?
   local child_pid=$!
   (( launch_status == 0 )) || die "tracked process launch failed: ${token}"
@@ -1810,7 +1824,7 @@ run_tracked_command_with_input() {
   gate_path="$(tracked_child_gate_path "${token}")"
   [[ ! -e "${gate_path}" && ! -L "${gate_path}" ]] || die 'tracked process release gate already exists'
   lock_child_pending "${token}" || die "tracked process pending marker failed: ${token}"
-  ( tracked_child_wait_for_release "${gate_path}" || exit $?; exec "$@" < "${input_path}" ) &
+  ( tracked_child_wait_for_release "${gate_path}" || exit $?; cutover_bounded_command 1860 "$@" < "${input_path}" ) &
   local launch_status=$?
   local child_pid=$!
   (( launch_status == 0 )) || die "tracked process launch failed: ${token}"
@@ -1834,6 +1848,316 @@ run_tracked_command_with_input() {
   return "${status}"
 }
 
+cutover_bounded_command() {
+  python3 -c '
+import math
+import os
+import signal
+import subprocess
+import sys
+import time
+
+try:
+    seconds = float(sys.argv[1])
+    if not math.isfinite(seconds) or seconds <= 0 or not sys.argv[2:]:
+        raise ValueError()
+except (IndexError, ValueError):
+    raise SystemExit("invalid bounded command")
+child = None
+def stop_child():
+    if child is not None:
+        try:
+            os.killpg(child.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        child.wait()
+def interrupted(signum, frame):
+    stop_child()
+    print("IO_OUTCOME=UNKNOWN retry_allowed=false next_action=reconcile_remote_operation", file=sys.stderr)
+    raise SystemExit(128 + signum)
+for signum in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+    signal.signal(signum, interrupted)
+deadline = time.monotonic() + seconds
+try:
+    child = subprocess.Popen(sys.argv[2:], start_new_session=True)
+    status = child.wait(timeout=max(0.001, deadline - time.monotonic()))
+except subprocess.TimeoutExpired:
+    stop_child()
+    print("IO_OUTCOME=UNKNOWN reason=deadline retry_allowed=false next_action=reconcile_remote_operation", file=sys.stderr)
+    raise SystemExit(124)
+except OSError:
+    print("IO_OUTCOME=UNKNOWN reason=consumer_unavailable retry_allowed=false next_action=reconcile_remote_operation", file=sys.stderr)
+    raise SystemExit(125)
+try:
+    os.killpg(child.pid, 0)
+except ProcessLookupError:
+    pass
+else:
+    stop_child()
+    print("IO_OUTCOME=UNKNOWN reason=child_survived retry_allowed=false next_action=reconcile_remote_operation", file=sys.stderr)
+    raise SystemExit(124)
+raise SystemExit(status if status >= 0 else 128 - status)
+' "$@"
+}
+
+remote_wait_backend_ready() {
+  local expected_container="$1"
+  local expected_image="$2"
+  local expected_release="$3"
+  local phase="$4"
+  local expected_env_sha="$5"
+  python3 - "${expected_container}" "${expected_image}" "${expected_release}" \
+    "${phase}" "${expected_env_sha}" <<'PY'
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import selectors
+import signal
+import subprocess
+import sys
+import time
+
+container, image, release, phase, env_sha = sys.argv[1:]
+# A single start precedes this read-only observer. These limits cannot authorize a retry.
+TOTAL_SECONDS = 120.0
+REQUEST_SECONDS = 5.0
+POLL_SECONDS = 1.0
+deadline = time.monotonic() + TOTAL_SECONDS
+active = None
+
+def finish(outcome, reason, status):
+    print("READINESS=" + outcome + " reason=" + reason +
+          " retry_allowed=false next_action=" +
+          ("continue_current_operation" if status == 0 else "reconcile_remote_operation"), file=sys.stderr)
+    raise SystemExit(status)
+
+def kill_child():
+    if active is not None:
+        try:
+            os.killpg(active.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        active.wait()
+
+def interrupted(signum, frame):
+    kill_child()
+    finish("UNKNOWN", "interrupted", 128 + signum)
+
+for signum in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+    signal.signal(signum, interrupted)
+
+def read_command(argv, limit=1048576):
+    global active
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        finish("UNKNOWN", "deadline", 75)
+    command_deadline = time.monotonic() + min(REQUEST_SECONDS, remaining)
+    try:
+        active = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                  stderr=subprocess.DEVNULL, start_new_session=True)
+    except OSError:
+        finish("UNKNOWN", "consumer_unavailable", 75)
+    payload = bytearray()
+    timed_out = False
+    with selectors.DefaultSelector() as selector:
+        selector.register(active.stdout, selectors.EVENT_READ)
+        while selector.get_map():
+            wait = command_deadline - time.monotonic()
+            if wait <= 0:
+                timed_out = True
+                break
+            for key, _ in selector.select(wait):
+                chunk = os.read(key.fd, 65536)
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    continue
+                payload.extend(chunk)
+                if len(payload) > limit:
+                    kill_child()
+                    finish("FAILED", "observation_too_large", 4)
+    if timed_out:
+        kill_child()
+        active.stdout.close()
+        active = None
+        if time.monotonic() >= deadline:
+            finish("UNKNOWN", "deadline", 75)
+        return None, b""
+    try:
+        status = active.wait(timeout=max(0.001, command_deadline - time.monotonic()))
+    except subprocess.TimeoutExpired:
+        kill_child()
+        status = None
+    active.stdout.close()
+    active = None
+    if time.monotonic() >= deadline:
+        finish("UNKNOWN", "deadline", 75)
+    return status, bytes(payload)
+
+critical = {
+    "TELEGRAM_BOT_ENABLED", "TELEGRAM_BOT_MODE", "TELEGRAM_TRAFFIC_POLICY",
+    "TELEGRAM_ALLOWED_USER_IDS", "TELEGRAM_ALLOWED_CHAT_IDS", "STAGING_MAINTENANCE_MODE",
+    "STAGING_MAINTENANCE_ALLOWED_USER_IDS", "STAGING_MAINTENANCE_ALLOWED_CHAT_IDS",
+}
+if not re.fullmatch(r"[0-9a-f]{64}", container) or not re.fullmatch(r"sha256:[0-9a-f]{64}", image):
+    finish("FAILED", "invalid_expected_identity", 4)
+if not re.fullmatch(r"[0-9a-f]{40}", release) or not re.fullmatch(r"[0-9a-f]{64}", env_sha):
+    finish("FAILED", "invalid_expected_binding", 4)
+if phase not in ("first", "final", "pre-v126"):
+    finish("FAILED", "invalid_phase", 4)
+
+def expected_environment():
+    try:
+        payload = Path(".env").read_bytes()
+        if hashlib.sha256(payload).hexdigest() != env_sha:
+            finish("FAILED", "bound_environment_changed", 4)
+        values = {}
+        for row in payload.decode("utf-8").splitlines():
+            if "=" in row:
+                key, value = row.split("=", 1)
+                if key in critical:
+                    if key in values:
+                        finish("FAILED", "duplicate_bound_environment", 4)
+                    values[key] = value
+        if set(values) != critical:
+            finish("FAILED", "incomplete_bound_environment", 4)
+        fixed = {"TELEGRAM_BOT_ENABLED": "true", "TELEGRAM_BOT_MODE": "long_polling",
+                 "TELEGRAM_TRAFFIC_POLICY": "PRODUCT", "TELEGRAM_ALLOWED_USER_IDS": "",
+                 "TELEGRAM_ALLOWED_CHAT_IDS": "",
+                 "STAGING_MAINTENANCE_MODE": "V126_SMOKE" if phase == "first" else "OFF"}
+        if any(values[key] != value for key, value in fixed.items()):
+            finish("FAILED", "bound_environment_policy", 4)
+        for key in ("STAGING_MAINTENANCE_ALLOWED_USER_IDS", "STAGING_MAINTENANCE_ALLOWED_CHAT_IDS"):
+            if bool(values[key]) != (phase == "first"):
+                finish("FAILED", "bound_environment_allowlists", 4)
+        return values
+    except (OSError, UnicodeError):
+        finish("UNKNOWN", "bound_environment_unavailable", 75)
+
+def observe_container():
+    expected = expected_environment()
+    status, payload = read_command(["docker", "inspect", container])
+    if status != 0:
+        finish("UNKNOWN", "container_inspection_failed", 75)
+    try:
+        rows = json.loads(payload)
+        if not isinstance(rows, list) or len(rows) != 1:
+            raise ValueError()
+        row = rows[0]
+        labels = row["Config"]["Labels"]
+        project = labels["com.docker.compose.project"]
+        if (row["Id"] != container or row["Image"] != image or
+                labels["com.docker.compose.service"] != "backend" or not project or
+                row["HostConfig"]["RestartPolicy"]["Name"] != "no" or row["RestartCount"] != 0):
+            finish("FAILED", "container_identity_or_restart", 4)
+        values = {}
+        for value in row["Config"]["Env"]:
+            key, value = value.split("=", 1)
+            if key in critical:
+                values.setdefault(key, []).append(value)
+        if any(values.get(key) != [value] for key, value in expected.items()):
+            finish("FAILED", "container_environment_changed", 4)
+        state = row["State"]
+        if state["Status"] in ("exited", "dead", "restarting", "removing") or state.get("OOMKilled"):
+            finish("FAILED", "container_terminal_state", 4)
+        if state.get("Paused"):
+            finish("FAILED", "container_paused", 4)
+        running = state["Status"] == "running" and state["Running"] is True
+        if not running and state["Status"] != "created":
+            finish("UNKNOWN", "container_state_unknown", 75)
+    except (ValueError, KeyError, TypeError, AttributeError):
+        finish("UNKNOWN", "container_inventory_invalid", 75)
+    status, payload = read_command(["docker", "ps", "--all", "--quiet", "--no-trunc",
+                                    "--filter", "label=com.docker.compose.project=" + project,
+                                    "--filter", "label=com.docker.compose.service=backend"])
+    if status != 0:
+        finish("UNKNOWN", "container_inventory_failed", 75)
+    if payload.decode("ascii", errors="replace").splitlines() != [container]:
+        finish("FAILED", "container_scope_not_unique", 4)
+    return running
+
+def probe(path, kind):
+    status, payload = read_command([
+        "curl", "--disable", "--silent", "--noproxy", "*", "--proto", "=http",
+        "--connect-timeout", "2", "--max-time", str(REQUEST_SECONDS),
+        "--max-filesize", "16384", "--write-out", "\n%{http_code}",
+        "http://127.0.0.1:8080" + path], limit=16400)
+    if status in (None, 7, 28, 52, 56):
+        return False
+    if status != 0:
+        finish("FAILED", "http_consumer_failed", 4)
+    body, separator, code = payload.rpartition(b"\n")
+    if not separator:
+        finish("FAILED", "http_status_missing", 4)
+    if code == b"503":
+        return False
+    if code != b"200":
+        finish("FAILED", "http_status_unexpected", 4)
+    try:
+        value = json.loads(body)
+        if kind == "health":
+            good = value == {"status": "ok"}
+        else:
+            good = (isinstance(value, dict) and value.get("service") == "backend" and
+                    value.get("env") == "staging" and value.get("version") == release)
+        if not good:
+            finish("FAILED", "http_identity_mismatch", 4)
+    except (ValueError, UnicodeError):
+        finish("FAILED", "http_json_invalid", 4)
+    return True
+
+announced = False
+while True:
+    running = observe_container()
+    if running and all(probe(path, kind) for path, kind in
+                       (("/health", "health"), ("/db/health", "health"), ("/version", "version"))):
+        # Fence successful HTTP observations with the same process/configuration identity.
+        if observe_container():
+            finish("READY", "same_container_health_version", 0)
+    if not announced:
+        print("READINESS=STARTING reason=not_ready retry_allowed=false", file=sys.stderr)
+        announced = True
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        finish("UNKNOWN", "deadline", 75)
+    time.sleep(min(POLL_SECONDS, remaining))
+PY
+}
+
+verify_remote_operation_ack() {
+  local capture="$1"
+  local action="$2"
+  python3 - "${capture}" "${RUN_ID}" "${RELEASE_SHA}" "${SCRIPT_SHA256}" \
+    "${ACTIVE_INTENT_HASH}" "${ACTIVE_OPERATION_KIND}" "${ACTIVE_OPERATION_NAME}" "${action}" <<'PY'
+import hashlib, json, os, stat, sys
+path, *values = sys.argv[1:]
+info = os.lstat(path)
+if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1:
+    raise SystemExit('remote acknowledgement capture metadata invalid')
+raw = open(path, 'rb').read()
+prefix = b'\nREMOTE_OPERATION_ACK\t'
+if raw.count(prefix) != 1:
+    raise SystemExit('remote completion acknowledgement is missing or ambiguous')
+log, encoded = raw.split(prefix)
+try:
+    outcome = json.loads(encoded)
+except (ValueError, UnicodeError):
+    raise SystemExit('remote acknowledgement is malformed') from None
+identity = dict(zip(('run_id', 'release_sha', 'script_sha256', 'intent_sha256', 'kind', 'name', 'action'), values))
+canonical = lambda doc: (json.dumps(doc, sort_keys=True, separators=(',', ':')) + '\n').encode()
+if (set(outcome) != {'identity', 'operation_id', 'exit', 'outcome', 'children', 'log_sha256', 'completed_at'} or
+        encoded != canonical(outcome) or outcome['identity'] != identity or
+        outcome['operation_id'] != hashlib.sha256(canonical(identity)).hexdigest() or
+        type(outcome['exit']) is not int or outcome['exit'] != 0 or
+        outcome['outcome'] != 'SUCCEEDED' or outcome['children'] != 'REAPED' or
+        outcome['log_sha256'] != hashlib.sha256(log).hexdigest() or
+        not isinstance(outcome['completed_at'], str) or not outcome['completed_at']):
+    raise SystemExit('remote completion acknowledgement failed identity/outcome validation')
+sys.stdout.buffer.write(log)
+PY
+}
+
 run_remote() {
   local action="$1"
   shift
@@ -1847,6 +2171,7 @@ run_remote() {
   [[ "$1" == "${STAGING_PATH}" && "$2" == "${RUN_ID}" && "$3" == "${RELEASE_SHA}" ]] ||
     die 'internal remote dispatch target differs from the run manifest'
   local baseline_database_sha='NONE'
+  local baseline_database_identity='NONE'
   local baseline_identities_sha='NONE'
   local baseline_compose_sha='NONE'
   local baseline_maintenance_sha='NONE'
@@ -1856,6 +2181,7 @@ run_remote() {
   if [[ "${ACTIVE_OPERATION_KIND}:${ACTIVE_OPERATION_NAME}:${action}" != \
     STAGE:BASELINE_VERIFIED:baseline ]]; then
     baseline_database_sha="$(receipt_artifact_hash BASELINE_VERIFIED database-url-binding)"
+    baseline_database_identity="$(receipt_artifact_hash BASELINE_VERIFIED database-target-identity)"
     baseline_identities_sha="$(receipt_artifact_hash BASELINE_VERIFIED maintenance-identities)"
     baseline_compose_sha="$(receipt_artifact_hash BASELINE_VERIFIED remote-compose-source)"
     baseline_maintenance_sha="$(receipt_artifact_hash BASELINE_VERIFIED remote-maintenance-check-source)"
@@ -1952,6 +2278,7 @@ loader_read authorization_gate
 loader_read authorization_hash
 loader_read intent_hash
 loader_read baseline_database_sha
+loader_read baseline_database_identity
 loader_read baseline_identities_sha
 loader_read baseline_compose_sha
 loader_read baseline_maintenance_sha
@@ -1994,6 +2321,7 @@ export V126_INTERNAL_REMOTE_AUTHORIZATION_GATE="${authorization_gate}"
 export V126_INTERNAL_REMOTE_AUTHORIZATION_HASH="${authorization_hash}"
 export V126_INTERNAL_REMOTE_INTENT_HASH="${intent_hash}"
 export V126_INTERNAL_REMOTE_BASELINE_DATABASE_URL_SHA256="${baseline_database_sha}"
+export V126_INTERNAL_REMOTE_DATABASE_TARGET_IDENTITY_SHA256="${baseline_database_identity}"
 export V126_INTERNAL_REMOTE_BASELINE_MAINTENANCE_IDENTITIES_SHA256="${baseline_identities_sha}"
 export V126_INTERNAL_REMOTE_BASELINE_COMPOSE_SOURCE_SHA256="${baseline_compose_sha}"
 export V126_INTERNAL_REMOTE_BASELINE_MAINTENANCE_CHECK_SOURCE_SHA256="${baseline_maintenance_sha}"
@@ -2007,6 +2335,7 @@ export V126_INTERNAL_REMOTE_CADDY_ACTIVATION_SHA256="${caddy_activation_sha}"
 export V126_INTERNAL_REMOTE_MAINTENANCE_SMOKE_SHA256="${maintenance_smoke_sha}"
 export V126_INTERNAL_REMOTE_MAINTENANCE_OFF_SHA256="${maintenance_off_sha}"
 source /dev/stdin <<< "${remote_body_content}"
+V126_REMOTE_VERIFIED_BODY="${remote_body_content}"
 unset remote_body_content
 remote_dispatch_enveloped "${action}" "${remote_args[@]}"
 loader_status=$?
@@ -2030,6 +2359,7 @@ REMOTE_LOADER
       "${ACTIVE_AUTHORIZATION_HASH}" \
       "${ACTIVE_INTENT_HASH}" \
       "${baseline_database_sha}" \
+      "${baseline_database_identity}" \
       "${baseline_identities_sha}" \
       "${baseline_compose_sha}" \
       "${baseline_maintenance_sha}" \
@@ -2054,13 +2384,25 @@ REMOTE_LOADER
     rm -f -- "${stream}"
     die 'internal remote stream could not be protected'
   fi
-  if run_tracked_command_with_input remote-ssh "${stream}" ssh "${REMOTE}" bash -s; then
+  local capture="${stream}.output"
+  [[ ! -e "${capture}" && ! -L "${capture}" ]] || die 'remote capture path already exists'
+  if run_tracked_command_with_input remote-ssh "${stream}" ssh "${REMOTE}" bash -s > "${capture}"; then
     status=0
   else
     status=$?
   fi
   rm -f -- "${stream}"
-  return "${status}"
+  if (( status == 0 )); then
+    verify_remote_operation_ack "${capture}" "${action}" || status=$?
+  fi
+  # Failed transport output is evidence only; it must never reach artifact consumers.
+  if (( status != 0 )); then
+    chmod 0400 "${capture}" || return 4
+    printf 'REMOTE_OUTCOME=UNKNOWN retry_allowed=false next_action=RECONCILE_TARGET_RECORDS\n' >&2
+    return "${status}"
+  fi
+  rm -f -- "${capture}"
+  return 0
 }
 
 require_stage_preconditions() {
@@ -2082,6 +2424,109 @@ require_stage_preconditions() {
   intent="$(intent_path "${stage}")"
   [[ ! -e "${intent}" && ! -L "${intent}" ]] ||
     die "stage has a prior intent; retry is forbidden and reconciliation/recovery is required: ${stage}"
+}
+
+read_attempt_state() {
+  python3 - "${STATE_DIR}/attempts" "${RUN_ID}" "${SCRIPT_SHA256}" <<'PY'
+import hashlib, json, os, re, stat, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+def metadata(path, mode, directory=False):
+    info = path.lstat()
+    return ((stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode)) and
+            stat.S_IMODE(info.st_mode) == mode and info.st_uid == os.getuid() and
+            (directory or info.st_nlink == 1))
+def classify():
+    if not root.exists() and not root.is_symlink():
+        return 'NOT_STARTED'
+    if not metadata(root, 0o700, True):
+        return 'INVALID_EVIDENCE'
+    incomplete = False
+    for attempt in root.iterdir():
+        if not re.fullmatch(r'baseline\.[A-Za-z0-9]+', attempt.name) or not metadata(attempt, 0o700, True):
+            return 'INVALID_EVIDENCE'
+        result = attempt / 'result.json'
+        if not result.exists() and not result.is_symlink():
+            incomplete = True
+            continue
+        if not metadata(result, 0o400):
+            return 'INVALID_EVIDENCE'
+        raw = result.read_bytes()
+        doc = json.loads(raw)
+        if (raw != (json.dumps(doc, sort_keys=True, separators=(',', ':')) + '\n').encode() or
+                set(doc) != {'dispatch', 'phase', 'run_id', 'script_sha256', 'exit', 'files'} or
+                doc['dispatch'] != 'NOT_DISPATCHED' or doc['phase'] != 'READ_ONLY_PRECHECK' or
+                doc['run_id'] != sys.argv[2] or doc['script_sha256'] != sys.argv[3] or
+                type(doc['exit']) is not int or not 0 <= doc['exit'] <= 255 or
+                not isinstance(doc['files'], dict) or
+                not {'started.proof', 'operation.log'} <= set(doc['files'])):
+            return 'INVALID_EVIDENCE'
+        if set(p.name for p in attempt.iterdir()) != set(doc['files']) | {'result.json'}:
+            return 'INVALID_EVIDENCE'
+        for name, digest in doc['files'].items():
+            if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*', name) or not isinstance(digest, str):
+                return 'INVALID_EVIDENCE'
+            path = attempt / name
+            if not metadata(path, 0o400) or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+                return 'INVALID_EVIDENCE'
+        if (attempt / 'started.proof').read_bytes() != b'phase=READ_ONLY_PRECHECK\ndispatch=NOT_DISPATCHED\n':
+            return 'INVALID_EVIDENCE'
+    return 'RECONCILIATION_REQUIRED' if incomplete else 'NOT_DISPATCHED'
+try:
+    outcome = classify()
+except (OSError, ValueError, TypeError, KeyError):
+    outcome = 'INVALID_EVIDENCE'
+print(outcome)
+PY
+}
+
+run_baseline_prechecks() {
+  local attempts="${STATE_DIR}/attempts" attempt_state
+  attempt_state="$(read_attempt_state)" || die 'attempt evidence query failed'
+  case "${attempt_state}" in
+    NOT_STARTED | NOT_DISPATCHED) ;;
+    *) die 'read attempt evidence is incomplete or invalid; retry is forbidden' ;;
+  esac
+  if [[ ! -e "${attempts}" && ! -L "${attempts}" ]]; then
+    mkdir -m 0700 "${attempts}" || die 'attempt namespace creation failed'
+  fi
+  BASELINE_ATTEMPT_DIR="$(mktemp -d "${attempts}/baseline.XXXXXXXX")" || die 'attempt creation failed'
+  printf 'phase=READ_ONLY_PRECHECK\ndispatch=NOT_DISPATCHED\n' > "${BASELINE_ATTEMPT_DIR}/started.proof" ||
+    die 'read attempt start record failed'
+  local status=0
+  cutover_bounded_command 180 bash -c '
+    source "$1"
+    load_state "$2"
+    BASELINE_ATTEMPT_DIR="$3"
+    verify_release_baseline_local
+  ' v126-read-precheck "${SCRIPT_PATH}" "${STATE_DIR}" "${BASELINE_ATTEMPT_DIR}" \
+    > "${BASELINE_ATTEMPT_DIR}/operation.log" 2>&1 || status=$?
+  python3 - "${BASELINE_ATTEMPT_DIR}" "${RUN_ID}" "${SCRIPT_SHA256}" "${status}" <<'PY'
+import hashlib, json, os, stat, sys
+from pathlib import Path
+root, run, source, code = sys.argv[1:]
+root = Path(root)
+files = {}
+for p in root.iterdir():
+    info = p.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1:
+        raise SystemExit('invalid precheck artifact')
+    p.chmod(0o400)
+    files[p.name] = hashlib.sha256(p.read_bytes()).hexdigest()
+doc = dict(dispatch='NOT_DISPATCHED', phase='READ_ONLY_PRECHECK', run_id=run,
+           script_sha256=source, exit=int(code), files=files)
+fd = os.open(root / 'result.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
+with os.fdopen(fd, 'wb') as f:
+    f.write((json.dumps(doc, sort_keys=True, separators=(',', ':')) + '\n').encode())
+    f.flush(); os.fsync(f.fileno())
+PY
+  [[ $? == 0 ]] || die 'read attempt could not be sealed'
+  if (( status != 0 )); then
+    printf 'BASELINE_PRECHECK=FAILED dispatch=NOT_DISPATCHED retry_allowed=true evidence=%s\n' \
+      "${BASELINE_ATTEMPT_DIR}" >&2
+    return "${status}"
+  fi
+  BASELINE_PRECHECK_COMPLETED=true
 }
 
 stage_command() {
@@ -2111,6 +2556,17 @@ stage_command() {
     require_absolute_path evidence-file "${evidence_file}"
   elif [[ -n "${evidence_file}" ]]; then
     die "--evidence-file is not accepted for ${stage}"
+  fi
+  BASELINE_PRECHECK_COMPLETED=false
+  BASELINE_ATTEMPT_DIR=''
+  if [[ "${stage}" == BASELINE_VERIFIED ]]; then
+    local precheck_status=0
+    run_baseline_prechecks || precheck_status=$?
+    if (( precheck_status != 0 )); then
+      release_state_lock
+      clear_state_lock_traps
+      return "${precheck_status}"
+    fi
   fi
   local index
   local function_name
@@ -2204,6 +2660,88 @@ stage_command() {
   clear_state_lock_traps
 }
 
+classify_status_record() {
+  python3 - "${STATE_DIR}/run.json" "$1" "$2" "${3:-}" "${4:-}" "${5:-}" "${6:-}" "${7:-}" <<'PY'
+import datetime, hashlib, json, os, re, stat, sys
+from pathlib import Path
+manifest, path, kind, stage, predecessor, previous_hash, gate, authorization = sys.argv[1:]
+def checked(path):
+    info = path.lstat()
+    if (not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o400 or
+            info.st_uid != os.getuid() or info.st_nlink != 1):
+        raise ValueError('record metadata')
+    return path.read_bytes()
+try:
+    path = Path(path)
+    raw = checked(path)
+    if checked(Path(str(path) + '.sha256')) != (hashlib.sha256(raw).hexdigest() + '\n').encode():
+        raise ValueError('checksum')
+    doc = json.loads(raw)
+    if raw != (json.dumps(doc, sort_keys=True, separators=(',', ':')) + '\n').encode():
+        raise ValueError('canonical JSON')
+    run = json.loads(Path(manifest).read_bytes())
+    for key in ('run_id', 'release_sha', 'script_sha256'):
+        if doc[key] != run[key]:
+            raise ValueError('identity')
+    if type(doc['format_version']) is not int or doc['format_version'] != 1:
+        raise ValueError('version')
+    if kind == 'terminal':
+        if set(doc) != {'format_version', 'mode', 'release_sha', 'run_id', 'script_sha256', 'status', 'terminal_at'}:
+            raise ValueError('terminal schema')
+        if doc['mode'] not in ('pre-v126', 'post-v126-stop', 'verify-full-dr') or doc['status'] != 'RECOVERY_INTENT_RECORDED_NO_STAGE_CONTINUATION':
+            raise ValueError('terminal state')
+        timestamp = doc['terminal_at']
+    else:
+        if set(doc) != {'authorization_gate', 'authorization_receipt_sha256', 'format_version', 'intent_at', 'kind', 'predecessor_receipt_sha256', 'predecessor_stage', 'release_sha', 'run_id', 'script_sha256', 'stage'}:
+            raise ValueError('intent schema')
+        expected = dict(kind='STAGE_INTENT', stage=stage, predecessor_stage=predecessor,
+                        predecessor_receipt_sha256=previous_hash, authorization_gate=gate,
+                        authorization_receipt_sha256=authorization)
+        if any(doc[key] != value for key, value in expected.items()):
+            raise ValueError('intent binding')
+        timestamp = doc['intent_at']
+    datetime.datetime.strptime(timestamp, '%Y-%m-%dT%H:%M:%SZ')
+    print('RECONCILIATION_REQUIRED')
+except (OSError, ValueError, TypeError, KeyError):
+    print('INVALID_EVIDENCE')
+PY
+}
+
+read_recovery_state() {
+  python3 - "${STATE_DIR}/run.json" "${STATE_DIR}/recovery" <<'PY'
+import hashlib, json, os, re, stat, sys
+from pathlib import Path
+try:
+    run = json.loads(Path(sys.argv[1]).read_bytes())
+    root = Path(sys.argv[2])
+    entries = list(root.iterdir())
+    for path in entries:
+        info = path.lstat()
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1 or
+                stat.S_IMODE(info.st_mode) not in (0o400, 0o600)):
+            raise ValueError('metadata')
+        if not (re.fullmatch(r'(pre-v126|post-v126-stop|verify-full-dr)\.(intent\.json|receipt\.json|operation\.log)(\.sha256)?', path.name) or path.name == 'dr-boundary.json'):
+            raise ValueError('inventory')
+        if path.name.endswith('.sha256'):
+            original = Path(str(path)[:-7])
+            if original.is_symlink() or path.read_bytes() != (hashlib.sha256(original.read_bytes()).hexdigest() + '\n').encode():
+                raise ValueError('checksum')
+        elif path.name.endswith('.intent.json'):
+            raw = path.read_bytes()
+            doc = json.loads(raw)
+            if (set(doc) != {'authorization_token_sha256', 'format_version', 'intent_at', 'kind', 'mode', 'predecessor_receipt_sha256', 'predecessor_stage', 'release_sha', 'run_id', 'script_sha256'} or
+                    raw != (json.dumps(doc, sort_keys=True, separators=(',', ':')) + '\n').encode() or
+                    doc['kind'] != 'RECOVERY_INTENT' or doc['format_version'] != 1 or
+                    doc['mode'] != path.name[:-12] or
+                    any(doc[key] != run[key] for key in ('run_id', 'release_sha', 'script_sha256')) or
+                    not re.fullmatch(r'[0-9a-f]{64}', doc['authorization_token_sha256'])):
+                raise ValueError('intent')
+    print('RECONCILIATION_REQUIRED' if entries else 'ABSENT')
+except (OSError, ValueError, TypeError, KeyError):
+    print('INVALID_EVIDENCE')
+PY
+}
+
 status_command() {
   local state_dir=''
   shift
@@ -2214,52 +2752,147 @@ status_command() {
     esac
   done
   load_state "${state_dir}"
+  local stage next=NONE outcome=COMPLETE attempt_state terminal_state=ABSENT recovery_state
+  local intent receipt predecessor previous_hash gate authorization
+  attempt_state="$(read_attempt_state)" || attempt_state=INVALID_EVIDENCE
+  recovery_state="$(read_recovery_state)" || recovery_state=INVALID_EVIDENCE
+  local recovery_mode
+  for recovery_mode in pre-v126 post-v126-stop verify-full-dr; do
+    if [[ -e "${STATE_DIR}/recovery/${recovery_mode}.receipt.json" || -L "${STATE_DIR}/recovery/${recovery_mode}.receipt.json" ]]; then
+      verify_recovery_receipt "${recovery_mode}" >/dev/null 2>&1 || recovery_state=INVALID_EVIDENCE
+    fi
+  done
+  if [[ -e "${STATE_DIR}/run-terminal.json" || -L "${STATE_DIR}/run-terminal.json" ||
+        -e "${STATE_DIR}/run-terminal.json.sha256" || -L "${STATE_DIR}/run-terminal.json.sha256" ]]; then
+    terminal_state="$(classify_status_record "${STATE_DIR}/run-terminal.json" terminal)" || terminal_state=INVALID_EVIDENCE
+  fi
   printf 'run_id=%s\nrelease_sha=%s\nscript_sha256=%s\n' "${RUN_ID}" "${RELEASE_SHA}" "${SCRIPT_SHA256}"
-  local stage
-  local next='NONE'
+  printf 'read_attempts=%s\nrecovery_records=%s\n' "${attempt_state}" "${recovery_state}"
   for stage in "${V126_STAGES[@]}"; do
     if verify_receipt "${stage}" >/dev/null 2>&1; then
       printf '%s=PASS\n' "${stage}"
-    else
-      printf '%s=PENDING\n' "${stage}"
-      next="${stage}"
-      break
+      continue
     fi
+    receipt="$(receipt_path "${stage}")"
+    intent="$(intent_path "${stage}")"
+    if [[ -e "${receipt}" || -L "${receipt}" || -e "${receipt}.sha256" || -L "${receipt}.sha256" ]]; then
+      outcome=INVALID_EVIDENCE
+    elif [[ -e "${intent}" || -L "${intent}" || -e "${intent}.sha256" || -L "${intent}.sha256" ]]; then
+      predecessor="$(stage_predecessor "${stage}")"
+      previous_hash=NONE
+      if [[ "${predecessor}" != NONE ]]; then
+        previous_hash="$(verify_receipt "${predecessor}")" || previous_hash=INVALID
+      fi
+      gate="$(stage_gate "${stage}")"
+      authorization="$(authorization_hash_for_stage "${stage}" 2>/dev/null)" || authorization=INVALID
+      outcome="$(classify_status_record "${intent}" intent "${stage}" "${predecessor}" "${previous_hash}" "${gate}" "${authorization}")" || outcome=INVALID_EVIDENCE
+    else
+      outcome=NOT_STARTED
+      next="${stage}"
+    fi
+    case "${attempt_state}" in
+      INVALID_EVIDENCE) outcome=INVALID_EVIDENCE ;;
+      RECONCILIATION_REQUIRED) [[ "${outcome}" == INVALID_EVIDENCE ]] || outcome=RECONCILIATION_REQUIRED ;;
+    esac
+    case "${terminal_state}" in
+      INVALID_EVIDENCE) outcome=INVALID_EVIDENCE ;;
+      RECONCILIATION_REQUIRED) [[ "${outcome}" == INVALID_EVIDENCE ]] || outcome=RECONCILIATION_REQUIRED ;;
+    esac
+    case "${recovery_state}" in
+      INVALID_EVIDENCE) outcome=INVALID_EVIDENCE ;;
+      RECONCILIATION_REQUIRED) [[ "${outcome}" == INVALID_EVIDENCE ]] || outcome=RECONCILIATION_REQUIRED ;;
+    esac
+    [[ "${outcome}" == NOT_STARTED ]] || next=NONE
+    printf '%s=%s\n' "${stage}" "${outcome}"
+    break
   done
-  printf 'next_stage=%s\n' "${next}"
-  if [[ -e "${STATE_DIR}/run-terminal.json" || -L "${STATE_DIR}/run-terminal.json" ]]; then
-    python3 - "${STATE_DIR}/run.json" "${STATE_DIR}/run-terminal.json" "${STATE_DIR}/run-terminal.json.sha256" <<'PY'
-import hashlib
-import json
-import os
-import stat
-import sys
-manifest_path, terminal_path, checksum_path = sys.argv[1:]
-if os.path.islink(terminal_path) or os.path.islink(checksum_path):
-    raise SystemExit("terminal marker symlink rejected")
-if stat.S_IMODE(os.stat(terminal_path).st_mode) != 0o400 or stat.S_IMODE(os.stat(checksum_path).st_mode) != 0o400:
-    raise SystemExit("terminal marker files must be mode 0400")
-raw = open(terminal_path, "rb").read()
-digest = hashlib.sha256(raw).hexdigest()
-if open(checksum_path, "rt", encoding="ascii").read().strip() != digest:
-    raise SystemExit("terminal marker checksum mismatch")
-doc = json.loads(raw)
-manifest = json.load(open(manifest_path, "rt", encoding="utf-8"))
-expected_keys = {"format_version", "mode", "release_sha", "run_id", "script_sha256", "status", "terminal_at"}
-if set(doc) != expected_keys or doc["format_version"] != 1:
-    raise SystemExit("terminal marker schema mismatch")
-if raw != (json.dumps(doc, sort_keys=True, separators=(",", ":")) + "\n").encode():
-    raise SystemExit("terminal marker is not canonical JSON")
-for key in ("release_sha", "run_id", "script_sha256"):
-    if doc[key] != manifest[key]:
-        raise SystemExit(f"terminal marker identity mismatch: {key}")
-if doc["status"] != "RECOVERY_INTENT_RECORDED_NO_STAGE_CONTINUATION":
-    raise SystemExit("terminal marker status mismatch")
-print(f"terminal=true\nrecovery_mode={doc['mode']}")
+  # Prior evidence corruption blocks even a complete receipt chain.
+  case "${attempt_state}:${terminal_state}:${recovery_state}" in
+    *INVALID_EVIDENCE*) outcome=INVALID_EVIDENCE; next=NONE ;;
+    *RECONCILIATION_REQUIRED*) [[ "${outcome}" == INVALID_EVIDENCE ]] || outcome=RECONCILIATION_REQUIRED; next=NONE ;;
+  esac
+  printf 'canonical_execution=%s\nnext_stage=%s\nretry_allowed=false\navailability=NOT_OBSERVED\n' "${outcome}" "${next}"
+  case "${outcome}" in
+    NOT_STARTED) printf 'next_action=EXECUTE_NEXT_AUTHORIZED_STAGE\n' ;;
+    COMPLETE) printf 'next_action=REVIEW_OPERATIONAL_HANDOFF\n' ;;
+    *) printf 'next_action=RECONCILE_EVIDENCE_AND_REMOTE_OUTCOME\n' ;;
+  esac
+  case "${terminal_state}" in
+    ABSENT) printf 'terminal=false\n' ;;
+    INVALID_EVIDENCE) printf 'terminal=INVALID_EVIDENCE\n' ;;
+    *) printf 'terminal=true\n' ;;
+  esac
+}
+
+target_binding_command() {
+  local command="$1" target='' state_dir='' handoff='' version=''
+  local next_run='' next_release='' next_source='' authorization=''
+  shift
+  while (( $# > 0 )); do
+    case "$1" in
+      --target) target="$(parse_option_value "$1" "${2:-}")"; shift 2 ;;
+      --state-dir) state_dir="$(parse_option_value "$1" "${2:-}")"; shift 2 ;;
+      --handoff-file) handoff="$(parse_option_value "$1" "${2:-}")"; shift 2 ;;
+      --operational-version) version="$(parse_option_value "$1" "${2:-}")"; shift 2 ;;
+      --next-run-id) next_run="$(parse_option_value "$1" "${2:-}")"; shift 2 ;;
+      --next-release-sha) next_release="$(parse_option_value "$1" "${2:-}")"; shift 2 ;;
+      --next-script-sha256) next_source="$(parse_option_value "$1" "${2:-}")"; shift 2 ;;
+      --authorization) authorization="$(parse_option_value "$1" "${2:-}")"; shift 2 ;;
+      *) die "unknown binding option: $1" ;;
+    esac
+  done
+  require_absolute_path target "${target}"
+  local mode=inspect receipt_sha=NONE expected_image=NONE
+  if [[ "${command}" == retire-target ]]; then
+    [[ "${authorization}" == AUTHORIZE_V126_TARGET_BINDING_RETIREMENT ]] || die 'target retirement authorization is absent'
+    load_state "${state_dir}"
+    [[ "${target}" == "${STAGING_PATH}" ]] || die 'retirement target differs from the source-bound run'
+    require_absolute_path handoff-file "${handoff}"
+    local execution_status predecessor_fields predecessor predecessor_sha observed_predecessor attempt_state
+    execution_status="$(status_command status --state-dir "${state_dir}")" || die 'run evidence classification is unavailable'
+    [[ "${execution_status}" != *INVALID_EVIDENCE* ]] || die 'invalid run evidence blocks retirement'
+    attempt_state="$(read_attempt_state)" || die 'read attempt classification is unavailable'
+    case "${attempt_state}" in
+      NOT_STARTED | NOT_DISPATCHED) ;;
+      *) die 'unresolved read attempts block retirement' ;;
+    esac
+    case "${version}" in
+      V126)
+        [[ "${execution_status}" == *'canonical_execution=COMPLETE'* ]] || die 'V126 retirement requires complete canonical execution'
+        expected_image="${V126_IMAGE_ID}"
+        receipt_sha="$(verify_receipt FINAL_PUBLIC_GATES_PASSED)" || die 'complete V126 receipt chain is required for retirement'
+        ;;
+      V125)
+        expected_image="${V125_IMAGE_ID}"
+        receipt_sha="$(verify_recovery_receipt pre-v126)" || die 'verified V125 recovery is required for retirement'
+        [[ "${execution_status}" == *'terminal=true'* ]] || die 'V125 retirement requires the canonical recovery terminal marker'
+        predecessor_fields="$(python3 - "${STATE_DIR}/recovery/pre-v126.receipt.json" <<'PY'
+import json, sys
+with open(sys.argv[1]) as handle:
+    receipt = json.load(handle)
+print(receipt['predecessor_stage'] + '\t' + receipt['predecessor_receipt_sha256'])
 PY
-  else
-    printf 'terminal=false\n'
+)" || die 'V125 recovery predecessor is unavailable'
+        IFS=$'\t' read -r predecessor predecessor_sha <<< "${predecessor_fields}"
+        [[ "${predecessor}" != NONE ]] || die 'V125 retirement requires a verified baseline predecessor'
+        observed_predecessor="$(verify_receipt "${predecessor}")" || die 'V125 recovery predecessor chain is invalid'
+        [[ "${observed_predecessor}" == "${predecessor_sha}" ]] || die 'V125 recovery predecessor hash mismatch'
+        ;;
+      *) die 'retirement requires explicit V125 or V126 operational version' ;;
+    esac
+    [[ "${next_run}" =~ ^[a-z0-9][a-z0-9._-]{5,63}$ ]] || die 'next run identity is invalid'
+    require_sha next-release-sha "${next_release}"
+    [[ "${next_source}" =~ ^[0-9a-f]{64}$ ]] || die 'next source identity is invalid'
+    mode=retire
+  elif [[ -n "${state_dir}${handoff}${version}${next_run}${next_release}${next_source}${authorization}" ]]; then
+    die 'inspect-target accepts only a target path'
   fi
+  local code
+  code="$(remote_operation_bindings_python)" || die 'target binding verifier source unavailable'
+  code+=$'\ntry:\n    binding_entry(sys.argv[-1])\nexcept (BindingError, OSError, ValueError, KeyError, TypeError):\n    print("TARGET_BINDING=RECONCILIATION_REQUIRED retry_allowed=false", file=sys.stderr)\n    raise SystemExit(75)\n'
+  cutover_bounded_command 30 python3 -c "${code}" "${target}" "${RUN_ID}" "${RELEASE_SHA}" \
+    "${SCRIPT_SHA256}" "${receipt_sha}" "${handoff}" "${next_run}" "${next_release}" "${next_source}" "${version}" "${expected_image}" "${mode}" ||
+    die 'binding outcome is unavailable or refused; do not retry a retirement without reconciliation'
 }
 
 main() {
@@ -2270,6 +2903,7 @@ main() {
     stage) stage_command "$@" ;;
     status) status_command "$@" ;;
     recover) recovery_command "$@" ;;
+    inspect-target | retire-target) target_binding_command "$@" ;;
     --help | -h | help) usage ;;
     '') usage >&2; exit 2 ;;
     *) die "unknown command: ${command}" ;;
@@ -2333,19 +2967,22 @@ remote_backup_root() {
 remote_sudo_require_root_file() {
   local target="$1"
   local expected_mode="$2"
-  sudo test -f "${target}"
-  sudo test ! -L "${target}"
-  [[ "$(sudo stat -c '%a:%U:%G' "${target}")" == "${expected_mode}:root:root" ]] ||
+  sudo test -f "${target}" || die 'root-owned file is absent or inaccessible'
+  sudo test ! -L "${target}" || die 'root-owned file symlink rejected'
+  local metadata
+  metadata="$(sudo stat -c '%a:%U:%G' "${target}")" || die 'root-owned file metadata query failed'
+  [[ "${metadata}" == "${expected_mode}:root:root" ]] ||
     die "root-owned file mode or ownership mismatch: ${target}"
 }
 
 remote_sudo_read_sha256_checksum() {
   local checksum="$1"
-  remote_sudo_require_root_file "${checksum}" 600
-  local value
-  value="$(sudo cat "${checksum}")"
+  remote_sudo_require_root_file "${checksum}" 600 || die 'checksum metadata verification failed'
+  local value lines
+  value="$(sudo cat "${checksum}")" || die 'checksum read failed'
   [[ "${value}" =~ ^[0-9a-f]{64}$ ]] || die "invalid root-owned SHA-256 checksum: ${checksum}"
-  [[ "$(sudo wc -l "${checksum}" | awk '{print $1}')" == 1 ]] || die "checksum must contain one line: ${checksum}"
+  lines="$(sudo wc -l "${checksum}" | awk '{print $1}')" || die 'checksum line count query failed'
+  [[ "${lines}" == 1 ]] || die "checksum must contain one line: ${checksum}"
   printf '%s\n' "${value}"
 }
 
@@ -2363,7 +3000,7 @@ remote_env_value() {
 }
 
 remote_compose() {
-  env -i \
+  cutover_bounded_command 600 env -i \
     PATH="${PATH:?}" \
     HOME="${HOME:?}" \
     BACKEND_IMAGE="${REMOTE_BACKEND_IMAGE:?}" \
@@ -2760,6 +3397,8 @@ PY
   [[ "${REMOTE_BOUND_ENV_SHA256}" =~ ^[0-9a-f]{64}$ && \
     "$(remote_hash_file "${environment_path}")" == "${REMOTE_BOUND_ENV_SHA256}" ]] ||
     die 'accepted staging environment changed during authority verification'
+  REMOTE_DATABASE_URL_PATH="${database_url_path}"
+  REMOTE_DATABASE_URL_SHA256="${database_url_sha}"
 }
 
 remote_assert_public_drain() {
@@ -2768,7 +3407,7 @@ remote_assert_public_drain() {
   body="$(mktemp "${TMPDIR:-/tmp}/v126-public-drain.XXXXXX")"
   chmod 0600 "${body}"
   local status=0
-  if status="$(curl -sS -o "${body}" -w '%{http_code}' https://staging.hookahtootah.club/health 2>/dev/null)"; then
+  if status="$(curl --disable --connect-timeout 3 --max-time 10 -sS -o "${body}" -w '%{http_code}' https://staging.hookahtootah.club/health 2>/dev/null)"; then
     :
   else
     local curl_status=$?
@@ -2788,11 +3427,11 @@ remote_assert_health_json() {
   local target
   target="$(mktemp "${TMPDIR:-/tmp}/v126-health.XXXXXX")"
   chmod 0600 "${target}"
-  if ! curl -fsS "${url}" > "${target}" 2>/dev/null; then
+  if ! curl --disable --connect-timeout 3 --max-time 10 -fsS "${url}" > "${target}" 2>/dev/null; then
     rm -f -- "${target}"
     die "health request failed: ${url}"
   fi
-  python3 - "${target}" <<'PY'
+  if ! python3 - "${target}" <<'PY'
 import json
 import sys
 with open(sys.argv[1], "rt", encoding="utf-8") as handle:
@@ -2800,6 +3439,10 @@ with open(sys.argv[1], "rt", encoding="utf-8") as handle:
 if payload != {"status": "ok"}:
     raise SystemExit("health JSON mismatch")
 PY
+  then
+    rm -f -- "${target}"
+    die 'health JSON mismatch'
+  fi
   rm -f -- "${target}"
 }
 
@@ -2808,11 +3451,11 @@ remote_assert_version() {
   local target
   target="$(mktemp "${TMPDIR:-/tmp}/v126-version.XXXXXX")"
   chmod 0600 "${target}"
-  if ! curl -fsS http://127.0.0.1:8080/version > "${target}" 2>/dev/null; then
+  if ! curl --disable --connect-timeout 3 --max-time 10 -fsS http://127.0.0.1:8080/version > "${target}" 2>/dev/null; then
     rm -f -- "${target}"
     die 'loopback version request failed'
   fi
-  python3 - "${target}" "${expected}" <<'PY'
+  if ! python3 - "${target}" "${expected}" <<'PY'
 import json
 import sys
 with open(sys.argv[1], "rt", encoding="utf-8") as handle:
@@ -2820,6 +3463,10 @@ with open(sys.argv[1], "rt", encoding="utf-8") as handle:
 if payload.get("service") != "backend" or payload.get("env") != "staging" or payload.get("version") != sys.argv[2]:
     raise SystemExit("backend version identity mismatch")
 PY
+  then
+    rm -f -- "${target}"
+    die 'backend version identity mismatch'
+  fi
   rm -f -- "${target}"
 }
 
@@ -2846,10 +3493,10 @@ remote_assert_telegram_idle() {
     'fail' \
     "url = \"https://api.telegram.org/bot${token}/getWebhookInfo\"" > "${config}"
   chmod 0600 "${config}"
-  if ! curl --config "${config}" --output "${response}" 2> "${error_file}"; then
+  if ! curl --disable --connect-timeout 3 --max-time 10 --config "${config}" --output "${response}" 2> "${error_file}"; then
     die 'Telegram getWebhookInfo failed; restricted response was discarded'
   fi
-  python3 - "${response}" <<'PY'
+  if ! python3 - "${response}" <<'PY'
 import json
 import sys
 with open(sys.argv[1], "rt", encoding="utf-8") as handle:
@@ -2860,6 +3507,9 @@ if not isinstance(result, dict):
 if result.get("url") != "" or result.get("pending_update_count") != 0:
     raise SystemExit("Telegram webhook or pending update gate failed")
 PY
+  then
+    die 'Telegram webhook or pending update gate failed'
+  fi
   rm -rf -- "${temp_dir}"
   trap - EXIT INT TERM HUP
 }
@@ -2879,7 +3529,7 @@ remote_assert_zero_writer() {
 
   local session_gate
   session_gate="$(remote_compose exec -T postgres sh -c \
-    ': "${POSTGRES_USER:?}" "${POSTGRES_DB:?}"; psql -X -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At --set=ON_ERROR_STOP=1' <<'SQL'
+    ': "${POSTGRES_USER:?}" "${POSTGRES_DB:?}"; PGCONNECT_TIMEOUT=5 PGOPTIONS="-c statement_timeout=15000 -c lock_timeout=5000" psql -X -w -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At --set=ON_ERROR_STOP=1' <<'SQL'
 SELECT CONCAT(
   COUNT(*) FILTER (
     WHERE (backend_type = 'client backend' OR backend_type IS NULL)
@@ -2900,7 +3550,7 @@ SQL
 
   local queue_gate
   queue_gate="$(remote_compose exec -T postgres sh -c \
-    ': "${POSTGRES_USER:?}" "${POSTGRES_DB:?}"; psql -X -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At --set=ON_ERROR_STOP=1' <<'SQL'
+    ': "${POSTGRES_USER:?}" "${POSTGRES_DB:?}"; PGCONNECT_TIMEOUT=5 PGOPTIONS="-c statement_timeout=15000 -c lock_timeout=5000" psql -X -w -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At --set=ON_ERROR_STOP=1' <<'SQL'
 SELECT CONCAT(
   (SELECT COUNT(*) FROM telegram_inbound_updates WHERE status IN ('PENDING', 'RETRY', 'PROCESSING')),
   ':',
@@ -2913,7 +3563,7 @@ SQL
   if [[ "${expected_flyway}" != ANY ]]; then
     local flyway_gate
     flyway_gate="$(remote_compose exec -T postgres sh -c \
-      ': "${POSTGRES_USER:?}" "${POSTGRES_DB:?}"; psql -X -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At --set=ON_ERROR_STOP=1' <<'SQL'
+      ': "${POSTGRES_USER:?}" "${POSTGRES_DB:?}"; PGCONNECT_TIMEOUT=5 PGOPTIONS="-c statement_timeout=15000 -c lock_timeout=5000" psql -X -w -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At --set=ON_ERROR_STOP=1' <<'SQL'
 SELECT CONCAT(
   MAX(version::integer), ':',
   COUNT(*) FILTER (WHERE version = '126'), ':',
@@ -2928,7 +3578,7 @@ SQL
 
 remote_assert_schema_v126() {
   remote_compose exec -T postgres sh -c \
-    ': "${POSTGRES_USER:?}" "${POSTGRES_DB:?}"; psql -X -U "$POSTGRES_USER" -d "$POSTGRES_DB" --set=ON_ERROR_STOP=1' >/dev/null <<'SQL'
+    ': "${POSTGRES_USER:?}" "${POSTGRES_DB:?}"; PGCONNECT_TIMEOUT=5 PGOPTIONS="-c statement_timeout=15000 -c lock_timeout=5000" psql -X -w -U "$POSTGRES_USER" -d "$POSTGRES_DB" --set=ON_ERROR_STOP=1' >/dev/null <<'SQL'
 DO $contract$
 BEGIN
   IF (SELECT COUNT(*) FROM flyway_schema_history WHERE version = '126') <> 1 THEN
@@ -2996,8 +3646,8 @@ remote_assert_runtime() {
   local expected_image_id="$3"
   local expected_mode="$4"
   local require_drain="$5"
-  remote_assert_single_v126_backend_poller "${expected_image_id}"
-  remote_capture_compose_ids running backend
+  remote_assert_single_v126_backend_poller "${expected_image_id}" || die 'runtime prerequisite consumer failed'
+  remote_capture_compose_ids running backend || die 'runtime prerequisite consumer failed'
   (( ${#REMOTE_CAPTURED_CONTAINER_IDS[@]} == 1 )) ||
     die 'runtime environment proof requires one running Compose backend'
   local environment_phase
@@ -3007,14 +3657,14 @@ remote_assert_runtime() {
     *) die 'runtime environment proof has an invalid maintenance mode' ;;
   esac
   remote_assert_bound_container_environment "${REMOTE_CAPTURED_CONTAINER_IDS[0]}" \
-    "${environment_phase}"
-  remote_capture_compose_ids running postgres
+    "${environment_phase}" || die 'runtime prerequisite consumer failed'
+  remote_capture_compose_ids running postgres || die 'runtime prerequisite consumer failed'
   (( ${#REMOTE_CAPTURED_CONTAINER_IDS[@]} == 1 )) ||
     die 'running PostgreSQL count is not one'
-  remote_assert_health_json http://127.0.0.1:8080/health
-  remote_assert_health_json http://127.0.0.1:8080/db/health
-  curl -fsSI http://127.0.0.1:8080/miniapp/ >/dev/null 2>&1 || die 'loopback Mini App check failed'
-  remote_assert_version "${expected_release}"
+  remote_assert_health_json http://127.0.0.1:8080/health || die 'runtime prerequisite consumer failed'
+  remote_assert_health_json http://127.0.0.1:8080/db/health || die 'runtime prerequisite consumer failed'
+  curl --disable --connect-timeout 3 --max-time 10 -fsSI http://127.0.0.1:8080/miniapp/ >/dev/null 2>&1 || die 'loopback Mini App check failed'
+  remote_assert_version "${expected_release}" || die 'runtime prerequisite consumer failed'
   if [[ "${expected_mode}" == V126_SMOKE ]]; then
     STAGING_MAINTENANCE_V126_SMOKE_AUTHORIZED=true \
       "${staging_path}/scripts/check-staging-maintenance-config.sh" .env >/dev/null
@@ -3022,11 +3672,11 @@ remote_assert_runtime() {
     "${staging_path}/scripts/check-staging-maintenance-config.sh" .env >/dev/null
   fi
   "${staging_path}/scripts/validate-staging-admission.sh" \
-    --profile public-pilot --env-file .env --compose-file docker-compose.yml >/dev/null
-  remote_assert_schema_v126
+    --profile public-pilot --env-file .env --compose-file docker-compose.yml >/dev/null || die 'runtime prerequisite consumer failed'
+  remote_assert_schema_v126 || die 'runtime prerequisite consumer failed'
   local queue_gate
   queue_gate="$(remote_compose exec -T postgres sh -c \
-    ': "${POSTGRES_USER:?}" "${POSTGRES_DB:?}"; psql -X -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At --set=ON_ERROR_STOP=1' <<'SQL'
+    ': "${POSTGRES_USER:?}" "${POSTGRES_DB:?}"; PGCONNECT_TIMEOUT=5 PGOPTIONS="-c statement_timeout=15000 -c lock_timeout=5000" psql -X -w -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At --set=ON_ERROR_STOP=1' <<'SQL'
 SELECT CONCAT(
   (SELECT COUNT(*) FROM telegram_inbound_updates WHERE status IN ('PENDING', 'RETRY', 'PROCESSING')),
   ':',
@@ -3035,7 +3685,7 @@ SELECT CONCAT(
 SQL
 )"
   [[ "${queue_gate}" == '0:0' ]] || die 'runtime actionable queue gate is not zero'
-  remote_assert_telegram_idle .env
+  remote_assert_telegram_idle .env || die 'runtime prerequisite consumer failed'
   if [[ "${require_drain}" == true ]]; then
     remote_assert_public_drain
   fi
@@ -3089,6 +3739,9 @@ remote_baseline() {
   "${staging_path}/scripts/validate-staging-admission.sh" \
     --profile public-pilot --env-file .env --compose-file docker-compose.yml >/dev/null
   REMOTE_BACKEND_IMAGE="${v125_image_tag}"
+  REMOTE_DATABASE_URL_PATH="${database_url_file}"
+  REMOTE_DATABASE_URL_SHA256="${database_url_sha}"
+  remote_assert_database_target || die 'baseline database equality failed'
   remote_assert_compose_backend_image "${v125_image_tag}"
   remote_capture_compose_ids running backend
   (( ${#REMOTE_CAPTURED_CONTAINER_IDS[@]} == 1 )) ||
@@ -3114,11 +3767,11 @@ remote_baseline() {
   remote_require_global_image_count "${V126_INTERNAL_REMOTE_V126_IMAGE_ID:-}" 0
   remote_assert_health_json http://127.0.0.1:8080/health
   remote_assert_health_json http://127.0.0.1:8080/db/health
-  curl -fsSI http://127.0.0.1:8080/miniapp/ >/dev/null 2>&1 || die 'baseline Mini App check failed'
+  curl --disable --connect-timeout 3 --max-time 10 -fsSI http://127.0.0.1:8080/miniapp/ >/dev/null 2>&1 || die 'baseline Mini App check failed'
   remote_assert_version "${V125_SOURCE_SHA}"
   local flyway_gate
   flyway_gate="$(remote_compose exec -T postgres sh -c \
-    ': "${POSTGRES_USER:?}" "${POSTGRES_DB:?}"; psql -X -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At --set=ON_ERROR_STOP=1' <<'SQL'
+    ': "${POSTGRES_USER:?}" "${POSTGRES_DB:?}"; PGCONNECT_TIMEOUT=5 PGOPTIONS="-c statement_timeout=15000 -c lock_timeout=5000" psql -X -w -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At --set=ON_ERROR_STOP=1' <<'SQL'
 SELECT CONCAT(MAX(version::integer), ':', COUNT(*) FILTER (WHERE version = '126'), ':', COUNT(*) FILTER (WHERE NOT success))
 FROM flyway_schema_history;
 SQL
@@ -3126,7 +3779,7 @@ SQL
   [[ "${flyway_gate}" == '125:0:0' ]] || die 'baseline Flyway state mismatch'
   local queue_gate
   queue_gate="$(remote_compose exec -T postgres sh -c \
-    ': "${POSTGRES_USER:?}" "${POSTGRES_DB:?}"; psql -X -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At --set=ON_ERROR_STOP=1' <<'SQL'
+    ': "${POSTGRES_USER:?}" "${POSTGRES_DB:?}"; PGCONNECT_TIMEOUT=5 PGOPTIONS="-c statement_timeout=15000 -c lock_timeout=5000" psql -X -w -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At --set=ON_ERROR_STOP=1' <<'SQL'
 SELECT CONCAT(
   (SELECT COUNT(*) FROM telegram_inbound_updates WHERE status IN ('PENDING', 'RETRY', 'PROCESSING')),
   ':',
@@ -3182,6 +3835,7 @@ SQL
     "caddy_sha256=${caddy_sha}" \
     'result=PASS' > "${baseline_record}"
   chmod 0600 "${baseline_record}"
+  remote_emit_artifact database-target-identity "${REMOTE_DATABASE_TARGET_IDENTITY_SHA256}"
   remote_emit_artifact database-url-binding "${database_url_sha}"
   remote_emit_artifact maintenance-identities "${identities_sha}"
   remote_emit_artifact remote-compose-source "${compose_sha}"
@@ -3216,6 +3870,7 @@ remote_backup_rehearsal() {
     remote_assert_zero_writer '125:0:0'
   fi
 
+  remote_assert_database_target || die 'backup database equality failed'
   local backup_root
   backup_root="$(remote_backup_root "${release_sha}" "${run_id}")"
   local backup_base='/var/backups/hookah-bot'
@@ -3268,9 +3923,9 @@ remote_backup_rehearsal() {
   source_db_user="$(remote_compose exec -T postgres sh -c \
     ': "${POSTGRES_USER:?}"; printf %s "$POSTGRES_USER"')"
   source_version="$(remote_compose exec -T postgres sh -c \
-    ': "${POSTGRES_USER:?}" "${POSTGRES_DB:?}"; psql -X -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "SHOW server_version_num"')"
+    ': "${POSTGRES_USER:?}" "${POSTGRES_DB:?}"; PGCONNECT_TIMEOUT=5 PGOPTIONS="-c statement_timeout=15000 -c lock_timeout=5000" psql -X -w -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "SHOW server_version_num"')"
   source_db_size="$(remote_compose exec -T postgres sh -c \
-    ': "${POSTGRES_USER:?}" "${POSTGRES_DB:?}"; psql -X -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "SELECT pg_database_size(current_database())"')"
+    ': "${POSTGRES_USER:?}" "${POSTGRES_DB:?}"; PGCONNECT_TIMEOUT=5 PGOPTIONS="-c statement_timeout=15000 -c lock_timeout=5000" psql -X -w -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "SELECT pg_database_size(current_database())"')"
   [[ -n "${source_db_user}" ]] || die 'source database user is empty'
   [[ "${source_version}" =~ ^[0-9]+$ && "${source_db_size}" =~ ^[0-9]+$ ]] ||
     die 'source PostgreSQL version or size is invalid'
@@ -3729,7 +4384,7 @@ remote_caddy_activate() {
   done
   sudo test ! -e "${evidence_root}"
   sudo test ! -L "${evidence_root}"
-  remote_sudo_require_root_file /etc/caddy/Caddyfile 644
+  remote_sudo_require_root_file /etc/caddy/Caddyfile 644 || die 'Caddy file metadata verification failed'
   sudo test ! -e /etc/caddy/v126-drain.enabled
   sudo test ! -L /etc/caddy/v126-drain.enabled
   sudo install -d -o root -g root -m 0700 "${evidence_root}"
@@ -3785,19 +4440,19 @@ PY
   added_lines="$(sudo awk 'NR > 2 && /^+/{sub(/^+[[:space:]]*/, ""); print}' "${diff_file}")"
   [[ "${added_lines}" == $'@v126_staging_drain file {\nroot /\ntry_files /etc/caddy/v126-drain.enabled\n}\nrespond @v126_staging_drain "Service temporarily unavailable" 503' ]] ||
     die 'Caddy candidate additions mismatch'
-  sudo caddy validate --config "${original}" --adapter caddyfile >/dev/null
-  sudo caddy validate --config "${candidate}" --adapter caddyfile >/dev/null
+  cutover_bounded_command 15 sudo caddy validate --config "${original}" --adapter caddyfile >/dev/null || die 'Caddy validation failed'
+  cutover_bounded_command 15 sudo caddy validate --config "${candidate}" --adapter caddyfile >/dev/null || die 'Caddy validation failed'
   local original_sha
   local candidate_sha
   local diff_sha
-  original_sha="$(sudo sha256sum "${original}" | awk '{print $1}')"
-  candidate_sha="$(sudo sha256sum "${candidate}" | awk '{print $1}')"
-  diff_sha="$(sudo sha256sum "${diff_file}" | awk '{print $1}')"
+  original_sha="$(sudo sha256sum "${original}" | awk '{print $1}')" || die 'Caddy file digest query failed'
+  candidate_sha="$(sudo sha256sum "${candidate}" | awk '{print $1}')" || die 'Caddy file digest query failed'
+  diff_sha="$(sudo sha256sum "${diff_file}" | awk '{print $1}')" || die 'Caddy file digest query failed'
   [[ "${original_sha}" == "${baseline_caddy_sha}" ]] ||
     die 'sealed Caddy original differs from the immutable baseline receipt'
-  remote_sudo_require_root_file "${original}" 600
-  remote_sudo_require_root_file "${candidate}" 600
-  remote_sudo_require_root_file "${diff_file}" 600
+  remote_sudo_require_root_file "${original}" 600 || die 'Caddy file metadata verification failed'
+  remote_sudo_require_root_file "${candidate}" 600 || die 'Caddy file metadata verification failed'
+  remote_sudo_require_root_file "${diff_file}" 600 || die 'Caddy file metadata verification failed'
   sudo test ! -e "${evidence_root}/Caddyfile.original.sha256"
   sudo test ! -L "${evidence_root}/Caddyfile.original.sha256"
   sudo test ! -e "${evidence_root}/Caddyfile.drain.sha256"
@@ -3812,12 +4467,13 @@ PY
     die 'Caddy candidate checksum write mismatch'
   [[ "$(sudo sha256sum /etc/caddy/Caddyfile | awk '{print $1}')" == "${original_sha}" ]] ||
     die 'active Caddyfile changed during preparation'
-  sudo install -o root -g root -m 0644 "${candidate}" /etc/caddy/Caddyfile
+  cutover_bounded_command 15 sudo install -o root -g root -m 0644 "${candidate}" /etc/caddy/Caddyfile || die 'Caddy install failed; active configuration requires reconciliation'
   [[ "$(sudo sha256sum /etc/caddy/Caddyfile | awk '{print $1}')" == "${candidate_sha}" ]] ||
     die 'installed Caddy candidate hash mismatch'
-  sudo systemctl reload caddy
-  [[ "$(sudo systemctl is-active caddy)" == active ]] || die 'Caddy is not active after reload'
+  cutover_bounded_command 20 sudo systemctl reload caddy || die 'Caddy reload failed; active configuration requires reconciliation'
+  remote_assert_caddy_service_active || die 'Caddy active service proof failed'
   sudo test ! -e /etc/caddy/v126-drain.enabled
+  remote_assert_caddy_config_active "${candidate}" || die 'candidate Caddy runtime is not established'
   local admin_config
   admin_config="$(mktemp "${TMPDIR:-/tmp}/v126-caddy-admin.XXXXXX")"
   chmod 0600 "${admin_config}"
@@ -3831,7 +4487,7 @@ PY
   trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after INT' >&2; fi; exit 130" INT
   trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after TERM' >&2; fi; exit 143" TERM
   trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after HUP' >&2; fi; exit 129" HUP
-  if ! curl -fsS http://127.0.0.1:2019/config/ > "${admin_config}" 2>/dev/null; then
+  if ! curl --disable --connect-timeout 3 --max-time 10 -fsS http://127.0.0.1:2019/config/ > "${admin_config}" 2>/dev/null; then
     die 'Caddy admin config proof is unavailable after reload'
   fi
   python3 - "${admin_config}" <<'PY'
@@ -3870,7 +4526,7 @@ PY
     sudo tee "${activation_proof}.sha256" >/dev/null
   sudo chown root:root "${activation_proof}.sha256"
   sudo chmod 0600 "${activation_proof}.sha256"
-  remote_sudo_require_root_file "${activation_proof}" 600
+  remote_sudo_require_root_file "${activation_proof}" 600 || die 'Caddy file metadata verification failed'
   remote_sudo_read_sha256_checksum "${activation_proof}.sha256" >/dev/null
   remote_emit_artifact caddy-original "${original_sha}"
   remote_emit_artifact caddy-candidate "${candidate_sha}"
@@ -3895,6 +4551,7 @@ remote_initialize_compose() {
   remote_verify_baseline_authority "${staging_path}" "${run_id}" "${release_sha}" \
     "${expected_database_sha}" "${expected_identities_sha}"
   REMOTE_BACKEND_IMAGE="${backend_image}"
+  remote_assert_database_target || die 'database equality failed before operation'
   remote_assert_compose_backend_image "${backend_image}"
 }
 
@@ -3909,6 +4566,7 @@ remote_assert_caddy_candidate_active() {
     "${V126_INTERNAL_REMOTE_CADDY_CANDIDATE_SHA256}" ]] ||
     die 'active Caddy candidate differs from the immutable stage receipt'
   [[ "$(sudo systemctl is-active caddy)" == active ]] || die 'Caddy is not active'
+  remote_assert_caddy_config_active "${evidence_root}/Caddyfile.drain" || die 'candidate Caddy runtime is not established'
 }
 
 remote_assert_public_live() {
@@ -3917,7 +4575,7 @@ remote_assert_public_live() {
   chmod 0600 "${target}"
   local endpoint
   for endpoint in health db/health; do
-    if ! curl -fsS "https://staging.hookahtootah.club/${endpoint}" > "${target}" 2>/dev/null; then
+    if ! curl --disable --connect-timeout 3 --max-time 10 -fsS "https://staging.hookahtootah.club/${endpoint}" > "${target}" 2>/dev/null; then
       rm -f -- "${target}"
       die "public ${endpoint} endpoint is unavailable"
     fi
@@ -3929,9 +4587,11 @@ with open(sys.argv[1], "rt", encoding="utf-8") as handle:
 if payload != {"status": "ok"}:
     raise SystemExit("public health JSON mismatch")
 PY
+    local parse_status=$?
+    [[ "${parse_status}" == 0 ]] || { rm -f -- "${target}"; die 'public health response is invalid'; }
   done
   rm -f -- "${target}"
-  curl -fsSI https://staging.hookahtootah.club/miniapp/ >/dev/null 2>&1 ||
+  curl --disable --connect-timeout 3 --max-time 10 -fsSI https://staging.hookahtootah.club/miniapp/ >/dev/null 2>&1 ||
     die 'public Mini App endpoint is unavailable'
 }
 
@@ -3940,7 +4600,7 @@ remote_assert_protected_unauthenticated_503() {
   response="$(mktemp "${TMPDIR:-/tmp}/v126-protected-503.XXXXXX")"
   chmod 0600 "${response}"
   local status=0
-  if status="$(curl -sS -o "${response}" -w '%{http_code}' \
+  if status="$(curl --disable --connect-timeout 3 --max-time 10 -sS -o "${response}" -w '%{http_code}' \
     https://staging.hookahtootah.club/api/guest/_ping 2>/dev/null)"; then
     :
   else
@@ -4082,6 +4742,450 @@ remote_zero_writer_stage() {
   remote_emit_artifact zero-writer-v125 "$(remote_hash_file "${proof}")"
 }
 
+remote_database_evidence_python() {
+  cat <<'PY'
+#!/usr/bin/env python3
+"""Privacy-safe V126 database evidence decisions; no database writes or credentials.
+
+The sequencer embeds this exact source for its remote consumers. The regression suite
+checks byte equality, so source binding covers the helper as well as its caller.
+"""
+import hashlib
+import json
+import os
+import subprocess
+from pathlib import Path
+import re
+import sys
+from urllib.parse import urlsplit
+
+
+IDENTITY_SQL = """BEGIN READ ONLY;
+SET LOCAL statement_timeout = '5s';
+SET LOCAL lock_timeout = '2s';
+SELECT json_build_object(
+ 'version',1,
+ 'system_identifier',(SELECT system_identifier::text FROM pg_control_system()),
+ 'postmaster_epoch',extract(epoch FROM pg_postmaster_start_time())::text,
+ 'database',current_database(),
+ 'database_oid',(SELECT oid::text FROM pg_database WHERE datname=current_database()),
+ 'schema',current_schema(),
+ 'schema_oid',(SELECT oid::text FROM pg_namespace WHERE nspname=current_schema()),
+ 'search_path',current_schemas(false),
+ 'current_role',current_user,
+ 'session_role',session_user,
+ 'role_oid',(SELECT oid::text FROM pg_roles WHERE rolname=current_user),
+ 'read_only',current_setting('transaction_read_only'))::text;
+ROLLBACK;
+"""
+
+
+def fail(message):
+    raise ValueError(message)
+
+
+def strict_json(data):
+    def object_pairs(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                fail('structured database evidence contains a duplicate field')
+            result[key] = value
+        return result
+    return json.loads(data, object_pairs_hook=object_pairs)
+
+
+def preflight_outcome(data):
+    prefix = b'V126_PREFLIGHT_RESULT='
+    lines = data.splitlines()
+    results = [line[len(prefix):] for line in lines if line.startswith(prefix)]
+    if len(results) != 1:
+        fail('preflight requires exactly one structured outcome')
+    try:
+        outcome = strict_json(results[0])
+    except (ValueError, UnicodeError):
+        fail('preflight structured outcome is invalid')
+    if (not isinstance(outcome, dict) or set(outcome) != {'version', 'safe', 'unsafe_count'}
+            or type(outcome['version']) is not int or outcome['version'] != 1
+            or outcome['safe'] is not True or type(outcome['unsafe_count']) is not int
+            or outcome['unsafe_count'] != 0):
+        fail('preflight did not prove safe with zero unsafe rows')
+    if lines.count(b'BOOKING_THREAD_PREFLIGHT_SAFE_TO_CONTINUE') != 1:
+        fail('preflight positive completion marker is missing or duplicated')
+    if any(b'STOP_FOR_BOOKING_THREAD_DEDUPLICATION_DECISION' in line for line in lines):
+        fail('preflight contains an unsafe decision')
+    return outcome
+
+
+def canonical_toc(data):
+    # This is the sole volatile presentation field: pg_restore formats the archive
+    # creation time using the consumer's timezone. Every other byte remains bound.
+    if b'\x00' in data or not data.endswith(b'\n'):
+        fail('TOC inventory is not complete text')
+    lines = data.splitlines(keepends=True)
+    candidates = [i for i, line in enumerate(lines) if line.startswith(b'; Archive created at ')]
+    if len(candidates) != 1 or candidates[0] != 1 or lines[0] != b';\n':
+        fail('TOC archive creation header is missing or misplaced')
+    if not re.fullmatch(rb'; Archive created at \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?: [A-Za-z0-9_+:/.-]+)?\n', lines[1]):
+        fail('TOC archive creation header is malformed')
+    if lines.count(b'; Selected TOC Entries:\n') != 1:
+        fail('TOC selected-entry header is missing or duplicated')
+    selected = lines.index(b'; Selected TOC Entries:\n')
+    headers = b''.join(lines[2:selected])
+    for name in [b'dbname', b'TOC Entries', b'Compression', b'Dump Version', b'Format',
+                 b'Integer', b'Offset', b'Dumped from database version', b'Dumped by pg_dump version']:
+        if len(re.findall(rb'^; +'+re.escape(name)+rb': [^\n]+\n', headers, re.M)) != 1:
+            fail('TOC semantic header is missing or duplicated')
+    entries = [line for line in lines[selected + 1:] if line != b';\n']
+    if not entries or any(not re.match(rb'[0-9]+; [0-9]+ [0-9]+ ', line) for line in entries):
+        fail('TOC entries are empty or malformed')
+    ids = [line.split(b';', 1)[0] for line in entries]
+    if len(set(ids)) != len(ids):
+        fail('TOC entry IDs are duplicated')
+    lines[1] = b'; Archive creation display omitted; exact dump SHA-256 verified separately\n'
+    return b''.join(lines)
+
+
+def compare_toc(dump, expected_dump_sha, retained, generated):
+    if not re.fullmatch('[0-9a-f]{64}', expected_dump_sha):
+        fail('dump hash binding is malformed')
+    if hashlib.sha256(dump).hexdigest() != expected_dump_sha:
+        fail('selected DR backup hash mismatch')
+    if canonical_toc(retained) != canonical_toc(generated):
+        fail('DR inventory does not match the selected archive')
+
+
+def database_identity(data):
+    try:
+        value = strict_json(data)
+    except (ValueError, UnicodeError):
+        fail('database identity is not one JSON object')
+    fields = {'version', 'system_identifier', 'postmaster_epoch', 'database', 'database_oid',
+              'schema', 'schema_oid', 'search_path', 'current_role', 'session_role', 'role_oid', 'read_only'}
+    if not isinstance(value, dict) or set(value) != fields:
+        fail('database identity fields do not match the contract')
+    if type(value['version']) is not int or value['version'] != 1 or value['read_only'] != 'on':
+        fail('database identity query did not use the read-only contract')
+    for name in ['system_identifier', 'database_oid', 'schema_oid', 'role_oid']:
+        if not isinstance(value[name], str) or not re.fullmatch('[1-9][0-9]*', value[name]):
+            fail('database identity has an invalid catalog identity')
+    if not isinstance(value['postmaster_epoch'], str) or not re.fullmatch(r'[0-9]+(?:\.[0-9]+)?', value['postmaster_epoch']):
+        fail('database identity has an invalid server lifetime')
+    for name in ['database', 'schema', 'current_role', 'session_role']:
+        if not isinstance(value[name], str) or not value[name] or any(ord(ch) < 32 for ch in value[name]):
+            fail('database identity has an invalid name')
+    if value['current_role'] != value['session_role']:
+        fail('database identity unexpectedly changed roles')
+    if (not isinstance(value['search_path'], list) or not value['search_path']
+            or value['search_path'][0] != value['schema']
+            or any(not isinstance(x, str) or not x for x in value['search_path'])
+            or len(set(value['search_path'])) != len(value['search_path'])):
+        fail('database identity has an invalid effective schema search path')
+    return value
+
+
+def equal_identities(values):
+    if len(values) < 2:
+        fail('database equality requires independent consumers')
+    identities = [database_identity(value) for value in values]
+    if any(value != identities[0] for value in identities[1:]):
+        fail('database server/database/schema/intended-role equality failed')
+    encoded = json.dumps(identities[0], sort_keys=True, separators=(',', ':')).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def backend_contract(compose, source, backend, resolved, planned_network=None):
+    def environment(container):
+        values = {}
+        for entry in container['Config']['Env']:
+            key, separator, value = entry.partition('=')
+            if not separator or key in values:
+                fail('container environment is malformed or duplicated')
+            values[key] = value
+        return values
+
+    producer = environment(source)
+    if any(key.startswith('PG') and key not in {'PG_MAJOR', 'PG_VERSION', 'PG_SHA256', 'PGDATA'}
+           and value for key, value in producer.items()):
+        fail('source container has unsupported libpq environment overrides')
+    actual = environment(backend)
+    effective = compose['services']['backend']['environment']
+    database = producer.get('POSTGRES_DB', '')
+    role = producer.get('POSTGRES_USER', '')
+    password = producer.get('POSTGRES_PASSWORD', '')
+    if (not database or any(ch in database for ch in '/?:#@%')
+            or not role or not password or any(ord(ch) < 32 for ch in database + role)):
+        fail('source target is not an exact supported JDBC target')
+    required = {'DB_JDBC_URL': 'jdbc:postgresql://postgres:5432/' + database,
+                'DB_USER': role, 'DB_PASSWORD': password}
+    if any(effective.get(key) != value or actual.get(key) != value for key, value in required.items()):
+        fail('future/actual backend target differs from the source database')
+    source_networks = source['NetworkSettings']['Networks']
+    backend_networks = backend['NetworkSettings']['Networks']
+    running = backend.get('State', {}).get('Running', True)
+    if not running:
+        if planned_network is None:
+            fail('stopped backend requires an exact future network proof')
+        name, network_id = planned_network['Name'], planned_network['Id']
+        if (backend['HostConfig']['NetworkMode'] not in {name, network_id}
+                or name not in source_networks
+                or source_networks[name].get('NetworkID') != network_id):
+            fail('stopped backend network plan differs from the selected source')
+        backend_networks = {name: {'NetworkID': network_id}}
+    shared = set(source_networks) & set(backend_networks)
+    expected = set()
+    for name in shared:
+        left, right = source_networks[name], backend_networks[name]
+        if left.get('NetworkID') != right.get('NetworkID') or not left.get('NetworkID'):
+            fail('backend/source network identity differs')
+        if 'postgres' in (left.get('Aliases') or []):
+            address = left.get('IPAddress', '')
+            if not re.fullmatch(r'(?:[0-9]{1,3}\.){3}[0-9]{1,3}', address):
+                fail('source network endpoint is unavailable')
+            expected.add(address)
+    if not expected or set(resolved) != expected:
+        fail('backend postgres DNS does not resolve only to the selected source endpoint')
+    return True
+
+
+LIBPQ_IDENTITY_WORKER = r"""
+import ctypes
+import ctypes.util
+import json
+import re
+import shutil
+import subprocess
+import sys
+
+connection = None
+try:
+    payload = json.load(sys.stdin)
+    library = ctypes.util.find_library('pq')
+    if not library and sys.platform == 'darwin':
+        linked = subprocess.run(['otool', '-L', shutil.which('psql')], stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, timeout=3, check=True).stdout
+        match = re.search(rb'\n\s+(/[^\n]+/libpq[^\s]+\.dylib) ', linked)
+        library = match.group(1).decode() if match else None
+    if not library:
+        raise ValueError('libpq unavailable')
+    pq = ctypes.CDLL(library)
+    pointer = ctypes.c_void_p
+    pq.PQconnectdbParams.argtypes = [ctypes.POINTER(ctypes.c_char_p), ctypes.POINTER(ctypes.c_char_p), ctypes.c_int]
+    pq.PQconnectdbParams.restype = pointer
+    pq.PQstatus.argtypes = [pointer]
+    pq.PQstatus.restype = ctypes.c_int
+    pq.PQexec.argtypes = [pointer, ctypes.c_char_p]
+    pq.PQexec.restype = pointer
+    pq.PQresultStatus.argtypes = [pointer]
+    pq.PQresultStatus.restype = ctypes.c_int
+    pq.PQntuples.argtypes = [pointer]
+    pq.PQntuples.restype = ctypes.c_int
+    pq.PQnfields.argtypes = [pointer]
+    pq.PQnfields.restype = ctypes.c_int
+    pq.PQgetvalue.argtypes = [pointer, ctypes.c_int, ctypes.c_int]
+    pq.PQgetvalue.restype = ctypes.c_char_p
+    pq.PQclear.argtypes = [pointer]
+    pq.PQfinish.argtypes = [pointer]
+    keys = (ctypes.c_char_p * 4)(b'dbname', b'connect_timeout', b'client_encoding', None)
+    values = (ctypes.c_char_p * 4)(payload['uri'].encode(), b'5', b'UTF8', None)
+    connection = pq.PQconnectdbParams(keys, values, 1)
+    if not connection or pq.PQstatus(connection) != 0:
+        raise ValueError('connection failed')
+    found = []
+    for statement in payload['sql'].split(';'):
+        if not statement.strip():
+            continue
+        result = pq.PQexec(connection, statement.encode())
+        if not result:
+            raise ValueError('query failed')
+        try:
+            status = pq.PQresultStatus(result)
+            if status == 2:
+                if pq.PQntuples(result) != 1 or pq.PQnfields(result) != 1:
+                    raise ValueError('query result shape failed')
+                found.append(pq.PQgetvalue(result, 0, 0).decode())
+            elif status != 1:
+                raise ValueError('query status failed')
+        finally:
+            pq.PQclear(result)
+    if len(found) != 1:
+        raise ValueError('query result count failed')
+    print(found[0])
+except BaseException:
+    raise SystemExit('read-only libpq target identity failed') from None
+finally:
+    if connection:
+        pq.PQfinish(connection)
+"""
+
+
+def assert_compose_source_labels(source_labels, backend_labels):
+    canonical_cwd = str(Path.cwd().resolve(strict=True))
+    required = {
+        'com.docker.compose.project.working_dir': canonical_cwd,
+        'com.docker.compose.project.config_files': str(Path(canonical_cwd) / 'docker-compose.yml'),
+    }
+    for labels in (source_labels, backend_labels):
+        if not isinstance(labels, dict) or any(labels.get(key) != value for key, value in required.items()):
+            fail('database containers belong to another Compose working directory or config source')
+
+
+def assert_live_target(uri_path, backend_image, expected_uri_sha):
+    # All credential-bearing configuration and inspect output stays in this process.
+    raw_uri = Path(uri_path).read_bytes()
+    if (not re.fullmatch('[0-9a-f]{64}', expected_uri_sha)
+            or hashlib.sha256(raw_uri).hexdigest() != expected_uri_sha):
+        fail('database URI bytes differ from immutable authority')
+    clean = {key: os.environ[key] for key in ('PATH', 'HOME')}
+    compose_env = dict(clean, BACKEND_IMAGE=backend_image)
+    compose = ['docker', 'compose', '--env-file', '.env', '--file', 'docker-compose.yml']
+
+    def command(argv, *, payload=None, environment=None):
+        result = subprocess.run(argv, input=payload, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                env=environment or clean, timeout=12, check=False)
+        if result.returncode:
+            fail('database target consumer failed')
+        return result.stdout
+
+    def ids(service, running):
+        arguments = ['ps', '--status', 'running', '-q', '--no-trunc', service] if running else ['ps', '-aq', '--no-trunc', service]
+        values = command(compose + arguments, environment=compose_env).decode().splitlines()
+        if len(values) != 1 or not re.fullmatch('[0-9a-f]{64}', values[0]):
+            fail('database target requires one canonical source/backend container')
+        return values[0]
+
+    def inspected(cid):
+        values = json.loads(command(['docker', 'inspect', cid]))
+        if not isinstance(values, list) or len(values) != 1 or values[0].get('Id') != cid:
+            fail('database target container identity changed')
+        return values[0]
+
+    source_id, backend_id = ids('postgres', True), ids('backend', False)
+    source, backend = inspected(source_id), inspected(backend_id)
+    config = json.loads(command(compose + ['config', '--format', 'json'], environment=compose_env))
+    source_labels, backend_labels = source['Config']['Labels'], backend['Config']['Labels']
+    assert_compose_source_labels(source_labels, backend_labels)
+    if (source_labels.get('com.docker.compose.service') != 'postgres'
+            or backend_labels.get('com.docker.compose.service') != 'backend'
+            or not source_labels.get('com.docker.compose.project')
+            or source_labels.get('com.docker.compose.project') != backend_labels.get('com.docker.compose.project')):
+        fail('database target project/service identity differs')
+    # The tracked Compose puts both services on the same single default network.
+    def networks(service):
+        declared = config['services'][service].get('networks', {'default': None})
+        if not isinstance(declared, dict) or len(declared) != 1:
+            fail('database target has unsupported Compose networks')
+        return set(declared)
+    logical = networks('postgres')
+    if networks('backend') != logical:
+        fail('future backend/source Compose networks differ')
+    name = config['networks'][next(iter(logical))]['name']
+    if name not in source['NetworkSettings']['Networks']:
+        fail('source does not use the future Compose network')
+    networks_found = json.loads(command(['docker', 'network', 'inspect', name]))
+    if not isinstance(networks_found, list) or len(networks_found) != 1:
+        fail('future database network is not unique')
+    planned_network = networks_found[0]
+    project = source_labels['com.docker.compose.project']
+    if (planned_network.get('Name') != name
+            or planned_network.get('Id') != source['NetworkSettings']['Networks'][name]['NetworkID']
+            or planned_network.get('Labels', {}).get('com.docker.compose.project') != project
+            or not set(planned_network.get('Containers', {})).issubset({source_id, backend_id})
+            or source_id not in planned_network.get('Containers', {})):
+        fail('future database network identity or endpoint inventory differs')
+    # A stopped backend cannot run a DNS consumer. Its exact retained network and
+    # future Compose plan must agree; recheck from the created/running backend later.
+    resolver = backend_id if backend['State']['Running'] else source_id
+    dns = command(['docker', 'exec', resolver, 'getent', 'ahostsv4', 'postgres']).decode().splitlines()
+    addresses = []
+    for line in dns:
+        parts = line.split()
+        if len(parts) not in (2, 3) or not re.fullmatch(r'(?:[0-9]{1,3}\.){3}[0-9]{1,3}', parts[0]):
+            fail('database DNS consumer returned malformed output')
+        addresses.append(parts[0])
+    backend_contract(config, source, backend, addresses, planned_network)
+    native = command(['docker', 'exec', '-i', source_id, 'sh', '-c',
+                      ': "${POSTGRES_USER:?}" "${POSTGRES_DB:?}"; '
+                      'env -i PATH="$PATH" PGCONNECT_TIMEOUT=5 psql -XqAtw -U "$POSTGRES_USER" -d "$POSTGRES_DB" --set=ON_ERROR_STOP=1'],
+                     payload=IDENTITY_SQL.encode())
+    raw = raw_uri.removesuffix(b'\n')
+    uri = raw.decode('utf-8')
+    if (not uri.startswith(('postgresql://', 'postgres://')) or not uri
+            or any(ord(ch) < 32 or ord(ch) == 127 for ch in uri)):
+        fail('database target URI is malformed')
+    parsed = urlsplit(uri)
+    if (not parsed.hostname or not parsed.username or not parsed.password or parsed.fragment
+            or not parsed.path.startswith('/') or parsed.path.count('/') != 1 or len(parsed.path) < 2
+            or ',' in parsed.netloc):
+        fail('database target URI lacks explicit connection authority')
+    host = command(['python3', '-c', LIBPQ_IDENTITY_WORKER],
+                   payload=json.dumps({'uri': uri, 'sql': IDENTITY_SQL}).encode())
+    digest = equal_identities([native, host])
+    # Inspect again to reject container replacement/config drift during the reads.
+    def stable(container):
+        return {key: container[key] for key in ('Id', 'Config', 'RestartCount', 'HostConfig')} | {
+            'networks': container['NetworkSettings']['Networks'],
+            'started_at': container['State']['StartedAt'], 'running': container['State']['Running']}
+    if (json.loads(command(['docker', 'network', 'inspect', name])) != [planned_network]
+            or stable(inspected(source_id)) != stable(source) or stable(inspected(backend_id)) != stable(backend)
+            or ids('postgres', True) != source_id or ids('backend', False) != backend_id):
+        fail('database target container changed during verification')
+    print('DATABASE_TARGET_EQUALITY=' + digest)
+
+
+def main(argv):
+    if argv == ['identity-sql']:
+        print(IDENTITY_SQL, end='')
+    elif len(argv) == 4 and argv[0] == 'live-target':
+        assert_live_target(argv[1], argv[2], argv[3])
+    elif len(argv) == 2 and argv[0] == 'preflight':
+        preflight_outcome(Path(argv[1]).read_bytes())
+    elif len(argv) == 5 and argv[0] == 'toc':
+        if not re.fullmatch('[0-9a-f]{64}', argv[2]):
+            fail('dump hash binding is malformed')
+        digest = hashlib.sha256()
+        with Path(argv[1]).open('rb') as dump:
+            for block in iter(lambda: dump.read(1024 * 1024), b''):
+                digest.update(block)
+        if digest.hexdigest() != argv[2]:
+            fail('selected DR backup hash mismatch')
+        if canonical_toc(Path(argv[3]).read_bytes()) != canonical_toc(Path(argv[4]).read_bytes()):
+            fail('DR inventory does not match the selected archive')
+    elif len(argv) >= 3 and argv[0] == 'identity':
+        print(equal_identities([Path(path).read_bytes() for path in argv[1:]]))
+    else:
+        fail('invalid database evidence operation')
+
+
+if __name__ == '__main__':
+    try:
+        main(sys.argv[1:])
+    except (ValueError, OSError, UnicodeError, KeyError, TypeError, subprocess.SubprocessError):
+        raise SystemExit('database evidence refused; no credentials or target details are logged') from None
+PY
+}
+
+remote_assert_database_target() {
+  local database_path="${1:-${REMOTE_DATABASE_URL_PATH:-}}"
+  local database_sha="${2:-${REMOTE_DATABASE_URL_SHA256:-}}"
+  [[ -n "${database_path}" && "${database_sha}" =~ ^[0-9a-f]{64}$ ]] ||
+    die 'actual database target lacks immutable URI binding'
+  [[ -n "${REMOTE_BACKEND_IMAGE:-}" ]] || die 'database equality lacks the bound backend image'
+  local code
+  code="$(remote_database_evidence_python)" || die 'database evidence source unavailable'
+  local result
+  result="$(cutover_bounded_command 180 python3 -c "${code}" live-target "${database_path}" \
+    "${REMOTE_BACKEND_IMAGE}" "${database_sha}")" ||
+    die 'actual server/database/schema/intended-role target equality failed'
+  [[ "${result}" =~ ^DATABASE_TARGET_EQUALITY=([0-9a-f]{64})$ ]] || die 'database target result is malformed'
+  REMOTE_DATABASE_TARGET_IDENTITY_SHA256="${BASH_REMATCH[1]}"
+  local expected="${V126_INTERNAL_REMOTE_DATABASE_TARGET_IDENTITY_SHA256:-}"
+  if [[ "${expected}" != NONE ]]; then
+    [[ "${expected}" =~ ^[0-9a-f]{64}$ && "${expected}" == "${REMOTE_DATABASE_TARGET_IDENTITY_SHA256}" ]] ||
+      die 'actual database identity changed since the immutable baseline'
+  fi
+}
+
 remote_final_v125_preflight() {
   local staging_path="$1"
   local run_id="$2"
@@ -4133,6 +5237,8 @@ remote_final_v125_preflight() {
   trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after INT' >&2; fi; exit 130" INT
   trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after TERM' >&2; fi; exit 143" TERM
   trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after HUP' >&2; fi; exit 129" HUP
+  remote_assert_database_target "${database_url_file}" "${expected_database_sha}" ||
+    die 'preflight semantic database equality failed'
   python3 - "${database_url_file}" "${expected_database_sha}" "${service_file}" "${pass_file}" <<'PY'
 # HT12X_LIBPQ_DERIVATION_BEGIN
 from hashlib import sha256
@@ -4293,6 +5399,8 @@ PY
     fi
     die 'final V125 booking-integrity preflight failed; restricted output retained'
   fi
+  python3 -c "$(remote_database_evidence_python)" preflight "${restricted_output}" ||
+    die 'final V125 preflight lacks structured safe/count0 outcome; restricted output retained'
   rm -f -- "${service_file}" "${pass_file}"
   trap - EXIT INT TERM HUP
   chmod 0600 "${restricted_output}"
@@ -4305,6 +5413,152 @@ PY
     "script_sha256=${expected_script_sha}" "output_sha256=${output_sha}" \
     'database_target=EXPLICIT_REDACTED' 'flyway=125:0:0' 'result=PASS'
   remote_emit_artifact final-v125-preflight "$(remote_hash_file "${proof}")"
+}
+
+# Candidate bytes must occupy Compose's fixed env_file during validation.
+remote_validate_environment_candidate() (
+  local staging_path="$1"
+  local candidate="$2"
+  local target_mode="$3"
+  local validation_dir
+  validation_dir="$(mktemp -d "${TMPDIR:-/tmp}/v126-env-validation.XXXXXX")" ||
+    die 'cannot create private candidate validation directory'
+  local cleanup_command
+  printf -v cleanup_command 'rm -rf -- %q' "${validation_dir}"
+  trap "v126_cleanup_exit_status=\$?; trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after EXIT' >&2; fi; exit \"\${v126_cleanup_exit_status}\"" EXIT
+  trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after INT' >&2; fi; exit 130" INT
+  trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after TERM' >&2; fi; exit 143" TERM
+  trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after HUP' >&2; fi; exit 129" HUP
+  chmod 0700 "${validation_dir}" || die 'cannot protect candidate validation directory'
+  local candidate_sha
+  local compose_sha
+  candidate_sha="$(remote_hash_file "${candidate}")" || die 'candidate hash failed'
+  compose_sha="$(remote_hash_file "${staging_path}/docker-compose.yml")" || die 'Compose hash failed'
+  cp "${candidate}" "${validation_dir}/.env" || die 'candidate validation copy failed'
+  cp "${staging_path}/docker-compose.yml" "${validation_dir}/docker-compose.yml" ||
+    die 'Compose validation copy failed'
+  chmod 0600 "${validation_dir}/.env" "${validation_dir}/docker-compose.yml" ||
+    die 'cannot protect candidate validation inputs'
+  [[ "$(remote_hash_file "${validation_dir}/.env")" == "${candidate_sha}" && \
+    "$(remote_hash_file "${validation_dir}/docker-compose.yml")" == "${compose_sha}" ]] ||
+    die 'candidate validation snapshot identity mismatch'
+  remote_validate_fixed_environment "${staging_path}" "${validation_dir}" "${target_mode}" ||
+    die 'candidate fixed-environment validation failed'
+  [[ "$(remote_hash_file "${candidate}")" == "${candidate_sha}" && \
+    "$(remote_hash_file "${staging_path}/docker-compose.yml")" == "${compose_sha}" && \
+    "$(remote_hash_file "${validation_dir}/.env")" == "${candidate_sha}" && \
+    "$(remote_hash_file "${validation_dir}/docker-compose.yml")" == "${compose_sha}" ]] ||
+    die 'candidate validation inputs changed'
+)
+
+remote_validate_fixed_environment() {
+  local staging_path="$1"
+  local config_dir="$2"
+  local target_mode="$3"
+  [[ "${target_mode}" == V126_SMOKE || "${target_mode}" == OFF ]] || die 'invalid environment validation mode'
+  local authorized=false
+  [[ "${target_mode}" != V126_SMOKE ]] || authorized=true
+  cutover_bounded_command 30 env -i PATH="${PATH}" HOME="${HOME}" \
+    STAGING_MAINTENANCE_V126_SMOKE_AUTHORIZED="${authorized}" \
+    "${staging_path}/scripts/check-staging-maintenance-config.sh" "${config_dir}/.env" >/dev/null ||
+    die 'fixed-environment maintenance validation failed'
+  cutover_bounded_command 30 env -i PATH="${PATH}" HOME="${HOME}" \
+    "${staging_path}/scripts/validate-staging-admission.sh" --profile public-pilot \
+    --env-file "${config_dir}/.env" --compose-file "${config_dir}/docker-compose.yml" >/dev/null ||
+    die 'fixed-environment effective Compose admission validation failed'
+  [[ "$(remote_env_value "${config_dir}/.env" STAGING_MAINTENANCE_MODE)" == "${target_mode}" ]] ||
+    die 'fixed-environment maintenance target mismatch'
+}
+
+remote_install_environment_candidate() {
+  cutover_bounded_command 30 python3 - "$1" "$2" "$3" <<'PY'
+from pathlib import Path
+import hashlib
+import os
+import stat
+import sys
+candidate, next_path, expected_source_sha = sys.argv[1:]
+source_path = Path('.env')
+metadata = source_path.lstat()
+if not stat.S_ISREG(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o600:
+    raise SystemExit('fixed environment metadata is unsafe')
+if hashlib.sha256(source_path.read_bytes()).hexdigest() != expected_source_sha:
+    raise SystemExit('fixed environment changed before replacement')
+if not stat.S_ISREG(os.lstat(candidate).st_mode):
+    raise SystemExit('candidate must be a regular non-symlink file')
+payload = Path(candidate).read_bytes()
+fd = os.open(next_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+with os.fdopen(fd, 'wb') as handle:
+    os.fchown(handle.fileno(), metadata.st_uid, metadata.st_gid)
+    os.fchmod(handle.fileno(), stat.S_IMODE(metadata.st_mode))
+    handle.write(payload)
+    handle.flush()
+    os.fsync(handle.fileno())
+current = source_path.lstat()
+if (current.st_dev, current.st_ino, current.st_uid, current.st_gid, current.st_mode) != (
+    metadata.st_dev, metadata.st_ino, metadata.st_uid, metadata.st_gid, metadata.st_mode
+) or hashlib.sha256(source_path.read_bytes()).hexdigest() != expected_source_sha:
+    raise SystemExit('fixed environment identity changed before atomic replacement')
+os.replace(next_path, source_path)
+for directory in {str(Path(next_path).parent), str(source_path.absolute().parent)}:
+    directory_fd = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+PY
+  local status=$?
+  [[ "${status}" == 0 ]] || die 'environment install failed; replacement outcome requires reconciliation'
+}
+
+# Compare complete parsed configurations; only JSON object ordering is immaterial.
+remote_assert_caddy_config_active() (
+  local config_path="$1"
+  local proof_dir
+  proof_dir="$(mktemp -d "${TMPDIR:-/tmp}/v126-caddy-proof.XXXXXX")" || die 'cannot allocate Caddy runtime proof'
+  local cleanup_command
+  printf -v cleanup_command 'rm -rf -- %q' "${proof_dir}"
+  trap "v126_cleanup_exit_status=\$?; trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after EXIT' >&2; fi; exit \"\${v126_cleanup_exit_status}\"" EXIT
+  trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after INT' >&2; fi; exit 130" INT
+  trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after TERM' >&2; fi; exit 143" TERM
+  trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after HUP' >&2; fi; exit 129" HUP
+  chmod 0700 "${proof_dir}" || die 'cannot protect Caddy runtime proof'
+  cutover_bounded_command 15 sudo caddy adapt --config "${config_path}" --adapter caddyfile \
+    > "${proof_dir}/expected.json" 2>/dev/null || die 'Caddy configuration adaptation failed'
+  curl --disable --noproxy '*' --proto '=http' --connect-timeout 3 --max-time 10 -fsS http://127.0.0.1:2019/config/ \
+    > "${proof_dir}/active.json" 2>/dev/null || die 'Caddy active configuration is unavailable'
+  python3 - "${proof_dir}/expected.json" "${proof_dir}/active.json" <<'PY'
+import json
+import sys
+
+def unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError('duplicate Caddy configuration key')
+        result[key] = value
+    return result
+
+try:
+    with open(sys.argv[1], encoding='utf-8') as handle:
+        expected = json.load(handle, object_pairs_hook=unique_object)
+    with open(sys.argv[2], encoding='utf-8') as handle:
+        active = json.load(handle, object_pairs_hook=unique_object)
+    if (not isinstance(expected, dict) or not expected or
+        json.dumps(active, sort_keys=True, separators=(',', ':'), allow_nan=False) !=
+        json.dumps(expected, sort_keys=True, separators=(',', ':'), allow_nan=False)):
+        raise ValueError('Caddy runtime differs from the sealed configuration')
+except (OSError, ValueError):
+    raise SystemExit('Caddy active configuration equality is not established')
+PY
+  local status=$?
+  [[ "${status}" == 0 ]] || die 'Caddy active configuration equality is not established'
+)
+
+remote_assert_caddy_service_active() {
+  local state
+  state="$(cutover_bounded_command 10 sudo systemctl is-active caddy)" || die 'Caddy service state query failed'
+  [[ "${state}" == active ]] || die 'Caddy is not active'
 }
 
 remote_transform_maintenance_config() {
@@ -4366,7 +5620,7 @@ remote_transform_maintenance_config() {
   trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after INT' >&2; fi; exit 130" INT
   trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after TERM' >&2; fi; exit 143" TERM
   trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after HUP' >&2; fi; exit 129" HUP
-  cp --preserve=mode,ownership,timestamps .env "${before}"
+  cp --preserve=mode,ownership,timestamps .env "${before}" || die 'environment snapshot failed'
   chmod 0600 "${before}"
   python3 - "${before}" "${expected_source_sha}" "${identities_file}" \
     "${expected_identities_sha}" "${candidate}" "${target_mode}" <<'PY'
@@ -4429,25 +5683,17 @@ fd = os.open(target_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
 with os.fdopen(fd, "wb") as handle:
     handle.write(payload)
 PY
-  chmod 0600 "${candidate}"
-  if [[ "${target_mode}" == V126_SMOKE ]]; then
-    STAGING_MAINTENANCE_V126_SMOKE_AUTHORIZED=true \
-      "${staging_path}/scripts/check-staging-maintenance-config.sh" "${candidate}" >/dev/null
-  else
-    "${staging_path}/scripts/check-staging-maintenance-config.sh" "${candidate}" >/dev/null
-  fi
-  "${staging_path}/scripts/validate-staging-admission.sh" \
-    --profile public-pilot --env-file "${candidate}" --compose-file docker-compose.yml >/dev/null
+  local derive_status=$?
+  [[ "${derive_status}" == 0 ]] || die 'environment derivation failed'
+  chmod 0600 "${candidate}" || die 'cannot protect environment candidate'
+  remote_validate_environment_candidate "${staging_path}" "${candidate}" "${target_mode}" ||
+    die 'candidate environment validation failed'
   [[ "$(remote_hash_file .env)" == "${expected_source_sha}" ]] ||
     die 'staging environment changed during maintenance transformation'
-  install -m 0600 "${candidate}" "${next_env}"
-  mv "${next_env}" .env
-  if [[ "${target_mode}" == V126_SMOKE ]]; then
-    STAGING_MAINTENANCE_V126_SMOKE_AUTHORIZED=true \
-      "${staging_path}/scripts/check-staging-maintenance-config.sh" .env >/dev/null
-  else
-    "${staging_path}/scripts/check-staging-maintenance-config.sh" .env >/dev/null
-  fi
+  remote_install_environment_candidate "${candidate}" "${next_env}" "${expected_source_sha}" ||
+    die 'environment installation failed; reconcile the fixed environment before any further mutation'
+  remote_validate_fixed_environment "${staging_path}" "${staging_path}" "${target_mode}" ||
+    die 'installed fixed environment validation failed'
   local before_sha
   local after_sha
   before_sha="$(remote_hash_file "${before}")"
@@ -4840,7 +6086,8 @@ remote_start_v126() {
   remote_assert_compose_backend_image "${image_tag}"
   [[ "$(remote_hash_file .env)" == "${REMOTE_BOUND_ENV_SHA256}" ]] ||
     die 'staging environment changed between immutable verification and backend creation'
-  remote_compose create --force-recreate --no-build --no-deps --pull never backend >/dev/null
+  remote_compose create --force-recreate --no-build --no-deps --pull never backend >/dev/null ||
+    die 'backend create failed; outcome requires reconciliation'
   remote_capture_compose_ids all backend
   (( ${#REMOTE_CAPTURED_CONTAINER_IDS[@]} == 1 )) || die 'Compose did not create exactly one V126 backend'
   local backend_container="${REMOTE_CAPTURED_CONTAINER_IDS[0]}"
@@ -4851,12 +6098,15 @@ remote_start_v126() {
     die 'created V126 backend image ID mismatch'
   [[ "$(remote_hash_file .env)" == "${REMOTE_BOUND_ENV_SHA256}" ]] ||
     die 'staging environment changed during V126 backend creation'
-  remote_assert_bound_container_environment "${backend_container}" "${phase}"
-  docker update --restart=no "${backend_container}" >/dev/null
+  remote_assert_bound_container_environment "${backend_container}" "${phase}" || die 'created backend environment failed'
+  remote_assert_database_target || die 'created backend database target plan failed'
+  docker update --restart=no "${backend_container}" >/dev/null || die 'restart policy update failed'
   [[ "$(docker inspect --format '{{.HostConfig.RestartPolicy.Name}}:{{.RestartCount}}' "${backend_container}")" == 'no:0' ]] ||
     die 'V126 backend restart policy was not disabled before start'
-  docker start "${backend_container}" >/dev/null
-  remote_wait_backend_running "${backend_container}"
+  docker start "${backend_container}" >/dev/null || die 'V126 start command failed; outcome requires reconciliation'
+  remote_wait_backend_ready "${backend_container}" "${image_id}" "${release_sha}" \
+    "${phase}" "${REMOTE_BOUND_ENV_SHA256}" || die 'V126 readiness did not complete; start must not be repeated'
+  remote_assert_database_target || die 'running backend database target failed'
   remote_assert_single_v126_backend_poller "${image_id}"
   remote_assert_health_json http://127.0.0.1:8080/health
   remote_assert_version "${release_sha}"
@@ -4961,27 +6211,28 @@ remote_restore_caddy() {
     "${release_sha}" OFF "${V126_INTERNAL_REMOTE_MAINTENANCE_OFF_SHA256:-}"
   remote_assert_runtime "${staging_path}" "${release_sha}" "${image_id}" OFF true
   remote_assert_caddy_candidate_active "${release_sha}" "${run_id}"
-  remote_assert_caddy_drain_marker
+  remote_assert_caddy_drain_marker || die 'Caddy consumer verification failed'
   local evidence_root
   evidence_root="$(remote_caddy_evidence_root "${release_sha}" "${run_id}")"
   local original="${evidence_root}/Caddyfile.original"
   local original_checksum="${evidence_root}/Caddyfile.original.sha256"
-  remote_sudo_require_root_file "${original}" 600
+  remote_sudo_require_root_file "${original}" 600 || die 'Caddy file metadata verification failed'
   local original_sha
   local expected_original_sha
-  original_sha="$(sudo sha256sum "${original}" | awk '{print $1}')"
+  original_sha="$(sudo sha256sum "${original}" | awk '{print $1}')" || die 'Caddy file digest query failed'
   expected_original_sha="${V126_INTERNAL_REMOTE_CADDY_ORIGINAL_SHA256:-}"
   [[ "${original_sha}" == "${expected_original_sha}" ]] ||
     die 'original Caddyfile differs from the immutable stage receipt'
   [[ "$(remote_sudo_read_sha256_checksum "${original_checksum}")" == "${expected_original_sha}" ]] ||
     die 'original Caddyfile sidecar differs from the immutable stage receipt'
-  sudo caddy validate --config "${original}" --adapter caddyfile >/dev/null
-  sudo install -o root -g root -m 0644 "${original}" /etc/caddy/Caddyfile
+  cutover_bounded_command 15 sudo caddy validate --config "${original}" --adapter caddyfile >/dev/null || die 'Caddy validation failed'
+  cutover_bounded_command 15 sudo install -o root -g root -m 0644 "${original}" /etc/caddy/Caddyfile || die 'Caddy install failed; active configuration requires reconciliation'
   [[ "$(sudo sha256sum /etc/caddy/Caddyfile | awk '{print $1}')" == "${original_sha}" ]] ||
     die 'restored Caddyfile is not byte-identical to the original'
-  sudo systemctl reload caddy
-  [[ "$(sudo systemctl is-active caddy)" == active ]] || die 'Caddy is not active after ordinary restoration'
-  sudo rm -f -- /etc/caddy/v126-drain.enabled
+  cutover_bounded_command 20 sudo systemctl reload caddy || die 'Caddy reload failed; active configuration requires reconciliation'
+  remote_assert_caddy_service_active || die 'Caddy active service proof failed'
+  remote_assert_caddy_config_active "${original}" || die 'original Caddy runtime is not established'
+  sudo rm -f -- /etc/caddy/v126-drain.enabled || die 'Caddy drain marker removal failed'
   sudo test ! -e /etc/caddy/v126-drain.enabled
   local admin_config
   admin_config="$(mktemp "${TMPDIR:-/tmp}/v126-caddy-restored.XXXXXX")"
@@ -4996,7 +6247,7 @@ remote_restore_caddy() {
   trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after INT' >&2; fi; exit 130" INT
   trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after TERM' >&2; fi; exit 143" TERM
   trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after HUP' >&2; fi; exit 129" HUP
-  curl -fsS http://127.0.0.1:2019/config/ > "${admin_config}" 2>/dev/null || {
+  curl --disable --connect-timeout 3 --max-time 10 -fsS http://127.0.0.1:2019/config/ > "${admin_config}" 2>/dev/null || {
     die 'restored Caddy admin config proof is unavailable'
   }
   local grep_status=0
@@ -5010,7 +6261,7 @@ remote_restore_caddy() {
   admin_sha="$(remote_hash_file "${admin_config}")"
   rm -f -- "${admin_config}"
   trap - EXIT INT TERM HUP
-  remote_assert_public_live
+  remote_assert_public_live || die 'Caddy consumer verification failed'
   local proof="${run_root}/ordinary-caddy-restored.proof"
   remote_write_proof "${proof}" \
     "run_id=${run_id}" "release_sha=${release_sha}" "original_sha256=${original_sha}" \
@@ -5064,7 +6315,7 @@ release_git() (
     esac
   done < <(env)
   export GIT_NO_REPLACE_OBJECTS=1
-  command git \
+  cutover_bounded_command 45 git \
     -c core.fsmonitor=false \
     -c core.untrackedCache=false \
     -c core.hooksPath=/dev/null \
@@ -5212,7 +6463,7 @@ verify_release_baseline_local() {
   require_cmd gh
   require_cmd docker
   [[ -d "${RELEASE_WORKTREE}" && ! -L "${RELEASE_WORKTREE}" ]] || die 'release worktree is unavailable'
-  release_git "${RELEASE_WORKTREE}" fetch --no-tags origin main
+  release_git "${RELEASE_WORKTREE}" fetch --no-tags origin main || die 'release fetch failed'
   local release_status=''
   if ! release_status="$(release_git "${RELEASE_WORKTREE}" status --porcelain=v1 --untracked-files=normal)"; then
     die 'release worktree cleanliness could not be determined'
@@ -5229,16 +6480,17 @@ verify_release_baseline_local() {
   tracked_script_sha="$(git_object_sha256 "${RELEASE_WORKTREE}" "${RELEASE_SHA}:scripts/v126-cutover.sh")"
   [[ "${tracked_script_sha}" == "${SCRIPT_SHA256}" ]] ||
     die 'executing sequencer does not match the release-tracked sequencer identity'
-  local actions_json="${STATE_DIR}/tmp/main-actions-${MAIN_ACTIONS_RUN_ID}.json"
+  local precheck_dir="${BASELINE_ATTEMPT_DIR:-${STATE_DIR}/tmp}"
+  local actions_json="${precheck_dir}/main-actions-${MAIN_ACTIONS_RUN_ID}.json"
   [[ ! -e "${actions_json}" && ! -L "${actions_json}" ]] || die 'main Actions temporary artifact exists'
-  gh run view "${MAIN_ACTIONS_RUN_ID}" --repo koteev-m/hookah_bot \
+  cutover_bounded_command 45 gh run view "${MAIN_ACTIONS_RUN_ID}" --repo koteev-m/hookah_bot \
     --json databaseId,workflowName,workflowDatabaseId,event,headBranch,headSha,attempt,status,conclusion,jobs > "${actions_json}" ||
     die 'main Actions evidence command failed'
   chmod 0600 "${actions_json}"
   validate_main_actions_run "${actions_json}" || die 'main Actions release contract rejected'
   local actions_hash
   actions_hash="$(hash_file "${actions_json}")"
-  local sealed_actions="${STATE_DIR}/artifacts/main-actions.json"
+  local sealed_actions="${BASELINE_ATTEMPT_DIR:-${STATE_DIR}/artifacts}/main-actions.json"
   [[ ! -e "${sealed_actions}" && ! -L "${sealed_actions}" ]] || die 'sealed main Actions evidence exists'
   chmod 0400 "${actions_json}"
   mv "${actions_json}" "${sealed_actions}"
@@ -5264,7 +6516,7 @@ verify_release_baseline_local() {
     die 'Flyway V126 checksum mismatch'
   [[ "$(docker image inspect --format '{{.Id}}' "${V126_IMAGE_TAG}")" == "${V126_IMAGE_ID}" ]] ||
     die 'local V126 image ID mismatch before any remote call'
-  local record="${STATE_DIR}/tmp/local-baseline.proof"
+  local record="${precheck_dir}/local-baseline.proof"
   write_local_baseline_proof "${record}" "${sealed_actions}" || die 'local baseline proof failed'
   local_emit_artifact local-baseline "$(hash_file "${record}")"
   local_emit_artifact main-actions "${actions_hash}"
@@ -5369,7 +6621,16 @@ PY
 
 # V126_STAGE_BASELINE_VERIFIED_BEGIN
 stage_baseline_verified() {
-  verify_release_baseline_local
+  if [[ "${BASELINE_PRECHECK_COMPLETED:-false}" == true ]]; then
+    [[ ! -e "${STATE_DIR}/artifacts/main-actions.json" && ! -L "${STATE_DIR}/artifacts/main-actions.json" ]] ||
+      die 'main Actions publication path exists'
+    cp "${BASELINE_ATTEMPT_DIR}/main-actions.json" "${STATE_DIR}/artifacts/main-actions.json" ||
+      die 'verified main Actions evidence could not be published'
+    chmod 0400 "${STATE_DIR}/artifacts/main-actions.json" || die 'main Actions protection failed'
+    cat "${BASELINE_ATTEMPT_DIR}/operation.log" || die 'precheck operation log read failed'
+  else
+    verify_release_baseline_local || die 'baseline precheck failed'
+  fi
   local compose_sha
   local maintenance_sha
   local admission_sha
@@ -5601,7 +6862,7 @@ stage_final_public_gates_passed() {
 
 remote_flyway_state() {
   remote_compose exec -T postgres sh -c \
-    ': "${POSTGRES_USER:?}" "${POSTGRES_DB:?}"; psql -X -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At --set=ON_ERROR_STOP=1' <<'SQL'
+    ': "${POSTGRES_USER:?}" "${POSTGRES_DB:?}"; PGCONNECT_TIMEOUT=5 PGOPTIONS="-c statement_timeout=15000 -c lock_timeout=5000" psql -X -w -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At --set=ON_ERROR_STOP=1' <<'SQL'
 SELECT CONCAT(
   COALESCE(MAX(version::integer), 0), ':',
   COUNT(*) FILTER (WHERE version = '126'), ':',
@@ -5637,7 +6898,7 @@ remote_recovery_product_off() {
   trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after INT' >&2; fi; exit 130" INT
   trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after TERM' >&2; fi; exit 143" TERM
   trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'cleanup failed after HUP' >&2; fi; exit 129" HUP
-  cp --preserve=mode,ownership,timestamps .env "${before}"
+  cp --preserve=mode,ownership,timestamps .env "${before}" || die 'environment snapshot failed'
   chmod 0600 "${before}"
   python3 - "${before}" "${expected_source_sha}" "${candidate}" <<'PY'
 from pathlib import Path
@@ -5669,19 +6930,19 @@ fd = os.open(target_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
 with os.fdopen(fd, "wb") as handle:
     handle.write(payload)
 PY
-  chmod 0600 "${candidate}"
-  "${staging_path}/scripts/check-staging-maintenance-config.sh" "${candidate}" >/dev/null
-  "${staging_path}/scripts/validate-staging-admission.sh" \
-    --profile public-pilot --env-file "${candidate}" --compose-file docker-compose.yml >/dev/null
+  local derive_status=$?
+  [[ "${derive_status}" == 0 ]] || die 'environment derivation failed'
+  chmod 0600 "${candidate}" || die 'cannot protect environment candidate'
+  remote_validate_environment_candidate "${staging_path}" "${candidate}" OFF ||
+    die 'candidate environment validation failed'
   local before_sha
   before_sha="$(remote_hash_file "${before}")"
   [[ "$(remote_hash_file .env)" == "${expected_source_sha}" ]] ||
     die 'staging environment changed during recovery PRODUCT/OFF transformation'
-  install -m 0600 "${candidate}" "${next_env}"
-  mv "${next_env}" .env
-  "${staging_path}/scripts/check-staging-maintenance-config.sh" .env >/dev/null
-  "${staging_path}/scripts/validate-staging-admission.sh" \
-    --profile public-pilot --env-file .env --compose-file docker-compose.yml >/dev/null
+  remote_install_environment_candidate "${candidate}" "${next_env}" "${expected_source_sha}" ||
+    die 'environment installation failed; reconcile the fixed environment before any further mutation'
+  remote_validate_fixed_environment "${staging_path}" "${staging_path}" OFF ||
+    die 'installed fixed environment validation failed'
   local after_sha
   after_sha="$(remote_hash_file .env)"
   remote_cleanup_recovery_env_temporaries "${candidate}" "${before}" "${next_env}"
@@ -5764,46 +7025,50 @@ for key, expected_value in expected.items():
 remote_assert_v125_runtime() {
   local staging_path="$1"
   local image_tag="$2"
-  local backend_container
-  remote_capture_compose_ids running backend
+  local backend_container observed
+  remote_capture_compose_ids running backend || die 'runtime prerequisite consumer failed'
   (( ${#REMOTE_CAPTURED_CONTAINER_IDS[@]} == 1 )) ||
     die 'V125 recovery backend count is not one'
   backend_container="${REMOTE_CAPTURED_CONTAINER_IDS[0]}"
-  remote_capture_compose_ids all backend
+  remote_capture_compose_ids all backend || die 'runtime prerequisite consumer failed'
   (( ${#REMOTE_CAPTURED_CONTAINER_IDS[@]} == 1 )) ||
     die 'V125 recovery has an extra stopped or running backend container'
   [[ "${REMOTE_CAPTURED_CONTAINER_IDS[0]}" == "${backend_container}" ]] ||
     die 'V125 recovery running backend is not the unique Compose backend'
-  [[ "$(docker inspect --format '{{.Image}}' "${backend_container}")" == "${V125_IMAGE_ID}" ]] ||
+  observed="$(docker inspect --format '{{.Image}}' "${backend_container}")" || die 'V125 recovery running image query failed'
+  [[ "${observed}" == "${V125_IMAGE_ID}" ]] ||
     die 'V125 recovery running image ID mismatch'
-  [[ "$(docker image inspect --format '{{.Id}}' "${image_tag}")" == "${V125_IMAGE_ID}" ]] ||
+  observed="$(docker image inspect --format '{{.Id}}' "${image_tag}")" || die 'V125 recovery loaded image query failed'
+  [[ "${observed}" == "${V125_IMAGE_ID}" ]] ||
     die 'V125 recovery loaded image ID mismatch'
-  [[ "$(docker inspect --format '{{.HostConfig.RestartPolicy.Name}}:{{.RestartCount}}' "${backend_container}")" == 'no:0' ]] ||
+  observed="$(docker inspect --format '{{.HostConfig.RestartPolicy.Name}}:{{.RestartCount}}' "${backend_container}")" || die 'V125 recovery restart policy query failed'
+  [[ "${observed}" == "no:0" ]] ||
     die 'V125 recovery restart policy or RestartCount mismatch'
   docker exec "${backend_container}" sh -c \
     'test "${TELEGRAM_BOT_ENABLED:-}" = true && test "${TELEGRAM_BOT_MODE:-}" = long_polling' >/dev/null ||
     die 'V125 recovery does not have the unique long-polling Telegram poller configuration'
-  remote_require_unique_global_image_container "${V125_IMAGE_ID}" "${backend_container}"
-  remote_require_global_image_count "${V126_INTERNAL_REMOTE_V126_IMAGE_ID:-}" 0
-  remote_assert_health_json http://127.0.0.1:8080/health
-  remote_assert_health_json http://127.0.0.1:8080/db/health
-  remote_assert_version "${V125_SOURCE_SHA}"
-  "${staging_path}/scripts/check-staging-maintenance-config.sh" .env >/dev/null
+  remote_require_unique_global_image_container "${V125_IMAGE_ID}" "${backend_container}" || die 'runtime prerequisite consumer failed'
+  remote_require_global_image_count "${V126_INTERNAL_REMOTE_V126_IMAGE_ID:-}" 0 || die 'runtime prerequisite consumer failed'
+  remote_assert_health_json http://127.0.0.1:8080/health || die 'runtime prerequisite consumer failed'
+  remote_assert_health_json http://127.0.0.1:8080/db/health || die 'runtime prerequisite consumer failed'
+  remote_assert_version "${V125_SOURCE_SHA}" || die 'runtime prerequisite consumer failed'
+  "${staging_path}/scripts/check-staging-maintenance-config.sh" .env >/dev/null || die 'runtime prerequisite consumer failed'
   "${staging_path}/scripts/validate-staging-admission.sh" \
-    --profile public-pilot --env-file .env --compose-file docker-compose.yml >/dev/null
-  [[ "$(remote_flyway_state)" == '125:0:0:0' ]] || die 'V125 recovery Flyway state mismatch'
+    --profile public-pilot --env-file .env --compose-file docker-compose.yml >/dev/null || die 'runtime prerequisite consumer failed'
+  observed="$(remote_flyway_state)" || die 'V125 recovery Flyway query failed'
+  [[ "${observed}" == '125:0:0:0' ]] || die 'V125 recovery Flyway state mismatch'
   local queues
   queues="$(remote_compose exec -T postgres sh -c \
-    ': "${POSTGRES_USER:?}" "${POSTGRES_DB:?}"; psql -X -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At --set=ON_ERROR_STOP=1' <<'SQL'
+    ': "${POSTGRES_USER:?}" "${POSTGRES_DB:?}"; PGCONNECT_TIMEOUT=5 PGOPTIONS="-c statement_timeout=15000 -c lock_timeout=5000" psql -X -w -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At --set=ON_ERROR_STOP=1' <<'SQL'
 SELECT CONCAT(
   (SELECT COUNT(*) FROM telegram_inbound_updates WHERE status IN ('PENDING', 'RETRY', 'PROCESSING')), ':',
   (SELECT COUNT(*) FROM telegram_outbox WHERE status IN ('NEW', 'SENDING'))
 );
 SQL
-)"
+)" || die 'V125 recovery queue query failed'
   [[ "${queues}" == '0:0' ]] || die 'V125 recovery queue gate mismatch'
-  remote_assert_telegram_idle .env
-  remote_assert_public_drain
+  remote_assert_telegram_idle .env || die 'runtime prerequisite consumer failed'
+  remote_assert_public_drain || die 'runtime prerequisite consumer failed'
 }
 
 remote_recovery_restore_original_caddy() {
@@ -5812,12 +7077,13 @@ remote_recovery_restore_original_caddy() {
   local expected_original
   local expected_candidate
   if [[ "${V126_INTERNAL_REMOTE_CADDY_ORIGINAL_SHA256:-}" == NONE ]]; then
-    remote_verify_partial_caddy_evidence "${release_sha}" "${run_id}"
+    remote_verify_partial_caddy_evidence "${release_sha}" "${run_id}" || die 'Caddy consumer verification failed'
     expected_original="${V126_INTERNAL_REMOTE_BASELINE_CADDY_SHA256:-}"
     expected_candidate="$(sudo sha256sum \
-      "$(remote_caddy_evidence_root "${release_sha}" "${run_id}")/Caddyfile.drain" | awk '{print $1}')"
+      "$(remote_caddy_evidence_root "${release_sha}" "${run_id}")/Caddyfile.drain" | awk '{print $1}')" ||
+      die 'Caddy file digest query failed'
   else
-    remote_verify_caddy_receipt_evidence "${release_sha}" "${run_id}"
+    remote_verify_caddy_receipt_evidence "${release_sha}" "${run_id}" || die 'Caddy consumer verification failed'
     expected_original="${V126_INTERNAL_REMOTE_CADDY_ORIGINAL_SHA256:-}"
     expected_candidate="${V126_INTERNAL_REMOTE_CADDY_CANDIDATE_SHA256:-}"
   fi
@@ -5827,52 +7093,53 @@ remote_recovery_restore_original_caddy() {
   local candidate="${evidence_root}/Caddyfile.drain"
   [[ "$(sudo stat -c '%a:%U:%G' "${evidence_root}")" == '700:root:root' ]] ||
     die 'recovery Caddy evidence root ownership or mode mismatch'
-  remote_sudo_require_root_file "${original}" 600
-  remote_sudo_require_root_file "${candidate}" 600
-  remote_sudo_require_root_file /etc/caddy/Caddyfile 644
+  remote_sudo_require_root_file "${original}" 600 || die 'Caddy file metadata verification failed'
+  remote_sudo_require_root_file "${candidate}" 600 || die 'Caddy file metadata verification failed'
+  remote_sudo_require_root_file /etc/caddy/Caddyfile 644 || die 'Caddy file metadata verification failed'
   local digest
   local candidate_digest
   local active_digest
-  digest="$(sudo sha256sum "${original}" | awk '{print $1}')"
-  candidate_digest="$(sudo sha256sum "${candidate}" | awk '{print $1}')"
-  active_digest="$(sudo sha256sum /etc/caddy/Caddyfile | awk '{print $1}')"
+  digest="$(sudo sha256sum "${original}" | awk '{print $1}')" || die 'Caddy file digest query failed'
+  candidate_digest="$(sudo sha256sum "${candidate}" | awk '{print $1}')" || die 'Caddy file digest query failed'
+  active_digest="$(sudo sha256sum /etc/caddy/Caddyfile | awk '{print $1}')" || die 'Caddy file digest query failed'
   [[ "${digest}" == "${expected_original}" ]] ||
     die 'recovery original Caddyfile differs from immutable authority'
   [[ "${candidate_digest}" == "${expected_candidate}" ]] ||
     die 'recovery candidate Caddyfile differs from immutable authority'
   [[ "${active_digest}" == "${expected_candidate}" ]] ||
     die 'recovery refuses to overwrite an active Caddyfile other than the sealed candidate'
-  sudo caddy validate --config "${original}" --adapter caddyfile >/dev/null
-  sudo install -o root -g root -m 0644 "${original}" /etc/caddy/Caddyfile
-  sudo systemctl reload caddy
-  [[ "$(sudo systemctl is-active caddy)" == active ]] || die 'Caddy recovery reload failed'
+  cutover_bounded_command 15 sudo caddy validate --config "${original}" --adapter caddyfile >/dev/null || die 'Caddy validation failed'
+  cutover_bounded_command 15 sudo install -o root -g root -m 0644 "${original}" /etc/caddy/Caddyfile || die 'Caddy install failed; active configuration requires reconciliation'
+  cutover_bounded_command 20 sudo systemctl reload caddy || die 'Caddy reload failed; active configuration requires reconciliation'
+  remote_assert_caddy_service_active || die 'Caddy active service proof failed'
   [[ "$(sudo sha256sum /etc/caddy/Caddyfile | awk '{print $1}')" == "${digest}" ]] ||
     die 'Caddy recovery restoration is not byte-identical'
-  remote_assert_caddy_drain_marker
-  sudo rm -f -- /etc/caddy/v126-drain.enabled
-  remote_assert_public_live
+  remote_assert_caddy_config_active "${original}" || die 'original Caddy runtime is not established'
+  remote_assert_caddy_drain_marker || die 'Caddy consumer verification failed'
+  sudo rm -f -- /etc/caddy/v126-drain.enabled || die 'Caddy drain marker removal failed'
+  remote_assert_public_live || die 'Caddy consumer verification failed'
   printf '%s\n' "${digest}"
 }
 
 remote_recovery_ensure_candidate_drain() {
   local release_sha="$1"
   local run_id="$2"
-  remote_verify_caddy_receipt_evidence "${release_sha}" "${run_id}"
+  remote_verify_caddy_receipt_evidence "${release_sha}" "${run_id}" || die 'Caddy consumer verification failed'
   local evidence_root
   evidence_root="$(remote_caddy_evidence_root "${release_sha}" "${run_id}")"
   local candidate="${evidence_root}/Caddyfile.drain"
   local original="${evidence_root}/Caddyfile.original"
   [[ "$(sudo stat -c '%a:%U:%G' "${evidence_root}")" == '700:root:root' ]] ||
     die 'recovery Caddy evidence root ownership or mode mismatch'
-  remote_sudo_require_root_file "${candidate}" 600
-  remote_sudo_require_root_file "${original}" 600
-  remote_sudo_require_root_file /etc/caddy/Caddyfile 644
+  remote_sudo_require_root_file "${candidate}" 600 || die 'Caddy file metadata verification failed'
+  remote_sudo_require_root_file "${original}" 600 || die 'Caddy file metadata verification failed'
+  remote_sudo_require_root_file /etc/caddy/Caddyfile 644 || die 'Caddy file metadata verification failed'
   local candidate_sha
   local original_sha
   local active_sha
-  candidate_sha="$(sudo sha256sum "${candidate}" | awk '{print $1}')"
-  original_sha="$(sudo sha256sum "${original}" | awk '{print $1}')"
-  active_sha="$(sudo sha256sum /etc/caddy/Caddyfile | awk '{print $1}')"
+  candidate_sha="$(sudo sha256sum "${candidate}" | awk '{print $1}')" || die 'Caddy file digest query failed'
+  original_sha="$(sudo sha256sum "${original}" | awk '{print $1}')" || die 'Caddy file digest query failed'
+  active_sha="$(sudo sha256sum /etc/caddy/Caddyfile | awk '{print $1}')" || die 'Caddy file digest query failed'
   [[ "${candidate_sha}" == "${V126_INTERNAL_REMOTE_CADDY_CANDIDATE_SHA256:-}" ]] ||
     die 'recovery Caddy candidate differs from the immutable stage receipt'
   [[ "${original_sha}" == "${V126_INTERNAL_REMOTE_CADDY_ORIGINAL_SHA256:-}" ]] ||
@@ -5880,17 +7147,17 @@ remote_recovery_ensure_candidate_drain() {
   [[ "${active_sha}" == "${original_sha}" || "${active_sha}" == "${candidate_sha}" ]] ||
     die 'post-V126 recovery refuses an unrecognized active Caddyfile'
   if [[ "${active_sha}" != "${candidate_sha}" ]]; then
-    sudo caddy validate --config "${candidate}" --adapter caddyfile >/dev/null
-    sudo install -o root -g root -m 0644 "${candidate}" /etc/caddy/Caddyfile
-    sudo systemctl reload caddy
+    cutover_bounded_command 15 sudo caddy validate --config "${candidate}" --adapter caddyfile >/dev/null || die 'Caddy validation failed'
+    cutover_bounded_command 15 sudo install -o root -g root -m 0644 "${candidate}" /etc/caddy/Caddyfile || die 'Caddy install failed; active configuration requires reconciliation'
+    cutover_bounded_command 20 sudo systemctl reload caddy || die 'Caddy reload failed; active configuration requires reconciliation'
   fi
   remote_assert_caddy_candidate_active "${release_sha}" "${run_id}"
   sudo test ! -L /etc/caddy/v126-drain.enabled
   if ! sudo test -e /etc/caddy/v126-drain.enabled; then
     sudo install -o root -g root -m 0600 /dev/null /etc/caddy/v126-drain.enabled
   fi
-  remote_assert_caddy_drain_marker
-  remote_assert_public_drain
+  remote_assert_caddy_drain_marker || die 'Caddy consumer verification failed'
+  remote_assert_public_drain || die 'Caddy consumer verification failed'
 }
 
 remote_recovery_ensure_pre_v126_drain() {
@@ -5899,12 +7166,13 @@ remote_recovery_ensure_pre_v126_drain() {
   local expected_original
   local expected_candidate
   if [[ "${V126_INTERNAL_REMOTE_CADDY_ORIGINAL_SHA256:-}" == NONE ]]; then
-    remote_verify_partial_caddy_evidence "${release_sha}" "${run_id}"
+    remote_verify_partial_caddy_evidence "${release_sha}" "${run_id}" || die 'Caddy consumer verification failed'
     expected_original="${V126_INTERNAL_REMOTE_BASELINE_CADDY_SHA256:-}"
     expected_candidate="$(sudo sha256sum \
-      "$(remote_caddy_evidence_root "${release_sha}" "${run_id}")/Caddyfile.drain" | awk '{print $1}')"
+      "$(remote_caddy_evidence_root "${release_sha}" "${run_id}")/Caddyfile.drain" | awk '{print $1}')" ||
+      die 'Caddy file digest query failed'
   else
-    remote_verify_caddy_receipt_evidence "${release_sha}" "${run_id}"
+    remote_verify_caddy_receipt_evidence "${release_sha}" "${run_id}" || die 'Caddy consumer verification failed'
     expected_original="${V126_INTERNAL_REMOTE_CADDY_ORIGINAL_SHA256:-}"
     expected_candidate="${V126_INTERNAL_REMOTE_CADDY_CANDIDATE_SHA256:-}"
   fi
@@ -5914,34 +7182,35 @@ remote_recovery_ensure_pre_v126_drain() {
   local candidate="${evidence_root}/Caddyfile.drain"
   [[ "$(sudo stat -c '%a:%U:%G' "${evidence_root}")" == '700:root:root' ]] ||
     die 'pre-V126 Caddy evidence root ownership or mode mismatch'
-  remote_sudo_require_root_file "${original}" 600
-  remote_sudo_require_root_file "${candidate}" 600
-  remote_sudo_require_root_file /etc/caddy/Caddyfile 644
+  remote_sudo_require_root_file "${original}" 600 || die 'Caddy file metadata verification failed'
+  remote_sudo_require_root_file "${candidate}" 600 || die 'Caddy file metadata verification failed'
+  remote_sudo_require_root_file /etc/caddy/Caddyfile 644 || die 'Caddy file metadata verification failed'
   local original_sha
   local candidate_sha
   local active_sha
-  original_sha="$(sudo sha256sum "${original}" | awk '{print $1}')"
-  candidate_sha="$(sudo sha256sum "${candidate}" | awk '{print $1}')"
-  active_sha="$(sudo sha256sum /etc/caddy/Caddyfile | awk '{print $1}')"
+  original_sha="$(sudo sha256sum "${original}" | awk '{print $1}')" || die 'Caddy file digest query failed'
+  candidate_sha="$(sudo sha256sum "${candidate}" | awk '{print $1}')" || die 'Caddy file digest query failed'
+  active_sha="$(sudo sha256sum /etc/caddy/Caddyfile | awk '{print $1}')" || die 'Caddy file digest query failed'
   [[ "${original_sha}" == "${expected_original}" ]] ||
     die 'pre-V126 original Caddy differs from immutable authority'
   [[ "${candidate_sha}" == "${expected_candidate}" ]] ||
     die 'pre-V126 candidate Caddy differs from immutable authority'
   [[ "${active_sha}" == "${original_sha}" || "${active_sha}" == "${candidate_sha}" ]] ||
     die 'pre-V126 recovery refuses an unrecognized active Caddyfile'
-  sudo caddy validate --config "${original}" --adapter caddyfile >/dev/null
-  sudo caddy validate --config "${candidate}" --adapter caddyfile >/dev/null
-  sudo install -o root -g root -m 0644 "${candidate}" /etc/caddy/Caddyfile
-  sudo systemctl reload caddy
-  [[ "$(sudo systemctl is-active caddy)" == active ]] || die 'pre-V126 recovery Caddy drain reload failed'
+  cutover_bounded_command 15 sudo caddy validate --config "${original}" --adapter caddyfile >/dev/null || die 'Caddy validation failed'
+  cutover_bounded_command 15 sudo caddy validate --config "${candidate}" --adapter caddyfile >/dev/null || die 'Caddy validation failed'
+  cutover_bounded_command 15 sudo install -o root -g root -m 0644 "${candidate}" /etc/caddy/Caddyfile || die 'Caddy install failed; active configuration requires reconciliation'
+  cutover_bounded_command 20 sudo systemctl reload caddy || die 'Caddy reload failed; active configuration requires reconciliation'
+  remote_assert_caddy_service_active || die 'Caddy active service proof failed'
   [[ "$(sudo sha256sum /etc/caddy/Caddyfile | awk '{print $1}')" == "${candidate_sha}" ]] ||
     die 'pre-V126 recovery Caddy candidate is not byte-identical'
+  remote_assert_caddy_config_active "${candidate}" || die 'candidate Caddy runtime is not established'
   sudo test ! -L /etc/caddy/v126-drain.enabled
   if ! sudo test -e /etc/caddy/v126-drain.enabled; then
     sudo install -o root -g root -m 0600 /dev/null /etc/caddy/v126-drain.enabled
   fi
-  remote_assert_caddy_drain_marker
-  remote_assert_public_drain
+  remote_assert_caddy_drain_marker || die 'Caddy consumer verification failed'
+  remote_assert_public_drain || die 'Caddy consumer verification failed'
 }
 
 # V126_RECOVERY_PRE_V126_BEGIN
@@ -5973,7 +7242,8 @@ remote_recover_pre_v126() {
   [[ "${REMOTE_RECOVERY_ENV_AFTER_SHA256}" =~ ^[0-9a-f]{64}$ && \
     "$(remote_hash_file .env)" == "${REMOTE_RECOVERY_ENV_AFTER_SHA256}" ]] ||
     die 'recovery environment changed before V125 backend creation'
-  remote_compose create --force-recreate --no-build --no-deps --pull never backend >/dev/null
+  remote_compose create --force-recreate --no-build --no-deps --pull never backend >/dev/null ||
+    die 'backend create failed; outcome requires reconciliation'
   remote_capture_compose_ids all backend
   (( ${#REMOTE_CAPTURED_CONTAINER_IDS[@]} == 1 )) ||
     die 'pre-V126 recovery did not create exactly one V125 backend'
@@ -5982,15 +7252,20 @@ remote_recover_pre_v126() {
     die 'created pre-V126 recovery backend image mismatch'
   [[ "$(remote_hash_file .env)" == "${REMOTE_RECOVERY_ENV_AFTER_SHA256}" ]] ||
     die 'recovery environment changed during V125 backend creation'
-  remote_assert_bound_container_environment "${recovery_container}" pre-v126
-  docker update --restart=no "${recovery_container}" >/dev/null
+  remote_assert_bound_container_environment "${recovery_container}" pre-v126 || die 'recovery backend environment failed'
+  remote_assert_database_target || die 'recovery backend database target plan failed'
+  docker update --restart=no "${recovery_container}" >/dev/null || die 'recovery restart policy update failed'
   [[ "$(docker inspect --format '{{.HostConfig.RestartPolicy.Name}}:{{.RestartCount}}' "${recovery_container}")" == 'no:0' ]] ||
     die 'pre-V126 recovery restart policy was not disabled before start'
-  docker start "${recovery_container}" >/dev/null
-  remote_wait_backend_running "${recovery_container}"
-  remote_assert_v125_runtime "${staging_path}" "${v125_image_tag}"
+  docker start "${recovery_container}" >/dev/null || die 'V125 start command failed; outcome requires reconciliation'
+  remote_wait_backend_ready "${recovery_container}" "${V125_IMAGE_ID}" "${V125_SOURCE_SHA}" \
+    pre-v126 "${REMOTE_RECOVERY_ENV_AFTER_SHA256}" || die 'V125 readiness did not complete; start must not be repeated'
+  remote_assert_database_target || die 'running recovery database target failed'
+  remote_assert_v125_runtime "${staging_path}" "${v125_image_tag}" || die 'recovery runtime verification failed'
   local caddy_sha
-  caddy_sha="$(remote_recovery_restore_original_caddy "${release_sha}" "${run_id}")"
+  caddy_sha="$(remote_recovery_restore_original_caddy "${release_sha}" "${run_id}")" ||
+    die 'Caddy recovery did not complete; no recovery completion proof is allowed'
+  [[ "${caddy_sha}" =~ ^[0-9a-f]{64}$ ]] || die 'invalid recovered Caddy identity'
   local proof="${run_root}/recovery-pre-v126.proof"
   remote_write_proof "${proof}" \
     "run_id=${run_id}" "release_sha=${release_sha}" 'flyway=125:0:0:0' \
@@ -6248,9 +7523,10 @@ remote_verify_full_dr() {
   local generated="${run_root}/dr-${phase}.generated-list"
   [[ ! -e "${generated}" && ! -L "${generated}" ]] || die 'DR inventory verification artifact exists'
   remote_compose exec -T postgres sh -c ': "${POSTGRES_USER:?}"; pg_restore --list' \
-    < "${dump}" > "${generated}"
+    < "${dump}" > "${generated}" || die 'DR inventory consumer failed'
   chmod 0600 "${generated}"
-  cmp -s "${generated}" "${inventory}" || die 'DR inventory does not match the selected archive'
+  python3 -c "$(remote_database_evidence_python)" toc "${dump}" "${expected_dump_sha}" \
+    "${inventory}" "${generated}" || die 'DR inventory does not match the selected archive'
   local proof="${run_root}/recovery-full-dr-prerequisites.proof"
   remote_write_proof "${proof}" \
     "run_id=${run_id}" "release_sha=${release_sha}" "backup_phase=${phase}" \
@@ -6807,6 +8083,492 @@ recovery_command() {
   clear_state_lock_traps
 }
 
+remote_operation_bindings_python() {
+  cat <<'PY'
+#!/usr/bin/env python3
+"""Source-bound target binding history; no SSH or daemon mutation.
+
+The sequencer embeds these same bytes. Retirement only appends a protected transfer
+record after the caller verifies its real terminal receipt and approved handoff.
+Unknown daemon outcomes cannot be retired by this protocol.
+"""
+import datetime
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import sys
+
+
+class BindingError(ValueError):
+    pass
+
+
+def binding_canonical(value):
+    return (json.dumps(value, sort_keys=True, separators=(',', ':')) + '\n').encode()
+
+
+def binding_protected(path, mode, directory=False):
+    info = path.lstat()
+    if (not (stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode)) or
+            info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != mode or
+            (not directory and info.st_nlink != 1)):
+        raise BindingError('record_metadata')
+
+
+def binding_read(path):
+    binding_protected(path, 0o400)
+    raw = path.read_bytes()
+    value = json.loads(raw)
+    if raw != binding_canonical(value):
+        raise BindingError('record_not_canonical')
+    return value
+
+
+def binding_hash(path):
+    digest = hashlib.sha256()
+    with path.open('rb') as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b''):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def binding_owner(value):
+    if (not isinstance(value, dict) or set(value) != {'run_id', 'release_sha', 'script_sha256'} or
+            not re.fullmatch(r'[a-z0-9][a-z0-9._-]{5,63}', value['run_id']) or
+            not re.fullmatch(r'[0-9a-f]{40}', value['release_sha']) or
+            not re.fullmatch(r'[0-9a-f]{64}', value['script_sha256'])):
+        raise BindingError('owner_schema')
+    return value
+
+
+def binding_owner_id(owner):
+    return hashlib.sha256(binding_canonical(binding_owner(owner))).hexdigest()
+
+
+def binding_inventory(root, owner):
+    files = {}
+    unknown = False
+    identities = []
+    for start in sorted(root.glob('*.start.json')):
+        doc = binding_read(start)
+        identity = doc.get('identity', {})
+        if {key: identity.get(key) for key in owner} != owner:
+            continue
+        op = start.name.removesuffix('.start.json')
+        if (set(doc) != {'identity', 'operation_id', 'started_at', 'boot_id'} or
+                set(identity) != {'run_id', 'release_sha', 'script_sha256', 'intent_sha256', 'kind', 'name', 'action'} or
+                doc['operation_id'] != op or hashlib.sha256(binding_canonical(identity)).hexdigest() != op):
+            raise BindingError('start_binding')
+        identities.append(identity)
+        files[start.name] = binding_hash(start)
+        result = root / (op + '.result.json')
+        log = root / (op + '.log')
+        if not result.exists():
+            unknown = True
+            continue
+        outcome = binding_read(result)
+        if (set(outcome) != {'identity', 'operation_id', 'exit', 'outcome', 'children', 'log_sha256', 'completed_at'} or
+                outcome['identity'] != identity or outcome['operation_id'] != op or
+                type(outcome['exit']) is not int or not 0 <= outcome['exit'] <= 255 or
+                outcome['outcome'] != ('SUCCEEDED' if outcome['exit'] == 0 else 'UNKNOWN') or
+                outcome['children'] != 'REAPED'):
+            raise BindingError('result_binding')
+        binding_protected(log, 0o400)
+        if binding_hash(log) != outcome['log_sha256']:
+            raise BindingError('log_binding')
+        files[result.name] = binding_hash(result)
+        files[log.name] = outcome['log_sha256']
+        unknown = unknown or outcome['exit'] != 0
+    return files, unknown, identities
+
+
+def binding_handoff(doc, owner, next_owner, receipt_sha, target):
+    keys = {'format_version', 'owner', 'next_owner', 'terminal_receipt_sha256', 'target_sha256',
+            'operational_version', 'backend_image', 'image_id', 'environment_sha256',
+            'compose_sha256', 'caddy_runtime_sha256', 'config_owner', 'restart_policy',
+            'handoff_approved_and_applied', 'approval_id', 'observed_at'}
+    if (not isinstance(doc, dict) or set(doc) != keys or type(doc['format_version']) is not int or
+            doc['format_version'] != 1 or doc['owner'] != owner or doc['next_owner'] != next_owner or
+            doc['terminal_receipt_sha256'] != receipt_sha or
+            doc['target_sha256'] != hashlib.sha256(str(target).encode()).hexdigest() or
+            doc['operational_version'] not in ('V125', 'V126') or
+            doc['config_owner'] != 'root:root' or doc['restart_policy'] != 'unless-stopped' or
+            doc['handoff_approved_and_applied'] is not True or
+            not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{5,127}', doc['approval_id'])):
+        raise BindingError('handoff_contract')
+    for key in ('terminal_receipt_sha256', 'environment_sha256', 'compose_sha256', 'caddy_runtime_sha256'):
+        if not re.fullmatch(r'[0-9a-f]{64}', doc[key]):
+            raise BindingError('handoff_digest')
+    if not re.fullmatch(r'sha256:[0-9a-f]{64}', doc['image_id']):
+        raise BindingError('handoff_image')
+    release = owner['release_sha'] if doc['operational_version'] == 'V126' else 'f577934691a1a7a79ba327c54e2055425142b7be'
+    if not re.fullmatch(r'[a-z0-9][a-z0-9._/-]*:' + release, doc['backend_image']):
+        raise BindingError('handoff_image_source')
+    datetime.datetime.strptime(doc['observed_at'], '%Y-%m-%dT%H:%M:%SZ')
+
+
+def binding_chain(root, target):
+    owner = binding_owner(binding_read(root / 'run.json'))
+    owners = [owner]
+    directory = root / 'transfers'
+    if not directory.exists() and not directory.is_symlink():
+        return owner, owners
+    binding_protected(directory, 0o700, True)
+    names = set(path.name for path in directory.iterdir())
+    consumed = set()
+    while binding_owner_id(owner) + '.json' in names:
+        name = binding_owner_id(owner) + '.json'
+        if name in consumed:
+            raise BindingError('binding_cycle')
+        transfer = binding_read(directory / name)
+        if (set(transfer) != {'format_version', 'previous_owner', 'next_owner', 'inventory', 'handoff'} or
+                transfer['format_version'] != 1 or transfer['previous_owner'] != owner):
+            raise BindingError('transfer_schema')
+        next_owner = binding_owner(transfer['next_owner'])
+        if any(previous['run_id'] == next_owner['run_id'] for previous in owners):
+            raise BindingError('run_id_reuse')
+        inventory, unknown, identities = binding_inventory(root, owner)
+        if unknown or not inventory or transfer['inventory'] != inventory:
+            raise BindingError('retired_outcome_not_proven')
+        handoff = transfer['handoff']
+        binding_handoff(handoff, owner, next_owner, handoff['terminal_receipt_sha256'], target)
+        required = ('STAGE', 'FINAL_PUBLIC_GATES_PASSED') if handoff['operational_version'] == 'V126' else ('RECOVERY', 'pre-v126')
+        if not any((identity['kind'], identity['name']) == required for identity in identities):
+            raise BindingError('terminal_remote_operation_missing')
+        consumed.add(name)
+        owner = next_owner
+        owners.append(owner)
+    if consumed != names:
+        raise BindingError('unlinked_transfer_record')
+    return owner, owners
+
+
+def binding_entry(mode):
+    # Called only from the sequencer CLI after its source/receipt checks.
+    target = Path(sys.argv[1])
+    if not target.is_absolute() or target.resolve(strict=True) != target:
+        raise BindingError('target_not_canonical')
+    info = target.stat()
+    if info.st_uid != os.geteuid() or info.st_mode & 0o022:
+        raise BindingError('target_ownership')
+    root = target / '.v126-target-operations'
+    binding_protected(root, 0o700, True)
+    binding_protected(root / 'lock', 0o600)
+    fd = os.open(root / 'lock', os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        current, owners = binding_chain(root, target)
+        inventory, unknown, identities = binding_inventory(root, current)
+        allowed = {'lock', 'run.json'} | ({'transfers'} if (root / 'transfers').exists() else set())
+        for owner in owners:
+            files, old_unknown, _ = binding_inventory(root, owner)
+            allowed.update(files)
+            # A missing result may have a private active/partial log: inspection is
+            # conservative; it never adopts or removes such evidence.
+            for name in tuple(files):
+                if name.endswith('.start.json'):
+                    log = name.removesuffix('.start.json') + '.log'
+                    if (root / log).exists(): allowed.add(log)
+        if set(p.name for p in root.iterdir()) != allowed:
+            raise BindingError('unexpected_target_records')
+        if mode == 'inspect':
+            print(json.dumps(dict(owner=current, history_count=len(owners),
+                  outcome='UNKNOWN' if unknown else 'COMMAND_RESULTS_VERIFIED',
+                  next_action='EXTERNAL_DAEMON_FENCING_DECISION_REQUIRED' if unknown else 'VERIFY_TERMINAL_RECEIPT_AND_APPROVED_HANDOFF',
+                  retry_allowed=False), sort_keys=True))
+            return
+        owner = dict(zip(('run_id', 'release_sha', 'script_sha256'), sys.argv[2:5]))
+        receipt_sha, handoff_path = sys.argv[5:7]
+        next_owner = dict(zip(('run_id', 'release_sha', 'script_sha256'), sys.argv[7:10]))
+        binding_owner(next_owner)
+        if current != owner or unknown or not inventory:
+            raise BindingError('retirement_requires_known_completed_current_run')
+        handoff = binding_read(Path(handoff_path))
+        binding_handoff(handoff, owner, next_owner, receipt_sha, target)
+        if handoff['image_id'] != sys.argv[11]:
+            raise BindingError('terminal_handoff_image_mismatch')
+        if handoff['operational_version'] != sys.argv[10]:
+            raise BindingError('terminal_handoff_version_mismatch')
+        required = ('STAGE', 'FINAL_PUBLIC_GATES_PASSED') if handoff['operational_version'] == 'V126' else ('RECOVERY', 'pre-v126')
+        if not any((identity['kind'], identity['name']) == required for identity in identities):
+            raise BindingError('terminal_remote_operation_missing')
+        if any(previous['run_id'] == next_owner['run_id'] for previous in owners):
+            raise BindingError('run_id_reuse')
+        directory = root / 'transfers'
+        if not directory.exists():
+            directory.mkdir(mode=0o700)
+        binding_protected(directory, 0o700, True)
+        transfer = dict(format_version=1, previous_owner=owner, next_owner=next_owner,
+                        inventory=inventory, handoff=handoff)
+        recordfd = os.open(directory / (binding_owner_id(owner) + '.json'),
+                           os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o400)
+        with os.fdopen(recordfd, 'wb') as handle:
+            handle.write(binding_canonical(transfer)); handle.flush(); os.fsync(handle.fileno())
+        for path in (directory, root):
+            syncfd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+            try: os.fsync(syncfd)
+            finally: os.close(syncfd)
+        print('TARGET_BINDING_RETIRED history_preserved=true next_baseline_only=true')
+    finally:
+        os.close(fd)
+PY
+}
+
+remote_operation_python() {
+  remote_operation_bindings_python || { printf 'binding source unavailable\n' >&2; return 75; }
+  cat <<'PY'
+import ctypes
+import datetime
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import signal
+import stat
+import subprocess
+import sys
+import time
+
+
+def refuse(reason):
+    print('REMOTE_OPERATION=RECONCILIATION_REQUIRED reason=' + reason +
+          ' retry_allowed=false', file=sys.stderr)
+    raise SystemExit(75)
+
+
+def canonical(value):
+    return (json.dumps(value, sort_keys=True, separators=(',', ':')) + '\n').encode()
+
+
+def protected(path, mode, directory=False):
+    info = path.lstat()
+    if (not (stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode)) or
+            info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != mode or
+            (not directory and info.st_nlink != 1)):
+        refuse('record_metadata')
+
+
+def sync_dir(path):
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def create(path, value):
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o400)
+    with os.fdopen(fd, 'wb') as handle:
+        handle.write(canonical(value))
+        handle.flush()
+        os.fsync(handle.fileno())
+    sync_dir(path.parent)
+
+
+def read(path):
+    protected(path, 0o400)
+    raw = path.read_bytes()
+    value = json.loads(raw)
+    if raw != canonical(value):
+        refuse('record_not_canonical')
+    return value
+
+
+# Fail before allocation/mutation on platforms that cannot prove descendant lifetime.
+if sys.platform != 'linux':
+    refuse('linux_subreaper_required')
+libc = ctypes.CDLL(None, use_errno=True)
+if libc.prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
+    refuse('subreaper_unavailable')
+source = sys.stdin.buffer.read(2 * 1024 * 1024 + 1)
+fields = ('run_id', 'release_sha', 'script_sha256', 'intent_sha256', 'kind', 'name', 'action')
+target_arg, *args = sys.argv[1:]
+identity = dict(zip(fields, args[:7]))
+worker_args = args[7:]
+if (len(identity) != 7 or not worker_args or len(source) > 2 * 1024 * 1024 or
+        hashlib.sha256(source).hexdigest() != identity['script_sha256']):
+    refuse('source_identity')
+for key in ('script_sha256', 'intent_sha256'):
+    if not re.fullmatch('[0-9a-f]{64}', identity[key]):
+        refuse('invalid_identity')
+operation_id = hashlib.sha256(canonical(identity)).hexdigest()
+target = Path(target_arg)
+if not target.is_absolute() or str(target.resolve(strict=True)) != str(target):
+    refuse('target_not_canonical')
+# Existing sequencer source/input guards still run inside the worker.
+info = target.stat()
+if info.st_uid != os.geteuid() or info.st_mode & 0o022:
+    refuse('target_ownership')
+root = target / '.v126-target-operations'
+try:
+    root.mkdir(mode=0o700)
+    sync_dir(target)
+except FileExistsError:
+    pass
+protected(root, 0o700, True)
+lockfd = os.open(root / 'lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+protected(root / 'lock', 0o600)
+try:
+    fcntl.flock(lockfd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError:
+    refuse('target_busy')
+owner = {key: identity[key] for key in ('run_id', 'release_sha', 'script_sha256')}
+if (root / 'run.json').exists():
+    try:
+        active_owner, prior_owners = binding_chain(root, target)
+    except (BindingError, OSError, ValueError, KeyError, TypeError):
+        refuse('binding_history_invalid')
+    if active_owner != owner:
+        refuse('target_bound_to_another_run')
+    _, _, current_operations = binding_inventory(root, owner)
+    if not current_operations and (identity['kind'], identity['name']) != ('STAGE', 'BASELINE_VERIFIED'):
+        refuse('next_binding_requires_fresh_baseline')
+else:
+    # A legacy/uninitialized target may only be claimed by a fresh baseline.
+    if identity['kind'] != 'STAGE' or identity['name'] != 'BASELINE_VERIFIED':
+        refuse('legacy_run_requires_reconciliation')
+    if set(p.name for p in root.iterdir()) != {'lock'}:
+        refuse('uninitialized_target_records')
+    create(root / 'run.json', owner)
+    prior_owners = [owner]
+starts = sorted(root.glob('*.start.json'))
+expected_names = {'lock', 'run.json'} | ({'transfers'} if (root / 'transfers').exists() else set())
+failed = False
+recovery_seen = False
+for start_path in starts:
+    prior = read(start_path)
+    prior_id = start_path.name.removesuffix('.start.json')
+    if set(prior) != {'identity', 'operation_id', 'started_at', 'boot_id'}:
+        refuse('start_schema')
+    if prior['operation_id'] != prior_id or hashlib.sha256(canonical(prior['identity'])).hexdigest() != prior_id:
+        refuse('start_binding')
+    result_path = root / (prior_id + '.result.json')
+    if not result_path.exists():
+        refuse('prior_outcome_unknown')
+    outcome = read(result_path)
+    if (set(outcome) != {'identity', 'operation_id', 'exit', 'outcome', 'children', 'log_sha256', 'completed_at'} or
+            outcome['identity'] != prior['identity'] or outcome['operation_id'] != prior_id or
+            outcome['children'] != 'REAPED' or type(outcome['exit']) is not int or
+            outcome['outcome'] != ('SUCCEEDED' if outcome['exit'] == 0 else 'UNKNOWN')):
+        refuse('result_binding')
+    log_path = root / (prior_id + '.log')
+    protected(log_path, 0o400)
+    if hashlib.sha256(log_path.read_bytes()).hexdigest() != outcome['log_sha256']:
+        refuse('log_binding')
+    if outcome['exit'] != 0:
+        refuse('prior_daemon_outcome_unknown')
+    failed = failed or outcome['exit'] != 0
+    prior_owner = {key: prior['identity'].get(key) for key in owner}
+    if prior_owner not in prior_owners:
+        refuse('unbound_operation_history')
+    if prior_owner == owner:
+        recovery_seen = recovery_seen or prior['identity']['kind'] == 'RECOVERY'
+    expected_names.update((start_path.name, result_path.name, log_path.name))
+if set(p.name for p in root.iterdir()) != expected_names:
+    refuse('unexpected_target_records')
+if (failed or recovery_seen) and identity['kind'] != 'RECOVERY':
+    refuse('prior_failed_operation_requires_recovery')
+if (root / (operation_id + '.start.json')).exists():
+    refuse('operation_already_dispatched')
+now = lambda: datetime.datetime.now(datetime.timezone.utc).isoformat()
+create(root / (operation_id + '.start.json'), dict(identity=identity, operation_id=operation_id,
+       started_at=now(), boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip()))
+log_path = root / (operation_id + '.log')
+logfd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+# Mutation output never depends on the SSH stdout pipe staying open.
+signal.signal(signal.SIGHUP, signal.SIG_IGN)
+cancelled = False
+
+def cancel(signum, frame):
+    global cancelled
+    cancelled = True
+
+for signum in (signal.SIGTERM, signal.SIGINT):
+    signal.signal(signum, cancel)
+deadline = time.monotonic() + {'backup-rehearsal': 1800, 'image-load': 900,
+                                  'final-v125-preflight': 600}.get(identity['action'], 300)
+child = subprocess.Popen(['bash', '-c', 'source /dev/stdin; remote_dispatch_action "$@"',
+                          'v126-operation', identity['action'], *worker_args],
+                         stdin=subprocess.PIPE, stdout=logfd, stderr=logfd, start_new_session=True)
+try:
+    child.stdin.write(source)
+    child.stdin.close()
+except BrokenPipeError:
+    pass
+status = None
+descendant_failure = False
+cleanup_deadline = None
+# waitpid(-1) plus subreaper adoption is the completion proof, not a PID scan.
+while True:
+    try:
+        pid, wait_status = os.waitpid(-1, os.WNOHANG)
+    except ChildProcessError:
+        break
+    if pid:
+        value = os.waitstatus_to_exitcode(wait_status)
+        if pid == child.pid:
+            status = value if value >= 0 else 128 - value
+            child.returncode = value
+        elif value != 0:
+            descendant_failure = True
+        continue
+    if cancelled or time.monotonic() >= deadline:
+        if cleanup_deadline is None:
+            cleanup_deadline = time.monotonic() + 10
+            status = 124
+            try:
+                os.killpg(child.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        # Direct children are ours and remain unreaped, so their PIDs cannot be reused.
+        for pid_text in Path('/proc/self/task/' + str(os.getpid()) + '/children').read_text().split():
+            try:
+                os.kill(int(pid_text), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        if time.monotonic() >= cleanup_deadline:
+            refuse('children_completion_unknown')
+    time.sleep(0.05)
+if status is None:
+    refuse('worker_outcome_unknown')
+if descendant_failure and status == 0:
+    status = 75
+os.fsync(logfd)
+os.fchmod(logfd, 0o400)
+os.close(logfd)
+raw = log_path.read_bytes()
+outcome = dict(identity=identity, operation_id=operation_id, exit=status,
+               outcome='SUCCEEDED' if status == 0 else 'UNKNOWN', children='REAPED',
+               log_sha256=hashlib.sha256(raw).hexdigest(), completed_at=now())
+create(root / (operation_id + '.result.json'), outcome)
+# A lost acknowledgement preserves durable evidence and never makes a replay safe.
+try:
+    sys.stdout.buffer.write(raw)
+    sys.stdout.buffer.write(b'\nREMOTE_OPERATION_ACK\t' + canonical(outcome))
+    sys.stdout.buffer.flush()
+except BrokenPipeError:
+    pass
+raise SystemExit(status)
+PY
+}
+
+remote_supervise_action() {
+  local action="$1"
+  shift
+  [[ -n "${V126_REMOTE_VERIFIED_BODY:-}" ]] || die 'remote supervision lacks verified source'
+  printf '%s' "${V126_REMOTE_VERIFIED_BODY}" | python3 -c "$(remote_operation_python)" \
+    "${V126_INTERNAL_REMOTE_STAGING_PATH}" "${V126_INTERNAL_REMOTE_RUN_ID}" \
+    "${V126_INTERNAL_REMOTE_RELEASE_SHA}" "${V126_INTERNAL_REMOTE_SCRIPT_SHA256}" \
+    "${V126_INTERNAL_REMOTE_INTENT_HASH}" "${V126_INTERNAL_REMOTE_OPERATION_KIND}" \
+    "${V126_INTERNAL_REMOTE_OPERATION_NAME}" "${action}" "$@"
+}
+
 remote_dispatch_enveloped() {
   local action="${1:-}"
   shift || true
@@ -6837,6 +8599,7 @@ remote_dispatch_enveloped() {
   local authorization_gate="${V126_INTERNAL_REMOTE_AUTHORIZATION_GATE:-}"
   local authorization_hash="${V126_INTERNAL_REMOTE_AUTHORIZATION_HASH:-}"
   local baseline_database_sha="${V126_INTERNAL_REMOTE_BASELINE_DATABASE_URL_SHA256:-}"
+  local baseline_database_identity="${V126_INTERNAL_REMOTE_DATABASE_TARGET_IDENTITY_SHA256:-}"
   local baseline_identities_sha="${V126_INTERNAL_REMOTE_BASELINE_MAINTENANCE_IDENTITIES_SHA256:-}"
   local baseline_compose_sha="${V126_INTERNAL_REMOTE_BASELINE_COMPOSE_SOURCE_SHA256:-}"
   local baseline_maintenance_sha="${V126_INTERNAL_REMOTE_BASELINE_MAINTENANCE_CHECK_SOURCE_SHA256:-}"
@@ -6850,14 +8613,14 @@ remote_dispatch_enveloped() {
   local maintenance_smoke_sha="${V126_INTERNAL_REMOTE_MAINTENANCE_SMOKE_SHA256:-}"
   local maintenance_off_sha="${V126_INTERNAL_REMOTE_MAINTENANCE_OFF_SHA256:-}"
   if [[ "${operation_kind}:${operation_name}:${action}" == STAGE:BASELINE_VERIFIED:baseline ]]; then
-    [[ "${baseline_database_sha}" == NONE && "${baseline_identities_sha}" == NONE && \
+    [[ "${baseline_database_sha}" == NONE && "${baseline_database_identity}" == NONE && "${baseline_identities_sha}" == NONE && \
       "${baseline_compose_sha}" == NONE && "${baseline_maintenance_sha}" == NONE && \
       "${baseline_admission_sha}" == NONE && "${baseline_caddy_sha}" == NONE && \
       "${baseline_env_sha}" == NONE ]] ||
       die 'baseline remote envelope must not claim a pre-existing authority receipt'
   else
     local authority_hash
-    for authority_hash in "${baseline_database_sha}" "${baseline_identities_sha}" \
+    for authority_hash in "${baseline_database_sha}" "${baseline_database_identity}" "${baseline_identities_sha}" \
       "${baseline_compose_sha}" "${baseline_maintenance_sha}" "${baseline_admission_sha}" \
       "${baseline_caddy_sha}" "${baseline_env_sha}"; do
       [[ "${authority_hash}" =~ ^[0-9a-f]{64}$ ]] ||
@@ -6976,6 +8739,12 @@ remote_dispatch_enveloped() {
       ;;
     *) die 'remote action is not authorized by the current operation envelope' ;;
   esac
+  remote_supervise_action "${action}" "$@"
+}
+
+remote_dispatch_action() {
+  local action="$1"
+  shift
   case "${action}" in
     baseline) remote_baseline "$@" ;;
     backup-rehearsal) remote_backup_rehearsal "$@" ;;

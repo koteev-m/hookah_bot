@@ -25,12 +25,12 @@ object PostgresTestEnv {
     }
 
     private val container: PostgreSQLContainer<*> by lazy {
-        val image = DockerImageName.parse("postgres:16-alpine")
+        val image = DockerImageName.parse("postgres:17-alpine")
         PostgreSQLContainer(image).apply {
             withDatabaseName("hookah_test")
             withUsername("hookah")
             withPassword("hookah")
-            withReuse(true)
+            withReuse(false)
         }
     }
 

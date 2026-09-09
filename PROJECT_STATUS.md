@@ -5,6 +5,29 @@
 Read the matching task entry first; preserved snapshots below are evidence/history, not
 fresh instructions or authorization. Update concurrent tasks separately at meaningful boundaries.
 
+### HT-RELEASE-REPAIR-01 — 2026-09-09 feature validation
+
+- One F01–F11 candidate on `codex/ht-release-repair-01-rkbe7q`, worktree
+  `/private/tmp/ht-release-repair-01.RKbe7q/worktree`, exact base
+  `f7828e09863d391e1f714cc65c9c866f814cf6bf` / tree
+  `ff66c8639ec7c5c3ad45c2371878f5ba3656df9a`.
+- AUTHORIZE_REPAIR_FEATURE_CI_ONLY now permits explicit-file commits/non-force feature
+  pushes and the existing12-job ordinary Ubuntu CI. No PR/main/deployment/live authority.
+  The initial local24-file changeset and evidence were preserved before this continuation.
+- Baseline12 artifacts and known-completed target retirement are source-bound; history
+  remains immutable, next binding requires a fresh baseline. UNKNOWN daemon reconciliation
+  and full ordinary-deploy locking remain OPEN. F09 target policy is accepted, with
+  separate V125 schema125 and completed-V126 handoffs; no live application moment selected.
+- Local PG17/clients17–18, Compose/Bash/HTTP, CLI15 and Kotlin compile/lint evidence exists.
+  Full mandatory harness is being repeated with endpoint confinement; actual Linux
+  Caddy/SSH/Docker/JVM/PG Testcontainers CI is pending. Runtime gaps are not declared PASS.
+- G01 operational DR/RPO/loss, G02 VM/daemon reboot and G03/G04 real17 manual assertions
+  remain open. Canonical PASS1–8/intent9 and historical V125 observation remain unchanged.
+- Next: targeted review, feature validation publication, exact candidate CI inspection,
+  authorized corrective fixes if needed, final report and stop. No new V126 attempt or
+  archive. Original dirty checkout, frozen evidence, migrations and scripts/dev untouched.
+  See REPAIR-REPORT.md, REPAIR-COVERAGE.md and REPAIR-CHECKPOINT.md.
+
 ### HT-12AA — 2026-09-09
 
 - Goal: correct pg_dumpall initial database selection; deliver one reviewed feature
@@ -857,3 +880,12 @@ HT-12M prerequisite and HT-12C policy baseline. HT-12P's only current next gate 
 local validation, independent review, commit/push and exact green branch Actions is the explicit
 main-integration authorization recorded in section 1. The previous integrity release retains its
 separate historical V124/V125 preflight/migration evidence.
+
+
+HT-RELEASE-REPAIR-01 feature validation continuation: explicit-file commit/non-force push
+of `codex/ht-release-repair-01-rkbe7q` and existing12-job Ubuntu CI are authorized.
+Baseline12-artifact and completed-run retirement contracts are being validated together;
+UNKNOWN daemon reconciliation, operational deploy locking, VM reboot/DR and live manual
+gates remain open. V125 and V126 handoff target policies are accepted separately, with
+no live application moment authorized. See REPAIR-REPORT.md and REPAIR-CHECKPOINT.md.
+No main integration, PR, deployment or new V126 attempt follows this validation.

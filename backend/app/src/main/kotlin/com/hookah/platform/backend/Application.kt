@@ -293,6 +293,7 @@ internal data class ModuleOverrides(
     val afterPlatformGuestTeardown: (suspend (chatId: Long, actorUserId: Long) -> Unit)? = null,
     val guestOrderContextCheckpoint: (GuestOrderContextCheckpoint) -> Unit = {},
     val guestOrderWriteCheckpoint: (GuestOrderWriteCheckpoint) -> Unit = {},
+    val telegramHttpClientFactory: ((Json) -> HttpClient)? = null,
     val telegramWebhookProductAbuseLimiter: TelegramProductAbuseLimiter? = null,
     val miniAppAbuseProtection: MiniAppAbuseProtection? = null,
     val telegramCommandMenuConfigurator: suspend (TelegramApiClient) -> Unit =
@@ -805,14 +806,15 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
             TelegramApiClient(
                 token = telegramConfig.token!!,
                 client =
-                    HttpClient(Java) {
-                        install(ContentNegotiation) { json(telegramJson) }
-                        install(HttpTimeout) {
-                            connectTimeoutMillis = 10_000
-                            socketTimeoutMillis = socketTimeoutMs
-                            requestTimeoutMillis = requestTimeoutMs
-                        }
-                    },
+                    overrides.telegramHttpClientFactory?.invoke(telegramJson)
+                        ?: HttpClient(Java) {
+                            install(ContentNegotiation) { json(telegramJson) }
+                            install(HttpTimeout) {
+                                connectTimeoutMillis = 10_000
+                                socketTimeoutMillis = socketTimeoutMs
+                                requestTimeoutMillis = requestTimeoutMs
+                            }
+                        },
                 json = telegramJson,
                 trafficPolicy = telegramTrafficPolicy,
                 maintenancePolicy = stagingMaintenancePolicy,

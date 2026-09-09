@@ -2,7 +2,8 @@
 """Real PG17 backup regression; only synthetic, task-labelled local Docker resources.
 
 Sources the production function (including the immutable before revision). Authority
-preconditions and host paths are fixture bindings, not a cutover authorization. The
+preconditions (including semantic database identity, tested separately) and host paths
+are fixture bindings, not a cutover authorization. The
 Compose boundary forwards the original sh argv to one exact source container. Docker
 inventories are restricted to this test's label; positive PostgreSQL tools are real.
 """
@@ -72,6 +73,7 @@ mode="$4"
 boundary() { python3 "$HT12AA_HELPER" --boundary "$fixture/config.json" "$@"; }
 remote_require_run_root() { printf '%s\n' "$fixture/run"; }
 remote_verify_baseline_authority() { boundary event baseline; }
+remote_assert_database_target() { REMOTE_DATABASE_TARGET_IDENTITY_SHA256="$(hash_text fixture-semantic-database-target)"; }
 remote_assert_compose_backend_image() { [[ "$1" == "fixture:$V125_SOURCE_SHA" ]]; }
 remote_verify_proof() { [[ "$1" == "$fixture/run/baseline-authority.proof" ]]; boundary event pre-drain-gate; }
 remote_assert_zero_writer() { [[ "$1" == 125:0:0 ]]; boundary event quiesced-gate; }

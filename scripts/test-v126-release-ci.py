@@ -172,7 +172,16 @@ class ReleaseCiTest(unittest.TestCase):
     def test_command_failure_cannot_emit_baseline_pass(self):
         write_json(self.actions, GOOD)
         (self.root / 'tmp').mkdir()
-        # Mock Git/image transport only; invoke actual local baseline function, including gh status.
+        # Bounded consumers execute subprocesses: use actual executable fixtures,
+        # never a shell function that could fall through to the user's real gh.
+        fakebin = self.root / 'bin'
+        fakebin.mkdir()
+        gh = fakebin / 'gh'
+        gh.write_text('#!' + sys.executable + '\n' + "import os,pathlib,sys\nexpected=['run','view',os.environ['FIXTURE_RUN_ID'],'--repo','koteev-m/hookah_bot','--json','databaseId,workflowName,workflowDatabaseId,event,headBranch,headSha,attempt,status,conclusion,jobs']\nif sys.argv[1:] != expected: raise SystemExit(98)\nsys.stdout.buffer.write(pathlib.Path(os.environ['FIXTURE_ACTIONS']).read_bytes())\nraise SystemExit(23)\n")
+        gh.chmod(0o700)
+        docker = fakebin / 'docker'
+        docker.write_text('#!/bin/sh\necho UNEXPECTED_IMAGE_CALL\nexit 99\n')
+        docker.chmod(0o700)
         body = r'''
 source "$1"
 STATE_DIR="$2"; RELEASE_WORKTREE="$2"; RELEASE_SHA="$4"; MAIN_ACTIONS_RUN_ID="$5"
@@ -189,13 +198,7 @@ release_git() {
   esac
 }
 git_object_sha256() { echo script; }
-gh() {
-  [[ "$*" == "run view $MAIN_ACTIONS_RUN_ID --repo koteev-m/hookah_bot --json databaseId,workflowName,workflowDatabaseId,event,headBranch,headSha,attempt,status,conclusion,jobs" ]] || return 98
-  cat "$fixture_actions"
-  return 23
-}
-docker() { echo UNEXPECTED_IMAGE_CALL; return 99; }
-fixture_actions="$3"
+export PATH="$2/bin:$PATH" FIXTURE_ACTIONS="$3" FIXTURE_RUN_ID="$5"
 if verify_release_baseline_local; then echo PASS; else exit 1; fi
 '''
         result = shell(body, SCRIPT, self.root, self.actions, GOOD['headSha'], GOOD['databaseId'])

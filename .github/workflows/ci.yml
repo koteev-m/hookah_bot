@@ -142,6 +142,9 @@ jobs:
             --tests "com.hookah.platform.backend.telegram.TelegramBotRouterTableTokenTest" \
             --tests "com.hookah.platform.backend.telegram.TelegramKeyboardsTest" \
             --console=plain
+      - name: Record synthetic PostgreSQL Testcontainers image identity
+        if: ${{ !cancelled() }}
+        run: docker image inspect --format '{{.Id}} {{json .RepoDigests}} {{.Os}}/{{.Architecture}}' postgres:17-alpine
       - name: Assert route and security test results
         if: ${{ !cancelled() }}
         run: |
@@ -197,7 +200,7 @@ jobs:
               "com.hookah.platform.backend.telegram.BookingMessageStaffChatNotifierTest": 8,
               "com.hookah.platform.backend.telegram.StaffChatNotifierTest": 40,
               "com.hookah.platform.backend.telegram.TelegramOutboxVenueAuthorityTest": 2,
-              "com.hookah.platform.backend.telegram.TelegramOutboxWorkerTest": 18,
+              "com.hookah.platform.backend.telegram.TelegramOutboxWorkerTest": 19,
               "com.hookah.platform.backend.miniapp.guest.GuestOrderRoutesTest": 61,
               "com.hookah.platform.backend.telegram.db.GuestOrderIdempotencyFingerprintTest": 7,
               "com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepositoryTest": 54,
@@ -236,6 +239,7 @@ jobs:
                   "disallowed staff chat is skipped before notification state or outbox",
               },
               "com.hookah.platform.backend.telegram.TelegramOutboxWorkerTest": {
+                  "maintenance claim leaves denied rows byte identical and reaches later allowed rows",
                   "claim skips disallowed rows without mutation and does not starve allowed rows",
                   "disallowed producers create no outbox or staff notification state",
                   "malformed payload is terminal local validation without transport fallback or metrics",
@@ -706,6 +710,9 @@ jobs:
             --tests "com.hookah.platform.backend.miniapp.guest.VisitFeedbackWorkerTest" \
             --tests "com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackRepositoryTest" \
             --console=plain
+      - name: Record synthetic PostgreSQL Testcontainers image identity
+        if: ${{ !cancelled() }}
+        run: docker image inspect --format '{{.Id}} {{json .RepoDigests}} {{.Os}}/{{.Architecture}}' postgres:17-alpine
       - name: Assert Telegram traffic policy test results
         if: ${{ !cancelled() }}
         run: |
@@ -729,11 +736,11 @@ jobs:
               "com.hookah.platform.backend.maintenance.StagingMaintenancePolicyTest": 4,
               "com.hookah.platform.backend.maintenance.StagingMaintenanceStartupTest": 4,
               "com.hookah.platform.backend.telegram.TelegramLongPollingWorkerTest": 5,
-              "com.hookah.platform.backend.telegram.TelegramInboundUpdateWorkerTest": 3,
+              "com.hookah.platform.backend.telegram.TelegramInboundUpdateWorkerTest": 4,
               "com.hookah.platform.backend.telegram.TelegramBotRouterIdempotencyTest": 2,
               "com.hookah.platform.backend.telegram.TelegramQueueDepthMetricsTest": 2,
               "com.hookah.platform.backend.telegram.TelegramWebhookConfigTest": 4,
-              "com.hookah.platform.backend.telegram.TelegramWebhookRoutesTest": 5,
+              "com.hookah.platform.backend.telegram.TelegramWebhookRoutesTest": 6,
               "com.hookah.platform.backend.telegram.TelegramApiClientTrafficPolicyTest": 6,
               "com.hookah.platform.backend.miniapp.auth.TelegramAuthRouteTest": 11,
               "com.hookah.platform.backend.miniapp.auth.TelegramInitDataValidatorTest": 10,
@@ -783,6 +790,7 @@ jobs:
                   "router failure preserves offset and defers later updates for retry",
               },
               "com.hookah.platform.backend.telegram.TelegramInboundUpdateWorkerTest": {
+                  "maintenance queued defense leaves denied row unchanged and processes allowed row behind it",
                   "worker does not route historical queued update denied by policy",
               },
               "com.hookah.platform.backend.telegram.TelegramBotRouterIdempotencyTest": {
@@ -792,6 +800,7 @@ jobs:
                   "webhook secret is required for every normalized restricted environment",
               },
               "com.hookah.platform.backend.telegram.TelegramWebhookRoutesTest": {
+                  "maintenance webhook gate acknowledges denied identity before queue persistence",
                   "allowlist denial is acknowledged before webhook enqueue",
                   "malformed webhook payload returns bad request without enqueue or sensitive logs",
               },
@@ -1089,6 +1098,11 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
+      - name: Set up Java for isolated backend runtime
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
+        with:
+          distribution: temurin
+          java-version: '21'
       - name: Validate staging admission guard syntax
         run: |
           bash -n scripts/validate-staging-admission.sh
@@ -1113,19 +1127,64 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends postgresql-common ca-certificates curl
           sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
-          sudo apt-get install -y --no-install-recommends postgresql-client-17 'libpq5=18.*'
+          sudo apt-get install -y --no-install-recommends postgresql-17 postgresql-client-17 postgresql-client-18 openssh-server 'libpq5=18.*'
           echo /usr/lib/postgresql/17/bin >> "$GITHUB_PATH"
+          mkdir -m 0700 "$RUNNER_TEMP/v126-caddy-package"
+          cd "$RUNNER_TEMP/v126-caddy-package"
+          apt-get download caddy
+          dpkg-deb -x ./caddy_*.deb runtime
+          echo "$RUNNER_TEMP/v126-caddy-package/runtime/usr/bin" >> "$GITHUB_PATH"
+      - name: Validate test endpoint confinement
+        run: python3 scripts/v126-test-endpoint-guard.py --self-test
+      - name: Record isolated Linux tool versions
+        run: |
+          uname -srmo
+          cat /etc/os-release
+          /usr/lib/postgresql/17/bin/postgres --version
+          /usr/lib/postgresql/17/bin/psql --version
+          /usr/lib/postgresql/18/bin/psql --version
+          docker version
+          docker compose version
+          caddy version
+          ssh -V
+          java -version
       - name: Exercise V126 executable cutover contract fixtures
         env:
           HT12X_REQUIRE_LIBPQ_MAJOR: '18'
-        run: bash scripts/test-v126-cutover.sh
+          PG17_BIN: /usr/lib/postgresql/17/bin
+          PG18_BIN: /usr/lib/postgresql/18/bin
+        run: python3 scripts/v126-test-endpoint-guard.py --run "$RUNNER_TEMP/v126-harness-endpoints" -- bash scripts/test-v126-cutover.sh
       - name: Exercise V126 canonical IDs with real Docker and Compose (isolated runner)
-        run: python3 scripts/test-v126-container-ids.py --real-cli
+        if: ${{ !cancelled() }}
+        run: python3 scripts/v126-test-endpoint-guard.py --run "$RUNNER_TEMP/v126-container-ids-endpoints" -- python3 scripts/test-v126-container-ids.py --real-cli
       - name: Exercise V126 real process guard regression
-        run: python3 scripts/test-v126-process-guard.py
+        if: ${{ !cancelled() }}
+        run: python3 scripts/v126-test-endpoint-guard.py --run "$RUNNER_TEMP/v126-process-endpoints" -- python3 scripts/test-v126-process-guard.py
       - name: Exercise V126 pre-Gate-A prerequisite sync fixtures
-        run: bash scripts/test-v126-staging-prerequisite-sync.sh
+        if: ${{ !cancelled() }}
+        run: python3 scripts/v126-test-endpoint-guard.py --run "$RUNNER_TEMP/v126-sync-endpoints" -- bash scripts/test-v126-staging-prerequisite-sync.sh
+      - name: Exercise real Caddy disk and active configuration consumers
+        if: ${{ !cancelled() }}
+        run: python3 scripts/v126-test-endpoint-guard.py --run "$RUNNER_TEMP/v126-caddy-endpoints" -- python3 scripts/test-v126-caddy-linux.py --require-linux-caddy
+      - name: Exercise actual root ownership and fixed operational Compose guard
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/v126-test-endpoint-guard.py --run "$RUNNER_TEMP/v126-handoff-endpoints" -- bash -c 'exec sudo -n env PATH="$PATH" GITHUB_ACTIONS=true RUNNER_OS=Linux python3 scripts/test-v126-operational-handoff.py --require-linux-root-compose'
+      - name: Exercise connected PostgreSQL17 Docker and JVM runtime
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/test-v126-linux-runtime.py --diagnostics-self-test
+          python3 scripts/v126-test-endpoint-guard.py --run "$RUNNER_TEMP/v126-runtime-endpoints" -- python3 scripts/test-v126-linux-runtime.py --require-hosted-ci --evidence-dir "$RUNNER_TEMP/v126-linux-runtime-evidence"
+      - name: Record safe runtime evidence summary
+        if: ${{ !cancelled() }}
+        run: |
+          if [ -f "$RUNNER_TEMP/v126-linux-runtime-evidence/result.json" ]; then
+            cat "$RUNNER_TEMP/v126-linux-runtime-evidence/result.json"
+          else
+            echo 'No runtime result was produced; connected runtime is unverified.'
+          fi
       - name: Create CI compose env
+        if: ${{ !cancelled() }}
         run: |
           cat > .env <<'EOF'
           POSTGRES_DB=hookah
@@ -1133,8 +1192,10 @@ jobs:
           POSTGRES_PASSWORD=ci-placeholder-password
           EOF
       - name: Validate Docker Compose config
+        if: ${{ !cancelled() }}
         run: docker compose config --quiet
       - name: Validate staging maintenance deploy guard
+        if: ${{ !cancelled() }}
         run: |
           bash scripts/check-staging-maintenance-config.sh --self-test
           bash scripts/check-staging-image-identity.sh --self-test \
