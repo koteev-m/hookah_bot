@@ -49,6 +49,13 @@ class CoordinatorInterrupted(BaseException):
         super().__init__('fixture coordinator interrupted by signal ' + str(signum))
 
 
+class OwnedDescendantRefusal(AssertionError):
+    def __init__(self, result, descendant_count):
+        super().__init__('owned command left descendants; outcome UNKNOWN')
+        self.result = result
+        self.descendant_count = descendant_count
+
+
 def coordinator_signal(signum, _frame):
     raise CoordinatorInterrupted(signum)
 
@@ -181,7 +188,9 @@ finally:
                 self.known[child.pid] = birth
             out, err = child.communicate(timeout=kwargs['timeout'])
             result = subprocess.CompletedProcess(argv, child.returncode, out, err)
-            require(not self.inventory(), 'owned command left descendants; outcome UNKNOWN')
+            remaining = self.inventory()
+            if remaining:
+                raise OwnedDescendantRefusal(result, len(remaining))
             self.quiescent = not child_pids(os.getpid())
             require(self.quiescent, 'owned command lifetime remains UNKNOWN')
             return result
@@ -460,6 +469,15 @@ class Fixture:
         self.callers_quiescent = False
         try:
             result = scope.execute([str(arg) for arg in argv], env=env or self.env, cwd=self.root, timeout=timeout)
+        except OwnedDescendantRefusal as error:
+            self.events.append({'consumer': Path(argv[0]).name, 'exit': error.result.returncode,
+                                'outcome': 'UNKNOWN', 'scope_refusal': 'OWNED_DESCENDANTS',
+                                'descendant_count': error.descendant_count,
+                                'caller_cleanup_proven': scope.quiescent,
+                                'seconds': round(time.monotonic() - before, 3), 'deadline_seconds': timeout,
+                                'stdout_sha256': sha(error.result.stdout), 'stdout_bytes': len(error.result.stdout),
+                                'stderr_sha256': sha(error.result.stderr), 'stderr_bytes': len(error.result.stderr)})
+            raise
         except subprocess.TimeoutExpired as error:
             self.events.append({'consumer': Path(argv[0]).name, 'exit': 124, 'timed_out': True,
                                 'seconds': round(time.monotonic() - before, 3), 'deadline_seconds': timeout,
@@ -618,6 +636,21 @@ class Fixture:
         self.cases.append(row)
         return row
 
+    def observe_hung_reload_refusal(self):
+        try:
+            return self.probe('restore', check=False), None
+        except OwnedDescendantRefusal as error:
+            # This one adverse test observes a refused caller, never completion.
+            # Its systemd ControlPID/late outcome is checked separately below.
+            require(self.callers_quiescent, 'hung reload caller cleanup is unproven; retain fixture')
+            require(error.result.returncode != 0 and error.descendant_count > 0
+                    and b'IO_OUTCOME=UNKNOWN reason=deadline retry_allowed=false next_action=reconcile_remote_operation\n' in error.result.stderr
+                    and b'OWNED_CADDY_COMPLETE' not in error.result.stdout,
+                    'hung reload descendant refusal has no exact failed deadline outcome')
+            require(not list(self.proofs.iterdir()), 'refused reload caller left temporary proof files')
+            return error.result, {'outcome': 'UNKNOWN', 'scope_refusal': 'OWNED_DESCENDANTS',
+                                  'descendant_count': error.descendant_count, 'caller_cleanup': 'REAPED'}
+
     def restart_fixture(self):
         self.manager('kill', '--kill-whom=main', '--signal=SIGCONT', self.unit, check=False)
         self.manager('stop', self.unit, check=False)
@@ -660,7 +693,10 @@ class Fixture:
         self.restart_fixture()
         self.manager('kill', '--kill-whom=main', '--signal=SIGSTOP', self.unit)
         before = time.monotonic()
-        row = self.record_case('hung-real-systemd-reload', self.probe('restore', check=False), False, active=False)
+        reload_result, caller_refusal = self.observe_hung_reload_refusal()
+        row = self.record_case('hung-real-systemd-reload', reload_result, False, active=False)
+        if caller_refusal is not None:
+            row['caller_refusal'] = caller_refusal
         row['elapsed_seconds'] = round(time.monotonic() - before, 3)
         require(row['io_unknown'] and 19 <= row['elapsed_seconds'] < 28, 'actual reload did not remain bounded UNKNOWN')
         require(row['post_state']['systemd']['ControlPID'] != '0', 'fixture failed to expose continuing external reload job')
@@ -836,6 +872,95 @@ class AdapterTest(unittest.TestCase):
         self.assertIs(raised.exception, original)
         self.assertIsInstance(scope.cleanup_failure, AssertionError)
         self.assertFalse(scope.quiescent)
+
+    def test_scope_preserves_refused_result_without_accepting_remaining_descendants(self):
+        for exit_code in (0, 4):
+            with self.subTest(exit_code=exit_code):
+                scope = OwnedCommandScope.__new__(OwnedCommandScope)
+                scope.known, scope.cleanup_failure, scope.quiescent = {}, None, False
+                scope.inventory = Mock(return_value={43: 'owned-child-birth'})
+                scope.close = Mock(side_effect=lambda: setattr(scope, 'quiescent', True))
+                child = Mock(pid=42, returncode=exit_code)
+                child.communicate.return_value = (b'private-output', b'private-error')
+                with patch(__name__ + '.subprocess.Popen', return_value=child), \
+                        patch(__name__ + '.proc_identity', return_value='owned-parent-birth'):
+                    with self.assertRaises(OwnedDescendantRefusal) as raised:
+                        scope.execute(['synthetic-own-command'], env={}, cwd=self.root, timeout=.1)
+                self.assertEqual(raised.exception.result.returncode, exit_code)
+                self.assertEqual(raised.exception.result.stdout, b'private-output')
+                self.assertEqual(raised.exception.result.stderr, b'private-error')
+                self.assertEqual(raised.exception.descendant_count, 1)
+                scope.close.assert_called_once_with()
+                self.assertTrue(scope.quiescent)
+
+    def test_refused_scope_result_cannot_hide_unproven_cleanup(self):
+        scope = OwnedCommandScope.__new__(OwnedCommandScope)
+        scope.known, scope.cleanup_failure, scope.quiescent = {}, None, False
+        scope.inventory = Mock(return_value={43: 'owned-child-birth'})
+        cleanup_error = AssertionError('cleanup remains unproven')
+        scope.close = Mock(side_effect=cleanup_error)
+        child = Mock(pid=42, returncode=4)
+        child.communicate.return_value = (b'', b'failed caller')
+        with patch(__name__ + '.subprocess.Popen', return_value=child), \
+                patch(__name__ + '.proc_identity', return_value='owned-parent-birth'):
+            with self.assertRaises(OwnedDescendantRefusal) as raised:
+                scope.execute(['synthetic-own-command'], env={}, cwd=self.root, timeout=.1)
+        self.assertEqual(raised.exception.result.returncode, 4)
+        self.assertIs(scope.cleanup_failure, cleanup_error)
+        self.assertFalse(scope.quiescent)
+
+    def test_fixture_records_only_safe_refusal_metadata_and_still_raises(self):
+        fixture = Fixture.__new__(Fixture)
+        fixture.callers_quiescent, fixture.events = True, []
+        fixture.tools, fixture.env, fixture.root = {'sudo': '/no-real-sudo'}, {}, self.root
+        result = subprocess.CompletedProcess(['private-argv'], 4, b'private-output', b'private-error')
+        original = OwnedDescendantRefusal(result, 2)
+        scope = Mock(quiescent=True, cleanup_failure=None)
+        scope.execute.side_effect = original
+        with patch(__name__ + '.OwnedCommandScope', return_value=scope):
+            with self.assertRaises(OwnedDescendantRefusal) as raised:
+                fixture.run(['/no-real-bash', 'private-argv'], check=False)
+        self.assertIs(raised.exception, original)
+        self.assertTrue(fixture.callers_quiescent)
+        self.assertEqual(len(fixture.events), 1)
+        row = fixture.events[0]
+        self.assertEqual(row['outcome'], 'UNKNOWN')
+        self.assertEqual(row['exit'], 4)
+        self.assertEqual(row['descendant_count'], 2)
+        self.assertTrue(row['caller_cleanup_proven'])
+        self.assertEqual(row['stderr_sha256'], sha(b'private-error'))
+        self.assertNotIn('private-', json.dumps(row))
+
+    def test_hung_reload_observes_only_exact_failed_deadline_after_caller_cleanup(self):
+        fixture = Fixture.__new__(Fixture)
+        fixture.proofs = self.root / 'proofs'
+        fixture.proofs.mkdir()
+        fixture.callers_quiescent = True
+        deadline = b'IO_OUTCOME=UNKNOWN reason=deadline retry_allowed=false next_action=reconcile_remote_operation\n'
+        result = subprocess.CompletedProcess(['own-bash'], 4, b'', deadline)
+        fixture.probe = Mock(side_effect=OwnedDescendantRefusal(result, 1))
+        observed, metadata = fixture.observe_hung_reload_refusal()
+        self.assertIs(observed, result)
+        self.assertEqual(metadata, {'outcome': 'UNKNOWN', 'scope_refusal': 'OWNED_DESCENDANTS',
+                                    'descendant_count': 1, 'caller_cleanup': 'REAPED'})
+        fixture.probe.assert_called_once_with('restore', check=False)
+        for name, exit_code, out, err, count, quiescent in (
+                ('zero-exit', 0, b'', deadline, 1, True),
+                ('missing-marker', 4, b'', b'IO_OUTCOME=UNKNOWN\n', 1, True),
+                ('completion-marker', 4, b'OWNED_CADDY_COMPLETE\n', deadline, 1, True),
+                ('missing-descendants', 4, b'', deadline, 0, True),
+                ('cleanup-unproven', 4, b'', deadline, 1, False)):
+            with self.subTest(name=name):
+                fixture.callers_quiescent = quiescent
+                fixture.probe.side_effect = OwnedDescendantRefusal(
+                    subprocess.CompletedProcess(['own-bash'], exit_code, out, err), count)
+                with self.assertRaises(AssertionError):
+                    fixture.observe_hung_reload_refusal()
+        fixture.callers_quiescent = True
+        fixture.probe.side_effect = OwnedDescendantRefusal(result, 1)
+        (fixture.proofs / 'unfinished-proof').write_bytes(b'own temporary proof')
+        with self.assertRaisesRegex(AssertionError, 'temporary proof'):
+            fixture.observe_hung_reload_refusal()
 
     def test_coordinator_signal_reaches_finally_and_preserves_first_failure(self):
         evidence = self.root / 'evidence'

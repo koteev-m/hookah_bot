@@ -15,7 +15,7 @@ from urllib.parse import parse_qs, urlsplit
 
 ROOT = Path('/fixture')
 TOKEN = os.environ['FIXTURE_TELEGRAM_TOKEN']
-STATE = {'getUpdates': 0, 'getWebhookInfo': 0, 'unexpected': 0,
+STATE = {'getUpdates': 0, 'getWebhookInfo': 0, 'setChatMenuButton': 0, 'unexpected': 0,
          'last_offset': None, 'denied_delivered': False, 'outbound': 0}
 LOCK = threading.Lock()
 
@@ -26,6 +26,15 @@ def allowed_api_target(host, path):
         host == 'api.telegram.org' or
         (host == '127.0.0.1' and path == expected + 'getWebhookInfo')
     )
+
+
+def commands_menu_body(body):
+    # Object pairs retain duplicate keys and distinguish objects from arrays.
+    try:
+        return json.loads(body, object_pairs_hook=lambda pairs: pairs) == [
+            ('menu_button', [('type', 'commands')])]
+    except (ValueError, UnicodeError):
+        return False
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -89,10 +98,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if length > 16384:
             self.reply(413, {'ok': False})
             return
-        self.rfile.read(length)
+        body = self.rfile.read(length)
         expected = '/bot' + TOKEN + '/'
         if (host == 'api.telegram.org' and parsed.path.startswith(expected)
                 and parsed.path[len(expected):] in ('deleteMyCommands', 'setMyCommands')):
+            self.reply(200, {'ok': True, 'result': True})
+            return
+        if (host == 'api.telegram.org' and self.path == expected + 'setChatMenuButton'
+                and self.headers.get_content_type() == 'application/json'
+                and commands_menu_body(body)):
+            with LOCK:
+                STATE['setChatMenuButton'] += 1
             self.reply(200, {'ok': True, 'result': True})
             return
         with LOCK:

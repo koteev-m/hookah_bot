@@ -1,145 +1,83 @@
 # HT-RELEASE-REPAIR-01 coverage and remaining gates
 
-## Final Open-Gate Closure — validation candidate, 2026-09-10
+## Final Open-Gate Closure — candidate02 partial native proof, 2026-09-10
 
 **HT_RELEASE_REPAIR_VALIDATION_INCOMPLETE**
 
-Authorization is `AUTHORIZE_REPAIR_OPEN_GATE_CLOSURE_FEATURE_ONLY`, on the existing
-`codex/ht-release-repair-01-rkbe7q` worktree. Starting candidate/parent is
-`09e19461cf54376714ae51f2d4c9e480f8365d8e`, tree
-`17ec77daf4713264a36381a9d43ce4b4f4ef3151`; base/main remains
-`f7828e09863d391e1f714cc65c9c866f814cf6bf` (base tree
-`ff66c8639ec7c5c3ad45c2371878f5ba3656df9a`). Existing local final-report edits were
-preserved byte-for-byte in `../evidence/open-gate-closure-abp_tolk/initial/`, including
-the initial patch, four hashes and authorization. They were not part of09e19461.
-Validation candidate65016cf8746ebdbb2dbec088ff920175e6f5609d,
-tree7ae79a350c36c23944707aa42b534b925fe581d6, parent09e19461, was committed with
-29 explicit files and normally pushed to the same feature (exits0). Exact push CI
-34457486489/attempt1 completed with11 jobs PASS and compose FAILURE in4 steps:
-full mandatory harness, supervisor comparison, standalone systemd and ordinary lifecycle.
-Connected PG17/Docker/JVM, real Caddy and root handoff steps PASS; all28 formerly skipped
-PG cases execute in their successful jobs. No full harness/overall CI PASS is claimed.
+Current published candidate `cde7a0ebbf89e4d98489d24087fb53762bcd7e05`, tree
+`9e6067301fa27375b82a2c3f688eb7d7dbb61a8e`, parent65016cf8746ebdbb2dbec088ff920175e6f5609d.
+Exact feature push CI34461706240/attempt1:11 successful jobs, compose failed only in
+new systemd and ordinary native steps. Full mandatory harness PASS7m16; prerequisite
+18/18groups and40/40negative matrix PASS18m56. Safe raw log SHA256
+`12d789e2e1f0f01dc48e5678a137afc7c4a23a0ed51f6c1df941281d4bbb5c01`.
+No overall CI/native closure is inferred. Scope is the same F01–F11 package from exact
+basef7828e09 and phase parent09e19461; full identities and history are in REPAIR-REPORT.
 
-Two invocation defects have source-bound before evidence and local corrections: actual
-standalone hosted_only rejects the published root coordinator; actual ordinary Fixture
-constructor needs RUNNER_TEMP lost through sudo. Workflow now runs standalone as the
-ordinary runner and explicitly forwards RUNNER_TEMP to the root ordinary fixture. Two
-targeted regressions and the full12-test CI contract suite PASS; the same focused review
-is clear for this correction. Native after remains pending. The completed compose log
-(bf74a2bc6c3be73983f1f00f48316f3cea5ba39f68fac0965194767a09f62f8d) proves the other
-two failed steps share3 fixture assertions: direct shared-API refusal raised BindingError
-and escaped as Python exit1 instead of the real caller's75. The fixture now embeds the
-exact extracted production exception consumer; expected75, specific UNKNOWN diagnostic,
-immutable records and no-effect assertions stay strict. Five portable checks PASS.
-Production sequencer/helper bytes are unchanged by these corrective fixes.
-
-Full harness stopped there before real libpq, real backup and later legacy groups; it is
-not PASS. The independent exact09e before consumer executed and exposed old timeout
-status137; full harness now receives that same hash-checked source too, eliminating its
-absent-before-source skip. Real Caddy8/process7/rootguard7, connected PG/Docker/JVM, and
-the downstream prerequisite18groups/40negative matrix PASS (19m48). New native systemd
-and ordinary lifecycle produced no executed cases and remain unverified. A single early
-log read returned HTTP404; later completed-job download succeeded. No auth/network
-settings changed. Candidate-01 retains every first failure, before/after and review.
-Three generated task bytecode files were moved to evidence; imports now suppress bytecode.
-
-One shared source now implements persistent target supervision for cutover, uploads
-and ordinary deployment. Separate reconciliation checks the original successful
-operation group plus exact current postconditions, retains all original records and
-writes a distinctly typed completion. Missing/nonzero/daemon-unknown outcomes still
-require an explicit external fencing decision and permit no replay or retirement.
-V125 reconciliation/retirement is separate from the V126 manual/release chain.
-`docs/V126_REPAIR_OPERATION_PROTOCOL.md` specifies the complete immutable lifecycle;
-`docs/V126_OPERATIONAL_HANDOFF.md` specifies the already accepted image limitation.
-
-The runtime suites use an owned root Caddy/systemd unit and owned Docker/PG17/JVM/
-synthetic-provider fixture on ordinary GitHub-hosted Ubuntu. They are mandatory steps
-in the existing compose job; all12 existing jobs, gates and timeout budgets remain.
-Root test dependency installation is confined to the disposable runner. There is no
-Mac install, real endpoint use, default service modification or host reboot test.
-
-| Finding | Current phase disposition before exact CI | Delta and proof boundary |
+| Finding | Current result | Exact proof and remaining boundary |
 | --- | --- | --- |
-| F01 | IMPLEMENTED_UNVERIFIED for expanded consumer; prior repair verified | SAFE/count0/extracted SQL unchanged; new preflight completion includes checked credential cleanup and fresh source-bound read-only observation. Full PG17/17+18 consumer regression remains mandatory. |
-| F02 | FIXED_AND_VERIFIED at prior four-transition scope; new joins pending | Real fixed-env_file Compose and inverse semantics preserved. Reconciliation now checks actual fixed configuration and cleanup; hosted closure is pending. |
-| F03 | IMPLEMENTED_UNVERIFIED | Explicit caller exits preserved; own real systemd/Caddy tests add install/reload/admin divergence, actual failure/hang and interruption boundaries. Portable lifetime fixes verified; real Linux pending. |
-| F04 | IMPLEMENTED_UNVERIFIED for affected create path; prior readiness verified | Actual production Compose create rejected unsupported --no-deps; both start/recovery create calls corrected after real parser before/after. One-start readiness unchanged. Exact Docker/JVM rerun pending. |
-| F05 | IMPLEMENTED_UNVERIFIED | Shared source/lock, supervised binary uploads, immutable request records, action-specific exact-effect reconciliation, typed canonical stage/recovery completion, explicit v2 transfer and ordinary-deploy lifecycle implemented. Missing/nonzero/UNKNOWN never clears. Portable canonical V125/V126 chains pass; real lifecycle + final review pending. |
-| F06 | IMPLEMENTED_UNVERIFIED | Supervisor stdin is nonblocking; deadline/cancellation latched; reaped process groups never signalled as if still owned. Own systemd caller/descendant cleanup retains fixtures when quiescence is unproved. Actual Linux before/after required. |
-| F07 | FIXED_AND_VERIFIED at prior semantic-target scope; new joins pending | Source/backup/preflight/backend server/database/schema/role identity retained. Reconciliation/ordinary worker reuse actual semantic consumers; hosted lifecycle pending. |
-| F08 | FIXED_AND_VERIFIED at prior TOC scope; new joins pending | Exact dump + strict semantic TOC retained; original rehearsal resource/cleanup witnesses added and current absence checked. Both-phase real backup rerun mandatory. |
-| F09 | IMPLEMENTED_UNVERIFIED | Accepted root/exact-image/restart policy unchanged; ordinary worker holds the shared lock across prechecks/upload/recreate/postconditions and retirement permits the next exact request. Supports already accepted image, no implicit selection/.env rewrite. Real applied fixture handoff and two deployments pending. |
-| F10 | FIXED_AND_VERIFIED at prior read-attempt scope | No mutation retry or cached PASS introduced. New reconciliation capture and completion remain distinct; exact mandatory harness rerun pending. |
-| F11 | IMPLEMENTED_UNVERIFIED for new typed status join | Status displays reconciled outcomes separately from native PASS. New source consumer exit initially aborted invalid-recovery status; isolated classification now returns INVALID_EVIDENCE and blocks retirement. Targeted regression and full status harness retained. |
+| F01 | FIXED_AND_VERIFIED at core repair scope | Full extracted SQL/actual structured SAFE/count0 consumer, unsafe refusal/no artifact, source binding/privacy and PG17/psql17+18 tests execute in current full harness. Fresh reconciliation reuses those consumers; it is not18 independently native reconciled stages. Historical receipts/PASS8 remain unchanged. |
+| F02 | FIXED_AND_VERIFIED at core repair scope | Actual fixed env_file guards+Compose execute all four OFF/SMOKE/recovery transitions, post-install validation, inverse and metadata/unrelated-byte/cleanup checks. Current ordinary setup/config consumers also execute before its later provider failure. No arbitrary env-file or host-crash permutation claim. |
+| F03 | IMPLEMENTED_UNVERIFIED at remaining native join | Actual caller exit regressions and Caddy disk/admin suite pass. Own systemd executes11 Caddy cases, including validate/install/reload failures and two real interruption boundaries. Hung reload hits strict descendant UNKNOWN guard before its expected observation; continuation/stopped-service assertions remain unexecuted. Own unit/cgroup cleanup succeeds. |
+| F04 | FIXED_AND_VERIFIED at core repair scope | Actual supported Compose create, delayed readiness/503→200, wrong identity, JVM exit and timeout execute with one recorded start per scenario in the owned PG17/JVM integration. No start retry is added; ordinary approved recreate is a separate lifecycle. |
+| F05 | IMPLEMENTED_UNVERIFIED pending complete native closure | One shared supervisor covers target lock, requests/uploads, exact-effect reconciliation, immutable typed canonical chain/status and explicit v2 retirement. Current owned SSH/deadline/ACK/children tests pass. Native lost-output successful terminal→fresh collector→RECONCILED_EFFECT→handoff→two same-lock ordinary deployments execute; final provider gate fails. Original records/lock survive, replay/UNKNOWN/retirement refusals execute. Missing/nonzero/daemon ambiguity remains UNKNOWN, never cleared by PID death/current-state equality. |
+| F06 | IMPLEMENTED_UNVERIFIED at remaining native join | Actual supervisor source-backpressure/cancel/deadline/before comparison passes, as do4 real owned process cases and bounded hung admin. Hung reload's strict outer descendant refusal requires an explicit test observation path after proven caller cleanup; actual continuing ControlPID/late-state assertions must still execute. Host reboot/daemon-crash durability is separately unproved. |
+| F07 | FIXED_AND_VERIFIED at core repair scope | Actual two plausible server/database/schema/role targets, fixed Compose source binding, real libpq/auth, backup/preflight and running backend semantic equality execute. Ordinary consumer verifies its actual DB before the later provider failure. URI hashes never replace semantic identity; no live DB target change. |
+| F08 | FIXED_AND_VERIFIED at core repair scope | Exact dump hash and strict meaningful TOC checks execute, including timezone/client presentation differences versus real dump/inventory changes. Real two-phase backup/rehearsal includes resource identity and checked cleanup; protected original local DR boundary stays required. This does not prove full operational DR. |
+| F09 | IMPLEMENTED_UNVERIFIED pending complete native closure | Root/exact-image/restart guards and actual synthetic applied handoff execute: migration=no, then approved/applied unless-stopped; two exact-image backend-only deployments through the shared lock, next explicit transfer, unchanged PG and actual backend restart. Wrong image/config/owner and UNKNOWN refuse. Final provider gate fails; no live policy application or implicit new-image selection. V125 keeps its own schema125 boundary. |
+| F10 | FIXED_AND_VERIFIED at core repair scope | Full immutable attempt/status/remote stdin/ACK/precheck consumers execute. Only proved NOT_DISPATCHED read attempts may repeat; unknown mutation cannot retry/delete intent/use cached PASS. Both current Linux supervisor invocations execute the exact09e before source. Reconciliation is separate completion evidence, not replay. |
+| F11 | FIXED_AND_VERIFIED at core repair scope | Exact status/typed V125/V126 chain validators execute, distinguishing NOT_STARTED, RECONCILIATION_REQUIRED and INVALID_EVIDENCE; source/predecessor/manual/DR corruption refuses. Actual remote reconciliation has distinct evidence; native local-format2 full20-stage chain remains a separate portable test. Historical V125 availability is separately sourced/timed and never becomes stage9 PASS. |
 
-G01 operational DR/RPO/loss/actual auth custody remains OPEN; synthetic whole-DB
-roles/ACL/auth/settings remains mandatory. G02 actual host reboot/persistent-storage
-crash with an external observer is not provable by killing processes or restarting
-containers in this runner. No new VM is provisioned. Available systemd/daemon tests
-must execute before narrowing that residual gap. G03/G04 delivery acknowledgement
-ambiguity and17 real Guest/Owner/MIX assertions remain separate live gates; no replay,
-retention or acceptable-loss semantics change, no real Telegram call.
+Candidate02 actual systemd failure: `owned command left descendants; outcome UNKNOWN`
+at hung reload after4 process and11 Caddy cases, with successful bounded caller/unit
+cleanup. A typed observation of that nonzero result is permitted only in the exact
+expected-failure case after cleanup, preserving UNKNOWN/no-completion/deadline and actual
+daemon post-state assertions. No generic descendant suppression or production change.
 
-Current phase evidence is `../evidence/open-gate-closure-abp_tolk/`. It retains design
-before implementation, local command/exits/hashes, before failures and corrections,
-focused review and later exact CI ledgers. First local defects retained include Bash3
-empty-array retirement; unsupported Compose create flag; nested collector heredoc;
-source status exit during invalid recovery; reaped ordinary consumer signalling;
-missing original local DR-boundary revalidation; linked image archive rejection in the
-reconciliation checker; fixture upload framing, cleanup and adapter joins. Full source/test manifests and exact publication SHA/tree/parent will be bound
-in the publication ledger rather than guessed before commit.
+Candidate02 actual ordinary failure: final `synthetic provider saw unexpected request`
+after17 emitted lifecycle/refusal checkpoints. Source OFF startup's commands-only
+setChatMenuButton call was absent from the strict provider fixture; the correction must
+allow only that exact synthetic method/body and continue refusing send/chat/web-app/extra
+input. Both final unexpected/outbound constraints remain strict. CI02 lacked per-method counts, so every historical unexpected request cannot be attributed retrospectively. The exact source/handler mismatch has before403/counters1 proof and after coverage; native zero counters remain required.
 
-No whole-procedure E2E claim: portable tests use declared synthetic immutable records,
-manual approvals and selected dependencies; actual Linux consumers retain explicit
-fixture namespace/port/source adapters. New ordinary integration starts from synthetic
-predecessor/approval setup. The connected hook tests the actual remote terminal, lost
-stdout and fresh collector, while the full local typed canonical chain/retirement is
-validated separately with synthetic predecessor/manual fixtures. A successful CI run cannot prove operational DR, actual host
-reboot or live manual assertions. First failures remain immutable; no blind rerun.
+Local corrections pass systemd15, ordinary20 and reconciliation-hook4 portable tests. Systemd preserves a typed refusal and permits only the hung-reload expected-failure observer after proven cleanup/exact deadline/no completion; actual ControlPID/late-state/timing gates remain. The provider regression executes the real HTTP parser/handler through in-memory wire transport, with18 negatives and no TLS/listener/socket. Neither portable correction claims native after.
 
-Local mandatory entrypoint attempt `mandatory-local-01` returned exit1: all15 readiness
-cases failed at fixture setup because the Mac sandbox denied socket.bind. Earlier
-portable selections in that invocation passed; it did not reach Linux SSH/PG17 gates.
-No policy or guard was weakened. This is an environment failure, not application
-readiness evidence. A separate local selection driver initially gave Bash the sourced
-harness path as argv0 and accidentally entered main twice; the same socket restriction
-stopped both. Remaining40 dispatches were prevented by reserving their fresh guard
-namespaces; no action records were reset. The corrected driver uses an identical syntax
-copy with a distinct argv0 and executes unmodified named functions independently.
+| Gap | Current synthetic/runtime proof | Remaining mandatory release gate |
+| --- | --- | --- |
+| G01 OPEN | Real synthetic whole-DB globals/roles/memberships/owners/ACL/settings/auth plus schema/data rehearsal. | Operational assets/auth/secret custody and a real accepted recovery point/RPO/loss boundary. No default loss or automatic live restore. User classifies this as a separate live release decision, not a missing replay feature. |
+| G02 OPEN | Actual hosted Linux, PG17/clients17–18, Docker/Compose, owned SSH, Caddy/JVM; current partial systemd/ordinary proof above. | First close the two applicable fixture validation failures. Actual host reboot/persistent-storage/power-loss/daemon-crash durability then remains a localized infrastructure gate needing a controlled VM plus external observer. Process/container restart is not host reboot. No new VM or runner reboot authorized. |
+| G03 OPEN | Current28 PostgreSQL cases prove allowed/denied HTTP/Telegram writes, unchanged denied rows and inbound/outbox progress with a synthetic provider. Connected runtime proves polling progress/readiness. | Real poller/conflict evidence and provider-send→markSent acknowledgement/crash ambiguity; no new retained/replayed denied updates, delivery guarantee or accepted loss. OFF can resume writes before Caddy opens. |
+| G04 OPEN | Exact17-assertion artifact validator, browser216 and source-bound backend tests. |17 actual controlled Guest/Owner/MIX assertions, including delivery and tenant/write boundaries, remain live Gate B/C evidence. Synthetic approval/manual data never substitute. |
 
-`legacy-local-02` executed42 named functions:38 PASS and4 refusals. Three are stale
-fixture expectations for the removed unsupported Compose create --no-deps flag (two
-start/selection groups plus recovery). The rehearsal group also exposed the newly added
-explicit failure checks converting original86/87/88 statuses to4. The checks now retain
-the original status and diagnostic through cleanup; the regression expectations are
-preserved. The successful rehearsal fixture supplies and verifies an exact owned64hex
-resource ID, matching the new source witness. All four after selections PASS in `legacy-fixture-closure/after-ledger.json`; the
-expanded rehearsal verifies24 direct/conditional/capture combinations, preserving
-86/87/88 plus copy89/createdb90/restore91, exact cleanup and no failure proof. All five
-guarded after invocations record zero unexpected endpoints. None of these selective
-checks is presented as full harness PASS.
+Evidence is `../evidence/open-gate-closure-abp_tolk/candidate-02/`: immutable raw log,
+final snapshot48/result ledger, core-compose proof, native extraction/diagnosis, eleven-job
+proof and database source bindings. Every first failure remains separate. Current28PG
+execution is inbound4 + webhook5PG (plus1nonPG) + outbox19; exact selectors and mandatory
+XML/name/no-skip validators support counts where logs are aggregate. The only skipped
+declared step in the other11jobs is pnpm setup because npm was selected. No required
+Linux test is made optional to obtain PASS.
 
-Focused review has resolved D1–D9/S1–S2 at source, including original DR JSON, private
-anonymous image snapshot and first-error preservation in Linux-hook diagnostics/cleanup.
-Native Linux proof remains pending. Exact source/command ledgers preserve each first
-failure, scoped correction and exposed fixture boundary. No unexpected endpoint was
-allowed; no actual Mac service, database, SSH endpoint or Docker resource was started.
+No full E2E claim: native ordinary integration starts from synthetic earlier prerequisites
+and approval; the terminal action/supervisor/collector/lock/deployment consumers are real.
+It uses an owned direct stream, not a new full SSH cutover; actual SSH behavior is tested
+separately. Ordinary public_checks=false is disclosed; terminal public gates and backend
+health are separately exercised. Private in-run evidence is not claimed downloaded unless
+exported. Endpoint wrappers are accidental-escape guards with declared limitations;
+Docker runtime additionally uses an owned internal network and exact synthetic endpoints.
 
-The focused independent source review of this delta and current report updates is
-clear after the latest status/fixture corrections; exact hashes/ledgers are retained
-in `review-delta-interim.md` and the source snapshots. Next: complete the final local
-ledger and explicit-file commit/non-force feature push, then exact
-12-job hosted CI and required-step verification. All four final report/status files
-must be included in the final reviewed published candidate; none will be left as an
-uncommitted final-results delta. A later integration/publication/live phase is not
-started automatically.
+Candidate01 failed invocations and exact09e137-before remain immutable; candidate02
+full harness proves the first8-file corrections. Same focused independent review continues
+for the two new fixture joins and final evidence/status. Full publication, source hashes,
+commands/exits, side effects, cleanup and changed-file manifest are in REPAIR-REPORT.
+All four final report/status files must be in the final reviewed candidate, followed by
+exact12-job CI verification. Until then the overall result remains VALIDATION_INCOMPLETE.
 
 `MAIN_INTEGRATION=NOT_AUTHORIZED`; `LIVE_ACTIONS=NONE`;
 `PUBLICATION=FEATURE_VALIDATION_ONLY`; `STAGING_RELEASE_READINESS=NOT_ESTABLISHED`.
-Staging application remains a future separately authorized gate. Original dirty
-checkout, scripts/dev, migrations, historical runs/receipts/archives/backups and frozen
-evidence are preserved. No scripts/dev read or write. Historical PASS1–8/intent9 and
-separately timed V125 restoration remain unchanged; no fresh availability observation.
+Staging application remains separately authorized future work. No scripts/dev read/write,
+original dirty checkout, historical migration/run/receipt/archive/backup or frozen evidence
+changes. Historical canonical PASS1–8/intent9 and separately observed V125 restoration
+remain unchanged. Stop after the final report before main/PR/HT13/GateABC/live work.
+
 
 ## Preserved prior phase report (applies to09e19461 only)
 

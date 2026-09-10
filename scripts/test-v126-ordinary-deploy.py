@@ -10,6 +10,7 @@ stdin bytes. It does not claim target-lock or daemon verification.
 """
 import copy
 import contextlib
+import ast
 import fcntl
 import importlib.util
 import io
@@ -106,6 +107,76 @@ class OrdinaryTests(unittest.TestCase):
                         handoff_approved_and_applied=True, approval_id='synthetic-approved', observed_at='2026-09-10T00:00:00Z',
                         files={name: '7' * 64 for name in ordinary.UPLOADS}, public_url='https://fixture.invalid', public_checks=True)
         self.deploy = ordinary.Deployment(self.target, self.doc, ROOT)
+
+    def test_provider_accepts_exact_source_command_menu_and_latches_other_requests(self):
+        # Execute the real HTTP parser/handler with in-memory wire transport;
+        # only the TLS/listener bootstrap is excluded. No socket is opened.
+        provider = ROOT / 'scripts/fixtures/v126-linux-runtime/telegram-provider.py'
+        nodes = []
+        for node in ast.parse(provider.read_text()).body:
+            if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == 'server'
+                                                   for target in node.targets):
+                break
+            nodes.append(node)
+        scope = {'__name__': 'ordinary_synthetic_provider'}
+        with mock.patch.dict(os.environ, {'FIXTURE_TELEGRAM_TOKEN': SECRET}):
+            exec(compile(ast.Module(body=nodes, type_ignores=[]), str(provider), 'exec'), scope)
+
+        # Bind the wire fixture to the actual Kotlin producer, without replacing
+        # that producer or reproducing its dispatch/maintenance algorithms.
+        client = (ROOT / 'backend/app/src/main/kotlin/com/hookah/platform/backend/telegram/TelegramApiClient.kt').read_text()
+        method = client.split('suspend fun setCommandsMenuButton(): TelegramCallResult {', 1)[1].split(
+            'private suspend fun callMethod(', 1)[0]
+        call = re.search(r'return callMethod\(\s*"([A-Za-z]+)",\s*buildJsonObject\s*\{\s*put\(\s*"([a-z_]+)",\s*'
+                         r'buildJsonObject\s*\{\s*put\("([a-z_]+)",\s*"([a-z_]+)"\)\s*}\s*,?\s*\)\s*,?\s*}\s*,?\s*\)', method)
+        self.assertIsNotNone(call, 'actual command-menu producer schema changed; review synthetic endpoint contract')
+        api_method, outer, key, value = call.groups()
+        self.assertEqual((api_method, outer, key, value), ('setChatMenuButton', 'menu_button', 'type', 'commands'))
+        actual_body = json.dumps({outer: {key: value}}, separators=(',', ':')).encode()
+
+        class Wire:
+            def __init__(self, request):
+                self.input, self.output = io.BytesIO(request), bytearray()
+            def makefile(self, *args):
+                return self.input
+            def sendall(self, data):
+                self.output.extend(data)
+
+        def request(body=actual_body, *, host='api.telegram.org', token=SECRET, method=api_method,
+                    verb='POST', suffix='', content_type='application/json'):
+            wire = Wire((verb + ' /bot' + token + '/' + method + suffix + ' HTTP/1.1\r\nHost: ' + host +
+                         '\r\nContent-Type: ' + content_type + '\r\nContent-Length: ' + str(len(body)) +
+                         '\r\nConnection: close\r\n\r\n').encode() + body)
+            scope['Handler'](wire, ('127.0.0.1', 41001), object())
+            return int(bytes(wire.output).split(b' ', 2)[1])
+
+        for body in (actual_body, b'{ "menu_button" : { "type" : "commands" } }'):
+            self.assertEqual(request(body), 200)
+        self.assertEqual(scope['STATE']['setChatMenuButton'], 2)
+        self.assertEqual(scope['STATE']['unexpected'], 0)
+        self.assertEqual(scope['STATE']['outbound'], 0)
+        cases = [dict(host='127.0.0.1'), dict(host='external.invalid'), dict(token='wrong'),
+                 dict(method='sendMessage'), dict(method='getWebhookInfo'), dict(verb='GET'),
+                 dict(suffix='?chat_id=1'), dict(content_type='text/plain')]
+        cases.extend(dict(body=body) for body in (
+            b'{"chat_id":1,"menu_button":{"type":"commands"}}',
+            b'{"menu_button":{"type":"web_app","web_app":{"url":"https://external.invalid"}}}',
+            b'{"menu_button":{"type":"commands","extra":true}}', b'{"menu_button":{"type":"commands"},"extra":true}',
+            b'{"menu_button":{"type":"commands","type":"commands"}}',
+            b'{"menu_button":{"type":"commands"},"menu_button":{"type":"commands"}}',
+            b'[["menu_button",[["type","commands"]]]]', b'null', b'{', b'\xff'))
+        expected_outbound = 0
+        for index, case in enumerate(cases, 1):
+            with self.subTest(case=index):
+                self.assertEqual(request(**case), 403)
+                expected_outbound += case.get('verb') != 'GET'
+                self.assertEqual(scope['STATE']['unexpected'], index)
+                self.assertEqual(scope['STATE']['outbound'], expected_outbound)
+                self.assertEqual(scope['STATE']['setChatMenuButton'], 2)
+        # A later valid request cannot erase earlier refused operations.
+        self.assertEqual(request(), 200)
+        self.assertEqual(scope['STATE']['unexpected'], len(cases))
+        self.assertEqual(scope['STATE']['outbound'], expected_outbound)
 
     def test_descriptor_rejects_stale_wrong_and_implicit_authority(self):
         ordinary.validate_descriptor(self.doc, self.target)
@@ -858,7 +929,12 @@ def linux_integration(evidence):
                 if fault == 'stale-image': observer.doc['image_id'] = old
                 elif fault == 'wrong-config': (target / 'docker-compose.yml').write_bytes(old)
                 else: os.chown(target / '.env', 0, 0)
-        ordinary.require(fixture.stats()['unexpected'] == 0, 'synthetic provider saw unexpected request')
+        provider_stats = fixture.stats()
+        events.append({'checkpoint': 'SYNTHETIC_PROVIDER_COUNTERS', **{key: provider_stats[key] for key in
+                       ('getUpdates', 'getWebhookInfo', 'setChatMenuButton', 'unexpected', 'outbound')}})
+        ordinary.require(provider_stats['unexpected'] == 0 and provider_stats['outbound'] == 0,
+                         'synthetic provider saw unexpected request')
+        ordinary.require(provider_stats['setChatMenuButton'] > 0, 'actual OFF startup command-menu request was not observed')
         events.append({'checkpoint': 'SYNTHETIC_PROVIDER_ONLY', 'unexpected': 0})
     except BaseException as error:
         first_failure = {'type': type(error).__name__, 'reason': str(error) if isinstance(error, (ordinary.Refused, runtime.FixtureAssertionError)) else 'owned integration failed'}
