@@ -1912,8 +1912,10 @@ run_tracked_command_with_input() {
 
 cutover_bounded_command() {
   python3 -c '
+import fcntl
 import math
 import os
+import select
 import signal
 import subprocess
 import sys
@@ -1926,39 +1928,153 @@ try:
 except (IndexError, ValueError):
     raise SystemExit("invalid bounded command")
 child = None
-def stop_child():
-    if child is not None:
-        try:
-            os.killpg(child.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        child.wait()
+reaped = False
+cancelled = None
+flags = {}
+nonblocking = set()
+streams = {}
+pending = {1: bytearray(), 2: bytearray()}
+queue_limit = 65536
+deadline = time.monotonic() + seconds
+
+class Refusal(Exception):
+    def __init__(self, reason, status):
+        self.reason, self.status = reason, status
+
 def interrupted(signum, frame):
-    stop_child()
-    print("IO_OUTCOME=UNKNOWN retry_allowed=false next_action=reconcile_remote_operation", file=sys.stderr)
-    raise SystemExit(128 + signum)
+    global cancelled
+    if cancelled is None:
+        cancelled = signum
+
 for signum in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
     signal.signal(signum, interrupted)
-deadline = time.monotonic() + seconds
+
+def stop_child():
+    global reaped
+    if child is None or reaped:
+        return
+    # WNOWAIT retains the leader identity until this group signal. Never signal
+    # a reaped PGID. Escaped children/daemon effects remain the outer operation
+    # supervisor responsibility and cannot be discharged by this I/O timeout.
+    try:
+        os.killpg(child.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+    try:
+        child.wait(timeout=1)
+        reaped = True
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+
+def emit_unknown(reason):
+    if 2 not in nonblocking:
+        return
+    if reason == "deadline":
+        payload = b"IO_OUTCOME=UNKNOWN reason=deadline retry_allowed=false next_action=reconcile_remote_operation\n"
+    else:
+        payload = ("IO_OUTCOME=UNKNOWN reason=" + reason +
+                   " retry_allowed=false next_action=reconcile_remote_operation\n").encode()
+    # A blocked diagnostic sink cannot extend the command deadline. The nonzero
+    # exit and outer durable operation result remain authoritative in that case.
+    try:
+        os.write(2, payload)
+    except (BlockingIOError, BrokenPipeError, InterruptedError, OSError):
+        pass
+
+status = 125
 try:
-    child = subprocess.Popen(sys.argv[2:], start_new_session=True)
-    status = child.wait(timeout=max(0.001, deadline - time.monotonic()))
+    # Snapshot both before changing either: callers may use 2>&1, sharing flags.
+    flags = {fd: fcntl.fcntl(fd, fcntl.F_GETFL) for fd in (1, 2)}
+    for fd in (1, 2):
+        fcntl.fcntl(fd, fcntl.F_SETFL, flags[fd] | os.O_NONBLOCK)
+        nonblocking.add(fd)
+    # Private pipes prevent a detached privileged waiter from keeping a Bash
+    # command substitution open after this helper has refused its outcome.
+    child = subprocess.Popen(sys.argv[2:], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             start_new_session=True)
+    for stream, target in ((child.stdout, 1), (child.stderr, 2)):
+        os.set_blocking(stream.fileno(), False)
+        streams[stream.fileno()] = target
+    exited = None
+    while True:
+        if cancelled is not None:
+            raise Refusal("interrupted", 128 + cancelled)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise Refusal("deadline", 124)
+        if exited is None:
+            exited = os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+        reads = [fd for fd, target in streams.items() if len(pending[target]) < queue_limit]
+        writes = [fd for fd, payload in pending.items() if payload]
+        # select also accepts regular-file sinks; epoll cannot register them.
+        ready_reads, ready_writes, _ = select.select(reads, writes, [], min(.05, remaining))
+        for fd in ready_reads:
+            target = streams[fd]
+            try:
+                payload = os.read(fd, queue_limit - len(pending[target]))
+            except (BlockingIOError, InterruptedError):
+                continue
+            if payload:
+                pending[target].extend(payload)
+            else:
+                del streams[fd]
+        for fd in ready_writes:
+            try:
+                written = os.write(fd, pending[fd])
+            except (BlockingIOError, InterruptedError):
+                continue
+            if written <= 0:
+                raise Refusal("output_unavailable", 125)
+            del pending[fd][:written]
+        if exited is not None and streams and len(reads) == len(streams) and not ready_reads:
+            raise Refusal("child_survived", 124)
+        if exited is not None and not streams and not any(pending.values()):
+            status = child.wait(timeout=max(.001, deadline - time.monotonic()))
+            reaped = True
+            # Conservative refusal only: this no longer-owned group identifier
+            # must never be signalled. The target supervisor proves descendants.
+            try:
+                os.killpg(child.pid, 0)
+            except ProcessLookupError:
+                pass
+            else:
+                raise Refusal("child_survived", 124)
+            if cancelled is not None:
+                raise Refusal("interrupted", 128 + cancelled)
+            if time.monotonic() >= deadline:
+                raise Refusal("deadline", 124)
+            status = status if status >= 0 else 128 - status
+            break
+except Refusal as error:
+    status = error.status
+    stop_child()
+    emit_unknown(error.reason)
 except subprocess.TimeoutExpired:
     stop_child()
-    print("IO_OUTCOME=UNKNOWN reason=deadline retry_allowed=false next_action=reconcile_remote_operation", file=sys.stderr)
-    raise SystemExit(124)
-except OSError:
-    print("IO_OUTCOME=UNKNOWN reason=consumer_unavailable retry_allowed=false next_action=reconcile_remote_operation", file=sys.stderr)
-    raise SystemExit(125)
-try:
-    os.killpg(child.pid, 0)
-except ProcessLookupError:
-    pass
-else:
+    status = 124
+    emit_unknown("deadline")
+except (OSError, ValueError):
     stop_child()
-    print("IO_OUTCOME=UNKNOWN reason=child_survived retry_allowed=false next_action=reconcile_remote_operation", file=sys.stderr)
-    raise SystemExit(124)
-raise SystemExit(status if status >= 0 else 128 - status)
+    status = 125
+    emit_unknown("consumer_unavailable" if child is None else "consumer_io")
+finally:
+    if child is not None:
+        for stream in (child.stdout, child.stderr):
+            try:
+                stream.close()
+            except OSError:
+                status = status or 125
+    for fd, original in flags.items():
+        try:
+            fcntl.fcntl(fd, fcntl.F_SETFL, original)
+        except OSError:
+            status = status or 125
+        nonblocking.discard(fd)
+if status == 0 and cancelled is not None:
+    status = 128 + cancelled
+if status == 0 and time.monotonic() >= deadline:
+    status = 124
+raise SystemExit(status)
 ' "$@"
 }
 

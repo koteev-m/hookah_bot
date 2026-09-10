@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """Exact production observers, real loopback HTTP/curl, synthetic Docker inventory only."""
+import ast
+import fcntl
 import hashlib
 import http.server
 import json
@@ -8,6 +10,7 @@ from pathlib import Path
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import tempfile
 import threading
@@ -363,6 +366,270 @@ os.execv(os.environ["REAL_CURL"], [os.environ["REAL_CURL"]] + args)
         self.assertEqual(result.returncode, 124, result.stderr)
         self.assertLess(time.monotonic() - before, 1.5)
         self.assertIn("IO_OUTCOME=UNKNOWN reason=child_survived", result.stderr)
+
+
+class BoundedStreamsTest(unittest.TestCase):
+    """Actual helper/capture bytes; only the session-escaping consumer is synthetic."""
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix="v126-bounded-streams-"))
+        self.jobs = []
+        tree = ast.parse((ROOT / "test-v126-systemd-linux.py").read_text())
+        self.driver = next(ast.literal_eval(node.value) for node in tree.body
+                           if isinstance(node, ast.Assign)
+                           and any(isinstance(target, ast.Name) and target.id == "DRIVER" for target in node.targets))
+
+    def tearDown(self):
+        # A detached synthetic holder has a 1.2-second one-shot termination timer.
+        # Never signal an exited/reused PID; delete files only after its closure
+        # marker and read-only PID-absence check prove the owned holder is gone.
+        unproven = []
+        for job, require_closed in self.jobs:
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                if (job / "pid").exists() and (not require_closed or (job / "closed").exists()):
+                    try:
+                        os.kill(int((job / "pid").read_text()), 0)
+                    except ProcessLookupError:
+                        break
+                time.sleep(.01)
+            else:
+                unproven.append(str(job))
+        if unproven:
+            self.fail("detached test holder lifetime unproven; retained " + ", ".join(unproven))
+        shutil.rmtree(self.root)
+
+    def detached_capture(self, stream, parent_exit):
+        job = self.root / (stream + "-" + str(parent_exit))
+        job.mkdir()
+        self.jobs.append((job, True))
+        holder = job / "holder.py"
+        holder.write_text('''import os, signal, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+if sys.argv[2] == "stdout":
+    os.close(2)
+elif sys.argv[2] == "stderr":
+    os.close(1)
+def finish(*_):
+    for descriptor in (1, 2):
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+    (root / "closed").write_bytes(b"owned streams closed before exit")
+    os._exit(0)
+signal.signal(signal.SIGALRM, finish)
+signal.setitimer(signal.ITIMER_REAL, 1.2)
+while True:
+    signal.pause()
+''')
+        adapter = job / "adapter.py"
+        adapter.write_text('''import subprocess, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+child = subprocess.Popen([sys.executable, str(root / "holder.py"), str(root), sys.argv[2]], start_new_session=True)
+(root / "pid").write_text(str(child.pid))
+if sys.argv[3] == "wait":
+    raise SystemExit(child.wait())
+raise SystemExit(int(sys.argv[3]))
+''')
+        arguments = " ".join(map(shlex.quote, (PYTHON, str(adapter), str(job), stream, str(parent_exit))))
+        source = job / "source.bash"
+        source.write_text(function("cutover_bounded_command") + "\n"
+                          + "remote_recovery_restore_original_caddy() { cutover_bounded_command 0.2 "
+                          + arguments + "; }\n")
+        # Exact production fixture DRIVER preserves its real command substitution.
+        before = time.monotonic()
+        result = subprocess.run(["bash", "-c", self.driver, "fixture", str(source), str(job),
+                                 "restore", "capture", "a" * 64], capture_output=True, timeout=4)
+        result.elapsed = time.monotonic() - before
+        return result
+
+    def test_detached_stdout_cannot_extend_timeout_under_exact_capture(self):
+        result = self.detached_capture("stdout", "wait")
+        self.assertEqual(result.returncode, 124, result.stderr)
+        self.assertIn(b"IO_OUTCOME=UNKNOWN", result.stderr)
+        self.assertIn(b"retry_allowed=false", result.stderr)
+        self.assertNotIn(b"OWNED_CADDY_COMPLETE", result.stdout)
+        self.assertLess(result.elapsed, .9)
+
+    def test_detached_stderr_cannot_extend_timeout_under_exact_capture(self):
+        result = self.detached_capture("stderr", "wait")
+        self.assertEqual(result.returncode, 124, result.stderr)
+        self.assertIn(b"IO_OUTCOME=UNKNOWN", result.stderr)
+        self.assertIn(b"retry_allowed=false", result.stderr)
+        self.assertNotIn(b"OWNED_CADDY_COMPLETE", result.stdout)
+        self.assertLess(result.elapsed, .9)
+
+    def test_exit_zero_with_detached_inherited_streams_is_unknown(self):
+        result = self.detached_capture("both", 0)
+        self.assertEqual(result.returncode, 124, result.stderr)
+        self.assertIn(b"IO_OUTCOME=UNKNOWN", result.stderr)
+        self.assertIn(b"retry_allowed=false", result.stderr)
+        self.assertNotIn(b"OWNED_CADDY_COMPLETE", result.stdout)
+        self.assertLess(result.elapsed, .9)
+
+    def test_binary_stdin_stdout_stderr_and_exit_are_preserved(self):
+        payload = b"synthetic-stdin\x00\xff\nlast\n"
+        for exit_code in (0, 42):
+            with self.subTest(exit_code=exit_code):
+                program = ("import sys; data=sys.stdin.buffer.read(); "
+                           "sys.stdout.buffer.write(b'out:'+data); "
+                           "sys.stderr.buffer.write(b'err:'+data); raise SystemExit(" + str(exit_code) + ")")
+                script = function("cutover_bounded_command") + "\ncutover_bounded_command 1 "
+                script += " ".join(map(shlex.quote, (PYTHON, "-c", program))) + "\n"
+                result = subprocess.run(["bash", "-c", script], input=payload, capture_output=True, timeout=3)
+                self.assertEqual(result.returncode, exit_code, result.stderr)
+                self.assertEqual(result.stdout, b"out:" + payload)
+                self.assertEqual(result.stderr, b"err:" + payload)
+
+    def test_nonzero_capture_preserves_stdout_stderr_and_does_not_complete(self):
+        script = function("cutover_bounded_command") + "\n"
+        program = "import sys; sys.stdout.write('synthetic\\nstdout'); sys.stderr.write('synthetic\\nstderr\\n'); raise SystemExit(42)"
+        command = " ".join(map(shlex.quote, (PYTHON, "-c", program)))
+        script += 'captured="$(cutover_bounded_command 1 ' + command + ')"; status=$?\n'
+        script += 'printf "%s" "$captured"\nexit "$status"\n'
+        result = subprocess.run(["bash", "-c", script], capture_output=True, timeout=3)
+        self.assertEqual(result.returncode, 42, result.stderr)
+        self.assertEqual(result.stdout, b"synthetic\nstdout")
+        self.assertEqual(result.stderr, b"synthetic\nstderr\n")
+
+    def test_unread_parent_output_cannot_extend_the_deadline(self):
+        for target in (1, 2):
+            with self.subTest(target=target):
+                job = self.root / ("backpressure-" + str(target))
+                job.mkdir()
+                self.jobs.append((job, False))
+                program = ("import os,signal; from pathlib import Path; "
+                           "signal.setitimer(signal.ITIMER_REAL,1.2); "
+                           "Path(" + repr(str(job / "pid")) + ").write_text(str(os.getpid())); "
+                           "os.write(" + str(target) + ",b'x'*1048576)")
+                script = function("cutover_bounded_command") + "\ncutover_bounded_command 0.2 "
+                script += " ".join(map(shlex.quote, (PYTHON, "-c", program))) + "\n"
+                reader, writer = os.pipe()
+                child = None
+                # CPython's first real write may add a platform SIGPIPE flag.
+                # Snapshot this owned sink after preparation, before dispatch.
+                os.write(writer, b"p")
+                self.assertEqual(os.read(reader, 1), b"p")
+                before_flags = fcntl.fcntl(writer, fcntl.F_GETFL)
+                try:
+                    with (job / "other-stream").open("w+b") as other:
+                        sinks = {"stdout": writer if target == 1 else other,
+                                 "stderr": writer if target == 2 else other}
+                        before = time.monotonic()
+                        child = subprocess.Popen(["bash", "-c", script], start_new_session=True, **sinks)
+                        try:
+                            status = child.wait(timeout=.9)
+                        except subprocess.TimeoutExpired:
+                            self.fail("helper waited for unread parent output beyond its bound")
+                        self.assertLess(time.monotonic() - before, .9)
+                        self.assertEqual(status, 124)
+                        self.assertEqual(fcntl.fcntl(writer, fcntl.F_GETFL), before_flags)
+                        if target == 1:
+                            other.seek(0)
+                            self.assertIn(b"IO_OUTCOME=UNKNOWN", other.read())
+                        # For blocked stderr the nonzero timeout is authoritative;
+                        # an UNKNOWN diagnostic is explicitly only best-effort.
+                finally:
+                    if child is not None and child.poll() is None:
+                        # Still-owned, unreaped direct leader: never a reused PGID.
+                        os.killpg(child.pid, signal.SIGKILL)
+                        child.wait(timeout=2)
+                    os.close(reader)
+                    os.close(writer)
+
+    def test_ordinary_file_sinks_preserve_binary_bytes_and_descriptor_flags(self):
+        payload = b"synthetic-file-input\x00\xff\n"
+        program = ("import sys; data=sys.stdin.buffer.read(); "
+                   "sys.stdout.buffer.write(b'out:'+data); "
+                   "sys.stderr.buffer.write(b'err:'+data); raise SystemExit(42)")
+        script = function("cutover_bounded_command") + "\ncutover_bounded_command 1 "
+        script += " ".join(map(shlex.quote, (PYTHON, "-c", program))) + "\n"
+        out_path, err_path = self.root / "stdout", self.root / "stderr"
+        with out_path.open("ab", buffering=0) as out, err_path.open("ab", buffering=0) as err:
+            for stream in (out, err):
+                os.write(stream.fileno(), b"prefix\n")
+            flags = [fcntl.fcntl(stream.fileno(), fcntl.F_GETFL) for stream in (out, err)]
+            result = subprocess.run(["bash", "-c", script], input=payload, stdout=out, stderr=err, timeout=3)
+            self.assertEqual(result.returncode, 42)
+            self.assertEqual([fcntl.fcntl(stream.fileno(), fcntl.F_GETFL) for stream in (out, err)], flags)
+        self.assertEqual(out_path.read_bytes(), b"prefix\nout:" + payload)
+        self.assertEqual(err_path.read_bytes(), b"prefix\nerr:" + payload)
+
+    def test_merged_output_restores_the_shared_descriptor_flags(self):
+        program = "import os; os.write(1,b'synthetic-out\\n'); os.write(2,b'synthetic-err\\n')"
+        script = function("cutover_bounded_command") + "\ncutover_bounded_command 1 "
+        script += " ".join(map(shlex.quote, (PYTHON, "-c", program))) + "\n"
+        reader, writer = os.pipe()
+        try:
+            os.write(writer, b"p")
+            self.assertEqual(os.read(reader, 1), b"p")
+            before = fcntl.fcntl(writer, fcntl.F_GETFL)
+            result = subprocess.run(["bash", "-c", script], stdout=writer, stderr=subprocess.STDOUT, timeout=3)
+            self.assertEqual(result.returncode, 0)
+            self.assertEqual(fcntl.fcntl(writer, fcntl.F_GETFL), before)
+            self.assertEqual(sorted(os.read(reader, 1024).splitlines()), [b"synthetic-err", b"synthetic-out"])
+        finally:
+            os.close(writer)
+            os.close(reader)
+
+    def test_setup_failure_with_closed_stdout_and_full_stderr_is_bounded(self):
+        script = function("cutover_bounded_command") + "\nexec 1>&-\ncutover_bounded_command 0.2 true\n"
+        reader, writer = os.pipe()
+        child = None
+        original = fcntl.fcntl(writer, fcntl.F_GETFL)
+        try:
+            fcntl.fcntl(writer, fcntl.F_SETFL, original | os.O_NONBLOCK)
+            while True:
+                try:
+                    os.write(writer, b"synthetic-full-stderr" * 4096)
+                except BlockingIOError:
+                    break
+            fcntl.fcntl(writer, fcntl.F_SETFL, original)
+            original = fcntl.fcntl(writer, fcntl.F_GETFL)
+            before = time.monotonic()
+            child = subprocess.Popen(["bash", "-c", script], stdout=subprocess.DEVNULL,
+                                     stderr=writer, start_new_session=True)
+            try:
+                status = child.wait(timeout=.9)
+            except subprocess.TimeoutExpired:
+                self.fail("setup refusal blocked on a full diagnostic sink")
+            self.assertEqual(status, 125)
+            self.assertLess(time.monotonic() - before, .9)
+            self.assertEqual(fcntl.fcntl(writer, fcntl.F_GETFL), original)
+        finally:
+            if child is not None and child.poll() is None:
+                os.killpg(child.pid, signal.SIGKILL)
+                child.wait(timeout=2)
+            os.close(writer)
+            os.close(reader)
+
+    def test_simultaneous_binary_streams_and_stdin_make_progress_without_loss(self):
+        payload = bytes(range(256)) * 512
+        block = bytes(range(256)) * 1024
+        program = '''import os, sys, threading
+block = bytes(range(256)) * 1024
+def write(fd):
+    view = memoryview(block)
+    while view:
+        count = os.write(fd, view)
+        view = view[count:]
+threads = [threading.Thread(target=write, args=(fd,)) for fd in (1, 2)]
+for thread in threads:
+    thread.start()
+data = sys.stdin.buffer.read()
+for thread in threads:
+    thread.join()
+sys.stdout.buffer.write(b"out-tail:" + data)
+sys.stderr.buffer.write(b"err-tail:" + data)
+'''
+        script = function("cutover_bounded_command") + "\ncutover_bounded_command 3 "
+        script += " ".join(map(shlex.quote, (PYTHON, "-c", program))) + "\n"
+        result = subprocess.run(["bash", "-c", script], input=payload, capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr[-200:])
+        self.assertEqual(result.stdout, block + b"out-tail:" + payload)
+        self.assertEqual(result.stderr, block + b"err-tail:" + payload)
 
 
 if __name__ == "__main__":

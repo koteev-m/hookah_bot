@@ -1,57 +1,67 @@
 # HT-RELEASE-REPAIR-01 checkpoint — final feature validation
 
-## HT-RELEASE-REPAIR-01 — Final Open-Gate Closure (candidate02 failed; correction in progress)
+## HT-RELEASE-REPAIR-01 — Final Open-Gate Closure (candidate03 failed; F06 correction)
 
-**HT_RELEASE_REPAIR_VALIDATION_INCOMPLETE**. Existing feature/worktree remains
-`codex/ht-release-repair-01-rkbe7q`, base
+**HT_RELEASE_REPAIR_VALIDATION_INCOMPLETE**. Same feature/worktree
+`codex/ht-release-repair-01-rkbe7q`, exact base
 `f7828e09863d391e1f714cc65c9c866f814cf6bf`, base tree
-`ff66c8639ec7c5c3ad45c2371878f5ba3656df9a`. Phase parent09e19461/tree17ec77da;
-four original local report changes are preserved under
+`ff66c8639ec7c5c3ad45c2371878f5ba3656df9a`, phase parent09e19461/tree17ec77da.
+The four starting local report changes are preserved under
 `../evidence/open-gate-closure-abp_tolk/initial/`.
 
-Latest published candidate `cde7a0ebbf89e4d98489d24087fb53762bcd7e05`,
-tree `9e6067301fa27375b82a2c3f688eb7d7dbb61a8e`, parent65016cf8746ebdbb2dbec088ff920175e6f5609d.
-Exact feature push CI34461706240/attempt1 completed:11 jobs PASS, compose FAIL in two
-new native steps. Full mandatory harness PASS7m16; prerequisites18/18 groups and40/40
-negative matrix PASS18m56. Real libpq/PG17/backup/Docker/SSH/JVM checks and all28 formerly
-skipped PostgreSQL cases execute. Full compose log retained with SHA256
-`12d789e2e1f0f01dc48e5678a137afc7c4a23a0ed51f6c1df941281d4bbb5c01`.
+Published candidate `90d0bda929f673cd2e277e6c243de9ae6bc5b0fc`, tree
+`dd5a1d0f7089537a5591fb1a19a4a67d97ee482b`, parent
+`cde7a0ebbf89e4d98489d24087fb53762bcd7e05`. Exact feature push
+[CI34466473797](https://github.com/koteev-m/hookah_bot/actions/runs/34466473797),
+CI/230370033, attempt1: **11 jobs PASS; compose FAIL only in owned systemd**.
+Full mandatory harness PASS8m00; prerequisites18/18 groups and40/40 negative matrix
+PASS1234.685s logged (1236s step). Ordinary native lifecycle PASS.
 
-Actual systemd:4 process cases and11 Caddy cases passed, then strict descendant guard
-raised UNKNOWN during hung reload before its expected-refusal observation. Own callers,
-unit and cgroup cleanup succeeded. Ordinary fixture reached real lost-pipe terminal
-reconciliation, approved/applied synthetic handoff, two same-lock deployments, restart
-and authority/UNKNOWN refusals; final synthetic-provider assertion failed. OFF startup's
-actual commands-only setChatMenuButton request was absent from the provider fixture.
-These are diagnosed fixture joins; no production guard is relaxed. Local corrections pass
-systemd15, ordinary20 and reconciliation-hook4 portable tests, with exact before failures
-and strict negative cases. CI02 per-method provider counts were not exported; fresh zero
-counters remain mandatory. Correction review and a new exact feature CI are required. Reached native checkpoints
-remain partial proof, not overall PASS or wholly UNRUN.
+CI03 systemd reached4 process and12 Caddy observations. The hung reload correctly
+returned4/UNKNOWN, no completion, with two remaining owned descendants; caller/unit
+cleanup succeeded. But actual capture took39.465s, beyond the unchanged19–28s assertion;
+systemd had already timed out its reload (ControlPID0). Late-continuation/stopped-service
+checks did not execute. This is a proved F06 production I/O join, not an infrastructure
+skip: inherited child stdout/stderr can hold Bash command substitution open after the
+helper deadline. Exact extracted helper+unchanged native DRIVER reproduces0.2s→1.279s;
+new regressions also expose exit0 with detached inherited streams. Do not mask this by
+widening bounds or redirecting output only in the fixture.
 
-F01/F02/F04/F07/F08/F10/F11 are verified at the stated core scope; F03/F05/F06/F09 still
-await completion of applicable native validation. Missing/nonzero remote outcomes stay
-UNKNOWN with retry_allowed=false; exact successful outcome plus fresh action-specific
-proof permits a distinct immutable reconciliation, never replay/reset/native PASS.
-Ordinary deployment shares the permanent target lock/history and supports the already
-accepted exact image after a separately approved/applied handoff. V125 keeps its own
-schema125 boundary. No full20-stage E2E, live manual, operational DR or reboot claim.
+The correction gives actual child consumers private stdout/stderr pipes and forwards
+bounded queues under the monotonic deadline with nonblocking output. WNOWAIT retains
+leader identity through bounded group cleanup; no reaped group is signalled. Missing
+or surviving streams/output errors/deadline remain UNKNOWN. The outer shared target
+supervisor still proves process lifetime; this helper does not fence daemon effects.
+Native systemd fixture and production20s reload bound remain unchanged. Review and local
+regressions include binary stdin/stdout/stderr, nonzero, detached pipes, backpressure,
+merged-output flag restoration and setup refusal. Local readiness25/25, CI contract12/12,
+unchanged systemd portable15/15 and runtime-consumers6/6 PASS, with no unexpected endpoints.
+Fresh full Linux CI is required.
 
-Candidate01 CI34457486489 failures and candidate02 corrections remain immutable in
-candidate-01/. Candidate02 fixes execute: full12 CI-contract checks and actual supervisor
-caller/before-source comparisons pass. Same focused review continues for the two new
-fixture joins; no new audit. Report/COVERAGE contain exact per-F/G proof limits.
-Next: complete bounded corrections and review, explicit-file corrective commit/normal
-same-feature push, verify all12 jobs/mandatory steps, then publish the final reviewed
-reports and verify their exact candidate. Do not leave four final reports dirty.
+Ordinary actual proof now closes its previous provider fixture gap:19 ordered events,
+exact lost-output terminal→fresh collector→RECONCILED_EFFECT→approved/applied synthetic
+handoff→two same-lock deployments→restart/authority/UNKNOWN refusals. Final provider
+unexpected0/outbound0/setChatMenuButton5, cleanup=true. No full20-stage E2E: earlier
+prerequisites/approval are synthetic, ordinary public_checks=false and owned directstream;
+actual SSH and local canonical typed chain are separately covered.
+
+All28 former PostgreSQL skips execute. Current full harness, real PG17/libpq/backup/
+Docker/SSH/JVM, eleven-job and ordinary proofs are in candidate-03/. Raw compose log
+483434bytes/SHA25696e8c2bc377ee4a85dcd63da290cf4ba5ea1d8ab75ffe0d2fa6dbc81487e821b.
+Same focused F05 review has no production blocker; F03/F06 need the new helper's native
+verification. Prior candidate01/02/03 failures remain immutable, not blind retries.
+Next: finish scoped F06 correction/review, explicit-file commit/normal same-feature push,
+verify all12 jobs and mandatory steps, then publish final reviewed reports and verify
+their exact candidate. All four final report files must be committed; no dirty result delta.
 
 `MAIN_INTEGRATION=NOT_AUTHORIZED`; `LIVE_ACTIONS=NONE`;
-`STAGING_RELEASE_READINESS=NOT_ESTABLISHED`. Feature validation publication only.
-No scripts/dev read/write, migration/history/frozen-evidence change, original checkout
-change or live observation. Staging application, operational DR/RPO/loss, real host reboot
-and17 controlled Guest/Owner/MIX assertions remain separately authorized future gates.
-After the final report, stop before main/PR/HT13/GateABC/live work.
-
+`PUBLICATION=FEATURE_VALIDATION_ONLY`; `STAGING_RELEASE_READINESS=NOT_ESTABLISHED`.
+Staging runtime application, operational DR/RPO/loss, host reboot and17 controlled
+Guest/Owner/MIX assertions remain separately authorized future gates. No scripts/dev
+read/write, original dirty checkout, historical migration/run/intent/receipt/archive/
+backup or frozen evidence changes. Historical PASS1–8/intent9 and separately observed
+V125 restoration remain historical, never a new native stage9 PASS. Stop after final
+feature validation/report before main/PR/HT13/GateABC/live work.
 
 ## Preserved prior phase checkpoint (09e19461 only)
 

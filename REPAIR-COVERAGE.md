@@ -1,83 +1,81 @@
 # HT-RELEASE-REPAIR-01 coverage and remaining gates
 
-## Final Open-Gate Closure — candidate02 partial native proof, 2026-09-10
+## Final Open-Gate Closure — candidate03 actual proof and F06 correction
 
 **HT_RELEASE_REPAIR_VALIDATION_INCOMPLETE**
 
-Current published candidate `cde7a0ebbf89e4d98489d24087fb53762bcd7e05`, tree
-`9e6067301fa27375b82a2c3f688eb7d7dbb61a8e`, parent65016cf8746ebdbb2dbec088ff920175e6f5609d.
-Exact feature push CI34461706240/attempt1:11 successful jobs, compose failed only in
-new systemd and ordinary native steps. Full mandatory harness PASS7m16; prerequisite
-18/18groups and40/40negative matrix PASS18m56. Safe raw log SHA256
-`12d789e2e1f0f01dc48e5678a137afc7c4a23a0ed51f6c1df941281d4bbb5c01`.
-No overall CI/native closure is inferred. Scope is the same F01–F11 package from exact
-basef7828e09 and phase parent09e19461; full identities and history are in REPAIR-REPORT.
+Published candidate `90d0bda929f673cd2e277e6c243de9ae6bc5b0fc`, tree
+`dd5a1d0f7089537a5591fb1a19a4a67d97ee482b`, parent
+`cde7a0ebbf89e4d98489d24087fb53762bcd7e05`. Exact feature push
+[CI34466473797](https://github.com/koteev-m/hookah_bot/actions/runs/34466473797),
+CI/230370033, attempt1: **11 jobs PASS; compose FAIL only in owned systemd**.
+Full mandatory harness PASS8m00; prerequisites18/18 groups and40/40 negative matrix
+PASS1234.685s logged (1236s step). Ordinary native lifecycle PASS.
 
-| Finding | Current result | Exact proof and remaining boundary |
+Evidence root: `../evidence/open-gate-closure-abp_tolk/candidate-03/`; exact source/CI/log
+bindings are in REPAIR-REPORT. Current raw compose SHA
+96e8c2bc377ee4a85dcd63da290cf4ba5ea1d8ab75ffe0d2fa6dbc81487e821b.
+New bounded-I/O source bytes require fresh native proof; earlier PASS is not inherited.
+
+| Finding | Result at current proven boundary | Evidence / remaining boundary |
 | --- | --- | --- |
-| F01 | FIXED_AND_VERIFIED at core repair scope | Full extracted SQL/actual structured SAFE/count0 consumer, unsafe refusal/no artifact, source binding/privacy and PG17/psql17+18 tests execute in current full harness. Fresh reconciliation reuses those consumers; it is not18 independently native reconciled stages. Historical receipts/PASS8 remain unchanged. |
-| F02 | FIXED_AND_VERIFIED at core repair scope | Actual fixed env_file guards+Compose execute all four OFF/SMOKE/recovery transitions, post-install validation, inverse and metadata/unrelated-byte/cleanup checks. Current ordinary setup/config consumers also execute before its later provider failure. No arbitrary env-file or host-crash permutation claim. |
-| F03 | IMPLEMENTED_UNVERIFIED at remaining native join | Actual caller exit regressions and Caddy disk/admin suite pass. Own systemd executes11 Caddy cases, including validate/install/reload failures and two real interruption boundaries. Hung reload hits strict descendant UNKNOWN guard before its expected observation; continuation/stopped-service assertions remain unexecuted. Own unit/cgroup cleanup succeeds. |
-| F04 | FIXED_AND_VERIFIED at core repair scope | Actual supported Compose create, delayed readiness/503→200, wrong identity, JVM exit and timeout execute with one recorded start per scenario in the owned PG17/JVM integration. No start retry is added; ordinary approved recreate is a separate lifecycle. |
-| F05 | IMPLEMENTED_UNVERIFIED pending complete native closure | One shared supervisor covers target lock, requests/uploads, exact-effect reconciliation, immutable typed canonical chain/status and explicit v2 retirement. Current owned SSH/deadline/ACK/children tests pass. Native lost-output successful terminal→fresh collector→RECONCILED_EFFECT→handoff→two same-lock ordinary deployments execute; final provider gate fails. Original records/lock survive, replay/UNKNOWN/retirement refusals execute. Missing/nonzero/daemon ambiguity remains UNKNOWN, never cleared by PID death/current-state equality. |
-| F06 | IMPLEMENTED_UNVERIFIED at remaining native join | Actual supervisor source-backpressure/cancel/deadline/before comparison passes, as do4 real owned process cases and bounded hung admin. Hung reload's strict outer descendant refusal requires an explicit test observation path after proven caller cleanup; actual continuing ControlPID/late-state assertions must still execute. Host reboot/daemon-crash durability is separately unproved. |
-| F07 | FIXED_AND_VERIFIED at core repair scope | Actual two plausible server/database/schema/role targets, fixed Compose source binding, real libpq/auth, backup/preflight and running backend semantic equality execute. Ordinary consumer verifies its actual DB before the later provider failure. URI hashes never replace semantic identity; no live DB target change. |
-| F08 | FIXED_AND_VERIFIED at core repair scope | Exact dump hash and strict meaningful TOC checks execute, including timezone/client presentation differences versus real dump/inventory changes. Real two-phase backup/rehearsal includes resource identity and checked cleanup; protected original local DR boundary stays required. This does not prove full operational DR. |
-| F09 | IMPLEMENTED_UNVERIFIED pending complete native closure | Root/exact-image/restart guards and actual synthetic applied handoff execute: migration=no, then approved/applied unless-stopped; two exact-image backend-only deployments through the shared lock, next explicit transfer, unchanged PG and actual backend restart. Wrong image/config/owner and UNKNOWN refuse. Final provider gate fails; no live policy application or implicit new-image selection. V125 keeps its own schema125 boundary. |
-| F10 | FIXED_AND_VERIFIED at core repair scope | Full immutable attempt/status/remote stdin/ACK/precheck consumers execute. Only proved NOT_DISPATCHED read attempts may repeat; unknown mutation cannot retry/delete intent/use cached PASS. Both current Linux supervisor invocations execute the exact09e before source. Reconciliation is separate completion evidence, not replay. |
-| F11 | FIXED_AND_VERIFIED at core repair scope | Exact status/typed V125/V126 chain validators execute, distinguishing NOT_STARTED, RECONCILIATION_REQUIRED and INVALID_EVIDENCE; source/predecessor/manual/DR corruption refuses. Actual remote reconciliation has distinct evidence; native local-format2 full20-stage chain remains a separate portable test. Historical V125 availability is separately sourced/timed and never becomes stage9 PASS. |
+| F01 | FIXED_AND_VERIFIED, core scope | Full extracted SQL/structuredSAFE-count0, unsafe/noartifact/privacy/source binding on PG17/psql17+18 PASS. Reconciliation reuses actual consumer, not18 independent native completed stages. Historical PASS8 stays unchanged. |
+| F02 | FIXED_AND_VERIFIED, core scope | Fixed env_file guards+real Compose allfour OFF/SMOKE/recovery transitions, inverse/post-install/metadata/unrelatedbytes/cleanup PASS; ordinary real config consumers PASS. No arbitrary env-file authority or crash proof. |
+| F03 | IMPLEMENTED_UNVERIFIED at remaining native I/O join | Actual exits/command-substitution/validate/install/reload/admin divergence and two interruption boundaries PASS; hung reload shows F06 capture delay39.465s, so continuing ControlPID/lateactive/stoppedservice assertions unexecuted. Source correction awaits native recheck. |
+| F04 | FIXED_AND_VERIFIED, core scope | Owned actual PG17/Docker/JVM503→200/readiness, wrongidentity,exit,timeout;4 exact CIDs eachstart1. No start retry; ordinary authorized recreate is separate lifecycle. |
+| F05 | FIXED_AND_VERIFIED at stated protocol/native fixture scope | Same shared target lock/history, exact successful lost ACK→fresh actual collector→immutable distinct reconciliation→protected handoff→two deployments and next binding PASS. Actual SSH/descendant/deadline/competing recovery and portable typed canonical/retirement validators PASS. Missing/nonzero/SIGKILL/daemon ambiguity stays UNKNOWN; no external fence/reset/replay executor. No full20-stage E2E/native18classes claim. Changed F06 helper still requires whole-package fresh CI. |
+| F06 | IMPLEMENTED_UNVERIFIED; proved production blocker being corrected | Actual20s deadline emitsUNKNOWN but inherited detached consumer streams hold Bash capture39.465s. Exact production/helper+DRIVER before0.2→1.279s and false0 are reproduced. Private child pipes/bounded nonblocking forwarding/WNOWAIT cleanup correction has targeted after coverage; actual native bounds/daemon continuation must rerun. No widened timeouts or fixture-only output suppression. |
+| F07 | FIXED_AND_VERIFIED, core scope | Two plausible semantic server/database/schema/role targets, actual backup/preflight/backend equality, real libpq/auth and ordinary DB consumer PASS. HashURI never substitutes; no live target change. |
+| F08 | FIXED_AND_VERIFIED, core scope | Exact dump hash, meaningful TOC timezone/client-format differences versus real changes PASS; native both-phase backup/rehearsal and owned cleanup witnesses PASS. Original local sealed DR boundary still required; not operationalDR. |
+| F09 | FIXED_AND_VERIFIED at stated handoff/ordinary fixture scope | Actual migration=no→explicit approved/applied synthetic handoff→unless-stopped; accepted exactimage/root.env authority, two same-lock backend-only deployments, PG unchanged, backend restart and stale/wrongimage/config/owner/UNKNOWN refusals PASS. V125 schema125 boundary separate; no live policy/time/newimage authority chosen. |
+| F10 | FIXED_AND_VERIFIED, core scope | Immutable attempts/status/stdinACK/dispatch consumers PASS; only proved NOT_DISPATCHED reads repeat. Unknown cannot replay/delete intent/cachePASS. Both native supervisor invocations use exact09e before source. |
+| F11 | FIXED_AND_VERIFIED, core scope | Distinct NOT_STARTED/RECONCILIATION_REQUIRED/INVALID_EVIDENCE and typed V125/V126 chains PASS; source/predecessor/manual/DR corruption refuses. Remote native reconciliation and separate portable localformat2 chain are explicit. Historical availability separately timed/sourced, never nativePASS9. |
 
-Candidate02 actual systemd failure: `owned command left descendants; outcome UNKNOWN`
-at hung reload after4 process and11 Caddy cases, with successful bounded caller/unit
-cleanup. A typed observation of that nonzero result is permitted only in the exact
-expected-failure case after cleanup, preserving UNKNOWN/no-completion/deadline and actual
-daemon post-state assertions. No generic descendant suppression or production change.
+The applicable systemd failure is a production inherited-stream join revealed after a
+fixture refusal-observation fix. Current source uses private child output pipes, bounded
+queues/nonblocking forwarding, held unreaped leader for safe bounded cleanup, exact original
+nonzero and UNKNOWN on unresolved I/O. No generic daemon or complete child-lifetime proof
+is inferred; outer target supervisor owns that responsibility. New local tests include actual
+extracted helper/unchanged native DRIVER, detached stdout/stderr and exited0 parent, binary
+stdin/stdout/stderr, backpressure, merged2>&1 and descriptor-flag/setup edges. Review findings
+and exact before/after commands are retained. Local readiness25/25 (10 new methods),
+CI contract12/12, native-fixture portable15/15 and runtime-consumers6/6 PASS; full new Linux
+CI remains required.
 
-Candidate02 actual ordinary failure: final `synthetic provider saw unexpected request`
-after17 emitted lifecycle/refusal checkpoints. Source OFF startup's commands-only
-setChatMenuButton call was absent from the strict provider fixture; the correction must
-allow only that exact synthetic method/body and continue refusing send/chat/web-app/extra
-input. Both final unexpected/outbound constraints remain strict. CI02 lacked per-method counts, so every historical unexpected request cannot be attributed retrospectively. The exact source/handler mismatch has before403/counters1 proof and after coverage; native zero counters remain required.
+Ordinary final native provider counters are getUpdates334/getWebhookInfo8/menu5,
+unexpected0/outbound0;19 ordered events and cleanup=true. This closes the exactcommands-menu
+fixture mismatch. It does not prove real Telegram/manual delivery or erase the failed earlier
+provider run, which lacked per-method counters. Repeated current JSON represents one execution.
 
-Local corrections pass systemd15, ordinary20 and reconciliation-hook4 portable tests. Systemd preserves a typed refusal and permits only the hung-reload expected-failure observer after proven cleanup/exact deadline/no completion; actual ControlPID/late-state/timing gates remain. The provider regression executes the real HTTP parser/handler through in-memory wire transport, with18 negatives and no TLS/listener/socket. Neither portable correction claims native after.
-
-| Gap | Current synthetic/runtime proof | Remaining mandatory release gate |
+| Gap | Current actual/synthetic proof | Remaining mandatory release gate |
 | --- | --- | --- |
-| G01 OPEN | Real synthetic whole-DB globals/roles/memberships/owners/ACL/settings/auth plus schema/data rehearsal. | Operational assets/auth/secret custody and a real accepted recovery point/RPO/loss boundary. No default loss or automatic live restore. User classifies this as a separate live release decision, not a missing replay feature. |
-| G02 OPEN | Actual hosted Linux, PG17/clients17–18, Docker/Compose, owned SSH, Caddy/JVM; current partial systemd/ordinary proof above. | First close the two applicable fixture validation failures. Actual host reboot/persistent-storage/power-loss/daemon-crash durability then remains a localized infrastructure gate needing a controlled VM plus external observer. Process/container restart is not host reboot. No new VM or runner reboot authorized. |
-| G03 OPEN | Current28 PostgreSQL cases prove allowed/denied HTTP/Telegram writes, unchanged denied rows and inbound/outbox progress with a synthetic provider. Connected runtime proves polling progress/readiness. | Real poller/conflict evidence and provider-send→markSent acknowledgement/crash ambiguity; no new retained/replayed denied updates, delivery guarantee or accepted loss. OFF can resume writes before Caddy opens. |
-| G04 OPEN | Exact17-assertion artifact validator, browser216 and source-bound backend tests. |17 actual controlled Guest/Owner/MIX assertions, including delivery and tenant/write boundaries, remain live Gate B/C evidence. Synthetic approval/manual data never substitute. |
+| G01 OPEN | Actual synthetic whole-DB roles/memberships/owners/ACL/settings/auth and schema/data restore preserved mandatory. | Operational assets/auth/secret custody and real accepted recovery point/RPO/loss. No loss default or automatic live restore; separate live decision. |
+| G02 OPEN | Actual hosted Linux/PG17/clients17–18/Docker/Compose/ownSSH/Caddy/JVM/ordinary lifecycle,4process+partial12systemd observations. | First verify F06 correction in applicable native systemd. Real hostreboot/powerloss/persistent-storage/daemon-crash durability needs a controlled VM with external observer; process/containerrestart is not that proof. No VM or runnerreboot authorized. |
+| G03 OPEN |28 actualPGcases prove allowed/denied HTTP/Telegram writes and inbound/outbox progression; connected runtime polling/denial plus strict syntheticprovider PASS. | Real poller/conflict and provider-send→markSent acknowledgement/crash ambiguity. No new deniedupdate retention/replay, promise or accepted loss. OFF can resume writes before publicCaddy. |
+| G04 OPEN | Exact17artifact assertion validator, browser216 and backend source-bound gates PASS. |17 controlled live Guest/Owner/MIX assertions remain GateB/C. Synthetic manual/handoff prerequisites never substitute. |
 
-Evidence is `../evidence/open-gate-closure-abp_tolk/candidate-02/`: immutable raw log,
-final snapshot48/result ledger, core-compose proof, native extraction/diagnosis, eleven-job
-proof and database source bindings. Every first failure remains separate. Current28PG
-execution is inbound4 + webhook5PG (plus1nonPG) + outbox19; exact selectors and mandatory
-XML/name/no-skip validators support counts where logs are aggregate. The only skipped
-declared step in the other11jobs is pnpm setup because npm was selected. No required
-Linux test is made optional to obtain PASS.
+Counts are source-bound to current log and mandatory selectors/resultsvalidators: inbound4,
+webhook5PG+1nonPG,outbox19; no fabricated individually printed outbox execution. Core harness
+has479 assertion markers/17suite summaries, not479 unique tests. Only non-Linux case and
+inapplicable pnpm setup skip; no applicable Linux requirement is optional. Core backup has
+actualDocker/PG plus explicitly identified adapters; prerequisite18/40 orchestration mocks
+SSH/Docker/PG/Caddy/Telegram. Full lists are in core-compose-proof and prior scope definitions.
 
-No full E2E claim: native ordinary integration starts from synthetic earlier prerequisites
-and approval; the terminal action/supervisor/collector/lock/deployment consumers are real.
-It uses an owned direct stream, not a new full SSH cutover; actual SSH behavior is tested
-separately. Ordinary public_checks=false is disclosed; terminal public gates and backend
-health are separately exercised. Private in-run evidence is not claimed downloaded unless
-exported. Endpoint wrappers are accidental-escape guards with declared limitations;
-Docker runtime additionally uses an owned internal network and exact synthetic endpoints.
-
-Candidate01 failed invocations and exact09e137-before remain immutable; candidate02
-full harness proves the first8-file corrections. Same focused independent review continues
-for the two new fixture joins and final evidence/status. Full publication, source hashes,
-commands/exits, side effects, cleanup and changed-file manifest are in REPAIR-REPORT.
-All four final report/status files must be in the final reviewed candidate, followed by
-exact12-job CI verification. Until then the overall result remains VALIDATION_INCOMPLETE.
+Ordinary native starts from synthetic prior records/approval and uses owned directstream,
+public_checks=false; actual terminal action/collector/deploy consumers and lock are real.
+Actual SSH and local canonical typed chains are separately tested. No fullE2E/daemoncrash/
+hostreboot/liveDR/manual claim. Current same focused F05 source review is clear; proved F06
+correction and final reports require its focused continuation/new12-job CI. Earlier failures,
+initial dirty reports and historical source evidence remain immutable.
 
 `MAIN_INTEGRATION=NOT_AUTHORIZED`; `LIVE_ACTIONS=NONE`;
 `PUBLICATION=FEATURE_VALIDATION_ONLY`; `STAGING_RELEASE_READINESS=NOT_ESTABLISHED`.
-Staging application remains separately authorized future work. No scripts/dev read/write,
-original dirty checkout, historical migration/run/receipt/archive/backup or frozen evidence
-changes. Historical canonical PASS1–8/intent9 and separately observed V125 restoration
-remain unchanged. Stop after the final report before main/PR/HT13/GateABC/live work.
-
+Staging runtime application, operational DR/RPO/loss, host reboot and17 controlled
+Guest/Owner/MIX assertions remain separately authorized future gates. No scripts/dev
+read/write, original dirty checkout, historical migration/run/intent/receipt/archive/
+backup or frozen evidence changes. Historical PASS1–8/intent9 and separately observed
+V125 restoration remain historical, never a new native stage9 PASS. Stop after final
+feature validation/report before main/PR/HT13/GateABC/live work.
 
 ## Preserved prior phase report (applies to09e19461 only)
 
