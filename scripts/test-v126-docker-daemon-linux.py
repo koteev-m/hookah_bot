@@ -91,6 +91,7 @@ def private_root(spec):
                 require(stat.S_ISSOCK(path.stat().st_mode) and path.stat().st_uid == os.geteuid(), 'owned endpoint is not its socket')
     require(spec['unit'] == root.name + '.service', 'daemon unit identity differs')
     require(spec['namespace'] == root.name, 'containerd namespace differs')
+    require(spec['plugin_namespace'] == root.name + '-plugins', 'containerd plugin namespace differs')
     return root
 
 
@@ -100,7 +101,7 @@ def daemon_argv(spec):
             '--exec-root=' + spec['exec_root'], '--pidfile=' + spec['pidfile'], '--config-file=' + spec['config'],
             '--storage-driver=vfs', '--bridge=none', '--iptables=false', '--ip6tables=false',
             '--ip-forward=false', '--ip-masq=false', '--userland-proxy=false',
-            '--containerd-namespace=' + spec['namespace'], '--containerd-plugins-namespace=' + spec['namespace']]
+            '--containerd-namespace=' + spec['namespace'], '--containerd-plugins-namespace=' + spec['plugin_namespace']]
 
 
 def docker_argv(spec, args, *, proxy=False):
@@ -253,15 +254,15 @@ def child_mode(mode, path, variant):
 
 
 class UnixConnection(http.client.HTTPConnection):
-    def __init__(self, fixture):
-        super().__init__('owned-docker', timeout=4)
+    def __init__(self, fixture, timeout=4):
+        super().__init__('owned-docker', timeout=timeout)
         self.fixture = fixture
 
     def connect(self):
         private_root(self.fixture.spec)
         require(self.fixture.daemon_pid is not None, 'owned daemon identity unavailable')
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.sock.settimeout(4)
+        self.sock.settimeout(self.timeout)
         self.sock.connect(self.fixture.spec['socket'])
         require_peer(self.sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12), self.fixture.daemon_pid)
 
@@ -467,7 +468,7 @@ class Fixture:
         self.spec = {'root': str(self.root), 'socket': str(self.root / 'd.sock'), 'proxy_socket': str(self.root / 'p.sock'),
             'data_root': str(self.root / 'data'), 'exec_root': str(self.root / 'exec'), 'pidfile': str(self.root / 'dockerd.pid'),
             'config': str(self.root / 'daemon.json'), 'cli_config': str(self.root / 'cli'),
-            'unit': self.root.name + '.service', 'namespace': self.root.name, **self.tools,
+            'unit': self.root.name + '.service', 'namespace': self.root.name, 'plugin_namespace': self.root.name + '-plugins', **self.tools,
             'test_sha256': sha(SELF.read_bytes()), 'binding_sha256': sha((SCRIPTS / 'v126-operation-bindings.py').read_bytes())}
         self.unit_path = Path('/run/systemd/system') / self.spec['unit']
         self.events, self.cases, self.failures = [], [], []
@@ -550,8 +551,8 @@ class Fixture:
     def manager(self, *args, **kwargs):
         return self.run([self.tools['systemctl'], *args], **kwargs)
 
-    def properties(self):
-        result = self.manager('show', self.spec['unit'], '--property=MainPID,ControlPID,ControlGroup,FragmentPath,ActiveState,SubState')
+    def properties(self, *, timeout=12):
+        result = self.manager('show', self.spec['unit'], '--property=MainPID,ControlPID,ControlGroup,FragmentPath,ActiveState,SubState', timeout=timeout)
         return dict(line.split('=', 1) for line in result.stdout.decode().splitlines() if '=' in line)
 
     def prepare(self):
@@ -597,21 +598,48 @@ class Fixture:
         self.assert_unit_file()
         self.manager('start', self.spec['unit'], timeout=50)
         deadline = time.monotonic() + 35
+        def remaining(bound):
+            budget = deadline - time.monotonic()
+            require(budget > 0, 'own daemon readiness deadline expired; outcome UNKNOWN')
+            return min(bound, budget)
         info = None
-        while time.monotonic() < deadline:
-            result = self.run(docker_argv(self.spec, ['info', '--format', '{{json .}}']), check=False, timeout=5)
-            if result.returncode == 0:
-                info = json.loads(result.stdout)
+        while info is None:
+            props = self.properties(timeout=remaining(5))
+            self.events.append({'daemon_readiness_unit': props})
+            require(props.get('FragmentPath') == str(self.unit_path) and props.get('ControlGroup') in ('', '/system.slice/' + self.spec['unit']),
+                    'own daemon systemd identity differs')
+            require(props.get('ActiveState') in ('active', 'activating'), 'own daemon reached terminal state before readiness')
+            result = self.run(docker_argv(self.spec, ['info', '--format', '{{json .}}']), check=False, timeout=remaining(5))
+            try:
+                observed = json.loads(result.stdout) if result.stdout else {}
+            except (ValueError, UnicodeError):
+                raise AssertionError('own Docker info JSON invalid') from None
+            require(isinstance(observed, dict), 'own Docker info schema invalid')
+            fields = {key: observed.get(key) or '' for key in ('DockerRootDir', 'Driver', 'ID', 'ServerVersion')}
+            require(all(isinstance(value, str) for value in fields.values()), 'own Docker info identity fields invalid')
+            errors = observed.get('ServerErrors') or []
+            require(isinstance(errors, list) and all(isinstance(value, str) for value in errors), 'own Docker info server errors invalid')
+            self.events.append({'daemon_readiness_info': {'exit': result.returncode, 'root_sha256': sha(fields['DockerRootDir'].encode()),
+                'root_matches': fields['DockerRootDir'] == self.spec['data_root'], 'driver': fields['Driver'],
+                'id_present': bool(fields['ID']), 'server_version': fields['ServerVersion'], 'server_error_count': len(errors)}})
+            # A formatted client/error placeholder may exit zero. Empty server
+            # fields are starting; an observed foreign identity always refuses.
+            require(fields['DockerRootDir'] in ('', self.spec['data_root']) and fields['Driver'] in ('', 'vfs'),
+                    'Docker daemon root/driver differs')
+            require(not fields['ID'] or self.engine_id is None or fields['ID'] == self.engine_id,
+                    'private engine identity changed across same-data restart')
+            if result.returncode == 0 and not errors and all(fields.values()) and props['ActiveState'] == 'active':
+                info = observed
                 break
-            time.sleep(.1)
-        require(info is not None, 'own daemon did not become ready')
+            time.sleep(remaining(.1))
         require(info.get('DockerRootDir') == self.spec['data_root'] and info.get('Driver') == 'vfs', 'Docker daemon root/driver differs')
         require(isinstance(info.get('ID'), str) and info['ID'], 'actual private daemon engine identity unavailable')
         require(self.engine_id is None or info['ID'] == self.engine_id, 'private engine identity changed across same-data restart')
         self.engine_id = info['ID']
-        props = self.properties()
+        props = self.properties(timeout=remaining(5))
         require(props.get('FragmentPath') == str(self.unit_path) and props.get('ControlGroup') == '/system.slice/' + self.spec['unit'],
                 'own daemon systemd identity differs')
+        require(props.get('ActiveState') == 'active', 'own daemon reached terminal state before readiness')
         require(props.get('MainPID', '').isdigit() and int(props['MainPID']) > 0, 'own daemon MainPID missing')
         pid = int(props['MainPID'])
         require(Path('/proc/' + str(pid) + '/exe').resolve(strict=True) == Path(self.tools['dockerd']).resolve(), 'own MainPID is not actual dockerd')
@@ -619,12 +647,13 @@ class Fixture:
         self.daemon_fd = os.pidfd_open(pid)
         self.daemon_pid, self.daemon_birth = pid, self.scope_module.proc_identity(pid)
         require(self.daemon_birth is not None, 'own daemon birth identity unavailable')
-        connection = UnixConnection(self)
+        connection = UnixConnection(self, timeout=remaining(4))
         try:
             connection.request('GET', '/_ping')
             require(connection.getresponse().read(1024) == b'OK', 'private daemon peer ping differs')
         finally:
             connection.close()
+        remaining(1)
         self.events.append({'daemon_started': True, 'main_pid': pid, 'birth': self.daemon_birth,
                             'engine_id': info.get('ID'), 'version': info.get('ServerVersion'), 'driver': info['Driver'],
                             'private_root_sha256': sha(self.spec['data_root'].encode())})
@@ -781,6 +810,7 @@ class Guards(unittest.TestCase):
         self.root = Path(self.temp.name).resolve() / (PREFIX + 'a'*32)
         self.root.mkdir(mode=0o700)
         self.spec = {'root': str(self.root), 'unit': self.root.name+'.service', 'namespace': self.root.name,
+                     'plugin_namespace': self.root.name+'-plugins',
                      'dockerd': '/actual/dockerd', 'docker': '/actual/docker', 'name': self.root.name+'-positive',
                      'image_id': 'sha256:'+'b'*64}
         for key, name in (('socket','d.sock'),('proxy_socket','p.sock'),('data_root','data'),('exec_root','exec'),
@@ -808,6 +838,92 @@ class Guards(unittest.TestCase):
         self.assertFalse(any(value.startswith('--containerd=') for value in argv))
         self.assertIn('--containerd-namespace='+self.root.name,argv)
         self.assertNotIn('/var/run/docker.sock',' '.join(argv))
+
+    def test_actual_daemon_arguments_use_distinct_owned_containerd_namespaces(self):
+        options=dict(value[2:].split('=',1) for value in daemon_argv(self.spec)[1:])
+        self.assertNotEqual(options['containerd-namespace'],options['containerd-plugins-namespace'])
+        self.assertEqual(options['containerd-namespace'],self.root.name)
+        self.assertEqual(options['containerd-plugins-namespace'],self.root.name+'-plugins')
+        with self.assertRaisesRegex(AssertionError,'plugin namespace'):
+            daemon_argv(self.spec|{'plugin_namespace':'plugins.moby'})
+
+    def readiness_fixture(self, observations, active_state='active'):
+        fixture=Fixture.__new__(Fixture)
+        fixture.spec=self.spec;fixture.tools={'dockerd':self.spec['dockerd']};fixture.events=[]
+        fixture.unit_path=self.root/'own.service';fixture.assert_unit_file=Mock();fixture.manager=Mock()
+        fixture.run=Mock(side_effect=[subprocess.CompletedProcess(['own-docker-info'],code,canonical(body),b'') for code,body in observations])
+        fixture.properties=Mock(return_value={'FragmentPath':str(fixture.unit_path),'ControlGroup':'/system.slice/'+self.spec['unit'],
+                                              'MainPID':'12345','ControlPID':'0','ActiveState':active_state,'SubState':'running'})
+        fixture.scope_module=Mock();fixture.scope_module.proc_identity.return_value='synthetic-birth'
+        fixture.engine_id=None;fixture.daemon_pid=fixture.daemon_fd=fixture.daemon_birth=None
+        return fixture
+
+    def complete_info(self):
+        return {'DockerRootDir':self.spec['data_root'],'Driver':'vfs','ID':'synthetic-private-engine','ServerVersion':'28.0.4'}
+
+    def observe_readiness(self, fixture):
+        original_resolve=Path.resolve;original_read=Path.read_text
+        def resolve(path,*args,**kwargs):
+            if str(path)=='/proc/12345/exe':return Path(self.spec['dockerd'])
+            return original_resolve(path,*args,**kwargs)
+        def read(path,*args,**kwargs):
+            if str(path)=='/proc/12345/cgroup':return '0::/system.slice/'+self.spec['unit']+'\n'
+            return original_read(path,*args,**kwargs)
+        connection=Mock();connection.getresponse.return_value.read.return_value=b'OK'
+        with patch.object(Path,'resolve',resolve),patch.object(Path,'read_text',read),patch.object(os,'pidfd_open',return_value=123,create=True),\
+                patch.dict(Fixture.start_daemon.__globals__,{'UnixConnection':Mock(return_value=connection)}),patch.object(time,'sleep'):
+            fixture.start_daemon()
+
+    def test_exit_zero_empty_server_placeholder_waits_once_then_real_identity(self):
+        # CI28 returned exit0 during failed startup. These are explicit synthetic
+        # observations, not an assertion that local CLI29 reproduces its status.
+        for extra in ({},{'ServerErrors':['own socket not ready']}):
+            with self.subTest(server_errors=bool(extra)):
+                fixture=self.readiness_fixture([(0,{'DockerRootDir':'','Driver':'','ID':''}|extra),(0,self.complete_info())])
+                self.observe_readiness(fixture)
+                self.assertEqual(fixture.run.call_count,2)
+                fixture.manager.assert_called_once_with('start',self.spec['unit'],timeout=50)
+                self.assertEqual(fixture.engine_id,'synthetic-private-engine')
+                self.assertEqual(len([event for event in fixture.events if event.get('daemon_started')]),1)
+
+    def test_terminal_failed_own_unit_refuses_before_docker_info(self):
+        fixture=self.readiness_fixture([(0,self.complete_info())],active_state='failed')
+        with self.assertRaisesRegex(AssertionError,'terminal state'):
+            self.observe_readiness(fixture)
+        fixture.run.assert_not_called()
+
+    def test_foreign_server_identity_refuses_without_wait_or_second_start(self):
+        for extra in ({},{'ServerErrors':['synthetic error']}):
+            with self.subTest(server_errors=bool(extra)):
+                fixture=self.readiness_fixture([(0,self.complete_info()|{'DockerRootDir':'/foreign/data'}|extra)])
+                with self.assertRaisesRegex(AssertionError,'root/driver differs'):
+                    self.observe_readiness(fixture)
+                self.assertEqual(fixture.run.call_count,1)
+                fixture.manager.assert_called_once_with('start',self.spec['unit'],timeout=50)
+
+    def test_server_errors_with_full_identity_cannot_be_ready(self):
+        fixture=self.readiness_fixture([(0,self.complete_info()|{'ServerErrors':['synthetic not-ready']}),
+                                        (0,self.complete_info())])
+        self.observe_readiness(fixture)
+        self.assertEqual(fixture.run.call_count,2)
+
+    def test_same_data_restart_refuses_changed_engine_identity_without_wait(self):
+        fixture=self.readiness_fixture([(0,self.complete_info())])
+        fixture.engine_id='different-original-private-engine'
+        with self.assertRaisesRegex(AssertionError,'engine identity changed across same-data restart'):
+            self.observe_readiness(fixture)
+        self.assertEqual(fixture.run.call_count,1)
+        fixture.manager.assert_called_once_with('start',self.spec['unit'],timeout=50)
+        self.assertFalse(any(event.get('daemon_started') for event in fixture.events))
+
+    def test_daemon_readiness_deadline_is_unknown_and_does_not_repeat_start(self):
+        fixture=self.readiness_fixture([(0,{'DockerRootDir':'','Driver':'','ID':''})])
+        with patch.object(time,'monotonic',side_effect=[0,10,20,30,40]),self.assertRaisesRegex(AssertionError,'deadline expired; outcome UNKNOWN'):
+            self.observe_readiness(fixture)
+        fixture.manager.assert_called_once_with('start',self.spec['unit'],timeout=50)
+        self.assertEqual(fixture.run.call_count,1)
+        self.assertLessEqual(fixture.run.call_args.kwargs['timeout'],5)
+        self.assertFalse(any(event.get('daemon_started') for event in fixture.events))
 
     def test_private_root_and_socket_reject_escape_and_symlink(self):
         with self.assertRaises(AssertionError):

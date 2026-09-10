@@ -1,5 +1,47 @@
 # HT-RELEASE-REPAIR-01 checkpoint — final feature closure
 
+## Latest closure validation — CI05 fixture correction
+
+**HT_RELEASE_REPAIR_VALIDATION_INCOMPLETE**. Published candidate
+`ee262f2ca6b227930a01a5ce0fb218afb46f4b7b`, tree
+`c8e952da0d0b3b44bdd7a15b1398f7488ee6c54c`, parent
+`391abc7135e74365dad69e34109b1bc2612caec7`.
+[CI34479384440](https://github.com/koteev-m/hookah_bot/actions/runs/34479384440),
+CI/230370033, exact feature push/attempt1, completed2026-09-10T13:33:33Z:
+11 other jobs and every other compose step PASS; new owned daemon step FAILED.
+Full mandatory harness6m26 and prerequisites18 groups/40 negatives21m44 PASS.
+The failure is preserved in candidate-05/result-ledger.json and compose.log,
+517680bytes/SHA25683fc5762f737def26f154da3ee45916273b418fb0a56d056d45b972a5cb73eec.
+
+The fixture passed identical containerd container/plugin namespaces; actual Docker28
+refused startup. The first reported assertion was root/driver mismatch because formatted
+Docker info returned exit0 despite an unavailable server. No fault case started.
+Own systemd journal records the namespace refusal; cleanup completed, own cgroup EMPTY,
+callers REAPED, runtime root removed. No default daemon or running container was changed.
+This is a test setup/readiness defect, not evidence of a new production supervisor defect.
+The corrective fixture uses distinct private namespaces and actual server readiness,
+with bounded read-only waiting and immediate refusal of foreign identity. Local regression
+before:5 failing methods/6 assertions; after:23 PASS. Workflow/guard CI-contract13 PASS;
+endpoint violations0, syntax/compile/diff0. Current fixture SHA256
+a0ffcc98ad8fb9203ad4af18c3129570b4cf1034ae2935e9152de901e7595621.
+Evidence is daemon-proof/correction-01/DIAGNOSIS.md and final-validation-02.json, plus
+candidate-06/ci-contract-01.json and sanity-01.json. The portable readiness observations
+are synthetic; native after is unverified until the corrective candidate executes in CI.
+
+Actual CI05 ordinary lifecycle retains19 events, two distinct same-lock deployments,
+cleanup=true and synthetic provider polls309/webhook8/menu5/unexpected0/outbound0.
+Other native/core/systemd and28 former PG cases pass at their recorded fixture scopes.
+Current source production sequencer remains d18a638fd64362a381b1d97b0cd7c647a965788cf46f8e783609404604bb45cf.
+All candidate05 observations stay separate from the CI04 details below; CI05 is not green.
+Its11-file commit/push exited0/0; manifest49 base-changed/32 phase-changed paths.
+
+Next: review the demonstrated fixture correction and narrow regressions, explicitly commit
+and normally push only this feature, then verify exact12 jobs/native outcomes. Native daemon
+validation and final published report acceptance remain required. Historical report tails,
+starting dirty reports and first failures remain unchanged. MAIN_INTEGRATION=NOT_AUTHORIZED;
+LIVE_ACTIONS=NONE; STAGING_RELEASE_READINESS=NOT_ESTABLISHED. No scripts/dev access.
+
+
 ## HT-RELEASE-REPAIR-01 — Final Open-Gate Closure (CI04 passed; daemon gate pending)
 
 **HT_RELEASE_REPAIR_VALIDATION_INCOMPLETE**. Same worktree/feature
