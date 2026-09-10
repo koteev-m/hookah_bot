@@ -62,7 +62,13 @@ handoff and the next exact descriptor, then appends the next transfer. The next 
 uses the same lock/inode/history. Missing, timed-out or nonzero results keep the target
 blocked, including competing recovery. The separate reconciliation/retirement semantics
 and commands are in [V126_REPAIR_OPERATION_PROTOCOL.md](V126_REPAIR_OPERATION_PROTOCOL.md).
-Runtime closure is pending exact feature CI; portable fixtures alone do not establish it.
+Exact feature391abc7135e74365dad69e34109b1bc2612caec7/CI34472343581 verifies the owned
+terminal/reconciliation/handoff/two-deployment lifecycle with real Docker/JVM/PG and
+Caddy/systemd consumers. Earlier prerequisites and the approved handoff are synthetic;
+ordinary public_checks=false and the owned direct transport are explicit fixture limits.
+Separate SSH and local typed-chain regressions supply their own evidence. The new
+private Docker daemon interruption gate remains pending; no complete cutover E2E or
+host reboot is claimed. REPAIR-REPORT/COVERAGE retain exact results and first failures.
 
 An incident or reboot first requires read-only reconciliation of exact container/image,
 actual database/schema, config disk/runtime, target operation records and queued/inflight

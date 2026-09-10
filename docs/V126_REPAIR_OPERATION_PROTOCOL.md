@@ -1,7 +1,11 @@
 # V126 repair operation protocol and binding retirement
 
-This records the implemented F05 contract for HT-RELEASE-REPAIR-01. Runtime validation of this closure candidate is pending exact feature CI. It supplements
-the canonical cutover contract; it is not authority to run against staging.
+This records the implemented F05 contract for HT-RELEASE-REPAIR-01. Exact feature
+candidate391abc7135e74365dad69e34109b1bc2612caec7 passed CI34472343581, including the
+owned terminal/reconciliation/ordinary lifecycle and actual Caddy/systemd consumers.
+The separate owned Docker daemon interruption gate is still pending. REPAIR-REPORT
+and REPAIR-COVERAGE bind each proof and its limits. This supplements the canonical
+cutover contract; it is not authority to run against staging.
 
 The existing verified stdin dispatcher will supervise each remote action using a
 Linux child subreaper and one nonblocking `flock` on a persistent lock file under
@@ -27,6 +31,14 @@ timeout is UNKNOWN with respect to side effects. Only the supervisor's own
 descendants may be signalled. If cleanup cannot prove no children remain, no
 terminal outcome is written. Missing or malformed outcomes block all subsequent
 mutations, including recovery, even after a process exits or a host reboots.
+
+Individual bounded consumers use private child stdout/stderr pipes and bounded
+nonblocking forwarding under their monotonic deadline, including inside Bash command
+substitution. Missing EOF, output backpressure or cancellation cannot prolong capture
+indefinitely or yield success. An unreaped leader retains process-group identity during
+bounded cleanup; no reaped group is signalled. This I/O helper does not prove complete
+descendant lifetime or fence daemon work: the outer supervisor retains the former
+responsibility, and unresolved daemon effects remain UNKNOWN.
 
 SIGHUP does not cancel a supervised action. SIGTERM/INT trigger bounded child
 cleanup; SIGKILL/crash/reboot leaves the start record unresolved. Boot ID and PID
@@ -193,6 +205,9 @@ There is no automatically selected next run or automatic retirement after HTTP20
 
 Old version1 transfers remain strict and retain their original meaning. Existing runs
 without request/protocol records cannot be upgraded, adopted or assigned synthetic
-completion. The frozen historical PASS1–8/intent9 remains unchanged. Actual host reboot
-and daemon crash durability need a separately controlled VM exercise; process kills,
-container restarts and hosted systemd interruption do not prove host reboot behavior.
+completion. The frozen historical PASS1–8/intent9 remains unchanged. The owned Docker
+daemon interruption fixture exercises synthetic create metadata and blocked replay;
+until its actual native result is recorded, that applicable gate remains unverified.
+It does not establish JVM survival, power-loss/storage durability or host reboot.
+The latter needs a controlled VM with persistent storage and an external observer;
+rebooting the disposable GitHub runner is not authorized.

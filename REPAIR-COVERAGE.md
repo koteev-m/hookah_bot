@@ -1,81 +1,79 @@
 # HT-RELEASE-REPAIR-01 coverage and remaining gates
 
-## Final Open-Gate Closure — candidate03 actual proof and F06 correction
+## Final Open-Gate Closure — CI04 proof and pending native daemon gate
 
 **HT_RELEASE_REPAIR_VALIDATION_INCOMPLETE**
 
-Published candidate `90d0bda929f673cd2e277e6c243de9ae6bc5b0fc`, tree
-`dd5a1d0f7089537a5591fb1a19a4a67d97ee482b`, parent
-`cde7a0ebbf89e4d98489d24087fb53762bcd7e05`. Exact feature push
-[CI34466473797](https://github.com/koteev-m/hookah_bot/actions/runs/34466473797),
-CI/230370033, attempt1: **11 jobs PASS; compose FAIL only in owned systemd**.
-Full mandatory harness PASS8m00; prerequisites18/18 groups and40/40 negative matrix
-PASS1234.685s logged (1236s step). Ordinary native lifecycle PASS.
+Verified implementation candidate `391abc7135e74365dad69e34109b1bc2612caec7`,
+tree `c70a0bbb936a043ab97ed137a8c67838af3dd021`, parent
+`90d0bda929f673cd2e277e6c243de9ae6bc5b0fc`.
+[CI34472343581](https://github.com/koteev-m/hookah_bot/actions/runs/34472343581),
+workflow CI/230370033, feature push, attempt1: **12/12 jobs and all mandatory steps PASS**;
+compose completed2026-09-10T12:12:18Z. Full mandatory harness PASS6m42;
+prerequisites18/18 groups and40/40 negative matrix PASS16m56 by step timestamps.
+This green candidate precedes the new required Docker daemon interruption fixture.
+The fixture and its CI wiring require their own reviewed candidate and actual native run.
 
-Evidence root: `../evidence/open-gate-closure-abp_tolk/candidate-03/`; exact source/CI/log
-bindings are in REPAIR-REPORT. Current raw compose SHA
-96e8c2bc377ee4a85dcd63da290cf4ba5ea1d8ab75ffe0d2fa6dbc81487e821b.
-New bounded-I/O source bytes require fresh native proof; earlier PASS is not inherited.
+Evidence: `../evidence/open-gate-closure-abp_tolk/candidate-04/`. Source/CI/log hashes,
+commands, actual versions/identities and exclusions are in REPAIR-REPORT and the bound
+proofs. Statuses below apply to actual executed scope, not the historical tables.
 
 | Finding | Result at current proven boundary | Evidence / remaining boundary |
 | --- | --- | --- |
 | F01 | FIXED_AND_VERIFIED, core scope | Full extracted SQL/structuredSAFE-count0, unsafe/noartifact/privacy/source binding on PG17/psql17+18 PASS. Reconciliation reuses actual consumer, not18 independent native completed stages. Historical PASS8 stays unchanged. |
 | F02 | FIXED_AND_VERIFIED, core scope | Fixed env_file guards+real Compose allfour OFF/SMOKE/recovery transitions, inverse/post-install/metadata/unrelatedbytes/cleanup PASS; ordinary real config consumers PASS. No arbitrary env-file authority or crash proof. |
-| F03 | IMPLEMENTED_UNVERIFIED at remaining native I/O join | Actual exits/command-substitution/validate/install/reload/admin divergence and two interruption boundaries PASS; hung reload shows F06 capture delay39.465s, so continuing ControlPID/lateactive/stoppedservice assertions unexecuted. Source correction awaits native recheck. |
+| F03 | FIXED_AND_VERIFIED at actual Caddy/systemd scope | Actual validate/install/reload exits, command substitution, disk/admin divergence, active-unit checks, hung admin/reload, post-install/post-reload interruption and late continuation PASS in unchanged13-case fixture. Service active/disk hash alone never completes the action. Host reboot remains G02. |
 | F04 | FIXED_AND_VERIFIED, core scope | Owned actual PG17/Docker/JVM503→200/readiness, wrongidentity,exit,timeout;4 exact CIDs eachstart1. No start retry; ordinary authorized recreate is separate lifecycle. |
-| F05 | FIXED_AND_VERIFIED at stated protocol/native fixture scope | Same shared target lock/history, exact successful lost ACK→fresh actual collector→immutable distinct reconciliation→protected handoff→two deployments and next binding PASS. Actual SSH/descendant/deadline/competing recovery and portable typed canonical/retirement validators PASS. Missing/nonzero/SIGKILL/daemon ambiguity stays UNKNOWN; no external fence/reset/replay executor. No full20-stage E2E/native18classes claim. Changed F06 helper still requires whole-package fresh CI. |
-| F06 | IMPLEMENTED_UNVERIFIED; proved production blocker being corrected | Actual20s deadline emitsUNKNOWN but inherited detached consumer streams hold Bash capture39.465s. Exact production/helper+DRIVER before0.2→1.279s and false0 are reproduced. Private child pipes/bounded nonblocking forwarding/WNOWAIT cleanup correction has targeted after coverage; actual native bounds/daemon continuation must rerun. No widened timeouts or fixture-only output suppression. |
+| F05 | FIXED_AND_VERIFIED at stated protocol/native fixture scope | Shared target lock/history, successful lost ACK→fresh actual collector→distinct immutable reconciliation→explicit retirement→two deployments PASS; unknown/nonzero/missing records block replay/recovery/retirement. Real SSH/descendants and separate typed local chains PASS. New actual Docker-daemon fault gate remains pending under G02; no universal external fence or full20-stage E2E claim. |
+| F06 | IMPLEMENTED_UNVERIFIED only at pending Docker-daemon gate | Production inherited-stream join corrected; exact before39.465s→after23.579s on unchanged native reload assertion. Private pipes, bounded queues/I/O, deadlines, original exits, backpressure and child cleanup PASS. Actual Caddy continuation remains UNKNOWN. Available isolated Docker-daemon interruption validation is being added; it cannot be replaced by container restart or labelled unavailable without evidence. |
 | F07 | FIXED_AND_VERIFIED, core scope | Two plausible semantic server/database/schema/role targets, actual backup/preflight/backend equality, real libpq/auth and ordinary DB consumer PASS. HashURI never substitutes; no live target change. |
 | F08 | FIXED_AND_VERIFIED, core scope | Exact dump hash, meaningful TOC timezone/client-format differences versus real changes PASS; native both-phase backup/rehearsal and owned cleanup witnesses PASS. Original local sealed DR boundary still required; not operationalDR. |
 | F09 | FIXED_AND_VERIFIED at stated handoff/ordinary fixture scope | Actual migration=no→explicit approved/applied synthetic handoff→unless-stopped; accepted exactimage/root.env authority, two same-lock backend-only deployments, PG unchanged, backend restart and stale/wrongimage/config/owner/UNKNOWN refusals PASS. V125 schema125 boundary separate; no live policy/time/newimage authority chosen. |
 | F10 | FIXED_AND_VERIFIED, core scope | Immutable attempts/status/stdinACK/dispatch consumers PASS; only proved NOT_DISPATCHED reads repeat. Unknown cannot replay/delete intent/cachePASS. Both native supervisor invocations use exact09e before source. |
 | F11 | FIXED_AND_VERIFIED, core scope | Distinct NOT_STARTED/RECONCILIATION_REQUIRED/INVALID_EVIDENCE and typed V125/V126 chains PASS; source/predecessor/manual/DR corruption refuses. Remote native reconciliation and separate portable localformat2 chain are explicit. Historical availability separately timed/sourced, never nativePASS9. |
 
-The applicable systemd failure is a production inherited-stream join revealed after a
-fixture refusal-observation fix. Current source uses private child output pipes, bounded
-queues/nonblocking forwarding, held unreaped leader for safe bounded cleanup, exact original
-nonzero and UNKNOWN on unresolved I/O. No generic daemon or complete child-lifetime proof
-is inferred; outer target supervisor owns that responsibility. New local tests include actual
-extracted helper/unchanged native DRIVER, detached stdout/stderr and exited0 parent, binary
-stdin/stdout/stderr, backpressure, merged2>&1 and descriptor-flag/setup edges. Review findings
-and exact before/after commands are retained. Local readiness25/25 (10 new methods),
-CI contract12/12, native-fixture portable15/15 and runtime-consumers6/6 PASS; full new Linux
-CI remains required.
-
-Ordinary final native provider counters are getUpdates334/getWebhookInfo8/menu5,
-unexpected0/outbound0;19 ordered events and cleanup=true. This closes the exactcommands-menu
-fixture mismatch. It does not prove real Telegram/manual delivery or erase the failed earlier
-provider run, which lacked per-method counters. Repeated current JSON represents one execution.
-
-| Gap | Current actual/synthetic proof | Remaining mandatory release gate |
+| Gap | Established scope | Remaining boundary |
 | --- | --- | --- |
-| G01 OPEN | Actual synthetic whole-DB roles/memberships/owners/ACL/settings/auth and schema/data restore preserved mandatory. | Operational assets/auth/secret custody and real accepted recovery point/RPO/loss. No loss default or automatic live restore; separate live decision. |
-| G02 OPEN | Actual hosted Linux/PG17/clients17–18/Docker/Compose/ownSSH/Caddy/JVM/ordinary lifecycle,4process+partial12systemd observations. | First verify F06 correction in applicable native systemd. Real hostreboot/powerloss/persistent-storage/daemon-crash durability needs a controlled VM with external observer; process/containerrestart is not that proof. No VM or runnerreboot authorized. |
-| G03 OPEN |28 actualPGcases prove allowed/denied HTTP/Telegram writes and inbound/outbox progression; connected runtime polling/denial plus strict syntheticprovider PASS. | Real poller/conflict and provider-send→markSent acknowledgement/crash ambiguity. No new deniedupdate retention/replay, promise or accepted loss. OFF can resume writes before publicCaddy. |
-| G04 OPEN | Exact17artifact assertion validator, browser216 and backend source-bound gates PASS. |17 controlled live Guest/Owner/MIX assertions remain GateB/C. Synthetic manual/handoff prerequisites never substitute. |
+| G01 OPEN | Mandatory actual synthetic whole-DB roles/memberships/owners/ACL/settings/auth and schema/data restore PASS. | Operational assets/secret custody/auth/recovery point and accepted RPO/loss decision. No loss default or automatic live restore. |
+| G02 OPEN | Actual hosted Linux/PG17/clients17–18/Docker/Compose/own SSH/JVM,13 native Caddy/systemd plus4 process cases, ordinary restart/recreate and all cleanup proofs PASS. | Actual isolated Docker-daemon interruption remains applicable and pending. Real host reboot/power-loss/persistent-storage durability needs controlled VM/persistent storage/external observer; runner reboot is unauthorized. These are distinct limits. |
+| G03 OPEN | All28 related PG cases plus connected polling/progress, allowed/denied HTTP/Telegram boundaries and strict synthetic provider PASS. | Real provider/poller conflict and send→markSent acknowledgement/crash ambiguity; no new denied-update retention/replay or accepted loss/delivery promise. |
+| G04 OPEN | Source-bound17-artifact assertion validator, browser216 and backend mandatory gates PASS. |17 actual controlled Guest/Owner/MIX assertions remain future live Gate B/C; synthetic manual/handoff prerequisites never substitute. |
 
-Counts are source-bound to current log and mandatory selectors/resultsvalidators: inbound4,
-webhook5PG+1nonPG,outbox19; no fabricated individually printed outbox execution. Core harness
-has479 assertion markers/17suite summaries, not479 unique tests. Only non-Linux case and
-inapplicable pnpm setup skip; no applicable Linux requirement is optional. Core backup has
-actualDocker/PG plus explicitly identified adapters; prerequisite18/40 orchestration mocks
-SSH/Docker/PG/Caddy/Telegram. Full lists are in core-compose-proof and prior scope definitions.
+Current full harness retains479 assertion markers and17 printed suite summaries,
+including readiness25 after the ten new inherited-stream/binary/backpressure/descriptor
+regressions. This is not479 unique tests. CI-contract12 methods are captured by the
+successful harness consumer. Remote supervisor has18 PASS+one non-Linux platform skip;
+no applicable Linux case is silently skipped. Other11 jobs have57 successful declared
+steps and only the inapplicable pnpm setup skipped. The28 former PG skips are inbound4,
+webhook5PG (+1non-PG) and outbox19 under actual successful selectors/XML/no-skip validators;
+no fabricated individual outbox log lines or cross-suite unique total is claimed.
 
-Ordinary native starts from synthetic prior records/approval and uses owned directstream,
-public_checks=false; actual terminal action/collector/deploy consumers and lock are real.
-Actual SSH and local canonical typed chains are separately tested. No fullE2E/daemoncrash/
-hostreboot/liveDR/manual claim. Current same focused F05 source review is clear; proved F06
-correction and final reports require its focused continuation/new12-job CI. Earlier failures,
-initial dirty reports and historical source evidence remain immutable.
+Systemd before/after source binding proves unchanged fixture/deadlines and corrected
+production helper:13 cases+4 process cases and33 evidence checks PASS. Hung reload
+23.579s/UNKNOWN/no completion, active ControlPID followed by separate late equality;
+original marker preserved, caller/unit cleanup independently proved. Ordinary19 events
+PASS, provider polls310/webhook8/menu5/unexpected0/outbound0, cleanup=true.
+
+Actual consumers use explicitly documented topology/fault adapters and synthetic
+prerequisites. Full mocked cutover/prerequisite18+40 orchestration is not full native
+E2E. New private daemon metadata mutation is likewise narrower than running backend
+restart survival, reboot or operational DR. Its before boundary is missing requested
+coverage, not a newly demonstrated production failure. Its first native result remains
+pending and must be recorded separately from this green CI04.
+
+New fixture portable16/16 and actual workflow/guard CI-contract13/13 PASS, unexpected
+endpoints0; syntax/compile/diff0. Platform/UID/peer/thread/diagnostic leaves are explicit
+portable mocks. The exact minimal create payload reaches real Docker only in the required
+next native run; no portable result is upgraded to daemon proof.
 
 `MAIN_INTEGRATION=NOT_AUTHORIZED`; `LIVE_ACTIONS=NONE`;
 `PUBLICATION=FEATURE_VALIDATION_ONLY`; `STAGING_RELEASE_READINESS=NOT_ESTABLISHED`.
-Staging runtime application, operational DR/RPO/loss, host reboot and17 controlled
-Guest/Owner/MIX assertions remain separately authorized future gates. No scripts/dev
-read/write, original dirty checkout, historical migration/run/intent/receipt/archive/
-backup or frozen evidence changes. Historical PASS1–8/intent9 and separately observed
-V125 restoration remain historical, never a new native stage9 PASS. Stop after final
-feature validation/report before main/PR/HT13/GateABC/live work.
+Operational DR/RPO/loss, actual host reboot/power-loss/storage durability,17 controlled
+live Guest/Owner/MIX assertions and staging application remain separate future gates.
+No scripts/dev read/write, original dirty checkout, migration bytes, historical runs/
+intents/receipts/archives/backups or frozen evidence changes. Historical PASS1–8/intent9
+and separately sourced V125 restoration are not a new stage9 PASS. No main, PR, HT13,
+Gate A/B/C, recovery, deployment or live smoke is authorized by this result.
 
 ## Preserved prior phase report (applies to09e19461 only)
 

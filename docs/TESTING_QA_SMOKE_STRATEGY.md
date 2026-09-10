@@ -3828,5 +3828,13 @@ provider fixtures use an internal network and CA, and do not redefine denied-upd
 storage/replay. PostgreSQL Testcontainers17 cases must execute without skips; floors and
 required test names include maintenance progress/denial cases. Version and sanitized
 runtime result summaries are retained in CI logs. Independent checks continue after a
-failure while the job remains failed. No green feature job substitutes for17 real smoke
-assertions, daemon/VM reboot proof, accepted RPO or whole operational DR.
+failure while the job remains failed. The compose job also requires the actual owned
+Caddy/systemd interruption cases, reconciled terminal/ordinary deployment lifecycle,
+and `test-v126-docker-daemon-linux.py --require-hosted-daemon`. The latter uses a second
+ephemeral daemon with private socket/data/exec roots and managed containerd, no bridge
+or firewall/sysctl changes, and only synthetic image/container metadata. It must never
+stop or reconfigure the default daemon. Missing applicable native capabilities fail;
+its portable self-tests are also part of the full harness. Exact native execution and
+cleanup results remain required, not inferred from this wiring.
+No green feature job substitutes for17 real smoke assertions, host reboot/power-loss
+durability, accepted RPO or whole operational DR.

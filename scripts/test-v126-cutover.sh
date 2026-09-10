@@ -8200,6 +8200,7 @@ main() {
   python3 "${SCRIPT_DIR}/test-v126-ordinary-deploy.py"
   python3 "${SCRIPT_DIR}/test-v126-operational-handoff.py"
   python3 "${SCRIPT_DIR}/test-v126-systemd-linux.py" --self-test
+  python3 "${SCRIPT_DIR}/test-v126-docker-daemon-linux.py" --self-test
   python3 "${SCRIPT_DIR}/test-v126-reconciliation-linux.py" --self-test
   python3 "${SCRIPT_DIR}/test-v126-readiness.py"
   python3 "${SCRIPT_DIR}/test-v126-runtime-consumers.py"

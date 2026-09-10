@@ -1124,7 +1124,8 @@ jobs:
             scripts/v126-operation-bindings.py scripts/v126-reconcile-poststate.py \
             scripts/v126-ordinary-deploy.py scripts/test-v126-reconciliation.py \
             scripts/test-v126-reconcile-poststate.py scripts/test-v126-ordinary-deploy.py \
-            scripts/test-v126-systemd-linux.py scripts/test-v126-reconciliation-linux.py
+            scripts/test-v126-systemd-linux.py scripts/test-v126-reconciliation-linux.py \
+            scripts/test-v126-docker-daemon-linux.py
       - name: Exercise staging admission guard fixtures
         run: bash scripts/validate-staging-admission.sh --self-test docker-compose.yml
       - name: Install real psql17 and libpq18 consumer (isolated CI runner)
@@ -1201,10 +1202,16 @@ jobs:
           sudo -n env PATH="$PATH" RUNNER_TEMP="$RUNNER_TEMP" GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted RUNNER_OS=Linux \
             python3 scripts/v126-test-endpoint-guard.py --run "$RUNNER_TEMP/v126-ordinary-root-endpoints" -- \
             python3 scripts/test-v126-ordinary-deploy.py --require-linux-integration --evidence "$RUNNER_TEMP/v126-ordinary-evidence"
+      - name: Exercise isolated Docker daemon interruption and blocked replay
+        if: ${{ !cancelled() }}
+        run: |
+          sudo -n env PATH="$PATH" RUNNER_TEMP="$RUNNER_TEMP" GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted RUNNER_OS=Linux \
+            python3 scripts/v126-test-endpoint-guard.py --run "$RUNNER_TEMP/v126-daemon-root-endpoints" -- \
+            python3 scripts/test-v126-docker-daemon-linux.py --require-hosted-daemon --evidence-dir "$RUNNER_TEMP/v126-daemon-evidence"
       - name: Record safe closure evidence summaries
         if: ${{ !cancelled() }}
         run: |
-          for directory in v126-systemd-evidence v126-ordinary-evidence; do
+          for directory in v126-systemd-evidence v126-ordinary-evidence v126-daemon-evidence; do
             if sudo -n test -f "$RUNNER_TEMP/$directory/result.json"; then
               sudo -n cat "$RUNNER_TEMP/$directory/result.json"
             else

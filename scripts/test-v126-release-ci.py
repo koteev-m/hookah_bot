@@ -190,10 +190,13 @@ class ReleaseCiTest(unittest.TestCase):
         self.assertIn('--before-supervisor-source "${TEST_ROOT}/v126-supervisor-before.sh"', harness)
         ordered = ('scripts/test-v126-linux-runtime.py --require-hosted-ci',
                    'scripts/test-v126-systemd-linux.py --require-hosted-systemd',
-                   'scripts/test-v126-ordinary-deploy.py --require-linux-integration')
+                   'scripts/test-v126-ordinary-deploy.py --require-linux-integration',
+                   'scripts/test-v126-docker-daemon-linux.py --require-hosted-daemon')
         positions = [compose.index(item) for item in ordered]
         self.assertEqual(positions, sorted(positions))
-        self.assertEqual(compose.count('RUNNER_ENVIRONMENT=github-hosted'), 1)
+        self.assertEqual(compose.count('RUNNER_ENVIRONMENT=github-hosted'), 2)
+        self.assertIn('    timeout-minutes: 60\n', compose)
+        self.assertIn('"${SCRIPT_DIR}/test-v126-docker-daemon-linux.py" --self-test', harness)
         self.assertIn('contents: read', workflow.split('\njobs:\n', 1)[0])
         self.assertNotRegex(workflow, r'(?m)^\s*(?:environment|workflow_run|secrets|continue-on-error):')
 
@@ -232,6 +235,24 @@ class ReleaseCiTest(unittest.TestCase):
             fixture = systemd.Fixture(self.root / 'ordinary-coordinator-evidence')
             self.assertEqual(fixture.root.parent, self.root.resolve())
             self.assertFalse(fixture.unit_installed)
+
+    def test_daemon_workflow_invocation_passes_actual_hosted_root_guard(self):
+        runner = dict(PATH=os.environ['PATH'], RUNNER_TEMP=str(self.root), GITHUB_ACTIONS='true',
+                      RUNNER_ENVIRONMENT='github-hosted', RUNNER_OS='Linux')
+        uid, environment, argv = closure_invocation('Exercise isolated Docker daemon interruption and blocked replay', runner)
+        self.assertEqual(argv[:3], ['python3', 'scripts/test-v126-docker-daemon-linux.py', '--require-hosted-daemon'])
+        self.assertEqual(uid, 0)
+        self.assertEqual(environment['RUNNER_TEMP'], str(self.root))
+        daemon = fixture_module('test-v126-docker-daemon-linux.py')
+        # Only platform files are synthetic; the actual guard and workflow argv run
+        # together without launching Docker, systemd, sockets or privileged commands.
+        read_text, is_dir, is_file = Path.read_text, Path.is_dir, Path.is_file
+        with patch.object(daemon.sys, 'platform', 'linux'), patch.object(daemon.os, 'geteuid', return_value=uid), \
+             patch.dict(os.environ, environment, clear=True), \
+             patch.object(Path, 'read_text', lambda path, *a, **kw: 'systemd\n' if str(path) == '/proc/1/comm' else read_text(path, *a, **kw)), \
+             patch.object(Path, 'is_dir', lambda path: True if str(path) == '/run/systemd/system' else is_dir(path)), \
+             patch.object(Path, 'is_file', lambda path: True if str(path) == '/sys/fs/cgroup/cgroup.controllers' else is_file(path)):
+            daemon.hosted_only()
 
     def test_each_job_must_complete_successfully(self):
         for index in range(12):
