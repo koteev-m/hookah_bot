@@ -194,6 +194,10 @@ def boundary(config, kind, args):
         print("Avail\n" + str(shutil.disk_usage(mapped(args[2])).free))
         return 0
     if kind == "checksum":
+        if not args:
+            # Production metadata hashing uses stdin; preserve the real utility's
+            # bytes and exit without recording an artifact-file checksum event.
+            return forward([cfg["sha256sum"]], sys.stdin.buffer.read())
         check = args[0] == "-c"
         path = mapped(args[-1])
         event("checksum-check" if check else "checksum-write")
@@ -253,6 +257,72 @@ def boundary(config, kind, args):
     else:
         raise AssertionError("unexpected Docker action")
     return docker(args)
+
+
+class BoundaryAdapterTest(unittest.TestCase):
+    """Exercise the actual fixture boundary without requiring a Docker daemon."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="ht12aa-boundary-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.native_hash = shutil.which("sha256sum")
+        require(self.native_hash, "real sha256sum is required")
+        self.config = self.root / "config.json"
+        self.config.write_text(json.dumps({"sha256sum": self.native_hash}))
+
+    def checksum(self, data, *args):
+        return run([sys.executable, str(Path(__file__).resolve()), "--boundary", str(self.config),
+                    "checksum", *args], input=data)
+
+    def target_digest(self):
+        # Exact fixture functions and production hash_text; no copied hash algorithm
+        # or replacement of the backup/psql consumer under test.
+        prefix = DRIVER.split('if [[ "$mode" == globals ]]; then', 1)[0]
+        script = prefix + '\nremote_assert_database_target || die "backup database equality failed"\n'
+        script += 'printf "%s\\n" "$REMOTE_DATABASE_TARGET_IDENTITY_SHA256"\n'
+        env = {key: os.environ[key] for key in ("PATH", "HOME") if key in os.environ}
+        env["HT12AA_HELPER"] = str(Path(__file__).resolve())
+        return run(["bash", "-c", script, "boundary-regression", str(ROOT / "v126-cutover.sh"),
+                    str(self.root), "pre-drain", "backup"], env=env)
+
+    def test_exact_target_fixture_supports_native_stdin_hash(self):
+        result = self.target_digest()
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(result.stdout.strip(), hashlib.sha256(b"fixture-semantic-database-target").hexdigest().encode())
+        self.assertFalse((self.root / "events").exists(), "stdin metadata hash is not a dump checksum event")
+
+    def test_actual_stdin_hash_accepts_empty_and_binary_input(self):
+        for payload in (b"", b"fixture\x00binary\xff\n"):
+            with self.subTest(size=len(payload)):
+                result = self.checksum(payload)
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                self.assertEqual(result.stdout, hashlib.sha256(payload).hexdigest().encode() + b"  -\n")
+
+    def test_valid_hash_stdout_followed_by_nonzero_remains_failure(self):
+        import shlex
+        wrapper = self.root / "hash-then-fail"
+        wrapper.write_text("#!/bin/sh\n" + shlex.quote(self.native_hash) + ' "$@" || exit $?\nexit 73\n')
+        wrapper.chmod(0o500)
+        self.config.write_text(json.dumps({"sha256sum": str(wrapper)}))
+        result = self.checksum(b"fixture")
+        self.assertEqual(result.returncode, 73)
+        self.assertEqual(result.stdout, hashlib.sha256(b"fixture").hexdigest().encode() + b"  -\n")
+        target = self.target_digest()
+        self.assertEqual(target.returncode, 4)
+        self.assertIn(b"backup database equality failed", target.stderr)
+        self.assertNotIn(b"ARTIFACT\t", target.stdout)
+
+    def test_real_file_checksum_and_corruption_refusal_remain(self):
+        payload = self.root / "dump"
+        payload.write_bytes(b"synthetic dump bytes")
+        produced = self.checksum(None, str(payload))
+        self.assertEqual(produced.returncode, 0)
+        inventory = self.root / "dump.sha256"
+        inventory.write_bytes(produced.stdout)
+        self.assertEqual(self.checksum(None, "-c", str(inventory)).returncode, 0)
+        payload.write_bytes(b"different bytes")
+        self.assertNotEqual(self.checksum(None, "-c", str(inventory)).returncode, 0)
 
 
 class BackupTest(unittest.TestCase):

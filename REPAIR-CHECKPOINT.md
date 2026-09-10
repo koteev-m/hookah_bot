@@ -34,8 +34,19 @@ Focused corrections and the same-review addendum are complete: local relay14 PAS
 deadline11 PASS/1 Linux SKIP, and syntax/diff checks pass. Actual Docker transport and
 the full corrected Linux sequence remain unverified.
 
-Next: explicitly commit/push the corrective files to the same branch, verify all12 jobs/mandatory
-steps for its exact SHA/tree, finalize report/coverage, then stop.
+Candidate02 `6702409fb0e0437118edd36f3d8f4b8494320eec` / tree
+`3437a98006b9f2bfeed98e97c9b43e28a93dc469`, CI34397910541:10 jobs PASS,
+compose and unchanged Mini App debounce smoke FAIL. Linux supervisor10 applicable
+tests and real libpq11 now pass; full harness reaches backup but its stdin-checksum
+fixture refuses before dump. Runtime reaches actual PG17/Flyway125 preparation,
+then Compose refuses unsupported create --no-deps before backend start. Both fixture
+corrections have local before/after evidence: backup4 PASS and runtime15 PASS, guard0.
+Full prerequisite18 groups/40 injected failures PASS19m38s; all28 PG skips executed again.
+
+Next: finish the same focused review, explicitly commit/push the two fixture corrections
+and updated reports to the same branch, verify all12 jobs/mandatory steps for the exact
+SHA/tree, finalize report/coverage, then stop. No blind retry of the unrelated Mini App
+failure; it remains recorded and unchanged in the next justified full candidate run.
 G01–G04 and17 live manual assertions remain explicit in REPAIR-COVERAGE.md.
 Original dirty checkout, scripts/dev, migration bytes and frozen runs remain untouched.
 

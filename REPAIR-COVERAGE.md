@@ -21,6 +21,18 @@ fails at two supervisor fixture errors before its legacy/libpq/backup segment;
 connected Docker/JVM fails after image build and before backend start. Corrective
 CI must verify these and repeat affected fixture checks. Overall CI is not green.
 
+Candidate02 (`6702409`, CI34397910541) adds actual Linux supervisor10 applicable
+tests/one non-Linux skip, real libpq11 and early legacy/container-ID/rehearsal-cleanup
+PASS. Full entrypoint then fails in real backup tests because their checksum adapter
+rejects stdin before dump; later legacy gates do not execute. Runtime reaches owned
+PG17/relay/Flyway125 preparation but fails on unsupported Compose create --no-deps
+before backend start. These two fixture corrections have portable before/after proof
+(backup4, runtime15 PASS); complete Docker/PG/JVM proof remains pending corrective CI.
+Caddy8, root7, deadline12, all28 former PG skips and complete prerequisite18 groups/
+40 injected failures pass again. Unchanged Mini App debounce smoke fails1/216 and
+remains a separate mandatory CI failure. No F04/F06/F07 or overall readiness promotion
+is justified by preparation alone; F05 UNKNOWN and G01–G04 remain OPEN.
+
 This updates the supplied audit map; unchanged findings are not silently promoted.
 R = actual production consumer/tool in an owned fixture; M = explicit external dependency
 mock; S = source review; U = required runtime proof unavailable. No row is live evidence.

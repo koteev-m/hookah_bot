@@ -124,6 +124,48 @@ found no remaining actionable defect; AST/extracted-Python/Bash/diff checks pass
 The earlier local findings below retain their original boundary. Final feature
 findings will be updated against the exact corrective candidate and individual steps.
 
+Candidate02 `6702409fb0e0437118edd36f3d8f4b8494320eec`, tree
+`3437a98006b9f2bfeed98e97c9b43e28a93dc469`, was explicitly committed and normally
+pushed to the same feature branch (exit0). Exact push CI
+[34397910541](https://github.com/koteev-m/hookah_bot/actions/runs/34397910541)
+completed with10 jobs PASS and compose/Mini App browser smoke FAIL. All12 job logs,
+step outcomes and hashes are retained in `candidate-02/result-ledger.json`.
+
+The corrected Linux supervisor completed10 applicable tests (one non-Linux refusal
+test skipped), including owned SSH disconnect, descendants, exclusion and completed
+binding retirement. Real libpq11 passed with PG17 authentication. The harness then
+passed its early legacy/container-ID/rehearsal-cleanup sections and reached real backup
+tests:5 methods reported25 failures, including subcases. The first failure was the fixture SHA256
+adapter accepting file arguments only; the new semantic-target fixture called the
+actual production stdin hash consumer and was refused before any backup dump. A
+local exact-driver before reproduced exit4. The adapter now forwards unchanged stdin
+to actual sha256sum, preserving status; four portable methods pass, including binary/
+empty input, valid stdout plus exit73 and actual file corruption refusal. Real Docker
+backup/rehearsal and the remaining full harness still require corrective CI.
+
+Runtime preparation proved PG17 readiness, owned internal relay setup, exact126
+migration resources and actual Flyway125/no126. Before any backend start, actual
+Compose2.38.2 refused `create --no-deps`; the safe24-byte stderr hash and location
+identify the unsupported flag exactly. Real local Compose5.1.1 parser reproduces it
+without daemon access. Both create call sites now omit that flag; backend has no
+declared dependencies. Existing runtime self-tests now15 PASS, with zero unexpected
+endpoints. Actual JVM migration/readiness/progress remains unverified until CI.
+
+Candidate02 repeated Caddy8, root/Compose7, Docker IDs and all28 former PostgreSQL
+skips successfully. Deadline/cleanup12 passed with no Linux skip. The complete
+prerequisite matrix passed all18 groups,40 injected failures and retained recovery
+paths in19m38s (candidate01:40m11s); this observed duration is not a general performance
+guarantee. Native/fallback equivalence and the bounded microbenchmark also passed.
+
+Mini App browser smoke executed216 cases:215 PASS, one debounce assertion FAIL at
+`guest-smoke.spec.ts:9422` (request count2 instead of1 after fastForward299). Mini App
+tree and job bytes match candidate01, where the test passed. Clock-boundary sensitivity
+is a hypothesis, not an established cause or fixed defect. It is outside the proved
+F01–F11 joins; no Mini App edit, skipped assertion or blind retry was made. A new full
+CI run will follow only the two independently justified fixture corrections above.
+The same unified review continues for that corrective diff; all release-blocking
+UNKNOWN/ordinary-deploy/daemon/VM/DR/manual boundaries remain explicit.
+
 ## Preserved local-phase result (before feature authorization)
 
 ## Identity and preserved evidence

@@ -28,7 +28,14 @@ fresh instructions or authorization. Update concurrent tasks separately at meani
   and connected runtime must pass in corrective CI.
 - G01 operational DR/RPO/loss, G02 VM/daemon reboot and G03/G04 real17 manual assertions
   remain open. Canonical PASS1–8/intent9 and historical V125 observation remain unchanged.
-- Next: commit/push the reviewed cohesive corrective candidate only
+- Candidate02 `6702409`, exact CI34397910541:10 jobs PASS; compose and unchanged
+  Mini App debounce smoke FAIL. Supervisor10 applicable cases and libpq11 now pass;
+  harness reaches backup fixture stdin-hash incompatibility. Runtime reaches PG17/
+  Flyway125 preparation then refuses unsupported Compose create --no-deps. Both
+  fixture corrections have local before/after proof (backup4, runtime15 PASS), no
+  production consumer change. Full prerequisite18 groups/40 failures PASS19m38s.
+- Next: complete the same focused review and commit/push the two fixture corrections
+  with reports as one corrective candidate only
   to this feature branch, inspect exact12-job CI, finalize the report and stop. No new V126 attempt or
   archive. Original dirty checkout, frozen evidence, migrations and scripts/dev untouched.
   See REPAIR-REPORT.md, REPAIR-COVERAGE.md and REPAIR-CHECKPOINT.md.

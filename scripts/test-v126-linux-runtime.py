@@ -10,6 +10,7 @@ are explicit test inputs. This is a connected integration selection, not full cu
 operational DR, real Telegram smoke, VM reboot or an authorization to release.
 """
 import argparse
+import ast
 import contextlib
 import hashlib
 import http.client
@@ -572,7 +573,7 @@ class Integration:
         return result
 
     def positive_sequence(self):
-        self.compose('create', '--no-build', '--no-deps', 'backend')
+        self.compose('create', '--no-build', 'backend')
         cid = self.cid('backend')
         self.target()  # Actual source/host plus stopped future-backend network proof.
         dump = self.run(['pg_dump', '-Fc', '--no-owner', '--no-acl', '-d', self.uri], timeout=60).stdout
@@ -661,7 +662,7 @@ class Integration:
         for name, changes, expected, code in cases:
             self.values = dict(original, **changes)
             self.write_inputs()
-            self.compose('create', '--no-build', '--no-deps', 'backend')
+            self.compose('create', '--no-build', 'backend')
             cid = self.cid('backend')
             self.start_once(cid)
             result, output, elapsed = self.observe(cid)
@@ -1069,6 +1070,39 @@ class TransportTest(unittest.TestCase):
             connect.assert_not_called()
 
 
+class ComposeParserTest(unittest.TestCase):
+    def test_actual_positive_and_negative_create_argv_use_supported_compose_flags(self):
+        docker = shutil.which('docker')
+        self.assertIsNotNone(docker, 'read-only Docker Compose parser is required')
+        module = ast.parse(Path(__file__).read_text())
+        integration = next(node for node in module.body if isinstance(node, ast.ClassDef) and node.name == 'Integration')
+        with tempfile.TemporaryDirectory(prefix='v126-compose-parser-') as temporary:
+            directory = Path(temporary)
+            environment = {key: os.environ[key] for key in ('PATH', 'HOME')}
+            environment['DOCKER_HOST'] = 'unix://' + str(directory / 'nonexistent-daemon.sock')
+            for method in ('positive_sequence', 'negative_sequence'):
+                body = next(node for node in integration.body if isinstance(node, ast.FunctionDef) and node.name == method)
+                calls = [node for node in ast.walk(body) if isinstance(node, ast.Call)
+                         and isinstance(node.func, ast.Attribute) and node.func.attr == 'compose'
+                         and node.args and isinstance(node.args[0], ast.Constant) and node.args[0].value == 'create']
+                self.assertEqual(len(calls), 1, method)
+                arguments = [ast.literal_eval(value) for value in calls[0].args]
+                result = subprocess.run([docker, 'compose', *arguments, '--help'], cwd=directory,
+                                        env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+                self.assertEqual(result.returncode, 0, method + ': real Compose parser rejected source argv')
+                self.assertIn(b'Creates containers for a service', result.stdout)
+                self.assertEqual(arguments[-1], 'backend')
+            # The actual constructor emits no backend depends_on/links; selecting
+            # this service for create cannot request postgres/provider dependencies.
+            fixture = Integration(directory / 'evidence')
+            try:
+                backend = fixture.compose_doc['services']['backend']
+                self.assertFalse(set(backend) & {'depends_on', 'links', 'external_links'})
+                self.assertEqual(fixture.starts, {})
+            finally:
+                fixture.temp.cleanup()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group(required=True)
@@ -1078,7 +1112,7 @@ def main():
     args = parser.parse_args()
     if args.diagnostics_self_test:
         suite = unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(case)
-                                  for case in (DiagnosticsTest, TransportTest))
+                                  for case in (DiagnosticsTest, TransportTest, ComposeParserTest))
         result = unittest.TextTestRunner(verbosity=2).run(suite)
         return 0 if result.wasSuccessful() else 1
     hosted_only()
