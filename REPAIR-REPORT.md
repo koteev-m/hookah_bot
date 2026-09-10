@@ -12,8 +12,36 @@ Authorization is `AUTHORIZE_REPAIR_OPEN_GATE_CLOSURE_FEATURE_ONLY`, on the exist
 `ff66c8639ec7c5c3ad45c2371878f5ba3656df9a`). Existing local final-report edits were
 preserved byte-for-byte in `../evidence/open-gate-closure-abp_tolk/initial/`, including
 the initial patch, four hashes and authorization. They were not part of09e19461.
-The current executable delta has not yet run on Linux and is not covered by the
-previous green CI34428598301. No new publication has occurred at this checkpoint.
+Validation candidate65016cf8746ebdbb2dbec088ff920175e6f5609d,
+tree7ae79a350c36c23944707aa42b534b925fe581d6, parent09e19461, was committed with
+29 explicit files and normally pushed to the same feature (exits0). Exact push CI
+34457486489/attempt1 completed with11 jobs PASS and compose FAILURE in4 steps:
+full mandatory harness, supervisor comparison, standalone systemd and ordinary lifecycle.
+Connected PG17/Docker/JVM, real Caddy and root handoff steps PASS; all28 formerly skipped
+PG cases execute in their successful jobs. No full harness/overall CI PASS is claimed.
+
+Two invocation defects have source-bound before evidence and local corrections: actual
+standalone hosted_only rejects the published root coordinator; actual ordinary Fixture
+constructor needs RUNNER_TEMP lost through sudo. Workflow now runs standalone as the
+ordinary runner and explicitly forwards RUNNER_TEMP to the root ordinary fixture. Two
+targeted regressions and the full12-test CI contract suite PASS; the same focused review
+is clear for this correction. Native after remains pending. The completed compose log
+(bf74a2bc6c3be73983f1f00f48316f3cea5ba39f68fac0965194767a09f62f8d) proves the other
+two failed steps share3 fixture assertions: direct shared-API refusal raised BindingError
+and escaped as Python exit1 instead of the real caller's75. The fixture now embeds the
+exact extracted production exception consumer; expected75, specific UNKNOWN diagnostic,
+immutable records and no-effect assertions stay strict. Five portable checks PASS.
+Production sequencer/helper bytes are unchanged by these corrective fixes.
+
+Full harness stopped there before real libpq, real backup and later legacy groups; it is
+not PASS. The independent exact09e before consumer executed and exposed old timeout
+status137; full harness now receives that same hash-checked source too, eliminating its
+absent-before-source skip. Real Caddy8/process7/rootguard7, connected PG/Docker/JVM, and
+the downstream prerequisite18groups/40negative matrix PASS (19m48). New native systemd
+and ordinary lifecycle produced no executed cases and remain unverified. A single early
+log read returned HTTP404; later completed-job download succeeded. No auth/network
+settings changed. Candidate-01 retains every first failure, before/after and review.
+Three generated task bytecode files were moved to evidence; imports now suppress bytecode.
 
 One shared source now implements persistent target supervision for cutover, uploads
 and ordinary deployment. Separate reconciliation checks the original successful

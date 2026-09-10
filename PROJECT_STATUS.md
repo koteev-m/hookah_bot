@@ -34,9 +34,25 @@ bindings15/reconciliation14; agent stdin14/ordinary19/handoff7/collector16/syste
 hook4 portable PASS. Scope29files includes three minimal canonical-doc joins; syntax,
 compile/diff/secret-signature/workflow-trigger checks pass. Full Linux remains pending.
 
-Next: explicit-file commit/non-force feature push,
-verify exact SHA/tree/event/attempt and all12 jobs/mandatory steps. Four final reports
-must be committed in the final reviewed candidate. No publication this phase yet.
+Published validation candidate65016cf8746ebdbb2dbec088ff920175e6f5609d,
+tree7ae79a350c36c23944707aa42b534b925fe581d6, parent09e19461, via explicit29-file
+commit and normal feature push (both exit0). Exact push CI34457486489/attempt1
+completed:11 jobs PASS, compose FAILURE in full harness, supervisor comparison,
+standalone systemd and ordinary lifecycle. Full log retained at candidate-01/compose.log
+(SHA256bf74a2bc6c3be73983f1f00f48316f3cea5ba39f68fac0965194767a09f62f8d).
+Connected PG17/Docker/JVM, real Caddy8/process7/root handoff7, all28 PostgreSQL cases,
+and prerequisite18groups/40negative cases PASS. Full harness stopped before real libpq,
+backup and later groups. Native new systemd/ordinary cases were not executed.
+
+Three diagnosed fixture/CI joins are corrected locally: standalone root/nonroot mismatch;
+missing ordinary RUNNER_TEMP; direct shared API exception escaped without the actual
+caller consumer. Expected refusal75 and UNKNOWN/no-replay semantics are preserved.
+Two invocation + full12 CI-contract tests and5 caller tests PASS; full harness now also
+receives the exact09e before source. Production sequencer/helper unchanged. Generated
+task bytecode moved to evidence and suppressed on import. No unexpected endpoints.
+Next: final focused correction review and affected checks, explicit8-file corrective
+commit/non-force same-feature push, then exact12 jobs/full mandatory Linux validation.
+All four final report/status files must be committed in the final reviewed candidate.
 After the final report, stop before main/PR/HT13/GateABC/live work.
 `MAIN_INTEGRATION=NOT_AUTHORIZED`; `LIVE_ACTIONS=NONE`;
 `STAGING_RELEASE_READINESS=NOT_ESTABLISHED`. No scripts/dev access/change, migrations,

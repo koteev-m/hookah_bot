@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Local-only regressions of the sourced sequencer CI validator and receipt consumer."""
 import copy
+import ast
 import contextlib
 import hashlib
 import importlib.util
@@ -9,12 +10,15 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
+
+sys.dont_write_bytecode = True
 
 ROOT = Path(__file__).resolve().parent
 SCRIPT = ROOT / 'v126-cutover.sh'
@@ -69,6 +73,40 @@ def seed_ci(state):
               'local-baseline': hashlib.sha256(proof.read_bytes()).hexdigest()}
     proof.unlink()
     return hashes
+
+
+def closure_invocation(name, runner):
+    """Interpret only the literal one-command fixture steps; never execute sudo."""
+    workflow = (ROOT.parent / '.github/workflows/ci.yml').read_text()
+    body = workflow.split('      - name: ' + name + '\n', 1)[1]
+    body = re.split(r'^      - ', body, maxsplit=1, flags=re.M)[0]
+    run = body.split('        run: |\n', 1)[1]
+    lines = run.splitlines()
+    if not all(line.startswith('          ') for line in lines):
+        raise AssertionError('fixture invocation has unsupported YAML structure')
+    command = '\n'.join(line[10:] for line in lines).replace('\\\n', ' ')
+    argv = shlex.split(command)
+    environment = dict(runner)
+    uid = 1001
+    if argv[:3] == ['sudo', '-n', 'env']:
+        uid, environment, argv = 0, {}, argv[3:]
+        while argv and re.fullmatch('[A-Z_]+=.*', argv[0]):
+            key, value = argv.pop(0).split('=', 1)
+            if value.startswith('$'):
+                value = runner[value[1:]]
+            environment[key] = value
+    if argv[:2] != ['python3', 'scripts/v126-test-endpoint-guard.py'] or argv[2] != '--run' or argv[4] != '--':
+        raise AssertionError('native fixture must retain actual endpoint guard invocation')
+    return uid, environment, argv[5:]
+
+
+def fixture_module(name):
+    path = ROOT / name
+    specification = importlib.util.spec_from_file_location(name.removesuffix('.py').replace('-', '_'), path)
+    module = importlib.util.module_from_spec(specification)
+    sys.modules[specification.name] = module
+    specification.loader.exec_module(module)
+    return module
 
 
 class ReleaseCiTest(unittest.TestCase):
@@ -147,14 +185,53 @@ class ReleaseCiTest(unittest.TestCase):
         self.assertNotIn('continue-on-error:', compose)
         self.assertIn('scripts/test-v126-cutover.sh', compose)
         self.assertIn('--require-linux-ssh --before-supervisor-source', compose)
+        harness = HARNESS.read_text().split('\nmain() {\n', 1)[1]
+        self.assertIn('show 09e19461cf54376714ae51f2d4c9e480f8365d8e:scripts/v126-cutover.sh', harness)
+        self.assertIn('--before-supervisor-source "${TEST_ROOT}/v126-supervisor-before.sh"', harness)
         ordered = ('scripts/test-v126-linux-runtime.py --require-hosted-ci',
                    'scripts/test-v126-systemd-linux.py --require-hosted-systemd',
                    'scripts/test-v126-ordinary-deploy.py --require-linux-integration')
         positions = [compose.index(item) for item in ordered]
         self.assertEqual(positions, sorted(positions))
-        self.assertEqual(compose.count('RUNNER_ENVIRONMENT=github-hosted'), 2)
+        self.assertEqual(compose.count('RUNNER_ENVIRONMENT=github-hosted'), 1)
         self.assertIn('contents: read', workflow.split('\njobs:\n', 1)[0])
         self.assertNotRegex(workflow, r'(?m)^\s*(?:environment|workflow_run|secrets|continue-on-error):')
+
+    def test_standalone_workflow_invocation_passes_actual_hosted_coordinator_guard(self):
+        runner = dict(PATH=os.environ['PATH'], RUNNER_TEMP=str(self.root), GITHUB_ACTIONS='true',
+                      RUNNER_ENVIRONMENT='github-hosted', RUNNER_OS='Linux')
+        uid, environment, argv = closure_invocation('Exercise owned real systemd Caddy interruption and active configuration', runner)
+        self.assertEqual(argv[:3], ['python3', 'scripts/test-v126-systemd-linux.py', '--require-hosted-systemd'])
+        systemd = fixture_module('test-v126-systemd-linux.py')
+        # Virtual Linux platform files only; this calls the real unmodified guard.
+        read_text, is_dir, is_file = Path.read_text, Path.is_dir, Path.is_file
+        with patch.object(systemd.sys, 'platform', 'linux'), patch.object(systemd.os, 'geteuid', return_value=uid), \
+             patch.dict(os.environ, environment, clear=True), \
+             patch.object(Path, 'read_text', lambda path, *a, **kw: 'systemd\n' if str(path) == '/proc/1/comm' else read_text(path, *a, **kw)), \
+             patch.object(Path, 'is_dir', lambda path: True if str(path) == '/run/systemd/system' else is_dir(path)), \
+             patch.object(Path, 'is_file', lambda path: True if str(path) == '/sys/fs/cgroup/cgroup.controllers' else is_file(path)):
+            systemd.hosted_only()
+
+    def test_ordinary_workflow_invocation_passes_actual_guard_and_fixture_temp_binding(self):
+        runner = dict(PATH=os.environ['PATH'], RUNNER_TEMP=str(self.root), GITHUB_ACTIONS='true',
+                      RUNNER_ENVIRONMENT='github-hosted', RUNNER_OS='Linux')
+        uid, environment, argv = closure_invocation('Exercise reconciled terminal and ordinary deploy shared target lifecycle', runner)
+        self.assertEqual(argv[:3], ['python3', 'scripts/test-v126-ordinary-deploy.py', '--require-linux-integration'])
+        ordinary = fixture_module('test-v126-ordinary-deploy.py')
+        systemd = fixture_module('test-v126-systemd-linux.py')
+        tree = ast.parse((ROOT / 'test-v126-ordinary-deploy.py').read_text())
+        function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'linux_integration')
+        guard = next(node for node in function.body if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call))
+        # Execute the actual leading root/hosted guard, then the actual constructor.
+        # Tool lookup and unused port allocation are explicit no-daemon leaf mocks.
+        with patch.object(sys, 'platform', 'linux'), patch.object(os, 'geteuid', return_value=uid), \
+             patch.dict(os.environ, environment, clear=True), \
+             patch.object(systemd.shutil, 'which', side_effect=lambda name: '/owned-unused-tools/' + name), \
+             patch.object(systemd.Fixture, 'port', side_effect=[24419, 24480]):
+            exec(compile(ast.Module(body=[guard], type_ignores=[]), str(ROOT / 'test-v126-ordinary-deploy.py'), 'exec'), vars(ordinary))
+            fixture = systemd.Fixture(self.root / 'ordinary-coordinator-evidence')
+            self.assertEqual(fixture.root.parent, self.root.resolve())
+            self.assertFalse(fixture.unit_installed)
 
     def test_each_job_must_complete_successfully(self):
         for index in range(12):

@@ -1193,13 +1193,12 @@ jobs:
       - name: Exercise owned real systemd Caddy interruption and active configuration
         if: ${{ !cancelled() }}
         run: |
-          sudo -n env PATH="$PATH" GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted RUNNER_OS=Linux \
-            python3 scripts/v126-test-endpoint-guard.py --run "$RUNNER_TEMP/v126-systemd-root-endpoints" -- \
+          python3 scripts/v126-test-endpoint-guard.py --run "$RUNNER_TEMP/v126-systemd-endpoints" -- \
             python3 scripts/test-v126-systemd-linux.py --require-hosted-systemd --evidence-dir "$RUNNER_TEMP/v126-systemd-evidence"
       - name: Exercise reconciled terminal and ordinary deploy shared target lifecycle
         if: ${{ !cancelled() }}
         run: |
-          sudo -n env PATH="$PATH" GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted RUNNER_OS=Linux \
+          sudo -n env PATH="$PATH" RUNNER_TEMP="$RUNNER_TEMP" GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted RUNNER_OS=Linux \
             python3 scripts/v126-test-endpoint-guard.py --run "$RUNNER_TEMP/v126-ordinary-root-endpoints" -- \
             python3 scripts/test-v126-ordinary-deploy.py --require-linux-integration --evidence "$RUNNER_TEMP/v126-ordinary-evidence"
       - name: Record safe closure evidence summaries

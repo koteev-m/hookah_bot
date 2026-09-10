@@ -338,11 +338,31 @@ AllowUsers {pwd.getpwuid(os.getuid()).pw_name}
         self.assertEqual(json.loads(result.read_text())['outcome'], 'UNKNOWN')
 
 
+def production_refusal_handler(program):
+    """Use the exact public caller's exception consumer, without copying policy."""
+    callers = [node for node in ast.parse(program).body if isinstance(node, ast.Try)]
+    if len(callers) != 1 or len(callers[0].handlers) != 1:
+        raise AssertionError('production supervisor exception consumer is ambiguous')
+    caller = callers[0]
+    if not any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and
+               node.func.id == 'binding_supervise' for statement in caller.body for node in ast.walk(statement)):
+        raise AssertionError('production caller does not invoke the actual common supervisor')
+    handler = ast.get_source_segment(program, caller.handlers[0])
+    if not handler:
+        raise AssertionError('production supervisor exception consumer is unavailable')
+    return handler
+
+
+SHARED_REFUSAL_HANDLER = production_refusal_handler(PROGRAM)
+
+
 SHARED_RUNNER = r'''import hashlib,importlib.util,json,os,signal,sys,time
 from pathlib import Path
+sys.dont_write_bytecode=True
 target=Path(sys.argv[2]);mode=sys.argv[3];kind=sys.argv[4]
 spec=importlib.util.spec_from_file_location('actual_operation_bindings',sys.argv[1])
 bindings=importlib.util.module_from_spec(spec);spec.loader.exec_module(bindings)
+BindingError=bindings.BindingError
 observations=[]
 real_waitpid=os.waitpid
 def observed_waitpid(pid,options):
@@ -360,7 +380,9 @@ def audit(event,args):
  if event in ('os.killpg','os.kill'):
   observations.append({'event':event,'pid':args[0],'signal':args[1]})
 sys.addaudithook(audit)
-if mode=='input-backpressure':
+if mode=='caller-refusal':
+ worker='raise SystemExit(98)'
+elif mode=='input-backpressure':
  worker='import time;time.sleep(3)'
 elif mode=='cancel-on-zero-reap':
  worker='raise SystemExit(0)'
@@ -377,14 +399,19 @@ identity=dict(run_id='actual-common-helper-fixture',release_sha='a'*40,
  script_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),intent_sha256=('c' if kind=='RECOVERY' else 'b')*64,
  kind=kind,name='pre-v126' if kind=='RECOVERY' else 'BASELINE_VERIFIED',
  action='recover-pre-v126' if kind=='RECOVERY' else 'baseline')
+if mode=='caller-refusal':
+ # Real common-helper validation refuses before target allocation on Linux;
+ # other platforms keep their actual platform refusal, without impersonation.
+ identity['intent_sha256']='invalid'
 try:
  status=bindings.binding_supervise(target,identity,[sys.executable,'-c',worker,str(target/'leader.pid'),str(target/'descendant.pid'),str(target/'late-effect')],
   input_data=b'x'*(2*1024*1024) if mode=='input-backpressure' else b'',
   env={key:os.environ[key] for key in ('PATH','HOME')},timeout=.5)
  raise SystemExit(status)
+__SOURCE_BOUND_REFUSAL_HANDLER__
 finally:
  Path(sys.argv[5]).write_text(json.dumps(observations,sort_keys=True)+'\n')
-'''
+'''.replace('__SOURCE_BOUND_REFUSAL_HANDLER__', SHARED_REFUSAL_HANDLER)
 
 
 class SharedSupervisor(unittest.TestCase):
@@ -393,6 +420,7 @@ class SharedSupervisor(unittest.TestCase):
     The waitpid wrapper returns every actual kernel result unchanged. Only the
     cancellation race case injects a real signal at that observation point. The
     syscall audit hook observes actual signals without replacing their consumer.
+    The exception consumer is extracted unchanged from the production caller.
     """
     tearDown = Supervisor.tearDown
     args = Supervisor.args
@@ -437,9 +465,32 @@ class SharedSupervisor(unittest.TestCase):
         self.assertFalse(list(self.target.rglob('*.receipt.json')))
         snapshot = {path: path.read_bytes() for path in registry.rglob('*') if path.is_file()}
         recovery, _, _ = self.shared(mode, kind='RECOVERY')
-        self.assertEqual(recovery.returncode, 75)
+        self.assertEqual(recovery.returncode, 75, recovery.stderr)
+        self.assertIn(b'REMOTE_OPERATION=RECONCILIATION_REQUIRED reason=prior_daemon_outcome_unknown '
+                      b'retry_allowed=false', recovery.stderr)
+        self.assertNotIn(b'Traceback', recovery.stderr)
         for path, raw in snapshot.items():
             self.assertEqual(path.read_bytes(), raw)
+
+    def test_shared_runner_contains_the_exact_production_exception_consumer(self):
+        self.assertEqual(SHARED_RUNNER.count(SHARED_REFUSAL_HANDLER), 1)
+        actual = ast.parse(SHARED_RUNNER)
+        caller = next(node for node in actual.body if isinstance(node, ast.Try))
+        self.assertEqual(ast.get_source_segment(SHARED_RUNNER, caller.handlers[0]), SHARED_REFUSAL_HANDLER)
+        compile(SHARED_RUNNER, '<source-bound-shared-runner>', 'exec')
+
+    def test_actual_shared_refusal_uses_production_caller_status_before_allocation(self):
+        for kind in ('STAGE', 'RECOVERY'):
+            with self.subTest(kind=kind):
+                result, _, observations = self.shared('caller-refusal', kind=kind)
+                self.assertEqual(result.returncode, 75, result.stderr)
+                reason = 'invalid_identity' if sys.platform == 'linux' else 'linux_subreaper_required'
+                self.assertIn(('REMOTE_OPERATION=RECONCILIATION_REQUIRED reason=' + reason +
+                               ' retry_allowed=false').encode(), result.stderr)
+                self.assertNotIn(b'Traceback', result.stderr)
+                self.assertEqual(result.stdout, b'')
+                self.assertEqual(observations, [])
+                self.assertEqual(list(self.target.iterdir()), [])
 
     def test_synthetic_shared_leaf_programs_compile(self):
         # Construct and compile only fixture strings. No common-helper runtime
