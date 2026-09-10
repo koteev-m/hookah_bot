@@ -20,23 +20,49 @@ The accepted policy has distinct V125 and V126 completion boundaries:
 | V126 ordinary operation | `unless-stopped` only after completed release, required runtime/manual gates, integrity verification and separately approved applied handoff | No live moment authorized |
 | Restored V125 operation | Separate handoff on verified schema125, exact V125 image/config and recovery integrity; V126 manual17 is not its prerequisite | Historical restored availability alone is not applied handoff proof |
 | Permanent image selection | Fixed root-owned `.env` holds the exact accepted full-SHA `BACKEND_IMAGE`; verify exact image ID/source before recreate; no fallback, pull or build during recreate | No live `.env` edit authorized |
-| Configuration ownership | Root:root protected configuration remains server authority; ordinary upload must not import workstation uid/gid | Guard requires root deployment identity and fixed protected environment/Compose; rsync disables owner/group import |
+| Configuration ownership | Root:root protected configuration remains server authority; ordinary upload must not import workstation uid/gid | Guard requires root deployment identity and fixed protected environment/Compose; explicit installation sets root ownership |
 | Target binding | Preserve lock inode and immutable history; explicit retirement of a known completed run requires terminal receipt and approved/applied handoff | UNKNOWN remains blocked; no reset/adoption/expiry |
 | Recovery point/data loss | Operator selects a proven consistent point and accepts its loss boundary after whole-DB/globals/auth/settings review | DECISION_REQUIRED; no RPO or loss default |
 
-Ordinary deploy now refuses every target containing `.v126-target-operations`, including
-retired history, before rsync or remote mutation. It checks fixed `.env` image equality,
-root ownership and actual effective Compose image/restart policy. Uploads use root
-identity with `--no-owner --no-group`; `.env` is absent from their explicit file list and
-the operation registry is excluded. The remote exact image ID is checked again before
-`up --no-build --pull never`. These guards do not apply a handoff.
+Ordinary deploy uses the same persistent target supervisor as the sequencer. A
+standalone read-only handoff guard still refuses an existing operation registry; only
+the deploy worker holding that registry's lock calls its actual authority consumer.
+The worker revalidates complete immutable history and the exact approved next-request
+binding before any upload or mutation. No rsync, remote mkdir, load or recreate runs
+outside that lock. An unbound legacy target is refused under the lock; there is no
+bootstrap/adoption fallback.
 
-**OPEN: ordinary deploy protocol integration.** A read-only guard cannot exclude a race
-in which a new sequencer claims an unbound target after the check. Supporting ordinary
-deploy on a protocol-managed target requires one target lock across the entire remote
-upload/recreate lifecycle and confirmed outcomes, with preserved history. This package
-conservatively blocks that path; it does not implement partial lock expiry or unlink a
-registry after retirement. No turnkey operational deploy or VM reboot proof is claimed.
+The protected canonical descriptor schema is `DESCRIPTOR_FIELDS` in
+`scripts/v126-ordinary-deploy.py`: exact next owner/source-bundle and target; V125/V126
+version; full-SHA image/tag, image ID/source/platform; fixed env hash; before/after
+Compose hashes; Caddy disk/active hashes; protected DB URI file/hash and semantic target
+digest; root:root, unless-stopped; approved/applied handoff identity/time; explicit file
+hashes; public URL/check policy. Credentials do not enter the descriptor. The next
+owner and descriptor are named by an explicit immutable transfer, not by HTTP200.
+
+`deploy-staging.sh` additionally requires `APPROVED_DEPLOYMENT_FILE` and a fresh
+`DEPLOY_STATE_DIR`. Its existing exact local build/artifact gate remains. One supervised
+source-bound transport carries the reviewed files and image; the fixed `.env` is absent
+from the upload list. Actual protected root ownership, effective env/Compose, semantic
+DB equality, Caddy disk/admin/systemd state and current accepted image are checked before
+mutation and after bounded backend-only recreate (`--no-build --pull never --no-deps`).
+PostgreSQL configuration, mounts/network identity and container are not recreated.
+A dedicated immutable deployment proof/result is required before local success.
+
+This contract supports recreation/deployment of the **already accepted image**. It
+requires the pre-existing backend to match that image. It does not choose or apply a
+new image/.env authority, or implement an old-image to new-image selection transition.
+Such selection needs its own separately approved boundary. Migration `restart=no`
+is rejected by ordinary deploy until the explicit approved/applied handoff has changed
+only the authorized target. V125 uses its schema125 recovery completion; V126 requires
+its complete release/manual/integrity boundary.
+
+After success, explicit deployment retirement joins that proof to a protected applied
+handoff and the next exact descriptor, then appends the next transfer. The next deploy
+uses the same lock/inode/history. Missing, timed-out or nonzero results keep the target
+blocked, including competing recovery. The separate reconciliation/retirement semantics
+and commands are in [V126_REPAIR_OPERATION_PROTOCOL.md](V126_REPAIR_OPERATION_PROTOCOL.md).
+Runtime closure is pending exact feature CI; portable fixtures alone do not establish it.
 
 An incident or reboot first requires read-only reconciliation of exact container/image,
 actual database/schema, config disk/runtime, target operation records and queued/inflight

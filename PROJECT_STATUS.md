@@ -1,44 +1,84 @@
 # Project Status
 
+## HT-RELEASE-REPAIR-01 — Final Open-Gate Closure (validation in progress)
+
+**HT_RELEASE_REPAIR_VALIDATION_INCOMPLETE**. Existing branch/worktree and source parent
+09e19461cf54376714ae51f2d4c9e480f8365d8e/tree17ec77daf4713264a36381a9d43ce4b4f4ef3151
+verified. Four pre-phase local report changes are preserved under
+`../evidence/open-gate-closure-abp_tolk/initial/`; prior CI34428598301 is evidence only
+for that parent, not the current delta.
+
+Shared target supervision, protected binary uploads, action-specific exact-effect
+reconciliation, typed V125/V126 chain/status/retirement, ordinary deployment and its
+next exact binding are implemented. Missing/nonzero/unknown daemon outcomes remain
+blocked with retry_allowed=false. Real systemd/Caddy and ordinary Docker/PG/JVM lifecycle
+steps are mandatory additions inside the existing compose job; exact12 jobs preserved.
+No full operational E2E, live manual or host reboot claim. New delta needs focused
+review and exact hosted CI before a final finding disposition.
+
+Local evidence preserves every first failure and correction. Canonical reconciliation
+regressions include terminal V126 and own V125 handoff without manufactured PASS9.
+Latest status defect: a failing recovery validator could exit status; now isolated so
+INVALID_EVIDENCE remains explicit. Pending full-harness execution and runtime proof are
+not hidden by prior green CI. See REPAIR-REPORT/COVERAGE for per-F/G boundaries.
+
+Full mandatory local attempt exit1 at15 HTTP listener setup errors: sandbox socket.bind
+refused before Linux requirement. Corrected selective legacy run38/42PASS; all four
+failed joins now pass targeted after checks, including24 rehearsal caller/failure
+combinations with original exit codes and zero unexpected endpoints. First attempts/
+driver mistakes retained; no full harness PASS or Linux proof claimed. Focused source
+review D1–D9 and latest five status-preserving checks/fixture joins is clear.
+
+Final accessible local suites PASS: runtime6/configuration7/DB-unit4/CI-contract10/
+bindings15/reconciliation14; agent stdin14/ordinary19/handoff7/collector16/systemd11/
+hook4 portable PASS. Scope29files includes three minimal canonical-doc joins; syntax,
+compile/diff/secret-signature/workflow-trigger checks pass. Full Linux remains pending.
+
+Next: explicit-file commit/non-force feature push,
+verify exact SHA/tree/event/attempt and all12 jobs/mandatory steps. Four final reports
+must be committed in the final reviewed candidate. No publication this phase yet.
+After the final report, stop before main/PR/HT13/GateABC/live work.
+`MAIN_INTEGRATION=NOT_AUTHORIZED`; `LIVE_ACTIONS=NONE`;
+`STAGING_RELEASE_READINESS=NOT_ESTABLISHED`. No scripts/dev access/change, migrations,
+original dirty checkout or frozen evidence changes.
+
+
 ## Task checkpoints
 
 Read the matching task entry first; preserved snapshots below are evidence/history, not
 fresh instructions or authorization. Update concurrent tasks separately at meaningful boundaries.
 
-### HT-RELEASE-REPAIR-01 — 2026-09-09 feature validation
+### HT-RELEASE-REPAIR-01 — 2026-09-10 feature CI complete with open gates
 
-- One F01–F11 candidate on `codex/ht-release-repair-01-rkbe7q`, worktree
-  `/private/tmp/ht-release-repair-01.RKbe7q/worktree`, exact base
-  `f7828e09863d391e1f714cc65c9c866f814cf6bf` / tree
-  `ff66c8639ec7c5c3ad45c2371878f5ba3656df9a`.
-- AUTHORIZE_REPAIR_FEATURE_CI_ONLY now permits explicit-file commits/non-force feature
-  pushes and the existing12-job ordinary Ubuntu CI. No PR/main/deployment/live authority.
-  The initial local24-file changeset and evidence were preserved before this continuation.
-- Baseline12 artifacts and known-completed target retirement are source-bound; history
-  remains immutable, next binding requires a fresh baseline. UNKNOWN daemon reconciliation
-  and full ordinary-deploy locking remain OPEN. F09 target policy is accepted, with
-  separate V125 schema125 and completed-V126 handoffs; no live application moment selected.
-- Candidate01 `d97c405c27ed06204af31d4db93284311900fae0`, exact push CI34390646421:
-  11 jobs PASS, compose FAIL. Linux PG17.11/clients17.11–18.6, whole-DB synthetic checks,
-  Caddy8, root guard7, full prerequisite-sync40/40 and all28 former PostgreSQL skips pass.
-  Full harness stopped at two supervisor fixture errors; connected JVM fixture failed
-  on an absent published port before backend startup. First logs are preserved.
-  Focused fixture corrections, bounded test timeouts and CI ordering passed the same
-  review; local relay14 and deadline11 PASS (1 Linux skip). Complete harness/libpq/backup
-  and connected runtime must pass in corrective CI.
-- G01 operational DR/RPO/loss, G02 VM/daemon reboot and G03/G04 real17 manual assertions
-  remain open. Canonical PASS1–8/intent9 and historical V125 observation remain unchanged.
-- Candidate02 `6702409`, exact CI34397910541:10 jobs PASS; compose and unchanged
-  Mini App debounce smoke FAIL. Supervisor10 applicable cases and libpq11 now pass;
-  harness reaches backup fixture stdin-hash incompatibility. Runtime reaches PG17/
-  Flyway125 preparation then refuses unsupported Compose create --no-deps. Both
-  fixture corrections have local before/after proof (backup4, runtime15 PASS), no
-  production consumer change. Full prerequisite18 groups/40 failures PASS19m38s.
-- Next: complete the same focused review and commit/push the two fixture corrections
-  with reports as one corrective candidate only
-  to this feature branch, inspect exact12-job CI, finalize the report and stop. No new V126 attempt or
-  archive. Original dirty checkout, frozen evidence, migrations and scripts/dev untouched.
-  See REPAIR-REPORT.md, REPAIR-COVERAGE.md and REPAIR-CHECKPOINT.md.
+- **HT_RELEASE_REPAIR_FEATURE_CI_PASSED_WITH_OPEN_GATES**. One F01–F11 changeset in
+  `/private/tmp/ht-release-repair-01.RKbe7q/worktree`, existing branch
+  `codex/ht-release-repair-01-rkbe7q`, exact basef7828e09863d391e1f714cc65c9c866f814cf6bf.
+- Published candidate09e19461cf54376714ae51f2d4c9e480f8365d8e,
+  tree17ec77daf4713264a36381a9d43ce4b4f4ef3151; exact push CI34428598301:
+  **12/12 jobs and all mandatory steps PASS**, compose complete2026-09-10T02:46:20Z.
+  Full mandatory harness6m25 and prerequisite18groups/40failure matrix19m37 PASS.
+  Real Linux own SSH/Caddy/root, PG17/clients17–18/backup/Docker/JVM and all28 formerly
+  skipped PostgreSQL cases execute. Synthetic worker progress is established, not live smoke.
+- Candidate01/02 failures and corrective evidence retained. Candidate03 fixes the proven
+  native stdin-checksum fixture and unsupported Compose create flag; production consumer
+  remains unchanged by that correction. Candidate02 Mini App debounce failure is preserved;
+  unchanged candidate03 full216 smoke PASS does not prove its underlying cause fixed.
+- Baseline12 artifacts and known-completed target retirement pass with immutable history
+  and fresh next baseline. F05 UNKNOWN daemon reconciliation and ordinary-deploy whole
+  lifecycle locking/fresh-target race remain OPEN. F09 separate V125-schema125/V126 handoff
+  policy is accepted, with no live env/restart/ownership application time authorized.
+- F01/F02/F04/F07/F08/F10/F11 verified at recorded scope; F03/F06/F09 remain partially
+  unverified. G01 operational DR/RPO/loss/auth, G02 privileged systemd/daemon/VM crash/reboot
+  and G03/G04 delivery ambiguity/17 actual manual assertions remain open.
+- One unified review and safe exact-CI evidence accompany REPAIR-REPORT/COVERAGE/CHECKPOINT.
+  Final updates to those three files and this status remain local/uncommitted; executable
+  candidate/source/test/workflow match green CI. Original dirty checkout, scripts/dev,
+  migration bytes and frozen runs/evidence remain unchanged. Historical PASS1–8/intent9
+  and separately sourced V125 availability are not upgraded.
+- Stop here. Next is the single diff review and concrete decisions, then separate authority
+  for any integration/publication/live step. MAIN_INTEGRATION=NOT_AUTHORIZED;
+  LIVE_ACTIONS=NONE; STAGING_RELEASE_READINESS=NOT_ESTABLISHED. No HT13/new archive,
+  PR, deployment, Gate A/B/C, recovery, automatic CI retry or GitHub diagnostics.
 
 ### HT-12AA — 2026-09-09
 

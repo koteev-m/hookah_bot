@@ -140,6 +140,22 @@ class ReleaseCiTest(unittest.TestCase):
         for index, doc in enumerate(variants):
             with self.subTest(index=index): self.refused(self.validate(doc))
 
+    def test_closure_consumers_are_mandatory_hosted_compose_steps(self):
+        workflow = (ROOT.parent / '.github/workflows/ci.yml').read_text()
+        compose = workflow.split('\n  compose:\n', 1)[1].split('\n  miniapp:\n', 1)[0]
+        self.assertIn('    runs-on: ubuntu-latest\n', compose)
+        self.assertNotIn('continue-on-error:', compose)
+        self.assertIn('scripts/test-v126-cutover.sh', compose)
+        self.assertIn('--require-linux-ssh --before-supervisor-source', compose)
+        ordered = ('scripts/test-v126-linux-runtime.py --require-hosted-ci',
+                   'scripts/test-v126-systemd-linux.py --require-hosted-systemd',
+                   'scripts/test-v126-ordinary-deploy.py --require-linux-integration')
+        positions = [compose.index(item) for item in ordered]
+        self.assertEqual(positions, sorted(positions))
+        self.assertEqual(compose.count('RUNNER_ENVIRONMENT=github-hosted'), 2)
+        self.assertIn('contents: read', workflow.split('\njobs:\n', 1)[0])
+        self.assertNotRegex(workflow, r'(?m)^\s*(?:environment|workflow_run|secrets|continue-on-error):')
+
     def test_each_job_must_complete_successfully(self):
         for index in range(12):
             for field, value in [('conclusion','failure'),('conclusion','skipped'),('status','in_progress')]:

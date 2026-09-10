@@ -20,6 +20,14 @@ STATE = {'getUpdates': 0, 'getWebhookInfo': 0, 'unexpected': 0,
 LOCK = threading.Lock()
 
 
+def allowed_api_target(host, path):
+    expected = '/bot' + TOKEN + '/'
+    return path.startswith(expected) and (
+        host == 'api.telegram.org' or
+        (host == '127.0.0.1' and path == expected + 'getWebhookInfo')
+    )
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
@@ -43,7 +51,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 value = dict(STATE)
             self.reply(200, value)
             return
-        if host != 'api.telegram.org' or not parsed.path.startswith('/bot' + TOKEN + '/'):
+        if not allowed_api_target(host, parsed.path):
             with LOCK:
                 STATE['unexpected'] += 1
             self.reply(403, {'ok': False})

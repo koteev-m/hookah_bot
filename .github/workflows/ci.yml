@@ -1120,6 +1120,11 @@ jobs:
           PYTHONPYCACHEPREFIX="${RUNNER_TEMP}/ht12x-pycache" python3 -m py_compile scripts/test-v126-libpq.py
           PYTHONPYCACHEPREFIX="${RUNNER_TEMP}/ht12v-pycache" python3 -m py_compile scripts/test-v126-process-guard.py
           PYTHONPYCACHEPREFIX="${RUNNER_TEMP}/ht12z-pycache" python3 -m py_compile scripts/test-v126-container-ids.py
+          PYTHONPYCACHEPREFIX="${RUNNER_TEMP}/v126-closure-pycache" python3 -m py_compile \
+            scripts/v126-operation-bindings.py scripts/v126-reconcile-poststate.py \
+            scripts/v126-ordinary-deploy.py scripts/test-v126-reconciliation.py \
+            scripts/test-v126-reconcile-poststate.py scripts/test-v126-ordinary-deploy.py \
+            scripts/test-v126-systemd-linux.py scripts/test-v126-reconciliation-linux.py
       - name: Exercise staging admission guard fixtures
         run: bash scripts/validate-staging-admission.sh --self-test docker-compose.yml
       - name: Install real psql17 and libpq18 consumer (isolated CI runner)
@@ -1157,6 +1162,11 @@ jobs:
       - name: Exercise V126 canonical IDs with real Docker and Compose (isolated runner)
         if: ${{ !cancelled() }}
         run: python3 scripts/v126-test-endpoint-guard.py --run "$RUNNER_TEMP/v126-container-ids-endpoints" -- python3 scripts/test-v126-container-ids.py --real-cli
+      - name: Compare original and repaired supervisor deadline and cancellation consumers
+        if: ${{ !cancelled() }}
+        run: |
+          git show 09e19461cf54376714ae51f2d4c9e480f8365d8e:scripts/v126-cutover.sh > "$RUNNER_TEMP/v126-supervisor-before.sh"
+          python3 scripts/v126-test-endpoint-guard.py --run "$RUNNER_TEMP/v126-supervisor-before-endpoints" -- python3 scripts/test-v126-remote-operation.py --require-linux-ssh --before-supervisor-source "$RUNNER_TEMP/v126-supervisor-before.sh"
       - name: Exercise V126 real process guard regression
         if: ${{ !cancelled() }}
         run: python3 scripts/v126-test-endpoint-guard.py --run "$RUNNER_TEMP/v126-process-endpoints" -- python3 scripts/test-v126-process-guard.py
@@ -1180,6 +1190,28 @@ jobs:
           else
             echo 'No runtime result was produced; connected runtime is unverified.'
           fi
+      - name: Exercise owned real systemd Caddy interruption and active configuration
+        if: ${{ !cancelled() }}
+        run: |
+          sudo -n env PATH="$PATH" GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted RUNNER_OS=Linux \
+            python3 scripts/v126-test-endpoint-guard.py --run "$RUNNER_TEMP/v126-systemd-root-endpoints" -- \
+            python3 scripts/test-v126-systemd-linux.py --require-hosted-systemd --evidence-dir "$RUNNER_TEMP/v126-systemd-evidence"
+      - name: Exercise reconciled terminal and ordinary deploy shared target lifecycle
+        if: ${{ !cancelled() }}
+        run: |
+          sudo -n env PATH="$PATH" GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted RUNNER_OS=Linux \
+            python3 scripts/v126-test-endpoint-guard.py --run "$RUNNER_TEMP/v126-ordinary-root-endpoints" -- \
+            python3 scripts/test-v126-ordinary-deploy.py --require-linux-integration --evidence "$RUNNER_TEMP/v126-ordinary-evidence"
+      - name: Record safe closure evidence summaries
+        if: ${{ !cancelled() }}
+        run: |
+          for directory in v126-systemd-evidence v126-ordinary-evidence; do
+            if sudo -n test -f "$RUNNER_TEMP/$directory/result.json"; then
+              sudo -n cat "$RUNNER_TEMP/$directory/result.json"
+            else
+              echo "No result for $directory; applicable integration remains unverified."
+            fi
+          done
       - name: Exercise prerequisite fixture deadlines and cleanup
         if: ${{ !cancelled() }}
         run: python3 scripts/v126-test-endpoint-guard.py --run "$RUNNER_TEMP/v126-sync-fixture-endpoints" -- python3 scripts/test-v126-prerequisite-timeout.py

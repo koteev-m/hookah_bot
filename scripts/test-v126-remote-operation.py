@@ -6,10 +6,12 @@ On macOS only the fail-before-allocation platform refusal runs; this is an expli
 runtime gap. CI passes --require-linux-ssh, so unavailable runtime is a failure.
 """
 import hashlib
+import ast
 import json
 import os
 from pathlib import Path
 import pwd
+import re
 import shutil
 import signal
 import socket
@@ -23,6 +25,17 @@ sys.dont_write_bytecode = True
 
 ROOT = Path(__file__).resolve().parent
 SOURCE = ROOT / 'v126-cutover.sh'
+BEFORE_SOURCE = None
+BEFORE_SOURCE_SHA256 = '5911db8d4a0fc43a7ddb75b0cdaf2c0ef2c29720142715899463813226b8b98f'
+BEFORE_PROGRAM_SHA256 = '5f82928591eb40803c7400208e415f76e30c9eadacf5a20cb7416aa0028ddfdb'
+if '--before-supervisor-source' in sys.argv:
+    index = sys.argv.index('--before-supervisor-source')
+    if index + 1 >= len(sys.argv):
+        raise SystemExit('--before-supervisor-source requires the exact 09e source file')
+    BEFORE_SOURCE = Path(sys.argv[index + 1]).resolve(strict=True)
+    del sys.argv[index:index + 2]
+    if hashlib.sha256(BEFORE_SOURCE.read_bytes()).hexdigest() != BEFORE_SOURCE_SHA256:
+        raise SystemExit('before supervisor source differs from exact candidate09e bytes')
 REQUIRE = '--require-linux-ssh' in sys.argv
 if REQUIRE:
     sys.argv.remove('--require-linux-ssh')
@@ -55,13 +68,17 @@ class Supervisor(unittest.TestCase):
         self.program = self.root / 'supervisor.py'
         self.program.write_text(PROGRAM)
         self.children = []
+        self.retain = False
 
     def tearDown(self):
         for process in self.children:
             if process.poll() is None:
                 process.kill()
             process.wait(timeout=15)
-        self.temp.cleanup()
+        if self.retain:
+            self.temp._finalizer.detach()
+        else:
+            self.temp.cleanup()
 
     def args(self, mode='success', intent='b', run='repair-owned-run', kind='STAGE', name=None):
         name = name or ('BASELINE_VERIFIED' if kind == 'STAGE' else 'pre-v126')
@@ -104,6 +121,42 @@ class Supervisor(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         self.wait_file(self.target / 'effects')
         self.assertEqual((self.target / 'effects').read_text(), 'x')
+
+    def test_production_create_arguments_use_the_real_compose_parser(self):
+        if not shutil.which('docker'):
+            if REQUIRE: self.fail('real Compose parser is required on the mandatory runner')
+            self.skipTest('Docker Compose CLI unavailable')
+        compose = self.root / 'docker-compose.yml'
+        compose.write_text('services:\n  backend:\n    image: synthetic-parser-only:unreachable\n')
+        (self.root / '.env').write_text('')
+        docker_host = 'unix://' + str(self.root / 'absent-owned-daemon.sock')
+        clean = {key: os.environ[key] for key in ('PATH', 'HOME')}
+        source = SOURCE.read_text()
+        for function in ('remote_start_v126', 'remote_recover_pre_v126'):
+            body = re.search(r'(?ms)^' + function + r'\(\) \{\n(.*?)^\}', source)
+            self.assertIsNotNone(body, function)
+            commands = re.findall(r'(?m)^  remote_compose create[^\n]*\n    die [^\n]*', body.group(1))
+            self.assertEqual(len(commands), 1, function)
+            capture = self.root / (function + '.argv')
+            # Only remote_compose's external invocation is captured. Execute the
+            # exact production command plus its real nonzero failure consumer.
+            script = 'source "$1"; CAPTURE="$2"; remote_compose() { printf "%s\\0" "$@" > "$CAPTURE"; return 87; };\n' + commands[0]
+            result = subprocess.run(['bash', '-c', script, 'argv-fixture', str(SOURCE), str(capture)],
+                                    capture_output=True, timeout=5)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(b'backend create failed', result.stderr)
+            argv = [value.decode() for value in capture.read_bytes().split(b'\0') if value]
+            self.assertEqual(argv[0], 'create')
+            self.assertEqual(argv[-1], 'backend')
+            parser = ['docker', '--host', docker_host, 'compose', '--env-file', str(self.root / '.env'),
+                      '--file', str(compose), *argv]
+            help_result = subprocess.run([*parser, '--help'], capture_output=True, timeout=10, env=clean)
+            self.assertEqual(help_result.returncode, 0, help_result.stderr)
+            result = subprocess.run(parser, capture_output=True, timeout=10, env=clean)
+            self.assertNotEqual(result.returncode, 0, 'parser fixture must not reach any daemon')
+            self.assertIn(str(self.root / 'absent-owned-daemon.sock').encode(), result.stderr)
+            self.assertNotIn(b'unknown flag', result.stderr)
+            self.assertFalse((self.root / 'absent-owned-daemon.sock').exists())
 
     @unittest.skipUnless(sys.platform == 'linux', 'Linux subreaper runtime unavailable')
     def test_exact_ack_and_no_repeat_or_second_run(self):
@@ -283,6 +336,173 @@ AllowUsers {pwd.getpwuid(os.getuid()).pw_name}
         self.assertEqual(self.run_operation(intent='c', kind='RECOVERY').returncode, 75)
         result = next((self.target / '.v126-target-operations').glob('*.result.json'))
         self.assertEqual(json.loads(result.read_text())['outcome'], 'UNKNOWN')
+
+
+SHARED_RUNNER = r'''import hashlib,importlib.util,json,os,signal,sys,time
+from pathlib import Path
+target=Path(sys.argv[2]);mode=sys.argv[3];kind=sys.argv[4]
+spec=importlib.util.spec_from_file_location('actual_operation_bindings',sys.argv[1])
+bindings=importlib.util.module_from_spec(spec);spec.loader.exec_module(bindings)
+observations=[]
+real_waitpid=os.waitpid
+def observed_waitpid(pid,options):
+ result=real_waitpid(pid,options)
+ if result[0]:
+  observations.append({'event':'actual_reap','pid':result[0],'exit':os.waitstatus_to_exitcode(result[1])})
+  if mode=='cancel-on-zero-reap' and os.waitstatus_to_exitcode(result[1])==0:
+   # Deterministic timing injection only: retain the real waitpid result and
+   # deliver a real SIGTERM immediately before its consumer receives it.
+   os.kill(os.getpid(),signal.SIGTERM)
+   observations.append({'event':'actual_sigterm_after_zero_reap'})
+ return result
+os.waitpid=observed_waitpid
+def audit(event,args):
+ if event in ('os.killpg','os.kill'):
+  observations.append({'event':event,'pid':args[0],'signal':args[1]})
+sys.addaudithook(audit)
+if mode=='input-backpressure':
+ worker='import time;time.sleep(3)'
+elif mode=='cancel-on-zero-reap':
+ worker='raise SystemExit(0)'
+elif mode=='detached-after-leader':
+ child='import pathlib,sys,time;pathlib.Path(sys.argv[1]).write_text(str(__import__("os").getpid()));time.sleep(2);pathlib.Path(sys.argv[2]).write_text("late")'
+ worker=('import os,pathlib,subprocess,sys,time;'
+         'pathlib.Path(sys.argv[1]).write_text(str(os.getpid()));'
+         'subprocess.Popen([sys.executable,"-c",'+repr(child)+',sys.argv[2],sys.argv[3]],start_new_session=True,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL);'
+         'deadline=time.monotonic()+1;'
+         '\nwhile not pathlib.Path(sys.argv[2]).exists() and time.monotonic()<deadline:time.sleep(.01)\n')
+else:
+ raise ValueError('unknown explicit synthetic leaf')
+identity=dict(run_id='actual-common-helper-fixture',release_sha='a'*40,
+ script_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),intent_sha256=('c' if kind=='RECOVERY' else 'b')*64,
+ kind=kind,name='pre-v126' if kind=='RECOVERY' else 'BASELINE_VERIFIED',
+ action='recover-pre-v126' if kind=='RECOVERY' else 'baseline')
+try:
+ status=bindings.binding_supervise(target,identity,[sys.executable,'-c',worker,str(target/'leader.pid'),str(target/'descendant.pid'),str(target/'late-effect')],
+  input_data=b'x'*(2*1024*1024) if mode=='input-backpressure' else b'',
+  env={key:os.environ[key] for key in ('PATH','HOME')},timeout=.5)
+ raise SystemExit(status)
+finally:
+ Path(sys.argv[5]).write_text(json.dumps(observations,sort_keys=True)+'\n')
+'''
+
+
+class SharedSupervisor(unittest.TestCase):
+    """Real Linux common helper, real children; explicit scheduling observation.
+
+    The waitpid wrapper returns every actual kernel result unchanged. Only the
+    cancellation race case injects a real signal at that observation point. The
+    syscall audit hook observes actual signals without replacing their consumer.
+    """
+    tearDown = Supervisor.tearDown
+    args = Supervisor.args
+
+    def setUp(self):
+        Supervisor.setUp(self)
+        self.shared_runner = self.root / 'shared-runner.py'
+        self.shared_runner.write_text(SHARED_RUNNER)
+
+    def shared(self, mode, kind='STAGE'):
+        observations = self.root / (mode + '-' + kind + '.observations.json')
+        process = subprocess.Popen([sys.executable, str(self.shared_runner), str(ROOT / 'v126-operation-bindings.py'),
+                                    str(self.target), mode, kind, str(observations)],
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+        self.children.append(process)
+        started = time.monotonic()
+        try:
+            out, err = process.communicate(timeout=6)
+        except subprocess.TimeoutExpired:
+            # Do not delete paths while a failed supervisor might still own
+            # descendants. All explicit synthetic children have a 3s lifetime.
+            self.retain = True
+            process.send_signal(signal.SIGTERM)
+            try:
+                process.communicate(timeout=12)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.communicate(timeout=5)
+            self.fail('shared supervisor exceeded the outer bound; fixture retained')
+        return subprocess.CompletedProcess(process.args, process.returncode, out, err), time.monotonic() - started, json.loads(observations.read_text())
+
+    def assert_unknown_without_retry(self, result, elapsed, mode):
+        self.assertEqual(result.returncode, 124, result.stderr)
+        self.assertLess(elapsed, 3)
+        registry = self.target / '.v126-target-operations'
+        records = list(registry.glob('*.result.json'))
+        self.assertEqual(len(records), 1)
+        outcome = json.loads(records[0].read_text())
+        self.assertEqual((outcome['exit'], outcome['outcome'], outcome['children']), (124, 'UNKNOWN', 'REAPED'))
+        self.assertNotIn(b'ARTIFACT\t', result.stdout)
+        self.assertFalse(list(self.target.rglob('*.proof')))
+        self.assertFalse(list(self.target.rglob('*.receipt.json')))
+        snapshot = {path: path.read_bytes() for path in registry.rglob('*') if path.is_file()}
+        recovery, _, _ = self.shared(mode, kind='RECOVERY')
+        self.assertEqual(recovery.returncode, 75)
+        for path, raw in snapshot.items():
+            self.assertEqual(path.read_bytes(), raw)
+
+    def test_synthetic_shared_leaf_programs_compile(self):
+        # Construct and compile only fixture strings. No common-helper runtime
+        # branch or Linux platform identity is simulated on this host.
+        parsed = ast.parse(SHARED_RUNNER)
+        branch = next(node for node in parsed.body if isinstance(node, ast.If))
+        for mode in ('input-backpressure', 'cancel-on-zero-reap', 'detached-after-leader'):
+            scope = {'mode': mode}
+            exec(compile(ast.Module(body=[branch], type_ignores=[]), '<fixture-selection>', 'exec'), scope)
+            compile(scope['worker'], '<synthetic-worker>', 'exec')
+            if 'child' in scope:
+                compile(scope['child'], '<synthetic-detached-child>', 'exec')
+
+    @unittest.skipUnless(sys.platform == 'linux', 'real Linux subreaper required; never simulated on macOS')
+    def test_input_backpressure_does_not_block_real_deadline(self):
+        result, elapsed, observations = self.shared('input-backpressure')
+        self.assert_unknown_without_retry(result, elapsed, 'input-backpressure')
+        self.assertTrue(any(row['event'] == 'actual_reap' for row in observations))
+
+    @unittest.skipUnless(sys.platform == 'linux', 'real Linux subreaper required; never simulated on macOS')
+    def test_real_zero_exit_cannot_erase_latched_cancellation(self):
+        result, elapsed, observations = self.shared('cancel-on-zero-reap')
+        self.assert_unknown_without_retry(result, elapsed, 'cancel-on-zero-reap')
+        self.assertTrue(any(row['event'] == 'actual_reap' and row['exit'] == 0 for row in observations))
+        self.assertEqual(sum(row['event'] == 'actual_sigterm_after_zero_reap' for row in observations), 1)
+
+    @unittest.skipUnless(sys.platform == 'linux', 'real Linux subreaper required; never simulated on macOS')
+    def test_reaped_leader_is_never_signalled_as_a_process_group(self):
+        result, elapsed, observations = self.shared('detached-after-leader')
+        self.assert_unknown_without_retry(result, elapsed, 'detached-after-leader')
+        leader = int((self.target / 'leader.pid').read_text())
+        descendant = int((self.target / 'descendant.pid').read_text())
+        zero = next(index for index, row in enumerate(observations)
+                    if row['event'] == 'actual_reap' and row['pid'] == leader and row['exit'] == 0)
+        self.assertFalse(any(row['event'] == 'os.killpg' and row['pid'] == leader for row in observations[zero + 1:]))
+        self.assertTrue(any(row['event'] == 'os.kill' and row['pid'] == descendant and row['signal'] == signal.SIGKILL
+                            for row in observations[zero + 1:]))
+        self.assertTrue(any(row['event'] == 'actual_reap' and row['pid'] == descendant for row in observations))
+        self.assertFalse((self.target / 'late-effect').exists())
+
+    @unittest.skipUnless(sys.platform == 'linux' and BEFORE_SOURCE is not None,
+                         'exact09e before requires an explicitly supplied source on Linux')
+    def test_exact_before_timeout_exit_is_overwritten_by_real_sigkill_status(self):
+        before = subprocess.check_output(['bash', '-c', 'source "$1"; remote_operation_python',
+                                          'exact-before-extract', str(BEFORE_SOURCE)])
+        self.assertEqual(hashlib.sha256(before).hexdigest(), BEFORE_PROGRAM_SHA256)
+        program = self.root / 'exact-before.py'
+        program.write_bytes(before)
+        # Clock-only mock compresses the original300s deadline to0.3s. No
+        # supervisor algorithm, worker process, waitpid or signal is replaced.
+        wrapper = ('import sys,time;real=time.monotonic;origin=real();'
+                   'time.monotonic=lambda:origin+(real()-origin)*1000;'
+                   'path=sys.argv.pop(1);exec(compile(open(path).read(),path,"exec"))')
+        started = time.monotonic()
+        result = subprocess.run([sys.executable, '-c', wrapper, str(program), *self.args(mode='delayed')],
+                                input=WORKER, capture_output=True, timeout=6)
+        self.assertLess(time.monotonic() - started, 3)
+        self.assertEqual(result.returncode, 137, result.stderr)
+        outcome = json.loads(next((self.target / '.v126-target-operations').glob('*.result.json')).read_text())
+        self.assertEqual((outcome['exit'], outcome['outcome']), (137, 'UNKNOWN'))
+        self.assertFalse((self.target / 'effects').exists())
+        print('EXACT09E_BEFORE timeout_status_overwritten=137 outcome=UNKNOWN clock_scale=1000 '
+              'source_sha256=' + BEFORE_SOURCE_SHA256, flush=True)
 
 
 if __name__ == '__main__':

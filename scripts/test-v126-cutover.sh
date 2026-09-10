@@ -211,9 +211,9 @@ stage_remote_action_oracle() {
     PUBLIC_DRAIN_ACTIVE|PUBLIC_DRAIN_REACTIVATED) printf '%s\n' public-drain-on ;;
     V125_BACKEND_STOPPED|V126_BACKEND_STOPPED_FOR_OFF_TRANSITION) printf '%s\n' stop-backend ;;
     ZERO_WRITER_GATE_PASSED) printf '%s\n' zero-writer ;;
-    FINAL_V125_PREFLIGHT_PASSED) printf '%s\n' final-v125-preflight ;;
+    FINAL_V125_PREFLIGHT_PASSED) printf '%s\n' 'preflight-upload,final-v125-preflight' ;;
     V126_MAINTENANCE_CONFIG_PREPARED|MAINTENANCE_OFF_CONFIG_VERIFIED) printf '%s\n' transform-maintenance ;;
-    V126_IMAGE_TRANSFERRED_AND_VERIFIED) printf '%s\n' 'image-prepare,image-load' ;;
+    V126_IMAGE_TRANSFERRED_AND_VERIFIED) printf '%s\n' 'image-prepare,image-upload,image-load' ;;
     V126_BACKEND_STARTED|FINAL_V126_BACKEND_STARTED) printf '%s\n' start-v126 ;;
     V126_SCHEMA_RUNTIME_GATE_PASSED) printf '%s\n' schema-runtime-gate ;;
     MANUAL_SMOKE_AUTHORIZED) printf '%s\n' open-manual-smoke ;;
@@ -981,12 +981,8 @@ extract_booking_preflight() {
   hash_file "$1"
 }
 require_cmd() { :; }
-run_tracked_command() {
-  [[ "$1" == remote-rsync ]] || die "unexpected tracked command in stage fixture: $1"
-  if [[ "${fixture_stage}" == V126_IMAGE_TRANSFERRED_AND_VERIFIED ]]; then
-    printf 'tracked %s\n' "$*" >> "${STATE_DIR}/command-spy.log"
-  fi
-}
+run_tracked_command() { die 'unexpected independent upload command in stage artifact fixture'; }
+
 docker() {
   if [[ "${fixture_stage}" == V126_IMAGE_TRANSFERRED_AND_VERIFIED ]]; then
     printf 'docker %s\n' "$*" >> "${STATE_DIR}/command-spy.log"
@@ -1057,9 +1053,11 @@ run_remote() {
     die "wrong remote action in real stage: ${fixture_stage}:${action}"
   fixture_action_index=$((fixture_action_index + 1))
   local emitted="${fixture_remote_artifacts}"
+  [[ "${action}" != preflight-upload ]] || emitted=''
   if [[ "${fixture_stage}" == V126_IMAGE_TRANSFERRED_AND_VERIFIED ]]; then
     case "${action}" in
       image-prepare) emitted='v126-image-transfer-ready' ;;
+      image-upload) emitted='' ;;
       image-load) emitted='v126-image-archive,v126-image-transferred' ;;
       *) die "unexpected image-transfer action: ${action}" ;;
     esac
@@ -1144,7 +1142,7 @@ expected = [
     rf"^docker image inspect --format \{{\{{\.Id\}}\}} hookah-v126:{release_sha}$",
     rf"^docker save --output .+/tmp/v126-image\.tar hookah-v126:{release_sha}$",
     r"^remote image-prepare$",
-    r"^tracked remote-rsync rsync --archive --copy-links --chmod=Fu=rw,Fgo= /dev/fd/9 .+:/.*v126-image\.tar\.partial$",
+    r"^remote image-upload$",
     r"^remote image-load$",
 ]
 for line, pattern in zip(lines, expected):
@@ -2720,6 +2718,8 @@ run_saved_image_archive_stage_fixture() {
   local action_log="$2"
   local fixture_root="$3"
   local upload_capture="$4"
+  mkdir -m 0700 -p "${fixture_root}/fake-bin"
+  make_artifact_ssh "${fixture_root}/fake-bin/ssh"     v126-image-transfer-ready=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa     v126-image-archive=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb     v126-image-transferred=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
   /bin/bash -s -- "${CUTOVER_SCRIPT}" "${archive_fixture}" "${action_log}" \
     "${fixture_root}" "${RELEASE_SHA}" "${V126_IMAGE_ID}" "${upload_capture}" <<'SH'
 set -Eeuo pipefail
@@ -2747,51 +2747,34 @@ docker() {
     *) die "unexpected saved-image Docker fixture call: $*" ;;
   esac
 }
-run_tracked_command() {
-  [[ "$1" == remote-rsync && "$2" == rsync ]] || die 'unexpected saved-image tracked command'
-  [[ "$3" == --archive && "$4" == --copy-links && "$5" == --chmod=Fu=rw,Fgo= &&
-    "$6" == /dev/fd/9 && "$7" == "${REMOTE}:"* ]] ||
-    die 'saved-image rsync flags or fixed anonymous FD differ from the portable contract'
-  local fixture_rsync
-  fixture_rsync="$(command -v rsync)" || die 'real rsync is unavailable for compatibility fixture'
-  if [[ "$(uname -s)" == Darwin && "${fixture_rsync}" != /usr/bin/rsync ]]; then
-    die 'macOS compatibility fixture did not resolve the system rsync'
-  fi
-  "${fixture_rsync}" "$3" "$4" "$5" "$6" "${fixture_upload_capture}"
-  python3 - "${fixture_upload_capture}" <<'PY'
-import os
-import stat
-import sys
+# Actual run_remote builder/ACK consumer and NUL payload; synthetic SSH executes
+# the actual receiver with declared environmental precondition leaf fixtures.
+SCRIPT_PATH="$1"
+SCRIPT_SHA256="$(hash_file "${SCRIPT_PATH}")"
+ACTIVE_OPERATION_KIND=STAGE
+ACTIVE_OPERATION_NAME=V126_IMAGE_TRANSFERRED_AND_VERIFIED
+ACTIVE_PREDECESSOR_STAGE=V126_MAINTENANCE_CONFIG_PREPARED
+ACTIVE_PREDECESSOR_HASH=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+ACTIVE_AUTHORIZATION_GATE=A
+ACTIVE_AUTHORIZATION_HASH="${ACTIVE_PREDECESSOR_HASH}"
+ACTIVE_INTENT_HASH="${ACTIVE_PREDECESSOR_HASH}"
+printf '%s\n' '{}' > "${STATE_DIR}/present-receipt"
+receipt_path() { printf '%s/present-receipt\n' "${STATE_DIR}"; }
+verify_receipt() { :; }
+receipt_artifact_hash() { printf '%s\n' "${ACTIVE_PREDECESSOR_HASH}"; }
+run_tracked_command() { die 'independent remote upload is forbidden'; }
+run_tracked_command_with_input() {
+  [[ "$1" == remote-ssh ]] || die 'unexpected tracked transport'
+  local stream="$2"
+  shift 2
+  "$@" < "${stream}"
+}
+export HT12P_ACTION_LOG="${fixture_action_log}"
+export HT12P_UPLOAD_SOURCE_CAPTURE="${fixture_upload_capture}"
+export HT12P_ARCHIVE_SWAP_PATH="${STATE_DIR}/tmp/v126-image.tar"
+export HT12P_EXPECTED_UPLOAD_SHA="${fixture_expected_sha}"
+export PATH="${STATE_DIR}/fake-bin:${PATH}"
 
-if stat.S_IMODE(os.stat(sys.argv[1]).st_mode) != 0o600:
-    raise SystemExit("real rsync did not enforce the exact restricted upload mode")
-PY
-  printf '%s\n' rsync >> "${fixture_action_log}"
-}
-run_remote() {
-  local action="$1"
-  printf 'remote %s\n' "${action}" >> "${fixture_action_log}"
-  case "${action}" in
-    image-prepare)
-      printf '%s\n' 'HT12P_REINTRODUCED_ARCHIVE_PATH_MUST_NOT_UPLOAD' > \
-        "${STATE_DIR}/tmp/v126-image.tar"
-      chmod 0600 "${STATE_DIR}/tmp/v126-image.tar"
-      printf 'ARTIFACT\tv126-image-transfer-ready\t%s\n' \
-        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-      ;;
-    image-load)
-      [[ "$7" == "${fixture_expected_sha}" ]] ||
-        die 'image-load checksum did not bind the anonymous local snapshot'
-      [[ "$(hash_file "${fixture_upload_capture}")" == "${fixture_expected_sha}" ]] ||
-        die 'rsync did not consume the exact verified anonymous snapshot'
-      printf 'ARTIFACT\tv126-image-archive\t%s\n' \
-        bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-      printf 'ARTIFACT\tv126-image-transferred\t%s\n' \
-        cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-      ;;
-    *) die 'unexpected saved-image remote action' ;;
-  esac
-}
 stage_v126_image_transferred_and_verified
 SH
 }
@@ -2807,7 +2790,7 @@ test_saved_image_archive_binding() {
     expect_success "${mode} Docker-save archive reaches bounded transfer actions" \
       run_saved_image_archive_stage_fixture "${archive}" "${action_log}" \
       "${fixture_root}" "${upload_capture}"
-    [[ "$(cat "${action_log}")" == $'remote image-prepare\nrsync\nremote image-load' ]] ||
+    [[ "$(cat "${action_log}")" == $'remote image-prepare\nremote image-upload\nremote image-load' ]] ||
       fail "${mode} saved-image archive action order mismatch"
     cmp -s "${archive}" "${upload_capture}" ||
       fail "${mode} anonymous-FD upload differs from the verified Docker-save archive"
@@ -2816,7 +2799,7 @@ test_saved_image_archive_binding() {
       fail "${mode} path-swap control was not installed after image-prepare"
     ! grep -F 'HT12P_REINTRODUCED_ARCHIVE_PATH_MUST_NOT_UPLOAD' \
       "${upload_capture}" >/dev/null ||
-      fail "${mode} rsync followed the reintroduced archive path instead of the verified FD"
+      fail "${mode} supervised upload followed the reintroduced archive path instead of the verified FD"
   done
   while IFS='|' read -r mode pattern; do
     archive="${TEST_ROOT}/saved-image-${mode}.tar"
@@ -2827,7 +2810,7 @@ test_saved_image_archive_binding() {
     expect_failure "${mode} Docker-save archive rejects before remote mutation" "${pattern}" \
       run_saved_image_archive_stage_fixture "${archive}" "${action_log}" \
       "${fixture_root}" "${upload_capture}"
-    [[ ! -s "${action_log}" ]] || fail "${mode} saved-image archive reached remote or rsync"
+    [[ ! -s "${action_log}" ]] || fail "${mode} saved-image archive reached a remote action"
     [[ ! -e "${upload_capture}" ]] || fail "${mode} saved-image archive reached the upload FD"
   done <<'EOF'
 wrong-tag|tag association mismatch
@@ -2982,16 +2965,15 @@ test_image_separation_and_mismatch() {
   extract_function_source "${CUTOVER_SCRIPT}" remote_image_load "${remote_load}"
   extract_function_source "${CUTOVER_SCRIPT}" remote_start_v126 "${remote_start}"
   assert_literals_in_order "${transfer}" 'image transfer stage' \
-    'docker image inspect' 'docker save' 'run_remote image-prepare' 'rsync ' 'run_remote image-load'
+    'docker image inspect' 'docker save' 'run_remote image-prepare' 'run_remote image-upload' 'run_remote image-load'
   grep -F 'local archive_fd=9' "${transfer}" >/dev/null ||
     fail 'image transfer does not use the Bash-3.2-compatible fixed archive FD'
-  grep -F 'run_tracked_command remote-rsync rsync --archive --copy-links --chmod=Fu=rw,Fgo=' \
-    "${transfer}" >/dev/null ||
-    fail 'image transfer lacks the portable exact rsync flag contract'
-  grep -F '"/dev/fd/${archive_fd}"' "${transfer}" >/dev/null ||
-    fail 'image transfer does not upload the verified anonymous FD'
-  ! grep -E -- '--protect-args|--chmod=F600|exec \{archive_fd\}' "${transfer}" >/dev/null ||
-    fail 'image transfer reintroduced a macOS Bash/rsync-incompatible construct'
+  grep -F 'local V126_LOCAL_UPLOAD_FD="${archive_fd}" upload_size' "${transfer}" >/dev/null ||
+    fail 'image transfer does not bind the verified anonymous FD to the supervised upload'
+  grep -F 'run_remote image-upload' "${transfer}" >/dev/null ||
+    fail 'image transfer lacks the supervised upload operation'
+  ! grep -E 'rsync|exec \{archive_fd\}' "${transfer}" >/dev/null ||
+    fail 'image transfer reintroduced an independent writer or incompatible dynamic FD'
   ! grep -F 'start-v126' "${transfer}" >/dev/null || fail 'image transfer stage can start V126'
   grep -F 'run_remote start-v126' "${startup}" >/dev/null || fail 'startup stage lacks exact start action'
   ! grep -E 'docker (save|load)|image-(prepare|load)' "${startup}" >/dev/null ||
@@ -3006,7 +2988,7 @@ test_image_separation_and_mismatch() {
   ! grep -F 'remote_compose up' "${remote_load}" >/dev/null || fail 'remote image load starts backend'
   assert_literals_in_order "${remote_start}" 'single V126 backend start contract' \
     'remote_assert_compose_backend_image "${image_tag}"' \
-    'remote_compose create --force-recreate --no-build --no-deps --pull never backend' \
+    'remote_compose create --force-recreate --no-build --pull never backend' \
     'docker update --restart=no "${backend_container}"' \
     "'{{.HostConfig.RestartPolicy.Name}}:{{.RestartCount}}'" \
     'docker start "${backend_container}"' \
@@ -3081,7 +3063,7 @@ remote_compose() {
   printf 'remote_compose %s\n' "$*" >> "${fixture_mutation_log}"
 }
 remote_assert_compose_backend_image "${fixture_expected}"
-remote_compose create --force-recreate --no-build --no-deps --pull never backend
+remote_compose create --force-recreate --no-build --pull never backend
 SH
 }
 
@@ -3100,7 +3082,7 @@ test_backend_specific_compose_mapping() {
   exact="{\"services\":{\"backend\":{\"image\":\"${expected}\"},\"worker\":{\"image\":\"${wrong}\"}}}"
   expect_success 'backend-specific Compose mapping accepts only the backend exact tag' \
     run_compose_mapping_fixture "${exact}" "${expected}" "${mutation_log}"
-  [[ "$(grep -F -c 'remote_compose create --force-recreate --no-build --no-deps --pull never backend' \
+  [[ "$(grep -F -c 'remote_compose create --force-recreate --no-build --pull never backend' \
     "${mutation_log}" || true)" == 1 ]] || fail 'exact backend mapping did not reach one bounded create'
   pass 'Compose service mapping is backend-specific and fail-closed before start'
 }
@@ -3121,7 +3103,7 @@ PATH="${fixture_fake_bin}:${PATH}"
 cd "${fixture_staging}"
 REMOTE_BACKEND_IMAGE="${fixture_expected}"
 remote_assert_compose_backend_image "${fixture_expected}"
-remote_compose create --force-recreate --no-build --no-deps --pull never backend >/dev/null
+remote_compose create --force-recreate --no-build --pull never backend >/dev/null
 SH
 }
 
@@ -3152,7 +3134,7 @@ test_explicit_compose_file_selection() {
     "  'compose --env-file .env --file docker-compose.yml config --format json')" \
     "    printf '%s\\n' '{\"services\":{\"backend\":{\"image\":\"${expected}\"}}}'" \
     '    ;;' \
-    "  'compose --env-file .env --file docker-compose.yml create --force-recreate --no-build --no-deps --pull never backend') : ;;" \
+    "  'compose --env-file .env --file docker-compose.yml create --force-recreate --no-build --pull never backend') : ;;" \
     '  *) exit 97 ;;' \
     'esac' > "${fake_bin}/docker"
   chmod 0700 "${fake_bin}/docker"
@@ -3165,7 +3147,7 @@ import sys
 actual = open(sys.argv[1], "rt", encoding="utf-8").read().splitlines()
 expected = [
     "docker compose --env-file .env --file docker-compose.yml config --format json",
-    "docker compose --env-file .env --file docker-compose.yml create --force-recreate --no-build --no-deps --pull never backend",
+    "docker compose --env-file .env --file docker-compose.yml create --force-recreate --no-build --pull never backend",
 ]
 if actual != expected:
     raise SystemExit(f"explicit Compose file selection mismatch: {actual!r}")
@@ -3178,14 +3160,16 @@ PY
 run_real_backup_rehearsal_cleanup_fixture() {
   local fixture_mode="$1"
   local fixture_root="$2"
+  local fixture_caller="${3:-direct}"
   /bin/bash -s -- "${CUTOVER_SCRIPT}" "${fixture_mode}" "${fixture_root}" \
-    "${RELEASE_SHA}" <<'SH'
+    "${RELEASE_SHA}" "${fixture_caller}" <<'SH'
 set -Eeuo pipefail
 source "$1"
 fixture_legacy_dependencies
 fixture_mode="$2"
 fixture_root="$3"
 fixture_release="$4"
+fixture_caller="$5"
 fixture_staging="${fixture_root}/staging"
 fixture_run_id=fixture-rehearsal
 fixture_run_root="${fixture_staging}/.v126-runs/${fixture_run_id}"
@@ -3201,6 +3185,7 @@ fixture_expected_owner_file="${fixture_root}/expected-owner"
 fixture_sentinel_guard="${fixture_root}/sentinel.guard"
 fixture_postgres_id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 fixture_postgres_image=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+fixture_rehearsal_id=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 fixture_expected_name="hookah-v126-fixture-rehearsal-quiesced-$$"
 fixture_expected_owner="v126:${fixture_release}:fixture-rehearsal:quiesced:$$"
 fixture_sentinel_name="${fixture_expected_name}-sentinel"
@@ -3344,11 +3329,16 @@ docker() {
       ;;
     container)
       [[ "${2:-}" == inspect && "${3:-}" == --format &&
-        "${4:-}" == '{{ index .Config.Labels "hookah.v126.rehearsal-owner" }}' ]] ||
+        ( "${4:-}" == '{{.Id}}' ||
+          "${4:-}" == '{{ index .Config.Labels "hookah.v126.rehearsal-owner" }}' ) ]] ||
         die "unexpected rehearsal Docker container call: ${rendered}"
       name="${5:-}"
       [[ -f "${fixture_container_state}" &&
         "$(< "${fixture_container_state}")" == "${name}" ]] || return 1
+      if [[ "${4:-}" == '{{.Id}}' ]]; then
+        printf '%s\n' "${fixture_rehearsal_id}"
+        return 0
+      fi
       actual_owner="$(< "${fixture_container_owner}")"
       if [[ "${actual_owner}" == "${fixture_expected_owner}" ]]; then
         printf '%s\n' CONTAINER_OWNER_EXACT >> "${fixture_log}"
@@ -3467,7 +3457,9 @@ docker() {
         "$(< "${fixture_container_state}")" == "${name}" ]] ||
         die 'rehearsal exec targeted the wrong container'
       case "${3:-}" in
-        pg_isready|createdb|pg_restore) : ;;
+        pg_isready) : ;;
+        createdb) [[ "${fixture_mode}" != post-createdb ]] || return 90 ;;
+        pg_restore) [[ "${fixture_mode}" != post-restore ]] || return 91 ;;
         psql)
           case "${rendered}" in
             *'SHOW server_version_num'*) printf '%s\n' 160004 ;;
@@ -3482,6 +3474,7 @@ docker() {
       [[ -s "${2:-}" && -f "${fixture_container_state}" &&
         "${3:-}" == "$(< "${fixture_container_state}"):/tmp/v126-rehearsal.dump" ]] ||
         die "unexpected rehearsal Docker cp call: ${rendered}"
+      [[ "${fixture_mode}" != post-copy ]] || return 89
       ;;
     rm)
       [[ "${2:-}" == -f ]] || die "unexpected rehearsal Docker rm call: ${rendered}"
@@ -3499,9 +3492,39 @@ docker() {
   esac
 }
 
-remote_backup_rehearsal "${fixture_staging}" "${fixture_run_id}" "${fixture_release}" \
-  quiesced "hookah-v125:${V125_SOURCE_SHA}"
+case "${fixture_caller}" in
+  direct)
+    remote_backup_rehearsal "${fixture_staging}" "${fixture_run_id}" "${fixture_release}" \
+      quiesced "hookah-v125:${V125_SOURCE_SHA}"
+    ;;
+  conditional)
+    if remote_backup_rehearsal "${fixture_staging}" "${fixture_run_id}" "${fixture_release}" \
+      quiesced "hookah-v125:${V125_SOURCE_SHA}"; then
+      :
+    else
+      exit "$?"
+    fi
+    ;;
+  capture)
+    fixture_result="$(remote_backup_rehearsal "${fixture_staging}" "${fixture_run_id}" "${fixture_release}" \
+      quiesced "hookah-v125:${V125_SOURCE_SHA}")" || exit "$?"
+    printf '%s\n' "${fixture_result}"
+    ;;
+  *) die 'unknown rehearsal caller context' ;;
+esac
 [[ "${fixture_mode}" == success ]] || die 'failure rehearsal fixture returned unexpectedly'
+# The actual proof producer must retain the exact observed owned-container ID
+# after cleanup, together with the existing volume, owner and completion fields.
+python3 - "${fixture_run_root}/quiesced-backup-rehearsed.proof" \
+  "${fixture_rehearsal_id}" "${fixture_expected_name}" "${fixture_expected_owner}" <<'PYPROOF'
+from pathlib import Path
+import sys
+lines = Path(sys.argv[1]).read_text().splitlines()
+for expected in ["rehearsal_container=" + sys.argv[2], "rehearsal_volume=" + sys.argv[3],
+                 "rehearsal_owner=" + sys.argv[4], "rehearsal_cleanup=COMPLETE", "result=PASS"]:
+    if lines.count(expected) != 1:
+        raise SystemExit("actual rehearsal proof lost an exact owned cleanup witness")
+PYPROOF
 [[ ! -e "${fixture_volume_state}" && ! -e "${fixture_volume_owner}" &&
   ! -e "${fixture_container_state}" && ! -e "${fixture_container_owner}" ]] ||
   die 'successful rehearsal left a fake Docker resource allocated'
@@ -3526,7 +3549,7 @@ assert_real_backup_rehearsal_lifecycle() {
     post-container)
       expected=$'VOLUME_CREATE\nVOLUME_OWNER_EXACT\nCONTAINER_RUN\nCONTAINER_CREATE\nCONTAINER_OWNER_EXACT\nCONTAINER_RM_ATTEMPT\nCONTAINER_RM\nVOLUME_OWNER_EXACT\nVOLUME_RM_ATTEMPT\nVOLUME_RM'
       ;;
-    success)
+    success|post-copy|post-createdb|post-restore)
       expected=$'VOLUME_CREATE\nVOLUME_OWNER_EXACT\nCONTAINER_RUN\nCONTAINER_CREATE\nCONTAINER_OWNER_EXACT\nCONTAINER_OWNER_EXACT\nCONTAINER_RM_ATTEMPT\nCONTAINER_RM\nVOLUME_OWNER_EXACT\nVOLUME_RM_ATTEMPT\nVOLUME_RM'
       ;;
     wrong-owner-volume)
@@ -3546,13 +3569,14 @@ assert_real_backup_rehearsal_lifecycle() {
 }
 
 test_real_backup_rehearsal_cleanup_contract() {
-  local fixture_mode fixture_root actual_status expected_status
-  for fixture_mode in post-volume post-container success wrong-owner-volume cleanup-failure; do
-    fixture_root="${TEST_ROOT}/real-rehearsal-${fixture_mode}"
+  local fixture_caller fixture_mode fixture_root actual_status expected_status
+  for fixture_caller in direct conditional capture; do
+  for fixture_mode in post-volume post-container success wrong-owner-volume cleanup-failure post-copy post-createdb post-restore; do
+    fixture_root="${TEST_ROOT}/real-rehearsal-${fixture_caller}-${fixture_mode}"
     mkdir -m 0700 -p "${fixture_root}"
     capture_path
     if run_real_backup_rehearsal_cleanup_fixture \
-      "${fixture_mode}" "${fixture_root}" > "${LAST_OUTPUT}" 2>&1; then
+      "${fixture_mode}" "${fixture_root}" "${fixture_caller}" > "${LAST_OUTPUT}" 2>&1; then
       actual_status=0
     else
       actual_status=$?
@@ -3564,12 +3588,19 @@ test_real_backup_rehearsal_cleanup_contract() {
       success) expected_status=0 ;;
       wrong-owner-volume) expected_status=4 ;;
       cleanup-failure) expected_status=88 ;;
+      post-copy) expected_status=89 ;;
+      post-createdb) expected_status=90 ;;
+      post-restore) expected_status=91 ;;
     esac
     [[ "${actual_status}" == "${expected_status}" ]] ||
       fail "${fixture_mode} rehearsal status mismatch: expected=${expected_status} actual=${actual_status}"
     assert_real_backup_rehearsal_lifecycle "${fixture_mode}" "${fixture_root}"
+    if [[ "${fixture_mode}" != success ]]; then
+      [[ ! -e "${fixture_root}/staging/.v126-runs/fixture-rehearsal/quiesced-backup-rehearsed.proof" ]] ||
+        fail "${fixture_caller}/${fixture_mode} failure created a successful rehearsal proof"
+    fi
     case "${fixture_mode}" in
-      post-volume|post-container|success)
+      post-volume|post-container|success|post-copy|post-createdb|post-restore)
         [[ ! -e "${fixture_root}/volume.state" && ! -e "${fixture_root}/volume.owner" &&
           ! -e "${fixture_root}/container.state" && ! -e "${fixture_root}/container.owner" ]] ||
           fail "${fixture_mode} rehearsal retained an owned fake resource"
@@ -3595,7 +3626,8 @@ test_real_backup_rehearsal_cleanup_contract() {
           fail 'EXIT cleanup failure was not reported'
         ;;
     esac
-    pass "real rehearsal cleanup contract: ${fixture_mode}"
+    pass "real rehearsal cleanup contract: ${fixture_caller}/${fixture_mode}"
+  done
   done
   pass 'real rehearsal prearms exact ownership, cleans partial resources, and preserves original failures'
 }
@@ -4004,7 +4036,7 @@ remote_emit_artifact() { :; }
 remote_compose() {
   case "$*" in
     'ps --status running -q --no-trunc backend') : ;;
-    'create --force-recreate --no-build --no-deps --pull never backend')
+    'create --force-recreate --no-build --pull never backend')
       printf '%s\n' compose-create >> "${fixture_log}"
       if [[ "${fixture_failure_mode}" == drift-during-create ]]; then
         printf '%s\n' 'UNRELATED_DRIFT=1' >> .env
@@ -5745,15 +5777,6 @@ test_real_stage_eight_artifact_collection() {
   make_instrumented_script "${CUTOVER_SCRIPT}" "${hybrid}" FINAL_V125_PREFLIGHT_PASSED
   prepare_preflight_release_fixture
   mkdir -m 0700 "${fake_bin}"
-  printf '%s\n' \
-    '#!/usr/bin/env bash' \
-    'source_path=' \
-    'for argument in "$@"; do' \
-    '  if [[ -f "${argument}" ]]; then source_path="${argument}"; fi' \
-    'done' \
-    '[[ -n "${source_path}" ]]' \
-    'cp "${source_path}" "${HT12P_RSYNC_SOURCE_CAPTURE:?}"' > "${fake_bin}/rsync"
-  chmod 0700 "${fake_bin}/rsync"
 
   make_artifact_ssh "${fake_bin}/ssh" "final-v125-preflight=${remote_hash}"
   new_state "${hybrid}" real-stage-eight
@@ -5784,7 +5807,7 @@ PY
   grep -F "${mutable_sentinel}" \
     "${TEST_ROOT}/release-worktree/docs/DEPLOYMENT_RUNBOOK.md" >/dev/null ||
     fail 'stage-8 mutable working-tree SQL sentinel was not installed after baseline'
-  export HT12P_RSYNC_SOURCE_CAPTURE="${transferred_preflight}"
+  export HT12P_UPLOAD_SOURCE_CAPTURE="${transferred_preflight}"
   export HT12P_REMOTE_STREAM_LOG="${remote_stream}"
   PATH="${fake_bin}:${old_path}"
   expect_success 'real state 8 collects and seals an exact artifact set' \
@@ -5942,7 +5965,7 @@ items = sys.argv[2:]
 if any(not re.fullmatch(r"[a-z0-9-]+=[0-9a-f]{64}", item) for item in items):
     raise SystemExit("invalid fake SSH artifact fixture")
 source = r'''#!/usr/bin/env python3
-import hashlib, json, os, sys, time
+import hashlib, json, os, re, shutil, subprocess, sys, tempfile, time
 from pathlib import Path
 stream = sys.stdin.buffer.read()
 if os.environ.get("HT12P_REMOTE_STREAM_LOG"):
@@ -5960,17 +5983,76 @@ if os.environ.get("HT12P_RACE_READY"):
 marker = b"\nV126_INTERNAL_REMOTE_ENVELOPE_V1\n"
 if stream.count(marker) != 1:
     raise SystemExit("fixture remote envelope marker mismatch")
-fields = stream.split(marker, 1)[1].splitlines()
-identity = dict(action=fields[0].decode(), run_id=fields[1].decode(),
-                release_sha=fields[2].decode(), script_sha256=fields[4].decode(),
-                kind=fields[6].decode(), name=fields[7].decode(), intent_sha256=fields[12].decode())
+header_names = ('action run release target script image kind name predecessor predecessor_hash gate gate_hash intent '
+                'database_sha database_identity identities_sha compose_sha maintenance_sha admission_sha caddy_sha env_sha '
+                'caddy_original caddy_candidate caddy_diff caddy_activation smoke_sha off_sha').split()
+pieces = stream.split(marker, 1)[1].split(b"\n", len(header_names) + 1)
+header = dict(zip(header_names, (value.decode() for value in pieces[:len(header_names)])))
+count = int(pieces[len(header_names)])
+args_body = pieces[-1].split(b"\n", count)
+arguments = [value.decode() for value in args_body[:count]]
+identity = dict(action=header['action'], run_id=header['run'], release_sha=header['release'],
+                script_sha256=header['script'], kind=header['kind'], name=header['name'], intent_sha256=header['intent'])
 canonical = lambda doc: (json.dumps(doc, sort_keys=True, separators=(",", ":")) + "\n").encode()
 items = ITEMS
+status = 0
+if os.environ.get("HT12P_ACTION_LOG"):
+    with Path(os.environ["HT12P_ACTION_LOG"]).open("a") as handle:
+        handle.write("remote " + identity["action"] + "\n")
+if identity["action"] == "image-prepare" and os.environ.get("HT12P_ARCHIVE_SWAP_PATH"):
+    swap = Path(os.environ["HT12P_ARCHIVE_SWAP_PATH"])
+    swap.write_text("HT12P_REINTRODUCED_ARCHIVE_PATH_MUST_NOT_UPLOAD\n")
+    swap.chmod(0o600)
+if identity["action"] == "image-prepare":
+    items = [item for item in items if item.startswith("v126-image-transfer-ready=")]
+elif identity["action"] == "image-load":
+    items = [item for item in items if item.startswith(("v126-image-archive=", "v126-image-transferred="))]
+    if os.environ.get('HT12P_EXPECTED_UPLOAD_SHA'):
+        expected = os.environ['HT12P_EXPECTED_UPLOAD_SHA']
+        if arguments[-1] != expected:
+            raise SystemExit('image-load checksum did not bind the anonymous local snapshot')
+        if hashlib.sha256(Path(os.environ['HT12P_UPLOAD_SOURCE_CAPTURE']).read_bytes()).hexdigest() != expected:
+            raise SystemExit('actual receiver did not consume the exact verified anonymous snapshot')
 log = b"".join(("ARTIFACT\t" + item.replace("=", "\t", 1) + "\n").encode() for item in items)
+if identity["action"] in ("image-upload", "preflight-upload"):
+    # Real stream builder and real upload receiver; only SSH/supervision and the
+    # receiver's independently tested environmental preconditions are synthetic.
+    body, delimiter, payload = args_body[-1].partition(b"\0")
+    if not delimiter or hashlib.sha256(body).hexdigest() != identity['script_sha256']:
+        raise SystemExit('fixture upload body/source binding differs')
+    receiver = re.search(rb'(?ms)^remote_receive_upload\(\) \{\n.*?^\}\n', body)
+    if receiver is None:
+        raise SystemExit('actual source upload receiver is absent')
+    run_root = Path(arguments[0]) / '.v126-runs' / arguments[1]
+    run_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    script = r"""set -euo pipefail
+exec 8<&0
+die() { printf '%s\n' "$*" >&2; exit 4; }
+remote_initialize_compose() { :; }
+remote_require_run_root() { printf '%s/.v126-runs/%s\n' "$1" "$2"; }
+remote_assert_public_drain() { :; }
+remote_assert_zero_writer() { [[ "$1" == '125:0:0' ]]; }
+remote_verify_proof() { :; }
+remote_verify_maintenance_env_binding() { :; }
+""" + receiver.group().decode() + '\nremote_receive_upload "$@"\n'
+    with tempfile.TemporaryFile() as incoming:
+        incoming.write(payload); incoming.seek(0)
+        received = subprocess.run(['bash', '-c', script, 'actual-upload-receiver', identity['action'], *arguments],
+                                  stdin=incoming, capture_output=True, timeout=30)
+    status, log = received.returncode, received.stdout
+    sys.stderr.buffer.write(received.stderr)
+    destination = run_root / ('v126-image.tar.partial' if identity['action']=='image-upload' else 'final-v125-preflight.sh.partial')
+    if status == 0:
+        if destination.stat().st_mode & 0o777 != 0o600:
+            raise SystemExit('actual upload receiver mode differs')
+        if os.environ.get('HT12P_UPLOAD_SOURCE_CAPTURE'):
+            shutil.copyfile(destination, os.environ['HT12P_UPLOAD_SOURCE_CAPTURE'])
+            Path(os.environ['HT12P_UPLOAD_SOURCE_CAPTURE']).chmod(0o600)
 ack = dict(identity=identity, operation_id=hashlib.sha256(canonical(identity)).hexdigest(),
-           exit=0, outcome="SUCCEEDED", children="REAPED",
+           exit=status, outcome="SUCCEEDED" if status == 0 else "UNKNOWN", children="REAPED",
            log_sha256=hashlib.sha256(log).hexdigest(), completed_at="2026-09-09T00:00:00+00:00")
 sys.stdout.buffer.write(log + b"\nREMOTE_OPERATION_ACK\t" + canonical(ack))
+raise SystemExit(status)
 '''
 Path(sys.argv[1]).write_text(source.replace("ITEMS", repr(items)))
 Path(sys.argv[1]).chmod(0o700)
@@ -7330,10 +7412,10 @@ remote_compose() {
       fi
       return 0
       ;;
-    'create --force-recreate --no-build --no-deps --pull never backend')
+    'create --force-recreate --no-build --pull never backend')
       [[ "${fixture_mode}" == pre && "$(< "${backend_state_file}")" == stopped ]] ||
         die 'Compose create crossed the recovery state boundary'
-      log_command 'compose create --force-recreate --no-build --no-deps --pull never backend'
+      log_command 'compose create --force-recreate --no-build --pull never backend'
       printf '%s\n' "${V125_IMAGE_ID}" > "${backend_image_file}"
       if [[ "${fixture_failure_mode}" == env-during-create ]]; then
         printf '%s\n' 'UNRELATED_CREATE_DRIFT=1' >> "${fixture_staging}/.env"
@@ -7453,7 +7535,7 @@ if mode == "pre":
         "product PRODUCT OFF EMPTY",
         f"docker image inspect --format {{{{.Id}}}} hookah-v125:{v125_sha}",
         f"compose-image hookah-v125:{v125_sha}",
-        "compose create --force-recreate --no-build --no-deps --pull never backend",
+        "compose create --force-recreate --no-build --pull never backend",
         "compose ps -aq --no-trunc backend",
         f"docker inspect --format {{{{.Image}}}} {backend}",
         f"docker inspect --format {{{{json .Config.Env}}}} {backend}",
@@ -7615,7 +7697,7 @@ test_recovery_contract() {
     'remote_compose stop backend' \
     '[[ "${v125_image_tag}" =~ :${V125_SOURCE_SHA}$ ]]' \
     'remote_assert_compose_backend_image "${v125_image_tag}"' \
-    'remote_compose create --force-recreate --no-build --no-deps --pull never backend' \
+    'remote_compose create --force-recreate --no-build --pull never backend' \
     'docker update --restart=no "${recovery_container}"' \
     'docker start "${recovery_container}"'
   [[ "$(grep -F -c 'docker start "${recovery_container}"' "${pre}" || true)" == 1 ]] ||
@@ -8113,6 +8195,12 @@ main() {
   python3 "${SCRIPT_DIR}/test-v126-remote-stdin.py"
   python3 "${SCRIPT_DIR}/test-v126-attempt-status.py"
   python3 "${SCRIPT_DIR}/test-v126-bindings.py"
+  python3 "${SCRIPT_DIR}/test-v126-reconciliation.py"
+  python3 "${SCRIPT_DIR}/test-v126-reconcile-poststate.py"
+  python3 "${SCRIPT_DIR}/test-v126-ordinary-deploy.py"
+  python3 "${SCRIPT_DIR}/test-v126-operational-handoff.py"
+  python3 "${SCRIPT_DIR}/test-v126-systemd-linux.py" --self-test
+  python3 "${SCRIPT_DIR}/test-v126-reconciliation-linux.py" --self-test
   python3 "${SCRIPT_DIR}/test-v126-readiness.py"
   python3 "${SCRIPT_DIR}/test-v126-runtime-consumers.py"
   python3 "${SCRIPT_DIR}/test-v126-configuration.py"

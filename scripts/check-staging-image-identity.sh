@@ -40,25 +40,22 @@ verify_deploy_order() {
   local required_id_line
   local build_line
   local guard_line
-  local remote_directory_line
-  local rsync_line
-  local image_upload_line
+  local supervised_transport_line
 
   [[ -f "${deploy_script}" ]] || fail "deploy script is unavailable"
   required_tag_line="$(first_line "${deploy_script}" 'BACKEND_IMAGE is required')"
   required_id_line="$(first_line "${deploy_script}" 'EXPECTED_BACKEND_IMAGE_ID is required')"
   build_line="$(first_line "${deploy_script}" 'docker buildx build \')"
   guard_line="$(first_line "${deploy_script}" '"${SCRIPT_DIR}/check-staging-image-identity.sh" \')"
-  remote_directory_line="$(first_line "${deploy_script}" 'ssh "${REMOTE}" "mkdir -p')"
-  rsync_line="$(first_line "${deploy_script}" 'rsync -azR \')"
-  image_upload_line="$(first_line "${deploy_script}" 'docker save "${BACKEND_IMAGE}"')"
+  supervised_transport_line="$(first_line "${deploy_script}" 'python3 "${SCRIPT_DIR}/v126-ordinary-deploy.py" client \')"
 
   (( required_tag_line < build_line )) || fail "full-SHA image tag must be required before build"
   (( required_id_line < build_line )) || fail "reviewed image identity must be required before build"
   (( build_line < guard_line )) || fail "identity guard must follow the local image build"
-  (( guard_line < remote_directory_line )) || fail "identity guard must precede remote directory mutation"
-  (( guard_line < rsync_line )) || fail "identity guard must precede rsync upload"
-  (( guard_line < image_upload_line )) || fail "identity guard must precede image upload"
+  (( guard_line < supervised_transport_line )) || fail "identity guard must precede supervised payload transfer"
+  if grep -qE '^[[:space:]]*(ssh|rsync)[[:space:]]' "${deploy_script}"; then
+    fail "ordinary deployment must not mutate outside its supervised transport"
+  fi
 }
 
 verify_controlmaster_order() {

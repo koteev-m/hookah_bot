@@ -6,6 +6,17 @@ prerequisite-sync command is `scripts/v126-staging-prerequisite-sync.sh`; the se
 command is `scripts/v126-cutover.sh`. This file remains the one-VPS staging implementation-detail
 runbook and must not define another prerequisite or V126 command path.
 
+For a protocol-managed target, ordinary deployment requires the separately approved/applied
+[V125/V126 operational handoff](V126_OPERATIONAL_HANDOFF.md) and an explicit immutable
+[target-binding transfer](V126_REPAIR_OPERATION_PROTOCOL.md) naming the exact next deployment
+request. `APPROVED_DEPLOYMENT_FILE` is the protected canonical descriptor;
+`DEPLOY_STATE_DIR` is a fresh local evidence directory. The descriptor binds the fixed
+root-owned `.env`, already accepted full-SHA image, effective configuration and runtime.
+Missing/unresolved operation history blocks all ordinary deployment and recovery. Generic
+restart/recreate/rollback snippets below are not a bypass for this target lock or approval.
+Unbound legacy targets are refused; there is no automatic adoption or image/.env selection.
+These documents describe future authorized operation, not permission to change staging now.
+
 This runbook describes the minimal staging setup for the Telegram bot + Mini App on one VPS with Docker Compose, PostgreSQL on the same host, and the Mini App production build served by the backend at `/miniapp/`.
 
 ## 1. Target Architecture
@@ -314,12 +325,15 @@ For temporary tunnel-based local dev, keep using local env files and set public 
 Standard local one-command deploy for ordinary public-pilot releases only:
 
 This command intentionally builds, uploads and starts in one path. Therefore it is prohibited for
-every V126 state and recovery branch; V126 uses the no-build transfer and separately gated startup
-implemented only by `scripts/v126-cutover.sh`.
+active V126 cutover/recovery phase before a completed terminal boundary and separately
+approved/applied operational handoff. During those phases, V126 uses the no-build transfer
+and separately gated startup implemented only by `scripts/v126-cutover.sh`.
 
 ```bash
 BACKEND_IMAGE='hookah_bot_ant-backend:<candidate-sha>' \
 EXPECTED_BACKEND_IMAGE_ID='sha256:<reviewed-image-id>' \
+APPROVED_DEPLOYMENT_FILE='/absolute/path/approved-deployment.json' \
+DEPLOY_STATE_DIR='/absolute/path/fresh-deployment-evidence' \
 ./scripts/deploy-staging.sh '<ssh-alias>'
 ```
 
@@ -328,24 +342,32 @@ Current staging alias example:
 ```bash
 BACKEND_IMAGE='hookah_bot_ant-backend:<candidate-sha>' \
 EXPECTED_BACKEND_IMAGE_ID='sha256:<reviewed-image-id>' \
+APPROVED_DEPLOYMENT_FILE='/absolute/path/approved-deployment.json' \
+DEPLOY_STATE_DIR='/absolute/path/fresh-deployment-evidence' \
 ./scripts/deploy-staging.sh hookah-staging
 ```
 
 The script:
 
-1. runs the secret-free admission and maintenance guard fixtures locally;
-2. requires a reviewed canonical `EXPECTED_BACKEND_IMAGE_ID`, then builds the backend image locally
-   for `linux/amd64` with BuildKit provenance disabled,
-   including the Mini App production build;
-3. compares the built canonical `sha256` image ID to the reviewed value and stops before opening
-   SSH, uploading files or making any remote change on a missing, malformed or different value;
-4. uploads Compose/control files, then validates the fixed `.env` through the scrubbed effective
-   Compose admission guard and the separate maintenance authorization guard without printing
-   secrets or identities;
-5. uploads the already verified Docker image;
-6. runs `docker compose --env-file .env up -d --no-build postgres backend` through the same scrubbed
-   admission and maintenance environment so shell values cannot replace reviewed configuration;
-7. waits and retries loopback health/DB/static checks and, when enabled, the public staging URL.
+1. runs the secret-free admission and maintenance fixtures and requires the clean exact
+   image commit plus reviewed canonical `EXPECTED_BACKEND_IMAGE_ID`;
+2. builds/verifies the local image using the existing reproducibility contract, then
+   requires the protected approved descriptor and fresh evidence directory;
+3. sends one source-bound stream whose remote worker acquires the persistent target lock,
+   verifies all history, exact next descriptor and actual applied handoff before upload;
+4. installs only explicitly hashed files as root, preserves fixed `.env`, verifies and loads
+   the exact archive without pull/build/retag fallback;
+5. performs one backend-only recreate with `--no-build --pull never --no-deps`, retaining
+   the existing PostgreSQL container/configuration and network/mount authority;
+6. uses bounded read-only readiness and actual image/config/DB/Caddy/public postconditions
+   before sealing its dedicated proof and durable acknowledged result.
+
+The next deployment requires explicit retirement and a new exact descriptor. Local SSH exit,
+PID death or HTTP200 cannot clear UNKNOWN. The command supports the already accepted image;
+changing image/.env authority needs a separately approved boundary. Add
+`APPROVED_DEPLOYMENT_FILE='/absolute/path/approved-deployment.json'` and
+`DEPLOY_STATE_DIR='/absolute/path/fresh-deployment-evidence'` to ordinary command invocations
+above, including the ControlMaster wrapper. No live invocation is authorized in repair CI.
 
 CI and local release validation use the same secret-free checks:
 
@@ -842,7 +864,7 @@ commands and must not be composed with a V126 run. V126 recovery uses only
 `scripts/v126-cutover.sh recover ...` under the exact policy in
 `docs/V126_STAGING_CUTOVER_CONTRACT.md`.
 
-The deploy script uploads a Docker image selected by `BACKEND_IMAGE`. For rollback-friendly releases, deploy with an immutable image tag, for example:
+The following generic rollback example does not select a new image authority for a protocol-managed target. That target requires an explicit applied image/environment handoff and exact descriptor; ordinary deploy refuses a current backend/image mismatch. Outside that protocol, immutable image tags remain mandatory:
 
 ```bash
 BACKEND_IMAGE='hookah_bot_ant-backend:<known-good-full-sha>' \

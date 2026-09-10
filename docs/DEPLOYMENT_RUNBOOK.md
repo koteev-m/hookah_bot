@@ -105,12 +105,22 @@ Use this only for an ordinary public-pilot deployment after GitHub Actions are g
 changes, unless explicitly doing a debug deploy. It is never a PostgreSQL V126 cutover, transfer,
 startup or recovery command:
 
+A protocol-managed target additionally requires the separately approved/applied
+[V125/V126 operational handoff](V126_OPERATIONAL_HANDOFF.md), verified immutable history
+and an explicit transfer naming the exact next deployment descriptor. The single shared
+target lock covers remote upload through durable completion. It permits only the already
+accepted fixed-env image; no implicit image selection, `.env` rewrite, registry reset or
+retry of UNKNOWN. The same descriptor/evidence variables pass through ControlMaster.
+This repair phase authorizes feature validation only; it does not authorize this command.
+
 ```bash
 STAGING_PATH=/opt/hookah-bot \
 STAGING_DOMAIN=staging.hookahtootah.club \
 DOCKER_PLATFORM=linux/amd64 \
 BACKEND_IMAGE=hookah_bot_ant-backend:<candidate-sha> \
 EXPECTED_BACKEND_IMAGE_ID=sha256:<reviewed-image-id> \
+APPROVED_DEPLOYMENT_FILE='/absolute/path/approved-deployment.json' \
+DEPLOY_STATE_DIR='/absolute/path/fresh-deployment-evidence' \
 ./scripts/deploy-staging-controlmaster.sh hookah-staging
 ```
 

@@ -851,7 +851,13 @@ PY
 }
 
 receipt_path() {
-  printf '%s/receipts/%02d-%s.receipt.json\n' "${STATE_DIR}" "$(stage_index "$1")" "$1"
+  local path="${STATE_DIR}/receipts/$(printf '%02d' "$(stage_index "$1")")-$1"
+  if [[ ! -e "${path}.receipt.json" && ! -L "${path}.receipt.json" &&
+    ( -e "${path}.reconciliation.json" || -L "${path}.reconciliation.json" ) ]]; then
+    printf '%s.reconciliation.json\n' "${path}"
+  else
+    printf '%s.receipt.json\n' "${path}"
+  fi
 }
 
 intent_path() {
@@ -873,6 +879,7 @@ verify_receipt() {
   done
   {
     release_ci_python
+    remote_operation_bindings_python
     cat <<'PY'
 import hashlib
 import json
@@ -883,7 +890,7 @@ import sys
 
 (
     manifest_path, receipts_dir, auth_dir, artifacts_dir, requested, current_script_sha,
-    token_a, token_b, token_c, *expected_artifact_specs,
+    token_a, token_b, token_c, script_path, *expected_artifact_specs,
 ) = sys.argv[1:]
 stages = [
     "BASELINE_VERIFIED", "PRE_DRAIN_BACKUP_REHEARSED",
@@ -970,13 +977,23 @@ previous_hash = "NONE"
 anchor_hashes = {}
 for index, stage in enumerate(stages[: stages.index(requested) + 1], start=1):
     path = os.path.join(receipts_dir, f"{index:02d}-{stage}.receipt.json")
+    reconciled_path = os.path.join(receipts_dir, f"{index:02d}-{stage}.reconciliation.json")
+    reconciled = os.path.lexists(reconciled_path)
+    if reconciled:
+        if os.path.lexists(path):
+            raise SystemExit('native and reconciled completion cannot coexist')
+        path = reconciled_path
     doc, digest = read_canonical(path, path + ".sha256")
     expected_keys = {
         "artifacts", "authorization_gate", "authorization_receipt_sha256", "completed_at",
         "format_version", "intent_sha256", "predecessor_receipt_sha256", "predecessor_stage",
         "release_sha", "result_category", "run_id", "script_sha256", "stage",
     }
-    if set(doc) != expected_keys or doc["format_version"] != 1:
+    if reconciled:
+        expected_keys |= {'remote_evidence_sha256', 'original_operation_log_sha256'}
+    version = 2 if reconciled else 1
+    category = 'RECONCILED_EFFECT' if reconciled else 'PASS'
+    if set(doc) != expected_keys or type(doc["format_version"]) is not int or doc["format_version"] != version:
         raise SystemExit(f"invalid stage receipt schema: {stage}")
     if not isinstance(doc["completed_at"], str) or not timestamp_pattern.fullmatch(doc["completed_at"]):
         raise SystemExit(f"invalid stage completion timestamp: {stage}")
@@ -991,11 +1008,11 @@ for index, stage in enumerate(stages[: stages.index(requested) + 1], start=1):
     fixed = {
         "authorization_gate": gate,
         "authorization_receipt_sha256": expected_auth_hash,
-        "format_version": 1,
+        "format_version": version,
         "predecessor_receipt_sha256": previous_hash,
         "predecessor_stage": predecessor,
         "release_sha": manifest["release_sha"],
-        "result_category": "PASS",
+        "result_category": category,
         "run_id": manifest["run_id"],
         "script_sha256": current_script_sha,
         "stage": stage,
@@ -1027,7 +1044,27 @@ for index, stage in enumerate(stages[: stages.index(requested) + 1], start=1):
         missing = sorted(expected_artifacts[stage] - names)
         extra = sorted(names - expected_artifacts[stage])
         raise SystemExit(f"stage artifact set mismatch: {stage} missing={missing} extra={extra}")
+    if reconciled:
+        binding_retained_local_artifacts(os.path.dirname(receipts_dir), manifest, artifact_hashes)
     operation_path = os.path.join(artifacts_dir, f"{index}-{stage}.operation.log")
+    if reconciled:
+        operation_path = str(binding_original_stage_log(artifacts_dir, index, stage))
+        binding_protected(Path(operation_path), 0o400)
+        if binding_hash(Path(operation_path)) != doc['original_operation_log_sha256']:
+            raise SystemExit('original failed operation log changed')
+        bundle = Path(artifacts_dir) / f'{index}-{stage}.remote-reconciliation.json'
+        if binding_hash(bundle) != doc['remote_evidence_sha256']:
+            raise SystemExit('remote reconciliation bundle hash mismatch')
+        record, remote_logs = binding_verify_reconciliation_bundle(
+            bundle, manifest['staging_path'], current_script_sha, 'STAGE', stage, doc['intent_sha256'],
+            hashlib.sha256(binding_embedded_source(Path(script_path).read_bytes(), 'remote_reconciliation_poststate_python')).hexdigest())
+        if (record['identity']['run_id'] != manifest['run_id'] or
+                record['identity']['release_sha'] != manifest['release_sha']):
+            raise SystemExit('remote reconciliation run identity mismatch')
+        derived = binding_reconciliation_log(Path(operation_path).read_bytes(), remote_logs)
+        operation_path = os.path.join(artifacts_dir, f'{index}-{stage}.reconciliation.log')
+        if Path(operation_path).read_bytes() != derived:
+            raise SystemExit('reconciliation artifact inventory differs from original evidence')
     if os.path.islink(operation_path) or not os.path.isfile(operation_path):
         raise SystemExit(f"operation log is unavailable or a symlink: {stage}")
     operation_stat = os.stat(operation_path)
@@ -1092,7 +1129,7 @@ print(previous_hash)
 PY
   } | python3 - "${STATE_DIR}/run.json" "${STATE_DIR}/receipts" "${STATE_DIR}/authorizations" \
     "${STATE_DIR}/artifacts" "${stage}" "${SCRIPT_SHA256}" "${GATE_A_TOKEN}" \
-    "${GATE_B_TOKEN}" "${GATE_C_TOKEN}" "${expected_artifact_specs[@]}"
+    "${GATE_B_TOKEN}" "${GATE_C_TOKEN}" "${SCRIPT_PATH}" "${expected_artifact_specs[@]}"
 }
 
 receipt_artifact_hash() {
@@ -1316,6 +1353,31 @@ with os.fdopen(fd, "wb") as handle:
 PY
   printf '%s\n' "$(hash_file "${target}")" > "${target}.sha256"
   chmod 0400 "${target}.sha256"
+}
+
+write_reconciled_stage_completion() {
+  local stage="$1" bundle="$2" index predecessor predecessor_hash gate authorization intent_hash
+  index="$(stage_index "${stage}")"
+  predecessor="$(stage_predecessor "${stage}")"
+  predecessor_hash=NONE
+  if [[ "${predecessor}" != NONE ]]; then
+    predecessor_hash="$(verify_receipt "${predecessor}")" || die 'reconciliation predecessor is invalid'
+  fi
+  gate="$(stage_gate "${stage}")"
+  authorization="$(authorization_hash_for_stage "${stage}")" || die 'reconciliation authorization is invalid'
+  [[ "$(classify_status_record "$(intent_path "${stage}")" intent "${stage}" "${predecessor}" \
+    "${predecessor_hash}" "${gate}" "${authorization}")" == RECONCILIATION_REQUIRED ]] || die 'reconciliation intent is invalid'
+  intent_hash="$(hash_file "$(intent_path "${stage}")")"
+  {
+    remote_operation_bindings_python
+    cat <<'PY'
+state, stage, index, bundle_path, source_sha, script_path, expected_spec = sys.argv[1:]
+if binding_hash(Path(script_path)) != source_sha: raise BindingError('source_changed')
+binding_write_completion(state, 'STAGE', stage, int(index), bundle_path, script_path, expected_spec)
+PY
+  } | python3 - "${STATE_DIR}" "${stage}" "${index}" "${bundle}" "${SCRIPT_SHA256}" "${SCRIPT_PATH}" "$(stage_expected_artifacts "${stage}")" ||
+    die 'reconciled completion evidence is incomplete; no mutation retry is allowed'
+  verify_receipt "${stage}" >/dev/null || die 'reconciled completion failed canonical validation'
 }
 
 write_stage_intent() {
@@ -2257,7 +2319,7 @@ loader_die() {
 remote_envelope_content=''
 loader_status=0
 IFS= read -r -d '' remote_envelope_content || loader_status=$?
-[[ "${loader_status}" == 1 ]] || loader_die 'invalid internal remote envelope encoding'
+[[ "${loader_status}" == 0 || "${loader_status}" == 1 ]] || loader_die 'invalid internal remote envelope encoding'
 loader_read() {
   [[ "${remote_envelope_content}" == *$'\n'* ]] || loader_die "truncated internal remote envelope: $1"
   printf -v "$1" '%s' "${remote_envelope_content%%$'\n'*}"
@@ -2265,6 +2327,11 @@ loader_read() {
 }
 loader_read magic
 loader_read action
+if [[ "${action}" == image-upload || "${action}" == preflight-upload ]]; then
+  [[ "${loader_status}" == 0 ]] || loader_die 'upload payload delimiter is absent'
+else
+  [[ "${loader_status}" == 1 ]] || loader_die 'invalid internal remote envelope encoding'
+fi
 loader_read envelope_run_id
 loader_read envelope_release_sha
 loader_read envelope_staging_path
@@ -2375,6 +2442,19 @@ REMOTE_LOADER
       "$#" || exit 4
     printf '%s\n' "$@" || exit 4
     cat "${SCRIPT_PATH}" || exit 4
+    if [[ "${action}" == image-upload || "${action}" == preflight-upload ]]; then
+      [[ "${V126_LOCAL_UPLOAD_FD:-}" =~ ^[0-9]+$ ]] || exit 4
+      printf '\0' || exit 4
+      python3 -c 'import os,sys
+fd=int(sys.argv[1]); size=os.fstat(fd).st_size
+if not 0 < size <= 8*1024**3: raise SystemExit("upload size refused")
+os.lseek(fd,0,os.SEEK_SET)
+while True:
+    block=os.read(fd,1024*1024)
+    if not block: break
+    sys.stdout.buffer.write(block)
+' "${V126_LOCAL_UPLOAD_FD}" || exit 4
+    fi
   ) > "${stream}" || status=$?
   if (( status != 0 )); then
     rm -f -- "${stream}"
@@ -2720,7 +2800,7 @@ try:
         if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1 or
                 stat.S_IMODE(info.st_mode) not in (0o400, 0o600)):
             raise ValueError('metadata')
-        if not (re.fullmatch(r'(pre-v126|post-v126-stop|verify-full-dr)\.(intent\.json|receipt\.json|operation\.log)(\.sha256)?', path.name) or path.name == 'dr-boundary.json'):
+        if not (re.fullmatch(r'(pre-v126|post-v126-stop|verify-full-dr)\.(intent\.json|receipt\.json|reconciliation\.json|operation\.log)(\.sha256)?', path.name) or path.name == 'dr-boundary.json'):
             raise ValueError('inventory')
         if path.name.endswith('.sha256'):
             original = Path(str(path)[:-7])
@@ -2756,12 +2836,24 @@ status_command() {
   local intent receipt predecessor previous_hash gate authorization
   attempt_state="$(read_attempt_state)" || attempt_state=INVALID_EVIDENCE
   recovery_state="$(read_recovery_state)" || recovery_state=INVALID_EVIDENCE
-  local recovery_mode
+  local recovery_mode recovery_pending=false recovery_completed=false recovery_reconciled=false last_recovery=NONE
   for recovery_mode in pre-v126 post-v126-stop verify-full-dr; do
-    if [[ -e "${STATE_DIR}/recovery/${recovery_mode}.receipt.json" || -L "${STATE_DIR}/recovery/${recovery_mode}.receipt.json" ]]; then
-      verify_recovery_receipt "${recovery_mode}" >/dev/null 2>&1 || recovery_state=INVALID_EVIDENCE
+    if [[ -e "$(recovery_receipt_path "${recovery_mode}")" || -L "$(recovery_receipt_path "${recovery_mode}")" ]]; then
+      if (verify_recovery_receipt "${recovery_mode}" &&
+        verify_reconciliation_recovery_intent "${recovery_mode}") >/dev/null 2>&1; then
+        recovery_completed=true
+        last_recovery="${recovery_mode}"
+        [[ "$(recovery_receipt_path "${recovery_mode}")" != *.reconciliation.json ]] || recovery_reconciled=true
+      else
+        recovery_state=INVALID_EVIDENCE
+      fi
+    elif [[ -e "${STATE_DIR}/recovery/${recovery_mode}.intent.json" || -L "${STATE_DIR}/recovery/${recovery_mode}.intent.json" ]]; then
+      recovery_pending=true
     fi
   done
+  if [[ "${recovery_state}" != INVALID_EVIDENCE && "${recovery_completed}" == true && "${recovery_pending}" == false ]]; then
+    recovery_state=COMPLETED
+  fi
   if [[ -e "${STATE_DIR}/run-terminal.json" || -L "${STATE_DIR}/run-terminal.json" ||
         -e "${STATE_DIR}/run-terminal.json.sha256" || -L "${STATE_DIR}/run-terminal.json.sha256" ]]; then
     terminal_state="$(classify_status_record "${STATE_DIR}/run-terminal.json" terminal)" || terminal_state=INVALID_EVIDENCE
@@ -2770,7 +2862,11 @@ status_command() {
   printf 'read_attempts=%s\nrecovery_records=%s\n' "${attempt_state}" "${recovery_state}"
   for stage in "${V126_STAGES[@]}"; do
     if verify_receipt "${stage}" >/dev/null 2>&1; then
-      printf '%s=PASS\n' "${stage}"
+      if [[ "$(receipt_path "${stage}")" == *.reconciliation.json ]]; then
+        printf '%s=RECONCILED_EFFECT\n' "${stage}"
+      else
+        printf '%s=PASS\n' "${stage}"
+      fi
       continue
     fi
     receipt="$(receipt_path "${stage}")"
@@ -2811,10 +2907,22 @@ status_command() {
     *INVALID_EVIDENCE*) outcome=INVALID_EVIDENCE; next=NONE ;;
     *RECONCILIATION_REQUIRED*) [[ "${outcome}" == INVALID_EVIDENCE ]] || outcome=RECONCILIATION_REQUIRED; next=NONE ;;
   esac
+  if [[ "${outcome}" != INVALID_EVIDENCE && "${recovery_state}" == COMPLETED &&
+    "${terminal_state}" == RECONCILIATION_REQUIRED && "${attempt_state}" != RECONCILIATION_REQUIRED ]]; then
+    outcome=TERMINAL_RECOVERY_COMPLETE
+    [[ "${recovery_reconciled}" != true ]] || outcome=TERMINAL_RECOVERY_RECONCILED
+    next=NONE
+  fi
   printf 'canonical_execution=%s\nnext_stage=%s\nretry_allowed=false\navailability=NOT_OBSERVED\n' "${outcome}" "${next}"
   case "${outcome}" in
     NOT_STARTED) printf 'next_action=EXECUTE_NEXT_AUTHORIZED_STAGE\n' ;;
     COMPLETE) printf 'next_action=REVIEW_OPERATIONAL_HANDOFF\n' ;;
+    TERMINAL_RECOVERY_COMPLETE | TERMINAL_RECOVERY_RECONCILED)
+      case "${last_recovery}" in
+        pre-v126) printf 'next_action=REVIEW_V125_OPERATIONAL_HANDOFF\n' ;;
+        post-v126-stop) printf 'next_action=FORWARD_FIX_REQUIRED\n' ;;
+        verify-full-dr) printf 'next_action=DR_AUTHORIZATION_REQUIRED\n' ;;
+      esac ;;
     *) printf 'next_action=RECONCILE_EVIDENCE_AND_REMOTE_OUTCOME\n' ;;
   esac
   case "${terminal_state}" in
@@ -2824,9 +2932,105 @@ status_command() {
   esac
 }
 
+remote_reconciliation_python() {
+  remote_operation_bindings_python || return 75
+  cat <<'PY'
+try:
+    target, run, release, source_sha, kind, name, intent_sha = sys.argv[1:]
+    source = sys.stdin.buffer.read(2 * 1024**2 + 1)
+    if len(source) > 2 * 1024**2 or hashlib.sha256(source).hexdigest() != source_sha:
+        raise BindingError('reconciliation_source_binding')
+    checker = binding_embedded_source(source, 'remote_reconciliation_poststate_python')
+    namespace = {'__name__': 'v126_reconcile_observer'}
+    exec(compile(checker, '<source-bound-read-only-observer>', 'exec'), namespace)
+    owner = dict(run_id=run, release_sha=release, script_sha256=source_sha)
+    record = binding_reconcile(target, owner, kind, name, intent_sha, source_sha,
+        hashlib.sha256(checker).hexdigest(), binding_action_sequence(kind, name),
+        lambda identity, request, operations: namespace['collect'](Path(target), identity, source, request, operations))
+    sys.stdout.buffer.write(binding_canonical(binding_export_reconciliation(Path(target) / '.v126-target-operations', record)))
+except (BindingError, OSError, ValueError, KeyError, TypeError):
+    print('RECONCILIATION=UNKNOWN retry_allowed=false next_action=VERIFY_MISSING_EVIDENCE_OR_EXTERNAL_DAEMON_FENCE', file=sys.stderr)
+    raise SystemExit(75)
+PY
+}
+
+reconcile_command() {
+  local state_dir='' stage='' recovery='' authorization='' kind=STAGE name=''
+  shift
+  while (( $# > 0 )); do
+    case "$1" in
+      --state-dir) state_dir="$(parse_option_value "$1" "${2:-}")"; shift 2 ;;
+      --stage) stage="$(parse_option_value "$1" "${2:-}")"; shift 2 ;;
+      --recovery) recovery="$(parse_option_value "$1" "${2:-}")"; shift 2 ;;
+      --authorization) authorization="$(parse_option_value "$1" "${2:-}")"; shift 2 ;;
+      *) die "unknown reconciliation option: $1" ;;
+    esac
+  done
+  [[ "${authorization}" == AUTHORIZE_V126_EXACT_EFFECT_RECONCILIATION ]] || die 'explicit reconciliation authorization is required'
+  if [[ -n "${recovery}" ]]; then
+    [[ -z "${stage}" ]] || die 'choose one stage or recovery operation'
+    case "${recovery}" in pre-v126 | post-v126-stop | verify-full-dr) ;; *) die 'unknown recovery class' ;; esac
+    kind=RECOVERY
+    name="${recovery}"
+  else
+    stage_index "${stage}" >/dev/null || die 'a known stage is required'
+    name="${stage}"
+  fi
+  load_state "${state_dir}"
+  acquire_state_lock
+  install_state_lock_traps
+  local completion predecessor previous_hash gate auth_hash intent classification code remote_command capture status=0
+  if [[ "${kind}" == STAGE ]]; then
+    require_no_recovery_intent
+    [[ ! -e "${STATE_DIR}/run-terminal.json" && ! -L "${STATE_DIR}/run-terminal.json" ]] || die 'terminal run cannot reconcile stage continuation'
+    completion="$(receipt_path "${stage}")"
+  else
+    completion="$(recovery_receipt_path "${recovery}")"
+  fi
+  [[ ! -e "${completion}" && ! -L "${completion}" && ! -e "${completion}.sha256" && ! -L "${completion}.sha256" ]] || die 'completion already exists; inspect it without repeating an action'
+  if [[ "${kind}" == STAGE ]]; then
+  predecessor="$(stage_predecessor "${stage}")"
+  previous_hash=NONE
+  if [[ "${predecessor}" != NONE ]]; then
+    previous_hash="$(verify_receipt "${predecessor}")" || die 'reconciliation predecessor chain is invalid'
+  fi
+  gate="$(stage_gate "${stage}")"
+  auth_hash="$(authorization_hash_for_stage "${stage}")" || die 'reconciliation gate authority is invalid'
+  classification="$(classify_status_record "$(intent_path "${stage}")" intent "${stage}" "${predecessor}" \
+    "${previous_hash}" "${gate}" "${auth_hash}")" || die 'reconciliation intent inspection failed'
+  [[ "${classification}" == RECONCILIATION_REQUIRED ]] || die 'original dispatched intent is absent or invalid'
+  intent="$(hash_file "$(intent_path "${stage}")")"
+  else
+    intent="$(verify_reconciliation_recovery_intent "${recovery}")" || die 'original recovery intent or predecessor is invalid'
+  fi
+  code="$(remote_reconciliation_python)" || die 'source-bound reconciliation checker is unavailable'
+  printf -v remote_command '%q ' python3 -c "${code}" "${STAGING_PATH}" "${RUN_ID}" "${RELEASE_SHA}" \
+    "${SCRIPT_SHA256}" "${kind}" "${name}" "${intent}"
+  capture="${STATE_DIR}/tmp/reconciliation-${name}-$(date -u +%Y%m%dT%H%M%SZ)-$$.capture.json"
+  (set -C; : > "${capture}") || die 'reconciliation attempt capture already exists'
+  chmod 0600 "${capture}"
+  run_tracked_command_with_input reconciliation-ssh "${SCRIPT_PATH}" \
+    ssh "${REMOTE}" "${remote_command}" > "${capture}" || status=$?
+  chmod 0400 "${capture}"
+  if (( status != 0 )); then
+    printf 'RECONCILIATION=UNKNOWN retry_allowed=false evidence=%s\n' "${capture}" >&2
+    return "${status}"
+  fi
+  if [[ "${kind}" == STAGE ]]; then
+    write_reconciled_stage_completion "${stage}" "${capture}" || die 'reconciliation could not complete the original stage contract'
+    printf 'Stage %s: RECONCILED_EFFECT retry_allowed=false\n' "${stage}"
+  else
+    write_reconciled_recovery_completion "${recovery}" "${capture}" || die 'reconciliation could not complete the original recovery contract'
+    printf 'Recovery %s: RECONCILED_TERMINAL_RECOVERY retry_allowed=false\n' "${recovery}"
+  fi
+  release_state_lock
+  clear_state_lock_traps
+}
+
 target_binding_command() {
   local command="$1" target='' state_dir='' handoff='' version=''
   local next_run='' next_release='' next_source='' authorization=''
+  local next_kind='' next_request=''
   shift
   while (( $# > 0 )); do
     case "$1" in
@@ -2837,12 +3041,14 @@ target_binding_command() {
       --next-run-id) next_run="$(parse_option_value "$1" "${2:-}")"; shift 2 ;;
       --next-release-sha) next_release="$(parse_option_value "$1" "${2:-}")"; shift 2 ;;
       --next-script-sha256) next_source="$(parse_option_value "$1" "${2:-}")"; shift 2 ;;
+      --next-kind) next_kind="$(parse_option_value "$1" "${2:-}")"; shift 2 ;;
+      --next-request-file) next_request="$(parse_option_value "$1" "${2:-}")"; shift 2 ;;
       --authorization) authorization="$(parse_option_value "$1" "${2:-}")"; shift 2 ;;
       *) die "unknown binding option: $1" ;;
     esac
   done
   require_absolute_path target "${target}"
-  local mode=inspect receipt_sha=NONE expected_image=NONE
+  local mode=inspect receipt_sha=NONE expected_image=NONE terminal_kind=NATIVE_RECEIPT
   if [[ "${command}" == retire-target ]]; then
     [[ "${authorization}" == AUTHORIZE_V126_TARGET_BINDING_RETIREMENT ]] || die 'target retirement authorization is absent'
     load_state "${state_dir}"
@@ -2861,12 +3067,14 @@ target_binding_command() {
         [[ "${execution_status}" == *'canonical_execution=COMPLETE'* ]] || die 'V126 retirement requires complete canonical execution'
         expected_image="${V126_IMAGE_ID}"
         receipt_sha="$(verify_receipt FINAL_PUBLIC_GATES_PASSED)" || die 'complete V126 receipt chain is required for retirement'
+        [[ "$(receipt_path FINAL_PUBLIC_GATES_PASSED)" != *.reconciliation.json ]] || terminal_kind=RECONCILED_EFFECT
         ;;
       V125)
         expected_image="${V125_IMAGE_ID}"
         receipt_sha="$(verify_recovery_receipt pre-v126)" || die 'verified V125 recovery is required for retirement'
+        [[ "$(recovery_receipt_path pre-v126)" != *.reconciliation.json ]] || terminal_kind=RECONCILED_EFFECT
         [[ "${execution_status}" == *'terminal=true'* ]] || die 'V125 retirement requires the canonical recovery terminal marker'
-        predecessor_fields="$(python3 - "${STATE_DIR}/recovery/pre-v126.receipt.json" <<'PY'
+        predecessor_fields="$(python3 - "$(recovery_receipt_path pre-v126)" <<'PY'
 import json, sys
 with open(sys.argv[1]) as handle:
     receipt = json.load(handle)
@@ -2884,14 +3092,25 @@ PY
     require_sha next-release-sha "${next_release}"
     [[ "${next_source}" =~ ^[0-9a-f]{64}$ ]] || die 'next source identity is invalid'
     mode=retire
-  elif [[ -n "${state_dir}${handoff}${version}${next_run}${next_release}${next_source}${authorization}" ]]; then
+  elif [[ -n "${state_dir}${handoff}${version}${next_run}${next_release}${next_source}${authorization}${next_kind}${next_request}" ]]; then
     die 'inspect-target accepts only a target path'
   fi
   local code
+  local -a next_policy=("${mode}")
+  if [[ -n "${next_kind}${next_request}" || "${terminal_kind}" == RECONCILED_EFFECT ]]; then
+    next_kind="${next_kind:-CUTOVER}"
+    if [[ "${next_kind}" == ORDINARY_DEPLOY ]]; then
+      require_absolute_path next-request-file "${next_request}"
+    else
+      [[ "${next_kind}" == CUTOVER && -z "${next_request}" ]] || die 'invalid next binding policy'
+      next_request=NONE
+    fi
+    next_policy=("${next_kind}" "${next_request}" "${terminal_kind}" "${mode}")
+  fi
   code="$(remote_operation_bindings_python)" || die 'target binding verifier source unavailable'
   code+=$'\ntry:\n    binding_entry(sys.argv[-1])\nexcept (BindingError, OSError, ValueError, KeyError, TypeError):\n    print("TARGET_BINDING=RECONCILIATION_REQUIRED retry_allowed=false", file=sys.stderr)\n    raise SystemExit(75)\n'
   cutover_bounded_command 30 python3 -c "${code}" "${target}" "${RUN_ID}" "${RELEASE_SHA}" \
-    "${SCRIPT_SHA256}" "${receipt_sha}" "${handoff}" "${next_run}" "${next_release}" "${next_source}" "${version}" "${expected_image}" "${mode}" ||
+    "${SCRIPT_SHA256}" "${receipt_sha}" "${handoff}" "${next_run}" "${next_release}" "${next_source}" "${version}" "${expected_image}" "${next_policy[@]}" ||
     die 'binding outcome is unavailable or refused; do not retry a retirement without reconciliation'
 }
 
@@ -2903,6 +3122,7 @@ main() {
     stage) stage_command "$@" ;;
     status) status_command "$@" ;;
     recover) recovery_command "$@" ;;
+    reconcile) reconcile_command "$@" ;;
     inspect-target | retire-target) target_binding_command "$@" ;;
     --help | -h | help) usage ;;
     '') usage >&2; exit 2 ;;
@@ -3353,7 +3573,32 @@ PY
     die 'baseline Caddy identity does not match the streamed baseline receipt'
   [[ "${environment_sha}" == "${expected_env_sha}" ]] ||
     die 'baseline environment identity does not match the streamed baseline receipt'
-  if [[ "${V126_INTERNAL_REMOTE_MAINTENANCE_OFF_SHA256:-}" =~ ^[0-9a-f]{64}$ ]]; then
+  if [[ -n "${11:-}" ]]; then
+    # Only the read-only reconciliation caller supplies a completed recovery
+    # artifact, already bound to the original successful operation's exact log.
+    local recovery_proof="${run_root}/recovery-pre-v126.proof" recovered_env
+    [[ "${11}" =~ ^[0-9a-f]{64}$ ]] || die 'invalid completed recovery proof binding'
+    remote_verify_proof "${recovery_proof}" || die 'completed recovery proof unavailable'
+    [[ "$(remote_hash_file "${recovery_proof}")" == "${11}" ]] || die 'completed recovery proof identity changed'
+    recovered_env="$(python3 - "${recovery_proof}" "${run_id}" "${release_sha}" <<'PY'
+import re, sys
+values = {}
+for row in open(sys.argv[1]):
+    key, value = row.rstrip('\n').split('=', 1)
+    if key in values: raise SystemExit('duplicate recovery proof key')
+    values[key] = value
+for key, value in dict(run_id=sys.argv[2], release_sha=sys.argv[3],
+        flyway='125:0:0:0', maintenance='OFF', traffic_policy='PRODUCT', allowed_lists='EMPTY',
+        result='PRE_V126_ROLLBACK_COMPLETE', start_command_count='1', restart_policy='no', restart_count='0').items():
+    if values.get(key) != value: raise SystemExit('completed recovery contract mismatch')
+for key in ('env_after_sha256', 'backend_container_id'):
+    if not re.fullmatch('[0-9a-f]{64}', values.get(key, '')): raise SystemExit('recovery resource identity missing')
+print(values['env_after_sha256'])
+PY
+)" || die 'completed recovery environment proof invalid'
+    [[ "$(remote_hash_file "${environment_path}")" == "${recovered_env}" ]] || die 'completed recovery environment drift'
+    REMOTE_BOUND_ENV_SHA256="${recovered_env}"
+  elif [[ "${V126_INTERNAL_REMOTE_MAINTENANCE_OFF_SHA256:-}" =~ ^[0-9a-f]{64}$ ]]; then
     remote_verify_maintenance_env_binding "${staging_path}" "${run_root}" "${run_id}" \
       "${release_sha}" OFF "${V126_INTERNAL_REMOTE_MAINTENANCE_OFF_SHA256}"
   elif [[ "${V126_INTERNAL_REMOTE_MAINTENANCE_SMOKE_SHA256:-}" =~ ^[0-9a-f]{64}$ ]]; then
@@ -4115,7 +4360,11 @@ remote_backup_rehearsal() {
   trap "trap - EXIT HUP INT TERM; if ! ${cleanup_command}; then printf '%s\\n' 'rehearsal cleanup failed after HUP' >&2; fi; exit 129" HUP
   docker volume create \
     --label "hookah.v126.rehearsal-owner=${rehearsal_owner}" \
-    "${rehearsal_volume}" >/dev/null
+    "${rehearsal_volume}" >/dev/null || {
+    local command_status=$?
+    printf '%s (exit=%s)\n' 'rehearsal volume creation outcome requires reconciliation' "${command_status}" >&2
+    exit "${command_status}"
+  }
   local created_volume_owner
   created_volume_owner="$(docker volume inspect --format \
     '{{ index .Labels "hookah.v126.rehearsal-owner" }}' "${rehearsal_volume}")" ||
@@ -4129,8 +4378,15 @@ remote_backup_rehearsal() {
     --mount "type=volume,source=${rehearsal_volume},target=/var/lib/postgresql/data" \
     --env "POSTGRES_USER=${source_db_user}" \
     --env POSTGRES_HOST_AUTH_METHOD=trust \
-    "${source_image_id}" >/dev/null
-  local created_container_owner
+    "${source_image_id}" >/dev/null || {
+    local command_status=$?
+    printf '%s (exit=%s)\n' 'rehearsal container creation outcome requires reconciliation' "${command_status}" >&2
+    exit "${command_status}"
+  }
+  local created_container_owner rehearsal_container_id
+  rehearsal_container_id="$(docker container inspect --format '{{.Id}}' "${rehearsal_container}")" ||
+    die 'rehearsal container identity unavailable'
+  [[ "${rehearsal_container_id}" =~ ^[0-9a-f]{64}$ ]] || die 'invalid rehearsal container identity'
   created_container_owner="$(docker container inspect --format \
     '{{ index .Config.Labels "hookah.v126.rehearsal-owner" }}' "${rehearsal_container}")" ||
     die 'created rehearsal container ownership proof failed'
@@ -4160,12 +4416,24 @@ remote_backup_rehearsal() {
     sleep 1
   done
   [[ "${ready}" == true ]] || die 'rehearsal PostgreSQL did not become ready in 60 attempts'
-  docker cp "${dump_file}" "${rehearsal_container}:/tmp/v126-rehearsal.dump"
+  docker cp "${dump_file}" "${rehearsal_container}:/tmp/v126-rehearsal.dump" || {
+    local command_status=$?
+    printf '%s (exit=%s)\n' 'rehearsal archive copy failed' "${command_status}" >&2
+    exit "${command_status}"
+  }
   docker exec "${rehearsal_container}" \
-    createdb -U "${source_db_user}" --maintenance-db=postgres --template=template0 v126_restore_rehearsal
+    createdb -U "${source_db_user}" --maintenance-db=postgres --template=template0 v126_restore_rehearsal || {
+    local command_status=$?
+    printf '%s (exit=%s)\n' 'rehearsal database creation failed' "${command_status}" >&2
+    exit "${command_status}"
+  }
   docker exec "${rehearsal_container}" \
     pg_restore -U "${source_db_user}" --exit-on-error --no-owner --no-privileges \
-    --dbname v126_restore_rehearsal /tmp/v126-rehearsal.dump
+    --dbname v126_restore_rehearsal /tmp/v126-rehearsal.dump || {
+    local command_status=$?
+    printf '%s (exit=%s)\n' 'rehearsal restore failed' "${command_status}" >&2
+    exit "${command_status}"
+  }
   local restored_version
   local restored_migration_state
   restored_version="$(docker exec "${rehearsal_container}" \
@@ -4213,6 +4481,8 @@ remote_backup_rehearsal() {
     "dump_sha256=$(remote_hash_file "${dump_file}")" \
     "inventory_sha256=$(remote_hash_file "${list_file}")" \
     "rehearsal_sha256=$(remote_hash_file "${metadata_file}")" \
+    "rehearsal_container=${rehearsal_container_id}" "rehearsal_volume=${rehearsal_volume}" \
+    "rehearsal_owner=${rehearsal_owner}" 'rehearsal_cleanup=COMPLETE' \
     'result=PASS'
   remote_emit_artifact "${phase}-backup-proof" "$(remote_hash_file "${backup_proof}")"
 }
@@ -4553,6 +4823,20 @@ remote_initialize_compose() {
   REMOTE_BACKEND_IMAGE="${backend_image}"
   remote_assert_database_target || die 'database equality failed before operation'
   remote_assert_compose_backend_image "${backend_image}"
+}
+
+remote_initialize_reconciled_recovery() {
+  local staging_path="$1" run_id="$2" release_sha="$3" backend_image="$4" proof_sha="$5"
+  remote_require_absolute_path staging-path "${staging_path}"
+  remote_require_run_id "${run_id}"
+  remote_require_sha "${release_sha}"
+  [[ "${backend_image}" =~ :${V125_SOURCE_SHA}$ ]] || die 'reconciled recovery image source differs'
+  cd "${staging_path}"
+  remote_require_operator_file .env 600
+  remote_verify_baseline_authority "${staging_path}" "${run_id}" "${release_sha}" '' '' '' '' '' '' '' "${proof_sha}"
+  REMOTE_BACKEND_IMAGE="${backend_image}"
+  remote_assert_database_target || die 'reconciled recovery database equality failed'
+  remote_assert_compose_backend_image "${backend_image}" || die 'reconciled recovery Compose image differs'
 }
 
 remote_assert_caddy_candidate_active() {
@@ -5401,16 +5685,19 @@ PY
   fi
   python3 -c "$(remote_database_evidence_python)" preflight "${restricted_output}" ||
     die 'final V125 preflight lacks structured safe/count0 outcome; restricted output retained'
-  rm -f -- "${service_file}" "${pass_file}"
+  rm -f -- "${service_file}" "${pass_file}" || die 'preflight credential cleanup failed'
+  [[ ! -e "${service_file}" && ! -L "${service_file}" && ! -e "${pass_file}" && ! -L "${pass_file}" ]] ||
+    die 'preflight credentials remain after cleanup'
   trap - EXIT INT TERM HUP
   chmod 0600 "${restricted_output}"
   local output_sha
   output_sha="$(remote_hash_file "${restricted_output}")"
-  rm -f -- "${restricted_output}"
+  rm -f -- "${restricted_output}" || die 'preflight private output cleanup failed'
   local proof="${run_root}/final-v125-preflight.proof"
   remote_write_proof "${proof}" \
     "run_id=${run_id}" "release_sha=${release_sha}" \
     "script_sha256=${expected_script_sha}" "output_sha256=${output_sha}" \
+    'preflight_outcome=SAFE' 'unsafe_count=0' 'credentials_cleanup=COMPLETE' \
     'database_target=EXPLICIT_REDACTED' 'flyway=125:0:0' 'result=PASS'
   remote_emit_artifact final-v125-preflight "$(remote_hash_file "${proof}")"
 }
@@ -5881,6 +6168,64 @@ remote_verify_maintenance_env_binding() {
   REMOTE_BOUND_ENV_SHA256="${after_sha}"
 }
 
+remote_receive_upload() {
+  local action="$1" staging_path="$2" run_id="$3" release_sha="$4"
+  local image_tag="$5" expected_sha="$6" expected_size="$7" run_root destination
+  (( $# == 7 )) || die 'upload argument contract differs'
+  [[ "${expected_sha}" =~ ^[0-9a-f]{64}$ && "${expected_size}" =~ ^[1-9][0-9]{0,10}$ ]] || die 'invalid upload identity'
+  remote_initialize_compose "${staging_path}" "${run_id}" "${release_sha}" "${image_tag}"
+  run_root="$(remote_require_run_root "${staging_path}" "${run_id}")" || die 'upload namespace is unavailable'
+  remote_assert_public_drain || die 'upload drain check failed'
+  remote_assert_zero_writer '125:0:0' || die 'upload zero-writer check failed'
+  case "${action}" in
+    image-upload)
+      remote_verify_proof "${run_root}/v126-image-transfer-ready.proof" || die 'upload preparation proof is absent'
+      remote_verify_maintenance_env_binding "${staging_path}" "${run_root}" "${run_id}" \
+        "${release_sha}" V126_SMOKE "${V126_INTERNAL_REMOTE_MAINTENANCE_SMOKE_SHA256:-}" || die 'upload environment binding failed'
+      destination="${run_root}/v126-image.tar.partial" ;;
+    preflight-upload) destination="${run_root}/final-v125-preflight.sh.partial" ;;
+    *) die 'unknown upload class' ;;
+  esac
+  # FD8 is the remaining NUL-framed SSH input. This receiver is a child of the
+  # common target supervisor; there is no independent rsync writer after unlock.
+  python3 - "${destination}" "${expected_sha}" "${expected_size}" "${action}" <<'PY'
+import hashlib, os, select, stat, sys, time
+path, expected, size, action = sys.argv[1:]
+size = int(size)
+maximum = 8 * 1024**3 if action == 'image-upload' else 1024**2
+if not 0 < size <= maximum:
+    raise SystemExit('upload size outside source contract')
+deadline = time.monotonic() + (840 if action == 'image-upload' else 120)
+fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+digest = hashlib.sha256()
+remaining = size
+try:
+    while remaining:
+        wait = min(30, deadline - time.monotonic())
+        if wait <= 0 or not select.select([8], [], [], wait)[0]:
+            raise SystemExit('upload transport outcome UNKNOWN')
+        block = os.read(8, min(1024**2, remaining))
+        if not block:
+            raise SystemExit('upload transport truncated')
+        digest.update(block)
+        remaining -= len(block)
+        view = memoryview(block)
+        while view:
+            view = view[os.write(fd, view):]
+    if not select.select([8], [], [], min(30, max(0, deadline-time.monotonic())))[0] or os.read(8, 1):
+        raise SystemExit('upload framing did not complete')
+    if digest.hexdigest() != expected:
+        raise SystemExit('upload bytes differ from source identity')
+    os.fsync(fd)
+finally:
+    os.close(fd)
+parent = os.open(os.path.dirname(path), os.O_RDONLY | os.O_DIRECTORY)
+try: os.fsync(parent)
+finally: os.close(parent)
+print('UPLOAD_COMPLETED sha256=' + expected + ' bytes=' + str(size))
+PY
+}
+
 remote_image_prepare() {
   local staging_path="$1"
   local run_id="$2"
@@ -6086,7 +6431,7 @@ remote_start_v126() {
   remote_assert_compose_backend_image "${image_tag}"
   [[ "$(remote_hash_file .env)" == "${REMOTE_BOUND_ENV_SHA256}" ]] ||
     die 'staging environment changed between immutable verification and backend creation'
-  remote_compose create --force-recreate --no-build --no-deps --pull never backend >/dev/null ||
+  remote_compose create --force-recreate --no-build --pull never backend >/dev/null ||
     die 'backend create failed; outcome requires reconciliation'
   remote_capture_compose_ids all backend
   (( ${#REMOTE_CAPTURED_CONTAINER_IDS[@]} == 1 )) || die 'Compose did not create exactly one V126 backend'
@@ -6116,7 +6461,7 @@ remote_start_v126() {
   fi
   remote_write_proof "${proof}" \
     "run_id=${run_id}" "release_sha=${release_sha}" "phase=${phase}" \
-    "image_tag=${image_tag}" "image_id=${image_id}" 'compose_build=false' \
+    "image_tag=${image_tag}" "image_id=${image_id}" "backend_container_id=${backend_container}" 'compose_build=false' \
     'start_command_count=1' 'restart_policy=no' 'restart_count=0' \
     'backend_count=1' 'poller_count=1' 'live_v125_count=0' 'live_old_image_count=0' \
     'public_drain=PASS' 'result=PASS'
@@ -6689,11 +7034,15 @@ stage_final_v125_preflight_passed() {
   script_sha="$(extract_booking_preflight "${extracted}")"
   chmod 0600 "${extracted}"
   local remote_target="${STAGING_PATH}/.v126-runs/${RUN_ID}/final-v125-preflight.sh.partial"
-  run_tracked_command remote-rsync rsync --archive --chmod=Fu=rw,Fgo= \
-    "${extracted}" "${REMOTE}:${remote_target}"
+  local V126_LOCAL_UPLOAD_FD=9 upload_size
+  exec 9<"${extracted}"
+  upload_size="$(python3 -c 'import os; print(os.fstat(9).st_size)')" || die 'preflight upload size unavailable'
+  local_emit_artifact final-v125-preflight-source "${script_sha}"
+  run_remote preflight-upload "${STAGING_PATH}" "${RUN_ID}" "${RELEASE_SHA}" \
+    "${V125_IMAGE_TAG}" "${script_sha}" "${upload_size}" || die 'preflight upload outcome requires reconciliation'
+  exec 9<&-
   local database_binding_sha
   database_binding_sha="$(receipt_artifact_hash BASELINE_VERIFIED database-url-binding)"
-  local_emit_artifact final-v125-preflight-source "${script_sha}"
   run_remote final-v125-preflight "${STAGING_PATH}" "${RUN_ID}" "${RELEASE_SHA}" "${V125_IMAGE_TAG}" \
     "${DATABASE_URL_FILE}" "${remote_target}" "${script_sha}" "${database_binding_sha}"
   rm -f -- "${extracted}"
@@ -6712,7 +7061,6 @@ stage_v126_maintenance_config_prepared() {
 # V126_STAGE_V126_IMAGE_TRANSFERRED_AND_VERIFIED_BEGIN
 stage_v126_image_transferred_and_verified() {
   require_cmd docker
-  require_cmd rsync
   local actual_image_id
   actual_image_id="$(docker image inspect --format '{{.Id}}' "${V126_IMAGE_TAG}")"
   [[ "${actual_image_id}" == "${V126_IMAGE_ID}" ]] ||
@@ -6740,13 +7088,14 @@ stage_v126_image_transferred_and_verified() {
     exec 9>&-
     die 'local V126 image snapshot structure or identity mismatch before remote mutation'
   fi
+  local_emit_artifact local-v126-image-archive "${archive_sha}"
   run_remote image-prepare "${STAGING_PATH}" "${RUN_ID}" "${RELEASE_SHA}" "${V126_IMAGE_TAG}" "${V126_IMAGE_ID}"
-  local remote_target="${STAGING_PATH}/.v126-runs/${RUN_ID}/v126-image.tar.partial"
-  run_tracked_command remote-rsync rsync --archive --copy-links --chmod=Fu=rw,Fgo= \
-    "/dev/fd/${archive_fd}" "${REMOTE}:${remote_target}"
+  local V126_LOCAL_UPLOAD_FD="${archive_fd}" upload_size
+  upload_size="$(python3 -c 'import os; print(os.fstat(9).st_size)')" || die 'image upload size unavailable'
+  run_remote image-upload "${STAGING_PATH}" "${RUN_ID}" "${RELEASE_SHA}" \
+    "${V126_IMAGE_TAG}" "${archive_sha}" "${upload_size}" || die 'image upload outcome requires reconciliation'
   run_remote image-load "${STAGING_PATH}" "${RUN_ID}" "${RELEASE_SHA}" "${V126_IMAGE_TAG}" \
     "${V126_IMAGE_ID}" "${archive_sha}"
-  local_emit_artifact local-v126-image-archive "${archive_sha}"
   exec 9>&-
 }
 # V126_STAGE_V126_IMAGE_TRANSFERRED_AND_VERIFIED_END
@@ -7025,6 +7374,8 @@ for key, expected_value in expected.items():
 remote_assert_v125_runtime() {
   local staging_path="$1"
   local image_tag="$2"
+  local require_drain="${3:-true}"
+  [[ "${require_drain}" == true || "${require_drain}" == false ]] || die 'invalid V125 drain policy'
   local backend_container observed
   remote_capture_compose_ids running backend || die 'runtime prerequisite consumer failed'
   (( ${#REMOTE_CAPTURED_CONTAINER_IDS[@]} == 1 )) ||
@@ -7068,7 +7419,11 @@ SQL
 )" || die 'V125 recovery queue query failed'
   [[ "${queues}" == '0:0' ]] || die 'V125 recovery queue gate mismatch'
   remote_assert_telegram_idle .env || die 'runtime prerequisite consumer failed'
-  remote_assert_public_drain || die 'runtime prerequisite consumer failed'
+  if [[ "${require_drain}" == true ]]; then
+    remote_assert_public_drain || die 'runtime prerequisite consumer failed'
+  else
+    remote_assert_public_live || die 'completed recovery public gate failed'
+  fi
 }
 
 remote_recovery_restore_original_caddy() {
@@ -7242,7 +7597,7 @@ remote_recover_pre_v126() {
   [[ "${REMOTE_RECOVERY_ENV_AFTER_SHA256}" =~ ^[0-9a-f]{64}$ && \
     "$(remote_hash_file .env)" == "${REMOTE_RECOVERY_ENV_AFTER_SHA256}" ]] ||
     die 'recovery environment changed before V125 backend creation'
-  remote_compose create --force-recreate --no-build --no-deps --pull never backend >/dev/null ||
+  remote_compose create --force-recreate --no-build --pull never backend >/dev/null ||
     die 'backend create failed; outcome requires reconciliation'
   remote_capture_compose_ids all backend
   (( ${#REMOTE_CAPTURED_CONTAINER_IDS[@]} == 1 )) ||
@@ -7269,7 +7624,7 @@ remote_recover_pre_v126() {
   local proof="${run_root}/recovery-pre-v126.proof"
   remote_write_proof "${proof}" \
     "run_id=${run_id}" "release_sha=${release_sha}" 'flyway=125:0:0:0' \
-    "v125_source_sha=${V125_SOURCE_SHA}" "v125_image_id=${V125_IMAGE_ID}" \
+    "v125_source_sha=${V125_SOURCE_SHA}" "v125_image_id=${V125_IMAGE_ID}" "backend_container_id=${recovery_container}" \
     "env_before_sha256=${REMOTE_RECOVERY_ENV_BEFORE_SHA256}" \
     "env_after_sha256=${REMOTE_RECOVERY_ENV_AFTER_SHA256}" \
     "ordinary_caddy_sha256=${caddy_sha}" 'maintenance=OFF' 'traffic_policy=PRODUCT' \
@@ -7565,54 +7920,17 @@ validate_dr_boundary() {
   local destination="$2"
   local phase="$3"
   [[ -f "${source}" && ! -L "${source}" ]] || die 'DR boundary evidence must be a regular non-symlink file'
-  python3 - "${source}" "${destination}" "${RUN_ID}" "${RELEASE_SHA}" "${phase}" <<'PY'
-import datetime
-import json
-import os
-import stat
-import sys
+  {
+    remote_operation_bindings_python || return $?
+    cat <<'PY'
 source, target, run_id, release_sha, phase = sys.argv[1:]
 if stat.S_IMODE(os.stat(source).st_mode) not in (0o400, 0o600):
     raise SystemExit("DR boundary evidence must be mode 0400 or 0600")
-raw = open(source, "rb").read()
-doc = json.loads(raw)
-expected_keys = {
-    "accepted_data_loss_boundary", "accepted_recovery_point_utc", "backup_phase",
-    "format_version", "release_sha", "result_category", "run_id",
-}
-if set(doc) != expected_keys or doc.get("format_version") != 1:
-    raise SystemExit("DR boundary evidence schema mismatch")
-fixed = {
-    "backup_phase": phase,
-    "release_sha": release_sha,
-    "result_category": "DR_PREREQUISITES_ACCEPTED",
-    "run_id": run_id,
-}
-for key, value in fixed.items():
-    if doc.get(key) != value:
-        raise SystemExit(f"DR boundary evidence mismatch: {key}")
-if doc.get("accepted_data_loss_boundary") not in (
-    "ALL_WRITES_AFTER_PRE_DRAIN_BACKUP_MAY_BE_LOST",
-    "ALL_WRITES_AFTER_QUIESCED_BACKUP_MAY_BE_LOST",
-):
-    raise SystemExit("DR data-loss boundary is not explicit")
-expected_boundary = (
-    "ALL_WRITES_AFTER_PRE_DRAIN_BACKUP_MAY_BE_LOST" if phase == "pre-drain"
-    else "ALL_WRITES_AFTER_QUIESCED_BACKUP_MAY_BE_LOST"
-)
-if doc["accepted_data_loss_boundary"] != expected_boundary:
-    raise SystemExit("DR data-loss boundary does not match selected backup")
-try:
-    parsed = datetime.datetime.strptime(doc["accepted_recovery_point_utc"], "%Y-%m-%dT%H:%M:%SZ")
-except (TypeError, ValueError):
-    raise SystemExit("DR recovery point must be an exact UTC timestamp")
-canonical = (json.dumps(doc, sort_keys=True, separators=(",", ":")) + "\n").encode()
-if raw != canonical:
-    raise SystemExit("DR boundary evidence is not canonical JSON")
-fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
-with os.fdopen(fd, "wb") as handle:
-    handle.write(raw)
+raw = Path(source).read_bytes()
+binding_validate_dr_boundary(raw, run_id, release_sha, phase)
+binding_create_raw(Path(target), raw)
 PY
+  } | python3 - "${source}" "${destination}" "${RUN_ID}" "${RELEASE_SHA}" "${phase}"
 }
 
 write_recovery_intent_and_terminal() {
@@ -7683,8 +8001,8 @@ verify_post_v126_recovery_for_dr() {
   fields="$(python3 - "${STATE_DIR}/run.json" "${STATE_DIR}/run-terminal.json" \
     "${STATE_DIR}/run-terminal.json.sha256" "${STATE_DIR}/recovery/post-v126-stop.intent.json" \
     "${STATE_DIR}/recovery/post-v126-stop.intent.json.sha256" \
-    "${STATE_DIR}/recovery/post-v126-stop.receipt.json" \
-    "${STATE_DIR}/recovery/post-v126-stop.receipt.json.sha256" \
+    "$(recovery_receipt_path post-v126-stop)" \
+    "$(recovery_receipt_path post-v126-stop).sha256" \
     "$(hash_text "${POST_V126_STOP_TOKEN}")" <<'PY'
 import hashlib
 import json
@@ -7721,9 +8039,11 @@ receipt_keys = {
     "mode", "predecessor_receipt_sha256", "predecessor_stage", "release_sha", "result_category",
     "run_id", "script_sha256",
 }
+reconciled = receipt_path.endswith('.reconciliation.json')
+if reconciled: receipt_keys |= {'remote_evidence_sha256', 'original_operation_log_sha256'}
 if set(terminal) != terminal_keys or set(intent) != intent_keys or set(receipt) != receipt_keys:
     raise SystemExit("post-V126 recovery schema mismatch")
-if any(doc.get("format_version") != 1 for doc in (terminal, intent, receipt)):
+if any(doc.get("format_version") != 1 for doc in (terminal, intent)) or receipt["format_version"] != (2 if reconciled else 1):
     raise SystemExit("post-V126 recovery format mismatch")
 for doc, key in ((terminal, "terminal_at"), (intent, "intent_at"), (receipt, "completed_at")):
     if not isinstance(doc.get(key), str) or not timestamp.fullmatch(doc[key]):
@@ -7736,7 +8056,7 @@ if terminal.get("mode") != "post-v126-stop" or terminal.get("status") != "RECOVE
     raise SystemExit("terminal marker is not the post-V126 stop")
 if intent.get("mode") != "post-v126-stop" or intent.get("kind") != "RECOVERY_INTENT":
     raise SystemExit("post-V126 recovery intent mismatch")
-if receipt.get("mode") != "post-v126-stop" or receipt.get("result_category") != "TERMINAL_RECOVERY_BOUNDARY":
+if receipt.get("mode") != "post-v126-stop" or receipt.get("result_category") != ("RECONCILED_TERMINAL_RECOVERY" if reconciled else "TERMINAL_RECOVERY_BOUNDARY"):
     raise SystemExit("post-V126 recovery receipt mismatch")
 if intent.get("authorization_token_sha256") != token_hash or receipt.get("authorization_token_sha256") != token_hash:
     raise SystemExit("post-V126 recovery authorization mismatch")
@@ -7833,6 +8153,83 @@ PY
   chmod 0400 "${target}.sha256"
 }
 
+verify_reconciliation_recovery_intent() {
+  local mode="$1" token_hash fields predecessor previous_hash intent_sha observed
+  case "${mode}" in
+    pre-v126) token_hash="$(hash_text "${PRE_V126_ROLLBACK_TOKEN}")" ;;
+    post-v126-stop) token_hash="$(hash_text "${POST_V126_STOP_TOKEN}")" ;;
+    verify-full-dr) token_hash="$(hash_text "${FULL_DR_VERIFY_TOKEN}")" ;;
+    *) die 'unknown reconciliation recovery class' ;;
+  esac
+  [[ "$(classify_status_record "${STATE_DIR}/run-terminal.json" terminal)" == RECONCILIATION_REQUIRED ]] ||
+    die 'original recovery terminal marker is invalid'
+  [[ "$(read_recovery_state)" != INVALID_EVIDENCE ]] || die 'recovery evidence inventory is invalid'
+  fields="$(
+    {
+      remote_operation_bindings_python
+      cat <<'PY'
+state, mode, token_sha = sys.argv[1:]
+state = Path(state)
+manifest = binding_read(state / 'run.json')
+path = state / 'recovery' / (mode + '.intent.json')
+doc = binding_read(path)
+checksum = Path(str(path) + '.sha256')
+binding_protected(checksum, 0o400)
+if checksum.read_bytes() != (binding_hash(path) + '\n').encode(): raise BindingError('intent_checksum')
+keys = {'authorization_token_sha256','format_version','intent_at','kind','mode',
+        'predecessor_receipt_sha256','predecessor_stage','release_sha','run_id','script_sha256'}
+if (set(doc) != keys or type(doc['format_version']) is not int or doc['format_version'] != 1 or
+        doc['kind'] != 'RECOVERY_INTENT' or doc['mode'] != mode or doc['authorization_token_sha256'] != token_sha or
+        any(doc[key] != manifest[key] for key in ('run_id','release_sha','script_sha256'))):
+    raise BindingError('recovery_intent_binding')
+datetime.datetime.strptime(doc['intent_at'], '%Y-%m-%dT%H:%M:%SZ')
+print(doc['predecessor_stage']+'\t'+doc['predecessor_receipt_sha256']+'\t'+binding_hash(path))
+PY
+    } | python3 - "${STATE_DIR}" "${mode}" "${token_hash}"
+  )" || die 'original recovery intent is invalid'
+  IFS=$'\t' read -r predecessor previous_hash intent_sha <<< "${fields}"
+  if [[ "${predecessor}" == RECOVERY_POST_V126_STOP ]]; then
+    [[ "${mode}" == verify-full-dr ]] || die 'invalid recovery predecessor kind'
+    observed="$(verify_post_v126_recovery_for_dr)" || die 'post-stop predecessor is invalid'
+    [[ "${observed%%$'\t'*}" == "${previous_hash}" ]] || die 'post-stop predecessor hash differs'
+  elif [[ "${predecessor}" == NONE ]]; then
+    [[ "${previous_hash}" == NONE ]] || die 'empty predecessor hash differs'
+  else
+    [[ "$(verify_receipt "${predecessor}")" == "${previous_hash}" ]] || die 'recovery predecessor chain is invalid'
+  fi
+  printf '%s\n' "${intent_sha}"
+}
+
+write_reconciled_recovery_completion() {
+  local mode="$1" bundle="$2" expected
+  verify_reconciliation_recovery_intent "${mode}" >/dev/null || die 'recovery intent no longer verifies'
+  case "${mode}" in
+    pre-v126) expected=recovery-pre-v126 ;;
+    post-v126-stop) expected=recovery-post-v126-stop ;;
+    verify-full-dr) expected=dr-boundary,dr-selected-backup,dr-selected-inventory,recovery-full-dr-prerequisites ;;
+    *) die 'unknown recovery class' ;;
+  esac
+  {
+    remote_operation_bindings_python
+    cat <<'PY'
+state, mode, bundle_path, source_path, expected = sys.argv[1:]
+binding_write_completion(state, 'RECOVERY', mode, 0, bundle_path, source_path, expected)
+PY
+  } | python3 - "${STATE_DIR}" "${mode}" "${bundle}" "${SCRIPT_PATH}" "${expected}" ||
+    die 'original recovery evidence is incomplete; target remains blocked'
+  verify_recovery_receipt "${mode}" >/dev/null || die 'reconciled recovery completion failed validation'
+}
+
+recovery_receipt_path() {
+  local base="${STATE_DIR}/recovery/$1"
+  if [[ ! -e "${base}.receipt.json" && ! -L "${base}.receipt.json" &&
+    ( -e "${base}.reconciliation.json" || -L "${base}.reconciliation.json" ) ]]; then
+    printf '%s.reconciliation.json\n' "${base}"
+  else
+    printf '%s.receipt.json\n' "${base}"
+  fi
+}
+
 verify_recovery_receipt() {
   local mode="$1"
   local token_hash
@@ -7852,12 +8249,9 @@ verify_recovery_receipt() {
       ;;
     *) die 'unknown recovery receipt mode' ;;
   esac
-  python3 - "${STATE_DIR}/run.json" "${STATE_DIR}/recovery/${mode}.intent.json" \
-    "${STATE_DIR}/recovery/${mode}.intent.json.sha256" \
-    "${STATE_DIR}/recovery/${mode}.receipt.json" \
-    "${STATE_DIR}/recovery/${mode}.receipt.json.sha256" \
-    "${STATE_DIR}/recovery/${mode}.operation.log" "${mode}" "${token_hash}" \
-    "${expected_artifacts}" <<'PY'
+  {
+    remote_operation_bindings_python
+    cat <<'PY'
 import hashlib
 import json
 import os
@@ -7867,7 +8261,7 @@ import sys
 
 (
     manifest_path, intent_path, intent_sum, receipt_path, receipt_sum, operation_path,
-    mode, token_hash, expected_spec,
+    mode, token_hash, expected_spec, script_path,
 ) = sys.argv[1:]
 timestamp = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
 
@@ -7889,6 +8283,9 @@ def read_canonical(path, checksum):
 
 manifest = json.load(open(manifest_path, "rt", encoding="utf-8"))
 intent, intent_hash = read_canonical(intent_path, intent_sum)
+reconciled = receipt_path.endswith('.reconciliation.json')
+if reconciled and os.path.lexists(receipt_path.removesuffix('.reconciliation.json')+'.receipt.json'):
+    raise SystemExit('native and reconciled recovery cannot coexist')
 receipt, receipt_hash = read_canonical(receipt_path, receipt_sum)
 intent_keys = {
     "authorization_token_sha256", "format_version", "intent_at", "kind", "mode",
@@ -7899,9 +8296,11 @@ receipt_keys = {
     "mode", "predecessor_receipt_sha256", "predecessor_stage", "release_sha", "result_category",
     "run_id", "script_sha256",
 }
+if reconciled:
+    receipt_keys |= {'remote_evidence_sha256', 'original_operation_log_sha256'}
 if set(intent) != intent_keys or set(receipt) != receipt_keys:
     raise SystemExit("recovery receipt schema mismatch")
-if intent["format_version"] != 1 or receipt["format_version"] != 1 or intent["kind"] != "RECOVERY_INTENT":
+if intent["format_version"] != 1 or type(receipt["format_version"]) is not int or receipt["format_version"] != (2 if reconciled else 1) or intent["kind"] != "RECOVERY_INTENT":
     raise SystemExit("recovery receipt format mismatch")
 if not timestamp.fullmatch(intent["intent_at"]) or not timestamp.fullmatch(receipt["completed_at"]):
     raise SystemExit("recovery receipt timestamp mismatch")
@@ -7911,7 +8310,7 @@ for doc in (intent, receipt):
             raise SystemExit(f"recovery receipt identity mismatch: {key}")
     if doc.get("mode") != mode or doc.get("authorization_token_sha256") != token_hash:
         raise SystemExit("recovery receipt mode or authorization mismatch")
-if receipt["result_category"] != "TERMINAL_RECOVERY_BOUNDARY" or receipt["intent_sha256"] != intent_hash:
+if receipt["result_category"] != ("RECONCILED_TERMINAL_RECOVERY" if reconciled else "TERMINAL_RECOVERY_BOUNDARY") or receipt["intent_sha256"] != intent_hash:
     raise SystemExit("recovery receipt result or intent mismatch")
 for key in ("predecessor_stage", "predecessor_receipt_sha256"):
     if receipt[key] != intent[key]:
@@ -7933,6 +8332,24 @@ for item in artifacts:
 expected = set(expected_spec.split(",")) | {"operation-log"}
 if set(artifact_hashes) != expected:
     raise SystemExit("recovery receipt artifact set mismatch")
+if reconciled:
+    binding_protected(Path(operation_path), 0o400)
+    if binding_hash(Path(operation_path)) != receipt['original_operation_log_sha256']:
+        raise SystemExit('original recovery log changed')
+    artifacts_dir = Path(manifest_path).parent / 'artifacts'
+    bundle = artifacts_dir / f'recovery-{mode}.remote-reconciliation.json'
+    if binding_hash(bundle) != receipt['remote_evidence_sha256']:
+        raise SystemExit('recovery reconciliation bundle changed')
+    record, remote_logs = binding_verify_reconciliation_bundle(bundle, manifest['staging_path'], manifest['script_sha256'],
+        'RECOVERY', mode, intent_hash, hashlib.sha256(binding_embedded_source(Path(script_path).read_bytes(),
+        'remote_reconciliation_poststate_python')).hexdigest())
+    if any(record['identity'][key] != manifest[key] for key in ('run_id','release_sha','script_sha256')):
+        raise SystemExit('reconciled recovery identity mismatch')
+    binding_retained_local_artifacts(Path(manifest_path).parent, manifest, artifact_hashes, bundle)
+    derived = binding_reconciliation_log(Path(operation_path).read_bytes(), remote_logs)
+    operation_path = str(artifacts_dir / f'recovery-{mode}.reconciliation.log')
+    if Path(operation_path).read_bytes() != derived:
+        raise SystemExit('reconciled recovery inventory differs from original evidence')
 if os.path.islink(operation_path) or not os.path.isfile(operation_path):
     raise SystemExit("recovery operation log is unavailable or symlinked")
 operation_stat = os.stat(operation_path)
@@ -7960,6 +8377,12 @@ for name, digest in logged.items():
         raise SystemExit("recovery operation log ARTIFACT hash mismatch")
 print(receipt_hash)
 PY
+  } | python3 - "${STATE_DIR}/run.json" "${STATE_DIR}/recovery/${mode}.intent.json" \
+    "${STATE_DIR}/recovery/${mode}.intent.json.sha256" \
+    "$(recovery_receipt_path "${mode}")" \
+    "$(recovery_receipt_path "${mode}").sha256" \
+    "${STATE_DIR}/recovery/${mode}.operation.log" "${mode}" "${token_hash}" \
+    "${expected_artifacts}" "${SCRIPT_PATH}"
 }
 
 recovery_command() {
@@ -8083,6 +8506,741 @@ recovery_command() {
   clear_state_lock_traps
 }
 
+remote_reconciliation_poststate_python() {
+  cat <<'V126_RECONCILIATION_PY'
+#!/usr/bin/env python3
+"""Fresh read-only observations for intact successful V126 operation records.
+
+The binding coordinator holds the permanent target lock throughout collect(). This
+module never dispatches an action or writes a stage proof. Its temporary source and
+observer files are private; retained operation records are opened read-only.
+"""
+import datetime
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import shlex
+import stat
+import subprocess
+import tempfile
+import time
+
+
+ACTIONS = frozenset({
+    'baseline', 'backup-rehearsal', 'caddy-activate', 'public-drain-on',
+    'stop-backend', 'zero-writer', 'final-v125-preflight', 'transform-maintenance',
+    'image-prepare', 'image-load', 'start-v126', 'schema-runtime-gate',
+    'open-manual-smoke', 'record-manual-smoke', 'restore-caddy', 'final-public-gates',
+    'recover-pre-v126', 'recover-post-v126-stop', 'verify-full-dr',
+    'preflight-upload', 'image-upload',
+})
+IMPLEMENTED = frozenset({
+    'start-v126', 'schema-runtime-gate', 'open-manual-smoke', 'record-manual-smoke',
+    'restore-caddy', 'final-public-gates', 'stop-backend', 'zero-writer',
+    'recover-pre-v126', 'recover-post-v126-stop', 'transform-maintenance',
+    'caddy-activate', 'public-drain-on', 'image-load',
+    'baseline', 'backup-rehearsal', 'final-v125-preflight', 'verify-full-dr',
+})
+UNSUPPORTED_REASONS = {
+    'image-prepare': 'prepare_alone_cannot_complete_ordered_transfer_group',
+    'preflight-upload': 'upload_alone_cannot_complete_ordered_preflight_group',
+    'image-upload': 'upload_alone_cannot_complete_ordered_transfer_group',
+}
+MAX_RECORD = 16 * 1024 * 1024
+DEADLINE_SECONDS = 600
+PROOF_FILENAMES = {'pre-drain-backup-proof': 'pre-drain-backup-rehearsed',
+                   'quiesced-backup-proof': 'quiesced-backup-rehearsed'}
+
+
+def canonical(value):
+    return (json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False) + '\n').encode()
+
+
+def digest(raw):
+    return hashlib.sha256(raw).hexdigest()
+
+
+def require(condition, reason):
+    if not condition:
+        raise ValueError('INSUFFICIENT_EVIDENCE:' + reason)
+
+
+def regular(path, mode):
+    path = Path(path)
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        metadata = os.fstat(fd)
+        require(stat.S_ISREG(metadata.st_mode) and metadata.st_uid == os.geteuid() and
+                stat.S_IMODE(metadata.st_mode) == mode and metadata.st_nlink == 1,
+                'protected_file_metadata')
+        require(metadata.st_size <= MAX_RECORD, 'protected_file_bound')
+        raw = bytearray()
+        while len(raw) <= MAX_RECORD:
+            block = os.read(fd, min(65536, MAX_RECORD + 1 - len(raw)))
+            if not block:
+                break
+            raw.extend(block)
+        require(len(raw) == metadata.st_size, 'protected_file_changed')
+        after = os.fstat(fd)
+        require((metadata.st_size, metadata.st_mtime_ns, metadata.st_ctime_ns) ==
+                (after.st_size, after.st_mtime_ns, after.st_ctime_ns), 'protected_file_changed')
+        return bytes(raw)
+    finally:
+        os.close(fd)
+
+
+def directory(path):
+    metadata = Path(path).lstat()
+    require(stat.S_ISDIR(metadata.st_mode) and metadata.st_uid == os.geteuid() and
+            stat.S_IMODE(metadata.st_mode) == 0o700, 'protected_directory_metadata')
+
+
+def document(path):
+    raw = regular(path, 0o400)
+    value = json.loads(raw)
+    require(raw == canonical(value), 'original_record_not_canonical')
+    return value, digest(raw)
+
+
+def validate_request(target, identity, request):
+    require(set(request) == {'format_version', 'identity', 'target_sha256', 'args', 'environment'} and
+            type(request['format_version']) is int and request['format_version'] == 1 and
+            request['identity'] == identity and request['target_sha256'] == digest(str(target).encode()),
+            'original_request_binding')
+    require(isinstance(request['args'], list) and 3 <= len(request['args']) <= 32 and
+            all(isinstance(arg, str) and not any(c in arg for c in '\x00\n\r') for arg in request['args']) and
+            request['args'][:3] == [str(target), identity['run_id'], identity['release_sha']],
+            'original_request_args')
+    require(isinstance(request['environment'], dict) and all(
+        re.fullmatch(r'V126_INTERNAL_REMOTE_[A-Z0-9_]+', key) and isinstance(value, str) and
+        not any(c in value for c in '\x00\n\r') for key, value in request['environment'].items()),
+        'original_request_environment')
+
+
+def operation(root, operation_id, target):
+    require(re.fullmatch('[0-9a-f]{64}', operation_id), 'operation_id')
+    start, start_sha = document(root / (operation_id + '.start.json'))
+    require(set(start) == {'identity', 'operation_id', 'started_at', 'boot_id'} and
+            start['operation_id'] == operation_id and digest(canonical(start['identity'])) == operation_id,
+            'original_start_binding')
+    identity = start['identity']
+    require(set(identity) == {'run_id', 'release_sha', 'script_sha256', 'intent_sha256', 'kind', 'name', 'action'} and
+            re.fullmatch('[a-z0-9][a-z0-9._-]{0,79}', identity['run_id']) and
+            re.fullmatch('[0-9a-f]{40}', identity['release_sha']) and
+            all(re.fullmatch('[0-9a-f]{64}', identity[key]) for key in ('script_sha256', 'intent_sha256')),
+            'original_identity_schema')
+    request, request_sha = document(root / (operation_id + '.request.json'))
+    validate_request(target, identity, request)
+    result, result_sha = document(root / (operation_id + '.result.json'))
+    require(set(result) == {'identity', 'operation_id', 'exit', 'outcome', 'children', 'log_sha256', 'completed_at'} and
+            result['identity'] == identity and result['operation_id'] == operation_id and
+            type(result['exit']) is int and result['exit'] == 0 and result['outcome'] == 'SUCCEEDED' and
+            result['children'] == 'REAPED', 'UNKNOWN_original_result_or_children')
+    log = regular(root / (operation_id + '.log'), 0o400)
+    require(digest(log) == result['log_sha256'], 'original_log_digest')
+    files = {operation_id + suffix: value for suffix, value in (
+        ('.start.json', start_sha), ('.request.json', request_sha),
+        ('.result.json', result_sha), ('.log', digest(log)))}
+    artifacts = {}
+    for row in log.splitlines():
+        if row.startswith(b'ARTIFACT'):
+            match = re.fullmatch(rb'ARTIFACT\t([a-z0-9][a-z0-9._-]{0,63})\t([0-9a-f]{64})', row)
+            require(match is not None, 'original_artifact_format')
+            name, value = (part.decode() for part in match.groups())
+            require(name not in artifacts, 'duplicate_original_artifact')
+            artifacts[name] = value
+    return identity, request, files, artifacts
+
+
+class Evidence:
+    def __init__(self, target, identity, request, operations):
+        self.target, self.identity = Path(target), identity
+        self.root = self.target / '.v126-target-operations'
+        self.run_root = self.target / '.v126-runs' / identity['run_id']
+        directory(self.root)
+        directory(self.target / '.v126-runs')
+        directory(self.run_root)
+        require(isinstance(operations, list) and operations, 'original_operation_group_empty')
+        self.artifacts, self.selected, self.proofs, self.original_requests = {}, {}, {}, []
+        self.derived_environment = {}
+        selected_ids = []
+        for selected in operations:
+            require(set(selected) == {'operation_id', 'files'}, 'selected_operation_schema')
+            original, original_request, files, artifacts = operation(self.root, selected['operation_id'], self.target)
+            require(all(original[key] == identity[key] for key in
+                        ('run_id', 'release_sha', 'script_sha256', 'intent_sha256', 'kind', 'name')) and
+                    files == selected['files'], 'selected_operation_binding')
+            selected_ids.append(selected['operation_id'])
+            for name, value in artifacts.items():
+                require(name not in self.selected, 'duplicate_selected_artifact')
+                self.selected[name] = value
+        require(len(selected_ids) == len(set(selected_ids)) and original == identity and
+                original_request == request, 'last_original_operation_binding')
+        # Predecessor IDs/proofs must also originate in intact successful records;
+        # a writable proof plus a matching writable sidecar is insufficient.
+        for path in sorted(self.root.glob('*.start.json')):
+            candidate, _ = document(path)
+            candidate_identity = candidate.get('identity', {})
+            if any(candidate_identity.get(key) != identity[key] for key in ('run_id', 'release_sha', 'script_sha256')):
+                continue
+            original, original_request, _, artifacts = operation(self.root, path.name.removesuffix('.start.json'), self.target)
+            self.original_requests.append((original, original_request))
+            for name, value in artifacts.items():
+                require(name not in self.artifacts, 'ambiguous_original_artifact')
+                self.artifacts[name] = value
+
+    def derive(self, key, artifact):
+        require(artifact in self.selected, 'missing_original_artifact_' + artifact)
+        self.derived_environment[key] = self.selected[artifact]
+
+    def prior_request(self, action):
+        requests = [request for identity, request in self.original_requests if identity['action'] == action]
+        require(len(requests) == 1, 'ambiguous_prior_request_' + action)
+        return requests[0]
+
+    def proof(self, name, *, selected=False):
+        expected = (self.selected if selected else self.artifacts).get(name)
+        require(expected is not None, 'missing_original_artifact_' + name)
+        path = self.run_root / (PROOF_FILENAMES.get(name, name) + '.proof')
+        raw = regular(path, 0o600)
+        require(digest(raw) == expected and regular(Path(str(path) + '.sha256'), 0o600) ==
+                (expected + '\n').encode(), 'original_proof_digest_' + name)
+        fields = {}
+        for row in raw.decode('utf-8').splitlines():
+            require('=' in row, 'proof_row_' + name)
+            key, value = row.split('=', 1)
+            require(key not in fields and re.fullmatch('[a-z0-9_]+', key), 'proof_key_' + name)
+            fields[key] = value
+        require(fields.get('run_id') == self.identity['run_id'] and
+                fields.get('release_sha') == self.identity['release_sha'], 'proof_identity_' + name)
+        self.proofs[name] = expected
+        return fields
+
+
+def quoted_call(name, *args):
+    require(re.fullmatch(r'[a-z][a-z0-9_]*', name), 'checker_function')
+    return name + ' ' + ' '.join(shlex.quote(str(arg)) for arg in args)
+
+
+def observer_plan(evidence, request):
+    """Return only checked read-only calls; no original action implementation."""
+    action = evidence.identity['action']
+    require(action in IMPLEMENTED, 'unsupported_action_' + action + '_' + UNSUPPORTED_REASONS.get(action, 'unknown'))
+    args = request['args']
+    target, run, release = args[:3]
+    expected_id = None
+    require(len(args) >= (3 if action == 'caddy-activate' else 4), 'action_args_' + action)
+    init_args = args[:4]
+    if action == 'baseline':
+        require(len(args) == 9, 'baseline_args')
+        for suffix, artifact in [('DATABASE_URL', 'database-url-binding'), ('MAINTENANCE_IDENTITIES', 'maintenance-identities'),
+                                 ('COMPOSE_SOURCE', 'remote-compose-source'), ('MAINTENANCE_CHECK_SOURCE', 'remote-maintenance-check-source'),
+                                 ('ADMISSION_SOURCE', 'remote-admission-source'), ('CADDY', 'baseline-caddy'), ('ENV', 'baseline-env')]:
+            evidence.derive('V126_INTERNAL_REMOTE_BASELINE_' + suffix + '_SHA256', artifact)
+        evidence.derive('V126_INTERNAL_REMOTE_DATABASE_TARGET_IDENTITY_SHA256', 'database-target-identity')
+    elif action == 'backup-rehearsal':
+        require(len(args) == 5 and args[3] in ('pre-drain', 'quiesced'), 'backup_args')
+        init_args = args[:3] + [args[4]]
+    if action == 'caddy-activate':
+        require(len(args) == 3, 'caddy_args')
+        baseline = evidence.prior_request('baseline')
+        require(len(baseline['args']) >= 4, 'baseline_image_argument')
+        init_args = args + [baseline['args'][3]]
+        for suffix, artifact in [('ORIGINAL', 'caddy-original'), ('CANDIDATE', 'caddy-candidate'),
+                                 ('DIFF', 'caddy-diff'), ('ACTIVATION', 'caddy-activation')]:
+            evidence.derive('V126_INTERNAL_REMOTE_CADDY_' + suffix + '_SHA256', artifact)
+    calls = [('initialize', quoted_call('remote_initialize_compose', *init_args))]
+    image = args[4] if len(args) >= 5 else None
+    if action in {'start-v126', 'schema-runtime-gate', 'open-manual-smoke', 'record-manual-smoke',
+                  'restore-caddy', 'final-public-gates'}:
+        require(len(args) == (6 if action in {'start-v126', 'record-manual-smoke'} else 5) and
+                re.fullmatch('sha256:[0-9a-f]{64}', image or '') and
+                request['environment'].get('V126_INTERNAL_REMOTE_V126_IMAGE_ID') == image,
+                'runtime_image_args')
+        phase = args[5] if action == 'start-v126' else (
+            'final' if action in {'restore-caddy', 'final-public-gates'} else 'first')
+        require(phase in ('first', 'final'), 'start_phase')
+        started = 'v126-backend-' + phase + '-started'
+        original = evidence.proof(started, selected=(action == 'start-v126'))
+        expected_id = original.get('backend_container_id')
+        require(re.fullmatch('[0-9a-f]{64}', expected_id or '') and original.get('image_id') == image and
+                original.get('image_tag') == args[3] and original.get('phase') == phase and
+                original.get('start_command_count') == '1' and original.get('restart_policy') == 'no' and
+                original.get('restart_count') == '0' and original.get('result') == 'PASS',
+                'original_exact_start_resource')
+        calls.append(('exact_backend', quoted_call('reconcile_exact_backend', expected_id, image)))
+        calls.append(('readiness', quoted_call('remote_wait_backend_ready', expected_id, image, release,
+                                               phase) + ' "${REMOTE_BOUND_ENV_SHA256}"'))
+        mode = 'OFF' if phase == 'final' else 'V126_SMOKE'
+        live = action in {'open-manual-smoke', 'record-manual-smoke', 'restore-caddy', 'final-public-gates'}
+        calls.append(('runtime', quoted_call('remote_assert_runtime', target, release, image, mode, str(not live).lower())))
+        if action != 'start-v126':
+            own_name = {'schema-runtime-gate': 'v126-schema-runtime', 'open-manual-smoke': 'manual-smoke-window',
+                        'record-manual-smoke': 'manual-smoke-passed', 'restore-caddy': 'ordinary-caddy-restored',
+                        'final-public-gates': 'final-public-gates'}[action]
+            own = evidence.proof(own_name, selected=True)
+            require(own.get('result') == ('AUTHORIZED' if action == 'open-manual-smoke' else 'PASS'), 'original_action_result')
+            if action == 'record-manual-smoke':
+                require(re.fullmatch('[0-9a-f]{64}', args[5]) and own.get('evidence_sha256') == args[5], 'manual_original_binding')
+        if phase == 'final' and live:
+            restored = evidence.proof('ordinary-caddy-restored', selected=(action == 'restore-caddy'))
+            require(restored.get('original_sha256') == request['environment'].get('V126_INTERNAL_REMOTE_CADDY_ORIGINAL_SHA256'),
+                    'original_caddy_binding')
+            calls.append(('ordinary_caddy', quoted_call('reconcile_ordinary_caddy', release, run)))
+        else:
+            calls.append(('candidate_caddy', quoted_call('remote_assert_caddy_candidate_active', release, run)))
+        if live:
+            calls.extend([('drain_absent', 'sudo test ! -e /etc/caddy/v126-drain.enabled\nsudo test ! -L /etc/caddy/v126-drain.enabled'),
+                          ('public_live', 'remote_assert_public_live')])
+            if phase == 'first':
+                calls.append(('protected_denial', 'remote_assert_protected_unauthenticated_503'))
+        else:
+            calls.append(('public_drain', 'remote_assert_public_drain'))
+    elif action == 'stop-backend':
+        require(len(args) == 6 and args[4] in ('v125', 'v126-off-transition') and
+                re.fullmatch('sha256:[0-9a-f]{64}', args[5]), 'stop_args')
+        own = evidence.proof(args[4] + '-backend-stopped', selected=True)
+        require(own.get('phase') == args[4] and own.get('backend_running_count') == '0' and own.get('result') == 'PASS',
+                'original_stop_proof')
+        calls.extend([('candidate_caddy', quoted_call('remote_assert_caddy_candidate_active', release, run)),
+                      ('public_drain', 'remote_assert_public_drain'), ('stopped_backend', 'reconcile_stopped_backend')])
+    elif action == 'zero-writer':
+        require(len(args) == 4, 'zero_writer_args')
+        own = evidence.proof('zero-writer-v125', selected=True)
+        require(own.get('flyway') == '125:0:0' and own.get('result') == 'PASS', 'original_zero_writer_proof')
+        calls.extend([('public_drain', 'remote_assert_public_drain'),
+                      ('zero_writer', quoted_call('remote_assert_zero_writer', '125:0:0'))])
+    elif action == 'recover-pre-v126':
+        require(len(args) == 5, 'recovery_args')
+        own = evidence.proof('recovery-pre-v126', selected=True)
+        expected_id = own.get('backend_container_id')
+        require(re.fullmatch('[0-9a-f]{64}', expected_id or '') and
+                re.fullmatch('sha256:[0-9a-f]{64}', own.get('v125_image_id', '')) and
+                own.get('result') == 'PRE_V126_ROLLBACK_COMPLETE' and own.get('flyway') == '125:0:0:0' and
+                own.get('start_command_count') == '1' and own.get('restart_policy') == 'no' and
+                own.get('restart_count') == '0', 'original_recovery_resource')
+        calls = [('initialize_recovery', quoted_call('remote_initialize_reconciled_recovery',
+                  *args[:4], evidence.proofs['recovery-pre-v126'])),
+                 ('exact_backend', quoted_call('reconcile_exact_backend', expected_id, own['v125_image_id'])),
+                 ('recovery_environment', quoted_call('remote_assert_bound_container_environment', expected_id, 'pre-v126')),
+                 ('readiness', quoted_call('remote_wait_backend_ready', expected_id, own['v125_image_id'],
+                  own.get('v125_source_sha', ''), 'pre-v126', own.get('env_after_sha256', ''))),
+                 ('v125_runtime', quoted_call('remote_assert_v125_runtime', target, args[3], 'false')),
+                 ('ordinary_caddy', quoted_call('reconcile_ordinary_caddy', release, run)),
+                 ('drain_absent', 'sudo test ! -e /etc/caddy/v126-drain.enabled\nsudo test ! -L /etc/caddy/v126-drain.enabled'),
+                 ('public_live', 'remote_assert_public_live')]
+    elif action == 'recover-post-v126-stop':
+        require(len(args) == 5, 'post_stop_args')
+        evidence.proof('recovery-post-v126-stop', selected=True)
+        calls.extend([('original_stop_contract', quoted_call('remote_verify_post_v126_stop_proof', evidence.run_root,
+                      run, release, evidence.proofs['recovery-post-v126-stop'])),
+                      ('candidate_caddy', quoted_call('remote_assert_caddy_candidate_active', release, run)),
+                      ('public_drain', 'remote_assert_public_drain'),
+                      ('zero_writer', quoted_call('remote_assert_zero_writer', '126:1:0'))])
+    elif action == 'transform-maintenance':
+        require(len(args) == 7 and args[5] in ('V126_SMOKE', 'OFF'), 'maintenance_args')
+        mode = args[5]
+        name = 'maintenance-' + mode.lower()
+        own = evidence.proof(name, selected=True)
+        require(own.get('mode') == mode and own.get('result') == 'PASS', 'original_maintenance_result')
+        evidence.derive('V126_INTERNAL_REMOTE_MAINTENANCE_' + ('SMOKE' if mode == 'V126_SMOKE' else 'OFF') + '_SHA256', name)
+        calls.extend([('maintenance_proof', quoted_call('remote_verify_maintenance_env_binding', target,
+                      evidence.run_root, run, release, mode, evidence.proofs[name])),
+                      ('public_drain', 'remote_assert_public_drain'),
+                      ('zero_writer', quoted_call('remote_assert_zero_writer', '125:0:0' if mode == 'V126_SMOKE' else '126:1:0')),
+                      ('temporary_cleanup', quoted_call('reconcile_maintenance_cleanup', evidence.run_root, mode))])
+    elif action == 'caddy-activate':
+        calls.extend([('candidate_caddy', quoted_call('remote_assert_caddy_candidate_active', release, run)),
+                      ('drain_absent', 'sudo test ! -e /etc/caddy/v126-drain.enabled\nsudo test ! -L /etc/caddy/v126-drain.enabled')])
+    elif action == 'public-drain-on':
+        require(len(args) == 6 and args[4] in ('initial', 'reactivated') and
+                re.fullmatch('sha256:[0-9a-f]{64}', args[5]), 'drain_args')
+        own = evidence.proof('public-drain-' + ('active' if args[4] == 'initial' else 'reactivated'), selected=True)
+        require(own.get('phase') == args[4] and own.get('result') == 'PASS', 'original_drain_result')
+        calls.append(('candidate_caddy', quoted_call('remote_assert_caddy_candidate_active', release, run)))
+        if args[4] == 'initial':
+            calls.append(('v125_runtime', quoted_call('remote_assert_v125_runtime', target, args[3])))
+        else:
+            started = evidence.proof('v126-backend-first-started')
+            expected_id = started.get('backend_container_id')
+            require(re.fullmatch('[0-9a-f]{64}', expected_id or '') and started.get('image_id') == args[5], 'drain_backend_binding')
+            evidence.proof('manual-smoke-passed')
+            calls.extend([('exact_backend', quoted_call('reconcile_exact_backend', expected_id, args[5])),
+                          ('runtime', quoted_call('remote_assert_runtime', target, release, args[5], 'V126_SMOKE', 'true'))])
+        calls.append(('public_drain', 'remote_assert_public_drain'))
+    elif action == 'image-load':
+        require(len(args) == 6 and re.fullmatch('sha256:[0-9a-f]{64}', args[4]) and
+                re.fullmatch('[0-9a-f]{64}', args[5]), 'image_args')
+        own = evidence.proof('v126-image-transferred', selected=True)
+        evidence.proof('v126-image-transfer-ready', selected=True)
+        require(own.get('archive_sha256') == args[5] and own.get('remote_image_id') == args[4] and
+                own.get('image_tag') == args[3] and own.get('result') == 'PASS' and
+                evidence.selected.get('v126-image-archive') == args[5], 'original_image_result')
+        calls.extend([('public_drain', 'remote_assert_public_drain'),
+                      ('zero_writer', quoted_call('remote_assert_zero_writer', '125:0:0')),
+                      ('sealed_image', quoted_call('reconcile_loaded_image', evidence.run_root, *args[3:6]))])
+    elif action == 'baseline':
+        require(all(evidence.selected.get(name) == value for name, value in zip(
+                    ('remote-compose-source', 'remote-maintenance-check-source', 'remote-admission-source'), args[6:9])),
+                'baseline_original_source_arguments')
+        calls.extend([('baseline_paths', quoted_call('reconcile_baseline_paths', evidence.run_root, args[4], args[5])),
+                      ('v125_runtime', quoted_call('remote_assert_v125_runtime', target, args[3], 'false')),
+                      ('baseline_environment', 'remote_capture_compose_ids running backend\n'
+                       'remote_assert_bound_container_environment "${REMOTE_CAPTURED_CONTAINER_IDS[0]}" baseline'),
+                      ('baseline_caddy', 'reconcile_baseline_caddy'),
+                      ('public_live', 'remote_assert_public_live')])
+    elif action == 'backup-rehearsal':
+        phase = args[3]
+        own = evidence.proof(phase + '-backup-proof', selected=True)
+        require(own.get('phase') == phase and own.get('result') == 'PASS', 'original_backup_result')
+        calls += backup_checks(evidence, release, run, phase, own, selected=True)
+        if phase == 'quiesced':
+            calls.extend([('public_drain', 'remote_assert_public_drain'),
+                          ('zero_writer', quoted_call('remote_assert_zero_writer', '125:0:0'))])
+    elif action == 'final-v125-preflight':
+        require(len(args) == 8 and re.fullmatch('[0-9a-f]{64}', args[6]), 'preflight_args')
+        own = evidence.proof('final-v125-preflight', selected=True)
+        require(own.get('script_sha256') == args[6] and own.get('preflight_outcome') == 'SAFE' and
+                own.get('unsafe_count') == '0' and own.get('credentials_cleanup') == 'COMPLETE' and
+                own.get('result') == 'PASS' and own.get('flyway') == '125:0:0',
+                'historical_preflight_structured_witness_missing_or_invalid')
+        backup = evidence.proof('quiesced-backup-proof')
+        calls += backup_checks(evidence, release, run, 'quiesced', backup)
+        calls.extend([('public_drain', 'remote_assert_public_drain'),
+                      ('zero_writer', quoted_call('remote_assert_zero_writer', '125:0:0')),
+                      ('preflight_retained_source_and_cleanup', quoted_call('reconcile_preflight_evidence', evidence.run_root, args[6])),
+                      ('preflight_current_safe', quoted_call('reconcile_preflight_safe', evidence.run_root, args[4], args[6], args[7]))])
+    elif action == 'verify-full-dr':
+        require(len(args) == 9 and args[4] in ('pre-drain', 'quiesced') and
+                all(re.fullmatch('[0-9a-f]{64}', value) for value in args[5:8]), 'full_dr_args')
+        own = evidence.proof('recovery-full-dr-prerequisites', selected=True)
+        phase = args[4]
+        backup = evidence.proof(phase + '-backup-proof')
+        require(backup.get('dump_sha256') == args[5] and backup.get('inventory_sha256') == args[6], 'full_dr_original_archive')
+        predecessor = request['environment'].get('V126_INTERNAL_REMOTE_PREDECESSOR_STAGE')
+        receipt_sha = request['environment'].get('V126_INTERNAL_REMOTE_PREDECESSOR_HASH') if predecessor == 'RECOVERY_POST_V126_STOP' else 'NONE'
+        if predecessor == 'RECOVERY_POST_V126_STOP':
+            evidence.proof('recovery-post-v126-stop')
+            require(evidence.proofs['recovery-post-v126-stop'] == args[8], 'full_dr_original_stop')
+            calls.append(('original_stop_contract', quoted_call('remote_verify_post_v126_stop_proof', evidence.run_root, run, release, args[8])))
+        else:
+            require(args[8] == 'NONE', 'full_dr_unexpected_stop')
+        calls += backup_checks(evidence, release, run, phase, backup)
+        calls.extend([('full_dr_original_contract', quoted_call('remote_verify_full_dr_proof',
+                      evidence.run_root / 'recovery-full-dr-prerequisites.proof', run, release, phase,
+                      *args[5:8], receipt_sha, args[8])),
+                      ('public_drain', 'remote_assert_public_drain'),
+                      ('zero_writer', quoted_call('remote_assert_zero_writer', 'ANY'))])
+    return calls, expected_id
+
+
+def backup_checks(evidence, release, run, phase, proof, *, selected=False):
+    artifacts = evidence.selected if selected else evidence.artifacts
+    for field, suffix in [('dump_sha256', 'dump'), ('inventory_sha256', 'inventory'), ('rehearsal_sha256', 'rehearsal')]:
+        require(re.fullmatch('[0-9a-f]{64}', proof.get(field, '')) and
+                proof[field] == artifacts.get(phase + '-backup-' + suffix), 'original_backup_' + field)
+    cid, volume, owner = (proof.get(key, '') for key in ('rehearsal_container', 'rehearsal_volume', 'rehearsal_owner'))
+    require(re.fullmatch('[0-9a-f]{64}', cid) and re.fullmatch('hookah-v126-[a-z0-9-]+', volume) and
+            re.fullmatch('v126:' + release + r':[a-z0-9-]+:' + phase + r':[0-9]+', owner) and
+            proof.get('rehearsal_cleanup') == 'COMPLETE', 'historical_backup_resource_witness_missing_or_invalid')
+    globals_sha = artifacts.get('pre-drain-globals', 'NONE') if phase == 'pre-drain' else 'NONE'
+    require(phase != 'pre-drain' or re.fullmatch('[0-9a-f]{64}', globals_sha), 'original_globals_binding')
+    return [('backup_archive_' + phase, quoted_call('reconcile_backup_archive', release, run, phase,
+             proof['dump_sha256'], proof['inventory_sha256'], proof['rehearsal_sha256'], globals_sha)),
+            ('backup_resources_' + phase, quoted_call('reconcile_rehearsal_absent', cid, volume, owner))]
+
+
+READ_ONLY_HELPERS = r'''
+reconcile_exact_backend() {
+  local expected="$1" image="$2" observed
+  remote_capture_compose_ids running backend || return 4
+  (( ${#REMOTE_CAPTURED_CONTAINER_IDS[@]} == 1 )) || return 4
+  [[ "${REMOTE_CAPTURED_CONTAINER_IDS[0]}" == "${expected}" ]] || return 4
+  remote_capture_compose_ids all backend || return 4
+  (( ${#REMOTE_CAPTURED_CONTAINER_IDS[@]} == 1 )) || return 4
+  [[ "${REMOTE_CAPTURED_CONTAINER_IDS[0]}" == "${expected}" ]] || return 4
+  observed="$(docker inspect --format '{{.Image}}:{{.HostConfig.RestartPolicy.Name}}:{{.RestartCount}}' "${expected}")" || return 4
+  [[ "${observed}" == "${image}:no:0" ]] || return 4
+}
+reconcile_stopped_backend() {
+  remote_capture_compose_ids running backend || return 4
+  (( ${#REMOTE_CAPTURED_CONTAINER_IDS[@]} == 0 )) || return 4
+  remote_require_global_image_count "${V125_IMAGE_ID}" 0 || return 4
+  remote_require_global_image_count "${V126_INTERNAL_REMOTE_V126_IMAGE_ID}" 0 || return 4
+  remote_compose exec -T postgres sh -c ': "${POSTGRES_USER:?}" "${POSTGRES_DB:?}"; PGCONNECT_TIMEOUT=5 pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"' >/dev/null
+}
+reconcile_ordinary_caddy() {
+  local release="$1" run="$2" root observed
+  local expected="${V126_INTERNAL_REMOTE_CADDY_ORIGINAL_SHA256}"
+  if [[ "${expected}" == NONE ]]; then
+    remote_verify_partial_caddy_evidence "${release}" "${run}" || return 4
+    expected="${V126_INTERNAL_REMOTE_BASELINE_CADDY_SHA256}"
+  else
+    remote_verify_caddy_receipt_evidence "${release}" "${run}" || return 4
+  fi
+  root="$(remote_caddy_evidence_root "${release}" "${run}")" || return 4
+  remote_sudo_require_root_file /etc/caddy/Caddyfile 644 || return 4
+  observed="$(sudo sha256sum /etc/caddy/Caddyfile | awk '{print $1}')" || return 4
+  [[ "${observed}" == "${expected}" ]] || return 4
+  remote_assert_caddy_service_active || return 4
+  remote_assert_caddy_config_active "${root}/Caddyfile.original" || return 4
+}
+reconcile_maintenance_cleanup() {
+  local root="$1" mode="$2" path
+  for path in "${root}/env.${mode}.candidate" "${root}/env.before-${mode}" "${root}/.env.next"; do
+    [[ ! -e "${path}" && ! -L "${path}" ]] || return 4
+  done
+}
+reconcile_loaded_image() (
+  local root="$1" tag="$2" image="$3" archive_sha="$4" observed
+  v126_reconcile_image_copy='' v126_reconcile_image_snapshot=''
+  trap 'status=$?; trap - EXIT; if [[ -n "${v126_reconcile_image_copy:-}" ]]; then rm -f -- "${v126_reconcile_image_copy}" || status=4; fi; if [[ -n "${v126_reconcile_image_snapshot:-}" ]]; then rm -f -- "${v126_reconcile_image_snapshot}" || status=4; fi; exit "${status}"' EXIT
+  remote_require_operator_file "${root}/v126-image.tar" 400 || exit 4
+  [[ ! -e "${root}/v126-image.tar.partial" && ! -L "${root}/v126-image.tar.partial" ]] || exit 4
+  [[ "$(remote_hash_file "${root}/v126-image.tar")" == "${archive_sha}" ]] || exit 4
+  # The real saved-image verifier accepts only an unlinked private snapshot.
+  # Preserve the retained sealed archive and use the source's actual snapshotter.
+  v126_reconcile_image_copy="$(mktemp "${V126_RECONCILE_PRIVATE}/image-source.XXXXXX")" || exit 4
+  v126_reconcile_image_snapshot="$(mktemp "${V126_RECONCILE_PRIVATE}/image-snapshot.XXXXXX")" || exit 4
+  cat "${root}/v126-image.tar" > "${v126_reconcile_image_copy}" || exit 4
+  chmod 0600 "${v126_reconcile_image_copy}" "${v126_reconcile_image_snapshot}" || exit 4
+  snapshot_image_archive "${v126_reconcile_image_copy}" "${v126_reconcile_image_snapshot}" || exit 4
+  exec 9<"${v126_reconcile_image_snapshot}" || exit 4
+  rm -f -- "${v126_reconcile_image_snapshot}" "${v126_reconcile_image_copy}" || { exec 9<&-; exit 4; }
+  observed="$(verify_saved_image_archive_fd 9 "${tag}" "${image}")" || { exec 9<&-; exit 4; }
+  exec 9<&-
+  [[ "${observed}" == "${archive_sha}" ]] || exit 4
+  remote_require_operator_file "${root}/v126-image.tar" 400 || exit 4
+  [[ "$(remote_hash_file "${root}/v126-image.tar")" == "${archive_sha}" ]] || exit 4
+  observed="$(docker image inspect --format '{{.Id}}' "${tag}")" || exit 4
+  [[ "${observed}" == "${image}" && "${image}" == "${V126_INTERNAL_REMOTE_V126_IMAGE_ID}" ]] || exit 4
+  remote_assert_compose_backend_image "${tag}" || exit 4
+)
+reconcile_baseline_paths() {
+  python3 - "$1/baseline-authority.proof" "$2" "$3" <<'PY'
+from pathlib import Path
+import sys
+fields = dict(row.split('=', 1) for row in Path(sys.argv[1]).read_text().splitlines())
+if fields.get('database_url_path') != sys.argv[2] or fields.get('maintenance_identities_path') != sys.argv[3]:
+    raise SystemExit('original baseline path differs')
+PY
+}
+reconcile_baseline_caddy() {
+  local observed
+  remote_sudo_require_root_file /etc/caddy/Caddyfile 644 || return 4
+  observed="$(sudo sha256sum /etc/caddy/Caddyfile | awk '{print $1}')" || return 4
+  [[ "${observed}" == "${V126_INTERNAL_REMOTE_BASELINE_CADDY_SHA256}" ]] || return 4
+  sudo test ! -e /etc/caddy/v126-drain.enabled || return 4
+  sudo test ! -L /etc/caddy/v126-drain.enabled || return 4
+  cutover_bounded_command 15 sudo caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null || return 4
+  remote_assert_caddy_service_active || return 4
+  remote_assert_caddy_config_active /etc/caddy/Caddyfile || return 4
+}
+reconcile_rehearsal_absent() {
+  local cid="$1" volume="$2" owner="$3" observed
+  observed="$(docker container ls --all --no-trunc --filter "id=${cid}" --format '{{.ID}}')" || return 4
+  [[ -z "${observed}" ]] || return 4
+  observed="$(docker container ls --all --no-trunc --filter "label=hookah.v126.rehearsal-owner=${owner}" --format '{{.ID}}')" || return 4
+  [[ -z "${observed}" ]] || return 4
+  observed="$(docker volume ls --filter "name=${volume}" --format '{{.Name}}')" || return 4
+  [[ -z "${observed}" ]] || return 4
+  observed="$(docker volume ls --filter "label=hookah.v126.rehearsal-owner=${owner}" --format '{{.Name}}')" || return 4
+  [[ -z "${observed}" ]] || return 4
+}
+reconcile_backup_archive() (
+  local release="$1" run="$2" phase="$3" dump_sha="$4" inventory_sha="$5" metadata_sha="$6" globals_sha="$7"
+  local root dump inventory metadata temporary observed code
+  root="$(remote_backup_root "${release}" "${run}")" || exit 4
+  [[ -d "${root}" && ! -L "${root}" ]] || exit 4
+  [[ "$(stat -c '%a:%U:%G' "${root}")" == "700:$(id -un):$(id -gn)" ]] || exit 4
+  dump="${root}/${phase}.dump"
+  inventory="${dump}.pg_restore.list"
+  metadata="${dump}.rehearsal.txt"
+  remote_require_operator_file "${dump}" 600 || exit 4
+  remote_require_operator_file "${inventory}" 600 || exit 4
+  remote_require_operator_file "${metadata}" 600 || exit 4
+  remote_require_operator_file "${dump}.sha256" 600 || exit 4
+  [[ "$(remote_hash_file "${dump}")" == "${dump_sha}" ]] || exit 4
+  [[ "$(remote_hash_file "${inventory}")" == "${inventory_sha}" ]] || exit 4
+  [[ "$(remote_hash_file "${metadata}")" == "${metadata_sha}" ]] || exit 4
+  [[ "$(cat "${dump}.sha256")" == "${dump_sha}  ${dump}" ]] || exit 4
+  sha256sum -c "${dump}.sha256" >/dev/null || exit 4
+  if [[ "${globals_sha}" != NONE ]]; then
+    remote_require_operator_file "${root}/globals.sql" 600 || exit 4
+    remote_require_operator_file "${root}/globals.sql.sha256" 600 || exit 4
+    [[ "$(remote_hash_file "${root}/globals.sql")" == "${globals_sha}" ]] || exit 4
+    [[ "$(cat "${root}/globals.sql.sha256")" == "${globals_sha}  ${root}/globals.sql" ]] || exit 4
+    sha256sum -c "${root}/globals.sql.sha256" >/dev/null || exit 4
+  fi
+  remote_capture_compose_ids running postgres || exit 4
+  (( ${#REMOTE_CAPTURED_CONTAINER_IDS[@]} == 1 )) || exit 4
+  observed="$(docker inspect --format '{{.Image}}' "${REMOTE_CAPTURED_CONTAINER_IDS[0]}")" || exit 4
+  python3 - "${metadata}" "${release}" "${run}" "${phase}" "${observed}" <<'PY'
+from pathlib import Path
+import re
+import sys
+path, release, run, phase, image = sys.argv[1:]
+fields = {}
+for row in Path(path).read_text().splitlines():
+    key, value = row.split('=', 1)
+    if key in fields: raise SystemExit('duplicate rehearsal metadata')
+    fields[key] = value
+for key, expected in dict(run_id=run, release_sha=release, phase=phase, source_image_id=image,
+                          restored_flyway='125:0:0', rehearsal='PASS').items():
+    if fields.get(key) != expected: raise SystemExit('original rehearsal metadata differs')
+if not re.fullmatch(r'17[0-9]{4}', fields.get('source_version', '')):
+    raise SystemExit('original rehearsal is not PostgreSQL17')
+PY
+  [[ "$?" == 0 ]] || exit 4
+  temporary="${V126_RECONCILE_PRIVATE}/toc-${phase}"
+  [[ ! -e "${temporary}" && ! -L "${temporary}" ]] || exit 4
+  (set -o noclobber; umask 077; : > "${temporary}") || exit 4
+  chmod 0600 "${temporary}" || exit 4
+  remote_compose exec -T postgres sh -c ': "${POSTGRES_USER:?}"; pg_restore --list' < "${dump}" > "${temporary}" || exit 4
+  code="$(remote_database_evidence_python)" || exit 4
+  python3 -c "${code}" toc "${dump}" "${dump_sha}" "${inventory}" "${temporary}" || exit 4
+  [[ "$(remote_hash_file "${inventory}")" == "${inventory_sha}" ]] || exit 4
+  [[ "$(remote_hash_file "${metadata}")" == "${metadata_sha}" ]] || exit 4
+)
+reconcile_preflight_evidence() {
+  local root="$1" expected="$2" path
+  remote_require_operator_file "${root}/final-v125-preflight.sh" 500 || return 4
+  [[ "$(remote_hash_file "${root}/final-v125-preflight.sh")" == "${expected}" ]] || return 4
+  for path in final-v125-preflight.sh.partial final-v125-preflight.output final-v125-preflight.pg_service.conf final-v125-preflight.pgpass; do
+    [[ ! -e "${root}/${path}" && ! -L "${root}/${path}" ]] || return 4
+  done
+}
+reconcile_preflight_safe() {
+  local root="$1" uri="$2" script_sha="$3" uri_sha="$4" temporary="${V126_RECONCILE_PRIVATE}"
+  remote_assert_database_target "${uri}" "${uri_sha}" || return 4
+  python3 "${temporary}/derive.py" "${uri}" "${uri_sha}" "${temporary}/pg_service.conf" "${temporary}/pgpass" || return 4
+  python3 "${temporary}/execute.py" "${root}/final-v125-preflight.sh" "${script_sha}" "${temporary}/preflight.output" \
+    "${temporary}/pg_service.conf" "${temporary}/pgpass" "${PATH}" "${HOME}" || return 4
+  python3 -c "$(remote_database_evidence_python)" preflight "${temporary}/preflight.output" || return 4
+}
+'''
+
+
+def preflight_sources(source_bytes):
+    source = source_bytes.decode('utf-8')
+    start = source.index('remote_final_v125_preflight() {\n')
+    end = source.index('\n# Candidate bytes ', start)
+    chunks = re.findall(r"<<'PY'\n(.*?)\nPY\n", source[start:end], re.S)
+    derive = [chunk for chunk in chunks if chunk.startswith('# HT12X_LIBPQ_DERIVATION_BEGIN\n')]
+    execute = [chunk for chunk in chunks if 'script_path, expected_sha, output_path, service_path, pass_path, path_value, home_value = sys.argv[1:]' in chunk]
+    require(len(derive) == len(execute) == 1, 'source_bound_preflight_consumers_unavailable')
+    return derive[0] + '\n', execute[0] + '\n'
+
+
+def run_observer(source_bytes, request, evidence, calls, expected_id):
+    env = {key: os.environ[key] for key in ('PATH', 'HOME', 'TMPDIR') if key in os.environ}
+    env.update(request['environment'])
+    env.update(evidence.derived_environment)
+    env.update({'V126_INTERNAL_REMOTE_MODE': 'true',
+                'V126_INTERNAL_REMOTE_ENVELOPE_VALIDATED': 'V126_INTERNAL_REMOTE_ENVELOPE_V1'})
+    with tempfile.TemporaryDirectory(prefix='v126-reconcile-read-') as temp:
+        root = Path(temp)
+        env['V126_RECONCILE_PRIVATE'] = str(root)
+        env['TMPDIR'] = str(root)
+        source, script = root / 'source.sh', root / 'observe.sh'
+        source.write_bytes(source_bytes)
+        if evidence.identity['action'] == 'final-v125-preflight':
+            derive, execute = preflight_sources(source_bytes)
+            for name, code in [('derive.py', derive), ('execute.py', execute)]:
+                (root / name).write_text(code)
+                (root / name).chmod(0o400)
+        body = 'set -Eeuo pipefail\nsource "$1"\n' + READ_ONLY_HELPERS
+        for name in evidence.proofs:
+            body += quoted_call('remote_verify_proof', evidence.run_root / (PROOF_FILENAMES.get(name, name) + '.proof')) + '\n'
+        for name, command in calls:
+            body += "printf '%s\\n' 'V126_RECONCILE_CHECK=" + name + "'\n" + command + '\n'
+            body += 'v126_reconcile_status=$?\n[[ "${v126_reconcile_status}" == 0 ]] || exit 4\n'
+        body += '''remote_assert_database_target || exit 4
+remote_capture_compose_ids running postgres || exit 4
+(( ${#REMOTE_CAPTURED_CONTAINER_IDS[@]} == 1 )) || exit 4
+[[ "${REMOTE_CAPTURED_CONTAINER_IDS[0]}" =~ ^[0-9a-f]{64}$ ]] || exit 4
+printf 'V126_RECONCILE_POSTGRES=%s\\n' "${REMOTE_CAPTURED_CONTAINER_IDS[0]}"
+printf 'V126_RECONCILE_DATABASE=%s\\n' "${REMOTE_DATABASE_TARGET_IDENTITY_SHA256}"
+printf 'V126_RECONCILE_ENVIRONMENT=%s\\n' "${REMOTE_BOUND_ENV_SHA256}"
+remote_capture_compose_ids running backend || exit 4
+(( ${#REMOTE_CAPTURED_CONTAINER_IDS[@]} <= 1 )) || exit 4
+if (( ${#REMOTE_CAPTURED_CONTAINER_IDS[@]} == 1 )); then
+  [[ "${REMOTE_CAPTURED_CONTAINER_IDS[0]}" =~ ^[0-9a-f]{64}$ ]] || exit 4
+  printf 'V126_RECONCILE_BACKEND=%s\\n' "${REMOTE_CAPTURED_CONTAINER_IDS[0]}"
+else
+  printf '%s\\n' 'V126_RECONCILE_BACKEND=NONE'
+fi
+printf '%s\\n' 'V126_RECONCILE_COMPLETED=true'
+'''
+        script.write_text(body)
+        source.chmod(0o400)
+        script.chmod(0o400)
+        started = time.monotonic()
+        # The actual source supervisor bounds and reaps the read-only consumer
+        # tree. The enclosing binding supervisor continues to hold the target lock.
+        result = subprocess.run(['bash', '-c',
+                                 'set -Eeuo pipefail; source "$1"; cutover_bounded_command "$3" bash "$2" "$1"',
+                                 'v126-reconcile-read-only', str(source), str(script), str(DEADLINE_SECONDS)],
+                                cwd=evidence.target, env=env, stdin=subprocess.DEVNULL, capture_output=True)
+        elapsed = time.monotonic() - started
+        require(result.returncode == 0, 'current_postconditions_exit_' + str(result.returncode) +
+                '_stdout_' + digest(result.stdout) + '_stderr_' + digest(result.stderr))
+        rows = {}
+        observed_checks = []
+        for line in result.stdout.splitlines():
+            if not line.startswith(b'V126_RECONCILE_'):
+                continue
+            key, value = line.decode('ascii').split('=', 1)
+            if key == 'V126_RECONCILE_CHECK':
+                observed_checks.append(value)
+            else:
+                require(key not in rows, 'duplicate_observation')
+                rows[key] = value
+        require(observed_checks == [name for name, _ in calls] and set(rows) == {
+            'V126_RECONCILE_POSTGRES', 'V126_RECONCILE_DATABASE',
+            'V126_RECONCILE_ENVIRONMENT', 'V126_RECONCILE_BACKEND', 'V126_RECONCILE_COMPLETED'} and
+            rows['V126_RECONCILE_COMPLETED'] == 'true' and
+            all(re.fullmatch('[0-9a-f]{64}', rows[key]) for key in rows if not key.endswith(('COMPLETED', 'BACKEND'))) and
+            (rows['V126_RECONCILE_BACKEND'] == 'NONE' or re.fullmatch('[0-9a-f]{64}', rows['V126_RECONCILE_BACKEND'])) and
+            (expected_id is None or rows['V126_RECONCILE_BACKEND'] == expected_id),
+            'structured_current_postconditions')
+        return dict(checks=observed_checks, backend_container_id=(None if rows['V126_RECONCILE_BACKEND'] == 'NONE' else rows['V126_RECONCILE_BACKEND']),
+                    postgres_container_id=rows['V126_RECONCILE_POSTGRES'],
+                    database_identity_sha256=rows['V126_RECONCILE_DATABASE'],
+                    environment_sha256=rows['V126_RECONCILE_ENVIRONMENT'],
+                    stdout_sha256=digest(result.stdout), stderr_sha256=digest(result.stderr),
+                    observer_sha256=digest(body.encode()), exit=0, elapsed_seconds=round(elapsed, 6),
+                    deadline_seconds=DEADLINE_SECONDS)
+
+
+def collect(target, identity, source_bytes, request, operations):
+    """Called only while binding_reconcile holds the canonical persistent lock."""
+    target = Path(target)
+    require(target.is_absolute() and target.resolve(strict=True) == target, 'target_not_canonical')
+    require(isinstance(source_bytes, bytes) and digest(source_bytes) == identity.get('script_sha256'), 'source_binding')
+    validate_request(target, identity, request)
+    action = identity.get('action')
+    require(action in ACTIONS, 'unknown_action')
+    require(action in IMPLEMENTED, 'unsupported_action_' + action + '_' + UNSUPPORTED_REASONS.get(action, 'unknown'))
+    evidence = Evidence(target, identity, request, operations)
+    calls, expected_id = observer_plan(evidence, request)
+    observed = run_observer(source_bytes, request, evidence, calls, expected_id)
+    # Re-read the bound files after observation; no proof/record may drift while
+    # the observer runs, even if its current resource checks happened to succeed.
+    after = Evidence(target, identity, request, operations)
+    for name, original_sha in evidence.proofs.items():
+        after.proof(name)
+        require(after.proofs[name] == original_sha, 'proof_changed_during_observation')
+    return dict(format_version=1, action=action, outcome='EXACT_COMPLETED_EFFECT', retry_allowed=False,
+                source_sha256=digest(source_bytes), request_sha256=digest(canonical(request)),
+                original_artifacts=dict(sorted(evidence.proofs.items())),
+                derived_original_artifact_bindings=dict(sorted(evidence.derived_environment.items())), observation=observed,
+                observed_at=datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))
+V126_RECONCILIATION_PY
+}
+
 remote_operation_bindings_python() {
   cat <<'PY'
 #!/usr/bin/env python3
@@ -8105,6 +9263,37 @@ import sys
 
 class BindingError(ValueError):
     pass
+
+
+def binding_action_sequence(kind, name):
+    stages = {
+        'BASELINE_VERIFIED': ['baseline'],
+        'PRE_DRAIN_BACKUP_REHEARSED': ['backup-rehearsal'],
+        'CADDY_CANDIDATE_INSTALLED_AND_RELOADED': ['caddy-activate'],
+        'PUBLIC_DRAIN_ACTIVE': ['public-drain-on'],
+        'V125_BACKEND_STOPPED': ['stop-backend'],
+        'ZERO_WRITER_GATE_PASSED': ['zero-writer'],
+        'QUIESCED_BACKUP_REHEARSED': ['backup-rehearsal'],
+        'FINAL_V125_PREFLIGHT_PASSED': ['preflight-upload', 'final-v125-preflight'],
+        'V126_MAINTENANCE_CONFIG_PREPARED': ['transform-maintenance'],
+        'V126_IMAGE_TRANSFERRED_AND_VERIFIED': ['image-prepare', 'image-upload', 'image-load'],
+        'V126_BACKEND_STARTED': ['start-v126'],
+        'V126_SCHEMA_RUNTIME_GATE_PASSED': ['schema-runtime-gate'],
+        'MANUAL_SMOKE_AUTHORIZED': ['open-manual-smoke'],
+        'MANUAL_SMOKE_PASSED': ['record-manual-smoke'],
+        'PUBLIC_DRAIN_REACTIVATED': ['public-drain-on'],
+        'V126_BACKEND_STOPPED_FOR_OFF_TRANSITION': ['stop-backend'],
+        'MAINTENANCE_OFF_CONFIG_VERIFIED': ['transform-maintenance'],
+        'FINAL_V126_BACKEND_STARTED': ['start-v126'],
+        'ORDINARY_CADDY_RESTORED': ['restore-caddy'],
+        'FINAL_PUBLIC_GATES_PASSED': ['final-public-gates'],
+    }
+    recovery = {'pre-v126': ['recover-pre-v126'], 'post-v126-stop': ['recover-post-v126-stop'],
+                'verify-full-dr': ['verify-full-dr']}
+    selected = stages if kind == 'STAGE' else recovery if kind == 'RECOVERY' else {}
+    if name not in selected:
+        raise BindingError('reconciliation_action_class')
+    return selected[name]
 
 
 def binding_canonical(value):
@@ -8165,6 +9354,10 @@ def binding_inventory(root, owner):
             raise BindingError('start_binding')
         identities.append(identity)
         files[start.name] = binding_hash(start)
+        request = root / (op + '.request.json')
+        if request.exists() or request.is_symlink():
+            binding_request(request, identity, root.parent)
+            files[request.name] = binding_hash(request)
         result = root / (op + '.result.json')
         log = root / (op + '.log')
         if not result.exists():
@@ -8182,7 +9375,15 @@ def binding_inventory(root, owner):
             raise BindingError('log_binding')
         files[result.name] = binding_hash(result)
         files[log.name] = outcome['log_sha256']
+        if identity['kind'] == 'DEPLOY' and outcome['exit'] == 0:
+            proof = root / (op + '.deploy-proof.json')
+            binding_deploy_proof(proof, identity, root.parent)
+            files[proof.name] = binding_hash(proof)
         unknown = unknown or outcome['exit'] != 0
+    for name, digest in binding_reconciliation_inventory(root, root.parent).items():
+        identity = binding_read(root / name)['identity']
+        if {key: identity.get(key) for key in owner} == owner:
+            files[name] = digest
     return files, unknown, identities
 
 
@@ -8225,9 +9426,18 @@ def binding_chain(root, target):
         if name in consumed:
             raise BindingError('binding_cycle')
         transfer = binding_read(directory / name)
-        if (set(transfer) != {'format_version', 'previous_owner', 'next_owner', 'inventory', 'handoff'} or
-                transfer['format_version'] != 1 or transfer['previous_owner'] != owner):
+        version = transfer.get('format_version')
+        keys = {'format_version', 'previous_owner', 'next_owner', 'inventory', 'handoff'}
+        if version == 2:
+            keys |= {'next_kind', 'request_sha256', 'terminal_kind'}
+        if (type(version) is not int or version not in (1, 2) or set(transfer) != keys or
+                transfer['previous_owner'] != owner):
             raise BindingError('transfer_schema')
+        if version == 2 and (transfer['next_kind'] not in ('ORDINARY_DEPLOY', 'CUTOVER') or
+                (transfer['next_kind'] == 'ORDINARY_DEPLOY' and not re.fullmatch('[0-9a-f]{64}', transfer['request_sha256'])) or
+                (transfer['next_kind'] == 'CUTOVER' and transfer['request_sha256'] is not None) or
+                transfer['terminal_kind'] not in ('NATIVE_RECEIPT', 'RECONCILED_EFFECT', 'ORDINARY_DEPLOY_PROOF')):
+            raise BindingError('transfer_policy')
         next_owner = binding_owner(transfer['next_owner'])
         if any(previous['run_id'] == next_owner['run_id'] for previous in owners):
             raise BindingError('run_id_reuse')
@@ -8236,9 +9446,18 @@ def binding_chain(root, target):
             raise BindingError('retired_outcome_not_proven')
         handoff = transfer['handoff']
         binding_handoff(handoff, owner, next_owner, handoff['terminal_receipt_sha256'], target)
-        required = ('STAGE', 'FINAL_PUBLIC_GATES_PASSED') if handoff['operational_version'] == 'V126' else ('RECOVERY', 'pre-v126')
+        ordinary = version == 2 and transfer['terminal_kind'] == 'ORDINARY_DEPLOY_PROOF'
+        required = ('DEPLOY', 'ORDINARY_DEPLOY') if ordinary else (('STAGE', 'FINAL_PUBLIC_GATES_PASSED') if handoff['operational_version'] == 'V126' else ('RECOVERY', 'pre-v126'))
         if not any((identity['kind'], identity['name']) == required for identity in identities):
             raise BindingError('terminal_remote_operation_missing')
+        if ordinary:
+            matches = [identity for identity in identities if identity['kind'] == 'DEPLOY']
+            if len(matches) != 1:
+                raise BindingError('ordinary_terminal_operation_count')
+            op = hashlib.sha256(binding_canonical(matches[0])).hexdigest()
+            proof_path = root / (op + '.deploy-proof.json')
+            proof = binding_deploy_proof(proof_path, matches[0], target)
+            binding_deploy_handoff(proof, binding_hash(proof_path), handoff)
         consumed.add(name)
         owner = next_owner
         owners.append(owner)
@@ -8266,7 +9485,7 @@ def binding_entry(mode):
         allowed = {'lock', 'run.json'} | ({'transfers'} if (root / 'transfers').exists() else set())
         for owner in owners:
             files, old_unknown, _ = binding_inventory(root, owner)
-            allowed.update(files)
+            allowed.update(name.split('/')[0] for name in files)
             # A missing result may have a private active/partial log: inspection is
             # conservative; it never adopts or removes such evidence.
             for name in tuple(files):
@@ -8276,8 +9495,10 @@ def binding_entry(mode):
         if set(p.name for p in root.iterdir()) != allowed:
             raise BindingError('unexpected_target_records')
         if mode == 'inspect':
+            reconciled = sum(name.startswith('reconciliations/') for name in inventory)
             print(json.dumps(dict(owner=current, history_count=len(owners),
                   outcome='UNKNOWN' if unknown else 'COMMAND_RESULTS_VERIFIED',
+                  reconciled_completions=reconciled,
                   next_action='EXTERNAL_DAEMON_FENCING_DECISION_REQUIRED' if unknown else 'VERIFY_TERMINAL_RECEIPT_AND_APPROVED_HANDOFF',
                   retry_allowed=False), sort_keys=True))
             return
@@ -8304,6 +9525,19 @@ def binding_entry(mode):
         binding_protected(directory, 0o700, True)
         transfer = dict(format_version=1, previous_owner=owner, next_owner=next_owner,
                         inventory=inventory, handoff=handoff)
+        if len(sys.argv) > 13:
+            next_kind, request_path, terminal_kind = sys.argv[12:15]
+            if next_kind not in ('ORDINARY_DEPLOY', 'CUTOVER') or terminal_kind not in ('NATIVE_RECEIPT', 'RECONCILED_EFFECT'):
+                raise BindingError('next_binding_policy')
+            request_sha = None
+            if next_kind == 'ORDINARY_DEPLOY':
+                request = binding_read(Path(request_path))
+                binding_next_request(request, next_owner, handoff, target)
+                request_sha = binding_hash(Path(request_path))
+            elif request_path != 'NONE':
+                raise BindingError('cutover_transfer_has_no_deploy_request')
+            transfer.update(format_version=2, next_kind=next_kind,
+                            request_sha256=request_sha, terminal_kind=terminal_kind)
         recordfd = os.open(directory / (binding_owner_id(owner) + '.json'),
                            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o400)
         with os.fdopen(recordfd, 'wb') as handle:
@@ -8312,49 +9546,17 @@ def binding_entry(mode):
             syncfd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
             try: os.fsync(syncfd)
             finally: os.close(syncfd)
-        print('TARGET_BINDING_RETIRED history_preserved=true next_baseline_only=true')
+        print('TARGET_BINDING_RETIRED history_preserved=true ' +
+              ('next_request_only=true' if transfer.get('next_kind') == 'ORDINARY_DEPLOY' else 'next_baseline_only=true'))
     finally:
         os.close(fd)
-PY
-}
-
-remote_operation_python() {
-  remote_operation_bindings_python || { printf 'binding source unavailable\n' >&2; return 75; }
-  cat <<'PY'
-import ctypes
-import datetime
-import fcntl
-import hashlib
-import json
-import os
-from pathlib import Path
-import re
-import signal
-import stat
-import subprocess
-import sys
-import time
 
 
-def refuse(reason):
-    print('REMOTE_OPERATION=RECONCILIATION_REQUIRED reason=' + reason +
-          ' retry_allowed=false', file=sys.stderr)
-    raise SystemExit(75)
+def binding_refuse(reason):
+    raise BindingError(reason)
 
 
-def canonical(value):
-    return (json.dumps(value, sort_keys=True, separators=(',', ':')) + '\n').encode()
-
-
-def protected(path, mode, directory=False):
-    info = path.lstat()
-    if (not (stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode)) or
-            info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != mode or
-            (not directory and info.st_nlink != 1)):
-        refuse('record_metadata')
-
-
-def sync_dir(path):
+def binding_sync_dir(path):
     fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
     try:
         os.fsync(fd)
@@ -8362,199 +9564,717 @@ def sync_dir(path):
         os.close(fd)
 
 
-def create(path, value):
+def binding_create(path, value):
+    binding_create_raw(path, binding_canonical(value))
+
+
+def binding_create_raw(path, raw):
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o400)
     with os.fdopen(fd, 'wb') as handle:
-        handle.write(canonical(value))
-        handle.flush()
-        os.fsync(handle.fileno())
-    sync_dir(path.parent)
+        handle.write(raw); handle.flush(); os.fsync(handle.fileno())
+    binding_sync_dir(path.parent)
 
 
-def read(path):
-    protected(path, 0o400)
-    raw = path.read_bytes()
-    value = json.loads(raw)
-    if raw != canonical(value):
-        refuse('record_not_canonical')
-    return value
+def binding_active_policy(root, target):
+    _, owners = binding_chain(root, target)
+    if len(owners) == 1:
+        return dict(next_kind='CUTOVER', request_sha256=None)
+    transfer = binding_read(root / 'transfers' / (binding_owner_id(owners[-2]) + '.json'))
+    return dict(next_kind=transfer.get('next_kind', 'CUTOVER'), request_sha256=transfer.get('request_sha256'))
 
 
-# Fail before allocation/mutation on platforms that cannot prove descendant lifetime.
-if sys.platform != 'linux':
-    refuse('linux_subreaper_required')
-libc = ctypes.CDLL(None, use_errno=True)
-if libc.prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
-    refuse('subreaper_unavailable')
-source = sys.stdin.buffer.read(2 * 1024 * 1024 + 1)
-fields = ('run_id', 'release_sha', 'script_sha256', 'intent_sha256', 'kind', 'name', 'action')
-target_arg, *args = sys.argv[1:]
-identity = dict(zip(fields, args[:7]))
-worker_args = args[7:]
-if (len(identity) != 7 or not worker_args or len(source) > 2 * 1024 * 1024 or
-        hashlib.sha256(source).hexdigest() != identity['script_sha256']):
-    refuse('source_identity')
-for key in ('script_sha256', 'intent_sha256'):
-    if not re.fullmatch('[0-9a-f]{64}', identity[key]):
-        refuse('invalid_identity')
-operation_id = hashlib.sha256(canonical(identity)).hexdigest()
-target = Path(target_arg)
-if not target.is_absolute() or str(target.resolve(strict=True)) != str(target):
-    refuse('target_not_canonical')
-# Existing sequencer source/input guards still run inside the worker.
-info = target.stat()
-if info.st_uid != os.geteuid() or info.st_mode & 0o022:
-    refuse('target_ownership')
-root = target / '.v126-target-operations'
-try:
-    root.mkdir(mode=0o700)
-    sync_dir(target)
-except FileExistsError:
-    pass
-protected(root, 0o700, True)
-lockfd = os.open(root / 'lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-protected(root / 'lock', 0o600)
-try:
-    fcntl.flock(lockfd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-except BlockingIOError:
-    refuse('target_busy')
-owner = {key: identity[key] for key in ('run_id', 'release_sha', 'script_sha256')}
-if (root / 'run.json').exists():
+def binding_deploy_proof(path, identity, target):
+    doc = binding_read(path)
+    keys = {'format_version', 'identity', 'target_sha256', 'request_sha256',
+            'environment_sha256', 'compose_sha256', 'image_id', 'backend_container_id',
+            'database_identity_sha256', 'caddy_runtime_sha256', 'result', 'completed_at'}
+    if (set(doc) != keys or type(doc['format_version']) is not int or doc['format_version'] != 1 or doc['identity'] != identity or
+            doc['target_sha256'] != hashlib.sha256(str(target).encode()).hexdigest() or
+            doc['request_sha256'] != identity['intent_sha256'] or
+            doc['result'] != 'ORDINARY_DEPLOY_COMPLETED'):
+        raise BindingError('ordinary_deploy_proof')
+    for key in ('request_sha256', 'environment_sha256', 'compose_sha256', 'backend_container_id',
+                'database_identity_sha256', 'caddy_runtime_sha256'):
+        if not re.fullmatch('[0-9a-f]{64}', doc[key]):
+            raise BindingError('ordinary_deploy_proof_digest')
+    if not re.fullmatch('sha256:[0-9a-f]{64}', doc['image_id']):
+        raise BindingError('ordinary_deploy_proof_image')
+    datetime.datetime.strptime(doc['completed_at'], '%Y-%m-%dT%H:%M:%SZ')
+    return doc
+
+
+def binding_next_request(request, next_owner, handoff, target):
+    # Full descriptor/source/file validation belongs to the single deploy consumer.
+    # A transfer binds its exact bytes; these joins preserve the applied authority.
+    if (request.get('owner') != next_owner or
+            request.get('target_sha256') != hashlib.sha256(str(target).encode()).hexdigest()):
+        raise BindingError('next_request_binding')
+    for key in ('operational_version', 'backend_image', 'image_id', 'environment_sha256',
+                'caddy_runtime_sha256', 'config_owner', 'restart_policy',
+                'handoff_approved_and_applied'):
+        if request.get(key) != handoff[key]:
+            raise BindingError('next_request_handoff_' + key)
+    if request.get('compose_before_sha256') != handoff['compose_sha256']:
+        raise BindingError('next_request_previous_compose')
+
+
+def binding_deploy_handoff(proof, digest, handoff):
+    if digest != handoff['terminal_receipt_sha256']:
+        raise BindingError('ordinary_terminal_proof_binding')
+    for key in ('image_id', 'environment_sha256', 'compose_sha256', 'caddy_runtime_sha256'):
+        if proof[key] != handoff[key]:
+            raise BindingError('ordinary_terminal_handoff_' + key)
+
+
+def binding_request(path, identity, target):
+    doc = binding_read(path)
+    if (set(doc) != {'format_version', 'identity', 'target_sha256', 'args', 'environment'} or
+            type(doc['format_version']) is not int or doc['format_version'] != 1 or
+            doc['identity'] != identity or
+            doc['target_sha256'] != hashlib.sha256(str(target).encode()).hexdigest() or
+            not isinstance(doc['args'], list) or not 3 <= len(doc['args']) <= 32 or
+            any(not isinstance(value, str) or '\x00' in value or '\n' in value for value in doc['args']) or
+            doc['args'][:3] != [str(target), identity['run_id'], identity['release_sha']] or
+            not isinstance(doc['environment'], dict) or
+            any(not key.startswith('V126_INTERNAL_REMOTE_') or not isinstance(value, str)
+                for key, value in doc['environment'].items())):
+        raise BindingError('original_request_contract')
+    return doc
+
+
+def binding_operation_evidence(root, operation_id, target):
+    if not re.fullmatch('[0-9a-f]{64}', operation_id):
+        raise BindingError('operation_id_schema')
+    start_path = root / (operation_id + '.start.json')
+    start = binding_read(start_path)
+    identity = start['identity']
+    if (set(start) != {'identity', 'operation_id', 'started_at', 'boot_id'} or
+            start['operation_id'] != operation_id or
+            hashlib.sha256(binding_canonical(identity)).hexdigest() != operation_id):
+        raise BindingError('original_start_binding')
+    request_path = root / (operation_id + '.request.json')
+    request = binding_request(request_path, identity, target)
+    result_path = root / (operation_id + '.result.json')
+    result = binding_read(result_path)
+    if (set(result) != {'identity', 'operation_id', 'exit', 'outcome', 'children', 'log_sha256', 'completed_at'} or
+            result['identity'] != identity or result['operation_id'] != operation_id or
+            type(result['exit']) is not int or result['exit'] != 0 or result['outcome'] != 'SUCCEEDED' or
+            result['children'] != 'REAPED'):
+        raise BindingError('UNKNOWN_external_daemon_fencing_required')
+    log = root / (operation_id + '.log')
+    binding_protected(log, 0o400)
+    if binding_hash(log) != result['log_sha256']:
+        raise BindingError('original_log_binding')
+    files = {path.name: binding_hash(path) for path in (start_path, request_path, result_path, log)}
+    return identity, files, request
+
+
+def binding_reconciliation_inventory(root, target):
+    directory = root / 'reconciliations'
+    if not directory.exists() and not directory.is_symlink():
+        return {}
+    binding_protected(directory, 0o700, True)
+    inventory = {}
+    for path in sorted(directory.iterdir()):
+        doc = binding_read(path)
+        keys = {'format_version', 'kind', 'identity', 'operation_id', 'target_sha256',
+                'operations', 'checker_sha256', 'poststate', 'observed_at', 'retry_allowed'}
+        if (set(doc) != keys or type(doc['format_version']) is not int or doc['format_version'] != 1 or
+                doc['kind'] != 'RECONCILED_EFFECT' or doc['retry_allowed'] is not False or
+                doc['target_sha256'] != hashlib.sha256(str(target).encode()).hexdigest() or
+                path.name != doc['operation_id'] + '.json' or
+                not re.fullmatch('[0-9a-f]{64}', doc['checker_sha256']) or
+                not isinstance(doc['poststate'], dict) or doc['poststate'].get('outcome') != 'EXACT_COMPLETED_EFFECT' or
+                not isinstance(doc['operations'], list) or not doc['operations']):
+            raise BindingError('reconciliation_schema')
+        datetime.datetime.strptime(doc['observed_at'], '%Y-%m-%dT%H:%M:%SZ')
+        ids = []
+        for operation in doc['operations']:
+            if set(operation) != {'operation_id', 'files'}:
+                raise BindingError('reconciliation_operation_schema')
+            identity, files, _ = binding_operation_evidence(root, operation['operation_id'], target)
+            if (operation['files'] != files or any(identity[key] != doc['identity'][key]
+                    for key in ('run_id', 'release_sha', 'script_sha256', 'intent_sha256', 'kind', 'name'))):
+                raise BindingError('reconciliation_original_binding')
+            ids.append(operation['operation_id'])
+        if len(ids) != len(set(ids)) or ids[-1] != doc['operation_id'] or identity != doc['identity']:
+            raise BindingError('reconciliation_operation_order')
+        inventory['reconciliations/' + path.name] = binding_hash(path)
+    return inventory
+
+
+def binding_reconcile(target, owner, kind, name, intent_sha, source_sha, checker_sha, actions, observe):
+    """Append exact-effect evidence after lost ACK. Never dispatch an action again.
+
+    observe is the source-bound read-only action checker supplied by the sequencer,
+    not an operator attestation. Nonzero/missing durable results stay UNKNOWN even
+    if current state resembles the desired state.
+    """
+    target = Path(target)
+    if not target.is_absolute() or target.resolve(strict=True) != target:
+        raise BindingError('target_not_canonical')
+    if source_sha != owner['script_sha256'] or not re.fullmatch('[0-9a-f]{64}', checker_sha):
+        raise BindingError('reconciliation_source_binding')
+    root = target / '.v126-target-operations'
+    binding_protected(root, 0o700, True)
+    binding_protected(root / 'lock', 0o600)
+    fd = os.open(root / 'lock', os.O_RDONLY | os.O_NOFOLLOW)
     try:
-        active_owner, prior_owners = binding_chain(root, target)
-    except (BindingError, OSError, ValueError, KeyError, TypeError):
-        refuse('binding_history_invalid')
-    if active_owner != owner:
-        refuse('target_bound_to_another_run')
-    _, _, current_operations = binding_inventory(root, owner)
-    if not current_operations and (identity['kind'], identity['name']) != ('STAGE', 'BASELINE_VERIFIED'):
-        refuse('next_binding_requires_fresh_baseline')
-else:
-    # A legacy/uninitialized target may only be claimed by a fresh baseline.
-    if identity['kind'] != 'STAGE' or identity['name'] != 'BASELINE_VERIFIED':
-        refuse('legacy_run_requires_reconciliation')
-    if set(p.name for p in root.iterdir()) != {'lock'}:
-        refuse('uninitialized_target_records')
-    create(root / 'run.json', owner)
-    prior_owners = [owner]
-starts = sorted(root.glob('*.start.json'))
-expected_names = {'lock', 'run.json'} | ({'transfers'} if (root / 'transfers').exists() else set())
-failed = False
-recovery_seen = False
-for start_path in starts:
-    prior = read(start_path)
-    prior_id = start_path.name.removesuffix('.start.json')
-    if set(prior) != {'identity', 'operation_id', 'started_at', 'boot_id'}:
-        refuse('start_schema')
-    if prior['operation_id'] != prior_id or hashlib.sha256(canonical(prior['identity'])).hexdigest() != prior_id:
-        refuse('start_binding')
-    result_path = root / (prior_id + '.result.json')
-    if not result_path.exists():
-        refuse('prior_outcome_unknown')
-    outcome = read(result_path)
-    if (set(outcome) != {'identity', 'operation_id', 'exit', 'outcome', 'children', 'log_sha256', 'completed_at'} or
-            outcome['identity'] != prior['identity'] or outcome['operation_id'] != prior_id or
-            outcome['children'] != 'REAPED' or type(outcome['exit']) is not int or
-            outcome['outcome'] != ('SUCCEEDED' if outcome['exit'] == 0 else 'UNKNOWN')):
-        refuse('result_binding')
-    log_path = root / (prior_id + '.log')
-    protected(log_path, 0o400)
-    if hashlib.sha256(log_path.read_bytes()).hexdigest() != outcome['log_sha256']:
-        refuse('log_binding')
-    if outcome['exit'] != 0:
-        refuse('prior_daemon_outcome_unknown')
-    failed = failed or outcome['exit'] != 0
-    prior_owner = {key: prior['identity'].get(key) for key in owner}
-    if prior_owner not in prior_owners:
-        refuse('unbound_operation_history')
-    if prior_owner == owner:
-        recovery_seen = recovery_seen or prior['identity']['kind'] == 'RECOVERY'
-    expected_names.update((start_path.name, result_path.name, log_path.name))
-if set(p.name for p in root.iterdir()) != expected_names:
-    refuse('unexpected_target_records')
-if (failed or recovery_seen) and identity['kind'] != 'RECOVERY':
-    refuse('prior_failed_operation_requires_recovery')
-if (root / (operation_id + '.start.json')).exists():
-    refuse('operation_already_dispatched')
-now = lambda: datetime.datetime.now(datetime.timezone.utc).isoformat()
-create(root / (operation_id + '.start.json'), dict(identity=identity, operation_id=operation_id,
-       started_at=now(), boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip()))
-log_path = root / (operation_id + '.log')
-logfd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-# Mutation output never depends on the SSH stdout pipe staying open.
-signal.signal(signal.SIGHUP, signal.SIG_IGN)
-cancelled = False
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        current, owners = binding_chain(root, target)
+        _, unknown, identities = binding_inventory(root, current)
+        if current != owner or unknown:
+            raise BindingError('UNKNOWN_external_daemon_fencing_required')
+        original = binding_reconciliation_inventory(root, target)
+        allowed = {'run.json', 'lock'} | ({'transfers'} if (root / 'transfers').exists() else set())
+        for previous in owners:
+            allowed.update(path.split('/')[0] for path in binding_inventory(root, previous)[0])
+        if set(path.name for path in root.iterdir()) != allowed:
+            raise BindingError('unexpected_target_records')
+        selected = [identity for identity in identities if
+                    (identity['kind'], identity['name'], identity['intent_sha256']) == (kind, name, intent_sha)]
+        by_action = {identity['action']: identity for identity in selected}
+        if len(by_action) != len(selected) or set(by_action) != set(actions) or not actions:
+            raise BindingError('original_action_sequence_incomplete')
+        operations = []
+        requests = []
+        for action in actions:
+            identity = by_action[action]
+            op = hashlib.sha256(binding_canonical(identity)).hexdigest()
+            _, files, request = binding_operation_evidence(root, op, target)
+            operations.append(dict(operation_id=op, files=files))
+            requests.append(request)
+        directory = root / 'reconciliations'
+        path = directory / (op + '.json')
+        if path.exists() or path.is_symlink():
+            # Explicit readback of a prior immutable reconciliation is not replay.
+            if 'reconciliations/' + path.name not in original:
+                raise BindingError('reconciliation_invalid')
+            return binding_read(path)
+        poststate = observe(identity, requests[-1], operations)
+        if not isinstance(poststate, dict) or poststate.get('outcome') != 'EXACT_COMPLETED_EFFECT':
+            raise BindingError('UNKNOWN_postconditions_insufficient')
+        record = dict(format_version=1, kind='RECONCILED_EFFECT', identity=identity,
+                      operation_id=op, target_sha256=hashlib.sha256(str(target).encode()).hexdigest(),
+                      operations=operations, checker_sha256=checker_sha, poststate=poststate,
+                      observed_at=datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+                      retry_allowed=False)
+        if not directory.exists():
+            directory.mkdir(mode=0o700)
+            binding_sync_dir(root)
+        binding_protected(directory, 0o700, True)
+        binding_create(path, record)
+        binding_reconciliation_inventory(root, target)
+        return record
+    finally:
+        os.close(fd)
 
-def cancel(signum, frame):
-    global cancelled
-    cancelled = True
 
-for signum in (signal.SIGTERM, signal.SIGINT):
-    signal.signal(signum, cancel)
-deadline = time.monotonic() + {'backup-rehearsal': 1800, 'image-load': 900,
-                                  'final-v125-preflight': 600}.get(identity['action'], 300)
-child = subprocess.Popen(['bash', '-c', 'source /dev/stdin; remote_dispatch_action "$@"',
-                          'v126-operation', identity['action'], *worker_args],
-                         stdin=subprocess.PIPE, stdout=logfd, stderr=logfd, start_new_session=True)
-try:
-    child.stdin.write(source)
-    child.stdin.close()
-except BrokenPipeError:
-    pass
-status = None
-descendant_failure = False
-cleanup_deadline = None
-# waitpid(-1) plus subreaper adoption is the completion proof, not a PID scan.
-while True:
+def binding_export_reconciliation(root, record):
+    import base64
+    names = {name for operation in record['operations'] for name in operation['files']}
+    names.add('reconciliations/' + record['operation_id'] + '.json')
+    return dict(format_version=1, files={name: base64.b64encode((root / name).read_bytes()).decode('ascii')
+                                       for name in sorted(names)})
+
+
+def binding_reconciliation_log(original, remote_logs):
+    artifacts = {}
+    for raw in [original, *remote_logs]:
+        seen = set()
+        for line in raw.splitlines():
+            if not line.startswith(b'ARTIFACT'):
+                continue
+            match = re.fullmatch(rb'ARTIFACT\t([a-z0-9][a-z0-9._-]{0,63})\t([0-9a-f]{64})', line)
+            if not match:
+                raise BindingError('original_artifact_encoding')
+            name, digest = (value.decode('ascii') for value in match.groups())
+            if name == 'operation-log' or name in seen or (name in artifacts and artifacts[name] != digest):
+                raise BindingError('original_artifact_conflict')
+            seen.add(name); artifacts[name] = digest
+    return b'RECONCILIATION_ARTIFACT_INVENTORY_FROM_ORIGINAL_RECORDS\n' + b''.join(
+        ('ARTIFACT\t' + name + '\t' + digest + '\n').encode('ascii') for name, digest in sorted(artifacts.items()))
+
+
+def binding_original_stage_log(directory, index, stage):
+    paths = [Path(directory) / f'{index}-{stage}.{suffix}.log' for suffix in ('operation', 'failed')]
+    present = [path for path in paths if path.exists() or path.is_symlink()]
+    if len(present) != 1:
+        raise BindingError('original_local_operation_log_ambiguous_or_missing')
+    binding_protected(present[0], 0o400)
+    return present[0]
+
+
+def binding_validate_dr_boundary(raw, run_id, release_sha, phase):
+    doc = json.loads(raw)
+    keys = {'accepted_data_loss_boundary', 'accepted_recovery_point_utc', 'backup_phase',
+            'format_version', 'release_sha', 'result_category', 'run_id'}
+    if (set(doc) != keys or type(doc['format_version']) is not int or doc['format_version'] != 1 or
+            raw != binding_canonical(doc) or phase not in ('pre-drain', 'quiesced') or
+            doc['run_id'] != run_id or doc['release_sha'] != release_sha or
+            doc['backup_phase'] != phase or doc['result_category'] != 'DR_PREREQUISITES_ACCEPTED'):
+        raise BindingError('DR boundary evidence schema or identity mismatch')
+    expected = ('ALL_WRITES_AFTER_PRE_DRAIN_BACKUP_MAY_BE_LOST' if phase == 'pre-drain'
+                else 'ALL_WRITES_AFTER_QUIESCED_BACKUP_MAY_BE_LOST')
+    if doc['accepted_data_loss_boundary'] != expected:
+        raise BindingError('DR data-loss boundary does not match selected backup')
+    datetime.datetime.strptime(doc['accepted_recovery_point_utc'], '%Y-%m-%dT%H:%M:%SZ')
+    return doc
+
+
+def binding_retained_local_artifacts(state, manifest, artifacts, bundle_path=None):
+    for name in ('manual-smoke-handoff', 'manual-smoke-evidence'):
+        if name not in artifacts:
+            continue
+        path = Path(state) / 'artifacts' / (name + '.json')
+        doc = binding_read(path)
+        if (binding_hash(path) != artifacts[name] or
+                doc.get('run_id') != manifest['run_id'] or doc.get('release_sha') != manifest['release_sha']):
+            raise BindingError('original_local_manual_evidence_missing_or_changed')
+    if 'dr-boundary' in artifacts:
+        import base64
+        path = Path(state) / 'recovery/dr-boundary.json'
+        binding_protected(path, 0o400)
+        if binding_hash(path) != artifacts['dr-boundary'] or bundle_path is None:
+            raise BindingError('original_local_DR_boundary_missing_or_changed')
+        bundle = binding_read(Path(bundle_path))
+        requests = [json.loads(base64.b64decode(raw, validate=True)) for name, raw in bundle['files'].items()
+                    if name.endswith('.request.json')]
+        if len(requests) != 1 or requests[0]['identity']['action'] != 'verify-full-dr':
+            raise BindingError('original_DR_request_missing')
+        args = requests[0]['args']
+        if (len(args) != 9 or args[5:8] != [artifacts['dr-selected-backup'], artifacts['dr-selected-inventory'], artifacts['dr-boundary']]):
+            raise BindingError('original_DR_backup_boundary_binding')
+        binding_validate_dr_boundary(path.read_bytes(), manifest['run_id'], manifest['release_sha'], args[4])
+    # Baseline's local proof is source-derived and main-actions is separately
+    # validated by the canonical CI consumer. Image/source uploads retain their
+    # identical bytes remotely; the action observer verifies those sealed files.
+
+
+def binding_embedded_source(source, name):
+    delimiter = 'V126_RECONCILIATION_PY' if name == 'remote_reconciliation_poststate_python' else 'PY'
+    marker = (name + "() {\n  cat <<'" + delimiter + "'\n").encode('ascii')
+    if source.count(marker) != 1:
+        raise BindingError('embedded_source_marker')
+    body = source.split(marker, 1)[1].split(('\n' + delimiter + '\n}').encode('ascii'), 1)[0] + b'\n'
+    return body
+
+
+def binding_verify_reconciliation_bundle(path, target, source_sha, kind, name, intent_sha, checker_sha):
+    """Validate transferred immutable evidence using the same record validators.
+
+    Temporary files are exact private copies for validation, never target records.
+    A bundle cannot authorize a mutation replay or synthesize a native receipt.
+    """
+    import base64
+    import tempfile
+    bundle = binding_read(Path(path))
+    if (set(bundle) != {'format_version', 'files'} or type(bundle['format_version']) is not int or
+            bundle['format_version'] != 1 or not isinstance(bundle['files'], dict) or
+            not 5 <= len(bundle['files']) <= 13):
+        raise BindingError('reconciliation_bundle_schema')
+    with tempfile.TemporaryDirectory(prefix='v126-evidence-check-') as directory:
+        root = Path(directory)
+        (root / 'reconciliations').mkdir(mode=0o700)
+        total = 0
+        for filename, encoded in bundle['files'].items():
+            if not re.fullmatch(r'(?:[0-9a-f]{64}\.(?:start|request|result)\.json|[0-9a-f]{64}\.log|reconciliations/[0-9a-f]{64}\.json)', filename):
+                raise BindingError('reconciliation_bundle_filename')
+            raw = base64.b64decode(encoded, validate=True)
+            total += len(raw)
+            if total > 16 * 1024**2:
+                raise BindingError('reconciliation_bundle_size')
+            file = root / filename
+            file.write_bytes(raw); file.chmod(0o400)
+        inventory = binding_reconciliation_inventory(root, Path(target))
+        if len(inventory) != 1:
+            raise BindingError('reconciliation_bundle_record_count')
+        record_name = next(iter(inventory))
+        record = binding_read(root / record_name)
+        identity = record['identity']
+        if (identity['script_sha256'] != source_sha or identity['kind'] != kind or
+                identity['name'] != name or identity['intent_sha256'] != intent_sha or
+                record['checker_sha256'] != checker_sha):
+            raise BindingError('reconciliation_bundle_identity')
+        expected = {filename for operation in record['operations'] for filename in operation['files']}
+        if set(bundle['files']) != expected | {record_name}:
+            raise BindingError('reconciliation_bundle_inventory')
+        actual_actions = [binding_read(root / (operation['operation_id'] + '.start.json'))['identity']['action']
+                          for operation in record['operations']]
+        if actual_actions != binding_action_sequence(kind, name):
+            raise BindingError('reconciliation_action_sequence')
+        logs = [(root / (operation['operation_id'] + '.log')).read_bytes() for operation in record['operations']]
+        return record, logs
+
+
+def binding_write_completion(state, kind, name, index, bundle_path, source_path, expected_spec):
+    state = Path(state)
+    source = Path(source_path).read_bytes()
+    source_sha = hashlib.sha256(source).hexdigest()
+    manifest = binding_read(state / 'run.json')
+    if manifest['script_sha256'] != source_sha:
+        raise BindingError('local_completion_source_identity')
+    stage = kind == 'STAGE'
+    if kind not in ('STAGE', 'RECOVERY'):
+        raise BindingError('local_completion_kind')
+    prefix = f'{index}-{name}' if stage else 'recovery-' + name
+    base = state / ('receipts' if stage else 'recovery') / (f'{index:02d}-{name}' if stage else name)
+    intent_path = state / ('intents' if stage else 'recovery') / ((f'{index:02d}-{name}' if stage else name) + '.intent.json')
+    intent = binding_read(intent_path)
+    intent_sha = binding_hash(intent_path)
+    checksum = Path(str(intent_path) + '.sha256')
+    binding_protected(checksum, 0o400)
+    if checksum.read_bytes() != (intent_sha + '\n').encode():
+        raise BindingError('original_intent_checksum')
+    record, logs = binding_verify_reconciliation_bundle(bundle_path, manifest['staging_path'], source_sha, kind, name,
+        intent_sha, hashlib.sha256(binding_embedded_source(source, 'remote_reconciliation_poststate_python')).hexdigest())
+    if any(record['identity'][key] != manifest[key] for key in ('run_id', 'release_sha', 'script_sha256')):
+        raise BindingError('reconciliation_run_binding')
+    original = binding_original_stage_log(state / 'artifacts', index, name) if stage else state / 'recovery' / (name + '.operation.log')
+    binding_protected(original, 0o400)
+    derived = binding_reconciliation_log(original.read_bytes(), logs)
+    artifacts = [dict(name=parts[1].decode(), sha256=parts[2].decode())
+                 for parts in (line.split(b'\t') for line in derived.splitlines() if line.startswith(b'ARTIFACT\t'))]
+    if {item['name'] for item in artifacts} != set(expected_spec.split(',')):
+        raise BindingError('original_complete_artifact_set_required')
+    binding_retained_local_artifacts(state, manifest, {item['name']: item['sha256'] for item in artifacts}, bundle_path)
+    artifacts.append(dict(name='operation-log', sha256=hashlib.sha256(derived).hexdigest()))
+    fields = ('run_id', 'release_sha', 'script_sha256', 'predecessor_stage', 'predecessor_receipt_sha256')
+    fields += ('stage', 'authorization_gate', 'authorization_receipt_sha256') if stage else ('mode', 'authorization_token_sha256')
+    doc = {key: intent[key] for key in fields}
+    doc.update(format_version=2, result_category='RECONCILED_EFFECT' if stage else 'RECONCILED_TERMINAL_RECOVERY',
+               completed_at=record['observed_at'], intent_sha256=intent_sha,
+               artifacts=sorted(artifacts, key=lambda item: item['name']),
+               remote_evidence_sha256=binding_hash(Path(bundle_path)), original_operation_log_sha256=binding_hash(original))
+    target = Path(str(base) + '.reconciliation.json')
+    bundle_target = state / 'artifacts' / (prefix + '.remote-reconciliation.json')
+    log_target = state / 'artifacts' / (prefix + '.reconciliation.log')
+    for path in (Path(str(base)+'.receipt.json'), Path(str(base)+'.receipt.json.sha256'),
+                 target, Path(str(target)+'.sha256'), bundle_target, log_target):
+        if path.exists() or path.is_symlink():
+            raise BindingError('completion_evidence_already_exists')
+    binding_create_raw(bundle_target, Path(bundle_path).read_bytes())
+    binding_create_raw(log_target, derived)
+    binding_create(target, doc)
+    binding_create_raw(Path(str(target)+'.sha256'), (binding_hash(target)+'\n').encode('ascii'))
+    return target
+
+
+def binding_retire_deploy(target, owner, proof_sha, handoff_path, next_request_path):
+    """Explicit retirement of one completed deploy; never reset or unlock history."""
+    target = Path(target)
+    if not target.is_absolute() or target.resolve(strict=True) != target:
+        raise BindingError('target_not_canonical')
+    root = target / '.v126-target-operations'
+    binding_protected(root, 0o700, True)
+    binding_protected(root / 'lock', 0o600)
+    fd = os.open(root / 'lock', os.O_RDONLY | os.O_NOFOLLOW)
     try:
-        pid, wait_status = os.waitpid(-1, os.WNOHANG)
-    except ChildProcessError:
-        break
-    if pid:
-        value = os.waitstatus_to_exitcode(wait_status)
-        if pid == child.pid:
-            status = value if value >= 0 else 128 - value
-            child.returncode = value
-        elif value != 0:
-            descendant_failure = True
-        continue
-    if cancelled or time.monotonic() >= deadline:
-        if cleanup_deadline is None:
-            cleanup_deadline = time.monotonic() + 10
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        current, owners = binding_chain(root, target)
+        policy = binding_active_policy(root, target)
+        files, unknown, identities = binding_inventory(root, current)
+        if (current != binding_owner(owner) or policy['next_kind'] != 'ORDINARY_DEPLOY' or
+                unknown or len(identities) != 1 or identities[0]['kind'] != 'DEPLOY'):
+            raise BindingError('ordinary_retirement_requires_known_completion')
+        allowed = {'run.json', 'lock', 'transfers'}
+        for previous in owners:
+            allowed.update(name.split('/')[0] for name in binding_inventory(root, previous)[0])
+        if set(path.name for path in root.iterdir()) != allowed:
+            raise BindingError('unexpected_target_records')
+        identity = identities[0]
+        if identity['intent_sha256'] != policy['request_sha256']:
+            raise BindingError('ordinary_terminal_request_binding')
+        op = hashlib.sha256(binding_canonical(identity)).hexdigest()
+        path = root / (op + '.deploy-proof.json')
+        proof = binding_deploy_proof(path, identity, target)
+        if binding_hash(path) != proof_sha:
+            raise BindingError('ordinary_terminal_proof_digest')
+        handoff = binding_read(Path(handoff_path))
+        request = binding_read(Path(next_request_path))
+        next_owner = binding_owner(request['owner'])
+        binding_handoff(handoff, owner, next_owner, proof_sha, target)
+        binding_deploy_handoff(proof, proof_sha, handoff)
+        binding_next_request(request, next_owner, handoff, target)
+        if any(previous['run_id'] == next_owner['run_id'] for previous in owners):
+            raise BindingError('run_id_reuse')
+        transfer = dict(format_version=2, previous_owner=owner, next_owner=next_owner,
+                        inventory=files, handoff=handoff, terminal_kind='ORDINARY_DEPLOY_PROOF',
+                        next_kind='ORDINARY_DEPLOY', request_sha256=binding_hash(Path(next_request_path)))
+        binding_create(root / 'transfers' / (binding_owner_id(owner) + '.json'), transfer)
+        print('TARGET_BINDING_RETIRED history_preserved=true next_request_only=true')
+    finally:
+        os.close(fd)
+
+
+def binding_supervise(target, identity, worker_argv, *, input_data=None, input_fd=None,
+                      env=None, timeout=300, request_sha256=None, pass_fds=(), request_context=None):
+    """Hold the single target lock through admission, children and durable result.
+
+    Callers validate source before entry; workers contain only action consumers.
+    Missing/nonzero outcomes never become no-effect authority.
+    """
+    import ctypes
+    import signal
+    import subprocess
+    import time
+    if sys.platform != 'linux':
+        binding_refuse('linux_subreaper_required')
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(36, 1, 0, 0, 0) != 0:
+        binding_refuse('subreaper_unavailable')
+    binding_owner({key: identity.get(key) for key in ('run_id', 'release_sha', 'script_sha256')})
+    if (set(identity) != {'run_id', 'release_sha', 'script_sha256', 'intent_sha256', 'kind', 'name', 'action'} or
+            not re.fullmatch('[0-9a-f]{64}', identity['intent_sha256']) or not worker_argv or
+            not 0 < timeout <= 1800):
+        binding_refuse('invalid_identity')
+    lockfd = None
+    previous_signals = {sig: signal.getsignal(sig) for sig in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)}
+    try:
+        operation_id = hashlib.sha256(binding_canonical(identity)).hexdigest()
+        target = Path(target)
+        if not target.is_absolute() or str(target.resolve(strict=True)) != str(target):
+            binding_refuse('target_not_canonical')
+        # Existing sequencer source/input guards still run inside the worker.
+        info = target.stat()
+        if info.st_uid != os.geteuid() or info.st_mode & 0o022:
+            binding_refuse('target_ownership')
+        root = target / '.v126-target-operations'
+        try:
+            root.mkdir(mode=0o700)
+            binding_sync_dir(target)
+        except FileExistsError:
+            pass
+        binding_protected(root, 0o700, True)
+        lockfd = os.open(root / 'lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        binding_protected(root / 'lock', 0o600)
+        try:
+            fcntl.flock(lockfd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            binding_refuse('target_busy')
+        owner = {key: identity[key] for key in ('run_id', 'release_sha', 'script_sha256')}
+        if (root / 'run.json').exists():
+            try:
+                active_owner, prior_owners = binding_chain(root, target)
+            except (BindingError, OSError, ValueError, KeyError, TypeError):
+                binding_refuse('binding_history_invalid')
+            if active_owner != owner:
+                binding_refuse('target_bound_to_another_run')
+            policy = binding_active_policy(root, target)
+            _, _, current_operations = binding_inventory(root, owner)
+            if policy['next_kind'] == 'ORDINARY_DEPLOY':
+                if ((identity['kind'], identity['name'], identity['action']) != ('DEPLOY', 'ORDINARY_DEPLOY', 'ordinary-deploy') or
+                        request_sha256 != policy['request_sha256'] or identity['intent_sha256'] != request_sha256 or current_operations):
+                    binding_refuse('ordinary_deploy_requires_exact_next_request')
+            elif identity['kind'] == 'DEPLOY':
+                binding_refuse('ordinary_deploy_not_authorized_by_transfer')
+            elif not current_operations and (identity['kind'], identity['name']) != ('STAGE', 'BASELINE_VERIFIED'):
+                binding_refuse('next_binding_requires_fresh_baseline')
+        else:
+            # A legacy/uninitialized target may only be claimed by a fresh baseline.
+            if identity['kind'] != 'STAGE' or identity['name'] != 'BASELINE_VERIFIED':
+                binding_refuse('legacy_run_requires_reconciliation')
+            if set(p.name for p in root.iterdir()) != {'lock'}:
+                binding_refuse('uninitialized_target_records')
+            binding_create(root / 'run.json', owner)
+            prior_owners = [owner]
+        starts = sorted(root.glob('*.start.json'))
+        expected_names = {'lock', 'run.json'} | ({'transfers'} if (root / 'transfers').exists() else set())
+        failed = False
+        recovery_seen = False
+        for start_path in starts:
+            prior = binding_read(start_path)
+            prior_id = start_path.name.removesuffix('.start.json')
+            if set(prior) != {'identity', 'operation_id', 'started_at', 'boot_id'}:
+                binding_refuse('start_schema')
+            if prior['operation_id'] != prior_id or hashlib.sha256(binding_canonical(prior['identity'])).hexdigest() != prior_id:
+                binding_refuse('start_binding')
+            result_path = root / (prior_id + '.result.json')
+            if not result_path.exists():
+                binding_refuse('prior_outcome_unknown')
+            outcome = binding_read(result_path)
+            if (set(outcome) != {'identity', 'operation_id', 'exit', 'outcome', 'children', 'log_sha256', 'completed_at'} or
+                    outcome['identity'] != prior['identity'] or outcome['operation_id'] != prior_id or
+                    outcome['children'] != 'REAPED' or type(outcome['exit']) is not int or
+                    outcome['outcome'] != ('SUCCEEDED' if outcome['exit'] == 0 else 'UNKNOWN')):
+                binding_refuse('result_binding')
+            log_path = root / (prior_id + '.log')
+            binding_protected(log_path, 0o400)
+            if hashlib.sha256(log_path.read_bytes()).hexdigest() != outcome['log_sha256']:
+                binding_refuse('log_binding')
+            if outcome['exit'] != 0:
+                binding_refuse('prior_daemon_outcome_unknown')
+            failed = failed or outcome['exit'] != 0
+            prior_owner = {key: prior['identity'].get(key) for key in owner}
+            if prior_owner not in prior_owners:
+                binding_refuse('unbound_operation_history')
+            if prior_owner == owner:
+                recovery_seen = recovery_seen or prior['identity']['kind'] == 'RECOVERY'
+            expected_names.update((start_path.name, result_path.name, log_path.name))
+            request_path = root / (prior_id + '.request.json')
+            if request_path.exists() or request_path.is_symlink():
+                binding_request(request_path, prior['identity'], target)
+                expected_names.add(request_path.name)
+            if prior['identity']['kind'] == 'DEPLOY':
+                proof_path = root / (prior_id + '.deploy-proof.json')
+                binding_deploy_proof(proof_path, prior['identity'], target)
+                expected_names.add(proof_path.name)
+            if (root / 'reconciliations').exists():
+                binding_reconciliation_inventory(root, target)
+                expected_names.add('reconciliations')
+        if set(p.name for p in root.iterdir()) != expected_names:
+            binding_refuse('unexpected_target_records')
+        if (failed or recovery_seen) and identity['kind'] != 'RECOVERY':
+            binding_refuse('prior_failed_operation_requires_recovery')
+        if (root / (operation_id + '.start.json')).exists():
+            binding_refuse('operation_already_dispatched')
+        now = lambda: datetime.datetime.now(datetime.timezone.utc).isoformat()
+        binding_create(root / (operation_id + '.start.json'), dict(identity=identity, operation_id=operation_id,
+               started_at=now(), boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip()))
+        if request_context is not None:
+            request_path = root / (operation_id + '.request.json')
+            binding_create(request_path, dict(format_version=1, identity=identity,
+                target_sha256=hashlib.sha256(str(target).encode()).hexdigest(), **request_context))
+            binding_request(request_path, identity, target)
+        log_path = root / (operation_id + '.log')
+        logfd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        # Mutation output never depends on the SSH stdout pipe staying open.
+        signal.signal(signal.SIGHUP, signal.SIG_IGN)
+        cancelled = False
+
+        def cancel(signum, frame):
+            nonlocal cancelled
+            cancelled = True
+
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            signal.signal(signum, cancel)
+        deadline = time.monotonic() + timeout
+        child = subprocess.Popen(worker_argv, stdin=(input_fd if input_fd is not None else subprocess.PIPE),
+                                 stdout=logfd, stderr=logfd, start_new_session=True,
+                                 env=env, pass_fds=pass_fds)
+        pending_input = memoryview(input_data or b'') if input_fd is None else memoryview(b'')
+        input_error = False
+        if input_fd is None:
+            os.set_blocking(child.stdin.fileno(), False)
+        status = None
+        worker_reaped = False
+        interrupted = False
+        descendant_failure = False
+        cleanup_deadline = None
+        # waitpid(-1) plus subreaper adoption is the completion proof, not a PID scan.
+        while True:
+            interrupted = interrupted or cancelled or time.monotonic() >= deadline
+            if input_fd is None and not child.stdin.closed:
+                try:
+                    if pending_input:
+                        sent = os.write(child.stdin.fileno(), pending_input[:65536])
+                        pending_input = pending_input[sent:]
+                    if not pending_input:
+                        child.stdin.close()
+                except BlockingIOError:
+                    pass
+                except BrokenPipeError:
+                    input_error = bool(pending_input)
+                    child.stdin.close()
+            try:
+                pid, wait_status = os.waitpid(-1, os.WNOHANG)
+            except ChildProcessError:
+                break
+            if pid:
+                value = os.waitstatus_to_exitcode(wait_status)
+                if pid == child.pid:
+                    worker_reaped = True
+                    status = value if value >= 0 else 128 - value
+                    child.returncode = value
+                elif value != 0:
+                    descendant_failure = True
+                continue
+            if interrupted:
+                interrupted = True
+                if cleanup_deadline is None:
+                    cleanup_deadline = time.monotonic() + 10
+                    status = 124
+                    if not worker_reaped:
+                        # The unreaped leader reserves this PID/PGID; after reaping
+                        # it, only our unreaped adopted children are safe to signal.
+                        try:
+                            os.killpg(child.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                # Direct children are ours and remain unreaped, so their PIDs cannot be reused.
+                for pid_text in Path('/proc/self/task/' + str(os.getpid()) + '/children').read_text().split():
+                    try:
+                        os.kill(int(pid_text), signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                if time.monotonic() >= cleanup_deadline:
+                    binding_refuse('children_completion_unknown')
+            time.sleep(0.05)
+        if status is None:
+            binding_refuse('worker_outcome_unknown')
+        if input_fd is None and not child.stdin.closed:
+            child.stdin.close()
+        if interrupted or cancelled or time.monotonic() >= deadline:
             status = 124
+        elif (input_error or pending_input) and status == 0:
+            status = 75
+        if descendant_failure and status == 0:
+            status = 75
+        if status == 0 and identity['kind'] == 'DEPLOY':
             try:
-                os.killpg(child.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-        # Direct children are ours and remain unreaped, so their PIDs cannot be reused.
-        for pid_text in Path('/proc/self/task/' + str(os.getpid()) + '/children').read_text().split():
-            try:
-                os.kill(int(pid_text), signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-        if time.monotonic() >= cleanup_deadline:
-            refuse('children_completion_unknown')
-    time.sleep(0.05)
-if status is None:
-    refuse('worker_outcome_unknown')
-if descendant_failure and status == 0:
-    status = 75
-os.fsync(logfd)
-os.fchmod(logfd, 0o400)
-os.close(logfd)
-raw = log_path.read_bytes()
-outcome = dict(identity=identity, operation_id=operation_id, exit=status,
-               outcome='SUCCEEDED' if status == 0 else 'UNKNOWN', children='REAPED',
-               log_sha256=hashlib.sha256(raw).hexdigest(), completed_at=now())
-create(root / (operation_id + '.result.json'), outcome)
-# A lost acknowledgement preserves durable evidence and never makes a replay safe.
+                binding_deploy_proof(root / (operation_id + '.deploy-proof.json'), identity, target)
+            except (BindingError, OSError, ValueError, KeyError, TypeError):
+                status = 75
+        os.fsync(logfd)
+        os.fchmod(logfd, 0o400)
+        os.close(logfd)
+        raw = log_path.read_bytes()
+        outcome = dict(identity=identity, operation_id=operation_id, exit=status,
+                       outcome='SUCCEEDED' if status == 0 else 'UNKNOWN', children='REAPED',
+                       log_sha256=hashlib.sha256(raw).hexdigest(), completed_at=now())
+        binding_create(root / (operation_id + '.result.json'), outcome)
+        # Broken transport does not alter durable operation results.
+        try:
+            sys.stdout.buffer.write(raw)
+            sys.stdout.buffer.write(b'\nREMOTE_OPERATION_ACK\t' + binding_canonical(outcome))
+            sys.stdout.buffer.flush()
+        except BrokenPipeError:
+            pass
+        return status
+    finally:
+        if lockfd is not None:
+            os.close(lockfd)
+        for sig, handler in previous_signals.items():
+            signal.signal(sig, handler)
+PY
+}
+
+remote_operation_python() {
+  remote_operation_bindings_python || { printf 'binding source unavailable\n' >&2; return 75; }
+  cat <<'PY'
 try:
-    sys.stdout.buffer.write(raw)
-    sys.stdout.buffer.write(b'\nREMOTE_OPERATION_ACK\t' + canonical(outcome))
-    sys.stdout.buffer.flush()
-except BrokenPipeError:
-    pass
-raise SystemExit(status)
+    source = sys.stdin.buffer.read(2 * 1024 * 1024 + 1)
+    fields = ('run_id', 'release_sha', 'script_sha256', 'intent_sha256', 'kind', 'name', 'action')
+    target, *args = sys.argv[1:]
+    identity = dict(zip(fields, args[:7]))
+    worker_args = args[7:]
+    if (len(identity) != 7 or not worker_args or len(source) > 2 * 1024 * 1024 or
+            hashlib.sha256(source).hexdigest() != identity['script_sha256']):
+        raise BindingError('source_identity')
+    status = binding_supervise(target, identity,
+        ['bash', '-c', 'source /dev/stdin; remote_dispatch_action "$@"',
+         'v126-operation', identity['action'], *worker_args], input_data=source,
+        timeout={'backup-rehearsal': 1800, 'image-load': 900,
+                 'image-upload': 900, 'final-v125-preflight': 600}.get(identity['action'], 300),
+        pass_fds=(8,) if identity['action'] in ('image-upload', 'preflight-upload') else (),
+        request_context=dict(args=worker_args, environment={key: value for key, value in os.environ.items()
+                             if key.startswith('V126_INTERNAL_REMOTE_')}))
+    raise SystemExit(status)
+except (BindingError, OSError, ValueError, KeyError, TypeError) as error:
+    print('REMOTE_OPERATION=RECONCILIATION_REQUIRED reason=' +
+          (str(error) if isinstance(error, BindingError) else 'invalid_or_unavailable_evidence') +
+          ' retry_allowed=false', file=sys.stderr)
+    raise SystemExit(75)
 PY
 }
 
@@ -8562,6 +10282,9 @@ remote_supervise_action() {
   local action="$1"
   shift
   [[ -n "${V126_REMOTE_VERIFIED_BODY:-}" ]] || die 'remote supervision lacks verified source'
+  if [[ "${action}" == image-upload || "${action}" == preflight-upload ]]; then
+    exec 8<&0 || die 'upload stream is unavailable'
+  fi
   printf '%s' "${V126_REMOTE_VERIFIED_BODY}" | python3 -c "$(remote_operation_python)" \
     "${V126_INTERNAL_REMOTE_STAGING_PATH}" "${V126_INTERNAL_REMOTE_RUN_ID}" \
     "${V126_INTERNAL_REMOTE_RELEASE_SHA}" "${V126_INTERNAL_REMOTE_SCRIPT_SHA256}" \
@@ -8720,9 +10443,11 @@ remote_dispatch_enveloped() {
       STAGE:ZERO_WRITER_GATE_PASSED:zero-writer | \
       STAGE:QUIESCED_BACKUP_REHEARSED:backup-rehearsal | \
       STAGE:FINAL_V125_PREFLIGHT_PASSED:final-v125-preflight | \
+      STAGE:FINAL_V125_PREFLIGHT_PASSED:preflight-upload | \
       STAGE:V126_MAINTENANCE_CONFIG_PREPARED:transform-maintenance | \
       STAGE:V126_IMAGE_TRANSFERRED_AND_VERIFIED:image-prepare | \
       STAGE:V126_IMAGE_TRANSFERRED_AND_VERIFIED:image-load | \
+      STAGE:V126_IMAGE_TRANSFERRED_AND_VERIFIED:image-upload | \
       STAGE:V126_BACKEND_STARTED:start-v126 | \
       STAGE:V126_SCHEMA_RUNTIME_GATE_PASSED:schema-runtime-gate | \
       STAGE:MANUAL_SMOKE_AUTHORIZED:open-manual-smoke | \
@@ -8756,6 +10481,7 @@ remote_dispatch_action() {
     transform-maintenance) remote_transform_maintenance_config "$@" ;;
     image-prepare) remote_image_prepare "$@" ;;
     image-load) remote_image_load "$@" ;;
+    image-upload | preflight-upload) remote_receive_upload "${action}" "$@" ;;
     start-v126) remote_start_v126 "$@" ;;
     schema-runtime-gate) remote_schema_runtime_gate "$@" ;;
     open-manual-smoke) remote_open_manual_smoke "$@" ;;

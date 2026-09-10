@@ -55,13 +55,14 @@ class Bindings(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def operation(self, name='FINAL_PUBLIC_GATES_PASSED', kind='STAGE', code=0, incomplete=False):
-        identity = dict(self.owner, intent_sha256='f' * 64, kind=kind, name=name, action='synthetic')
+    def operation(self, name='FINAL_PUBLIC_GATES_PASSED', kind='STAGE', code=0, incomplete=False,
+                  action='synthetic', intent_sha='f' * 64, log_text='synthetic operation\n'):
+        identity = dict(self.owner, intent_sha256=intent_sha, kind=kind, name=name, action=action)
         op = hashlib.sha256(bindings.binding_canonical(identity)).hexdigest()
         write(self.root / (op + '.start.json'), dict(identity=identity, operation_id=op,
               started_at='2026-09-09T00:00:00+00:00', boot_id='synthetic-boot'))
         log = self.root / (op + '.log')
-        log.write_text('synthetic operation\n');log.chmod(0o400)
+        log.write_text(log_text);log.chmod(0o400)
         if not incomplete:
             write(self.root / (op + '.result.json'), dict(identity=identity, operation_id=op, exit=code,
                   outcome='SUCCEEDED' if code == 0 else 'UNKNOWN', children='REAPED',
@@ -251,7 +252,8 @@ printf '%s\\n' "${V125_IMAGE_ID}"
         receipt = state / 'receipts/01-BASELINE_VERIFIED.receipt.json'
         receipt.unlink()
         Path(str(receipt) + '.sha256').unlink()
-        self.assert_cli_refuses_without_writes(state, 'V125', 'predecessor chain is invalid')
+        self.assert_invalid_recovery_status(state, 'recovery predecessor chain is invalid')
+        self.assert_cli_refuses_without_writes(state, 'V125', 'invalid run evidence')
 
     def test_actual_cli_v125_corrupt_predecessor_refuses_retirement(self):
         state = self.seed_v125_recovery()
@@ -269,7 +271,8 @@ printf '%s\\n' "${V125_IMAGE_ID}"
         self.rewrite_document_and_checksum(receipt, value)
         valid = self.shell('source "$1"; load_state "$2"; verify_receipt BASELINE_VERIFIED', SOURCE, state)
         self.assertEqual(valid.returncode, 0, valid.stderr)
-        self.assert_cli_refuses_without_writes(state, 'V125', 'predecessor hash mismatch')
+        self.assert_invalid_recovery_status(state, 'recovery predecessor chain is invalid')
+        self.assert_cli_refuses_without_writes(state, 'V125', 'invalid run evidence')
 
     def test_actual_cli_v125_native_recovery_without_terminal_refuses_retirement(self):
         state = self.seed_v125_recovery()
@@ -277,7 +280,19 @@ printf '%s\\n' "${V125_IMAGE_ID}"
         (state / 'run-terminal.json.sha256').unlink()
         valid = self.shell('source "$1"; load_state "$2"; verify_recovery_receipt pre-v126', SOURCE, state)
         self.assertEqual(valid.returncode, 0, valid.stderr)
-        self.assert_cli_refuses_without_writes(state, 'V125', 'canonical recovery terminal marker')
+        self.assert_invalid_recovery_status(state, 'original recovery terminal marker is invalid')
+        self.assert_cli_refuses_without_writes(state, 'V125', 'invalid run evidence')
+
+    def assert_invalid_recovery_status(self, state, reason):
+        original = self.shell('source "$1"; load_state "$2"; verify_reconciliation_recovery_intent pre-v126', SOURCE, state)
+        self.assertNotEqual(original.returncode, 0)
+        self.assertIn(reason, original.stderr)
+        # Status must classify a failing source consumer, even when it uses exit,
+        # rather than abandoning the status command in its caller context.
+        status = self.shell('source "$1"; status_command status --state-dir "$2"', SOURCE, state)
+        self.assertEqual(status.returncode, 0, status.stderr)
+        self.assertIn('canonical_execution=INVALID_EVIDENCE', status.stdout)
+        self.assertIn('retry_allowed=false', status.stdout)
 
     def test_actual_cli_v126_complete_receipts_do_not_override_unresolved_read_attempt(self):
         state = self.seed(20)

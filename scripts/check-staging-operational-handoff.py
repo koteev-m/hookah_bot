@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Read-only ordinary-deploy fence. Does not apply a handoff or retire a run.
+"""Read-only operational authority guard; never applies a handoff or retires a run.
 
-Any cutover operation registry blocks this deploy path, including retired history:
-ordinary deploy has not yet acquired the sequencer's full mutation lifecycle.
+The standalone diagnostic still refuses protocol targets. The supervised ordinary
+worker calls check_authority only while the shared target supervisor owns the lock.
+This metadata/configuration guard never grants target eligibility by itself.
 """
 import json
 import os
@@ -36,13 +37,10 @@ def validate_environment(raw, expected):
     require(values == [expected], 'fixed environment differs from approved image')
 
 
-def check(target, expected):
+def check_authority(target, expected):
     require(os.geteuid() == 0, 'approved root deployment identity is required')
     require(target.is_absolute() and target.resolve(strict=True) == target, 'canonical target is required')
     protected(target, True)
-    registry = target / '.v126-target-operations'
-    require(not registry.exists() and not registry.is_symlink(),
-            'cutover target requires protocol-aware operational deployment; ordinary deploy is blocked')
     envfile = target / '.env'
     protected(envfile, environment=True)
     protected(target / 'docker-compose.yml')
@@ -57,6 +55,16 @@ def check(target, expected):
     backend = json.loads(result.stdout)['services']['backend']
     require(backend.get('image') == expected and backend.get('restart') == 'unless-stopped',
             'effective operational image or restart policy differs from handoff')
+    return backend
+
+
+def check(target, expected):
+    # This command is only a diagnostic; protocol eligibility cannot be checked
+    # once here and reused later without retaining the same target lock.
+    registry = target / '.v126-target-operations'
+    require(not registry.exists() and not registry.is_symlink(),
+            'cutover target requires protocol-aware operational deployment; ordinary deploy is blocked')
+    check_authority(target, expected)
     print('OPERATIONAL_DEPLOY_PREFLIGHT=PASS migration_target=false')
 
 

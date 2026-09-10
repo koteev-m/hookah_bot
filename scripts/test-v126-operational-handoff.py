@@ -8,9 +8,10 @@ also call the real guard with explicitly synthetic stat records. The optional
 --require-linux-root-compose mode needs a disposable GitHub Ubuntu runner and
 root, uses real root metadata, and performs only daemon-free Compose rendering.
 
-Deploy ordering is source-bound and executes the actual preflight shell segment
-with a local SSH adapter and an image-inspect fixture. No positive deployment,
-protocol retirement, race exclusion, reboot or operational DR is claimed.
+Deploy ordering is source-bound and executes the actual image preflight shell
+segment with an explicit image-inspect fixture. The separate ordinary-deploy suite
+covers shared-protocol integration. This guard-only suite claims no deployment,
+retirement, reboot or operational DR.
 """
 import argparse
 import contextlib
@@ -198,50 +199,32 @@ class HandoffTests(unittest.TestCase):
 
     def test_deploy_source_order_and_actual_refusal_segment(self):
         source = DEPLOY.read_text()
-        gate = 'ssh "${REMOTE}" "python3 - \'${STAGING_PATH}\' \'${BACKEND_IMAGE}\'" < "${SCRIPT_DIR}/check-staging-operational-handoff.py"'
-        self.assertEqual(source.count(gate), 2, 'initial and post-upload operational guards are both required')
-        before_gate, after_gate = source.split(gate, 1)
-        self.assertNotRegex(before_gate, r'(?m)^\s*(?:ssh|rsync)\s')
-        self.assertIn('set -euo pipefail', before_gate)
-        self.assertIn('check-staging-image-identity.sh', before_gate)
-        self.assertIn('ssh "${REMOTE}" "mkdir -p', after_gate)
-        rsync = re.search(r'(?ms)^rsync -azR \\\n(.*?)"\$\{REMOTE\}:\$\{STAGING_PATH\}/"', after_gate)
-        self.assertIsNotNone(rsync)
-        self.assertIn('--no-owner --no-group', rsync.group(1))
-        self.assertIn('--exclude=.v126-target-operations', rsync.group(1))
-        self.assertNotRegex(rsync.group(1), r'(?m)^\s*\.env\s*\\?$')
-        self.assertLess(after_gate.index('rsync -azR'), after_gate.index(gate))
-        self.assertLess(after_gate.index(gate), after_gate.index('docker save "${BACKEND_IMAGE}"'))
-        remote = after_gate.split('echo "==> Restarting staging services"', 1)[1]
-        inspect_index = remote.index('actual_image_id=')
-        compare_index = remote.index('bash scripts/check-staging-image-identity.sh')
-        up_index = remote.index('compose_staging up -d --no-build --pull never postgres backend')
-        self.assertLess(inspect_index, compare_index)
-        self.assertLess(compare_index, up_index)
-        self.assertNotIn('||', remote[inspect_index:up_index])
-        # Execute the source's actual first remote gate. A local SSH adapter only
-        # rebinds the target to this test's fixture and runs the streamed guard.
-        # Nonroot runs refuse identity; real-root runner runs refuse the registry.
-        (self.target / '.v126-target-operations').mkdir()
-        segment = source[source.index('## This comparison must stay'):source.index('echo "==> Uploading compose files')]
+        transport = 'python3 "${SCRIPT_DIR}/v126-ordinary-deploy.py" client'
+        self.assertEqual(source.count(transport), 1, 'one supervised lifecycle is required')
+        before, after = source.split(transport, 1)
+        self.assertNotRegex(source, r'(?m)^\s*(?:ssh|rsync)\s')
+        self.assertIn('set -euo pipefail', before)
+        self.assertIn('check-staging-image-identity.sh', before)
+        self.assertIn('APPROVED_DEPLOYMENT_FILE', before)
+        self.assertIn('DEPLOY_STATE_DIR', before)
+        self.assertIn('--request-file "${APPROVED_DEPLOYMENT_FILE}"', after)
+        self.assertIn('--expected-image-id "${EXPECTED_BACKEND_IMAGE_ID}"', after)
+        # Execute the real local image consumer in the actual caller segment.
+        # A valid-looking wrong Docker ID must stop before client or SSH dispatch.
+        segment = source[source.index('## This comparison must stay'):source.index('# One remote invocation')]
         marker = self.root / 'mutation-reached'
-        shell = '''set -euo pipefail
-SCRIPT_DIR="$1"; STAGING_PATH="$2"; BACKEND_IMAGE="$3"; EXPECTED_BACKEND_IMAGE_ID="$4"
-REMOTE=fixture-own-endpoint; STAGING_ARTIFACT_PREFLIGHT_ONLY=false
-docker() { [[ "$*" == "image inspect --format {{.Id}} $BACKEND_IMAGE" ]] || return 91; printf '%s\\n' "$EXPECTED_BACKEND_IMAGE_ID"; }
-ssh() {
-  [[ "$1" == fixture-own-endpoint && "$2" == "python3 - '$STAGING_PATH' '$BACKEND_IMAGE'" ]] || return 92
-  python3 - "$STAGING_PATH" "$BACKEND_IMAGE"
-}
-'''
-        result = subprocess.run(['bash', '-c', shell + segment + '\ntouch "$5"\n', 'fixture',
-                                 str(REPO / 'scripts'), str(self.target), IMAGE, IMAGE_ID, str(marker)],
+        shell = """set -euo pipefail
+SCRIPT_DIR="$1"; BACKEND_IMAGE="$2"; EXPECTED_BACKEND_IMAGE_ID="$3"
+STAGING_ARTIFACT_PREFLIGHT_ONLY=false
+docker() { [[ "$*" == "image inspect --format {{.Id}} $BACKEND_IMAGE" ]] || return 91; printf '%s\\n' 'sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'; }
+"""
+        result = subprocess.run(['bash', '-c', shell + segment + '\ntouch "$4"\n', 'fixture',
+                                 str(REPO / 'scripts'), IMAGE, IMAGE_ID, str(marker)],
                                 text=True, capture_output=True, timeout=20)
         self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
-        self.assertIn('OPERATIONAL_DEPLOY_PREFLIGHT=REFUSED', result.stderr)
-        self.assertNotIn('OPERATIONAL_DEPLOY_PREFLIGHT=PASS', result.stdout)
+        self.assertIn('does not match', result.stderr)
         self.assertNotIn(SECRET, result.stdout + result.stderr)
-        self.assertFalse(marker.exists(), 'deploy continued after a real guard refusal')
+        self.assertFalse(marker.exists(), 'deploy continued after real image guard refusal')
 
 
 if __name__ == '__main__':

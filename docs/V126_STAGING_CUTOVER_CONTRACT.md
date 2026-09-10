@@ -10,7 +10,7 @@ cutover. Tracked executable authority is divided without overlap:
 - `scripts/v126-staging-prerequisite-sync.sh` is the only pre-Gate-A prerequisite-sync command;
 - `scripts/test-v126-staging-prerequisite-sync.sh` is its local-only static/fixture authority;
 - `scripts/v126-cutover.sh` for run initialization, authorization, one-stage execution, status and
-  bounded recovery;
+  bounded recovery, separate exact-effect reconciliation and explicit target inspection/retirement;
 - `scripts/test-v126-cutover.sh` for static and fixture validation of that command authority.
 
 Other product, QA, deployment and migration documents may summarize this contract and link to those
@@ -33,7 +33,7 @@ image, environment, restart=no, health and version. No start retry is introduced
 Read-only baseline prechecks run before mutation intent under a bounded subprocess.
 Each attempt retains its own immutable log/result and hashes. Only a complete validated
 NOT_DISPATCHED attempt permits another read. Missing/corrupted attempts, intent without
-PASS, lost transport or unknown dispatch require reconciliation; no cached PASS, erased
+verified completion, lost transport or unknown dispatch require reconciliation; no cached PASS, erased
 intent, automatic run or build is permitted. Status distinguishes NOT_STARTED,
 RECONCILIATION_REQUIRED and INVALID_EVIDENCE and never reports live availability.
 
@@ -44,6 +44,14 @@ consumption. Linux subreaper/SSH/crash validation is a mandatory separate runtim
 a successful local PID check or expired lease cannot substitute for it. New run bindings
 and the persistent operational policy remain explicit decisions in
 [V126_OPERATIONAL_HANDOFF.md](V126_OPERATIONAL_HANDOFF.md).
+The current shared protocol appends distinct immutable `RECONCILED_EFFECT` evidence only
+for intact successful original records plus exact action-specific fresh postconditions.
+Typed local stage/recovery completion is separately validated and never becomes a native
+PASS. Nonzero/missing/daemon-unknown results still require an external fencing decision;
+no reset/retry/adoption is provided. Explicit retirement can bind the next fresh cutover
+baseline or exact ordinary-deploy descriptor. Ordinary deploy then uses the same lock
+and shared helper for its entire remote lifecycle; it cannot be invoked by a V126 stage.
+
 
 Database checks compare actual source and protected-URI server/database/schema/role,
 persist the semantic identity as the source-bound `database-target-identity` baseline artifact,

@@ -74,9 +74,7 @@ require_cmd() {
 require_cmd docker
 require_cmd git
 require_cmd ssh
-require_cmd rsync
-require_cmd gzip
-require_cmd curl
+require_cmd python3
 
 if [[ ! "${BACKEND_IMAGE}" =~ :[0-9a-f]{40}$ ]]; then
   echo "BACKEND_IMAGE is required and must use a full lowercase commit-SHA tag" >&2
@@ -98,34 +96,6 @@ if [[ ! "${source_date_epoch}" =~ ^[0-9]+$ ]]; then
   echo "Cannot derive SOURCE_DATE_EPOCH from BACKEND_IMAGE commit" >&2
   exit 2
 fi
-
-wait_http() {
-  local label="$1"
-  local method="$2"
-  local url="$3"
-  local attempt
-
-  echo "==> Waiting for ${label}: ${url}"
-  for attempt in $(seq 1 "${HEALTHCHECK_ATTEMPTS}"); do
-    if [[ "${method}" == "HEAD" ]]; then
-      if curl -fsSI "${url}" >/dev/null; then
-        echo "OK: ${label}"
-        return 0
-      fi
-    elif curl -fsS "${url}"; then
-      echo
-      echo "OK: ${label}"
-      return 0
-    fi
-
-    echo "Waiting for ${label} (${attempt}/${HEALTHCHECK_ATTEMPTS})..."
-    sleep "${HEALTHCHECK_SLEEP_SECONDS}"
-  done
-
-  echo "Health check failed after ${HEALTHCHECK_ATTEMPTS} attempts: ${label}" >&2
-  echo "Do not redeploy blindly. Inspect backend logs and container status on the VPS first." >&2
-  return 1
-}
 
 if ! docker buildx version >/dev/null 2>&1; then
   echo "Docker buildx is required for cross-platform staging builds." >&2
@@ -164,134 +134,20 @@ if [[ "${STAGING_ARTIFACT_PREFLIGHT_ONLY}" == "true" ]]; then
   exit 0
 fi
 
-# A handoff must already be approved and applied. This read-only consumer does
-# not select the application moment and refuses every protocol-managed target.
+# One remote invocation owns the persistent target lock from eligibility through
+# payload installation, exact-image recreate/readiness and durable acknowledgement.
+# The descriptor is approved/applied root authority, never an implicit .env edit.
 [[ "${STAGING_PATH}" =~ ^/[A-Za-z0-9_./-]+$ ]] || { echo 'Unsafe staging target path' >&2; exit 2; }
-echo "==> Checking fixed operational image, ownership and cutover fence"
-ssh "${REMOTE}" "python3 - '${STAGING_PATH}' '${BACKEND_IMAGE}'" < "${SCRIPT_DIR}/check-staging-operational-handoff.py"
+: "${APPROVED_DEPLOYMENT_FILE:?Protected approved ordinary-deploy descriptor is required}"
+: "${DEPLOY_STATE_DIR:?Fresh explicit deployment evidence directory is required}"
+python3 "${SCRIPT_DIR}/v126-ordinary-deploy.py" client \
+  --remote "${REMOTE}" \
+  --target "${STAGING_PATH}" \
+  --request-file "${APPROVED_DEPLOYMENT_FILE}" \
+  --state-dir "${DEPLOY_STATE_DIR}" \
+  --expected-image "${BACKEND_IMAGE}" \
+  --expected-image-id "${EXPECTED_BACKEND_IMAGE_ID}" \
+  --public-url "${STAGING_PUBLIC_URL}" \
+  --public-checks "${RUN_PUBLIC_CHECKS}"
 
-echo "==> Uploading compose files to ${REMOTE}:${STAGING_PATH}"
-ssh "${REMOTE}" "mkdir -p '${STAGING_PATH}'"
-rsync -azR \
-  --no-owner --no-group \
-  --exclude=.v126-target-operations \
-  docker-compose.yml \
-  backend/Dockerfile \
-  scripts/validate-staging-admission.sh \
-  scripts/seed-staging.sh \
-  scripts/check-staging-maintenance-config.sh \
-  scripts/check-staging-image-identity.sh \
-  docs/env/staging.env.example \
-  docs/STAGING_DEPLOYMENT.md \
-  "${REMOTE}:${STAGING_PATH}/"
-
-if ! ssh "${REMOTE}" "test -f '${STAGING_PATH}/.env'"; then
-  echo "Missing ${STAGING_PATH}/.env on VPS."
-  echo "Create it from ${STAGING_PATH}/docs/env/staging.env.example, fill secrets, then rerun:"
-  echo "  ssh ${REMOTE}"
-  echo "  cd ${STAGING_PATH}"
-  echo "  cp docs/env/staging.env.example .env"
-  echo "  chmod 600 .env"
-  exit 3
-fi
-
-echo "==> Checking required server env keys"
-ssh "${REMOTE}" "
-  set -euo pipefail
-  cd '${STAGING_PATH}'
-  missing=0
-  for key in APP_ENV POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD DB_JDBC_URL DB_USER DB_PASSWORD TELEGRAM_TRAFFIC_POLICY TELEGRAM_WEBAPP_PUBLIC_URL MINIAPP_STATIC_DIR CORS_ALLOWED_HOSTS; do
-    if ! grep -qE \"^\${key}=.+\" .env; then
-      echo \"Missing or empty required env: \${key}\" >&2
-      missing=1
-    fi
-  done
-  if [[ \${missing} -ne 0 ]]; then
-    exit \${missing}
-  fi
-
-  BACKEND_IMAGE='${BACKEND_IMAGE}' \
-    bash scripts/validate-staging-admission.sh \
-      --profile '${STAGING_ADMISSION_PROFILE}' \
-      --env-file .env \
-      --compose-file docker-compose.yml
-"
-
-echo "==> Checking staging maintenance policy"
-ssh "${REMOTE}" "
-  set -euo pipefail
-  cd '${STAGING_PATH}'
-  chmod +x scripts/check-staging-maintenance-config.sh
-  STAGING_MAINTENANCE_V126_SMOKE_AUTHORIZED='${STAGING_MAINTENANCE_V126_SMOKE_AUTHORIZED}' \\
-    ./scripts/check-staging-maintenance-config.sh .env
-"
-
-echo "==> Rechecking effective uploaded Compose against fixed operational authority"
-ssh "${REMOTE}" "python3 - '${STAGING_PATH}' '${BACKEND_IMAGE}'" < "${SCRIPT_DIR}/check-staging-operational-handoff.py"
-
-echo "==> Uploading Docker image to VPS"
-docker save "${BACKEND_IMAGE}" | gzip | ssh "${REMOTE}" "gzip -dc | docker load"
-
-echo "==> Restarting staging services"
-ssh "${REMOTE}" "
-  set -euo pipefail
-  cd '${STAGING_PATH}'
-  wait_http() {
-    local label=\"\$1\"
-    local method=\"\$2\"
-    local url=\"\$3\"
-    local attempt
-
-    echo \"==> Waiting for \${label}: \${url}\"
-    for attempt in \$(seq 1 '${HEALTHCHECK_ATTEMPTS}'); do
-      if [[ \"\${method}\" == \"HEAD\" ]]; then
-        if curl -fsSI \"\${url}\" >/dev/null; then
-          echo \"OK: \${label}\"
-          return 0
-        fi
-      elif curl -fsS \"\${url}\"; then
-        echo
-        echo \"OK: \${label}\"
-        return 0
-      fi
-
-      echo \"Waiting for \${label} (\${attempt}/'${HEALTHCHECK_ATTEMPTS}')...\"
-      sleep '${HEALTHCHECK_SLEEP_SECONDS}'
-    done
-
-    echo \"Health check failed after '${HEALTHCHECK_ATTEMPTS}' attempts: \${label}\" >&2
-    echo \"Do not redeploy blindly. Inspect with: cd '${STAGING_PATH}' && docker compose ps && docker compose logs --tail=120 backend\" >&2
-    return 1
-  }
-
-  compose_staging() {
-    env \
-      -u APP_ENV \
-      -u TELEGRAM_TRAFFIC_POLICY \
-      -u TELEGRAM_ALLOWED_USER_IDS \
-      -u TELEGRAM_ALLOWED_CHAT_IDS \
-      -u STAGING_MAINTENANCE_MODE \
-      -u STAGING_MAINTENANCE_ALLOWED_USER_IDS \
-      -u STAGING_MAINTENANCE_ALLOWED_CHAT_IDS \
-      -u VENUE_STAFF_INVITE_SECRET_PEPPER \
-      BACKEND_IMAGE='${BACKEND_IMAGE}' \
-      docker compose --env-file .env \"\$@\"
-  }
-
-  actual_image_id=\"\$(docker image inspect --format '{{.Id}}' '${BACKEND_IMAGE}')\"
-  bash scripts/check-staging-image-identity.sh \"\${actual_image_id}\" '${EXPECTED_BACKEND_IMAGE_ID}'
-  compose_staging up -d --no-build --pull never postgres backend
-  compose_staging ps
-  wait_http 'local backend health' GET http://127.0.0.1:8080/health
-  wait_http 'local database health' GET http://127.0.0.1:8080/db/health
-  wait_http 'local Mini App static' HEAD http://127.0.0.1:8080/miniapp/
-"
-
-if [[ "${RUN_PUBLIC_CHECKS}" == "true" ]]; then
-  echo "==> Checking public staging URL: ${STAGING_PUBLIC_URL}"
-  wait_http "public backend health" GET "${STAGING_PUBLIC_URL}/health"
-  wait_http "public database health" GET "${STAGING_PUBLIC_URL}/db/health"
-  wait_http "public Mini App static" HEAD "${STAGING_PUBLIC_URL}/miniapp/"
-fi
-
-echo "==> Staging deploy finished"
+echo "==> Staging deploy durably acknowledged; next deployment requires explicit retirement"

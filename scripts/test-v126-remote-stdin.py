@@ -2,7 +2,8 @@
 """Production builder -> local pipe -> real bash -s -> production dispatch validation.
 
 Receipt lookups, the SSH/process boundary, Linux remote supervisor and leaf actions
-are fixtures. The supervisor fixture captures the leaf log and emits a canonical
+are fixtures. Uploads retain the actual receiver; only its environmental
+preconditions are explicit fixtures. The supervisor captures the leaf log and emits a canonical
 identity-bound acknowledgement; the production acknowledgement validator remains
 real. Separate Linux tests own subreaper/lock/crash coverage. No network, database,
 Docker, Caddy or cutover state is used. Never print child output.
@@ -101,6 +102,21 @@ ACTIVE_AUTHORIZATION_HASH=NONE
 ACTIVE_INTENT_HASH=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 case "$FRAME_OPERATION" in
   baseline) ;;
+  preflight-upload | image-upload)
+    ACTIVE_OPERATION_NAME=FINAL_V125_PREFLIGHT_PASSED
+    ACTIVE_PREDECESSOR_STAGE=QUIESCED_BACKUP_REHEARSED
+    if [[ "$FRAME_OPERATION" == image-upload ]]; then
+      ACTIVE_OPERATION_NAME=V126_IMAGE_TRANSFERRED_AND_VERIFIED
+      ACTIVE_PREDECESSOR_STAGE=V126_MAINTENANCE_CONFIG_PREPARED
+    fi
+    ACTIVE_PREDECESSOR_HASH="$ACTIVE_INTENT_HASH"
+    ACTIVE_AUTHORIZATION_GATE=A
+    ACTIVE_AUTHORIZATION_HASH="$ACTIVE_INTENT_HASH"
+    V126_LOCAL_UPLOAD_FD=9
+    exec 9<"$FRAME_ROOT/upload"
+    rm "$FRAME_ROOT/upload"
+    command printf '%s\n' 'PATH_REPLACEMENT_MUST_NOT_UPLOAD' > "$FRAME_ROOT/upload"
+    ;;
   recovery)
     ACTIVE_OPERATION_KIND=RECOVERY
     ACTIVE_OPERATION_NAME=pre-v126
@@ -123,7 +139,14 @@ case "$FRAME_OPERATION" in
     ;;
 esac
 receipt_path() {
-  if [[ "$FRAME_OPERATION" == late-recovery || "$FRAME_OPERATION" == full-dr ]]; then
+  if [[ "$FRAME_OPERATION" == preflight-upload || "$FRAME_OPERATION" == image-upload ]]; then
+    if [[ "$1" == CADDY_CANDIDATE_INSTALLED_AND_RELOADED ||
+          ( "$FRAME_OPERATION" == image-upload && "$1" == V126_MAINTENANCE_CONFIG_PREPARED ) ]]; then
+      command printf '%s/present\n' "$FRAME_ROOT"
+    else
+      command printf '%s/absent\n' "$FRAME_ROOT"
+    fi
+  elif [[ "$FRAME_OPERATION" == late-recovery || "$FRAME_OPERATION" == full-dr ]]; then
     command printf '%s/present\n' "$FRAME_ROOT"
   else
     command printf '%s/absent\n' "$FRAME_ROOT"
@@ -212,6 +235,17 @@ PY
 '''.encode()
         for leaf in leaves:
             recorder += leaf + b'() { frame_record ' + leaf + b' "$@"; }\n'
+        if b"remote_receive_upload() {" in source:
+            recorder += r'''
+# The actual receiver and its hash/size/O_EXCL/framing checks remain intact.
+# Only independently exercised target/daemon preconditions are synthetic.
+remote_initialize_compose() { :; }
+remote_require_run_root() { printf '%s\n' "$FRAME_RUN_ROOT"; }
+remote_assert_public_drain() { [[ "$FRAME_FAULT" != upload-drain ]]; }
+remote_assert_zero_writer() { [[ "$1" == '125:0:0' && "$FRAME_FAULT" != upload-writer ]]; }
+remote_verify_proof() { [[ "$FRAME_FAULT" != upload-proof ]]; }
+remote_verify_maintenance_env_binding() { [[ "$FRAME_FAULT" != upload-environment ]]; }
+'''.encode()
         if b"remote_supervise_action() {" in source:
             recorder += r'''
 # Only the OS supervisor is synthetic; call the real leaf dispatcher and retain
@@ -219,6 +253,9 @@ PY
 remote_supervise_action() {
   local fixture_log="$FRAME_ROOT/supervisor.log"
   local fixture_status
+  if [[ "$1" == image-upload || "$1" == preflight-upload ]]; then
+    exec 8<&0
+  fi
   if remote_dispatch_action "$@" > "$fixture_log"; then
     fixture_status=0
   else
@@ -247,7 +284,7 @@ PY
 '''.encode()
         return source + recorder + b"# trailing body bytes: \\ ' \" $() ; \t\n\n\n"
 
-    def build(self, *, old=False, operation="baseline", args=None, fault="none"):
+    def build(self, *, old=False, operation="baseline", args=None, fault="none", payload=None):
         source = self.old if old else self.source
         self.fields = LEGACY_FIELDS if old else FIELDS
         body = self.body(source)
@@ -258,7 +295,16 @@ PY
                         FRAME_OPERATION=operation, FRAME_FAULT=fault,
                         FRAME_FIELD_COUNT=str(len(self.fields)))
         action = {"baseline": "baseline", "recovery": "recover-pre-v126",
-                  "late-recovery": "recover-post-v126-stop", "full-dr": "verify-full-dr"}[operation]
+                  "late-recovery": "recover-post-v126-stop", "full-dr": "verify-full-dr",
+                  "preflight-upload": "preflight-upload", "image-upload": "image-upload"}[operation]
+        if operation in ("preflight-upload", "image-upload"):
+            payload = payload if payload is not None else b"synthetic upload\0bytes\xff\n"
+            (self.root / "upload").write_bytes(payload)
+            (self.root / "upload").chmod(0o400)
+            self.run_root = self.root / ("remote-run-" + str(len(list(self.root.glob("remote-run-*")))))
+            self.run_root.mkdir(mode=0o700)
+            self.env["FRAME_RUN_ROOT"] = str(self.run_root)
+            args = args if args is not None else ["fixture:" + BASE, hashlib.sha256(payload).hexdigest(), str(len(payload))]
         arguments = [action, "/fixture/staging", "fixture-run", BASE] + (args or [])
         existing = {file.name: hashlib.sha256(file.read_bytes()).hexdigest()
                     for file in (self.root / "tmp").iterdir()}
@@ -489,6 +535,81 @@ PY
                 self.assertFalse((self.root / "accepted").exists())
                 self.assertEqual(len((self.root / "dispatch").read_text().splitlines()), 1,
                                  "acknowledgement failure repeated or suppressed the leaf operation")
+
+    def test_11_actual_receiver_gets_exact_binary_anonymous_fd_stream(self):
+        payload = b"synthetic\0binary\xff\n" * 8192
+        for operation, filename in (("preflight-upload", "final-v125-preflight.sh.partial"),
+                                    ("image-upload", "v126-image.tar.partial")):
+            with self.subTest(operation=operation):
+                self.reset_markers()
+                result, body = self.build(operation=operation, payload=payload)
+                self.assertEqual(result.returncode, 0, "actual receiver refused valid framed upload")
+                self.assertEqual((self.run_root / filename).read_bytes(), payload)
+                self.assertEqual(stat.S_IMODE((self.run_root / filename).stat().st_mode), 0o600)
+                self.assertEqual((self.root / "upload").read_bytes(), b"PATH_REPLACEMENT_MUST_NOT_UPLOAD\n")
+                self.assertEqual((self.root / "verified-body").read_bytes(), body)
+                _, _, _, wire = self.stream_parts()
+                self.assertEqual(wire, body + b"\0" + payload)
+                self.assertNotIn(payload[:32], result.stdout + result.stderr)
+                self.assertFalse((self.root / "dispatch").exists(), "an unrelated synthetic leaf was dispatched")
+
+    def test_12_actual_upload_receiver_refuses_bad_hash_size_tail_and_preconditions(self):
+        payload = b"owned exact payload\0" * 8
+        digest = hashlib.sha256(payload).hexdigest()
+        for case, args, fault in [
+            ("wrong-hash", ["fixture:" + BASE, "0" * 64, str(len(payload))], "none"),
+            ("short", ["fixture:" + BASE, digest, str(len(payload) + 1)], "none"),
+            ("tail", ["fixture:" + BASE, digest, str(len(payload) - 1)], "none"),
+            ("zero-size", ["fixture:" + BASE, digest, "0"], "none"),
+            ("preflight-limit", ["fixture:" + BASE, digest, str(1024**2 + 1)], "none"),
+            ("drain", None, "upload-drain"), ("writer", None, "upload-writer"),
+        ]:
+            with self.subTest(case=case):
+                self.reset_markers()
+                result, _ = self.build(operation="preflight-upload", payload=payload, args=args, fault=fault)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse((self.root / "accepted").exists())
+                self.assertNotIn(b"UPLOAD_COMPLETED", result.stdout)
+                if case in ("zero-size", "preflight-limit", "drain", "writer"):
+                    self.assertEqual(list(self.run_root.iterdir()), [], "refusal allocated an upload pathname")
+        for fault in ("upload-proof", "upload-environment"):
+            with self.subTest(fault=fault):
+                self.reset_markers()
+                result, _ = self.build(operation="image-upload", payload=payload, fault=fault)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(list(self.run_root.iterdir()), [])
+
+    def test_13_upload_delimiter_and_verified_source_are_required(self):
+        _, body = self.build(operation="image-upload")
+        loader, fields, arguments, wire = self.stream_parts()
+        content, delimiter, payload = wire.partition(b"\0")
+        self.assertEqual(content, body)
+        self.assertEqual(delimiter, b"\0")
+        for changed in (body + payload, body[:-1] + b"\0" + payload):
+            with self.subTest(size=len(changed)):
+                self.denied(self.execute(loader + b"\n".join(fields + arguments) + b"\n" + changed), before_source=True)
+
+    def test_14_existing_partial_and_symlink_are_never_overwritten(self):
+        self.build(operation="preflight-upload")
+        wire = (self.root / "stream").read_bytes()
+        original = self.run_root / "final-v125-preflight.sh.partial"
+        snapshot = original.read_bytes()
+        result = self.execute(wire)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(original.read_bytes(), snapshot)
+        # A fresh isolated target tests refusal of an attacker-owned alias;
+        # failed/successful historical upload bytes above are never removed.
+        fresh = self.root / "symlink-target"
+        fresh.mkdir(mode=0o700)
+        sentinel = self.root / "unchanged-sentinel"
+        sentinel.write_bytes(b"unchanged own fixture")
+        alias = fresh / original.name
+        alias.symlink_to(sentinel)
+        self.env["FRAME_RUN_ROOT"] = str(fresh)
+        result = self.execute(wire)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue(alias.is_symlink())
+        self.assertEqual(sentinel.read_bytes(), b"unchanged own fixture")
 
 
 if __name__ == "__main__":
