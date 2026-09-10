@@ -1,11 +1,12 @@
 # V126 repair operation protocol and binding retirement
 
 This records the implemented F05 contract for HT-RELEASE-REPAIR-01. Exact feature
-candidate391abc7135e74365dad69e34109b1bc2612caec7 passed CI34472343581, including the
+candidate2866db99ae897817c7e9a745d19f3b487c5563b6 passed CI34484968850, including the
 owned terminal/reconciliation/ordinary lifecycle and actual Caddy/systemd consumers.
-The separate owned Docker daemon interruption gate is still pending. REPAIR-REPORT
-and REPAIR-COVERAGE bind each proof and its limits. This supplements the canonical
-cutover contract; it is not authority to run against staging.
+The separate owned Docker daemon interruption gate verifies five metadata/shared-supervisor
+cases and cleanup. REPAIR-REPORT and REPAIR-COVERAGE bind each proof and its limits;
+final document delivery requires its own exact CI and reviewed-blob attestation.
+This supplements the canonical cutover contract; it is not authority to run against staging.
 
 The existing verified stdin dispatcher will supervise each remote action using a
 Linux child subreaper and one nonblocking `flock` on a persistent lock file under
@@ -206,8 +207,14 @@ There is no automatically selected next run or automatic retirement after HTTP20
 Old version1 transfers remain strict and retain their original meaning. Existing runs
 without request/protocol records cannot be upgraded, adopted or assigned synthetic
 completion. The frozen historical PASS1–8/intent9 remains unchanged. The owned Docker
-daemon interruption fixture exercises synthetic create metadata and blocked replay;
-until its actual native result is recorded, that applicable gate remains unverified.
-It does not establish JVM survival, power-loss/storage durability or host reboot.
-The latter needs a controlled VM with persistent storage and an external observer;
-rebooting the disposable GitHub runner is not authorized.
+daemon interruption fixture has actual five-case proof at2866db99/CI34484968850:
+create metadata before/after transport and daemon interruption preserves original
+records, refuses replay/recovery/earliest UNKNOWN retirement and verifies cleanup.
+A zero or one post-restart object count never replaces missing/nonzero original results.
+The baseline identity is synthetic; full terminal/handoff proof belongs to the separate
+ordinary lifecycle. No running-JVM survival, complete native cutover, power-loss/storage
+durability or host reboot is established. JVM survival is an unexercised workload scope,
+not an established infrastructure unavailability. Actual host reboot/power-loss needs a
+separately authorized controlled VM with persistent test storage and an external observer;
+rebooting the disposable GitHub runner is not authorized. Exact results and final delivery
+binding are recorded in REPAIR-REPORT/COVERAGE.

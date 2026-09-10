@@ -3838,3 +3838,12 @@ its portable self-tests are also part of the full harness. Exact native executio
 cleanup results remain required, not inferred from this wiring.
 No green feature job substitutes for17 real smoke assertions, host reboot/power-loss
 durability, accepted RPO or whole operational DR.
+
+Exact repair implementation2866db99ae897817c7e9a745d19f3b487c5563b6/CI34484968850
+executes these applicable gates: full Linux-required harness, all28 required PG cases,
+real Caddy/systemd13+4, connected JVM/PG/Docker, ordinary handoff/two deployments and
+five private-daemon metadata cases with strict identity/outcome/cleanup proof. The only
+supervisor skip is the non-Linux platform-refusal case. Synthetic prerequisites/provider
+and earlier handoff approval remain explicit; no full native cutover or running-JVM daemon
+survival is claimed. Final report delivery must pass its own exact12-job CI and match the
+reviewed report blobs; implementation-run success is not inherited by a later commit.

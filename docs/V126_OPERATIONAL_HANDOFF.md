@@ -62,13 +62,17 @@ handoff and the next exact descriptor, then appends the next transfer. The next 
 uses the same lock/inode/history. Missing, timed-out or nonzero results keep the target
 blocked, including competing recovery. The separate reconciliation/retirement semantics
 and commands are in [V126_REPAIR_OPERATION_PROTOCOL.md](V126_REPAIR_OPERATION_PROTOCOL.md).
-Exact feature391abc7135e74365dad69e34109b1bc2612caec7/CI34472343581 verifies the owned
+Exact feature2866db99ae897817c7e9a745d19f3b487c5563b6/CI34484968850 verifies the owned
 terminal/reconciliation/handoff/two-deployment lifecycle with real Docker/JVM/PG and
 Caddy/systemd consumers. Earlier prerequisites and the approved handoff are synthetic;
 ordinary public_checks=false and the owned direct transport are explicit fixture limits.
-Separate SSH and local typed-chain regressions supply their own evidence. The new
-private Docker daemon interruption gate remains pending; no complete cutover E2E or
-host reboot is claimed. REPAIR-REPORT/COVERAGE retain exact results and first failures.
+Separate SSH and local typed-chain regressions supply their own evidence. The private
+Docker daemon interruption gate verifies five metadata/shared-supervisor cases, exact
+UNKNOWN exclusion and cleanup. It starts no container; its earliest UNKNOWN retirement
+guard is separate from the full handoff proof. Running-JVM daemon survival and complete
+cutover E2E are unexercised workload scopes, not established infrastructure limitations.
+Host reboot/power/storage remain residual operational gates. REPAIR-REPORT/COVERAGE retain
+exact implementation results, first failures and final delivery acceptance binding.
 
 An incident or reboot first requires read-only reconciliation of exact container/image,
 actual database/schema, config disk/runtime, target operation records and queued/inflight

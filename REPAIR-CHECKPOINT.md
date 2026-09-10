@@ -1,108 +1,64 @@
-# HT-RELEASE-REPAIR-01 checkpoint — final feature closure
+# HT-RELEASE-REPAIR-01 — final closure checkpoint
 
-## Latest closure validation — CI05 fixture correction
+The unified F01–F11 implementation is FIXED_AND_VERIFIED at the explicit scopes in
+[REPAIR-COVERAGE.md](REPAIR-COVERAGE.md). F05 UNKNOWN reconciliation and ordinary deployment
+now share the persistent target lock and immutable history; no known code/protocol blocker
+remains in the reviewed implementation. Exact implementation2866db99/tree296b37d0,
+[CI34484968850](https://github.com/koteev-m/hookah_bot/actions/runs/34484968850),
+CI/230370033/push feature/attempt1, passed12/12 jobs and mandatory steps.
+Full Linux harness476s/18 printed suites/479 separate PASS markers; prerequisite18 groups,
+40 negatives/97 expected exits1188s. All28 required PostgreSQL cases executed; browser216/216.
 
-**HT_RELEASE_REPAIR_VALIDATION_INCOMPLETE**. Published candidate
-`ee262f2ca6b227930a01a5ce0fb218afb46f4b7b`, tree
-`c8e952da0d0b3b44bdd7a15b1398f7488ee6c54c`, parent
-`391abc7135e74365dad69e34109b1bc2612caec7`.
-[CI34479384440](https://github.com/koteev-m/hookah_bot/actions/runs/34479384440),
-CI/230370033, exact feature push/attempt1, completed2026-09-10T13:33:33Z:
-11 other jobs and every other compose step PASS; new owned daemon step FAILED.
-Full mandatory harness6m26 and prerequisites18 groups/40 negatives21m44 PASS.
-The failure is preserved in candidate-05/result-ledger.json and compose.log,
-517680bytes/SHA25683fc5762f737def26f154da3ee45916273b418fb0a56d056d45b972a5cb73eec.
+Actual Caddy/systemd13+4 cases/33 checks, corrected hung reload24.223s/UNKNOWN, connected
+PG17/V125→V126/Docker/JVM and four one-start container IDs pass. Actual ordinary
+reconciliation/handoff/two deployments pass with cleanup. Owned daemon five cases pass:
+6 starts/readiness identities,5 daemon SIGKILL,1 supervisor SIGKILL,6 EMPTY/REAPED,
+27 precise refusals, original records unchanged and UNKNOWN non-retryable. No container
+was started by the daemon metadata fixture. This is not a complete native cutover,
+uninterrupted JVM survival, host reboot or live smoke proof.
 
-The fixture passed identical containerd container/plugin namespaces; actual Docker28
-refused startup. The first reported assertion was root/driver mismatch because formatted
-Docker info returned exit0 despite an unavailable server. No fault case started.
-Own systemd journal records the namespace refusal; cleanup completed, own cgroup EMPTY,
-callers REAPED, runtime root removed. No default daemon or running container was changed.
-This is a test setup/readiness defect, not evidence of a new production supervisor defect.
-The corrective fixture uses distinct private namespaces and actual server readiness,
-with bounded read-only waiting and immediate refusal of foreign identity. Local regression
-before:5 failing methods/6 assertions; after:23 PASS. Workflow/guard CI-contract13 PASS;
-endpoint violations0, syntax/compile/diff0. Current fixture SHA256
-a0ffcc98ad8fb9203ad4af18c3129570b4cf1034ae2935e9152de901e7595621.
-Evidence is daemon-proof/correction-01/DIAGNOSIS.md and final-validation-02.json, plus
-candidate-06/ci-contract-01.json and sanity-01.json. The portable readiness observations
-are synthetic; native after is unverified until the corrective candidate executes in CI.
+All six closure candidates and first failures are preserved in [REPAIR-REPORT.md](REPAIR-REPORT.md)
+and local evidence. The last changes corrected the observed CI03 inherited-stream deadline
+defect and CI05 private-daemon namespace/readiness fixture defect. The full manifest is
+49 base-relative/32 phase-relative paths. Production sequencer SHA256
+`d18a638fd64362a381b1d97b0cd7c647a965788cf46f8e783609404604bb45cf`.
+Final delivery changes only four reports and three canonical docs; its exact SHA/tree,
+remote ref, reviewed blobs and exact CI are bound by the immutable delivery attestation.
 
-Actual CI05 ordinary lifecycle retains19 events, two distinct same-lock deployments,
-cleanup=true and synthetic provider polls309/webhook8/menu5/unexpected0/outbound0.
-Other native/core/systemd and28 former PG cases pass at their recorded fixture scopes.
-Current source production sequencer remains d18a638fd64362a381b1d97b0cd7c647a965788cf46f8e783609404604bb45cf.
-All candidate05 observations stay separate from the CI04 details below; CI05 is not green.
-Its11-file commit/push exited0/0; manifest49 base-changed/32 phase-changed paths.
+G01–G04 remain OPEN only at the explicitly recorded release boundaries: operational
+DR/RPO/loss decision, actual host reboot/power/storage, real provider/delivery ambiguities,
+17 live Guest/Owner/MIX assertions and separately authorized staging application/integrity.
+JVM survival through daemon loss is an untested workload scope, not proven unavailable
+infrastructure. Migration/recovery remains restart=no; an actual live handoff is not
+approved by these tests. Restored V125 has its independent schema125 handoff boundary.
 
-Next: review the demonstrated fixture correction and narrow regressions, explicitly commit
-and normally push only this feature, then verify exact12 jobs/native outcomes. Native daemon
-validation and final published report acceptance remain required. Historical report tails,
-starting dirty reports and first failures remain unchanged. MAIN_INTEGRATION=NOT_AUTHORIZED;
-LIVE_ACTIONS=NONE; STAGING_RELEASE_READINESS=NOT_ESTABLISHED. No scripts/dev access.
+Next after accepted delivery: review the single diff and make a separate main/release
+decision. Do not resume HT13, Gate A/B/C, recovery or staging. No staging deploy is required
+for this patch validation; future runtime application/smoke remains a separate release gate.
+Original dirty checkout, scripts/dev (no read/write), migrations and historical evidence
+are preserved. Clean implementation worktree was observed before this docs-only update;
+final clean Git status is required and recorded by the delivery attestation.
 
+## Verified implementation and final delivery binding
 
-## HT-RELEASE-REPAIR-01 — Final Open-Gate Closure (CI04 passed; daemon gate pending)
+This report records implementation evidence verified at
+`2866db99ae897817c7e9a745d19f3b487c5563b6`, tree
+`296b37d0ee4da172f6614000a313cb063c2469b7`, parent
+`ee262f2ca6b227930a01a5ce0fb218afb46f4b7b`, exact feature CI34484968850.
+Final delivery identity and acceptance are recorded in the immutable final-delivery
+attestation for the commit containing these exact report blobs. Acceptance requires
+that exact published feature candidate's12 jobs and mandatory steps to succeed, the
+reviewed report blobs to match, and no remaining report delta. This is an acceptance
+contract; it does not predeclare a future CI result or encode a commit's own SHA.
 
-**HT_RELEASE_REPAIR_VALIDATION_INCOMPLETE**. Same worktree/feature
-`/private/tmp/ht-release-repair-01.RKbe7q/worktree`, `codex/ht-release-repair-01-rkbe7q`.
-Exact basef7828e09863d391e1f714cc65c9c866f814cf6bf,
-base treeff66c8639ec7c5c3ad45c2371878f5ba3656df9a; phase starts09e19461/tree17ec77da.
-All four initially dirty reports remain preserved under
-`../evidence/open-gate-closure-abp_tolk/initial/`.
+Worktree `/private/tmp/ht-release-repair-01.RKbe7q/worktree`, branch
+`codex/ht-release-repair-01-rkbe7q`; base
+`f7828e09863d391e1f714cc65c9c866f814cf6bf`, tree
+`ff66c8639ec7c5c3ad45c2371878f5ba3656df9a`; phase begins at09e19461/tree17ec77da.
+The four initially dirty reports remain byte-identical in initial/; their historical
+tails are retained below the current report. No new branch/worktree was created.
 
-Verified implementation candidate `391abc7135e74365dad69e34109b1bc2612caec7`,
-tree `c70a0bbb936a043ab97ed137a8c67838af3dd021`, parent
-`90d0bda929f673cd2e277e6c243de9ae6bc5b0fc`.
-[CI34472343581](https://github.com/koteev-m/hookah_bot/actions/runs/34472343581),
-workflow CI/230370033, feature push, attempt1: **12/12 jobs and all mandatory steps PASS**;
-compose completed2026-09-10T12:12:18Z. Full mandatory harness PASS6m42;
-prerequisites18/18 groups and40/40 negative matrix PASS16m56 by step timestamps.
-This green candidate precedes the new required Docker daemon interruption fixture.
-The fixture and its CI wiring require their own reviewed candidate and actual native run.
-
-The proved F06 inherited-stream defect is corrected and native verified: unchanged actual
-Caddy/systemd hung-reload case now23.579s within19–28s, exit4/UNKNOWN/no completion.
-Actual reload ControlPID remains active at return; a separate later observation after
-explicit own-process resume records completed reload/admin equality. Marker and original
-UNKNOWN remain intact. All13 Caddy and4 process cases pass; callers reaped and own unit
-cgroup empty/MainPID0/ControlPID0. Before39.465s and exact extracted-helper regressions,
-review findings and all candidate01–03 first failures remain immutable.
-
-F05 shared-lock/reconciliation/retirement and F09 ordinary lifecycle are native verified at
-the recorded fixture scope. Nineteen ordinary events cover successful terminal/lost ACK,
-fresh actual collector, distinct RECONCILED_EFFECT, synthetic approved/applied handoff,
-two exact-image deployments/next binding and refusal cases. Provider unexpected0/outbound0,
-cleanup=true. Earlier prerequisites/approval are synthetic; public_checks=false and direct
-owned stream, not full20-stage E2E. Actual SSH and local typed-chain checks are separate.
-
-The focused review identified actual Docker daemon interruption as still applicable,
-not a proved unavailable capability or a new production-code defect. The new mandatory
-fixture uses a second ephemeral owned daemon with private socket/data/exec roots and no
-bridge/firewall/sysctl changes, preserving the default daemon. It exercises only real
-synthetic create metadata, dispatch/reply loss and blocked replay/recovery/retirement
-through the actual shared supervisor. Native verification remains pending; no claim of
-JVM daemon-restart survival, full operational DR or host reboot follows from this fixture.
-
-Current exact proof: candidate-04/result-ledger.json, core-compose-proof-final.json,
-systemd-proof/current-extraction/systemd-proof.json, ordinary-proof/actual-proof-01.json,
-completed-jobs-proof-01.json and database-proof/actual-proof-01.json. Raw compose log
-497100bytes/SHA25641b98d8935a4f046d18a112a62d270a7d367a575ceae73fed941e912c98067cf.
-All28 former PostgreSQL skips execute. Full details and per-F/G limits are in
-REPAIR-REPORT/COVERAGE. No overall green CI substitutes for the pending native gate.
-
-Next: finish/review the bounded new fixture, local regressions, explicit-file commit and
-ordinary same-feature push; verify exact12 jobs and native steps. Then commit final
-reviewed reports and validate that exact final candidate, leaving no dirty results delta.
-
-`MAIN_INTEGRATION=NOT_AUTHORIZED`; `LIVE_ACTIONS=NONE`;
-`PUBLICATION=FEATURE_VALIDATION_ONLY`; `STAGING_RELEASE_READINESS=NOT_ESTABLISHED`.
-Operational DR/RPO/loss, actual host reboot/power-loss/storage durability,17 controlled
-live Guest/Owner/MIX assertions and staging application remain separate future gates.
-No scripts/dev read/write, original dirty checkout, migration bytes, historical runs/
-intents/receipts/archives/backups or frozen evidence changes. Historical PASS1–8/intent9
-and separately sourced V125 restoration are not a new stage9 PASS. No main, PR, HT13,
-Gate A/B/C, recovery, deployment or live smoke is authorized by this result.
+MAIN_INTEGRATION=NOT_AUTHORIZED; LIVE_ACTIONS=NONE; STAGING_RELEASE_READINESS=NOT_ESTABLISHED.
 
 ## Preserved prior phase checkpoint (09e19461 only)
 
