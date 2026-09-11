@@ -32,6 +32,10 @@ sys.dont_write_bytecode = True
 spec = importlib.util.spec_from_file_location('database_evidence', helper_path)
 helper = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(helper)
+dr_spec = importlib.util.spec_from_file_location('v126_dr_evidence', ROOT / 'scripts/v126-dr-evidence.py')
+dr = importlib.util.module_from_spec(dr_spec)
+sys.modules[dr_spec.name] = dr
+dr_spec.loader.exec_module(dr)
 EVENTS = []
 
 
@@ -92,6 +96,64 @@ INSERT INTO flyway_schema_history VALUES('125',true,0);
 INSERT INTO bookings VALUES(1,1,1);
 INSERT INTO support_threads(id,thread_type,booking_id,venue_id,guest_user_id,status) VALUES(1,'BOOKING_THREAD',1,1,1,'OPEN');
 '''
+
+
+# Shared by the existing Unix-socket rehearsal and the optional local Docker
+# Policy B regression. These are synthetic values, never source DB payloads.
+WHOLE_DR_SETUP_SQL = """CREATE ROLE repair_reader;
+CREATE ROLE repair_login LOGIN;
+GRANT repair_reader TO repair_login;
+CREATE TABLE dr_payload(id integer PRIMARY KEY, value text);
+INSERT INTO dr_payload VALUES(1,'synthetic');
+ALTER TABLE dr_payload OWNER TO other_role;
+GRANT SELECT ON dr_payload TO repair_reader;
+CREATE SCHEMA dr_owned AUTHORIZATION other_role;
+GRANT USAGE ON SCHEMA dr_owned TO repair_reader;
+ALTER DEFAULT PRIVILEGES FOR ROLE other_role IN SCHEMA dr_owned GRANT SELECT ON TABLES TO repair_reader;
+CREATE SEQUENCE dr_sequence START 7;
+ALTER SEQUENCE dr_sequence OWNER TO other_role;
+SELECT nextval('dr_sequence');
+ALTER DATABASE source OWNER TO other_role;
+ALTER DATABASE source SET timezone='Asia/Tokyo';
+ALTER ROLE repair_login SET statement_timeout='7s';
+ALTER ROLE repair_login IN DATABASE source SET lock_timeout='3s';
+INSERT INTO telegram_inbound_updates VALUES ('synthetic-inbound', 'PROCESSING');
+INSERT INTO telegram_outbox VALUES ('synthetic-outbox', 'SENDING');
+INSERT INTO guest_batch_idempotency VALUES ('{"synthetic":true}');
+"""
+
+WHOLE_DR_FACTS_SQL = {
+    'ROLES_MEMBERSHIPS': """SELECT rolname,rolsuper,rolinherit,rolcreaterole,rolcreatedb,rolcanlogin,
+rolreplication,rolconnlimit,rolvaliduntil,rolbypassrls FROM pg_roles WHERE rolname NOT LIKE 'pg_%' ORDER BY rolname;
+SELECT pg_get_userbyid(roleid),pg_get_userbyid(member),pg_get_userbyid(grantor),admin_option,inherit_option,set_option
+FROM pg_auth_members ORDER BY 1,2,3;""",
+    'OWNERSHIP_ACL': """SELECT datname,pg_get_userbyid(datdba),datacl FROM pg_database WHERE datname='source';
+SELECT nspname,pg_get_userbyid(nspowner),nspacl FROM pg_namespace WHERE nspname IN ('public','dr_owned','other_schema') ORDER BY 1;
+SELECT n.nspname,c.relname,c.relkind,pg_get_userbyid(c.relowner),c.relacl FROM pg_class c
+JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname IN ('public','dr_owned','other_schema') ORDER BY 1,2;
+SELECT pg_get_userbyid(defaclrole),n.nspname,defaclobjtype,defaclacl FROM pg_default_acl d
+JOIN pg_namespace n ON n.oid=d.defaclnamespace ORDER BY 1,2,3;
+SELECT has_table_privilege('repair_reader','dr_payload','SELECT'),has_table_privilege('repair_reader','dr_payload','INSERT');""",
+    'SETTINGS_AUTH_CONFIG': """SELECT rolname,rolconfig FROM pg_roles WHERE rolname NOT LIKE 'pg_%' ORDER BY 1;
+SELECT coalesce(d.datname,''),coalesce(r.rolname,''),s.setconfig FROM pg_db_role_setting s
+LEFT JOIN pg_database d ON d.oid=s.setdatabase LEFT JOIN pg_roles r ON r.oid=s.setrole ORDER BY 1,2;
+SHOW timezone;""",
+    'DATA_SCHEMA': """SELECT count(*),min(value),max(id) FROM dr_payload;
+SELECT n.nspname,c.relname,c.relkind FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+WHERE n.nspname IN ('public','dr_owned','other_schema') ORDER BY 1,2;
+SELECT n.nspname,c.relname,a.attname,format_type(a.atttypid,a.atttypmod),a.attnotnull
+FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid JOIN pg_namespace n ON n.oid=c.relnamespace
+WHERE n.nspname='public' AND a.attnum>0 AND NOT a.attisdropped ORDER BY 1,2,a.attnum;
+SELECT conname,pg_get_constraintdef(oid) FROM pg_constraint WHERE connamespace='public'::regnamespace ORDER BY 1;
+SELECT extname,extversion,extnamespace::regnamespace,pg_get_userbyid(extowner) FROM pg_extension ORDER BY 1;""",
+    'FLYWAY': 'SELECT version,success,checksum FROM flyway_schema_history ORDER BY version;',
+    'SEQUENCES': """SELECT last_value,is_called FROM dr_sequence;
+SELECT s.seqrelid::regclass,s.seqtypid::regtype,s.seqstart,s.seqincrement,s.seqmax,s.seqmin,s.seqcache,s.seqcycle
+FROM pg_sequence s ORDER BY 1;""",
+    'DURABLE_QUEUES': """SELECT payload_json,status FROM telegram_inbound_updates ORDER BY 1,2;
+SELECT payload_json,status FROM telegram_outbox ORDER BY 1,2;
+SELECT response_snapshot FROM guest_batch_idempotency ORDER BY response_snapshot::text;""",
+}
 
 
 DRIVER = r'''
@@ -426,24 +488,8 @@ remote_verify_full_dr "$fixture" synthetic-only ffffffffffffffffffffffffffffffff
 
 
     def test_whole_db_roles_acl_settings_and_synthetic_auth(self):
-        self.sql("""CREATE ROLE repair_reader;
-CREATE ROLE repair_login LOGIN PASSWORD 'synthetic_DR_auth_only';
-GRANT repair_reader TO repair_login;
-CREATE TABLE dr_payload(id integer PRIMARY KEY, value text);
-INSERT INTO dr_payload VALUES(1,'synthetic');
-ALTER TABLE dr_payload OWNER TO other_role;
-GRANT SELECT ON dr_payload TO repair_reader;
-CREATE SCHEMA dr_owned AUTHORIZATION other_role;
-GRANT USAGE ON SCHEMA dr_owned TO repair_reader;
-ALTER DEFAULT PRIVILEGES FOR ROLE other_role IN SCHEMA dr_owned GRANT SELECT ON TABLES TO repair_reader;
-CREATE SEQUENCE dr_sequence START 7;
-ALTER SEQUENCE dr_sequence OWNER TO other_role;
-SELECT nextval('dr_sequence');
-ALTER DATABASE source OWNER TO other_role;
-ALTER DATABASE source SET timezone='Asia/Tokyo';
-ALTER ROLE repair_login SET statement_timeout='7s';
-ALTER ROLE repair_login IN DATABASE source SET lock_timeout='3s';
-""", 'source')
+        self.sql(WHOLE_DR_SETUP_SQL, 'source')
+        self.sql("ALTER ROLE repair_login PASSWORD 'synthetic_DR_auth_only';", 'source')
         source_hba = self.data/'pg_hba.conf'
         source_hba.write_text('local all repair_login scram-sha-256\n' + source_hba.read_text())
         run([self.bin17/'pg_ctl','-D',self.data,'reload'],env=self.env)
@@ -472,7 +518,11 @@ ALTER ROLE repair_login IN DATABASE source SET lock_timeout='3s';
             bootstrap = run([self.bin17/'psql','-XqAtw','--set=ON_ERROR_STOP=1'],env=env,
                             input=b"SELECT rolname FROM pg_roles WHERE rolname NOT LIKE 'pg_%' ORDER BY rolname;").stdout
             self.assertEqual(bootstrap,b'repair_owner\n')
-            globals_restore = globals_sql.replace(b'CREATE ROLE repair_owner;\n',b'')
+            databases = run([self.bin17/'psql','-XqAtw','--set=ON_ERROR_STOP=1'],env=env,
+                            input=b'SELECT datname FROM pg_database ORDER BY datname;').stdout.decode().splitlines()
+            globals_restore, transformation = dr.bootstrap_globals(
+                globals_sql, 'repair_owner', bootstrap.decode().splitlines(), databases)
+            self.assertEqual(transformation['original_sha256'], hashlib.sha256(globals_sql).hexdigest())
             run([self.bin17/'psql','-XqAtw','--set=ON_ERROR_STOP=1'],env=env,input=globals_restore)
             run([self.bin17/'pg_restore','--exit-on-error','--create','--dbname=postgres'],env=env,input=dump)
             # Passwords are a distinct synthetic recovery input, never from globals.
@@ -493,6 +543,10 @@ SELECT setconfig::text FROM pg_db_role_setting WHERE setdatabase=(SELECT oid FRO
             original = self.sql(facts,'source')
             restored = run([self.bin17/'psql','-XqAtw','--set=ON_ERROR_STOP=1'],env=dict(env,PGDATABASE='source'),input=facts.encode()).stdout
             self.assertEqual(restored, original)
+            source_vectors = {name:self.sql(sql,'source') for name,sql in WHOLE_DR_FACTS_SQL.items()}
+            restored_vectors = {name:run([self.bin17/'psql','-XqAtw','--set=ON_ERROR_STOP=1'],
+                env=dict(env,PGDATABASE='source'),input=sql.encode()).stdout for name,sql in WHOLE_DR_FACTS_SQL.items()}
+            dr.compare_catalogs(source_vectors, restored_vectors)
             auth_query = b"SELECT current_user; SELECT count(*) FROM dr_payload; SHOW statement_timeout; SHOW lock_timeout; SHOW timezone;"
             for base_env in [self.env, env]:
                 login_env = dict(base_env,PGDATABASE='source',PGUSER='repair_login',PGPASSWORD='synthetic_DR_auth_only')

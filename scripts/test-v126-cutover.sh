@@ -8206,6 +8206,7 @@ main() {
   python3 "${SCRIPT_DIR}/test-v126-runtime-consumers.py"
   python3 "${SCRIPT_DIR}/test-v126-configuration.py"
   python3 "${SCRIPT_DIR}/test-v126-database-evidence.py"
+  python3 "${SCRIPT_DIR}/test-v126-dr-evidence.py"
   git -C "${REPO_ROOT}" show 09e19461cf54376714ae51f2d4c9e480f8365d8e:scripts/v126-cutover.sh > \
     "${TEST_ROOT}/v126-supervisor-before.sh" || fail 'exact original supervisor source is unavailable'
   python3 "${SCRIPT_DIR}/test-v126-remote-operation.py" --require-linux-ssh \

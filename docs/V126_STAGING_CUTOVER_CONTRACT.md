@@ -18,6 +18,48 @@ files. They must not reproduce a second V126 command sequence. Neither this docu
 presence of the scripts or successful prerequisite sync authorizes staging access, backup creation, Caddy mutation, backend
 stop/start, maintenance activation, image transfer, Flyway/V126, manual smoke or recovery.
 
+## Policy B R0 and future Q consumer contract — AP-01
+
+Policy B/D1–D4 and DR-A…DR-G are defined in
+[DEPLOYMENT_RUNBOOK.md](DEPLOYMENT_RUNBOOK.md#policy-b-disaster-recovery--ht-ops-04--ap-01).
+`scripts/v126-dr-evidence.py:consume_barrier` is a versioned, read-only **future
+consumer hook**, not another sequencer or an operational gate executed by this
+patch. It accepts only v1 DR readiness plus a separately trusted complete ledger,
+current source/tool binding, current observations and fresh ongoing readiness.
+Its synthetic result has no V126 authorization effect.
+
+Two different barriers prevent a circular prerequisite:
+
+- R0 preparation requires a new qualified online point and applied ongoing G
+  readiness before a new V126 attempt. No stage7 receipt is allowed in R0.
+- Future Q requires its own qualification for the exact new run, exact native
+  stage7 receipt bytes and native manifest digest. R0, another run's Q or a
+  reconciled/historical schema cannot substitute. Existing native P/stage2,
+  zero-writer stage6 and Q/stage7 still remain mandatory.
+
+The future caller must first replay the complete native stage7 chain with existing
+`verify_receipt`, independently pin that receipt and its run manifest, and only
+then call `consume_barrier`. The DR consumer checks native v1 shape, source/script,
+stage/predecessor/run, the complete native stage7 artifact name set, exact dump/TOC
+hash equality with the DR manifest and snapshot chronology; it does not replace native artifact
+inventory/operation-log verification. Raw stage7 JSON by itself is insufficient.
+
+Future separately reviewed caller integration must call the hook under the existing shared target lock
+before init/first mutation and immediately before stages 8/9/11/13/18/19, checking
+current age plus bounded action time +300s margin. Final 18/19 also require the
+current ongoing mechanism and reviewed post-V126 recipe; a post-transition actual
+V126 point must qualify within 2h and remaining Q freshness. No cached PASS renewal,
+native stage7 retry or automatic recovery/reopen is permitted on expiry.
+
+This AP-01 patch does **not wire or execute** those live dispatch calls and does
+not modify `v126-cutover.sh`, its twenty states, native receipt schema or frozen
+historical runs. Current native commands therefore do not claim enforcement of
+the new Policy B gate. Future reviewed source/gate integration and its separate
+authorization are mandatory before any new operational V126 run. Do not operate
+the historical executor on the strength of an AP-01 test result.
+AP-06 remains read-only verification plus scoped receipt writes; it does not
+implicitly grant source implementation, installation or V126 execution authority.
+
 ## HT-RELEASE-REPAIR-01 local repair boundary
 
 This local package addresses F01–F11 together. It does not adopt or resume historical

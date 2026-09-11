@@ -677,6 +677,50 @@ Telegram/HTTP fixtures, never replace worker-progress evidence and the seventeen
 manual assertions. Retain historical records and each failed local validation attempt.
 Do not publish CI or perform staging actions during local-only repair.
 
+### HT-OPS-04 Policy B local evidence and restore regressions
+
+AP-01 only: no provider/staging/network tests, operational DR/V126 gate, secret
+custody writes, schedule installation or fence activation. Focused checks:
+
+```bash
+python3 scripts/test-v126-dr-evidence.py
+python3 scripts/test-v126-database-evidence.py --unit
+git diff --check
+```
+
+The new pure suite tests complete synthetic evidence/ledger/R0/Q decisions and
+negative cases: exact24h/uncertainty/rollback, failed-new/old-success, pending/unknown,
+incomplete or replayed ledgers, source/tool/schema/runtime drift, unknown/duplicate/
+missing fields, corrupt/missing/zero/truncated artifacts, credentials in locators,
+wrong object version/read-back, forged receipts/age, unavailable custody/bytes,
+unsafe archive/path/link/special-file substitution, bootstrap/catalog drift,
+synthetic-vs-operational auth, R0≠Q, wrong-run/stage7 and all readiness thresholds.
+
+For the owned local Docker integration, an existing local PostgreSQL17 image and
+Unix-socket Docker context are prerequisites; no image pull/install is attempted:
+
+```bash
+python3 scripts/test-v126-dr-evidence.py --postgres-docker
+```
+
+It pins the local image ID, creates two labelled network-none/tmpfs containers with
+no published ports or host mounts, and removes only those exact owned containers.
+It uses shared whole-DB fixture/semantic queries from `test-v126-database-evidence.py`,
+downloads exact fake object-version bytes, preserves roles/grantors/owners/ACL/
+settings/sequences/Flyway/durable queues, rejects injected catalog drift and checks
+synthetic SCRAM/read/denial. Fixture credentials are generated in memory and sent
+through stdin, never stored in evidence or argv. It waits for the final PostgreSQL
+process, not the transient image-initialization server. Missing Docker/image or
+cleanup errors fail this explicitly selected test; no silent skip.
+
+Default `test-v126-database-evidence.py` retains mandatory PG17/18 full coverage
+in the existing cutover/compose CI harness. Its whole-DB test now uses the shared
+strict bootstrap transform and seven semantic vectors. The pure Policy B suite
+is added to that existing harness, without a new CI framework/job or reduced floor.
+Local PG17 ARM64 and pure tests are not PG18, Linux/amd64 functional app restore,
+real crypto/custody, live smoke or operational DR evidence. AP-01 needs no staging
+deploy; any future live tooling application/gate remains separately approved.
+
 ### HT-12P executable V126 cutover quality gate
 
 `scripts/test-v126-cutover.sh` is the executable fixture authority for the sequencer; the canonical

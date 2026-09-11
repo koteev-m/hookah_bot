@@ -2068,6 +2068,154 @@ Area smoke anchors:
 - Platform/billing: `docs/PLATFORM_COCKPIT.md`.
 - RBAC/security: `docs/SECURITY_RBAC_MATRIX.md`.
 
+## Policy B disaster recovery — HT-OPS-04 / AP-01
+
+Current accepted policy: at most **86400 seconds** of committed application-DB
+changes may be lost for the staging/pilot. Controlled post-Q smoke loss is accepted
+within that limit. Telegram admission/acknowledgement/delivery ambiguity remains;
+DB recovery cannot retract delivered messages or guarantee exactly-once effects.
+External media bytes and a numerical RTO are not guaranteed. This supersedes the
+previous undecided G01 policy choice, not its missing operational evidence.
+**AP-01 local implementation is not DR PASS, DR-A…DR-G execution, or release authority.**
+
+Accepted D1–D4:
+
+- D1: provider-neutral S3-compatible target; the selected future provider is
+  **Yandex Object Storage Standard**, with versioning and Object Lock. Bind exact
+  VersionId (never ETag/latest/upload time), client-side encrypted payload and an
+  independent read-back/decrypt of every member. Lock mode, account, region,
+  bucket, capacity/cost and credential scope still need concrete AP-00/AP-03
+  descriptors. Same-provider storage does not promise survival of provider/account loss.
+- D2: the user owns recovery authority. Secret/config/image custody and decryption
+  authority must survive loss of the VPS and backup credentials independently.
+  AP-07 is separate. No secret values, credential URIs, per-secret plaintext
+  hashes, raw auth payloads or keys belong in manifests, logs or reports.
+- D3: future functional restore uses a disposable **Linux/amd64** environment
+  outside staging. Prove denied external ingress/egress before hydration of real
+  secrets; no staging mounts, public ports, host Docker socket or real provider
+  traffic. Local synthetic tests cannot satisfy operational real-auth.
+- D4: snapshot every 6h, qualification within 2h, independent monitoring every
+  5min, retention 7d and at least two qualified points. Warning at 12h, critical
+  at 20h, all-writer **fence-required** at 22h, violation above 24h. Fence execution
+  requires separate response authority; no auto-restore, rollback or auto-reopen.
+
+| Phase | Evidence/acceptance | Separate authority |
+| --- | --- | --- |
+| DR-A | Exact source/tree/tool/schema/runtime/target/custody binding; independent clock and scope observations | AP-06 preflight |
+| DR-B | Intent, whole-DB snapshot, fresh password-free globals and complete inventory; all consumers succeed | AP-02 |
+| DR-C | Exact locked object version, cipher hash/size, independent GET/decrypt and full member equality | AP-03 |
+| DR-D | Downloaded input only; empty isolated cluster; bootstrap, complete owners/ACL/settings/data/Flyway/queues restore | AP-04 |
+| DR-E | Named functional checks, real custody/auth, compatible backend and cleanup | AP-04 |
+| DR-F | Newest qualified attempt, complete ledger, current availability and conservative age | AP-06 |
+| DR-G | Applied ongoing mechanism, actual periodic cycle, retention, monitor/failure test and response authority; refreshed F | AP-05 + AP-06 |
+
+`scripts/v126-dr-evidence.py` and `scripts/v126-dr-schema.py` supply closed,
+versioned local validation/decision primitives. The schema source is the executable
+schema authority, with no external JSON-schema package. `validate-document` is
+read-only and prints `SCHEMA_VALID_ONLY_NOT_DR_PASS`; it cannot create or authorize
+any operational evidence. Run it only on an explicitly selected absolute local
+path. The API has no provider/network, backup, restore, notification or fence CLI.
+
+The strict chain is binding → authorization → intent → manifest/producer result
+→ off-host receipt → restore → functional → qualification → ledger/ongoing →
+readiness. Each digest is SHA-256 of exact canonical UTF-8 JSON bytes with one LF;
+there is no self-hash or future receipt reference in a manifest. Unknown, duplicate,
+missing or wrong-type fields and noncanonical serialization fail closed. The
+separate content-addressed intent/result/qualification events form one contiguous
+immutable ledger; an independent custodian pins its full head. `latest` is not
+authority. A digest copied from an untrusted document is not a trusted head.
+
+The caller-owned `Trust` API represents independent observations of authorization,
+custody versions, current exact bytes, completed read-back/restore/checks and
+response authority. It is deliberately not loadable from an evidence JSON file.
+Its `ongoing_sha256` must independently pin the exact canonical current ongoing
+observation, including timestamps and mechanism/ledger/authorization bindings.
+The evaluator validates these bytes and checks this pin before using their claims;
+a missing or mismatched pin fails closed, including at the R0/Q consumers.
+Rewriting ongoing/readiness JSON and recomputing hashes cannot supply a new trusted
+observation. A new pin requires independent acquisition by the caller.
+Its independent checkpoint clock must be at most 300s old; stale catalogue,
+availability or custody observations cannot be renewed by rewriting a readiness receipt.
+An AP-06 adapter must obtain these observations independently; setting flags or
+copying hashes from receipts is not verification. No trust-root signature system,
+ledger storage service or operational observation loader is implemented by AP-01.
+Existing duplicate-aware DB parsing and TOC validation are reused. Current Git
+SHA/tree, Python version and the full `v126-*` helper/recipe inventory are rechecked;
+any tool/schema/source change invalidates the old binding, including local edits.
+
+For source time T observed **before** snapshot acquisition with uncertainty Es,
+and independently observed now N with uncertainty En, AGE = N + En − T + Es.
+Both errors must be integers ≤60s. Monotonic/wall-clock rollback, future timestamps
+or ambiguous cross-clock chronology refuse a result; file mtime, upload completion
+and receipt renewal never advance the recovery point. At AGE=86400 a read-only
+freshness check can pass. A future mutation consumer additionally requires its
+bounded action duration plus a 300s safety margin before expiry. Cross-worker
+proof timestamps use the conservative maximum 60s error per endpoint; adjacent
+independent observations must be at least 120s apart and qualification must still
+fit 2h including uncertainty. This intentionally fails closed on imprecise clocks.
+
+The newest attempt must be qualified and match the requested purpose/attempt.
+FAILED, PENDING, UNKNOWN or producer-only SUCCESS does not fall back to an older
+success. Sequence holes, reused IDs, duplicate documents, unresolved overlapping
+attempts, corrupt/incompatible evidence or unavailable required retention bytes
+refuse selection. Among fully validated points, select greatest conservative
+recovery timestamp, then sequence. Known FAILED can be followed by a new approved
+attempt; PENDING/UNKNOWN require separate reconciliation. Old evidence is retained.
+
+`evaluate_ongoing` returns HEALTHY, WARNING, CRITICAL, FENCE_REQUIRED,
+RPO_VIOLATION, RPO_NOT_PROVABLE or RESPONSE_AUTHORITY_MISSING. It preserves age
+severity and response-authority status separately. Missing periodic qualification,
+retention <2, missed 6h slot/2h completion, >5min observation/monitor drift or
+missing mechanism/failure-test evidence cannot yield readiness; >10min monitor
+silence is unknown. After exact ongoing pin, checkpoint and ledger/availability
+validation, monitor freshness is a separate dimension: 301–600s silence records
+`MONITOR_INTERVAL_MISSED`; >600s silence, stale ongoing observation or invalid
+monitor chronology records `MONITOR_UNAVAILABLE`. Both close readiness without
+erasing proven age/age_seconds, latest attempt status or independently validated
+response authority. WARNING/CRITICAL/FENCE_REQUIRED/RPO_VIOLATION retain precedence;
+a young point with monitor uncertainty has state RPO_NOT_PROVABLE while its
+age_state remains HEALTHY. R0/Q consumers still reject any non-ready evaluation.
+Retention evaluation keeps every qualified point for 7d,
+at least the last two even when older, and Q points until a separate incident/
+release retention decision. It never deletes bytes, evidence or failed attempts.
+No schedules, jobs, alerts or writer actions are installed or invoked.
+
+The closed `response` descriptor binds explicit user/AP-05 authority, exact
+executor bytes, mechanism evidence and every writer scope: HTTP admission,
+Telegram polling, inbound workers, outbox/direct senders and autonomous DB writers.
+It requires trigger22h/budget300s and forbids auto-restore/rollback/reopen. A
+Caddy-only or incomplete response cannot satisfy ongoing readiness. This is a
+validated response design/authority contract, never a fence invocation.
+
+| Package | Current boundary |
+| --- | --- |
+| AP-00 | Future external provisioning, concrete provider/region/lock/cost choices and reviewed real adapter prerequisites; not granted |
+| AP-01 | Local isolated-worktree source/tests/canonical docs only; no publication or operational DR |
+| AP-02 | Future authorized source capture, exact R0 or separately native-authorized Q, using reviewed producer/supervisor integration; not granted |
+| AP-03 | Real S3 transport adapter/credential scope, exact encrypted transfer and independent versioned read-back; not granted |
+| AP-04 | Provisioned isolated Linux/amd64 restore, secret hydration, functional proof and cleanup; not granted |
+| AP-05 | Concrete periodic runner/monitor/retention and separately scoped writer response installation/activation; not granted |
+| AP-06 | Independent read-only observations and final evidence verification/receipt write using reviewed adapters/consumers; not granted |
+| AP-07 | Protected secret/config/image/evidence custody preparation and retrieval proof; not granted |
+
+The S3 `S3Transport` and `Encryption` interfaces are stable local contracts, with
+deterministic in-memory test doubles only. No SDK or crypto dependency was added.
+`FakeEncryption` is an opaque token map, **not cryptography**, and rejects
+client-side/operational mode. Real authenticated encryption, decryption/key
+recovery, create-only locked versioned upload and independently authenticated GET
+remain reviewed adapter prerequisites. No live transport or real encryption is
+claimed. Do not substitute plaintext archives or DIY crypto when these are absent.
+Producer orchestration, operational trust acquisition and live caller wiring are
+remaining implementation/review prerequisites. AP-02/AP-06 execution approval
+alone does not authorize arbitrary code changes, deployment or source integration.
+
+The [whole-database recipe](V126_DATABASE_RECOVERY_REHEARSAL.md) defines inventory,
+restore and functional boundaries. The [cutover contract](V126_STAGING_CUTOVER_CONTRACT.md)
+owns R0/Q consumers; the [operational handoff](V126_OPERATIONAL_HANDOFF.md) owns
+source/runtime transitions. Those consumers do not change the historical twenty
+states or replay/upgrade old receipts. Actual gate, V126 init/Gate A/B/C, live
+recovery, provider, scheduler, fence and deploy actions still need separate approvals.
+
 ## Logs And Troubleshooting Index
 
 Known commands:

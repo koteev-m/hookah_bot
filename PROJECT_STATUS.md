@@ -1,5 +1,30 @@
 # Project Status
 
+## HT-OPS-04 — Policy B DR / AP-01 local implementation
+
+AP-01 is the only authorized package. The isolated feature changeset from exact
+base `2c331a7c3809275367360685c7549c41f4e3ea86` implements closed versioned DR evidence,
+source/tool binding, attempt-ledger/freshness/readiness decisions, S3/encryption
+interfaces with test doubles, strict bundle/bootstrap/catalog validation and R0/Q
+consumer hooks. Accepted D1–D4, DR-A…DR-G and authority boundaries are in
+`docs/DEPLOYMENT_RUNBOOK.md`; restore and cutover contracts retain their own scope.
+
+No operational DR phase, real provider/crypto/custody/restore, scheduler/fence,
+V126 attempt, deploy, commit or push is performed by AP-01. Historical repair
+reports/receipts remain historical. Source/runtime dispatch integration and real
+adapters are future separately reviewed/authorized prerequisites. Next step:
+independent review of the local diff and its focused test evidence. This is not
+DR PASS or staging release readiness. Earlier checkpoints below are preserved.
+
+Local validation: `python3 scripts/test-v126-dr-evidence.py --postgres-docker`
+**37/37 PASS** (36 pure regressions + one real owned PG17 whole-DB test), existing
+database-evidence `--unit` **4/4 PASS**, Python syntax, shell syntax, canonical
+docs links/fences and tracked/new-file whitespace checks PASS. The installed PG17
+image is ARM64; PG18/full Linux cutover harness and operational Linux/amd64 app/
+real-auth restore were not run. The first Docker fixture startup failed because
+it observed the temporary initialization server; the final-process readiness
+check fixed it and later runs passed. All owned fixture containers were removed.
+
 ## HT-RELEASE-REPAIR-01 — implementation closure and delivery contract
 
 The unified F01–F11 implementation is FIXED_AND_VERIFIED at the explicit scopes in

@@ -93,6 +93,20 @@ runtime gate needs bounded successful polling/progress and conflict evidence plu
 17 real controlled Guest/Owner/MIX assertions. No concurrent getUpdates observer is
 allowed as a replacement for the bot's poller.
 
+HT-OPS-04 / AP-01 adds the source-bound Policy B evidence/readiness consumer in
+`scripts/v126-dr-evidence.py`; policy and AP-00…AP-07 boundaries are canonical in
+[DEPLOYMENT_RUNBOOK.md](DEPLOYMENT_RUNBOOK.md#policy-b-disaster-recovery--ht-ops-04--ap-01).
+The future approved handoff must bind the same target, data/restore source-image-
+migration-config epoch, independent custody versions and current ongoing readiness.
+A new source/schema/image/config epoch requires its own compatible qualified point;
+historical V125/Q bytes cannot be presented as actual post-V126 restore evidence.
+R0 preparation and future exact-run/native-stage7 Q are separate barriers described
+in [V126_STAGING_CUTOVER_CONTRACT.md](V126_STAGING_CUTOVER_CONTRACT.md).
+AP-01 implements only local validation and synthetic tests: no applied handoff,
+scheduler, monitor, fence, secret export, real restore or DR PASS. The earlier
+feature-publication authorization paragraph below belongs to the repair history
+and grants no publication authority to this AP-01 changeset.
+
 The schema/data rehearsal remains narrower than operational DR. The new synthetic
 whole-DB rehearsal checks globals/memberships, owners/ACL, database/role settings and
 role authentication, but uses only synthetic secrets. Real secret custody/rotation,
