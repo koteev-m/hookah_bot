@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import re
+import select
 import shutil
 import signal
 import stat
@@ -47,6 +48,174 @@ FIXTURE_EVENTS = frozenset((
 ))
 
 
+PRODUCTION_STAGES = (
+    "prerequisites", "source-inspection", "dump", "restore-list", "dump-checksum",
+    "globals-export", "globals-checksum", "capacity", "resource-creation", "readiness",
+    "copy-dump", "database-create", "restore", "restored-version", "restored-data",
+    "production-verified", "post-validation", "proof-generation", "complete",
+)
+CLEANUP_EVENTS = frozenset((
+    "cleanup-start", "container-cleanup", "container-failed", "volume-cleanup",
+    "volume-failed", "cleanup-ok", "cleanup-failed", "data-globals-check", "data-globals-ok",
+))
+
+
+def causal_diagnostic(trace, phase, code):
+    # A new private pipe per invocation; no sidecar, old proof, or raw child output
+    # is accepted as causal evidence. Validate the entire bounded stream first.
+    unknown = "production=UNKNOWN_REDACTED root_cause=UNKNOWN_REDACTED cleanup=UNKNOWN_REDACTED cleanup_event=UNKNOWN_REDACTED cleanup_failure=UNKNOWN_REDACTED fixture_check=UNKNOWN_REDACTED failure=unknown"
+    if (phase not in ("pre-drain", "quiesced") or not isinstance(trace, bytes) or
+            not 0 < len(trace) <= 2048 or not trace.endswith(b"\n")):
+        return unknown
+    records = trace[:-1].split(b"\n")
+    if records.pop(0) != ("begin-" + phase).encode() or len(records) > 40:
+        return unknown
+    allowed = {event.encode(): event for event in (*PRODUCTION_STAGES, *CLEANUP_EVENTS,
+                 *("failed-" + stage for stage in PRODUCTION_STAGES))}
+    if not records or any(record not in allowed for record in records):
+        return unknown
+    sequence = tuple(stage for stage in PRODUCTION_STAGES
+                     if phase == "pre-drain" or not stage.startswith("globals-"))
+    position = -1
+    production = "NONE"
+    root = "NONE"
+    cleanup = "NONE"
+    cleanup_failure = "NONE"
+    cleanup_event = "NONE"
+    fixture_check = "NONE"
+    cleaning = False
+    closed = False
+    for record in records:
+        event = allowed[record]
+        if event.startswith("failed-"):
+            failed_stage = event.removeprefix("failed-")
+            if (root != "NONE" or failed_stage != production or cleaning or
+                    production in ("NONE", "production-verified", "complete") or
+                    (cleanup != "NONE" and production not in ("post-validation", "proof-generation"))):
+                return unknown
+            root = failed_stage
+            closed = True
+        elif event in PRODUCTION_STAGES:
+            if cleaning or closed or position + 1 >= len(sequence) or event != sequence[position + 1]:
+                return unknown
+            if event == "post-validation" and cleanup != "cleanup-ok":
+                return unknown
+            position += 1
+            production = event
+        elif event == "cleanup-start":
+            if cleaning or production == "NONE" or cleanup != "NONE":
+                return unknown
+            cleaning = True
+        elif not cleaning:
+            return unknown
+        elif event in ("data-globals-check", "data-globals-ok"):
+            if cleanup != "container-cleanup" or fixture_check != ("NONE" if event == "data-globals-check" else "data-globals-check"):
+                return unknown
+            fixture_check = event
+        elif event == "container-cleanup":
+            if cleanup != "NONE":
+                return unknown
+            cleanup = event
+            cleanup_event = event
+        elif event == "container-failed":
+            if cleanup != "container-cleanup" or cleanup_failure != "NONE":
+                return unknown
+            cleanup_failure = "container-cleanup"
+        elif event == "volume-cleanup":
+            if cleanup not in ("NONE", "container-cleanup"):
+                return unknown
+            cleanup = event
+            cleanup_event = event
+        elif event == "volume-failed":
+            if cleanup != "volume-cleanup":
+                return unknown
+            if cleanup_failure == "NONE":
+                cleanup_failure = "volume-cleanup"
+        else:
+            if event == "cleanup-ok" and fixture_check == "data-globals-check":
+                return unknown
+            if (event == "cleanup-ok") != (cleanup_failure == "NONE"):
+                return unknown
+            cleanup = event
+            cleaning = False
+            closed = root != "NONE" or event == "cleanup-failed"
+    # Entries prove reachability only. A failure witness names the in-process
+    # active stage, never the last successfully delivered stage. Without one or
+    # an explicit completed-production/failed-cleanup boundary, fail attribution
+    # closed even when every delivered record is syntactically valid.
+    if code == 0:
+        if production != "complete" or root != "NONE" or cleanup != "cleanup-ok":
+            return unknown
+        failure = "none"
+    elif root != "NONE":
+        failure = "postcondition" if root in ("post-validation", "proof-generation") else "production"
+        if cleaning:
+            cleanup = "UNKNOWN_REDACTED"
+    elif production == "complete" and cleanup == "cleanup-ok":
+        failure = "postcondition"
+    elif production == "production-verified" and cleanup == "cleanup-failed":
+        failure = "cleanup"
+    else:
+        return unknown
+    return (f"production={production} root_cause={root} cleanup={cleanup} "
+            f"cleanup_event={cleanup_event} cleanup_failure={cleanup_failure} fixture_check={fixture_check} failure={failure}")
+
+
+def canonical_pass_proof(path, backup, run_id, release_sha):
+    # Exact writer: remote_backup_rehearsal -> remote_write_proof. Value and
+    # artifact authority: remote_verify_proof + backup_checks/reconcile_backup_archive.
+    # This fixture prerequisite accepts only that complete quiesced artifact;
+    # neither a result-line search nor a writable checksum alone proves PASS.
+    keys = ("run_id", "release_sha", "phase", "dump_sha256", "inventory_sha256", "rehearsal_sha256",
+            "rehearsal_container", "rehearsal_volume", "rehearsal_owner", "rehearsal_cleanup", "result")
+
+    def read_proof_file(target, limit):
+        info = target.lstat()
+        if (not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600 or
+                info.st_uid != os.getuid() or info.st_gid != os.getgid()):
+            raise ValueError
+        with target.open("rb") as stream:
+            return stream.read(limit + 1)
+
+    try:
+        proof = read_proof_file(path, 4096)
+        checksum = read_proof_file(Path(str(path) + ".sha256"), 65)
+        if not 0 < len(proof) <= 4096 or not proof.endswith(b"\n"):
+            return False
+        rows = proof[:-1].decode("ascii").split("\n")
+        if len(rows) != len(keys) or any(row.count("=") != 1 for row in rows):
+            return False
+        fields = [row.split("=") for row in rows]
+        if tuple(key for key, _ in fields) != keys:
+            return False
+        values = dict(fields)
+        if checksum != hashlib.sha256(proof).hexdigest().encode() + b"\n":
+            return False
+        expected = dict(run_id=run_id, release_sha=release_sha, phase="quiesced",
+                        rehearsal_cleanup="COMPLETE", result="PASS")
+        if any(values[key] != value for key, value in expected.items()):
+            return False
+        for key, suffix in (("dump_sha256", ".dump"), ("inventory_sha256", ".dump.pg_restore.list"),
+                            ("rehearsal_sha256", ".dump.rehearsal.txt")):
+            if not re.fullmatch("[0-9a-f]{64}", values[key]):
+                return False
+            digest = hashlib.sha256()
+            with (backup / ("quiesced" + suffix)).open("rb") as stream:
+                for chunk in iter(lambda: stream.read(65536), b""):
+                    digest.update(chunk)
+            if values[key] != digest.hexdigest():
+                return False
+        if not re.fullmatch("[0-9a-f]{64}", values["rehearsal_container"]):
+            return False
+        safe_run = re.sub("[^a-z0-9-]", "-", run_id)
+        owner = re.fullmatch("v126:" + re.escape(release_sha + ":" + safe_run) + r":quiesced:([0-9]+)",
+                             values["rehearsal_owner"])
+        return bool(owner and values["rehearsal_volume"] ==
+                    "hookah-v126-" + safe_run + "-quiesced-" + owner[1])
+    except (OSError, ValueError, UnicodeError):
+        return False
+
+
 def diagnostic_value(path, allowed, offset=0):
     # Bound the read as well as the output; never interpolate untrusted file bytes.
     try:
@@ -66,7 +235,7 @@ def diagnostic_value(path, allowed, offset=0):
     return next((item for item in allowed if value == item.encode()), "UNKNOWN_REDACTED")
 
 
-def driver_diagnostic(result, phase, root, event_offset, trace=None, initialized=True, mode=None):
+def driver_diagnostic(result, phase, root, event_offset, trace=None, initialized=True, mode=None, causal_trace=None):
     phase = phase if phase in ("pre-drain", "quiesced") else "UNKNOWN_REDACTED"
     stage = diagnostic_value(root / "driver-stage", DIAGNOSTIC_STAGES)
     event = diagnostic_value(root / "events", FIXTURE_EVENTS, event_offset)
@@ -109,9 +278,10 @@ def driver_diagnostic(result, phase, root, event_offset, trace=None, initialized
     else:
         rehearsal = "unknown"
         metadata = "unavailable"
+    causal = causal_diagnostic(causal_trace, phase, result.returncode)
     suffix = "" if metadata == "ok" else f" metadata={metadata}"
     return (f"HT12AA_DIAG phase={phase} stage={stage} rehearsal={rehearsal} "
-            f"exit={result.returncode:d} last_event={event}{suffix}")
+            f"exit={result.returncode:d} last_event={event} {causal}{suffix}")
 
 
 def run(args, **kwargs):
@@ -170,19 +340,72 @@ sudo() { boundary sudo "$@"; }
 stat() { boundary stat "$@"; }
 df() { boundary df "$@"; }
 sha256sum() { boundary checksum "$@"; }
+causal_write() {
+  local value
+  case "$1" in
+    __HT12AA_CAUSAL_ALLOWLIST__) value="$1" ;;
+    *) value=UNKNOWN_REDACTED ;;
+  esac
+  # Only the writer subshell ignores PIPE. The production shell keeps its
+  # signal dispositions, errexit and EXIT cleanup; even a writer signal/status
+  # is contained by the conditional subshell command. Redirect its entire
+  # stdout lifetime so Bash cannot flush a failed printf after restoring stdout.
+  ( trap '' PIPE; printf '%s\n' "$value" ) 2>/dev/null >&"$HT12AA_CAUSAL_FD" || :
+  return 0
+}
+remote_backup_failure() {
+  if [[ "${HT12AA_CAUSAL_FAILED:-no}" == no ]]; then
+    case "${HT12AA_CAUSAL_STAGE:-}" in
+      __HT12AA_FAILURE_STAGES__)
+        HT12AA_CAUSAL_FAILED=yes
+        causal_write "failed-$HT12AA_CAUSAL_STAGE"
+        ;;
+    esac
+  fi
+  return 0
+}
+remote_backup_diagnostic() {
+  case "$1" in
+    begin-pre-drain|begin-quiesced) HT12AA_CAUSAL_STAGE=; HT12AA_CAUSAL_FAILED=no ;;
+    __HT12AA_PRODUCTION_STAGES__) HT12AA_CAUSAL_STAGE="$1" ;;
+    cleanup-start)
+      # The unchanged production EXIT trap saved this status before cleanup.
+      if [[ "${v126_cleanup_exit_status:-0}" != 0 ]]; then remote_backup_failure; fi
+      ;;
+  esac
+  causal_write "$1"
+  return 0
+}
+# Fixture-only ERR observation: no raw command/status text, no production trap
+# replacement. Ignore command-substitution ERRs; the unhandled parent failure
+# is the authority. A successful observer does not change Bash's saved exit.
+trap 'if (( BASH_SUBSHELL == 0 )); then remote_backup_failure; fi' ERR
+# Explicit production denials use exit inside die, which does not raise ERR.
+# Alias the exact sourced implementation and forward its arguments unchanged;
+# only the fixture's parent-shell failure boundary adds a fixed witness.
+eval "$(declare -f die | sed '1s/^die /ht12aa_production_die /')"
+die() {
+  if (( BASH_SUBSHELL == 0 )); then remote_backup_failure; fi
+  ht12aa_production_die "$@"
+}
 diagnostic_stage() {
   local metadata=ok
   { printf '%s\n' "$1" >| "$fixture/driver-stage"; } 2>/dev/null || metadata=failed
-  { printf '%s %s\n' "$1" "$metadata" >&"$HT12AA_DIAGNOSTIC_FD"; } 2>/dev/null || :
+  ( trap '' PIPE; printf '%s %s\n' "$1" "$metadata" ) 2>/dev/null >&"$HT12AA_DIAGNOSTIC_FD" || :
   return 0
 }
 if [[ "$mode" == globals ]]; then
   diagnostic_stage globals_command
   source "$fixture/globals-command.sh"
 else
+  case "$phase" in
+    pre-drain) remote_backup_diagnostic begin-pre-drain ;;
+    quiesced) remote_backup_diagnostic begin-quiesced ;;
+  esac
   diagnostic_stage remote_backup_rehearsal
   # Keep this a simple command: conditional callers would disable production errexit.
   remote_backup_rehearsal "$fixture" "$HT12AA_RUN" "$HT12AA_RELEASE" "$phase" "fixture:$V125_SOURCE_SHA"
+  remote_backup_diagnostic complete
   diagnostic_stage remote_backup_rehearsal_success
   diagnostic_stage trap_postcondition
   # Explicit exits prevent later markers from masking failed postconditions,
@@ -194,7 +417,12 @@ else
   if declare -p V126_REMOTE_REHEARSAL_CLEANUP_VOLUME >/dev/null 2>&1; then exit 1; fi
   diagnostic_stage complete
 fi
-'''
+'''.replace("__HT12AA_CAUSAL_ALLOWLIST__", "|".join(
+    (*PRODUCTION_STAGES, *sorted(CLEANUP_EVENTS), "begin-pre-drain", "begin-quiesced",
+     *("failed-" + stage for stage in PRODUCTION_STAGES)))).replace(
+         "__HT12AA_PRODUCTION_STAGES__", "|".join(PRODUCTION_STAGES)).replace(
+         "__HT12AA_FAILURE_STAGES__", "|".join(stage for stage in PRODUCTION_STAGES
+                                               if stage not in ("production-verified", "complete")))
 
 
 def boundary(config, kind, args):
@@ -204,6 +432,13 @@ def boundary(config, kind, args):
     def event(value):
         with (root / "events").open("a") as log:
             log.write(value + "\n")
+
+    def diagnostic_event(value):
+        value = value if value in ("data-globals-check", "data-globals-ok") else "UNKNOWN_REDACTED"
+        try:
+            os.write(int(os.environ["HT12AA_CAUSAL_FD"]), (value + "\n").encode())
+        except (KeyError, ValueError, OSError):
+            pass
 
     def forward(command, payload=None):
         result = run(command, input=payload)
@@ -335,6 +570,7 @@ def boundary(config, kind, args):
         require(args[-1] != cfg["source"], "production attempted source cleanup")
         if not fault:
             # Additional test oracle before production deletes its restored database.
+            diagnostic_event("data-globals-check")
             query = ("SELECT (SELECT count(*) FROM ht12aa_payload)=2 AND "
                      "(SELECT sum(value) FROM ht12aa_payload)=42 AND "
                      "(SELECT last_value FROM ht12aa_seq)=9 AND "
@@ -342,6 +578,7 @@ def boundary(config, kind, args):
             result = run([cfg["docker"], "exec", args[-1], "psql", "-X", "-U", cfg["user"],
                           "-d", "v126_restore_rehearsal", "-Atqc", query])
             require(result.returncode == 0 and result.stdout == b"t\n", "restored data/global separation failed")
+            diagnostic_event("data-globals-ok")
             event("data-verified-globals-not-applied")
         event("container-remove")
     elif args[:2] == ["volume", "rm"]:
@@ -421,6 +658,426 @@ class BoundaryAdapterTest(unittest.TestCase):
         self.assertEqual(self.checksum(None, "-c", str(inventory)).returncode, 0)
         payload.write_bytes(b"different bytes")
         self.assertNotEqual(self.checksum(None, "-c", str(inventory)).returncode, 0)
+
+
+class CausalDiagnosticTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="ht-ops-18-causal-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+
+    def trace(self, stage="restore", phase="quiesced", cleanup=(), witness=True):
+        sequence = [item for item in PRODUCTION_STAGES
+                    if phase == "pre-drain" or not item.startswith("globals-")]
+        failure = ["failed-" + stage] if witness and stage not in ("production-verified", "complete") else []
+        return ("\n".join(["begin-" + phase, *sequence[:sequence.index(stage) + 1], *failure, *cleanup]) + "\n").encode()
+
+    def fixture(self, stage="none", cleanup_failure=False, caller="direct", writer_failure=False,
+                lost_after="", closed_reader=False, restore_failure=False, driver_failure=False, command_failure=""):
+        # Reuse the cutover fake-Docker boundary and the actual diagnostic writer;
+        # execute the production body/traps unchanged. A pipe handshake makes
+        # reader loss precede the next write deterministically, without sleeps.
+        import shlex
+        root = self.root / uuid.uuid4().hex
+        root.mkdir()
+        observer = DRIVER.split("causal_write() {", 1)[1].split("diagnostic_stage() {", 1)[0]
+        observer = ("causal_write() {" + observer).replace(
+            "remote_backup_diagnostic() {", "observed_diagnostic() {")
+        wrapper = root / "source.sh"
+        wrapper.write_text("source " + shlex.quote(str(ROOT / "v126-cutover.sh")) + "\n" + observer + r'''
+remote_backup_diagnostic() {
+  observed_diagnostic "$@"
+  if [[ "$1" == "$HT18_STAGE" ]]; then remote_backup_failure; exit 77; fi
+  if [[ "$HT18_CLEANUP" == yes && "$1" == production-verified ]]; then
+    remote_cleanup_owned_rehearsal_volume() {
+      remote_backup_diagnostic volume-cleanup || :
+      return 1
+    }
+  fi
+  if [[ "$1" == "$HT20_LOST_AFTER" ]]; then
+    if [[ "$HT20_READER" == yes ]]; then
+      IFS= read -r -u "$HT20_ACK_FD" acknowledgement
+      [[ "$acknowledgement" == closed ]] || exit 98
+    else
+      eval "exec ${HT12AA_CAUSAL_FD}>&-"
+    fi
+  fi
+  [[ "$HT18_WRITER" != yes ]] || return 93
+  return 0
+}
+remote_backup_diagnostic begin-quiesced || :
+''')
+        harness = (ROOT / "test-v126-cutover.sh").read_text()
+        fixture = harness.split("run_real_backup_rehearsal_cleanup_fixture() {", 1)[1].split(
+            "\nassert_real_backup_rehearsal_lifecycle()", 1)[0]
+        fixture = "run_real_backup_rehearsal_cleanup_fixture() {" + fixture
+        if restore_failure:
+            fixture = fixture.replace('pg_restore) [[ "${fixture_mode}" != post-restore ]] || return 91 ;;',
+                                      'pg_restore) return 72 ;;')
+        if driver_failure:
+            fixture = fixture.replace("printf '%s\\n' SUCCESS_CLEANUP_GLOBALS_RESET",
+                                      "exit 79\nprintf '%s\\n' SUCCESS_CLEANUP_GLOBALS_RESET")
+        if command_failure:
+            injected = r'''
+eval "$(declare -f remote_compose | sed '1s/^remote_compose /ht20_compose /')"
+remote_compose() {
+  if [[ "$HT20_COMMAND_FAILURE" == restore-list && "$*" == *'pg_restore --list'* ]]; then return 73; fi
+  if [[ "$HT20_COMMAND_FAILURE" == dump-empty && "$*" == *'pg_dump '* ]]; then return 0; fi
+  ht20_compose "$@"
+}
+eval "$(declare -f remote_write_proof | sed '1s/^remote_write_proof /ht20_write_proof /')"
+remote_write_proof() {
+  [[ "$HT20_COMMAND_FAILURE" != proof-create ]] || return 76
+  ht20_write_proof "$@"
+}
+eval "$(declare -f remote_emit_artifact | sed '1s/^remote_emit_artifact /ht20_emit_artifact /')"
+remote_emit_artifact() {
+  if [[ "$HT20_COMMAND_FAILURE" == proof-emit && "$1" == quiesced-backup-proof ]]; then return 78; fi
+  if [[ "$HT20_COMMAND_FAILURE" == metadata-emit && "$1" == quiesced-backup-rehearsal ]]; then return 79; fi
+  ht20_emit_artifact "$@"
+}
+'''
+            fixture = fixture.replace('case "${fixture_caller}" in', injected + '\ncase "${fixture_caller}" in', 1)
+        adapted = root / "fixture.sh"
+        adapted.write_text(fixture)
+        read_fd, write_fd = os.pipe()
+        ack_read, ack_write = os.pipe()
+        env = {key: os.environ[key] for key in ("PATH", "HOME", "TMPDIR") if key in os.environ}
+        env.update(HT12AA_CAUSAL_FD=str(write_fd), HT20_ACK_FD=str(ack_read), HT18_STAGE=stage,
+                   HT18_CLEANUP="yes" if cleanup_failure else "no", HT18_WRITER="yes" if writer_failure else "no",
+                   HT20_LOST_AFTER=lost_after, HT20_READER="yes" if closed_reader else "no",
+                   HT20_COMMAND_FAILURE=command_failure)
+        script = 'source "$1"\nsource "$2"\nCUTOVER_SCRIPT="$3"\nrun_real_backup_rehearsal_cleanup_fixture success "$4" "$5"\n'
+        data = b""
+        try:
+            with subprocess.Popen(["bash", "-c", script, "causal-fixture", str(ROOT / "test-v126-cutover.sh"),
+                                   str(adapted), str(wrapper), str(root), caller], env=env,
+                                  pass_fds=(write_fd, ack_read), stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE) as process:
+                try:
+                    os.close(write_fd)
+                    write_fd = None
+                    if closed_reader:
+                        deadline = time.monotonic() + 15
+                        while ("\n" + lost_after + "\n").encode() not in data:
+                            require(time.monotonic() < deadline, "closed-reader handshake timed out")
+                            if select.select([read_fd], [], [], 0.1)[0]:
+                                chunk = os.read(read_fd, 2049)
+                                require(bool(chunk), "closed-reader handshake lost producer")
+                                data += chunk
+                        os.close(read_fd)
+                        read_fd = None
+                        os.write(ack_write, b"closed\n")
+                    stdout, stderr = process.communicate(timeout=20)
+                except BaseException:
+                    process.kill()
+                    process.communicate()
+                    raise
+                result = subprocess.CompletedProcess([], process.returncode, stdout, stderr)
+            if read_fd is not None:
+                data += os.read(read_fd, 2049)
+        finally:
+            for fd in (read_fd, write_fd, ack_read, ack_write):
+                if fd is not None:
+                    os.close(fd)
+        data += b"complete\n" if result.returncode == 0 and not lost_after else b""
+        result.causal_trace = data
+        summary = causal_diagnostic(data, "quiesced", result.returncode)
+        return result, root, summary
+
+    def test_closed_reader_preserves_failure_exit_and_exit_cleanup(self):
+        result, root, summary = self.fixture(lost_after="restore", closed_reader=True, restore_failure=True)
+        self.assertEqual(result.returncode, 72, summary)
+        self.assertIn("failure=unknown", summary)
+        self.assertIn(b"rehearsal restore failed (exit=72)", result.stderr)
+        self.assert_cleaned(root)
+
+    def test_closed_reader_preserves_success_and_proof(self):
+        result, root, summary = self.fixture(lost_after="restore", closed_reader=True)
+        self.assertEqual(result.returncode, 0, summary)
+        self.assertIn("failure=unknown", summary)
+        self.assertIn(b"SUCCESS_CLEANUP_GLOBALS_RESET", result.stdout)
+        self.assertTrue((root / "staging/.v126-runs/fixture-rehearsal/quiesced-backup-rehearsed.proof").is_file())
+        self.assert_cleaned(root)
+
+    def assert_cleaned(self, root):
+        for name in ("container.state", "container.owner", "volume.state", "volume.owner"):
+            self.assertFalse((root / name).exists(), name)
+        lifecycle = (root / "lifecycle.log").read_text().splitlines()
+        self.assertIn("CONTAINER_RM", lifecycle)
+        self.assertIn("VOLUME_RM", lifecycle)
+        self.assertEqual((root / "sentinel.guard").read_text(), "SENTINEL_UNTOUCHED\n")
+
+    def test_lost_suffix_after_successful_stages_never_fabricates_root(self):
+        for last, stage, restore, driver in (("readiness", "none", True, False),
+                                            ("database-create", "none", True, False),
+                                            ("production-verified", "proof-generation", False, False),
+                                            ("volume-cleanup", "none", False, True),
+                                            ("cleanup-ok", "none", False, True)):
+            with self.subTest(last_delivered=last):
+                result, root, summary = self.fixture(stage, lost_after=last, restore_failure=restore,
+                                                     driver_failure=driver)
+                self.assertEqual(result.returncode, 72 if restore else 79 if driver else 77)
+                self.assertIn("root_cause=UNKNOWN_REDACTED", summary)
+                self.assertIn("failure=unknown", summary)
+                self.assertTrue(result.causal_trace.endswith((last + "\n").encode()))
+                self.assert_cleaned(root)
+
+    def test_intact_unhandled_command_failure_witness_preserves_exact_exit(self):
+        for fault, code, stage, proof in (("dump-empty", 4, "dump", False),
+                                           ("restore-list", 73, "restore-list", False),
+                                           ("proof-create", 76, "proof-generation", False),
+                                           ("proof-emit", 78, "proof-generation", True),
+                                           ("metadata-emit", 79, "post-validation", False)):
+            with self.subTest(command=fault):
+                result, root, summary = self.fixture(command_failure=fault)
+                self.assertEqual(result.returncode, code, summary)
+                self.assertIn("root_cause=" + stage + " ", summary)
+                self.assertEqual((root / "staging/.v126-runs/fixture-rehearsal/quiesced-backup-rehearsed.proof").exists(), proof)
+                if fault not in ("dump-empty", "restore-list"):
+                    self.assert_cleaned(root)
+
+    def test_writer_preserves_parent_traps_and_nonzero_status(self):
+        prefix = DRIVER.split('if [[ "$mode" == globals ]]; then', 1)[0]
+        for signal_handler in ("trap - PIPE", "trap ':' PIPE"):
+            read_fd, write_fd = os.pipe()
+            ack_read, ack_write = os.pipe()
+            try:
+                script = 'IFS= read -r -u "$HT20_ACK_FD" acknowledgement\n' + prefix + r'''
+trap ':' INT TERM HUP
+trap 'saved=$?; printf "cleanup=%s\n" "$saved"; exit "$saved"' EXIT
+''' + signal_handler + r'''
+before_traps="$(trap -p EXIT INT TERM HUP PIPE ERR)"
+before_options="$-"
+remote_backup_diagnostic begin-quiesced
+remote_backup_diagnostic dump
+diagnostic_stage remote_backup_rehearsal
+[[ "$(trap -p EXIT INT TERM HUP PIPE ERR)" == "$before_traps" && "$-" == "$before_options" ]] || exit 98
+unhandled_failure() { return 73; }
+unhandled_failure
+'''
+                with subprocess.Popen(["bash", "-c", script, "writer-traps", str(ROOT / "v126-cutover.sh"),
+                                       str(self.root), "quiesced", "backup"],
+                                      env=dict(PATH=os.environ["PATH"], HT12AA_CAUSAL_FD=str(write_fd),
+                                               HT12AA_DIAGNOSTIC_FD=str(write_fd), HT20_ACK_FD=str(ack_read)),
+                                      pass_fds=(write_fd, ack_read), stdout=subprocess.PIPE,
+                                      stderr=subprocess.PIPE) as process:
+                    # Close after spawn so subprocess FD remapping cannot reuse
+                    # a pre-closed reader descriptor for captured stdout/stderr.
+                    os.close(read_fd)
+                    os.write(ack_write, b"closed\n")
+                    stdout, stderr = process.communicate(timeout=10)
+                    result = subprocess.CompletedProcess([], process.returncode, stdout, stderr)
+            finally:
+                for fd in (write_fd, ack_read, ack_write):
+                    os.close(fd)
+            self.assertEqual(result.returncode, 73)
+            self.assertEqual(result.stdout, b"cleanup=73\n")
+            self.assertEqual(result.stderr, b"")
+
+    def test_prefix_without_failure_witness_is_unknown_at_every_stage(self):
+        for phase in ("pre-drain", "quiesced"):
+            for stage in PRODUCTION_STAGES[:-1]:
+                if phase == "quiesced" and stage.startswith("globals-"):
+                    continue
+                self.assertIn("failure=unknown", causal_diagnostic(
+                    self.trace(stage, phase, witness=False), phase, 72))
+        prefix = self.trace("database-create", witness=False)
+        # A recovered channel cannot bind a later failure to an earlier entry.
+        self.assertIn("failure=unknown", causal_diagnostic(prefix + b"failed-restore\n", "quiesced", 72))
+        # An explicit intact failure witness remains authoritative if cleanup's suffix is lost.
+        self.assertIn("root_cause=restore", causal_diagnostic(self.trace(), "quiesced", 72))
+
+    def test_actual_early_failure_survives_exit_cleanup(self):
+        for caller in ("direct", "conditional", "capture"):
+            with self.subTest(caller=caller):
+                result, root, summary = self.fixture("restore", caller=caller)
+                self.assertEqual(result.returncode, 77, summary)
+                self.assertIn("root_cause=restore cleanup=cleanup-ok cleanup_event=volume-cleanup", summary)
+                self.assertIn("failure=production", summary)
+                self.assertIn("CONTAINER_RM\n", (root / "lifecycle.log").read_text())
+                self.assertIn("VOLUME_RM\n", (root / "lifecycle.log").read_text())
+                self.assertFalse((root / "container.state").exists())
+                self.assertFalse((root / "volume.state").exists())
+
+    def test_actual_substages_and_post_validation(self):
+        for stage in ("restore-list", "readiness", "database-create", "restored-version", "restored-data",
+                      "post-validation", "proof-generation"):
+            with self.subTest(stage=stage):
+                result, root, summary = self.fixture(stage)
+                self.assertEqual(result.returncode, 77, summary)
+                self.assertIn("root_cause=" + stage + " ", summary)
+                self.assertIn("failure=" + ("postcondition" if stage in ("post-validation", "proof-generation")
+                                          else "production"), summary)
+                self.assertFalse((root / "staging/.v126-runs/fixture-rehearsal/quiesced-backup-rehearsed.proof").exists())
+
+    def test_actual_success_and_cleanup_failure_are_distinct(self):
+        for fail in (False, True):
+            with self.subTest(cleanup_failure=fail):
+                result, root, summary = self.fixture(cleanup_failure=fail)
+                self.assertEqual(result.returncode, 4 if fail else 0, summary)
+                self.assertIn("root_cause=NONE", summary)
+                self.assertIn("cleanup=" + ("cleanup-failed" if fail else "cleanup-ok"), summary)
+                self.assertIn("failure=" + ("cleanup" if fail else "none"), summary)
+                self.assertIn("cleanup_failure=" + ("volume-cleanup" if fail else "NONE"), summary)
+                proof = root / "staging/.v126-runs/fixture-rehearsal/quiesced-backup-rehearsed.proof"
+                self.assertEqual(proof.exists(), not fail)
+                if not fail:
+                    self.assertIn(b"result=PASS\n", proof.read_bytes())
+
+    def test_observer_nonzero_does_not_change_production_predicates(self):
+        for stage, code in (("none", 0), ("restore", 77)):
+            with self.subTest(stage=stage):
+                result, _, summary = self.fixture(stage, writer_failure=True)
+                self.assertEqual(result.returncode, code, summary)
+
+    def test_all_fixed_categories_and_cleanup_failure_preserve_first_root(self):
+        for phase in ("pre-drain", "quiesced"):
+            for stage in PRODUCTION_STAGES[:PRODUCTION_STAGES.index("production-verified")]:
+                if phase == "quiesced" and stage.startswith("globals-"):
+                    continue
+                for end in (("cleanup-start", "container-cleanup", "volume-cleanup", "cleanup-ok"),
+                            ("cleanup-start", "container-cleanup", "container-failed", "volume-cleanup",
+                             "volume-failed", "cleanup-failed")):
+                    summary = causal_diagnostic(self.trace(stage, phase, end), phase, 74)
+                    self.assertIn("root_cause=" + stage + " ", summary)
+                    self.assertIn("failure=production", summary)
+                    self.assertIn("cleanup_event=volume-cleanup", summary)
+                    self.assertIn("cleanup_failure=" + ("NONE" if end[-1] == "cleanup-ok" else "container-cleanup"), summary)
+
+    def test_combined_fixture_data_globals_check_remains_attributable(self):
+        prefix = self.trace("production-verified", cleanup=("cleanup-start", "container-cleanup", "data-globals-check"))
+        failed = prefix + b"container-failed\nvolume-cleanup\nvolume-failed\ncleanup-failed\n"
+        summary = causal_diagnostic(failed, "quiesced", 4)
+        self.assertIn("root_cause=NONE", summary)
+        self.assertIn("fixture_check=data-globals-check failure=cleanup", summary)
+        self.assertIn("cleanup_failure=container-cleanup", summary)
+        # A check that started but never passed cannot supply successful cleanup evidence.
+        self.assertIn("failure=unknown", causal_diagnostic(prefix + b"volume-cleanup\ncleanup-ok\n", "quiesced", 4))
+
+    def test_adversarial_streams_are_fully_redacted(self):
+        payloads = ["unknown", CANARY, "SCRAM-SHA-256$4096:salt$stored:server",
+                    "postgresql://fixture:password@invalid/db", "host=invalid password=fixture",
+                    "restore\nunknown", "restore\t", " restore", "restore ", "restore=bad", "$(id);`id`|&<>",
+                    "\x1b[31mrestore", "\u202erestore", "restоre", "restore\u200b", "x" * 8192]
+        valid = self.trace()
+        for number, payload in enumerate(payloads):
+            for trace in (payload.encode(), valid + payload.encode() + b"\n",
+                          valid.replace(b"restore\n", payload.encode() + b"\n")):
+                with self.subTest(payload=number):
+                    summary = causal_diagnostic(trace, "quiesced", 1)
+                    self.assertEqual(set(part.split("=", 1)[1] for part in summary.split()),
+                                     {"UNKNOWN_REDACTED", "unknown"})
+                    self.assertLess(len(summary), 256)
+                    self.assertNotIn(CANARY, summary)
+                    self.assertNotIn("SCRAM", summary)
+                    self.assertNotIn("postgresql", summary)
+        for trace in (None, b"", valid[:-1], valid + b"complete\n", valid + valid,
+                      self.trace("production-verified") + b"cleanup-ok\n"):
+            self.assertIn("failure=unknown", causal_diagnostic(trace, "quiesced", 1))
+
+    def test_adversarial_values_are_redacted_by_actual_writer(self):
+        prefix = DRIVER.split('if [[ "$mode" == globals ]]; then', 1)[0]
+        payloads = ["restore\nrestored-version", "restore\t", " restore", "restore ", "restore=bad",
+                    "$(id);`id`|&<>", "\x1b[31mrestore", "\u202erestore", "restоre", "restore\u200b",
+                    "x" * 8192, CANARY, "SCRAM-SHA-256$4096:salt$stored:server",
+                    "postgresql://fixture:password@invalid/db", "host=invalid password=fixture", "unknown"]
+        for number, payload in enumerate(payloads):
+            with self.subTest(payload=number):
+                read_fd, write_fd = os.pipe()
+                try:
+                    env = {"PATH": os.environ["PATH"], "HT12AA_CAUSAL_FD": str(write_fd)}
+                    result = run(["bash", "-c", prefix + '\nremote_backup_diagnostic "$5"\n',
+                                  "writer-test", str(ROOT / "v126-cutover.sh"), str(self.root),
+                                  "quiesced", "backup", payload], env=env, pass_fds=(write_fd,))
+                    os.close(write_fd)
+                    write_fd = None
+                    emitted = os.read(read_fd, 256)
+                finally:
+                    if write_fd is not None:
+                        os.close(write_fd)
+                    os.close(read_fd)
+                self.assertEqual(result.returncode, 0)
+                self.assertEqual(emitted, b"UNKNOWN_REDACTED\n")
+                self.assertEqual(result.stdout + result.stderr, b"")
+
+    def test_phase_and_invocation_isolation(self):
+        pre = self.trace(phase="pre-drain")
+        quiesced = self.trace()
+        self.assertIn("failure=unknown", causal_diagnostic(pre, "quiesced", 74))
+        self.assertIn("failure=unknown", causal_diagnostic(quiesced, "pre-drain", 74))
+        self.assertIn("root_cause=restore", causal_diagnostic(quiesced, "quiesced", 74))
+        self.assertIn("failure=unknown", causal_diagnostic(b"", "quiesced", 74))
+        self.assertIn("failure=unknown", causal_diagnostic(pre + quiesced, "quiesced", 74))
+
+    def test_missing_or_nonpass_proof_is_safe_prerequisite_failure(self):
+        case = BackupTest("test_12_diagnostic_writer_failure_preserves_postcondition_failure")
+        result = subprocess.CompletedProcess([], 1, b"", b"")
+        result.diagnostic = "HT12AA_DIAG " + causal_diagnostic(self.trace(), "quiesced", 1)
+        path = self.root / "run/quiesced-backup-rehearsed.proof"
+        path.parent.mkdir()
+        for contents in (None, b"result=FAIL\n", b"result=PASS", b"result=PASS\nresult=PASS\n",
+                         b"untrusted " + CANARY.encode()):
+            if contents is not None:
+                path.write_bytes(contents)
+            message = case.failure_text(lambda: case.assert_completed_rehearsal(result, self.root, self.root))
+            self.assertIn("HT12AA_PREREQUISITE production-pass-proof-required", message)
+            self.assertIn("root_cause=restore", message)
+            for forbidden in ("FileNotFoundError", str(self.root), CANARY):
+                self.assertNotIn(forbidden, message)
+
+    def test_canonical_pass_proof_accepts_genuine_artifact_and_rejects_ambiguity(self):
+        result, root, _ = self.fixture()
+        self.assertEqual(result.returncode, 0)
+        proof = root / "staging/.v126-runs/fixture-rehearsal/quiesced-backup-rehearsed.proof"
+        checksum = Path(str(proof) + ".sha256")
+        genuine = proof.read_bytes()
+        # The fixture's exact production writer supplies this artifact. Keep its
+        # generated identity; all negative cases mutate those genuine bytes.
+        release = next(row.split(b"=", 1)[1].decode() for row in genuine.splitlines()
+                       if row.startswith(b"release_sha="))
+        valid = lambda: canonical_pass_proof(proof, root / "backup", "fixture-rehearsal", release)
+        self.assertTrue(valid())
+        self.assert_cleaned(root)
+        rows = genuine.splitlines(keepends=True)
+        cases = {
+            "missing": None, "empty": b"", "pass-only": b"result=PASS\n",
+            "non-pass": genuine.replace(b"result=PASS", b"result=FAIL"),
+            "pass-plus-fail": genuine + b"result=FAIL\n", "duplicate-pass": genuine + b"result=PASS\n",
+            "truncated-row": genuine[:-1], "truncated-artifact": b"".join(rows[:-2]),
+            "duplicate-key": genuine + rows[3], "contradictory-cleanup": genuine + b"rehearsal_cleanup=FAILED\n",
+            "extra-field": genuine + b"unexpected=PASS\n", "unknown-value": genuine.replace(b"COMPLETE", b"UNKNOWN"),
+            "malformed-row": genuine.replace(b"phase=quiesced", b"phase==quiesced"),
+            "whitespace": genuine.replace(b"result=PASS", b"result=PASS "),
+            "wrong-phase": genuine.replace(b"phase=quiesced", b"phase=pre-drain"),
+            "wrong-hash": genuine.replace(rows[3], b"dump_sha256=" + b"0" * 64 + b"\n"),
+            "unknown-container": genuine.replace(rows[6], b"rehearsal_container=UNKNOWN\n"),
+            "wrong-owner": genuine.replace(b":quiesced:", b":pre-drain:"),
+            "uncontrolled": genuine + CANARY.encode() + b"\n",
+        }
+        for name, contents in cases.items():
+            with self.subTest(proof=name):
+                proof.unlink(missing_ok=True)
+                if contents is not None:
+                    proof.write_bytes(contents)
+                    proof.chmod(0o600)
+                    # Even a recomputed writable sidecar cannot bless bad grammar.
+                    checksum.write_bytes(hashlib.sha256(contents).hexdigest().encode() + b"\n")
+                self.assertFalse(valid())
+        proof.write_bytes(genuine)
+        proof.chmod(0o600)
+        checksum.write_bytes(hashlib.sha256(genuine).hexdigest().encode() + b"\n")
+        self.assertTrue(valid())
+        proof.chmod(0)
+        self.assertFalse(valid(), "mode-000 proof must fail even under a privileged test user")
+        proof.chmod(0o600)
+        with mock.patch.object(Path, "open", side_effect=PermissionError):
+            self.assertFalse(valid())
+        checksum.write_bytes(b"0" * 64 + b"\n")
+        self.assertFalse(valid())
+        checksum.unlink()
+        self.assertFalse(valid())
+
 
 
 class BackupTest(unittest.TestCase):
@@ -542,28 +1199,41 @@ class BackupTest(unittest.TestCase):
             (root / "driver-stage").write_text("driver_started\n")
         except OSError:
             initialized = False
-        # Six fixed records total <256 bytes, below the POSIX minimum pipe capacity.
-        # Keep the reader open throughout the child; no disk I/O or raw child streams
-        # supply this sequence. Nonblocking bounded reading also handles a lost suffix.
+        # Each fixed stream is below 512 bytes (including one failure witness).
+        # Keep readers open throughout the child; neither disk metadata nor raw
+        # child output supplies causal authority. A lost suffix stays unknown
+        # unless an explicit failure/completion boundary was already delivered.
+        causal_read, causal_write = os.pipe()
         read_fd, write_fd = os.pipe()
         try:
+            os.set_blocking(causal_read, False)
+            env["HT12AA_CAUSAL_FD"] = str(causal_write)
             os.set_blocking(read_fd, False)
             env["HT12AA_DIAGNOSTIC_FD"] = str(write_fd)
             result = run(["bash", str(self.driver), str(source), str(root), phase, mode],
-                         env=env, group=True, pass_fds=(write_fd,))
+                         env=env, group=True, pass_fds=(write_fd, causal_write))
             try:
                 trace = os.read(read_fd, 256)
             except OSError:
                 trace = None
+            try:
+                causal_trace = os.read(causal_read, 2049)
+            except OSError:
+                causal_trace = None
         finally:
+            os.close(causal_write)
+            os.close(causal_read)
             os.close(write_fd)
             os.close(read_fd)
-        result.diagnostic = driver_diagnostic(result, phase, root, event_offset, trace, initialized, mode)
+        result.diagnostic = driver_diagnostic(result, phase, root, event_offset, trace, initialized, mode, causal_trace)
         require(CANARY.encode() not in result.stdout + result.stderr,
                 "credential in diagnostics; " + result.diagnostic)
         require(b"SCRAM-SHA-256$" not in result.stdout + result.stderr,
                 "verifier in diagnostics; " + result.diagnostic)
         return result, root, root / "backups" / "v126" / BASE / run_id
+
+    def legacy_diagnostic(self, result):
+        return re.sub(r" production=\S+ root_cause=\S+ cleanup=\S+ cleanup_event=\S+ cleanup_failure=\S+ fixture_check=\S+ failure=\S+", "", result.diagnostic)
 
     def assert_driver_success(self, result):
         self.assertEqual(result.returncode, 0, result.diagnostic)
@@ -611,6 +1281,8 @@ class BackupTest(unittest.TestCase):
         result, root, backup = self.invoke(database=DATABASE)
         self.assert_driver_success(result)
         self.assertIn("stage=complete rehearsal=success exit=0", result.diagnostic)
+        self.assertIn("production=complete root_cause=NONE cleanup=cleanup-ok", result.diagnostic)
+        self.assertIn("fixture_check=data-globals-ok failure=none", result.diagnostic)
         globals_bytes = (backup / "globals.sql").read_bytes()
         for expected in (b"CREATE ROLE ht12aa_global;", b"HT12AA known global", b"GRANT ht12aa_global TO",
                          ("CREATE ROLE " + USER + ";").encode()):
@@ -621,6 +1293,7 @@ class BackupTest(unittest.TestCase):
         result, _, _ = self.invoke(phase="quiesced", database=DATABASE, root=root)
         self.assert_driver_success(result)
         self.assertIn("phase=quiesced stage=complete rehearsal=success exit=0", result.diagnostic)
+        self.assertIn("production=complete root_cause=NONE cleanup=cleanup-ok", result.diagnostic)
         for name, contents in before.items():
             require((backup / name).read_bytes() == contents, "pre-drain artifact changed")
         self.assertEqual(stat.S_IMODE(backup.stat().st_mode), 0o700)
@@ -682,6 +1355,13 @@ class BackupTest(unittest.TestCase):
                         root = self.quiesced_root()
                     result, root, backup = self.invoke(phase=phase, fault=fault, root=root)
                     self.rejected(result, root, backup, phase)
+                    category = ("restore-list" if fault == "pg_dump-partial" or fault.startswith("pg_restore-") else
+                                "dump" if fault.startswith("pg_dump-") else
+                                "globals-export" if fault.startswith("pg_dumpall-") else
+                                "restore" if fault == "restore-fail" else
+                                "resource-creation" if fault == "wrong-owner-volume" else fault)
+                    self.assertIn("root_cause=" + category + " ", result.diagnostic)
+                    self.assertIn("failure=production", result.diagnostic)
                     events = (root / "events").read_text().splitlines()
                     if fault not in ("restore-fail", "wrong-owner-volume"):
                         prefix = ["baseline", phase + "-gate", "user", "psql", "psql", "pg_dump"]
@@ -722,6 +1402,7 @@ class BackupTest(unittest.TestCase):
             else:
                 self.assertNotEqual(result.returncode, 0, result.diagnostic)
                 require(b"ARTIFACT\t" not in result.stdout, "failure emitted successful evidence; " + result.diagnostic)
+            self.assertIn("production=prerequisites root_cause=prerequisites cleanup=NONE", result.diagnostic)
             for path, digest in snapshot.items():
                 self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), digest, "existing artifact overwritten")
 
@@ -732,7 +1413,7 @@ class BackupTest(unittest.TestCase):
         self.assertEqual(result.returncode, 71, result.diagnostic)
         expected = (f"HT12AA_DIAG phase={phase} stage=remote_backup_rehearsal "
                     "rehearsal=nonzero exit=71 last_event=pg_dump")
-        self.assertEqual(result.diagnostic, expected)
+        self.assertEqual(result.diagnostic.split(" production=", 1)[0], expected)
         message = self.failure_text(lambda: self.assert_driver_success(result))
         self.assertIn(expected, message)
         require(CANARY not in message and "SCRAM-SHA-256$" not in message, "unsafe failure message")
@@ -762,7 +1443,7 @@ class BackupTest(unittest.TestCase):
                 expected = (f"HT12AA_DIAG phase=quiesced stage={stage} "
                             "rehearsal=success exit=1 last_event=checksum-write")
                 self.assertEqual(result.returncode, 1, result.diagnostic)
-                self.assertEqual(result.diagnostic, expected)
+                self.assertEqual(result.diagnostic.split(" production=", 1)[0], expected)
                 self.assertIn(expected, self.failure_text(lambda: self.assert_driver_success(result)))
                 self.assertTrue((backup / "quiesced.dump.rehearsal.txt").is_file())
                 self.assertTrue((root / "run" / "quiesced-backup-rehearsed.proof").is_file())
@@ -791,12 +1472,12 @@ class BackupTest(unittest.TestCase):
             result, root, _ = self.invoke(phase="quiesced", root=self.quiesced_root())
         require(payload.encode() in result.stdout and payload.encode() in result.stderr,
                 "raw output injection did not reach the actual child")
-        self.assertEqual(result.diagnostic,
+        self.assertEqual(self.legacy_diagnostic(result),
                          "HT12AA_DIAG phase=quiesced stage=trap_postcondition "
                          "rehearsal=success exit=1 last_event=UNKNOWN_REDACTED")
         message = self.failure_text(lambda: self.assert_driver_success(result))
         require("UNCONTROLLED_CHILD_CONTENT_" not in message, "uncontrolled output escaped")
-        self.assertLess(len(result.diagnostic), 256)
+        self.assertLess(len(result.diagnostic), 640)
         (root / "driver-stage").write_text(payload + "\n")
         summary = driver_diagnostic(result, CANARY, root, 0)
         self.assertIn("phase=UNKNOWN_REDACTED stage=UNKNOWN_REDACTED rehearsal=unknown", summary)
@@ -805,8 +1486,9 @@ class BackupTest(unittest.TestCase):
         self.assertIn("last_event=NONE", driver_diagnostic(result, "quiesced", root, offset))
 
     def assert_completed_rehearsal(self, result, root, backup):
-        require(b"result=PASS\n" in (root / "run" / "quiesced-backup-rehearsed.proof").read_bytes(),
-                "real production PASS proof missing")
+        require(canonical_pass_proof(root / "run/quiesced-backup-rehearsed.proof", backup,
+                                     backup.name, backup.parent.name),
+                "HT12AA_PREREQUISITE production-pass-proof-required; " + result.diagnostic)
         self.assertTrue((backup / "quiesced.dump.rehearsal.txt").is_file())
         events = (root / "events").read_text().splitlines()
         for event in ("data-verified-globals-not-applied", "container-remove", "volume-remove"):
@@ -824,7 +1506,7 @@ class BackupTest(unittest.TestCase):
         self.assert_driver_success(result)
         self.assert_completed_rehearsal(result, root, backup)
         self.assertEqual((root / "driver-stage").read_bytes(), b"remote_backup_rehearsal\n")
-        self.assertEqual(result.diagnostic, "HT12AA_DIAG phase=quiesced stage=complete "
+        self.assertEqual(self.legacy_diagnostic(result), "HT12AA_DIAG phase=quiesced stage=complete "
                          "rehearsal=success exit=0 last_event=checksum-write metadata=failed")
 
     def test_12_diagnostic_writer_failure_preserves_postcondition_failure(self):
@@ -832,10 +1514,10 @@ class BackupTest(unittest.TestCase):
         with self.instrument_driver(call, 'chmod 0400 "$fixture/driver-stage"\n'
                                     'V126_REMOTE_REHEARSAL_CLEANUP_VOLUME=fixture'):
             result, root, backup = self.invoke(phase="quiesced", root=self.quiesced_root())
-        self.assertEqual(result.returncode, 1, result.diagnostic)
         self.assert_completed_rehearsal(result, root, backup)
+        self.assertEqual(result.returncode, 1, result.diagnostic)
         self.assertEqual((root / "driver-stage").read_bytes(), b"remote_backup_rehearsal\n")
-        self.assertEqual(result.diagnostic, "HT12AA_DIAG phase=quiesced stage=cleanup_volume_postcondition "
+        self.assertEqual(self.legacy_diagnostic(result), "HT12AA_DIAG phase=quiesced stage=cleanup_volume_postcondition "
                          "rehearsal=success exit=1 last_event=checksum-write metadata=failed")
         message = self.failure_text(lambda: self.assert_driver_success(result))
         self.assertIn(result.diagnostic, message)
@@ -846,11 +1528,24 @@ class BackupTest(unittest.TestCase):
             result, root, backup = self.invoke(phase="quiesced", fault="restore-fail", root=self.quiesced_root())
         self.rejected(result, root, backup, "quiesced")
         self.assertEqual(result.returncode, 74, result.diagnostic)
-        self.assertEqual(result.diagnostic, "HT12AA_DIAG phase=quiesced stage=remote_backup_rehearsal "
+        self.assertEqual(self.legacy_diagnostic(result), "HT12AA_DIAG phase=quiesced stage=remote_backup_rehearsal "
                          "rehearsal=nonzero exit=74 last_event=volume-remove metadata=failed")
+        self.assertIn("production=restore root_cause=restore cleanup=cleanup-ok", result.diagnostic)
+        self.assertIn("cleanup_event=volume-cleanup cleanup_failure=NONE fixture_check=NONE failure=production", result.diagnostic)
         events = (root / "events").read_text().splitlines()
         self.assertIn("container-remove", events)
         self.assertIn("volume-remove", events)
+
+    def test_16_causal_channel_failure_and_unexpected_prerequisite_are_bounded(self):
+        with self.instrument_driver("  diagnostic_stage remote_backup_rehearsal",
+                                    'eval "exec ${HT12AA_CAUSAL_FD}>&-"'):
+            result, root, backup = self.invoke(phase="quiesced", fault="pg_dump-fail", root=self.quiesced_root())
+        self.assertEqual(result.returncode, 71, result.diagnostic)
+        self.assertIn("production=UNKNOWN_REDACTED root_cause=UNKNOWN_REDACTED", result.diagnostic)
+        message = self.failure_text(lambda: self.assert_completed_rehearsal(result, root, backup))
+        self.assertIn("HT12AA_PREREQUISITE production-pass-proof-required", message)
+        for forbidden in ("FileNotFoundError", str(root), "Bad file descriptor", CANARY):
+            self.assertNotIn(forbidden, message)
 
     def test_14_diagnostic_state_ambiguity_is_explicit(self):
         root = self.quiesced_root()
@@ -876,7 +1571,7 @@ class BackupTest(unittest.TestCase):
                         self.assertIn("rehearsal=" + outcome + " ", summary)
                         if not (state == b"remote_backup_rehearsal\n" and trace == prefix and code in (1, 71)):
                             self.assertIn("metadata=", summary)
-                        self.assertLess(len(summary), 256)
+                        self.assertLess(len(summary), 640)
                         require(CANARY not in summary and "UNTRUSTED_METADATA_" not in summary and
                                 "postgresql://" not in summary and "\n" not in summary,
                                 "untrusted metadata escaped")

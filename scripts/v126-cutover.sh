@@ -4208,7 +4208,12 @@ SQL
   rm -f -- "${baseline_record}"
 }
 
+# Observation hook for isolated fixtures; no production I/O or authority.
+# Callers must never let diagnostic failure change a rehearsal predicate or exit.
+remote_backup_diagnostic() { :; }
+
 remote_backup_rehearsal() {
+  remote_backup_diagnostic prerequisites || :
   local staging_path="$1"
   local run_id="$2"
   local release_sha="$3"
@@ -4271,6 +4276,7 @@ remote_backup_rehearsal() {
   done
   set -o noclobber
 
+  remote_backup_diagnostic source-inspection || :
   local postgres_container
   remote_capture_compose_ids running postgres
   (( ${#REMOTE_CAPTURED_CONTAINER_IDS[@]} == 1 )) || die 'PostgreSQL container count is not one'
@@ -4313,15 +4319,18 @@ remote_backup_rehearsal() {
   if (( preliminary_bytes < minimum_bytes )); then preliminary_bytes="${minimum_bytes}"; fi
   (( $(remote_minimum_available_bytes) >= preliminary_bytes )) || die 'insufficient free space before backup'
 
+  remote_backup_diagnostic dump || :
   remote_compose exec -T postgres sh -c \
     ': "${POSTGRES_USER:?}" "${POSTGRES_DB:?}"; pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom' \
     > "${dump_file}"
   [[ -s "${dump_file}" ]] || die 'backup dump is empty'
   chmod 0600 "${dump_file}"
+  remote_backup_diagnostic restore-list || :
   remote_compose exec -T postgres sh -c ': "${POSTGRES_USER:?}"; pg_restore --list' \
     < "${dump_file}" > "${list_file}"
   [[ -s "${list_file}" ]] || die 'backup inventory is empty'
   chmod 0600 "${list_file}"
+  remote_backup_diagnostic dump-checksum || :
   sha256sum "${dump_file}" > "${sha_file}"
   chmod 0600 "${sha_file}"
   sha256sum -c "${sha_file}" >/dev/null
@@ -4331,16 +4340,19 @@ remote_backup_rehearsal() {
     globals_file="${backup_root}/globals.sql"
     [[ ! -e "${globals_file}" && ! -L "${globals_file}" ]] || die 'globals artifact already exists'
     [[ ! -e "${globals_file}.sha256" && ! -L "${globals_file}.sha256" ]] || die 'globals checksum already exists'
+    remote_backup_diagnostic globals-export || :
     remote_compose exec -T postgres sh -c \
       ': "${POSTGRES_USER:?}" "${POSTGRES_DB:?}"; pg_dumpall -U "$POSTGRES_USER" -l "$POSTGRES_DB" --globals-only --no-role-passwords' \
       > "${globals_file}"
     [[ -s "${globals_file}" ]] || die 'globals artifact is empty'
     chmod 0600 "${globals_file}"
+    remote_backup_diagnostic globals-checksum || :
     sha256sum "${globals_file}" > "${globals_file}.sha256"
     chmod 0600 "${globals_file}.sha256"
     sha256sum -c "${globals_file}.sha256" >/dev/null
   fi
 
+  remote_backup_diagnostic capacity || :
   local dump_size
   local calculated_bytes
   local required_bytes
@@ -4350,6 +4362,7 @@ remote_backup_rehearsal() {
   if (( calculated_bytes > minimum_bytes )); then required_bytes="${calculated_bytes}"; fi
   (( $(remote_minimum_available_bytes) >= required_bytes )) || die 'insufficient free space for rehearsal'
 
+  remote_backup_diagnostic resource-creation || :
   local safe_run="${run_id//[^a-z0-9-]/-}"
   local rehearsal_volume="hookah-v126-${safe_run}-${phase}-$$"
   local rehearsal_container="hookah-v126-${safe_run}-${phase}-$$"
@@ -4381,6 +4394,7 @@ remote_backup_rehearsal() {
   V126_REMOTE_REHEARSAL_CLEANUP_CONTAINER="${rehearsal_container}"
   V126_REMOTE_REHEARSAL_CLEANUP_VOLUME="${rehearsal_volume}"
   remote_cleanup_owned_rehearsal_container() {
+    remote_backup_diagnostic container-cleanup || :
     local expected_container="$1"
     local expected_owner="$2"
     local inventory
@@ -4411,6 +4425,7 @@ remote_backup_rehearsal() {
     }
   }
   remote_cleanup_owned_rehearsal_volume() {
+    remote_backup_diagnostic volume-cleanup || :
     local expected_volume="$1"
     local expected_owner="$2"
     local inventory
@@ -4441,6 +4456,7 @@ remote_backup_rehearsal() {
     }
   }
   remote_cleanup_rehearsal() {
+    remote_backup_diagnostic cleanup-start || :
     local expected_container="$1"
     local expected_volume="$2"
     local expected_owner="$3"
@@ -4459,11 +4475,18 @@ remote_backup_rehearsal() {
     V126_REMOTE_REHEARSAL_CLEANUP_VOLUME=''
     if [[ -n "${cleanup_container}" ]] &&
       ! remote_cleanup_owned_rehearsal_container "${expected_container}" "${expected_owner}"; then
+      remote_backup_diagnostic container-failed || :
       cleanup_status=1
     fi
     if [[ -n "${cleanup_volume}" ]] &&
       ! remote_cleanup_owned_rehearsal_volume "${expected_volume}" "${expected_owner}"; then
+      remote_backup_diagnostic volume-failed || :
       cleanup_status=1
+    fi
+    if (( cleanup_status == 0 )); then
+      remote_backup_diagnostic cleanup-ok || :
+    else
+      remote_backup_diagnostic cleanup-failed || :
     fi
     return "${cleanup_status}"
   }
@@ -4521,6 +4544,7 @@ remote_backup_rehearsal() {
   [[ "$(docker inspect --format '{{(index .Mounts 0).Destination}}' "${rehearsal_container}")" == /var/lib/postgresql/data ]] ||
     die 'rehearsal mount destination mismatch'
 
+  remote_backup_diagnostic readiness || :
   local ready=false
   local attempt
   for attempt in $(seq 1 60); do
@@ -4532,17 +4556,20 @@ remote_backup_rehearsal() {
     sleep 1
   done
   [[ "${ready}" == true ]] || die 'rehearsal PostgreSQL did not become ready in 60 attempts'
+  remote_backup_diagnostic copy-dump || :
   docker cp "${dump_file}" "${rehearsal_container}:/tmp/v126-rehearsal.dump" || {
     local command_status=$?
     printf '%s (exit=%s)\n' 'rehearsal archive copy failed' "${command_status}" >&2
     exit "${command_status}"
   }
+  remote_backup_diagnostic database-create || :
   docker exec "${rehearsal_container}" \
     createdb -U "${source_db_user}" --maintenance-db=postgres --template=template0 v126_restore_rehearsal || {
     local command_status=$?
     printf '%s (exit=%s)\n' 'rehearsal database creation failed' "${command_status}" >&2
     exit "${command_status}"
   }
+  remote_backup_diagnostic restore || :
   docker exec "${rehearsal_container}" \
     pg_restore -U "${source_db_user}" --exit-on-error --no-owner --no-privileges \
     --dbname v126_restore_rehearsal /tmp/v126-rehearsal.dump || {
@@ -4550,15 +4577,18 @@ remote_backup_rehearsal() {
     printf '%s (exit=%s)\n' 'rehearsal restore failed' "${command_status}" >&2
     exit "${command_status}"
   }
+  remote_backup_diagnostic restored-version || :
   local restored_version
   local restored_migration_state
   restored_version="$(docker exec "${rehearsal_container}" \
     psql -X -U "${source_db_user}" -d v126_restore_rehearsal -Atqc 'SHOW server_version_num')"
   [[ "${restored_version}" == "${source_version}" ]] || die 'rehearsal PostgreSQL version mismatch'
+  remote_backup_diagnostic restored-data || :
   restored_migration_state="$(docker exec "${rehearsal_container}" \
     psql -X -U "${source_db_user}" -d v126_restore_rehearsal -Atqc \
     "SELECT CONCAT(MAX(version::integer), ':', COUNT(*) FILTER (WHERE version = '126'), ':', COUNT(*) FILTER (WHERE NOT success)) FROM flyway_schema_history")"
   [[ "${restored_migration_state}" == '125:0:0' ]] || die 'rehearsal Flyway state mismatch'
+  remote_backup_diagnostic production-verified || :
   if ! remote_cleanup_rehearsal \
     "${rehearsal_container}" "${rehearsal_volume}" "${rehearsal_owner}"; then
     trap - EXIT INT TERM HUP
@@ -4568,6 +4598,7 @@ remote_backup_rehearsal() {
   trap - EXIT INT TERM HUP
   unset V126_REMOTE_REHEARSAL_CLEANUP_CONTAINER V126_REMOTE_REHEARSAL_CLEANUP_VOLUME
 
+  remote_backup_diagnostic post-validation || :
   printf '%s\n' \
     "run_id=${run_id}" \
     "release_sha=${release_sha}" \
@@ -4589,6 +4620,7 @@ remote_backup_rehearsal() {
   if [[ -n "${globals_file}" ]]; then
     remote_emit_artifact pre-drain-globals "$(remote_hash_file "${globals_file}")"
   fi
+  remote_backup_diagnostic proof-generation || :
   local backup_proof="${run_root}/${phase}-backup-rehearsed.proof"
   remote_write_proof "${backup_proof}" \
     "run_id=${run_id}" \

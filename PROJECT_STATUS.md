@@ -1,5 +1,41 @@
 # Project Status
 
+## HT-OPS-20 — Diagnostic Transport Findings Repair
+
+Local F1–F3 repair in `/private/tmp/ht-ops-04-policy-b-dr`, branch
+`codex/ht-ops-04-policy-b-dr`, exact base/HEAD `c134e8b26cb3213e85ea460fc74d78cab1b38754`.
+Fresh read-only remote checks returned that SHA for both main and the feature branch.
+The exact HT-OPS-19 starting patch and four file hashes matched and were preserved in
+`/private/tmp/ht-ops-20-repair/pre.patch` and `pre/`; index empty and no untracked files.
+The primary checkout and all external operational systems remain outside this repair.
+
+F1 contains PIPE/write failures in a diagnostic-only subshell, retaining the production
+exit and completed cleanup even when the reader disappears. F2 requires an explicit
+failure/completion witness; a delivered successful-stage prefix cannot become root from
+nonzero exit alone. F3 validates the complete canonical production PASS proof, its bound
+artifact hashes and cleanup witnesses; malformed/ambiguous proof fails with fixed copy.
+Contract: `docs/V126_STAGING_CUTOVER_CONTRACT.md`, HT-OPS-20 section.
+
+Final focused regressions **21/21 PASS**; full installed-PG17 suite **37/37 PASS**
+(253.221s); selected real-body fake-Docker cleanup fixtures **24/24 PASS**; container-ID
+suite **10/10 PASS**. Closed-reader before/after evidence preserves exact exit 72 (and
+success 0), completes cleanup and removes both synthetic resources; lost successful-stage
+prefixes give UNKNOWN. Genuine proof acceptance and 23 invalid/unreadable proof states pass.
+AST/compile, standalone/embedded Bash syntax, diff/docs checks and bounded output scan pass.
+The local PG17.8 ARM64 image was used with no pulls, ports or external network; both task
+labels have zero containers and volumes after cleanup. Earlier failed validation attempts
+and the final evidence are retained under `/private/tmp/ht-ops-20-repair`.
+
+Production `scripts/v126-cutover.sh` bytes are unchanged by HT-OPS-20; stripping only the
+existing observation additions reproduces exact HEAD in full. No production commands,
+predicates, traps, SQL, restore flags, retries/sleeps or workflows changed.
+`CI_487_489_FUNCTIONAL_ROOT_CAUSE_STILL_UNPROVEN` remains unchanged.
+Verdict: `DIAGNOSTIC_TRANSPORT_FINDINGS_FIXED_READY_FOR_BOUNDED_REREVIEW`.
+
+No commit, push, PR, Actions, SSH/staging, provider, V126 or deploy action is performed.
+Next step: bounded independent re-review of the exact F1-F3 repair delta.
+
+
 ## HT-OPS-04 — Policy B DR / AP-01 local implementation
 
 AP-01 is the only authorized package. The isolated feature changeset from exact

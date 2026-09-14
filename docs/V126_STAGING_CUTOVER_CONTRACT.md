@@ -703,6 +703,50 @@ Restore-rehearsal container and volume cleanup is pre-armed with exact names and
 ownership label. The sequencer proves that label before mount/use or deletion, removes the container
 before the volume and refuses to delete a wrong-owner resource.
 
+### HT-OPS-20 local rehearsal causal diagnostics
+
+The HT12AA fixture observes fixed production substages through a no-I/O production hook.
+Its per-invocation private pipe is independent of raw client output, the legacy event log
+and driver-stage storage. An entered `production` stage alone never proves failure.
+`root_cause` requires a fixed `failed-<stage>` witness naming the in-process active stage,
+which advances even if delivery fails. The fixture observes unhandled parent-shell ERR,
+forwards explicit denials to the exact sourced `die`, and observes the production exit
+saved by the unchanged EXIT trap before cleanup. No raw command or denial value enters
+the witness. A witness inconsistent with the delivered sequence is rejected.
+
+`cleanup`, `cleanup_event` and `cleanup_failure` separately describe cleanup outcome,
+observed container/volume operation and first failed cleanup operation, including its
+inventory/ownership checks. These labels do not prove that Docker removal itself failed.
+A complete success requires the ordered production, cleanup and completion records.
+An explicit failure witness can retain the original cause despite a lost cleanup suffix;
+unconfirmed cleanup completion remains unknown. Without a trustworthy failure/completion
+boundary, any lost prefix/suffix gives `UNKNOWN_REDACTED`, including loss after successful
+readiness, database creation, validation or cleanup. A nonzero exit plus the last entered
+stage is never root authority. The legacy last event is supplemental only.
+
+Bash causal and legacy pipe writes run in a conditional subshell with PIPE ignored only
+there; ordinary write errors and disappearing readers cannot signal the production shell
+or interrupt its cleanup. Production shell options and EXIT/INT/TERM/HUP traps are retained.
+Writers allowlist values; readers reject malformed, oversized, out-of-order and wrong-phase
+streams. The combined data/globals-not-applied oracle remains fixture-only. No SQL, raw
+process streams, environment, credential/verifier or connection values enter diagnostics.
+
+The diagnostic-writer/postcondition prerequisite uses the exact 11-field artifact written by
+`remote_backup_rehearsal`/`remote_write_proof`, with the identity, digest and cleanup-witness
+rules in `remote_verify_proof` and the existing `backup_checks` consumer. It requires canonical
+unique fields/order, exact quiesced run/release/PASS/COMPLETE values, valid bound container/
+volume/owner witnesses, matching archive/inventory/rehearsal hashes and the proof checksum,
+and operator-owned mode-0600 regular proof/checksum files. Missing, unreadable, incomplete,
+malformed, duplicate or contradictory artifacts produce only the fixed
+`HT12AA_PREREQUISITE production-pass-proof-required` plus the safe diagnostic. A PASS-only
+fragment, appended FAIL, duplicate PASS or recomputed checksum cannot satisfy this gate.
+The exact genuine production PASS proof is still required; no proof is fabricated or test skipped.
+
+Focused regressions: `python3 scripts/test-v126-backup.py CausalDiagnosticTest BoundaryAdapterTest`.
+The full PG17 suite and selected cutover cleanup callers remain required local checks.
+No backup/restore, readiness, cleanup, proof or workflow success predicate is weakened.
+CI #487/#489 functional cause remains `CI_487_489_FUNCTIONAL_ROOT_CAUSE_STILL_UNPROVEN`.
+
 ### Pre-V126 runtime rollback
 
 Exact token: `AUTHORIZE_V126_PRE_V126_ROLLBACK`.
