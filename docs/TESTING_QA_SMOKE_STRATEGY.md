@@ -3323,31 +3323,11 @@ Expectations:
 
 ## Standard Pre-Commit Workflow
 
-Use explicit staging. Never use `git add .`.
-
-1. Check worktree:
-   ```bash
-   git status --short
-   ```
-2. Check whitespace:
-   ```bash
-   git diff --check
-   ```
-3. Run relevant validation commands from the catalog below.
-4. Stage explicit files only:
-   ```bash
-   git add <file1> <file2>
-   ```
-5. Inspect staged scope:
-   ```bash
-   git diff --cached --name-only
-   git diff --cached --check
-   git status --short
-   ```
-6. Commit with focused message.
-7. Push.
-8. Wait for GitHub Actions.
-9. Deploy staging only if runtime behavior changed and release policy requires it.
+Use the publication checklist in `docs/DEPLOYMENT_RUNBOOK.md` only when publication is explicitly
+authorized. Validation stays proportional to the change and risk; reuse sufficient evidence for an
+unchanged candidate and repeat or broaden only for a new change, failure, unresolved risk or
+mandatory gate. After push, Codex verifies the exact remote SHA and STOPs. The user/ChatGPT tracks
+CI separately; release/deploy is a later authorized task after green checks for the exact SHA.
 
 ## `scripts/dev/` Policy
 
@@ -3445,11 +3425,13 @@ If Gradle OOM occurs:
 Docs-only:
 - no staging deploy;
 - run local docs sanity;
-- wait for CI only after push/PR.
+- standard CI remains required after an authorized push/PR; the user/ChatGPT tracks it.
 
 Runtime change touching backend/Mini App/Telegram:
 - run relevant local checks first;
-- push and wait for GitHub Actions;
+- after an authorized push, Codex verifies the exact remote SHA and STOPs;
+- the user/ChatGPT tracks Actions; a later authorized release requires green checks for the exact
+  release SHA;
 - deploy staging only after CI is green unless explicitly doing a debug deploy;
 - run product smoke relevant to the changed area.
 
@@ -3842,26 +3824,24 @@ Telegram/staff-chat:
 
 ## Codex Workflow Guidance
 
-Every future Codex implementation task should end with:
-- changed files;
-- behavior summary;
-- tests run;
-- validation result;
-- manual smoke checklist;
-- `git status --short`;
-- whether `scripts/dev/` was touched;
-- whether staging deploy is needed.
+Use the proportional final-report contract in `AGENTS.md`. Include the changed-area manual smoke
+checklist for runtime behavior changes and retain required evidence and pending gates. A docs-only
+task does not require an unrelated smoke checklist.
 
 For ChatGPT handoff after a Codex summary, paste:
 - Codex final summary;
 - `git status --short`;
 - any CI failure details if present.
 
-ChatGPT should return:
-- exact `git add` file list;
-- commit message;
-- push instructions;
-- deploy/staging smoke instructions where needed.
+ChatGPT returns the actual bounded next action for the current task state and authorization. Exact
+`git add` file lists, commit messages and push instructions are provided only when publication is
+already explicitly authorized in the current scope or is explicitly selected as the next
+decision/gate; selection may prepare the authorization/publication instructions but does not make
+publication already authorized. Deploy/staging-smoke instructions are provided only when deploy is
+the authorized or explicitly selected next release step, applicable release prerequisites are
+satisfied, and the change type requires deployment/smoke; deploy remains separately authorized.
+Read-only review, diagnosis, analysis, BLOCKED, FAIL, NOT_PROVABLE and local-fix-review outcomes
+return their actual next step and do not manufacture publication or deploy commands.
 
 
 The HT-RELEASE-REPAIR-01 feature candidate uses the same12 GitHub-hosted Ubuntu jobs.

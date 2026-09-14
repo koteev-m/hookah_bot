@@ -8,9 +8,18 @@ This is a Kotlin/Ktor Telegram bot + Telegram Mini App platform for hookah venue
 The bot, Mini App, backend routes, database and staff-chat integrations are one product.
 Work outcome-first: preserve existing flows while delivering the smallest useful change.
 
+## Instruction scope
+
+System/platform constraints, tool contracts, approvals and mandatory Skill contracts remain
+binding. Within those boundaries, the current explicit user task defines project intent and scope
+and takes precedence over optional project recommendations when they conflict. Project instructions,
+Skills, checklists and handoffs guide the task; they do not expand its scope or authorize mutations.
+If an applicable Skill requires a pause, confirmation or changed direction, identify the exact
+file/rule and explain the practical reason.
+
 ## Product Sources Of Truth
 
-After the task checkpoint, use the relevant sections of `docs/PRODUCT_SPEC.md` as the
+When product context is needed, use relevant sections of `docs/PRODUCT_SPEC.md` as the
 product map, then read the smallest relevant canonical docs (this list is an index):
 
 - `docs/COMMUNICATION_MODEL.md`
@@ -33,16 +42,18 @@ without code/test/smoke evidence.
 ## Context loading
 
 At the start of a new task:
-1. Read the task's checkpoint at the top of `PROJECT_STATUS.md`; read older snapshots only
-   for a concrete evidence gap. Keep concurrent tasks under distinct task IDs.
+1. Start with the current task and any task-specific checkpoint. Consult the current
+   `PROJECT_STATUS.md` checkpoint when stage, blockers or evidence continuity matter; read older
+   snapshots only for a concrete evidence gap. Keep concurrent tasks under distinct task IDs.
 2. Read relevant code, canonical doc sections and applicable skills; expand only for a
    specific gap or risk. Do not copy the full history or runbook into each prompt.
 3. Verify mutable claims against the task's actual Git state and applicable evidence.
 4. Keep stable rules here, model policy in `docs/MODEL_WORKFLOW.md`, and detailed evidence
    in its existing artifacts. Read model policy when selecting/changing a model or its settings.
-5. Update the checkpoint at meaningful boundaries: task/goal; worktree/branch/base; state;
-   decisions; checks/results and evidence links; unfinished operations; authorization scope;
-   blocker and next step. Use short facts, no full logs, secrets or copied history.
+5. Update the checkpoint only when the product/release stage, blocker or next step changes.
+   At such boundaries record task/goal; worktree/branch/base; state; decisions; checks/results and
+   evidence links; unfinished operations; authorization scope; blocker and next step. Use short
+   facts, no full logs, secrets or copied history. Routine instruction/docs edits need no checkpoint.
 
 The file checkpoint survives model changes and native notes. ChatGPT maintains the agreed
 Google decision/continuation journal; Codex maintains authorized repo docs and checkpoints.
@@ -51,12 +62,15 @@ remain implementation evidence.
 
 ## Workflow
 
-- Define outcome, necessary sources, autonomy boundaries, acceptance criteria and useful report.
-  Prescribe exact steps where sequence is part of safety or an external contract.
+- For small reversible ambiguity, make a reasonable assumption and continue. Ask when uncertainty
+  materially changes the result, safety, an irreversible action, a product/architecture contract,
+  or authorization for an external or mutating action. Mandatory constraints still bind.
+- Plan when complexity, risk, architecture, dependent stages or unclear scope make it useful.
+  File count alone does not require a plan. Prescribe exact steps where sequence is part of safety
+  or an external contract.
 - Inspect affected docs/code/tests before editing; routes and UI only when relevant.
 - Keep diffs small and cohesive.
 - Prefer existing local patterns over new abstractions.
-- For multi-file, architectural, risky or ambiguous work, plan first.
 - For behavior changes, update tests and the smallest relevant docs surface.
 - Runtime behavior changes require validation matching `docs/TESTING_QA_SMOKE_STRATEGY.md`.
 - Docs-only changes require docs sanity checks, not staging deploy.
@@ -71,8 +85,9 @@ remain implementation evidence.
 - Continue after clarification or a recoverable local blocker when execution state and the
   contract permit. A new chat, Goal, worktree or run needs a concrete reason, not just a FAIL.
   Terminal release states, fresh-evidence gates and consumed one-time permissions still bind.
-- No automatic Max/Ultra, extra agents or repeated audits. Read the current model selection
-  policy in `docs/MODEL_WORKFLOW.md`; quality/safety rules apply to every model.
+- Do not automatically add agents, subagents, worktrees, Goal mode or audit passes. Use them only
+  when permitted and when parallel work, independent review or isolation materially helps.
+  Read model/effort policy in `docs/MODEL_WORKFLOW.md`; quality/safety rules apply to every model.
 
 ## Review evidence
 
@@ -170,15 +185,23 @@ Use `docs/DEPLOYMENT_RUNBOOK.md` for release model, staging deploy, rollback,
 environment, logs, incident response and Codex/ChatGPT handoff.
 
 - Docs-only: no staging deploy.
-- Runtime/backend/Mini App/Telegram/staff-chat/billing/migration changes: wait for
-  green Actions before release; staging smoke is required when behavior changes.
+- After a separately authorized push, verify that the exact remote branch SHA equals the published
+  commit, then STOP. If exact identity cannot be confirmed, report it as unverified and stop.
+- Codex does not wait for or monitor GitHub Actions after push: no `gh run watch`, polling loops,
+  repeated `gh run view`, workflow waiting or delegated CI monitoring. The user/ChatGPT tracks CI.
+  A terminal red run gets a separate bounded Codex diagnosis task. Workflow rerun, cancel or
+  dispatch requires separate explicit authorization.
+- Required Actions must be green for the exact release SHA before release/deploy; a later authorized
+  release task consumes that completed evidence. This gate is distinct from CI monitoring.
+  Staging smoke is required when runtime behavior changes.
 - Do not claim production readiness from local-only checks.
 
 ## Final Response Checklist
 
 Every task outcome needs a useful report, including read-only work, BLOCKED, FAIL, DIVERGED,
 NOT_PROVABLE and stopping before implementation. Never return only a verdict. Keep the report
-proportionate to the task; do not run extra checks just to fill it. Include:
+proportionate to the task; do not run extra checks just to fill it. For simple docs-only work,
+combine non-applicable staging and `scripts/dev/` status in one line. Include:
 
 - what was completed and the exact success boundary or first failure;
 - expected versus actual results when they differ;

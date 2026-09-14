@@ -34,7 +34,9 @@ Target runbook:
 
 ## Pre-Push Checklist
 
-Use explicit staging. Never use `git add .`.
+Use this checklist only for explicitly authorized publication. Use explicit staging. Never use
+`git add .`. Reuse sufficient validation for an unchanged candidate; rerun only for a new change,
+failure, unresolved risk or mandatory gate.
 
 1. Inspect worktree:
    ```bash
@@ -62,8 +64,11 @@ Use explicit staging. Never use `git add .`.
    ```bash
    git push --set-upstream origin '<feature-branch>'
    ```
-8. Check GitHub Actions.
-9. Deploy staging only if runtime behavior changed.
+8. Verify that the exact remote feature-branch SHA equals the published commit, then STOP.
+   Report failed identity confirmation as unverified; do not monitor CI.
+
+The user/ChatGPT tracks Actions separately. A later explicitly authorized release/deploy task may
+continue only after required checks are green for that exact release SHA.
 
 `scripts/dev/` policy:
 - `scripts/dev/` is currently an untracked local helper area.
@@ -72,9 +77,12 @@ Use explicit staging. Never use `git add .`.
 
 ## GitHub Actions Policy
 
-Actions must pass before treating a change as merged or release-ready.
+Actions must pass before treating a change as merged or release-ready. This release gate does not
+authorize Codex to monitor CI after push. Do not use `gh run watch`, polling loops, repeated
+`gh run view`, workflow waiting or delegated monitoring. Workflow rerun, cancel and dispatch each
+require separate explicit authorization.
 
-If Actions are red, report:
+For a separate bounded Codex diagnosis task on a terminal red run, report:
 - failing job name;
 - failing test class;
 - failing test name;
@@ -2374,23 +2382,22 @@ Before release-ready:
 
 ## Codex / ChatGPT Handoff Format
 
-Codex final response should include:
-- Verdict;
-- changed files;
-- what changed;
-- tests/validation;
-- open/future;
-- `git status --short`;
-- whether `scripts/dev/` was touched;
-- whether staging deploy is needed.
+Use the proportional final-report contract in `AGENTS.md`. Release/DR handoffs retain exact release
+SHA, evidence source, smoke owner/result, pending gates, deployment descriptor and image identity
+where applicable, and rollback/recovery state. Publication completion is not release readiness.
 
-ChatGPT should return:
-- exact `git add` list;
-- commit message;
-- push instruction;
-- deploy instruction if needed;
-- manual smoke checklist;
-- what to send back if Actions fail.
+ChatGPT returns the actual bounded next step for the current task state and authorization; do not
+automatically turn every Codex result into a publication workflow. Provide an exact `git add` list,
+commit message and push instruction only when publication is already explicitly authorized in the
+current scope or is explicitly selected as the next decision/gate. In the latter case, prepare the
+authorization/publication instructions without treating publication as already authorized.
+
+Provide deploy instructions and a manual smoke checklist only when deploy is the authorized or
+explicitly selected next release step, applicable release prerequisites are satisfied, and the
+change type requires deploy/smoke. Selecting that step may prepare its required authorization and
+gates; deploy remains separately authorized. Read-only review, diagnosis, analysis, BLOCKED, FAIL,
+NOT_PROVABLE and local-fix-review outcomes return their actual next step, not automatic
+publication or deploy commands. Include what to send back for an actual terminal Actions failure.
 
 ## Roadmap Status
 
