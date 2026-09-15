@@ -9414,7 +9414,9 @@ test('guest catalog sends debounced backend search and city filters then resets'
   ])
 
   const initialRequestCount = api.getCatalogRequests().length
-  await page.clock.install()
+  const debounceClockTime = new Date('2026-01-01T00:00:00Z')
+  await page.clock.install({ time: debounceClockTime })
+  await page.clock.pauseAt(debounceClockTime)
   await search.fill('М')
   await search.fill('Микс')
   await search.fill('Микс & чай')
