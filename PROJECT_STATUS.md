@@ -1,5 +1,131 @@
 # Project Status
 
+## HT-OPS-31 — AP-00 Dedicated S3 Worker Runtime
+
+Same isolated worktree `/private/tmp/ht-ops-25-ap00/worktree`, branch
+`codex/ht-ops-25-ap00`, base/HEAD `77caf48a46e5d3c61b01ffdfc0a43bc9ec55ceaa`.
+Authenticated starting full patch SHA-256:
+`b673b0daf44253f7fd695f6b83430195b93de7b1dbb02a0d7f1b68da335a8acf`.
+Exact pre/post files, full patches, architecture delta, hashes and report:
+`/private/tmp/ht-ops-31-worker/REPORT.md`. HT-OPS-29/30 evidence remains unchanged.
+
+Operational S3 now executes only in one fresh, bounded subprocess per logical
+operation. The parent remains stdlib/SDK-free, with closed binary-safe IPC, a local
+timeout and process cleanup. The worker admits CPython 3.13 with GIL before site/SDK
+acquisition. Exact Python patch qualification remains bound by Policy B; existing
+tooling includes worker/IPC source hashes. Raw child stdout/stderr/provider messages
+are not diagnostic authority. Write timeout/crash/invalid IPC after start is UNKNOWN,
+with no second PUT or reconciliation. [Contract](docs/DR_AP00_ADAPTER_FOUNDATION.md).
+
+HT-OPS-29 in-process LogRecordFactory ownership (setter patch, ContextVar, lock and
+counter) is removed and superseded **before publication**; it never became operational
+evidence. Historical checkpoints below describe prior local candidates only.
+Local worker suite **22/22 PASS**, SDK/crypto/provisioning **34/34 PASS**, AP-01 with
+`-S` **48/48 PASS**. Actual malformed-header child WARNING reaches no parent factory/
+handler/output; parent reload/logging state remains independent. Adversarial IPC,
+runtime negatives, one-PUT ambiguity, distinct PIDs, concurrency/reaping and source
+binding are covered. Prior PG17/database/diagnostic evidence is reused only for
+unchanged sources after hash/applicability checks; no Docker rerun.
+
+Crypto, provisioning, dependency pins, F3 history NOT_PROVEN and F4 temporary 64 MiB
+bound/capacity NOT_PROVEN remain unchanged. Provider is unprovisioned. AP-02 producer,
+AP-06 independent observations and AP-07 custody remain unimplemented/unauthorized;
+AP-03 real transfer remains unexecuted/unauthorized and blocked by
+`AP03_CAPACITY_COMPATIBILITY_NOT_PROVEN`. No DR PASS, operational qualification,
+publication, staging/SSH/deploy/V126, provider access or credentials/keys.
+Index empty; no commit/push/PR/Actions activity.
+
+Next: independent security review of the exact HT-OPS-31 dedicated-worker changeset
+before any publication or provisioning.
+
+
+## HT-OPS-29 — AP-00 Logging Factory Ownership Repair
+
+Same worktree `/private/tmp/ht-ops-25-ap00/worktree`, branch `codex/ht-ops-25-ap00`,
+base/HEAD `77caf48a46e5d3c61b01ffdfc0a43bc9ec55ceaa`; index empty, no publication.
+Authenticated starting candidate patch SHA-256:
+`f022fa6c79ae3d77c3f2a1fdde9827abb84a8f1e45cb3d069f14c3fc07b5277a`.
+Exact pre/post files, full patches, F1-only delta, hashes and report:
+`/private/tmp/ht-ops-29-repair/REPORT.md`. HT-OPS-28 evidence is unchanged.
+
+HT-OPS-28 F1-RACE/P1 is repaired locally: public factory replacement and adapter
+admission now use the same ownership lock/counter. Active scopes reject replacement
+with `AP00_S3_LOGGING_FACTORY_BUSY`; saved public-setter aliases are mediated too.
+Response consumption, read retries and stream cleanup retain ownership. Idle replacement
+works; subsequent adapter admission refuses before SDK activity without reinstalling.
+[Runtime boundary](docs/DR_AP00_ADAPTER_FOUNDATION.md#target-and-authority-boundaries):
+qualified CPython/GIL stdlib setter, one adapter runtime owner, no request serialization.
+
+Preserved pre-copy race: 4/4 canaries at factory/handler/formatter at all three timing
+points. Repaired public/saved-alias matrix: 0/4, expected single-PUT success retained.
+Focused logging **13/13 PASS**, S3 **20/20 PASS** including existing F2 matrix; independent
+concurrency/nesting/failure-cleanup probes PASS. Static/integrity evidence is retained
+with the report. F2–F4 semantics, crypto/provisioning/pins and broader evidence inputs
+remain unchanged. Historical HT-OPS-27 checkpoint below is superseded for F1 ownership.
+Local repair is not provider/staging/DR or production-readiness evidence.
+
+Next: bounded independent re-review of only the authenticated HT-OPS-29 F1 ownership
+repair delta. No publication or further operational action is authorized.
+
+
+## HT-OPS-27 — AP-00 Security Findings Bounded Repair
+
+Same worktree `/private/tmp/ht-ops-25-ap00/worktree`, branch `codex/ht-ops-25-ap00`,
+base/HEAD `77caf48a46e5d3c61b01ffdfc0a43bc9ec55ceaa`; no commit/index changes.
+Authenticated HT-OPS-25 pre-repair patch SHA-256:
+`f0938bb9c78296b3a635de31f5a7f69f86e89915678bb3985b61d54dfbc8d863`.
+Full pre/post files, patches, manifests and before/after F1/F2 evidence:
+`/private/tmp/ht-ops-27-repair/`; detailed handoff `REPORT.md` there.
+
+F1: context-scoped SDK record redaction before downstream logging factories/handlers,
+with persistent factory chaining and no temporary global logging mutation. F2:
+unexpected post-dispatch 2xx is UNKNOWN, with one PUT and no reconciliation. F3:
+conditional creation protects current key state; all-history uniqueness is NOT_PROVEN.
+F4: temporary enforced 64 MiB bound unchanged; operational capacity is NOT_PROVEN.
+AP-03 real transfer is blocked by `AP03_CAPACITY_COMPATIBILITY_NOT_PROVEN` until the
+[mandatory gate](docs/DR_AP00_ADAPTER_FOUNDATION.md#mandatory-pre-ap-03-capacity-compatibility-gate)
+is PASS. No streaming/chunked design selected. Crypto, provisioning schema/pins,
+AP-01, AP-02/AP-06/AP-07 boundaries and Policy B thresholds remain unchanged.
+
+Local adapter regressions **40/40 PASS**, including real urllib3 WARNING parsing,
+concurrent logging and stream cleanup, and the write-status matrix. Before-repair
+F1 leak and F2 incorrect rejections reproduced from preserved bytes; after repair
+no canaries escape and unexpected 2xx stays UNKNOWN. Local evidence is not operational
+DR PASS or Linux/amd64 capacity proof. HT-OPS-25 PG17 evidence remains applicable to
+unchanged AP-01/database/Docker code; no Docker rerun or external operation here.
+
+Next: bounded independent re-review of only the authenticated HT-OPS-27 F1–F4 repair
+delta against the already reviewed HT-OPS-25 candidate. No publication/provisioning.
+
+
+## HT-OPS-25 — AP-00 Production Adapter Foundation
+
+Local changeset at exact base/HEAD `77caf48a46e5d3c61b01ffdfc0a43bc9ec55ceaa`;
+initial read-only remote-main verification matched. Independent local Git copy in
+`/private/tmp/ht-ops-25-ap00/repository.git`, worktree
+`/private/tmp/ht-ops-25-ap00/worktree`, branch `codex/ht-ops-25-ap00`.
+No shared alternates/hardlinks; original `.git` content comparison is unchanged.
+The primary checkout is unused; its `.git` was read only to isolate the task.
+
+Implemented optional pinned SDK transport, current-key conditional COMPLIANCE PUT with exact
+VersionId and explicit UNKNOWN outcomes, exact reader/metadata observer, AES-256-GCM
+authenticated envelope, injected key-provider interface and closed non-secret
+provisioning declarations. [Contract and limits](docs/DR_AP00_ADAPTER_FOUNDATION.md).
+AP-01 schemas/validators/Trust/R0/Q and V126 production code remain unchanged.
+
+Local tests: adapter **34/34 PASS**, stdlib-only AP-01 **48/48 PASS**, existing
+DR + installed PG17 ARM64 whole-DB fixture **49/49 PASS**, database unit **4/4 PASS**,
+diagnostic boundary/causal regressions **21/21 PASS**. Synthetic fixtures only;
+no operational DR PASS or Linux/amd64/PG18/live qualification is inferred.
+Evidence and final changeset manifest: `/private/tmp/ht-ops-25-ap00/evidence/`.
+
+No provider resources, real credentials/keys, source capture, transfer or custody
+were provisioned/executed. AP-02 producer, AP-06 Trust acquisition and AP-07 custody
+remain unimplemented/unauthorized; AP-03 real transfer/read-back remains unexecuted/
+unauthorized. No staging/SSH/deploy/V126, publication or Actions operation occurred.
+HT-OPS-25 review/repair continuation is recorded in HT-OPS-27 above. Earlier
+checkpoints below remain historical.
+
 ## HT-OPS-20 — Diagnostic Transport Findings Repair
 
 Local F1–F3 repair in `/private/tmp/ht-ops-04-policy-b-dr`, branch

@@ -721,6 +721,32 @@ Local PG17 ARM64 and pure tests are not PG18, Linux/amd64 functional app restore
 real crypto/custody, live smoke or operational DR evidence. AP-01 needs no staging
 deploy; any future live tooling application/gate remains separately approved.
 
+### HT-OPS-25 / HT-OPS-31 AP-00 adapter security regressions
+
+The [AP-00 foundation contract](DR_AP00_ADAPTER_FOUNDATION.md#dependencies-and-local-validation)
+owns the optional pinned DR venv and test commands. Run
+`python scripts/test-v126-dr-adapters.py` and `python scripts/test-v126-dr-workers.py`
+inside that unchanged venv, then the existing pure DR suite without site-packages
+(`python3 -S scripts/test-v126-dr-evidence.py`). The adapter suite preserves real SDK
+serialization/signing, current-key conditional PUT/retention/VersionId/UNKNOWN,
+exact-read retries, AEAD negatives/4096 nonces and provisioning checks. The worker
+suite owns subprocess runtime admission, bounded closed IPC, parent SDK-free imports
+and operations, runtime negatives, canary safety through actual urllib3 malformed
+headers, write crash/timeout ambiguity, one-child counts, reaping/concurrency, parent
+logging/reload independence and actual worker/IPC source-byte binding negatives.
+Network connections are forbidden by synthetic fixtures; no provider calls occur.
+HT-OPS-29 in-process logging ownership tests are superseded by this child boundary.
+For this bounded change, reuse HT-OPS-25 PG17/database/diagnostic evidence after
+checking unchanged AP-01/database/Docker/diagnostic sources and evidence hashes; no
+automatic whole-DB or Docker rerun is required. Retain focused logs, lifecycle/count
+matrices and exact pre/post/delta evidence outside the repository. Local
+synthetic 64 MiB tests are not operational capacity proof: AP-03 real transfer requires
+PASS of the [mandatory capacity gate](DR_AP00_ADAPTER_FOUNDATION.md#mandatory-pre-ap-03-capacity-compatibility-gate);
+current compatibility is NOT_PROVEN (`AP03_CAPACITY_COMPATIBILITY_NOT_PROVEN`).
+Local PG17 synthetic restore remains test evidence only. AP-02/AP-03/AP-06/AP-07,
+provisioning, publication and operational DR remain separate gates; no V126 command
+or existing workflow behavior changes.
+
 ### HT-12P executable V126 cutover quality gate
 
 `scripts/test-v126-cutover.sh` is the executable fixture authority for the sequencer; the canonical
