@@ -3,26 +3,36 @@
 ## CI Compose Stability — V126 Cutover Fixtures (2026-09-16)
 
 Isolated worktree `/private/tmp/ci-v126-compose-stability-20260916`, branch
-`codex/ci-v126-compose-stability`, base `ad23f8e0bd1846c95242fde10314ceb579fedb98`.
-CI 498 (`35061726837`, compose `104683280720`) is classified
-`B. FIXTURE_TIMING_RACE`: backup rehearsal accepted the temporary PostgreSQL init
-server's Unix socket before its shutdown. Real entrypoint barriers reproduced the
-exact pre-drain `database-create` exit 1 and secondary fixture cleanup failure.
-Loopback TCP readiness fixes the shared consumer; deadlines and safety gates are
-unchanged. PR #198's failing/passing SHAs and this main baseline have identical
-backup consumer/fixture blobs. [Evidence and regression](docs/TESTING_QA_SMOKE_STRATEGY.md#ht-12aa-postgresql17-globals-and-backup-regression).
+`codex/ci-v126-compose-stability`; follow-up parent
+`be32509d20f72fcacbd559e59c191eeb6529e835`, original base
+`ad23f8e0bd1846c95242fde10314ceb579fedb98`. The existing TCP readiness fix for
+CI 498's `database-create` race is preserved. PR #199 CI 499/500
+(`35103344782` / `35103386597`, compose `104818091340` / `104818238165`)
+passed the ordinary positive backup but failed the new transition fixture in
+both phases at `readiness`, exit 4. Their source trees match `be32509`.
 
-Local PG17.8 ARM64: full backup suite **38/38 PASS**, original positive fixture
-**10/10 repeats PASS**, controlled transition **3/3 repeats PASS** (both phases),
-cleanup callers **24/24 PASS**, canonical container IDs **10/10 PASS**. The new
-regression rejects the original source in both phases. This is local evidence;
-the aggregate harness still requires Linux/OpenSSH and CI used PG17.11 AMD64.
-Historical CI #487/#489 exact functional attribution remains unproven.
-PR #198, the primary checkout and HT-OPS-39 are unchanged; no rerun, publication,
-SSH, deploy, staging or provider action. One local fix commit only, no push.
+The fixture's FIFO owner/writer mismatch (OS postgres/root) is a confirmed
+portability defect. Both releases now explicitly use OS `postgres`; actual writer
+and owner UIDs are checked without pinning UID 999. Safe fixture diagnostics retain
+the first failed handoff and observed exit status through later readiness failure.
+Production code, TCP readiness, deadlines, cleanup ownership and workflow are
+unchanged. [Contract and evidence limits](docs/TESTING_QA_SMOKE_STRATEGY.md#ht-12aa-postgresql17-globals-and-backup-regression).
 
-Next: validate the candidate's full Compose/V126 gate on an isolated Linux runner
-before separately authorized publication.
+With the immutable CI PG17.11 AMD64 image on Docker Desktop, the targeted
+transition/positive cases pass; backup suite **41/41**, boundary checks **7/7**,
+sequential transition series **5/5** and cleanup caller contracts **24/24** pass.
+The temporary default-root writer control is rejected at all four writer/phase
+boundaries; the socket-only production-copy control fails both phases at
+`database-create`. Owned container/volume inventory returns to zero. Syntax,
+static safety, documentation and diff checks pass. Local `fs.protected_fifos=0` is unchanged;
+the historical CI attribution to `fs.protected_fifos=1` remains unproven, and
+the full GitHub-hosted Linux gate remains unverified. Historical CI #487/#489
+exact functional attribution also remains unproven.
+
+Only this local follow-up is authorized; no push or Actions operation. PR #198,
+the primary checkout, Candidate A/B, HT-OPS-39 and staging/provider state are untouched.
+
+Next: separately authorize publication of the local follow-up for GitHub-hosted Linux CI.
 
 ## HT-OPS-31 — AP-00 Dedicated S3 Worker Runtime
 

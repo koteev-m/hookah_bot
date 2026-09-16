@@ -443,6 +443,95 @@ fi
                                                if stage not in ("production-verified", "complete")))
 
 
+def init_transition_diagnostic(root):
+    # Fixture observations only: never consumed by production or accepted as proof.
+    unknown = " HT12AA_INIT_TRANSITION boundary=UNKNOWN_REDACTED outcome=unavailable exit=UNAVAILABLE"
+    try:
+        with (root / "init-transition.json").open("rb") as stream:
+            data = json.loads(stream.read(2049))
+        record = data["transition"]
+        stage, outcome, code = (record[key] for key in ("boundary", "outcome", "exit"))
+        if (stage not in ("init-ready", "probes", "init-release", "init-stopped", "final-release", "complete")
+                or outcome not in ("pending", "nonzero", "timeout", "deadline", "unavailable", "invalid-identity", "held", "ok")
+                or not (code is None or type(code) is int and -255 <= code <= 255)):
+            return unknown
+    except (OSError, ValueError, KeyError, TypeError):
+        return unknown
+    return f" HT12AA_INIT_TRANSITION boundary={stage} outcome={outcome} exit={code if code is not None else 'UNAVAILABLE'}"
+
+
+def exercise_init_transition(cfg, args, witness):
+    name = args[1]
+    state = {"handoffs": {}}
+    stage = "init-ready"
+
+    def record(outcome, code=None):
+        state["transition"] = dict(boundary=stage, outcome=outcome, exit=code)
+        witness.write_text(json.dumps(state))
+
+    def call(command, **kwargs):
+        try:
+            return run(command, **kwargs)
+        except subprocess.TimeoutExpired:
+            record("timeout")  # No exit status was observed; do not invent one.
+            raise
+        except OSError:
+            record("unavailable")
+            raise
+
+    def wait_marker(marker):
+        record("pending")
+        deadline = time.monotonic() + 30
+        code = None
+        while time.monotonic() < deadline:
+            code = call([cfg["docker"], "exec", name, "test", "-e", marker], timeout=5).returncode
+            if code == 0:
+                return
+            time.sleep(0.05)
+        record("deadline", code)
+        raise AssertionError("owned init transition barrier deadline")
+
+    def release():
+        record("pending")
+        # postgres is the image's OS user, not cfg['user'] (the database role).
+        # Observe identity in the same shell that writes each FIFO release.
+        result = call([cfg["docker"], "exec", "--user", "postgres", name, "sh", "-c",
+                       "set -e; writer=$(id -u); owner=$(stat -c %u /tmp/ht12aa-init-gate); "
+                       "printf '%s:%s\\n' \"$writer\" \"$owner\"; "
+                       "printf 'go\\n' > /tmp/ht12aa-init-gate"])
+        identity = re.fullmatch(rb"([0-9]{1,10}):([0-9]{1,10})\n", result.stdout)
+        state["handoffs"][stage] = dict(exit=result.returncode)
+        if identity:
+            state["handoffs"][stage].update(writer_uid=int(identity[1]), owner_uid=int(identity[2]))
+        if result.returncode != 0:
+            record("nonzero", result.returncode)
+            raise AssertionError("owned init transition handoff failed")
+        if not identity:
+            record("invalid-identity", result.returncode)
+            raise AssertionError("owned init transition identity unavailable")
+
+    wait_marker("/tmp/ht12aa-init-ready")
+    stage = "probes"
+    record("pending")
+    probe = [cfg["docker"], "exec", name, "pg_isready", "-U", cfg["user"], "-d", "postgres"]
+    state["socket"] = call(probe).returncode
+    state["tcp"] = call([*probe, "-h", "127.0.0.1"]).returncode
+    state["actual"] = call([cfg["docker"], *args]).returncode
+    stage = "init-release"
+    release()
+    stage = "init-stopped"
+    wait_marker("/tmp/ht12aa-init-stopped")
+    stage = "final-release"
+    # A false-ready probe must still reach createdb with the init server stopped.
+    if state["actual"] == 0:
+        record("held")
+    else:
+        release()
+        stage = "complete"
+        record("ok", 0)
+    return state["actual"]
+
+
 def boundary(config, kind, args):
     cfg = json.loads(Path(config).read_text())
     root = Path(config).parent
@@ -473,14 +562,6 @@ def boundary(config, kind, args):
 
     def docker(args, payload=None):
         return forward([cfg["docker"], *args], payload)
-
-    def wait_init_marker(name, marker):
-        deadline = time.monotonic() + 30
-        while time.monotonic() < deadline:
-            if run([cfg["docker"], "exec", name, "test", "-e", marker], timeout=5).returncode == 0:
-                return
-            time.sleep(0.05)
-        raise AssertionError("owned init transition barrier deadline")
 
     def own(name, volume=False):
         require(name in (cfg["source"], cfg["sentinel"]) or re.fullmatch(
@@ -597,23 +678,7 @@ def boundary(config, kind, args):
         event("rehearsal-" + args[2])
         witness = root / "init-transition.json"
         if fault == "init-transition" and args[2] == "pg_isready" and not witness.exists():
-            name = args[1]
-            wait_init_marker(name, "/tmp/ht12aa-init-ready")
-            probe = [cfg["docker"], "exec", name, "pg_isready", "-U", cfg["user"], "-d", "postgres"]
-            socket_status = run(probe).returncode
-            tcp_status = run([*probe, "-h", "127.0.0.1"]).returncode
-            actual = run([cfg["docker"], *args])
-            witness.write_text(json.dumps(dict(socket=socket_status, tcp=tcp_status, actual=actual.returncode)))
-            release = [cfg["docker"], "exec", name, "sh", "-c",
-                       "printf 'go\\n' > /tmp/ht12aa-init-gate"]
-            require(run(release).returncode == 0, "owned init release failed")
-            wait_init_marker(name, "/tmp/ht12aa-init-stopped")
-            # A correct probe rejects init and may now wait for the final server.
-            # A false-ready probe instead reaches createdb with no server, exactly
-            # exposing the original race; the normal owned cleanup still runs.
-            if actual.returncode != 0:
-                require(run(release).returncode == 0, "owned final-server release failed")
-            return actual.returncode
+            return exercise_init_transition(cfg, args, witness)
         if fault == "restore-fail" and args[2] == "pg_restore":
             return 74
     elif args[0] == "rm":
@@ -709,6 +774,93 @@ class BoundaryAdapterTest(unittest.TestCase):
         self.assertEqual(self.checksum(None, "-c", str(inventory)).returncode, 0)
         payload.write_bytes(b"different bytes")
         self.assertNotEqual(self.checksum(None, "-c", str(inventory)).returncode, 0)
+
+
+class InitTransitionTest(unittest.TestCase):
+    """Fault injection at the fixture boundary, not a protected_fifos kernel test."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="ht12aa-transition-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.config = self.root / "config.json"
+        self.config.write_text(json.dumps(dict(docker="fixture-docker", token="owned",
+                                               source="owned-source", sentinel="owned-sentinel",
+                                               user="database-role-not-os-user", fault="init-transition")))
+        self.args = ["exec", "owned-source", "pg_isready", "-h", "127.0.0.1", "-U", USER, "-d", "postgres"]
+
+    def test_first_handoff_failure_survives_later_readiness_failure(self):
+        for fail_at, status in ((1, 73), (2, 74)):
+            with self.subTest(handoff=fail_at):
+                witness = self.root / "init-transition.json"
+                witness.unlink(missing_ok=True)
+                releases = []
+
+                def docker_call(argv, **kwargs):
+                    output, code = b"", 0
+                    if argv[1:3] == ["container", "inspect"]:
+                        output = b"owned\n"
+                    elif "pg_isready" in argv:
+                        code = 2 if "-h" in argv else 0
+                    elif "sh" in argv:
+                        releases.append(argv)
+                        code = status if len(releases) == fail_at else 0
+                        output = CANARY.encode() if code else b"1234:1234\n"
+                    stderr = CANARY.encode() if "sh" in argv and code else b""
+                    return subprocess.CompletedProcess(argv, code, output, stderr)
+
+                with mock.patch.dict(globals(), run=docker_call):
+                    with self.assertRaisesRegex(AssertionError, "handoff failed"):
+                        boundary(self.config, "docker", self.args)
+                    first = witness.read_bytes()
+                    # The next ordinary readiness poll must not retry a handoff,
+                    # overwrite its first failure, or call that transition complete.
+                    self.assertEqual(boundary(self.config, "docker", self.args), 2)
+                self.assertEqual(witness.read_bytes(), first)
+                self.assertEqual(len(releases), fail_at)
+                failed = "init-release" if fail_at == 1 else "final-release"
+                expected = f"HT12AA_INIT_TRANSITION boundary={failed} outcome=nonzero exit={status}"
+                self.assertEqual(init_transition_diagnostic(self.root).strip(), expected)
+                self.assertNotIn(CANARY, first.decode())
+
+                # Exercise the real parent result/AssertionError path with a terminal
+                # driver exit, without spending the production readiness deadline.
+                fixture = BackupTest()
+                fixture.root, fixture.token = self.root, "owned"
+                fixture.docker, fixture.sha256sum = "fixture-docker", "fixture-sha256sum"
+                fixture.source, fixture.sentinel = "owned-source", "owned-sentinel"
+                fixture.driver = self.root / "driver.sh"
+                fixture.driver.write_text("exit 4\n")
+                result, _, _ = fixture.invoke(root=self.root, fault="init-transition")
+                message = fixture.failure_text(lambda: fixture.assert_driver_success(result))
+                self.assertIn(expected, message)
+                self.assertNotIn(CANARY, message)
+                self.assertNotIn("EACCES", message)
+
+    def test_timeout_has_no_invented_exit_status(self):
+        def timed_out(argv, **kwargs):
+            raise subprocess.TimeoutExpired(argv, 5, output=CANARY.encode(), stderr=CANARY.encode())
+
+        with mock.patch.dict(globals(), run=timed_out):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                exercise_init_transition(json.loads(self.config.read_text()), self.args,
+                                         self.root / "init-transition.json")
+        self.assertEqual(init_transition_diagnostic(self.root).strip(),
+                         "HT12AA_INIT_TRANSITION boundary=init-ready outcome=timeout exit=UNAVAILABLE")
+        self.assertNotIn(CANARY, (self.root / "init-transition.json").read_text())
+
+    def test_probe_only_and_untrusted_metadata_cannot_report_completion(self):
+        witness = self.root / "init-transition.json"
+        for data in ({"socket": 0, "tcp": 2, "actual": 2},
+                     {"transition": dict(boundary=CANARY, outcome="nonzero", exit=73)},
+                     {"transition": dict(boundary="init-release", outcome="nonzero", exit=CANARY)},
+                     [], None):
+            with self.subTest(data_type=type(data).__name__):
+                witness.write_text(json.dumps(data))
+                message = init_transition_diagnostic(self.root)
+                self.assertIn("outcome=unavailable exit=UNAVAILABLE", message)
+                self.assertNotIn("boundary=complete", message)
+                self.assertNotIn(CANARY, message)
 
 
 class CausalDiagnosticTest(unittest.TestCase):
@@ -1152,6 +1304,11 @@ class BackupTest(unittest.TestCase):
                       "-c", "log_connections=on", "-c", "log_line_prefix=%a|%u|%d|"], timeout=240)
         require(result.returncode == 0, "owned PostgreSQL17 launch failed")
         cls.source = result.stdout.decode().strip()
+        os_user = run([cls.docker, "exec", cls.source, "id", "-u", "postgres"])
+        require(os_user.returncode == 0 and re.fullmatch(rb"[0-9]{1,10}\n", os_user.stdout),
+                "image postgres OS identity unavailable")
+        cls.postgres_os_uid = int(os_user.stdout)
+        print(f"HT12AA postgres OS uid: {cls.postgres_os_uid}", flush=True)
         for _ in range(120):
             ready = run([cls.docker, "exec", cls.source, "pg_isready", "-U", "postgres"])
             if ready.returncode == 0:
@@ -1277,6 +1434,8 @@ class BackupTest(unittest.TestCase):
             os.close(write_fd)
             os.close(read_fd)
         result.diagnostic = driver_diagnostic(result, phase, root, event_offset, trace, initialized, mode, causal_trace)
+        if fault == "init-transition":
+            result.diagnostic += init_transition_diagnostic(root)
         require(CANARY.encode() not in result.stdout + result.stderr,
                 "credential in diagnostics; " + result.diagnostic)
         require(b"SCRAM-SHA-256$" not in result.stdout + result.stderr,
@@ -1333,11 +1492,19 @@ class BackupTest(unittest.TestCase):
             with self.subTest(phase=phase):
                 root = self.quiesced_root() if phase == "quiesced" else None
                 result, root, backup = self.invoke(phase=phase, root=root, fault="init-transition")
+                self.assert_driver_success(result)
                 probes = json.loads((root / "init-transition.json").read_text())
                 self.assertEqual(probes["socket"], 0, "real init server must accept Unix sockets")
                 self.assertEqual(probes["tcp"], 2, "real init server must not listen on loopback TCP")
                 self.assertEqual(probes["actual"], 2, "production probe must reject the temporary server")
-                self.assert_driver_success(result)
+                self.assertEqual(probes["transition"], dict(boundary="complete", outcome="ok", exit=0))
+                self.assertEqual(set(probes["handoffs"]), {"init-release", "final-release"})
+                for handoff, observed in probes["handoffs"].items():
+                    with self.subTest(handoff=handoff):
+                        self.assertEqual(observed["exit"], 0)
+                        self.assertEqual(observed["owner_uid"], self.postgres_os_uid)
+                        self.assertEqual(observed["writer_uid"], observed["owner_uid"],
+                                         "FIFO writer must be its OS owner, even with protected_fifos=0")
                 self.assertIn("production=complete root_cause=NONE cleanup=cleanup-ok", result.diagnostic)
                 self.assertTrue((root / "run" / (phase + "-backup-rehearsed.proof")).exists())
                 events = (root / "events").read_text().splitlines()
