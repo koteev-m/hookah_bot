@@ -650,6 +650,24 @@ Record actual server/client versions and image ID/digest/platform from each exec
 A local or CI PG17 result is not a new live PostgreSQL17.10 observation, a Gate A PASS
 or HT-13 completion. Run process-sensitive harnesses sequentially.
 
+The 2026-09-16 [CI 498 failure](https://github.com/koteev-m/hookah_bot/actions/runs/35061726837/job/104683280720)
+reached `database-create` in `test_02_full_production_both_phases` (pre-drain, exit 1).
+The same script/fixture blobs and PG17 image passed in
+[CI 497](https://github.com/koteev-m/hookah_bot/actions/runs/35056988168/job/104669132092).
+The image's temporary init server accepts Unix sockets before shutdown/restart;
+socket-only readiness can therefore admit `createdb` into that transition. Rehearsal
+now probes `127.0.0.1` **inside** its network-none container, where only the final
+server listens on TCP. The existing 60-attempt bound, ownership cleanup, restore
+checks and fail-closed proof remain unchanged. The deterministic
+`BackupTest.test_02_init_server_is_not_rehearsal_readiness` holds the real init server
+and shutdown with bounded FIFO barriers, proves socket-ready/TCP-unready, and checks
+both phases finish with exactly one database-create and complete resource cleanup.
+CI 489 (`34712708666`) also failed this backup test, but its older diagnostics cannot
+prove the exact failing operation; do not attribute every historical failure to this race.
+The later `container-cleanup` diagnostic in CI 498 is secondary: the fixture's data
+oracle rejects a database that was never created. Class cleanup reported no owned
+containers/volumes remaining. Compare source/image identity when investigating recurrence.
+
 ### HT-RELEASE-REPAIR-01 combined regression gate
 
 The existing complete cutover/compose job now requires the actual attempt/status,

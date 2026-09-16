@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import re
 import select
+import shlex
 import shutil
 import signal
 import stat
@@ -33,6 +34,23 @@ CANARY = "HT12AA_synthetic_password_canary"
 USER = "ht12aa_source"
 ODD_USER = "ht12aa role ' \" $x"
 DATABASE = "ht12aa db ' \" ; $(touch /tmp/ht12aa-injected) `id`"
+
+# Sourced by the real image entrypoint after its socket-only server is ready.
+# Two bounded FIFO handshakes expose the init/shutdown transition without sleeps
+# that guess how long PostgreSQL initialization takes.
+INIT_TRANSITION = r'''
+mkfifo /tmp/ht12aa-init-gate
+exec 9<> /tmp/ht12aa-init-gate
+eval "$(declare -f docker_temp_server_stop | sed '1s/docker_temp_server_stop/ht12aa_temp_stop/')"
+docker_temp_server_stop() {
+  ht12aa_temp_stop
+  touch /tmp/ht12aa-init-stopped
+  IFS= read -r -t 45 release <&9
+  exec 9>&-
+}
+touch /tmp/ht12aa-init-ready
+IFS= read -r -t 45 release <&9
+'''
 
 DIAGNOSTIC_STAGES = frozenset((
     "driver_started", "globals_command", "remote_backup_rehearsal",
@@ -456,6 +474,14 @@ def boundary(config, kind, args):
     def docker(args, payload=None):
         return forward([cfg["docker"], *args], payload)
 
+    def wait_init_marker(name, marker):
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            if run([cfg["docker"], "exec", name, "test", "-e", marker], timeout=5).returncode == 0:
+                return
+            time.sleep(0.05)
+        raise AssertionError("owned init transition barrier deadline")
+
     def own(name, volume=False):
         require(name in (cfg["source"], cfg["sentinel"]) or re.fullmatch(
             "hookah-v126-" + cfg["run"] + r"-(pre-drain|quiesced)-[0-9]+", name),
@@ -555,6 +581,12 @@ def boundary(config, kind, args):
         if fault == "wrong-owner-volume" and args[0] == "volume":
             args[args.index("--label") + 1] = "hookah.v126.rehearsal-owner=foreign-fixture"
         index = 1 if args[0] == "run" else 2
+        if fault == "init-transition" and args[0] == "run":
+            bootstrap = ("printf '%s' " + shlex.quote(INIT_TRANSITION) +
+                         " > /docker-entrypoint-initdb.d/00-ht12aa.sh; "
+                         "chmod 0644 /docker-entrypoint-initdb.d/00-ht12aa.sh; "
+                         "exec /usr/local/bin/docker-entrypoint.sh postgres")
+            args = [args[0], "--entrypoint", "bash", *args[1:], "-c", bootstrap]
         return docker([*args[:index], "--label", LABEL + "=" + cfg["token"], *args[index:]])
     if args[0] == "cp":
         own(args[2].split(":")[0])
@@ -563,6 +595,25 @@ def boundary(config, kind, args):
     elif args[0] == "exec":
         own(args[1])
         event("rehearsal-" + args[2])
+        witness = root / "init-transition.json"
+        if fault == "init-transition" and args[2] == "pg_isready" and not witness.exists():
+            name = args[1]
+            wait_init_marker(name, "/tmp/ht12aa-init-ready")
+            probe = [cfg["docker"], "exec", name, "pg_isready", "-U", cfg["user"], "-d", "postgres"]
+            socket_status = run(probe).returncode
+            tcp_status = run([*probe, "-h", "127.0.0.1"]).returncode
+            actual = run([cfg["docker"], *args])
+            witness.write_text(json.dumps(dict(socket=socket_status, tcp=tcp_status, actual=actual.returncode)))
+            release = [cfg["docker"], "exec", name, "sh", "-c",
+                       "printf 'go\\n' > /tmp/ht12aa-init-gate"]
+            require(run(release).returncode == 0, "owned init release failed")
+            wait_init_marker(name, "/tmp/ht12aa-init-stopped")
+            # A correct probe rejects init and may now wait for the final server.
+            # A false-ready probe instead reaches createdb with no server, exactly
+            # exposing the original race; the normal owned cleanup still runs.
+            if actual.returncode != 0:
+                require(run(release).returncode == 0, "owned final-server release failed")
+            return actual.returncode
         if fault == "restore-fail" and args[2] == "pg_restore":
             return 74
     elif args[0] == "rm":
@@ -1276,6 +1327,23 @@ class BackupTest(unittest.TestCase):
         self.assertEqual((backup / "globals.sql").stat().st_size, 0)
         self.assertFalse((backup / "globals.sql.sha256").exists())
         self.assertNotIn("volume-create", (root / "events").read_text())
+
+    def test_02_init_server_is_not_rehearsal_readiness(self):
+        for phase in ("pre-drain", "quiesced"):
+            with self.subTest(phase=phase):
+                root = self.quiesced_root() if phase == "quiesced" else None
+                result, root, backup = self.invoke(phase=phase, root=root, fault="init-transition")
+                probes = json.loads((root / "init-transition.json").read_text())
+                self.assertEqual(probes["socket"], 0, "real init server must accept Unix sockets")
+                self.assertEqual(probes["tcp"], 2, "real init server must not listen on loopback TCP")
+                self.assertEqual(probes["actual"], 2, "production probe must reject the temporary server")
+                self.assert_driver_success(result)
+                self.assertIn("production=complete root_cause=NONE cleanup=cleanup-ok", result.diagnostic)
+                self.assertTrue((root / "run" / (phase + "-backup-rehearsed.proof")).exists())
+                events = (root / "events").read_text().splitlines()
+                self.assertEqual(events.count("rehearsal-createdb"), 1)
+                self.assertEqual(events.count("container-remove"), 1)
+                self.assertEqual(events.count("volume-remove"), 1)
 
     def test_02_full_production_both_phases(self):
         result, root, backup = self.invoke(database=DATABASE)

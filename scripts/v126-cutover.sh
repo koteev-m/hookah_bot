@@ -4548,8 +4548,10 @@ remote_backup_rehearsal() {
   local ready=false
   local attempt
   for attempt in $(seq 1 60); do
+    # The image entrypoint's temporary init server accepts Unix sockets, then
+    # stops. Only the final server listens on TCP inside this isolated container.
     if docker exec "${rehearsal_container}" \
-      pg_isready -U "${source_db_user}" -d postgres >/dev/null 2>&1; then
+      pg_isready -h 127.0.0.1 -U "${source_db_user}" -d postgres >/dev/null 2>&1; then
       ready=true
       break
     fi

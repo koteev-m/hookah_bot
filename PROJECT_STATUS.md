@@ -1,5 +1,29 @@
 # Project Status
 
+## CI Compose Stability — V126 Cutover Fixtures (2026-09-16)
+
+Isolated worktree `/private/tmp/ci-v126-compose-stability-20260916`, branch
+`codex/ci-v126-compose-stability`, base `ad23f8e0bd1846c95242fde10314ceb579fedb98`.
+CI 498 (`35061726837`, compose `104683280720`) is classified
+`B. FIXTURE_TIMING_RACE`: backup rehearsal accepted the temporary PostgreSQL init
+server's Unix socket before its shutdown. Real entrypoint barriers reproduced the
+exact pre-drain `database-create` exit 1 and secondary fixture cleanup failure.
+Loopback TCP readiness fixes the shared consumer; deadlines and safety gates are
+unchanged. PR #198's failing/passing SHAs and this main baseline have identical
+backup consumer/fixture blobs. [Evidence and regression](docs/TESTING_QA_SMOKE_STRATEGY.md#ht-12aa-postgresql17-globals-and-backup-regression).
+
+Local PG17.8 ARM64: full backup suite **38/38 PASS**, original positive fixture
+**10/10 repeats PASS**, controlled transition **3/3 repeats PASS** (both phases),
+cleanup callers **24/24 PASS**, canonical container IDs **10/10 PASS**. The new
+regression rejects the original source in both phases. This is local evidence;
+the aggregate harness still requires Linux/OpenSSH and CI used PG17.11 AMD64.
+Historical CI #487/#489 exact functional attribution remains unproven.
+PR #198, the primary checkout and HT-OPS-39 are unchanged; no rerun, publication,
+SSH, deploy, staging or provider action. One local fix commit only, no push.
+
+Next: validate the candidate's full Compose/V126 gate on an isolated Linux runner
+before separately authorized publication.
+
 ## HT-OPS-31 — AP-00 Dedicated S3 Worker Runtime
 
 Same isolated worktree `/private/tmp/ht-ops-25-ap00/worktree`, branch
