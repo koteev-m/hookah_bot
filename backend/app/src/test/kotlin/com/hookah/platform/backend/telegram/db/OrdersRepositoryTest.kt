@@ -1,5 +1,6 @@
 package com.hookah.platform.backend.telegram.db
 
+import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
 import kotlinx.coroutines.runBlocking
 import org.flywaydb.core.Flyway
 import org.h2.jdbcx.JdbcDataSource
@@ -211,6 +212,71 @@ class OrdersRepositoryTest {
             assertNull(resolved)
         }
 
+    @Test
+    fun `tab scoped active details exclude another tab service charges`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("active-order-tab-service-charges")
+            val fixture = seedVenueTableSession(jdbcUrl)
+            val repository = OrdersRepository(dataSource(jdbcUrl))
+            val firstUserId = 1001L
+            val secondUserId = 2002L
+            seedUser(jdbcUrl, firstUserId)
+            seedUser(jdbcUrl, secondUserId)
+            val orderId =
+                assertNotNull(
+                    repository.getOrCreateActiveOrderId(
+                        tableId = fixture.tableId,
+                        venueId = fixture.venueId,
+                        tableSessionId = fixture.tableSessionId,
+                        venueZoneId = ZoneId.of("UTC"),
+                    ),
+                )
+            val firstTabId = seedTab(jdbcUrl, fixture.venueId, fixture.tableSessionId, firstUserId)
+            val secondTabId = seedTab(jdbcUrl, fixture.venueId, fixture.tableSessionId, secondUserId)
+            seedOrderBatch(jdbcUrl, orderId, firstUserId, firstTabId)
+            seedOrderBatch(jdbcUrl, orderId, secondUserId, secondTabId)
+            seedOrderServiceCharge(jdbcUrl, fixture, orderId, firstTabId, "First tab extension")
+            seedOrderServiceCharge(jdbcUrl, fixture, orderId, secondTabId, "Second tab extension")
+
+            val firstTabDetails =
+                assertNotNull(repository.findActiveOrderDetailsForTab(fixture.tableSessionId, firstTabId))
+            val secondTabDetails =
+                assertNotNull(repository.findActiveOrderDetailsForTab(fixture.tableSessionId, secondTabId))
+            val wholeOrderDetails = assertNotNull(repository.findActiveOrderDetails(fixture.tableSessionId))
+
+            assertEquals(listOf("First tab extension"), firstTabDetails.serviceCharges.map { it.label })
+            assertEquals(listOf("Second tab extension"), secondTabDetails.serviceCharges.map { it.label })
+            assertEquals(
+                setOf("First tab extension", "Second tab extension"),
+                wholeOrderDetails.serviceCharges.map { it.label }.toSet(),
+            )
+        }
+
+    @Test
+    fun `legacy tabless summary remains author scoped and exit guarded`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("legacy-summary-isolation")
+            val fixture = seedVenueTableSession(jdbcUrl)
+            val dataSource = dataSource(jdbcUrl)
+            val repository = OrdersRepository(dataSource)
+            val owner = 1001L
+            val stranger = 2002L
+            seedUser(jdbcUrl, owner)
+            seedUser(jdbcUrl, stranger)
+            val orderId =
+                assertNotNull(
+                    repository.getOrCreateActiveOrderId(fixture.tableId, fixture.venueId, fixture.tableSessionId),
+                )
+            seedOrderBatch(jdbcUrl, orderId, owner)
+            assertEquals(listOf(orderId), repository.listActiveOrderSummariesForUser(owner).map { it.orderId })
+            assertEquals(emptyList(), repository.listActiveOrderSummariesForUser(stranger))
+            dataSource.connection.use { connection ->
+                TableSessionRepository(dataSource)
+                    .recordUserExit(connection, owner, fixture.tableSessionId, Instant.now())
+            }
+            assertEquals(emptyList(), repository.listActiveOrderSummariesForUser(owner))
+        }
+
     private fun migratedJdbcUrl(prefix: String): String {
         val jdbcUrl =
             "jdbc:h2:mem:$prefix-${UUID.randomUUID()};MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;" +
@@ -417,6 +483,33 @@ class OrdersRepositoryTest {
                 }
             }
         }
+
+    private fun seedOrderServiceCharge(
+        jdbcUrl: String,
+        fixture: OrderFixture,
+        orderId: Long,
+        tabId: Long,
+        label: String,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                INSERT INTO order_service_charges (
+                    order_id, venue_id, table_session_id, tab_id, source, label,
+                    qty, unit_price_minor, total_minor, currency
+                )
+                VALUES (?, ?, ?, ?, 'SHIFT_EXTENSION', ?, 1, 5000, 5000, 'RUB')
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, orderId)
+                statement.setLong(2, fixture.venueId)
+                statement.setLong(3, fixture.tableSessionId)
+                statement.setLong(4, tabId)
+                statement.setString(5, label)
+                statement.executeUpdate()
+            }
+        }
+    }
 
     private fun seedClosedOrderDisplay(
         jdbcUrl: String,

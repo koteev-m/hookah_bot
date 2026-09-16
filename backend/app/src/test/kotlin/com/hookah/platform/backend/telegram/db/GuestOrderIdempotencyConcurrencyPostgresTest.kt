@@ -122,6 +122,92 @@ class GuestOrderIdempotencyConcurrencyPostgresTest {
     }
 
     @Test
+    fun `concurrent distinct batches on separate tabs share one active session order`() {
+        withFixture { dataSource, fixture ->
+            val personalScope = fixture.primaryPersonalScope()
+            val sharedScope = personalScope.copy(tabId = fixture.sharedTabId)
+            val concurrentDataSource = TransactionStartBarrierDataSource(dataSource)
+            val repository = ordersRepository(concurrentDataSource)
+
+            val results =
+                runConcurrently(
+                    { submit(repository, fixture, personalScope, "concurrent-personal-batch") },
+                    { submit(repository, fixture, sharedScope, "concurrent-shared-batch") },
+                ).map(Result<CreatedOrderBatch>::getOrThrow)
+
+            assertEquals(1, results.map(CreatedOrderBatch::orderId).distinct().size)
+            assertEquals(2, results.map(CreatedOrderBatch::batchId).distinct().size)
+            assertTrue(results.none(CreatedOrderBatch::idempotencyReplay))
+            assertEquals(2, concurrentDataSource.backendPids.size)
+            assertEquals(1, countRows(dataSource, "orders"))
+            assertEquals(2, countRows(dataSource, "order_batches"))
+            assertEquals(2, countRows(dataSource, "guest_batch_idempotency"))
+        }
+    }
+
+    @Test
+    fun `postgres tab charges and user summary access stay scoped`() {
+        withFixture { dataSource, fixture ->
+            val repository = ordersRepository(dataSource)
+            val personal = fixture.primaryPersonalScope()
+            val shared = personal.copy(tabId = fixture.sharedTabId)
+            val first = submit(repository, fixture, personal, "scoped-personal")
+            submit(repository, fixture, shared, "scoped-shared")
+            dataSource.connection.use { connection ->
+                connection.prepareStatement(
+                    "UPDATE table_sessions SET expires_at = TIMESTAMP '2099-01-01 00:00:00' WHERE id = ?",
+                ).use {
+                    it.setLong(1, personal.tableSessionId)
+                    it.executeUpdate()
+                }
+                connection.prepareStatement(
+                    """
+                    INSERT INTO order_service_charges (
+                        order_id, venue_id, table_session_id, tab_id, source, label,
+                        qty, unit_price_minor, total_minor, currency
+                    ) VALUES (?, ?, ?, ?, 'SHIFT_EXTENSION', ?, 1, 500, 500, 'RUB')
+                    """.trimIndent(),
+                ).use {
+                    listOf(personal, shared).forEach { scope ->
+                        it.setLong(1, first.orderId)
+                        it.setLong(2, fixture.venueId)
+                        it.setLong(3, scope.tableSessionId)
+                        it.setLong(4, scope.tabId)
+                        it.setString(5, "Charge ${scope.tabId}")
+                        it.executeUpdate()
+                    }
+                }
+            }
+            runBlocking {
+                listOf(personal, shared).forEach { scope ->
+                    val details =
+                        assertNotNull(repository.findActiveOrderDetailsForTab(scope.tableSessionId, scope.tabId))
+                    assertEquals(listOf("Charge ${scope.tabId}"), details.serviceCharges.map { it.label })
+                }
+                assertEquals(
+                    2,
+                    assertNotNull(repository.findActiveOrderDetails(personal.tableSessionId)).serviceCharges.size,
+                )
+                assertEquals(2, repository.listActiveOrderSummariesForUser(USER_ID).single().items.single().qty)
+                dataSource.connection.use { connection ->
+                    connection.prepareStatement("DELETE FROM tab_member WHERE tab_id = ? AND user_id = ?").use {
+                        it.setLong(1, shared.tabId)
+                        it.setLong(2, USER_ID)
+                        it.executeUpdate()
+                    }
+                }
+                assertEquals(1, repository.listActiveOrderSummariesForUser(USER_ID).single().items.single().qty)
+                dataSource.connection.use { connection ->
+                    TableSessionRepository(dataSource).recordUserExit(connection, USER_ID, personal.tableSessionId, NOW)
+                }
+                assertTrue(repository.listActiveOrderSummariesForUser(USER_ID).isEmpty())
+                TableSessionRepository(dataSource).clearUserExit(USER_ID, personal.tableSessionId)
+                assertEquals(1, repository.listActiveOrderSummariesForUser(USER_ID).single().items.single().qty)
+            }
+        }
+    }
+
+    @Test
     fun `same key on another tab in one session mismatches while exact retry succeeds`() {
         withFixture { dataSource, fixture ->
             val personalScope = fixture.primaryPersonalScope()

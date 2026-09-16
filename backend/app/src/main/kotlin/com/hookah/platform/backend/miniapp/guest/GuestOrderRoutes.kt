@@ -135,47 +135,66 @@ fun Route.guestOrderRoutes(
             )
 
         val scopedActiveOrder =
-            if (tableSessionId != null || tabId != null) {
-                val tableSession =
-                    platformAccess?.tableSession
-                        ?: tableSessionRepository.touchActiveSession(
-                            tableSessionId = checkNotNull(tableSessionId),
-                            venueId = table.venueId,
-                            tableId = table.tableId,
-                            ttl = tableSessionConfig.ttl,
-                        ) ?: throw NotFoundException()
-                val member =
-                    guestTabsRepository.isTabMember(
-                        tabId = checkNotNull(tabId),
-                        venueId = table.venueId,
-                        tableSessionId = tableSession.id,
-                        userId = userId,
-                    )
-                if (!member) {
-                    throw ForbiddenException("Tab access denied")
-                }
-                tableSession.id to (tabId to ordersRepository.findActiveOrderDetailsForTab(tableSession.id, tabId))
-            } else {
-                val tableSession =
-                    platformAccess?.tableSession
-                        ?: tableSessionRepository.resolveActiveSession(
-                            venueId = table.venueId,
-                            tableId = table.tableId,
-                            ttl = tableSessionConfig.ttl,
-                        )
-                val personalTab =
-                    platformAccess?.personalTab
-                        ?: guestTabsRepository.ensurePersonalTab(
+            if (tableSessionId != null && tabId != null) {
+                guestOrderTransactionCoordinator.executeAuthorized(
+                    actorUserId = userId,
+                    tableToken = token,
+                    expectedVenueId = table.venueId,
+                    expectedTableId = table.tableId,
+                    expectedTableSessionId = tableSessionId,
+                ) { connection, tableSession ->
+                    if (
+                        !guestTabsRepository.isTabMember(
+                            connection = connection,
+                            tabId = tabId,
                             venueId = table.venueId,
                             tableSessionId = tableSession.id,
                             userId = userId,
                         )
-                val activeOrderDetails =
-                    ordersRepository.findActiveOrderDetailsForTab(
-                        tableSession.id,
-                        personalTab.id,
-                    )
-                tableSession.id to (personalTab.id to activeOrderDetails)
+                    ) {
+                        throw ForbiddenException("Tab access denied")
+                    }
+                    tableSessionRepository.touchActiveSession(
+                        connection = connection,
+                        tableSessionId = tableSession.id,
+                        venueId = table.venueId,
+                        tableId = table.tableId,
+                        ttl = tableSessionConfig.ttl,
+                        now = Instant.now(),
+                    ) ?: throw NotFoundException()
+                    tableSession.id to
+                        (tabId to ordersRepository.findActiveOrderDetailsForTab(connection, tableSession.id, tabId))
+                }
+            } else {
+                guestOrderTransactionCoordinator.execute { connection ->
+                    val tableSession =
+                        platformAccess?.tableSession
+                            ?: tableSessionRepository.resolveActiveSession(
+                                connection = connection,
+                                venueId = table.venueId,
+                                tableId = table.tableId,
+                                ttl = tableSessionConfig.ttl,
+                                now = Instant.now(),
+                            )
+                    if (tableSessionRepository.hasUserExit(connection, userId, tableSession.id)) {
+                        throw NotFoundException()
+                    }
+                    val personalTab =
+                        platformAccess?.personalTab
+                            ?: guestTabsRepository.ensurePersonalTab(
+                                connection = connection,
+                                venueId = table.venueId,
+                                tableSessionId = tableSession.id,
+                                userId = userId,
+                            )
+                    val activeOrderDetails =
+                        ordersRepository.findActiveOrderDetailsForTab(
+                            connection,
+                            tableSession.id,
+                            personalTab.id,
+                        )
+                    tableSession.id to (personalTab.id to activeOrderDetails)
+                }
             }
         val activeOrder = scopedActiveOrder.second.second
         call.respond(
@@ -319,50 +338,62 @@ fun Route.guestOrderRoutes(
                     )
                 }
             } else {
-                val tableSession =
+                guestOrderTransactionCoordinator.executeAuthorized(
+                    actorUserId = userId,
+                    tableToken = token,
+                    expectedVenueId = table.venueId,
+                    expectedTableId = table.tableId,
+                    expectedTableSessionId = request.tableSessionId,
+                ) { connection, tableSession ->
+                    if (
+                        !guestTabsRepository.isTabMember(
+                            connection = connection,
+                            tabId = tabId,
+                            venueId = table.venueId,
+                            tableSessionId = tableSession.id,
+                            userId = userId,
+                        )
+                    ) {
+                        throw ForbiddenException("Tab access denied")
+                    }
+                    val activeOrder =
+                        ordersRepository.findActiveOrderDetailsForTab(
+                            connection = connection,
+                            tableSessionId = tableSession.id,
+                            tabId = tabId,
+                        ) ?: throw NotFoundException()
                     tableSessionRepository.touchActiveSession(
-                        tableSessionId = request.tableSessionId,
+                        connection = connection,
+                        tableSessionId = tableSession.id,
                         venueId = table.venueId,
                         tableId = table.tableId,
                         ttl = tableSessionConfig.ttl,
+                        now = Instant.now(),
                     ) ?: throw NotFoundException()
-                ensureGuestActionAvailable(table.venueId, guestVenueRepository, subscriptionRepository)
-                if (
-                    !guestTabsRepository.isTabMember(
-                        tabId = tabId,
-                        venueId = table.venueId,
-                        tableSessionId = tableSession.id,
-                        userId = userId,
-                    )
-                ) {
-                    throw ForbiddenException("Tab access denied")
-                }
-                val activeOrder =
-                    ordersRepository.findActiveOrderDetailsForTab(
-                        tableSessionId = tableSession.id,
-                        tabId = tabId,
-                    ) ?: throw NotFoundException()
-                val tabs =
-                    guestTabsRepository.listTabsForUser(
-                        venueId = table.venueId,
-                        tableSessionId = tableSession.id,
-                        userId = userId,
-                    )
-                GuestBillMutationResult(
-                    tableSessionId = tableSession.id,
-                    activeOrder = activeOrder,
-                    accountLabel = guestBillRequestAccountLabel(tabId = tabId, tabs = tabs),
-                    created =
-                        staffCallRepository.createGuestBillRequest(
+                    val tabs =
+                        guestTabsRepository.listTabsForUser(
+                            connection = connection,
                             venueId = table.venueId,
-                            tableId = table.tableId,
                             tableSessionId = tableSession.id,
-                            tabId = tabId,
-                            orderId = activeOrder.orderId,
-                            createdByUserId = userId,
-                            paymentMethod = paymentMethod,
-                        ),
-                )
+                            userId = userId,
+                        )
+                    GuestBillMutationResult(
+                        tableSessionId = tableSession.id,
+                        activeOrder = activeOrder,
+                        accountLabel = guestBillRequestAccountLabel(tabId = tabId, tabs = tabs),
+                        created =
+                            staffCallRepository.createGuestBillRequest(
+                                connection = connection,
+                                venueId = table.venueId,
+                                tableId = table.tableId,
+                                tableSessionId = tableSession.id,
+                                tabId = tabId,
+                                orderId = activeOrder.orderId,
+                                createdByUserId = userId,
+                                paymentMethod = paymentMethod,
+                            ),
+                    )
+                }
             }
         val activeOrder = mutation.activeOrder
         val activeOrderDto =

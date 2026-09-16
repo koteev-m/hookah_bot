@@ -1,5 +1,132 @@
 # Project Status
 
+## Unified Review and Consolidation — Guest Order / Session / Tab Isolation — 2026-09-16
+
+**INDEPENDENT REVIEW COMPLETE / CONSOLIDATED LOCAL CANDIDATE VERIFIED / UNCOMMITTED /
+RELEASE AND STAGING GATES OPEN**.
+
+### Scope, baseline and preservation
+
+- Final isolated worktree: `/private/tmp/guest-order-consolidated-20260916`, detached HEAD/base
+  `77caf48a46e5d3c61b01ffdfc0a43bc9ec55ceaa`, matching the inspected local `origin/main` ref.
+  This is 41 commits ahead of ancestor `4daf5546fb622a6b967398f5c25b7bed41d7fa05`.
+  No fetch or remote-state claim is made. The fresh worktree was clean before applying changes.
+- Primary remains on `main` at `4daf5546fb622a6b967398f5c25b7bed41d7fa05`, with its existing
+  modified `AGENTS.md`, `PROJECT_STATUS.md`, `docs/DEPLOYMENT_RUNBOOK.md`,
+  `docs/TESTING_QA_SMOKE_STRATEGY.md`, untracked `docs/MODEL_WORKFLOW.md` and `scripts/dev/`.
+  Primary and both original candidates retain identical HEAD, status, staged/unstaged diff hashes
+  and hashes of their changed files. No primary changes were absorbed into this candidate.
+- The existing primary **HT-OPS-39 external support wait** entry is preserved byte-for-byte.
+  HT-OPS-39 remains OPEN, externally blocked awaiting Yandex Support; this task does not change its
+  evidence or authorization. No HT-OPS evidence, Yandex/yc, credential or infrastructure action.
+- Read instructions: primary root `AGENTS.md`; A root `AGENTS.md`; empty ancestor
+  `/Users/maksimmartynov/.codex/AGENTS.md` and B root `AGENTS.md`; the new worktree's root matches B.
+  No applicable ancestor override or nested instruction file was found. Explicit task constraints
+  take precedence; no commit/stage/push/PR/SSH/deploy/Actions query was performed.
+
+### Review verdicts and final behavior
+
+- **A — ACCEPT_WITH_ADJUSTMENT.** Exact candidate: six files, +493/-81, detached at `4daf5546`.
+  Its route implementation is retained unchanged: explicit active-order reads and ordinary bill
+  requests use the existing authorized transaction, and legacy personal lookup checks exit inside
+  its transaction. The baseline exit/read regression returned HTTP 200 instead of 404. Static review
+  confirmed the same missing exit check in ordinary bill requests. Tests now also cover later
+  service charges, bill denial for invalid scopes and complete denial snapshots. Older status
+  text was not copied over newer checkpoints.
+- **B — ACCEPT_WITH_ADJUSTMENT.** Exact candidate: four files, +153/-9, detached at `77caf48a`.
+  Its order/tab service-charge predicate is retained; baseline regression returned both tabs'
+  charges for one tab. The optional tab predicate preserves full-order/staff charge aggregation.
+  A's stronger sequential-visit test supersedes B's overlapping test/helper. Review additionally
+  required the active-summary correction below and fuller money-component regression coverage.
+- Both production fixes are independent and compatible, and neither is obsolete on the newer
+  baseline: affected order routes/repository/test sources were unchanged between the two bases.
+  Mechanical/semantic overlap was confined to the sequential-visit test and competing status
+  entries; these were consolidated deliberately. Neither fix grants new authorization.
+- Historical table-only P0 remains closed in code: PostgreSQL V61 supplies non-null session/FK and
+  partial ACTIVE-order uniqueness; H2 V112 mirrors uniqueness. Create/reuse and idempotency remain
+  session-scoped. No migration, DTO/API, Mini App, order identity or staff notification change.
+- **Additional confirmed disclosure:** Telegram active-order summaries loaded order-wide promotion
+  labels/amounts and accepted retained membership/authorship after exit/revocation. On A+B alone,
+  guest A expected promotion 440 but received order-wide 1100 plus another guest's loyalty 100;
+  the separate exit-summary regression also failed. The repository now derives items, tab type
+  and promotions from the same currently authorized batch set: valid active session, no exit,
+  active tab/membership and personal ownership. Own legacy tabless author/idempotency summaries
+  remain supported under active-session/no-exit checks. Booking and history paths are unchanged.
+- Monetary inspection and regressions cover batches/comments/items, option snapshots and deltas,
+  manual discounts, excluded/canceled lines, promotions/loyalty, gift/reward flags and labels,
+  charges and derived gross/payable totals. Item attachments already use selected batch/item IDs;
+  the charge predicate closes the selected-tab attachment leak. Full-order views retain both tabs.
+- Existing exit/re-entry contract is preserved: exit is a user/session marker, not deletion of
+  shared membership or closure of the physical session. Explicit valid QR re-entry restores retained
+  membership; it does not restore deleted membership. Old read/bill/append, including exact-key
+  replay, fails after exit or revocation. Confirmed Platform Guest preflight remains required.
+
+### Fresh verification on the consolidated candidate
+
+**235 tests / 16 suites / zero failures, errors or skips** across three successful Gradle runs;
+real PostgreSQL ran in local Testcontainers. Backend compile and ktlint pass. **24 focused Mini App
+checks pass**, using mocked local API fixtures because the existing QA matrix explicitly requires
+Mini App e2e for order/session/tab work. No client/API change required a new frontend test or build.
+
+| Suite | Passed |
+| --- | ---: |
+| `GuestOrderRoutesTest` | 65 |
+| `VenueOrdersRepositoryTest` | 32 |
+| `GuestOrderIdempotencyFingerprintTest` | 7 |
+| `OrdersRepositoryTest` | 9 |
+| `PostgresMigrationSmokeTest` | 2 |
+| `ActiveOrderTabUniquenessMigrationTest` | 3 |
+| `GuestBatchIdempotencyFingerprintMigrationH2Test` | 2 |
+| `GuestBatchIdempotencyFingerprintMigrationPostgresTest` | 2 |
+| `TableSessionsMigrationV28PostgresTest` | 1 |
+| `GuestOrderIdempotencyConcurrencyPostgresTest` | 11 |
+| `GuestTableResolveRoutesTest` | 36 |
+| `GuestTabsRoutesTest` | 9 |
+| `PlatformGuestTableMutationCoordinatorTest` | 14 |
+| `ShiftExtensionRoutesTest` | 9 |
+| `VenueOrderRoutesTest` | 22 |
+| `TelegramBotRouterTableTokenTest` | 11 |
+
+Commands executed from the consolidated worktree:
+
+```bash
+_JAVA_OPTIONS=-Xmx4g JAVA_TOOL_OPTIONS=-Dapi.version=1.44 ./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*GuestOrderRoutesTest' --tests '*OrdersRepositoryTest' --tests '*GuestOrderIdempotencyFingerprintTest' :backend:app:compileKotlin :backend:app:ktlintCheck --console=plain
+_JAVA_OPTIONS=-Xmx4g JAVA_TOOL_OPTIONS=-Dapi.version=1.44 ./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*GuestOrderIdempotencyConcurrencyPostgresTest' --tests '*ActiveOrderTabUniquenessMigrationTest' --tests '*TableSessionsMigrationV28PostgresTest' --tests '*GuestBatchIdempotencyFingerprintMigrationH2Test' --tests '*GuestBatchIdempotencyFingerprintMigrationPostgresTest' --tests '*PostgresMigrationSmokeTest' --console=plain
+_JAVA_OPTIONS=-Xmx4g JAVA_TOOL_OPTIONS=-Dapi.version=1.44 ./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*GuestTableResolveRoutesTest' --tests '*GuestTabsRoutesTest' --tests '*PlatformGuestTableMutationCoordinatorTest' --tests '*VenueOrderRoutesTest' --tests '*ShiftExtensionRoutesTest' --tests '*TelegramBotRouterTableTokenTest.my command*' --tests '*TelegramBotRouterTableTokenTest.active order screen*' --tests '*TelegramBotRouterTableTokenTest.guest bot active order shows shift extension*' --tests '*TelegramBotRouterTableTokenTest.bill reason asks payment method*' --tests '*TelegramBotRouterTableTokenTest.cart checkout rejects stale shared*' --console=plain
+npm --prefix miniapp ci --offline --ignore-scripts --no-audit --no-fund
+MINIAPP_E2E_PORT=5183 npm --prefix miniapp run e2e:smoke -- --grep 'table context|initial tab restore|switching tab|guest cart idempotency|guest cart unverifiable|guest.*bill' --workers=1
+git diff --check
+git status --short
+```
+
+The core, PostgreSQL/migration and context/staff/bot runs passed 113, 21 and 101 tests respectively.
+The core wildcard also selected `VenueOrdersRepositoryTest`; Telegram selection ran 11 methods,
+not that entire class. Local artifacts (original patches, expected-red XML, final XML per group,
+logs, suite totals and preservation hashes) are under
+`/private/tmp/guest-order-consolidation-evidence-20260916/`.
+
+Both original regressions failed before production patches; both additional summary regressions
+failed with A+B alone, then passed with the correction. One initial broad run was 111/112: the new
+five-case denial fixture hit rate limiting on its last submission. Only that fixture's existing
+request-limit option was raised to 10; the dedicated rate-limit test remains unchanged and passed.
+Initial long-line/formatting failures were corrected before the final successful lint. The first
+sandboxed Gradle attempt could not open its user-cache lock; the authorized local rerun succeeded.
+No OOM occurred in this consolidation. Runs used the instructed 4 GB heap and one worker because
+these H2 suites retain multiple in-memory databases; no assertion or database constraint was weakened.
+
+Final changed files: `GuestOrderRoutes.kt`, `OrdersRepository.kt`, `GuestOrderRoutesTest.kt`,
+`OrdersRepositoryTest.kt`, `GuestOrderIdempotencyConcurrencyPostgresTest.kt`, this status file,
+`docs/ORDER_SESSION_TAB_CORE.md` and `docs/DEFERRED_MANUAL_SMOKE_BACKLOG.md`. All are unstaged.
+No migration/API/DTO/client/infrastructure files changed; `scripts/dev/` was neither read nor touched.
+
+Full backend/browser suites, deployed database/runtime, live Telegram/staging smoke and production
+load behavior remain unverified. Required Actions must be green for a separately authorized release
+SHA, and `ORDER-CONTEXT-MANUAL-001` remains PLANNED. Local checks do not close those gates or authorize
+publication. No in-flight exit-versus-summary race or production-scale query benchmark is claimed.
+
+**Next step:** review this consolidated worktree and decide whether to authorize a separate
+integration task, preserving the primary checkout's pending documentation changes.
+
 ## HT-OPS-20 — Diagnostic Transport Findings Repair
 
 Local F1–F3 repair in `/private/tmp/ht-ops-04-policy-b-dr`, branch
