@@ -9387,6 +9387,8 @@ test('ownership onboarding: platform closes approved-unlinked request through th
 })
 
 test('guest catalog sends debounced backend search and city filters then resets', async ({ page }) => {
+  // Installing a running clock lets real elapsed time cross the 299/300 ms debounce boundary.
+  await page.clock.pauseAt(new Date('2026-01-01T00:00:00Z'))
   await installTelegramWebApp(page, 123456789)
   const api = await mockGuestApi(page, {
     catalogVenues: [
@@ -9414,7 +9416,6 @@ test('guest catalog sends debounced backend search and city filters then resets'
   ])
 
   const initialRequestCount = api.getCatalogRequests().length
-  await page.clock.install()
   await search.fill('М')
   await search.fill('Микс')
   await search.fill('Микс & чай')

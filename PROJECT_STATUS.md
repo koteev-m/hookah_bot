@@ -1,5 +1,42 @@
 # Project Status
 
+## PR #198 — recurring Mini App catalog debounce smoke failure — 2026-09-16
+
+**D — FLAKY_OR_TIMING_RACE / TEST-ONLY FIX VERIFIED LOCALLY / PUBLICATION AND RELEASE GATES OPEN**.
+
+- Worktree: `/private/tmp/guest-order-consolidated-20260916`; branch
+  `codex/guest-order-session-tab-isolation`; follow-up parent
+  `48afb71821ef289bc396d58a0f18ea2442b352f5`. The reviewed guest isolation commit is unchanged.
+- Exact CI evidence: [run 35056988168, job 104669132051](https://github.com/koteev-m/hookah_bot/actions/runs/35056988168/job/104669132051).
+  Smoke executed `216`: `215` passed, `1` failed, no retries/skips/runner errors, `3.3m` total.
+  `guest catalog sends debounced backend search and city filters then resets` failed at the
+  request-count assertion after `fastForward(299)`: expected `1`, received `2`, including the
+  final search query. Vite and Chromium started successfully; the JSON assertion correctly
+  rejected the failed test. CI uploaded no report/trace artifact; the job log contains the failure.
+- The immediately preceding failed smoke [run 34938754893, job 104282354047](https://github.com/koteev-m/hookah_bot/actions/runs/34938754893/job/104282354047)
+  has the identical test/line/expected/actual signature. Existing QA notes also record this flake.
+  The earlier `24` local order/tab checks did not select this catalog test.
+- Root cause: `page.clock.install()` leaves time running. Real time between browser actions plus
+  a `299ms` jump can reach the product's valid `300ms` debounce deadline. The test now pauses time
+  before navigation. All existing debounce, query, city, reset and navigation assertions remain;
+  no product code, timeout, retry, workflow, dependency, API or DTO change.
+- Local evidence with CI Node `20.20.2`, npm `10.8.2`, unchanged lockfile, Playwright `1.60.0`,
+  Chromium `148.0.7778.96`, `CI=1`, `TZ=UTC`, port `5174`: unchanged focused test passed once,
+  then reproduced the exact failure in `1/20` attempts with two workers. After the fix, focused
+  `1/1`, repeated `20/20`, full structured `216/216` (`134.2s`) and the unchanged CI JSON assertion
+  passed with zero failed attempts/skips/flaky outcomes. Mini App `tsc && vite build` passed with
+  its existing bundle-size warning; `git diff --check` passed. No backend/runtime change required
+  new backend tests. Logs, JSON, local failure trace and input hashes:
+  `/private/tmp/pr198-miniapp-ci-20260916/`.
+- Local reproduction is macOS arm64, not the Ubuntu runner. CI's exact versions/command and two
+  effective full-suite workers were reproduced; no post-fix GitHub Actions result is claimed.
+  `BOOKING-CI-PLAYWRIGHT-FLAKE-001` remains open for its separate favorite-test signal and fresh CI
+  evidence. PR/release-SHA CI, authorized staging smoke and `ORDER-CONTEXT-MANUAL-001` remain gates.
+- Scope permits one local follow-up commit only. No push, Actions rerun, merge, deploy, staging or
+  provider action. Dirty primary changes and the existing HT-OPS-39 support wait remain unchanged;
+  `scripts/dev/` and HT-OPS evidence were not accessed. Next step: review and separately authorize
+  publication of this verified local follow-up commit to PR #198.
+
 ## Unified Review and Consolidation — Guest Order / Session / Tab Isolation — 2026-09-16
 
 **INDEPENDENT REVIEW COMPLETE / CONSOLIDATED LOCAL CANDIDATE VERIFIED / UNCOMMITTED /

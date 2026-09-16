@@ -1044,6 +1044,22 @@ passed the raised full structured floor at `216/216` with zero unexpected, flaky
 Revisit the finding in the next Mini App CI-hardening pass or after a repeated same failure in
 GitHub Actions.
 
+PR #198 bounded diagnosis (2026-09-16): CI runs `35056988168` / job `104669132051` and
+`34938754893` / job `104282354047` failed the same catalog debounce assertion: after advancing
+`299ms`, expected one catalog request but received two. This is `FLAKY_OR_TIMING_RACE`:
+`page.clock.install()` keeps time running, so elapsed real time can cross the `300ms` deadline.
+Tests asserting an exact debounce boundary must pause the virtual clock before the app schedules
+timers, then advance it explicitly. The catalog test now pauses before navigation and retains the
+`299ms` negative assertion, `+1ms` request assertion and all query/filter/reset/navigation coverage.
+No timeout/retry increase, sleep, skipped assertion, product or workflow change is involved.
+Under CI Node `20.20.2` / npm `10.8.2`, Playwright `1.60.0` / Chromium `148.0.7778.96`, UTC and
+port `5174`, the unchanged test reproduced `1` identical failure in `20` local attempts. The fix
+passed focused `1/1`, repeated `20/20`, full structured `216/216` and the unchanged CI JSON
+assertion (zero failures/flaky/skips/runner errors/failed attempts), plus the production build.
+The separate favorite-test signal remains open; macOS local verification does not prove a fresh
+Ubuntu CI result or close the PR/release-SHA and authorized staging gates. Evidence is recorded
+in the PR #198 checkpoint in `PROJECT_STATUS.md`.
+
 CI must assert the exact JUnit XML files and zero skipped/failures/errors. A selector that discovers
 fewer tests must fail the job. PostgreSQL/Testcontainers checks may not be treated as optional or
 green through skips.
