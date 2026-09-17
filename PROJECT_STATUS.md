@@ -1,5 +1,39 @@
 # Project Status
 
+## CI Compose Stability — V126 Cutover Fixtures (2026-09-16)
+
+Isolated worktree `/private/tmp/ci-v126-compose-stability-20260916`, branch
+`codex/ci-v126-compose-stability`; follow-up parent
+`be32509d20f72fcacbd559e59c191eeb6529e835`, original base
+`ad23f8e0bd1846c95242fde10314ceb579fedb98`. The existing TCP readiness fix for
+CI 498's `database-create` race is preserved. PR #199 CI 499/500
+(`35103344782` / `35103386597`, compose `104818091340` / `104818238165`)
+passed the ordinary positive backup but failed the new transition fixture in
+both phases at `readiness`, exit 4. Their source trees match `be32509`.
+
+The fixture's FIFO owner/writer mismatch (OS postgres/root) is a confirmed
+portability defect. Both releases now explicitly use OS `postgres`; actual writer
+and owner UIDs are checked without pinning UID 999. Safe fixture diagnostics retain
+the first failed handoff and observed exit status through later readiness failure.
+Production code, TCP readiness, deadlines, cleanup ownership and workflow are
+unchanged. [Contract and evidence limits](docs/TESTING_QA_SMOKE_STRATEGY.md#ht-12aa-postgresql17-globals-and-backup-regression).
+
+With the immutable CI PG17.11 AMD64 image on Docker Desktop, the targeted
+transition/positive cases pass; backup suite **41/41**, boundary checks **7/7**,
+sequential transition series **5/5** and cleanup caller contracts **24/24** pass.
+The temporary default-root writer control is rejected at all four writer/phase
+boundaries; the socket-only production-copy control fails both phases at
+`database-create`. Owned container/volume inventory returns to zero. Syntax,
+static safety, documentation and diff checks pass. Local `fs.protected_fifos=0` is unchanged;
+the historical CI attribution to `fs.protected_fifos=1` remains unproven, and
+the full GitHub-hosted Linux gate remains unverified. Historical CI #487/#489
+exact functional attribution also remains unproven.
+
+Only this local follow-up is authorized; no push or Actions operation. PR #198,
+the primary checkout, Candidate A/B, HT-OPS-39 and staging/provider state are untouched.
+
+Next: separately authorize publication of the local follow-up for GitHub-hosted Linux CI.
+
 ## HT-OPS-31 — AP-00 Dedicated S3 Worker Runtime
 
 Same isolated worktree `/private/tmp/ht-ops-25-ap00/worktree`, branch
