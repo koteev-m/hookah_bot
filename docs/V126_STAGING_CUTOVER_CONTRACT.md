@@ -1,7 +1,8 @@
 # PostgreSQL V126 Staging Cutover Contract
 
-Status: **HT-12W release CI contract repair / bounded review PASS / final local and feature CI gates pending /
-ownership and protected-input readiness remain blocked / no cutover authorization**.
+Status: **CURRENT MAIN MERGED AND GREEN / STAGING V125 / V126 ABSENT / CANDIDATE ARTIFACTS AND
+TARGET-OPERATION REGISTRY ABSENT / PROTECTED-INPUT AUTHORITY AND POLICY-B R0 READINESS UNRESOLVED /
+NO CUTOVER AUTHORIZATION**.
 Earlier task sections below retain their historical release evidence.
 
 This document is the single policy and state-machine authority for the PostgreSQL V126 staging
@@ -17,6 +18,22 @@ Other product, QA, deployment and migration documents may summarize this contrac
 files. They must not reproduce a second V126 command sequence. Neither this document nor the
 presence of the scripts or successful prerequisite sync authorizes staging access, backup creation, Caddy mutation, backend
 stop/start, maintenance activation, image transfer, Flyway/V126, manual smoke or recovery.
+
+## Current post-PR #198 staging checkpoint — 2026-09-17
+
+PR #198 is merged at authoritative `main`
+`465ce33c4a9e244ad5f9771beadf35cfa7b8d9d4`; CI #504, CI #505 and post-merge CI #506
+passed, and the remote PR branch was deleted. Read-only staging reconciliation found deployed runtime
+`f577934691a1a7a79ba327c54e2055425142b7be` at Flyway head V125. V126 is absent and the
+current-main candidate is not deployed. Its exact candidate image, image ID and deployment descriptor
+are absent, and the canonical target-operation registry is absent.
+
+The protected V126 input files now exist with the expected shape and metadata, but their approval,
+provenance and semantic binding remain unproven. This supersedes only the earlier current-state
+observation that the proposed files were absent; it does not change protected-input authority or
+admissibility. Policy-B R0 operational readiness remains unresolved and is on the V126 critical path.
+No handoff is applied, Gate A is not started, and no V126 readiness, staging smoke pass, provider
+readiness, operational DR PASS or production readiness is claimed.
 
 ## Policy B R0 and future Q consumer contract — AP-01
 
@@ -109,7 +126,7 @@ Historical policy/task sections below are preserved as history. Current local ou
 coverage, exact commands and blockers are recorded in the repair report; none of these
 changes establishes staging release readiness or authorizes publication/live actions.
 
-## HT-12W current release CI and readiness boundary
+## HT-12W historical release CI and readiness boundary
 
 HT-12W starts from main `8436ee7b219ca6074aceecc47d6bf5f24803621d`, tree
 `ea5ffc713337ce01c2ad7a0308363a99dbbf31dd`. Fresh main Actions `34146214650` is workflow
