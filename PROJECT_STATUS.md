@@ -18,12 +18,12 @@ The user accepted losing the observer's duplicate HEAD proof and the residual
 availability risk when reader response VersionId is absent; reader stays fail-closed.
 Three independent principals remain required. [Contract](docs/DR_AP00_ADAPTER_FOUNDATION.md).
 
-Pre-integration local validation: targeted adapter 7/7 and worker/IPC 5/5; full adapter 37/37,
-worker/IPC 24/24, stdlib AP-01 48/48 PASS. The new retention-only regression rejects
-the original HEAD implementation in an in-memory negative control. The first worker
-selector command used the base test class incorrectly; corrected selectors passed.
-CPython 3.13.2/GIL and all pins match; dependency check passes. No provider test.
-Baseline identities, full diff, logs and remaining gates:
+Fresh validation of exact local merge `46c587222ff9b17f6c69c6b811d9f73162338b2b`:
+adapter 37/37, worker/IPC 24/24 and stdlib AP-01 48/48 PASS; in-memory syntax
+compile 5/5, Markdown targets 12/12 and `git diff --check` PASS; no conflict markers.
+The focused merge review found no blocking runtime defect. This docs-only correction
+closes its sole stale-handoff finding. No provider test was performed. Earlier
+implementation identities, diff and logs remain in
 `/private/tmp/ht-ops-39-yandex-context/REPORT.md`.
 
 HT-OPS-39 remains `BLOCKED_HT_OPS39_LEAST_PRIVILEGE`: reproducible policy/ACL,
@@ -33,7 +33,8 @@ four-call observer mismatch is historical for the original implementation.
 No operational schema/Trust, provisioning, IAM or provider change; no credentials,
 push/PR/publication, staging/SSH/deploy/V126 or Actions activity.
 
-Next: verify the combined local merge before a separate publication decision.
+The implementation/merge review is complete. Publication remains separately
+unauthorized and requires an explicit decision after this docs-only correction.
 
 ## PR #198 — merged main and staging reconciliation — 2026-09-17
 

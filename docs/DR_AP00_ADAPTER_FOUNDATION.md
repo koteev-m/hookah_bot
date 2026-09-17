@@ -352,9 +352,16 @@ no schema migration or operational receipt generation is hidden in AP-00.
 - AP-07 remains unimplemented/unauthorized: no KMS/HSM/provider keys, password
   manager, key storage/retrieval service, secret/config/image/evidence custody.
 
-Next gate: focused review of the uncommitted HT-OPS-39 observer/IPC adaptation
-before a separate commit decision. F2–F4 and crypto/provisioning
-contracts are preserved. No deploy/staging/V126 action is implied.
+The retention-only observer/IPC adaptation is locally committed as
+`27a2c785e156940d4344ad1d0ff689eca322f312`; authoritative current `main`
+`7dfdee55153dce59fc96e3e1a68b22dcc8ffcb53` is locally integrated in merge
+`46c587222ff9b17f6c69c6b811d9f73162338b2b`. Fresh exact merged-tree validation
+passed: adapter 37/37, worker/IPC 24/24, stdlib AP-01 48/48, in-memory syntax
+compile 5/5, Markdown targets 12/12 and `git diff --check`; no conflict markers.
+Focused review found no blocking runtime implementation defect, and this docs-only
+correction closes the stale handoff wording. Publication remains separately
+unauthorized. F2–F4 and crypto/provisioning contracts are preserved; no
+deploy/staging/V126 action is implied.
 
 ## Implementation references
 
