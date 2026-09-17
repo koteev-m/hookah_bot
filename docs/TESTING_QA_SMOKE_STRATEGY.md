@@ -1,8 +1,16 @@
 # Testing / QA Smoke Strategy
 
-Дата актуализации: 2026-09-04.
+Дата актуализации: 2026-09-17.
 
 Статус: **current product reference / UPDATED**. This document is the canonical QA/smoke strategy for the Telegram bot + Mini App platform. It consolidates local validation, GitHub Actions expectations, area-specific smoke suites, staging policy, failure reporting and Codex handoff rules. Deployment and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
+
+Current merged feature checkpoint: PR #198 is merged at authoritative `main`
+`465ce33c4a9e244ad5f9771beadf35cfa7b8d9d4`; CI #504, CI #505 and post-merge CI #506
+passed, and the remote PR branch was deleted. Automated merge/CI gates are closed, but the
+environment-dependent order/session/tab smoke remains open as
+`ORDER-CONTEXT-MANUAL-001 = BLOCKED_BY_ENVIRONMENT`. Staging still runs runtime
+`f577934691a1a7a79ba327c54e2055425142b7be` at Flyway V125, with V126 absent and the
+current-main candidate not deployed. Green CI is not staging privacy/order release evidence.
 
 Latest release-closed bounded menu audit blocks: option hard delete with atomic base-profile
 normalization, option rename, option price and **DANGEROUS ACTION AUDIT SLICE / MENU ITEM
@@ -20,12 +28,13 @@ STAGING-SMOKE-PASSED** for release HEAD `e35def99ea8429462e5fdaaeee914f57da72e77
 green Actions, staging deploy, consolidated smoke and cleanup. At that historical closure, local
 GitHub CLI authentication was invalid, so its Actions result was recorded as user-confirmed evidence.
 
-Current build/release QA slice: **HT-12T / CANONICAL DOCKER-SAVE RELEASE ARTIFACT EXPORT /
+Historical HT-12T build/release QA checkpoint: **HT-12T / CANONICAL DOCKER-SAVE RELEASE ARTIFACT EXPORT /
 EXACT MAIN AND 12/12 MAIN ACTIONS VERIFIED / RETAINED HT-13 ARCHIVE FAILURE CLASSIFIED AS
 `ARCHIVE_VALIDATOR_CONTRACT_MISMATCH` / ATOMIC EXPORT, STRICT ARCHIVE VERIFICATION AND NO-PREEXISTING-
 IMAGE LOAD PROOF IMPLEMENTED / COMPLETE LOCAL VALIDATION, INDEPENDENT READ-ONLY REVIEW AND EXACT GREEN
 FEATURE-BRANCH ACTIONS ARE MANDATORY BEFORE INTEGRATION / NO MAIN INTEGRATION, STAGING ACCESS OR
-CUTOVER AUTHORIZED**. The final task stop is `HT12T_MAIN_INTEGRATION_AUTHORIZATION_REQUIRED`.
+CUTOVER AUTHORIZED**. That checkpoint's final task stop was
+`HT12T_MAIN_INTEGRATION_AUTHORIZATION_REQUIRED`.
 
 Preserved preceding build/release QA slice: **HT-12R / TRACKED V126 PRE-GATE-A PREREQUISITE SYNC /
 TRACKED ORCHESTRATOR, HELPER, 40-CHECK MAP AND LOCAL-ONLY MOCKED HARNESS IMPLEMENTED / COMPLETE LOCAL
@@ -650,6 +659,45 @@ Record actual server/client versions and image ID/digest/platform from each exec
 A local or CI PG17 result is not a new live PostgreSQL17.10 observation, a Gate A PASS
 or HT-13 completion. Run process-sensitive harnesses sequentially.
 
+The 2026-09-16 [CI 498 failure](https://github.com/koteev-m/hookah_bot/actions/runs/35061726837/job/104683280720)
+reached `database-create` in `test_02_full_production_both_phases` (pre-drain, exit 1).
+The same script/fixture blobs and PG17 image passed in
+[CI 497](https://github.com/koteev-m/hookah_bot/actions/runs/35056988168/job/104669132092).
+The image's temporary init server accepts Unix sockets before shutdown/restart;
+socket-only readiness can therefore admit `createdb` into that transition. Rehearsal
+now probes `127.0.0.1` **inside** its network-none container, where only the final
+server listens on TCP. The existing 60-attempt bound, ownership cleanup, restore
+checks and fail-closed proof remain unchanged. The deterministic
+`BackupTest.test_02_init_server_is_not_rehearsal_readiness` holds the real init server
+and shutdown with bounded FIFO barriers, proves socket-ready/TCP-unready, and checks
+both phases finish with exactly one database-create and complete resource cleanup.
+Both FIFO releases run as the image's OS user `postgres`, independently of the
+PostgreSQL role selected by the fixture. Each writing shell records its actual UID
+and the FIFO owner's UID; the regression compares both handoffs with the image's
+`postgres` UID. Thus default-root writers fail the contract even on a local kernel
+with `fs.protected_fifos=0`; no numeric UID is pinned.
+
+Fixture-only `HT12AA_INIT_TRANSITION` diagnostics preserve the first failed boundary,
+an allowlisted outcome and the observed command exit status. A subprocess timeout
+reports `exit=UNAVAILABLE`, not an invented status. Probe observations/pending
+handoffs are not completion, and this JSON is never production proof authority.
+Fault injection covers each release failing, persistence across later readiness
+polls/driver failure, and redaction of raw output. This is a boundary contract test,
+not reproduction of a kernel permission denial.
+
+CI 499/500 on `be32509` passed the ordinary positive backup but failed the new
+transition regression at `readiness`, exit 4. Their actual FIFO-release error and
+kernel setting were not recorded. The root writer opening a postgres-owned FIFO
+under `/tmp` is a confirmed portability defect; attribution of those CI failures
+to `fs.protected_fifos=1` remains unproven. Local passes with protection disabled
+do not close the protected-FIFO or full GitHub-hosted Linux verification boundary.
+
+CI 489 (`34712708666`) also failed this backup test, but its older diagnostics cannot
+prove the exact failing operation; do not attribute every historical failure to this race.
+The later `container-cleanup` diagnostic in CI 498 is secondary: the fixture's data
+oracle rejects a database that was never created. Class cleanup reported no owned
+containers/volumes remaining. Compare source/image identity when investigating recurrence.
+
 ### HT-RELEASE-REPAIR-01 combined regression gate
 
 The existing complete cutover/compose job now requires the actual attempt/status,
@@ -1069,6 +1117,24 @@ not erase these flake signals. The current Guest surface/deep-link/stale-respons
 passed the raised full structured floor at `216/216` with zero unexpected, flaky or skipped results.
 Revisit the finding in the next Mini App CI-hardening pass or after a repeated same failure in
 GitHub Actions.
+
+PR #198 bounded diagnosis (2026-09-16): CI runs `35056988168` / job `104669132051` and
+`34938754893` / job `104282354047` failed the same catalog debounce assertion: after advancing
+`299ms`, expected one catalog request but received two. This is `FLAKY_OR_TIMING_RACE`:
+`page.clock.install()` keeps time running, so elapsed real time can cross the `300ms` deadline.
+Tests asserting an exact debounce boundary must pause the virtual clock before the app schedules
+timers, then advance it explicitly. The catalog test now pauses before navigation and retains the
+`299ms` negative assertion, `+1ms` request assertion and all query/filter/reset/navigation coverage.
+No timeout/retry increase, sleep, skipped assertion, product or workflow change is involved.
+Under CI Node `20.20.2` / npm `10.8.2`, Playwright `1.60.0` / Chromium `148.0.7778.96`, UTC and
+port `5174`, the unchanged test reproduced `1` identical failure in `20` local attempts. The fix
+passed focused `1/1`, repeated `20/20`, full structured `216/216` and the unchanged CI JSON
+assertion (zero failures/flaky/skips/runner errors/failed attempts), plus the production build.
+The separate favorite-test signal remains open. At this dated diagnosis, macOS local verification
+did not prove a fresh Ubuntu CI result or close the PR/release-SHA and authorized staging gates.
+Subsequently CI #504, CI #505 and post-merge CI #506 passed and PR #198 merged at
+`465ce33c4a9e244ad5f9771beadf35cfa7b8d9d4`; the staging gate remains open. Evidence is recorded
+in the PR #198 checkpoint in `PROJECT_STATUS.md`.
 
 CI must assert the exact JUnit XML files and zero skipped/failures/errors. A selector that discovers
 fewer tests must fail the job. PostgreSQL/Testcontainers checks may not be treated as optional or
@@ -3751,21 +3817,17 @@ Telegram/staff-chat:
 ## Roadmap Status
 
 - Testing/QA smoke strategy: `UPDATED`.
-- HT-12R tracked V126 prerequisite sync: **TRACKED CANDIDATE IMPLEMENTED ON EXACT MAIN
-  `a648e75179975c97daa4b3dae03070e6476d8a9a` / LOCAL FIXTURE VALIDATION, INDEPENDENT REVIEW,
-  FEATURE-BRANCH COMMIT AND EXACT GREEN ACTIONS REQUIRED / NO MAIN INTEGRATION OR STAGING ACCESS /
-  GATE A NOT STARTED**. R1-R5 remain rejected history; the tracked command is the only future
-  prerequisite-sync authority and final release/image identity must be reselected after integration.
-- HT-12P executable V126 cutover contract: **HARDENED CANDIDATE IMPLEMENTED / LOCAL ADVERSARIAL
-  VALIDATION PASSED / INDEPENDENT READ-ONLY RE-REVIEW REQUIRED BEFORE COMMIT AND PUSH / EXACT GREEN
-  FEATURE-BRANCH ACTIONS REQUIRED AFTER PUSH / NO REVIEW OR ACTIONS PASS CLAIMED / NO EXECUTION GATE
-  PASSED** on exact required main
-  `ecb09601975678a41d89e5c824cc7812c7876481`, tree
-  `8c97996e317f0182b4871d2a2537a732d4830f64`, ordered parents
-  `9f51ebbd2dae0702b4b2f6333c1b42fc94cd1fc1` then
-  `d9c656b1c5feb757b79558209f130c08cba81cf5`, with main Actions `33536142005` green `11/11`.
-  HT-13 stopped before creating the run namespace or sealed input under
-  `PREDEPLOY_CONTRACT_NOT_PROVABLE`; no package or staging mutation exists.
+- Guest order/session/tab isolation: **PR #198 MERGED AT
+  `465ce33c4a9e244ad5f9771beadf35cfa7b8d9d4` / CI #504, #505 AND POST-MERGE #506 PASS /
+  `ORDER-CONTEXT-MANUAL-001` BLOCKED_BY_ENVIRONMENT**. The remote PR branch is deleted; staging
+  privacy/order release evidence is still open.
+- V126 staging release: **NOT READY / NO APPLIED HANDOFF / GATE A NOT STARTED**. Staging remains on
+  runtime `f577934691a1a7a79ba327c54e2055425142b7be`, Flyway V125, with V126 absent. The exact
+  current-main candidate image, image ID and deployment descriptor are absent; the canonical
+  target-operation registry is absent. Protected inputs have the expected shape/metadata, but
+  approval, provenance and semantic binding are unproven. Policy-B R0 operational readiness remains
+  unresolved and is on the V126 critical path. Historical HT-12R/HT-12P implementation and CI
+  evidence remain in their dated sections; they do not establish current staging readiness.
 - Booking conversation UX / distinct labels, inbox and unread discoverability:
   **INCLUDED THROUGH HT-12C ANCESTRY / AUTOMATED REGRESSION RETAINED / V126 EXECUTION REQUIRED**.
   The exact HT-12P baseline includes NULL-author system unread and fixed Guest queue/type guards; the

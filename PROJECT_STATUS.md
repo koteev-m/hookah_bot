@@ -2,10 +2,12 @@
 
 ## HT-OPS-39 — local retention-only observer adaptation
 
-User-approved local change; uncommitted in `/private/tmp/ht-ops-25-ap00/worktree`,
-branch `codex/ht-ops-33-ap00-dedicated-worker-18390444`, unchanged base/HEAD
-`ad23f8e0bd1846c95242fde10314ceb579fedb98`. This branch matches the latest HT-OPS-39
-evidence; the older `codex/ht-ops-25-ap00` name was not restored or checked out.
+The user-approved local change is committed as
+`27a2c785e156940d4344ad1d0ff689eca322f312` in
+`/private/tmp/ht-ops-25-ap00/worktree`, branch
+`codex/ht-ops-33-ap00-dedicated-worker-18390444`. This integration brings authoritative
+current `main` `7dfdee55153dce59fc96e3e1a68b22dcc8ffcb53` into that branch. User-provided
+post-merge CI #509 is `SUCCESS`; this task did not query Actions.
 
 Observer now issues only exact-version GetObjectRetention and the two bucket
 settings reads. Its result is `requested_version_id`, `mode`, `retained_until`:
@@ -16,7 +18,7 @@ The user accepted losing the observer's duplicate HEAD proof and the residual
 availability risk when reader response VersionId is absent; reader stays fail-closed.
 Three independent principals remain required. [Contract](docs/DR_AP00_ADAPTER_FOUNDATION.md).
 
-Local validation: targeted adapter 7/7 and worker/IPC 5/5; full adapter 37/37,
+Pre-integration local validation: targeted adapter 7/7 and worker/IPC 5/5; full adapter 37/37,
 worker/IPC 24/24, stdlib AP-01 48/48 PASS. The new retention-only regression rejects
 the original HEAD implementation in an in-memory negative control. The first worker
 selector command used the base test class incorrectly; corrected selectors passed.
@@ -29,9 +31,98 @@ writer effective permissions, billing, F4 capacity, custody and operational R0/G
 remain open. Manifest NOT EXECUTABLE; request NOT READY TO ISSUE. The former
 four-call observer mismatch is historical for the original implementation.
 No operational schema/Trust, provisioning, IAM or provider change; no credentials,
-Git staging/commit/publication, staging/SSH/deploy/V126 or Actions activity.
+push/PR/publication, staging/SSH/deploy/V126 or Actions activity.
 
-Next: focused review of this uncommitted diff before a separate commit decision.
+Next: verify the combined local merge before a separate publication decision.
+
+## PR #198 — merged main and staging reconciliation — 2026-09-17
+
+**MERGED / CI PASS / STAGING AND MANUAL SMOKE OPEN**.
+
+At the PR #198 merge checkpoint, authoritative `main` was
+`465ce33c4a9e244ad5f9771beadf35cfa7b8d9d4`; CI #504, CI #505 and post-merge
+CI #506 passed, and the remote PR branch was deleted.
+
+The reviewed Guest Order / Session / Tab fixes remain intact: active-order reads
+and ordinary bill requests validate current session, exit and tab authorization;
+service charges are selected by order/tab; active summaries derive items,
+promotions and loyalty from the same authorized batches. Personal ownership,
+shared membership/revocation, legacy tabless authorship under active-session/no-exit
+checks, explicit QR re-entry and full-order/staff aggregation are preserved.
+No migration, API/DTO, client behavior or new product/security contract is introduced.
+[Canonical scope](docs/ORDER_SESSION_TAB_CORE.md#guest-order-isolation-consolidation--2026-09-16)
+and [blocked manual smoke](docs/DEFERRED_MANUAL_SMOKE_BACKLOG.md#order-context-manual-001).
+
+The merge conflict resolution was limited to this checkpoint and the catalog debounce
+test. Both test variants pause time; the merged result retains PR #198's single pause
+before navigation, with all 299ms/+1ms, query/filter/reset/navigation assertions
+unchanged. Backend sources/tests match the reviewed PR #198 candidate. Old PR #198
+Compose failures describe the pre-integration tree, not current main.
+
+Prior consolidated evidence (235 backend tests / 16 suites, 24 focused browser
+checks) remains historical at `/private/tmp/guest-order-consolidation-evidence-20260916/`.
+The debounce reproduction and 216-test local verification are recorded at
+`/private/tmp/pr198-miniapp-ci-20260916/` and in the QA strategy. Pre-merge combined-tree
+checks passed: **235/235 backend tests in 16 suites**, including **11/11 real PostgreSQL
+idempotency/concurrency tests**, plus forced backend compile/ktlint, Mini App build,
+focused catalog **1/1** and full structured browser smoke **216/216** (113.8s).
+XML and the unchanged CI JSON validator report zero failures/errors/skips/flaky
+outcomes/failed attempts. Testcontainers containers/volumes return to zero; diff
+and documentation consistency checks pass. Local runtime: macOS arm64, Java 21,
+Docker Desktop, Node 20.20.2/npm 10.8.2, Playwright 1.60.0, UTC, two full-smoke workers,
+zero retries. The first focused invocation selected no tests because its grep was
+incorrectly anchored; corrected discovery selected exactly one unchanged test.
+Commands, logs, XML and JSON: `/private/tmp/pr198-main-integration-20260917/`.
+
+Read-only staging reconciliation found deployed runtime
+`f577934691a1a7a79ba327c54e2055425142b7be` at Flyway head V125. V126 is absent,
+the then-current main candidate `465ce33c4a9e244ad5f9771beadf35cfa7b8d9d4` was not deployed, and its exact
+candidate image, image ID and deployment descriptor are absent. The canonical
+target-operation registry is absent. The protected V126 input files now exist with
+the expected shape and metadata, but their approval, provenance and semantic binding
+remain unproven. Policy-B R0 operational readiness remains unresolved and is on the
+V126 critical path.
+
+Staging/manual smoke remains open. `ORDER-CONTEXT-MANUAL-001` is
+`BLOCKED_BY_ENVIRONMENT`; green merged-feature CI does not substitute for the missing
+deployment, V126 transition prerequisites, controlled actors/contexts or cleanup
+authority. No `STAGING-SMOKE-PASSED`, V126 readiness, provider readiness, operational
+DR PASS or production readiness is claimed. Full implementation and pre-merge evidence
+remain in the merge parents and the paths above.
+
+## CI Compose Stability — V126 Cutover Fixtures (2026-09-16)
+
+Isolated worktree `/private/tmp/ci-v126-compose-stability-20260916`, branch
+`codex/ci-v126-compose-stability`; follow-up parent
+`be32509d20f72fcacbd559e59c191eeb6529e835`, original base
+`ad23f8e0bd1846c95242fde10314ceb579fedb98`. The existing TCP readiness fix for
+CI 498's `database-create` race is preserved. PR #199 CI 499/500
+(`35103344782` / `35103386597`, compose `104818091340` / `104818238165`)
+passed the ordinary positive backup but failed the new transition fixture in
+both phases at `readiness`, exit 4. Their source trees match `be32509`.
+
+The fixture's FIFO owner/writer mismatch (OS postgres/root) is a confirmed
+portability defect. Both releases now explicitly use OS `postgres`; actual writer
+and owner UIDs are checked without pinning UID 999. Safe fixture diagnostics retain
+the first failed handoff and observed exit status through later readiness failure.
+Production code, TCP readiness, deadlines, cleanup ownership and workflow are
+unchanged. [Contract and evidence limits](docs/TESTING_QA_SMOKE_STRATEGY.md#ht-12aa-postgresql17-globals-and-backup-regression).
+
+With the immutable CI PG17.11 AMD64 image on Docker Desktop, the targeted
+transition/positive cases pass; backup suite **41/41**, boundary checks **7/7**,
+sequential transition series **5/5** and cleanup caller contracts **24/24** pass.
+The temporary default-root writer control is rejected at all four writer/phase
+boundaries; the socket-only production-copy control fails both phases at
+`database-create`. Owned container/volume inventory returns to zero. Syntax,
+static safety, documentation and diff checks pass. Local `fs.protected_fifos=0` is unchanged;
+the historical CI attribution to `fs.protected_fifos=1` remains unproven, and
+the full GitHub-hosted Linux gate remains unverified. Historical CI #487/#489
+exact functional attribution also remains unproven.
+
+Publication is superseded by merged PR #199 at
+`e08f4b74824d56e096cdad3eafe813a97d20067c`; both `be32509` and `1cb22f2`
+are preserved ancestors. The results above describe local verification only;
+this integration does not inspect Actions or establish a new CI/release verdict.
 
 ## HT-OPS-31 — AP-00 Dedicated S3 Worker Runtime
 
