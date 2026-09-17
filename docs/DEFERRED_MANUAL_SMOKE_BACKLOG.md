@@ -54,9 +54,42 @@
 
 | ID | Feature | Priority | Current status | Blocking impact |
 | --- | --- | --- | --- | --- |
+| [`ORDER-CONTEXT-MANUAL-001`](#order-context-manual-001) | Guest order/tab authorization and monetary isolation | P0 privacy | `PLANNED` | Local fix is not released; staging privacy/order smoke remains required before rollout. |
 | [`REPEAT-MANUAL-001`](#repeat-manual-001) | Repeat as Template Phase 1 | P1 | `BLOCKED_BY_ENVIRONMENT` | Repeat production-readiness remains open for environment-dependent parity/privacy/context scenarios; independent bounded development may continue. |
 | [`CATALOG-SEARCH-MANUAL-001`](#catalog-search-manual-001) | Catalog Search and Filter Phase 1 | P2 | `BLOCKED_BY_ENVIRONMENT` | Does not block the current MVP/release; required before catalog pagination, ranking, map/geo or a large pilot rollout. |
 | [`STAFF-IDENTITY-MANUAL-001`](#staff-identity-manual-001) | Staff Identity create-from-member free-account scenario | P2 | `BLOCKED_BY_ENVIRONMENT` | Non-blocking coverage gap only; Identity Linking remains `DONE / MVP / STAGING-SMOKE-PASSED`. |
+
+## ORDER-CONTEXT-MANUAL-001
+
+- **Feature / date:** Guest Order / Session / Tab Isolation Consolidation, 2026-09-16.
+- **Priority / status:** P0 privacy / `PLANNED`.
+- **Reason deferred:** this task does not authorize publication, deployment or staging access;
+  the candidate exists only in an isolated local worktree.
+- **Prerequisites:** separately authorized staging candidate, two Guest accounts, a disposable
+  venue/table with QR, personal/shared tabs and a staff account; confirm test-data cleanup authority.
+- **Automated evidence:** baseline regressions reproduced exit/read 200 instead of 404,
+  cross-tab service charges, order-wide summary promotions and summary access after exit.
+  Fresh consolidated H2/PostgreSQL/API and required local checks are recorded in `PROJECT_STATUS.md`.
+- **Manual steps / expected results:**
+  1. Join both guests to an empty shared tab; A exits, B submits a batch and staff approves a
+     service charge. A's old explicit/legacy active-order, bill/new-batch requests and Telegram
+     active-order summary must reveal none of that later activity; B retains access.
+  2. A explicitly reenters via QR: authorized shared-tab access works again. A cannot read B's
+     personal tab or a different session/tab combination.
+  3. End/expire the test visit through an authorized lifecycle path, then start another visit
+     at the same table: a distinct session/order is used; old context cannot read or append.
+  4. Submit distinct concurrent batches and replay an exact submit: one active session order,
+     separate new batches, one replayed batch, correct selected-tab totals and staff notifications.
+  5. Give personal tabs A/B different charges, manual discounts, promotions/loyalty and excluded
+     lines. Each selected bill and Telegram summary exposes only its authorized components;
+     the staff full-order view retains the intended aggregate. Check QR re-entry and revoked
+     shared membership separately; re-entry must not restore a removed membership.
+- **Cleanup:** close only scenario-owned test orders/tabs through normal authorized flows;
+  preserve historical rows and unrelated sessions. Record cleanup outcome.
+- **Result / date / actor / cleanup:** not run / pending / pending / pending.
+- **Blocking impact:** release/privacy gate for this candidate remains open; no claim of
+  `STAGING-SMOKE-PASSED` or production readiness.
+- **Related docs:** `ORDER_SESSION_TAB_CORE.md`, `TESTING_QA_SMOKE_STRATEGY.md`.
 
 ## STAFF-IDENTITY-MANUAL-001
 

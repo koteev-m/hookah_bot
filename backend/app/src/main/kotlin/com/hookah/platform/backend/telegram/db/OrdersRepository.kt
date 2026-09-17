@@ -711,7 +711,7 @@ class OrdersRepository(
                     order.orderId,
                     batches.map { it.batchId },
                 ),
-            serviceCharges = loadOrderServiceCharges(connection, order.orderId),
+            serviceCharges = loadOrderServiceCharges(connection, order.orderId, tabId),
             batches =
                 batches.map { batch ->
                     OrderBatchDetails(
@@ -732,57 +732,96 @@ class OrdersRepository(
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
+                    val visibleBatchesSql =
+                        """
+                        SELECT ob.id, ob.order_id, t.type AS tab_type
+                        FROM order_batches ob
+                        JOIN orders o ON o.id = ob.order_id
+                        JOIN table_sessions ts ON ts.id = o.table_session_id
+                        JOIN users actor ON actor.telegram_user_id = ?
+                        LEFT JOIN tab t
+                          ON t.id = ob.tab_id
+                         AND t.venue_id = o.venue_id
+                         AND t.table_session_id = ts.id
+                        LEFT JOIN tab_member tm ON tm.tab_id = t.id AND tm.user_id = actor.telegram_user_id
+                        WHERE o.status = 'ACTIVE'
+                          AND ts.status = 'ACTIVE'
+                          AND ts.ended_at IS NULL
+                          AND ts.expires_at > CURRENT_TIMESTAMP
+                          AND NOT EXISTS (
+                              SELECT 1 FROM guest_table_session_exits exits
+                              WHERE exits.table_session_id = ts.id AND exits.user_id = actor.telegram_user_id
+                          )
+                          AND (
+                              (t.status = 'ACTIVE' AND tm.user_id IS NOT NULL
+                               AND (t.type = 'SHARED' OR t.owner_user_id = actor.telegram_user_id))
+                              OR (ob.tab_id IS NULL AND (
+                                  ob.author_user_id = actor.telegram_user_id
+                                  OR EXISTS (
+                                      SELECT 1 FROM guest_batch_idempotency gbi
+                                      WHERE gbi.batch_id = ob.id AND gbi.user_id = actor.telegram_user_id
+                                  )
+                              ))
+                          )
+                        """.trimIndent()
                     connection.prepareStatement(
                         """
-                        SELECT DISTINCT o.id, o.venue_id, v.name AS venue_name, o.status, o.display_number, o.display_date
+                        WITH visible_batches AS ($visibleBatchesSql)
+                        SELECT o.id, o.venue_id, v.name AS venue_name, o.status, o.display_number, o.display_date
                         FROM orders o
                         JOIN venues v ON v.id = o.venue_id
-                        WHERE o.status = 'ACTIVE'
-                          AND EXISTS (
-                              SELECT 1
-                              FROM order_batches ob
-                              LEFT JOIN guest_batch_idempotency gbi
-                                ON gbi.batch_id = ob.id
-                               AND gbi.user_id = ?
-                              WHERE ob.order_id = o.id
-                                AND (
-                                    ob.author_user_id = ?
-                                    OR gbi.user_id IS NOT NULL
-                                    OR EXISTS (
-                                        SELECT 1
-                                        FROM tab_member tm
-                                        WHERE tm.tab_id = ob.tab_id
-                                          AND tm.user_id = ?
-                                    )
-                                )
-                          )
+                        WHERE EXISTS (SELECT 1 FROM visible_batches vb WHERE vb.order_id = o.id)
                         ORDER BY o.id DESC
                         LIMIT ?
                         """.trimIndent(),
                     ).use { statement ->
                         statement.setLong(1, userId)
-                        statement.setLong(2, userId)
-                        statement.setLong(3, userId)
-                        statement.setInt(4, limit)
+                        statement.setInt(2, limit)
                         statement.executeQuery().use { rs ->
                             buildList {
                                 while (rs.next()) {
                                     val orderId = rs.getLong("id")
+                                    val visibleBatches =
+                                        connection.prepareStatement(
+                                            "$visibleBatchesSql AND o.id = ? ORDER BY ob.id",
+                                        ).use {
+                                            it.setLong(1, userId)
+                                            it.setLong(2, orderId)
+                                            it.executeQuery().use { batches ->
+                                                buildList {
+                                                    while (batches.next()) {
+                                                        add(batches.getLong("id") to batches.getString("tab_type"))
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    if (visibleBatches.isEmpty()) continue
+                                    val batchIds = visibleBatches.map { it.first }
                                     add(
                                         UserActiveOrderSummary(
                                             orderId = orderId,
                                             venueId = rs.getLong("venue_id"),
                                             venueName = rs.getString("venue_name"),
                                             status = rs.getString("status"),
-                                            tabType = loadUserTabTypeForOrder(connection, userId, orderId),
-                                            items = loadOrderItemsSummaryForUser(connection, orderId, userId),
+                                            tabType =
+                                                if (visibleBatches.any { it.second == "SHARED" }) {
+                                                    "SHARED"
+                                                } else {
+                                                    visibleBatches.firstNotNullOfOrNull { it.second }
+                                                },
+                                            items = loadOrderItemsSummaryForBatches(connection, batchIds),
                                             displayNumber =
                                                 rs.getInt("display_number").let {
                                                         value ->
                                                     if (rs.wasNull()) null else value
                                                 },
                                             displayDate = rs.getDate("display_date")?.toLocalDate(),
-                                            promotionDiscounts = loadPromotionDiscountsForOrder(connection, orderId),
+                                            promotionDiscounts =
+                                                loadPromotionDiscountsForBatches(
+                                                    connection,
+                                                    orderId,
+                                                    batchIds,
+                                                ),
                                         ),
                                     )
                                 }
@@ -796,51 +835,9 @@ class OrdersRepository(
         }
     }
 
-    private fun loadUserTabTypeForOrder(
+    private fun loadOrderItemsSummaryForBatches(
         connection: Connection,
-        userId: Long,
-        orderId: Long,
-    ): String? =
-        connection.prepareStatement(
-            """
-            SELECT t.type
-            FROM order_batches ob
-            JOIN tab t ON t.id = ob.tab_id
-            LEFT JOIN guest_batch_idempotency gbi
-              ON gbi.batch_id = ob.id
-             AND gbi.user_id = ?
-            WHERE ob.order_id = ?
-              AND (
-                  ob.author_user_id = ?
-                  OR gbi.user_id IS NOT NULL
-                  OR EXISTS (
-                      SELECT 1
-                      FROM tab_member tm
-                      WHERE tm.tab_id = ob.tab_id
-                        AND tm.user_id = ?
-                  )
-              )
-            ORDER BY CASE
-                WHEN t.type = 'SHARED' THEN 0
-                WHEN t.type = 'PERSONAL' THEN 1
-                ELSE 2
-            END
-            LIMIT 1
-            """.trimIndent(),
-        ).use { statement ->
-            statement.setLong(1, userId)
-            statement.setLong(2, orderId)
-            statement.setLong(3, userId)
-            statement.setLong(4, userId)
-            statement.executeQuery().use { rs ->
-                if (rs.next()) rs.getString("type") else null
-            }
-        }
-
-    private fun loadOrderItemsSummaryForUser(
-        connection: Connection,
-        orderId: Long,
-        userId: Long,
+        batchIds: List<Long>,
     ): List<UserActiveOrderItemSummary> =
         connection.prepareStatement(
             """
@@ -878,26 +875,13 @@ class OrdersRepository(
                 GROUP BY order_batch_item_id
             ) promo ON promo.order_batch_item_id = obi.id
             LEFT JOIN order_promotion_reward_items opri ON opri.reward_order_batch_item_id = obi.id
-            LEFT JOIN guest_batch_idempotency gbi
-              ON gbi.batch_id = ob.id
-             AND gbi.user_id = ?
-            WHERE ob.order_id = ?
+            WHERE ob.id IN (${batchIds.joinToString(",") { "?" }})
               AND ob.status <> 'REJECTED'
               AND ob.status <> 'CLOSED'
               AND ob.rejected_reason_code IS NULL
               AND ob.rejected_reason_text IS NULL
               AND obi.is_excluded = FALSE
               AND COALESCE(obi.item_status, 'ACTIVE') = 'ACTIVE'
-              AND (
-                  ob.author_user_id = ?
-                  OR gbi.user_id IS NOT NULL
-                  OR EXISTS (
-                      SELECT 1
-                      FROM tab_member tm
-                      WHERE tm.tab_id = ob.tab_id
-                        AND tm.user_id = ?
-                  )
-              )
             GROUP BY
                 obi.menu_item_id,
                 mi.name,
@@ -919,10 +903,7 @@ class OrdersRepository(
             ORDER BY MIN(obi.id) ASC
             """.trimIndent(),
         ).use { statement ->
-            statement.setLong(1, userId)
-            statement.setLong(2, orderId)
-            statement.setLong(3, userId)
-            statement.setLong(4, userId)
+            batchIds.forEachIndexed { index, batchId -> statement.setLong(index + 1, batchId) }
             statement.executeQuery().use { rs ->
                 buildList {
                     while (rs.next()) {
@@ -3217,65 +3198,6 @@ class OrdersRepository(
             }
         }
 
-    private fun loadPromotionDiscountsForOrder(
-        connection: Connection,
-        orderId: Long,
-    ): List<CreatedOrderPromotionDiscount> =
-        connection.prepareStatement(
-            """
-            WITH application_discounts AS (
-                SELECT
-                    CASE
-                        WHEN opa.rule_type = 'GIFT_WITH_ITEM' THEN COALESCE(MAX(opri.label_snapshot), opa.title_snapshot)
-                        ELSE opa.title_snapshot
-                    END AS promo_label,
-                    opa.rule_type,
-                    opa.currency,
-                    COALESCE(SUM(obipa.discount_minor), 0) AS discount_minor,
-                    MIN(opa.id) AS first_application_id
-                FROM order_promotion_applications opa
-                JOIN order_batch_item_promotion_adjustments obipa ON obipa.application_id = opa.id
-                JOIN order_batch_items obi ON obi.id = obipa.order_batch_item_id
-                JOIN order_batches ob ON ob.id = obi.order_batch_id
-                LEFT JOIN order_promotion_reward_items opri ON opri.application_id = opa.id
-                WHERE opa.order_id = ?
-                  AND ob.status <> 'REJECTED'
-                  AND ob.status <> 'CLOSED'
-                  AND ob.rejected_reason_code IS NULL
-                  AND ob.rejected_reason_text IS NULL
-                  AND obi.is_excluded = FALSE
-                  AND COALESCE(obi.item_status, 'ACTIVE') = 'ACTIVE'
-                GROUP BY opa.id, opa.title_snapshot, opa.rule_type, opa.currency
-            )
-            SELECT promo_label,
-                   rule_type,
-                   currency,
-                   COALESCE(SUM(discount_minor), 0) AS discount_minor
-            FROM application_discounts
-            GROUP BY promo_label, rule_type, currency
-            ORDER BY MIN(first_application_id)
-            """.trimIndent(),
-        ).use { statement ->
-            statement.setLong(1, orderId)
-            statement.executeQuery().use { rs ->
-                buildList {
-                    while (rs.next()) {
-                        val discountMinor = rs.getLong("discount_minor")
-                        if (discountMinor > 0L) {
-                            add(
-                                CreatedOrderPromotionDiscount(
-                                    label = rs.getString("promo_label"),
-                                    discountMinor = discountMinor,
-                                    currency = rs.getString("currency"),
-                                    ruleType = rs.getString("rule_type"),
-                                ),
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
     private fun loadPromotionDiscountsForBatches(
         connection: Connection,
         orderId: Long,
@@ -3346,6 +3268,7 @@ class OrdersRepository(
     private fun loadOrderServiceCharges(
         connection: Connection,
         orderId: Long,
+        tabId: Long? = null,
     ): List<OrderServiceChargeDetails> =
         connection.prepareStatement(
             """
@@ -3359,10 +3282,14 @@ class OrdersRepository(
                    currency
             FROM order_service_charges
             WHERE order_id = ?
+              ${if (tabId != null) "AND tab_id = ?" else ""}
             ORDER BY created_at, id
             """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, orderId)
+            if (tabId != null) {
+                statement.setLong(2, tabId)
+            }
             statement.executeQuery().use { rs ->
                 buildList {
                     while (rs.next()) {

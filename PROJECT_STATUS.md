@@ -1,5 +1,55 @@
 # Project Status
 
+## PR #198 — current main integration — 2026-09-17
+
+**LOCAL INTEGRATION VERIFIED / NOT PUSHED / RELEASE AND STAGING GATES OPEN**.
+
+Worktree `/private/tmp/guest-order-consolidated-20260916`, branch
+`codex/guest-order-session-tab-isolation`; starting HEAD
+`d075df10d18a76dbc8865e0e76fb18e72c12f04e`, integrating verified `origin/main`
+`e08f4b74824d56e096cdad3eafe813a97d20067c` (merged PR #199).
+The starting worktree/index were clean; the dirty primary checkout is not used.
+
+The reviewed Guest Order / Session / Tab fixes remain intact: active-order reads
+and ordinary bill requests validate current session, exit and tab authorization;
+service charges are selected by order/tab; active summaries derive items,
+promotions and loyalty from the same authorized batches. Personal ownership,
+shared membership/revocation, legacy tabless authorship under active-session/no-exit
+checks, explicit QR re-entry and full-order/staff aggregation are preserved.
+No migration, API/DTO, client behavior or new product/security contract is introduced.
+[Canonical scope](docs/ORDER_SESSION_TAB_CORE.md#guest-order-isolation-consolidation--2026-09-16)
+and [pending manual smoke](docs/DEFERRED_MANUAL_SMOKE_BACKLOG.md#order-context-manual-001).
+
+Conflicts are limited to this checkpoint and the catalog debounce test. Both test
+variants pause time; integration retains PR #198's single pause before navigation,
+with all 299ms/+1ms, query/filter/reset/navigation assertions unchanged. Backend
+sources/tests remain byte-identical to `d075df10`; CI/V126 scripts and workflow
+remain byte-identical to current main. Main's CI/V126 facts are retained below.
+Old PR #198 Compose failures describe the pre-integration tree, not this tree.
+
+Prior consolidated evidence (235 backend tests / 16 suites, 24 focused browser
+checks) remains historical at `/private/tmp/guest-order-consolidation-evidence-20260916/`.
+The debounce reproduction and 216-test local verification are recorded at
+`/private/tmp/pr198-miniapp-ci-20260916/` and in the QA strategy. Fresh combined-tree
+checks pass: **235/235 backend tests in 16 suites**, including **11/11 real PostgreSQL
+idempotency/concurrency tests**, plus forced backend compile/ktlint, Mini App build,
+focused catalog **1/1** and full structured browser smoke **216/216** (113.8s).
+XML and the unchanged CI JSON validator report zero failures/errors/skips/flaky
+outcomes/failed attempts. Testcontainers containers/volumes return to zero; diff
+and documentation consistency checks pass. Local runtime: macOS arm64, Java 21,
+Docker Desktop, Node 20.20.2/npm 10.8.2, Playwright 1.60.0, UTC, two full-smoke workers,
+zero retries. The first focused invocation selected no tests because its grep was
+incorrectly anchored; corrected discovery selected exactly one unchanged test.
+Commands, logs, XML and JSON: `/private/tmp/pr198-main-integration-20260917/`.
+
+No old test result substitutes for these fresh checks. The separate favorite flake,
+exact release-SHA CI, authorized staging smoke and `ORDER-CONTEXT-MANUAL-001` remain
+open boundaries. Full history remains in the two merge parents.
+
+Only local integration, relevant validation and one merge commit are authorized.
+No push/PR/Actions/staging/provider operation; primary, `scripts/dev/` and HT-OPS-39
+are preserved. Next: separately authorize publication of this verified local merge.
+
 ## CI Compose Stability — V126 Cutover Fixtures (2026-09-16)
 
 Isolated worktree `/private/tmp/ci-v126-compose-stability-20260916`, branch
@@ -29,10 +79,10 @@ the historical CI attribution to `fs.protected_fifos=1` remains unproven, and
 the full GitHub-hosted Linux gate remains unverified. Historical CI #487/#489
 exact functional attribution also remains unproven.
 
-Only this local follow-up is authorized; no push or Actions operation. PR #198,
-the primary checkout, Candidate A/B, HT-OPS-39 and staging/provider state are untouched.
-
-Next: separately authorize publication of the local follow-up for GitHub-hosted Linux CI.
+Publication is superseded by merged PR #199 at
+`e08f4b74824d56e096cdad3eafe813a97d20067c`; both `be32509` and `1cb22f2`
+are preserved ancestors. The results above describe local verification only;
+this integration does not inspect Actions or establish a new CI/release verdict.
 
 ## HT-OPS-31 — AP-00 Dedicated S3 Worker Runtime
 

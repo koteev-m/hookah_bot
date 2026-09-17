@@ -88,6 +88,41 @@ The active order belongs to a verified table session/visit, not to a physical ta
 | Fallback chat order | Mini App fallback emits `cmd=start_quick_order` with `table_token`; real Telegram fallback remains release smoke. Canonical fallback/staff-chat rules are in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. | Bot fallback must create/use the same table session/tab rules as Mini App. | Keep fallback smoke whenever bot order fallback changes. |
 | Visit history foundation | Guest History Foundation MVP is DONE / staging-smoke-passed: current-user list/detail shows closed-order visits and booking-only `SEATED` visits, filters non-seated booking statuses, preserves but hides legacy invalid rows, opens legacy closed order details safely and keeps privacy filters strict. | `VISIT` is derived from closed orders and booking `SEATED`, with merge/dedup where booking + order represent the same real visit. | Repeat templates, post-visit feedback, full base item historical snapshotting where still missing, loyalty/preorder `visit_count` and analytics event completeness remain follow-ups. |
 
+## Guest order isolation consolidation — 2026-09-16
+
+**LOCAL CANDIDATE / UNCOMMITTED / RELEASE AND STAGING GATES OPEN**.
+The verified local baseline is `77caf48a46e5d3c61b01ffdfc0a43bc9ec55ceaa`, a descendant
+of `4daf5546fb622a6b967398f5c25b7bed41d7fa05`. PostgreSQL V61 and H2 V112 already enforce
+one active order per `table_session_id`; the historical table-only P0 remains closed in code.
+This does not attest any deployed runtime or database.
+
+Two independent candidate defects were reproduced on the newer baseline:
+
+- Retained shared membership let an exited ordinary Guest read subsequent batches and request
+  a bill. Explicit active-order reads and ordinary bill requests now use the existing authorized
+  transaction coordinator, validating token/venue/table/session, exit and tab access before the
+  read or mutation. Legacy personal lookup checks exit inside its transaction and rolls back
+  on denial. Confirmed Platform Guest preflight is preserved.
+- Tab-scoped details filtered batches and promotions but loaded service charges for the whole
+  order. Charges now use both `order_id` and `tab_id`; full-order/staff reads retain all charges.
+
+Review also reproduced an alternate disclosure through the existing Telegram active-order summary:
+its promotion totals were order-wide, and retained membership/authorship bypassed exit or revoked
+membership. Summary items and promotions now use the same currently authorized batch set. Active
+session, no exit, active tab and membership are required for tab-backed batches; personal ownership
+is checked. The existing own-author/idempotency fallback remains only for legacy batches without
+any tab, under the same active-session/no-exit checks. This changes no booking or history flow.
+
+The monetary review covers batch comments/items, option snapshots, manual discounts, exclusions,
+canceled lines, promotion/loyalty adjustments, gift/reward attachments, service charges and derived
+Guest totals. Item attachments are joined by authorized batch/item IDs; charge filtering closes the
+remaining selected-tab attachment gap. No migration, API/DTO, Mini App or order identity change.
+
+Exit remains user-scoped and retains shared membership: a valid explicit QR re-entry clears the exit
+marker and restores existing membership; it does not restore a deleted membership. Other guests
+keep their physical session. Verification is recorded in `PROJECT_STATUS.md`; the pending release
+smoke is [`ORDER-CONTEXT-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#order-context-manual-001).
+
 ## Guest UX
 
 - In table context, guest is inside an active `TABLE_SESSION`.

@@ -114,6 +114,11 @@ class GuestOrderRoutesTest {
             "order_batches",
             "order_batch_items",
             "order_batch_item_options",
+            "order_service_charges",
+            "order_promotion_applications",
+            "order_batch_item_promotion_adjustments",
+            "order_promotion_reward_items",
+            "staff_calls",
             "guest_batch_idempotency",
             "analytics_events",
             "telegram_outbox",
@@ -593,7 +598,7 @@ class GuestOrderRoutesTest {
         }
 
     @Test
-    fun `add-batch in different table sessions creates different active orders for same table`() =
+    fun `new visit at same table neither reuses nor exposes ended visit order`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("guest-order-session-scope")
             val config = buildConfig(jdbcUrl)
@@ -608,9 +613,7 @@ class GuestOrderRoutesTest {
             seedTableToken(jdbcUrl, tableId, "session-scope-token")
             seedSubscription(jdbcUrl, venueId, "ACTIVE")
             val firstSessionId = seedTableSession(jdbcUrl, venueId, tableId)
-            val secondSessionId = seedTableSession(jdbcUrl, venueId, tableId)
             val firstTabId = seedPersonalTab(jdbcUrl, venueId, firstSessionId, TELEGRAM_USER_ID)
-            val secondTabId = seedPersonalTab(jdbcUrl, venueId, secondSessionId, TELEGRAM_USER_ID)
             val categoryId = seedMenuCategory(jdbcUrl, venueId)
             val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Session scoped item")
 
@@ -633,6 +636,16 @@ class GuestOrderRoutesTest {
                         ),
                     )
                 }
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                connection.prepareStatement(
+                    "UPDATE table_sessions SET status = 'ENDED', ended_at = CURRENT_TIMESTAMP WHERE id = ?",
+                ).use { statement ->
+                    statement.setLong(1, firstSessionId)
+                    assertEquals(1, statement.executeUpdate())
+                }
+            }
+            val secondSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val secondTabId = seedPersonalTab(jdbcUrl, venueId, secondSessionId, TELEGRAM_USER_ID)
             val secondResponse =
                 client.post("/api/guest/order/add-batch") {
                     contentType(ContentType.Application.Json)
@@ -675,18 +688,16 @@ class GuestOrderRoutesTest {
                     headers { append(HttpHeaders.Authorization, "Bearer $token") }
                 }
 
-            assertEquals(HttpStatusCode.OK, firstActiveResponse.status)
+            assertEquals(HttpStatusCode.NotFound, firstActiveResponse.status)
+            assertApiErrorEnvelope(firstActiveResponse, ApiErrorCodes.NOT_FOUND)
             assertEquals(HttpStatusCode.OK, secondActiveResponse.status)
-            val firstActiveOrder =
-                json.decodeFromString(ActiveOrderResponse.serializer(), firstActiveResponse.bodyAsText()).order
             val secondActiveOrder =
                 json.decodeFromString(ActiveOrderResponse.serializer(), secondActiveResponse.bodyAsText()).order
-            assertEquals(firstPayload.orderId, firstActiveOrder?.orderId)
-            assertEquals(firstSessionId, firstActiveOrder?.tableSessionId)
-            assertEquals(firstTabId, firstActiveOrder?.tabId)
             assertEquals(secondPayload.orderId, secondActiveOrder?.orderId)
             assertEquals(secondSessionId, secondActiveOrder?.tableSessionId)
             assertEquals(secondTabId, secondActiveOrder?.tabId)
+            assertEquals(2, countRows(jdbcUrl, "orders"))
+            assertEquals(2, countRows(jdbcUrl, "order_batches"))
         }
 
     @Test
@@ -3934,6 +3945,47 @@ class GuestOrderRoutesTest {
             assertEquals(1, countPromotionApplications(jdbcUrl))
             assertEquals(1, countPromotionAdjustments(jdbcUrl))
             assertEquals(1, countRows(jdbcUrl, "order_promotion_reward_items"))
+
+            val otherUser = 95959L
+            val otherTab = seedPersonalTab(jdbcUrl, venueId, tableSessionId, otherUser)
+            val otherToken = issueToken(config, otherUser)
+            val otherSubmit =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $otherToken") }
+                    setBody(
+                        json.encodeToString(
+                            AddBatchRequest.serializer(),
+                            AddBatchRequest(
+                                "gift-ledger-token",
+                                tableSessionId,
+                                otherTab,
+                                "other-tab-no-gift",
+                                listOf(AddBatchItemDto(itemId = teaItemId, qty = 1)),
+                            ),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, otherSubmit.status)
+            val otherRead =
+                client.get(
+                    "/api/guest/order/active?tableToken=gift-ledger-token" +
+                        "&tableSessionId=$tableSessionId&tabId=$otherTab",
+                ) { headers { append(HttpHeaders.Authorization, "Bearer $otherToken") } }
+            assertEquals(HttpStatusCode.OK, otherRead.status)
+            val otherOrder =
+                assertNotNull(
+                    json.decodeFromString(ActiveOrderResponse.serializer(), otherRead.bodyAsText()).order,
+                )
+            assertEquals(100L, otherOrder.finalPayableTotalMinor)
+            assertTrue(otherOrder.discounts.isEmpty())
+            assertFalse(otherOrder.batches.single().items.single().isPromotionReward)
+            val otherSummary =
+                OrdersRepository(
+                    h2DataSource(jdbcUrl),
+                ).listActiveOrderSummariesForUser(otherUser).single()
+            assertTrue(otherSummary.promotionDiscounts.isEmpty())
+            assertFalse(otherSummary.items.single().isPromotionReward)
         }
 
     @Test
@@ -5567,6 +5619,452 @@ class GuestOrderRoutesTest {
         }
 
     @Test
+    fun `invalid session and tab scopes reject active reads and appends without writes`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-order-invalid-scopes")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 19)
+            val foreignTableId = seedTable(jdbcUrl, venueId, 20)
+            val tableToken = "invalid-scopes-token"
+            seedTableToken(jdbcUrl, tableId, tableToken)
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val itemId = seedMenuItem(jdbcUrl, venueId, seedMenuCategory(jdbcUrl, venueId), "Scoped item")
+            val token = issueToken(config)
+
+            listOf("expired", "ended", "foreign-session", "wrong-session-tab", "closed-tab").forEach { case ->
+                val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+                val tabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
+                val request =
+                    AddBatchRequest(
+                        tableToken = tableToken,
+                        tableSessionId = tableSessionId,
+                        tabId = tabId,
+                        idempotencyKey = "scope-$case",
+                        items = listOf(AddBatchItemDto(itemId = itemId, qty = 1)),
+                        comment = null,
+                    )
+                val initial =
+                    client.post("/api/guest/order/add-batch") {
+                        contentType(ContentType.Application.Json)
+                        headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                        setBody(json.encodeToString(AddBatchRequest.serializer(), request))
+                    }
+                assertEquals(HttpStatusCode.OK, initial.status, case)
+                var requestedSessionId = tableSessionId
+                var requestedTabId = tabId
+                when (case) {
+                    "expired", "ended", "closed-tab" ->
+                        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                            val sql =
+                                when (case) {
+                                    "expired" ->
+                                        "UPDATE table_sessions " +
+                                            "SET expires_at = TIMESTAMP '2000-01-01 00:00:00' WHERE id = ?"
+                                    "ended" ->
+                                        "UPDATE table_sessions " +
+                                            "SET status = 'ENDED', ended_at = CURRENT_TIMESTAMP WHERE id = ?"
+                                    else -> "UPDATE tab SET status = 'CLOSED' WHERE id = ?"
+                                }
+                            connection.prepareStatement(sql).use { statement ->
+                                statement.setLong(1, if (case == "closed-tab") tabId else tableSessionId)
+                                assertEquals(1, statement.executeUpdate())
+                            }
+                        }
+                    "foreign-session" -> {
+                        requestedSessionId = seedTableSession(jdbcUrl, venueId, foreignTableId)
+                        requestedTabId = seedPersonalTab(jdbcUrl, venueId, requestedSessionId, TELEGRAM_USER_ID)
+                    }
+                    "wrong-session-tab" -> {
+                        val otherSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+                        requestedTabId = seedPersonalTab(jdbcUrl, venueId, otherSessionId, TELEGRAM_USER_ID)
+                    }
+                }
+                val expected =
+                    if (case in setOf("wrong-session-tab", "closed-tab")) {
+                        HttpStatusCode.Forbidden
+                    } else {
+                        HttpStatusCode.NotFound
+                    }
+                val before = persistenceSnapshot(jdbcUrl)
+                val read =
+                    client.get(
+                        "/api/guest/order/active?tableToken=$tableToken" +
+                            "&tableSessionId=$requestedSessionId&tabId=$requestedTabId",
+                    ) {
+                        headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    }
+                assertEquals(expected, read.status, case)
+                listOf(request.idempotencyKey, "new-$case").forEach { key ->
+                    val append =
+                        client.post("/api/guest/order/add-batch") {
+                            contentType(ContentType.Application.Json)
+                            headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                            setBody(
+                                json.encodeToString(
+                                    AddBatchRequest.serializer(),
+                                    request.copy(
+                                        tableSessionId = requestedSessionId,
+                                        tabId = requestedTabId,
+                                        idempotencyKey = key,
+                                    ),
+                                ),
+                            )
+                        }
+                    assertEquals(expected, append.status, "$case / $key")
+                }
+                val bill =
+                    client.post("/api/guest/order/bill-request") {
+                        contentType(ContentType.Application.Json)
+                        headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                        setBody(
+                            json.encodeToString(
+                                GuestBillRequestRequest.serializer(),
+                                GuestBillRequestRequest(tableToken, requestedSessionId, requestedTabId, "CASH"),
+                            ),
+                        )
+                    }
+                assertEquals(expected, bill.status, case)
+                assertEquals(before, persistenceSnapshot(jdbcUrl), case)
+            }
+        }
+
+    @Test
+    fun `exited shared tab member cannot read later batches or charges until explicit reentry`() =
+        testApplication {
+            val guestA = 71717L
+            val guestB = 81818L
+            val jdbcUrl = buildJdbcUrl("guest-order-exited-shared-member")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 17)
+            val tableToken = "exited-shared-token"
+            seedTableToken(jdbcUrl, tableId, tableToken)
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val categoryId = seedMenuCategory(jdbcUrl, venueId)
+            val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Later shared item")
+            val sharedTabId = seedSharedTab(jdbcUrl, venueId, tableSessionId, guestB)
+            addTabMember(jdbcUrl, sharedTabId, guestA, role = "MEMBER")
+            val guestAToken = issueToken(config, guestA)
+            val guestBToken = issueToken(config, guestB)
+            val exit =
+                client.post("/api/guest/table/session/end") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $guestAToken") }
+                    setBody("""{"tableToken":"$tableToken","tableSessionId":$tableSessionId}""")
+                }
+            assertEquals(HttpStatusCode.OK, exit.status)
+            assertEquals("true", json.parseToJsonElement(exit.bodyAsText()).jsonObject.getValue("ended").toString())
+
+            val submitted =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $guestBToken") }
+                    setBody(
+                        json.encodeToString(
+                            AddBatchRequest.serializer(),
+                            AddBatchRequest(
+                                tableToken = tableToken,
+                                tableSessionId = tableSessionId,
+                                tabId = sharedTabId,
+                                idempotencyKey = "after-member-exit",
+                                items = listOf(AddBatchItemDto(itemId = itemId, qty = 1)),
+                                comment = null,
+                            ),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, submitted.status)
+            val batch = json.decodeFromString(AddBatchResponse.serializer(), submitted.bodyAsText())
+            seedOrderServiceCharge(jdbcUrl, venueId, tableSessionId, batch.orderId, sharedTabId, "Later charge", 700)
+            val activePath =
+                "/api/guest/order/active?tableToken=$tableToken&tableSessionId=$tableSessionId&tabId=$sharedTabId"
+            val beforeDenied = persistenceSnapshot(jdbcUrl)
+            val denied =
+                client.get(activePath) {
+                    headers { append(HttpHeaders.Authorization, "Bearer $guestAToken") }
+                }
+            assertEquals(HttpStatusCode.NotFound, denied.status)
+            assertApiErrorEnvelope(denied, ApiErrorCodes.NOT_FOUND)
+            val legacyDenied =
+                client.get("/api/guest/order/active?tableToken=$tableToken") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $guestAToken") }
+                }
+            assertEquals(HttpStatusCode.NotFound, legacyDenied.status)
+            val billDenied =
+                client.post("/api/guest/order/bill-request") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $guestAToken") }
+                    setBody(
+                        json.encodeToString(
+                            GuestBillRequestRequest.serializer(),
+                            GuestBillRequestRequest(
+                                tableToken = tableToken,
+                                tableSessionId = tableSessionId,
+                                tabId = sharedTabId,
+                                paymentMethod = "CASH",
+                            ),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.NotFound, billDenied.status)
+            val appendDenied =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $guestAToken") }
+                    setBody(
+                        json.encodeToString(
+                            AddBatchRequest.serializer(),
+                            AddBatchRequest(
+                                tableToken = tableToken,
+                                tableSessionId = tableSessionId,
+                                tabId = sharedTabId,
+                                idempotencyKey = "exited-append",
+                                items = listOf(AddBatchItemDto(itemId = itemId, qty = 1)),
+                                comment = null,
+                            ),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.NotFound, appendDenied.status)
+            assertEquals(beforeDenied, persistenceSnapshot(jdbcUrl))
+            val ownerRead =
+                client.get(activePath) {
+                    headers { append(HttpHeaders.Authorization, "Bearer $guestBToken") }
+                }
+            assertEquals(HttpStatusCode.OK, ownerRead.status)
+            val reentry =
+                client.get("/api/guest/table/resolve?tableToken=$tableToken&resolveMode=create") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $guestAToken") }
+                }
+            assertEquals(HttpStatusCode.OK, reentry.status)
+            val afterReentry =
+                client.get(activePath) {
+                    headers { append(HttpHeaders.Authorization, "Bearer $guestAToken") }
+                }
+            assertEquals(HttpStatusCode.OK, afterReentry.status)
+            val order = json.decodeFromString(ActiveOrderResponse.serializer(), afterReentry.bodyAsText()).order
+            assertEquals(itemId, assertNotNull(order).batches.single().items.single().itemId)
+            assertEquals(listOf("Later charge"), order.serviceCharges.map { it.label })
+            assertEquals(800L, order.finalPayableTotalMinor)
+        }
+
+    @Test
+    fun `tab bills and user summaries isolate every monetary component`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-order-all-money-isolation")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 21)
+            val tableToken = "all-money-token"
+            seedTableToken(jdbcUrl, tableId, tableToken)
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val sessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val hookahCategory = seedMenuCategory(jdbcUrl, venueId)
+            setMenuCategoryType(jdbcUrl, hookahCategory, "HOOKAH")
+            val otherCategory = seedMenuCategory(jdbcUrl, venueId)
+            val users = listOf(91919L, 92929L)
+            val tabs = users.map { seedPersonalTab(jdbcUrl, venueId, sessionId, it) }
+            val rewardItem = seedMenuItem(jdbcUrl, venueId, hookahCategory, "B loyalty reward", 100)
+            seedActiveLoyaltyProgramWithReward(jdbcUrl, venueId, users[1], 1, listOf(rewardItem))
+            seedHappyHoursRule(jdbcUrl, venueId, users[0], discountPercent = 20, status = "ACTIVE")
+            val requests =
+                users.mapIndexed { index, user ->
+                    val promoItem = seedMenuItem(jdbcUrl, venueId, hookahCategory, "Promo $user", 1000)
+                    val option = seedMenuOption(jdbcUrl, venueId, promoItem, "Option $user", 100)
+                    val manualItem = seedMenuItem(jdbcUrl, venueId, otherCategory, "Manual $user", 600)
+                    val excludedItem = seedMenuItem(jdbcUrl, venueId, hookahCategory, "Excluded $user", 400)
+                    val canceledItem = seedMenuItem(jdbcUrl, venueId, hookahCategory, "Canceled $user", 500)
+                    AddBatchRequest(
+                        tableToken,
+                        sessionId,
+                        tabs[index],
+                        "money-$user",
+                        buildList {
+                            add(AddBatchItemDto(itemId = promoItem, qty = index + 2, selectedOptionId = option))
+                            add(AddBatchItemDto(itemId = manualItem, qty = 1))
+                            add(AddBatchItemDto(itemId = excludedItem, qty = 1))
+                            add(AddBatchItemDto(itemId = canceledItem, qty = 1))
+                            if (index == 1) add(AddBatchItemDto(itemId = rewardItem, qty = 1))
+                        },
+                        comment = "Comment $user",
+                    )
+                }
+            val batches =
+                requests.mapIndexed { index, request ->
+                    val token = issueToken(config, users[index])
+                    val response =
+                        client.post("/api/guest/order/add-batch") {
+                            contentType(ContentType.Application.Json)
+                            headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                            setBody(json.encodeToString(AddBatchRequest.serializer(), request))
+                        }
+                    assertEquals(HttpStatusCode.OK, response.status)
+                    val batch = json.decodeFromString(AddBatchResponse.serializer(), response.bodyAsText())
+                    val lines = fetchBatchItemIdsByMenuItem(jdbcUrl, batch.batchId)
+                    excludeBatchItem(jdbcUrl, lines.getValue(request.items[2].itemId))
+                    cancelBatchItem(jdbcUrl, lines.getValue(request.items[3].itemId))
+                    DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                        connection.prepareStatement(
+                            "UPDATE order_batch_items SET discount_percent = ? WHERE id = ?",
+                        ).use {
+                            it.setInt(1, (index + 1) * 10)
+                            it.setLong(2, lines.getValue(request.items[1].itemId))
+                            assertEquals(1, it.executeUpdate())
+                        }
+                    }
+                    seedOrderServiceCharge(
+                        jdbcUrl,
+                        venueId,
+                        sessionId,
+                        batch.orderId,
+                        tabs[index],
+                        "Charge ${users[index]}",
+                        if (index == 0) 500 else 900,
+                    )
+                    batch
+                }
+            assertEquals(1, batches.map { it.orderId }.distinct().size)
+            val repository = OrdersRepository(h2DataSource(jdbcUrl))
+            users.forEachIndexed { index, user ->
+                val token = issueToken(config, user)
+                val response =
+                    client.get(
+                        "/api/guest/order/active?tableToken=$tableToken&tableSessionId=$sessionId&tabId=${tabs[index]}",
+                    ) { headers { append(HttpHeaders.Authorization, "Bearer $token") } }
+                assertEquals(HttpStatusCode.OK, response.status)
+                val order =
+                    assertNotNull(json.decodeFromString(ActiveOrderResponse.serializer(), response.bodyAsText()).order)
+                val expectedItems = requests[index].items.filterIndexed { i, _ -> i !in 2..3 }.map { it.itemId }
+                assertEquals(listOf(batches[index].batchId), order.batches.map { it.batchId })
+                assertEquals(expectedItems, order.batches.single().items.map { it.itemId })
+                assertEquals("Comment $user", order.batches.single().comment)
+                assertEquals("Option $user", order.batches.single().items.first().selectedOption?.name)
+                assertEquals(listOf("Charge $user"), order.serviceCharges.map { it.label })
+                assertEquals(if (index == 0) 3300L else 4900L, order.grossTotalMinor)
+                assertEquals(if (index == 0) 60L else 120L, order.manualDiscountTotalMinor)
+                assertEquals(if (index == 0) 440L else 660L, order.promoDiscountTotalMinor)
+                assertEquals(if (index == 0) 0L else 100L, order.loyaltyDiscountTotalMinor)
+                assertEquals(if (index == 0) 2800L else 4020L, order.finalPayableTotalMinor)
+                assertEquals("RUB", order.currency)
+                val summary = repository.listActiveOrderSummariesForUser(user).single()
+                assertEquals(expectedItems, summary.items.map { it.itemId })
+                assertEquals(
+                    order.discounts.map { it.label to it.discountMinor },
+                    summary.promotionDiscounts.map { it.label to it.discountMinor },
+                )
+            }
+            val wholeOrder = assertNotNull(repository.findActiveOrderDetails(sessionId))
+            assertEquals(2, wholeOrder.batches.size)
+            assertEquals(
+                setOf("Charge ${users[0]}", "Charge ${users[1]}"),
+                wholeOrder.serviceCharges.map { it.label }.toSet(),
+            )
+            assertEquals(1200L, wholeOrder.promotionDiscounts.sumOf { it.discountMinor })
+        }
+
+    @Test
+    fun `user order summaries reject exit revoked membership and inactive sessions`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-order-summary-authority")
+            val config = buildConfig(jdbcUrl, guestAddBatchMaxRequests = 10)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+            val guestA = 93939L
+            val guestB = 94949L
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 22)
+            val tableToken = "summary-authority-token"
+            seedTableToken(jdbcUrl, tableId, tableToken)
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val sessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            val tabId = seedSharedTab(jdbcUrl, venueId, sessionId, guestB)
+            addTabMember(jdbcUrl, tabId, guestA, "MEMBER")
+            val itemId = seedMenuItem(jdbcUrl, venueId, seedMenuCategory(jdbcUrl, venueId), "Shared summary")
+            val token = issueToken(config, guestA)
+            val request =
+                AddBatchRequest(
+                    tableToken,
+                    sessionId,
+                    tabId,
+                    "summary-author",
+                    listOf(AddBatchItemDto(itemId = itemId, qty = 1)),
+                )
+            val submitted =
+                client.post("/api/guest/order/add-batch") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(json.encodeToString(AddBatchRequest.serializer(), request))
+                }
+            assertEquals(HttpStatusCode.OK, submitted.status)
+            val repository = OrdersRepository(h2DataSource(jdbcUrl))
+            assertEquals(1, repository.listActiveOrderSummariesForUser(guestA).size)
+            val mutations =
+                listOf(
+                    "INSERT INTO guest_table_session_exits (user_id, table_session_id) VALUES ($guestA, $sessionId)" to
+                        "DELETE FROM guest_table_session_exits WHERE user_id = $guestA",
+                    "DELETE FROM tab_member WHERE tab_id = $tabId AND user_id = $guestA" to
+                        "INSERT INTO tab_member (tab_id, user_id, role) VALUES ($tabId, $guestA, 'MEMBER')",
+                    "UPDATE tab SET status = 'CLOSED' WHERE id = $tabId" to
+                        "UPDATE tab SET status = 'ACTIVE' WHERE id = $tabId",
+                    "UPDATE table_sessions SET status = 'ENDED' WHERE id = $sessionId" to
+                        "UPDATE table_sessions SET status = 'ACTIVE' WHERE id = $sessionId",
+                    "UPDATE table_sessions SET expires_at = TIMESTAMP '2000-01-01 00:00:00' WHERE id = $sessionId" to
+                        "UPDATE table_sessions SET expires_at = TIMESTAMP '2099-01-01 00:00:00' WHERE id = $sessionId",
+                )
+            mutations.forEach { (deny, restore) ->
+                DriverManager.getConnection(jdbcUrl, "sa", "").use { it.createStatement().executeUpdate(deny) }
+                val before = persistenceSnapshot(jdbcUrl)
+                assertTrue(repository.listActiveOrderSummariesForUser(guestA).isEmpty(), deny)
+                val expected =
+                    if (deny.startsWith("DELETE FROM tab_member") || deny.startsWith("UPDATE tab SET")) {
+                        HttpStatusCode.Forbidden
+                    } else {
+                        HttpStatusCode.NotFound
+                    }
+                val read =
+                    client.get(
+                        "/api/guest/order/active?tableToken=$tableToken&tableSessionId=$sessionId&tabId=$tabId",
+                    ) { headers { append(HttpHeaders.Authorization, "Bearer $token") } }
+                assertEquals(expected, read.status, deny)
+                val bill =
+                    client.post("/api/guest/order/bill-request") {
+                        contentType(ContentType.Application.Json)
+                        headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                        setBody(
+                            json.encodeToString(
+                                GuestBillRequestRequest.serializer(),
+                                GuestBillRequestRequest(tableToken, sessionId, tabId, "CASH"),
+                            ),
+                        )
+                    }
+                assertEquals(expected, bill.status, deny)
+                val replay =
+                    client.post("/api/guest/order/add-batch") {
+                        contentType(ContentType.Application.Json)
+                        headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                        setBody(json.encodeToString(AddBatchRequest.serializer(), request))
+                    }
+                assertEquals(expected, replay.status, deny)
+                assertEquals(before, persistenceSnapshot(jdbcUrl))
+                DriverManager.getConnection(jdbcUrl, "sa", "").use { it.createStatement().executeUpdate(restore) }
+                assertEquals(1, repository.listActiveOrderSummariesForUser(guestA).size, restore)
+            }
+        }
+
+    @Test
     fun `blocked subscription rejects add-batch`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("guest-order-blocked")
@@ -6528,6 +7026,37 @@ class GuestOrderRoutesTest {
             }
         }
         error("Failed to insert invoice")
+    }
+
+    private fun seedOrderServiceCharge(
+        jdbcUrl: String,
+        venueId: Long,
+        tableSessionId: Long,
+        orderId: Long,
+        tabId: Long,
+        label: String,
+        amount: Long,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                INSERT INTO order_service_charges (
+                    order_id, venue_id, table_session_id, tab_id, source, label,
+                    qty, unit_price_minor, total_minor, currency
+                )
+                VALUES (?, ?, ?, ?, 'SHIFT_EXTENSION', ?, 1, ?, ?, 'RUB')
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, orderId)
+                statement.setLong(2, venueId)
+                statement.setLong(3, tableSessionId)
+                statement.setLong(4, tabId)
+                statement.setString(5, label)
+                statement.setLong(6, amount)
+                statement.setLong(7, amount)
+                assertEquals(1, statement.executeUpdate())
+            }
+        }
     }
 
     private fun seedMenuCategory(
