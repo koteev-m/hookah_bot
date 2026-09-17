@@ -1,168 +1,214 @@
 # Project Status
 
-## PR #198 — recurring Mini App catalog debounce smoke failure — 2026-09-16
+## PR #198 — current main integration — 2026-09-17
 
-**D — FLAKY_OR_TIMING_RACE / TEST-ONLY FIX VERIFIED LOCALLY / PUBLICATION AND RELEASE GATES OPEN**.
+**LOCAL INTEGRATION VERIFIED / NOT PUSHED / RELEASE AND STAGING GATES OPEN**.
 
-- Worktree: `/private/tmp/guest-order-consolidated-20260916`; branch
-  `codex/guest-order-session-tab-isolation`; follow-up parent
-  `48afb71821ef289bc396d58a0f18ea2442b352f5`. The reviewed guest isolation commit is unchanged.
-- Exact CI evidence: [run 35056988168, job 104669132051](https://github.com/koteev-m/hookah_bot/actions/runs/35056988168/job/104669132051).
-  Smoke executed `216`: `215` passed, `1` failed, no retries/skips/runner errors, `3.3m` total.
-  `guest catalog sends debounced backend search and city filters then resets` failed at the
-  request-count assertion after `fastForward(299)`: expected `1`, received `2`, including the
-  final search query. Vite and Chromium started successfully; the JSON assertion correctly
-  rejected the failed test. CI uploaded no report/trace artifact; the job log contains the failure.
-- The immediately preceding failed smoke [run 34938754893, job 104282354047](https://github.com/koteev-m/hookah_bot/actions/runs/34938754893/job/104282354047)
-  has the identical test/line/expected/actual signature. Existing QA notes also record this flake.
-  The earlier `24` local order/tab checks did not select this catalog test.
-- Root cause: `page.clock.install()` leaves time running. Real time between browser actions plus
-  a `299ms` jump can reach the product's valid `300ms` debounce deadline. The test now pauses time
-  before navigation. All existing debounce, query, city, reset and navigation assertions remain;
-  no product code, timeout, retry, workflow, dependency, API or DTO change.
-- Local evidence with CI Node `20.20.2`, npm `10.8.2`, unchanged lockfile, Playwright `1.60.0`,
-  Chromium `148.0.7778.96`, `CI=1`, `TZ=UTC`, port `5174`: unchanged focused test passed once,
-  then reproduced the exact failure in `1/20` attempts with two workers. After the fix, focused
-  `1/1`, repeated `20/20`, full structured `216/216` (`134.2s`) and the unchanged CI JSON assertion
-  passed with zero failed attempts/skips/flaky outcomes. Mini App `tsc && vite build` passed with
-  its existing bundle-size warning; `git diff --check` passed. No backend/runtime change required
-  new backend tests. Logs, JSON, local failure trace and input hashes:
-  `/private/tmp/pr198-miniapp-ci-20260916/`.
-- Local reproduction is macOS arm64, not the Ubuntu runner. CI's exact versions/command and two
-  effective full-suite workers were reproduced; no post-fix GitHub Actions result is claimed.
-  `BOOKING-CI-PLAYWRIGHT-FLAKE-001` remains open for its separate favorite-test signal and fresh CI
-  evidence. PR/release-SHA CI, authorized staging smoke and `ORDER-CONTEXT-MANUAL-001` remain gates.
-- Scope permits one local follow-up commit only. No push, Actions rerun, merge, deploy, staging or
-  provider action. Dirty primary changes and the existing HT-OPS-39 support wait remain unchanged;
-  `scripts/dev/` and HT-OPS evidence were not accessed. Next step: review and separately authorize
-  publication of this verified local follow-up commit to PR #198.
+Worktree `/private/tmp/guest-order-consolidated-20260916`, branch
+`codex/guest-order-session-tab-isolation`; starting HEAD
+`d075df10d18a76dbc8865e0e76fb18e72c12f04e`, integrating verified `origin/main`
+`e08f4b74824d56e096cdad3eafe813a97d20067c` (merged PR #199).
+The starting worktree/index were clean; the dirty primary checkout is not used.
 
-## Unified Review and Consolidation — Guest Order / Session / Tab Isolation — 2026-09-16
+The reviewed Guest Order / Session / Tab fixes remain intact: active-order reads
+and ordinary bill requests validate current session, exit and tab authorization;
+service charges are selected by order/tab; active summaries derive items,
+promotions and loyalty from the same authorized batches. Personal ownership,
+shared membership/revocation, legacy tabless authorship under active-session/no-exit
+checks, explicit QR re-entry and full-order/staff aggregation are preserved.
+No migration, API/DTO, client behavior or new product/security contract is introduced.
+[Canonical scope](docs/ORDER_SESSION_TAB_CORE.md#guest-order-isolation-consolidation--2026-09-16)
+and [pending manual smoke](docs/DEFERRED_MANUAL_SMOKE_BACKLOG.md#order-context-manual-001).
 
-**INDEPENDENT REVIEW COMPLETE / CONSOLIDATED LOCAL CANDIDATE VERIFIED / UNCOMMITTED /
-RELEASE AND STAGING GATES OPEN**.
+Conflicts are limited to this checkpoint and the catalog debounce test. Both test
+variants pause time; integration retains PR #198's single pause before navigation,
+with all 299ms/+1ms, query/filter/reset/navigation assertions unchanged. Backend
+sources/tests remain byte-identical to `d075df10`; CI/V126 scripts and workflow
+remain byte-identical to current main. Main's CI/V126 facts are retained below.
+Old PR #198 Compose failures describe the pre-integration tree, not this tree.
 
-### Scope, baseline and preservation
+Prior consolidated evidence (235 backend tests / 16 suites, 24 focused browser
+checks) remains historical at `/private/tmp/guest-order-consolidation-evidence-20260916/`.
+The debounce reproduction and 216-test local verification are recorded at
+`/private/tmp/pr198-miniapp-ci-20260916/` and in the QA strategy. Fresh combined-tree
+checks pass: **235/235 backend tests in 16 suites**, including **11/11 real PostgreSQL
+idempotency/concurrency tests**, plus forced backend compile/ktlint, Mini App build,
+focused catalog **1/1** and full structured browser smoke **216/216** (113.8s).
+XML and the unchanged CI JSON validator report zero failures/errors/skips/flaky
+outcomes/failed attempts. Testcontainers containers/volumes return to zero; diff
+and documentation consistency checks pass. Local runtime: macOS arm64, Java 21,
+Docker Desktop, Node 20.20.2/npm 10.8.2, Playwright 1.60.0, UTC, two full-smoke workers,
+zero retries. The first focused invocation selected no tests because its grep was
+incorrectly anchored; corrected discovery selected exactly one unchanged test.
+Commands, logs, XML and JSON: `/private/tmp/pr198-main-integration-20260917/`.
 
-- Final isolated worktree: `/private/tmp/guest-order-consolidated-20260916`, detached HEAD/base
-  `77caf48a46e5d3c61b01ffdfc0a43bc9ec55ceaa`, matching the inspected local `origin/main` ref.
-  This is 41 commits ahead of ancestor `4daf5546fb622a6b967398f5c25b7bed41d7fa05`.
-  No fetch or remote-state claim is made. The fresh worktree was clean before applying changes.
-- Primary remains on `main` at `4daf5546fb622a6b967398f5c25b7bed41d7fa05`, with its existing
-  modified `AGENTS.md`, `PROJECT_STATUS.md`, `docs/DEPLOYMENT_RUNBOOK.md`,
-  `docs/TESTING_QA_SMOKE_STRATEGY.md`, untracked `docs/MODEL_WORKFLOW.md` and `scripts/dev/`.
-  Primary and both original candidates retain identical HEAD, status, staged/unstaged diff hashes
-  and hashes of their changed files. No primary changes were absorbed into this candidate.
-- The existing primary **HT-OPS-39 external support wait** entry is preserved byte-for-byte.
-  HT-OPS-39 remains OPEN, externally blocked awaiting Yandex Support; this task does not change its
-  evidence or authorization. No HT-OPS evidence, Yandex/yc, credential or infrastructure action.
-- Read instructions: primary root `AGENTS.md`; A root `AGENTS.md`; empty ancestor
-  `/Users/maksimmartynov/.codex/AGENTS.md` and B root `AGENTS.md`; the new worktree's root matches B.
-  No applicable ancestor override or nested instruction file was found. Explicit task constraints
-  take precedence; no commit/stage/push/PR/SSH/deploy/Actions query was performed.
+No old test result substitutes for these fresh checks. The separate favorite flake,
+exact release-SHA CI, authorized staging smoke and `ORDER-CONTEXT-MANUAL-001` remain
+open boundaries. Full history remains in the two merge parents.
 
-### Review verdicts and final behavior
+Only local integration, relevant validation and one merge commit are authorized.
+No push/PR/Actions/staging/provider operation; primary, `scripts/dev/` and HT-OPS-39
+are preserved. Next: separately authorize publication of this verified local merge.
 
-- **A — ACCEPT_WITH_ADJUSTMENT.** Exact candidate: six files, +493/-81, detached at `4daf5546`.
-  Its route implementation is retained unchanged: explicit active-order reads and ordinary bill
-  requests use the existing authorized transaction, and legacy personal lookup checks exit inside
-  its transaction. The baseline exit/read regression returned HTTP 200 instead of 404. Static review
-  confirmed the same missing exit check in ordinary bill requests. Tests now also cover later
-  service charges, bill denial for invalid scopes and complete denial snapshots. Older status
-  text was not copied over newer checkpoints.
-- **B — ACCEPT_WITH_ADJUSTMENT.** Exact candidate: four files, +153/-9, detached at `77caf48a`.
-  Its order/tab service-charge predicate is retained; baseline regression returned both tabs'
-  charges for one tab. The optional tab predicate preserves full-order/staff charge aggregation.
-  A's stronger sequential-visit test supersedes B's overlapping test/helper. Review additionally
-  required the active-summary correction below and fuller money-component regression coverage.
-- Both production fixes are independent and compatible, and neither is obsolete on the newer
-  baseline: affected order routes/repository/test sources were unchanged between the two bases.
-  Mechanical/semantic overlap was confined to the sequential-visit test and competing status
-  entries; these were consolidated deliberately. Neither fix grants new authorization.
-- Historical table-only P0 remains closed in code: PostgreSQL V61 supplies non-null session/FK and
-  partial ACTIVE-order uniqueness; H2 V112 mirrors uniqueness. Create/reuse and idempotency remain
-  session-scoped. No migration, DTO/API, Mini App, order identity or staff notification change.
-- **Additional confirmed disclosure:** Telegram active-order summaries loaded order-wide promotion
-  labels/amounts and accepted retained membership/authorship after exit/revocation. On A+B alone,
-  guest A expected promotion 440 but received order-wide 1100 plus another guest's loyalty 100;
-  the separate exit-summary regression also failed. The repository now derives items, tab type
-  and promotions from the same currently authorized batch set: valid active session, no exit,
-  active tab/membership and personal ownership. Own legacy tabless author/idempotency summaries
-  remain supported under active-session/no-exit checks. Booking and history paths are unchanged.
-- Monetary inspection and regressions cover batches/comments/items, option snapshots and deltas,
-  manual discounts, excluded/canceled lines, promotions/loyalty, gift/reward flags and labels,
-  charges and derived gross/payable totals. Item attachments already use selected batch/item IDs;
-  the charge predicate closes the selected-tab attachment leak. Full-order views retain both tabs.
-- Existing exit/re-entry contract is preserved: exit is a user/session marker, not deletion of
-  shared membership or closure of the physical session. Explicit valid QR re-entry restores retained
-  membership; it does not restore deleted membership. Old read/bill/append, including exact-key
-  replay, fails after exit or revocation. Confirmed Platform Guest preflight remains required.
+## CI Compose Stability — V126 Cutover Fixtures (2026-09-16)
 
-### Fresh verification on the consolidated candidate
+Isolated worktree `/private/tmp/ci-v126-compose-stability-20260916`, branch
+`codex/ci-v126-compose-stability`; follow-up parent
+`be32509d20f72fcacbd559e59c191eeb6529e835`, original base
+`ad23f8e0bd1846c95242fde10314ceb579fedb98`. The existing TCP readiness fix for
+CI 498's `database-create` race is preserved. PR #199 CI 499/500
+(`35103344782` / `35103386597`, compose `104818091340` / `104818238165`)
+passed the ordinary positive backup but failed the new transition fixture in
+both phases at `readiness`, exit 4. Their source trees match `be32509`.
 
-**235 tests / 16 suites / zero failures, errors or skips** across three successful Gradle runs;
-real PostgreSQL ran in local Testcontainers. Backend compile and ktlint pass. **24 focused Mini App
-checks pass**, using mocked local API fixtures because the existing QA matrix explicitly requires
-Mini App e2e for order/session/tab work. No client/API change required a new frontend test or build.
+The fixture's FIFO owner/writer mismatch (OS postgres/root) is a confirmed
+portability defect. Both releases now explicitly use OS `postgres`; actual writer
+and owner UIDs are checked without pinning UID 999. Safe fixture diagnostics retain
+the first failed handoff and observed exit status through later readiness failure.
+Production code, TCP readiness, deadlines, cleanup ownership and workflow are
+unchanged. [Contract and evidence limits](docs/TESTING_QA_SMOKE_STRATEGY.md#ht-12aa-postgresql17-globals-and-backup-regression).
 
-| Suite | Passed |
-| --- | ---: |
-| `GuestOrderRoutesTest` | 65 |
-| `VenueOrdersRepositoryTest` | 32 |
-| `GuestOrderIdempotencyFingerprintTest` | 7 |
-| `OrdersRepositoryTest` | 9 |
-| `PostgresMigrationSmokeTest` | 2 |
-| `ActiveOrderTabUniquenessMigrationTest` | 3 |
-| `GuestBatchIdempotencyFingerprintMigrationH2Test` | 2 |
-| `GuestBatchIdempotencyFingerprintMigrationPostgresTest` | 2 |
-| `TableSessionsMigrationV28PostgresTest` | 1 |
-| `GuestOrderIdempotencyConcurrencyPostgresTest` | 11 |
-| `GuestTableResolveRoutesTest` | 36 |
-| `GuestTabsRoutesTest` | 9 |
-| `PlatformGuestTableMutationCoordinatorTest` | 14 |
-| `ShiftExtensionRoutesTest` | 9 |
-| `VenueOrderRoutesTest` | 22 |
-| `TelegramBotRouterTableTokenTest` | 11 |
+With the immutable CI PG17.11 AMD64 image on Docker Desktop, the targeted
+transition/positive cases pass; backup suite **41/41**, boundary checks **7/7**,
+sequential transition series **5/5** and cleanup caller contracts **24/24** pass.
+The temporary default-root writer control is rejected at all four writer/phase
+boundaries; the socket-only production-copy control fails both phases at
+`database-create`. Owned container/volume inventory returns to zero. Syntax,
+static safety, documentation and diff checks pass. Local `fs.protected_fifos=0` is unchanged;
+the historical CI attribution to `fs.protected_fifos=1` remains unproven, and
+the full GitHub-hosted Linux gate remains unverified. Historical CI #487/#489
+exact functional attribution also remains unproven.
 
-Commands executed from the consolidated worktree:
+Publication is superseded by merged PR #199 at
+`e08f4b74824d56e096cdad3eafe813a97d20067c`; both `be32509` and `1cb22f2`
+are preserved ancestors. The results above describe local verification only;
+this integration does not inspect Actions or establish a new CI/release verdict.
 
-```bash
-_JAVA_OPTIONS=-Xmx4g JAVA_TOOL_OPTIONS=-Dapi.version=1.44 ./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*GuestOrderRoutesTest' --tests '*OrdersRepositoryTest' --tests '*GuestOrderIdempotencyFingerprintTest' :backend:app:compileKotlin :backend:app:ktlintCheck --console=plain
-_JAVA_OPTIONS=-Xmx4g JAVA_TOOL_OPTIONS=-Dapi.version=1.44 ./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*GuestOrderIdempotencyConcurrencyPostgresTest' --tests '*ActiveOrderTabUniquenessMigrationTest' --tests '*TableSessionsMigrationV28PostgresTest' --tests '*GuestBatchIdempotencyFingerprintMigrationH2Test' --tests '*GuestBatchIdempotencyFingerprintMigrationPostgresTest' --tests '*PostgresMigrationSmokeTest' --console=plain
-_JAVA_OPTIONS=-Xmx4g JAVA_TOOL_OPTIONS=-Dapi.version=1.44 ./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*GuestTableResolveRoutesTest' --tests '*GuestTabsRoutesTest' --tests '*PlatformGuestTableMutationCoordinatorTest' --tests '*VenueOrderRoutesTest' --tests '*ShiftExtensionRoutesTest' --tests '*TelegramBotRouterTableTokenTest.my command*' --tests '*TelegramBotRouterTableTokenTest.active order screen*' --tests '*TelegramBotRouterTableTokenTest.guest bot active order shows shift extension*' --tests '*TelegramBotRouterTableTokenTest.bill reason asks payment method*' --tests '*TelegramBotRouterTableTokenTest.cart checkout rejects stale shared*' --console=plain
-npm --prefix miniapp ci --offline --ignore-scripts --no-audit --no-fund
-MINIAPP_E2E_PORT=5183 npm --prefix miniapp run e2e:smoke -- --grep 'table context|initial tab restore|switching tab|guest cart idempotency|guest cart unverifiable|guest.*bill' --workers=1
-git diff --check
-git status --short
-```
+## HT-OPS-31 — AP-00 Dedicated S3 Worker Runtime
 
-The core, PostgreSQL/migration and context/staff/bot runs passed 113, 21 and 101 tests respectively.
-The core wildcard also selected `VenueOrdersRepositoryTest`; Telegram selection ran 11 methods,
-not that entire class. Local artifacts (original patches, expected-red XML, final XML per group,
-logs, suite totals and preservation hashes) are under
-`/private/tmp/guest-order-consolidation-evidence-20260916/`.
+Same isolated worktree `/private/tmp/ht-ops-25-ap00/worktree`, branch
+`codex/ht-ops-25-ap00`, base/HEAD `77caf48a46e5d3c61b01ffdfc0a43bc9ec55ceaa`.
+Authenticated starting full patch SHA-256:
+`b673b0daf44253f7fd695f6b83430195b93de7b1dbb02a0d7f1b68da335a8acf`.
+Exact pre/post files, full patches, architecture delta, hashes and report:
+`/private/tmp/ht-ops-31-worker/REPORT.md`. HT-OPS-29/30 evidence remains unchanged.
 
-Both original regressions failed before production patches; both additional summary regressions
-failed with A+B alone, then passed with the correction. One initial broad run was 111/112: the new
-five-case denial fixture hit rate limiting on its last submission. Only that fixture's existing
-request-limit option was raised to 10; the dedicated rate-limit test remains unchanged and passed.
-Initial long-line/formatting failures were corrected before the final successful lint. The first
-sandboxed Gradle attempt could not open its user-cache lock; the authorized local rerun succeeded.
-No OOM occurred in this consolidation. Runs used the instructed 4 GB heap and one worker because
-these H2 suites retain multiple in-memory databases; no assertion or database constraint was weakened.
+Operational S3 now executes only in one fresh, bounded subprocess per logical
+operation. The parent remains stdlib/SDK-free, with closed binary-safe IPC, a local
+timeout and process cleanup. The worker admits CPython 3.13 with GIL before site/SDK
+acquisition. Exact Python patch qualification remains bound by Policy B; existing
+tooling includes worker/IPC source hashes. Raw child stdout/stderr/provider messages
+are not diagnostic authority. Write timeout/crash/invalid IPC after start is UNKNOWN,
+with no second PUT or reconciliation. [Contract](docs/DR_AP00_ADAPTER_FOUNDATION.md).
 
-Final changed files: `GuestOrderRoutes.kt`, `OrdersRepository.kt`, `GuestOrderRoutesTest.kt`,
-`OrdersRepositoryTest.kt`, `GuestOrderIdempotencyConcurrencyPostgresTest.kt`, this status file,
-`docs/ORDER_SESSION_TAB_CORE.md` and `docs/DEFERRED_MANUAL_SMOKE_BACKLOG.md`. All are unstaged.
-No migration/API/DTO/client/infrastructure files changed; `scripts/dev/` was neither read nor touched.
+HT-OPS-29 in-process LogRecordFactory ownership (setter patch, ContextVar, lock and
+counter) is removed and superseded **before publication**; it never became operational
+evidence. Historical checkpoints below describe prior local candidates only.
+Local worker suite **22/22 PASS**, SDK/crypto/provisioning **34/34 PASS**, AP-01 with
+`-S` **48/48 PASS**. Actual malformed-header child WARNING reaches no parent factory/
+handler/output; parent reload/logging state remains independent. Adversarial IPC,
+runtime negatives, one-PUT ambiguity, distinct PIDs, concurrency/reaping and source
+binding are covered. Prior PG17/database/diagnostic evidence is reused only for
+unchanged sources after hash/applicability checks; no Docker rerun.
 
-Full backend/browser suites, deployed database/runtime, live Telegram/staging smoke and production
-load behavior remain unverified. Required Actions must be green for a separately authorized release
-SHA, and `ORDER-CONTEXT-MANUAL-001` remains PLANNED. Local checks do not close those gates or authorize
-publication. No in-flight exit-versus-summary race or production-scale query benchmark is claimed.
+Crypto, provisioning, dependency pins, F3 history NOT_PROVEN and F4 temporary 64 MiB
+bound/capacity NOT_PROVEN remain unchanged. Provider is unprovisioned. AP-02 producer,
+AP-06 independent observations and AP-07 custody remain unimplemented/unauthorized;
+AP-03 real transfer remains unexecuted/unauthorized and blocked by
+`AP03_CAPACITY_COMPATIBILITY_NOT_PROVEN`. No DR PASS, operational qualification,
+publication, staging/SSH/deploy/V126, provider access or credentials/keys.
+Index empty; no commit/push/PR/Actions activity.
 
-**Next step:** review this consolidated worktree and decide whether to authorize a separate
-integration task, preserving the primary checkout's pending documentation changes.
+Next: independent security review of the exact HT-OPS-31 dedicated-worker changeset
+before any publication or provisioning.
+
+
+## HT-OPS-29 — AP-00 Logging Factory Ownership Repair
+
+Same worktree `/private/tmp/ht-ops-25-ap00/worktree`, branch `codex/ht-ops-25-ap00`,
+base/HEAD `77caf48a46e5d3c61b01ffdfc0a43bc9ec55ceaa`; index empty, no publication.
+Authenticated starting candidate patch SHA-256:
+`f022fa6c79ae3d77c3f2a1fdde9827abb84a8f1e45cb3d069f14c3fc07b5277a`.
+Exact pre/post files, full patches, F1-only delta, hashes and report:
+`/private/tmp/ht-ops-29-repair/REPORT.md`. HT-OPS-28 evidence is unchanged.
+
+HT-OPS-28 F1-RACE/P1 is repaired locally: public factory replacement and adapter
+admission now use the same ownership lock/counter. Active scopes reject replacement
+with `AP00_S3_LOGGING_FACTORY_BUSY`; saved public-setter aliases are mediated too.
+Response consumption, read retries and stream cleanup retain ownership. Idle replacement
+works; subsequent adapter admission refuses before SDK activity without reinstalling.
+[Runtime boundary](docs/DR_AP00_ADAPTER_FOUNDATION.md#target-and-authority-boundaries):
+qualified CPython/GIL stdlib setter, one adapter runtime owner, no request serialization.
+
+Preserved pre-copy race: 4/4 canaries at factory/handler/formatter at all three timing
+points. Repaired public/saved-alias matrix: 0/4, expected single-PUT success retained.
+Focused logging **13/13 PASS**, S3 **20/20 PASS** including existing F2 matrix; independent
+concurrency/nesting/failure-cleanup probes PASS. Static/integrity evidence is retained
+with the report. F2–F4 semantics, crypto/provisioning/pins and broader evidence inputs
+remain unchanged. Historical HT-OPS-27 checkpoint below is superseded for F1 ownership.
+Local repair is not provider/staging/DR or production-readiness evidence.
+
+Next: bounded independent re-review of only the authenticated HT-OPS-29 F1 ownership
+repair delta. No publication or further operational action is authorized.
+
+
+## HT-OPS-27 — AP-00 Security Findings Bounded Repair
+
+Same worktree `/private/tmp/ht-ops-25-ap00/worktree`, branch `codex/ht-ops-25-ap00`,
+base/HEAD `77caf48a46e5d3c61b01ffdfc0a43bc9ec55ceaa`; no commit/index changes.
+Authenticated HT-OPS-25 pre-repair patch SHA-256:
+`f0938bb9c78296b3a635de31f5a7f69f86e89915678bb3985b61d54dfbc8d863`.
+Full pre/post files, patches, manifests and before/after F1/F2 evidence:
+`/private/tmp/ht-ops-27-repair/`; detailed handoff `REPORT.md` there.
+
+F1: context-scoped SDK record redaction before downstream logging factories/handlers,
+with persistent factory chaining and no temporary global logging mutation. F2:
+unexpected post-dispatch 2xx is UNKNOWN, with one PUT and no reconciliation. F3:
+conditional creation protects current key state; all-history uniqueness is NOT_PROVEN.
+F4: temporary enforced 64 MiB bound unchanged; operational capacity is NOT_PROVEN.
+AP-03 real transfer is blocked by `AP03_CAPACITY_COMPATIBILITY_NOT_PROVEN` until the
+[mandatory gate](docs/DR_AP00_ADAPTER_FOUNDATION.md#mandatory-pre-ap-03-capacity-compatibility-gate)
+is PASS. No streaming/chunked design selected. Crypto, provisioning schema/pins,
+AP-01, AP-02/AP-06/AP-07 boundaries and Policy B thresholds remain unchanged.
+
+Local adapter regressions **40/40 PASS**, including real urllib3 WARNING parsing,
+concurrent logging and stream cleanup, and the write-status matrix. Before-repair
+F1 leak and F2 incorrect rejections reproduced from preserved bytes; after repair
+no canaries escape and unexpected 2xx stays UNKNOWN. Local evidence is not operational
+DR PASS or Linux/amd64 capacity proof. HT-OPS-25 PG17 evidence remains applicable to
+unchanged AP-01/database/Docker code; no Docker rerun or external operation here.
+
+Next: bounded independent re-review of only the authenticated HT-OPS-27 F1–F4 repair
+delta against the already reviewed HT-OPS-25 candidate. No publication/provisioning.
+
+
+## HT-OPS-25 — AP-00 Production Adapter Foundation
+
+Local changeset at exact base/HEAD `77caf48a46e5d3c61b01ffdfc0a43bc9ec55ceaa`;
+initial read-only remote-main verification matched. Independent local Git copy in
+`/private/tmp/ht-ops-25-ap00/repository.git`, worktree
+`/private/tmp/ht-ops-25-ap00/worktree`, branch `codex/ht-ops-25-ap00`.
+No shared alternates/hardlinks; original `.git` content comparison is unchanged.
+The primary checkout is unused; its `.git` was read only to isolate the task.
+
+Implemented optional pinned SDK transport, current-key conditional COMPLIANCE PUT with exact
+VersionId and explicit UNKNOWN outcomes, exact reader/metadata observer, AES-256-GCM
+authenticated envelope, injected key-provider interface and closed non-secret
+provisioning declarations. [Contract and limits](docs/DR_AP00_ADAPTER_FOUNDATION.md).
+AP-01 schemas/validators/Trust/R0/Q and V126 production code remain unchanged.
+
+Local tests: adapter **34/34 PASS**, stdlib-only AP-01 **48/48 PASS**, existing
+DR + installed PG17 ARM64 whole-DB fixture **49/49 PASS**, database unit **4/4 PASS**,
+diagnostic boundary/causal regressions **21/21 PASS**. Synthetic fixtures only;
+no operational DR PASS or Linux/amd64/PG18/live qualification is inferred.
+Evidence and final changeset manifest: `/private/tmp/ht-ops-25-ap00/evidence/`.
+
+No provider resources, real credentials/keys, source capture, transfer or custody
+were provisioned/executed. AP-02 producer, AP-06 Trust acquisition and AP-07 custody
+remain unimplemented/unauthorized; AP-03 real transfer/read-back remains unexecuted/
+unauthorized. No staging/SSH/deploy/V126, publication or Actions operation occurred.
+HT-OPS-25 review/repair continuation is recorded in HT-OPS-27 above. Earlier
+checkpoints below remain historical.
 
 ## HT-OPS-20 — Diagnostic Transport Findings Repair
 

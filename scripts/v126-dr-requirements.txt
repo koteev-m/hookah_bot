@@ -1,0 +1,12 @@
+# AP-00 optional runtime. CPython 3.13; install only in a dedicated venv.
+# Includes exact transitive pins; no dependency is imported by AP-01 validators.
+boto3==1.43.94
+botocore==1.43.94
+cffi==2.1.1
+cryptography==50.0.1
+jmespath==1.1.0
+pycparser==3.0
+python-dateutil==2.9.0.post0
+s3transfer==0.19.2
+six==1.17.0
+urllib3==2.7.0

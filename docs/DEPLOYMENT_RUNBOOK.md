@@ -2197,22 +2197,35 @@ validated response design/authority contract, never a fence invocation.
 
 | Package | Current boundary |
 | --- | --- |
-| AP-00 | Future external provisioning, concrete provider/region/lock/cost choices and reviewed real adapter prerequisites; not granted |
+| AP-00 | HT-OPS-31 local dedicated S3 worker + preserved AEAD/provisioning foundation; independent security review pending; external provisioning not granted |
 | AP-01 | Local isolated-worktree source/tests/canonical docs only; no publication or operational DR |
 | AP-02 | Future authorized source capture, exact R0 or separately native-authorized Q, using reviewed producer/supervisor integration; not granted |
-| AP-03 | Real S3 transport adapter/credential scope, exact encrypted transfer and independent versioned read-back; not granted |
+| AP-03 | Real credential scope, exact encrypted transfer and independent versioned read-back using reviewed adapters; not granted or executed |
 | AP-04 | Provisioned isolated Linux/amd64 restore, secret hydration, functional proof and cleanup; not granted |
 | AP-05 | Concrete periodic runner/monitor/retention and separately scoped writer response installation/activation; not granted |
 | AP-06 | Independent read-only observations and final evidence verification/receipt write using reviewed adapters/consumers; not granted |
 | AP-07 | Protected secret/config/image/evidence custody preparation and retrieval proof; not granted |
 
-The S3 `S3Transport` and `Encryption` interfaces are stable local contracts, with
-deterministic in-memory test doubles only. No SDK or crypto dependency was added.
-`FakeEncryption` is an opaque token map, **not cryptography**, and rejects
-client-side/operational mode. Real authenticated encryption, decryption/key
-recovery, create-only locked versioned upload and independently authenticated GET
-remain reviewed adapter prerequisites. No live transport or real encryption is
-claimed. Do not substitute plaintext archives or DIY crypto when these are absent.
+The AP-01 `S3Transport` and `Encryption` interfaces and deterministic test doubles
+remain unchanged. `FakeEncryption` is an opaque token map, **not cryptography**,
+and rejects client-side/operational mode. HT-OPS-25 adds separate optional boto3/
+botocore transport, AES-256-GCM envelope, injected key-provider boundary and closed
+non-secret provisioning descriptor. See the [AP-00 foundation contract](DR_AP00_ADAPTER_FOUNDATION.md)
+for pinned dependencies, exact-version/current-key conditional create/UNKNOWN semantics
+and local tests. Conditional PUT is not proof of all-history key uniqueness. AP-03 real
+transfer is blocked until the mandatory [capacity compatibility gate](DR_AP00_ADAPTER_FOUNDATION.md#mandatory-pre-ap-03-capacity-compatibility-gate)
+is PASS; current operational compatibility with the temporary 64 MiB bound is NOT_PROVEN
+(`AP03_CAPACITY_COMPATIBILITY_NOT_PROVEN`).
+HT-OPS-31 moves operational S3 execution into one short-lived CPython 3.13/GIL
+subprocess per logical operation. The parent remains stdlib/SDK-free; bounded closed
+IPC is the only result authority and raw child stderr/provider diagnostics are discarded.
+Write crash/timeout/invalid IPC after start remains UNKNOWN, with no automatic second
+PUT or reconciliation. Existing Policy B tooling binds worker/IPC bytes and exact Python
+patch; runtime admission alone is not operational qualification. HT-OPS-29's in-process
+logging ownership approach was superseded before publication and never became
+operational evidence. The adapter is local, unprovisioned and not independently approved.
+No real bucket/SA/key/credentials/custody exists from code alone; no provider transfer
+or operational DR PASS is claimed. Do not substitute plaintext archives or DIY crypto.
 Producer orchestration, operational trust acquisition and live caller wiring are
 remaining implementation/review prerequisites. AP-02/AP-06 execution approval
 alone does not authorize arbitrary code changes, deployment or source integration.
