@@ -17,7 +17,7 @@ S = dr.schema
 crypto = dr.module('ipc_crypto', Path(__file__).with_name('v126-dr-crypto.py'))
 HEADER = struct.Struct('!4sIQ')
 MAGIC = b'HS3W'
-VERSION = 1
+VERSION = 2
 MAX_CONTROL = 16384
 MAX_BODY = crypto.MAX_ENVELOPE_BYTES
 OPERATIONS = ('write', 'read', 'observe_version', 'observe_bucket')
@@ -140,7 +140,7 @@ def response(control, body, operation, runtime_version):
                 if value['size'] != len(body) or not 0 < len(body) <= MAX_BODY:
                     invalid()
             elif op == 'observe_version':
-                S.check(value, {'version_id': 'object-version', 'size': 'positive',
+                S.check(value, {'requested_version_id': 'object-version',
                                 'mode': S.enum('COMPLIANCE'), 'retained_until': 'time'})
             elif op == 'observe_bucket':
                 S.check(value, {'versioning': S.enum('ENABLED'), 'object_lock': S.enum('ENABLED'),

@@ -1,10 +1,46 @@
 # Project Status
 
+## HT-OPS-39 — local retention-only observer adaptation
+
+The user-approved local change is committed as
+`27a2c785e156940d4344ad1d0ff689eca322f312` in
+`/private/tmp/ht-ops-25-ap00/worktree`, branch
+`codex/ht-ops-33-ap00-dedicated-worker-18390444`. This integration brings authoritative
+current `main` `7dfdee55153dce59fc96e3e1a68b22dcc8ffcb53` into that branch. User-provided
+post-merge CI #509 is `SUCCESS`; this task did not query Actions.
+
+Observer now issues only exact-version GetObjectRetention and the two bucket
+settings reads. Its result is `requested_version_id`, `mode`, `retained_until`:
+request correlation, not a provider response-ID/size/delete-marker attestation.
+Private IPC v2 rejects v1 and old/mixed results. Reader response VersionId,
+delete-marker/length/bytes checks and independent readback remain unchanged.
+The user accepted losing the observer's duplicate HEAD proof and the residual
+availability risk when reader response VersionId is absent; reader stays fail-closed.
+Three independent principals remain required. [Contract](docs/DR_AP00_ADAPTER_FOUNDATION.md).
+
+Fresh validation of exact local merge `46c587222ff9b17f6c69c6b811d9f73162338b2b`:
+adapter 37/37, worker/IPC 24/24 and stdlib AP-01 48/48 PASS; in-memory syntax
+compile 5/5, Markdown targets 12/12 and `git diff --check` PASS; no conflict markers.
+The focused merge review found no blocking runtime defect. This docs-only correction
+closes its sole stale-handoff finding. No provider test was performed. Earlier
+implementation identities, diff and logs remain in
+`/private/tmp/ht-ops-39-yandex-context/REPORT.md`.
+
+HT-OPS-39 remains `BLOCKED_HT_OPS39_LEAST_PRIVILEGE`: reproducible policy/ACL,
+writer effective permissions, billing, F4 capacity, custody and operational R0/G
+remain open. Manifest NOT EXECUTABLE; request NOT READY TO ISSUE. The former
+four-call observer mismatch is historical for the original implementation.
+No operational schema/Trust, provisioning, IAM or provider change; no credentials,
+push/PR/publication, staging/SSH/deploy/V126 or Actions activity.
+
+The implementation/merge review is complete. Publication remains separately
+unauthorized and requires an explicit decision after this docs-only correction.
+
 ## PR #198 — merged main and staging reconciliation — 2026-09-17
 
 **MERGED / CI PASS / STAGING AND MANUAL SMOKE OPEN**.
 
-PR #198 is merged. Authoritative current `main` is
+At the PR #198 merge checkpoint, authoritative `main` was
 `465ce33c4a9e244ad5f9771beadf35cfa7b8d9d4`; CI #504, CI #505 and post-merge
 CI #506 passed, and the remote PR branch was deleted.
 
@@ -41,7 +77,7 @@ Commands, logs, XML and JSON: `/private/tmp/pr198-main-integration-20260917/`.
 
 Read-only staging reconciliation found deployed runtime
 `f577934691a1a7a79ba327c54e2055425142b7be` at Flyway head V125. V126 is absent,
-current-main candidate `465ce33c4a9e244ad5f9771beadf35cfa7b8d9d4` is not deployed, and its exact
+the then-current main candidate `465ce33c4a9e244ad5f9771beadf35cfa7b8d9d4` was not deployed, and its exact
 candidate image, image ID and deployment descriptor are absent. The canonical
 target-operation registry is absent. The protected V126 input files now exist with
 the expected shape and metadata, but their approval, provenance and semantic binding

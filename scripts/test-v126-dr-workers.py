@@ -65,16 +65,16 @@ def request(op='write'):
             'read': dict(key=KEY, version_id='version-001'),
             'observe_version': dict(key=KEY, version_id='version-001', required_until=ipc.date(UNTIL)),
             'observe_bucket': {}}[op]
-    return dict(version=1, kind='request', operation=op, target=json.loads(TARGET),
+    return dict(version=ipc.VERSION, kind='request', operation=op, target=json.loads(TARGET),
                 target_sha256=TARGET_HASH, credentials=CREDENTIALS, arguments=args)
 
 
 def response(op='write', **changes):
     value = {'write': {'version_id': 'version-001'},
              'read': {'version_id': 'version-001', 'size': len(BODY)},
-             'observe_version': dict(version_id='version-001', size=len(BODY), mode='COMPLIANCE', retained_until=ipc.date(UNTIL)),
+             'observe_version': dict(requested_version_id='version-001', mode='COMPLIANCE', retained_until=ipc.date(UNTIL)),
              'observe_bucket': dict(versioning='ENABLED', object_lock='ENABLED', mode='COMPLIANCE', default_retention_days=7)}[op]
-    return dict(version=1, kind='response', operation=op, result='SUCCESS', code='OK', value=value,
+    return dict(version=ipc.VERSION, kind='response', operation=op, result='SUCCESS', code='OK', value=value,
                 runtime=dr.platform.python_version()) | changes
 
 
@@ -124,8 +124,11 @@ def sdk():
         def send(session, req):
             global _request_count
             _request_count += 1
+            retention_query = req.url == OBJECT_URL + '?retention&versionId=version-001'
             _event('REQUEST', method=req.method, exact_query=('versionId=version-001' in req.url),
-                   conditional=(req.headers.get('If-None-Match') == b'*'))
+                   retention_query=retention_query, conditional=(req.headers.get('If-None-Match') == b'*'))
+            if MODE == 'retention_only' and not (req.method == 'GET' and retention_query):
+                raise AssertionError('HEAD_BODY_GET_LIST_FORBIDDEN')
             if MODE in ('timeout', 'crash', 'malformed_after_dispatch'):
                 if MODE == 'timeout':
                     import signal
@@ -138,7 +141,7 @@ def sdk():
                 os._exit(0)
             if MODE == 'retry_read' and _request_count < 3:
                 return AWSResponse(req.url, 503, {}, Raw(b'<Error/>'))
-            headers = {'x-amz-version-id': 'version-001'}
+            headers = {} if MODE == 'retention_only' else {'x-amz-version-id': 'version-001'}
             raw = b''
             if STATUS >= 300:
                 raw = b'<Error><Code>Denied</Code><Message>HT31_SYNTHETIC_CREDENTIAL_5fb2</Message></Error>'
@@ -222,6 +225,7 @@ class WorkerTest(unittest.TestCase):
         source = worker.read_text()
         marker = "if __name__ == '__main__':\n    try:\n        main"
         inject = '\n'.join((f'MODE = {mode!r}', f'STATUS = {status!r}', f'AUDIT = {str(self.audit)!r}',
+                            f'OBJECT_URL = {("https://objects.example.invalid/synthetic-ap00/" + KEY)!r}',
                             f'MARKERS = {CANARIES!r}', f'BINARY_BODY = {BODY!r}', f'RETAIN_UNTIL = {ipc.date(UNTIL)!r}', FIXTURE)) + '\n\n'
         self.assertIn(marker, source)
         worker.write_text(source.replace(marker, inject + marker))
@@ -331,7 +335,7 @@ class ProtocolTests(WorkerTest):
     def test_request_adversarial_matrix_refuses_before_sdk(self):
         good = request()
         mutations = []
-        for field, value in [('version', 2), ('version', True), ('operation', 'delete'),
+        for field, value in [('version', 1), ('version', ipc.VERSION+1), ('version', True), ('operation', 'delete'),
                              ('operation', 'list_latest'), ('kind', 'response')]:
             mutated = copy.deepcopy(good); mutated[field] = value
             mutations.append(ipc.encode(mutated, BODY))
@@ -339,7 +343,8 @@ class ProtocolTests(WorkerTest):
                        dict(good, arguments=dict(good['arguments'], unexpected=1))):
             mutations.append(ipc.encode(mutant, BODY))
         canonical = dr.canonical(good)
-        for control in (b'{', canonical.replace(b'"version":1', b'"version":1,"version":1'),
+        version_field = f'"version":{ipc.VERSION}'.encode()
+        for control in (b'{', canonical.replace(version_field, version_field+b','+version_field),
                         b' ' + canonical, b'[]\n'):
             mutations.append(ipc.HEADER.pack(ipc.MAGIC, len(control), len(BODY)) + control + BODY)
         valid = ipc.encode(good, BODY)
@@ -362,13 +367,14 @@ class ProtocolTests(WorkerTest):
         cases = [b'', b'junk '+CANARIES[0].encode(), valid[:-1], valid+b'x', valid+valid,
             ipc.HEADER.pack(ipc.MAGIC, ipc.MAX_CONTROL+1, 0),
             ipc.HEADER.pack(ipc.MAGIC, 1, ipc.MAX_BODY+1), b'HS3W'+b'\xff'*12,
-            ipc.encode(response(version=2)), ipc.encode(response(version=True)),
+            ipc.encode(response(version=1)), ipc.encode(response(version=ipc.VERSION+1)), ipc.encode(response(version=True)),
             ipc.encode(response(operation='read')), ipc.encode(response(result='RETRY')),
             ipc.encode(response(unknown=1)), ipc.encode(response(value={'version_id':'latest'})),
             ipc.encode(response(runtime='3.13.999')), ipc.encode(response(), b'x'),
             ipc.encode(response(result='REJECTED', code=CANARIES[0], value=None))]
         raw = dr.canonical(response())
-        for control in (b'{', raw.replace(b'"version":1', b'"version":1,"version":1'), b' '+raw):
+        version_field = f'"version":{ipc.VERSION}'.encode()
+        for control in (b'{', raw.replace(version_field, version_field+b','+version_field), b' '+raw):
             cases.append(ipc.HEADER.pack(ipc.MAGIC, len(control), 0)+control)
         for i, raw in enumerate(cases):
             with self.subTest(case=i):
@@ -384,11 +390,33 @@ class ProtocolTests(WorkerTest):
             worker = self.fake("os.write(1, b'HT31_SYNTHETIC_CREDENTIAL_5fb2')\n")
             self.safe_error(lambda: self.call(worker, op), 'AP00_WORKER_UNAVAILABLE')
         for op in ('read', 'observe_version'):
-            value = response(op)['value'] | {'version_id':'different-version'}
+            field = 'requested_version_id' if op == 'observe_version' else 'version_id'
+            value = response(op)['value'] | {field:'different-version'}
             frame = ipc.encode(response(op, value=value), BODY if op == 'read' else b'')
             worker = self.fake(f'os.write(1, {frame!r})\n')
             self.safe_error(lambda: self.call(worker, op), 'AP00_WORKER_UNAVAILABLE')
         self.reaped()
+
+    def test_observer_closed_ipc_rejects_old_mixed_and_uncorrelated_results(self):
+        good = response('observe_version')
+        value = good['value']
+        old = dict(version_id='version-001',size=len(BODY),mode='COMPLIANCE',retained_until=ipc.date(UNTIL))
+        invalid_values = [old, value | old, value | {'size':len(BODY)},
+            value | {'version_id':'version-001'}, value | {'DeleteMarker':False},
+            value | {'unknown':True}, value | {'requested_version_id':'different-version'},
+            value | {'requested_version_id':'latest'},
+            value | {'retained_until':ipc.date(UNTIL-timedelta(seconds=1))},
+            value | {'mode':'GOVERNANCE'},
+            *[{k:v for k,v in value.items() if k != field} for field in value]]
+        frames = [ipc.encode(good | {'value':v}) for v in invalid_values]
+        frames += [ipc.encode(good | {'version':1}), ipc.encode(good | {'version':ipc.VERSION+1}),
+                   ipc.encode(good | {'operation':'read'}), ipc.encode(good,b'x')]
+        for i,frame in enumerate(frames):
+            with self.subTest(case=i):
+                worker = self.fake(f'os.write(1, {frame!r})\n')
+                self.safe_error(lambda:self.call(worker,'observe_version'),'AP00_WORKER_UNAVAILABLE')
+        self.reaped()
+        print('OBSERVER_IPC_REJECTION_CASES',len(frames))
 
     def test_valid_result_with_nonzero_exit_or_signal_remains_unknown(self):
         for ending in ('sys.exit(7)', 'os.kill(os.getpid(), signal.SIGTERM)',
@@ -469,15 +497,20 @@ class OperationTests(WorkerTest):
         self.assertTrue(all(e['exact_query'] for e in requests))
         self.reaped()
 
-    def test_metadata_operations_keep_two_reads_inside_one_child(self):
-        worker = self.instrumented()
+    def test_retention_only_real_ipc_without_head_body_or_listing(self):
+        worker = self.instrumented('retention_only')
         value = self.call(worker, 'observe_version')
-        self.assertEqual(value, dict(version_id='version-001', size=len(BODY), mode='COMPLIANCE', retained_until=UNTIL))
+        self.assertEqual(value, dict(requested_version_id='version-001', mode='COMPLIANCE', retained_until=UNTIL))
         self.assertEqual(len(self.children), 1)
-        self.assertEqual([e['method'] for e in self.events() if e['event']=='REQUEST'], ['HEAD','GET'])
-        self.audit.unlink()
+        requests = [e for e in self.events() if e['event']=='REQUEST']
+        self.assertEqual([e['method'] for e in requests], ['GET'])
+        self.assertTrue(requests[0]['retention_query'])
+        self.reaped()
+
+    def test_bucket_settings_keep_two_reads_inside_one_child(self):
+        worker = self.instrumented()
         self.assertEqual(self.call(worker, 'observe_bucket'), response('observe_bucket')['value'])
-        self.assertEqual(len(self.children), 2)
+        self.assertEqual(len(self.children), 1)
         self.assertEqual([e['method'] for e in self.events() if e['event']=='REQUEST'], ['GET','GET'])
         self.reaped()
 
