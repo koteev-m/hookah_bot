@@ -1,6 +1,6 @@
 # Deferred Manual Smoke Backlog
 
-Дата актуализации: 2026-08-04.
+Дата актуализации: 2026-09-17.
 
 Статус: **current product reference / ACTIVE BACKLOG**.
 
@@ -54,7 +54,7 @@
 
 | ID | Feature | Priority | Current status | Blocking impact |
 | --- | --- | --- | --- | --- |
-| [`ORDER-CONTEXT-MANUAL-001`](#order-context-manual-001) | Guest order/tab authorization and monetary isolation | P0 privacy | `PLANNED` | Local fix is not released; staging privacy/order smoke remains required before rollout. |
+| [`ORDER-CONTEXT-MANUAL-001`](#order-context-manual-001) | Guest order/tab authorization and monetary isolation | P0 privacy | `BLOCKED_BY_ENVIRONMENT` | The merged feature has green CI; staging privacy/order release evidence remains blocked by environment prerequisites. |
 | [`REPEAT-MANUAL-001`](#repeat-manual-001) | Repeat as Template Phase 1 | P1 | `BLOCKED_BY_ENVIRONMENT` | Repeat production-readiness remains open for environment-dependent parity/privacy/context scenarios; independent bounded development may continue. |
 | [`CATALOG-SEARCH-MANUAL-001`](#catalog-search-manual-001) | Catalog Search and Filter Phase 1 | P2 | `BLOCKED_BY_ENVIRONMENT` | Does not block the current MVP/release; required before catalog pagination, ranking, map/geo or a large pilot rollout. |
 | [`STAFF-IDENTITY-MANUAL-001`](#staff-identity-manual-001) | Staff Identity create-from-member free-account scenario | P2 | `BLOCKED_BY_ENVIRONMENT` | Non-blocking coverage gap only; Identity Linking remains `DONE / MVP / STAGING-SMOKE-PASSED`. |
@@ -62,11 +62,14 @@
 ## ORDER-CONTEXT-MANUAL-001
 
 - **Feature / date:** Guest Order / Session / Tab Isolation Consolidation, 2026-09-16.
-- **Priority / status:** P0 privacy / `PLANNED`.
-- **Reason deferred:** this task does not authorize publication, deployment or staging access;
-  the candidate exists only in an isolated local worktree.
+- **Priority / status:** P0 privacy / `BLOCKED_BY_ENVIRONMENT`.
+- **Reason deferred:** staging still runs V125 and the merged candidate is not deployed. The V126
+  transition prerequisites remain incomplete, and the required Guest A, Guest B, Staff,
+  disposable venue/table QR, clean personal/shared tab context and cleanup authority are not all
+  established.
 - **Prerequisites:** separately authorized staging candidate, two Guest accounts, a disposable
-  venue/table with QR, personal/shared tabs and a staff account; confirm test-data cleanup authority.
+  venue/table with QR, clean personal/shared tab contexts and a staff account; confirm test-data
+  cleanup authority.
 - **Automated evidence:** baseline regressions reproduced exit/read 200 instead of 404,
   cross-tab service charges, order-wide summary promotions and summary access after exit.
   Fresh consolidated H2/PostgreSQL/API and required local checks are recorded in `PROJECT_STATUS.md`.
@@ -87,8 +90,9 @@
 - **Cleanup:** close only scenario-owned test orders/tabs through normal authorized flows;
   preserve historical rows and unrelated sessions. Record cleanup outcome.
 - **Result / date / actor / cleanup:** not run / pending / pending / pending.
-- **Blocking impact:** release/privacy gate for this candidate remains open; no claim of
-  `STAGING-SMOKE-PASSED` or production readiness.
+- **Blocking impact:** the merged feature has green CI, but staging privacy/order release evidence
+  remains blocked by environment prerequisites; no claim of `STAGING-SMOKE-PASSED` or production
+  readiness.
 - **Related docs:** `ORDER_SESSION_TAB_CORE.md`, `TESTING_QA_SMOKE_STRATEGY.md`.
 
 ## STAFF-IDENTITY-MANUAL-001

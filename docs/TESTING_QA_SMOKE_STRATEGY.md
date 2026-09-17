@@ -1,8 +1,16 @@
 # Testing / QA Smoke Strategy
 
-Дата актуализации: 2026-09-04.
+Дата актуализации: 2026-09-17.
 
 Статус: **current product reference / UPDATED**. This document is the canonical QA/smoke strategy for the Telegram bot + Mini App platform. It consolidates local validation, GitHub Actions expectations, area-specific smoke suites, staging policy, failure reporting and Codex handoff rules. Deployment and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
+
+Current merged feature checkpoint: PR #198 is merged at authoritative `main`
+`465ce33c4a9e244ad5f9771beadf35cfa7b8d9d4`; CI #504, CI #505 and post-merge CI #506
+passed, and the remote PR branch was deleted. Automated merge/CI gates are closed, but the
+environment-dependent order/session/tab smoke remains open as
+`ORDER-CONTEXT-MANUAL-001 = BLOCKED_BY_ENVIRONMENT`. Staging still runs runtime
+`f577934691a1a7a79ba327c54e2055425142b7be` at Flyway V125, with V126 absent and the
+current-main candidate not deployed. Green CI is not staging privacy/order release evidence.
 
 Latest release-closed bounded menu audit blocks: option hard delete with atomic base-profile
 normalization, option rename, option price and **DANGEROUS ACTION AUDIT SLICE / MENU ITEM
@@ -20,12 +28,13 @@ STAGING-SMOKE-PASSED** for release HEAD `e35def99ea8429462e5fdaaeee914f57da72e77
 green Actions, staging deploy, consolidated smoke and cleanup. At that historical closure, local
 GitHub CLI authentication was invalid, so its Actions result was recorded as user-confirmed evidence.
 
-Current build/release QA slice: **HT-12T / CANONICAL DOCKER-SAVE RELEASE ARTIFACT EXPORT /
+Historical HT-12T build/release QA checkpoint: **HT-12T / CANONICAL DOCKER-SAVE RELEASE ARTIFACT EXPORT /
 EXACT MAIN AND 12/12 MAIN ACTIONS VERIFIED / RETAINED HT-13 ARCHIVE FAILURE CLASSIFIED AS
 `ARCHIVE_VALIDATOR_CONTRACT_MISMATCH` / ATOMIC EXPORT, STRICT ARCHIVE VERIFICATION AND NO-PREEXISTING-
 IMAGE LOAD PROOF IMPLEMENTED / COMPLETE LOCAL VALIDATION, INDEPENDENT READ-ONLY REVIEW AND EXACT GREEN
 FEATURE-BRANCH ACTIONS ARE MANDATORY BEFORE INTEGRATION / NO MAIN INTEGRATION, STAGING ACCESS OR
-CUTOVER AUTHORIZED**. The final task stop is `HT12T_MAIN_INTEGRATION_AUTHORIZATION_REQUIRED`.
+CUTOVER AUTHORIZED**. That checkpoint's final task stop was
+`HT12T_MAIN_INTEGRATION_AUTHORIZATION_REQUIRED`.
 
 Preserved preceding build/release QA slice: **HT-12R / TRACKED V126 PRE-GATE-A PREREQUISITE SYNC /
 TRACKED ORCHESTRATOR, HELPER, 40-CHECK MAP AND LOCAL-ONLY MOCKED HARNESS IMPLEMENTED / COMPLETE LOCAL
@@ -1121,8 +1130,10 @@ Under CI Node `20.20.2` / npm `10.8.2`, Playwright `1.60.0` / Chromium `148.0.77
 port `5174`, the unchanged test reproduced `1` identical failure in `20` local attempts. The fix
 passed focused `1/1`, repeated `20/20`, full structured `216/216` and the unchanged CI JSON
 assertion (zero failures/flaky/skips/runner errors/failed attempts), plus the production build.
-The separate favorite-test signal remains open; macOS local verification does not prove a fresh
-Ubuntu CI result or close the PR/release-SHA and authorized staging gates. Evidence is recorded
+The separate favorite-test signal remains open. At this dated diagnosis, macOS local verification
+did not prove a fresh Ubuntu CI result or close the PR/release-SHA and authorized staging gates.
+Subsequently CI #504, CI #505 and post-merge CI #506 passed and PR #198 merged at
+`465ce33c4a9e244ad5f9771beadf35cfa7b8d9d4`; the staging gate remains open. Evidence is recorded
 in the PR #198 checkpoint in `PROJECT_STATUS.md`.
 
 CI must assert the exact JUnit XML files and zero skipped/failures/errors. A selector that discovers
@@ -3806,21 +3817,17 @@ Telegram/staff-chat:
 ## Roadmap Status
 
 - Testing/QA smoke strategy: `UPDATED`.
-- HT-12R tracked V126 prerequisite sync: **TRACKED CANDIDATE IMPLEMENTED ON EXACT MAIN
-  `a648e75179975c97daa4b3dae03070e6476d8a9a` / LOCAL FIXTURE VALIDATION, INDEPENDENT REVIEW,
-  FEATURE-BRANCH COMMIT AND EXACT GREEN ACTIONS REQUIRED / NO MAIN INTEGRATION OR STAGING ACCESS /
-  GATE A NOT STARTED**. R1-R5 remain rejected history; the tracked command is the only future
-  prerequisite-sync authority and final release/image identity must be reselected after integration.
-- HT-12P executable V126 cutover contract: **HARDENED CANDIDATE IMPLEMENTED / LOCAL ADVERSARIAL
-  VALIDATION PASSED / INDEPENDENT READ-ONLY RE-REVIEW REQUIRED BEFORE COMMIT AND PUSH / EXACT GREEN
-  FEATURE-BRANCH ACTIONS REQUIRED AFTER PUSH / NO REVIEW OR ACTIONS PASS CLAIMED / NO EXECUTION GATE
-  PASSED** on exact required main
-  `ecb09601975678a41d89e5c824cc7812c7876481`, tree
-  `8c97996e317f0182b4871d2a2537a732d4830f64`, ordered parents
-  `9f51ebbd2dae0702b4b2f6333c1b42fc94cd1fc1` then
-  `d9c656b1c5feb757b79558209f130c08cba81cf5`, with main Actions `33536142005` green `11/11`.
-  HT-13 stopped before creating the run namespace or sealed input under
-  `PREDEPLOY_CONTRACT_NOT_PROVABLE`; no package or staging mutation exists.
+- Guest order/session/tab isolation: **PR #198 MERGED AT
+  `465ce33c4a9e244ad5f9771beadf35cfa7b8d9d4` / CI #504, #505 AND POST-MERGE #506 PASS /
+  `ORDER-CONTEXT-MANUAL-001` BLOCKED_BY_ENVIRONMENT**. The remote PR branch is deleted; staging
+  privacy/order release evidence is still open.
+- V126 staging release: **NOT READY / NO APPLIED HANDOFF / GATE A NOT STARTED**. Staging remains on
+  runtime `f577934691a1a7a79ba327c54e2055425142b7be`, Flyway V125, with V126 absent. The exact
+  current-main candidate image, image ID and deployment descriptor are absent; the canonical
+  target-operation registry is absent. Protected inputs have the expected shape/metadata, but
+  approval, provenance and semantic binding are unproven. Policy-B R0 operational readiness remains
+  unresolved and is on the V126 critical path. Historical HT-12R/HT-12P implementation and CI
+  evidence remain in their dated sections; they do not establish current staging readiness.
 - Booking conversation UX / distinct labels, inbox and unread discoverability:
   **INCLUDED THROUGH HT-12C ANCESTRY / AUTOMATED REGRESSION RETAINED / V126 EXECUTION REQUIRED**.
   The exact HT-12P baseline includes NULL-author system unread and fixed Guest queue/type guards; the

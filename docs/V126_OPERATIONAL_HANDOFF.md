@@ -5,7 +5,17 @@ recovery and final automated gates retain `restart=no` and RestartCount=0. A com
 stage20 or restored HTTP availability does not transfer image/configuration authority
 or promise service recovery after reboot.
 
-The last supplied availability observation is historical: source
+Current integration status: PR #198 is merged at authoritative `main`
+`465ce33c4a9e244ad5f9771beadf35cfa7b8d9d4`; CI #504, CI #505 and post-merge CI #506
+passed, and the remote PR branch was deleted. Read-only staging reconciliation found runtime
+`f577934691a1a7a79ba327c54e2055425142b7be` at Flyway V125, with V126 absent and the
+current-main candidate not deployed. The exact candidate image, image ID and deployment descriptor
+are absent. The canonical target-operation registry is absent, and no handoff has been applied.
+Protected V126 input files exist with expected shape/metadata, but approval, provenance and semantic
+binding are unproven. Policy-B R0 operational readiness remains unresolved and is on the V126
+critical path. These facts grant no staging, deployment, cutover, recovery or provider authority.
+
+The earlier supplied availability observation remains historical: source
 `/private/tmp/ht13-v125-recovery-exec-s22m246w/REPORT.md`, observed
 2026-09-09T14:15:41.464269+00:00, V125 PRODUCT/OFF/public200, PostgreSQL125/noV126,
 drain absent, restart=no. It is not a fresh probe or native stage9 PASS. The canonical
@@ -114,7 +124,7 @@ pg_hba/host authentication, extensions/version inventory, tablespaces, external 
 Docker/Caddy/systemd recreation and crash durability still require an isolated Linux
 exercise and an accepted loss boundary. No automatic live restore was added.
 
-Feature-only commit/push and ordinary Ubuntu CI are authorized for validation. Main
-integration, PR, deployment and live handoff application remain unauthorized. After
-feature validation, review the single diff and the remaining operation/DR/manual gates.
-No staging attempt follows this document.
+The feature-only commit/push and ordinary Ubuntu CI authorization was a historical repair boundary.
+Main integration and PR publication are now complete as recorded above; that completion does not
+apply the operational handoff or authorize deployment. The remaining operation/DR/manual gates still
+require their own evidence and authority. No staging attempt follows this document.

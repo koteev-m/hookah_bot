@@ -1,14 +1,12 @@
 # Project Status
 
-## PR #198 — current main integration — 2026-09-17
+## PR #198 — merged main and staging reconciliation — 2026-09-17
 
-**LOCAL INTEGRATION VERIFIED / NOT PUSHED / RELEASE AND STAGING GATES OPEN**.
+**MERGED / CI PASS / STAGING AND MANUAL SMOKE OPEN**.
 
-Worktree `/private/tmp/guest-order-consolidated-20260916`, branch
-`codex/guest-order-session-tab-isolation`; starting HEAD
-`d075df10d18a76dbc8865e0e76fb18e72c12f04e`, integrating verified `origin/main`
-`e08f4b74824d56e096cdad3eafe813a97d20067c` (merged PR #199).
-The starting worktree/index were clean; the dirty primary checkout is not used.
+PR #198 is merged. Authoritative current `main` is
+`465ce33c4a9e244ad5f9771beadf35cfa7b8d9d4`; CI #504, CI #505 and post-merge
+CI #506 passed, and the remote PR branch was deleted.
 
 The reviewed Guest Order / Session / Tab fixes remain intact: active-order reads
 and ordinary bill requests validate current session, exit and tab authorization;
@@ -18,20 +16,19 @@ shared membership/revocation, legacy tabless authorship under active-session/no-
 checks, explicit QR re-entry and full-order/staff aggregation are preserved.
 No migration, API/DTO, client behavior or new product/security contract is introduced.
 [Canonical scope](docs/ORDER_SESSION_TAB_CORE.md#guest-order-isolation-consolidation--2026-09-16)
-and [pending manual smoke](docs/DEFERRED_MANUAL_SMOKE_BACKLOG.md#order-context-manual-001).
+and [blocked manual smoke](docs/DEFERRED_MANUAL_SMOKE_BACKLOG.md#order-context-manual-001).
 
-Conflicts are limited to this checkpoint and the catalog debounce test. Both test
-variants pause time; integration retains PR #198's single pause before navigation,
-with all 299ms/+1ms, query/filter/reset/navigation assertions unchanged. Backend
-sources/tests remain byte-identical to `d075df10`; CI/V126 scripts and workflow
-remain byte-identical to current main. Main's CI/V126 facts are retained below.
-Old PR #198 Compose failures describe the pre-integration tree, not this tree.
+The merge conflict resolution was limited to this checkpoint and the catalog debounce
+test. Both test variants pause time; the merged result retains PR #198's single pause
+before navigation, with all 299ms/+1ms, query/filter/reset/navigation assertions
+unchanged. Backend sources/tests match the reviewed PR #198 candidate. Old PR #198
+Compose failures describe the pre-integration tree, not current main.
 
 Prior consolidated evidence (235 backend tests / 16 suites, 24 focused browser
 checks) remains historical at `/private/tmp/guest-order-consolidation-evidence-20260916/`.
 The debounce reproduction and 216-test local verification are recorded at
-`/private/tmp/pr198-miniapp-ci-20260916/` and in the QA strategy. Fresh combined-tree
-checks pass: **235/235 backend tests in 16 suites**, including **11/11 real PostgreSQL
+`/private/tmp/pr198-miniapp-ci-20260916/` and in the QA strategy. Pre-merge combined-tree
+checks passed: **235/235 backend tests in 16 suites**, including **11/11 real PostgreSQL
 idempotency/concurrency tests**, plus forced backend compile/ktlint, Mini App build,
 focused catalog **1/1** and full structured browser smoke **216/216** (113.8s).
 XML and the unchanged CI JSON validator report zero failures/errors/skips/flaky
@@ -42,13 +39,21 @@ zero retries. The first focused invocation selected no tests because its grep wa
 incorrectly anchored; corrected discovery selected exactly one unchanged test.
 Commands, logs, XML and JSON: `/private/tmp/pr198-main-integration-20260917/`.
 
-No old test result substitutes for these fresh checks. The separate favorite flake,
-exact release-SHA CI, authorized staging smoke and `ORDER-CONTEXT-MANUAL-001` remain
-open boundaries. Full history remains in the two merge parents.
+Read-only staging reconciliation found deployed runtime
+`f577934691a1a7a79ba327c54e2055425142b7be` at Flyway head V125. V126 is absent,
+current-main candidate `465ce33c4a9e244ad5f9771beadf35cfa7b8d9d4` is not deployed, and its exact
+candidate image, image ID and deployment descriptor are absent. The canonical
+target-operation registry is absent. The protected V126 input files now exist with
+the expected shape and metadata, but their approval, provenance and semantic binding
+remain unproven. Policy-B R0 operational readiness remains unresolved and is on the
+V126 critical path.
 
-Only local integration, relevant validation and one merge commit are authorized.
-No push/PR/Actions/staging/provider operation; primary, `scripts/dev/` and HT-OPS-39
-are preserved. Next: separately authorize publication of this verified local merge.
+Staging/manual smoke remains open. `ORDER-CONTEXT-MANUAL-001` is
+`BLOCKED_BY_ENVIRONMENT`; green merged-feature CI does not substitute for the missing
+deployment, V126 transition prerequisites, controlled actors/contexts or cleanup
+authority. No `STAGING-SMOKE-PASSED`, V126 readiness, provider readiness, operational
+DR PASS or production readiness is claimed. Full implementation and pre-merge evidence
+remain in the merge parents and the paths above.
 
 ## CI Compose Stability — V126 Cutover Fixtures (2026-09-16)
 

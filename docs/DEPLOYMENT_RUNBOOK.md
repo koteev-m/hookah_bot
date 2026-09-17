@@ -1,6 +1,6 @@
 # Deployment / Runbook / Operations
 
-Дата актуализации: 2026-09-02.
+Дата актуализации: 2026-09-17.
 
 Статус: **current operations reference / UPDATED**. This document is the canonical deploy, release and operations runbook for the Telegram bot + Mini App platform. Use it together with `docs/TESTING_QA_SMOKE_STRATEGY.md` for validation scope, `docs/STAGING_DEPLOYMENT.md` for one-VPS staging details, `docs/OPERATIONS.md` for metrics/queue incident basics and `docs/MIGRATION_POLICY.md` for Flyway policy.
 
@@ -108,6 +108,16 @@ Last local validation that passed: <commands>.
 ```
 
 ## Current Staging Deploy Command
+
+Current post-PR #198 checkpoint: PR #198 is merged at `main`
+`465ce33c4a9e244ad5f9771beadf35cfa7b8d9d4`; CI #504, CI #505 and post-merge CI #506
+passed, and the remote PR branch was deleted. Read-only reconciliation found staging on runtime
+`f577934691a1a7a79ba327c54e2055425142b7be`, Flyway V125, with V126 absent and the
+current-main candidate not deployed. Its exact candidate image, image ID and deployment descriptor
+are absent; the canonical target-operation registry is absent. The protected V126 inputs have the
+expected shape and metadata, but approval, provenance and semantic binding remain unproven.
+Policy-B R0 operational readiness remains unresolved and is on the V126 critical path. This is an
+observed status, not deployment authority or a change to the procedure below.
 
 Use this only for an ordinary public-pilot deployment after GitHub Actions are green for runtime
 changes, unless explicitly doing a debug deploy. It is never a PostgreSQL V126 cutover, transfer,
@@ -2415,11 +2425,13 @@ publication or deploy commands. Include what to send back for an actual terminal
 ## Roadmap Status
 
 - Deployment/runbook docs: `UPDATED`.
-- PostgreSQL V126 staging contract: `HT-12P HARDENED CANDIDATE IMPLEMENTED AFTER FIRST REVIEW BLOCK /
-  LOCAL ADVERSARIAL VALIDATION PASSED / INDEPENDENT READ-ONLY RE-REVIEW REQUIRED BEFORE COMMIT AND
-  PUSH / EXACT GREEN FEATURE-BRANCH ACTIONS REQUIRED AFTER PUSH`; no staging access,
-  backup, Caddy reload, maintenance activation, image transfer, migration, deploy or smoke is
-  recorded. Command authority is `scripts/v126-cutover.sh`; policy/state-machine authority is
+- PostgreSQL V126 staging contract: `CURRENT MAIN MERGED AND GREEN / STAGING V125 / V126 ABSENT /
+  NO APPLIED HANDOFF / GATE A NOT STARTED`. The exact current-main candidate image, image ID and
+  descriptor and the canonical target-operation registry are absent. Protected inputs are present
+  with expected shape/metadata but lack proven approval, provenance and semantic binding. Policy-B
+  R0 operational readiness remains unresolved on the V126 critical path. No backup, Caddy reload,
+  maintenance activation, image transfer, migration, deploy or smoke is recorded. Command authority
+  remains `scripts/v126-cutover.sh`; policy/state-machine authority remains
   `docs/V126_STAGING_CUTOVER_CONTRACT.md`.
 - Staging deploy policy: `DOCUMENTED`.
 - Rollback policy: V126 pre-runtime rollback, post-V126 forward-fix stop and full-DR prerequisite
