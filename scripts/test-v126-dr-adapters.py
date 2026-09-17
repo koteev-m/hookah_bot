@@ -451,6 +451,28 @@ class S3Tests(OfflineTest):
         with patch.object(self.client,'get_object',return_value={'ResponseMetadata':{}}):
             self.safe_error(self.get,'AP00_S3_RESPONSE_INVALID')
 
+    def test_reader_exact_identity_length_and_stream_close(self):
+        cases = [({}, b'x'), ({'VersionId':'wrong'}, b'x'),
+                 ({'DeleteMarker':True}, b'x'), ({'ContentLength':0}, b'x'),
+                 ({'ContentLength':c.MAX_ENVELOPE_BYTES+1}, b'x'),
+                 ({'ContentLength':2}, b'x'), ({}, b'xx')]
+        for changes, raw in cases:
+            with self.subTest(changes=changes, length=len(raw)):
+                body=io.BytesIO(raw)
+                value=dict(VersionId='version-001',ContentLength=1,Body=body,
+                           ResponseMetadata={'HTTPStatusCode':200})
+                value.update(changes)
+                if not changes and raw == b'x': del value['VersionId']
+                with patch.object(self.client,'get_object',return_value=value) as get:
+                    self.safe_error(self.get,'AP00_S3_EXACT_RESPONSE_INVALID')
+                get.assert_called_once_with(Bucket='synthetic-ap00',Key=CONTEXT['object_key'],VersionId='version-001')
+                self.assertTrue(body.closed)
+        body=io.BytesIO(b'x')
+        with patch.object(self.client,'get_object',return_value=dict(VersionId='version-001',
+                ContentLength=1,Body=body,ResponseMetadata={'HTTPStatusCode':200})):
+            self.assertEqual(self.get(),b'x')
+        self.assertTrue(body.closed)
+
     def test_target_endpoint_region_bucket_and_retry_mismatch_before_send(self):
         for field,value in [('endpoint','https://different.invalid'),('region','another'),('bucket','different')]:
             target=json.loads(TARGET); target[field]=value; raw=dr.canonical(target)
@@ -467,33 +489,74 @@ class S3Tests(OfflineTest):
         self.safe_error(lambda:self.writer.create_once(TARGET_HASH,CONTEXT['object_key'],PLAINTEXT,
                         custody_version_sha256=CONTEXT['custody_version_sha256'],retain_until=UNTIL),'AP00_ENVELOPE_INVALID')
 
-    def observe(self):
-        return self.observer.observe_version(TARGET_HASH,CONTEXT['object_key'],'version-001',required_until=UNTIL)
+    def observe(self, version='version-001'):
+        return self.observer.observe_version(TARGET_HASH,CONTEXT['object_key'],version,required_until=UNTIL)
 
     def stub(self):
         from botocore.stub import Stubber
         return Stubber(self.client)
 
-    def test_exact_head_and_retention_observation(self):
+    def test_retention_only_when_head_body_and_listing_are_forbidden(self):
         params=dict(Bucket='synthetic-ap00',Key=CONTEXT['object_key'],VersionId='version-001')
-        with self.stub() as stub:
-            stub.add_response('head_object',dict(VersionId='version-001',ContentLength=12,ResponseMetadata={'HTTPStatusCode':200}),params)
+        real_call=self.client._make_api_call
+        def retention_only(operation, arguments):
+            self.assertEqual(operation,'GetObjectRetention','HEAD/body GET/listing are forbidden')
+            return real_call(operation,arguments)
+        with patch.object(self.client,'_make_api_call',side_effect=retention_only) as calls, self.stub() as stub:
             stub.add_response('get_object_retention',dict(Retention={'Mode':'COMPLIANCE','RetainUntilDate':UNTIL},
                                                         ResponseMetadata={'HTTPStatusCode':200}),params)
-            self.assertEqual(self.observe(),dict(version_id='version-001',size=12,mode='COMPLIANCE',retained_until=UNTIL))
+            self.assertEqual(self.observe(),dict(requested_version_id='version-001',mode='COMPLIANCE',retained_until=UNTIL))
             stub.assert_no_pending_responses()
+            calls.assert_called_once_with('GetObjectRetention',params)
 
-    def test_retention_mismatch_missing_and_wrong_version(self):
-        for retention in ({}, {'Mode':'GOVERNANCE','RetainUntilDate':UNTIL},
-                          {'Mode':'COMPLIANCE','RetainUntilDate':UNTIL-timedelta(seconds=1)},
-                          {'Mode':'COMPLIANCE','RetainUntilDate':UNTIL.replace(tzinfo=None)}):
-            with self.stub() as stub:
-                stub.add_response('head_object',dict(VersionId='version-001',ContentLength=12,ResponseMetadata={'HTTPStatusCode':200}))
-                stub.add_response('get_object_retention',dict(Retention=retention,ResponseMetadata={'HTTPStatusCode':200}))
+    def test_observer_invalid_address_and_required_date_before_request(self):
+        with patch.object(self.client,'_make_api_call',side_effect=AssertionError('REQUEST_FORBIDDEN')) as call:
+            for version in (None,'','latest','null','unknown',True,0):
+                self.safe_error(lambda:self.observe(version),'AP00_S3_ADDRESS_INVALID')
+            for target,key in ((H('wrong'),CONTEXT['object_key']),(TARGET_HASH,'latest')):
+                self.safe_error(lambda:self.observer.observe_version(target,key,'version-001',required_until=UNTIL),
+                                'AP00_S3_ADDRESS_INVALID')
+            for date in (UNTIL.replace(tzinfo=None),UNTIL.replace(microsecond=1),
+                         UNTIL.astimezone(timezone(timedelta(hours=3)))):
+                self.safe_error(lambda:self.observer.observe_version(TARGET_HASH,CONTEXT['object_key'],
+                                'version-001',required_until=date),'AP00_S3_RETENTION_INVALID')
+            call.assert_not_called()
+
+    def test_retention_mismatch_missing_and_invalid_dates(self):
+        valid={'Mode':'COMPLIANCE','RetainUntilDate':UNTIL}
+        responses=[{}, {'Retention':None}, {'Retention':{}},
+                   *[{'Retention':dict(valid,**change)} for change in (
+                       {'Mode':'GOVERNANCE'}, {'Mode':None},
+                       {'RetainUntilDate':UNTIL-timedelta(seconds=1)},
+                       {'RetainUntilDate':UNTIL.replace(tzinfo=None)},
+                       {'RetainUntilDate':UNTIL.replace(microsecond=1)},
+                       {'RetainUntilDate':UNTIL.astimezone(timezone(timedelta(hours=3)))},
+                       {'RetainUntilDate':None}, {'RetainUntilDate':'not-a-date'})],
+                   {'Retention':{'Mode':'COMPLIANCE'}}]
+        for value in responses:
+            with patch.object(self.client,'get_object_retention',return_value=dict(value,
+                    ResponseMetadata={'HTTPStatusCode':200})) as call:
                 self.safe_error(self.observe,'AP00_S3_RETENTION_MISMATCH')
-        with self.stub() as stub:
-            stub.add_response('head_object',dict(VersionId='wrong',ContentLength=12,ResponseMetadata={'HTTPStatusCode':200}))
-            self.safe_error(self.observe,'AP00_S3_EXACT_RESPONSE_INVALID')
+                call.assert_called_once_with(Bucket='synthetic-ap00',Key=CONTEXT['object_key'],VersionId='version-001')
+        self.sleep.assert_not_called()
+
+    def test_retention_exact_wire_request_retries_and_denials(self):
+        from botocore.exceptions import ReadTimeoutError
+        body=('<Retention><Mode>COMPLIANCE</Mode><RetainUntilDate>' +
+              UNTIL.strftime('%Y-%m-%dT%H:%M:%SZ') + '</RetainUntilDate></Retention>').encode()
+        with self.wire([ReadTimeoutError(endpoint_url=CANARY),(503,{},b'<Error/>'),(200,{},body)]) as send:
+            self.assertEqual(self.observe('version/+=='),dict(requested_version_id='version/+==',
+                                                             mode='COMPLIANCE',retained_until=UNTIL))
+            self.assertEqual(send.call_count,3)
+            for call in send.call_args_list:
+                self.assertEqual(call.args[0].method,'GET')
+                self.assertEqual(call.args[0].url,'https://objects.example.invalid/synthetic-ap00/'+
+                                 CONTEXT['object_key']+'?retention&versionId=version%2F%2B%3D%3D')
+        self.assertEqual([call.args[0] for call in self.sleep.call_args_list],[0.1,0.2])
+        for status,code in ((403,'FORBIDDEN'),(404,'EXACT_VERSION_UNAVAILABLE')):
+            with self.wire([(status,{},b'<Error/>')]) as send:
+                self.safe_error(self.observe,'AP00_S3_'+code)
+                self.assertEqual(send.call_count,1)
 
     def test_bucket_config_observation_and_mismatches(self):
         for status,enabled,mode,days,valid in [('Enabled','Enabled','COMPLIANCE',7,True),

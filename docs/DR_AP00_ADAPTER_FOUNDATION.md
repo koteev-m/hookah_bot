@@ -109,7 +109,7 @@ and concurrent memory into qualification/freshness budgets.
 | Part | Contract |
 | --- | --- |
 | Header | 16 bytes: `HS3W`, unsigned big-endian uint32 control length, uint64 body length |
-| Control | 1–16384 bytes of canonical ASCII JSON with one LF; protocol version 1; exact field/type sets; duplicate/unknown/noncanonical input rejected |
+| Control | 1–16384 bytes of canonical ASCII JSON with one LF; private protocol version 2; exact field/type sets; duplicate/unknown/noncanonical input rejected |
 | Request | `version`, `kind=request`, closed `operation`, canonical target object/hash, explicit credential fields, operation-specific arguments |
 | Response | `version`, `kind=response`, operation, `SUCCESS`/`REJECTED`/`UNKNOWN`, allowlisted code, closed operation-specific value, exact runtime version |
 | Body | Binary bytes without base64; encrypted-envelope request only for write, exact ciphertext response only for read; maximum 67110936 bytes; all other bodies empty |
@@ -118,8 +118,14 @@ and concurrent memory into qualification/freshness budgets.
 Only fixed pre-admission rejections may carry null operation/runtime fields; they
 cannot be success or provider authority. Operation enum: `write`, `read`,
 `observe_version`, `observe_bucket`. Read requires
-exact VersionId. Metadata observation preserves exact HEAD + GetObjectRetention in
+exact VersionId. Metadata observation performs only exact GetObjectRetention in
 one child; bucket observation preserves its two read-only requests in one child.
+The closed `observe_version` value is `requested_version_id`, `mode=COMPLIANCE`,
+`retained_until`, with no body. The parent checks request-version correlation and
+the required retention deadline. This correlation is not a provider response-ID
+confirmation. Protocol v1, old `version_id`/`size`, mixed/extra fields and unexpected
+bodies are rejected; there is no compatibility fallback. Operational evidence
+schema versions are unchanged.
 Existing read retries happen inside that logical operation. A write child issues at
 most one PUT; it never performs HEAD/LIST/latest reconciliation or a second PUT.
 Parent output buffering is bounded by header/control and the operation's body cap;
@@ -217,7 +223,7 @@ Every SDK client uses `total_max_attempts=1`. A first `needs-retry.s3` handler b
 HTTP errors before the SDK region redirector, including its implicit HeadBucket;
 a before-sign guard checks the endpoint, bucket path and signing region. Endpoint/
 region mismatch fails closed. HTTP 5xx/408/429 on writes are conservatively UNKNOWN.
-GET/HEAD/config calls alone retry transient network/408/429/500/502/503/504 failures,
+GET/retention/config calls alone retry transient network/408/429/500/502/503/504 failures,
 with at most three attempts and 0.1/0.2-second delays. TLS errors, access denial,
 missing exact versions, redirects and malformed metadata do not retry. A failed
 stream is closed before retry; partial bytes never escape to the evidence layer.
@@ -226,11 +232,26 @@ stream is closed before retry; partial bytes never escape to the evidence layer.
 It always supplies bucket/key/VersionId, requires matching response VersionId,
 rejects delete markers and bounds ContentLength/body size. The existing
 `independent_readback` still checks ciphertext SHA/size, archive identity and members.
-`MetadataObserver.observe_version` issues exact HEAD + GetObjectRetention and rejects
-wrong version, missing/short/non-COMPLIANCE retention. `observe_bucket` requires
+`MetadataObserver.observe_version` supplies exact bucket/key/VersionId to
+GetObjectRetention and rejects missing/invalid/short/non-COMPLIANCE retention.
+It issues no HEAD, body GET or listing. Its `requested_version_id` is the addressed
+request version, not an independently confirmed provider response VersionId.
+Target/hash/key validation remains bound to the launcher and child request.
+`observe_bucket` requires
 versioning/Object Lock enabled and default COMPLIANCE retention of at least seven days.
 These returned facts are not operational Trust, independent observation receipts,
 live availability qualification or readiness authority.
+
+HT-OPS-39 explicitly accepts removing the observer's independent HEAD-derived
+VersionId, delete-marker and size verification. Reader remains the sole
+provider-confirmed source of those object facts; it still fails closed on a
+missing/wrong response VersionId, including the accepted risk of unavailable
+read-back when that header is absent. Observer retains separate retention/config
+observations, not a second copy of reader proof. The old four-call bodyless contract
+was incompatible with the support-reported HEAD/body-GET permission coupling;
+local adaptation does not establish effective IAM, a reproducible policy/ACL
+configuration, custody or operational availability. Three independent principals
+remain required. No operational consumer or Trust/schema change is introduced.
 
 ## Authenticated envelope and key boundary
 
@@ -331,8 +352,8 @@ no schema migration or operational receipt generation is hidden in AP-00.
 - AP-07 remains unimplemented/unauthorized: no KMS/HSM/provider keys, password
   manager, key storage/retrieval service, secret/config/image/evidence custody.
 
-Next gate: independent security review of the exact HT-OPS-31 dedicated-worker
-changeset before any publication or provisioning. F2–F4 and crypto/provisioning
+Next gate: focused review of the uncommitted HT-OPS-39 observer/IPC adaptation
+before a separate commit decision. F2–F4 and crypto/provisioning
 contracts are preserved. No deploy/staging/V126 action is implied.
 
 ## Implementation references

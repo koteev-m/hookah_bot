@@ -1,5 +1,38 @@
 # Project Status
 
+## HT-OPS-39 — local retention-only observer adaptation
+
+User-approved local change; uncommitted in `/private/tmp/ht-ops-25-ap00/worktree`,
+branch `codex/ht-ops-33-ap00-dedicated-worker-18390444`, unchanged base/HEAD
+`ad23f8e0bd1846c95242fde10314ceb579fedb98`. This branch matches the latest HT-OPS-39
+evidence; the older `codex/ht-ops-25-ap00` name was not restored or checked out.
+
+Observer now issues only exact-version GetObjectRetention and the two bucket
+settings reads. Its result is `requested_version_id`, `mode`, `retained_until`:
+request correlation, not a provider response-ID/size/delete-marker attestation.
+Private IPC v2 rejects v1 and old/mixed results. Reader response VersionId,
+delete-marker/length/bytes checks and independent readback remain unchanged.
+The user accepted losing the observer's duplicate HEAD proof and the residual
+availability risk when reader response VersionId is absent; reader stays fail-closed.
+Three independent principals remain required. [Contract](docs/DR_AP00_ADAPTER_FOUNDATION.md).
+
+Local validation: targeted adapter 7/7 and worker/IPC 5/5; full adapter 37/37,
+worker/IPC 24/24, stdlib AP-01 48/48 PASS. The new retention-only regression rejects
+the original HEAD implementation in an in-memory negative control. The first worker
+selector command used the base test class incorrectly; corrected selectors passed.
+CPython 3.13.2/GIL and all pins match; dependency check passes. No provider test.
+Baseline identities, full diff, logs and remaining gates:
+`/private/tmp/ht-ops-39-yandex-context/REPORT.md`.
+
+HT-OPS-39 remains `BLOCKED_HT_OPS39_LEAST_PRIVILEGE`: reproducible policy/ACL,
+writer effective permissions, billing, F4 capacity, custody and operational R0/G
+remain open. Manifest NOT EXECUTABLE; request NOT READY TO ISSUE. The former
+four-call observer mismatch is historical for the original implementation.
+No operational schema/Trust, provisioning, IAM or provider change; no credentials,
+Git staging/commit/publication, staging/SSH/deploy/V126 or Actions activity.
+
+Next: focused review of this uncommitted diff before a separate commit decision.
+
 ## HT-OPS-31 — AP-00 Dedicated S3 Worker Runtime
 
 Same isolated worktree `/private/tmp/ht-ops-25-ap00/worktree`, branch

@@ -288,10 +288,6 @@ class MetadataObserver(_Bound):
             raise TransportError('AP00_S3_ADDRESS_INVALID')
         params = self._address(target_sha256, key, version_id)
         _date(required_until)
-        head = self._request('head_object', params)
-        if (head.get('VersionId') != version_id or head.get('DeleteMarker', False) is not False
-                or type(head.get('ContentLength')) is not int or head['ContentLength'] <= 0):
-            raise TransportError('AP00_S3_EXACT_RESPONSE_INVALID')
         response = self._request('get_object_retention', params)
         try:
             retention = response['Retention']
@@ -300,8 +296,8 @@ class MetadataObserver(_Bound):
                 raise ValueError
         except Exception:
             raise TransportError('AP00_S3_RETENTION_MISMATCH') from None
-        return {'version_id': version_id, 'size': head['ContentLength'],
-                'mode': 'COMPLIANCE', 'retained_until': until}
+        # Retention has no response VersionId: this is request correlation only.
+        return {'requested_version_id': version_id, 'mode': 'COMPLIANCE', 'retained_until': until}
 
     def observe_bucket(self):
         self._check_client()

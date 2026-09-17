@@ -154,10 +154,13 @@ class _Launcher:
             ipc.response(reply, returned_body, operation, _runtime_version())
             if reply['result'] == 'SUCCESS':
                 value = reply['value']
-                if operation in ('read', 'observe_version') and value['version_id'] != arguments['version_id']:
+                if operation == 'read' and value['version_id'] != arguments['version_id']:
                     ipc.invalid()
-                if operation == 'observe_version' and S.timestamp(value['retained_until']) < S.timestamp(arguments['required_until']):
-                    ipc.invalid()
+                if operation == 'observe_version':
+                    # Correlation with this child request, not a provider ID echo.
+                    if (value['requested_version_id'] != arguments['version_id']
+                            or S.timestamp(value['retained_until']) < S.timestamp(arguments['required_until'])):
+                        ipc.invalid()
                 if operation == 'observe_bucket' and value['default_retention_days'] * 86400 < self._target['retention_seconds']:
                     ipc.invalid()
         except Exception:
