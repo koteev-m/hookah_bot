@@ -2214,7 +2214,7 @@ validated response design/authority contract, never a fence invocation.
 | AP-04 | Provisioned isolated Linux/amd64 restore, secret hydration, functional proof and cleanup; not granted |
 | AP-05 | Concrete periodic runner/monitor/retention and separately scoped writer response installation/activation; not granted |
 | AP-06 | Independent read-only observations and final evidence verification/receipt write using reviewed adapters/consumers; not granted |
-| AP-07 | Protected secret/config/image/evidence custody preparation and retrieval proof; not granted |
+| AP-07 | HT-OPS-41 [local custody foundation](DR_AP07_CUSTODY_FOUNDATION.md); protected asset preparation and real retrieval remain separately unauthorized/unexecuted |
 
 The AP-01 `S3Transport` and `Encryption` interfaces and deterministic test doubles
 remain unchanged. `FakeEncryption` is an opaque token map, **not cryptography**,
