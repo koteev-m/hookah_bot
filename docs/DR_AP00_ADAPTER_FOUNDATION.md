@@ -275,8 +275,12 @@ The closed header contains `format_version=1`, `algorithm=AES-256-GCM`,
 AAD is **the entire prefix and canonical header**, binding all of these fields.
 Production encryption calls `os.urandom(12)` internally each time; callers cannot
 supply a nonce. Only tests patch that call for deterministic vectors. Nonce collision
-risk and per-key usage limits require future AP-07 key lifecycle decisions; a 4096
-nonce test is a bounded regression, not a mathematical uniqueness guarantee.
+risk and per-key usage limits still require an explicit lifecycle decision before
+operational producer use. The
+[AP-07 lifecycle contract](DR_AP07_CUSTODY_FOUNDATION.md#lifecycle-and-retention)
+records an unapproved proposal, not accepted numeric limits or unknown-count policy;
+reviewed enforcement remains a producer prerequisite. A 4096 nonce test is a bounded
+regression, not a mathematical uniqueness guarantee.
 
 `Envelope` is constructed with the expected context independently of the input header.
 The manifest/key relationship is validated. Decrypt verifies exact header/context,
@@ -349,8 +353,10 @@ no schema migration or operational receipt generation is hidden in AP-00.
 - AP-06 remains unimplemented/unauthorized: no independent clock, availability,
   ledger-head or credential/custody probes; no operational Trust construction,
   readiness/qualification wiring or evidence receipt writes.
-- AP-07 remains unimplemented/unauthorized: no KMS/HSM/provider keys, password
-  manager, key storage/retrieval service, secret/config/image/evidence custody.
+- AP-07 has a [provider-neutral local foundation](DR_AP07_CUSTODY_FOUNDATION.md)
+  for declarations, retrieval observations and retention. Real KMS/HSM/provider
+  keys, password-manager writes, key storage/retrieval and secret/config/image/evidence
+  custody remain unimplemented/unexecuted and separately unauthorized.
 
 The retention-only observer/IPC adaptation is locally committed as
 `27a2c785e156940d4344ad1d0ff689eca322f312`; authoritative current `main`

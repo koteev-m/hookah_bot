@@ -795,6 +795,29 @@ Local PG17 synthetic restore remains test evidence only. AP-02/AP-03/AP-06/AP-07
 provisioning, publication and operational DR remain separate gates; no V126 command
 or existing workflow behavior changes.
 
+### HT-OPS-41 AP-07 custody foundation
+
+The [AP-07 contract](DR_AP07_CUSTODY_FOUNDATION.md) adds closed local declarations
+and independently pinned retrieval-observation validation. Run offline stdlib checks:
+
+```bash
+python3 -S scripts/test-v126-dr-custody.py
+python3 -S scripts/test-v126-dr-evidence.py
+python3 -S scripts/test-v126-database-evidence.py --unit
+git diff --check
+```
+
+Exercise missing assets/copies, every shared failure-domain dimension, replayed
+versions, revoked/retained keys, historical exact-vs-regenerable material, bound
+source/tools/config/images, closed/canonical parsing and accidental secret/digest
+fields. Retrieval tests must reject self-declared proof, wrong pins, stale clocks,
+wrong assets and non-independent environments; one surviving route is degraded
+retrieval only. Fixed error output must not echo input canaries. No network, real
+secret, provider, Docker/DB restore, staging or external mutation is needed.
+Synthetic observations are not operational proof. Existing AP-01/R0/Q interfaces
+and AP-00 crypto/S3 behavior are unchanged; AP-07 is included by the existing
+`v126-*` tooling inventory, so later bindings must include its exact bytes.
+
 ### HT-12P executable V126 cutover quality gate
 
 `scripts/test-v126-cutover.sh` is the executable fixture authority for the sequencer; the canonical
