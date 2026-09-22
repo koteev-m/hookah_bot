@@ -15,7 +15,7 @@ import { parsePositiveInt } from '../shared/parse'
 import { bindTelegramBackButton } from '../shared/telegramBackButton'
 import { getTelegramContext, getTelegramQrScanner } from '../shared/telegram'
 import { openBotChat } from '../shared/telegramActions'
-import { normalizeTableToken } from '../shared/validation/tableToken'
+import { extractTableTokenFromScannedText, tableTokenQueryParamKeys } from '../shared/validation/tableToken'
 import { append, el, on } from '../shared/ui/dom'
 import { renderCatalogScreen } from './catalog'
 import { renderCartScreen } from './cart'
@@ -61,8 +61,7 @@ type GuestRefs = {
   content: HTMLDivElement
 }
 
-const scannedTokenQueryParamKeys = ['table_token', 'tableToken', 'tgWebAppStartParam', 'startapp', 'start_param'] as const
-const tableContextQueryParamKeys = [...scannedTokenQueryParamKeys, 'tableSessionId', 'table_session_id'] as const
+const tableContextQueryParamKeys = [...tableTokenQueryParamKeys, 'tableSessionId', 'table_session_id'] as const
 const primaryActionsByMode: Record<GuestTableMode, GuestActionId[]> = {
   'no-table': ['qr'],
   'ended-table': ['qr', 'catalog', 'refresh'],
@@ -148,25 +147,6 @@ function resolveRouteNameFromHash(hash: string | null | undefined): RouteName | 
 
 function isTabFlowRoute(route: RouteName | null): boolean {
   return route === 'venue' || route === 'cart' || route === 'order'
-}
-
-function extractTokenFromSearchParams(params: URLSearchParams): string | null {
-  for (const key of scannedTokenQueryParamKeys) {
-    const token = normalizeTableToken(params.get(key))
-    if (token) {
-      return token
-    }
-  }
-  return null
-}
-
-function extractTableTokenFromScannedText(scannedText: string): string | null {
-  try {
-    const url = new URL(scannedText)
-    return extractTokenFromSearchParams(url.searchParams)
-  } catch {
-    return normalizeTableToken(scannedText)
-  }
 }
 
 function clearTableContextSearchParams() {
@@ -757,7 +737,12 @@ export function mountGuestApp(options: GuestAppOptions) {
     historyStack.push(hash)
   }
 
+  let cancelQrScan: (() => void) | null = null
+  let resolvingQr = false
+  disposables.push(() => cancelQrScan?.())
   const openQrScanner = () => {
+    if (resolvingQr) return
+    cancelQrScan?.()
     const telegramContext = getTelegramContext()
     const webApp = telegramContext.webApp
     const scanQr = getTelegramQrScanner(webApp)
@@ -768,25 +753,44 @@ export function mountGuestApp(options: GuestAppOptions) {
       webApp?.showAlert?.(fallbackMessage)
       return
     }
+    let consumed = false
+    const finishScan = () => {
+      consumed = true
+      webApp?.offEvent?.('scanQrPopupClosed', finishScan)
+      cancelQrScan = null
+    }
+    cancelQrScan = finishScan
     try {
+      webApp?.onEvent?.('scanQrPopupClosed', finishScan)
       scanQr({ text: 'Наведите камеру на QR стола' }, (scannedText) => {
-        const token = extractTableTokenFromScannedText(scannedText)
+        if (consumed) return true
+        const token = extractTableTokenFromScannedText(scannedText, {
+          miniAppUrl: window.location.href,
+          botUsername: telegramContext.botUsername
+        })
         if (!token) {
-          webApp?.showAlert?.('QR не содержит token стола.')
+          webApp?.showAlert?.('QR-код не содержит токен стола.')
           return false
         }
+        finishScan()
+        resolvingQr = true
         try {
           webApp?.closeScanQrPopup?.()
         } catch {
           // ignore scanner close errors
         }
-        const nextUrl = new URL(window.location.href)
-        tableContextQueryParamKeys.forEach((key) => nextUrl.searchParams.delete(key))
-        nextUrl.searchParams.set('table_token', token)
-        window.history.replaceState(null, '', `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`)
-        void refreshTableContext({ forceResolveSession: true })
-          .then(() => {
-            const snapshot = getTableContext()
+        void refreshTableContext({ scannedToken: token })
+          .then((snapshot) => {
+            if (!snapshot) return
+            if (!snapshot.orderAllowed) {
+              const failure = formatTableStatus(snapshot)
+              showTelegramAlert([failure.title, failure.details].filter(Boolean).join(' '))
+              return
+            }
+            const nextUrl = new URL(window.location.href)
+            tableContextQueryParamKeys.forEach((key) => nextUrl.searchParams.delete(key))
+            nextUrl.searchParams.set('table_token', token)
+            window.history.replaceState(null, '', `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`)
             if (resolveRoute().name !== 'catalog') {
               return
             }
@@ -794,10 +798,12 @@ export function mountGuestApp(options: GuestAppOptions) {
               navigate(`#/venue/${snapshot.venueId}`)
             }
           })
-          .catch(() => undefined)
+          .catch(() => showTelegramAlert('Не удалось загрузить стол. Попробуйте позже.'))
+          .finally(() => { resolvingQr = false })
         return true
       })
     } catch {
+      finishScan()
       refs.statusDetails.textContent = fallbackMessage
       webApp?.showAlert?.('Не удалось открыть QR-сканер.')
     }
@@ -912,7 +918,7 @@ export function mountGuestApp(options: GuestAppOptions) {
   }
   renderShellActions()
   const refreshResolvedTableContext = () => {
-    if (tableSnapshot.status === 'resolved' && tableSnapshot.tableToken) {
+    if (!resolvingQr && tableSnapshot.status === 'resolved' && tableSnapshot.tableToken) {
       void refreshTableContext()
     }
   }

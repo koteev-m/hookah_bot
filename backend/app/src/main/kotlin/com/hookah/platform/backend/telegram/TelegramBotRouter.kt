@@ -40,6 +40,7 @@ import com.hookah.platform.backend.miniapp.guest.db.PlatformGuestTableMutationRe
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionEndBlockedReason
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRecord
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
+import com.hookah.platform.backend.miniapp.guest.db.TableSessionStatus
 import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackMessageSender
 import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackRepository
 import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackThread
@@ -179,6 +180,7 @@ import com.hookah.platform.backend.telegram.db.StaffChatLinkCodeFormat
 import com.hookah.platform.backend.telegram.db.StaffChatLinkCodeRepository
 import com.hookah.platform.backend.telegram.db.StaffChatStatus
 import com.hookah.platform.backend.telegram.db.TableTokenRepository
+import com.hookah.platform.backend.telegram.db.TelegramOutboxRepository
 import com.hookah.platform.backend.telegram.db.TelegramUserContact
 import com.hookah.platform.backend.telegram.db.TelegramVenueContextRepository
 import com.hookah.platform.backend.telegram.db.UnlinkResult
@@ -239,6 +241,7 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Base64
 import java.util.Locale
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
@@ -2276,6 +2279,12 @@ class TelegramBotRouter internal constructor(
             data == "entry_have_qr" -> showTableQrEntryHint(chatId)
             data == "guest_miniapp_unavailable" -> enqueueMessage(chatId, miniAppUnavailableMessage())
             data == "continue_in_bot" -> continueInBot(chatId)
+            data?.startsWith("continue_in_bot:") == true ->
+                continueInBot(
+                    chatId,
+                    expectedTableSessionId = data.removePrefix("continue_in_bot:").toLongOrNull() ?: -1L,
+                    actorUserId = callbackQuery.from.id,
+                )
             data == "relocation_call_staff" -> createRelocationStaffCall(chatId)
             data == "relocation_back_to_table_actions" || data == "table_actions_back" ->
                 showRelocationBackToTableActions(
@@ -27598,8 +27607,19 @@ class TelegramBotRouter internal constructor(
         if (announceChannelChoice) {
             enqueueMessage(
                 chatId,
-                "Вы за столом №${context.tableNumber} в ${context.venueName}. Выберите удобный способ заказа.",
-                tableContextBotKeyboard(context),
+                "Вы за столом №${context.tableNumber} в ${context.venueName}.",
+                ReplyKeyboardRemove(removeKeyboard = true),
+                dedupeKey = "${TelegramOutboxRepository.GUEST_ORDER_ENTRY_DEDUPE_PREFIX}${UUID.randomUUID()}",
+            )
+            enqueueMessage(
+                chatId,
+                "Выберите удобный способ заказа.",
+                TelegramKeyboards.inlineTableEntryChoice(
+                    webAppUrl = config.webAppPublicUrl.takeIf { isMiniAppEntryAvailable() },
+                    tableToken = context.tableToken,
+                    tableSessionId = activeSession.id,
+                ),
+                dedupeKey = "${TelegramOutboxRepository.GUEST_ORDER_ENTRY_DEDUPE_PREFIX}${UUID.randomUUID()}",
             )
         }
         return ApplyTableTokenResult.Applied
@@ -27630,18 +27650,57 @@ class TelegramBotRouter internal constructor(
         )
     }
 
-    private suspend fun continueInBot(chatId: Long) {
+    private suspend fun continueInBot(
+        chatId: Long,
+        expectedTableSessionId: Long? = null,
+        actorUserId: Long? = null,
+    ) {
         val context = resolveGuestContext(chatId) ?: return
-        resolveCurrentTableSession(chatId, context) ?: return
+        if (expectedTableSessionId == null) {
+            resolveCurrentTableSession(chatId, context) ?: return
+        } else {
+            if (expectedTableSessionId <= 0L || actorUserId != context.userId) {
+                enqueueMessage(chatId, "Выбор способа заказа устарел. Отсканируйте QR на столе ещё раз.")
+                return
+            }
+            val session =
+                if (isPlatformOwner(context.userId)) {
+                    resolveCurrentTableSession(chatId, context) ?: return
+                } else {
+                    try {
+                        tableSessionRepository.findSessionForTable(
+                            tableSessionId = expectedTableSessionId,
+                            venueId = context.table.venueId,
+                            tableId = context.table.tableId,
+                        )?.takeIf { candidate ->
+                            candidate.status == TableSessionStatus.ACTIVE &&
+                                candidate.endedAt == null &&
+                                candidate.expiresAt.isAfter(Instant.now()) &&
+                                !tableSessionRepository.hasUserExit(context.userId, candidate.id)
+                        }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: DatabaseUnavailableException) {
+                        enqueueMessage(chatId, "База недоступна, попробуйте позже.")
+                        return
+                    }
+                }
+            if (session?.id != expectedTableSessionId) {
+                enqueueMessage(chatId, "Выбор способа заказа устарел. Отсканируйте QR на столе ещё раз.")
+                return
+            }
+        }
         enqueueMessage(
             chatId,
             "Продолжаем в боте. Выберите действие.",
+            dedupeKey = "${TelegramOutboxRepository.GUEST_ORDER_ENTRY_DEDUPE_PREFIX}${UUID.randomUUID()}",
         )
         // Restore persistent in-venue reply keyboard after channel selection.
         enqueueMessage(
             chatId,
             keyboardRemoveMarker,
             tableContextBotKeyboard(context.table),
+            dedupeKey = "${TelegramOutboxRepository.GUEST_ORDER_ENTRY_DEDUPE_PREFIX}${UUID.randomUUID()}",
         )
     }
 

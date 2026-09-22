@@ -126,6 +126,10 @@ smoke is [`ORDER-CONTEXT-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#order-con
 ## Guest UX
 
 - In table context, guest is inside an active `TABLE_SESSION`.
+- Mini App scanner accepts the generated HTTPS `t.me/<bot>?start=` form, existing `startapp`, same-origin Mini App token URLs and raw base64url tokens. URL parameters are decoded once; duplicate/conflicting tokens, foreign origins and unsupported routes are rejected. When launch context includes a bot username it must match; otherwise Telegram bot-link recognition is structural and backend token validation remains mandatory.
+- QR scanning inside Mini App and phone-camera `/start` entry use the same backend table resolution. Scanner cancellation, malformed/unsupported QR and rejected replacement tokens preserve the previous working context; successful scans cannot grant access without backend validation. If a scan cancels an unfinished restore, rejection returns to the last stable state (initially no table), not an abandoned loading state; another scan remains available. Explicit visit exit invalidates late responses. Repeated scanner delivery is consumed once per scan.
+- After ordinary Guest QR entry, the bot first removes its old reply keyboard and offers Mini App or bot ordering. Changing the interface or re-entering the same active visit preserves session/tab, cart and active order; the full bot order keyboard is shown on explicit bot choice.
+- Existing bot and Mini App selected-tab state remains local to each interface. This change preserves each selection and server-side tab membership; it does not add a cross-client shared-tab selection synchronization contract.
 - `Мой заказ` / `Мой счёт` shows the guest's personal tab or joined shared tab, not every guest's personal bill at the physical table.
 - `Дозаказать` creates a new `ORDER_BATCH` in the current active order/session and current selected tab.
 - Growth `Повторить как шаблон` must not create an order without active table context, selected tab and current menu/stop-list validation.

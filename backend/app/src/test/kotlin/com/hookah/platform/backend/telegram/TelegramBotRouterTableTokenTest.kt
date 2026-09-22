@@ -1710,7 +1710,7 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
-    fun `start with valid table token shows table context actions`() =
+    fun `guest qr entry removes previous keyboard before offering only order channels`() =
         runBlocking {
             val context =
                 TableContext(
@@ -1736,19 +1736,256 @@ class TelegramBotRouterTableTokenTest {
                         ),
                 )
 
-            router.process(update)
+            routerWithWebAppPublicUrl("https://mini.app/miniapp/").process(update)
+
+            coVerifyOrder {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Вы за столом №5 в Venue.",
+                    match { it is ReplyKeyboardRemove && it.removeKeyboard },
+                    dedupeKey = match { it?.startsWith("guest-qr-order-entry:") == true },
+                )
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    "Выберите удобный способ заказа.",
+                    match { markup ->
+                        val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                        buttons.map { it.text } == listOf("📱 Заказывать в Mini App", "💬 Заказывать в боте") &&
+                            buttons[0].webApp?.url ==
+                            "https://mini.app/miniapp/?mode=guest&tableToken=TOKEN&screen=menu&tableSessionId=55" &&
+                            buttons[1].callbackData == "continue_in_bot:55"
+                    },
+                    dedupeKey = match { it?.startsWith("guest-qr-order-entry:") == true },
+                )
+            }
+            coVerify(exactly = 2) { outboxEnqueuer.enqueueSendMessage(100, any(), any(), dedupeKey = any()) }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(100, any(), match { it is ReplyKeyboardMarkup }, dedupeKey = any())
+            }
+        }
+
+    @Test
+    fun `guest qr reentry removes bot keyboard and preserves draft session tab and order`() =
+        runBlocking {
+            val entryKeys = mutableListOf<String?>()
+            coEvery { outboxEnqueuer.enqueueSendMessage(any(), any(), any(), any(), any()) } answers {
+                entryKeys += invocation.args[4] as String?
+                TelegramOutboxEnqueueOutcome.ENQUEUED
+            }
+            val context = stubBotGiftCartContext(Instant.parse("2026-03-30T10:00:00Z"))
+            coEvery { tableSessionRepository.findSessionForTable(55L, 10L, 11L) } returns
+                platformGuestTableSession(context).copy(expiresAt = Instant.now().plusSeconds(7200))
+            coEvery { tableSessionRepository.hasUserExit(200L, 55L) } returns false
+            coEvery { ordersRepository.findActiveOrderSummaryForTab(55L, 77L) } returns
+                ActiveOrderSummary(900L, "ACTIVE")
+            processBotCallback(80_001L, "channel-bot-first", "continue_in_bot")
+            processBotCallback(80_002L, "channel-cart-item", "bot_menu_item:500:1000")
+            clearMocks(outboxEnqueuer, answers = false)
+            entryKeys.clear()
+
+            processTableStart(updateId = 80_003L, actorUserId = 200L)
+            processTableStart(updateId = 80_004L, actorUserId = 200L)
+
+            coVerifyOrder {
+                outboxEnqueuer.enqueueSendMessage(100L, any(), match { it is ReplyKeyboardRemove }, dedupeKey = any())
+                outboxEnqueuer.enqueueSendMessage(100L, any(), match { it is InlineKeyboardMarkup }, dedupeKey = any())
+                outboxEnqueuer.enqueueSendMessage(100L, any(), match { it is ReplyKeyboardRemove }, dedupeKey = any())
+                outboxEnqueuer.enqueueSendMessage(100L, any(), match { it is InlineKeyboardMarkup }, dedupeKey = any())
+            }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(100L, any(), match { it is ReplyKeyboardMarkup }, dedupeKey = any())
+            }
+
+            processBotCallback(80_005L, "channel-bot-repeat", "continue_in_bot:55")
+            processBotCallback(80_006L, "channel-bot-repeat-again", "continue_in_bot:55")
+            processBotCallback(80_007L, "channel-cart-retained", "bot_menu_item_cart")
+
+            val orderedKeys = entryKeys.filterNotNull()
+            assertEquals(8, orderedKeys.size)
+            assertEquals(orderedKeys.size, orderedKeys.distinct().size)
+            assertTrue(orderedKeys.all { it.startsWith("guest-qr-order-entry:") })
+
+            coVerify(exactly = 2) {
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    "\u2060",
+                    match {
+                        it is ReplyKeyboardMarkup &&
+                            it.keyboard == TelegramKeyboards.tableContextBotFlow().keyboard
+                    },
+                    dedupeKey = match { it?.startsWith("guest-qr-order-entry:") == true },
+                )
+            }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    "Кальян классический\nКоличество: 1\nСумма: 250.00 ₽",
+                    match { it is InlineKeyboardMarkup },
+                )
+                ordersRepository.previewGuestOrderBatch(
+                    venueId = 10L,
+                    userId = 200L,
+                    items = match { it.size == 1 && it.single().itemId == 1000L && it.single().qty == 1 },
+                    venueZoneId = ZoneId.of("Europe/Moscow"),
+                    tableSessionId = 55L,
+                    tabId = 77L,
+                    comment = null,
+                )
+            }
+            coVerify(exactly = 0) {
+                ordersRepository.createGuestOrderBatch(
+                    tableId = any(),
+                    venueId = any(),
+                    tableSessionId = any(),
+                    userId = any(),
+                    idempotencyKey = any(),
+                    tabId = any(),
+                    comment = any(),
+                    items = any(),
+                    venueZoneId = any(),
+                    selectedGiftChoices = any(),
+                    skippedGiftRuleIds = any(),
+                    giftDecision = any(),
+                    expectedPreviewFingerprint = any(),
+                    giftDecisionCommand = any(),
+                )
+                chatContextRepository.clear(any())
+            }
+        }
+
+    @Test
+    fun `continue in bot with revoked table token does not restore ordering keyboard`() =
+        runBlocking {
+            coEvery { chatContextRepository.get(100L) } returns StoredChatContext(userId = 200L, tableToken = "TOKEN")
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns null
+
+            processBotCallback(80_008L, "channel-revoked", "continue_in_bot:55")
+
+            coVerify { outboxEnqueuer.enqueueSendMessage(100L, "Сначала отсканируйте QR на столе.", null) }
+            coVerify(exactly = 0) {
+                outboxEnqueuer.enqueueSendMessage(100L, any(), match { it is ReplyKeyboardMarkup }, dedupeKey = any())
+                tableSessionRepository.resolveActiveSession(any(), any(), any(), any())
+                chatContextRepository.saveContext(any(), any(), any())
+            }
+        }
+
+    @Test
+    fun `bound bot choice rejects expired ended or missing session without creating a visit`() =
+        runBlocking {
+            val context = stubBotGiftCartContext(Instant.now())
+            val active = platformGuestTableSession(context).copy(expiresAt = Instant.now().plusSeconds(7200))
+            val invalidSessions =
+                listOf(
+                    null,
+                    active.copy(expiresAt = Instant.now().minusSeconds(1)),
+                    active.copy(status = TableSessionStatus.ENDED),
+                    active.copy(endedAt = Instant.now()),
+                )
+            invalidSessions.forEachIndexed { index, session ->
+                coEvery { tableSessionRepository.findSessionForTable(55L, 10L, 11L) } returns session
+                processBotCallback(80_020L + index, "channel-stale-$index", "continue_in_bot:55")
+            }
+
+            coVerify(exactly = invalidSessions.size) {
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    "Выбор способа заказа устарел. Отсканируйте QR на столе ещё раз.",
+                    null,
+                )
+            }
+            coVerify(exactly = 0) {
+                tableSessionRepository.resolveActiveSession(any(), any(), any(), any())
+                tableSessionRepository.touchActiveSession(any(), any(), any(), any(), any())
+                tableSessionRepository.clearUserExit(any(), any())
+                chatContextRepository.saveContext(any(), any(), any())
+                chatContextRepository.clear(any())
+                outboxEnqueuer.enqueueSendMessage(100L, any(), match { it is ReplyKeyboardMarkup }, dedupeKey = any())
+            }
+        }
+
+    @Test
+    fun `bound bot choice rejects user exit even when stored context remains`() =
+        runBlocking {
+            val context = stubBotGiftCartContext(Instant.now())
+            coEvery { tableSessionRepository.findSessionForTable(55L, 10L, 11L) } returns
+                platformGuestTableSession(context).copy(expiresAt = Instant.now().plusSeconds(7200))
+            coEvery { tableSessionRepository.hasUserExit(200L, 55L) } returns true
+
+            processBotCallback(80_030L, "channel-exited", "continue_in_bot:55")
 
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
-                    100,
-                    "Вы за столом №5 в Venue. Выберите удобный способ заказа.",
-                    match {
-                        it is ReplyKeyboardMarkup &&
-                            it.keyboard == TelegramKeyboards.tableContextBotFlow(context).keyboard
-                    },
+                    100L,
+                    "Выбор способа заказа устарел. Отсканируйте QR на столе ещё раз.",
+                    null,
                 )
             }
-            coVerify(exactly = 1) { outboxEnqueuer.enqueueSendMessage(100, any(), any()) }
+            coVerify(exactly = 0) {
+                tableSessionRepository.resolveActiveSession(any(), any(), any(), any())
+                tableSessionRepository.touchActiveSession(any(), any(), any(), any(), any())
+                tableSessionRepository.clearUserExit(any(), any())
+                outboxEnqueuer.enqueueSendMessage(100L, any(), match { it is ReplyKeyboardMarkup }, dedupeKey = any())
+            }
+        }
+
+    @Test
+    fun `bound bot choice from previous table cannot switch current context back`() =
+        runBlocking {
+            val first = stubBotGiftCartContext(Instant.now())
+            val second = first.copy(tableId = 12L, tableNumber = 6, tableToken = "OTHER_TOKEN")
+            coEvery { tableTokenRepository.resolve("OTHER_TOKEN") } returns second
+            coEvery { tableSessionRepository.resolveActiveSession(10L, 12L, any(), any()) } returns
+                platformGuestTableSession(second).copy(id = 56L)
+            processTableStart(updateId = 80_040L, actorUserId = 200L)
+            processTableStart(updateId = 80_041L, actorUserId = 200L, token = "OTHER_TOKEN")
+            coEvery { chatContextRepository.get(100L) } returns
+                StoredChatContext(userId = 200L, tableToken = "OTHER_TOKEN")
+            coEvery { tableSessionRepository.findSessionForTable(55L, 10L, 12L) } returns null
+            clearMocks(tableSessionRepository, chatContextRepository, outboxEnqueuer, answers = false)
+
+            processBotCallback(80_042L, "channel-previous-table", "continue_in_bot:55")
+
+            coVerify {
+                tableSessionRepository.findSessionForTable(55L, 10L, 12L)
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    "Выбор способа заказа устарел. Отсканируйте QR на столе ещё раз.",
+                    null,
+                )
+            }
+            coVerify(exactly = 0) {
+                tableSessionRepository.resolveActiveSession(any(), any(), any(), any())
+                tableSessionRepository.touchActiveSession(any(), any(), any(), any(), any())
+                chatContextRepository.saveContext(any(), any(), any())
+                chatContextRepository.clear(any())
+                outboxEnqueuer.enqueueSendMessage(100L, any(), match { it is ReplyKeyboardMarkup }, dedupeKey = any())
+            }
+        }
+
+    @Test
+    fun `bound bot choice rejects malformed session and another actor`() =
+        runBlocking {
+            stubBotGiftCartContext(Instant.now())
+            processBotCallback(80_050L, "channel-malformed", "continue_in_bot:invalid")
+            processPlatformGuestQrCallback(
+                updateId = 80_051L,
+                callbackId = "channel-other-actor",
+                actorUserId = 201L,
+                data = "continue_in_bot:55",
+            )
+
+            coVerify(exactly = 2) {
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    "Выбор способа заказа устарел. Отсканируйте QR на столе ещё раз.",
+                    null,
+                )
+            }
+            coVerify(exactly = 0) {
+                tableSessionRepository.findSessionForTable(any(), any(), any())
+                tableSessionRepository.resolveActiveSession(any(), any(), any(), any())
+                outboxEnqueuer.enqueueSendMessage(100L, any(), match { it is ReplyKeyboardMarkup }, dedupeKey = any())
+            }
         }
 
     @Test
@@ -5428,11 +5665,35 @@ class TelegramBotRouterTableTokenTest {
                 coVerify(exactly = 1) {
                     chatContextRepository.saveContext(200L + index, actorUserId, context)
                 }
-                coVerify {
+                coVerifyOrder {
                     outboxEnqueuer.enqueueSendMessage(
                         200L + index,
-                        "Вы за столом №${10 + index} в Mix Public. Выберите удобный способ заказа.",
-                        match { it == TelegramKeyboards.tableContextBotFlow(context) },
+                        "Вы за столом №${10 + index} в Mix Public.",
+                        match { it is ReplyKeyboardRemove && it.removeKeyboard },
+                        dedupeKey = match { it?.startsWith("guest-qr-order-entry:") == true },
+                    )
+                    outboxEnqueuer.enqueueSendMessage(
+                        200L + index,
+                        "Выберите удобный способ заказа.",
+                        match { markup ->
+                            val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
+                            buttons.map { it.text } == listOf("📱 Mini App не настроен", "💬 Заказывать в боте") &&
+                                buttons[0].callbackData == "guest_miniapp_unavailable" &&
+                                buttons[0].webApp == null &&
+                                buttons[1].callbackData == "continue_in_bot:55"
+                        },
+                        dedupeKey = match { it?.startsWith("guest-qr-order-entry:") == true },
+                    )
+                }
+                coVerify(exactly = 2) {
+                    outboxEnqueuer.enqueueSendMessage(200L + index, any(), any(), dedupeKey = any())
+                }
+                coVerify(exactly = 0) {
+                    outboxEnqueuer.enqueueSendMessage(
+                        200L + index,
+                        any(),
+                        match { it is ReplyKeyboardMarkup },
+                        dedupeKey = any(),
                     )
                 }
             }
@@ -5441,6 +5702,7 @@ class TelegramBotRouterTableTokenTest {
                     any(),
                     match { it.contains("Проверка гостевого QR") },
                     any(),
+                    dedupeKey = any(),
                 )
             }
             coVerify(exactly = 0) { auditLogRepository.appendJson(any(), any(), any(), any(), any()) }
@@ -26743,6 +27005,7 @@ class TelegramBotRouterTableTokenTest {
                     100,
                     "Продолжаем в боте. Выберите действие.",
                     any(),
+                    dedupeKey = any(),
                 )
                 outboxEnqueuer.enqueueSendMessage(
                     100,
@@ -26751,6 +27014,7 @@ class TelegramBotRouterTableTokenTest {
                         it is ReplyKeyboardMarkup &&
                             it.keyboard == TelegramKeyboards.tableContextBotFlow(context).keyboard
                     },
+                    dedupeKey = match { it?.startsWith("guest-qr-order-entry:") == true },
                 )
             }
         }
@@ -26795,6 +27059,7 @@ class TelegramBotRouterTableTokenTest {
                                 button.text == "Продление работы заведения"
                             }
                     },
+                    dedupeKey = match { it?.startsWith("guest-qr-order-entry:") == true },
                 )
             }
         }
@@ -27415,6 +27680,7 @@ class TelegramBotRouterTableTokenTest {
                     100,
                     "Продолжаем в боте. Выберите действие.",
                     any(),
+                    dedupeKey = any(),
                 )
                 outboxEnqueuer.enqueueSendMessage(
                     100,
@@ -27423,6 +27689,7 @@ class TelegramBotRouterTableTokenTest {
                         it is ReplyKeyboardMarkup &&
                             it.keyboard == TelegramKeyboards.tableContextBotFlow(context).keyboard
                     },
+                    dedupeKey = match { it?.startsWith("guest-qr-order-entry:") == true },
                 )
             }
         }

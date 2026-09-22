@@ -325,6 +325,8 @@ class TelegramOutboxRepository(
     }
 
     companion object {
+        const val GUEST_ORDER_ENTRY_DEDUPE_PREFIX = "guest-qr-order-entry:"
+
         private val strictJson = Json { ignoreUnknownKeys = false }
 
         private fun canonicalJson(payloadJson: String): String =
@@ -421,6 +423,16 @@ class TelegramOutboxRepository(
                             WHERE o.status IN (?, ?)
                               AND o.chat_id <> 0
                               AND (o.next_attempt_at IS NULL OR o.next_attempt_at <= ?)
+                              AND (
+                                  o.dedupe_key IS NULL OR o.dedupe_key NOT LIKE '$GUEST_ORDER_ENTRY_DEDUPE_PREFIX%'
+                                  OR NOT EXISTS (
+                                      SELECT 1 FROM telegram_outbox earlier_guest_entry
+                                      WHERE earlier_guest_entry.chat_id = o.chat_id
+                                        AND earlier_guest_entry.id < o.id
+                                        AND earlier_guest_entry.dedupe_key LIKE '$GUEST_ORDER_ENTRY_DEDUPE_PREFIX%'
+                                        AND earlier_guest_entry.status IN ('NEW', 'SENDING')
+                                  )
+                              )
                               $chatEligibilitySql
                               $maintenanceEligibilitySql
                             ORDER BY o.created_at, o.id
