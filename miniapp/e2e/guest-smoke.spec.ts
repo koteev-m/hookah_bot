@@ -1,4 +1,5 @@
 import { expect, type Locator, type Page, type Route, test } from '@playwright/test'
+import tableQrFixture from './fixtures/table-qr.json' with { type: 'json' }
 
 const sessionExpiresAt = Math.floor(Date.now() / 1000) + 3600
 const giftDecisionExpiresAtEpochSeconds = 4_102_444_800
@@ -21738,3 +21739,273 @@ test('account switch does not reuse previous user cart or table restore state', 
   await expect(page.getByText('Чтобы заказать к столику или вызвать персонал, отсканируйте QR-код на столе.')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Корзина (1)' })).toHaveCount(0)
 })
+
+
+type ScannerWindow = Window & {
+  Telegram: { WebApp: Record<string, unknown> }
+  __qrScan?: (text: string) => boolean | void
+  __qrAlerts: string[]
+  __qrCloseCount: number
+  __qrAppCloseCount: number
+  __qrCancel?: () => void
+}
+
+async function installQrScanner(page: Page) {
+  await installTelegramWebApp(page, 123456789)
+  await page.addInitScript(() => {
+    const scannerWindow = window as unknown as ScannerWindow
+    scannerWindow.__qrAlerts = []
+    scannerWindow.__qrCloseCount = 0
+    scannerWindow.__qrAppCloseCount = 0
+    Object.assign(scannerWindow.Telegram.WebApp, {
+      onEvent: (_event: string, callback: () => void) => { scannerWindow.__qrCancel = callback },
+      offEvent: () => { scannerWindow.__qrCancel = undefined },
+      showScanQrPopup: (_params: unknown, callback: (text: string) => boolean | void) => {
+        scannerWindow.__qrScan = callback
+      },
+      closeScanQrPopup: () => { scannerWindow.__qrCloseCount += 1 },
+      showAlert: (message: string) => { scannerWindow.__qrAlerts.push(message) },
+      close: () => { scannerWindow.__qrAppCloseCount += 1 }
+    })
+  })
+}
+
+async function scanQr(page: Page, text: string, repetitions = 1) {
+  return page.evaluate(({ text, repetitions }) => {
+    const scannerWindow = window as unknown as ScannerWindow
+    return Array.from({ length: repetitions }, () => scannerWindow.__qrScan?.(text))
+  }, { text, repetitions })
+}
+
+test('QR scanner resolves the real exported bot QR once and stays inside Mini App', async ({ page }) => {
+  await installQrScanner(page)
+  const api = await mockGuestApi(page)
+  const resolves: URL[] = []
+  page.on('request', (request) => {
+    if (request.url().includes('/api/guest/table/resolve?')) resolves.push(new URL(request.url()))
+  })
+  await page.goto(`?mode=guest&tgWebAppBotUsername=${tableQrFixture.botUsername}`)
+  await page.getByRole('button', { name: '🪑 Сканировать QR', exact: true }).first().click()
+  await scanQr(page, tableQrFixture.qrText, 2)
+  await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
+  expect(resolves).toHaveLength(1)
+  expect(resolves[0].searchParams.get('tableToken')).toBe(tableQrFixture.tableToken)
+  expect(resolves[0].searchParams.get('resolveMode')).toBe('create')
+  await expect(page.getByRole('button', { name: /Кальянное меню/ })).toBeVisible()
+  await page.getByRole('button', { name: /Кальянное меню/ }).click()
+  await page.getByRole('button', { name: 'Добавить' }).click()
+  await expect(page.getByRole('button', { name: 'Корзина (1)' })).toBeVisible()
+  await scanQr(page, tableQrFixture.qrText)
+  await page.getByRole('button', { name: 'Корзина (1)' }).click()
+  await expect(page.getByRole('heading', { name: 'Корзина', exact: true })).toBeVisible()
+  expect(resolves).toHaveLength(1)
+  expect(api.getStructuredMenuCalls()).toBeGreaterThan(0)
+  const scannerState = await page.evaluate(() => {
+    const scannerWindow = window as unknown as ScannerWindow
+    return { alerts: scannerWindow.__qrAlerts, closed: scannerWindow.__qrCloseCount, appClosed: scannerWindow.__qrAppCloseCount }
+  })
+  expect(scannerState).toEqual({ alerts: [], closed: 1, appClosed: 0 })
+  expect(page.url()).toContain('/miniapp/')
+})
+
+
+for (const scenario of ['invalid', 'foreign', 'conflict', 'revoked', 'forbidden', 'unavailable', 'ended', 'cancel'] as const) {
+  test(`QR scanner ${scenario} preserves restored session, selected tab, cart and URL`, async ({ page }) => {
+    await installQrScanner(page)
+    const api = await mockGuestApi(page)
+    let releaseRestore!: () => void
+    const restoreReady = new Promise<void>((resolve) => { releaseRestore = resolve })
+    await page.route('**/api/guest/table/restore', async (route) => {
+      await restoreReady
+      await route.fulfill(jsonResponse({ context: buildRestoreContext() }))
+    })
+    const resolutions: string[] = []
+    await page.route('**/api/guest/table/resolve?**', async (route) => {
+      resolutions.push(route.request().url())
+      if (scenario === 'unavailable' || scenario === 'ended') {
+        await route.fulfill(jsonResponse({
+          ...buildRestoreContext(),
+          available: scenario !== 'unavailable',
+          unavailableReason: scenario === 'unavailable' ? 'SERVICE_SUSPENDED' : null,
+          tableSessionActive: scenario !== 'ended'
+        }))
+      } else {
+        await route.fulfill({ status: scenario === 'forbidden' ? 403 : 404, contentType: 'application/json', body: JSON.stringify({ error: { code: scenario === 'forbidden' ? 'FORBIDDEN' : 'NOT_FOUND', message: 'Table unavailable' } }) })
+      }
+    })
+    await page.goto(`?mode=guest&tgWebAppBotUsername=${tableQrFixture.botUsername}`)
+    await page.getByRole('button', { name: '🪑 Сканировать QR', exact: true }).click()
+    releaseRestore()
+    await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
+    await page.getByRole('button', { name: /Кальянное меню/ }).click()
+    await page.getByRole('button', { name: 'Добавить' }).click()
+    await expect(page.getByRole('button', { name: 'Корзина (1)' })).toBeVisible()
+    const before = await page.evaluate(() => ({ url: window.location.href, session: { ...window.sessionStorage }, local: { ...window.localStorage } }))
+    if (scenario === 'cancel') {
+      await page.evaluate(() => (window as unknown as ScannerWindow).__qrCancel?.())
+    }
+    const payload = scenario === 'invalid' ? ''
+      : scenario === 'foreign' ? `https://foreign.example/?table_token=${tableQrFixture.tableToken}`
+      : scenario === 'conflict' ? `${tableQrFixture.qrText}&start=other`
+      : tableQrFixture.qrText
+    await scanQr(page, payload)
+    const backendDenied = ['revoked', 'forbidden', 'unavailable', 'ended'].includes(scenario)
+    if (scenario !== 'cancel') {
+      await expect.poll(() => page.evaluate(() => (window as unknown as ScannerWindow).__qrAlerts)).toEqual([
+        scenario === 'revoked' ? 'Стол не найден. Обновите QR.'
+          : scenario === 'forbidden' ? 'Требуется новое подтверждение входа Откройте QR-код ещё раз и подтвердите вход в Telegram.'
+          : scenario === 'unavailable' ? 'Заведение временно недоступно'
+          : scenario === 'ended' ? 'Контекст стола устарел Чтобы заказать или вызвать персонал, отсканируйте QR на столе заново.'
+          : 'QR-код не содержит токен стола.'
+      ])
+    }
+    expect(resolutions).toHaveLength(backendDenied ? 1 : 0)
+    expect(await page.evaluate(() => ({ url: window.location.href, session: { ...window.sessionStorage }, local: { ...window.localStorage } }))).toEqual(before)
+    await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Корзина (1)' })).toBeVisible()
+    expect(api.getAddBatchRequests()).toEqual([])
+    expect(await page.evaluate(() => (window as unknown as ScannerWindow).__qrAppCloseCount)).toBe(0)
+  })
+}
+
+test('QR scanner unavailable keeps the existing camera and bot fallback', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page)
+  await page.goto('?mode=guest')
+  await page.getByRole('button', { name: '🪑 Сканировать QR', exact: true }).click()
+  await expect(page.getByText('Откройте камеру телефона и отсканируйте QR на столе или нажмите «Я за столом / У меня QR» в боте.')).toBeVisible()
+})
+
+
+test('QR scanner resolution survives focus after the native camera closes', async ({ page }) => {
+  await installQrScanner(page)
+  await mockGuestApi(page)
+  let releaseRestore!: () => void
+  const restoreReady = new Promise<void>((resolve) => { releaseRestore = resolve })
+  await page.route('**/api/guest/table/restore', async (route) => {
+    await restoreReady
+    await route.fulfill(jsonResponse({ context: buildRestoreContext() }))
+  })
+  let releaseResolve!: () => void
+  const resolveReady = new Promise<void>((resolve) => { releaseResolve = resolve })
+  const resolutions: string[] = []
+  await page.route('**/api/guest/table/resolve?**', async (route) => {
+    resolutions.push(route.request().url())
+    await resolveReady
+    await route.fulfill(jsonResponse(buildRestoreContext({ tableNumber: '5' })))
+  })
+  await page.goto('?mode=guest')
+  await page.getByRole('button', { name: '🪑 Сканировать QR', exact: true }).click()
+  releaseRestore()
+  await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
+  await scanQr(page, tableQrFixture.qrText, 2)
+  await expect.poll(() => resolutions.length).toBe(1)
+  await page.evaluate(() => {
+    window.dispatchEvent(new Event('focus'))
+    document.dispatchEvent(new Event('visibilitychange'))
+  })
+  releaseResolve()
+  await expect(page.getByText('Вы за столом №5 · Микс')).toBeVisible()
+  expect(resolutions).toHaveLength(1)
+  expect(await page.evaluate(() => (window as unknown as ScannerWindow).__qrAlerts)).toEqual([])
+})
+
+
+test('QR scanner late resolution cannot restore a context after visit exit', async ({ page }) => {
+  await installQrScanner(page)
+  const api = await mockGuestApi(page, { activeOrder: null })
+  let releaseRestore!: () => void
+  const restoreReady = new Promise<void>((resolve) => { releaseRestore = resolve })
+  await page.route('**/api/guest/table/restore', async (route) => {
+    await restoreReady
+    await route.fulfill(jsonResponse({ context: buildRestoreContext() }))
+  })
+  let releaseResolve!: () => void
+  const resolveReady = new Promise<void>((resolve) => { releaseResolve = resolve })
+  let resolveStarted!: () => void
+  const resolutionStarted = new Promise<void>((resolve) => { resolveStarted = resolve })
+  let resolveSettled!: () => void
+  const resolutionSettled = new Promise<void>((resolve) => { resolveSettled = resolve })
+  for (const event of ['requestfinished', 'requestfailed'] as const) {
+    page.on(event, (request) => {
+      if (request.url().includes('/api/guest/table/resolve?')) resolveSettled()
+    })
+  }
+  await page.route('**/api/guest/table/resolve?**', async (route) => {
+    resolveStarted()
+    await resolveReady
+    await route.fulfill(jsonResponse(buildRestoreContext({ tableNumber: '5' })))
+  })
+  await page.goto('?mode=guest')
+  await page.getByRole('button', { name: '🪑 Сканировать QR', exact: true }).click()
+  releaseRestore()
+  await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
+  await scanQr(page, tableQrFixture.qrText)
+  await resolutionStarted
+  await page.getByRole('button', { name: '🚪 Завершить визит' }).click()
+  const noTableCopy = 'Чтобы заказать к столику или вызвать персонал, отсканируйте QR-код на столе.'
+  await expect(page.getByText(noTableCopy)).toBeVisible()
+  releaseResolve()
+  await resolutionSettled
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+  await expect(page.getByText(noTableCopy)).toBeVisible()
+  expect(new URL(page.url()).searchParams.has('table_token')).toBe(false)
+  expect(await page.evaluate(() => window.sessionStorage.getItem('hookah_guest_table_session_context:user:123456789'))).toBeNull()
+  expect(await page.evaluate(() => (window as unknown as ScannerWindow).__qrAlerts)).toEqual([
+    'Визит завершён. Чтобы снова заказать за столом, отсканируйте QR.'
+  ])
+  expect(api.getAddBatchRequests()).toEqual([])
+})
+
+
+for (const status of [404, 403, 500]) {
+  test(`QR scanner rejection ${status} ends superseded restore loading and permits another scan`, async ({ page }) => {
+    await installQrScanner(page)
+    await mockGuestApi(page)
+    let releaseRestore!: () => void
+    const restoreReady = new Promise<void>((resolve) => { releaseRestore = resolve })
+    let restoreStarted!: () => void
+    const restoring = new Promise<void>((resolve) => { restoreStarted = resolve })
+    await page.route('**/api/guest/table/restore', async (route) => {
+      restoreStarted()
+      await restoreReady
+      await route.fulfill(jsonResponse({ context: buildRestoreContext({ tableNumber: '99' }) }))
+    })
+    let resolutions = 0
+    await page.route('**/api/guest/table/resolve?**', async (route) => {
+      resolutions += 1
+      if (resolutions === 1) {
+        await route.fulfill({
+          status, contentType: 'application/json',
+          body: JSON.stringify({ error: { code: status === 404 ? 'NOT_FOUND' : status === 403 ? 'FORBIDDEN' : 'INTERNAL_ERROR', message: 'Synthetic rejection' } })
+        })
+      } else {
+        await route.fulfill(jsonResponse(buildRestoreContext()))
+      }
+    })
+    await page.goto('?mode=guest')
+    await restoring
+    await expect(page.getByText('Загрузка стола…', { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: '🪑 Сканировать QR', exact: true }).click()
+    await scanQr(page, tableQrFixture.qrText, 2)
+    await expect.poll(() => page.evaluate(() => (window as unknown as ScannerWindow).__qrAlerts)).toEqual([
+      status === 404 ? 'Стол не найден. Обновите QR.'
+        : status === 403 ? 'Требуется новое подтверждение входа Откройте QR-код ещё раз и подтвердите вход в Telegram.'
+        : 'Не удалось загрузить стол. Попробуйте позже.'
+    ])
+    const noTableCopy = 'Чтобы заказать к столику или вызвать персонал, отсканируйте QR-код на столе.'
+    await expect(page.getByText(noTableCopy)).toBeVisible()
+    await expect(page.getByText('Загрузка стола…', { exact: true })).toHaveCount(0)
+    expect(resolutions).toBe(1)
+    releaseRestore()
+    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+    await expect(page.getByText(noTableCopy)).toBeVisible()
+    expect(new URL(page.url()).searchParams.has('table_token')).toBe(false)
+    expect(await page.evaluate(() => window.sessionStorage.getItem('hookah_guest_table_session_context:user:123456789'))).toBeNull()
+    await page.getByRole('button', { name: '🪑 Сканировать QR', exact: true }).click()
+    await scanQr(page, tableQrFixture.qrText, 2)
+    await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
+    expect(resolutions).toBe(2)
+    expect(await page.evaluate(() => (window as unknown as ScannerWindow).__qrAppCloseCount)).toBe(0)
+  })
+}

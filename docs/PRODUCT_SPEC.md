@@ -228,6 +228,8 @@ SHOULD:
 MUST:
 - Catalog entry, venue link entry, table QR entry.
 - Table QR sets context (venue_id + table_id via opaque token).
+- Existing printed `https://t.me/<bot>?start=<table_token>` QR codes work through both the phone camera and the Mini App scanner. The scanner resolves the table inside the open Mini App; it never opens scanned URLs. Backend token, venue/table availability, session and tab checks remain authoritative.
+- Ordinary Guest QR entry first shows the public venue/table label and `Заказывать в Mini App` / `Заказывать в боте`. It removes any previous reply keyboard; the full bot order keyboard appears after the bot choice. Choosing an interface preserves the current visit, tab, cart and order.
 - QR/table token is a context pointer, not authorization; server validates guest/session/tab/venue access for every order, staff call, bill and tab action.
 - Tokens are non-guessable; support re-issue.
 - Platform Owner controlled QR test status is **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / DONE / MVP / STAGING-SMOKE-PASSED**; schema verdict is `NO_MIGRATION`. Commit/push, green Actions for the release HEAD, staging deploy and the bounded real Telegram role/privacy/exit smoke are complete. This closes only the controlled Phase 1 test escape, not the whole product or broader Platform/Guest parity.

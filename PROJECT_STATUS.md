@@ -1,5 +1,36 @@
 # Project Status
 
+## HT-QR-01 — Guest QR and order-channel entry
+
+**QR-R1 / QR-R2 CORRECTED LOCALLY / UNCOMMITTED / LOCAL CHECKS PASS / IPHONE SMOKE OPEN**.
+Branch `codex/guest-qr-order-entry`, worktree
+`/Users/maksimmartynov/IdeaProjects/hookah_bot_worktrees/ht-qr-01`, base/HEAD
+`8e672022a4340300dab1c5891819ffc539667c7f`. Before correction the 18-file candidate matched
+`HT-QR-01-review.zip` and its declared SHA-256 exactly; original archive is preserved.
+
+QR-R1: four guest-entry/channel messages now use scoped outbox ordering across retries, so
+late keyboard removal cannot overtake the selected bot keyboard. Real PostgreSQL + actual
+worker + synthetic transport reproduced both first/repeated-entry failures before the fix.
+Other traffic and existing terminal failure policy remain unchanged. QR-R2: a scan cancelling
+slow restore returns to the last stable state on rejection, never abandoned `resolving`;
+ready session/tab context and explicit-exit late-response guards are retained.
+
+Fresh correction checks: **107 backend tests / 8 suites**, **43 targeted frontend tests**,
+**252 full browser tests**, Mini App build and Kotlin compile/ktlint PASS (exit 0, zero test
+failures/errors/skips, browser retries=0). Source hashes before/after these checks match.
+Red evidence and intermediate compile/lint failures are retained; stale XML copied after
+compile-only failures is excluded from executed-test evidence. Final review closed five
+negative keyboard assertions that previously missed non-null dedupe keys; no open findings.
+The earlier 986-test result belongs to the original candidate and was not automatically rerun.
+[Exact correction commands, evidence scope and iPhone smoke](docs/TESTING_QA_SMOKE_STRATEGY.md#ht-qr-01--guest-scanner-and-order-channel-entry).
+
+Corrected review archive contains current source/diff and new command/exit/hash/log/XML evidence.
+No real Telegram/iPhone or deployed-runtime verification is claimed. Permanent delivery failure,
+unknown launch bot identity and existing per-interface tab selection remain explicit limits.
+Next: separately authorized publication/deployment and real iPhone smoke. No schema/dependencies,
+staging/commit/push/PR/merge, deploy/Actions/SSH/provider activity or changes to the main checkout,
+`scripts/dev/`, HT-OPS-39 or HT-OPS-41.
+
 ## HT-OPS-39 — local retention-only observer adaptation
 
 The user-approved local change is committed as

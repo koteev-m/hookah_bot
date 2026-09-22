@@ -1412,6 +1412,145 @@ Target QA model:
 | E. Manual staging smoke | Prove real environment, Telegram WebView, staff-chat and deploy behavior. | Required after runtime/frontend/backend/Telegram/deploy changes; not required for docs-only. |
 | F. GitHub Actions | Release gate and source of CI truth. | Must be green before considering a task merged/released. If red, report failing test/assertion first, not Gradle tail. |
 
+## HT-QR-01 — Guest scanner and order-channel entry
+
+Local regression uses only synthetic fixtures and mocked Telegram transport; no bot poller,
+real guest account, production data or operational DR/V126 gate is involved.
+
+- `VenueTableRoutesTest` exports the actual QR ZIP, decodes its PNG with ZXing and compares
+  the decoded text with `miniapp/e2e/fixtures/table-qr.json`. Browser scanner tests consume
+  that same fixture through Telegram `showScanQrPopup` callback. This reproduces the project
+  generator/parser mismatch; it does not attest the unprovided physical QR or real iPhone WebView.
+- Scanner coverage includes bot `start`, existing raw/Mini App token forms, single URL decoding,
+  empty/invalid/conflicting/foreign links, backend rejection, duplicate events, cancellation,
+  unavailable scanner fallback, scanner-close focus, preservation of working session/tab/cart context,
+  and rejection of a late scan response after explicit visit exit.
+- Router coverage requires keyboard removal before the two-action choice, current token/session
+  in the Mini App URL, bot menu only after selection, repeat entry with intact draft and selected
+  tab, and denial of revoked tokens and stale session-bound choices without session creation.
+  Existing Guest/Platform/Venue/Staff, session and tab authorization suites remain required.
+- QR entry removal, inline choice and explicit bot-choice responses use a scoped outbox delivery
+  sequence. A delayed/retrying earlier message blocks later messages in that sequence for the
+  same chat; unrelated traffic keeps the existing scheduling. Regression executes the real
+  repository and worker with synthetic transport, checks temporary removal failure, retry,
+  normal delivery and repeated entry. Existing permanent-failure/retry limits remain unchanged.
+- A scan that cancels slow restore must finish in a stable state after 404/403/500, allow a new
+  scan and ignore the late restore. Direct state-module and scanner-callback browser regressions
+  also retain ready context and protect explicit visit exit. Real Telegram/iPhone smoke remains open.
+
+Local commands (worktree root; JDK 21, `TZ=UTC` for backend):
+
+```bash
+npm --prefix miniapp run build
+MINIAPP_E2E_PORT=5187 npm --prefix miniapp run e2e:smoke -- --grep 'QR scanner|table QR parser' --workers=1 --retries=0
+MINIAPP_E2E_PORT=5187 npm --prefix miniapp run e2e:smoke -- --workers=1 --retries=0
+```
+
+Backend uses `./gradlew --no-daemon --max-workers=1 :backend:app:test --console=plain`
+with selectors `*TelegramBotRouter*`, `*TelegramKeyboardsTest*`, `*VenueTableRoutesTest*`,
+`*GuestTableResolveRoutesTest*`, `*GuestTableContextActivationRepositoryTest*`,
+`*GuestTableContextTeardownRepositoryTest*`, `*PlatformGuestTableMutationCoordinatorTest*`,
+`*PlatformGuestQrPendingConfirmationStoreTest*`, `*GuestOrderRoutesTest*`,
+`*GuestTabsRoutesTest*`, `*GuestVisitRoutesTest*` and `*VenueRbacRoutesTest*`, followed by
+`:backend:app:compileKotlin` and `:backend:app:ktlintCheck`. If the combined run exhausts
+heap, retain only fully completed suite results, split unfinished selectors by concrete class
+and use process-local `_JAVA_OPTIONS=-Xmx4g`; an executor failure/skipped test is not a pass.
+Initial reproduction and combined regression commands:
+
+```bash
+JAVA_HOME=/Users/maksimmartynov/Library/Java/JavaVirtualMachines/corretto-21.0.2/Contents/Home ./gradlew --no-daemon --max-workers=1 :backend:app:compileTestKotlin --console=plain
+JAVA_HOME=/Users/maksimmartynov/Library/Java/JavaVirtualMachines/corretto-21.0.2/Contents/Home ./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VenueTableRoutesTest.qr package export returns zip with entries' --tests '*TelegramBotRouterTableTokenTest.guest qr entry removes previous keyboard before offering only order channels' --console=plain
+JAVA_HOME=/Users/maksimmartynov/Library/Java/JavaVirtualMachines/corretto-21.0.2/Contents/Home ./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VenueTableRoutesTest' --tests '*TelegramBotRouterTableTokenTest.guest qr*' --tests '*TelegramBotRouterTableTokenTest.continue in bot*' --console=plain
+TZ=UTC JAVA_HOME=/Users/maksimmartynov/Library/Java/JavaVirtualMachines/corretto-21.0.2/Contents/Home ./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*TelegramBotRouter*' --tests '*TelegramKeyboardsTest*' --tests '*VenueTableRoutesTest*' --tests '*GuestTableResolveRoutesTest*' --tests '*GuestTableContextActivationRepositoryTest*' --tests '*GuestTableContextTeardownRepositoryTest*' --tests '*PlatformGuestTableMutationCoordinatorTest*' --tests '*PlatformGuestQrPendingConfirmationStoreTest*' --tests '*GuestOrderRoutesTest*' --tests '*GuestTabsRoutesTest*' --tests '*GuestVisitRoutesTest*' --tests '*VenueRbacRoutesTest*' :backend:app:compileKotlin :backend:app:ktlintCheck --console=plain
+```
+
+Original candidate sequence (before QR-R1/QR-R2 correction): initial compile PASS; exporter PASS
+with expected old bot-choice FAIL (1/2);
+first fixed targeted run 8/8 PASS. Browser old scanner rejected the real exporter fixture;
+late scan-after-exit also failed before its fix. New-test locator emoji and actual
+`resolveMode=create` assertions were corrected. Intermediate builds exposed unsupported
+`URLSearchParams.keys` in the configured DOM libs and a missing `TableSessionStatus` import;
+both fixed without dependency/config changes. The combined backend run then hit heap OOM
+with one incomplete/skipped RBAC case; the completed seven suites/159 tests remained valid.
+Final split backend evidence totals 986 tests/15 suites with zero failed/skipped tests;
+QR browser checks 14/14, full smoke 230/230, build/compile/ktlint/diff and added doc links PASS.
+Vite retains its existing large-chunk warning. No retries were used for browser tests.
+
+Executed OOM recovery (local JDK path; environment is scoped to each process):
+
+```bash
+TZ=UTC JAVA_HOME=/Users/maksimmartynov/Library/Java/JavaVirtualMachines/corretto-21.0.2/Contents/Home _JAVA_OPTIONS=-Xmx4g ./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*TelegramBotRouterTableTokenTest' :backend:app:compileKotlin :backend:app:ktlintCheck --console=plain
+for qr_test_class in VenueRbacRoutesTest TelegramBotRouterLinkCommandTest TelegramBotRouterIdempotencyTest TelegramBotRouterVenueConnectionRequestFlowTest TelegramKeyboardsTest VenueTableRoutesTest PlatformGuestQrPendingConfirmationStoreTest; do
+  TZ=UTC JAVA_HOME=/Users/maksimmartynov/Library/Java/JavaVirtualMachines/corretto-21.0.2/Contents/Home _JAVA_OPTIONS=-Xmx4g ./gradlew --no-daemon --max-workers=1 :backend:app:test --tests "*$qr_test_class" --console=plain
+done
+```
+
+The local HT-QR-01 run required this existing OOM recovery procedure; final counts are in
+[the checkpoint](../PROJECT_STATUS.md#ht-qr-01--guest-qr-and-order-channel-entry).
+
+Correction pass QR-R1 / QR-R2 (2026-09-22):
+
+- Before fix: real PostgreSQL repository/worker with synthetic Telegram transport had **2/3**
+  failing R1 cases (exit 1); actual-source state unit + scanner-callback browser had **2/2**
+  failing R2 cases (exit 1). Both failures and source hashes were recorded before production edits.
+- Final bounded backend: **107/107 across 8 suites**, failures/errors/skips=0, exit 0; includes
+  four delivery-order cases, 19 existing worker cases, two recipient-authority cases, selected
+  router/keyboard/Platform entry guards, exporter, table resolve and pending confirmation tests.
+  Kotlin compile and ktlint are included. PostgreSQL runs use isolated local Testcontainers;
+  `JAVA_TOOL_OPTIONS=-Dapi.version=1.44` is process-local Docker client compatibility, not config.
+- Frontend: **43/43** targeted and **252/252** full smoke, zero failures/skips and retries=0;
+  build exit 0 with the existing Vite chunk warning. Targeted tests overlap full smoke totals.
+- All final checks captured exact argv/env, numerical exit codes and matching source hashes
+  before/after. The corrected archive includes original new-run logs/XML/metadata. Earlier
+  986-test evidence remains in the original archive and does not assert this corrected candidate.
+- Two intermediate Kotlin compile errors and one test-formatting lint failure were corrected;
+  copied old XML after compile-only failures is explicitly stale and excluded. Review also fixed
+  five negative keyboard assertions to match any dedupe key; no actionable findings remain.
+
+Executed correction commands (worktree root; full argv/env also retained in archive metadata):
+
+```bash
+TZ=UTC JAVA_HOME=/Users/maksimmartynov/Library/Java/JavaVirtualMachines/corretto-21.0.2/Contents/Home _JAVA_OPTIONS=-Xmx4g JAVA_TOOL_OPTIONS=-Dapi.version=1.44 ./gradlew --no-daemon --max-workers=1 :backend:app:test \
+  --tests '*TelegramGuestEntryOutboxOrderingTest' \
+  --tests '*TelegramOutboxWorkerTest' \
+  --tests '*TelegramOutboxVenueAuthorityTest' \
+  --tests '*TelegramBotRouterTableTokenTest.guest qr*' \
+  --tests '*TelegramBotRouterTableTokenTest.continue in bot*' \
+  --tests '*TelegramBotRouterTableTokenTest.bound bot choice*' \
+  --tests '*TelegramBotRouterTableTokenTest.ordinary guest and venue roles*' \
+  --tests '*TelegramBotRouterTableTokenTest.platform owner valid table token*' \
+  --tests '*TelegramBotRouterTableTokenTest.platform owner confirm*' \
+  --tests '*TelegramBotRouterTableTokenTest.platform confirmed guest opens*' \
+  --tests '*TelegramBotRouterTableTokenTest.platform guest confirmation direct*' \
+  --tests '*TelegramBotRouterTableTokenTest.existing guest exit*' \
+  --tests '*TelegramBotRouterTableTokenTest.web app fallback quick order command*' \
+  --tests '*TelegramBotRouterTableTokenTest.start with same table token*' \
+  --tests '*TelegramBotRouterTableTokenTest.start with different table token*' \
+  --tests '*TelegramBotRouterTableTokenTest.tokenless platform start*' \
+  --tests '*TelegramKeyboardsTest.table entry choice*' \
+  --tests '*TelegramKeyboardsTest.table context bot flow*' \
+  --tests '*VenueTableRoutesTest' \
+  --tests '*GuestTableResolveRoutesTest' \
+  --tests '*PlatformGuestQrPendingConfirmationStoreTest' :backend:app:compileKotlin :backend:app:ktlintCheck --console=plain
+MINIAPP_E2E_PORT=5187 PLAYWRIGHT_JUNIT_OUTPUT_FILE=/tmp/ht-qr-01-corrected-r2/green-targeted.xml npm --prefix miniapp run e2e:smoke -- --grep 'table context|QR scanner|table QR parser' --workers=1 --retries=0 --reporter=list,junit --output=/tmp/ht-qr-01-corrected-r2/green-artifacts
+MINIAPP_E2E_PORT=5187 npm --prefix miniapp run e2e:smoke -- --workers=1 --retries=0 --reporter=list,junit
+npm --prefix miniapp run build
+```
+
+Manual smoke after separately authorized publication/deployment:
+1. Ordinary Guest with an old full bot keyboard scans an already printed table QR using the
+   iPhone camera. Verify public venue/table header, disappearance of the old keyboard, and only
+   `Заказывать в Mini App` / `Заказывать в боте` on the choice message.
+2. Choose Mini App: verify the intended table and active visit; return to chat and confirm the
+   full bot keyboard is still absent. In Mini App opened from the bot without table context,
+   scan the same QR using its built-in scanner; verify the app stays open on the same table.
+3. Repeat QR entry, choose bot, add an item, repeat the choice and inspect cart/current order.
+   Verify quantity, existing session/tab and order stay intact; menu/quick order/staff call work.
+4. Cancel the scanner, scan unrelated/invalid QR, and retry the valid QR. Verify working context
+   survives failures. While initial restore is loading, scan a rejected QR; loading must end
+   with a useful message and allow another scan. After closing/expiring the visit, press its old bot-choice button: require
+   fresh QR, with no new session/order. Test the normal role/Platform confirmation boundaries.
+
 ## Platform Owner Controlled Guest QR Test Escape Quality Gate
 
 Status: **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / DONE / MVP / STAGING-SMOKE-PASSED**. Schema verdict: `NO_MIGRATION`. Commit/push, green Actions for the release HEAD, staging deploy and the bounded real Telegram role/privacy/exit smoke are complete. This closes only the controlled single-instance Phase 1 slice and does not declare the whole product production-ready.
