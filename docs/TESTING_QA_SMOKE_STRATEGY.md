@@ -725,6 +725,51 @@ Telegram/HTTP fixtures, never replace worker-progress evidence and the seventeen
 manual assertions. Retain historical records and each failed local validation attempt.
 Do not publish CI or perform staging actions during local-only repair.
 
+### HT-QR-01-POLICY-B attended authority and dispatch regressions
+
+Run the affected stdlib suites serially with `python3 -B scripts/<suite>.py`:
+`test-v126-policy-b-adapter`, `test-v126-policy-b-dispatch`,
+`test-v126-policy-b-authority`, `test-v126-policy-b-init`, and
+`test-v126-policy-b-client`; retain existing consumer/custody, bindings/native-receipt,
+reconciliation and sequencer checks. Both `test-v126-policy-b-transport.py --require-linux-ssh`
+and `test-v126-policy-b-linux.py --require-linux-ssh` require the separately provisioned
+test-owned Linux/OpenSSH environment with external network denied and capture-only leaf
+commands. Run `test-v126-policy-b-attended.py` there for actual foreground PTY, cancellation
+and timeout behavior; retain the complete `test-v126-remote-operation.py --require-linux-ssh`
+gate with its pinned historical negative control. A portable subset or skipped Linux class
+is not a full PASS; retain exact commands, numeric exits and before/after source hashes.
+
+Authority tests execute real AP-01/AP-07 consumers against independently manufactured
+synthetic C/P/clock sources and a prior U anchor; forging readiness/internal hashes does
+not update those pins. Test root provenance, C foreground-console/nonces, full ledger and
+high-water/revocation, native own-run chain/artifact/log matching, clock/action budgets,
+all expiry-vector boundaries, late changes, and COPY_ONLY without R0 or a second writer.
+Actual caller→launcher→supervisor coverage must verify real SSH session principal/host,
+root-controlled single-key source, Linux flock/FD ownership, EARLY/LATE at INIT/baseline/
+stages8/9/11/13/18/19, one-use result and EOF/backpressure/cancellation before dispatch.
+Test actual foreground TTY handling through the Bash tracked caller, not only direct
+Python transport. INIT crash/lost-ACK/partial-writer cases preserve UNKNOWN and immutable
+history; completion is bound before any later stage. Read-only/status and historical
+recovery must remain usable within their prior scope.
+
+Correction regressions PB-AI-R1/R2/R3 additionally exercise real owned-SSH host-key rejection
+for extra plain/comment/wildcard/comma-list/CA trust and post-check known_hosts replacement;
+nonempty preflight/image payloads through the actual caller/launcher/supervisor under the
+same lock; zero request/spool/bytes before admission and UNKNOWN after transfer loss; and
+the actual outer `prepare-init` → delayed independent approval → `init` path with exact
+manifest bytes, drift/duplicate/existing-state/lost-completion refusals. A direct lower
+Python client test does not cover that outer proposal boundary.
+
+Remove individual checks only in disposable test copies: corresponding regressions
+must fail, including omitted gates, source/session/console provenance, native-chain,
+lock/history and completion checks. Positive cases assert exact inert actions after
+all required checks, not merely a checker call. Synthetic clean-Git/clock/observer inputs
+must be explicit; they do not qualify the actual dirty candidate or real DR assets.
+The [attended contract](V126_STAGING_CUTOVER_CONTRACT.md#ht-qr-01-policy-b--attended-authority-and-same-lock-dispatch)
+permits local validation only; actual enrollment, R0/G/Q and post-V126 qualification
+remain operational prerequisites. Final Linux/end-to-end results belong to retained
+run evidence; do not infer PASS from implementation, unit counts or CI alone.
+
 ### HT-OPS-04 Policy B local evidence and restore regressions
 
 AP-01 only: no provider/staging/network tests, operational DR/V126 gate, secret

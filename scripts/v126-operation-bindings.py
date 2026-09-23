@@ -45,6 +45,8 @@ def binding_action_sequence(kind, name):
     }
     recovery = {'pre-v126': ['recover-pre-v126'], 'post-v126-stop': ['recover-post-v126-stop'],
                 'verify-full-dr': ['verify-full-dr']}
+    if kind == 'INIT' and name == 'RUN_INITIALIZED':
+        return ['initialize-run']
     selected = stages if kind == 'STAGE' else recovery if kind == 'RECOVERY' else {}
     if name not in selected:
         raise BindingError('reconciliation_action_class')
@@ -118,18 +120,10 @@ def binding_inventory(root, owner):
         if not result.exists():
             unknown = True
             continue
-        outcome = binding_read(result)
-        if (set(outcome) != {'identity', 'operation_id', 'exit', 'outcome', 'children', 'log_sha256', 'completed_at'} or
-                outcome['identity'] != identity or outcome['operation_id'] != op or
-                type(outcome['exit']) is not int or not 0 <= outcome['exit'] <= 255 or
-                outcome['outcome'] != ('SUCCEEDED' if outcome['exit'] == 0 else 'UNKNOWN') or
-                outcome['children'] != 'REAPED'):
-            raise BindingError('result_binding')
-        binding_protected(log, 0o400)
-        if binding_hash(log) != outcome['log_sha256']:
-            raise BindingError('log_binding')
+        outcome = binding_result(result, identity, root.parent)
         files[result.name] = binding_hash(result)
-        files[log.name] = outcome['log_sha256']
+        if identity['kind'] != 'INIT':
+            files[log.name] = outcome['log_sha256']
         if identity['kind'] == 'DEPLOY' and outcome['exit'] == 0:
             proof = root / (op + '.deploy-proof.json')
             binding_deploy_proof(proof, identity, root.parent)
@@ -383,6 +377,8 @@ def binding_deploy_handoff(proof, digest, handoff):
 
 def binding_request(path, identity, target):
     doc = binding_read(path)
+    if identity['kind'] == 'INIT':
+        return binding_init_request(doc, identity, target)
     if (set(doc) != {'format_version', 'identity', 'target_sha256', 'args', 'environment'} or
             type(doc['format_version']) is not int or doc['format_version'] != 1 or
             doc['identity'] != identity or
@@ -762,8 +758,383 @@ def binding_retire_deploy(target, owner, proof_sha, handoff_path, next_request_p
         os.close(fd)
 
 
+def binding_init_request(doc, identity, target):
+    keys = {'format_version', 'identity', 'target_sha256', 'manifest_sha256', 'manifest_size',
+            'local_state_sha256', 'metadata'}
+    if (not isinstance(doc, dict) or set(doc) != keys or type(doc['format_version']) is not int or
+            doc['format_version'] != 1 or doc['identity'] != identity or
+            (identity['kind'], identity['name'], identity['action']) != ('INIT', 'RUN_INITIALIZED', 'initialize-run') or
+            doc['target_sha256'] != hashlib.sha256(str(target).encode()).hexdigest() or
+            not isinstance(doc['manifest_sha256'], str) or not re.fullmatch('[0-9a-f]{64}', doc['manifest_sha256']) or
+            identity['intent_sha256'] != doc['manifest_sha256'] or
+            not isinstance(doc['local_state_sha256'], str) or not re.fullmatch('[0-9a-f]{64}', doc['local_state_sha256']) or
+            type(doc['manifest_size']) is not int or not 1 <= doc['manifest_size'] <= 65536):
+        binding_refuse('init_request_contract')
+    metadata = dict(directories=['artifacts', 'authorizations', 'intents', 'receipts', 'recovery', 'tmp'], files=[
+        dict(path='run.json', sha256=doc['manifest_sha256'], size=doc['manifest_size'], mode=0o400),
+        dict(path='run.json.sha256', sha256=hashlib.sha256((doc['manifest_sha256'] + '\n').encode()).hexdigest(),
+             size=65, mode=0o400)])
+    if doc['metadata'] != metadata or len(binding_canonical(doc)) > 65536:
+        binding_refuse('init_metadata_scope')
+    return doc
+
+
+def binding_init_attestation(doc, identity, request):
+    expected = dict(format_version=1, operation_id=hashlib.sha256(binding_canonical(identity)).hexdigest(),
+                    request_sha256=hashlib.sha256(binding_canonical(request)).hexdigest(),
+                    manifest_sha256=request['manifest_sha256'],
+                    metadata_sha256=hashlib.sha256(binding_canonical(request['metadata'])).hexdigest(),
+                    writer='ATTENDED_VERIFIER', durable=True)
+    if doc != expected or type(doc.get('format_version')) is not int or doc.get('durable') is not True:
+        binding_refuse('init_local_write_attestation')
+    return doc
+
+
+def binding_validate_init_completion(identity, request, result, target):
+    """Pure closed-schema verification; caller separately pins the remote history."""
+    binding_init_request(request, identity, Path(target))
+    operation_id = hashlib.sha256(binding_canonical(identity)).hexdigest()
+    keys = {'format_version', 'identity', 'operation_id', 'exit', 'outcome', 'completion',
+            'request_sha256', 'attestation', 'completed_at'}
+    if (not isinstance(result, dict) or set(result) != keys or type(result['format_version']) is not int or
+            result['format_version'] != 1 or result['identity'] != identity or result['operation_id'] != operation_id or
+            type(result['exit']) is not int or result['exit'] != 0 or result['outcome'] != 'SUCCEEDED' or
+            result['completion'] != 'LOCAL_METADATA_ATTESTED' or
+            result['request_sha256'] != hashlib.sha256(binding_canonical(request)).hexdigest()):
+        binding_refuse('init_result_binding')
+    binding_init_attestation(result['attestation'], identity, request)
+    try:
+        completed = datetime.datetime.fromisoformat(result['completed_at'])
+        if completed.tzinfo is None or completed.utcoffset() != datetime.timedelta(0):
+            binding_refuse('init_completion_time')
+    except (TypeError, ValueError):
+        binding_refuse('init_completion_time')
+    return result
+
+
+def binding_require_init_completion(root, target, current, completion):
+    initialized = [item for item in current if item['kind'] == 'INIT']
+    if len(initialized) != 1 or not isinstance(completion, dict) or set(completion) != {
+            'request', 'result', 'request_sha256', 'result_sha256'}:
+        binding_refuse('local_init_completion_required')
+    identity = initialized[0]
+    binding_validate_init_completion(identity, completion['request'], completion['result'], target)
+    operation_id = hashlib.sha256(binding_canonical(identity)).hexdigest()
+    for key in ('request', 'result'):
+        path = root / (operation_id + '.' + key + '.json')
+        if (completion[key] != binding_read(path) or completion[key + '_sha256'] != binding_hash(path)):
+            binding_refuse('local_remote_init_completion_mismatch')
+
+
+def binding_result(path, identity, target):
+    outcome = binding_read(path)
+    operation_id = hashlib.sha256(binding_canonical(identity)).hexdigest()
+    if identity['kind'] == 'INIT':
+        request = binding_request(path.parent / (operation_id + '.request.json'), identity, target)
+        binding_validate_init_completion(identity, request, outcome, target)
+    else:
+        if (set(outcome) != {'identity', 'operation_id', 'exit', 'outcome', 'children', 'log_sha256', 'completed_at'} or
+                outcome['identity'] != identity or outcome['operation_id'] != operation_id or
+                type(outcome['exit']) is not int or not 0 <= outcome['exit'] <= 255 or
+                outcome['outcome'] != ('SUCCEEDED' if outcome['exit'] == 0 else 'UNKNOWN') or
+                outcome['children'] != 'REAPED'):
+            binding_refuse('result_binding')
+        log = path.parent / (operation_id + '.log')
+        binding_protected(log, 0o400)
+        if binding_hash(log) != outcome['log_sha256']:
+            binding_refuse('log_binding')
+    return outcome
+
+
+def binding_existing_lock(target):
+    target = Path(target)
+    if not target.is_absolute() or str(target.resolve(strict=True)) != str(target):
+        binding_refuse('target_not_canonical')
+    info = target.stat()
+    if info.st_uid != os.geteuid() or info.st_mode & 0o022:
+        binding_refuse('target_ownership')
+    root = target / '.v126-target-operations'
+    binding_protected(root, 0o700, True)
+    binding_protected(root / 'lock', 0o600)
+    fd = os.open(root / 'lock', os.O_RDWR | os.O_NOFOLLOW)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        binding_lock_held(root, fd)
+        return root, fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def binding_lock_held(root, fd):
+    binding_protected(root, 0o700, True)
+    binding_protected(root / 'lock', 0o600)
+    actual, current = os.fstat(fd), (root / 'lock').stat()
+    if (actual.st_dev, actual.st_ino) != (current.st_dev, current.st_ino):
+        binding_refuse('target_lock_replaced')
+    if sys.platform == 'linux':
+        # Verify this exact open file description, not merely contention from
+        # another process which might have acquired the lock after ours was lost.
+        with open('/proc/self/fdinfo/' + str(fd), encoding='ascii') as handle:
+            raw = handle.read(16385)
+        device_inode = f'{os.major(actual.st_dev):02x}:{os.minor(actual.st_dev):02x}:{actual.st_ino}'
+        expected = re.compile(r'^lock:\s+\d+: FLOCK\s+ADVISORY\s+WRITE\s+' + str(os.getpid()) +
+                              r'\s+' + re.escape(device_inode) + r'\s+0 EOF$', re.M)
+        if len(raw) > 16384 or not expected.search(raw):
+            binding_refuse('target_lock_not_held')
+        return
+    probe = os.open(root / 'lock', os.O_RDWR | os.O_NOFOLLOW)
+    try:
+        try:
+            fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return
+        binding_refuse('target_lock_not_held')
+    finally:
+        os.close(probe)
+
+
+def binding_history(root, target):
+    owner, owners = binding_chain(root, target)
+    expected = {'lock', 'run.json'}
+    if (root / 'transfers').exists():
+        expected.add('transfers')
+    current = []
+    recovery = False
+    for prior_owner in owners:
+        inventory, unknown, identities = binding_inventory(root, prior_owner)
+        if unknown:
+            for item in identities:
+                result_path = root / (hashlib.sha256(binding_canonical(item)).hexdigest() + '.result.json')
+                if result_path.exists() and binding_read(result_path).get('exit') != 0:
+                    binding_refuse('prior_daemon_outcome_unknown')
+            binding_refuse('prior_outcome_unknown')
+        expected.update(name.split('/')[0] for name in inventory)
+        if prior_owner == owner:
+            current = identities
+            recovery = any(item['kind'] == 'RECOVERY' for item in current)
+    if set(path.name for path in root.iterdir()) != expected:
+        binding_refuse('unexpected_target_records')
+    return owner, owners, current, recovery
+
+
+def binding_admit_operation(root, target, identity, current, request_sha256=None):
+    policy = binding_active_policy(root, target)
+    if policy['next_kind'] == 'ORDINARY_DEPLOY':
+        if ((identity['kind'], identity['name'], identity['action']) != ('DEPLOY', 'ORDINARY_DEPLOY', 'ordinary-deploy') or
+                request_sha256 != policy['request_sha256'] or identity['intent_sha256'] != request_sha256 or current):
+            binding_refuse('ordinary_deploy_requires_exact_next_request')
+        return
+    if identity['kind'] == 'DEPLOY':
+        binding_refuse('ordinary_deploy_not_authorized_by_transfer')
+    if identity['kind'] == 'INIT':
+        if current:
+            binding_refuse('init_requires_empty_owner_history')
+        return
+    if identity['kind'] == 'RECOVERY':
+        if not any(item['kind'] != 'INIT' for item in current):
+            binding_refuse('next_binding_requires_fresh_baseline')
+        return  # Existing, separately authorized historical recovery remains inspectable/usable.
+    initialized = [item for item in current if item['kind'] == 'INIT']
+    if len(initialized) != 1:
+        binding_refuse('cutover_requires_completed_init')
+    baseline = [item for item in current if item['kind'] == 'STAGE' and item['name'] == 'BASELINE_VERIFIED']
+    if identity['name'] != 'BASELINE_VERIFIED' and not baseline:
+        binding_refuse('next_binding_requires_fresh_baseline')
+    if identity['name'] == 'BASELINE_VERIFIED' and baseline:
+        binding_refuse('baseline_already_dispatched')
+
+
+def binding_history_snapshot(root):
+    """Exact bounded read of the existing registry, including this invocation's intent."""
+    import time
+    deadline = time.monotonic() + 30
+    result = {}
+    size = 0
+    pending = [root]
+    while pending:
+        directory = pending.pop()
+        binding_protected(directory, 0o700, True)
+        info = directory.stat()
+        result[str(directory.relative_to(root))] = [info.st_dev, info.st_ino, 0o700, 'directory']
+        for path in sorted(directory.iterdir()):
+            if len(result) > 4096 or time.monotonic() >= deadline:
+                binding_refuse('history_read_bound')
+            info = path.lstat()
+            if stat.S_ISDIR(info.st_mode):
+                pending.append(path)
+                continue
+            mode = 0o600 if path == root / 'lock' or (path.suffix == '.log' and stat.S_IMODE(info.st_mode) == 0o600) else 0o400
+            binding_protected(path, mode)
+            size += info.st_size
+            if size > 16 * 1024 * 1024:
+                binding_refuse('history_size_bound')
+            result[str(path.relative_to(root))] = [info.st_dev, info.st_ino, mode, binding_hash(path)]
+    return result
+
+
+def binding_history_unchanged(root, lockfd, expected):
+    binding_lock_held(root, lockfd)
+    if binding_history_snapshot(root) != expected:
+        binding_refuse('history_changed_during_invocation')
+
+
+def binding_live_history(root, lockfd, before, created):
+    binding_lock_held(root, lockfd)
+    after = binding_history_snapshot(root)
+    if set(after) != set(before) | set(created) or any(after[name] != value for name, value in before.items()):
+        binding_refuse('unexpected_inflight_history_delta')
+    for name, digest in created.items():
+        if after[name][3] != digest:
+            binding_refuse('own_inflight_record_changed')
+    return after
+
+
+def binding_policy_b_dispatch(gate, identity, target, lockfd, timeout):
+    # The attended transport consumes its one-use LATE nonce at this final boundary.
+    # In-process Gate remains available only to source-bound isolated validation.
+    callback = getattr(gate, 'before_dispatch', None)
+    if callback is not None:
+        callback(identity, target, lockfd, timeout)
+
+
+def binding_initialize(target, identity, init_request, *, policy_b_gate, write_init, ack_init=None, timeout=300):
+    """S-side INIT: existing target lock, R0, durable intent, attended metadata write."""
+    import signal
+    import time
+    if sys.platform != 'linux':
+        binding_refuse('linux_target_lock_required')
+    binding_owner({key: identity.get(key) for key in ('run_id', 'release_sha', 'script_sha256')})
+    if (set(identity) != {'run_id', 'release_sha', 'script_sha256', 'intent_sha256', 'kind', 'name', 'action'} or
+            (identity['kind'], identity['name'], identity['action']) != ('INIT', 'RUN_INITIALIZED', 'initialize-run') or
+            timeout != 300 or policy_b_gate is None or not callable(write_init)):
+        binding_refuse('init_identity_or_authority')
+    target = Path(target)
+    binding_init_request(init_request, identity, target)
+    root, lockfd = binding_existing_lock(target)
+    previous = {sig: signal.getsignal(sig) for sig in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)}
+    cancelled = False
+    def cancel(signum, frame):
+        nonlocal cancelled
+        cancelled = True
+    try:
+        for sig in previous:
+            signal.signal(sig, cancel)
+        owner, _, current, _ = binding_history(root, target)
+        if owner != {key: identity[key] for key in owner}:
+            binding_refuse('target_bound_to_another_run')
+        binding_admit_operation(root, target, identity, current)
+        before = binding_history_snapshot(root)
+        deadline = time.monotonic() + 930
+        binding_policy_b_check(policy_b_gate, identity, target, lockfd, timeout)
+        binding_history_unchanged(root, lockfd, before)
+        if cancelled or time.monotonic() >= deadline:
+            binding_refuse('init_cancelled_before_intent')
+        operation_id = hashlib.sha256(binding_canonical(identity)).hexdigest()
+        now = lambda: datetime.datetime.now(datetime.timezone.utc).isoformat()
+        start = dict(identity=identity, operation_id=operation_id, started_at=now(),
+                     boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip())
+        binding_create(root / (operation_id + '.start.json'), start)
+        binding_create(root / (operation_id + '.request.json'), init_request)
+        created = {operation_id + '.start.json': hashlib.sha256(binding_canonical(start)).hexdigest(),
+                   operation_id + '.request.json': hashlib.sha256(binding_canonical(init_request)).hexdigest()}
+        live = binding_live_history(root, lockfd, before, created)
+        late = binding_policy_b_check(policy_b_gate, identity, target, lockfd, timeout)
+        binding_history_unchanged(root, lockfd, live)
+        if cancelled or time.monotonic() >= deadline:
+            binding_refuse('init_cancelled_before_dispatch')
+        action_started = time.monotonic()
+        binding_policy_b_dispatch(policy_b_gate, identity, target, lockfd, timeout)
+        if cancelled:
+            binding_refuse('init_cancelled_before_dispatch')
+        attestation = write_init(identity, init_request, late)
+        if cancelled or time.monotonic() - action_started >= 300 or time.monotonic() >= deadline:
+            binding_refuse('init_local_completion_expired')
+        binding_init_attestation(attestation, identity, init_request)
+        binding_history_unchanged(root, lockfd, live)
+        if cancelled or time.monotonic() >= deadline:
+            binding_refuse('init_completion_deadline')
+        result = dict(format_version=1, identity=identity, operation_id=operation_id, exit=0, outcome='SUCCEEDED',
+                      completion='LOCAL_METADATA_ATTESTED', request_sha256=created[operation_id + '.request.json'],
+                      attestation=attestation, completed_at=now())
+        binding_create(root / (operation_id + '.result.json'), result)
+        if ack_init is not None:
+            ack_started = time.monotonic()
+            ack_init(result)
+            if time.monotonic() - ack_started >= 30 or time.monotonic() >= deadline:
+                binding_refuse('init_ack_deadline')
+        return result
+    finally:
+        os.close(lockfd)
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+
+def binding_init_readback(target, identity, request_sha256):
+    """Read existing exact completion only; never rerun a writer or append a result."""
+    target = Path(target)
+    root, lockfd = binding_existing_lock(target)
+    try:
+        binding_history(root, target)
+        if (identity.get('kind'), identity.get('name'), identity.get('action')) != ('INIT', 'RUN_INITIALIZED', 'initialize-run'):
+            binding_refuse('init_readback_identity')
+        operation_id = hashlib.sha256(binding_canonical(identity)).hexdigest()
+        request_path = root / (operation_id + '.request.json')
+        request = binding_request(request_path, identity, target)
+        if binding_hash(request_path) != request_sha256:
+            binding_refuse('init_readback_request')
+        result_path = root / (operation_id + '.result.json')
+        result = binding_result(result_path, identity, target)
+        return dict(request=request, result=result, request_sha256=request_sha256,
+                    result_sha256=binding_hash(result_path))
+    finally:
+        os.close(lockfd)
+
+
+def binding_policy_b_required(identity):
+    # Real stage/action identities select the barrier, never readiness claims.
+    if identity['kind'] == 'INIT':
+        if (identity['name'], identity['action']) != ('RUN_INITIALIZED', 'initialize-run'):
+            binding_refuse('init_dispatch_identity')
+        return True
+    if identity['kind'] == 'DEPLOY':
+        if (identity['name'], identity['action']) != ('ORDINARY_DEPLOY', 'ordinary-deploy'):
+            binding_refuse('policy_b_dispatch_identity')
+        return False
+    if identity['action'] not in binding_action_sequence(identity['kind'], identity['name']):
+        binding_refuse('policy_b_dispatch_identity')
+    if identity['kind'] == 'RECOVERY':
+        return False
+    return identity['name'] in {
+        'BASELINE_VERIFIED', 'FINAL_V125_PREFLIGHT_PASSED',
+        'V126_MAINTENANCE_CONFIG_PREPARED', 'V126_BACKEND_STARTED',
+        'MANUAL_SMOKE_AUTHORIZED', 'FINAL_V126_BACKEND_STARTED',
+        'ORDINARY_CADDY_RESTORED',
+    }
+
+
+def binding_policy_b_check(gate, identity, target, lockfd, timeout):
+    import time
+    started = time.monotonic()
+    try:
+        result = gate.check(identity, target, lockfd, timeout)
+        elapsed = time.monotonic() - started
+        if elapsed < 0 or elapsed >= 300:
+            binding_refuse('policy_b_round_expired')
+        expected = 'R0' if identity['kind'] == 'INIT' or identity['name'] == 'BASELINE_VERIFIED' else 'Q'
+        if (not isinstance(result, dict) or result.get('barrier') != expected or
+                result.get('operational') is not True or
+                not re.fullmatch('[0-9a-f]{64}', result.get('qualification_sha256', ''))):
+            binding_refuse('policy_b_consumer_result')
+        return result
+    except Exception:
+        # Do not expose provider data or turn a refusal into retry/recovery authority.
+        binding_refuse('policy_b_admission_refused')
+
+
 def binding_supervise(target, identity, worker_argv, *, input_data=None, input_fd=None,
-                      env=None, timeout=300, request_sha256=None, pass_fds=(), request_context=None):
+                      env=None, timeout=300, request_sha256=None, pass_fds=(), request_context=None,
+                      policy_b_gate=None, init_completion=None, prepare_payload=None):
     """Hold the single target lock through admission, children and durable result.
 
     Callers validate source before entry; workers contain only action consumers.
@@ -783,7 +1154,19 @@ def binding_supervise(target, identity, worker_argv, *, input_data=None, input_f
             not re.fullmatch('[0-9a-f]{64}', identity['intent_sha256']) or not worker_argv or
             not 0 < timeout <= 1800):
         binding_refuse('invalid_identity')
+    policy_b_required = binding_policy_b_required(identity)
+    if identity['kind'] == 'INIT':
+        binding_refuse('init_requires_metadata_handshake')
+    if policy_b_required and policy_b_gate is None:
+        # No file/env bootstrap: operational acquisition/transport needs an
+        # approved AP-06 contract. Refuse before creating target records.
+        binding_refuse('policy_b_independent_observer_required')
+    upload_action = identity['kind'] == 'STAGE' and identity['action'] in ('preflight-upload', 'image-upload')
+    if (upload_action != callable(prepare_payload) or
+            (upload_action and (input_fd is not None or pass_fds))):
+        binding_refuse('upload_requires_locked_preparation')
     lockfd = None
+    logfd = None
     previous_signals = {sig: signal.getsignal(sig) for sig in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)}
     try:
         operation_id = hashlib.sha256(binding_canonical(identity)).hexdigest()
@@ -794,105 +1177,37 @@ def binding_supervise(target, identity, worker_argv, *, input_data=None, input_f
         info = target.stat()
         if info.st_uid != os.geteuid() or info.st_mode & 0o022:
             binding_refuse('target_ownership')
-        root = target / '.v126-target-operations'
-        try:
-            root.mkdir(mode=0o700)
-            binding_sync_dir(target)
-        except FileExistsError:
-            pass
-        binding_protected(root, 0o700, True)
-        lockfd = os.open(root / 'lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-        binding_protected(root / 'lock', 0o600)
-        try:
-            fcntl.flock(lockfd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            binding_refuse('target_busy')
-        owner = {key: identity[key] for key in ('run_id', 'release_sha', 'script_sha256')}
-        if (root / 'run.json').exists():
-            try:
-                active_owner, prior_owners = binding_chain(root, target)
-            except (BindingError, OSError, ValueError, KeyError, TypeError):
-                binding_refuse('binding_history_invalid')
-            if active_owner != owner:
-                binding_refuse('target_bound_to_another_run')
-            policy = binding_active_policy(root, target)
-            _, _, current_operations = binding_inventory(root, owner)
-            if policy['next_kind'] == 'ORDINARY_DEPLOY':
-                if ((identity['kind'], identity['name'], identity['action']) != ('DEPLOY', 'ORDINARY_DEPLOY', 'ordinary-deploy') or
-                        request_sha256 != policy['request_sha256'] or identity['intent_sha256'] != request_sha256 or current_operations):
-                    binding_refuse('ordinary_deploy_requires_exact_next_request')
-            elif identity['kind'] == 'DEPLOY':
-                binding_refuse('ordinary_deploy_not_authorized_by_transfer')
-            elif not current_operations and (identity['kind'], identity['name']) != ('STAGE', 'BASELINE_VERIFIED'):
-                binding_refuse('next_binding_requires_fresh_baseline')
-        else:
-            # A legacy/uninitialized target may only be claimed by a fresh baseline.
-            if identity['kind'] != 'STAGE' or identity['name'] != 'BASELINE_VERIFIED':
-                binding_refuse('legacy_run_requires_reconciliation')
-            if set(p.name for p in root.iterdir()) != {'lock'}:
-                binding_refuse('uninitialized_target_records')
-            binding_create(root / 'run.json', owner)
-            prior_owners = [owner]
-        starts = sorted(root.glob('*.start.json'))
-        expected_names = {'lock', 'run.json'} | ({'transfers'} if (root / 'transfers').exists() else set())
-        failed = False
-        recovery_seen = False
-        for start_path in starts:
-            prior = binding_read(start_path)
-            prior_id = start_path.name.removesuffix('.start.json')
-            if set(prior) != {'identity', 'operation_id', 'started_at', 'boot_id'}:
-                binding_refuse('start_schema')
-            if prior['operation_id'] != prior_id or hashlib.sha256(binding_canonical(prior['identity'])).hexdigest() != prior_id:
-                binding_refuse('start_binding')
-            result_path = root / (prior_id + '.result.json')
-            if not result_path.exists():
-                binding_refuse('prior_outcome_unknown')
-            outcome = binding_read(result_path)
-            if (set(outcome) != {'identity', 'operation_id', 'exit', 'outcome', 'children', 'log_sha256', 'completed_at'} or
-                    outcome['identity'] != prior['identity'] or outcome['operation_id'] != prior_id or
-                    outcome['children'] != 'REAPED' or type(outcome['exit']) is not int or
-                    outcome['outcome'] != ('SUCCEEDED' if outcome['exit'] == 0 else 'UNKNOWN')):
-                binding_refuse('result_binding')
-            log_path = root / (prior_id + '.log')
-            binding_protected(log_path, 0o400)
-            if hashlib.sha256(log_path.read_bytes()).hexdigest() != outcome['log_sha256']:
-                binding_refuse('log_binding')
-            if outcome['exit'] != 0:
-                binding_refuse('prior_daemon_outcome_unknown')
-            failed = failed or outcome['exit'] != 0
-            prior_owner = {key: prior['identity'].get(key) for key in owner}
-            if prior_owner not in prior_owners:
-                binding_refuse('unbound_operation_history')
-            if prior_owner == owner:
-                recovery_seen = recovery_seen or prior['identity']['kind'] == 'RECOVERY'
-            expected_names.update((start_path.name, result_path.name, log_path.name))
-            request_path = root / (prior_id + '.request.json')
-            if request_path.exists() or request_path.is_symlink():
-                binding_request(request_path, prior['identity'], target)
-                expected_names.add(request_path.name)
-            if prior['identity']['kind'] == 'DEPLOY':
-                proof_path = root / (prior_id + '.deploy-proof.json')
-                binding_deploy_proof(proof_path, prior['identity'], target)
-                expected_names.add(proof_path.name)
-            if (root / 'reconciliations').exists():
-                binding_reconciliation_inventory(root, target)
-                expected_names.add('reconciliations')
-        if set(p.name for p in root.iterdir()) != expected_names:
-            binding_refuse('unexpected_target_records')
-        if (failed or recovery_seen) and identity['kind'] != 'RECOVERY':
+        root, lockfd = binding_existing_lock(target)
+        owner, prior_owners, current_operations, recovery_seen = binding_history(root, target)
+        requested_owner = {key: identity[key] for key in ('run_id', 'release_sha', 'script_sha256')}
+        if owner != requested_owner:
+            binding_refuse('target_bound_to_another_run')
+        binding_admit_operation(root, target, identity, current_operations, request_sha256)
+        if identity['kind'] == 'STAGE':
+            binding_require_init_completion(root, target, current_operations, init_completion)
+        if recovery_seen and identity['kind'] != 'RECOVERY':
             binding_refuse('prior_failed_operation_requires_recovery')
         if (root / (operation_id + '.start.json')).exists():
             binding_refuse('operation_already_dispatched')
+        history_before = binding_history_snapshot(root)
+        if policy_b_required:
+            binding_policy_b_check(policy_b_gate, identity, target, lockfd, timeout)
+        binding_history_unchanged(root, lockfd, history_before)
         now = lambda: datetime.datetime.now(datetime.timezone.utc).isoformat()
-        binding_create(root / (operation_id + '.start.json'), dict(identity=identity, operation_id=operation_id,
-               started_at=now(), boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip()))
+        start = dict(identity=identity, operation_id=operation_id, started_at=now(),
+                     boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip())
+        binding_create(root / (operation_id + '.start.json'), start)
+        created = {operation_id + '.start.json': hashlib.sha256(binding_canonical(start)).hexdigest()}
         if request_context is not None:
             request_path = root / (operation_id + '.request.json')
             binding_create(request_path, dict(format_version=1, identity=identity,
                 target_sha256=hashlib.sha256(str(target).encode()).hexdigest(), **request_context))
             binding_request(request_path, identity, target)
+            created[request_path.name] = binding_hash(request_path)
         log_path = root / (operation_id + '.log')
         logfd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        created[log_path.name] = hashlib.sha256(b'').hexdigest()
+        live_history = binding_live_history(root, lockfd, history_before, created)
         # Mutation output never depends on the SSH stdout pipe staying open.
         signal.signal(signal.SIGHUP, signal.SIG_IGN)
         cancelled = False
@@ -903,7 +1218,44 @@ def binding_supervise(target, identity, worker_argv, *, input_data=None, input_f
 
         for signum in (signal.SIGTERM, signal.SIGINT):
             signal.signal(signum, cancel)
+        # Binary acquisition is part of this operation: no request/spool before
+        # existing history admission, applicable EARLY and durable intent.
+        def payload_current():
+            if cancelled:
+                binding_refuse('cancelled_during_payload')
+            binding_lock_held(root, lockfd)
+
+        payload_current()
+        binding_history_unchanged(root, lockfd, live_history)
+        if upload_action:
+            transfer_started = time.monotonic()
+            try:
+                prepared = prepare_payload(identity, target, lockfd, live_history, payload_current)
+            except Exception:
+                binding_refuse('payload_acquisition_failed')
+            elapsed = time.monotonic() - transfer_started
+            if elapsed < 0 or elapsed >= 900:
+                binding_refuse('payload_transfer_expired')
+            if (not isinstance(prepared, tuple) or len(prepared) != 2 or
+                    not isinstance(prepared[0], list) or not prepared[0] or
+                    not all(isinstance(arg, str) for arg in prepared[0]) or
+                    not isinstance(prepared[1], tuple) or len(prepared[1]) != 1 or
+                    type(prepared[1][0]) is not int or prepared[1][0] <= 2 or prepared[1][0] == lockfd or
+                    not stat.S_ISREG(os.fstat(prepared[1][0]).st_mode)):
+                binding_refuse('payload_worker_binding')
+            worker_argv, pass_fds = prepared
+            payload_current()
+        # No cached PASS after durable I/O or upload. LATE observes fresh inputs.
+        if policy_b_required:
+            binding_policy_b_check(policy_b_gate, identity, target, lockfd, timeout)
+        binding_history_unchanged(root, lockfd, live_history)
+        if cancelled:
+            binding_refuse('cancelled_before_dispatch')
         deadline = time.monotonic() + timeout
+        if policy_b_required:
+            binding_policy_b_dispatch(policy_b_gate, identity, target, lockfd, timeout)
+        if cancelled:
+            binding_refuse('cancelled_before_dispatch')
         child = subprocess.Popen(worker_argv, stdin=(input_fd if input_fd is not None else subprocess.PIPE),
                                  stdout=logfd, stderr=logfd, start_new_session=True,
                                  env=env, pass_fds=pass_fds)
@@ -983,6 +1335,7 @@ def binding_supervise(target, identity, worker_argv, *, input_data=None, input_f
         os.fsync(logfd)
         os.fchmod(logfd, 0o400)
         os.close(logfd)
+        logfd = None
         raw = log_path.read_bytes()
         outcome = dict(identity=identity, operation_id=operation_id, exit=status,
                        outcome='SUCCEEDED' if status == 0 else 'UNKNOWN', children='REAPED',
@@ -997,6 +1350,11 @@ def binding_supervise(target, identity, worker_argv, *, input_data=None, input_f
             pass
         return status
     finally:
+        if logfd is not None:
+            # A late refusal retains the durable start as UNKNOWN, never SUCCESS.
+            os.fsync(logfd)
+            os.fchmod(logfd, 0o400)
+            os.close(logfd)
         if lockfd is not None:
             os.close(lockfd)
         for sig, handler in previous_signals.items():

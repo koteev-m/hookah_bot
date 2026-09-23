@@ -639,8 +639,12 @@ if keep_stage != "BASELINE_VERIFIED":
     entry = 'if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then'
     payload = payload.replace(entry, "verify_release_baseline_local() { printf 'FIXTURE_READ_ONLY_BASELINE=PASS\\n'; }\n\n" + entry, 1)
     result = [payload]
+# Keep the real completion verifier available when a synthetic stage script is
+# copied outside scripts/. This changes only dependency location in the fixture.
+payload = "".join(result).replace('${SCRIPT_DIR}/v126-policy-b-client.py',
+                                  os.path.join(os.path.dirname(source), 'v126-policy-b-client.py'))
 with open(target, "wt", encoding="utf-8", newline="") as handle:
-    handle.writelines(result)
+    handle.write(payload)
 os.chmod(target, 0o700)
 PY
 }
@@ -670,9 +674,40 @@ set_init_args() {
 new_state() {
   local script="$1"
   local label="$2"
+  # macOS callers may supply /var aliases; synthetic INIT uses the canonical parent.
+  TEST_ROOT="$(cd "${TEST_ROOT}" && pwd -P)"
   NEW_STATE="${TEST_ROOT}/state-${label}"
   set_init_args "${NEW_STATE}"
-  expect_success "initialize ${label}" invoke_script "${script}" init "${INIT_ARGS[@]}"
+  # Existing native-sequencer tests start from explicitly synthetic accepted INIT
+  # metadata. Actual CLI/SSH/consumer initialization is covered by its isolated
+  # transport harness; this writer is not operational admission or a test flag.
+  expect_success "synthetic metadata fixture ${label}" python3 - "${SCRIPT_DIR}/v126-policy-b-client.py" \
+    "${script}" "${INIT_ARGS[@]}" <<'PYINITFIXTURE'
+import datetime
+import importlib.util
+from pathlib import Path
+import sys
+sys.dont_write_bytecode = True
+client_path, script_path, *arguments = sys.argv[1:]
+spec = importlib.util.spec_from_file_location('synthetic_init_client', client_path)
+client = importlib.util.module_from_spec(spec); spec.loader.exec_module(client)
+options = {arguments[index].removeprefix('--').replace('-', '_'): arguments[index + 1]
+           for index in range(0, len(arguments), 2)}
+state = options.pop('state_dir')
+manifest = dict(options, format_version=1, created_at=datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+                script_sha256=client.digest(Path(script_path).read_bytes()))
+manifest['main_actions_run_id'] = int(manifest['main_actions_run_id'])
+manifest['release_parents'] = manifest['release_parents'].split(',')
+raw = client.canonical(manifest)
+request = client.init_request(state, raw)
+attestation = client.write_metadata(state, raw, request)
+result = dict(format_version=1, identity=request['identity'], operation_id=attestation['operation_id'],
+              exit=0, outcome='SUCCEEDED', completion='LOCAL_METADATA_ATTESTED',
+              request_sha256=attestation['request_sha256'], attestation=attestation,
+              completed_at=datetime.datetime.now(datetime.timezone.utc).isoformat())
+client.save_completion(state, dict(request=request, result=result,
+    request_sha256=client.digest(client.canonical(request)), result_sha256=client.digest(client.canonical(result))))
+PYINITFIXTURE
 }
 
 expect_missing_init_option() {
@@ -690,8 +725,8 @@ expect_missing_init_option() {
     filtered+=("${INIT_ARGS[${index}]}" "${INIT_ARGS[$((index + 1))]}")
     index=$((index + 2))
   done
-  expect_failure "init rejects ${label}" 'rejected|must|required|missing|invalid' \
-    invoke_script "${CUTOVER_SCRIPT}" init "${filtered[@]}"
+  expect_failure "proposal preparation rejects ${label}" 'rejected|must|required|missing|invalid' \
+    invoke_script "${CUTOVER_SCRIPT}" prepare-init --proposal-file "${TEST_ROOT}/${label}.proposal.json" "${filtered[@]}"
   [[ ! -e "${state_dir}" && ! -L "${state_dir}" ]] ||
     fail "rejected init created state: ${label}"
 }
@@ -1190,6 +1225,13 @@ test_init_contract() {
   expect_missing_init_option --v126-image-id
   expect_missing_init_option --database-url-file
 
+  local refused_state="${TEST_ROOT}/state-init-missing-authority"
+  set_init_args "${refused_state}"
+  expect_failure 'actual init requires independently enrolled authority before metadata' 'policy-b-anchor|anchor|required' \
+    invoke_script "${CUTOVER_SCRIPT}" init --state-dir "${refused_state}" \
+      --proposal-file "${TEST_ROOT}/unavailable-proposal.json" --proposal-sha256 "$(printf a%.0s {1..64})"
+  [[ ! -e "${refused_state}" && ! -L "${refused_state}" ]] || fail 'missing authority created canonical init metadata'
+
   new_state "${CUTOVER_SCRIPT}" exact-binding
   local state="${NEW_STATE}"
   python3 - "${state}/run.json" "${CUTOVER_SCRIPT}" "${V126_IMAGE_ID}" <<'PY'
@@ -1237,8 +1279,8 @@ PY
     fi
     index=$((index + 2))
   done
-  expect_failure 'init rejects symlink release worktree' 'symlink' \
-    invoke_script "${CUTOVER_SCRIPT}" init "${changed[@]}"
+  expect_failure 'proposal preparation rejects symlink release worktree' 'symlink' \
+    invoke_script "${CUTOVER_SCRIPT}" prepare-init --proposal-file "${TEST_ROOT}/symlink.proposal.json" "${changed[@]}"
 }
 
 test_receipt_integrity() {
@@ -8207,6 +8249,8 @@ main() {
   python3 "${SCRIPT_DIR}/test-v126-configuration.py"
   python3 "${SCRIPT_DIR}/test-v126-database-evidence.py"
   python3 "${SCRIPT_DIR}/test-v126-dr-evidence.py"
+  python3 -B "${SCRIPT_DIR}/test-v126-policy-b-adapter.py"
+  python3 -B "${SCRIPT_DIR}/test-v126-policy-b-dispatch.py"
   git -C "${REPO_ROOT}" show 09e19461cf54376714ae51f2d4c9e480f8365d8e:scripts/v126-cutover.sh > \
     "${TEST_ROOT}/v126-supervisor-before.sh" || fail 'exact original supervisor source is unavailable'
   python3 "${SCRIPT_DIR}/test-v126-remote-operation.py" --require-linux-ssh \

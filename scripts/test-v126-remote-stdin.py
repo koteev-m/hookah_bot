@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Production builder -> local pipe -> real bash -s -> production dispatch validation.
 
-Receipt lookups, the SSH/process boundary, Linux remote supervisor and leaf actions
-are fixtures. Uploads retain the actual receiver; only its environmental
+Receipt lookups, authenticated transport, the SSH/process boundary, Linux remote
+supervisor and leaf actions are fixtures. The actual authority/SSH handshake is
+covered by the separate Policy B transport suite. Uploads retain the actual receiver; only its environmental
 preconditions are explicit fixtures. The supervisor captures the leaf log and emits a canonical
 identity-bound acknowledgement; the production acknowledgement validator remains
 real. Separate Linux tests own subreaper/lock/crash coverage. No network, database,
@@ -93,6 +94,8 @@ RELEASE_SHA=67fbfd4d587244712b15e974f485e08316ffd486
 STAGING_PATH=/fixture/staging
 V126_IMAGE_ID=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 REMOTE=fixture-no-network
+POLICY_B_ANCHOR_PATH="$FRAME_ROOT/synthetic-authority-not-operational.json"
+POLICY_B_TRANSPORT_PATH="$FRAME_ROOT/synthetic-transport-not-operational.json"
 ACTIVE_OPERATION_KIND=STAGE
 ACTIVE_OPERATION_NAME=BASELINE_VERIFIED
 ACTIVE_PREDECESSOR_STAGE=NONE
@@ -159,6 +162,17 @@ run_tracked_command_with_input() {
   shift
   python3 "$FRAME_TEST" --transport "$@"
 }
+# Require the exact production authenticated-transport call shape; never execute
+# its command here. These tests exercise byte framing, not Policy B admission.
+run_tracked_command() {
+  [[ "$#" == 13 && "$1" == policy-b-ssh && "$2" == --attended &&
+     "$3" == python3 && "$4" == "$SCRIPT_DIR/v126-policy-b-client.py" &&
+     "$5" == operation && "$6" == --state-dir && "$7" == "$FRAME_ROOT" &&
+     "$8" == --policy-b-anchor && "$9" == "$POLICY_B_ANCHOR_PATH" &&
+     "${10}" == --policy-b-transport && "${11}" == "$POLICY_B_TRANSPORT_PATH" &&
+     "${12}" == --stream-file ]] || return 98
+  python3 "$FRAME_TEST" --transport "${13}" ssh fixture-no-network bash -s
+}
 cat() {
   command cat "$@" || return $?
   case "$FRAME_FAULT:$#" in
@@ -215,8 +229,9 @@ class RemoteStdin(unittest.TestCase):
             stub.chmod(0o700)
         self.env["PATH"] = str(bin_dir) + os.pathsep + self.env["PATH"]
 
-    def body(self, source):
-        # Keep the complete production dispatcher/validators. Stub only its leaf actions.
+    def body(self, source, *, raw_stage=False):
+        # Keep the production builder, loader, envelope and ACK validators.
+        # Authenticated transport/OS supervision and leaf effects are fixtures.
         dispatch = source.split(b"remote_dispatch_enveloped() {\n", 1)[1]
         leaves = re.findall(rb"\) (remote_[a-z0-9_]+) \"\$@\" ;;", dispatch)
         self.assertEqual(len(leaves), 19)
@@ -282,12 +297,22 @@ PY
   return "$fixture_status"
 }
 '''.encode()
+        if b"stage dispatch requires the authenticated Policy B launcher" in source and not raw_stage:
+            recorder += r'''
+# This fixture is the separately tested authenticated-launch boundary, not a
+# Policy B PASS. Keep the actual envelope validator and leaf/ACK consumers.
+# A dedicated case below executes the unmodified raw-STAGE rejection as well.
+remote_dispatch_enveloped() {
+  remote_validate_envelope "$@"
+  remote_supervise_action "$@"
+}
+'''.encode()
         return source + recorder + b"# trailing body bytes: \\ ' \" $() ; \t\n\n\n"
 
-    def build(self, *, old=False, operation="baseline", args=None, fault="none", payload=None):
+    def build(self, *, old=False, operation="baseline", args=None, fault="none", payload=None, raw_stage=False):
         source = self.old if old else self.source
         self.fields = LEGACY_FIELDS if old else FIELDS
-        body = self.body(source)
+        body = self.body(source, raw_stage=raw_stage)
         (self.root / "source.sh").write_bytes(source)
         (self.root / "body.sh").write_bytes(body)
         (self.root / "driver.sh").write_text(DRIVER)
@@ -401,6 +426,12 @@ PY
         for name, value in zip(FIELDS, expected):
             self.assertTrue(row["envelope"]["V126_INTERNAL_REMOTE_" + name] == value,
                             "received field differs: " + name)
+
+    def test_02b_unmodified_raw_stage_refuses_authenticated_transport_bypass(self):
+        result, _ = self.build(raw_stage=True)
+        self.denied(result)
+        self.assertIn(b"stage dispatch requires the authenticated Policy B launcher", result.stderr)
+        self.assertTrue((self.root / "verified-body").exists(), "raw source was not validated first")
 
     def test_03_recovery_same_transport(self):
         for operation, leaf in [("recovery", "remote_recover_pre_v126"),

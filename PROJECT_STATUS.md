@@ -1,5 +1,47 @@
 # Project Status
 
+## HT-QR-01-POLICY-B — approved authority/INIT implementation
+
+**ARCHITECTURE APPROVED / LOCAL IMPLEMENTATION AND ISOLATED VALIDATION PASS / UNCOMMITTED**.
+Branch `codex/ht-qr-01-policy-b-gates`, worktree
+`/Users/maksimmartynov/IdeaProjects/hookah_bot_worktrees/ht-qr-01-policy-b-gates`,
+base/HEAD `e20bfeb008b1c7a52b3f3bb88a81fe7228da45d3`, tree
+`b454a3898395febcb18641943585860efe8c8769`. No successor release is selected.
+
+The approved [attended contract](docs/V126_STAGING_CUTOVER_CONTRACT.md#ht-qr-01-policy-b--attended-authority-and-same-lock-dispatch)
+connects off-VPS AP-06 acquisition/consumer, authenticated launcher and existing target
+supervisor. Prior independent U anchor, fresh C console/head/revocation, P machine
+proofs and clock are separate from readiness. INIT and required stage actions run
+EARLY/LATE under the same flock; immutable completion/UNKNOWN and COPY_ONLY boundaries
+are implemented. Operational source checks remain enabled; no enrollment or target
+history is manufactured. Existing native receipts,20stages, Gate A/B/C, product/RBAC
+and migration bytes are preserved.
+
+PB-AI-R1/R2/R3 corrected locally after exact comparison with the original 27-file archive.
+SSH now uses only frozen pinned host-key material. Nonempty binary acquisition follows
+same-lock history/EARLY/intent and precedes fresh LATE; refusal before intent creates no
+payload spool and interruption preserves UNKNOWN. Outer `prepare-init` emits exact bytes
+for independent approval, then `init` consumes that proposal without regenerating its time.
+The approved authority and INIT model is unchanged.
+
+Correction checks: authority38, adapter25, dispatch23, INIT26 and client30 PASS on macOS
+and isolated Linux; owned-SSH transport28, actual caller14, supervisor21 and attended-PTY4
+PASS, no skips. Related consumer/history/status suites and 13 full sequencer core groups
+(192 assertions) pass. Pre-fix failures and test-harness setup/fault-injection corrections
+are retained. Scoped review found no remaining R1/R2/R3 findings. Runtime is Linux arm64 /
+Python3.12.3 / OpenSSH9.6; amd64 and staging are not qualified by these synthetic tests.
+Current evidence: `~/.hookahtootah/ht-qr-01-policy-b/evidence/20260923T013714Z-corrections/`.
+Both historical evidence directories and their archives remain unchanged.
+
+Operational qualification is **BLOCKED / NOT OBTAINED**: independent actual identities,
+restricted existing-key enrollment, C/P/clock/custody sources, real R0+G/ownQ, valid
+history/handoff/Gate A/B/C, clean reviewed successor/CI and retained release artifact
+remain separate prerequisites. No producer, credentials, SSH to staging, release
+selection, publication or deployment is authorized by this local package. Next: independent
+review of `HT-QR-01-policy-b-authority-init-review-corrected.zip` in the current evidence directory;
+any enrollment, publication, release-artifact preparation or operational run needs its
+own authorization. Do not operate staging.
+
 ## HT-QR-01 — Guest QR and order-channel entry
 
 **QR-R1 / QR-R2 CORRECTED LOCALLY / UNCOMMITTED / LOCAL CHECKS PASS / IPHONE SMOKE OPEN**.

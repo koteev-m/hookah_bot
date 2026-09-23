@@ -8,6 +8,13 @@ custody topology, lifecycle and retrieval requirements. The executable schema is
 [`v126-dr-custody.py`](../scripts/v126-dr-custody.py), following the AP-00 local
 closed-schema convention; existing AP-01 schemas/Trust/consumers are unchanged.
 
+The approved attended AP-06 reader integration is described in
+[V126 cutover contract](V126_STAGING_CUTOVER_CONTRACT.md#ht-qr-01-policy-b--attended-authority-and-same-lock-dispatch).
+An independently enrolled C confirms the current catalogue for each fresh nonce;
+that confirmation does not establish retrieval/restore/ongoing availability. V still
+validates exact AP-07 proof and separately enrolled P observations under this document's
+custody threat model. This local integration neither enrolls real custody nor runs producers.
+
 ## Threat boundary
 
 **IN_SCOPE:** complete VPS loss, missing VPS configuration, revoked or compromised

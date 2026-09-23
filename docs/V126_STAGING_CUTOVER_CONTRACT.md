@@ -39,9 +39,9 @@ readiness, operational DR PASS or production readiness is claimed.
 
 Policy B/D1–D4 and DR-A…DR-G are defined in
 [DEPLOYMENT_RUNBOOK.md](DEPLOYMENT_RUNBOOK.md#policy-b-disaster-recovery--ht-ops-04--ap-01).
-`scripts/v126-dr-evidence.py:consume_barrier` is a versioned, read-only **future
-consumer hook**, not another sequencer or an operational gate executed by this
-patch. It accepts only v1 DR readiness plus a separately trusted complete ledger,
+`scripts/v126-dr-evidence.py:consume_barrier` is the versioned, read-only consumer
+hook. AP-01 introduced it without a live caller; the approved attended caller
+and its local validation boundary are specified below. It is not another sequencer. It accepts only v1 DR readiness plus a separately trusted complete ledger,
 current source/tool binding, current observations and fresh ongoing readiness.
 Its synthetic result has no V126 authorization effect.
 
@@ -54,28 +54,94 @@ Two different barriers prevent a circular prerequisite:
   reconciled/historical schema cannot substitute. Existing native P/stage2,
   zero-writer stage6 and Q/stage7 still remain mandatory.
 
-The future caller must first replay the complete native stage7 chain with existing
+The attended caller must first replay the complete native stage7 chain with existing
 `verify_receipt`, independently pin that receipt and its run manifest, and only
 then call `consume_barrier`. The DR consumer checks native v1 shape, source/script,
 stage/predecessor/run, the complete native stage7 artifact name set, exact dump/TOC
 hash equality with the DR manifest and snapshot chronology; it does not replace native artifact
 inventory/operation-log verification. Raw stage7 JSON by itself is insufficient.
 
-Future separately reviewed caller integration must call the hook under the existing shared target lock
+The approved caller integration must call the hook under the existing shared target lock
 before init/first mutation and immediately before stages 8/9/11/13/18/19, checking
 current age plus bounded action time +300s margin. Final 18/19 also require the
 current ongoing mechanism and reviewed post-V126 recipe; a post-transition actual
 V126 point must qualify within 2h and remaining Q freshness. No cached PASS renewal,
 native stage7 retry or automatic recovery/reopen is permitted on expiry.
 
-This AP-01 patch does **not wire or execute** those live dispatch calls and does
+The historical AP-01 patch did **not wire or execute** those live dispatch calls and does
 not modify `v126-cutover.sh`, its twenty states, native receipt schema or frozen
-historical runs. Current native commands therefore do not claim enforcement of
+historical runs. At that AP-01 boundary, native commands do not claim enforcement of
 the new Policy B gate. Future reviewed source/gate integration and its separate
 authorization are mandatory before any new operational V126 run. Do not operate
 the historical executor on the strength of an AP-01 test result.
 AP-06 remains read-only verification plus scoped receipt writes; it does not
 implicitly grant source implementation, installation or V126 execution authority.
+
+## HT-QR-01-POLICY-B — attended authority and same-lock dispatch
+
+The authority/transport/INIT design is approved for local implementation and isolated
+validation. This approval establishes no real identities, qualifications or operational
+permission. `v126-policy-b-authority.py` runs the existing consumer on the attended,
+independently approved off-VPS verifier V; `v126-policy-b-client.py`, transport and the
+server-selected launcher connect it to the actual supervisor S and its existing flock.
+The shared adapter remains `v126-policy-b-dispatch.py`; there is no second admission policy.
+
+U supplies an independently retained **previously approved** anchor digest through the
+foreground `/dev/tty`, without a displayed candidate digest or an enrollment write.
+The anchor binds source/tree/full tools/Python, target/data/restore identities, scopes,
+clock method, existing SSH principal/host and independently controlled source readers.
+C separately confirms each fresh challenge nonce and exact catalogue/head/generation
+through that console, including known unresolved attempts and revocations. The reader
+rechecks its independent high-water checkpoint and full ledger; rollback/fork or drift
+refuses. C confirmation never substitutes for machine observations or asset availability.
+Enrolled P sources supply canonical AP-01/AP-07 observations; exact-version read-back,
+both custody routes, restore/isolation checks and current ongoing/recipe evidence are
+validated. Missing producers, pins or current observations refuse; no producer is run.
+File permissions/digests preserve an enrolled identity, not its independent provenance.
+
+S authenticates the existing enrolled key at a server-selected pre-client entrypoint;
+client environment or a supplied auth-info file cannot establish identity. Enrollment
+must pin the root-controlled authorized-key source and exclude an alternate key for that
+restricted account. V selects the exact pinned plain public host key and gives SSH only a
+protected per-invocation copy of that one key. The original known_hosts file, additional
+host patterns/keys/CA entries and later file changes cannot expand handshake trust;
+system/DNS/command host trust and host-key updates remain disabled.
+Installation/sshd/key-source changes require separate permission.
+Honest kernel/sshd/reviewed V/S execution is the explicit boundary, not remote attestation.
+Control frames are closed/canonical, ≤64 KiB, with fresh session/nonce/action/run/source/
+history bindings; the source limit is 2 MiB and the evidence snapshot limit is 16 MiB.
+
+R0 runs before INIT and baseline; Q runs before stage 8's two actions and 9/11/13/18/19.
+Each operation checks EARLY before durable start and LATE immediately before dispatch,
+without releasing the same target lock. V first runs full native `verify_receipt` through
+its own stage7 and compares exact local artifacts/logs with authenticated remote history.
+R0 never requires stage7. Each acquisition/consumer round is ≤300s; freshness reserves
+actual action (300s, final preflight 600s) +300s acquisition +300s canonical margin.
+The closed expiry vector covers checkpoint, ongoing/monitor, all authority scopes,
+cadence/age-state, custody, RPO, anchor, clock and source observations. S subtracts its
+whole challenge RTT plus processing and requires positive headroom and dispatch ≤5s
+after RESULT receipt. A changed/expired input cannot reuse PASS. Stages18/19 retain
+current G/recipe checks; actual post-V126 qualification remains due within2h and Q freshness.
+
+The outer `prepare-init --proposal-file <new-absolute-path>` command validates the complete
+source/target arguments and writes a protected create-only proposal outside canonical state
+and the release worktree. It reports proposal/manifest/request digests and the exact INIT
+identity for independent approval. This proposal is not authority. After approval, outer
+`init --state-dir ... --proposal-file ... --proposal-sha256 ... --policy-b-anchor ...
+--policy-b-transport ...` consumes those same canonical bytes, including `created_at`;
+it never regenerates the manifest. Drift, existing state and reused/unknown outcomes refuse.
+No canonical run metadata is created during preparation or before the admitted writer.
+
+INIT is `INIT / RUN_INITIALIZED / initialize-run`, not a twenty-first stage. It requires
+an existing valid CUTOVER owner/transfer and empty own history, never registry adoption.
+Under the same flock: R0 → immutable intent/request → fresh R0 → one bounded local writer
+→ validated durable remote completion → local completion copy. Partial/late/lost outcomes
+remain UNKNOWN; no cleanup or retry authority is created. Stage dispatch requires matching
+local/remote completion and baseline first. Separately approved COPY_ONLY can copy an exact
+already successful completion after locked history readback and a fresh bounded action
+scope; it cannot write INIT again and needs no R0. Status and existing recovery remain separate.
+Local implementation/synthetic checks do not supply operational R0/G/Q, AP-02…07 execution,
+Gate A/B/C, accepted handoff, clean successor/CI/image or publication/deploy permission.
 
 ## HT-RELEASE-REPAIR-01 local repair boundary
 

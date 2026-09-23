@@ -673,11 +673,11 @@ def evaluate_ongoing(evidence, trust, ongoing_ref, now):
 
 def consume_barrier(evidence, trust, readiness_ref, ongoing_ref, now, *, purpose,
                     requested_attempt, action_seconds=None, cutover=None, native_stage7=None):
-    """Versioned pure hook for FUTURE V126 callers under their existing target lock.
+    """Versioned pure hook for callers under their existing target lock.
 
-    No call is wired into the historical 20-state executor. AP-06 revalidates the
-    native stage7 chain with the existing verifier and pins its exact bytes; a
-    stage7 JSON file supplied by itself is not authority.
+    The attended AP-06 verifier uses this consumer for same-lock INIT/dispatch.
+    It replays the native stage7 chain with the existing verifier and pins exact
+    bytes. Operational enrollment/evidence remain separate; raw JSON is not authority.
     """
     proof = evidence.get(readiness_ref, 'readiness')
     verify_consumer_authority(evidence, trust, proof['authorization_sha256'], now, purpose, 'AP-06')

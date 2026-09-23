@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
-"""Actual embedded supervisor; synthetic leaf effects only. No application/live target.
+"""Actual shared supervisor and extracted production refusal handler; synthetic leaves only.
 
 Linux cases require a test-owned sshd endpoint and exercise real process lifetime.
 On macOS only the fail-before-allocation platform refusal runs; this is an explicit
 runtime gap. CI passes --require-linux-ssh, so unavailable runtime is a failure.
+Process-lifetime cases start from explicitly synthetic accepted INIT/baseline history
+and exercise a real non-Policy-B stage. They do not manufacture Policy B PASS;
+baseline admission with the actual consumer is covered by the dispatch suite.
 """
 import hashlib
 import ast
+import inspect
 import json
 import os
 from pathlib import Path
@@ -41,8 +45,52 @@ if REQUIRE:
     sys.argv.remove('--require-linux-ssh')
     if sys.platform != 'linux' or not Path('/usr/sbin/sshd').is_file():
         raise SystemExit('Linux with test-owned OpenSSH endpoint is required; runtime gap OPEN')
-PROGRAM = subprocess.check_output(['bash', '-c', 'source "$1"; remote_operation_python',
-                                   'repair-extract', str(SOURCE)], text=True)
+def production_refusal_handler(program):
+    """Use the exact public caller's exception consumer, without copying policy."""
+    callers = [node for node in ast.parse(program).body if isinstance(node, ast.Try)]
+    if len(callers) != 1 or len(callers[0].handlers) != 1:
+        raise AssertionError('production supervisor exception consumer is ambiguous')
+    caller = callers[0]
+    if not any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and
+               node.func.id == 'binding_supervise' for statement in caller.body for node in ast.walk(statement)):
+        raise AssertionError('production caller does not invoke the actual common supervisor')
+    handler = ast.get_source_segment(program, caller.handlers[0])
+    if not handler:
+        raise AssertionError('production supervisor exception consumer is unavailable')
+    return handler
+
+
+PRODUCTION_PROGRAM = subprocess.check_output(['bash', '-c', 'source "$1"; remote_operation_python',
+                                              'repair-extract', str(SOURCE)], text=True)
+# These lifetime cases deliberately use the actual common supervisor with accepted
+# synthetic INIT evidence. The approved authenticated caller is covered separately;
+# no environment toggle or operational raw-STAGE bypass is introduced.
+PROGRAM = (ROOT / 'v126-operation-bindings.py').read_text() + r"""
+try:
+    source = sys.stdin.buffer.read(2 * 1024 * 1024 + 1)
+    fields = ('run_id', 'release_sha', 'script_sha256', 'intent_sha256', 'kind', 'name', 'action')
+    target, *args = sys.argv[1:]
+    identity = dict(zip(fields, args[:7]))
+    worker_args = args[7:]
+    if (len(identity) != 7 or not worker_args or len(source) > 2 * 1024 * 1024 or
+            hashlib.sha256(source).hexdigest() != identity['script_sha256']):
+        raise BindingError('source_identity')
+    completion = None
+    root = Path(target) / '.v126-target-operations'
+    for path in root.glob('*.request.json'):
+        request = json.loads(path.read_bytes())
+        if request.get('identity', {}).get('kind') == 'INIT' and request['identity']['run_id'] == identity['run_id']:
+            result_path = path.with_name(path.name.replace('.request.json', '.result.json'))
+            completion = dict(request=request, result=json.loads(result_path.read_bytes()),
+                              request_sha256=binding_hash(path), result_sha256=binding_hash(result_path))
+    status = binding_supervise(target, identity,
+        ['bash', '-c', 'source /dev/stdin; remote_dispatch_action "$@"',
+         'v126-operation', identity['action'], *worker_args], input_data=source,
+        timeout=300, init_completion=completion,
+        request_context=dict(args=worker_args, environment={}))
+    raise SystemExit(status)
+""" + production_refusal_handler(PRODUCTION_PROGRAM) + '\n'
+
 WORKER = b'''remote_dispatch_action() {
   case "$5" in
     success) printf 'synthetic operation complete\\n'; printf x >> "$2/effects" ;;
@@ -57,6 +105,57 @@ WORKER = b'''remote_dispatch_action() {
   esac
 }
 '''
+
+
+def seed_accepted_baseline(target, owner):
+    """Test input only: no gate, receipt, operational admission or live target.
+
+    Keep lifetime tests independent of Policy B acquisition. The real supervisor
+    validates these immutable synthetic prior records before dispatching the
+    non-Policy-B action under test; it receives no fake passing gate.
+    """
+    root = target / '.v126-target-operations'
+    root.mkdir(mode=0o700, exist_ok=True)
+    (root / 'lock').touch(mode=0o600, exist_ok=True)
+    canonical = lambda value: (json.dumps(value, sort_keys=True, separators=(',', ':')) + '\n').encode()
+    def write(path, raw):
+        with path.open('xb') as handle:
+            handle.write(raw)
+        path.chmod(0o400)
+    if not (root / 'run.json').exists():
+        write(root / 'run.json', canonical(owner))
+    manifest = b'{"synthetic":"accepted-init-fixture"}\n'
+    manifest_sha = hashlib.sha256(manifest).hexdigest()
+    init_identity = dict(owner, intent_sha256=manifest_sha, kind='INIT', name='RUN_INITIALIZED', action='initialize-run')
+    operation_id = hashlib.sha256(canonical(init_identity)).hexdigest()
+    metadata = dict(directories=['artifacts', 'authorizations', 'intents', 'receipts', 'recovery', 'tmp'], files=[
+        dict(path='run.json', sha256=manifest_sha, size=len(manifest), mode=0o400),
+        dict(path='run.json.sha256', sha256=hashlib.sha256((manifest_sha + '\n').encode()).hexdigest(), size=65, mode=0o400)])
+    request = dict(format_version=1, identity=init_identity, target_sha256=hashlib.sha256(str(target).encode()).hexdigest(),
+                   manifest_sha256=manifest_sha, manifest_size=len(manifest), local_state_sha256='e'*64, metadata=metadata)
+    request_sha = hashlib.sha256(canonical(request)).hexdigest()
+    attestation = dict(format_version=1, operation_id=operation_id, request_sha256=request_sha,
+                       manifest_sha256=manifest_sha, metadata_sha256=hashlib.sha256(canonical(metadata)).hexdigest(),
+                       writer='ATTENDED_VERIFIER', durable=True)
+    result = dict(format_version=1, identity=init_identity, operation_id=operation_id, exit=0, outcome='SUCCEEDED',
+                  completion='LOCAL_METADATA_ATTESTED', request_sha256=request_sha, attestation=attestation,
+                  completed_at='2026-09-09T00:00:00+00:00')
+    write(root / (operation_id + '.start.json'), canonical(dict(identity=init_identity, operation_id=operation_id,
+          started_at='2026-09-09T00:00:00+00:00', boot_id='synthetic-init')))
+    write(root / (operation_id + '.request.json'), canonical(request))
+    write(root / (operation_id + '.result.json'), canonical(result))
+    completion = dict(request=request, result=result, request_sha256=request_sha,
+                      result_sha256=hashlib.sha256(canonical(result)).hexdigest())
+    identity = dict(owner, intent_sha256='0'*64, kind='STAGE', name='BASELINE_VERIFIED', action='baseline')
+    operation = hashlib.sha256(canonical(identity)).hexdigest()
+    log = b'SYNTHETIC_ACCEPTED_BASELINE_FIXTURE\n'
+    write(root / (operation + '.start.json'), canonical(dict(identity=identity, operation_id=operation,
+        started_at='2026-09-09T00:00:00+00:00', boot_id='synthetic-accepted-baseline')))
+    write(root / (operation + '.log'), log)
+    write(root / (operation + '.result.json'), canonical(dict(identity=identity, operation_id=operation,
+        exit=0, outcome='SUCCEEDED', children='REAPED', log_sha256=hashlib.sha256(log).hexdigest(),
+        completed_at='2026-09-09T00:00:01+00:00')))
+    return completion
 
 
 class Supervisor(unittest.TestCase):
@@ -81,16 +180,32 @@ class Supervisor(unittest.TestCase):
             self.temp.cleanup()
 
     def args(self, mode='success', intent='b', run='repair-owned-run', kind='STAGE', name=None):
-        name = name or ('BASELINE_VERIFIED' if kind == 'STAGE' else 'pre-v126')
-        action = 'baseline' if kind == 'STAGE' else 'recover-pre-v126'
+        name = name or ('PUBLIC_DRAIN_ACTIVE' if kind == 'STAGE' else 'pre-v126')
+        action = ({'BASELINE_VERIFIED': 'baseline', 'PUBLIC_DRAIN_ACTIVE': 'public-drain-on',
+                   'FINAL_PUBLIC_GATES_PASSED': 'final-public-gates'}[name]
+                  if kind == 'STAGE' else 'recover-pre-v126')
         return [str(self.target), run, 'a' * 40, hashlib.sha256(WORKER).hexdigest(),
                 intent * 64, kind, name, action, str(self.target), run, 'a' * 40, mode]
 
+    def prepare_lifetime_history(self, **kwargs):
+        args = self.args(**kwargs)
+        if (sys.platform == 'linux' and args[5:7] == ['STAGE', 'PUBLIC_DRAIN_ACTIVE']
+                and not (self.target / '.v126-target-operations').exists()):
+            seed_accepted_baseline(self.target, dict(run_id=args[1], release_sha=args[2], script_sha256=args[3]))
+
+    def result_path(self, **kwargs):
+        args = self.args(**kwargs)
+        identity = dict(zip(('run_id', 'release_sha', 'script_sha256', 'intent_sha256', 'kind', 'name', 'action'), args[1:8]))
+        raw = (json.dumps(identity, sort_keys=True, separators=(',', ':')) + '\n').encode()
+        return self.target / '.v126-target-operations' / (hashlib.sha256(raw).hexdigest() + '.result.json')
+
     def run_operation(self, **kwargs):
+        self.prepare_lifetime_history(**kwargs)
         return subprocess.run([sys.executable, str(self.program), *self.args(**kwargs)],
                               input=WORKER, capture_output=True, timeout=15)
 
     def start(self, **kwargs):
+        self.prepare_lifetime_history(**kwargs)
         process = subprocess.Popen([sys.executable, str(self.program), *self.args(**kwargs)],
                                    stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
                                    stderr=subprocess.DEVNULL, start_new_session=True)
@@ -105,12 +220,50 @@ class Supervisor(unittest.TestCase):
             time.sleep(.05)
         self.assertTrue(path.exists())
 
-    @unittest.skipIf(sys.platform == 'linux', 'non-Linux refusal only')
     def test_unsupported_platform_refuses_before_allocation(self):
-        result = self.run_operation()
+        # Only the external OS observation is synthetic on Linux; execute the
+        # actual refusal before registry creation or worker allocation.
+        if sys.platform == 'linux':
+            self.program.write_text("import sys; sys.platform='darwin'\n" + PROGRAM)
+            result = subprocess.run([sys.executable, str(self.program), *self.args()],
+                                    input=WORKER, capture_output=True, timeout=15)
+        else:
+            result = self.run_operation()
         self.assertEqual(result.returncode, 75)
         self.assertIn(b'linux_subreaper_required', result.stderr)
         self.assertEqual(list(self.target.iterdir()), [])
+
+    @unittest.skipUnless(sys.platform == 'linux', 'real Linux supervisor required')
+    def test_required_baseline_without_observer_refuses_before_allocation(self):
+        result = self.run_operation(name='BASELINE_VERIFIED')
+        self.assertEqual(result.returncode, 75, result.stderr)
+        self.assertIn(b'policy_b_independent_observer_required', result.stderr)
+        self.assertEqual(result.stdout, b'')
+        self.assertEqual(list(self.target.iterdir()), [])
+
+    def test_accepted_baseline_fixture_is_valid_immutable_prior_history(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('fixture_history_bindings', ROOT / 'v126-operation-bindings.py')
+        bindings = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(bindings)
+        args = self.args()
+        owner = dict(run_id=args[1], release_sha=args[2], script_sha256=args[3])
+        seed_accepted_baseline(self.target, owner)
+        registry = self.target / '.v126-target-operations'
+        inventory, unknown, identities = bindings.binding_inventory(registry, owner)
+        self.assertFalse(unknown)
+        self.assertEqual(len(inventory), 6)
+        self.assertEqual([(row['name'], row['action'], row['intent_sha256']) for row in identities if row['kind'] == 'STAGE'],
+                         [('BASELINE_VERIFIED', 'baseline', '0'*64)])
+        self.assertEqual([row['name'] for row in identities if row['kind'] == 'INIT'], ['RUN_INITIALIZED'])
+        self.assertEqual(bindings.binding_chain(registry, self.target)[0], owner)
+        snapshot = {path: path.read_bytes() for path in registry.iterdir() if path.is_file()}
+        with self.assertRaises(FileExistsError):
+            seed_accepted_baseline(self.target, owner)
+        for path, raw in snapshot.items():
+            self.assertEqual(path.read_bytes(), raw)
+        self.assertFalse(self.result_path().exists(), 'prior fixture cannot satisfy the tested action')
+        self.assertFalse(list(self.target.rglob('*.receipt.json')))
 
     def test_detached_fixture_executes_the_exact_nested_payload(self):
         # Run the same leaf submitted to the Linux supervisor. This portability
@@ -177,18 +330,19 @@ class Supervisor(unittest.TestCase):
         self.assertEqual(self.run_operation(intent='c', kind='RECOVERY').returncode, 75)
         self.assertEqual(self.run_operation(intent='d').returncode, 75)
         self.assertEqual((self.target / 'effects').read_text(), 'x')
-        result = next((self.target / '.v126-target-operations').glob('*.result.json'))
+        result = self.result_path()
         self.assertEqual(json.loads(result.read_text())['outcome'], 'UNKNOWN')
 
     @unittest.skipUnless(sys.platform == 'linux', 'Linux subreaper runtime unavailable')
     def test_detached_child_keeps_lock_and_defers_completion(self):
         process = self.start(mode='detached')
-        self.wait_file(next(iter([self.target / '.v126-target-operations'])))
+        result_path = self.result_path()
+        self.wait_file(result_path.with_name(result_path.name.replace('.result.json', '.start.json')))
         time.sleep(.25)
         self.assertEqual(self.run_operation(intent='c', kind='RECOVERY').returncode, 75)
         self.assertEqual(process.wait(timeout=10), 0)
         self.assertEqual((self.target / 'effects').read_text(), 'x')
-        result = next((self.target / '.v126-target-operations').glob('*.result.json'))
+        result = self.result_path()
         self.assertEqual(json.loads(result.read_text())['children'], 'REAPED')
 
     @unittest.skipUnless(sys.platform == 'linux', 'Linux subreaper runtime unavailable')
@@ -200,10 +354,11 @@ class Supervisor(unittest.TestCase):
         self.assertEqual(self.run_operation(intent='c', kind='RECOVERY').returncode, 75)
         self.wait_file(self.target / 'effects')
         self.assertEqual(self.run_operation(intent='c', kind='RECOVERY').returncode, 75)
-        self.assertFalse(list((self.target / '.v126-target-operations').glob('*.result.json')))
+        self.assertFalse(self.result_path().exists())
+        self.assertEqual(len(list((self.target / '.v126-target-operations').glob('*.result.json'))), 2)
 
     @unittest.skipUnless(sys.platform == 'linux', 'Linux subreaper runtime unavailable')
-    def test_completed_run_retirement_then_next_baseline_preserves_all_history(self):
+    def test_completed_run_retirement_then_next_run_preserves_all_history(self):
         # Real supervisor records and real binding consumer. The terminal action
         # is a synthetic leaf; terminal receipt/handoff are independently covered
         # by the actual CLI tests, not claimed as full cutover E2E here.
@@ -231,6 +386,13 @@ class Supervisor(unittest.TestCase):
             bindings.binding_entry('retire')
         self.assertEqual(self.run_operation(intent='d').returncode, 75)
         self.assertEqual(self.run_operation(intent='e', run=next_owner['run_id'], kind='RECOVERY').returncode, 75)
+        self.assertEqual(self.run_operation(intent='f', run=next_owner['run_id']).returncode, 75)
+        denied = self.run_operation(intent='f', run=next_owner['run_id'], name='BASELINE_VERIFIED')
+        self.assertEqual(denied.returncode, 75, denied.stderr)
+        self.assertIn(b'policy_b_independent_observer_required', denied.stderr)
+        # Model independently accepted next-run history, not a successful baseline
+        # dispatch. The Policy B suite exercises that gate with the real consumer.
+        seed_accepted_baseline(self.target, next_owner)
         self.assertEqual(self.run_operation(intent='f', run=next_owner['run_id']).returncode, 0)
         self.assertEqual(self.run_operation(intent='f', run=next_owner['run_id']).returncode, 75)
         self.assertEqual((self.target / 'effects').read_text(), 'xxx')
@@ -283,6 +445,7 @@ AllowUsers {pwd.getpwuid(os.getuid()).pw_name}
         return port
 
     def disconnect_case(self, mode):
+        self.prepare_lifetime_history(mode=mode)
         port = self.own_ssh_endpoint()
         known = self.root / 'known_hosts'
         import shlex
@@ -301,9 +464,11 @@ AllowUsers {pwd.getpwuid(os.getuid()).pw_name}
         self.assertEqual(self.run_operation(intent='c', kind='RECOVERY').returncode, 75)
         self.wait_file(self.target / 'effects')
         deadline = time.monotonic() + 5
-        while not list((self.target / '.v126-target-operations').glob('*.result.json')) and time.monotonic() < deadline:
+        while not self.result_path().exists() and time.monotonic() < deadline:
             time.sleep(.05)
-        self.assertEqual(len(list((self.target / '.v126-target-operations').glob('*.result.json'))), 1)
+        self.assertTrue(self.result_path().exists())
+        self.assertEqual(len(list((self.target / '.v126-target-operations').glob('*.result.json'))), 3)
+        self.assertEqual(json.loads(self.result_path().read_text())['outcome'], 'SUCCEEDED')
         self.assertEqual((self.target / 'effects').read_text(), 'x')
         self.assertEqual(self.run_operation().returncode, 75)
 
@@ -334,26 +499,13 @@ AllowUsers {pwd.getpwuid(os.getuid()).pw_name}
     def test_failed_child_remains_unknown_and_blocks_recovery(self):
         self.assertEqual(self.run_operation(mode='failed-child').returncode, 75)
         self.assertEqual(self.run_operation(intent='c', kind='RECOVERY').returncode, 75)
-        result = next((self.target / '.v126-target-operations').glob('*.result.json'))
+        result = self.result_path()
         self.assertEqual(json.loads(result.read_text())['outcome'], 'UNKNOWN')
 
 
-def production_refusal_handler(program):
-    """Use the exact public caller's exception consumer, without copying policy."""
-    callers = [node for node in ast.parse(program).body if isinstance(node, ast.Try)]
-    if len(callers) != 1 or len(callers[0].handlers) != 1:
-        raise AssertionError('production supervisor exception consumer is ambiguous')
-    caller = callers[0]
-    if not any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and
-               node.func.id == 'binding_supervise' for statement in caller.body for node in ast.walk(statement)):
-        raise AssertionError('production caller does not invoke the actual common supervisor')
-    handler = ast.get_source_segment(program, caller.handlers[0])
-    if not handler:
-        raise AssertionError('production supervisor exception consumer is unavailable')
-    return handler
 
 
-SHARED_REFUSAL_HANDLER = production_refusal_handler(PROGRAM)
+SHARED_REFUSAL_HANDLER = production_refusal_handler(PRODUCTION_PROGRAM)
 
 
 SHARED_RUNNER = r'''import hashlib,importlib.util,json,os,signal,sys,time
@@ -363,6 +515,7 @@ target=Path(sys.argv[2]);mode=sys.argv[3];kind=sys.argv[4]
 spec=importlib.util.spec_from_file_location('actual_operation_bindings',sys.argv[1])
 bindings=importlib.util.module_from_spec(spec);spec.loader.exec_module(bindings)
 BindingError=bindings.BindingError
+__ACCEPTED_BASELINE_FIXTURE__
 observations=[]
 real_waitpid=os.waitpid
 def observed_waitpid(pid,options):
@@ -397,21 +550,25 @@ else:
  raise ValueError('unknown explicit synthetic leaf')
 identity=dict(run_id='actual-common-helper-fixture',release_sha='a'*40,
  script_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),intent_sha256=('c' if kind=='RECOVERY' else 'b')*64,
- kind=kind,name='pre-v126' if kind=='RECOVERY' else 'BASELINE_VERIFIED',
- action='recover-pre-v126' if kind=='RECOVERY' else 'baseline')
+ kind=kind,name='pre-v126' if kind=='RECOVERY' else 'PUBLIC_DRAIN_ACTIVE',
+ action='recover-pre-v126' if kind=='RECOVERY' else 'public-drain-on')
+completion=None
 if mode=='caller-refusal':
  # Real common-helper validation refuses before target allocation on Linux;
  # other platforms keep their actual platform refusal, without impersonation.
  identity['intent_sha256']='invalid'
+elif sys.platform=='linux' and kind=='STAGE' and not (target/'.v126-target-operations').exists():
+ completion=seed_accepted_baseline(target,{key:identity[key] for key in ('run_id','release_sha','script_sha256')})
 try:
  status=bindings.binding_supervise(target,identity,[sys.executable,'-c',worker,str(target/'leader.pid'),str(target/'descendant.pid'),str(target/'late-effect')],
   input_data=b'x'*(2*1024*1024) if mode=='input-backpressure' else b'',
-  env={key:os.environ[key] for key in ('PATH','HOME')},timeout=.5)
+  env={key:os.environ[key] for key in ('PATH','HOME')},timeout=.5,init_completion=completion)
  raise SystemExit(status)
 __SOURCE_BOUND_REFUSAL_HANDLER__
 finally:
  Path(sys.argv[5]).write_text(json.dumps(observations,sort_keys=True)+'\n')
-'''.replace('__SOURCE_BOUND_REFUSAL_HANDLER__', SHARED_REFUSAL_HANDLER)
+'''.replace('__SOURCE_BOUND_REFUSAL_HANDLER__', SHARED_REFUSAL_HANDLER).replace(
+    '__ACCEPTED_BASELINE_FIXTURE__', inspect.getsource(seed_accepted_baseline))
 
 
 class SharedSupervisor(unittest.TestCase):
@@ -456,7 +613,9 @@ class SharedSupervisor(unittest.TestCase):
         self.assertEqual(result.returncode, 124, result.stderr)
         self.assertLess(elapsed, 3)
         registry = self.target / '.v126-target-operations'
-        records = list(registry.glob('*.result.json'))
+        self.assertEqual(len(list(registry.glob('*.result.json'))), 3)
+        records = [path for path in registry.glob('*.result.json')
+                   if json.loads(path.read_text())['identity']['intent_sha256'] == 'b'*64]
         self.assertEqual(len(records), 1)
         outcome = json.loads(records[0].read_text())
         self.assertEqual((outcome['exit'], outcome['outcome'], outcome['children']), (124, 'UNKNOWN', 'REAPED'))
@@ -545,7 +704,7 @@ class SharedSupervisor(unittest.TestCase):
                    'time.monotonic=lambda:origin+(real()-origin)*1000;'
                    'path=sys.argv.pop(1);exec(compile(open(path).read(),path,"exec"))')
         started = time.monotonic()
-        result = subprocess.run([sys.executable, '-c', wrapper, str(program), *self.args(mode='delayed')],
+        result = subprocess.run([sys.executable, '-c', wrapper, str(program), *self.args(mode='delayed', name='BASELINE_VERIFIED')],
                                 input=WORKER, capture_output=True, timeout=6)
         self.assertLess(time.monotonic() - started, 3)
         self.assertEqual(result.returncode, 137, result.stderr)
