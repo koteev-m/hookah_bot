@@ -16,7 +16,8 @@ HARNESS = ROOT / "test-v126-cutover.sh"
 class Attempts(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="v126-attempts-")
-        self.root = Path(self.temp.name)
+        # INIT completion binds the canonical local state path, including on macOS.
+        self.root = Path(self.temp.name).resolve()
         (self.root / "release-worktree").mkdir()
         self.env = dict(os.environ, DOCKER_HOST="unix://" + str(self.root / "absent.sock"))
         self.env.pop("DOCKER_CONTEXT", None)
@@ -91,6 +92,31 @@ else: raise SystemExit(97)
         self.assertIn("BASELINE_VERIFIED=NOT_STARTED", result.stdout)
         self.assertIn("next_action=EXECUTE_NEXT_AUTHORIZED_STAGE", result.stdout)
         self.assertIn("availability=NOT_OBSERVED", result.stdout)
+
+    def test_missing_init_completion_blocks_stage_but_preserves_status(self):
+        state = self.seed()
+        (state / "init-completion.json").unlink()
+        before = {path: path.read_bytes() for path in state.rglob("*") if path.is_file()}
+        fakebin = self.root / "denied-external-bin"
+        fakebin.mkdir()
+        marker = self.root / "unexpected-external"
+        for name in ("git", "gh", "ssh", "docker", "curl", "rsync", "psql"):
+            tool = fakebin / name
+            tool.write_text('#!/bin/sh\nprintf called >> "$FIXTURE_EXTERNAL_MARKER"\nexit 99\n')
+            tool.chmod(0o700)
+        self.env.update(PATH=str(fakebin) + ":" + self.env["PATH"],
+                        FIXTURE_EXTERNAL_MARKER=str(marker))
+        result = self.status(state)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("BASELINE_VERIFIED=NOT_STARTED", result.stdout)
+        denied = self.run_shell('bash "$1" stage --state-dir "$2" BASELINE_VERIFIED', SCRIPT, state)
+        self.assertEqual(denied.returncode, 4)
+        self.assertIn("run has no verified INIT completion", denied.stderr)
+        self.assertFalse(marker.exists(), "missing INIT completion reached an external action")
+        self.assertFalse(list((state / "intents").iterdir()))
+        self.assertFalse((state / "attempts").exists())
+        self.assertFalse((state / ".exclusive-lock").exists())
+        self.assertEqual({path: path.read_bytes() for path in state.rglob("*") if path.is_file()}, before)
 
     def test_intent_unknown_and_no_replay(self):
         state = self.seed()

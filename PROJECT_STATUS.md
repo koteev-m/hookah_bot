@@ -1,5 +1,38 @@
 # Project Status
 
+## HT-QR-01-POLICY-B — remaining compose correction
+
+**LOCAL CORRECTION / HOSTED COMPOSE QUALIFICATION OPEN / UNCOMMITTED DIFF**.
+Branch `codex/ht-qr-01-policy-b-gates`, worktree
+`/Users/maksimmartynov/IdeaProjects/hookah_bot_worktrees/ht-qr-01-policy-b-gates`,
+HEAD `41a21b7d691e9fb88961ab68320fef44323c030e`; PR #204.
+No successor release is selected.
+
+Completed PR-run #522 / `35824291019`, attempt1, checked merge
+`c7f8b960330c216431e5dc721048ef6ab97f34b7`; its tree equals feature HEAD.
+Cutover fixtures and new Policy B/owned-SSH steps passed. Two steps remained red:
+private daemon exposed raw flock contention instead of typed `target_busy`; terminal
+lifecycle collector parsed accepted INIT metadata as a stage request, yielding
+`INSUFFICIENT_EVIDENCE:original_request_binding`.
+
+Only flock EAGAIN/EWOULDBLOCK now becomes `target_busy`; other errors and FD cleanup
+remain distinct. Collector excludes exact INIT metadata from artifact ancestry after
+mandatory native history validation. Both embedded copies match standalone sources.
+Regressions also fix the daemon's later other-run/UNKNOWN precedence expectation and
+the INIT busy assertion. No gates, UNKNOWN/recovery rules, stages or product/migrations
+are weakened. Linux tests use real flock/processes and own SSH with synthetic authority;
+the complete synthetic terminal/handoff/ordinary chain preserves exact history bindings.
+
+Evidence: `~/.hookahtootah/ht-qr-01-policy-b/evidence/20260923T065605Z-remaining-compose/`.
+The report retains original failures, review findings, final commands/exits and source
+hashes. Full native hosted-amd64 private dockerd/systemd/PG/Caddy/JVM qualification
+remains OPEN; local capture-only results do not establish COMPOSE_PASS. Older evidence
+is unchanged. No publication, Actions mutation or operational action was performed.
+
+Next: one explicit approval of the final file list and diff hash for a correction commit
+and non-force push to PR #204 with normal automatic CI. No merge, release selection,
+enrollment, INIT/cutover or deployment is authorized by this local pass.
+
 ## HT-QR-01 — Guest QR and order-channel entry
 
 **QR-R1 / QR-R2 CORRECTED LOCALLY / UNCOMMITTED / LOCAL CHECKS PASS / IPHONE SMOKE OPEN**.

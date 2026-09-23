@@ -89,6 +89,16 @@ class DeferredFixtureDirectory:
         self.temporary.cleanup()
 
 
+def operation_quiescent(bindings, history, start, accepted_unknown):
+    """Validate metadata completion separately from supervised process completion."""
+    identity = bindings.binding_read(start)['identity']
+    operation_id = start.name.removesuffix('.start.json')
+    result = bindings.binding_result(history / (operation_id + '.result.json'), identity, history.parent)
+    if identity['kind'] == 'INIT':
+        return True  # Closed INIT success attests metadata; it never launches a child.
+    return result['children'] == 'REAPED' and (result['exit'] == 0 or operation_id in accepted_unknown)
+
+
 class OrdinaryTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix='v126-ordinary-deploy-')
@@ -107,6 +117,30 @@ class OrdinaryTests(unittest.TestCase):
                         handoff_approved_and_applied=True, approval_id='synthetic-approved', observed_at='2026-09-10T00:00:00Z',
                         files={name: '7' * 64 for name in ordinary.UPLOADS}, public_url='https://fixture.invalid', public_checks=True)
         self.deploy = ordinary.Deployment(self.target, self.doc, ROOT)
+
+    def test_cleanup_accepts_only_verified_init_metadata_completion(self):
+        bindings = ordinary.load_module(ROOT / 'scripts/v126-operation-bindings.py', 'ordinary_init_cleanup_bindings')
+        cases = ordinary.load_module(ROOT / 'scripts/test-v126-policy-b-init.py', 'ordinary_init_cleanup_fixture')
+        registry = self.target / '.v126-target-operations'
+        registry.mkdir(mode=0o700)
+        ordinary.create(registry / 'lock', b'', 0o600)
+        owner = dict(run_id='synthetic-cleanup', release_sha='a' * 40, script_sha256='b' * 64)
+        bindings.binding_create(registry / 'run.json', owner)
+        completion = cases.seed_completion(self.target, owner)
+        operation = completion['result']['operation_id']
+        start = registry / (operation + '.start.json')
+        self.assertNotIn('children', completion['result'])
+        before = {p.name: p.read_bytes() for p in registry.iterdir()}
+        self.assertTrue(operation_quiescent(bindings, registry, start, set()))
+        self.assertEqual(before, {p.name: p.read_bytes() for p in registry.iterdir()})
+        result = registry / (operation + '.result.json')
+        result.unlink()
+        with self.assertRaises(OSError): operation_quiescent(bindings, registry, start, set())
+        forged = copy.deepcopy(completion['result'])
+        forged['outcome'] = 'UNKNOWN'
+        bindings.binding_create(result, forged)
+        with self.assertRaisesRegex(bindings.BindingError, 'init_result_binding'):
+            operation_quiescent(bindings, registry, start, {operation})
 
     def test_provider_accepts_exact_source_command_menu_and_latches_other_requests(self):
         # Execute the real HTTP parser/handler with in-memory wire transport;
@@ -493,14 +527,28 @@ class OrdinaryTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
 
     def test_shared_v2_retirement_preserves_history_and_authorizes_only_next_request(self):
+        self.exercise_shared_v2_retirement(with_init=False)
+
+    def test_shared_v2_retirement_preserves_init_and_authorizes_only_next_request(self):
+        self.exercise_shared_v2_retirement(with_init=True)
+
+    def test_native_init_reconciled_terminal_retires_to_exact_ordinary_and_next_owner(self):
+        self.exercise_shared_v2_retirement(with_init=True, reconciled=True)
+
+    def exercise_shared_v2_retirement(self, *, with_init, reconciled=False):
         bindings = ordinary.load_module(ROOT / 'scripts/v126-operation-bindings.py', 'ordinary_binding_fixture')
         registry = self.target / '.v126-target-operations'
         registry.mkdir(mode=0o700)
         (registry / 'transfers').mkdir(mode=0o700)
         ordinary.create(registry / 'lock', b'', 0o600)
         lock_inode = (registry / 'lock').stat().st_ino
-        previous = dict(run_id='native-completed-fixture', release_sha='1' * 40, script_sha256='c' * 64)
+        source = (ROOT / 'scripts/v126-cutover.sh').read_bytes()
+        previous = dict(run_id='native-completed-fixture', release_sha='1' * 40,
+                        script_sha256=ordinary.sha(source) if reconciled else 'c' * 64)
         bindings.binding_create(registry / 'run.json', previous)
+        if with_init:
+            cases = ordinary.load_module(ROOT / 'scripts/test-v126-policy-b-init.py', 'ordinary_transfer_init_fixture')
+            cases.seed_completion(self.target, previous)
 
         def completed(identity, proof=None, outcome=0):
             op = ordinary.sha(ordinary.canonical(identity))
@@ -517,7 +565,53 @@ class OrdinaryTests(unittest.TestCase):
             return op
 
         native = dict(previous, intent_sha256='d' * 64, kind='STAGE', name='FINAL_PUBLIC_GATES_PASSED', action='final-public-gates')
-        completed(native)
+        terminal_sha = 'e' * 64
+        if reconciled:
+            fixture = ordinary.load_module(ROOT / 'scripts/test-v126-reconciliation-linux.py', 'ordinary_terminal_fixture')
+            collector = ordinary.load_module(ROOT / 'scripts/v126-reconcile-poststate.py', 'ordinary_terminal_collector')
+            namespace = self.target / '.v126-runs'
+            namespace.mkdir(mode=0o700)
+            run_root = namespace / previous['run_id']
+            run_root.mkdir(mode=0o700)
+            args = [str(self.target), previous['run_id'], previous['release_sha'], IMAGE, IMAGE_ID]
+            environment = dict(V126_INTERNAL_REMOTE_V126_IMAGE_ID=IMAGE_ID,
+                               V126_INTERNAL_REMOTE_CADDY_ORIGINAL_SHA256='8' * 64)
+            fields = dict(run_id=previous['run_id'], release_sha=previous['release_sha'], result='PASS')
+            started = fixture.proof(run_root, 'v126-backend-final-started', dict(fields, phase='final',
+                image_tag=IMAGE, image_id=IMAGE_ID, backend_container_id=CID, start_command_count='1',
+                restart_policy='no', restart_count='0'))
+            restored = fixture.proof(run_root, 'ordinary-caddy-restored', dict(fields, original_sha256='8' * 64))
+            terminal = fixture.proof(run_root, 'final-public-gates', fields)
+            fixture.synthetic_operation(bindings, self.target, previous, 'FINAL_V126_BACKEND_STARTED',
+                                        'start-v126', args + ['final'], environment, {'v126-backend-final-started': started})
+            fixture.synthetic_operation(bindings, self.target, previous, 'ORDINARY_CADDY_RESTORED',
+                                        'restore-caddy', args, environment, {'ordinary-caddy-restored': restored})
+            fixture.synthetic_operation(bindings, self.target, previous, native['name'], native['action'],
+                                        args, environment, {'final-public-gates': terminal})
+            native['intent_sha256'] = ordinary.sha(('SYNTHETIC_PREREQUISITE:' + native['name']).encode())
+            before_terminal = {str(path.relative_to(registry)): path.read_bytes()
+                               for path in registry.rglob('*') if path.is_file()}
+            # The actual locked coordinator and action-specific collector consume
+            # real closed-schema INIT/stage records. Only current external services
+            # are substituted; this does not claim native Docker/PG/Caddy execution.
+            def observe(identity, request, operations):
+                with (registry / 'lock').open('rb') as lock:
+                    with self.assertRaises(BlockingIOError): fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return collector.collect(self.target, identity, source, request, operations)
+            with mock.patch.object(collector, 'run_observer', return_value={'synthetic': 'current external services'}) as external:
+                record = bindings.binding_reconcile(self.target, previous, native['kind'], native['name'],
+                    native['intent_sha256'], previous['script_sha256'], ordinary.sha(Path(collector.__file__).read_bytes()),
+                    [native['action']], observe)
+                external.assert_called_once()
+                self.assertEqual(external.call_args.args[-1], CID)
+                self.assertEqual([name for name, _ in external.call_args.args[-2]],
+                    ['initialize', 'exact_backend', 'readiness', 'runtime', 'ordinary_caddy', 'drain_absent', 'public_live'])
+            self.assertEqual(record['kind'], 'RECONCILED_EFFECT')
+            self.assertFalse(record['retry_allowed'])
+            self.assertEqual(before_terminal, {name: (registry / name).read_bytes() for name in before_terminal})
+            terminal_sha = bindings.binding_hash(registry / 'reconciliations' / (record['operation_id'] + '.json'))
+        else:
+            completed(native)
 
         def handoff(owner, next_owner, proof_hash, compose_hash):
             return dict(format_version=1, owner=owner, next_owner=next_owner, terminal_receipt_sha256=proof_hash,
@@ -528,13 +622,25 @@ class OrdinaryTests(unittest.TestCase):
                         approval_id='synthetic-approved', observed_at='2026-09-10T00:00:00Z')
 
         request_sha = ordinary.sha(ordinary.canonical(self.doc))
-        first_handoff = handoff(previous, self.doc['owner'], 'e' * 64, self.doc['compose_before_sha256'])
+        first_handoff = handoff(previous, self.doc['owner'], terminal_sha, self.doc['compose_before_sha256'])
         files, unknown, _ = bindings.binding_inventory(registry, previous)
         self.assertFalse(unknown)
         first_transfer = dict(format_version=2, previous_owner=previous, next_owner=self.doc['owner'], inventory=files,
                               handoff=first_handoff, next_kind='ORDINARY_DEPLOY', request_sha256=request_sha,
                               terminal_kind='NATIVE_RECEIPT')
-        bindings.binding_create(registry / 'transfers' / (bindings.binding_owner_id(previous) + '.json'), first_transfer)
+        if reconciled:
+            approved_request, applied_handoff = self.target / 'approved-ordinary.json', self.target / 'applied-handoff.json'
+            bindings.binding_create(approved_request, self.doc)
+            bindings.binding_create(applied_handoff, first_handoff)
+            argv = ['synthetic-approved-retirement', str(self.target), *previous.values(), terminal_sha,
+                    str(applied_handoff), *self.doc['owner'].values(), 'V126', IMAGE_ID,
+                    'ORDINARY_DEPLOY', str(approved_request), 'RECONCILED_EFFECT']
+            with mock.patch.object(sys, 'argv', argv): bindings.binding_entry('retire')
+            transfer = bindings.binding_read(registry / 'transfers' / (bindings.binding_owner_id(previous) + '.json'))
+            self.assertEqual(transfer['terminal_kind'], 'RECONCILED_EFFECT')
+            self.assertEqual(transfer['inventory'], files)
+        else:
+            bindings.binding_create(registry / 'transfers' / (bindings.binding_owner_id(previous) + '.json'), first_transfer)
         self.assertEqual(bindings.binding_active_policy(registry, self.target),
                          {'next_kind': 'ORDINARY_DEPLOY', 'request_sha256': request_sha})
         identity = dict(self.doc['owner'], intent_sha256=request_sha, kind='DEPLOY', name='ORDINARY_DEPLOY', action='ordinary-deploy')
@@ -952,10 +1058,8 @@ def linux_integration(evidence):
         if quiescent and fixture is not None:
             history = fixture.root / '.v126-target-operations'
             for start in history.glob('*.start.json'):
-                operation_id = start.name.removesuffix('.start.json')
                 try:
-                    result = bindings.binding_read(history / (operation_id + '.result.json'))
-                    if result['children'] != 'REAPED' or (result['exit'] != 0 and operation_id not in accepted_pre_mutation_unknown):
+                    if not operation_quiescent(bindings, history, start, accepted_pre_mutation_unknown):
                         quiescent = False
                 except (OSError, ValueError, KeyError, bindings.BindingError):
                     quiescent = False

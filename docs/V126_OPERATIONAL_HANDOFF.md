@@ -117,6 +117,20 @@ scheduler, monitor, fence, secret export, real restore or DR PASS. The earlier
 feature-publication authorization paragraph below belongs to the repair history
 and grants no publication authority to this AP-01 changeset.
 
+HT-QR-01-POLICY-B's [approved attended dispatch contract](V126_STAGING_CUTOVER_CONTRACT.md#ht-qr-01-policy-b--attended-authority-and-same-lock-dispatch)
+is implemented locally with validation recorded separately. A handoff JSON does not
+supply authority: U's independent prior anchor, current C high-water/revocations and
+machine-verified P/clock observations remain mandatory. The existing SSH identity,
+server-selected launcher and root-controlled single-key source need separate enrollment.
+INIT uses the existing target lock/history only after a valid CUTOVER owner/transfer;
+it cannot create/adopt a missing registry or change ORDINARY_DEPLOY into CUTOVER.
+One immutable INIT completion precedes baseline; a second INIT or unresolved attempt
+refuses. A lost acknowledgement permits only separately authorized, bounded COPY_ONLY
+of an already successful exact completion; no repeated writer or fabricated result.
+This preserves accepted-image/descriptor/handoff, UNKNOWN/recovery and all20stage rules.
+No real R0/G/Q, actual post-V126 qualification, release artifact or operational readiness
+is established by local implementation or synthetic/owned-SSH tests.
+
 The schema/data rehearsal remains narrower than operational DR. The new synthetic
 whole-DB rehearsal checks globals/memberships, owners/ACL, database/role settings and
 role authentication, but uses only synthetic secrets. Real secret custody/rotation,

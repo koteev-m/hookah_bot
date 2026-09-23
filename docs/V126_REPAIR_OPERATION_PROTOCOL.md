@@ -8,14 +8,15 @@ cases and cleanup. REPAIR-REPORT and REPAIR-COVERAGE bind each proof and its lim
 final document delivery requires its own exact CI and reviewed-blob attestation.
 This supplements the canonical cutover contract; it is not authority to run against staging.
 
-The existing verified stdin dispatcher will supervise each remote action using a
+The authenticated Policy B launcher supervises new CUTOVER actions; the existing
+verified stdin path remains recovery-only. Both use a
 Linux child subreaper and one nonblocking `flock` on a persistent lock file under
 the canonical target directory's `.v126-target-operations` (operator-owned 0700).
 The lock inode is never removed. Its scope is the real target path, independent
 of SSH alias, local state directory or run. The protocol adds no service, account,
 daemon, access grant or lease.
 
-Each dispatched action gets create-only, fsynced, mode-0400 start/result JSON plus
+Each executable leaf action gets create-only, fsynced, mode-0400 start/result JSON plus
 a private operation log, bound to run/release/script/intent/action and a SHA-256
 operation ID. Cutover/recovery retain registry request JSON; ordinary deployment retains
 its protected approved-request.json in the operation work directory, bound by the
@@ -54,6 +55,42 @@ operation remains UNKNOWN even after all descendants are reaped: an external Doc
 database or systemd daemon may still be acting. Stage8 upload/preflight and stage10 prepare/upload/load share their original intent
 and require the complete ordered action group. Binary uploads use the same supervised
 SSH stream and target lock; no independent rsync or upload mutation occurs outside it.
+The initial OPEN/SOURCE exchange contains no binary spool. Enrolled source/target/action,
+existing lock/history/completion and applicable EARLY admission precede durable intent;
+only then may S request and receive the bounded binary payload. Source/history are replayed
+around transfer; live lock/cancellation are checked for each chunk, followed by applicable
+fresh LATE and final dispatch checks. Stage10 image-upload gains no new Policy B gate.
+Busy/missing/invalid history or EARLY refusal receives no payload bytes and creates no spool.
+A transfer failure after intent retains UNKNOWN; it cannot authorize retry.
+
+## Attended INIT metadata operation
+
+The locally approved tuple is `INIT / RUN_INITIALIZED / initialize-run`; the twenty
+STAGE identities and all legacy receipts retain their meaning. Closed request/result/
+attestation schemas are in `v126-operation-bindings.py`, mirrored in the sequencer.
+INIT opens the existing permanent lock **without creation**, verifies the complete
+history and already accepted CUTOVER owner/transfer, and requires empty own history.
+It does not appoint an owner or bootstrap a registry. The physical S lock remains
+held through EARLY R0/G, create-only intent/request, LATE R0/G, one WRITE_INIT and
+remote durable completion. The exact own in-flight delta is admissible only within
+this continuous invocation; a new session sees unresolved history as UNKNOWN.
+
+V creates protected local metadata with fsync/readback. Its LOCAL_WRITTEN attestation
+binds manifest bytes, local-state identity and complete metadata inventory. This state
+is provisional until S writes `completion=LOCAL_METADATA_ATTESTED`; the immutable local
+`init-completion.json` copy must match that remote result before any subsequent STAGE.
+INIT has no fictitious leaf log or `children=REAPED` assertion. Baseline is still required.
+After history verification the bound is 930s: two300s rounds, writer300s, ACK30s;
+preparation/history have finite separate bounds. Partial writes, timeout and lost result
+create no retry authority; no file is removed to resume INIT.
+
+`complete-init-copy` requires separate current COPY_ONLY authorization, the existing
+local state lock before the same target lock, and exact immutable successful history.
+It only copies completion, never repeats INIT/writer or appends another remote result.
+Missing/UNKNOWN remote completion refuses. Status/legacy inspection needs no Policy B
+readiness; recovery retains its existing independent authority. See
+[V126 cutover contract](V126_STAGING_CUTOVER_CONTRACT.md#ht-qr-01-policy-b--attended-authority-and-same-lock-dispatch)
+for authenticated transport, current observations and one-use dispatch bounds.
 
 ## Explicit inspection and retirement
 
@@ -92,8 +129,8 @@ It records previous/next owner, full completed operation inventory hashes and ha
 `run.json`, all old starts/results/logs and the permanent lock inode remain unchanged.
 Every subsequent dispatch revalidates the entire transfer chain and retired inventories;
 new entries for retired owners, reused run IDs or unlinked records refuse execution.
-A version1 transfer still requires the next run to start with its own fresh
-BASELINE_VERIFIED. A version2 transfer explicitly binds `next_kind=CUTOVER` or
+A version1 CUTOVER transfer now admits only one metadata INIT, followed by its own
+fresh BASELINE_VERIFIED as the first STAGE. A version2 transfer explicitly binds `next_kind=CUTOVER` or
 `ORDINARY_DEPLOY`, exact next request hash for deployment, and terminal proof kind
 `NATIVE_RECEIPT`, `RECONCILED_EFFECT` or `ORDINARY_DEPLOY_PROOF`. The next action must
 match that policy. No source, receipt or operation record is reset.

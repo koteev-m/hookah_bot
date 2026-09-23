@@ -2155,8 +2155,9 @@ observation. A new pin requires independent acquisition by the caller.
 Its independent checkpoint clock must be at most 300s old; stale catalogue,
 availability or custody observations cannot be renewed by rewriting a readiness receipt.
 An AP-06 adapter must obtain these observations independently; setting flags or
-copying hashes from receipts is not verification. No trust-root signature system,
-ledger storage service or operational observation loader is implemented by AP-01.
+copying hashes from receipts is not verification. AP-01 adds no trust-root signature system or ledger storage service. The attended
+AP-06 reader below consumes independently enrolled sources; an evidence file alone
+still cannot initialize Trust.
 Existing duplicate-aware DB parsing and TOC validation are reused. Current Git
 SHA/tree, Python version and the full `v126-*` helper/recipe inventory are rechecked;
 any tool/schema/source change invalidates the old binding, including local edits.
@@ -2236,9 +2237,24 @@ logging ownership approach was superseded before publication and never became
 operational evidence. The adapter is local, unprovisioned and not independently approved.
 No real bucket/SA/key/credentials/custody exists from code alone; no provider transfer
 or operational DR PASS is claimed. Do not substitute plaintext archives or DIY crypto.
-Producer orchestration, operational trust acquisition and live caller wiring are
-remaining implementation/review prerequisites. AP-02/AP-06 execution approval
-alone does not authorize arbitrary code changes, deployment or source integration.
+Producer orchestration and actual qualifications remain operational prerequisites.
+HT-QR-01-POLICY-B's approved [attended authority/dispatch contract](V126_STAGING_CUTOVER_CONTRACT.md#ht-qr-01-policy-b--attended-authority-and-same-lock-dispatch)
+connects the existing consumer to INIT and the required stages under the shared target
+lock. The local candidate implements the off-VPS verifier, independent C/P/clock readers,
+server-selected SSH launcher, one-use EARLY/LATE results and same-lock INIT/completion.
+Its closed schemas live with the reviewed authority/transport/operation modules; no
+JSON field can enroll itself, select an arbitrary command/plugin or grant operational mode.
+U's previously approved anchor and fresh attended C confirmation are distinct inputs.
+Protected source files preserve separately approved provenance; neither confirmation nor
+metadata replaces AP-03 full read-back, AP-04 restore or AP-07 retrieval/current-set evidence.
+The launcher requires a separately enrolled restricted existing SSH identity with a
+root-controlled single-key source. No account, key, custody route, clock service or source
+installation is provisioned by these scripts. Missing real inputs always refuse.
+Synthetic and Linux/owned-SSH results must be recorded for exact candidate bytes;
+implementation is not operational qualification. New operational use still needs
+independently accepted enrollment, actual R0/G/Q, handoff/history, Gate A/B/C, exact clean
+reviewed successor/CI and retained image, plus separate operation approvals. AP-02/AP-06
+execution approval alone never authorizes source changes, installation or V126 dispatch.
 
 The [whole-database recipe](V126_DATABASE_RECOVERY_REHEARSAL.md) defines inventory,
 restore and functional boundaries. The [cutover contract](V126_STAGING_CUTOVER_CONTRACT.md)

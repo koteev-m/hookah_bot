@@ -5,6 +5,8 @@ No daemon/SSH/network. The Linux supervisor suite independently checks transfer
 consumption with actual child processes. Applied handoff fields are operator
 attestation fixtures, not a fresh runtime observation.
 """
+import errno
+import fcntl
 import hashlib
 import importlib.util
 import json
@@ -155,6 +157,68 @@ printf '%s\\n' "${V125_IMAGE_ID}"
         checksum.chmod(0o600)
         checksum.write_text(bindings.binding_hash(path) + '\n')
         checksum.chmod(0o400)
+
+    def test_busy_existing_lock_closes_new_fd_and_preserves_history(self):
+        held = os.open(self.root / 'lock', os.O_RDWR)
+        before = self.snapshot()
+        real_open, opened = os.open, []
+        def record_open(*args, **kwargs):
+            fd = real_open(*args, **kwargs)
+            opened.append(fd)
+            return fd
+        try:
+            fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with patch.object(os, 'open', side_effect=record_open):
+                with self.assertRaisesRegex(bindings.BindingError, '^target_busy$'):
+                    bindings.binding_existing_lock(self.target)
+            self.assertEqual(len(opened), 1)
+            with self.assertRaises(OSError) as closed:
+                os.fstat(opened[0])
+            self.assertEqual(closed.exception.errno, errno.EBADF)
+            self.assertEqual(self.snapshot(), before)
+        finally:
+            os.close(held)
+        root, fd = bindings.binding_existing_lock(self.target)
+        try:
+            self.assertEqual(root, self.root)
+            bindings.binding_lock_held(root, fd)
+        finally:
+            os.close(fd)
+
+    def test_only_flock_contention_is_busy_and_other_errors_close_fd(self):
+        real_open = os.open
+        for code in (errno.EAGAIN, errno.EWOULDBLOCK, errno.EPERM, errno.EIO, errno.EBADF, errno.EINPROGRESS):
+            with self.subTest(errno=code):
+                opened = []
+                def record_open(*args, **kwargs):
+                    fd = real_open(*args, **kwargs)
+                    opened.append(fd)
+                    return fd
+                error = OSError(code, 'synthetic flock failure')
+                with patch.object(os, 'open', side_effect=record_open), patch.object(fcntl, 'flock', side_effect=error):
+                    if code in (errno.EAGAIN, errno.EWOULDBLOCK):
+                        with self.assertRaisesRegex(bindings.BindingError, '^target_busy$'):
+                            bindings.binding_existing_lock(self.target)
+                    else:
+                        with self.assertRaises(OSError) as caught:
+                            bindings.binding_existing_lock(self.target)
+                        self.assertIs(caught.exception, error)
+                self.assertEqual(len(opened), 1)
+                with self.assertRaises(OSError) as closed:
+                    os.fstat(opened[0])
+                self.assertEqual(closed.exception.errno, errno.EBADF)
+
+    def test_existing_lock_path_and_open_permission_errors_keep_their_identity(self):
+        with patch.object(os, 'open', side_effect=PermissionError(errno.EACCES, 'synthetic open refusal')):
+            with self.assertRaises(PermissionError) as caught:
+                bindings.binding_existing_lock(self.target)
+        self.assertEqual(caught.exception.errno, errno.EACCES)
+        (self.root / 'lock').chmod(0o400)
+        with self.assertRaisesRegex(bindings.BindingError, '^record_metadata$'):
+            bindings.binding_existing_lock(self.target)
+        (self.root / 'lock').unlink()
+        with self.assertRaises(FileNotFoundError):
+            bindings.binding_existing_lock(self.target)
 
     def test_failed_binding_source_producer_is_not_masked(self):
         result=self.shell('source "$1"; remote_operation_bindings_python() { printf partial; return 42; }; if payload="$(remote_operation_python)"; then echo ACCEPTED; else exit 1; fi',SOURCE)
