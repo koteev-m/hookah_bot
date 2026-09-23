@@ -89,6 +89,16 @@ class DeferredFixtureDirectory:
         self.temporary.cleanup()
 
 
+def operation_quiescent(bindings, history, start, accepted_unknown):
+    """Validate metadata completion separately from supervised process completion."""
+    identity = bindings.binding_read(start)['identity']
+    operation_id = start.name.removesuffix('.start.json')
+    result = bindings.binding_result(history / (operation_id + '.result.json'), identity, history.parent)
+    if identity['kind'] == 'INIT':
+        return True  # Closed INIT success attests metadata; it never launches a child.
+    return result['children'] == 'REAPED' and (result['exit'] == 0 or operation_id in accepted_unknown)
+
+
 class OrdinaryTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix='v126-ordinary-deploy-')
@@ -107,6 +117,30 @@ class OrdinaryTests(unittest.TestCase):
                         handoff_approved_and_applied=True, approval_id='synthetic-approved', observed_at='2026-09-10T00:00:00Z',
                         files={name: '7' * 64 for name in ordinary.UPLOADS}, public_url='https://fixture.invalid', public_checks=True)
         self.deploy = ordinary.Deployment(self.target, self.doc, ROOT)
+
+    def test_cleanup_accepts_only_verified_init_metadata_completion(self):
+        bindings = ordinary.load_module(ROOT / 'scripts/v126-operation-bindings.py', 'ordinary_init_cleanup_bindings')
+        cases = ordinary.load_module(ROOT / 'scripts/test-v126-policy-b-init.py', 'ordinary_init_cleanup_fixture')
+        registry = self.target / '.v126-target-operations'
+        registry.mkdir(mode=0o700)
+        ordinary.create(registry / 'lock', b'', 0o600)
+        owner = dict(run_id='synthetic-cleanup', release_sha='a' * 40, script_sha256='b' * 64)
+        bindings.binding_create(registry / 'run.json', owner)
+        completion = cases.seed_completion(self.target, owner)
+        operation = completion['result']['operation_id']
+        start = registry / (operation + '.start.json')
+        self.assertNotIn('children', completion['result'])
+        before = {p.name: p.read_bytes() for p in registry.iterdir()}
+        self.assertTrue(operation_quiescent(bindings, registry, start, set()))
+        self.assertEqual(before, {p.name: p.read_bytes() for p in registry.iterdir()})
+        result = registry / (operation + '.result.json')
+        result.unlink()
+        with self.assertRaises(OSError): operation_quiescent(bindings, registry, start, set())
+        forged = copy.deepcopy(completion['result'])
+        forged['outcome'] = 'UNKNOWN'
+        bindings.binding_create(result, forged)
+        with self.assertRaisesRegex(bindings.BindingError, 'init_result_binding'):
+            operation_quiescent(bindings, registry, start, {operation})
 
     def test_provider_accepts_exact_source_command_menu_and_latches_other_requests(self):
         # Execute the real HTTP parser/handler with in-memory wire transport;
@@ -493,6 +527,12 @@ class OrdinaryTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
 
     def test_shared_v2_retirement_preserves_history_and_authorizes_only_next_request(self):
+        self.exercise_shared_v2_retirement(with_init=False)
+
+    def test_shared_v2_retirement_preserves_init_and_authorizes_only_next_request(self):
+        self.exercise_shared_v2_retirement(with_init=True)
+
+    def exercise_shared_v2_retirement(self, *, with_init):
         bindings = ordinary.load_module(ROOT / 'scripts/v126-operation-bindings.py', 'ordinary_binding_fixture')
         registry = self.target / '.v126-target-operations'
         registry.mkdir(mode=0o700)
@@ -501,6 +541,9 @@ class OrdinaryTests(unittest.TestCase):
         lock_inode = (registry / 'lock').stat().st_ino
         previous = dict(run_id='native-completed-fixture', release_sha='1' * 40, script_sha256='c' * 64)
         bindings.binding_create(registry / 'run.json', previous)
+        if with_init:
+            cases = ordinary.load_module(ROOT / 'scripts/test-v126-policy-b-init.py', 'ordinary_transfer_init_fixture')
+            cases.seed_completion(self.target, previous)
 
         def completed(identity, proof=None, outcome=0):
             op = ordinary.sha(ordinary.canonical(identity))
@@ -952,10 +995,8 @@ def linux_integration(evidence):
         if quiescent and fixture is not None:
             history = fixture.root / '.v126-target-operations'
             for start in history.glob('*.start.json'):
-                operation_id = start.name.removesuffix('.start.json')
                 try:
-                    result = bindings.binding_read(history / (operation_id + '.result.json'))
-                    if result['children'] != 'REAPED' or (result['exit'] != 0 and operation_id not in accepted_pre_mutation_unknown):
+                    if not operation_quiescent(bindings, history, start, accepted_pre_mutation_unknown):
                         quiescent = False
                 except (OSError, ValueError, KeyError, bindings.BindingError):
                     quiescent = False

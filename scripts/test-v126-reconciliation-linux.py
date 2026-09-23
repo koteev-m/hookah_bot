@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Connected reconciliation hook for the owned ordinary-deploy Linux fixture.
 
-The predecessor baseline/maintenance/start/Caddy receipts below are explicitly
-synthetic prerequisites. The final-public action, supervisor, lost output pipe,
+The predecessor INIT completion and baseline/maintenance/start/Caddy receipts
+below are explicitly synthetic prerequisites. The final-public action, supervisor, lost output pipe,
 fresh observer, immutable reconciliation and subsequent transfer are real code.
 No additional image build, container start, daemon configuration or SSH is used.
 """
@@ -126,6 +126,12 @@ def synthetic_operation(bindings, target, owner, stage, action, args, environmen
                             exit=0, outcome='SUCCEEDED', children='REAPED', log_sha256=sha(log), completed_at='2026-09-10T00:00:00Z'))
 
 
+def synthetic_init_completion(target, owner):
+    # Fixture authority only: retain the production INIT schema/history verifier.
+    cases = load(ROOT / 'scripts/test-v126-policy-b-init.py', 'reconciliation_init_fixture')
+    return cases.seed_completion(target, owner)
+
+
 def secondary_failure(primary, phase, secondary):
     note = 'Owned reconciliation ' + phase + ' failed (' + type(secondary).__name__ + '); first failure preserved; fixture retained if lifetime is unknown'
     try:
@@ -153,6 +159,7 @@ def run_connected(fixture, caddy, evidence_dir):
     registry.mkdir(mode=0o700)
     create(registry / 'lock', b'', 0o600)
     bindings.binding_create(registry / 'run.json', owner)
+    init_completion = synthetic_init_completion(target, owner)
     inode = (registry / 'lock').stat().st_ino
     namespace = target / '.v126-runs'
     namespace.mkdir(mode=0o700)
@@ -255,7 +262,8 @@ def run_connected(fixture, caddy, evidence_dir):
     op = sha(canonical(identity))
     request = dict(format_version=1, identity=identity, target_sha256=sha(str(target).encode()), args=common, environment=environment)
     launch = target / 'reconciliation-launch.json'
-    create(launch, canonical(dict(identity=identity, args=common, environment=environment, source=str(source_path), target=str(target))))
+    create(launch, canonical(dict(identity=identity, args=common, environment=environment, source=str(source_path),
+                                  target=str(target), init_completion=init_completion)))
     events = []
     active = None
     primary = None
@@ -318,7 +326,7 @@ def run_connected(fixture, caddy, evidence_dir):
                        'mutation_replayed': False, 'source_sha256': sha(source)})
         result = dict(previous_owner=owner, terminal_receipt_sha256=sha(record_path.read_bytes()),
                       terminal_kind='RECONCILED_EFFECT', registry=str(registry), events=events,
-                      prerequisites='SYNTHETIC_BASELINE_MAINTENANCE_START_CADDY_NOT_FULL_E2E',
+                      prerequisites='SYNTHETIC_INIT_BASELINE_MAINTENANCE_START_CADDY_NOT_FULL_E2E',
                       native_terminal_action='REAL', ssh='NOT_USED', host_reboot='NOT_EXECUTED')
         create(evidence_dir / 'result.json', canonical(result))
         return result
@@ -353,15 +361,76 @@ def run_connected(fixture, caddy, evidence_dir):
 def supervise(path):
     doc = json.loads(Path(path).read_bytes())
     bindings = load(ROOT / 'scripts/v126-operation-bindings.py', 'reconciliation_worker_bindings')
+    require(sha(Path(doc['source']).read_bytes()) == doc['identity']['script_sha256'], 'supervisor source differs')
     env = {key: os.environ[key] for key in ('PATH', 'HOME')}
     env.update(doc['environment'])
     worker = ['bash', '-c', 'set -Eeuo pipefail; source "$1"; shift; remote_final_public_gates "$@"',
               'owned-real-final-public', doc['source'], *doc['args']]
     return bindings.binding_supervise(doc['target'], doc['identity'], worker, env=env, timeout=600,
-                                      request_context=dict(args=doc['args'], environment=doc['environment']))
+                                      request_context=dict(args=doc['args'], environment=doc['environment']),
+                                      init_completion=doc.get('init_completion'))
 
 
 class PortableTests(unittest.TestCase):
+    def test_actual_terminal_caller_requires_matching_init_completion_before_leaf(self):
+        cases = load(ROOT / 'scripts/test-v126-policy-b-dispatch.py', 'reconciliation_inert_runtime')
+        bindings = load(ROOT / 'scripts/v126-operation-bindings.py', 'reconciliation_admission_bindings')
+        source = ROOT / 'scripts/v126-cutover.sh'
+        owner = dict(run_id='synthetic-terminal-admission', release_sha='a' * 40, script_sha256=sha(source.read_bytes()))
+        for scenario in ('accepted', 'missing-remote', 'missing-local', 'changed-local', 'changed-source'):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory(prefix='v126-reconciliation-admission-') as temp:
+                target = Path(temp).resolve()
+                registry = target / '.v126-target-operations'
+                registry.mkdir(mode=0o700)
+                create(registry / 'lock', b'', 0o600)
+                bindings.binding_create(registry / 'run.json', owner)
+                completion = synthetic_init_completion(target, owner) if scenario != 'missing-remote' else None
+                args = [str(target), owner['run_id'], owner['release_sha'], 'synthetic:image', 'sha256:' + 'b' * 64]
+                synthetic_operation(bindings, target, owner, 'BASELINE_VERIFIED', 'baseline', args, {}, {})
+                identity = dict(owner, intent_sha256='c' * 64, kind='STAGE',
+                                name='FINAL_PUBLIC_GATES_PASSED', action='final-public-gates')
+                doc = dict(target=str(target), source=str(source), identity=identity, args=args, environment={},
+                           init_completion=completion)
+                if scenario == 'missing-local': del doc['init_completion']
+                if scenario == 'changed-local': doc['init_completion']['result_sha256'] = 'd' * 64
+                if scenario == 'changed-source':
+                    fake = target / 'changed-source.sh'
+                    create(fake, source.read_bytes() + b'\n# synthetic source drift\n')
+                    doc['source'] = str(fake)
+                launch = target / 'launch.json'
+                create(launch, canonical(doc))
+                before = {path.name: path.read_bytes() for path in registry.iterdir()}
+                expected_worker = ['bash', '-c', 'set -Eeuo pipefail; source "$1"; shift; remote_final_public_gates "$@"',
+                                   'owned-real-final-public', str(source), *args]
+                test = self
+
+                class CaptureOnly(cases.InertRuntime):
+                    def popen(self, argv, *argv_args, **kwargs):
+                        test.assertEqual(argv, expected_worker)
+                        test.assertTrue(self.locked())
+                        op = sha(canonical(identity))
+                        test.assertTrue((registry / (op + '.start.json')).exists())
+                        self.actual_worker = list(argv)
+                        return super().popen(['synthetic-policy-b-leaf'], *argv_args, **kwargs)
+
+                runtime = CaptureOnly(target, lambda: 0)
+                if scenario == 'accepted':
+                    with runtime.active(): result = supervise(launch)
+                    self.assertEqual(result, 0)
+                    self.assertEqual(len(runtime.calls), 1)
+                    self.assertEqual(runtime.actual_worker, expected_worker)
+                    result = bindings.binding_read(registry / (sha(canonical(identity)) + '.result.json'))
+                    self.assertEqual((result['outcome'], result['children']), ('SUCCEEDED', 'REAPED'))
+                    self.assertTrue(all((registry / name).read_bytes() == raw for name, raw in before.items()))
+                else:
+                    expected = {'missing-remote': 'cutover_requires_completed_init',
+                                'missing-local': 'local_init_completion_required',
+                                'changed-local': 'local_remote_init_completion_mismatch',
+                                'changed-source': 'supervisor source differs'}[scenario]
+                    with runtime.active(), self.assertRaisesRegex(ValueError, expected): supervise(launch)
+                    self.assertEqual(runtime.calls, [])
+                    self.assertEqual(before, {path.name: path.read_bytes() for path in registry.iterdir()})
+
     def test_actual_failure_handlers_preserve_primary_when_diagnostics_and_cleanup_fail(self):
         import ast
         import contextlib

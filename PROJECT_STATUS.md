@@ -1,46 +1,39 @@
 # Project Status
 
-## HT-QR-01-POLICY-B — approved authority/INIT implementation
+## HT-QR-01-POLICY-B — compose CI integration correction
 
-**ARCHITECTURE APPROVED / LOCAL IMPLEMENTATION AND ISOLATED VALIDATION PASS / UNCOMMITTED**.
+**LOCAL CORRECTION / HOSTED COMPOSE QUALIFICATION OPEN / UNCOMMITTED DIFF**.
 Branch `codex/ht-qr-01-policy-b-gates`, worktree
 `/Users/maksimmartynov/IdeaProjects/hookah_bot_worktrees/ht-qr-01-policy-b-gates`,
-base/HEAD `e20bfeb008b1c7a52b3f3bb88a81fe7228da45d3`, tree
-`b454a3898395febcb18641943585860efe8c8769`. No successor release is selected.
+HEAD `cea0b704eefafb3b833519cdd9846b28bd6aab9d`, parent
+`e20bfeb008b1c7a52b3f3bb88a81fe7228da45d3`. PR #204 remains OPEN;
+this correction is local and selects no successor release.
 
-The approved [attended contract](docs/V126_STAGING_CUTOVER_CONTRACT.md#ht-qr-01-policy-b--attended-authority-and-same-lock-dispatch)
-connects off-VPS AP-06 acquisition/consumer, authenticated launcher and existing target
-supervisor. Prior independent U anchor, fresh C console/head/revocation, P machine
-proofs and clock are separate from readiness. INIT and required stage actions run
-EARLY/LATE under the same flock; immutable completion/UNKNOWN and COPY_ONLY boundaries
-are implemented. Operational source checks remain enabled; no enrollment or target
-history is manufactured. Existing native receipts,20stages, Gate A/B/C, product/RBAC
-and migration bytes are preserved.
+Completed CI #519/#520 attempt1 had the same tree (push HEAD and PR merge checkout).
+Both failed the cutover fixture, shared lifecycle and private-daemon steps. Saved-image
+and later stage8/manual/envelope fixtures still used the former transport seam. The
+daemon caller lacked real synthetic R0/G, canonical budget, source bindings and INIT
+history. Reconciliation lacked INIT completion; cleanup also treated INIT metadata as
+a leaf. The CI lifecycle's first retained exception is FileNotFoundError; its exact
+missing file is unproven because the first traceback was suppressed and no artifacts
+were retained. The missing-INIT refusal was reproduced against published source.
 
-PB-AI-R1/R2/R3 corrected locally after exact comparison with the original 27-file archive.
-SSH now uses only frozen pinned host-key material. Nonempty binary acquisition follows
-same-lock history/EARLY/intent and precedes fresh LATE; refusal before intent creates no
-payload spool and interruption preserves UNKNOWN. Outer `prepare-init` emits exact bytes
-for independent approval, then `init` consumes that proposal without regenerating its time.
-The approved authority and INIT model is unchanged.
+Fixtures now preserve positive dispatch and native validation with these prerequisites;
+no runtime gates were disabled. CI explicitly wires authority/client/INIT plus the
+network-none owned-SSH runner. Existing 20 stages, R1/R2/R3 guarantees, product and
+migration bytes, native receipts and UNKNOWN/recovery contracts are unchanged.
 
-Correction checks: authority38, adapter25, dispatch23, INIT26 and client30 PASS on macOS
-and isolated Linux; owned-SSH transport28, actual caller14, supervisor21 and attended-PTY4
-PASS, no skips. Related consumer/history/status suites and 13 full sequencer core groups
-(192 assertions) pass. Pre-fix failures and test-harness setup/fault-injection corrections
-are retained. Scoped review found no remaining R1/R2/R3 findings. Runtime is Linux arm64 /
-Python3.12.3 / OpenSSH9.6; amd64 and staging are not qualified by these synthetic tests.
-Current evidence: `~/.hookahtootah/ht-qr-01-policy-b/evidence/20260923T013714Z-corrections/`.
-Both historical evidence directories and their archives remain unchanged.
+Current evidence: `~/.hookahtootah/ht-qr-01-policy-b/evidence/20260923T041236Z-compose-ci-correction/`.
+It retains original failures, commands/exits, source hashes, per-gate results and review.
+Actual local Linux arm64 caller/transport/PTY and supervisor checks pass; the full
+hosted Docker/systemd/PostgreSQL/Caddy/JVM lifecycle is not qualified locally. Missing
+local prerequisites remain OPEN; no COMPOSE_PASS or new CI success is claimed.
+Prior evidence and archives remain unchanged.
 
-Operational qualification is **BLOCKED / NOT OBTAINED**: independent actual identities,
-restricted existing-key enrollment, C/P/clock/custody sources, real R0+G/ownQ, valid
-history/handoff/Gate A/B/C, clean reviewed successor/CI and retained release artifact
-remain separate prerequisites. No producer, credentials, SSH to staging, release
-selection, publication or deployment is authorized by this local package. Next: independent
-review of `HT-QR-01-policy-b-authority-init-review-corrected.zip` in the current evidence directory;
-any enrollment, publication, release-artifact preparation or operational run needs its
-own authorization. Do not operate staging.
+Next: independent review of the correction archive, then separately authorized
+publication and hosted CI. This pass does not authorize Git publication, Actions,
+enrollment, real R0/G/Q acquisition, INIT/cutover, release artifacts or deployment.
+Operational authority/handoff/approvals and qualification remain separate prerequisites.
 
 ## HT-QR-01 — Guest QR and order-channel entry
 

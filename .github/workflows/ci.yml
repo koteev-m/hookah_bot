@@ -1160,6 +1160,27 @@ jobs:
           PG17_BIN: /usr/lib/postgresql/17/bin
           PG18_BIN: /usr/lib/postgresql/18/bin
         run: python3 scripts/v126-test-endpoint-guard.py --run "$RUNNER_TEMP/v126-harness-endpoints" -- bash scripts/test-v126-cutover.sh
+      - name: Exercise Policy B authority, INIT and exact proposal callers
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/test-v126-policy-b-authority.py
+          python3 scripts/test-v126-policy-b-client.py
+          python3 scripts/test-v126-policy-b-init.py
+      - name: Exercise Policy B authenticated owned SSH in network-denied Linux
+        if: ${{ !cancelled() }}
+        run: |
+          # Disposable test runtime only; never saved/pushed as a release artifact.
+          context="$(mktemp -d "$RUNNER_TEMP/policy-b-runtime.XXXXXX")"
+          image="v126-policy-b-ci:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          trap 'docker image rm "$image"; rm -rf -- "$context"' EXIT
+          cat > "$context/Dockerfile" <<'EOF'
+          FROM ubuntu:24.04
+          RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3 openssh-server openssh-client git ca-certificates procps util-linux iproute2 && rm -rf /var/lib/apt/lists/*
+          ENTRYPOINT []
+          CMD ["/bin/bash"]
+          EOF
+          docker build --tag "$image" "$context"
+          bash scripts/test-v126-policy-b-isolated.sh "$image"
       - name: Exercise V126 canonical IDs with real Docker and Compose (isolated runner)
         if: ${{ !cancelled() }}
         run: python3 scripts/v126-test-endpoint-guard.py --run "$RUNNER_TEMP/v126-container-ids-endpoints" -- python3 scripts/test-v126-container-ids.py --real-cli

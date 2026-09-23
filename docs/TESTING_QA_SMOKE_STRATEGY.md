@@ -739,6 +739,25 @@ and timeout behavior; retain the complete `test-v126-remote-operation.py --requi
 gate with its pinned historical negative control. A portable subset or skipped Linux class
 is not a full PASS; retain exact commands, numeric exits and before/after source hashes.
 
+The compose job also runs authority/client/INIT directly and invokes
+`bash scripts/test-v126-policy-b-isolated.sh TEST_RUNTIME_IMAGE`. The latter copies only
+public test sources into a disposable readonly, network-none Linux container, then runs
+both mandatory owned-SSH suites and attended PTY tests. Its temporary test image is not
+a release artifact. Do not mount Git credentials, HOME, an agent or Docker socket.
+
+Compose fixtures must carry current synthetic source bindings, existing registry/owner
+and exact INIT completion; gated baseline additionally uses the real R0/G consumer and
+canonical action budget. INIT metadata completion has no leaf `children` field: cleanup
+validates its closed schema through `binding_result`, while leaf outcomes still require
+REAPED (or the existing bounded UNKNOWN handling). Keep legacy and INIT-bearing lifecycle
+coverage. Archive/manual/stage8 unit seams validate the actual attended caller/envelope;
+owned SSH separately proves exact valid legacy/blob upload bytes, action order and lock.
+Raw STAGE remains forbidden. Run the entire cutover harness, including later envelope,
+manual-smoke and recovery groups; stopping at the first fixture failure is incomplete.
+Missing PostgreSQL17/libpq18, private dockerd, real systemd/Caddy/JVM or genuine hosted
+runner prerequisites leaves the corresponding full integration gate OPEN. Portable or
+network-none arm64 fixture PASS cannot replace those hosted amd64 checks.
+
 Authority tests execute real AP-01/AP-07 consumers against independently manufactured
 synthetic C/P/clock sources and a prior U anchor; forging readiness/internal hashes does
 not update those pins. Test root provenance, C foreground-console/nonces, full ledger and

@@ -341,7 +341,7 @@ tempfile.TemporaryFile=_observed_tempfile
         self.answers=[]
         return q,stages,index
 
-    def q_request(self,q,stages,index):
+    def q_request(self,q,stages,index,*,payload=None):
         identity=q.identity
         environment={'V126_INTERNAL_REMOTE_'+name:'f'*64 for name in self.client.ENVELOPE_NAMES}
         values=dict(ACTION=identity['action'],RUN_ID=identity['run_id'],RELEASE_SHA=identity['release_sha'],
@@ -354,9 +354,10 @@ tempfile.TemporaryFile=_observed_tempfile
         environment.update({'V126_INTERNAL_REMOTE_'+key:value for key,value in values.items()})
         args=[str(q.target),identity['run_id'],identity['release_sha']]
         request=dict(args=args,environment=environment)
-        payload=None;metadata=None
+        metadata=None
         if identity['action'] in ('preflight-upload','image-upload'):
-            payload=self.root/'synthetic-payload';payload.write_bytes(b'synthetic-payload'*8192)
+            if payload is None:
+                payload=self.root/'synthetic-payload';payload.write_bytes(b'synthetic-payload'*8192)
             metadata=dict(size=payload.stat().st_size,sha256=hashlib.sha256(payload.read_bytes()).hexdigest())
         opened=self.client.make_open(q.enrollment,self.manifest,identity,request,arguments=args,
             environment=environment,completion=self.acks[0],payload=metadata)
@@ -443,6 +444,73 @@ tempfile.TemporaryFile=_observed_tempfile
                     self.assertNotIn('CHALLENGE',names);self.assertEqual(self.answers,[])
                 saved=json.loads((self.history/(operation+'.result.json')).read_bytes())
                 self.assertEqual((saved['outcome'],saved['exit']),('SUCCEEDED',0))
+
+    def test_saved_image_archive_bytes_cross_owned_ssh_in_stage10_action_order(self):
+        # The shell fixture validates these Docker-save formats using the actual
+        # archive validator. This complementary test sends its exact bytes over
+        # the new authenticated transport; privileged image leaves stay captured.
+        stage='V126_IMAGE_TRANSFERRED_AND_VERIFIED'
+        actions=('image-prepare','image-upload','image-load')
+        for number,mode in enumerate(('valid-legacy','valid-blob')):
+            with self.subTest(format=mode):
+                if number:self.tearDown();self.doCleanups();self.setUp()
+                archive=self.root/'saved-image.tar'
+                generated=subprocess.run(['bash','-c',
+                    'set -Eeuo pipefail; source "$1"; make_saved_image_archive_fixture "$2" "$3"',
+                    'owned-saved-image-fixture',str(self.source_root/'scripts/test-v126-cutover.sh'),str(archive),mode],
+                    capture_output=True,timeout=30)
+                self.assertEqual(generated.returncode,0,generated.stderr.decode())
+                raw=archive.read_bytes();self.assertGreater(len(raw),0)
+                expected=hashlib.sha256(raw).hexdigest()
+                q,stages,index=self.native_fixture(stage,'image-prepare')
+                inode=(self.history/'lock').stat().st_ino
+                self.reset_transfer_events()
+                completed=[]
+                for action in actions:
+                    q.identity=dict(q.identity,action=action)
+                    q.catalogue['actions'][0]['identity']=q.identity;q.save('catalogue')
+                    start=len(self.transfer_events())
+                    opened,payload=self.q_request(q,stages,index,payload=archive if action=='image-upload' else None)
+                    operation=T.digest(q.identity);output=[]
+                    result=T.invoke_operation(self.ssh.options(),opened,self.ssh.source,self.verifier(q),
+                        payload=payload,output_sink=output.append)
+                    self.assertEqual(result['status'],0)
+                    emitted=b''.join(output)
+                    self.assertIn(('CAPTURED_ACTION\t'+action+'\n').encode(),emitted)
+                    events=self.transfer_events()[start:]
+                    self.assertEqual([item['action'] for item in events if item['event']=='LEAF'],[action])
+                    self.assertEqual(events[-1]['event'],'LEAF')
+                    for event in events:
+                        self.assertTrue(event['lock_held'],event)
+                        self.assertEqual(event['inode'],inode,event)
+                        self.assertIn(operation,event['starts'],event)
+                        self.assertNotIn(operation,event['results'],event)
+                        self.assertTrue(set(completed)<=set(event['results']),event)
+                    if action=='image-upload':
+                        self.assertEqual(opened['payload'],dict(size=len(raw),sha256=expected))
+                        self.assertIn(('CAPTURED_PAYLOAD\t'+expected).encode(),emitted)
+                        self.assertEqual([item['event'] for item in events].count('PAYLOAD_REQUEST'),1)
+                        self.assertEqual([item['event'] for item in events].count('SPOOL_OPEN'),1)
+                        for event in ('PAYLOAD_BYTES','SPOOL_WRITE'):
+                            self.assertEqual(sum(item['size'] for item in events if item['event']==event),len(raw))
+                    else:
+                        self.assertFalse(any(item['event'].startswith(('PAYLOAD','SPOOL')) for item in events))
+                    saved=json.loads((self.history/(operation+'.result.json')).read_bytes())
+                    self.assertEqual((saved['outcome'],saved['exit']),('SUCCEEDED',0))
+                    completed.append(operation)
+                self.assertEqual([item['action'] for item in self.transfer_events() if item['event']=='LEAF'],list(actions))
+                self.assertEqual(self.answers,[], 'stage10 must not acquire a new Policy B gate')
+                self.assertEqual(archive.read_bytes(),raw)
+                # A replay of the already completed upload cannot send more
+                # payload or create another result, even after image-load.
+                q.identity=dict(q.identity,action='image-upload')
+                opened,payload=self.q_request(q,stages,index,payload=archive)
+                before={path.name:path.read_bytes() for path in self.history.iterdir() if path.is_file()}
+                self.reset_transfer_events()
+                with self.assertRaises(T.ProtocolError):
+                    T.invoke_operation(self.ssh.options(),opened,self.ssh.source,self.verifier(q),payload=payload)
+                self.assertEqual(self.transfer_events(),[])
+                self.assertEqual(before,{path.name:path.read_bytes() for path in self.history.iterdir() if path.is_file()})
 
     def test_upload_disconnect_keeps_unknown_and_cannot_request_again(self):
         q,stages,index=self.native_fixture('FINAL_V125_PREFLIGHT_PASSED','preflight-upload')

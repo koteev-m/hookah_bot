@@ -133,6 +133,21 @@ fixture_legacy_dependencies() {
 }
 export -f fixture_legacy_dependencies
 
+# Archive/receipt units exercise the actual authenticated caller and data decoder.
+# Enrollment, SSH, supervisor and consumer are covered by the owned-SSH suite;
+# this seam cannot invoke SSH or accept the retired raw-STAGE caller.
+fixture_policy_b_tracked_command() {
+  [[ "$#" == 13 && "$1" == policy-b-ssh && "$2" == --attended &&
+    "$3" == python3 && "$4" == "${HT12P_POLICY_B_CLIENT_SOURCE:?}" &&
+    "$5" == operation && "$6" == --state-dir && "$7" == "${STATE_DIR}" &&
+    "$8" == --policy-b-anchor && "$9" == "${STATE_DIR}/synthetic-anchor" &&
+    "${10}" == --policy-b-transport && "${11}" == "${STATE_DIR}/synthetic-transport" &&
+    "${12}" == --stream-file && "${13}" == "${STATE_DIR}/tmp/remote-stream-$$-${action}.sh" ]] ||
+    die 'fixture requires the exact attended Policy B client invocation'
+  python3 "${HT12P_POLICY_B_ARTIFACT_CLIENT:?}" --policy-b-client "$4" "${SCRIPT_PATH}" "${13}"
+}
+export -f fixture_policy_b_tracked_command
+
 fixture_write_toc() {
   printf '%s\n' ';' '; Archive created at 2026-09-09 00:00:00 UTC' \
     '; dbname: fixture' '; TOC Entries: 1' '; Compression: none' \
@@ -643,6 +658,11 @@ if keep_stage != "BASELINE_VERIFIED":
 # copied outside scripts/. This changes only dependency location in the fixture.
 payload = "".join(result).replace('${SCRIPT_DIR}/v126-policy-b-client.py',
                                   os.path.join(os.path.dirname(source), 'v126-policy-b-client.py'))
+if keep_stage in ("FINAL_V125_PREFLIGHT_PASSED", "MANUAL_SMOKE_PASSED"):
+    # Keep the actual local stage/receipt path while capturing only the explicitly
+    # attended caller seam; authenticated execution is a mandatory owned-SSH gate.
+    payload = payload.replace(entry,
+        'run_tracked_command() { fixture_policy_b_tracked_command "$@"; }\n\n' + entry, 1)
 with open(target, "wt", encoding="utf-8", newline="") as handle:
     handle.write(payload)
 os.chmod(target, 0o700)
@@ -2789,8 +2809,8 @@ docker() {
     *) die "unexpected saved-image Docker fixture call: $*" ;;
   esac
 }
-# Actual run_remote builder/ACK consumer and NUL payload; synthetic SSH executes
-# the actual receiver with declared environmental precondition leaf fixtures.
+# Actual run_remote builder, Policy B decoder and ACK consumer. Only independent
+# enrollment/transport/leaf surroundings are synthetic in this archive unit.
 SCRIPT_PATH="$1"
 SCRIPT_SHA256="$(hash_file "${SCRIPT_PATH}")"
 ACTIVE_OPERATION_KIND=STAGE
@@ -2804,13 +2824,12 @@ printf '%s\n' '{}' > "${STATE_DIR}/present-receipt"
 receipt_path() { printf '%s/present-receipt\n' "${STATE_DIR}"; }
 verify_receipt() { :; }
 receipt_artifact_hash() { printf '%s\n' "${ACTIVE_PREDECESSOR_HASH}"; }
-run_tracked_command() { die 'independent remote upload is forbidden'; }
-run_tracked_command_with_input() {
-  [[ "$1" == remote-ssh ]] || die 'unexpected tracked transport'
-  local stream="$2"
-  shift 2
-  "$@" < "${stream}"
-}
+POLICY_B_ANCHOR_PATH="${STATE_DIR}/synthetic-anchor"
+POLICY_B_TRANSPORT_PATH="${STATE_DIR}/synthetic-transport"
+export HT12P_POLICY_B_CLIENT_SOURCE="${SCRIPT_DIR}/v126-policy-b-client.py"
+export HT12P_POLICY_B_ARTIFACT_CLIENT="${STATE_DIR}/fake-bin/ssh"
+run_tracked_command() { fixture_policy_b_tracked_command "$@"; }
+run_tracked_command_with_input() { die 'raw STAGE transport is forbidden in the archive fixture'; }
 export HT12P_ACTION_LOG="${fixture_action_log}"
 export HT12P_UPLOAD_SOURCE_CAPTURE="${fixture_upload_capture}"
 export HT12P_ARCHIVE_SWAP_PATH="${STATE_DIR}/tmp/v126-image.tar"
@@ -2870,6 +2889,75 @@ hardlink-member|non-regular member
 device-member|non-regular member
 EOF
   pass 'saved image anonymous FD binds bytes, tag, config digest, unique members, and layers before transfer'
+}
+
+
+run_upload_receiver_bounds_fixture() {
+  local fixture_root="$1" mode="$2" action="$3"
+  /bin/bash -s -- "${CUTOVER_SCRIPT}" "${fixture_root}" "${mode}" "${action}" <<'SH'
+set -Eeuo pipefail
+source "$1"
+fixture_legacy_dependencies
+fixture_root="$2" mode="$3" action="$4"
+mkdir -m 0700 -p "${fixture_root}"
+remote_initialize_compose() { :; }
+remote_require_run_root() { printf '%s\n' "${fixture_root}"; }
+remote_assert_public_drain() { :; }
+remote_assert_zero_writer() { [[ "$1" == '125:0:0' ]]; }
+remote_verify_proof() { :; }
+remote_verify_maintenance_env_binding() { :; }
+printf abcd > "${fixture_root}/payload"
+expected_sha="$(hash_file "${fixture_root}/payload")"
+size=4
+case "${mode}" in
+  valid) ;;
+  oversized)
+    if [[ "${action}" == image-upload ]]; then size=8589934593; else size=1048577; fi ;;
+  truncated) printf abc > "${fixture_root}/payload" ;;
+  extra) printf abcde > "${fixture_root}/payload" ;;
+  mismatch) printf abce > "${fixture_root}/payload" ;;
+  *) die 'unknown upload receiver fixture' ;;
+esac
+exec 8<"${fixture_root}/payload"
+remote_receive_upload "${action}" "${fixture_root}" synthetic-run \
+  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa synthetic-image "${expected_sha}" "${size}"
+SH
+}
+
+test_upload_receiver_bounds() {
+  local action mode fixture_root destination pattern
+  for action in image-upload preflight-upload; do
+    fixture_root="${TEST_ROOT}/receiver-${action}-valid"
+    if [[ "${action}" == image-upload ]]; then
+      destination=v126-image.tar.partial
+    else
+      destination=final-v125-preflight.sh.partial
+    fi
+    expect_success "${action} actual receiver preserves exact bounded bytes" \
+      run_upload_receiver_bounds_fixture "${fixture_root}" valid "${action}"
+    cmp -s "${fixture_root}/payload" "${fixture_root}/${destination}" ||
+      fail "${action} receiver changed accepted bytes"
+    while IFS='|' read -r mode pattern; do
+      fixture_root="${TEST_ROOT}/receiver-${action}-${mode}"
+      expect_failure "${action} actual receiver rejects ${mode} transfer" "${pattern}" \
+        run_upload_receiver_bounds_fixture "${fixture_root}" "${mode}" "${action}"
+      ! grep -F UPLOAD_COMPLETED "${LAST_OUTPUT}" >/dev/null ||
+        fail "${action} rejected ${mode} transfer emitted completion"
+      if [[ "${mode}" == oversized ]]; then
+        [[ ! -e "${fixture_root}/${destination}" ]] ||
+          fail "${action} oversized transfer created destination before size admission"
+      else
+        [[ -e "${fixture_root}/${destination}" ]] ||
+          fail "${action} failed in-flight transfer discarded partial evidence"
+      fi
+    done <<'EOF'
+oversized|upload size outside source contract
+truncated|upload transport truncated
+extra|upload framing did not complete
+mismatch|upload bytes differ from source identity
+EOF
+  done
+  pass 'actual image/preflight receivers reject bad bounds/framing/hash without false completion'
 }
 
 run_remote_image_fd_fixture() {
@@ -4667,7 +4755,7 @@ remote_recover_pre_v126() {
   printf '%s\n' recovery >> "${fixture_log}"
 }
 case "${fixture_mode}" in
-  baseline)
+  baseline|baseline-raw)
     V126_INTERNAL_REMOTE_ACTION=baseline
     V126_INTERNAL_REMOTE_OPERATION_KIND=STAGE
     V126_INTERNAL_REMOTE_OPERATION_NAME=BASELINE_VERIFIED
@@ -4675,21 +4763,39 @@ case "${fixture_mode}" in
     V126_INTERNAL_REMOTE_PREDECESSOR_HASH=NONE
     V126_INTERNAL_REMOTE_AUTHORIZATION_GATE=NONE
     V126_INTERNAL_REMOTE_AUTHORIZATION_HASH=NONE
-    if [[ "${fixture_mutation}" == none ]]; then
-      V126_INTERNAL_REMOTE_BASELINE_DATABASE_URL_SHA256=NONE
-      V126_INTERNAL_REMOTE_DATABASE_TARGET_IDENTITY_SHA256=NONE
-      V126_INTERNAL_REMOTE_BASELINE_MAINTENANCE_IDENTITIES_SHA256=NONE
-      V126_INTERNAL_REMOTE_BASELINE_COMPOSE_SOURCE_SHA256=NONE
-      V126_INTERNAL_REMOTE_BASELINE_MAINTENANCE_CHECK_SOURCE_SHA256=NONE
-      V126_INTERNAL_REMOTE_BASELINE_ADMISSION_SOURCE_SHA256=NONE
-      V126_INTERNAL_REMOTE_BASELINE_CADDY_SHA256=NONE
-      V126_INTERNAL_REMOTE_BASELINE_ENV_SHA256=NONE
+    V126_INTERNAL_REMOTE_BASELINE_DATABASE_URL_SHA256=NONE
+    V126_INTERNAL_REMOTE_DATABASE_TARGET_IDENTITY_SHA256=NONE
+    V126_INTERNAL_REMOTE_BASELINE_MAINTENANCE_IDENTITIES_SHA256=NONE
+    V126_INTERNAL_REMOTE_BASELINE_COMPOSE_SOURCE_SHA256=NONE
+    V126_INTERNAL_REMOTE_BASELINE_MAINTENANCE_CHECK_SOURCE_SHA256=NONE
+    V126_INTERNAL_REMOTE_BASELINE_ADMISSION_SOURCE_SHA256=NONE
+    V126_INTERNAL_REMOTE_BASELINE_CADDY_SHA256=NONE
+    V126_INTERNAL_REMOTE_BASELINE_ENV_SHA256=NONE
+    # Isolate each forbidden authority rather than rejecting seven other fields.
+    case "${fixture_mutation}" in
+      database) V126_INTERNAL_REMOTE_BASELINE_DATABASE_URL_SHA256="${fixture_hashes[0]}" ;;
+      target) V126_INTERNAL_REMOTE_DATABASE_TARGET_IDENTITY_SHA256="${fixture_hashes[0]}" ;;
+      identities) V126_INTERNAL_REMOTE_BASELINE_MAINTENANCE_IDENTITIES_SHA256="${fixture_hashes[1]}" ;;
+      compose) V126_INTERNAL_REMOTE_BASELINE_COMPOSE_SOURCE_SHA256="${fixture_hashes[2]}" ;;
+      maintenance) V126_INTERNAL_REMOTE_BASELINE_MAINTENANCE_CHECK_SOURCE_SHA256="${fixture_hashes[3]}" ;;
+      admission) V126_INTERNAL_REMOTE_BASELINE_ADMISSION_SOURCE_SHA256="${fixture_hashes[4]}" ;;
+      caddy) V126_INTERNAL_REMOTE_BASELINE_CADDY_SHA256="${fixture_hashes[5]}" ;;
+      environment) V126_INTERNAL_REMOTE_BASELINE_ENV_SHA256="${fixture_hashes[6]}" ;;
+      none) : ;;
+    esac
+    fixture_arguments=(baseline "${fixture_staging}" fixture-run "${fixture_release}"
+      "hookah-v125:${V125_SOURCE_SHA}" /fixture/database /fixture/identities
+      aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc)
+    if [[ "${fixture_mode}" == baseline-raw ]]; then
+      remote_dispatch_enveloped "${fixture_arguments[@]}"
+    else
+      # The authenticated launcher calls this exact validator before supervision.
+      # This unit observes validation only; owned SSH covers admitted dispatch.
+      remote_validate_envelope "${fixture_arguments[@]}"
+      remote_baseline
     fi
-    remote_dispatch_enveloped baseline "${fixture_staging}" fixture-run "${fixture_release}" \
-      "hookah-v125:${V125_SOURCE_SHA}" /fixture/database /fixture/identities \
-      aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
-      bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
-      cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
     ;;
   recovery)
     V126_INTERNAL_REMOTE_ACTION=recover-pre-v126
@@ -4851,6 +4957,11 @@ test_baseline_authority_envelope_contract() {
     run_remote_envelope_authority_fixture baseline none "${mutation_log}"
   [[ "$(cat "${mutation_log}")" == baseline ]] ||
     fail 'exact baseline NONE envelope did not reach its bounded helper'
+  : > "${mutation_log}"
+  expect_failure 'valid baseline envelope still refuses retired raw-STAGE dispatch' \
+    'stage dispatch requires the authenticated Policy B launcher' \
+    run_remote_envelope_authority_fixture baseline-raw none "${mutation_log}"
+  [[ ! -s "${mutation_log}" ]] || fail 'raw baseline dispatch reached its helper'
   local authority
   for authority in database target identities compose maintenance admission caddy environment; do
     : > "${mutation_log}"
@@ -5849,11 +5960,15 @@ PY
   grep -F "${mutable_sentinel}" \
     "${TEST_ROOT}/release-worktree/docs/DEPLOYMENT_RUNBOOK.md" >/dev/null ||
     fail 'stage-8 mutable working-tree SQL sentinel was not installed after baseline'
+  export HT12P_POLICY_B_CLIENT_SOURCE="${SCRIPT_DIR}/v126-policy-b-client.py"
+  export HT12P_POLICY_B_ARTIFACT_CLIENT="${fake_bin}/ssh"
   export HT12P_UPLOAD_SOURCE_CAPTURE="${transferred_preflight}"
   export HT12P_REMOTE_STREAM_LOG="${remote_stream}"
   PATH="${fake_bin}:${old_path}"
   expect_success 'real state 8 collects and seals an exact artifact set' \
-    invoke_script "${hybrid}" stage --state-dir "${state}" FINAL_V125_PREFLIGHT_PASSED
+    invoke_script "${hybrid}" stage --state-dir "${state}" \
+      --policy-b-anchor "${state}/synthetic-anchor" \
+      --policy-b-transport "${state}/synthetic-transport" FINAL_V125_PREFLIGHT_PASSED
   PATH="${old_path}"
   receipt="${state}/receipts/08-FINAL_V125_PREFLIGHT_PASSED.receipt.json"
   operation_log="${state}/artifacts/8-FINAL_V125_PREFLIGHT_PASSED.operation.log"
@@ -5902,7 +6017,9 @@ PY
   PATH="${fake_bin}:${old_path}"
   expect_failure 'real state 8 rejects duplicate artifact collection' \
     'duplicate artifact name|artifact.*duplicate' \
-    invoke_script "${hybrid}" stage --state-dir "${state}" FINAL_V125_PREFLIGHT_PASSED
+    invoke_script "${hybrid}" stage --state-dir "${state}" \
+      --policy-b-anchor "${state}/synthetic-anchor" \
+      --policy-b-transport "${state}/synthetic-transport" FINAL_V125_PREFLIGHT_PASSED
   PATH="${old_path}"
   [[ ! -e "${state}/receipts/08-FINAL_V125_PREFLIGHT_PASSED.receipt.json" ]] ||
     fail 'duplicate state-8 artifacts produced a receipt'
@@ -5927,6 +6044,7 @@ PY
   [[ ! -e "${missing_object_target}" ]] ||
     fail 'unavailable immutable preflight object produced an executable artifact'
   unset HT12P_RSYNC_SOURCE_CAPTURE HT12P_REMOTE_STREAM_LOG
+  unset HT12P_POLICY_B_CLIENT_SOURCE HT12P_POLICY_B_ARTIFACT_CLIENT
   FIXTURE_INIT_RELEASE_SHA=''
   FIXTURE_INIT_RELEASE_TREE=''
   pass 'stage 8 extracts only immutable release-object SQL and rejects unavailable/unsafe objects'
@@ -6007,9 +6125,18 @@ items = sys.argv[2:]
 if any(not re.fullmatch(r"[a-z0-9-]+=[0-9a-f]{64}", item) for item in items):
     raise SystemExit("invalid fake SSH artifact fixture")
 source = r'''#!/usr/bin/env python3
-import hashlib, json, os, re, shutil, subprocess, sys, tempfile, time
+import hashlib, importlib.util, json, os, re, shutil, subprocess, sys, tempfile, time
 from pathlib import Path
-stream = sys.stdin.buffer.read()
+sys.dont_write_bytecode = True
+decoded = None
+if len(sys.argv) == 5 and sys.argv[1] == '--policy-b-client':
+    client_path, source_path, stream_path = sys.argv[2:]
+    spec = importlib.util.spec_from_file_location('archive_fixture_client', client_path)
+    client = importlib.util.module_from_spec(spec); spec.loader.exec_module(client)
+    decoded = client.read_local_stream(stream_path, Path(source_path).read_bytes())
+    stream = Path(stream_path).read_bytes()
+else:
+    stream = sys.stdin.buffer.read()
 if os.environ.get("HT12P_REMOTE_STREAM_LOG"):
     Path(os.environ["HT12P_REMOTE_STREAM_LOG"]).write_bytes(stream)
 if os.environ.get("HT12P_REMOTE_LOG"):
@@ -6035,6 +6162,12 @@ args_body = pieces[-1].split(b"\n", count)
 arguments = [value.decode() for value in args_body[:count]]
 identity = dict(action=header['action'], run_id=header['run'], release_sha=header['release'],
                 script_sha256=header['script'], kind=header['kind'], name=header['name'], intent_sha256=header['intent'])
+if decoded is not None:
+    actual_identity, actual_arguments, _, payload_offset = decoded
+    if actual_identity != identity or actual_arguments != arguments:
+        raise SystemExit('Policy B data decoder differs from archive fixture oracle')
+    if (payload_offset is not None) != (identity['action'] in ('image-upload', 'preflight-upload')):
+        raise SystemExit('Policy B payload boundary differs from archive fixture oracle')
 canonical = lambda doc: (json.dumps(doc, sort_keys=True, separators=(",", ":")) + "\n").encode()
 items = ITEMS
 status = 0
@@ -6214,6 +6347,8 @@ test_manual_smoke_evidence() {
   mkdir -m 0700 "${fake_bin}"
   make_success_ssh "${fake_bin}/ssh" manual-smoke-passed
   export HT12P_REMOTE_LOG="${remote_log}"
+  export HT12P_POLICY_B_CLIENT_SOURCE="${SCRIPT_DIR}/v126-policy-b-client.py"
+  export HT12P_POLICY_B_ARTIFACT_CLIENT="${fake_bin}/ssh"
   PATH="${fake_bin}:${old_path}"
 
   index=0
@@ -6227,7 +6362,9 @@ test_manual_smoke_evidence() {
     before="$(log_line_count "${remote_log}")"
     expect_failure "manual evidence rejects missing claim ${assertion}" \
       'Stage MANUAL_SMOKE_PASSED failed closed' \
-      invoke_script "${hybrid}" stage --state-dir "${state}" MANUAL_SMOKE_PASSED \
+      invoke_script "${hybrid}" stage --state-dir "${state}" \
+      --policy-b-anchor "${state}/synthetic-anchor" \
+      --policy-b-transport "${state}/synthetic-transport" MANUAL_SMOKE_PASSED \
       --evidence-file "${evidence}"
     after="$(log_line_count "${remote_log}")"
     [[ "${after}" == "${before}" ]] ||
@@ -6248,7 +6385,9 @@ test_manual_smoke_evidence() {
     before="$(log_line_count "${remote_log}")"
     expect_failure "manual evidence rejects schema mutation ${mutation}" \
       'Stage MANUAL_SMOKE_PASSED failed closed' \
-      invoke_script "${hybrid}" stage --state-dir "${state}" MANUAL_SMOKE_PASSED \
+      invoke_script "${hybrid}" stage --state-dir "${state}" \
+      --policy-b-anchor "${state}/synthetic-anchor" \
+      --policy-b-transport "${state}/synthetic-transport" MANUAL_SMOKE_PASSED \
       --evidence-file "${evidence}"
     after="$(log_line_count "${remote_log}")"
     [[ "${after}" == "${before}" ]] ||
@@ -6264,12 +6403,14 @@ test_manual_smoke_evidence() {
   seed_chain "${state}" 13
   write_manual_smoke_evidence "${state}" "${valid}" valid
   expect_success 'exact manual-smoke evidence is sealed before Gate C' \
-    invoke_script "${hybrid}" stage --state-dir "${state}" MANUAL_SMOKE_PASSED \
+    invoke_script "${hybrid}" stage --state-dir "${state}" \
+      --policy-b-anchor "${state}/synthetic-anchor" \
+      --policy-b-transport "${state}/synthetic-transport" MANUAL_SMOKE_PASSED \
     --evidence-file "${valid}"
   [[ -s "${remote_log}" ]] || fail 'valid manual-smoke evidence did not reach the bounded remote action'
   [[ -f "${state}/artifacts/manual-smoke-evidence.json" ]] || fail 'manual-smoke evidence was not sealed'
   PATH="${old_path}"
-  unset HT12P_REMOTE_LOG
+  unset HT12P_REMOTE_LOG HT12P_POLICY_B_CLIENT_SOURCE HT12P_POLICY_B_ARTIFACT_CLIENT
   pass 'all 17 manual claims are exact, complete, mandatory, and sealed'
 }
 
@@ -8273,6 +8414,7 @@ main() {
   test_caddy_receipt_binding_contract
   test_caddy_source_same_read_binding
   test_saved_image_archive_binding
+  test_upload_receiver_bounds
   test_remote_image_exact_fd_binding
   test_image_separation_and_mismatch
   test_backend_specific_compose_mapping

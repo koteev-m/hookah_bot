@@ -5,6 +5,8 @@ Native mode is restricted to an authorized disposable GitHub-hosted Linux VM.
 No default Docker socket/service, running container, pull, TCP endpoint or reboot.
 """
 import argparse
+from contextlib import contextmanager
+from dataclasses import replace
 import hashlib
 import http.client
 import http.server
@@ -146,7 +148,7 @@ def expected_refusal(case, variant):
     if variant == 'other-run':
         return 'target_bound_to_another_run'
     if case == 'positive':
-        return 'operation_already_dispatched'
+        return 'baseline_already_dispatched'
     return 'prior_outcome_unknown' if case == 'missing-result' else 'prior_daemon_outcome_unknown'
 
 
@@ -185,12 +187,89 @@ def spec_read(path):
     require(raw == canonical(spec), 'fixture specification not canonical')
     require(spec['test_sha256'] == sha(SELF.read_bytes()), 'fixture source changed')
     require(spec['binding_sha256'] == sha((SCRIPTS / 'v126-operation-bindings.py').read_bytes()), 'binding source changed')
+    require(spec['source_binding'] == fixture_source_binding(), 'fixture Policy B source binding differs')
     private_root(spec)
     return spec
 
 
+def fixture_source_binding():
+    """Explicit synthetic checkout metadata, pinned to actual executable bytes.
+
+    This private-daemon fixture is not an operational source or AP-06 authority.
+    Only the external read-only Git observations are synthetic; the real
+    consumer still checks the complete source/tool binding and R0/G chain.
+    """
+    dr = load_module('daemon_fixture_source_evidence', SCRIPTS / 'v126-dr-evidence.py')
+    helpers = ('test-v126-policy-b-adapter.py', 'test-v126-policy-b-init.py', 'test-v126-dr-evidence.py')
+    return dict(source_sha='a' * 40, source_tree='b' * 40, tools=dr.tooling(SCRIPTS.parent),
+                fixture_helpers={name: sha((SCRIPTS / name).read_bytes()) for name in helpers})
+
+
+@contextmanager
+def fixture_checkout(spec):
+    real_run, real_output = subprocess.run, subprocess.check_output
+    binding = spec['source_binding']
+    require(binding == fixture_source_binding(), 'fixture Policy B source binding differs')
+    def observation(argv):
+        if not isinstance(argv, list) or argv[:1] != ['git']:
+            return None
+        prefix = ['git', '--no-replace-objects', '-C', str(SCRIPTS.parent)]
+        clean_prefix = ['git', '--no-replace-objects', '-c', 'core.fsmonitor=false', '-C', str(SCRIPTS.parent)]
+        if argv == prefix + ['rev-parse', 'HEAD', 'HEAD^{tree}']:
+            return (binding['source_sha'] + '\n' + binding['source_tree'] + '\n').encode()
+        if argv == clean_prefix + ['rev-parse', 'HEAD']:
+            return (binding['source_sha'] + '\n').encode()
+        if argv == clean_prefix + ['rev-parse', 'HEAD^{tree}']:
+            return (binding['source_tree'] + '\n').encode()
+        if argv == clean_prefix + ['status', '--porcelain', '--untracked-files=all']:
+            return b''
+        raise AssertionError('unexpected fixture Git observation')
+    def run(argv, *args, **kwargs):
+        raw = observation(argv)
+        return subprocess.CompletedProcess(argv, 0, raw, b'') if raw is not None else real_run(argv, *args, **kwargs)
+    def output(argv, *args, **kwargs):
+        raw = observation(argv)
+        return raw if raw is not None else real_output(argv, *args, **kwargs)
+    with patch.object(subprocess, 'run', side_effect=run), patch.object(subprocess, 'check_output', side_effect=output):
+        yield
+
+
+def fixture_admission(spec):
+    cases = load_module('daemon_fixture_policy_b_cases', SCRIPTS / 'test-v126-policy-b-adapter.py')
+    with fixture_checkout(spec):
+        fixture = cases.operational_shape_fixture('preparation')
+        gate, observer, _ = cases.make_case('BASELINE_VERIFIED', spec['target'], fixture=fixture)
+    observer.pins = replace(observer.pins, run_id=spec['run_id'])
+    observer.observations = replace(observer.observations, pins=observer.pins)
+    return gate, observer
+
+
+def seed_fixture_history(spec):
+    """Create only test data before admission, never bootstrap a real target."""
+    bindings = load_module('daemon_fixture_seed_bindings', SCRIPTS / 'v126-operation-bindings.py')
+    completion = load_module('daemon_fixture_init_history', SCRIPTS / 'test-v126-policy-b-init.py')
+    root = Path(spec['target']) / '.v126-target-operations'
+    root.mkdir(mode=0o700)
+    (root / 'lock').touch(mode=0o600)
+    owner = {key: identity(spec)[key] for key in ('run_id', 'release_sha', 'script_sha256')}
+    bindings.binding_create(root / 'run.json', owner)
+    return completion.seed_completion(Path(spec['target']), owner)
+
+
+def supervise_fixture(bindings, spec, owner, worker):
+    gate, _ = fixture_admission(spec)
+    with fixture_checkout(spec):
+        return bindings.binding_supervise(spec['target'], owner, worker,
+            input_data=b'', env=clean_env(spec['root']), timeout=300,
+            request_context={'args': [spec['target'], owner['run_id'], owner['release_sha'],
+                                     'synthetic-docker-create', spec['case_spec_path']], 'environment': {}},
+            policy_b_gate=gate, init_completion=spec['init_completion'])
+
+
 def identity(spec, variant='original'):
-    value = dict(run_id=spec['run_id'], release_sha='a' * 40, script_sha256=spec['test_sha256'],
+    value = dict(run_id=spec['run_id'], release_sha=spec['source_binding']['source_sha'],
+                 script_sha256=next(tool['sha256'] for tool in spec['source_binding']['tools']
+                                    if tool['path'] == 'scripts/v126-cutover.sh'),
                  intent_sha256=sha(('synthetic-intent-' + variant).encode()), kind='STAGE', name='BASELINE_VERIFIED', action='baseline')
     if variant == 'other-run':
         value['run_id'] += '-other'
@@ -206,10 +285,8 @@ def child_mode(mode, path, variant):
     owner = identity(spec, variant)
     try:
         if mode == 'supervise':
-            return bindings.binding_supervise(spec['target'], owner, [sys.executable, str(SELF), '--docker-create', str(path)],
-                input_data=b'', env=clean_env(spec['root']), timeout=20,
-                request_context={'args': [spec['target'], owner['run_id'], owner['release_sha'], 'synthetic-docker-create', str(path)],
-                                 'environment': {}})
+            return supervise_fixture(bindings, spec, owner,
+                [sys.executable, str(SELF), '--docker-create', str(path)])
         if mode == 'docker-create':
             # This synthetic leaf uses the actual daemon API; no Docker CLI default
             # payload fields are authorized implicitly by the transport adapter.
@@ -469,7 +546,8 @@ class Fixture:
             'data_root': str(self.root / 'data'), 'exec_root': str(self.root / 'exec'), 'pidfile': str(self.root / 'dockerd.pid'),
             'config': str(self.root / 'daemon.json'), 'cli_config': str(self.root / 'cli'),
             'unit': self.root.name + '.service', 'namespace': self.root.name, 'plugin_namespace': self.root.name + '-plugins', **self.tools,
-            'test_sha256': sha(SELF.read_bytes()), 'binding_sha256': sha((SCRIPTS / 'v126-operation-bindings.py').read_bytes())}
+            'test_sha256': sha(SELF.read_bytes()), 'binding_sha256': sha((SCRIPTS / 'v126-operation-bindings.py').read_bytes()),
+            'source_binding': fixture_source_binding()}
         self.unit_path = Path('/run/systemd/system') / self.spec['unit']
         self.events, self.cases, self.failures = [], [], []
         self.unit_allocated = False
@@ -722,6 +800,8 @@ class Fixture:
                 'run_id': 'daemon-' + case, 'state_a': str(directory/'state-a'), 'state_b': str(directory/'state-b'),
                 'proxy_pid': os.getpid()}
             spec_path = directory / 'case.json'
+            spec['case_spec_path'] = str(spec_path)
+            spec['init_completion'] = seed_fixture_history(spec)
             spec_path.write_bytes(canonical(spec)); spec_path.chmod(0o400)
             row = {'case': case, 'phase': 'PRE_DISPATCH', 'later_refusals': [], 'registry_preserved': False,
                    'target_sha256': sha(str(target).encode()), 'request_spec_sha256': sha(spec_path.read_bytes())}
@@ -737,7 +817,8 @@ class Fixture:
             require(not proxy.errors and proxy.creates == 1 and len(proxy.contenders) == 1, 'proxy boundary or concurrent exclusion failed')
             require((result.returncode == 0) == (case == 'positive'), 'actual supervisor outcome differs')
             snapshot = self.snapshot(target)
-            original_results = list((target / '.v126-target-operations').glob('*.result.json'))
+            original_results = [path for path in (target / '.v126-target-operations').glob('*.result.json')
+                                if json.loads(path.read_bytes())['identity']['kind'] == 'STAGE']
             self.progress(row, phase='ORIGINAL_RECORDS_OBSERVED', terminal_result_present=bool(original_results),
                           original_registry_files=snapshot)
             if case == 'missing-result':
@@ -1025,7 +1106,7 @@ class Guards(unittest.TestCase):
             self.assertNotIn('::',serialized);self.assertEqual(json.loads(serialized)['excerpt'],safe)
 
     def test_refusal_oracles_distinguish_actual_protected_boundaries(self):
-        self.assertEqual(expected_refusal('positive','original'),'operation_already_dispatched')
+        self.assertEqual(expected_refusal('positive','original'),'baseline_already_dispatched')
         self.assertEqual(expected_refusal('missing-result','recovery'),'prior_outcome_unknown')
         self.assertEqual(expected_refusal('after-created','retry'),'prior_daemon_outcome_unknown')
         self.assertEqual(expected_refusal('missing-result','other-run'),'target_bound_to_another_run')
@@ -1051,6 +1132,115 @@ class Guards(unittest.TestCase):
         fixture.stop_daemon.assert_not_called()
 
 
+class AdmissionGuards(unittest.TestCase):
+    """Real supervisor/consumer with captured leaf; no daemon or hosted spoofing.
+
+    Reuse the established inert runtime only for OS process observations and
+    capture-only leaf dispatch. Flock, source/tool checks, R0/G consumption,
+    owner/history and exact INIT completion execute unchanged.
+    """
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='daemon-admission-')
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name).resolve()
+        self.bindings = load_module('daemon_admission_bindings', SCRIPTS / 'v126-operation-bindings.py')
+        self.runtime_cases = load_module('daemon_admission_runtime', SCRIPTS / 'test-v126-policy-b-dispatch.py')
+        self.counter = 0
+        self.prepare()
+
+    def prepare(self):
+        self.counter += 1
+        target = self.root / ('target-' + str(self.counter))
+        target.mkdir(mode=0o700)
+        self.spec = dict(root=str(self.root), target=str(target), run_id='daemon-positive',
+                         case_spec_path=str(self.root / 'case.json'), source_binding=fixture_source_binding())
+        self.spec['init_completion'] = seed_fixture_history(self.spec)
+        self.gate, self.observer = fixture_admission(self.spec)
+        self.runtime = self.runtime_cases.InertRuntime(target, lambda: len([
+            value for value in self.observer.calls if isinstance(value, tuple) and value[0] == 'acquire']))
+
+    def run_supervisor(self, owner=None, gate=True):
+        with self.runtime.active(), patch.dict(supervise_fixture.__globals__, {
+                'fixture_admission': lambda spec: (self.gate if gate else None, self.observer)}):
+            return supervise_fixture(self.bindings, self.spec, owner or identity(self.spec),
+                                     ['synthetic-policy-b-leaf', 'baseline'])
+
+    def snapshot(self):
+        return {str(path.relative_to(self.spec['target'])): path.read_bytes()
+                for path in Path(self.spec['target']).rglob('*') if path.is_file()}
+
+    def test_real_gate_and_init_completion_reach_exact_leaf_after_two_checks(self):
+        self.assertEqual(self.run_supervisor(), 0)
+        self.assertEqual(self.runtime.calls, [dict(argv=['synthetic-policy-b-leaf', 'baseline'], observations=2, lock=True)])
+        validation = self.gate.last_validation
+        self.assertTrue(validation['result']['operational'])
+        self.assertEqual(validation['result']['barrier'], 'R0')
+        self.assertEqual(validation['context'].action_seconds, 300)
+        self.assertEqual(validation['context'].run_id, self.spec['run_id'])
+        owner = identity(self.spec)
+        root = Path(self.spec['target']) / '.v126-target-operations'
+        result = self.bindings.binding_result(root / (sha(canonical(owner)) + '.result.json'), owner, Path(self.spec['target']))
+        self.assertEqual(result['outcome'], 'SUCCEEDED')
+        before = self.snapshot()
+        with self.assertRaisesRegex(self.bindings.BindingError, 'baseline_already_dispatched'):
+            self.run_supervisor()
+        self.assertEqual(len(self.runtime.calls), 1)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_missing_gate_registry_owner_or_init_completion_never_dispatches(self):
+        for case in ('gate', 'registry', 'owner', 'completion', 'completion-hash', 'source'):
+            with self.subTest(case=case):
+                self.prepare()
+                root = Path(self.spec['target']) / '.v126-target-operations'
+                if case == 'registry':
+                    shutil.rmtree(root)
+                if case == 'owner':
+                    path = root / 'run.json'
+                    value = json.loads(path.read_bytes()); value['run_id'] = 'other-run'
+                    path.chmod(0o600); path.write_bytes(canonical(value)); path.chmod(0o400)
+                if case == 'completion':
+                    self.spec['init_completion'] = None
+                if case == 'completion-hash':
+                    self.spec['init_completion']['result_sha256'] = 'f' * 64
+                if case == 'source':
+                    self.spec['source_binding']['tools'][0]['sha256'] = 'f' * 64
+                before = self.snapshot()
+                errors = FileNotFoundError if case == 'registry' else (self.bindings.BindingError, AssertionError)
+                with self.assertRaises(errors):
+                    self.run_supervisor(gate=case != 'gate')
+                self.assertEqual(self.runtime.calls, [])
+                self.assertEqual(self.snapshot(), before)
+
+    def test_early_refusal_and_late_refusal_preserve_correct_history_boundary(self):
+        for late in (False, True):
+            with self.subTest(late=late):
+                self.prepare()
+                acquire = self.observer.acquire
+                acquisitions = []
+                def observed(context):
+                    acquisitions.append(context)
+                    if len(acquisitions) == (2 if late else 1):
+                        raise ValueError('synthetic observation unavailable')
+                    return acquire(context)
+                self.observer.acquire = observed
+                before = self.snapshot()
+                with self.assertRaisesRegex(self.bindings.BindingError, 'policy_b_admission_refused'):
+                    self.run_supervisor()
+                self.assertEqual(self.runtime.calls, [])
+                root = Path(self.spec['target']) / '.v126-target-operations'
+                operation = sha(canonical(identity(self.spec)))
+                self.assertFalse((root / (operation + '.result.json')).exists())
+                self.assertEqual((root / (operation + '.start.json')).exists(), late)
+                if not late:
+                    self.assertEqual(self.snapshot(), before)
+                else:
+                    unknown = self.snapshot()
+                    with self.assertRaisesRegex(self.bindings.BindingError, 'prior_outcome_unknown'):
+                        self.run_supervisor()
+                    self.assertEqual(self.runtime.calls, [])
+                    self.assertEqual(self.snapshot(), unknown)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     modes = parser.add_mutually_exclusive_group(required=True)
@@ -1062,7 +1252,8 @@ def main():
     parser.add_argument('--evidence-dir', type=Path)
     args = parser.parse_args()
     if args.self_test:
-        return 0 if unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(Guards)).wasSuccessful() else 1
+        suite = unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(case) for case in (Guards, AdmissionGuards))
+        return 0 if unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful() else 1
     for mode in ('supervise','docker-create','inspect','retire'):
         path=getattr(args,mode.replace('-','_'))
         if path is not None:return child_mode(mode,path,args.variant)
