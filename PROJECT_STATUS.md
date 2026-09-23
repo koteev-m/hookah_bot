@@ -1,39 +1,37 @@
 # Project Status
 
-## HT-QR-01-POLICY-B — compose CI integration correction
+## HT-QR-01-POLICY-B — remaining compose correction
 
 **LOCAL CORRECTION / HOSTED COMPOSE QUALIFICATION OPEN / UNCOMMITTED DIFF**.
 Branch `codex/ht-qr-01-policy-b-gates`, worktree
 `/Users/maksimmartynov/IdeaProjects/hookah_bot_worktrees/ht-qr-01-policy-b-gates`,
-HEAD `cea0b704eefafb3b833519cdd9846b28bd6aab9d`, parent
-`e20bfeb008b1c7a52b3f3bb88a81fe7228da45d3`. PR #204 remains OPEN;
-this correction is local and selects no successor release.
+HEAD `41a21b7d691e9fb88961ab68320fef44323c030e`; PR #204.
+No successor release is selected.
 
-Completed CI #519/#520 attempt1 had the same tree (push HEAD and PR merge checkout).
-Both failed the cutover fixture, shared lifecycle and private-daemon steps. Saved-image
-and later stage8/manual/envelope fixtures still used the former transport seam. The
-daemon caller lacked real synthetic R0/G, canonical budget, source bindings and INIT
-history. Reconciliation lacked INIT completion; cleanup also treated INIT metadata as
-a leaf. The CI lifecycle's first retained exception is FileNotFoundError; its exact
-missing file is unproven because the first traceback was suppressed and no artifacts
-were retained. The missing-INIT refusal was reproduced against published source.
+Completed PR-run #522 / `35824291019`, attempt1, checked merge
+`c7f8b960330c216431e5dc721048ef6ab97f34b7`; its tree equals feature HEAD.
+Cutover fixtures and new Policy B/owned-SSH steps passed. Two steps remained red:
+private daemon exposed raw flock contention instead of typed `target_busy`; terminal
+lifecycle collector parsed accepted INIT metadata as a stage request, yielding
+`INSUFFICIENT_EVIDENCE:original_request_binding`.
 
-Fixtures now preserve positive dispatch and native validation with these prerequisites;
-no runtime gates were disabled. CI explicitly wires authority/client/INIT plus the
-network-none owned-SSH runner. Existing 20 stages, R1/R2/R3 guarantees, product and
-migration bytes, native receipts and UNKNOWN/recovery contracts are unchanged.
+Only flock EAGAIN/EWOULDBLOCK now becomes `target_busy`; other errors and FD cleanup
+remain distinct. Collector excludes exact INIT metadata from artifact ancestry after
+mandatory native history validation. Both embedded copies match standalone sources.
+Regressions also fix the daemon's later other-run/UNKNOWN precedence expectation and
+the INIT busy assertion. No gates, UNKNOWN/recovery rules, stages or product/migrations
+are weakened. Linux tests use real flock/processes and own SSH with synthetic authority;
+the complete synthetic terminal/handoff/ordinary chain preserves exact history bindings.
 
-Current evidence: `~/.hookahtootah/ht-qr-01-policy-b/evidence/20260923T041236Z-compose-ci-correction/`.
-It retains original failures, commands/exits, source hashes, per-gate results and review.
-Actual local Linux arm64 caller/transport/PTY and supervisor checks pass; the full
-hosted Docker/systemd/PostgreSQL/Caddy/JVM lifecycle is not qualified locally. Missing
-local prerequisites remain OPEN; no COMPOSE_PASS or new CI success is claimed.
-Prior evidence and archives remain unchanged.
+Evidence: `~/.hookahtootah/ht-qr-01-policy-b/evidence/20260923T065605Z-remaining-compose/`.
+The report retains original failures, review findings, final commands/exits and source
+hashes. Full native hosted-amd64 private dockerd/systemd/PG/Caddy/JVM qualification
+remains OPEN; local capture-only results do not establish COMPOSE_PASS. Older evidence
+is unchanged. No publication, Actions mutation or operational action was performed.
 
-Next: independent review of the correction archive, then separately authorized
-publication and hosted CI. This pass does not authorize Git publication, Actions,
-enrollment, real R0/G/Q acquisition, INIT/cutover, release artifacts or deployment.
-Operational authority/handoff/approvals and qualification remain separate prerequisites.
+Next: one explicit approval of the final file list and diff hash for a correction commit
+and non-force push to PR #204 with normal automatic CI. No merge, release selection,
+enrollment, INIT/cutover or deployment is authorized by this local pass.
 
 ## HT-QR-01 — Guest QR and order-channel entry
 

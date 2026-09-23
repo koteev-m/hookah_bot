@@ -6,6 +6,7 @@ record after the caller verifies its real terminal receipt and approved handoff.
 Unknown daemon outcomes cannot be retired by this protocol.
 """
 import datetime
+import errno
 import fcntl
 import hashlib
 import json
@@ -858,7 +859,12 @@ def binding_existing_lock(target):
     binding_protected(root / 'lock', 0o600)
     fd = os.open(root / 'lock', os.O_RDWR | os.O_NOFOLLOW)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as error:
+            if error.errno in (errno.EAGAIN, errno.EWOULDBLOCK):
+                binding_refuse('target_busy')
+            raise
         binding_lock_held(root, fd)
         return root, fd
     except BaseException:

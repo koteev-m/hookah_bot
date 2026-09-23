@@ -758,6 +758,17 @@ Missing PostgreSQL17/libpq18, private dockerd, real systemd/Caddy/JVM or genuine
 runner prerequisites leaves the corresponding full integration gate OPEN. Portable or
 network-none arm64 fixture PASS cannot replace those hosted amd64 checks.
 
+Existing-lock contention is a typed `target_busy` refusal only for flock
+EAGAIN/EWOULDBLOCK; preserve other errno/path/permission failures and FD cleanup.
+Run the daemon self-test on Linux for actual interprocess busy/free/duplicate callers
+and every later UNKNOWN refusal, alongside the full hosted interruption/persistence
+fixture. Synthetic lost-result histories do not qualify a real daemon restart.
+The poststate collector excludes only the exact accepted INIT tuple from stage artifact
+ancestry; the locked native inventory still validates its entire request/completion.
+Retain malformed INIT refusal before observation and the complete synthetic reconciled
+terminal → approved handoff → ordinary result → next-owner chain; external runtime
+observations and ordinary leaf proofs in that regression are explicitly synthetic.
+
 Authority tests execute real AP-01/AP-07 consumers against independently manufactured
 synthetic C/P/clock sources and a prior U anchor; forging readiness/internal hashes does
 not update those pins. Test root provenance, C foreground-console/nonces, full ledger and

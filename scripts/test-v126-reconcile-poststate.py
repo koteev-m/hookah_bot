@@ -104,6 +104,77 @@ class PoststateTests(unittest.TestCase):
         self.assertNotIn('remote_start_v126 ', joined)
         self.assertNotIn('docker start ', joined)
 
+    def test_native_init_history_is_validated_before_stage_poststate_collection(self):
+        # Real coordinator/native INIT validator/collector. Only the external
+        # read-only observation is synthetic; no stage/INIT action is replayed.
+        spec = importlib.util.spec_from_file_location('poststate_init_fixture', HERE / 'test-v126-policy-b-init.py')
+        cases = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cases)
+        bindings = cases.b
+        owner = {key: self.identity[key] for key in ('run_id', 'release_sha', 'script_sha256')}
+        self.write(self.root / 'lock', b'', 0o600)
+        bindings.binding_create(self.root / 'run.json', owner)
+        completion = cases.seed_completion(self.target, owner)
+        operation = completion['result']['operation_id']
+        init_files = {self.root / (operation + '.' + suffix + '.json'): poststate.canonical(value)
+                      for suffix, value in [('request', completion['request']), ('result', completion['result'])]}
+        start_path = self.root / (operation + '.start.json')
+        init_files[start_path] = start_path.read_bytes()
+
+        def reconcile():
+            return bindings.binding_reconcile(self.target, owner, self.identity['kind'], self.identity['name'],
+                self.identity['intent_sha256'], owner['script_sha256'], poststate.digest(Path(poststate.__file__).read_bytes()),
+                [self.identity['action']], lambda identity, request, operations:
+                poststate.collect(self.target, identity, SOURCE, request, operations))
+
+        for scenario in ('request-target', 'manifest-size', 'attestation', 'result-identity', 'result-request-hash',
+                         'missing-result', 'unknown-result', 'wrong-tuple', 'wrong-source', 'unexpected-log'):
+            with self.subTest(scenario=scenario):
+                for path, raw in init_files.items(): self.write(path, raw, 0o400)
+                if scenario == 'unexpected-log':
+                    self.write(self.root / (operation + '.log'), b'ARTIFACT\tfake-init-artifact\t' + b'0' * 64 + b'\n', 0o400)
+                elif scenario == 'missing-result':
+                    (self.root / (operation + '.result.json')).unlink()
+                else:
+                    suffix = 'request' if scenario in ('request-target', 'manifest-size') else (
+                        'start' if scenario in ('wrong-tuple', 'wrong-source') else 'result')
+                    path = self.root / (operation + '.' + suffix + '.json')
+                    doc = json.loads(path.read_bytes())
+                    if scenario == 'request-target': doc['target_sha256'] = '0' * 64
+                    if scenario == 'manifest-size': doc['manifest_size'] += 1
+                    if scenario == 'attestation': doc['attestation']['durable'] = False
+                    if scenario == 'result-identity': doc['identity']['run_id'] = 'unrelated-run'
+                    if scenario == 'result-request-hash': doc['request_sha256'] = '0' * 64
+                    if scenario == 'unknown-result': doc['outcome'], doc['exit'] = 'UNKNOWN', 75
+                    if scenario == 'wrong-tuple': doc['identity']['action'] = 'initialize-other'
+                    if scenario == 'wrong-source': doc['identity']['script_sha256'] = '0' * 64
+                    self.write(path, poststate.canonical(doc), 0o400)
+                before = self.snapshot()
+                with patch.object(poststate, 'run_observer') as observe:
+                    with self.assertRaises(bindings.BindingError): reconcile()
+                    observe.assert_not_called()
+                self.assertEqual(self.snapshot(), before)
+                self.assertFalse((self.root / 'reconciliations').exists())
+                if scenario == 'unexpected-log': (self.root / (operation + '.log')).unlink()
+        for path, raw in init_files.items(): self.write(path, raw, 0o400)
+        before = self.snapshot()
+        with patch.object(poststate, 'run_observer', return_value={'mock': 'read-only boundary'}) as observe:
+            record = reconcile()
+            self.assertEqual(record['kind'], 'RECONCILED_EFFECT')
+            self.assertFalse(record['retry_allowed'])
+            self.assertEqual(reconcile(), record)  # Existing completion readback, not replay.
+            observe.assert_called_once()
+            evidence = observe.call_args.args[2]
+            self.assertNotIn('initialize-run', [identity['action'] for identity, _ in evidence.original_requests])
+            self.assertEqual(evidence.artifacts.keys(), {self.proof_name})
+            self.assertEqual(record['operations'], self.operations)
+        self.assertTrue(all(self.snapshot()[name] == raw for name, raw in before.items()))
+        # Metadata cannot replace selected stage evidence or authorize an action.
+        with patch.object(poststate, 'run_observer') as observe:
+            with self.assertRaisesRegex(ValueError, 'original_request_binding'):
+                poststate.collect(self.target, completion['request']['identity'], SOURCE, completion['request'], [])
+            observe.assert_not_called()
+
     def test_original_nonzero_and_unknown_children_refuse_even_if_current_would_match(self):
         for exit_code, children in [(1, 'REAPED'), (75, 'REAPED'), (0, 'UNKNOWN')]:
             with self.subTest(exit=exit_code, children=children):

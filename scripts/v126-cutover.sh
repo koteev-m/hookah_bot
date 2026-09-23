@@ -8946,6 +8946,12 @@ class Evidence:
             candidate_identity = candidate.get('identity', {})
             if any(candidate_identity.get(key) != identity[key] for key in ('run_id', 'release_sha', 'script_sha256')):
                 continue
+            if (candidate_identity.get('kind'), candidate_identity.get('name'), candidate_identity.get('action')) == (
+                    'INIT', 'RUN_INITIALIZED', 'initialize-run'):
+                # binding_reconcile already validated the complete native INIT
+                # request/result under this lock. Metadata is not stage evidence:
+                # it has no action args, process log or predecessor artifacts.
+                continue
             original, original_request, _, artifacts = operation(self.root, path.name.removesuffix('.start.json'), self.target)
             self.original_requests.append((original, original_request))
             for name, value in artifacts.items():
@@ -9512,6 +9518,7 @@ record after the caller verifies its real terminal receipt and approved handoff.
 Unknown daemon outcomes cannot be retired by this protocol.
 """
 import datetime
+import errno
 import fcntl
 import hashlib
 import json
@@ -10364,7 +10371,12 @@ def binding_existing_lock(target):
     binding_protected(root / 'lock', 0o600)
     fd = os.open(root / 'lock', os.O_RDWR | os.O_NOFOLLOW)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as error:
+            if error.errno in (errno.EAGAIN, errno.EWOULDBLOCK):
+                binding_refuse('target_busy')
+            raise
         binding_lock_held(root, fd)
         return root, fd
     except BaseException:

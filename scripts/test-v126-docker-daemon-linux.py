@@ -7,6 +7,7 @@ No default Docker socket/service, running container, pull, TCP endpoint or reboo
 import argparse
 from contextlib import contextmanager
 from dataclasses import replace
+import fcntl
 import hashlib
 import http.client
 import http.server
@@ -145,10 +146,10 @@ def excerpt(raw, limit=8192):
 
 
 def expected_refusal(case, variant):
-    if variant == 'other-run':
-        return 'target_bound_to_another_run'
     if case == 'positive':
-        return 'baseline_already_dispatched'
+        return 'target_bound_to_another_run' if variant == 'other-run' else 'baseline_already_dispatched'
+    # Complete history is checked before owner comparison. UNKNOWN blocks all
+    # callers, including another run, without granting recovery or retry.
     return 'prior_outcome_unknown' if case == 'missing-result' else 'prior_daemon_outcome_unknown'
 
 
@@ -278,15 +279,24 @@ def identity(spec, variant='original'):
     return value
 
 
+def supervise_child(bindings, spec, variant, worker):
+    """Shared actual daemon caller; isolated tests supply only an inert leaf."""
+    try:
+        return supervise_fixture(bindings, spec, identity(spec, variant), worker)
+    except bindings.BindingError as error:
+        print('DAEMON_BINDING_REFUSED reason=' + str(error), file=sys.stderr)
+        return 75
+
+
 def child_mode(mode, path, variant):
     hosted_only()
     spec = spec_read(path)
     bindings = load_module('daemon_gate_bindings_child', SCRIPTS / 'v126-operation-bindings.py')
     owner = identity(spec, variant)
+    if mode == 'supervise':
+        return supervise_child(bindings, spec, variant,
+            [sys.executable, str(SELF), '--docker-create', str(path)])
     try:
-        if mode == 'supervise':
-            return supervise_fixture(bindings, spec, owner,
-                [sys.executable, str(SELF), '--docker-create', str(path)])
         if mode == 'docker-create':
             # This synthetic leaf uses the actual daemon API; no Docker CLI default
             # payload fields are authorized implicitly by the transport adapter.
@@ -1109,7 +1119,9 @@ class Guards(unittest.TestCase):
         self.assertEqual(expected_refusal('positive','original'),'baseline_already_dispatched')
         self.assertEqual(expected_refusal('missing-result','recovery'),'prior_outcome_unknown')
         self.assertEqual(expected_refusal('after-created','retry'),'prior_daemon_outcome_unknown')
-        self.assertEqual(expected_refusal('missing-result','other-run'),'target_bound_to_another_run')
+        self.assertEqual(expected_refusal('positive','other-run'),'target_bound_to_another_run')
+        self.assertEqual(expected_refusal('missing-result','other-run'),'prior_outcome_unknown')
+        self.assertEqual(expected_refusal('after-created','other-run'),'prior_daemon_outcome_unknown')
 
     def test_unix_peer_must_match_exact_owned_root_daemon(self):
         require_peer(struct.pack('3i',123,0,0),123)
@@ -1241,6 +1253,103 @@ class AdmissionGuards(unittest.TestCase):
                     self.assertEqual(self.snapshot(), unknown)
 
 
+class NativeLockCallers(unittest.TestCase):
+    """Linux processes/flock/subreaper; capture-only leaf, no daemon claim.
+
+    The hosted fixture retains its guards and calls the same supervise_child.
+    Fault histories here represent a failed create or a lost terminal result;
+    actual Docker persistence/interruption remains the hosted daemon gate.
+    """
+    CHILD = r"""
+import importlib.util, json, sys
+from pathlib import Path
+sys.dont_write_bytecode = True
+module_spec = importlib.util.spec_from_file_location('native_daemon_caller', sys.argv[1])
+m = importlib.util.module_from_spec(module_spec)
+sys.modules[module_spec.name] = m
+module_spec.loader.exec_module(m)
+spec = json.loads(Path(sys.argv[2]).read_bytes())
+variant, fault = sys.argv[3:]
+assert variant in ('original', 'retry', 'other-run', 'recovery')
+assert fault in ('success', 'before-forward', 'dispatched-no-reply', 'after-created', 'missing-result')
+worker = [sys.executable, '-c',
+    'import pathlib,sys; '
+    'p=pathlib.Path(sys.argv[1]); fault=sys.argv[2]; '
+    'p.write_bytes(p.read_bytes()+b"x" if p.exists() else b"x") if fault != "before-forward" else None; '
+    'raise SystemExit(0 if fault in ("success", "missing-result") else 42)',
+    str(Path(spec['root']) / 'leaf.calls'), fault]
+bindings = m.load_module('native_daemon_bindings', m.SCRIPTS / 'v126-operation-bindings.py')
+raise SystemExit(m.supervise_child(bindings, spec, variant, worker))
+"""
+
+    def setUp(self):
+        self.assertEqual(sys.platform, 'linux', 'native lock cases require real Linux')
+        self.temp = tempfile.TemporaryDirectory(prefix='daemon-native-lock-')
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name).resolve()
+        self.target = self.root / 'target'
+        self.target.mkdir(mode=0o700)
+        self.spec_path = self.root / 'case.json'
+        self.spec = dict(root=str(self.root), target=str(self.target), run_id='daemon-native-lock',
+                         case_spec_path=str(self.spec_path), source_binding=fixture_source_binding())
+        self.spec['init_completion'] = seed_fixture_history(self.spec)
+        self.spec_path.write_bytes(canonical(self.spec)); self.spec_path.chmod(0o400)
+        self.registry = self.target / '.v126-target-operations'
+        self.effect = self.root / 'leaf.calls'
+
+    def child(self, variant='original', fault='success'):
+        return subprocess.run([sys.executable, '-c', self.CHILD, str(SELF), str(self.spec_path), variant, fault],
+                              env=clean_env(self.root), capture_output=True, timeout=15)
+
+    def snapshot(self):
+        return {str(path.relative_to(self.target)): (path.stat().st_mode, path.read_bytes())
+                for path in self.target.rglob('*') if path.is_file()}
+
+    def refusal(self, variant, reason, before):
+        effect = self.effect.read_bytes() if self.effect.exists() else None
+        result = self.child(variant)
+        self.assertEqual((result.returncode, result.stdout, result.stderr),
+                         (75, b'', ('DAEMON_BINDING_REFUSED reason=' + reason + '\n').encode()))
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(self.effect.read_bytes() if self.effect.exists() else None, effect)
+
+    def test_busy_actual_caller_then_free_recovery_and_duplicate_refusal(self):
+        baseline = self.child()
+        self.assertEqual(baseline.returncode, 0, baseline.stderr)
+        self.assertEqual(self.effect.read_bytes(), b'x')
+        before = self.snapshot()
+        fd = os.open(self.registry / 'lock', os.O_RDWR | os.O_NOFOLLOW)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.refusal('recovery', 'target_busy', before)
+        finally:
+            os.close(fd)
+        recovery = self.child('recovery')
+        self.assertEqual(recovery.returncode, 0, recovery.stderr)
+        self.assertEqual(self.effect.read_bytes(), b'xx')
+        self.refusal('recovery', 'operation_already_dispatched', self.snapshot())
+
+    def test_path_metadata_failure_is_not_busy_and_never_dispatches(self):
+        (self.registry / 'lock').chmod(0o400)
+        self.refusal('recovery', 'record_metadata', self.snapshot())
+        self.assertFalse(self.effect.exists())
+
+    def test_all_interruption_histories_refuse_every_later_caller_without_writes(self):
+        for case in CASES[1:]:
+            with self.subTest(case=case):
+                if case != CASES[1]:
+                    self.temp.cleanup(); self.setUp()
+                result = self.child(fault=case)
+                self.assertEqual(result.returncode, 0 if case == 'missing-result' else 42, result.stderr)
+                self.assertEqual(self.effect.exists(), case != 'before-forward')
+                if case == 'missing-result':
+                    operation = sha(canonical(identity(self.spec)))
+                    (self.registry / (operation + '.result.json')).unlink()
+                before = self.snapshot()
+                for variant in ('original', 'retry', 'other-run', 'recovery'):
+                    self.refusal(variant, expected_refusal(case, variant), before)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     modes = parser.add_mutually_exclusive_group(required=True)
@@ -1252,7 +1361,8 @@ def main():
     parser.add_argument('--evidence-dir', type=Path)
     args = parser.parse_args()
     if args.self_test:
-        suite = unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(case) for case in (Guards, AdmissionGuards))
+        cases = (Guards, AdmissionGuards, NativeLockCallers) if sys.platform == 'linux' else (Guards, AdmissionGuards)
+        suite = unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(case) for case in cases)
         return 0 if unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful() else 1
     for mode in ('supervise','docker-create','inspect','retire'):
         path=getattr(args,mode.replace('-','_'))

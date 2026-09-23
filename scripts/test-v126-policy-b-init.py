@@ -188,10 +188,11 @@ class Init(unittest.TestCase):
         fd = os.open(self.root / 'lock', os.O_RDWR)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            with self.assertRaises(BlockingIOError): self.run_init()
+            with self.assertRaisesRegex(b.BindingError, '^target_busy$'): self.run_init()
         finally: os.close(fd)
         self.assertEqual(self.names(), {'lock', 'run.json'})
         self.assertEqual(self.gate.calls, 0)
+        self.assertEqual(self.writes, [])
 
     def test_early_refusal_has_no_canonical_local_or_remote_intent(self):
         self.gate.fail = 1
