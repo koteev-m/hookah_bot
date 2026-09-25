@@ -2,6 +2,83 @@
 
 Repo-level instructions for Codex tasks in this repository.
 
+## Mandatory project identity gate
+
+This section is the single authoritative Hookah project identity contract. Before
+substantial work, reading project docs/source, delegation or writes, perform the
+read-only preflight below. Reading instruction files/metadata needed for this gate
+is allowed. Record the result and safe expected/observed identity in the task.
+
+| Identity | Expected value |
+| --- | --- |
+| PROJECT_ID | `Hookah_Tootah` |
+| REPO | `hookah_bot_ANT` |
+| Ordinary TASK_ID prefix | `HT-` |
+| Primary repository root | `/Users/maksimmartynov/IdeaProjects/hookah_bot_ANT` |
+| Git common dir | `/Users/maksimmartynov/IdeaProjects/hookah_bot_ANT/.git` |
+| Remote repository identity | `github.com/koteev-m/hookah_bot` |
+
+1. Establish the current task/session identity and exact `TASK_ID`; an ordinary
+   Hookah task must have the `HT-` prefix. Missing or ambiguous identity fails
+   closed. The expected root is the primary root above unless the task explicitly
+   supplies another existing Hookah worktree and its exact physical root before
+   preflight. Such a named worktree must share the expected Hookah Git common dir;
+   do not select or create an alternative root to make a failed gate pass.
+2. Without changing cwd, use read-only Git commands with `GIT_OPTIONAL_LOCKS=0`
+   (or `git --no-optional-locks`). Record `pwd -P`, physical cwd and the results of
+   `git rev-parse --show-toplevel`, `git rev-parse --absolute-git-dir`,
+   `git rev-parse --path-format=absolute --git-common-dir`,
+   `git rev-parse --path-format=absolute --git-path index`, `git rev-parse HEAD`,
+   branch/detached state and `git worktree list --porcelain`. Resolve symlinks,
+   `.git` and `commondir` indirection to physical absolute paths. Require root
+   equality with the task's expected root, cwd within that root, common-dir
+   equality, and Git dir/index ownership by that registered checkout. Check
+   identity-affecting `GIT_*` overrides, config includes, `core.worktree`,
+   `core.hooksPath`, object-store alternates and path redirections. Unresolved
+   ownership or foreign target/namespace/redirect fails closed; a neighbouring
+   repository or stale registration alone is not proof of foreign authority.
+   Verify local origin fetch/push identity without network or exposing credentials:
+   HTTPS/SSH spelling and a `.git` suffix may differ, but host/owner/repository
+   must match the table. `koteev-m/hookah_bot` is the expected remote identity
+   of local `hookah_bot_ANT`, not a foreign project.
+3. Establish origins of all applicable instructions: already inherited task/session
+   instructions, global `AGENTS.override.md` / `AGENTS.md`, files along the physical
+   directory chain, explicitly configured instruction files/fallback names, and
+   narrower instructions before entering a subdirectory's scope. Inspect only
+   the instruction metadata/content needed to establish authority. Repo-local
+   authority must belong to Hookah; correct cwd does not cancel inherited foreign
+   instructions. Do not load another project's instructions for application here.
+   Missing or ambiguous origin of active instructions fails closed; the general
+   rule for resolving minor ambiguity does not apply to project identity.
+4. Check task-supplied `EXPECTED_HEAD`, `EXPECTED_BASE`, branch or parent constraints
+   against locally verified commit OIDs (`git rev-parse --verify`). Supplied
+   `EXPECTED_HEAD` requires exact equality with actual HEAD. Check base/parent/
+   ancestry using precisely the relationship the task specifies; a supplied base
+   without a relationship means exact starting HEAD. Missing local objects, drift
+   or ambiguous relationships fail closed. For each unsupplied constraint record
+   `NOT_SUPPLIED`; never infer an expected SHA from historical evidence or hard-code
+   a HEAD. Do not fetch or reconstruct Git state to satisfy the gate.
+5. Foreign active task/session identity, repo-local instruction authority, input
+   authority, target root or Git common dir/dir/index/namespace requires
+   `STOP_PROJECT_CONTEXT_CONTAMINATION`. Examples `clubs_bot`,
+   `/IdeaProjects/clubs_bot` and `CLB-*` are negative-control values only, never
+   project authority. Historical/foreign references are allowed only as isolated
+   evidence explicitly within a bounded audit (including identity-guard validation
+   in an authorized remediation); their mere text is not a failing active authority.
+   They never authorize applying foreign instructions or executing foreign work.
+6. On any mismatch, failed verification or unresolved identity/instruction origin,
+   emit `STOP_PROJECT_CONTEXT_CONTAMINATION`, report the safe expected/observed
+   identity and offending source, and stop substantial work. Never classify
+   ambiguity in favour of continuation. Do not switch repository, create a branch
+   or worktree to escape the mismatch, reset/repair Git state or config, or ignore
+   already inherited foreign instructions because cwd is correct. No automatic
+   continuation of Hookah or foreign work is permitted after STOP.
+7. PASS permits only continuation of the currently authorized task. It grants no
+   network, stage/commit/push, SSH, provider/server, deploy or other external-action
+   permission. All existing task/platform restrictions still apply. Repeat the gate
+   after task resumption/handoff, changes to cwd/instructions/identity, and before
+   any separately authorized external action.
+
 ## Project
 
 This is a Kotlin/Ktor Telegram bot + Telegram Mini App platform for hookah venues.
