@@ -267,6 +267,18 @@ printf '%s\\n' "${V125_IMAGE_ID}"
                 for p in self.root.glob('*.result.json'):p.unlink()
                 for p in self.root.glob('*.log'):p.unlink()
 
+    def test_unknown_retirement_refuses_before_missing_handoff(self):
+        # The hosted private-daemon fixture has an UNKNOWN result and deliberately
+        # no approved handoff. It must reach the UNKNOWN guard, not a file error.
+        self.operation(code=42)
+        saved = self.snapshot()
+        self.assertFalse(self.handoff.exists())
+        with self.assertRaisesRegex(bindings.BindingError,
+                                    '^retirement_requires_known_completed_current_run$'):
+            self.consume()
+        self.assertEqual(self.snapshot(), saved)
+        self.assertFalse((self.root / 'transfers').exists())
+
     def test_terminal_and_explicit_handoff_required(self):
         self.operation(name='BASELINE_VERIFIED');self.approval()
         with self.assertRaises(bindings.BindingError):self.consume()

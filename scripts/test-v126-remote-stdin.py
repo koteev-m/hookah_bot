@@ -185,7 +185,12 @@ chmod() {
 }
 printf() {
   builtin printf "$@" || return $?
-  if [[ "$FRAME_FAULT" == fields-producer && $# -eq $((FRAME_FIELD_COUNT + 2)) ]]; then return 73; fi
+  if [[ "$FRAME_FAULT" == fields-producer && $# -eq $((FRAME_FIELD_COUNT + 1)) &&
+        "$1" == '%s\n' && "$2" == V126_INTERNAL_REMOTE_ENVELOPE_V1 &&
+        "$3" == baseline && "$4" == fixture-run ]]; then
+    command printf '%s\n' 'run_remote:envelope-fields-printf' > "$FRAME_ROOT/fields-producer-hit"
+    return 73
+  fi
   if [[ "$FRAME_FAULT" == args-producer && $# == 4 ]]; then return 74; fi
 }
 shift
@@ -544,9 +549,17 @@ remote_dispatch_enveloped() {
                       "chmod", "transport"):
             with self.subTest(fault=fault):
                 self.reset_markers()
+                (self.root / "fields-producer-hit").unlink(missing_ok=True)
                 (self.root / "stream").unlink(missing_ok=True)
                 result, _ = self.build(fault=fault)
                 self.denied(result, before_source=True)
+                if fault == "fields-producer":
+                    self.assertEqual((self.root / "fields-producer-hit").read_text(),
+                                     "run_remote:envelope-fields-printf\n",
+                                     "actual envelope fields producer did not encounter the injected failure")
+                else:
+                    self.assertFalse((self.root / "fields-producer-hit").exists(),
+                                     "unrelated failure triggered the envelope producer fault")
                 if fault == "transport":
                     self.assertEqual(result.returncode, 79)
                     self.assertNotIn(b"PASS\nARTIFACT", result.stdout,

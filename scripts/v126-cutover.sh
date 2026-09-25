@@ -9927,6 +9927,10 @@ def binding_entry(mode):
                   next_action='EXTERNAL_DAEMON_FENCING_DECISION_REQUIRED' if unknown else 'VERIFY_TERMINAL_RECEIPT_AND_APPROVED_HANDOFF',
                   retry_allowed=False), sort_keys=True))
             return
+        # An UNKNOWN result must refuse retirement before consulting an external
+        # handoff, which may be absent or invalid in a failed run.
+        if unknown or not inventory:
+            raise BindingError('retirement_requires_known_completed_current_run')
         owner = dict(zip(('run_id', 'release_sha', 'script_sha256'), sys.argv[2:5]))
         receipt_sha, handoff_path = sys.argv[5:7]
         next_owner = dict(zip(('run_id', 'release_sha', 'script_sha256'), sys.argv[7:10]))
@@ -9940,7 +9944,7 @@ def binding_entry(mode):
             supplied.update(binding_epoch(declared))
         binding_owner(next_owner)
         binding_predecessor_denied(root, next_owner)
-        if current != owner or unknown or not inventory:
+        if current != owner:
             raise BindingError('retirement_requires_known_completed_current_run')
         binding_handoff(handoff, owner, next_owner, receipt_sha, target)
         if handoff['image_id'] != sys.argv[11]:
