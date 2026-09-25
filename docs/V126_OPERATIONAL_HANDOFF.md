@@ -41,6 +41,10 @@ The worker revalidates complete immutable history and the exact approved next-re
 binding before any upload or mutation. No rsync, remote mkdir, load or recreate runs
 outside that lock. An unbound legacy target is refused under the lock; there is no
 bootstrap/adoption fallback.
+The separate approved [legacy genesis metadata operation](V126_REPAIR_OPERATION_PROTOCOL.md#approved-one-time-legacy-target-binding)
+can establish an absent binding only after independently verified complete legacy disposition.
+It preserves old UNKNOWN as history, grants no ordinary deploy permission, and requires a
+separate exact INIT with R0/G before baseline. This is not an ordinary-deploy fallback.
 
 The protected canonical descriptor schema is `DESCRIPTOR_FIELDS` in
 `scripts/v126-ordinary-deploy.py`: exact next owner/source-bundle and target; V125/V126

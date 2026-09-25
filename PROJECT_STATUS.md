@@ -1,5 +1,43 @@
 # Project Status
 
+## HT-QR-01-LEGACY-GENESIS — F-01–F-03 local correction
+
+**LOCAL CORRECTION / PORTABLE CHECKS PASSED / LINUX QUALIFICATION OPEN / UNCOMMITTED**
+(2026-09-25). Branch `codex/ht-qr-01-legacy-genesis`, worktree
+`/Users/maksimmartynov/IdeaProjects/hookah_bot_worktrees/ht-qr-01-legacy-genesis`,
+base/HEAD `c28b3da03d7bae62cd441498f28335c0a29cc6ce`,
+base tree `c49fa893d1d66cbf4ab77fc832306fd7c4fec5d6`.
+
+The retained implementation candidate matched all 17 candidate and 60 context files before
+correction; its independent review required F-01–F-03. Native terminal admission now closes
+the exact INIT/STAGE/RECOVERY set and checks recovery/action chronology. Genesis result
+bytes remain unpublishable until file/root fsync and same-FD readback succeed; actual mode
+is checked before any bytes so umask cannot publish a pending result. All completion/history/
+copy readers retain strict metadata checks. A Linux parent namespace watch plus same-name
+rename fence ties the first root FD to exclusive creation and refuses intervening replacement.
+Embedded bindings match the standalone source; old raw-owner history and twenty stages remain.
+
+Portable native, EIO/umask, history, transport, authority, INIT, reconciliation, ordinary-deploy
+and related self-tests passed. Independent non-author review found no remaining confirmed
+F-01–F-03 code blockers in the static/portable scope after the umask correction. Full Linux
+history/owned-SSH suites and the new F-03 syscall reproducer were not run: the existing test
+runtime's Docker socket is inaccessible in this sandbox. No Linux PASS is inferred from event
+parser tests. The result publication mode is not separately fsynced: power loss can restore
+pending0600 and conservatively block completion even after an answer; no automatic reseal,
+adoption or retry is permitted. Power-loss persistence remains unmodelled.
+
+Evidence: `~/.hookahtootah/ht-qr-01-legacy-genesis/evidence/20260925T025913Z-findings-correction/`.
+The original implementation and independent-review packages, approved plan/addenda and release
+artifacts are unchanged. Product/QR UX, migrations, release identity, index/refs and unrelated
+work are preserved. No commit, publication or operational action occurred.
+
+Next: validate the exact revised bytes with the existing isolated Linux test runtime when
+available, including full history/transport/owned-SSH and F-03 replacement regressions, before
+any separate publication decision. Full hosted-amd64/PG/systemd/private-daemon qualification
+remains OPEN; COMPOSE_PASS and real inventory, writer exclusion, disposition authority,
+accepted poststate, enrollment and per-action approvals are absent. Native positives remain
+synthetic supported history. This local correction grants no genesis/INIT/cutover/deploy admission.
+
 ## HT-QR-01-POLICY-B — remaining compose correction
 
 **LOCAL CORRECTION / HOSTED COMPOSE QUALIFICATION OPEN / UNCOMMITTED DIFF**.

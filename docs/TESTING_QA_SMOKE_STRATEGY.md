@@ -4196,3 +4196,22 @@ supervisor skip is the non-Linux platform-refusal case. Synthetic prerequisites/
 and earlier handoff approval remain explicit; no full native cutover or running-JVM daemon
 survival is claimed. Final report delivery must pass its own exact12-job CI and match the
 reviewed report blobs; implementation-run success is not inherited by a later commit.
+
+
+### HT-QR-01 legacy genesis validation
+
+The existing Policy B CI entrypoints additionally run `test-v126-legacy-genesis.py`
+(independent authority, complete inventory and both disposition routes),
+`test-v126-genesis-transport.py` (closed frames, exact proposal and expiry), and the
+network-denied owned Linux harness runs `test-v126-genesis-history.py`, its disposable
+negative controls, and `test-v126-genesis-linux.py --require-linux-ssh`.
+The latter uses the actual outer CLI, server-selected launcher, real sshd authentication,
+physical flock and attended verifier with isolated synthetic observations. It checks
+proposal → independent approval → genesis completion → INIT → baseline, partial states,
+no repeated genesis, and separately authorized completion copying. A report-only claim
+must refuse before registry creation; late refusal retains partial/UNKNOWN without a leaf.
+
+Related complete bindings, INIT, supervisor, reconciliation, ordinary-deploy and daemon
+contention suites remain required. Native hosted-amd64 Docker/systemd/PG gates cannot be
+substituted by local arm64 capture-only checks. No synthetic PASS establishes operational
+writer exclusion, accepted post-fence state, R0/G/Q, enrollment or permission for genesis.

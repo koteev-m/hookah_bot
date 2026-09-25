@@ -96,8 +96,10 @@ def binding_owner_id(owner):
     return hashlib.sha256(binding_canonical(binding_owner(owner))).hexdigest()
 
 
-def binding_inventory(root, owner):
-    files = {}
+def binding_inventory(root, owner, target=None):
+    target = root.parent if target is None else Path(target)
+    initial_owner, genesis = binding_genesis_completion(root, target)
+    files = dict(genesis) if owner == initial_owner else {}
     unknown = False
     identities = []
     for start in sorted(root.glob('*.start.json')):
@@ -114,23 +116,23 @@ def binding_inventory(root, owner):
         files[start.name] = binding_hash(start)
         request = root / (op + '.request.json')
         if request.exists() or request.is_symlink():
-            binding_request(request, identity, root.parent)
+            binding_request(request, identity, target)
             files[request.name] = binding_hash(request)
         result = root / (op + '.result.json')
         log = root / (op + '.log')
         if not result.exists():
             unknown = True
             continue
-        outcome = binding_result(result, identity, root.parent)
+        outcome = binding_result(result, identity, target)
         files[result.name] = binding_hash(result)
         if identity['kind'] != 'INIT':
             files[log.name] = outcome['log_sha256']
         if identity['kind'] == 'DEPLOY' and outcome['exit'] == 0:
             proof = root / (op + '.deploy-proof.json')
-            binding_deploy_proof(proof, identity, root.parent)
+            binding_deploy_proof(proof, identity, target)
             files[proof.name] = binding_hash(proof)
         unknown = unknown or outcome['exit'] != 0
-    for name, digest in binding_reconciliation_inventory(root, root.parent).items():
+    for name, digest in binding_reconciliation_inventory(root, target).items():
         identity = binding_read(root / name)['identity']
         if {key: identity.get(key) for key in owner} == owner:
             files[name] = digest
@@ -163,7 +165,7 @@ def binding_handoff(doc, owner, next_owner, receipt_sha, target):
 
 
 def binding_chain(root, target):
-    owner = binding_owner(binding_read(root / 'run.json'))
+    owner, _ = binding_genesis_completion(root, target)
     owners = [owner]
     directory = root / 'transfers'
     if not directory.exists() and not directory.is_symlink():
@@ -191,7 +193,7 @@ def binding_chain(root, target):
         next_owner = binding_owner(transfer['next_owner'])
         if any(previous['run_id'] == next_owner['run_id'] for previous in owners):
             raise BindingError('run_id_reuse')
-        inventory, unknown, identities = binding_inventory(root, owner)
+        inventory, unknown, identities = binding_inventory(root, owner, target)
         if unknown or not inventory or transfer['inventory'] != inventory:
             raise BindingError('retired_outcome_not_proven')
         handoff = transfer['handoff']
@@ -226,6 +228,12 @@ def binding_entry(mode):
         raise BindingError('target_ownership')
     root = target / '.v126-target-operations'
     binding_protected(root, 0o700, True)
+    if mode == 'inspect':
+        names = set(path.name for path in root.iterdir())
+        if ('run.json' not in names or (names & GENESIS_FILES and 'genesis.result.json' not in names)):
+            print(json.dumps(dict(outcome='PARTIAL_OR_UNKNOWN', retry_allowed=False,
+                  next_action='READ_ONLY_EVIDENCE_AND_SEPARATE_RECOVERY_DECISION_REQUIRED'), sort_keys=True))
+            return
     binding_protected(root / 'lock', 0o600)
     fd = os.open(root / 'lock', os.O_RDONLY | os.O_NOFOLLOW)
     try:
@@ -328,7 +336,11 @@ def binding_create_raw(path, raw):
 def binding_active_policy(root, target):
     _, owners = binding_chain(root, target)
     if len(owners) == 1:
-        return dict(next_kind='CUTOVER', request_sha256=None)
+        _, genesis = binding_genesis_completion(root, target)
+        policy = dict(next_kind='CUTOVER', request_sha256=None)
+        if genesis:
+            policy['next_init_manifest_sha256'] = binding_read(root / 'genesis.request.json')['next_init_manifest_sha256']
+        return policy
     transfer = binding_read(root / 'transfers' / (binding_owner_id(owners[-2]) + '.json'))
     return dict(next_kind=transfer.get('next_kind', 'CUTOVER'), request_sha256=transfer.get('request_sha256'))
 
@@ -908,7 +920,7 @@ def binding_history(root, target):
     current = []
     recovery = False
     for prior_owner in owners:
-        inventory, unknown, identities = binding_inventory(root, prior_owner)
+        inventory, unknown, identities = binding_inventory(root, prior_owner, target)
         if unknown:
             for item in identities:
                 result_path = root / (hashlib.sha256(binding_canonical(item)).hexdigest() + '.result.json')
@@ -934,6 +946,8 @@ def binding_admit_operation(root, target, identity, current, request_sha256=None
     if identity['kind'] == 'DEPLOY':
         binding_refuse('ordinary_deploy_not_authorized_by_transfer')
     if identity['kind'] == 'INIT':
+        if policy.get('next_init_manifest_sha256', identity['intent_sha256']) != identity['intent_sha256']:
+            binding_refuse('genesis_exact_init_proposal_required')
         if current:
             binding_refuse('init_requires_empty_owner_history')
         return
@@ -1002,6 +1016,444 @@ def binding_policy_b_dispatch(gate, identity, target, lockfd, timeout):
     callback = getattr(gate, 'before_dispatch', None)
     if callback is not None:
         callback(identity, target, lockfd, timeout)
+
+
+GENESIS_FILES = {'genesis.request.json', 'genesis.intent.json', 'legacy-inventory.json', 'genesis.result.json'}
+GENESIS_LOCK_PREFIX = b'V126_LEGACY_GENESIS_V1 '
+
+
+def binding_genesis_identity(request):
+    return dict(run_id=request['run_id'], release_sha=request['source_sha'],
+                script_sha256=request['script_sha256'], intent_sha256=hashlib.sha256(binding_canonical(request)).hexdigest(),
+                kind='TARGET_BIND', name='LEGACY_GENESIS', action='bind-legacy-target')
+
+
+def binding_genesis_request(request, identity, target):
+    """Structural binding only; independent evidence/authority is the attended gate."""
+    keys = {'schema_version', 'kind', 'run_id', 'source_sha', 'source_tree', 'script_sha256',
+            'tooling_sha256', 'python_version', 'target', 'next_init_manifest_sha256',
+            'inventory_sha256', 'created_at', 'expires_at', 'nonce'}
+    if (not isinstance(request, dict) or set(request) != keys or type(request['schema_version']) is not int or
+            request['schema_version'] != 1 or request['kind'] != 'legacy-target-genesis-request' or
+            len(binding_canonical(request)) > 65536):
+        binding_refuse('genesis_request_schema')
+    for key in ('script_sha256', 'tooling_sha256', 'next_init_manifest_sha256', 'inventory_sha256', 'nonce'):
+        if not isinstance(request[key], str) or not re.fullmatch('[0-9a-f]{64}', request[key]):
+            binding_refuse('genesis_request_digest')
+    for key in ('source_sha', 'source_tree'):
+        if not isinstance(request[key], str) or not re.fullmatch('[0-9a-f]{40}', request[key]):
+            binding_refuse('genesis_request_source')
+    if not isinstance(request['python_version'], str) or not re.fullmatch(r'3\.\d+\.\d+', request['python_version']):
+        binding_refuse('genesis_runtime')
+    owner = binding_owner(dict(run_id=request['run_id'], release_sha=request['source_sha'], script_sha256=request['script_sha256']))
+    expected = binding_genesis_identity(request)
+    if identity != expected or {key: identity.get(key) for key in owner} != owner:
+        binding_refuse('genesis_identity_binding')
+    selected = request['target']
+    if (not isinstance(selected, dict) or set(selected) != {'path', 'device', 'inode', 'uid', 'host_fingerprint'} or
+            selected['path'] != str(target) or any(type(selected[key]) is not int or selected[key] < 0
+                for key in ('device', 'inode', 'uid')) or selected['inode'] == 0 or
+            not isinstance(selected['host_fingerprint'], str) or
+            not re.fullmatch(r'SHA256:[A-Za-z0-9+/]{43}', selected['host_fingerprint'])):
+        binding_refuse('genesis_target_binding')
+    try:
+        created = datetime.datetime.strptime(request['created_at'], '%Y-%m-%dT%H:%M:%SZ')
+        expires = datetime.datetime.strptime(request['expires_at'], '%Y-%m-%dT%H:%M:%SZ')
+        if expires <= created:
+            binding_refuse('genesis_request_time')
+    except (TypeError, ValueError):
+        binding_refuse('genesis_request_time')
+    return owner
+
+
+def binding_genesis_target(target, request):
+    if not target.is_absolute() or str(target.resolve(strict=True)) != str(target):
+        binding_refuse('target_not_canonical')
+    info = target.stat()
+    selected = request['target']
+    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o022 or
+            (info.st_dev, info.st_ino, info.st_uid) != (selected['device'], selected['inode'], selected['uid'])):
+        binding_refuse('genesis_target_changed')
+
+
+def binding_genesis_index(index, request):
+    # The full native/provenance verifier runs on V. This immutable index retains
+    # its exact independently selected bytes; historical claims remain distinct.
+    if (not isinstance(index, dict) or index.get('schema_version') != 1 or
+            index.get('kind') != 'legacy-target-inventory' or index.get('target') != request['target'] or
+            len(binding_canonical(index)) > 48 * 1024 or
+            hashlib.sha256(binding_canonical(index)).hexdigest() != request['inventory_sha256'] or
+            not isinstance(index.get('runs'), list) or not index['runs']):
+        binding_refuse('genesis_inventory_binding')
+    runs = []
+    for item in index['runs']:
+        if (not isinstance(item, dict) or not isinstance(item.get('run_id'), str) or
+                not isinstance(item.get('disposition'), dict) or
+                item['disposition'].get('kind') not in ('NATIVE_TERMINAL', 'LEGACY_UNKNOWN_FENCED') or
+                item.get('historical_outcome') not in ('UNKNOWN', 'NATIVE_TERMINAL_PROVEN',
+                    'FAILED_PRE_ACTIVE_CONFIG_MUTATION_EXTERNALLY_FENCED') or
+                not re.fullmatch('[0-9a-f]{64}', item['disposition'].get('proof_sha256', ''))):
+            binding_refuse('genesis_disposition_binding')
+        runs.append(item['run_id'])
+    if len(set(runs)) != len(runs) or request['run_id'] in runs:
+        binding_refuse('genesis_legacy_run_reuse')
+    return index
+
+
+def binding_genesis_admission(result, request, barrier='LEGACY_GENESIS'):
+    keys = ('qualification_sha256', 'pins_sha256', 'catalogue_head_sha256', 'revocation_generation')
+    if (not isinstance(result, dict) or result.get('barrier') != barrier or
+            result.get('operational') is not True or result.get('qualification_sha256') != request['inventory_sha256'] or
+            any(not isinstance(result.get(key), str) or not re.fullmatch('[0-9a-f]{64}', result[key]) for key in keys[:3]) or
+            type(result.get('revocation_generation')) is not int or result['revocation_generation'] < 0):
+        binding_refuse('genesis_admission_result')
+    binding_genesis_index(result.get('legacy_inventory'), request)
+    return {key: result[key] for key in keys}
+
+
+def binding_validate_genesis_completion(request, result, index, target):
+    """Pure exact reply joins; the authenticated S also replays durable history."""
+    identity = binding_genesis_identity(request)
+    owner = binding_genesis_request(request, identity, Path(target))
+    binding_genesis_index(index, request)
+    request_sha = identity['intent_sha256']
+    operation_id = hashlib.sha256(binding_canonical(identity)).hexdigest()
+    owner_record = dict(format_version=2, kind='GENESIS_CUTOVER_OWNER', owner=owner,
+                        request_sha256=request_sha, inventory_sha256=request['inventory_sha256'])
+    keys = {'format_version', 'identity', 'operation_id', 'exit', 'outcome', 'completion', 'request_sha256',
+            'intent_sha256', 'inventory_sha256', 'owner_sha256', 'admissions', 'completed_at'}
+    if (set(result) != keys or type(result['format_version']) is not int or result['format_version'] != 1 or
+            result['identity'] != identity or result['operation_id'] != operation_id or type(result['exit']) is not int or
+            result['exit'] != 0 or result['outcome'] != 'SUCCEEDED' or result['completion'] != 'LEGACY_DISPOSITION_BOUND' or
+            result['request_sha256'] != request_sha or not isinstance(result['intent_sha256'], str) or not re.fullmatch('[0-9a-f]{64}', result['intent_sha256']) or
+            result['inventory_sha256'] != request['inventory_sha256'] or result['owner_sha256'] != hashlib.sha256(binding_canonical(owner_record)).hexdigest() or
+            not isinstance(result['admissions'], list) or len(result['admissions']) != 2):
+        binding_refuse('genesis_result_binding')
+    for admission in result['admissions']:
+        if not isinstance(admission, dict) or set(admission) != {'qualification_sha256', 'pins_sha256', 'catalogue_head_sha256', 'revocation_generation'}:
+            binding_refuse('genesis_admission_binding')
+        binding_genesis_admission(dict(admission, barrier='LEGACY_GENESIS', operational=True, legacy_inventory=index), request)
+    if result['admissions'][1]['revocation_generation'] < result['admissions'][0]['revocation_generation']:
+        binding_refuse('genesis_revocation_rollback')
+    return result
+
+
+def binding_genesis_completion(root, target):
+    """Verify new ancestry, or recognize the unchanged old raw-owner representation.
+
+    Both owner envelope and permanent lock identify new roots. Deleting a genesis
+    marker/result therefore cannot make a new root look like legacy history.
+    """
+    record = binding_read(root / 'run.json')
+    binding_protected(root / 'lock', 0o600)
+    with (root / 'lock').open('rb') as handle:
+        lock_marker = handle.read(128)
+    present = set(path.name for path in root.iterdir()) & GENESIS_FILES
+    if set(record) == {'run_id', 'release_sha', 'script_sha256'}:
+        if present or lock_marker:
+            binding_refuse('genesis_ancestry_required')
+        return binding_owner(record), {}
+    if (set(record) != {'format_version', 'kind', 'owner', 'request_sha256', 'inventory_sha256'} or
+            type(record['format_version']) is not int or record['format_version'] != 2 or
+            record['kind'] != 'GENESIS_CUTOVER_OWNER' or present != GENESIS_FILES):
+        binding_refuse('genesis_completion_required')
+    request = binding_read(root / 'genesis.request.json')
+    identity = binding_genesis_identity(request)
+    owner = binding_genesis_request(request, identity, target)
+    binding_genesis_target(target, request)
+    request_sha = identity['intent_sha256']
+    if (record['owner'] != owner or record['request_sha256'] != request_sha or
+            record['inventory_sha256'] != request['inventory_sha256'] or
+            lock_marker != GENESIS_LOCK_PREFIX + request_sha.encode() + b'\n'):
+        binding_refuse('genesis_owner_binding')
+    index = binding_read(root / 'legacy-inventory.json')
+    binding_genesis_index(index, request)
+    intent = binding_read(root / 'genesis.intent.json')
+    operation_id = hashlib.sha256(binding_canonical(identity)).hexdigest()
+    if (set(intent) != {'format_version', 'identity', 'operation_id', 'request_sha256', 'started_at'} or
+            type(intent['format_version']) is not int or intent['format_version'] != 1 or
+            intent['identity'] != identity or intent['operation_id'] != operation_id or
+            intent['request_sha256'] != request_sha):
+        binding_refuse('genesis_intent_binding')
+    result = binding_read(root / 'genesis.result.json')
+    binding_validate_genesis_completion(request, result, index, target)
+    if result['intent_sha256'] != binding_hash(root / 'genesis.intent.json'):
+        binding_refuse('genesis_intent_binding')
+    try:
+        started = datetime.datetime.fromisoformat(intent['started_at'])
+        completed = datetime.datetime.fromisoformat(result['completed_at'])
+        if (started.tzinfo is None or completed.tzinfo is None or started.utcoffset() != datetime.timedelta(0) or
+                completed.utcoffset() != datetime.timedelta(0) or completed < started):
+            binding_refuse('genesis_chronology')
+    except (TypeError, ValueError):
+        binding_refuse('genesis_chronology')
+    return owner, {name: binding_hash(root / name) for name in GENESIS_FILES}
+
+
+def binding_genesis_create_at(rootfd, name, value):
+    """Create only under the pinned directory; publish result after its barriers.
+
+    Readers require 0400. A complete but unsynced result stays 0600, including on
+    EIO. The final chmod publishes already durable bytes/name, with no subsequent
+    durability barrier. Crash rollback of that mode is conservatively UNKNOWN;
+    no reader or later invocation may seal/adopt the retained partial record.
+    """
+    raw = binding_canonical(value)
+    pending_result = name == 'genesis.result.json'
+    mode = 0o600 if pending_result else 0o400
+    fd = os.open(name, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode, dir_fd=rootfd)
+    with os.fdopen(fd, 'w+b') as handle:
+        # umask can remove the pending write bit, accidentally producing the
+        # published mode. Refuse before placing even one result byte in that FD.
+        info = os.fstat(handle.fileno())
+        if (not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != mode or
+                info.st_uid != os.geteuid() or info.st_nlink != 1):
+            binding_refuse('genesis_write_metadata')
+        handle.write(raw); handle.flush(); os.fsync(handle.fileno())
+        os.fsync(rootfd)
+        handle.seek(0)
+        info = os.fstat(handle.fileno())
+        named = os.stat(name, dir_fd=rootfd, follow_symlinks=False)
+        if (not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != mode or
+                (info.st_dev, info.st_ino) != (named.st_dev, named.st_ino) or
+                info.st_uid != os.geteuid() or info.st_nlink != 1 or handle.read(len(raw) + 1) != raw):
+            binding_refuse('genesis_write_readback')
+        if pending_result:
+            os.fchmod(handle.fileno(), 0o400)
+
+
+def binding_genesis_watch(targetfd):
+    """Observe creation's namespace before mkdir; mkdir itself returns no FD."""
+    import ctypes
+    libc = ctypes.CDLL(None, use_errno=True)
+    # IN_CREATE/DELETE/MOVED_FROM/MOVED_TO/DELETE_SELF/MOVE_SELF/ONLYDIR.
+    mask = 0x00000100 | 0x00000200 | 0x00000040 | 0x00000080 | 0x00000400 | 0x00000800 | 0x01000000
+    fd = libc.inotify_init1(os.O_NONBLOCK | os.O_CLOEXEC)
+    if fd < 0:
+        raise OSError(ctypes.get_errno(), 'genesis_namespace_watch')
+    try:
+        watch = libc.inotify_add_watch(fd, os.fsencode('/proc/self/fd/' + str(targetfd)), mask)
+        if watch < 0:
+            raise OSError(ctypes.get_errno(), 'genesis_namespace_watch')
+        return fd, watch
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def binding_genesis_created(watchfd, watch):
+    """After open, require the sole root-name event to be our exclusive mkdir.
+
+    Replacements before the first FD (including rename away-and-back) enqueue a
+    mutation before this read. Queue loss or unavailable observation fails closed.
+    Later replacements are checked against that FD by the existing inode checks.
+    """
+    import struct
+    created = 0
+    size = 0
+    while True:
+        try:
+            events = os.read(watchfd, 65536)
+        except BlockingIOError:
+            break
+        size += len(events)
+        if not events or size > 1024 * 1024:
+            binding_refuse('genesis_namespace_observation')
+        offset = 0
+        while offset < len(events):
+            if len(events) - offset < 16:
+                binding_refuse('genesis_namespace_observation')
+            wd, mask, cookie, length = struct.unpack_from('iIII', events, offset)
+            offset += 16
+            if length > len(events) - offset:
+                binding_refuse('genesis_namespace_observation')
+            name = events[offset:offset + length].split(b'\0', 1)[0]
+            offset += length
+            # Q_OVERFLOW, IGNORED, UNMOUNT, DELETE_SELF, MOVE_SELF.
+            if wd != watch or mask & (0x4000 | 0x8000 | 0x2000 | 0x400 | 0x800):
+                binding_refuse('genesis_registry_replaced')
+            if name == b'.v126-target-operations':
+                if mask != (0x100 | 0x40000000):  # CREATE | ISDIR
+                    binding_refuse('genesis_registry_replaced')
+                created += 1
+    if created != 1:
+        binding_refuse('genesis_namespace_observation')
+
+
+def binding_genesis(target, identity, request, *, policy_b_gate, ack_genesis=None, timeout=300):
+    """Only authenticated caller may invoke this create-once metadata transaction.
+
+    EARLY proves admission before any server write. LATE repeats independent
+    observations under the newly created permanent lock. Every partial root is
+    retained and blocks all subsequent dispatch; no cleanup or adoption exists.
+    """
+    import signal
+    import time
+    if sys.platform != 'linux':
+        binding_refuse('linux_target_lock_required')
+    target = Path(target)
+    owner = binding_genesis_request(request, identity, target)
+    binding_genesis_target(target, request)
+    if timeout != 300 or policy_b_gate is None or any(not callable(getattr(policy_b_gate, key, None))
+            for key in ('check', 'before_create', 'before_dispatch', 'before_write')):
+        binding_refuse('genesis_independent_observer_required')
+    root = target / '.v126-target-operations'
+    if root.exists() or root.is_symlink():
+        binding_refuse('genesis_registry_already_exists')
+    previous = {sig: signal.getsignal(sig) for sig in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)}
+    cancelled = False
+    lockfd = None
+    root_identity = None
+    targetfd = rootfd = watchfd = None
+    deadline = time.monotonic() + 630
+    def cancel(signum, frame):
+        nonlocal cancelled
+        cancelled = True
+    def current():
+        binding_genesis_target(target, request)
+        if cancelled or time.monotonic() >= deadline:
+            binding_refuse('genesis_cancelled_or_expired')
+        if targetfd is not None:
+            held = os.fstat(targetfd)
+            selected = request['target']
+            if (held.st_dev, held.st_ino, held.st_uid) != (selected['device'], selected['inode'], selected['uid']):
+                binding_refuse('genesis_target_changed')
+        if root_identity is not None:
+            info = root.lstat()
+            if (info.st_dev, info.st_ino) != root_identity:
+                binding_refuse('genesis_registry_replaced')
+        if lockfd is not None:
+            binding_lock_held(root, lockfd)
+    def check(fd):
+        started = time.monotonic()
+        result = policy_b_gate.check(identity, target, fd, timeout)
+        if not 0 <= time.monotonic() - started < 300:
+            binding_refuse('genesis_round_expired')
+        current()
+        return result, binding_genesis_admission(result, request)
+    try:
+        for sig in previous:
+            signal.signal(sig, cancel)
+        targetfd = os.open(target, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        current()
+        early, early_admission = check(None)
+        current()
+        if root.exists() or root.is_symlink():
+            binding_refuse('genesis_registry_already_exists')
+        policy_b_gate.before_create(identity, target, None, timeout)
+        current()
+        watchfd, watch = binding_genesis_watch(targetfd)
+        try:
+            os.mkdir('.v126-target-operations', mode=0o700, dir_fd=targetfd)
+        except FileExistsError:
+            binding_refuse('genesis_registry_already_exists')
+        os.fsync(targetfd)
+        current()
+        rootfd = os.open('.v126-target-operations', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=targetfd)
+        info = os.fstat(rootfd)
+        root_identity = (info.st_dev, info.st_ino)
+        # Linux renameat takes the parent namespace lock even for this same-name
+        # no-op. Fence any rename whose lookup became visible before its fsnotify
+        # event was queued; openat plus a nonblocking queue read alone is not one.
+        os.rename('.v126-target-operations', '.v126-target-operations',
+                  src_dir_fd=targetfd, dst_dir_fd=targetfd)
+        binding_genesis_created(watchfd, watch)
+        current()
+        binding_protected(root, 0o700, True)
+        lockfd = os.open('lock', os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=rootfd)
+        fcntl.flock(lockfd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        marker = GENESIS_LOCK_PREFIX + identity['intent_sha256'].encode() + b'\n'
+        if os.write(lockfd, marker) != len(marker):
+            binding_refuse('genesis_lock_write')
+        os.fsync(lockfd)
+        os.fsync(rootfd)
+        current()
+        before = binding_history_snapshot(root)
+        late, late_admission = check(lockfd)
+        if late_admission['revocation_generation'] < early_admission['revocation_generation']:
+            binding_refuse('genesis_revocation_rollback')
+        binding_history_unchanged(root, lockfd, before)
+        current()
+        policy_b_gate.before_dispatch(identity, target, lockfd, timeout)
+        current()
+        created = {}
+        now = lambda: datetime.datetime.now(datetime.timezone.utc).isoformat()
+        def write(name, value):
+            binding_live_history(root, lockfd, before, created)
+            current()
+            policy_b_gate.before_write(identity, target, lockfd, timeout)
+            current()
+            binding_genesis_create_at(rootfd, name, value)
+            current()
+            expected = hashlib.sha256(binding_canonical(value)).hexdigest()
+            if binding_hash(root / name) != expected or binding_read(root / name) != value:
+                binding_refuse('genesis_write_readback')
+            created[name] = expected
+        intent = dict(format_version=1, identity=identity, operation_id=hashlib.sha256(binding_canonical(identity)).hexdigest(),
+                      request_sha256=identity['intent_sha256'], started_at=now())
+        write('genesis.intent.json', intent)
+        write('genesis.request.json', request)
+        write('legacy-inventory.json', late['legacy_inventory'])
+        owner_record = dict(format_version=2, kind='GENESIS_CUTOVER_OWNER', owner=owner,
+                            request_sha256=identity['intent_sha256'], inventory_sha256=request['inventory_sha256'])
+        write('run.json', owner_record)
+        result = dict(format_version=1, identity=identity, operation_id=intent['operation_id'], exit=0,
+                      outcome='SUCCEEDED', completion='LEGACY_DISPOSITION_BOUND', request_sha256=identity['intent_sha256'],
+                      intent_sha256=created['genesis.intent.json'], inventory_sha256=created['legacy-inventory.json'],
+                      owner_sha256=created['run.json'], admissions=[early_admission, late_admission], completed_at=now())
+        write('genesis.result.json', result)
+        binding_live_history(root, lockfd, before, created)
+        binding_genesis_completion(root, target)
+        proof = dict(request=request, result=result, request_sha256=identity['intent_sha256'],
+                     result_sha256=binding_hash(root / 'genesis.result.json'),
+                     legacy_inventory=late['legacy_inventory'], legacy_inventory_sha256=request['inventory_sha256'])
+        if ack_genesis is not None:
+            started = time.monotonic()
+            ack_genesis(proof)
+            if not 0 <= time.monotonic() - started < 30 or time.monotonic() >= deadline:
+                binding_refuse('genesis_ack_deadline')
+        return proof
+    finally:
+        for fd in (lockfd, rootfd, watchfd, targetfd):
+            if fd is not None:
+                os.close(fd)
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+
+def binding_genesis_readback(target, identity, request_sha256, *, policy_b_gate, timeout=300):
+    """Separately authorized copy-only completion; no writer/result/owner replay."""
+    import time
+    if (identity.get('kind'), identity.get('name'), identity.get('action')) != ('TARGET_BIND', 'LEGACY_GENESIS', 'bind-legacy-target'):
+        binding_refuse('genesis_readback_identity')
+    if timeout != 300 or policy_b_gate is None or not callable(getattr(policy_b_gate, 'before_dispatch', None)):
+        binding_refuse('genesis_readback_authority')
+    target = Path(target)
+    root, fd = binding_existing_lock(target)
+    try:
+        binding_history(root, target)
+        request = binding_read(root / 'genesis.request.json')
+        if identity != binding_genesis_identity(request) or request_sha256 != identity['intent_sha256']:
+            binding_refuse('genesis_readback_request')
+        before = binding_history_snapshot(root)
+        for _ in range(2):
+            started = time.monotonic()
+            admitted = policy_b_gate.check(identity, target, fd, timeout)
+            if not 0 <= time.monotonic() - started < 300:
+                binding_refuse('genesis_round_expired')
+            binding_genesis_admission(admitted, request, barrier='LEGACY_GENESIS_COPY')
+            binding_history_unchanged(root, fd, before)
+        result = binding_read(root / 'genesis.result.json')
+        output = dict(request=request, result=result, request_sha256=request_sha256,
+                      result_sha256=binding_hash(root / 'genesis.result.json'),
+                      legacy_inventory=binding_read(root / 'legacy-inventory.json'),
+                      legacy_inventory_sha256=binding_hash(root / 'legacy-inventory.json'))
+        binding_history_unchanged(root, fd, before)
+        policy_b_gate.before_dispatch(identity, target, fd, timeout)
+        binding_lock_held(root, fd)
+        return output
+    finally:
+        os.close(fd)
 
 
 def binding_initialize(target, identity, init_request, *, policy_b_gate, write_init, ack_init=None, timeout=300):

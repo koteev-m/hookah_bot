@@ -23,4 +23,7 @@ docker run --rm --init --network none --read-only --cap-drop ALL \
     python3 scripts/test-v126-policy-b-linux.py --require-linux-ssh
     python3 scripts/test-v126-policy-b-transport.py --require-linux-ssh
     python3 scripts/test-v126-policy-b-attended.py
+    python3 scripts/test-v126-genesis-history.py
+    python3 scripts/test-v126-genesis-history.py --negative-controls
+    python3 scripts/test-v126-genesis-linux.py --require-linux-ssh
   '

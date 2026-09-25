@@ -63,6 +63,76 @@ fresh LATE and final dispatch checks. Stage10 image-upload gains no new Policy B
 Busy/missing/invalid history or EARLY refusal receives no payload bytes and creates no spool.
 A transfer failure after intent retains UNKNOWN; it cannot authorize retry.
 
+## Approved one-time legacy target binding
+
+`TARGET_BIND / LEGACY_GENESIS / bind-legacy-target` is a metadata operation of the
+existing target history, not a stage or migration authority. The approved HT-QR-01
+legacy plan §3 and HT-OPS-01 addenda permit its local implementation. Installation,
+enrollment, actual fencing, a target invocation and a successor release remain separately
+authorized work. The existing release/image identity is not changed by this source diff.
+
+The public `prepare-target-binding` command consumes the exact already prepared INIT
+proposal and writes a separate immutable proposal outside the clean source checkout.
+Its target device/inode/uid, host fingerprint and complete inventory digest are assertions
+for review, not trust. `bind-legacy-target` consumes those exact bytes and their digest;
+created_at/nonce/next INIT manifest identity are not regenerated after approval.
+No canonical local INIT state is created by preparation or genesis.
+
+The closed schemas in `scripts/v126-legacy-genesis.py` distinguish primary bytes,
+limited safe projections, recovered-report claims, missing material, historical outcome
+and a separate new-admission basis. HT-OPS-01's exact f782 disposition
+`FAILED_PRE_ACTIVE_CONFIG_MUTATION_EXTERNALLY_FENCED` remains attributed history; it
+is neither native PASS9 nor an accepted terminal/general fence, and never covers run724.
+Admission needs either the complete supported native terminal/handoff validators or
+independently observed cessation of **all** indexed old effects plus explicitly accepted
+post-fence state. Unknown native producer formats refuse that proof route; they are not
+silently parsed using the current producer. No old evidence is reconstructed.
+
+The existing attended V/C/U authority boundary selects the complete inventory from the
+independently enrolled catalogue and producer readers, with the full ledger/current
+high-water head. The prior U anchor additionally pins discovery, fencing, acceptance and
+writer-exclusion methods and disposition authority identity; exact catalogue action scopes
+are `LEGACY_GENESIS` and separately `LEGACY_GENESIS_COPY`. Both rounds require fresh
+nonce-bound trusted-console C confirmation, source/tool/runtime/target binding, current
+clock, revocation and bounded observations. Neither a proposal/report hash nor a
+self-asserted fence or approval field grants admission. Producers/acquisition operations
+are not implemented by this consumer.
+
+Only the authenticated server-selected launcher reaches this entrypoint. EARLY admission
+and its five-second consumption bound precede the first server mkdir. S exclusively
+creates the canonical registry. Before mkdir, an inotify watch observes the pinned target
+namespace; after the first root open, a same-name renameat no-op fences the parent namespace
+before the event queue is checked. Exactly one root CREATE and no root-name replacement,
+self-event or queue loss is required before lock creation. Watch/proc unavailability refuses;
+there is no stat-only fallback. This covers same-UID namespace replacement during creation,
+not hostile root/mount manipulation. S creates its permanent lock with O_EXCL and holds that
+same FD/inode across LATE admission and all create-only/fsync/readback writes. Target/root
+identity, exact history delta, cancellation and expiry are checked immediately before
+writes. The complete two-round operation is bounded; a partial root is retained even if
+no intent was written. It is never adopted, removed or retried automatically.
+
+`genesis.result.json`, joined to request, intent, full legacy index and owner, is the sole
+completion boundary only after publication as0400. It is created pending0600; the actual mode
+is checked before any bytes (including under restrictive umask). File fsync, root fsync and
+same-FD readback must succeed before fchmod publishes0400. A file/root barrier EIO leaves
+unacceptable pending bytes, never successful completion; all history/copy readers refuse.
+No durability barrier follows publication. The payload and directory entry have confirmed
+barriers, but publication mode itself is not separately synced: a crash/power loss may restore
+pending0600 and leave conservative UNKNOWN, even after an answer. This is not a guarantee of
+power-loss persistence of completion recognition. No later reader reseals or adopts it. Both the permanent lock marker and the version2
+owner envelope retain genesis ancestry. Deleting a completion marker cannot downgrade
+history to the old raw-owner format. All dispatch, reconciliation, retirement, handoff
+and transfer readers replay this ancestry. Legacy raw-owner histories remain readable
+unchanged. Partial/UNKNOWN inspection needs no new readiness and grants no retry.
+
+The distinct `copy-target-binding-completion` requires fresh exact copy authority and
+an independently pinned durable completion digest. Under the same existing target lock,
+it verifies and copies accepted history; it writes no new server result or owner and
+requires no renewed fence/expired create lease. A lost answer is not evidence of absence.
+Completed genesis only permits a **separate** INIT matching the pinned prepared manifest;
+INIT retains EARLY/LATE R0/G and its own completion, and baseline remains the first STAGE.
+The twenty stages, UNKNOWN/recovery rules and Gate A/B/C are unchanged.
+
 ## Attended INIT metadata operation
 
 The locally approved tuple is `INIT / RUN_INITIALIZED / initialize-run`; the twenty

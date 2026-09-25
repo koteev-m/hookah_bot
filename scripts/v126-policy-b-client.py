@@ -581,7 +581,149 @@ def complete_proof(request, result):
                 result_sha256=digest(canonical(result)))
 
 
+def genesis_module():
+    return module('v126_legacy_genesis', 'v126-legacy-genesis.py')
+
+
+def verify_genesis_source(request):
+    """The proposal never grants authority to substitute source/tool identities."""
+    g = genesis_module()
+    g.validate_request(request)
+    def git(*args):
+        return subprocess.check_output(['git', '--no-optional-locks', '-C', str(ROOT), *args],
+                                       stderr=subprocess.DEVNULL, timeout=30)
+    authority = module('v126_policy_b_authority', 'v126-policy-b-authority.py')
+    if (git('rev-parse', 'HEAD').decode().strip() != request['source_sha']
+            or git('rev-parse', 'HEAD^{tree}').decode().strip() != request['source_tree']
+            or git('status', '--porcelain', '--untracked-files=all')
+            or digest(SOURCE.read_bytes()) != request['script_sha256']
+            or git('show', request['source_sha'] + ':scripts/v126-cutover.sh') != SOURCE.read_bytes()
+            or authority.dr.digest(authority.dr.tooling(ROOT)) != request['tooling_sha256']
+            or '.'.join(map(str, sys.version_info[:3])) != request['python_version']):
+        fail('EXACT_CLEAN_GENESIS_SOURCE_REQUIRED')
+
+
+def new_protected_metadata(path, raw):
+    path = Path(path)
+    if (not path.is_absolute() or path.parent.resolve(strict=True) != path.parent
+            or path == ROOT or ROOT in path.parents):
+        fail('GENESIS_LOCAL_OUTPUT_PATH')
+    fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        info = os.fstat(fd)
+        if info.st_uid != os.geteuid() or info.st_mode & 0o022:
+            fail('GENESIS_LOCAL_OUTPUT_PROTECTION')
+        create_file(fd, path.name, raw)
+        os.fsync(fd)
+        if read_protected(path) != raw:
+            fail('GENESIS_LOCAL_OUTPUT_READBACK')
+    finally:
+        os.close(fd)
+
+
+def prepare_target_binding(args):
+    """Output exact proposal bytes before independent catalogue approval.
+
+    No server access, target registry or canonical INIT state is created here.
+    Observed target fields are assertions, rechecked independently on V and S.
+    """
+    if Path(args.state_dir).exists() or Path(args.state_dir).is_symlink():
+        fail('INIT_STATE_EXISTS')
+    manifest = read_init_proposal(args.state_dir, args.init_proposal_file,
+                                  args.init_proposal_sha256)
+    verify_source(manifest)
+    doc = strict(manifest)
+    authority = module('v126_policy_b_authority', 'v126-policy-b-authority.py')
+    from datetime import timezone
+    request = dict(schema_version=1, kind='legacy-target-genesis-request',
+        run_id=doc['run_id'], source_sha=doc['release_sha'], source_tree=doc['release_tree'],
+        script_sha256=doc['script_sha256'], tooling_sha256=authority.dr.digest(authority.dr.tooling(ROOT)),
+        python_version='.'.join(map(str, sys.version_info[:3])),
+        target=dict(path=doc['staging_path'], device=args.target_device, inode=args.target_inode,
+                    uid=args.target_uid, host_fingerprint=args.host_fingerprint),
+        next_init_manifest_sha256=digest(manifest), inventory_sha256=args.inventory_sha256,
+        created_at=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+        expires_at=args.expires_at, nonce=os.urandom(32).hex())
+    genesis_module().validate_request(request)
+    raw = canonical(request)
+    new_protected_metadata(args.proposal_file, raw)
+    return dict(proposal_sha256=digest(raw), identity=genesis_identity(request),
+                next_init_manifest_sha256=request['next_init_manifest_sha256'])
+
+
+def genesis_identity(request):
+    return dict(run_id=request['run_id'], release_sha=request['source_sha'],
+                script_sha256=request['script_sha256'], intent_sha256=digest(canonical(request)),
+                kind='TARGET_BIND', name='LEGACY_GENESIS', action='bind-legacy-target')
+
+
+def run_genesis_client(args):
+    if args.command == 'prepare-target-binding':
+        sys.stdout.buffer.write(canonical(prepare_target_binding(args)))
+        return 0
+    completion_path = Path(args.completion_file)
+    if (not completion_path.is_absolute() or completion_path.parent.resolve(strict=True) != completion_path.parent
+            or completion_path.exists() or completion_path.is_symlink()
+            or completion_path == ROOT or ROOT in completion_path.parents):
+        fail('GENESIS_COMPLETION_OUTPUT_EXISTS_OR_INVALID')
+    parent_info = completion_path.parent.stat()
+    if parent_info.st_uid != os.geteuid() or parent_info.st_mode & 0o022:
+        fail('GENESIS_COMPLETION_OUTPUT_PROTECTION')
+    raw = read_protected(args.proposal_file)
+    if digest(raw) != args.proposal_sha256:
+        fail('GENESIS_PROPOSAL_CHANGED')
+    request = strict(raw)
+    verify_genesis_source(request)
+    authority = module('v126_policy_b_authority', 'v126-policy-b-authority.py')
+    transport = module('v126_policy_b_transport', 'v126-policy-b-transport.py')
+    enrollment = authority.load_enrolled_authority(args.policy_b_anchor)
+    locator = strict(read_protected(args.policy_b_transport, mode=0o600))
+    if (type(locator) is not dict or set(locator) != {'remote_alias', 'ssh'}
+            or locator['remote_alias'] != args.remote
+            or locator['ssh'].get('host_fingerprint') != enrollment.document['host_fingerprint']):
+        fail('GENESIS_TRANSPORT_BINDING')
+    identity = genesis_identity(request)
+    verifier = authority.VVerifier(enrollment, None)
+    verifier.set_genesis_request(raw)
+    mode = 'GENESIS_READBACK' if args.command == 'copy-target-binding-completion' else 'EXECUTE'
+    if mode == 'GENESIS_READBACK' and args.authorization != 'AUTHORIZE_V126_GENESIS_COMPLETION_COPY':
+        fail('GENESIS_COPY_AUTHORITY_REQUIRED')
+    # U's independently approved anchor and exact catalogue action are acquired
+    # by the real verifier on each fresh EARLY/LATE server challenge.
+    doc = enrollment.document
+    opened = dict(version=1, type='OPEN', mode=mode, session_id=os.urandom(32).hex(),
+        anchor_sha256=enrollment.sha256, anchor_generation=doc['generation'],
+        principal_fingerprint=doc['principal_fingerprint'], host_fingerprint=doc['host_fingerprint'],
+        identity=identity, target=request['target']['path'], request_sha256=digest(raw),
+        manifest_sha256=digest(raw), manifest_size=len(raw), source_tree=request['source_tree'],
+        tooling_sha256=request['tooling_sha256'], runtime=request['python_version'],
+        worker_args=[], environment={}, init_request=None, init_completion=None, payload=None,
+        genesis_request=request)
+    reply = transport.invoke_operation(locator['ssh'], opened, SOURCE.read_bytes(), verifier)
+    if reply['status'] != 0:
+        fail('GENESIS_OUTCOME_UNCONFIRMED')
+    # Only copy completion returned by the same authenticated session. A lost
+    # response never authorizes a second genesis and never removes local evidence.
+    proof = reply['result']
+    expected = {'request', 'result', 'request_sha256', 'result_sha256', 'legacy_inventory', 'legacy_inventory_sha256'}
+    if (type(proof) is not dict or set(proof) != expected or proof['request'] != request
+            or proof['request_sha256'] != digest(raw)
+            or proof['result_sha256'] != digest(canonical(proof['result']))
+            or proof['legacy_inventory_sha256'] != request['inventory_sha256']
+            or proof['legacy_inventory_sha256'] != digest(canonical(proof['legacy_inventory']))):
+        fail('GENESIS_COMPLETION_SCHEMA')
+    bindings = module('v126_client_bindings', 'v126-operation-bindings.py')
+    bindings.binding_validate_genesis_completion(request, proof['result'], proof['legacy_inventory'],
+                                                request['target']['path'])
+    new_protected_metadata(args.completion_file, canonical(proof))
+    sys.stdout.buffer.write(canonical(dict(completion_sha256=digest(canonical(proof)),
+                                          request_sha256=digest(raw))))
+    return 0
+
+
 def run_client(args):
+    if args.command in ('prepare-target-binding', 'bind-legacy-target', 'copy-target-binding-completion'):
+        return run_genesis_client(args)
     if args.command == 'verify-completion':
         require_completion(args.state_dir)
         return 0
@@ -706,6 +848,27 @@ def main():
         if command == 'operation':
             entry.add_argument('--stream-file', required=True)
         if command == 'complete-init-copy':
+            entry.add_argument('--authorization', required=True)
+    for command in ('prepare-target-binding', 'bind-legacy-target', 'copy-target-binding-completion'):
+        entry = sub.add_parser(command)
+        entry.add_argument('--proposal-file', required=True)
+        if command == 'prepare-target-binding':
+            entry.add_argument('--state-dir', required=True)
+            entry.add_argument('--init-proposal-file', required=True)
+            entry.add_argument('--init-proposal-sha256', required=True)
+            entry.add_argument('--inventory-sha256', required=True)
+            entry.add_argument('--target-device', type=int, required=True)
+            entry.add_argument('--target-inode', type=int, required=True)
+            entry.add_argument('--target-uid', type=int, required=True)
+            entry.add_argument('--host-fingerprint', required=True)
+            entry.add_argument('--expires-at', required=True)
+        else:
+            entry.add_argument('--proposal-sha256', required=True)
+            entry.add_argument('--policy-b-anchor', required=True)
+            entry.add_argument('--policy-b-transport', required=True)
+            entry.add_argument('--remote', required=True)
+            entry.add_argument('--completion-file', required=True)
+        if command == 'copy-target-binding-completion':
             entry.add_argument('--authorization', required=True)
     try:
         return run_client(parser.parse_args())

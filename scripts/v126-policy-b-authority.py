@@ -34,11 +34,12 @@ def load(name, filename):
 adapter = sys.modules.get('v126_policy_b_dispatch') or load('v126_policy_b_dispatch', 'v126-policy-b-dispatch.py')
 dr, S = adapter.dr, adapter.dr.schema
 custody = load('v126_authority_custody', 'v126-dr-custody.py')
+genesis = load('v126_legacy_genesis', 'v126-legacy-genesis.py')
 MAX_BYTES = 16 * 1024 * 1024
 EXPIRY_KEYS = frozenset(('checkpoint', 'ongoing_observed', 'monitor', 'authorization',
     'response_authority', 'cadence', 'age_state', 'custody_retrieval', 'rpo', 'anchor', 'clock', 'source_observations'))
 IDENTITY = {'run_id': 'id', 'release_sha': 'git', 'script_sha256': 'sha', 'intent_sha256': 'sha',
-            'kind': S.enum('INIT', 'STAGE', 'COPY_ONLY'), 'name': 'version', 'action': 'id'}
+            'kind': S.enum('INIT', 'STAGE', 'COPY_ONLY', 'TARGET_BIND'), 'name': 'version', 'action': 'id'}
 ANCHOR_KEYS = frozenset(('schema_version', 'kind', 'decision_id', 'decision_provenance_sha256',
     'generation', 'valid_from', 'valid_until', 'revocation_generation', 'custodian_identity',
     'verifier_identity', 'principal_fingerprint', 'host_fingerprint', 'deployment_target',
@@ -56,8 +57,10 @@ CATALOGUE_SPEC = S.record('ap06-current-catalogue', {
     'custody_set_sha256': 'sha', 'custody_set_id': 'id', 'custody_set_version': 'positive',
     'custody_binding_sha256': 'sha', 'custody_current_versions': S.array({'logical_id':'id', 'sha256':'sha'}),
     'custody_required_versions': S.array('sha'), 'documents': S.array('sha'),
-    'actions': S.array({'identity': IDENTITY, 'scope': S.enum('DISPATCH', 'COPY_ONLY'),
+    'actions': S.array({'identity': IDENTITY, 'scope': S.enum('DISPATCH', 'COPY_ONLY', 'LEGACY_GENESIS', 'LEGACY_GENESIS_COPY'),
                       'valid_from': 'time', 'valid_until': 'time'})})
+GENESIS_CATALOGUE_SPEC = dict(CATALOGUE_SPEC, kind=S.enum('ap06-legacy-genesis-catalogue'),
+    legacy_inventory_sha256='sha', legacy_completion_sha256=S.optional('sha'))
 HIGHWATER_SPEC = S.record('ap06-high-water', {'source_identity':'sha', 'catalogue_generation':'positive',
     'revocation_generation':'uint', 'ledger_sequence':'positive', 'ledger_head_sha256':'sha',
     'observed':S.CLOCK, 'expires_at':'time'})
@@ -142,7 +145,7 @@ class PreviouslyApprovedAnchor:
 
 
 def validate_anchor(doc):
-    if type(doc) is not dict or set(doc) != ANCHOR_KEYS or type(doc['schema_version']) is not int or doc['schema_version'] != 1 or doc['kind'] != 'ap06-previously-approved-anchor':
+    if type(doc) is not dict or set(doc) not in (ANCHOR_KEYS, ANCHOR_KEYS | {'legacy_genesis'}) or type(doc['schema_version']) is not int or doc['schema_version'] != 1 or doc['kind'] != 'ap06-previously-approved-anchor':
         refuse()
     for field in ('decision_id',): S.check(doc[field], 'id')
     for field in ('decision_provenance_sha256', 'custodian_identity', 'verifier_identity', 'tooling_sha256',
@@ -165,8 +168,12 @@ def validate_anchor(doc):
         paths.append(str(canonical_path(value['path'])))
     if len({x['identity'] for x in doc['sources'].values()}) != len(paths): refuse()
     if len(paths) != len(set(paths)) or any(Path(x).is_relative_to(Path(doc['evidence_root'])) for x in paths): refuse()
-    S.check(doc['scopes'], S.array(S.enum('DISPATCH','COPY_ONLY')))
+    S.check(doc['scopes'], S.array(S.enum('DISPATCH','COPY_ONLY','LEGACY_GENESIS','LEGACY_GENESIS_COPY')))
     if len(set(doc['scopes'])) != len(doc['scopes']): refuse()
+    if any(x in doc['scopes'] for x in ('LEGACY_GENESIS','LEGACY_GENESIS_COPY')):
+        if 'legacy_genesis' not in doc: refuse()
+        genesis.check(doc['legacy_genesis'], genesis.PINS)
+    elif 'legacy_genesis' in doc: refuse()
     S.check(doc['initial_checkpoint'], {'catalogue_generation':'positive','ledger_sequence':'positive','ledger_head_sha256':'sha','revocation_generation':'uint'})
 
 
@@ -183,7 +190,7 @@ def load_enrolled_authority(anchor_path, console=None):
 
 class VVerifier:
     """Production readers are fixed and read-only; fixture injection is external I/O."""
-    def __init__(self, enrollment, native_verifier, console=None):
+    def __init__(self, enrollment, native_verifier, console=None, native_genesis_verifier=None):
         if type(enrollment) is not PreviouslyApprovedAnchor: refuse()
         validate_anchor(enrollment.document)
         if dr.canonical(enrollment.document) != enrollment.raw or dr.sha(enrollment.raw) != enrollment.sha256: refuse()
@@ -191,6 +198,8 @@ class VVerifier:
         self.doc = self.anchor.document
         self.console = console or ForegroundConsole()
         self.native_verifier = native_verifier
+        self.native_genesis_verifier = native_genesis_verifier
+        self.genesis_request = None
         self.seen = set()
         self.sessions = {}
         self.previous_clock = None
@@ -243,7 +252,7 @@ class VVerifier:
         self.source_bytes = {}
         now = self.now()
         self.unexpired(self.doc['valid_from'],self.doc['valid_until'],now)
-        catraw, cat = self.source('catalogue', CATALOGUE_SPEC)
+        catraw, cat = self.source('catalogue', GENESIS_CATALOGUE_SPEC if scope in ('LEGACY_GENESIS','LEGACY_GENESIS_COPY') else CATALOGUE_SPEC)
         highraw, high = self.source('highwater',HIGHWATER_SPEC)
         self.round_snapshot={'catalogue':catraw,'highwater':highraw}
         for observed in (cat,high):
@@ -290,6 +299,8 @@ class VVerifier:
     def challenge(self, value):
         expected={'version','type','session_id','nonce','sequence','phase','operation_id','identity','target','timeout','history_sha256',
                   'anchor_sha256','anchor_generation','manifest_sha256','source_tree','tooling_sha256','runtime','principal_fingerprint','host_fingerprint','native_history'}
+        if type(value) is dict and type(value.get('identity')) is dict and value['identity'].get('kind')=='TARGET_BIND':
+            expected |= {'genesis_mode','genesis_completion_sha256'}
         if type(value) is not dict or set(value)!=expected or value['version']!=1 or value['type']!='CHALLENGE': refuse()
         S.check(value['identity'],IDENTITY)
         for key in ('session_id','nonce','operation_id','history_sha256','anchor_sha256','tooling_sha256'): S.check(value[key],'sha')
@@ -314,10 +325,15 @@ class VVerifier:
             parsed=datetime.fromisoformat(stamp.replace('Z','+00:00'))
             if parsed.utcoffset().total_seconds()!=0: refuse()
             S.check(row['artifacts'],S.array({'name':'id','sha256':'sha'},0))
-        is_r0=identity['name'] in ('BASELINE_VERIFIED','RUN_INITIALIZED')
+        is_r0=identity['name'] in ('BASELINE_VERIFIED','RUN_INITIALIZED','LEGACY_GENESIS')
         if (is_r0 and native_history) or (not is_r0 and not 1<=len(native_history)<=20): refuse()
         if identity['kind']=='INIT':
             if identity['name']!='RUN_INITIALIZED' or identity['action']!='initialize-run' or value['manifest_sha256'] is None: refuse()
+        elif identity['kind']=='TARGET_BIND':
+            if identity['name']!='LEGACY_GENESIS' or identity['action']!='bind-legacy-target' or value['manifest_sha256']!=identity['intent_sha256']: refuse()
+            if value['genesis_mode'] not in ('EXECUTE','GENESIS_READBACK'): refuse()
+            S.check(value['genesis_completion_sha256'], S.optional('sha'))
+            if (value['genesis_mode']=='EXECUTE') != (value['genesis_completion_sha256'] is None): refuse()
         elif identity['kind']!='STAGE': refuse()
         if value['timeout']!=adapter.ACTION_SECONDS.get(identity['action'],300) or type(value['timeout']) is not int: refuse()
         if value['nonce'] in self.seen: refuse()
@@ -409,6 +425,110 @@ class VVerifier:
         self.recheck_sources()
         return adapter.Observations(trust,evidence,pins,cat['readiness_sha256'],cat['ongoing_sha256'])
 
+    def set_genesis_request(self, raw):
+        request = strict(raw)
+        genesis.validate_request(request)
+        if (request['source_sha'] != self.doc['source_sha'] or request['source_tree'] != self.doc['source_tree']
+                or request['tooling_sha256'] != self.doc['tooling_sha256'] or request['python_version'] != self.doc['python_version']
+                or request['target']['path'] != self.doc['deployment_target']
+                or request['target']['host_fingerprint'] != self.doc['host_fingerprint']): refuse()
+        self.genesis_request = copy.deepcopy(request)
+
+    def genesis_documents(self):
+        documents = {}
+        total = sum(map(len,self.source_bytes.values())) + len(self.anchor.raw)
+        for ref in self.catalogue['documents']:
+            if ref in documents: refuse()
+            raw = dr.read_regular(Path(self.doc['evidence_root'])/ref, MAX_BYTES)
+            total += len(raw)
+            if total > MAX_BYTES or dr.sha(raw) != ref: refuse()
+            documents[ref] = raw
+        return documents
+
+    def genesis_ledger(self, documents):
+        # The full independently selected hash chain and current high-water head
+        # are checked. Genesis does not require a future R0/qualification point.
+        evidence = dr.Evidence(documents)
+        ledger = evidence.get(self.catalogue['ledger_sha256'], 'ledger')
+        cat, cp = self.catalogue, self.checkpoint
+        if (ledger['binding_sha256'] != self.doc['binding_sha256'] or ledger['head_sequence'] != len(ledger['events'])
+                or ledger['head_sequence'] != cat['ledger_sequence'] or ledger['events'][-1] != cat['ledger_head_sha256']
+                or cp['ledger_sequence'] > len(ledger['events']) or ledger['events'][cp['ledger_sequence']-1] != cp['ledger_head_sha256']): refuse()
+        previous = None
+        seen = set()
+        for sequence, ref in enumerate(ledger['events'], 1):
+            event = evidence.get(ref, 'event')
+            if event['sequence'] != sequence or event['previous_sha256'] != previous or event['document_sha256'] in seen: refuse()
+            evidence.get(event['document_sha256'], event['document_kind'])
+            seen.add(event['document_sha256']); previous = ref
+
+    def verify_genesis(self, challenge, context, echo, started):
+        request = self.genesis_request
+        if request is None: refuse()
+        genesis.validate_request(request, identity=challenge['identity'], target=challenge['target'])
+        readback = challenge['genesis_mode'] == 'GENESIS_READBACK'
+        scope = 'LEGACY_GENESIS_COPY' if readback else 'LEGACY_GENESIS'
+        with adapter.bounded(300-(time.monotonic()-started)):
+            self.acquire_catalogue(challenge['nonce'], challenge['identity'], scope)
+            binding = self.source_binding()
+            if request['script_sha256'] != next(x['sha256'] for x in binding['tools'] if x['path']=='scripts/v126-cutover.sh'): refuse()
+            documents = self.genesis_documents()
+            self.genesis_ledger(documents)
+            cat = self.catalogue
+            if request['inventory_sha256'] != cat['legacy_inventory_sha256']: refuse()
+            invraw = documents.get(cat['legacy_inventory_sha256'])
+            if invraw is None: refuse()
+            inventory = strict(invraw)
+            genesis.validate_inventory(inventory)
+            if inventory['target'] != request['target'] or request['run_id'] in {x['run_id'] for x in inventory['runs']}: refuse()
+            current_action_refs = {challenge['identity']['intent_sha256'],dr.digest(challenge['identity']),dr.digest(self.action_authority)}
+            if current_action_refs & set(cat['revoked']): refuse()
+            now = self.now()
+            if readback:
+                if cat['legacy_completion_sha256'] is None or cat['legacy_completion_sha256'] != challenge['genesis_completion_sha256']: refuse()
+                # Copy authority is fresh; the accepted immutable inventory is
+                # historical. Do not require a new fence or requalify old effects.
+                validation = dict(inventory_sha256=request['inventory_sha256'], completion_sha256=cat['legacy_completion_sha256'])
+                disposition_headroom = self.remaining(self.action_authority['valid_until'], now)
+            else:
+                if cat['legacy_completion_sha256'] is not None: refuse()
+                self.unexpired(request['created_at'], request['expires_at'], now)
+                if self.remaining(request['expires_at'], now) <= context.action_seconds+600: refuse()
+                raw, producer = self.source('producer', genesis.OBSERVATIONS)
+                self.round_snapshot['producer'] = raw
+                if (producer['binding_sha256'] != self.doc['binding_sha256'] or producer['tools_sha256'] != self.doc['tooling_sha256']
+                        or any(producer[k] != self.doc[k] for k in ('source_sha','source_tree','python_version','target_sha256'))): refuse()
+                refs = set(producer['observed_documents']) | {request['inventory_sha256']}
+                if (refs | set(self.doc['legacy_genesis'].values())) & set(cat['revoked']): refuse()
+                native_verifier = self.native_genesis_verifier
+                if native_verifier is None:
+                    next_owner = dict(run_id=request['run_id'],release_sha=request['source_sha'],script_sha256=request['script_sha256'])
+                    native_verifier = lambda run, proof, docs: genesis.verify_native_terminal(run,proof,docs,source_path=ROOT/'scripts/v126-cutover.sh',next_owner=next_owner)
+                validation = genesis.validate_basis(inventory, producer, documents, self.doc['legacy_genesis'], now, native_verifier)
+                disposition_headroom = min(validation['headroom'], self.remaining(request['expires_at'], now)-context.action_seconds-600)
+            self.recheck_sources()
+            final = self.now(); dr.chronology(now, final)
+            elapsed = S.timestamp(final['utc'])+final['error_seconds']-S.timestamp(now['utc'])+now['error_seconds']
+            reserve = 0 if readback else context.action_seconds+600
+            authority = self.remaining(self.action_authority['valid_until'], final)-reserve
+            vector = dict(anchor=self.remaining(self.doc['valid_until'], final)-reserve,
+                clock=min(300-dr.age(self.clock_record['measured'],final),self.remaining(self.clock_record['expires_at'],final)),
+                catalogue=min(300-dr.age(cat['observed'],final),self.remaining(cat['expires_at'],final),
+                    300-dr.age(self.highwater['observed'],final),self.remaining(self.highwater['expires_at'],final)),
+                authority=authority, inventory=authority if readback else min(300-dr.age(inventory['observed'],final),self.remaining(inventory['expires_at'],final)),
+                disposition=authority if readback else disposition_headroom-max(0,elapsed))
+            if set(vector)!=genesis.EXPIRY_KEYS or any(type(x) not in (int,float) or not math.isfinite(x) or x<=0 for x in vector.values()): refuse()
+        if not 0 <= time.monotonic()-started <= 300: refuse()
+        if challenge['sequence']==1: self.sessions[challenge['session_id']]['admitted']=True
+        self.minimum_generation=cat['generation']; self.minimum_revocation=cat['revocation_generation']
+        self.checkpoint=dict(catalogue_generation=cat['generation'],ledger_sequence=cat['ledger_sequence'],ledger_head_sha256=cat['ledger_head_sha256'],revocation_generation=cat['revocation_generation'])
+        self.last_validation = dict(validation, inventory=copy.deepcopy(inventory))
+        return dict(echo,decision='PASS',barrier='LEGACY_GENESIS_COPY' if readback else 'LEGACY_GENESIS',
+            qualification_sha256=request['inventory_sha256'], catalogue_head_sha256=cat['ledger_head_sha256'],
+            catalogue_sequence=cat['ledger_sequence'],revocation_generation=cat['revocation_generation'],
+            pins_sha256=dr.digest(validation),native_stage7_sha256=None,native_manifest_sha256=None,
+            expiry=vector,legacy_inventory=inventory)
+
     def verify_native_stage7(self, context):
         if not callable(self.native_verifier): refuse()
         result=self.native_verifier(context,copy.deepcopy(self.current_challenge['native_history']))
@@ -453,6 +573,8 @@ class VVerifier:
             started=time.monotonic()
             self.current_challenge=copy.deepcopy(challenge)
             context=self.challenge(challenge)
+            if challenge['identity']['kind']=='TARGET_BIND':
+                return self.verify_genesis(challenge, context, echo, started)
             with adapter.bounded(300):
                 self.acquire_catalogue(challenge['nonce'],challenge['identity'],'DISPATCH')
             gate=adapter.Gate(self,operational=True)

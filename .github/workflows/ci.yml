@@ -1166,6 +1166,8 @@ jobs:
           python3 scripts/test-v126-policy-b-authority.py
           python3 scripts/test-v126-policy-b-client.py
           python3 scripts/test-v126-policy-b-init.py
+          python3 scripts/test-v126-legacy-genesis.py
+          python3 scripts/test-v126-genesis-transport.py
       - name: Exercise Policy B authenticated owned SSH in network-denied Linux
         if: ${{ !cancelled() }}
         run: |

@@ -112,7 +112,8 @@ def configuration(path):
     if source.parent != ROOT or source.name != 'v126-cutover.sh':
         raise ValueError('LAUNCHER_INSTALLED_SOURCE')
     required = {'v126-cutover.sh', 'v126-operation-bindings.py', 'v126-policy-b-transport.py',
-                'v126-policy-b-launcher.py', 'v126-policy-b-dispatch.py'}
+                'v126-policy-b-launcher.py', 'v126-policy-b-dispatch.py',
+                'v126-policy-b-client.py', 'v126-policy-b-authority.py', 'v126-legacy-genesis.py'}
     installed = {path.name for path in ROOT.glob('v126-*') if path.is_file() or path.is_symlink()}
     if not required <= cfg['modules'].keys() or set(cfg['modules']) != installed:
         raise ValueError('LAUNCHER_MODULE_INVENTORY')
@@ -260,20 +261,45 @@ def main():
         raise ValueError('LAUNCHER_APPROVED_SOURCE_OR_TARGET')
     # Only independently enrolled installed source is evaluated. Client SOURCE is
     # checked for equality; it cannot supply a different Python program.
-    extracted = subprocess.run(['/bin/bash', '-c', 'source "$1"; remote_operation_python',
-        'policy-b-source-extract', cfg['source_path']], stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-        env={'PATH': '/usr/sbin:/usr/bin:/sbin:/bin'}, timeout=10, check=True).stdout
+    genesis = transport.is_genesis(session.request['identity'])
+    if genesis:
+        # Genesis has no leaf or private output spool before first admission.
+        # Extract only the fixed enrolled heredocs; do not execute a shell whose
+        # heredoc implementation may create temporary files before EARLY.
+        bindings = load('v126_launcher_bindings', ROOT / 'v126-operation-bindings.py')
+        prefix = b"remote_operation_python() {\n  remote_operation_bindings_python || { printf 'binding source unavailable\\n' >&2; return 75; }\n"
+        if session.source.count(prefix) != 1:
+            raise ValueError('LAUNCHER_GENESIS_SOURCE_SHAPE')
+        plain = session.source.replace(prefix, b"remote_operation_python() {\n", 1)
+        extracted = (bindings.binding_embedded_source(session.source, 'remote_operation_bindings_python')
+                     + bindings.binding_embedded_source(plain, 'remote_operation_python'))
+    else:
+        extracted = subprocess.run(['/bin/bash', '-c', 'source "$1"; remote_operation_python',
+            'policy-b-source-extract', cfg['source_path']], stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            env={'PATH': '/usr/sbin:/usr/bin:/sbin:/bin'}, timeout=10, check=True).stdout
     if not 0 < len(extracted) <= transport.MAX_SOURCE:
         raise ValueError('LAUNCHER_EXTRACTED_SOURCE_SIZE')
     # Keep raw operation logs/ACK away from the duplex control stream. The
     # reviewed caller emits only explicit framed messages via POLICY_B_LAUNCH.
-    with tempfile_output() as output:
+    with (MetadataOutput() if genesis else tempfile_output()) as output:
         with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
             scope = dict(__name__='__main__', POLICY_B_LAUNCH=session,
                          POLICY_B_TRANSPORT=transport, POLICY_B_SERVER_ROOT=str(ROOT),
                          POLICY_B_OUTPUT_CAPTURE=output)
             exec(compile(extracted, '<enrolled-v126-remote-operation>', 'exec'), scope)
+
+
+class MetadataOutput(io.StringIO):
+    """Bounded diagnostics only; metadata operations never emit leaf output."""
+    def __init__(self):
+        super().__init__()
+        self.byte_count = 0
+    def write(self, value):
+        self.byte_count += len(value.encode('utf-8'))
+        if self.byte_count > 64 * 1024:
+            raise ValueError('LAUNCHER_METADATA_OUTPUT_BOUND')
+        return super().write(value)
 
 
 @contextlib.contextmanager
