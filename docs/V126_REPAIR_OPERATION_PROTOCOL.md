@@ -325,3 +325,10 @@ not an established infrastructure unavailability. Actual host reboot/power-loss 
 separately authorized controlled VM with persistent test storage and an external observer;
 rebooting the disposable GitHub runner is not authorized. Exact results and final delivery
 binding are recorded in REPAIR-REPORT/COVERAGE.
+
+## Prospective isolated domain extension
+
+The separately approved [prospective authority epoch contract](V126_PROSPECTIVE_AUTHORITY_EPOCH.md)
+adds a distinct-domain bootstrap. It does not admit the old target, upgrade legacy UNKNOWN,
+replace the legacy disposition route, waive R0/G/custody or authorize operational execution.
+Prospective mode requires the exact epoch through native manifests, history and all consumers.

@@ -1,5 +1,42 @@
 # Project Status
 
+## HT-QR-01 — prospective isolated genesis, local candidate
+
+**LOCAL IMPLEMENTATION / ISOLATED LINUX QUALIFIED / UNCOMMITTED** (2026-09-25).
+Approved architecture `9690f53c465f7110258f2272bba15496d1587b90c43ec1069773bd1eef8bba9e`;
+isolated detached worktree `/private/tmp/htqr-prospective-isolated-genesis-20260925`,
+base `0d565392cbee62890d467ea92eeec530c3005e83`, tree
+`f2df07cec2fb33e1a9839700f3940d7fc3044d04`. The original exact checkout and user-edited
+primary checkout are preserved. No branch, commit, push, PR or operational change is made.
+
+[Prospective authority contract](docs/V126_PROSPECTIVE_AUTHORITY_EPOCH.md) adds an explicit
+isolated effect/control domain, immutable predecessor ancestry, complete independently acquired
+isolation facts, current control ledger, bootstrap-only U, prospective AP06 and epoch-bound
+consumers. Old 724 remains UNKNOWN; f782 keeps its historical attributed disposition only.
+No old-domain retry, adoption, implicit data/account/credential continuity or terminal upgrade
+is permitted. Full U still requires genuine DR/custody/protected facts and separate enrollment
+rebind. There is no database migration or product/QR change.
+
+The final public-source snapshot ran 623 Linux tests plus 14 separate negative controls,
+without failures/skips, in the retained network-denied Linux/arm64 Python3.12.3 test image.
+This includes actual owned SSH/launcher/attended verifier and bootstrap INIT refusal. Portable
+legacy/Policy B/DR/custody/history tests and 215 sequencer assertions passed; source/embedded
+parity and migration identity are preserved. Review findings about revocation dependency
+closure and missing decision provenance were corrected with regressions. Optional unchanged
+AP00 SDK/crypto/worker suites could not qualify in the available incomplete old Python venv;
+those environment failures remain recorded, never PASS. No packages were installed.
+
+Exact manifest, command/log/source bindings, independent non-author review, preservation and
+bounded publication-readiness decision are retained in
+`~/.hookahtootah/ht-qr-01/evidence/20260925T083042Z-prospective-isolated-genesis-implementation/`.
+No real prospective domain, producer, ledger, U, key or AP06 enrollment was created. Power-loss
+persistence was not modeled. New candidate hosted-amd64/PG/systemd/private-daemon/compose and
+release/operational gates remain future work; completed baseline CI is not reused as candidate CI.
+
+Next: one separate decision on publication of the exact reviewed local candidate. No publication
+or operational execution is authorized by these local results. Older checkpoints below are
+retained history and do not override this candidate's evidence or the integrated baseline.
+
 ## HT-QR-01-LEGACY-GENESIS — F-01–F-03 local correction
 
 **LOCAL CORRECTION / PORTABLE CHECKS PASSED / LINUX QUALIFICATION OPEN / UNCOMMITTED**

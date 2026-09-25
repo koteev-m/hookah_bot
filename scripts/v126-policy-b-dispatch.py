@@ -65,6 +65,7 @@ class Context:
     action: str
     target: str
     action_seconds: int
+    epoch: dict = None
 
 
 @dataclass(frozen=True)
@@ -81,6 +82,7 @@ class Pins:
     restore_runtime: dict
     requested_attempt: str
     post_v126_recipe_sha256: str
+    epoch: dict = None
 
 
 @dataclass(frozen=True)
@@ -176,6 +178,10 @@ class Gate:
         path = Path(target)
         if not path.is_absolute() or str(path.resolve(strict=True)) != str(path):
             refuse('POLICY_B_TARGET_BINDING')
+        if 'epoch_id' in identity or 'domain_identity_sha256' in identity:
+            # A flat operation pair cannot invent the predecessor context. Only
+            # the authenticated v2 challenge supplies the complete epoch to V.
+            refuse('POLICY_B_AUTHENTICATED_EPOCH_CONTEXT_REQUIRED')
         context = Context(identity['run_id'], identity['release_sha'], identity['script_sha256'],
                           identity['name'], identity['action'], str(path), bound)
         if self.observer is None:
@@ -229,6 +235,12 @@ class Gate:
             evidence = dr.Evidence(documents)
             observed = copy.deepcopy(observed)
             pins = observed.pins
+            if pins.epoch != context.epoch:
+                refuse('POLICY_B_INDEPENDENT_EPOCH_MISMATCH')
+            if context.epoch is not None:
+                if (type(context.epoch) is not dict or set(context.epoch) != {'epoch_id', 'domain_identity_sha256', 'predecessor_index_sha256'}
+                        or any(type(v) is not str or not re.fullmatch('[0-9a-f]{64}', v) for v in context.epoch.values())):
+                    refuse('POLICY_B_EPOCH_CONTEXT_SCHEMA')
             binding = evidence.get(observed.trust.binding_sha256, 'binding')
             if (pins.run_id != context.run_id or pins.deployment_target != context.target
                     or pins.source_sha != context.release_sha
@@ -256,7 +268,7 @@ class Gate:
             result = dr.consume_barrier(evidence, observed.trust, observed.readiness_ref,
                 observed.ongoing_ref, now, purpose=purpose, requested_attempt=pins.requested_attempt,
                 action_seconds=bound + min(MAX_OBSERVATION_SECONDS, bound), cutover=cutover,
-                native_stage7=None if native is None else native.receipt)
+                native_stage7=None if native is None else native.receipt, native_epoch=context.epoch)
             # Reserve the entire bounded adapter duration in freshness, rather
             # than pretending a PASS before verification remains current forever.
             finish = self.observer.now()

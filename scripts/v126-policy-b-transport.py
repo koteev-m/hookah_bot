@@ -33,10 +33,47 @@ EXPIRY_KEYS = frozenset(('checkpoint', 'ongoing_observed', 'monitor', 'authoriza
     'clock', 'source_observations'))
 GENESIS_EXPIRY_KEYS = frozenset(('anchor', 'clock', 'catalogue', 'authority', 'inventory', 'disposition'))
 GENESIS_TUPLE = ('TARGET_BIND', 'LEGACY_GENESIS', 'bind-legacy-target')
+PROSPECTIVE_TUPLE = ('TARGET_BIND', 'PROSPECTIVE_ISOLATED_GENESIS', 'bind-isolated-target')
+EPOCH_KEYS = frozenset(('epoch_id', 'domain_identity_sha256', 'predecessor_index_sha256'))
+EPOCH_IDENTITY_KEYS = frozenset(('epoch_id', 'domain_identity_sha256'))
 
 
 def is_genesis(value):
-    return tuple(value.get(k) for k in ('kind', 'name', 'action')) == GENESIS_TUPLE
+    return tuple(value.get(k) for k in ('kind', 'name', 'action')) in (GENESIS_TUPLE, PROSPECTIVE_TUPLE)
+
+
+def is_prospective(value):
+    return tuple(value.get(k) for k in ('kind', 'name', 'action')) == PROSPECTIVE_TUPLE
+
+
+def epoch_bound(value):
+    return bool(EPOCH_IDENTITY_KEYS & value.keys())
+
+
+def epoch_context(value):
+    exact(value, EPOCH_KEYS)
+    for checksum in value.values():
+        sha(checksum)
+    return value
+
+
+def epoch_frame(value):
+    bound = epoch_bound(value.get('identity', {}))
+    if type(value.get('version')) is not int or value['version'] != (2 if bound else 1):
+        refuse('POLICY_B_PROTOCOL_VERSION')
+    if bound:
+        epoch_context(value.get('epoch'))
+        if any(value['epoch'][key] != value['identity'][key] for key in EPOCH_IDENTITY_KEYS):
+            refuse('POLICY_B_EPOCH_BINDING')
+        if value.get('runtime') != '3.12.3':
+            refuse('POLICY_B_PROSPECTIVE_RUNTIME')
+    elif 'epoch' in value:
+        refuse('POLICY_B_EPOCH_DOWNGRADE')
+    if is_prospective(value.get('identity', {})) and not bound:
+        refuse('POLICY_B_EPOCH_REQUIRED')
+    if bound and tuple(value['identity'].get(k) for k in ('kind', 'name', 'action')) == GENESIS_TUPLE:
+        refuse('POLICY_B_LEGACY_AUTHORITY_CROSS_EPOCH')
+    return bound
 
 
 IDENTITY_KEYS = frozenset(('run_id', 'release_sha', 'script_sha256', 'intent_sha256', 'kind', 'name', 'action'))
@@ -61,7 +98,7 @@ ENV_KEYS = frozenset('V126_INTERNAL_REMOTE_' + name for name in (
     'CADDY_ACTIVATION_SHA256', 'CADDY_CANDIDATE_SHA256', 'CADDY_DIFF_SHA256', 'CADDY_ORIGINAL_SHA256',
     'DATABASE_TARGET_IDENTITY_SHA256', 'ENVELOPE_VALIDATED', 'INTENT_HASH', 'MAINTENANCE_OFF_SHA256',
     'MAINTENANCE_SMOKE_SHA256', 'MODE', 'OPERATION_KIND', 'OPERATION_NAME', 'PREDECESSOR_HASH',
-    'PREDECESSOR_STAGE', 'RELEASE_SHA', 'RUN_ID', 'SCRIPT_SHA256', 'STAGING_PATH', 'V126_IMAGE_ID'))
+    'PREDECESSOR_STAGE', 'RELEASE_SHA', 'RUN_ID', 'SCRIPT_SHA256', 'STAGING_PATH', 'V126_IMAGE_ID', 'AUTHORITY_EPOCH_ID', 'DOMAIN_IDENTITY_SHA256'))
 WRITE_INIT_KEYS = frozenset(('version', 'type', 'session_id', 'nonce', 'sequence', 'operation_id',
     'challenge_sha256', 'request_sha256', 'manifest_sha256', 'manifest_size', 'request'))
 
@@ -103,7 +140,9 @@ def fingerprint(value):
 
 
 def identity(value):
-    exact(value, IDENTITY_KEYS)
+    exact(value, IDENTITY_KEYS | (EPOCH_IDENTITY_KEYS if epoch_bound(value) else set()))
+    for key in EPOCH_IDENTITY_KEYS & value.keys():
+        sha(value[key])
     if not re.fullmatch(r'[a-z0-9][a-z0-9._-]{5,63}', value['run_id']):
         refuse('POLICY_B_RUN_ID')
     sha(value['release_sha'], 40)
@@ -116,8 +155,9 @@ def identity(value):
 
 def validate_open(value):
     genesis = is_genesis(value.get('identity', {}))
-    exact(value, OPEN_KEYS | ({'genesis_request'} if genesis else set()))
-    if value['version'] != 1 or type(value['version']) is not int or value['type'] != 'OPEN':
+    bound = epoch_frame(value)
+    exact(value, OPEN_KEYS | ({'genesis_request'} if genesis else set()) | ({'epoch'} if bound else set()))
+    if value['type'] != 'OPEN':
         refuse('POLICY_B_PROTOCOL_VERSION')
     if (value['mode'] not in ('EXECUTE', 'INIT_READBACK', 'GENESIS_READBACK')
             or (value['mode'] == 'INIT_READBACK' and value['identity'].get('kind') != 'INIT')
@@ -182,8 +222,9 @@ def validate_open(value):
 
 def validate_challenge(value):
     genesis = is_genesis(value.get('identity', {}))
-    exact(value, CHALLENGE_KEYS | ({'genesis_mode', 'genesis_completion_sha256'} if genesis else set()))
-    if type(value['version']) is not int or value['version'] != 1 or value['type'] != 'CHALLENGE':
+    bound = epoch_frame(value)
+    exact(value, CHALLENGE_KEYS | ({'genesis_mode', 'genesis_completion_sha256'} if genesis else set()) | ({'epoch'} if bound else set()))
+    if value['type'] != 'CHALLENGE':
         refuse('POLICY_B_PROTOCOL_VERSION')
     identity(value['identity'])
     if genesis:
@@ -201,7 +242,7 @@ def validate_challenge(value):
     if type(value['timeout']) is not int or value['timeout'] not in (300, 600):
         refuse('POLICY_B_ACTION_BOUND')
     # Reuse closed scalar checks without attributing any authority to them.
-    scalar_open = dict(version=1, type='OPEN', identity=value['identity'], target=value['target'],
+    scalar_open = dict(version=value['version'], type='OPEN', identity=value['identity'], target=value['target'],
         session_id=value['session_id'], anchor_sha256=value['anchor_sha256'], anchor_generation=value['anchor_generation'],
         principal_fingerprint=value['principal_fingerprint'], host_fingerprint=value['host_fingerprint'],
         request_sha256='0'*64, manifest_sha256=value['manifest_sha256'],
@@ -217,6 +258,8 @@ def validate_challenge(value):
         scalar_open['manifest_sha256'] = scalar_open['request_sha256'] = digest({})
         scalar_open['manifest_size'] = len(canonical({}))
         scalar_open['identity'] = dict(value['identity'], intent_sha256=digest({}))
+    if bound:
+        scalar_open['epoch'] = value['epoch']
     validate_open(scalar_open)
     history = value['native_history']
     r0 = genesis or value['identity']['kind'] == 'INIT' or value['identity']['name'] == 'BASELINE_VERIFIED'
@@ -225,6 +268,8 @@ def validate_challenge(value):
     for row in history:
         exact(row, ('identity', 'request_sha256', 'result_sha256', 'log_sha256', 'completed_at', 'artifacts'))
         identity(row['identity'])
+        if {k: row['identity'][k] for k in EPOCH_IDENTITY_KEYS & row['identity'].keys()} != {k: value['identity'][k] for k in EPOCH_IDENTITY_KEYS & value['identity'].keys()}:
+            refuse('POLICY_B_NATIVE_HISTORY_EPOCH')
         for key in ('request_sha256', 'result_sha256', 'log_sha256'):
             sha(row[key])
         if type(row['completed_at']) is not str or len(row['completed_at']) > 40 or type(row['artifacts']) is not list:
@@ -238,8 +283,8 @@ def validate_challenge(value):
 
 
 def result_echo(challenge):
-    return dict(version=1, type='RESULT', session_id=challenge['session_id'], nonce=challenge['nonce'],
-                sequence=challenge['sequence'], phase=challenge['phase'], challenge_sha256=digest(challenge))
+    return dict(dict(version=challenge['version'], type='RESULT', session_id=challenge['session_id'], nonce=challenge['nonce'],
+                sequence=challenge['sequence'], phase=challenge['phase'], challenge_sha256=digest(challenge)), **({'epoch': challenge['epoch']} if 'epoch' in challenge else {}))
 
 
 def refusal_result(challenge):
@@ -248,9 +293,12 @@ def refusal_result(challenge):
 
 def validate_result(value, challenge, *, minimum_revocation=0):
     genesis = is_genesis(challenge['identity'])
-    exact(value, REFUSE_KEYS if value.get('decision') == 'REFUSE' else PASS_KEYS | ({'legacy_inventory'} if genesis else set()))
+    prospective = is_prospective(challenge['identity'])
+    epoch_keys = {'epoch'} if 'epoch' in challenge else set()
+    basis_key = 'prospective_basis' if prospective else 'legacy_inventory'
+    exact(value, (REFUSE_KEYS if value.get('decision') == 'REFUSE' else PASS_KEYS | ({basis_key} if genesis else set())) | epoch_keys)
     expected = result_echo(challenge)
-    if any(value[key] != expected[key] or type(value[key]) is not type(expected[key]) for key in ECHO_KEYS):
+    if any(value[key] != expected[key] or type(value[key]) is not type(expected[key]) for key in ECHO_KEYS | epoch_keys):
         refuse('POLICY_B_RESULT_SESSION_OR_REPLAY')
     if value['decision'] == 'REFUSE':
         if value['reason'] != 'POLICY_B_REFUSED':
@@ -259,7 +307,8 @@ def validate_result(value, challenge, *, minimum_revocation=0):
     if value['decision'] != 'PASS':
         refuse('POLICY_B_RESULT_DECISION')
     r0 = challenge['identity']['kind'] == 'INIT' or challenge['identity']['name'] == 'BASELINE_VERIFIED'
-    if value['barrier'] != (('LEGACY_GENESIS_COPY' if challenge['genesis_mode'] == 'GENESIS_READBACK' else 'LEGACY_GENESIS') if genesis else 'R0' if r0 else 'Q'):
+    genesis_barrier = 'PROSPECTIVE_ISOLATED_GENESIS' if prospective else 'LEGACY_GENESIS'
+    if value['barrier'] != ((genesis_barrier + ('_COPY' if challenge['genesis_mode'] == 'GENESIS_READBACK' else '')) if genesis else 'R0' if r0 else 'Q'):
         refuse('POLICY_B_RESULT_PURPOSE')
     for key in ('qualification_sha256', 'catalogue_head_sha256', 'pins_sha256'):
         sha(value[key])
@@ -274,7 +323,13 @@ def validate_result(value, challenge, *, minimum_revocation=0):
                 refuse('POLICY_B_R0_IS_NOT_Q')
         else:
             sha(value[key])
-    if genesis:
+    if prospective:
+        if (type(value['prospective_basis']) is not dict
+                or len(canonical(value['prospective_basis'])) > 48 * 1024
+                or value['prospective_basis'].get('epoch') != challenge['epoch']
+                or value['qualification_sha256'] != value['prospective_basis'].get('isolation_proof_sha256')):
+            refuse('POLICY_B_PROSPECTIVE_BASIS_BINDING')
+    elif genesis:
         if (type(value['legacy_inventory']) is not dict
                 or len(canonical(value['legacy_inventory'])) > 48 * 1024
                 or digest(value['legacy_inventory']) != value['qualification_sha256']):
@@ -391,6 +446,10 @@ class Session:
         if any(self.request[key] != self.principal[key] for key in
                ('principal_fingerprint', 'host_fingerprint', 'anchor_sha256', 'anchor_generation')):
             refuse('POLICY_B_AUTHENTICATED_BINDING')
+        if self.request.get('epoch') != self.principal.get('epoch'):
+            refuse('POLICY_B_AUTHENTICATED_EPOCH')
+        if self.principal.get('authority_scope') == 'BOOTSTRAP_ONLY' and not is_prospective(self.request['identity']):
+            refuse('POLICY_B_BOOTSTRAP_SCOPE')
         self.source_validator()
 
 
@@ -418,7 +477,7 @@ class Session:
         self._payload_started = True
         payload = self.request['payload']
         deadline = time.monotonic() + timeout
-        self.channel.send(dict(version=1, type='PAYLOAD_REQUEST', session_id=self.request['session_id'],
+        self.channel.send(dict(version=self.request['version'], type='PAYLOAD_REQUEST', session_id=self.request['session_id'],
             operation_id=digest(operation), **payload), deadline=min(deadline, time.monotonic() + PREPARE_SECONDS))
         output = tempfile.TemporaryFile()
         received, checksum = 0, hashlib.sha256()
@@ -499,11 +558,13 @@ class RemoteGate:
         challenge = {key: request[key] for key in ('session_id', 'anchor_sha256', 'anchor_generation',
             'principal_fingerprint', 'host_fingerprint', 'identity', 'target', 'manifest_sha256',
             'source_tree', 'tooling_sha256', 'runtime')}
-        challenge.update(version=1, type='CHALLENGE', nonce=nonce, sequence=self.round,
+        challenge.update(version=request['version'], type='CHALLENGE', nonce=nonce, sequence=self.round,
             phase='EARLY' if self.round == 1 else 'LATE', operation_id=digest(operation), timeout=timeout,
             history_sha256=self.history_snapshot(),
             native_history=[] if is_genesis(operation) or operation['kind'] == 'INIT' or operation['name'] == 'BASELINE_VERIFIED'
                 else (self.native_history() if self.native_history is not None else []))
+        if 'epoch' in request:
+            challenge['epoch'] = request['epoch']
         if is_genesis(operation):
             challenge['genesis_mode'] = request['mode']
             challenge['genesis_completion_sha256'] = (hashlib.sha256((Path(target) / '.v126-target-operations/genesis.result.json').read_bytes()).hexdigest() if request['mode'] == 'GENESIS_READBACK' else None)
@@ -517,7 +578,13 @@ class RemoteGate:
         self.pending = dict(challenge=challenge, result=answer, sent=sent, received=received)
         self._fresh()
         admitted = dict(barrier=answer['barrier'], qualification_sha256=answer['qualification_sha256'], operational=True)
-        if is_genesis(operation):
+        if 'epoch' in answer:
+            admitted['epoch'] = answer['epoch']
+        if is_prospective(operation):
+            if answer['qualification_sha256'] != request['genesis_request']['isolation_proof_sha256']:
+                refuse('POLICY_B_PROSPECTIVE_PROOF_CHANGED')
+            admitted.update({key: answer[key] for key in ('prospective_basis', 'pins_sha256', 'catalogue_head_sha256', 'revocation_generation')})
+        elif is_genesis(operation):
             if answer['qualification_sha256'] != request['genesis_request']['inventory_sha256']:
                 refuse('POLICY_B_GENESIS_INVENTORY_CHANGED')
             admitted.update({key: answer[key] for key in ('legacy_inventory', 'pins_sha256', 'catalogue_head_sha256', 'revocation_generation')})
@@ -568,14 +635,14 @@ class RemoteGate:
             refuse('POLICY_B_INIT_REQUEST_CHANGED')
         self._write_sent = True
         challenge = self.pending['challenge']
-        message = dict(version=1, type='WRITE_INIT', session_id=challenge['session_id'], nonce=challenge['nonce'],
+        message = dict(version=self.session.request['version'], type='WRITE_INIT', session_id=challenge['session_id'], nonce=challenge['nonce'],
             sequence=2, operation_id=challenge['operation_id'], challenge_sha256=digest(challenge),
             request_sha256=digest(request), manifest_sha256=self.session.request['manifest_sha256'],
             manifest_size=self.session.request['manifest_size'], request=request)
         self.session.channel.send(message, deadline=time.monotonic() + RESULT_SECONDS)
         answer = self.session.channel.recv(deadline=time.monotonic() + 300)
         exact(answer, ('version', 'type', 'session_id', 'nonce', 'operation_id', 'request_sha256', 'attestation'))
-        if (type(answer['version']) is not int or answer['version'] != 1 or answer['type'] != 'LOCAL_WRITTEN'
+        if (type(answer['version']) is not int or answer['version'] != self.session.request['version'] or answer['type'] != 'LOCAL_WRITTEN'
                 or any(answer[key] != message[key] for key in ('session_id', 'nonce', 'operation_id', 'request_sha256'))
                 or type(answer['attestation']) is not dict):
             refuse('POLICY_B_LOCAL_WRITTEN_BINDING')
@@ -586,7 +653,7 @@ class RemoteGate:
             refuse('POLICY_B_INIT_ACK_NOT_AUTHORIZED')
         self._acked = True
         challenge = self.pending['challenge']
-        message = dict(version=1, type='INIT_ACK', session_id=challenge['session_id'], nonce=challenge['nonce'],
+        message = dict(version=self.session.request['version'], type='INIT_ACK', session_id=challenge['session_id'], nonce=challenge['nonce'],
             operation_id=challenge['operation_id'], request_sha256=self.session.request['request_sha256'],
             result_sha256=digest(result), result=result)
         self.session.channel.send(message, deadline=time.monotonic() + 30)
@@ -597,7 +664,7 @@ def receive_session(channel, principal, source_validator):
     request = validate_open(channel.recv(deadline=deadline))
     header = channel.recv(deadline=deadline)
     exact(header, ('version', 'type', 'session_id', 'size', 'sha256'))
-    if (type(header['version']) is not int or header['version'] != 1 or header['type'] != 'SOURCE' or header['session_id'] != request['session_id']
+    if (type(header['version']) is not int or header['version'] != request['version'] or header['type'] != 'SOURCE' or header['session_id'] != request['session_id']
             or type(header['size']) is not int or not 0 < header['size'] <= MAX_SOURCE
             or header['sha256'] != request['identity']['script_sha256']):
         refuse('POLICY_B_SOURCE_FRAME')
@@ -702,7 +769,7 @@ def invoke_operation(ssh_options, open_request, source, verifier, *, init_writer
         latest = None
         try:
             channel.send(open_request, deadline=time.monotonic() + PREPARE_SECONDS)
-            channel.send(dict(version=1, type='SOURCE', session_id=open_request['session_id'],
+            channel.send(dict(version=open_request['version'], type='SOURCE', session_id=open_request['session_id'],
                 size=len(source), sha256=hashlib.sha256(source).hexdigest()), deadline=time.monotonic() + PREPARE_SECONDS)
             channel.send_bytes(source, deadline=time.monotonic() + PREPARE_SECONDS, maximum=MAX_SOURCE)
             while True:
@@ -711,7 +778,7 @@ def invoke_operation(ssh_options, open_request, source, verifier, *, init_writer
                     validate_challenge(message)
                     for key in ('session_id', 'identity', 'target', 'anchor_sha256', 'anchor_generation',
                                 'manifest_sha256', 'source_tree', 'tooling_sha256', 'runtime',
-                                'principal_fingerprint', 'host_fingerprint'):
+                                'principal_fingerprint', 'host_fingerprint', 'version') + (('epoch',) if 'epoch' in open_request else ()):
                         if message[key] != open_request[key]:
                             refuse('POLICY_B_SERVER_CHALLENGE_BINDING')
                     if is_genesis(open_request['identity']) and message['genesis_mode'] != open_request['mode']:
@@ -733,7 +800,7 @@ def invoke_operation(ssh_options, open_request, source, verifier, *, init_writer
                     if (payload_sent or payload is None
                             or len(used) != (1 if action == 'preflight-upload' else 0)
                             or (latest is not None and latest[0]['phase'] != 'EARLY')
-                            or type(message['version']) is not int or message['version'] != 1
+                            or type(message['version']) is not int or message['version'] != open_request['version']
                             or message['session_id'] != open_request['session_id']
                             or message['operation_id'] != digest(open_request['identity'])
                             or {key: message[key] for key in ('size', 'sha256')} != open_request['payload']):
@@ -760,7 +827,7 @@ def invoke_operation(ssh_options, open_request, source, verifier, *, init_writer
                     exact(message, WRITE_INIT_KEYS)
                     challenge, answer, sent = latest
                     elapsed = time.monotonic() - sent
-                    if (type(message['version']) is not int or message['version'] != 1 or type(message['sequence']) is not int or message['sequence'] != 2 or challenge['phase'] != 'LATE'
+                    if (type(message['version']) is not int or message['version'] != open_request['version'] or type(message['sequence']) is not int or message['sequence'] != 2 or challenge['phase'] != 'LATE'
                             or any(message[key] != challenge[key] for key in ('session_id', 'nonce', 'operation_id'))
                             or message['challenge_sha256'] != digest(challenge)
                             or any(message[key] != open_request[key] for key in ('request_sha256', 'manifest_sha256', 'manifest_size'))
@@ -769,7 +836,7 @@ def invoke_operation(ssh_options, open_request, source, verifier, *, init_writer
                         refuse('POLICY_B_LOCAL_WRITER_EXPIRED_OR_CHANGED')
                     written = True
                     attestation = init_writer(message)
-                    channel.send(dict(version=1, type='LOCAL_WRITTEN', session_id=message['session_id'],
+                    channel.send(dict(version=open_request['version'], type='LOCAL_WRITTEN', session_id=message['session_id'],
                         nonce=message['nonce'], operation_id=message['operation_id'], request_sha256=message['request_sha256'],
                         attestation=attestation), deadline=min(deadline, time.monotonic() + PREPARE_SECONDS))
                 elif message.get('type') == 'INIT_ACK':
@@ -777,7 +844,7 @@ def invoke_operation(ssh_options, open_request, source, verifier, *, init_writer
                         refuse('POLICY_B_INIT_COMPLETION_NOT_AUTHORIZED')
                     exact(message, ('version', 'type', 'session_id', 'nonce', 'operation_id', 'request_sha256', 'result_sha256', 'result'))
                     challenge = latest[0]
-                    if (type(message['version']) is not int or message['version'] != 1 or any(message[key] != challenge[key] for key in ('session_id', 'nonce', 'operation_id'))
+                    if (type(message['version']) is not int or message['version'] != open_request['version'] or any(message[key] != challenge[key] for key in ('session_id', 'nonce', 'operation_id'))
                             or message['request_sha256'] != open_request['request_sha256']
                             or digest(message['result']) != message['result_sha256']):
                         refuse('POLICY_B_INIT_ACK_BINDING')
@@ -785,7 +852,7 @@ def invoke_operation(ssh_options, open_request, source, verifier, *, init_writer
                     acked = True
                 elif message.get('type') == 'OPERATION_OUTPUT':
                     exact(message, ('version', 'type', 'session_id', 'operation_id', 'size', 'sha256'))
-                    if (output_received or output_sink is None or type(message['version']) is not int or message['version'] != 1
+                    if (output_received or output_sink is None or type(message['version']) is not int or message['version'] != open_request['version']
                             or message['session_id'] != open_request['session_id']
                             or message['operation_id'] != digest(open_request['identity'])
                             or type(message['size']) is not int or not 0 < message['size'] <= 16*1024*1024):
@@ -805,7 +872,7 @@ def invoke_operation(ssh_options, open_request, source, verifier, *, init_writer
                         refuse('POLICY_B_PRIVATE_OUTPUT_HASH')
                 elif message.get('type') == 'OPERATION_RESULT':
                     exact(message, ('version', 'type', 'session_id', 'operation_id', 'status', 'result'))
-                    if (type(message['version']) is not int or message['version'] != 1 or message['session_id'] != open_request['session_id']
+                    if (type(message['version']) is not int or message['version'] != open_request['version'] or message['session_id'] != open_request['session_id']
                             or message['operation_id'] != digest(open_request['identity'])
                             or type(message['status']) is not int or not 0 <= message['status'] <= 255):
                         refuse('POLICY_B_OPERATION_COMPLETION')
@@ -843,7 +910,7 @@ def send_operation_output(session, raw):
     if not raw:
         return
     deadline = time.monotonic() + 30
-    session.channel.send(dict(version=1, type='OPERATION_OUTPUT', session_id=session.request['session_id'],
+    session.channel.send(dict(version=session.request['version'], type='OPERATION_OUTPUT', session_id=session.request['session_id'],
         operation_id=digest(session.request['identity']), size=len(raw), sha256=hashlib.sha256(raw).hexdigest()), deadline=deadline)
     for index in range(0, len(raw), MAX_FRAME):
         session.channel.send_bytes(raw[index:index+MAX_FRAME], deadline=deadline)

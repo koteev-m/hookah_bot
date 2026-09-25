@@ -40,6 +40,16 @@ UNSUPPORTED_REASONS = {
 }
 MAX_RECORD = 16 * 1024 * 1024
 DEADLINE_SECONDS = 600
+EPOCH_FIELDS = frozenset(('epoch_id', 'domain_identity_sha256'))
+
+
+def epoch_identity(value):
+    present = EPOCH_FIELDS & set(value)
+    require(not present or (present == EPOCH_FIELDS and all(isinstance(value[key], str) and
+            re.fullmatch('[0-9a-f]{64}', value[key]) for key in EPOCH_FIELDS)), 'epoch_identity')
+    return {key: value[key] for key in present}
+
+
 PROOF_FILENAMES = {'pre-drain-backup-proof': 'pre-drain-backup-rehearsed',
                    'quiesced-backup-proof': 'quiesced-backup-rehearsed'}
 
@@ -116,7 +126,7 @@ def operation(root, operation_id, target):
             start['operation_id'] == operation_id and digest(canonical(start['identity'])) == operation_id,
             'original_start_binding')
     identity = start['identity']
-    require(set(identity) == {'run_id', 'release_sha', 'script_sha256', 'intent_sha256', 'kind', 'name', 'action'} and
+    require(set(identity) == {'run_id', 'release_sha', 'script_sha256', 'intent_sha256', 'kind', 'name', 'action'} | set(epoch_identity(identity)) and
             re.fullmatch('[a-z0-9][a-z0-9._-]{0,79}', identity['run_id']) and
             re.fullmatch('[0-9a-f]{40}', identity['release_sha']) and
             all(re.fullmatch('[0-9a-f]{64}', identity[key]) for key in ('script_sha256', 'intent_sha256')),
@@ -159,7 +169,7 @@ class Evidence:
         for selected in operations:
             require(set(selected) == {'operation_id', 'files'}, 'selected_operation_schema')
             original, original_request, files, artifacts = operation(self.root, selected['operation_id'], self.target)
-            require(all(original[key] == identity[key] for key in
+            require(epoch_identity(original) == epoch_identity(identity) and all(original[key] == identity[key] for key in
                         ('run_id', 'release_sha', 'script_sha256', 'intent_sha256', 'kind', 'name')) and
                     files == selected['files'], 'selected_operation_binding')
             selected_ids.append(selected['operation_id'])
@@ -175,6 +185,7 @@ class Evidence:
             candidate_identity = candidate.get('identity', {})
             if any(candidate_identity.get(key) != identity[key] for key in ('run_id', 'release_sha', 'script_sha256')):
                 continue
+            require(epoch_identity(candidate_identity) == epoch_identity(identity), 'predecessor_epoch_mismatch')
             if (candidate_identity.get('kind'), candidate_identity.get('name'), candidate_identity.get('action')) == (
                     'INIT', 'RUN_INITIALIZED', 'initialize-run'):
                 # binding_reconcile already validated the complete native INIT

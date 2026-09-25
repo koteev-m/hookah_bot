@@ -123,7 +123,10 @@ def validate_descriptor(doc, target):
     require(isinstance(doc, dict) and set(doc) == DESCRIPTOR_FIELDS and
             type(doc['format_version']) is int and doc['format_version'] == 1, 'descriptor schema')
     owner = doc['owner']
-    require(isinstance(owner, dict) and set(owner) == {'run_id', 'release_sha', 'script_sha256'} and
+    epoch_fields = {'epoch_id', 'domain_identity_sha256'}
+    owner_fields = {'run_id', 'release_sha', 'script_sha256'}
+    require(isinstance(owner, dict) and set(owner) in (owner_fields, owner_fields | epoch_fields) and
+            all(digest(owner[key]) for key in epoch_fields & set(owner)) and
             isinstance(owner['run_id'], str) and re.fullmatch('[a-z0-9][a-z0-9._-]{5,63}', owner['run_id']) and
             isinstance(owner['release_sha'], str) and re.fullmatch('[0-9a-f]{40}', owner['release_sha']) and
             digest(owner['script_sha256']), 'descriptor owner')
@@ -679,9 +682,12 @@ def client(remote_name, target, request_file, state, *, expected_image, expected
         os.fsync(output.fileno())
     identity = dict(doc['owner'], intent_sha256=sha(request_raw), kind='DEPLOY', name='ORDINARY_DEPLOY', action='ordinary-deploy')
     args = [capture, *[identity[key] for key in ('run_id', 'release_sha', 'script_sha256', 'intent_sha256', 'kind', 'name', 'action')]]
+    args.extend([identity.get('epoch_id', ''), identity.get('domain_identity_sha256', '')])
     log = shell_consumer(ROOT / 'scripts/v126-cutover.sh',
                          'capture="$1"; RUN_ID="$2"; RELEASE_SHA="$3"; SCRIPT_SHA256="$4"; ACTIVE_INTENT_HASH="$5"; '
-                         'ACTIVE_OPERATION_KIND="$6"; ACTIVE_OPERATION_NAME="$7"; verify_remote_operation_ack "$capture" "$8"', args)
+                         'ACTIVE_OPERATION_KIND="$6"; ACTIVE_OPERATION_NAME="$7"; '
+                         'AUTHORITY_EPOCH_ID="$9"; DOMAIN_IDENTITY_SHA256="${10}"; '
+                         'verify_remote_operation_ack "$capture" "$8"', args)
     require(len(re.findall(rb'^ARTIFACT\tordinary-deploy\t[0-9a-f]{64}$', log, re.M)) == 1, 'completed deploy proof acknowledgement missing')
     create(state / 'result.json', canonical(dict(request_sha256=sha(request_raw), transport_sha256=sha(capture.read_bytes()),
                                                 outcome='ACKNOWLEDGED_COMPLETION', retry_allowed=False)))

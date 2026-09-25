@@ -1003,3 +1003,10 @@ release sequencing text above does not authorize a new HT13 archive, Gate A/B/C,
 attempt or recovery. After feature CI and unified review, stop for the remaining decisions
 and separate main/deployment authorization. Reboot/operational DR and17 live assertions
 are not proved by connected synthetic consumer tests.
+
+## Prospective isolated domain extension
+
+The separately approved [prospective authority epoch contract](V126_PROSPECTIVE_AUTHORITY_EPOCH.md)
+adds a distinct-domain bootstrap. It does not admit the old target, upgrade legacy UNKNOWN,
+replace the legacy disposition route, waive R0/G/custody or authorize operational execution.
+Prospective mode requires the exact epoch through native manifests, history and all consumers.

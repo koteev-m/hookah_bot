@@ -222,6 +222,22 @@ class Fixture:
 
 
 class PolicyTests(unittest.TestCase):
+    def test_legacy_opaque_source_identity_keeps_existing_contract(self):
+        f = Fixture()
+        raw = b'legacy opaque source identity\n'
+        binding = dict(f.binding, source_identity_sha256=dr.sha(raw))
+        reference = f.put(binding)
+        f.documents[dr.sha(raw)] = raw
+        dr.validate_prospective_dr_binding(dr.Evidence(f.documents), reference, None)
+
+    def test_prospective_source_identity_requires_epoch_context(self):
+        f = Fixture()
+        raw = dr.canonical({'kind': 'prospective-dr-source-identity'})
+        reference = f.put(dict(f.binding, source_identity_sha256=dr.sha(raw)))
+        f.documents[dr.sha(raw)] = raw
+        with self.assertRaisesRegex(ValueError, 'PROSPECTIVE_DR_EPOCH_CONTEXT_REQUIRED'):
+            dr.validate_prospective_dr_binding(dr.Evidence(f.documents), reference, None)
+
     def test_complete_synthetic_chain_r0(self):
         f = Fixture()
         self.assertEqual(f.barrier()['barrier'], 'R0')

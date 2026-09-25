@@ -146,3 +146,10 @@ The feature-only commit/push and ordinary Ubuntu CI authorization was a historic
 Main integration and PR publication are now complete as recorded above; that completion does not
 apply the operational handoff or authorize deployment. The remaining operation/DR/manual gates still
 require their own evidence and authority. No staging attempt follows this document.
+
+## Prospective isolated domain extension
+
+The separately approved [prospective authority epoch contract](V126_PROSPECTIVE_AUTHORITY_EPOCH.md)
+adds a distinct-domain bootstrap. It does not admit the old target, upgrade legacy UNKNOWN,
+replace the legacy disposition route, waive R0/G/custody or authorize operational execution.
+Prospective mode requires the exact epoch through native manifests, history and all consumers.

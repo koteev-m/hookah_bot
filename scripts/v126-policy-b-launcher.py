@@ -10,6 +10,7 @@ import contextlib
 import hashlib
 import importlib.util
 import io
+import platform
 import json
 import os
 from pathlib import Path
@@ -83,7 +84,10 @@ def configuration(path):
         'host_fingerprint', 'source_sha', 'source_tree', 'tooling_sha256', 'runtime', 'source_path',
         'source_sha256', 'modules', 'sshd_path', 'sshd_config_path', 'sshd_config_sha256', 'launcher_command',
         'authorized_keys_path', 'authorized_keys_sha256', 'revocation_generation'}
-    if type(cfg) is not dict or set(cfg) != expected or cfg['version'] != 1 or type(cfg['version']) is not int:
+    prospective = type(cfg) is dict and cfg.get('version') == 2
+    if prospective:
+        expected |= {'epoch', 'authority_scope', 'enrollment_facts', 'server_runtime'}
+    if type(cfg) is not dict or set(cfg) != expected or cfg['version'] not in (1, 2) or type(cfg['version']) is not int:
         raise ValueError('LAUNCHER_CONFIG_SCHEMA')
     for field in ('anchor_generation', 'revocation_generation'):
         if type(cfg[field]) is not int or cfg[field] < 0:
@@ -114,6 +118,8 @@ def configuration(path):
     required = {'v126-cutover.sh', 'v126-operation-bindings.py', 'v126-policy-b-transport.py',
                 'v126-policy-b-launcher.py', 'v126-policy-b-dispatch.py',
                 'v126-policy-b-client.py', 'v126-policy-b-authority.py', 'v126-legacy-genesis.py'}
+    if prospective:
+        required.add('v126-authority-epoch.py')
     installed = {path.name for path in ROOT.glob('v126-*') if path.is_file() or path.is_symlink()}
     if not required <= cfg['modules'].keys() or set(cfg['modules']) != installed:
         raise ValueError('LAUNCHER_MODULE_INVENTORY')
@@ -128,7 +134,36 @@ def configuration(path):
             raise ValueError('LAUNCHER_ENROLLED_SOURCE_CHANGED')
     if cfg['modules']['v126-cutover.sh'] != cfg['source_sha256']:
         raise ValueError('LAUNCHER_SOURCE_PIN')
+    if prospective:
+        validate_prospective_configuration(cfg)
     return cfg
+
+
+def validate_prospective_configuration(cfg):
+    # Root-owned installed config is the server's enrollment authority. These
+    # facts must also be independently pinned and acquired on V for each action.
+    epoch = load('v126_launcher_epoch', ROOT / 'v126-authority-epoch.py')
+    epoch.check(cfg['epoch'], {k: 'sha' for k in ('epoch_id', 'domain_identity_sha256', 'predecessor_index_sha256')})
+    facts = cfg['enrollment_facts']
+    epoch.check(facts, epoch.ENROLLMENT)
+    if (cfg['authority_scope'] not in ('BOOTSTRAP_ONLY', 'FULL_DR')
+            or any(facts[k] != cfg['epoch'][k] for k in ('epoch_id', 'domain_identity_sha256'))
+            or any(facts[k] != cfg[k] for k in ('principal_fingerprint', 'host_fingerprint'))
+            or facts['source'] != dict(commit=cfg['source_sha'], tree=cfg['source_tree'], tooling_sha256=cfg['tooling_sha256'])
+            or not facts['excluded_principal_fingerprints']
+            or cfg['principal_fingerprint'] in facts['excluded_principal_fingerprints']
+            or cfg['runtime'] != '3.12.3' or platform.python_version() != '3.12.3'
+            or facts['python_version'] != '3.12.3'
+            or facts['endpoint']['host'] == '178.20.209.5'
+            or facts['endpoint']['host'] == facts['endpoint']['peer']):
+        raise ValueError('LAUNCHER_PROSPECTIVE_ENROLLMENT')
+    runtime = cfg['server_runtime']
+    epoch.check(runtime, epoch.RUNTIME)
+    executable = str(Path(sys.executable).resolve(strict=True))
+    if (epoch.digest(runtime) != facts['server_runtime_sha256'] or runtime['role'] != 'S'
+            or runtime['executable_path'] != executable
+            or hashlib.sha256(protected(executable, maximum=64*1024*1024)).hexdigest() != runtime['executable_sha256']):
+        raise ValueError('LAUNCHER_PROSPECTIVE_RUNTIME_IDENTITY')
 
 
 def authenticate(cfg, config_path):
@@ -139,6 +174,12 @@ def authenticate(cfg, config_path):
     connection = os.environ.get('SSH_CONNECTION', '').split()
     if len(connection) != 4 or not all(part.isdigit() for part in (connection[1], connection[3])):
         raise ValueError('LAUNCHER_SSH_CONNECTION_REQUIRED')
+    if cfg.get('version') == 2:
+        endpoint = cfg['enrollment_facts']['endpoint']
+        if (connection[0] != endpoint['peer'] or connection[2] != endpoint['host']
+                or int(connection[3]) != endpoint['port']
+                or pwd.getpwuid(os.getuid()).pw_name != endpoint['user']):
+            raise ValueError('LAUNCHER_PROSPECTIVE_PEER_OR_ENDPOINT')
     parent = process(os.getppid())
     executable = str(Path(cfg['sshd_path']).resolve(strict=True))
     protected(executable, maximum=16*1024*1024)
@@ -179,6 +220,8 @@ def authenticate(cfg, config_path):
     if (len(key_fields) not in (2, 3) or not key_fields[0].startswith(('ssh-', 'ecdsa-'))
             or '-cert-' in key_fields[0]):
         raise ValueError('LAUNCHER_EXCLUSIVE_AUTHORIZED_KEY')
+    if cfg['version'] == 2 and key_fields[0] != 'ssh-ed25519':
+        raise ValueError('LAUNCHER_PROSPECTIVE_PRINCIPAL_TYPE')
     authorized_key = base64.b64decode(key_fields[1], validate=True)
     authorized_fingerprint = 'SHA256:' + base64.b64encode(hashlib.sha256(authorized_key).digest()).decode().rstrip('=')
     if authorized_fingerprint != cfg['principal_fingerprint']:
@@ -203,6 +246,11 @@ def authenticate(cfg, config_path):
         'authorizedkeysfile': str(authorized_path), 'authorizedkeyscommand': 'none',
         'trustedusercakeys': 'none', 'authorizedprincipalsfile': 'none',
         'authorizedprincipalscommand': 'none', 'hostbasedauthentication': 'no'}
+    if cfg.get('version') == 2:
+        endpoint = cfg['enrollment_facts']['endpoint']
+        required.update(port=str(endpoint['port']),
+                        listenaddress=endpoint['host'] + ':' + str(endpoint['port']),
+                        allowusers=endpoint['user'] + '@' + endpoint['peer'])
     if any(effective.get(key) != [value] for key, value in required.items()) or effective.get('acceptenv'):
         raise ValueError('LAUNCHER_SSHD_SESSION_POLICY')
     expected_command = 'exec ' + shlex.join([sys.executable, str(Path(__file__).resolve()), '--config', str(config_path)])
@@ -236,7 +284,10 @@ def authenticate(cfg, config_path):
     fingerprint = 'SHA256:' + base64.b64encode(hashlib.sha256(key).digest()).decode().rstrip('=')
     if fingerprint != cfg['principal_fingerprint']:
         raise ValueError('LAUNCHER_PRINCIPAL_MISMATCH')
-    return {key: cfg[key] for key in ('principal_fingerprint', 'host_fingerprint', 'anchor_sha256', 'anchor_generation', 'revocation_generation')}
+    principal = {key: cfg[key] for key in ('principal_fingerprint', 'host_fingerprint', 'anchor_sha256', 'anchor_generation', 'revocation_generation')}
+    if cfg.get('version') == 2:
+        principal.update(epoch=cfg['epoch'], authority_scope=cfg['authority_scope'])
+    return principal
 
 
 def main():

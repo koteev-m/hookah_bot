@@ -8,9 +8,10 @@ image="$1"
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fixture="$(mktemp -d "${TMPDIR:-/tmp}/v126-policy-b-ci.XXXXXX")"
 trap 'rm -rf -- "$fixture"' EXIT
-mkdir "$fixture/scripts" "$fixture/docs"
+mkdir "$fixture/scripts" "$fixture/scripts/fixtures" "$fixture/docs"
 # Explicit public test-source inventory, never the checkout's .git/config or .env.
 cp "$root"/scripts/v126-* "$root"/scripts/test-v126-* "$fixture/scripts/"
+cp "$root/scripts/fixtures/v126-authority-epoch-fixture.py" "$fixture/scripts/fixtures/"
 cp "$root/docs/V126_DATABASE_RECOVERY_REHEARSAL.md" "$fixture/docs/"
 docker run --rm --init --network none --read-only --cap-drop ALL \
   --cap-add SETUID --cap-add SETGID --cap-add SYS_CHROOT --cap-add CHOWN \
@@ -26,4 +27,13 @@ docker run --rm --init --network none --read-only --cap-drop ALL \
     python3 scripts/test-v126-genesis-history.py
     python3 scripts/test-v126-genesis-history.py --negative-controls
     python3 scripts/test-v126-genesis-linux.py --require-linux-ssh
+    python3 scripts/test-v126-authority-epoch.py
+    python3 scripts/test-v126-authority-epoch.py --negative-controls
+    python3 scripts/test-v126-prospective-authority.py
+    python3 scripts/test-v126-prospective-transport.py
+    python3 scripts/test-v126-prospective-history.py --portable
+    python3 scripts/test-v126-prospective-history.py --linux
+    python3 scripts/test-v126-prospective-history.py --negative-controls
+    python3 scripts/test-v126-prospective-native.py
+    python3 scripts/test-v126-prospective-linux.py --require-linux-ssh
   '

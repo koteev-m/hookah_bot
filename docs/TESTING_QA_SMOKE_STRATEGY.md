@@ -4215,3 +4215,16 @@ Related complete bindings, INIT, supervisor, reconciliation, ordinary-deploy and
 contention suites remain required. Native hosted-amd64 Docker/systemd/PG gates cannot be
 substituted by local arm64 capture-only checks. No synthetic PASS establishes operational
 writer exclusion, accepted post-fence state, R0/G/Q, enrollment or permission for genesis.
+
+## Prospective authority epoch qualification
+
+For the [prospective isolated domain contract](V126_PROSPECTIVE_AUTHORITY_EPOCH.md), run
+`test-v126-authority-epoch.py` (including `--negative-controls`),
+`test-v126-prospective-authority.py`, `test-v126-prospective-transport.py`,
+`test-v126-prospective-history.py --portable` and `--negative-controls`, and
+`test-v126-prospective-native.py`. The existing isolated Policy B harness also requires
+`test-v126-prospective-history.py --linux` and
+`test-v126-prospective-linux.py --require-linux-ssh`, without skipped PASS.
+Retain the applicable existing legacy/genesis/Policy B/DR/reconciliation suites and negative
+controls, exact source/embedded parity, preservation and independent security review.
+Synthetic consumer PASS is not operational producer evidence or deployment permission.

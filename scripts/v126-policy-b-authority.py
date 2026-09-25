@@ -13,11 +13,13 @@ from datetime import datetime, timezone
 import importlib.util
 import math
 import os
+import platform
 from pathlib import Path
 import re
 import secrets
 import select
 import stat
+import subprocess
 import sys
 import time
 
@@ -35,11 +37,13 @@ adapter = sys.modules.get('v126_policy_b_dispatch') or load('v126_policy_b_dispa
 dr, S = adapter.dr, adapter.dr.schema
 custody = load('v126_authority_custody', 'v126-dr-custody.py')
 genesis = load('v126_legacy_genesis', 'v126-legacy-genesis.py')
+epoch = load('v126_authority_epoch', 'v126-authority-epoch.py')
 MAX_BYTES = 16 * 1024 * 1024
 EXPIRY_KEYS = frozenset(('checkpoint', 'ongoing_observed', 'monitor', 'authorization',
     'response_authority', 'cadence', 'age_state', 'custody_retrieval', 'rpo', 'anchor', 'clock', 'source_observations'))
 IDENTITY = {'run_id': 'id', 'release_sha': 'git', 'script_sha256': 'sha', 'intent_sha256': 'sha',
             'kind': S.enum('INIT', 'STAGE', 'COPY_ONLY', 'TARGET_BIND'), 'name': 'version', 'action': 'id'}
+PROSPECTIVE_IDENTITY = dict(IDENTITY, epoch_id='sha', domain_identity_sha256='sha')
 ANCHOR_KEYS = frozenset(('schema_version', 'kind', 'decision_id', 'decision_provenance_sha256',
     'generation', 'valid_from', 'valid_until', 'revocation_generation', 'custodian_identity',
     'verifier_identity', 'principal_fingerprint', 'host_fingerprint', 'deployment_target',
@@ -79,18 +83,29 @@ P_SPEC = S.record('ap06-producer-observations', {
         'completed':S.array(custody.RETRIEVAL), 'observed':S.CLOCK}})
 
 
+def full_source_spec(name):
+    """A v2 envelope never lets reduced bootstrap observations stand in for DR."""
+    prospective_catalogue = dict(CATALOGUE_SPEC, actions=S.array({
+        'identity':PROSPECTIVE_IDENTITY, 'scope':S.enum('DISPATCH','COPY_ONLY'),
+        'valid_from':'time','valid_until':'time'}))
+    dr_spec = {'catalogue':prospective_catalogue,'highwater':HIGHWATER_SPEC,'producer':P_SPEC}[name]
+    control_spec = {'catalogue':epoch.CATALOGUE,'highwater':epoch.HIGHWATER,'producer':epoch.OBSERVATIONS}[name]
+    return dict(schema_version=S.enum(2), kind=S.enum('ap06-prospective-full-'+name),
+        source_identity='sha', dr=dr_spec, control=control_spec)
+
+
 def refuse():
     raise ValueError('POLICY_B_AUTHORITY_REFUSED') from None
 
 
-def strict(raw, spec=None):
+def strict(raw, spec=None, checker=S.check):
     if type(raw) is not bytes or not 0 < len(raw) <= MAX_BYTES:
         refuse()
     doc = dr.database.strict_json(raw)
     if dr.canonical(doc) != raw:
         refuse()
     if spec is not None:
-        S.check(doc, spec)
+        checker(doc, spec)
     return doc
 
 
@@ -144,7 +159,27 @@ class PreviouslyApprovedAnchor:
     owner_uid: int
 
 
+def prospective_anchor(doc):
+    return type(doc) is dict and doc.get('schema_version') == 2 and doc.get('kind') in (
+        'ap06-prospective-epoch-anchor', 'ap06-prospective-full-anchor')
+
+
+def validate_enrolled_paths(doc):
+    canonical_path(doc['evidence_root'])
+    paths = []
+    for value in doc['sources'].values():
+        paths.append(str(canonical_path(value['path'])))
+    if (len(paths) != len(set(paths))
+            or len({x['identity'] for x in doc['sources'].values()}) != len(paths)
+            or any(Path(x).is_relative_to(Path(doc['evidence_root'])) for x in paths)):
+        refuse()
+
+
 def validate_anchor(doc):
+    if prospective_anchor(doc):
+        (epoch.validate_full_anchor if doc['kind'] == 'ap06-prospective-full-anchor' else epoch.validate_anchor)(doc)
+        validate_enrolled_paths(doc)
+        return
     if type(doc) is not dict or set(doc) not in (ANCHOR_KEYS, ANCHOR_KEYS | {'legacy_genesis'}) or type(doc['schema_version']) is not int or doc['schema_version'] != 1 or doc['kind'] != 'ap06-previously-approved-anchor':
         refuse()
     for field in ('decision_id',): S.check(doc[field], 'id')
@@ -196,6 +231,8 @@ class VVerifier:
         if dr.canonical(enrollment.document) != enrollment.raw or dr.sha(enrollment.raw) != enrollment.sha256: refuse()
         self.anchor = copy.deepcopy(enrollment)
         self.doc = self.anchor.document
+        self.prospective = prospective_anchor(self.doc)
+        self.bootstrap = self.doc['kind'] == 'ap06-prospective-epoch-anchor'
         self.console = console or ForegroundConsole()
         self.native_verifier = native_verifier
         self.native_genesis_verifier = native_genesis_verifier
@@ -206,6 +243,7 @@ class VVerifier:
         self.minimum_generation = self.doc['initial_checkpoint']['catalogue_generation']
         self.minimum_revocation = max(self.doc['revocation_generation'], self.doc['initial_checkpoint']['revocation_generation'])
         self.checkpoint = dict(self.doc['initial_checkpoint'])
+        self.control_checkpoint = dict(self.doc['initial_checkpoint'] if self.bootstrap else self.doc.get('control_checkpoint', {}))
         self.last_validation = None
         self.round_snapshot = None
         self.source_bytes = {}
@@ -215,8 +253,13 @@ class VVerifier:
         raw = protected_read(pin['path'], pin['owner_uid'])
         self.source_bytes[name] = raw
         if sum(map(len,self.source_bytes.values())) + len(self.anchor.raw) > MAX_BYTES: refuse()
-        parsed = strict(raw, spec)
+        full_producer = self.prospective and not self.bootstrap and name == 'producer' and spec is P_SPEC
+        parsed = strict(raw, full_source_spec(name) if full_producer else spec, checker=epoch.check if self.prospective else S.check)
         if parsed['source_identity'] != pin['identity']: refuse()
+        if full_producer:
+            if any(parsed[k]['source_identity'] != pin['identity'] for k in ('dr','control')): refuse()
+            self.control_producer = parsed['control']
+            return raw, parsed['dr']
         return raw, parsed
 
     def now(self):
@@ -225,6 +268,7 @@ class VVerifier:
         wall, mono = time.time(), time.monotonic()
         measured = clock['measured']
         error = measured['error_seconds']
+        if self.prospective and not 0 < error <= 59: refuse()
         # A concrete enrolled synchronization measurement binds this machine's
         # wall and monotonic clocks. Reading it does not renew its measurement.
         utc = S.timestamp(measured['utc'])
@@ -249,6 +293,8 @@ class VVerifier:
                 if protected_read(pin['path'],pin['owner_uid']) != raw: refuse()
 
     def acquire_catalogue(self, nonce, identity, scope):
+        if self.prospective:
+            return self.acquire_prospective_catalogue(nonce, identity, scope)
         self.source_bytes = {}
         now = self.now()
         self.unexpired(self.doc['valid_from'],self.doc['valid_until'],now)
@@ -275,15 +321,240 @@ class VVerifier:
         self.catalogue,self.highwater,self.action_authority=cat,high,matching[0]
         return cat,now
 
+    def read_documents(self, refs):
+        documents = {}
+        total = sum(map(len, self.source_bytes.values())) + len(self.anchor.raw)
+        for ref in refs:
+            S.check(ref, 'sha')
+            if ref in documents: refuse()
+            raw = dr.read_regular(Path(self.doc['evidence_root']) / ref, MAX_BYTES)
+            total += len(raw)
+            if total > MAX_BYTES or dr.sha(raw) != ref: refuse()
+            documents[ref] = raw
+        return documents
+
+    def transport_enrollment(self):
+        """Resolve public transport facts from U's immutable binding, never the CLI."""
+        if not self.prospective: refuse()
+        def get(ref, spec):
+            raw = dr.read_regular(Path(self.doc['evidence_root'])/ref, MAX_BYTES)
+            if dr.sha(raw) != ref: refuse()
+            return strict(raw, spec, checker=epoch.check)
+        binding = get(self.doc['bootstrap_binding_sha256'], epoch.BINDING)
+        if any(binding[k] != self.doc[k] for k in ('epoch_id','domain_identity_sha256',
+                'source_sha','source_tree','tooling_sha256','python_version',
+                'isolation_method_sha256','clock_method_sha256','protected_selection_policy_sha256')): refuse()
+        facts = get(binding['enrollment_facts_sha256'], epoch.ENROLLMENT)
+        if (any(facts[k] != self.doc[k] for k in ('epoch_id','domain_identity_sha256',
+                'principal_fingerprint','host_fingerprint','python_version','enrollment_spec_sha256'))
+                or facts['verifier_identity_sha256'] != self.doc['verifier_identity']
+                or facts['observer_identity_sha256'] != self.doc['sources']['producer']['identity']
+                or facts['source'] != dict(commit=self.doc['source_sha'],tree=self.doc['source_tree'],tooling_sha256=self.doc['tooling_sha256'])
+                or facts['principal_fingerprint'] in facts['excluded_principal_fingerprints']
+                or facts['endpoint']['host'] == '178.20.209.5'): refuse()
+        if len(set(facts['excluded_principal_fingerprints'])) != len(facts['excluded_principal_fingerprints']): refuse()
+        runtime = get(facts['verifier_runtime_sha256'], epoch.RUNTIME)
+        executable = Path(sys.executable).resolve(strict=True)
+        if (runtime['role'] != 'V' or runtime['python_version'] != '3.12.3' or platform.python_version() != runtime['python_version']
+                or runtime['executable_path'] != str(executable)
+                or runtime['executable_sha256'] != dr.sha(dr.read_regular(executable, MAX_BYTES))): refuse()
+        self.recheck_sources()
+        return copy.deepcopy(facts)
+
+    def bootstrap_source_binding(self):
+        raw = dr.read_regular(Path(self.doc['evidence_root']) / self.doc['bootstrap_binding_sha256'], MAX_BYTES)
+        if dr.sha(raw) != self.doc['bootstrap_binding_sha256']: refuse()
+        binding = strict(raw, epoch.BINDING, checker=epoch.check)
+        epoch.validate_binding(binding)
+        if any(binding[k] != self.doc[k] for k in (
+                'epoch_id', 'domain_identity_sha256', 'source_sha', 'source_tree',
+                'tooling_sha256', 'python_version', 'protected_selection_policy_sha256',
+                'isolation_method_sha256', 'clock_method_sha256')): refuse()
+        toolsraw = dr.read_regular(Path(self.doc['evidence_root']) / binding['tooling_sha256'], MAX_BYTES)
+        if dr.sha(toolsraw) != binding['tooling_sha256']: refuse()
+        tools = strict(toolsraw, S.array({'path':'tool-path','version':'version','sha256':'sha'}))
+        # Bootstrap has no fabricated DR binding. Check exactly the same complete
+        # executable closure and immutable Git/runtime observations directly.
+        env = {k:v for k,v in os.environ.items() if k in ('PATH','HOME','TMPDIR')}
+        env['GIT_OPTIONAL_LOCKS'] = '0'
+        def git(*args):
+            return subprocess.run(['git','--no-replace-objects','-c','core.fsmonitor=false',
+                '-C',str(ROOT),*args], env=env, check=True, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE).stdout.decode().strip()
+        if (git('rev-parse','HEAD') != self.doc['source_sha']
+                or git('rev-parse','HEAD^{tree}') != self.doc['source_tree']
+                or git('status','--porcelain','--untracked-files=all')
+                or dr.tooling(ROOT) != tools or platform.python_version() != '3.12.3'
+                or binding['python_version'] != '3.12.3'):
+            refuse()
+        return dict(binding, tools=tools)
+
+    def acquire_prospective_catalogue(self, nonce, identity, scope):
+        self.source_bytes = {}
+        now = self.now()
+        self.unexpired(self.doc['valid_from'], self.doc['valid_until'], now)
+        catraw, cat = self.source('catalogue', epoch.CATALOGUE if self.bootstrap else full_source_spec('catalogue'))
+        highraw, high = self.source('highwater', epoch.HIGHWATER if self.bootstrap else full_source_spec('highwater'))
+        dr_cat = dr_high = None
+        if not self.bootstrap:
+            for name, value in (('catalogue',cat),('highwater',high)):
+                if any(value[k]['source_identity'] != self.doc['sources'][name]['identity'] for k in ('dr','control')): refuse()
+            dr_cat, dr_high = cat['dr'], high['dr']
+            cat, high = cat['control'], high['control']
+        self.round_snapshot = {'catalogue':catraw, 'highwater':highraw}
+        for record in (cat, high):
+            if (record['epoch_id'] != self.doc['epoch_id']
+                    or dr.age(record['observed'], now) > 300
+                    or self.remaining(record['expires_at'], now) <= 0): refuse()
+        if (cat['generation'] < self.minimum_generation
+                or cat['revocation_generation'] < self.minimum_revocation
+                or high['catalogue_generation'] != cat['generation']
+                or high['revocation_generation'] != cat['revocation_generation']
+                or high['control_sequence'] != cat['control_sequence']
+                or high['control_head_sha256'] != cat['control_head_sha256']): refuse()
+        roots = {self.anchor.sha256, self.doc['verifier_identity'], self.doc['custodian_identity'],
+            self.doc['clock_method_sha256'], self.doc['isolation_method_sha256'],
+            self.doc['bootstrap_binding_sha256'], self.doc['epoch_id'], self.doc['domain_identity_sha256'],
+            *[x['identity'] for x in self.doc['sources'].values()]}
+        if roots & set(cat['revoked']) or scope not in self.doc['scopes']: refuse()
+        matching = [x for x in cat['actions'] if x['identity'] == identity and x['scope'] == scope]
+        if len(matching) != 1: refuse()
+        self.unexpired(matching[0]['valid_from'], matching[0]['valid_until'], now)
+        if {identity['intent_sha256'], dr.digest(identity), dr.digest(matching[0])} & set(cat['revoked']): refuse()
+        prompt = ('C '+self.doc['custodian_identity']+': confirm current complete prospective control '
+            'catalogue including unresolved transactions/revocations; epoch '+self.doc['epoch_id']+
+            ' source '+cat['source_identity']+' sequence '+str(cat['control_sequence'])+
+            ' head '+cat['control_head_sha256']+' revocation '+str(cat['revocation_generation'])+
+            ' expires '+cat['expires_at']+
+            ('' if dr_cat is None else ' DR sequence '+str(dr_cat['ledger_sequence'])+' head '+dr_cat['ledger_head_sha256']+' latest '+dr_cat['latest_attempt_outcome'])+
+            '; type nonce '+nonce+': ')
+        if self.console.ask(prompt, time.monotonic()+300) != nonce: refuse()
+        self.recheck_sources()
+        self.control_catalogue, self.control_highwater = cat, high
+        self.catalogue, self.highwater, self.action_authority = cat, high, matching[0]
+        if not self.bootstrap:
+            for record in (dr_cat, dr_high):
+                if dr.age(record['observed'],now)>300 or self.remaining(record['expires_at'],now)<=0: refuse()
+            if (dr_cat['generation'] != cat['generation'] or dr_cat['revocation_generation'] != cat['revocation_generation']
+                    or dr_high['catalogue_generation'] != dr_cat['generation'] or dr_high['revocation_generation'] != dr_cat['revocation_generation']
+                    or dr_high['ledger_sequence'] != dr_cat['ledger_sequence'] or dr_high['ledger_head_sha256'] != dr_cat['ledger_head_sha256']
+                    or set(dr_cat['revoked']) != set(cat['revoked'])
+                    or roots & set(dr_cat['revoked'])): refuse()
+            dr_matches = [x for x in dr_cat['actions'] if x['identity']==identity and x['scope']==scope]
+            if len(dr_matches)!=1 or dr_matches[0] != matching[0]: refuse()
+            self.catalogue, self.highwater = dr_cat, dr_high
+        return self.catalogue, now
+
+    def validate_full_control(self, binding, *, identity, scope, documents, now):
+        if self.bootstrap or not self.prospective: refuse()
+        basis = epoch.validate_current(self.doc, self.control_catalogue, self.control_highwater,
+            self.control_producer, documents, now, identity=identity, scope=scope,
+            checkpoint=self.control_checkpoint)
+        bootstrap_raw = documents.get(self.doc['bootstrap_anchor_sha256'])
+        if bootstrap_raw is None: refuse()
+        bootstrap = strict(bootstrap_raw)
+        epoch.validate_full_transition(self.doc, bootstrap, basis, binding)
+        # The control attachment must reference a real prefix of the complete DR
+        # ledger selected by C now, not another ledger sharing only a binding.
+        evidence = dr.Evidence(documents)
+        current_ledger = evidence.get(self.catalogue['ledger_sha256'], 'ledger')
+        attached = False
+        for kind, raw in basis.event_payloads:
+            if kind != 'DR_BINDING_ATTACHED': continue
+            row = strict(raw)
+            if row['binding_sha256'] != self.doc['binding_sha256']: continue
+            prior = evidence.get(row['dr_ledger_sha256'], 'ledger')
+            if (prior['binding_sha256'] != self.doc['binding_sha256']
+                    or prior['head_sequence'] != len(prior['events'])
+                    or prior['events'][-1] != row['dr_head_sha256']): refuse()
+            if current_ledger['events'][:len(prior['events'])] == prior['events']:
+                attached = True
+        if not attached: refuse()
+        self.control_basis = basis
+        return basis
+
+    def acquire_full_control(self, binding, identity, scope):
+        refs = sorted(set(self.catalogue['documents']) | set(self.control_catalogue['documents']))
+        documents = self.read_documents(refs)
+        raw, producer = self.source('producer', P_SPEC)
+        self.round_snapshot['producer'] = raw
+        now = self.now()
+        if (producer['binding_sha256'] != self.doc['binding_sha256']
+                or dr.age(producer['observed'],now)>300 or self.remaining(producer['expires_at'],now)<=0): refuse()
+        self.validate_full_control(binding, identity=identity, scope=scope, documents=documents, now=now)
+        self.recheck_sources()
+
+    def ratchet_control(self):
+        cat = self.control_catalogue
+        self.control_checkpoint = dict(catalogue_generation=cat['generation'],control_sequence=cat['control_sequence'],
+            control_head_sha256=cat['control_head_sha256'],revocation_generation=cat['revocation_generation'])
+
+    def verify_prospective_genesis(self, challenge, context, echo, started):
+        request = self.genesis_request
+        if request is None or not self.bootstrap: refuse()
+        epoch.validate_request(request, identity=challenge['identity'], target=challenge['target'])
+        readback = challenge['genesis_mode'] == 'GENESIS_READBACK'
+        scope = 'PROSPECTIVE_ISOLATED_GENESIS_COPY' if readback else 'PROSPECTIVE_ISOLATED_GENESIS'
+        with adapter.bounded(300-(time.monotonic()-started)):
+            self.acquire_catalogue(challenge['nonce'], challenge['identity'], scope)
+            binding = self.source_binding()
+            if request['script_sha256'] != next(x['sha256'] for x in binding['tools'] if x['path']=='scripts/v126-cutover.sh'): refuse()
+            documents = self.genesis_documents()
+            praw, producer = self.source('producer', epoch.OBSERVATIONS)
+            self.round_snapshot['producer'] = praw
+            now = self.now()
+            basis = epoch.validate_basis(request, self.doc, self.catalogue, self.highwater,
+                producer, documents, now, checkpoint=self.control_checkpoint, readback=readback)
+            cat = self.catalogue
+            if readback:
+                if (cat['completion_sha256'] is None
+                        or cat['completion_sha256'] != challenge['genesis_completion_sha256']): refuse()
+            else:
+                if cat['completion_sha256'] is not None: refuse()
+                self.unexpired(request['created_at'], request['expires_at'], now)
+            refs = {dr.digest(request), dr.digest(challenge['identity']), dr.digest(self.action_authority)}
+            if cat['completion_sha256'] is not None: refs.add(cat['completion_sha256'])
+            if refs & set(cat['revoked']): refuse()
+            self.recheck_sources()
+            final = self.now(); dr.chronology(now, final)
+            reserve = 0 if readback else context.action_seconds+600
+            elapsed = max(0, S.timestamp(final['utc'])+final['error_seconds']-S.timestamp(now['utc'])+now['error_seconds'])
+            authority = self.remaining(self.action_authority['valid_until'], final)-reserve
+            vector = dict(anchor=self.remaining(self.doc['valid_until'], final)-reserve,
+                clock=min(300-dr.age(self.clock_record['measured'],final),self.remaining(self.clock_record['expires_at'],final)),
+                catalogue=min(300-dr.age(cat['observed'],final),self.remaining(cat['expires_at'],final),
+                    300-dr.age(self.highwater['observed'],final),self.remaining(self.highwater['expires_at'],final)),
+                authority=authority,
+                inventory=min(300-dr.age(producer['observed'],final),self.remaining(producer['expires_at'],final)),
+                disposition=basis.headroom-elapsed)
+            if not readback:
+                vector['disposition'] = min(vector['disposition'], self.remaining(request['expires_at'],final)-reserve)
+            if set(vector) != genesis.EXPIRY_KEYS or any(type(x) not in (int,float) or not math.isfinite(x) or x <= 0 for x in vector.values()): refuse()
+        if not 0 <= time.monotonic()-started <= 300: refuse()
+        if challenge['sequence'] == 1: self.sessions[challenge['session_id']]['admitted'] = True
+        self.minimum_generation = cat['generation']; self.minimum_revocation = cat['revocation_generation']
+        self.control_checkpoint = dict(catalogue_generation=cat['generation'],control_sequence=cat['control_sequence'],
+            control_head_sha256=cat['control_head_sha256'],revocation_generation=cat['revocation_generation'])
+        self.checkpoint = dict(self.control_checkpoint)
+        self.last_validation = basis
+        serialized = epoch.durable_basis(request, basis)
+        return dict(echo, decision='PASS', barrier=scope, qualification_sha256=request['isolation_proof_sha256'],
+            catalogue_head_sha256=cat['control_head_sha256'],catalogue_sequence=cat['control_sequence'],
+            revocation_generation=cat['revocation_generation'],pins_sha256=dr.digest(serialized),
+            native_stage7_sha256=None,native_manifest_sha256=None,expiry=vector,prospective_basis=serialized)
+
     def authorize_action(self, identity, target=None, scope='COPY_ONLY'):
         """COPY_ONLY has independent approval/currentness, without R0/readiness."""
-        S.check(identity,IDENTITY)
+        S.check(identity, PROSPECTIVE_IDENTITY if self.prospective else IDENTITY)
+        if self.bootstrap: refuse()
         if target is not None and str(target)!=self.doc['deployment_target']: refuse()
         if identity['release_sha'] != self.doc['source_sha'] or scope not in ('COPY_ONLY','DISPATCH'): refuse()
         with adapter.bounded(300):
             nonce=secrets.token_hex(32)
             self.acquire_catalogue(nonce,identity,scope)
             binding=self.source_binding()
+            if self.prospective:
+                self.acquire_full_control(binding, identity, scope)
             if identity['script_sha256'] != next(x['sha256'] for x in binding['tools'] if x['path']=='scripts/v126-cutover.sh'): refuse()
             self.recheck_sources()
             now=self.now()
@@ -292,6 +563,11 @@ class VVerifier:
                 300-dr.age(self.catalogue['observed'],now),self.remaining(self.catalogue['expires_at'],now),
                 300-dr.age(self.highwater['observed'],now),self.remaining(self.highwater['expires_at'],now),
                 300-dr.age(self.clock_record['measured'],now),self.remaining(self.clock_record['expires_at'],now))
+            if self.prospective:
+                expiry = min(expiry, self.control_basis.headroom,
+                    300-dr.age(self.control_catalogue['observed'],now),self.remaining(self.control_catalogue['expires_at'],now),
+                    300-dr.age(self.control_highwater['observed'],now),self.remaining(self.control_highwater['expires_at'],now))
+                self.ratchet_control()
             if not math.isfinite(expiry) or expiry<=0: refuse()
             return {'anchor_sha256':self.anchor.sha256,'catalogue_head_sha256':self.catalogue['ledger_head_sha256'],
                     'revocation_generation':self.catalogue['revocation_generation'],'expiry':expiry}
@@ -299,14 +575,17 @@ class VVerifier:
     def challenge(self, value):
         expected={'version','type','session_id','nonce','sequence','phase','operation_id','identity','target','timeout','history_sha256',
                   'anchor_sha256','anchor_generation','manifest_sha256','source_tree','tooling_sha256','runtime','principal_fingerprint','host_fingerprint','native_history'}
+        if self.prospective: expected.add('epoch')
         if type(value) is dict and type(value.get('identity')) is dict and value['identity'].get('kind')=='TARGET_BIND':
             expected |= {'genesis_mode','genesis_completion_sha256'}
-        if type(value) is not dict or set(value)!=expected or value['version']!=1 or value['type']!='CHALLENGE': refuse()
-        S.check(value['identity'],IDENTITY)
+        if type(value) is not dict or set(value)!=expected or value['version']!=(2 if self.prospective else 1) or value['type']!='CHALLENGE': refuse()
+        S.check(value['identity'], PROSPECTIVE_IDENTITY if self.prospective else IDENTITY)
         for key in ('session_id','nonce','operation_id','history_sha256','anchor_sha256','tooling_sha256'): S.check(value[key],'sha')
         S.check(value['manifest_sha256'],S.optional('sha')); S.check(value['source_tree'],'git')
         if value['sequence'] not in (1,2) or type(value['sequence']) is not int or value['phase'] != ('EARLY' if value['sequence']==1 else 'LATE'): refuse()
         identity=value['identity']
+        if self.prospective and (value['epoch'] != epoch.epoch_context(self.doc) or any(identity[k] != self.doc[k] for k in ('epoch_id','domain_identity_sha256'))): refuse()
+        if self.bootstrap and identity['name'] != 'PROSPECTIVE_ISOLATED_GENESIS': refuse()
         if (dr.digest(identity)!=value['operation_id'] or identity['release_sha']!=self.doc['source_sha']
                 or value['target']!=self.doc['deployment_target'] or value['anchor_sha256']!=self.anchor.sha256
                 or value['anchor_generation']!=self.doc['generation'] or value['source_tree']!=self.doc['source_tree']
@@ -316,7 +595,8 @@ class VVerifier:
         if type(native_history) is not list or len(native_history)>20: refuse()
         for row in native_history:
             if type(row) is not dict or set(row)!={'identity','request_sha256','result_sha256','log_sha256','completed_at','artifacts'}: refuse()
-            S.check(row['identity'],IDENTITY)
+            S.check(row['identity'], PROSPECTIVE_IDENTITY if self.prospective else IDENTITY)
+            if self.prospective and any(row['identity'][k] != self.doc[k] for k in ('epoch_id','domain_identity_sha256')): refuse()
             for key in ('request_sha256','result_sha256','log_sha256'): S.check(row[key],'sha')
             # Existing operation history uses datetime.isoformat(), whereas AP01
             # documents use seconds + Z. Keep the native bytes and its UTC format.
@@ -325,12 +605,14 @@ class VVerifier:
             parsed=datetime.fromisoformat(stamp.replace('Z','+00:00'))
             if parsed.utcoffset().total_seconds()!=0: refuse()
             S.check(row['artifacts'],S.array({'name':'id','sha256':'sha'},0))
-        is_r0=identity['name'] in ('BASELINE_VERIFIED','RUN_INITIALIZED','LEGACY_GENESIS')
+        is_r0=identity['name'] in ('BASELINE_VERIFIED','RUN_INITIALIZED','LEGACY_GENESIS','PROSPECTIVE_ISOLATED_GENESIS')
         if (is_r0 and native_history) or (not is_r0 and not 1<=len(native_history)<=20): refuse()
         if identity['kind']=='INIT':
             if identity['name']!='RUN_INITIALIZED' or identity['action']!='initialize-run' or value['manifest_sha256'] is None: refuse()
         elif identity['kind']=='TARGET_BIND':
-            if identity['name']!='LEGACY_GENESIS' or identity['action']!='bind-legacy-target' or value['manifest_sha256']!=identity['intent_sha256']: refuse()
+            wanted = ('PROSPECTIVE_ISOLATED_GENESIS', 'bind-isolated-target') if self.bootstrap else ('LEGACY_GENESIS', 'bind-legacy-target')
+            if self.prospective and not self.bootstrap: refuse()
+            if (identity['name'], identity['action']) != wanted or value['manifest_sha256']!=identity['intent_sha256']: refuse()
             if value['genesis_mode'] not in ('EXECUTE','GENESIS_READBACK'): refuse()
             S.check(value['genesis_completion_sha256'], S.optional('sha'))
             if (value['genesis_mode']=='EXECUTE') != (value['genesis_completion_sha256'] is None): refuse()
@@ -345,9 +627,12 @@ class VVerifier:
             self.sessions[value['session_id']]={'binding':binding,'admitted':False}
         elif session is None or session['binding']!=binding or session['admitted'] is not True: refuse()
         else: del self.sessions[value['session_id']]
-        return adapter.Context(identity['run_id'],identity['release_sha'],identity['script_sha256'],identity['name'],identity['action'],value['target'],value['timeout'])
+        return adapter.Context(identity['run_id'],identity['release_sha'],identity['script_sha256'],identity['name'],identity['action'],value['target'],value['timeout'], epoch=epoch.epoch_context(self.doc) if self.prospective else None)
 
     def source_binding(self):
+        if self.prospective: self.transport_enrollment()
+        if self.bootstrap:
+            return self.bootstrap_source_binding()
         raw=dr.read_regular(Path(self.doc['evidence_root'])/self.doc['binding_sha256'],MAX_BYTES)
         if dr.sha(raw)!=self.doc['binding_sha256']: refuse()
         binding=dr.parse(raw,'binding')
@@ -360,7 +645,8 @@ class VVerifier:
         cat=self.catalogue
         documents={}
         total=sum(map(len,self.source_bytes.values()))+len(self.anchor.raw)
-        for ref in cat['documents']:
+        refs = cat['documents'] if not self.prospective else sorted(set(cat['documents']) | set(self.control_catalogue['documents']))
+        for ref in refs:
             S.check(ref,'sha')
             if ref in documents: refuse()
             raw=dr.read_regular(Path(self.doc['evidence_root'])/ref,MAX_BYTES)
@@ -372,6 +658,7 @@ class VVerifier:
         if (dr.digest(binding['tools'])!=self.doc['tooling_sha256'] or binding['python_version']!=self.doc['python_version']
                 or any(binding[k]!=self.doc[k] for k in ('source_sha','source_tree','target_sha256','source_identity_sha256','database_semantics_sha256','data_runtime','restore_runtime'))): refuse()
         dr.verify_checkout(binding,ROOT,require_clean=True)
+        if self.prospective: self.transport_enrollment()
         ledger=evidence.get(cat['ledger_sha256'],'ledger')
         cp=self.checkpoint
         if (ledger['head_sequence']!=cat['ledger_sequence'] or ledger['events'][-1]!=cat['ledger_head_sha256']
@@ -384,6 +671,8 @@ class VVerifier:
                 or any(producer[k]!=self.doc[k] for k in ('source_sha','source_tree','python_version','target_sha256','data_runtime','restore_runtime'))
                 or dr.age(producer['observed'],now)>300 or self.remaining(producer['expires_at'],now)<=0
                 or producer['ongoing_sha256']!=cat['ongoing_sha256']): refuse()
+        if self.prospective:
+            self.validate_full_control(binding, identity=self.current_challenge['identity'], scope='DISPATCH', documents=documents, now=now)
         revoked=set(cat['revoked'])
         auths=frozenset(cat['authorizations']); responses=frozenset(cat['responses'])
         observed=frozenset(producer['observed_evidence'])
@@ -418,7 +707,7 @@ class VVerifier:
         if cat['latest_attempt_outcome']!='QUALIFIED': refuse()
         pins=adapter.Pins(context.run_id,self.doc['deployment_target'],self.doc['source_sha'],self.doc['source_tree'],
             self.doc['target_sha256'],self.doc['source_identity_sha256'],self.doc['database_semantics_sha256'],
-            self.doc['data_runtime'],self.doc['restore_runtime'],selected['intent']['attempt_id'],self.doc['post_v126_recipe_sha256'])
+            self.doc['data_runtime'],self.doc['restore_runtime'],selected['intent']['attempt_id'],self.doc['post_v126_recipe_sha256'], epoch=epoch.epoch_context(self.doc) if self.prospective else None)
         self.producer,self.retrieval_proof,self.selected=producer,strict(proofraw,custody.PROOF_SCHEMA),selected
         self.custody_set=setdoc
         if sum(map(len,documents.values()))+sum(map(len,self.source_bytes.values()))+len(self.anchor.raw)>MAX_BYTES: refuse()
@@ -427,7 +716,8 @@ class VVerifier:
 
     def set_genesis_request(self, raw):
         request = strict(raw)
-        genesis.validate_request(request)
+        (epoch.validate_request if self.prospective else genesis.validate_request)(request)
+        if self.prospective and (not self.bootstrap or epoch.epoch_context(request) != epoch.epoch_context(self.doc)): refuse()
         if (request['source_sha'] != self.doc['source_sha'] or request['source_tree'] != self.doc['source_tree']
                 or request['tooling_sha256'] != self.doc['tooling_sha256'] or request['python_version'] != self.doc['python_version']
                 or request['target']['path'] != self.doc['deployment_target']
@@ -463,6 +753,8 @@ class VVerifier:
             seen.add(event['document_sha256']); previous = ref
 
     def verify_genesis(self, challenge, context, echo, started):
+        if self.bootstrap:
+            return self.verify_prospective_genesis(challenge, context, echo, started)
         request = self.genesis_request
         if request is None: refuse()
         genesis.validate_request(request, identity=challenge['identity'], target=challenge['target'])
@@ -559,6 +851,10 @@ class VVerifier:
             anchor=self.remaining(self.doc['valid_until'],now),
             clock=min(300-dr.age(self.clock_record['measured'],now),self.remaining(self.clock_record['expires_at'],now)),
             source_observations=min(300-dr.age(producer['observed'],now),self.remaining(producer['expires_at'],now)))
+        if self.prospective:
+            vector['source_observations'] = min(vector['source_observations'], self.control_basis.headroom,
+                300-dr.age(self.control_catalogue['observed'],now),self.remaining(self.control_catalogue['expires_at'],now),
+                300-dr.age(self.control_highwater['observed'],now),self.remaining(self.control_highwater['expires_at'],now))
         if set(vector)!=EXPIRY_KEYS or any(type(x) not in (int,float) or not math.isfinite(x) or x<=0 for x in vector.values()): refuse()
         return vector
 
@@ -568,7 +864,8 @@ class VVerifier:
         if type(challenge) is not dict: refuse()
         echo={k:challenge.get(k) for k in ('session_id','nonce','sequence','phase')}
         S.check(echo,{'session_id':'sha','nonce':'sha','sequence':S.enum(1,2),'phase':S.enum('EARLY','LATE')})
-        echo.update(version=1,type='RESULT',challenge_sha256=dr.digest(challenge))
+        echo.update(version=2 if self.prospective else 1,type='RESULT',challenge_sha256=dr.digest(challenge))
+        if self.prospective: echo['epoch'] = epoch.epoch_context(self.doc)
         try:
             started=time.monotonic()
             self.current_challenge=copy.deepcopy(challenge)
@@ -596,6 +893,7 @@ class VVerifier:
             self.last_validation=validation
             self.minimum_generation=self.catalogue['generation']; self.minimum_revocation=self.catalogue['revocation_generation']
             self.checkpoint=dict(catalogue_generation=self.catalogue['generation'],ledger_sequence=self.catalogue['ledger_sequence'],ledger_head_sha256=self.catalogue['ledger_head_sha256'],revocation_generation=self.catalogue['revocation_generation'])
+            if self.prospective: self.ratchet_control()
             native=validation['native']
             return dict(echo,decision='PASS',barrier=result['barrier'],qualification_sha256=result['qualification_sha256'],
                 catalogue_head_sha256=self.catalogue['ledger_head_sha256'],catalogue_sequence=self.catalogue['ledger_sequence'],

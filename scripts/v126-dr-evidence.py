@@ -672,13 +672,14 @@ def evaluate_ongoing(evidence, trust, ongoing_ref, now):
 
 
 def consume_barrier(evidence, trust, readiness_ref, ongoing_ref, now, *, purpose,
-                    requested_attempt, action_seconds=None, cutover=None, native_stage7=None):
+                    requested_attempt, action_seconds=None, cutover=None, native_stage7=None, native_epoch=None):
     """Versioned pure hook for callers under their existing target lock.
 
     The attended AP-06 verifier uses this consumer for same-lock INIT/dispatch.
     It replays the native stage7 chain with the existing verifier and pins exact
     bytes. Operational enrollment/evidence remain separate; raw JSON is not authority.
     """
+    validate_prospective_dr_binding(evidence, trust.binding_sha256, native_epoch)
     proof = evidence.get(readiness_ref, 'readiness')
     verify_consumer_authority(evidence, trust, proof['authorization_sha256'], now, purpose, 'AP-06')
     if (proof['binding_sha256'] != trust.binding_sha256 or proof['ledger_sha256'] != trust.ledger_sha256
@@ -700,7 +701,7 @@ def consume_barrier(evidence, trust, readiness_ref, ongoing_ref, now, *, purpose
                 or type(native_stage7) is not bytes or sha(native_stage7) != cutover['stage7_sha256']):
             fail('Q_RUN_OR_STAGE7_MISMATCH')
         require_observations([cutover['stage7_sha256'], cutover['native_manifest_sha256']], trust)
-        native = validate_native_stage7(native_stage7, cutover, trust.binding_sha256, evidence)
+        native = validate_native_stage7(native_stage7, cutover, trust.binding_sha256, evidence, native_epoch=native_epoch)
         artifacts = {x['name']: x['sha256'] for x in native['artifacts']}
         manifest = selected['manifest']
         if (artifacts['quiesced-backup-dump'] != manifest['artifacts']['application.dump']['sha256']
@@ -747,14 +748,41 @@ def validate_response(evidence, trust, binding, reference, now):
         return False
 
 
-def validate_native_stage7(raw, cutover, binding_ref, evidence):
-    """Inspect native v1 shape without upgrading it to the new DR schema."""
+def validate_prospective_dr_binding(evidence, binding_ref, expected_epoch):
+    binding = evidence.get(binding_ref, 'binding')
+    raw = evidence.documents.get(binding['source_identity_sha256'])
+    # Legacy source identities are opaque content-addressed bytes. Only the new
+    # typed identity requires JSON; keep the existing opaque legacy contract.
+    try:
+        descriptive = database.strict_json(raw) if type(raw) is bytes else None
+    except ValueError:
+        descriptive = None
+    prospective = type(descriptive) is dict and descriptive.get('kind') == 'prospective-dr-source-identity'
+    if expected_epoch is None:
+        if prospective:
+            fail('PROSPECTIVE_DR_EPOCH_CONTEXT_REQUIRED')
+        return
+    spec = importlib.util.spec_from_file_location('v126_dr_epoch_contract', ROOT / 'scripts/v126-authority-epoch.py')
+    epoch = importlib.util.module_from_spec(spec); sys.modules[spec.name] = epoch; spec.loader.exec_module(epoch)
+    epoch.check(expected_epoch, {k: 'sha' for k in ('epoch_id', 'domain_identity_sha256', 'predecessor_index_sha256')})
+    identity = epoch.strict(evidence.raw(binding['source_identity_sha256']), epoch.DR_SOURCE_IDENTITY)
+    if (epoch.epoch_context(identity) != expected_epoch
+            or any(identity[k] != binding[k] for k in ('source_sha','source_tree','database_semantics_sha256','data_runtime','restore_runtime'))
+            or identity['tooling_sha256'] != digest(binding['tools'])):
+        fail('PROSPECTIVE_DR_SOURCE_BINDING')
+
+
+def validate_native_stage7(raw, cutover, binding_ref, evidence, *, native_epoch=None):
+    """Inspect exact native shape; an epoch requires its independently bound DR identity."""
     try:
         doc = database.strict_json(raw)
         fields = {'artifacts', 'authorization_gate', 'authorization_receipt_sha256', 'completed_at',
                   'format_version', 'intent_sha256', 'predecessor_receipt_sha256', 'predecessor_stage',
                   'release_sha', 'result_category', 'run_id', 'script_sha256', 'stage'}
-        if type(doc) is not dict or set(doc) != fields or canonical(doc) != raw:
+        validate_prospective_dr_binding(evidence, binding_ref, native_epoch)
+        if native_epoch is not None:
+            fields.add('epoch')
+        if type(doc) is not dict or set(doc) != fields or canonical(doc) != raw or doc.get('epoch') != native_epoch:
             fail('NATIVE_STAGE7_INVALID')
         binding = evidence.get(binding_ref, 'binding')
         script_hash = next(x['sha256'] for x in binding['tools'] if x['path'] == 'scripts/v126-cutover.sh')

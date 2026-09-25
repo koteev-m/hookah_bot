@@ -118,7 +118,11 @@ def validate_init_manifest(manifest):
                 'maintenance_identities_file', 'release_parents', 'release_sha', 'release_tree',
                 'release_worktree', 'remote', 'run_id', 'script_sha256', 'staging_path',
                 'v125_image_tag', 'v126_image_id', 'v126_image_tag'}
-    if type(doc) is not dict or set(doc) != expected or type(doc['format_version']) is not int or doc['format_version'] != 1:
+    epoch = doc.get('epoch') if type(doc) is dict else None
+    if epoch is not None:
+        module('v126_policy_b_transport', 'v126-policy-b-transport.py').epoch_context(epoch)
+        expected.add('epoch')
+    if type(doc) is not dict or set(doc) != expected or type(doc['format_version']) is not int or doc['format_version'] != (2 if epoch is not None else 1):
         fail('INIT_MANIFEST_SCHEMA')
     def match(name, pattern):
         if type(doc[name]) is not str or re.fullmatch(pattern, doc[name]) is None:
@@ -207,6 +211,8 @@ def init_request(state, manifest):
     identity = dict(run_id=doc['run_id'], release_sha=doc['release_sha'],
                     script_sha256=doc['script_sha256'], intent_sha256=digest(manifest),
                     kind='INIT', name='RUN_INITIALIZED', action='initialize-run')
+    if 'epoch' in doc:
+        identity.update({k: doc['epoch'][k] for k in ('epoch_id', 'domain_identity_sha256')})
     checksum = (digest(manifest) + '\n').encode()
     metadata = dict(directories=list(STATE_DIRECTORIES), files=[
         dict(path='run.json', sha256=digest(manifest), size=len(manifest), mode=0o400),
@@ -373,7 +379,7 @@ def verify_native_stage7(state, context, native_history):
     manifest = read_protected(state / 'run.json')
     doc = strict(manifest)
     if (doc['run_id'] != context.run_id or doc['release_sha'] != context.release_sha
-            or doc['staging_path'] != context.target):
+            or doc['staging_path'] != context.target or doc.get('epoch') != getattr(context, 'epoch', None)):
         fail('NATIVE_STATE_BINDING')
     script = 'source "$1"; load_state "$2"; verify_receipt QUIESCED_BACKUP_REHEARSED >/dev/null'
     subprocess.run(['bash', '-c', script, 'v126-native-verifier', str(SOURCE), str(state)],
@@ -403,13 +409,18 @@ def read_local_stream(path, source):
     """Decode generated data only; the old client-provided shell loader is never executed."""
     with open(path, 'rb') as handle:
         prefix = handle.read(2 * 1024 * 1024)
-        magic = b'\nV126_INTERNAL_REMOTE_ENVELOPE_V1\n'
+        magics = (b'\nV126_INTERNAL_REMOTE_ENVELOPE_V1\n', b'\nV126_INTERNAL_REMOTE_ENVELOPE_V2\n')
+        if sum(prefix.count(m) for m in magics) != 1:
+            fail('LOCAL_ENVELOPE_MAGIC')
+        magic = next(m for m in magics if m in prefix)
+        prospective = magic == magics[1]
+        names = ENVELOPE_NAMES + (('AUTHORITY_EPOCH_ID', 'DOMAIN_IDENTITY_SHA256') if prospective else ())
         if prefix.count(magic) != 1:
             fail('LOCAL_ENVELOPE_MAGIC')
         start = prefix.index(magic) + len(magic)
         handle.seek(start)
         values = []
-        for _ in range(len(ENVELOPE_NAMES) + 1):
+        for _ in range(len(names) + 1):
             raw = handle.readline(4097)
             if len(raw) > 4096 or not raw.endswith(b'\n') or b'\x00' in raw or b'\r' in raw:
                 fail('LOCAL_ENVELOPE_FIELD')
@@ -425,7 +436,7 @@ def read_local_stream(path, source):
             args.append(raw[:-1].decode('ascii'))
         if handle.read(len(source)) != source:
             fail('LOCAL_ENVELOPE_SOURCE')
-        environment = {'V126_INTERNAL_REMOTE_' + k: v for k, v in zip(ENVELOPE_NAMES, values)}
+        environment = {'V126_INTERNAL_REMOTE_' + k: v for k, v in zip(names, values)}
         environment['V126_INTERNAL_REMOTE_MODE'] = 'true'
         environment['V126_INTERNAL_REMOTE_ENVELOPE_VALIDATED'] = 'V126_INTERNAL_REMOTE_ENVELOPE_V1'
         action = environment['V126_INTERNAL_REMOTE_ACTION']
@@ -441,6 +452,11 @@ def read_local_stream(path, source):
             fail('LOCAL_ENVELOPE_TRAILING_BYTES')
         identity = dict(run_id=values[1], release_sha=values[2], script_sha256=values[4],
                         intent_sha256=values[12], kind=values[6], name=values[7], action=values[0])
+        if prospective:
+            pair = dict(epoch_id=values[-2], domain_identity_sha256=values[-1])
+            if any(not re.fullmatch('[0-9a-f]{64}', v) for v in pair.values()):
+                fail('LOCAL_ENVELOPE_EPOCH')
+            identity.update(pair)
         return identity, args, environment, payload_offset
 
 
@@ -458,7 +474,7 @@ def native_history_snapshot(target, owner):
             start = bindings.binding_read(start_path)
             identity = start['identity']
             if (identity.get('kind') == 'STAGE' and identity.get('name') == stage
-                    and all(identity.get(k) == owner[k] for k in ('run_id', 'release_sha', 'script_sha256'))):
+                    and all(identity.get(k) == owner[k] for k in owner)):
                 matches.append((start_path, identity))
         if len(matches) != 1:
             fail('NATIVE_REMOTE_HISTORY_INCOMPLETE')
@@ -505,6 +521,9 @@ def compare_native_history(state, context, history):
         raw = read_protected(Path(state)/'receipts'/f'{index:02d}-{stage}.receipt.json')
         native = strict(raw)
         identity = observed['identity']
+        epoch = getattr(context, 'epoch', None)
+        if native.get('epoch') != epoch or {k: identity[k] for k in ('epoch_id', 'domain_identity_sha256') if k in identity} != ({k: epoch[k] for k in ('epoch_id', 'domain_identity_sha256')} if epoch else {}):
+            fail('NATIVE_REMOTE_EPOCH')
         if (identity.get('run_id') != context.run_id or identity.get('release_sha') != context.release_sha
                 or identity.get('script_sha256') != context.script_sha256
                 or identity.get('kind') != 'STAGE' or identity.get('name') != stage
@@ -559,11 +578,22 @@ def load_transport_config(path, manifest, enrollment):
     return options
 
 
+def validate_prospective_transport(verifier, options):
+    facts = verifier.transport_enrollment()
+    if any(options[key] != facts['endpoint'][key] for key in ('host', 'port', 'user')):
+        fail('PROSPECTIVE_ENDPOINT_MISMATCH')
+    if options['host_fingerprint'] != facts['host_fingerprint']:
+        fail('PROSPECTIVE_HOST_MISMATCH')
+
+
 def make_open(enrollment, manifest, identity, request, *, arguments=(), environment=None,
               completion=None, payload=None, mode='EXECUTE'):
     doc = enrollment.document
     initializing = identity['kind'] == 'INIT'
-    return dict(version=1, type='OPEN', mode=mode, session_id=os.urandom(32).hex(),
+    epoch = strict(manifest).get('epoch')
+    if epoch != (epoch_module().epoch_context(doc) if doc.get('schema_version') == 2 else None):
+        fail('MANIFEST_ENROLLED_EPOCH')
+    result = dict(version=2 if epoch else 1, type='OPEN', mode=mode, session_id=os.urandom(32).hex(),
                 anchor_sha256=enrollment.sha256, anchor_generation=doc['generation'],
                 principal_fingerprint=doc['principal_fingerprint'],
                 host_fingerprint=doc['host_fingerprint'], identity=identity,
@@ -574,11 +604,22 @@ def make_open(enrollment, manifest, identity, request, *, arguments=(), environm
                 runtime=doc['python_version'], worker_args=list(arguments),
                 environment=environment or {}, init_request=request if initializing else None,
                 init_completion=completion, payload=payload)
+    if epoch:
+        result['epoch'] = epoch
+    return result
 
 
 def complete_proof(request, result):
     return dict(request=request, result=result, request_sha256=digest(canonical(request)),
                 result_sha256=digest(canonical(result)))
+
+
+def epoch_module():
+    return module('v126_authority_epoch', 'v126-authority-epoch.py')
+
+
+def prospective_request(request):
+    return type(request) is dict and request.get('kind') == 'prospective-isolated-genesis-request'
 
 
 def genesis_module():
@@ -587,7 +628,7 @@ def genesis_module():
 
 def verify_genesis_source(request):
     """The proposal never grants authority to substitute source/tool identities."""
-    g = genesis_module()
+    g = epoch_module() if prospective_request(request) else genesis_module()
     g.validate_request(request)
     def git(*args):
         return subprocess.check_output(['git', '--no-optional-locks', '-C', str(ROOT), *args],
@@ -641,10 +682,21 @@ def prepare_target_binding(args):
         python_version='.'.join(map(str, sys.version_info[:3])),
         target=dict(path=doc['staging_path'], device=args.target_device, inode=args.target_inode,
                     uid=args.target_uid, host_fingerprint=args.host_fingerprint),
-        next_init_manifest_sha256=digest(manifest), inventory_sha256=args.inventory_sha256,
+        next_init_manifest_sha256=digest(manifest), inventory_sha256=getattr(args, 'inventory_sha256', None),
         created_at=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
         expires_at=args.expires_at, nonce=os.urandom(32).hex())
-    genesis_module().validate_request(request)
+    if args.command == 'prepare-isolated-target-binding':
+        epoch = doc.get('epoch')
+        if epoch is None:
+            fail('PROSPECTIVE_INIT_MANIFEST_REQUIRED')
+        request.update(schema_version=2, kind='prospective-isolated-genesis-request',
+                       **epoch, isolation_proof_sha256=args.isolation_proof_sha256)
+        del request['inventory_sha256']
+        epoch_module().validate_request(request)
+    else:
+        if 'epoch' in doc:
+            fail('LEGACY_GENESIS_EPOCH_DOWNGRADE')
+        genesis_module().validate_request(request)
     raw = canonical(request)
     new_protected_metadata(args.proposal_file, raw)
     return dict(proposal_sha256=digest(raw), identity=genesis_identity(request),
@@ -652,13 +704,15 @@ def prepare_target_binding(args):
 
 
 def genesis_identity(request):
+    if prospective_request(request):
+        return epoch_module().request_identity(request)
     return dict(run_id=request['run_id'], release_sha=request['source_sha'],
                 script_sha256=request['script_sha256'], intent_sha256=digest(canonical(request)),
                 kind='TARGET_BIND', name='LEGACY_GENESIS', action='bind-legacy-target')
 
 
 def run_genesis_client(args):
-    if args.command == 'prepare-target-binding':
+    if args.command in ('prepare-target-binding', 'prepare-isolated-target-binding'):
         sys.stdout.buffer.write(canonical(prepare_target_binding(args)))
         return 0
     completion_path = Path(args.completion_file)
@@ -673,6 +727,9 @@ def run_genesis_client(args):
     if digest(raw) != args.proposal_sha256:
         fail('GENESIS_PROPOSAL_CHANGED')
     request = strict(raw)
+    prospective = prospective_request(request)
+    if prospective != (args.command in ('bind-isolated-target', 'copy-isolated-target-binding-completion')):
+        fail('GENESIS_MODE_MISMATCH')
     verify_genesis_source(request)
     authority = module('v126_policy_b_authority', 'v126-policy-b-authority.py')
     transport = module('v126_policy_b_transport', 'v126-policy-b-transport.py')
@@ -685,13 +742,13 @@ def run_genesis_client(args):
     identity = genesis_identity(request)
     verifier = authority.VVerifier(enrollment, None)
     verifier.set_genesis_request(raw)
-    mode = 'GENESIS_READBACK' if args.command == 'copy-target-binding-completion' else 'EXECUTE'
+    mode = 'GENESIS_READBACK' if args.command in ('copy-target-binding-completion', 'copy-isolated-target-binding-completion') else 'EXECUTE'
     if mode == 'GENESIS_READBACK' and args.authorization != 'AUTHORIZE_V126_GENESIS_COMPLETION_COPY':
         fail('GENESIS_COPY_AUTHORITY_REQUIRED')
     # U's independently approved anchor and exact catalogue action are acquired
     # by the real verifier on each fresh EARLY/LATE server challenge.
     doc = enrollment.document
-    opened = dict(version=1, type='OPEN', mode=mode, session_id=os.urandom(32).hex(),
+    opened = dict(version=2 if prospective else 1, type='OPEN', mode=mode, session_id=os.urandom(32).hex(),
         anchor_sha256=enrollment.sha256, anchor_generation=doc['generation'],
         principal_fingerprint=doc['principal_fingerprint'], host_fingerprint=doc['host_fingerprint'],
         identity=identity, target=request['target']['path'], request_sha256=digest(raw),
@@ -699,21 +756,27 @@ def run_genesis_client(args):
         tooling_sha256=request['tooling_sha256'], runtime=request['python_version'],
         worker_args=[], environment={}, init_request=None, init_completion=None, payload=None,
         genesis_request=request)
+    if prospective:
+        opened['epoch'] = epoch_module().epoch_context(request)
+        validate_prospective_transport(verifier, locator['ssh'])
     reply = transport.invoke_operation(locator['ssh'], opened, SOURCE.read_bytes(), verifier)
     if reply['status'] != 0:
         fail('GENESIS_OUTCOME_UNCONFIRMED')
     # Only copy completion returned by the same authenticated session. A lost
     # response never authorizes a second genesis and never removes local evidence.
     proof = reply['result']
-    expected = {'request', 'result', 'request_sha256', 'result_sha256', 'legacy_inventory', 'legacy_inventory_sha256'}
+    basis_key = 'prospective_basis' if prospective else 'legacy_inventory'
+    checksum_key = basis_key + '_sha256'
+    expected = {'request', 'result', 'request_sha256', 'result_sha256', basis_key, checksum_key}
     if (type(proof) is not dict or set(proof) != expected or proof['request'] != request
             or proof['request_sha256'] != digest(raw)
             or proof['result_sha256'] != digest(canonical(proof['result']))
-            or proof['legacy_inventory_sha256'] != request['inventory_sha256']
-            or proof['legacy_inventory_sha256'] != digest(canonical(proof['legacy_inventory']))):
+            or proof[checksum_key] != digest(canonical(proof[basis_key]))):
         fail('GENESIS_COMPLETION_SCHEMA')
+    if not prospective and proof[checksum_key] != request['inventory_sha256']:
+        fail('GENESIS_INVENTORY_CHANGED')
     bindings = module('v126_client_bindings', 'v126-operation-bindings.py')
-    bindings.binding_validate_genesis_completion(request, proof['result'], proof['legacy_inventory'],
+    bindings.binding_validate_genesis_completion(request, proof['result'], proof[basis_key],
                                                 request['target']['path'])
     new_protected_metadata(args.completion_file, canonical(proof))
     sys.stdout.buffer.write(canonical(dict(completion_sha256=digest(canonical(proof)),
@@ -722,7 +785,8 @@ def run_genesis_client(args):
 
 
 def run_client(args):
-    if args.command in ('prepare-target-binding', 'bind-legacy-target', 'copy-target-binding-completion'):
+    if args.command in ('prepare-target-binding', 'bind-legacy-target', 'copy-target-binding-completion',
+                        'prepare-isolated-target-binding', 'bind-isolated-target', 'copy-isolated-target-binding-completion'):
         return run_genesis_client(args)
     if args.command == 'verify-completion':
         require_completion(args.state_dir)
@@ -754,6 +818,8 @@ def run_client(args):
     enrollment = authority.load_enrolled_authority(args.policy_b_anchor)
     ssh_options = load_transport_config(args.policy_b_transport, manifest, enrollment)
     verifier = authority.VVerifier(enrollment, lambda context, history: verify_native_stage7(state, context, history))
+    if 'epoch' in doc:
+        validate_prospective_transport(verifier, ssh_options)
     source = SOURCE.read_bytes()
     if args.command in ('init', 'complete-init-copy'):
         request = init_request(state, manifest)
@@ -802,6 +868,12 @@ def run_client(args):
             or identity['release_sha'] != doc['release_sha']
             or identity['script_sha256'] != doc['script_sha256']):
         fail('LOCAL_OPERATION_BINDING')
+    expected_epoch = {k: doc['epoch'][k] for k in ('epoch_id', 'domain_identity_sha256')} if 'epoch' in doc else {}
+    if {k: identity[k] for k in ('epoch_id', 'domain_identity_sha256') if k in identity} != expected_epoch:
+        fail('LOCAL_OPERATION_EPOCH')
+    if 'epoch' in doc:
+        environment.update(V126_INTERNAL_REMOTE_AUTHORITY_EPOCH_ID=doc['epoch']['epoch_id'],
+                           V126_INTERNAL_REMOTE_DOMAIN_IDENTITY_SHA256=doc['epoch']['domain_identity_sha256'])
     request = dict(args=arguments, environment=environment)
     payload = None
     payload_metadata = None
@@ -849,14 +921,18 @@ def main():
             entry.add_argument('--stream-file', required=True)
         if command == 'complete-init-copy':
             entry.add_argument('--authorization', required=True)
-    for command in ('prepare-target-binding', 'bind-legacy-target', 'copy-target-binding-completion'):
+    for command in ('prepare-target-binding', 'bind-legacy-target', 'copy-target-binding-completion',
+                    'prepare-isolated-target-binding', 'bind-isolated-target', 'copy-isolated-target-binding-completion'):
         entry = sub.add_parser(command)
         entry.add_argument('--proposal-file', required=True)
-        if command == 'prepare-target-binding':
+        if command in ('prepare-target-binding', 'prepare-isolated-target-binding'):
             entry.add_argument('--state-dir', required=True)
             entry.add_argument('--init-proposal-file', required=True)
             entry.add_argument('--init-proposal-sha256', required=True)
-            entry.add_argument('--inventory-sha256', required=True)
+            if command == 'prepare-target-binding':
+                entry.add_argument('--inventory-sha256', required=True)
+            else:
+                entry.add_argument('--isolation-proof-sha256', required=True)
             entry.add_argument('--target-device', type=int, required=True)
             entry.add_argument('--target-inode', type=int, required=True)
             entry.add_argument('--target-uid', type=int, required=True)
@@ -868,7 +944,7 @@ def main():
             entry.add_argument('--policy-b-transport', required=True)
             entry.add_argument('--remote', required=True)
             entry.add_argument('--completion-file', required=True)
-        if command == 'copy-target-binding-completion':
+        if command in ('copy-target-binding-completion', 'copy-isolated-target-binding-completion'):
             entry.add_argument('--authorization', required=True)
     try:
         return run_client(parser.parse_args())

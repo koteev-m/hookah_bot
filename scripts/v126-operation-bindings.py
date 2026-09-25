@@ -83,8 +83,53 @@ def binding_hash(path):
     return digest.hexdigest()
 
 
+EPOCH_FIELDS = frozenset(('epoch_id', 'domain_identity_sha256'))
+OWNER_FIELDS = frozenset(('run_id', 'release_sha', 'script_sha256'))
+IDENTITY_FIELDS = OWNER_FIELDS | {'intent_sha256', 'kind', 'name', 'action'}
+
+
+def binding_epoch(value):
+    """A closed optional epoch pair, never an implicitly inherited capability."""
+    if not isinstance(value, dict):
+        raise BindingError('epoch_identity_schema')
+    present = EPOCH_FIELDS & set(value)
+    if 'epoch' in value:
+        epoch = value['epoch']
+        if (present or not isinstance(epoch, dict) or set(epoch) != EPOCH_FIELDS | {'predecessor_index_sha256'} or
+                any(not isinstance(v, str) or not re.fullmatch('[0-9a-f]{64}', v) for v in epoch.values())):
+            raise BindingError('epoch_identity_schema')
+        return {k: epoch[k] for k in EPOCH_FIELDS}
+    if present and (present != EPOCH_FIELDS or any(not isinstance(value[k], str) or
+            not re.fullmatch('[0-9a-f]{64}', value[k]) for k in EPOCH_FIELDS)):
+        raise BindingError('epoch_identity_schema')
+    return {k: value[k] for k in EPOCH_FIELDS} if present else {}
+
+
+def binding_identity_keys(value):
+    return IDENTITY_FIELDS | set(binding_epoch(value))
+
+
+def binding_identity_owner(value):
+    return binding_owner({k: value.get(k) for k in OWNER_FIELDS} | binding_epoch(value))
+
+
+def binding_identity(value):
+    binding_identity_owner(value)
+    if (set(value) != binding_identity_keys(value) or
+            not isinstance(value['intent_sha256'], str) or not re.fullmatch('[0-9a-f]{64}', value['intent_sha256']) or
+            any(not isinstance(value[k], str) or not value[k] for k in ('kind', 'name', 'action'))):
+        raise BindingError('operation_identity_schema')
+    return value
+
+
+def binding_same_epoch(left, right):
+    if binding_epoch(left) != binding_epoch(right):
+        raise BindingError('epoch_domain_mismatch')
+
+
 def binding_owner(value):
-    if (not isinstance(value, dict) or set(value) != {'run_id', 'release_sha', 'script_sha256'} or
+    epoch = binding_epoch(value)
+    if (not isinstance(value, dict) or set(value) != OWNER_FIELDS | set(epoch) or
             not re.fullmatch(r'[a-z0-9][a-z0-9._-]{5,63}', value['run_id']) or
             not re.fullmatch(r'[0-9a-f]{40}', value['release_sha']) or
             not re.fullmatch(r'[0-9a-f]{64}', value['script_sha256'])):
@@ -109,7 +154,7 @@ def binding_inventory(root, owner, target=None):
             continue
         op = start.name.removesuffix('.start.json')
         if (set(doc) != {'identity', 'operation_id', 'started_at', 'boot_id'} or
-                set(identity) != {'run_id', 'release_sha', 'script_sha256', 'intent_sha256', 'kind', 'name', 'action'} or
+                set(identity) != binding_identity_keys(identity) or
                 doc['operation_id'] != op or hashlib.sha256(binding_canonical(identity)).hexdigest() != op):
             raise BindingError('start_binding')
         identities.append(identity)
@@ -140,6 +185,9 @@ def binding_inventory(root, owner, target=None):
 
 
 def binding_handoff(doc, owner, next_owner, receipt_sha, target):
+    binding_owner(owner)
+    binding_owner(next_owner)
+    binding_same_epoch(owner, next_owner)
     keys = {'format_version', 'owner', 'next_owner', 'terminal_receipt_sha256', 'target_sha256',
             'operational_version', 'backend_image', 'image_id', 'environment_sha256',
             'compose_sha256', 'caddy_runtime_sha256', 'config_owner', 'restart_policy',
@@ -191,6 +239,8 @@ def binding_chain(root, target):
                 transfer['terminal_kind'] not in ('NATIVE_RECEIPT', 'RECONCILED_EFFECT', 'ORDINARY_DEPLOY_PROOF')):
             raise BindingError('transfer_policy')
         next_owner = binding_owner(transfer['next_owner'])
+        binding_same_epoch(owner, next_owner)
+        binding_predecessor_denied(root, next_owner)
         if any(previous['run_id'] == next_owner['run_id'] for previous in owners):
             raise BindingError('run_id_reuse')
         inventory, unknown, identities = binding_inventory(root, owner, target)
@@ -263,10 +313,18 @@ def binding_entry(mode):
         owner = dict(zip(('run_id', 'release_sha', 'script_sha256'), sys.argv[2:5]))
         receipt_sha, handoff_path = sys.argv[5:7]
         next_owner = dict(zip(('run_id', 'release_sha', 'script_sha256'), sys.argv[7:10]))
+        handoff = binding_read(Path(handoff_path))
+        # The approved handoff supplies explicit epoch pairs. Do not infer them
+        # from the target (which would silently upgrade an old caller's rights).
+        for supplied, field in ((owner, 'owner'), (next_owner, 'next_owner')):
+            declared = binding_owner(handoff.get(field))
+            if any(declared[k] != supplied[k] for k in OWNER_FIELDS):
+                raise BindingError('handoff_owner_arguments')
+            supplied.update(binding_epoch(declared))
         binding_owner(next_owner)
+        binding_predecessor_denied(root, next_owner)
         if current != owner or unknown or not inventory:
             raise BindingError('retirement_requires_known_completed_current_run')
-        handoff = binding_read(Path(handoff_path))
         binding_handoff(handoff, owner, next_owner, receipt_sha, target)
         if handoff['image_id'] != sys.argv[11]:
             raise BindingError('terminal_handoff_image_mismatch')
@@ -371,6 +429,7 @@ def binding_next_request(request, next_owner, handoff, target):
     if (request.get('owner') != next_owner or
             request.get('target_sha256') != hashlib.sha256(str(target).encode()).hexdigest()):
         raise BindingError('next_request_binding')
+    binding_same_epoch(handoff['owner'], next_owner)
     for key in ('operational_version', 'backend_image', 'image_id', 'environment_sha256',
                 'caddy_runtime_sha256', 'config_owner', 'restart_policy',
                 'handoff_approved_and_applied'):
@@ -389,6 +448,7 @@ def binding_deploy_handoff(proof, digest, handoff):
 
 
 def binding_request(path, identity, target):
+    binding_identity(identity)
     doc = binding_read(path)
     if identity['kind'] == 'INIT':
         return binding_init_request(doc, identity, target)
@@ -412,6 +472,7 @@ def binding_operation_evidence(root, operation_id, target):
     start_path = root / (operation_id + '.start.json')
     start = binding_read(start_path)
     identity = start['identity']
+    binding_identity(identity)
     if (set(start) != {'identity', 'operation_id', 'started_at', 'boot_id'} or
             start['operation_id'] != operation_id or
             hashlib.sha256(binding_canonical(identity)).hexdigest() != operation_id):
@@ -457,6 +518,7 @@ def binding_reconciliation_inventory(root, target):
             if set(operation) != {'operation_id', 'files'}:
                 raise BindingError('reconciliation_operation_schema')
             identity, files, _ = binding_operation_evidence(root, operation['operation_id'], target)
+            binding_same_epoch(identity, doc['identity'])
             if (operation['files'] != files or any(identity[key] != doc['identity'][key]
                     for key in ('run_id', 'release_sha', 'script_sha256', 'intent_sha256', 'kind', 'name'))):
                 raise BindingError('reconciliation_original_binding')
@@ -685,6 +747,7 @@ def binding_write_completion(state, kind, name, index, bundle_path, source_path,
     base = state / ('receipts' if stage else 'recovery') / (f'{index:02d}-{name}' if stage else name)
     intent_path = state / ('intents' if stage else 'recovery') / ((f'{index:02d}-{name}' if stage else name) + '.intent.json')
     intent = binding_read(intent_path)
+    binding_same_epoch(manifest, intent)
     intent_sha = binding_hash(intent_path)
     checksum = Path(str(intent_path) + '.sha256')
     binding_protected(checksum, 0o400)
@@ -694,6 +757,7 @@ def binding_write_completion(state, kind, name, index, bundle_path, source_path,
         intent_sha, hashlib.sha256(binding_embedded_source(source, 'remote_reconciliation_poststate_python')).hexdigest())
     if any(record['identity'][key] != manifest[key] for key in ('run_id', 'release_sha', 'script_sha256')):
         raise BindingError('reconciliation_run_binding')
+    binding_same_epoch(manifest, record['identity'])
     original = binding_original_stage_log(state / 'artifacts', index, name) if stage else state / 'recovery' / (name + '.operation.log')
     binding_protected(original, 0o400)
     derived = binding_reconciliation_log(original.read_bytes(), logs)
@@ -706,6 +770,10 @@ def binding_write_completion(state, kind, name, index, bundle_path, source_path,
     fields = ('run_id', 'release_sha', 'script_sha256', 'predecessor_stage', 'predecessor_receipt_sha256')
     fields += ('stage', 'authorization_gate', 'authorization_receipt_sha256') if stage else ('mode', 'authorization_token_sha256')
     doc = {key: intent[key] for key in fields}
+    if binding_epoch(intent):
+        if intent.get('epoch') != manifest.get('epoch') or not isinstance(manifest.get('epoch'), dict):
+            raise BindingError('reconciliation_epoch_ancestry')
+        doc['epoch'] = dict(manifest['epoch'])
     doc.update(format_version=2, result_category='RECONCILED_EFFECT' if stage else 'RECONCILED_TERMINAL_RECOVERY',
                completed_at=record['observed_at'], intent_sha256=intent_sha,
                artifacts=sorted(artifacts, key=lambda item: item['name']),
@@ -757,6 +825,7 @@ def binding_retire_deploy(target, owner, proof_sha, handoff_path, next_request_p
         handoff = binding_read(Path(handoff_path))
         request = binding_read(Path(next_request_path))
         next_owner = binding_owner(request['owner'])
+        binding_predecessor_denied(root, next_owner)
         binding_handoff(handoff, owner, next_owner, proof_sha, target)
         binding_deploy_handoff(proof, proof_sha, handoff)
         binding_next_request(request, next_owner, handoff, target)
@@ -772,6 +841,7 @@ def binding_retire_deploy(target, owner, proof_sha, handoff_path, next_request_p
 
 
 def binding_init_request(doc, identity, target):
+    binding_identity(identity)
     keys = {'format_version', 'identity', 'target_sha256', 'manifest_sha256', 'manifest_size',
             'local_state_sha256', 'metadata'}
     if (not isinstance(doc, dict) or set(doc) != keys or type(doc['format_version']) is not int or
@@ -840,6 +910,7 @@ def binding_require_init_completion(root, target, current, completion):
 
 
 def binding_result(path, identity, target):
+    binding_identity(identity)
     outcome = binding_read(path)
     operation_id = hashlib.sha256(binding_canonical(identity)).hexdigest()
     if identity['kind'] == 'INIT':
@@ -937,6 +1008,11 @@ def binding_history(root, target):
 
 
 def binding_admit_operation(root, target, identity, current, request_sha256=None):
+    active, _ = binding_chain(root, target)
+    binding_same_epoch(active, identity)
+    if binding_identity_owner(identity) != active:
+        binding_refuse('target_bound_to_another_run')
+    binding_predecessor_denied(root, identity)
     policy = binding_active_policy(root, target)
     if policy['next_kind'] == 'ORDINARY_DEPLOY':
         if ((identity['kind'], identity['name'], identity['action']) != ('DEPLOY', 'ORDINARY_DEPLOY', 'ordinary-deploy') or
@@ -1020,12 +1096,39 @@ def binding_policy_b_dispatch(gate, identity, target, lockfd, timeout):
 
 GENESIS_FILES = {'genesis.request.json', 'genesis.intent.json', 'legacy-inventory.json', 'genesis.result.json'}
 GENESIS_LOCK_PREFIX = b'V126_LEGACY_GENESIS_V1 '
+PROSPECTIVE_GENESIS_FILES = {'genesis.request.json', 'genesis.intent.json', 'prospective-basis.json', 'genesis.result.json'}
+PROSPECTIVE_LOCK_PREFIX = b'V126_PROSPECTIVE_GENESIS_V2 '
+
+
+def binding_prospective(request):
+    return isinstance(request, dict) and request.get('kind') == 'prospective-isolated-genesis-request'
+
+
+def binding_genesis_layout(request):
+    if binding_prospective(request):
+        return ('PROSPECTIVE_ISOLATED_GENESIS', 'prospective_basis', 'prospective-basis.json',
+                'basis_sha256', PROSPECTIVE_GENESIS_FILES, PROSPECTIVE_LOCK_PREFIX,
+                'PROSPECTIVE_ISOLATED_DOMAIN_BOUND')
+    return ('LEGACY_GENESIS', 'legacy_inventory', 'legacy-inventory.json', 'inventory_sha256',
+            GENESIS_FILES, GENESIS_LOCK_PREFIX, 'LEGACY_DISPOSITION_BOUND')
+
+
+def binding_genesis_owner_record(request, owner, basis_sha256):
+    if binding_prospective(request):
+        return dict(format_version=3, kind='PROSPECTIVE_CUTOVER_OWNER', owner=owner,
+                    request_sha256=hashlib.sha256(binding_canonical(request)).hexdigest(), basis_sha256=basis_sha256,
+                    epoch=dict(binding_epoch(request), predecessor_index_sha256=request['predecessor_index_sha256']))
+    return dict(format_version=2, kind='GENESIS_CUTOVER_OWNER', owner=owner,
+                request_sha256=hashlib.sha256(binding_canonical(request)).hexdigest(), inventory_sha256=basis_sha256)
 
 
 def binding_genesis_identity(request):
+    prospective = binding_prospective(request)
     return dict(run_id=request['run_id'], release_sha=request['source_sha'],
                 script_sha256=request['script_sha256'], intent_sha256=hashlib.sha256(binding_canonical(request)).hexdigest(),
-                kind='TARGET_BIND', name='LEGACY_GENESIS', action='bind-legacy-target')
+                kind='TARGET_BIND', name='PROSPECTIVE_ISOLATED_GENESIS' if prospective else 'LEGACY_GENESIS',
+                action='bind-isolated-target' if prospective else 'bind-legacy-target',
+                **(binding_epoch(request) if prospective else {}))
 
 
 def binding_genesis_request(request, identity, target):
@@ -1033,11 +1136,17 @@ def binding_genesis_request(request, identity, target):
     keys = {'schema_version', 'kind', 'run_id', 'source_sha', 'source_tree', 'script_sha256',
             'tooling_sha256', 'python_version', 'target', 'next_init_manifest_sha256',
             'inventory_sha256', 'created_at', 'expires_at', 'nonce'}
+    prospective = binding_prospective(request)
+    if prospective:
+        keys = (keys - {'inventory_sha256'}) | EPOCH_FIELDS | {'predecessor_index_sha256', 'isolation_proof_sha256'}
     if (not isinstance(request, dict) or set(request) != keys or type(request['schema_version']) is not int or
-            request['schema_version'] != 1 or request['kind'] != 'legacy-target-genesis-request' or
+            request['schema_version'] != (2 if prospective else 1) or
+            request['kind'] != ('prospective-isolated-genesis-request' if prospective else 'legacy-target-genesis-request') or
             len(binding_canonical(request)) > 65536):
         binding_refuse('genesis_request_schema')
-    for key in ('script_sha256', 'tooling_sha256', 'next_init_manifest_sha256', 'inventory_sha256', 'nonce'):
+    digest_keys = {'script_sha256', 'tooling_sha256', 'next_init_manifest_sha256', 'nonce'}
+    digest_keys |= EPOCH_FIELDS | {'predecessor_index_sha256', 'isolation_proof_sha256'} if prospective else {'inventory_sha256'}
+    for key in digest_keys:
         if not isinstance(request[key], str) or not re.fullmatch('[0-9a-f]{64}', request[key]):
             binding_refuse('genesis_request_digest')
     for key in ('source_sha', 'source_tree'):
@@ -1045,7 +1154,10 @@ def binding_genesis_request(request, identity, target):
             binding_refuse('genesis_request_source')
     if not isinstance(request['python_version'], str) or not re.fullmatch(r'3\.\d+\.\d+', request['python_version']):
         binding_refuse('genesis_runtime')
-    owner = binding_owner(dict(run_id=request['run_id'], release_sha=request['source_sha'], script_sha256=request['script_sha256']))
+    if prospective and request['python_version'] != '3.12.3':
+        binding_refuse('prospective_runtime')
+    owner = binding_owner(dict(run_id=request['run_id'], release_sha=request['source_sha'],
+                               script_sha256=request['script_sha256'], **(binding_epoch(request) if prospective else {})))
     expected = binding_genesis_identity(request)
     if identity != expected or {key: identity.get(key) for key in owner} != owner:
         binding_refuse('genesis_identity_binding')
@@ -1077,6 +1189,8 @@ def binding_genesis_target(target, request):
 
 
 def binding_genesis_index(index, request):
+    if binding_prospective(request):
+        return binding_prospective_basis(index, request)
     # The full native/provenance verifier runs on V. This immutable index retains
     # its exact independently selected bytes; historical claims remain distinct.
     if (not isinstance(index, dict) or index.get('schema_version') != 1 or
@@ -1100,15 +1214,101 @@ def binding_genesis_index(index, request):
     return index
 
 
-def binding_genesis_admission(result, request, barrier='LEGACY_GENESIS'):
+def binding_prospective_basis(index, request):
+    """Replay durable V-accepted ancestry, not a new isolation admission.
+
+    Exact independently enrolled observations are verified on V before S receives
+    this compact index. Completed history retains immutable facts after expiry;
+    a new action still requires its own current scoped authority.
+    """
+    sha = lambda value: isinstance(value, str) and re.fullmatch('[0-9a-f]{64}', value)
+    digest = lambda value: hashlib.sha256(binding_canonical(value)).hexdigest()
+    keys = {'schema_version', 'kind', 'epoch', 'isolation_proof_sha256', 'predecessor_index', 'epoch_descriptor'}
+    expected_epoch = dict(binding_epoch(request), predecessor_index_sha256=request['predecessor_index_sha256'])
+    if (not isinstance(index, dict) or set(index) != keys or type(index['schema_version']) is not int or
+            index['schema_version'] != 2 or index['kind'] != 'prospective-genesis-basis' or
+            index['epoch'] != expected_epoch or index['isolation_proof_sha256'] != request['isolation_proof_sha256'] or
+            len(binding_canonical(index)) > 48 * 1024):
+        binding_refuse('prospective_basis_binding')
+    epoch = index['epoch_descriptor']
+    epoch_keys = {'schema_version', 'kind', 'nonce', 'created', 'bootstrap_source', 'domain_identity_sha256',
+                  'predecessor_index_sha256', 'owner_scope_decision_sha256', 'control_policy_sha256'}
+    if (not isinstance(epoch, dict) or set(epoch) != epoch_keys or type(epoch['schema_version']) is not int or
+            epoch['schema_version'] != 2 or epoch['kind'] != 'authority-epoch-descriptor' or
+            digest(epoch) != request['epoch_id'] or epoch['domain_identity_sha256'] != request['domain_identity_sha256'] or
+            epoch['predecessor_index_sha256'] != request['predecessor_index_sha256'] or
+            any(not sha(epoch[k]) for k in ('nonce', 'owner_scope_decision_sha256', 'control_policy_sha256'))):
+        binding_refuse('prospective_epoch_ancestry')
+    predecessors = index['predecessor_index']
+    pkeys = {'schema_version', 'kind', 'legacy_domain_identity_sha256', 'legacy_target',
+             'legacy_control_roots', 'legacy_resource_roots', 'runs'}
+    if (not isinstance(predecessors, dict) or set(predecessors) != pkeys or type(predecessors['schema_version']) is not int or
+            predecessors['schema_version'] != 2 or predecessors['kind'] != 'authority-predecessor-index' or
+            digest(predecessors) != request['predecessor_index_sha256'] or
+            not sha(predecessors['legacy_domain_identity_sha256']) or
+            predecessors['legacy_domain_identity_sha256'] == request['domain_identity_sha256']):
+        binding_refuse('prospective_predecessor_binding')
+    legacy_target = predecessors['legacy_target']
+    if (not isinstance(legacy_target, dict) or set(legacy_target) != set(request['target']) or
+            legacy_target['host_fingerprint'] == request['target']['host_fingerprint']):
+        binding_refuse('prospective_same_legacy_target')
+    for key in ('legacy_control_roots', 'legacy_resource_roots'):
+        values = predecessors[key]
+        if not isinstance(values, list) or not values or any(not sha(value) for value in values) or len(set(values)) != len(values):
+            binding_refuse('prospective_predecessor_roots')
+    runs = predecessors['runs']
+    if not isinstance(runs, list) or not runs:
+        binding_refuse('prospective_predecessor_runs')
+    required = {'v126-cutover-20260909t025024z-724dbe93': 'UNKNOWN',
+                'v126-cutover-20260909t113822z-f7828e09': 'FAILED_PRE_ACTIVE_CONFIG_MUTATION_EXTERNALLY_FENCED'}
+    seen = set()
+    for row in runs:
+        if (not isinstance(row, dict) or set(row) != {'run_id', 'historical_outcome', 'retained_references', 'missing', 'intent_sha256'} or
+                not isinstance(row['run_id'], str) or not re.fullmatch(r'[a-z0-9][a-z0-9._-]{5,63}', row['run_id']) or
+                row['run_id'] in seen or row['run_id'] == request['run_id'] or
+                row['historical_outcome'] not in ('UNKNOWN', 'FAILED_PRE_ACTIVE_CONFIG_MUTATION_EXTERNALLY_FENCED') or
+                row['historical_outcome'] != required.get(row['run_id'], row['historical_outcome']) or
+                not isinstance(row['retained_references'], list) or not row['retained_references'] or
+                any(not sha(value) for value in row['retained_references']) or
+                not isinstance(row['missing'], list) or not row['missing'] or
+                any(not isinstance(value, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:-]{0,127}', value) for value in row['missing']) or
+                (row['intent_sha256'] is not None and not sha(row['intent_sha256'])) or
+                row['intent_sha256'] == request['next_init_manifest_sha256']):
+            binding_refuse('prospective_predecessor_refusal')
+        seen.add(row['run_id'])
+    if not set(required) <= seen:
+        binding_refuse('prospective_predecessor_omitted')
+    return index
+
+
+def binding_predecessor_denied(root, identity):
+    if not binding_epoch(identity):
+        return
+    basis = binding_read(root / 'prospective-basis.json')
+    for row in basis['predecessor_index']['runs']:
+        if row['run_id'] == identity['run_id'] or (row['intent_sha256'] is not None and
+                row['intent_sha256'] == identity.get('intent_sha256')):
+            binding_refuse('prospective_legacy_identity_replay')
+
+
+def binding_genesis_admission(result, request, barrier=None):
+    layout = binding_genesis_layout(request)
+    barrier = layout[0] if barrier is None else barrier
     keys = ('qualification_sha256', 'pins_sha256', 'catalogue_head_sha256', 'revocation_generation')
     if (not isinstance(result, dict) or result.get('barrier') != barrier or
-            result.get('operational') is not True or result.get('qualification_sha256') != request['inventory_sha256'] or
+            result.get('operational') is not True or result.get('qualification_sha256') != request[
+                'isolation_proof_sha256' if binding_prospective(request) else 'inventory_sha256'] or
             any(not isinstance(result.get(key), str) or not re.fullmatch('[0-9a-f]{64}', result[key]) for key in keys[:3]) or
             type(result.get('revocation_generation')) is not int or result['revocation_generation'] < 0):
         binding_refuse('genesis_admission_result')
-    binding_genesis_index(result.get('legacy_inventory'), request)
-    return {key: result[key] for key in keys}
+    binding_genesis_index(result.get(layout[1]), request)
+    admission = {key: result[key] for key in keys}
+    if binding_prospective(request):
+        expected = dict(binding_epoch(request), predecessor_index_sha256=request['predecessor_index_sha256'])
+        if result.get('epoch') != expected:
+            binding_refuse('prospective_admission_epoch')
+        admission['epoch'] = expected
+    return admission
 
 
 def binding_validate_genesis_completion(request, result, index, target):
@@ -1118,21 +1318,24 @@ def binding_validate_genesis_completion(request, result, index, target):
     binding_genesis_index(index, request)
     request_sha = identity['intent_sha256']
     operation_id = hashlib.sha256(binding_canonical(identity)).hexdigest()
-    owner_record = dict(format_version=2, kind='GENESIS_CUTOVER_OWNER', owner=owner,
-                        request_sha256=request_sha, inventory_sha256=request['inventory_sha256'])
+    layout = binding_genesis_layout(request)
+    basis_sha = hashlib.sha256(binding_canonical(index)).hexdigest()
+    owner_record = binding_genesis_owner_record(request, owner, basis_sha)
     keys = {'format_version', 'identity', 'operation_id', 'exit', 'outcome', 'completion', 'request_sha256',
-            'intent_sha256', 'inventory_sha256', 'owner_sha256', 'admissions', 'completed_at'}
-    if (set(result) != keys or type(result['format_version']) is not int or result['format_version'] != 1 or
+            'intent_sha256', layout[3], 'owner_sha256', 'admissions', 'completed_at'}
+    if (set(result) != keys or type(result['format_version']) is not int or result['format_version'] != (2 if binding_prospective(request) else 1) or
             result['identity'] != identity or result['operation_id'] != operation_id or type(result['exit']) is not int or
-            result['exit'] != 0 or result['outcome'] != 'SUCCEEDED' or result['completion'] != 'LEGACY_DISPOSITION_BOUND' or
+            result['exit'] != 0 or result['outcome'] != 'SUCCEEDED' or result['completion'] != layout[6] or
             result['request_sha256'] != request_sha or not isinstance(result['intent_sha256'], str) or not re.fullmatch('[0-9a-f]{64}', result['intent_sha256']) or
-            result['inventory_sha256'] != request['inventory_sha256'] or result['owner_sha256'] != hashlib.sha256(binding_canonical(owner_record)).hexdigest() or
+            result[layout[3]] != basis_sha or result['owner_sha256'] != hashlib.sha256(binding_canonical(owner_record)).hexdigest() or
             not isinstance(result['admissions'], list) or len(result['admissions']) != 2):
         binding_refuse('genesis_result_binding')
     for admission in result['admissions']:
-        if not isinstance(admission, dict) or set(admission) != {'qualification_sha256', 'pins_sha256', 'catalogue_head_sha256', 'revocation_generation'}:
+        akeys = {'qualification_sha256', 'pins_sha256', 'catalogue_head_sha256', 'revocation_generation'}
+        if binding_prospective(request): akeys.add('epoch')
+        if not isinstance(admission, dict) or set(admission) != akeys:
             binding_refuse('genesis_admission_binding')
-        binding_genesis_admission(dict(admission, barrier='LEGACY_GENESIS', operational=True, legacy_inventory=index), request)
+        binding_genesis_admission(dict(admission, barrier=layout[0], operational=True, **{layout[1]: index}), request)
     if result['admissions'][1]['revocation_generation'] < result['admissions'][0]['revocation_generation']:
         binding_refuse('genesis_revocation_rollback')
     return result
@@ -1148,26 +1351,32 @@ def binding_genesis_completion(root, target):
     binding_protected(root / 'lock', 0o600)
     with (root / 'lock').open('rb') as handle:
         lock_marker = handle.read(128)
-    present = set(path.name for path in root.iterdir()) & GENESIS_FILES
+    present = set(path.name for path in root.iterdir()) & (GENESIS_FILES | PROSPECTIVE_GENESIS_FILES)
     if set(record) == {'run_id', 'release_sha', 'script_sha256'}:
         if present or lock_marker:
             binding_refuse('genesis_ancestry_required')
         return binding_owner(record), {}
-    if (set(record) != {'format_version', 'kind', 'owner', 'request_sha256', 'inventory_sha256'} or
-            type(record['format_version']) is not int or record['format_version'] != 2 or
-            record['kind'] != 'GENESIS_CUTOVER_OWNER' or present != GENESIS_FILES):
+    expected_keys = ({'format_version', 'kind', 'owner', 'request_sha256', 'basis_sha256', 'epoch'}
+                     if record.get('kind') == 'PROSPECTIVE_CUTOVER_OWNER'
+                     else {'format_version', 'kind', 'owner', 'request_sha256', 'inventory_sha256'})
+    if (set(record) != expected_keys or type(record.get('format_version')) is not int or
+            (record.get('format_version'), record.get('kind')) not in
+            ((2, 'GENESIS_CUTOVER_OWNER'), (3, 'PROSPECTIVE_CUTOVER_OWNER'))):
         binding_refuse('genesis_completion_required')
     request = binding_read(root / 'genesis.request.json')
     identity = binding_genesis_identity(request)
     owner = binding_genesis_request(request, identity, target)
     binding_genesis_target(target, request)
+    layout = binding_genesis_layout(request)
+    if present != layout[4]:
+        binding_refuse('genesis_completion_required')
     request_sha = identity['intent_sha256']
-    if (record['owner'] != owner or record['request_sha256'] != request_sha or
-            record['inventory_sha256'] != request['inventory_sha256'] or
-            lock_marker != GENESIS_LOCK_PREFIX + request_sha.encode() + b'\n'):
-        binding_refuse('genesis_owner_binding')
-    index = binding_read(root / 'legacy-inventory.json')
+    index = binding_read(root / layout[2])
     binding_genesis_index(index, request)
+    expected_record = binding_genesis_owner_record(request, owner, hashlib.sha256(binding_canonical(index)).hexdigest())
+    if (record != expected_record or type(record.get('format_version')) is not int or
+            lock_marker != layout[5] + request_sha.encode() + b'\n'):
+        binding_refuse('genesis_owner_binding')
     intent = binding_read(root / 'genesis.intent.json')
     operation_id = hashlib.sha256(binding_canonical(identity)).hexdigest()
     if (set(intent) != {'format_version', 'identity', 'operation_id', 'request_sha256', 'started_at'} or
@@ -1187,7 +1396,7 @@ def binding_genesis_completion(root, target):
             binding_refuse('genesis_chronology')
     except (TypeError, ValueError):
         binding_refuse('genesis_chronology')
-    return owner, {name: binding_hash(root / name) for name in GENESIS_FILES}
+    return owner, {name: binding_hash(root / name) for name in layout[4]}
 
 
 def binding_genesis_create_at(rootfd, name, value):
@@ -1293,6 +1502,7 @@ def binding_genesis(target, identity, request, *, policy_b_gate, ack_genesis=Non
         binding_refuse('linux_target_lock_required')
     target = Path(target)
     owner = binding_genesis_request(request, identity, target)
+    layout = binding_genesis_layout(request)
     binding_genesis_target(target, request)
     if timeout != 300 or policy_b_gate is None or any(not callable(getattr(policy_b_gate, key, None))
             for key in ('check', 'before_create', 'before_dispatch', 'before_write')):
@@ -1362,7 +1572,7 @@ def binding_genesis(target, identity, request, *, policy_b_gate, ack_genesis=Non
         binding_protected(root, 0o700, True)
         lockfd = os.open('lock', os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=rootfd)
         fcntl.flock(lockfd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        marker = GENESIS_LOCK_PREFIX + identity['intent_sha256'].encode() + b'\n'
+        marker = layout[5] + identity['intent_sha256'].encode() + b'\n'
         if os.write(lockfd, marker) != len(marker):
             binding_refuse('genesis_lock_write')
         os.fsync(lockfd)
@@ -1393,20 +1603,21 @@ def binding_genesis(target, identity, request, *, policy_b_gate, ack_genesis=Non
                       request_sha256=identity['intent_sha256'], started_at=now())
         write('genesis.intent.json', intent)
         write('genesis.request.json', request)
-        write('legacy-inventory.json', late['legacy_inventory'])
-        owner_record = dict(format_version=2, kind='GENESIS_CUTOVER_OWNER', owner=owner,
-                            request_sha256=identity['intent_sha256'], inventory_sha256=request['inventory_sha256'])
+        # This metadata transaction never translates prospective facts into
+        # fictitious legacy disposition. Each mode retains its own closed index.
+        write(layout[2], late[layout[1]])
+        owner_record = binding_genesis_owner_record(request, owner, created[layout[2]])
         write('run.json', owner_record)
-        result = dict(format_version=1, identity=identity, operation_id=intent['operation_id'], exit=0,
-                      outcome='SUCCEEDED', completion='LEGACY_DISPOSITION_BOUND', request_sha256=identity['intent_sha256'],
-                      intent_sha256=created['genesis.intent.json'], inventory_sha256=created['legacy-inventory.json'],
+        result = dict(format_version=2 if binding_prospective(request) else 1, identity=identity, operation_id=intent['operation_id'], exit=0,
+                      outcome='SUCCEEDED', completion=layout[6], request_sha256=identity['intent_sha256'],
+                      intent_sha256=created['genesis.intent.json'], **{layout[3]: created[layout[2]]},
                       owner_sha256=created['run.json'], admissions=[early_admission, late_admission], completed_at=now())
         write('genesis.result.json', result)
         binding_live_history(root, lockfd, before, created)
         binding_genesis_completion(root, target)
         proof = dict(request=request, result=result, request_sha256=identity['intent_sha256'],
                      result_sha256=binding_hash(root / 'genesis.result.json'),
-                     legacy_inventory=late['legacy_inventory'], legacy_inventory_sha256=request['inventory_sha256'])
+                     **{layout[1]: late[layout[1]], layout[1] + '_sha256': created[layout[2]]})
         if ack_genesis is not None:
             started = time.monotonic()
             ack_genesis(proof)
@@ -1424,7 +1635,9 @@ def binding_genesis(target, identity, request, *, policy_b_gate, ack_genesis=Non
 def binding_genesis_readback(target, identity, request_sha256, *, policy_b_gate, timeout=300):
     """Separately authorized copy-only completion; no writer/result/owner replay."""
     import time
-    if (identity.get('kind'), identity.get('name'), identity.get('action')) != ('TARGET_BIND', 'LEGACY_GENESIS', 'bind-legacy-target'):
+    if (identity.get('kind'), identity.get('name'), identity.get('action')) not in (
+            ('TARGET_BIND', 'LEGACY_GENESIS', 'bind-legacy-target'),
+            ('TARGET_BIND', 'PROSPECTIVE_ISOLATED_GENESIS', 'bind-isolated-target')):
         binding_refuse('genesis_readback_identity')
     if timeout != 300 or policy_b_gate is None or not callable(getattr(policy_b_gate, 'before_dispatch', None)):
         binding_refuse('genesis_readback_authority')
@@ -1433,6 +1646,7 @@ def binding_genesis_readback(target, identity, request_sha256, *, policy_b_gate,
     try:
         binding_history(root, target)
         request = binding_read(root / 'genesis.request.json')
+        layout = binding_genesis_layout(request)
         if identity != binding_genesis_identity(request) or request_sha256 != identity['intent_sha256']:
             binding_refuse('genesis_readback_request')
         before = binding_history_snapshot(root)
@@ -1441,13 +1655,12 @@ def binding_genesis_readback(target, identity, request_sha256, *, policy_b_gate,
             admitted = policy_b_gate.check(identity, target, fd, timeout)
             if not 0 <= time.monotonic() - started < 300:
                 binding_refuse('genesis_round_expired')
-            binding_genesis_admission(admitted, request, barrier='LEGACY_GENESIS_COPY')
+            binding_genesis_admission(admitted, request, barrier=layout[0] + '_COPY')
             binding_history_unchanged(root, fd, before)
         result = binding_read(root / 'genesis.result.json')
         output = dict(request=request, result=result, request_sha256=request_sha256,
                       result_sha256=binding_hash(root / 'genesis.result.json'),
-                      legacy_inventory=binding_read(root / 'legacy-inventory.json'),
-                      legacy_inventory_sha256=binding_hash(root / 'legacy-inventory.json'))
+                      **{layout[1]: binding_read(root / layout[2]), layout[1] + '_sha256': binding_hash(root / layout[2])})
         binding_history_unchanged(root, fd, before)
         policy_b_gate.before_dispatch(identity, target, fd, timeout)
         binding_lock_held(root, fd)
@@ -1462,8 +1675,8 @@ def binding_initialize(target, identity, init_request, *, policy_b_gate, write_i
     import time
     if sys.platform != 'linux':
         binding_refuse('linux_target_lock_required')
-    binding_owner({key: identity.get(key) for key in ('run_id', 'release_sha', 'script_sha256')})
-    if (set(identity) != {'run_id', 'release_sha', 'script_sha256', 'intent_sha256', 'kind', 'name', 'action'} or
+    binding_identity_owner(identity)
+    if (set(identity) != binding_identity_keys(identity) or
             (identity['kind'], identity['name'], identity['action']) != ('INIT', 'RUN_INITIALIZED', 'initialize-run') or
             timeout != 300 or policy_b_gate is None or not callable(write_init)):
         binding_refuse('init_identity_or_authority')
@@ -1584,6 +1797,10 @@ def binding_policy_b_check(gate, identity, target, lockfd, timeout):
                 result.get('operational') is not True or
                 not re.fullmatch('[0-9a-f]{64}', result.get('qualification_sha256', ''))):
             binding_refuse('policy_b_consumer_result')
+        if binding_epoch(identity):
+            record = binding_read(Path(target) / '.v126-target-operations' / 'run.json')
+            if result.get('epoch') != record.get('epoch') or binding_epoch(result) != binding_epoch(identity):
+                binding_refuse('policy_b_epoch_binding')
         return result
     except Exception:
         # Do not expose provider data or turn a refusal into retry/recovery authority.
@@ -1607,8 +1824,8 @@ def binding_supervise(target, identity, worker_argv, *, input_data=None, input_f
     libc = ctypes.CDLL(None, use_errno=True)
     if libc.prctl(36, 1, 0, 0, 0) != 0:
         binding_refuse('subreaper_unavailable')
-    binding_owner({key: identity.get(key) for key in ('run_id', 'release_sha', 'script_sha256')})
-    if (set(identity) != {'run_id', 'release_sha', 'script_sha256', 'intent_sha256', 'kind', 'name', 'action'} or
+    binding_identity_owner(identity)
+    if (set(identity) != binding_identity_keys(identity) or
             not re.fullmatch('[0-9a-f]{64}', identity['intent_sha256']) or not worker_argv or
             not 0 < timeout <= 1800):
         binding_refuse('invalid_identity')
@@ -1637,7 +1854,7 @@ def binding_supervise(target, identity, worker_argv, *, input_data=None, input_f
             binding_refuse('target_ownership')
         root, lockfd = binding_existing_lock(target)
         owner, prior_owners, current_operations, recovery_seen = binding_history(root, target)
-        requested_owner = {key: identity[key] for key in ('run_id', 'release_sha', 'script_sha256')}
+        requested_owner = binding_identity_owner(identity)
         if owner != requested_owner:
             binding_refuse('target_bound_to_another_run')
         binding_admit_operation(root, target, identity, current_operations, request_sha256)
