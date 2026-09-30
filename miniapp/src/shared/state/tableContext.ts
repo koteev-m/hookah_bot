@@ -45,8 +45,9 @@ const isDebug = isDebugEnabled()
 const tableSessionStorageKeyPrefix = 'hookah_guest_table_session_context'
 const listeners = new Set<(snapshot: TableContextSnapshot) => void>()
 let currentSnapshot = buildEmptySnapshot('missing')
+let stableSnapshot = currentSnapshot
 let activeController: AbortController | null = null
-let inFlight: Promise<void> | null = null
+let inFlight: Promise<void | TableContextSnapshot | null> | null = null
 let requestCounter = 0
 let initialized = false
 
@@ -156,6 +157,9 @@ function forgetTableSessionContext(tableToken?: string | null) {
 }
 
 export function clearCurrentTableContext(): void {
+  activeController?.abort()
+  activeController = null
+  requestCounter += 1
   const tableToken = currentSnapshot.tableToken
   if (currentSnapshot.tableSessionId) {
     setSelectedGuestTabId(currentSnapshot.tableSessionId, null)
@@ -222,6 +226,7 @@ function buildResolvedSnapshot(
 
 function updateSnapshot(snapshot: TableContextSnapshot) {
   currentSnapshot = snapshot
+  if (snapshot.status !== 'resolving') stableSnapshot = snapshot
   listeners.forEach((listener) => listener(currentSnapshot))
 }
 
@@ -237,14 +242,16 @@ export function subscribe(listener: (snapshot: TableContextSnapshot) => void): (
   }
 }
 
-export async function refresh(options?: { forceResolveSession?: boolean }): Promise<void> {
+export async function refresh(options?: { forceResolveSession?: boolean; scannedToken?: string }): Promise<TableContextSnapshot | null> {
+  const isScan = options?.scannedToken !== undefined
+  const forceResolveSession = isScan || options?.forceResolveSession === true
   const { tableTokenStatus, tableToken, tableSessionId } = getTelegramContext()
   const hasResolvedSnapshotToken =
-    !options?.forceResolveSession &&
+    !forceResolveSession &&
     tableTokenStatus === 'missing' &&
     currentSnapshot.status === 'resolved' &&
     Boolean(currentSnapshot.tableToken)
-  const nextToken = tableTokenStatus === 'valid' && tableToken ? tableToken : hasResolvedSnapshotToken ? currentSnapshot.tableToken : null
+  const nextToken = options?.scannedToken ?? (tableTokenStatus === 'valid' && tableToken ? tableToken : hasResolvedSnapshotToken ? currentSnapshot.tableToken : null)
   const contextTableSessionId =
     tableTokenStatus === 'valid' && tableToken ? tableSessionId : hasResolvedSnapshotToken ? currentSnapshot.tableSessionId : null
   if (!nextToken) {
@@ -253,18 +260,18 @@ export async function refresh(options?: { forceResolveSession?: boolean }): Prom
       activeController = null
     }
     updateSnapshot(buildEmptySnapshot(resolveTokenStatus(tableTokenStatus)))
-    return
+    return null
   }
 
   const currentSessionId =
-    !options?.forceResolveSession &&
+    !forceResolveSession &&
     contextTableSessionId === null &&
     currentSnapshot.status === 'resolved' &&
     currentSnapshot.tableToken === nextToken
       ? currentSnapshot.tableSessionId
       : null
   const storedSessionId =
-    !options?.forceResolveSession && contextTableSessionId === null && currentSessionId === null
+    !forceResolveSession && contextTableSessionId === null && currentSessionId === null
       ? loadStoredTableSessionContext(nextToken)
       : null
   if (activeController) {
@@ -272,31 +279,35 @@ export async function refresh(options?: { forceResolveSession?: boolean }): Prom
   }
   const controller = new AbortController()
   activeController = controller
-  updateSnapshot(buildEmptySnapshot('resolving', nextToken))
+  if (!isScan) {
+    updateSnapshot(buildEmptySnapshot('resolving', nextToken))
+  } else if (currentSnapshot.status === 'resolving') {
+    updateSnapshot(stableSnapshot)
+  }
   const requestId = (requestCounter += 1)
 
   const backendUrl = getBackendBaseUrl()
   const deps = buildApiDeps()
   const request = guestResolveTable(backendUrl, nextToken, deps, controller.signal, {
-    tableSessionId: options?.forceResolveSession === true ? null : contextTableSessionId ?? currentSessionId ?? storedSessionId,
-    allowCreateSession: options?.forceResolveSession === true
+    tableSessionId: forceResolveSession ? null : contextTableSessionId ?? currentSessionId ?? storedSessionId,
+    allowCreateSession: forceResolveSession
   })
-  inFlight = request.then((result) => {
+  const resolution = request.then((result) => {
     if (controller.signal.aborted || requestId !== requestCounter) {
-      return
+      return null
     }
 
     if (!result.ok) {
-      if (result.error.code === REQUEST_ABORTED_CODE) {
-        return
-      }
-      if (result.error.status === 404) {
-        updateSnapshot(buildEmptySnapshot('notFound'))
-        return
-      }
-      updateSnapshot({ ...buildEmptySnapshot('error'), error: result.error })
-      return
+      if (result.error.code === REQUEST_ABORTED_CODE) return null
+      const failure = result.error.status === 404
+        ? buildEmptySnapshot('notFound')
+        : { ...buildEmptySnapshot('error'), error: result.error }
+      if (!isScan) updateSnapshot(failure)
+      return failure
     }
+
+    const resolved = buildResolvedSnapshot(result.data, nextToken)
+    if (isScan && !resolved.orderAllowed) return resolved
 
     if (result.data.tableSessionActive) {
       rememberTableToken(nextToken)
@@ -304,10 +315,12 @@ export async function refresh(options?: { forceResolveSession?: boolean }): Prom
     } else {
       forgetTableSessionContext(nextToken)
     }
-    updateSnapshot(buildResolvedSnapshot(result.data, nextToken))
+    updateSnapshot(resolved)
+    return resolved
   })
 
-  await inFlight
+  inFlight = resolution
+  return resolution
 }
 
 async function restoreActiveContext(): Promise<void> {

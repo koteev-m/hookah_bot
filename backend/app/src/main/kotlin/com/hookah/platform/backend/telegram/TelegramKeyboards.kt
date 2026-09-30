@@ -1852,7 +1852,7 @@ object TelegramKeyboards {
                     listOf(
                         InlineKeyboardButton(
                             text = "💬 Заказывать в боте",
-                            callbackData = "continue_in_bot",
+                            callbackData = tableSessionId?.let { "continue_in_bot:$it" } ?: "continue_in_bot",
                         ),
                     ),
                 )

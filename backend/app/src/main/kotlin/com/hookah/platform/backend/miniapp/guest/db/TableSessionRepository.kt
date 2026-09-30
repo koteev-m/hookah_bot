@@ -618,6 +618,22 @@ class TableSessionRepository(
         }
     }
 
+    suspend fun hasUserExit(
+        userId: Long,
+        tableSessionId: Long,
+    ): Boolean {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    hasUserExit(connection, userId, tableSessionId)
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
     fun hasUserExit(
         connection: Connection,
         userId: Long,

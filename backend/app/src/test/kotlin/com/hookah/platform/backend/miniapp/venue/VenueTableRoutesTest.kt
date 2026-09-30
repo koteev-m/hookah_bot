@@ -1,5 +1,9 @@
 package com.hookah.platform.backend.miniapp.venue
 
+import com.google.zxing.BinaryBitmap
+import com.google.zxing.MultiFormatReader
+import com.google.zxing.client.j2se.BufferedImageLuminanceSource
+import com.google.zxing.common.HybridBinarizer
 import com.hookah.platform.backend.api.ApiErrorCodes
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
@@ -18,11 +22,14 @@ import io.ktor.server.config.MapApplicationConfig
 import io.ktor.server.testing.testApplication
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import java.nio.file.Files
+import java.nio.file.Path
 import java.sql.DriverManager
 import java.sql.Statement
 import java.time.Instant
 import java.util.UUID
 import java.util.zip.ZipInputStream
+import javax.imageio.ImageIO
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -135,12 +142,18 @@ class VenueTableRoutesTest {
     @Test
     fun `qr package export returns zip with entries`() =
         testApplication {
+            val fixturePath =
+                generateSequence(Path.of("").toAbsolutePath()) { it.parent }
+                    .map { it.resolve("miniapp/e2e/fixtures/table-qr.json") }
+                    .firstOrNull(Files::isRegularFile)
+                    ?: error("miniapp/e2e/fixtures/table-qr.json not found from test working directory")
+            val fixture = json.decodeFromString(TableQrFixture.serializer(), Files.readString(fixturePath))
             val jdbcUrl = buildJdbcUrl("tables-export")
             val config =
                 buildConfig(
                     jdbcUrl,
                     webAppUrl = "https://example.com/miniapp/",
-                    botUsername = "hookah_test_bot",
+                    botUsername = fixture.botUsername,
                 )
 
             environment { this.config = config }
@@ -151,7 +164,7 @@ class VenueTableRoutesTest {
             val venueId = seedVenueWithRole(jdbcUrl, TELEGRAM_USER_ID, "OWNER")
             val firstTable = seedTable(jdbcUrl, venueId, 1)
             val secondTable = seedTable(jdbcUrl, venueId, 2)
-            seedTableToken(jdbcUrl, firstTable, "token-one")
+            seedTableToken(jdbcUrl, firstTable, fixture.tableToken)
             seedTableToken(jdbcUrl, secondTable, "token-two")
             seedSubscription(jdbcUrl, venueId, "active")
 
@@ -167,12 +180,18 @@ class VenueTableRoutesTest {
             val bytes = response.body<ByteArray>()
             val entries = mutableListOf<String>()
             var manifestContent: String? = null
+            var decodedTableQr: String? = null
             ZipInputStream(bytes.inputStream()).use { zip ->
                 while (true) {
                     val entry = zip.nextEntry ?: break
                     entries.add(entry.name)
                     if (entry.name == "manifest.json") {
                         manifestContent = zip.readBytes().toString(Charsets.UTF_8)
+                    }
+                    if (entry.name == "table_1.png") {
+                        val image = ImageIO.read(zip.readBytes().inputStream())
+                        val bitmap = BinaryBitmap(HybridBinarizer(BufferedImageLuminanceSource(image)))
+                        decodedTableQr = MultiFormatReader().decode(bitmap).text
                     }
                     zip.closeEntry()
                 }
@@ -182,7 +201,8 @@ class VenueTableRoutesTest {
             assertTrue(entries.contains("table_2.png"))
             assertTrue(entries.contains("manifest.json"))
             assertNotNull(manifestContent)
-            assertTrue(manifestContent!!.contains("https://t.me/hookah_test_bot?start=token-one"))
+            assertEquals(fixture.qrText, decodedTableQr)
+            assertTrue(manifestContent!!.contains(fixture.qrText))
             assertTrue(manifestContent!!.contains("https://t.me/hookah_test_bot?start=token-two"))
         }
 
@@ -415,6 +435,13 @@ class VenueTableRoutesTest {
             }
         }
     }
+
+    @Serializable
+    private data class TableQrFixture(
+        val botUsername: String,
+        val tableToken: String,
+        val qrText: String,
+    )
 
     @Serializable
     private data class VenueTableDto(

@@ -28,6 +28,8 @@ export type TelegramWebAppLike = {
   expand?: () => void
   showScanQrPopup?: TelegramScanQrPopup
   closeScanQrPopup?: () => void
+  onEvent?: (event: 'scanQrPopupClosed', callback: () => void) => void
+  offEvent?: (event: 'scanQrPopupClosed', callback: () => void) => void
   sendData?: (data: string) => void
   openTelegramLink?: (url: string) => void
   showAlert?: (message: string) => void

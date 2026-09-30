@@ -2059,6 +2059,7 @@ class TelegramKeyboardsTest {
 
         assertTrue(webAppUrl.contains("tableToken=abc123"))
         assertTrue(webAppUrl.contains("tableSessionId=55"))
+        assertEquals("continue_in_bot:55", markup.inlineKeyboard.flatten()[1].callbackData)
         assertFalse(webAppUrl.contains("tgWebAppData"))
     }
 

@@ -91,6 +91,7 @@ jobs:
             --tests "com.hookah.platform.backend.miniapp.shift.ShiftExtensionRoutesTest" \
             --tests "com.hookah.platform.backend.support.SupportTicketRoutesTest" \
             --tests "com.hookah.platform.backend.support.SupportThreadReadRepositoryTest" \
+            --tests "com.hookah.platform.backend.telegram.TelegramGuestEntryOutboxOrderingTest" \
             --tests "com.hookah.platform.backend.telegram.TelegramOutboxWorkerTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.VenueOrderRoutesTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.promotions.VenuePromotionRoutesTest" \
@@ -135,6 +136,7 @@ jobs:
               "com.hookah.platform.backend.miniapp.shift.ShiftExtensionRoutesTest",
               "com.hookah.platform.backend.support.SupportTicketRoutesTest",
               "com.hookah.platform.backend.support.SupportThreadReadRepositoryTest",
+              "com.hookah.platform.backend.telegram.TelegramGuestEntryOutboxOrderingTest",
               "com.hookah.platform.backend.telegram.TelegramOutboxWorkerTest",
               "com.hookah.platform.backend.miniapp.venue.VenueOrderRoutesTest",
               "com.hookah.platform.backend.miniapp.venue.promotions.VenuePromotionRoutesTest",
@@ -159,6 +161,7 @@ jobs:
           required_minimums = {
               "com.hookah.platform.backend.support.SupportTicketRoutesTest": 12,
               "com.hookah.platform.backend.support.SupportThreadReadRepositoryTest": 11,
+              "com.hookah.platform.backend.telegram.TelegramGuestEntryOutboxOrderingTest": 4,
               "com.hookah.platform.backend.telegram.TelegramOutboxWorkerTest": 8,
               "com.hookah.platform.backend.miniapp.guest.GuestOrderRoutesTest": 61,
               "com.hookah.platform.backend.telegram.db.GuestOrderIdempotencyFingerprintTest": 7,
