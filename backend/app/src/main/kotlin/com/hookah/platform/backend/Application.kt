@@ -284,6 +284,7 @@ private data class VersionResponse(
 )
 
 internal data class ModuleOverrides(
+    val tableSessionCleanupEnabled: Boolean = true,
     val tableTokenResolver: (suspend (String) -> TableContext?)? = null,
     val telegramFileDownloader: (suspend (String) -> TelegramDownloadedFile?)? = null,
     val staffChatNotifier: StaffChatNotifier? = null,
@@ -298,7 +299,9 @@ internal data class ModuleOverrides(
     val miniAppAbuseProtection: MiniAppAbuseProtection? = null,
     val telegramCommandMenuConfigurator: suspend (TelegramApiClient) -> Unit =
         ::configureTelegramCommandMenuSafely,
-)
+) {
+    fun isTableSessionCleanupEnabled(appEnv: String): Boolean = appEnv != "test" || tableSessionCleanupEnabled
+}
 
 private class TelegramTrafficPolicySessionGuardConfig {
     lateinit var trafficPolicy: TelegramTrafficPolicy
@@ -956,7 +959,9 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
         if (dataSource != null) {
             if (stagingMaintenancePolicy.allowsAutonomousWrites) {
                 subscriptionBillingJob.start(subscriptionBillingScope)
-                tableSessionCleanupJob = tableSessionCleanupWorker.start()
+                if (overrides.isTableSessionCleanupEnabled(appEnv)) {
+                    tableSessionCleanupJob = tableSessionCleanupWorker.start()
+                }
                 if (bookingExpiryWorkerConfig.enabled) {
                     bookingExpiryJob = bookingExpiryWorker.start()
                 } else {
