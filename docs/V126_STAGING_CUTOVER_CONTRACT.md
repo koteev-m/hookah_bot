@@ -216,6 +216,37 @@ the expected local proof hash from the immutable run manifest. Old, missing or f
 has no compatibility bypass. The changed script identity requires a newly bound future run;
 this feature does not reinterpret old runs or permit cutover initialization.
 
+
+### HT-CI-01 parallel release CI contract (new runs only)
+
+The current sequencer uses the explicit contract identifier `HT-CI-01-parallel-v1`. Its exact
+15-job inventory is the historical twelve names plus `compose-cutover`, `compose-prerequisite`
+and `compose-runtime`; `compose` remains the mandatory aggregate. The version identifier and exact
+expanded names participate in `CI_CONTRACT_SHA256`. New local baseline proof bytes additionally
+contain `main_actions_contract=HT-CI-01-parallel-v1`, `main_actions_jobs=15/15`, the contract hash
+and the exact sealed Actions JSON hash. Run/workflow/repository/SHA/attempt and completed-success
+requirements remain unchanged. Every worker and both existing aggregates must independently appear
+once with `completed/success`; aggregate success cannot substitute for a missing worker.
+
+This is a separate prospective contract, not a migration of historical evidence. The historical
+HT-12W twelve-job JSON/proof format and hashes described above remain valid only under their
+original release-tracked sequencer and verification chain. The new verifier rejects that inventory,
+and the historical verifier rejects the new inventory. Neither chooses a contract from untrusted
+evidence or silently accepts an older shape. `load_state` and receipt verification retain the exact
+manifest `script_sha256` binding; the new sequencer cannot continue an old initialized run. Historical
+verification must use its original exact sequencer and bound dependencies. No historical receipt,
+proof, checksum, release manifest, authority enrollment or external evidence is rewritten.
+
+A future authorized run requires fresh approval bound to the new exact release/sequencer identity
+and new CI evidence. This change grants no new execution authority, does not alter Gate A/B/C,
+rollback, recovery, admission, endpoint confinement or any deployment operation. Existing active
+runs must not be upgraded in place. Regression coverage validates both inventory directions,
+distinct proof hashes, and rejection of missing/unexpected/duplicate/substituted/partial jobs,
+historical JSON and forged contract identity even after synthetic log/receipt hashes are recomputed.
+
+See [HT-CI-01 parallel Compose contract](TESTING_QA_SMOKE_STRATEGY.md#ht-ci-01-parallel-compose-contract)
+for the full preserved step inventory, aggregation behavior and local/hosted validation boundary.
+
 ### Ownership observation and separately approved repair
 
 The successful prerequisite `V126-PRE-GATE-A-SYNC-20260907T181340Z` remains terminal PASS

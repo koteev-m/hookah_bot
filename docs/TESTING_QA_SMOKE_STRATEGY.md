@@ -3563,10 +3563,85 @@ Current CI jobs:
 - `backend-telegram-lightweight`;
 - `backend-migration-sanity`;
 - `backend` aggregate;
-- `compose`;
+- `compose` aggregate;
+- `compose-cutover`;
+- `compose-prerequisite`;
+- `compose-runtime`;
 - `miniapp`;
 - `miniapp-e2e-smoke`;
 - `docker`.
+
+### HT-CI-01 parallel Compose contract
+
+This topology supersedes earlier references to the current twelve-job layout; historical CI
+observations and receipts remain unchanged. The exact release contract now has 15 jobs. The original
+11 non-Compose jobs, including all eight `backend` dependencies, are unchanged. `push` and
+`pull_request` triggers and `contents: read` remain unchanged.
+
+Three independent GitHub-hosted `ubuntu-latest` runners execute `compose-cutover`,
+`compose-prerequisite` and `compose-runtime` concurrently. Each retains the 60-minute job timeout,
+full checkout history, Java 21, PostgreSQL17/18 and libpq18, SSH/Caddy preparation, endpoint guard
+self-test and tool-version recording. Setup is repeated deliberately: no artifact transfer, shared
+server, shared filesystem or cross-job state is introduced. Fixtures allocate their own temporary
+roots and owned resources; endpoint confinement, signals, timeouts and cleanup code are unchanged.
+Process-sensitive checks remain serial within each worker. Runtime and closure evidence summaries
+stay with their producing steps, in the original order. Compose `.env` creation stays directly
+before config validation in `compose-cutover`.
+
+`compose` retains its original check name and directly needs all three workers. Both the job and its
+single local aggregation step use `always()`. Exact dependency names, `result=success`, and the
+string output `verified=true` from a final default-success-only worker step are mandatory. Missing,
+unexpected, failure, skipped, cancelled, partial or unconfirmed results cause a nonzero exit; there
+is no `continue-on-error`. A forced workflow cancellation or runner loss may prevent the aggregate
+from finishing; that is never a successful aggregate and is not release evidence.
+
+Complete original Compose step inventory (commands, environments and conditions retained verbatim):
+
+| Original mandatory step | New location |
+| --- | --- |
+| Checkout | All three workers |
+| Set up Java for isolated backend runtime | All three workers |
+| Validate staging admission guard syntax | All three workers |
+| Exercise staging admission guard fixtures | All three workers |
+| Install real psql17 and libpq18 consumer (isolated CI runner) | All three workers |
+| Validate test endpoint confinement | All three workers |
+| Record isolated Linux tool versions | All three workers |
+| Exercise V126 executable cutover contract fixtures | `compose-cutover` |
+| Exercise Policy B authority, INIT and exact proposal callers | `compose-cutover` |
+| Exercise Policy B authenticated owned SSH in network-denied Linux | `compose-cutover` |
+| Exercise V126 canonical IDs with real Docker and Compose (isolated runner) | `compose-cutover` |
+| Compare original and repaired supervisor deadline and cancellation consumers | `compose-cutover` |
+| Exercise V126 real process guard regression | `compose-cutover` |
+| Exercise real Caddy disk and active configuration consumers | `compose-runtime` |
+| Exercise actual root ownership and fixed operational Compose guard | `compose-runtime` |
+| Exercise connected PostgreSQL17 Docker and JVM runtime | `compose-runtime` |
+| Record safe runtime evidence summary | `compose-runtime` |
+| Exercise owned real systemd Caddy interruption and active configuration | `compose-runtime` |
+| Exercise reconciled terminal and ordinary deploy shared target lifecycle | `compose-runtime` |
+| Exercise isolated Docker daemon interruption and blocked replay | `compose-runtime` |
+| Record safe closure evidence summaries | `compose-runtime` |
+| Exercise prerequisite fixture deadlines and cleanup | `compose-prerequisite` |
+| Exercise V126 pre-Gate-A prerequisite sync fixtures | `compose-prerequisite` |
+| Create CI compose env | `compose-cutover` |
+| Validate Docker Compose config | `compose-cutover` |
+| Validate staging maintenance deploy guard | `compose-cutover` |
+
+Local validation: `python3 scripts/test-v126-release-ci.py`, `bash -n scripts/v126-cutover.sh`,
+`actionlint -shellcheck= -pyflakes= .github/workflows/ci.yml`, and `git diff --check`. The release-CI
+suite executes the actual aggregate script over all 216 combinations of success/failure/skipped/
+cancelled/empty/null worker results, plus missing/unexpected jobs and missing/invalid completion
+outputs. It also checks exact inventory, mandatory hosted consumers, historical contract separation
+and downstream receipt binding after synthetic evidence tampering and rehashing.
+
+No static/local result proves hosted Linux integration success or a faster CI run. Based on the
+previous approximately 16.3-minute prerequisite, 10.6-minute cutover and 5.5-minute connected-runtime
+steps, 20–25 minutes is a conditional target: package installation, fixture cost, runner queueing,
+three available concurrent runner slots, Docker pulls/builds and other CI jobs determine the actual
+critical path. Total runner minutes can increase because setup is repeated. A subsequent authorized
+CI run must establish correctness and elapsed time for its exact SHA; no staging deploy is needed
+for this CI-only change.
+
+### Required check expectations
 
 Expectations:
 - All required jobs must be green before merge/release.
@@ -3610,14 +3685,14 @@ Expectations:
   H2/PostgreSQL `5 / 5`, cursor H2/PostgreSQL `4 / 4`, and real PostgreSQL migration-lock
   concurrency `2`. Missing, below-minimum, skipped, failed or errored reports fail the existing
   mandatory job.
-- `compose` syntax-checks the V126 sequencer and prerequisite-sync shell scripts, compiles the
+- The mandatory `compose` groups syntax-check the V126 sequencer and prerequisite-sync shell scripts, compiles the
   prerequisite Python helper, and executes both complete mocked harnesses in addition to the
   existing admission, maintenance, image-identity and Compose guards. Both fixture suites are
   mandatory; a skipped or missing sequencer/prerequisite test is not equivalent evidence.
   The cutover harness includes the explicitly scoped HT-12X disposable loopback PostgreSQL17
   container and real libpq consumer described above. HT-12Z adds argument-sensitive canonical
-  container-ID fixtures to that harness and a mandatory real Docker/Compose check in the same
-  `compose` job (`python3 scripts/test-v126-container-ids.py --real-cli`). The latter requires an
+  container-ID fixtures to that harness and a mandatory real Docker/Compose check in
+  `compose-cutover` (`python3 scripts/test-v126-container-ids.py --real-cli`). The latter requires an
   empty default daemon on a GitHub-hosted Linux runner and uses only test-owned, network-disabled
   inert containers; it records actual CLI/server versions and verifies cleanup. Local fixture
   results without daemon isolation do not satisfy this CI gate. All other external operations are mocked;

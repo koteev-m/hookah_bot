@@ -6,6 +6,7 @@ import contextlib
 import hashlib
 import importlib.util
 import io
+import itertools
 import json
 import os
 from pathlib import Path
@@ -24,7 +25,7 @@ ROOT = Path(__file__).resolve().parent
 SCRIPT = ROOT / 'v126-cutover.sh'
 HARNESS = ROOT / 'test-v126-cutover.sh'
 # Projection of confirmed main CI 34146214650, attempt 1 (steps are not job gates).
-GOOD = {'attempt': 1,
+HISTORICAL_GOOD = {'attempt': 1,
  'conclusion': 'success',
  'databaseId': 34146214650,
  'event': 'push',
@@ -45,6 +46,29 @@ GOOD = {'attempt': 1,
  'status': 'completed',
  'workflowDatabaseId': 230370033,
  'workflowName': 'CI'}
+
+# Synthetic future-contract evidence; the historical observation above stays intact.
+COMPOSE_GROUPS = ('compose-cutover', 'compose-prerequisite', 'compose-runtime')
+GOOD = copy.deepcopy(HISTORICAL_GOOD)
+GOOD.update(headSha='a' * 40, databaseId=1)
+GOOD['jobs'].extend(dict(name=name, status='completed', conclusion='success')
+                    for name in COMPOSE_GROUPS)
+
+
+def workflow_jobs():
+    workflow = (ROOT.parent / '.github/workflows/ci.yml').read_text()
+    sections = re.split(r'^  ([a-z][a-z0-9-]+):\n', workflow.split('\njobs:\n', 1)[1], flags=re.M)
+    return dict(zip(sections[1::2], sections[2::2]))
+
+
+def step_run(body, name):
+    step = body.split('      - name: ' + name + '\n', 1)[1]
+    step = re.split(r'^      - ', step, maxsplit=1, flags=re.M)[0]
+    run = step.split('        run: |\n', 1)[1].rstrip()
+    lines = run.splitlines()
+    if not all(not line or line.startswith('          ') for line in lines):
+        raise AssertionError('unsupported literal step script')
+    return '\n'.join(line[10:] for line in lines) + '\n'
 
 
 def shell(body, *args):
@@ -163,11 +187,11 @@ class ReleaseCiTest(unittest.TestCase):
         self.assertEqual(len(names), len(set(names)))
         self.assertEqual(sorted(names), list(namespace['CI_REQUIRED_JOBS']))
         self.assertEqual(sorted(names), sorted(job['name'] for job in GOOD['jobs']))
-        self.assertEqual(len(names), 12)
+        self.assertEqual(len(names), 15)
 
     def test_incomplete_duplicate_substituted_and_unexpected_sets(self):
         variants = []
-        for index in range(12):
+        for index in range(len(GOOD['jobs'])):
             doc = copy.deepcopy(GOOD); del doc['jobs'][index]; variants.append(doc)
         doc = copy.deepcopy(GOOD); doc['jobs'][-1] = doc['jobs'][0]; variants.append(doc)
         doc = copy.deepcopy(GOOD); doc['jobs'][-1]['name'] = 'substituted'; variants.append(doc)
@@ -180,25 +204,133 @@ class ReleaseCiTest(unittest.TestCase):
 
     def test_closure_consumers_are_mandatory_hosted_compose_steps(self):
         workflow = (ROOT.parent / '.github/workflows/ci.yml').read_text()
-        compose = workflow.split('\n  compose:\n', 1)[1].split('\n  miniapp:\n', 1)[0]
-        self.assertIn('    runs-on: ubuntu-latest\n', compose)
-        self.assertNotIn('continue-on-error:', compose)
-        self.assertIn('scripts/test-v126-cutover.sh', compose)
-        self.assertIn('--require-linux-ssh --before-supervisor-source', compose)
+        jobs = workflow_jobs()
+        for name in COMPOSE_GROUPS:
+            body = jobs[name]
+            header = body.split('    steps:\n', 1)[0]
+            self.assertIn('    runs-on: ubuntu-latest\n', header)
+            self.assertIn('    timeout-minutes: 60\n', header)
+            self.assertNotRegex(header, r'(?m)^    (?:needs|if|environment|container|services|strategy):')
+            self.assertIn('          fetch-depth: 0\n', body)
+            self.assertIn('      verified: ${{ steps.completed.outputs.verified }}', header)
+            self.assertTrue(body.rstrip().endswith(
+                '      - name: Confirm mandatory group completion\n'
+                '        id: completed\n'
+                '        run: echo \'verified=true\' >> "$GITHUB_OUTPUT"'))
+            self.assertIn('python3 scripts/v126-test-endpoint-guard.py --self-test', body)
+        cutover, runtime = jobs['compose-cutover'], jobs['compose-runtime']
+        self.assertIn('scripts/test-v126-cutover.sh', cutover)
+        self.assertIn('--require-linux-ssh --before-supervisor-source', cutover)
+        self.assertIn("HT12X_REQUIRE_LIBPQ_MAJOR: '18'", cutover)
+        self.assertIn('scripts/test-v126-staging-prerequisite-sync.sh', jobs['compose-prerequisite'])
         harness = HARNESS.read_text().split('\nmain() {\n', 1)[1]
         self.assertIn('show 09e19461cf54376714ae51f2d4c9e480f8365d8e:scripts/v126-cutover.sh', harness)
         self.assertIn('--before-supervisor-source "${TEST_ROOT}/v126-supervisor-before.sh"', harness)
         ordered = ('scripts/test-v126-linux-runtime.py --require-hosted-ci',
+                   'Record safe runtime evidence summary',
                    'scripts/test-v126-systemd-linux.py --require-hosted-systemd',
                    'scripts/test-v126-ordinary-deploy.py --require-linux-integration',
-                   'scripts/test-v126-docker-daemon-linux.py --require-hosted-daemon')
-        positions = [compose.index(item) for item in ordered]
+                   'scripts/test-v126-docker-daemon-linux.py --require-hosted-daemon',
+                   'Record safe closure evidence summaries')
+        positions = [runtime.index(item) for item in ordered]
         self.assertEqual(positions, sorted(positions))
-        self.assertEqual(compose.count('RUNNER_ENVIRONMENT=github-hosted'), 2)
-        self.assertIn('    timeout-minutes: 60\n', compose)
+        self.assertEqual(runtime.count('RUNNER_ENVIRONMENT=github-hosted'), 2)
         self.assertIn('"${SCRIPT_DIR}/test-v126-docker-daemon-linux.py" --self-test', harness)
         self.assertIn('contents: read', workflow.split('\njobs:\n', 1)[0])
         self.assertNotRegex(workflow, r'(?m)^\s*(?:environment|workflow_run|secrets|continue-on-error):')
+
+    def test_compose_aggregate_executes_and_requires_every_confirmed_success(self):
+        body = workflow_jobs()['compose']
+        header = body.split('    steps:\n', 1)[0]
+        self.assertIn('    if: ${{ always() }}\n', header)
+        self.assertEqual(body.count('if: ${{ always() }}'), 2)
+        match = re.search(r'^    needs: \[(.+)\]$', header, re.M)
+        self.assertIsNotNone(match)
+        self.assertEqual(sorted(match[1].split(', ')), list(COMPOSE_GROUPS))
+        self.assertIn('COMPOSE_NEEDS: ${{ toJSON(needs) }}', body)
+        command = step_run(body, 'Require all Compose groups to complete successfully')
+        def aggregate(doc):
+            return subprocess.run(['bash', '-e', '-o', 'pipefail', '-c', command],
+                                  env=dict(os.environ, COMPOSE_NEEDS=json.dumps(doc)),
+                                  capture_output=True, text=True, timeout=10)
+        for results in itertools.product(('success', 'failure', 'skipped', 'cancelled', '', None), repeat=3):
+            doc = {name: dict(result=result, outputs={'verified': 'true'})
+                   for name, result in zip(COMPOSE_GROUPS, results)}
+            with self.subTest(results=results):
+                self.assertEqual(aggregate(doc).returncode == 0, all(r == 'success' for r in results))
+        good = {name: dict(result='success', outputs={'verified': 'true'}) for name in COMPOSE_GROUPS}
+        for name in COMPOSE_GROUPS:
+            for mutation in ('missing-job', 'missing-result', 'missing-output', 'false-output', 'boolean-output'):
+                doc = copy.deepcopy(good)
+                if mutation == 'missing-job': del doc[name]
+                elif mutation == 'missing-result': del doc[name]['result']
+                elif mutation == 'missing-output': del doc[name]['outputs']
+                else: doc[name]['outputs']['verified'] = True if mutation == 'boolean-output' else 'false'
+                with self.subTest(name=name, mutation=mutation): self.assertNotEqual(aggregate(doc).returncode, 0)
+        for doc in ({}, None, [], dict(good, unexpected={'result': 'success'})):
+            self.assertNotEqual(aggregate(doc).returncode, 0)
+
+    def test_historical_contract_remains_separate(self):
+        # Read-only historical source, never rewrite real receipts/manifests or auto-migrate them.
+        historical = subprocess.run(['git', '--no-optional-locks', '-C', str(ROOT.parent), 'show',
+                                     'b9797db5eaf226ec602d16ed86ed0ce74949ed67:scripts/v126-cutover.sh'],
+                                    capture_output=True, text=True, timeout=10, check=True).stdout
+        old_source = self.root / 'historical-sequencer.sh'
+        old_source.write_text(historical)
+        namespaces = []
+        for source in (old_source, SCRIPT):
+            result = shell('source "$1"; release_ci_python', source)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            namespace = {}
+            exec(compile(result.stdout, str(source), 'exec'), namespace)
+            namespaces.append(namespace)
+        old, new = namespaces
+        self.assertEqual(new['CI_CONTRACT_VERSION'], 'HT-CI-01-parallel-v1')
+        self.assertEqual(old['CI_CONTRACT_SHA256'],
+                         '0558c8ed75680c699ca81d841d1ff1364a4fea7edf57cbc5d31ff0534fbd25b9')
+        self.assertNotEqual(old['CI_CONTRACT_SHA256'], new['CI_CONTRACT_SHA256'])
+        for namespace, valid, invalid in ((old, HISTORICAL_GOOD, GOOD), (new, GOOD, HISTORICAL_GOOD)):
+            write_json(self.actions, valid)
+            namespace['read_main_actions'](str(self.actions), valid['headSha'], valid['databaseId'])
+            write_json(self.actions, invalid)
+            with self.assertRaisesRegex(SystemExit, 'job set differs'):
+                namespace['read_main_actions'](str(self.actions), invalid['headSha'], invalid['databaseId'])
+        manifest = dict(run_id='synthetic', release_sha='a'*40, release_tree='b'*40,
+                        release_parents=['c'*40], main_actions_run_id=1, v126_image_id='sha256:'+'d'*64)
+        old_proof = old['local_baseline_bytes'](manifest, 'e'*64)
+        new_proof = new['local_baseline_bytes'](manifest, 'e'*64)
+        self.assertIn(b'main_actions_jobs=12/12\n', old_proof)
+        self.assertNotIn(b'main_actions_contract=', old_proof)
+        self.assertIn(b'main_actions_jobs=15/15\n', new_proof)
+        self.assertIn(b'main_actions_contract=HT-CI-01-parallel-v1\n', new_proof)
+        self.assertNotEqual(hashlib.sha256(old_proof).digest(), hashlib.sha256(new_proof).digest())
+
+    def test_historical_receipt_chain_still_verifies_only_with_its_bound_sequencer(self):
+        historical_root = self.root / 'historical'
+        historical_scripts = historical_root / 'scripts'
+        historical_scripts.mkdir(parents=True)
+        # Only synthetic temp state is created. Original historical files/evidence stay read-only.
+        for name in ('v126-cutover.sh', 'test-v126-cutover.sh', 'test-v126-release-ci.py',
+                     'v126-operation-bindings.py',
+                     'v126-policy-b-authority.py', 'v126-policy-b-client.py'):
+            raw = subprocess.run(['git', '--no-optional-locks', '-C', str(ROOT.parent), 'show',
+                                  'b9797db5eaf226ec602d16ed86ed0ce74949ed67:scripts/' + name],
+                                 capture_output=True, timeout=10, check=True).stdout
+            (historical_scripts / name).write_bytes(raw)
+        (historical_root / 'release-worktree').mkdir()
+        old_script = historical_scripts / 'v126-cutover.sh'
+        result = shell('source "$1"; TEST_ROOT="$2"; new_state "$CUTOVER_SCRIPT" historical; '
+                       'seed_chain "$NEW_STATE" 1', historical_scripts / HARNESS.name, historical_root)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        state = historical_root / 'state-historical'
+        snapshot = {p: p.read_bytes() for p in state.rglob('*') if p.is_file()}
+        verify = 'source "$1"; load_state "$2"; verify_receipt BASELINE_VERIFIED; echo PASS'
+        self.assertEqual(shell(verify, old_script, state).returncode, 0)
+        refused = shell(verify, SCRIPT, state)
+        self.refused(refused)
+        self.assertIn('sequencer identity changed after run initialization', refused.stderr)
+        self.assertEqual({p: p.read_bytes() for p in state.rglob('*') if p.is_file()}, snapshot)
+        self.assertEqual(shell(verify, old_script, state).returncode, 0)
 
     def test_standalone_workflow_invocation_passes_actual_hosted_coordinator_guard(self):
         runner = dict(PATH=os.environ['PATH'], RUNNER_TEMP=str(self.root), GITHUB_ACTIONS='true',
@@ -255,8 +387,10 @@ class ReleaseCiTest(unittest.TestCase):
             daemon.hosted_only()
 
     def test_each_job_must_complete_successfully(self):
-        for index in range(12):
-            for field, value in [('conclusion','failure'),('conclusion','skipped'),('status','in_progress')]:
+        invalid = [('conclusion', value) for value in ('failure', 'skipped', 'cancelled', 'neutral', '', None)]
+        invalid += [('status', 'in_progress'), ('status', 'queued')]
+        for index in range(len(GOOD['jobs'])):
+            for field, value in invalid:
                 with self.subTest(index=index, field=field, value=value):
                     doc = copy.deepcopy(GOOD); doc['jobs'][index][field] = value
                     self.refused(self.validate(doc))
@@ -341,20 +475,31 @@ if verify_release_baseline_local; then echo PASS; else exit 1; fi
         self.assertEqual(shell('source "$1"; STATE_DIR="$2"; write_local_baseline_proof "$3" "$4"',
                                SCRIPT, state, proof, actions).returncode, 0)
         good_proof = proof.read_bytes()
-        self.assertIn(b'main_actions_jobs=12/12\n', good_proof)
+        self.assertIn(b'main_actions_jobs=15/15\n', good_proof)
         self.assertIn(b'main_actions_contract_sha256=', good_proof)
-        for mutation in ('old-proof','forged-proof','forged-ci','missing-ci','unsealed-ci','symlink-ci'):
+        for mutation in ('old-proof', 'older-proof', 'old-contract', 'wrong-contract-version',
+                         'forged-proof', 'forged-ci', 'historical-ci', 'missing-ci', 'unsealed-ci', 'symlink-ci'):
             with self.subTest(mutation=mutation):
                 doc = json.loads(original[receipt])
                 if mutation == 'old-proof':
-                    forged = good_proof.replace(b'main_actions_jobs=12/12', b'main_actions_jobs=11/11')
+                    forged = good_proof.replace(b'main_actions_jobs=15/15', b'main_actions_jobs=12/12')
+                elif mutation == 'older-proof':
+                    forged = good_proof.replace(b'main_actions_jobs=15/15', b'main_actions_jobs=11/11')
+                elif mutation == 'old-contract':
+                    forged = re.sub(rb'main_actions_contract_sha256=[0-9a-f]{64}',
+                                    b'main_actions_contract_sha256=0558c8ed75680c699ca81d841d1ff1364a4fea7edf57cbc5d31ff0534fbd25b9',
+                                    good_proof)
+                elif mutation == 'wrong-contract-version':
+                    forged = good_proof.replace(b'HT-CI-01-parallel-v1', b'HT-12W-legacy')
                 elif mutation == 'forged-proof':
                     forged = good_proof.replace(b'main_actions_contract_sha256=', b'forged_contract_sha256=')
                 else: forged = good_proof
                 for item in doc['artifacts']:
                     if item['name'] == 'local-baseline': item['sha256'] = hashlib.sha256(forged).hexdigest()
-                if mutation == 'forged-ci':
-                    ci = json.loads(original[actions]); ci['jobs'][-1]['name'] = 'forged'
+                if mutation in ('forged-ci', 'historical-ci'):
+                    ci = json.loads(original[actions])
+                    if mutation == 'historical-ci': ci['jobs'] = copy.deepcopy(HISTORICAL_GOOD['jobs'])
+                    else: ci['jobs'][-1]['name'] = 'forged'
                     actions.chmod(0o600); write_json(actions, ci, 0o400)
                     digest = hashlib.sha256(actions.read_bytes()).hexdigest()
                     for item in doc['artifacts']:
