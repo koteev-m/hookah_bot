@@ -7031,6 +7031,7 @@ import stat
 
 CI_REPOSITORY = "koteev-m/hookah_bot"
 CI_WORKFLOW_ID = 230370033
+CI_CONTRACT_VERSION = "HT-CI-01-parallel-v1"
 CI_REQUIRED_JOBS = (
     "backend",
     "backend-archive-reproducibility (21)",
@@ -7041,11 +7042,15 @@ CI_REQUIRED_JOBS = (
     "backend-telegram-lightweight (21)",
     "backend-venue-booking-rbac (21)",
     "compose",
+    "compose-cutover",
+    "compose-prerequisite",
+    "compose-runtime",
     "docker (backend)",
     "miniapp (20)",
     "miniapp-e2e-smoke (20)",
 )
 CI_CONTRACT_SHA256 = hashlib.sha256(json.dumps({
+    "version": CI_CONTRACT_VERSION,
     "repository": CI_REPOSITORY, "workflow_id": CI_WORKFLOW_ID,
     "workflow_path": ".github/workflows/ci.yml", "workflow_name": "CI",
     "event": "push", "branch": "main", "attempt": 1,
@@ -7100,6 +7105,7 @@ def local_baseline_bytes(manifest, actions_sha):
         ("release_parents", ",".join(manifest["release_parents"])),
         ("main_actions_run_id", manifest["main_actions_run_id"]),
         ("main_actions_jobs", f"{len(CI_REQUIRED_JOBS)}/{len(CI_REQUIRED_JOBS)}"),
+        ("main_actions_contract", CI_CONTRACT_VERSION),
         ("main_actions_contract_sha256", CI_CONTRACT_SHA256),
         ("main_actions_sha256", actions_sha),
         ("migration_sha256", "ad11b2f95a6c73db226d3cd1ba53ac800a514c72d454b9255f379566195e08b5"),
