@@ -1,5 +1,28 @@
 # Project Status
 
+## HT-NEW-STAGING-09 — Linux EMPTY collector, local only
+
+**V125_EMPTY_COLLECTOR_LOCAL_READY / UNCOMMITTED** (2026-10-12).
+Identity gate passed for `Hookah_Tootah` in
+`/private/tmp/hookah-ht-new-staging-07-20261012`, branch
+`codex/ht-new-staging-07-minimal-v125-initial-install`, exact HEAD/base
+`5d32a7198b5617bd10afd1fb810fb7605e59163e`; parent constraint NOT_SUPPLIED.
+The [bounded Linux observer](docs/V125_EMPTY_COLLECTOR.md) acquires only fixed proc
+fields and directory metadata. All output remains UNKNOWN/INCOMPLETE, with no
+execution or qualification authority. Existing V125/V126 consumers are unchanged.
+
+Local synthetic V125 suites: **64/64 PASS**, including 23 collector regressions and
+41 existing lifecycle/initial-install tests. Syntax/static and diff checks passed.
+This is not real Linux target qualification: no new server exists, no EMPTY proof,
+provider/control-plane independence, immutable history or installation authority was
+acquired. No SSH, Docker, SQL, enrollment, installation, commit, push or deploy.
+Initial five modified/untracked files and Git index were preserved byte-for-byte;
+primary checkout, other worktrees, backups and `scripts/dev/` were not modified.
+
+Next: a separate decision on independent provider/control-plane fact acquisition and
+independent collection/retention of future Linux observations. Installation requires
+its own exact authorization; actual recovery/custody and Policy B precede test access.
+
 ## HT-QR-01 — prospective isolated genesis, local candidate
 
 **LOCAL IMPLEMENTATION / ISOLATED LINUX QUALIFIED / UNCOMMITTED** (2026-09-25).

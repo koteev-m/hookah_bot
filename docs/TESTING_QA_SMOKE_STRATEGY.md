@@ -4216,6 +4216,17 @@ contention suites remain required. Native hosted-amd64 Docker/systemd/PG gates c
 substituted by local arm64 capture-only checks. No synthetic PASS establishes operational
 writer exclusion, accepted post-fence state, R0/G/Q, enrollment or permission for genesis.
 
+## V125 offline initial-install assessment
+
+The [local V125 slice](V125_LIFECYCLE_VALIDATOR.md#ht-new-staging-07--offline-initial-install-slice)
+has no operational executor. Run `python3 -B -m unittest discover -s scripts -p 'test_v125*.py' -v`
+and Python syntax compilation for its validator and both test files. The suite covers
+EMPTY/prepared/closed-V125/UNKNOWN classification, actual migration/config/archive bytes,
+image/platform mismatch, V126, imported/existing DBs, old target/epoch/credentials,
+missing authority, replay, predecessor mismatch and premature Telegram opening.
+All results remain non-authoritative. No Docker, SQL, network, browser or staging smoke
+is involved; deployment/Policy B qualification remains separately gated.
+
 ## Prospective authority epoch qualification
 
 For the [prospective isolated domain contract](V126_PROSPECTIVE_AUTHORITY_EPOCH.md), run
