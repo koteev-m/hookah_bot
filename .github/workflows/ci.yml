@@ -107,6 +107,8 @@ jobs:
             --tests "com.hookah.platform.backend.telegram.db.GuestOrderIdempotencyFingerprintTest" \
             --tests "com.hookah.platform.backend.miniapp.guest.GuestVisitRoutesTest" \
             --tests "com.hookah.platform.backend.miniapp.guest.GuestTableResolveRoutesTest" \
+            --tests "com.hookah.platform.backend.miniapp.guest.GuestTableResolveAvailabilityTest" \
+            --tests "com.hookah.platform.backend.miniapp.guest.GuestTableResolveAvailabilityPostgresTest" \
             --tests "com.hookah.platform.backend.miniapp.guest.db.GuestTableContextActivationRepositoryTest" \
             --tests "com.hookah.platform.backend.miniapp.guest.db.GuestTableContextTeardownRepositoryTest" \
             --tests "com.hookah.platform.backend.miniapp.guest.db.PlatformGuestTableMutationCoordinatorTest" \
@@ -159,6 +161,8 @@ jobs:
               "com.hookah.platform.backend.telegram.db.GuestOrderIdempotencyFingerprintTest",
               "com.hookah.platform.backend.miniapp.guest.GuestVisitRoutesTest",
               "com.hookah.platform.backend.miniapp.guest.GuestTableResolveRoutesTest",
+              "com.hookah.platform.backend.miniapp.guest.GuestTableResolveAvailabilityTest",
+              "com.hookah.platform.backend.miniapp.guest.GuestTableResolveAvailabilityPostgresTest",
               "com.hookah.platform.backend.miniapp.guest.db.GuestTableContextActivationRepositoryTest",
               "com.hookah.platform.backend.miniapp.guest.db.GuestTableContextTeardownRepositoryTest",
               "com.hookah.platform.backend.miniapp.guest.db.PlatformGuestTableMutationCoordinatorTest",
@@ -195,6 +199,8 @@ jobs:
               "com.hookah.platform.backend.telegram.TelegramKeyboardsTest",
           ]
           required_minimums = {
+              "com.hookah.platform.backend.miniapp.guest.GuestTableResolveAvailabilityTest": 20,
+              "com.hookah.platform.backend.miniapp.guest.GuestTableResolveAvailabilityPostgresTest": 20,
               "com.hookah.platform.backend.support.SupportTicketRoutesTest": 15,
               "com.hookah.platform.backend.support.SupportThreadReadRepositoryTest": 21,
               "com.hookah.platform.backend.telegram.BookingMessageStaffChatNotifierTest": 8,

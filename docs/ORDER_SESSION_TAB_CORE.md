@@ -29,6 +29,14 @@ The active order belongs to a verified table session/visit, not to a physical ta
 ## Core Invariants
 
 - QR/table token sets context, not permissions.
+- Ordinary Guest Mini App `/api/guest/table/resolve` with `available=false` does not create or touch table
+  sessions, create personal tabs/memberships, clear user exit markers or emit session-start events. An
+  explicitly requested session may be read within the resolved venue/table scope; its status does not override
+  unavailable venue/subscription access. Without an explicit session, an unavailable resolve returns the
+  existing missing-session representation (`0`, `UNKNOWN`, `TABLE_SESSION_MISSING`), including
+  `resolveMode=create`. Available QR re-entry retains session reuse, personal-tab creation and user-scoped
+  exit clearing. Disabled tables/revoked tokens and unpublished venues retain their existing not-found
+  response.
 - For exact Platform Owner, a table token creates no context/session until explicit controlled confirmation. The five-minute process-local opaque pending is not session state or authority and is lost safely on restart. Phase 1 uses single-instance long-polling; a callback missing on another instance fails closed.
 - Confirmed Platform Guest activation is all-or-nothing: final token/venue/table/availability/subscription validation, session resolve/create/touch, exit-marker clear, persisted Guest-dialog clear and exact chat-context save share one JDBC transaction. In-memory cart/draft cleanup follows commit only.
 - Exact Platform Owner Mini App create/touch or explicit-session resolve requires a matching active server-owned Telegram chat context and no user-exit marker. Client token, session id, `mode=guest` and Platform role are never sufficient authority.

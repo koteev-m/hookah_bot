@@ -17,6 +17,7 @@ import com.hookah.platform.backend.miniapp.guest.db.PlatformGuestTableResolveRes
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionEndBlockedReason
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRecord
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
+import com.hookah.platform.backend.miniapp.guest.db.TableSessionStatus
 import com.hookah.platform.backend.miniapp.subscription.VenueAvailabilityResolver
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
@@ -198,13 +199,23 @@ fun Route.guestTableResolveRoutes(
         val sessionState =
             if (requestedTableSessionId != null) {
                 val activeSession =
-                    tableSessionRepository.touchActiveSession(
-                        tableSessionId = requestedTableSessionId,
-                        venueId = table.venueId,
-                        tableId = table.tableId,
-                        ttl = tableSessionConfig.ttl,
-                        now = now,
-                    )
+                    if (availability.available) {
+                        tableSessionRepository.touchActiveSession(
+                            tableSessionId = requestedTableSessionId,
+                            venueId = table.venueId,
+                            tableId = table.tableId,
+                            ttl = tableSessionConfig.ttl,
+                            now = now,
+                        )
+                    } else {
+                        tableSessionRepository.findSessionForTable(
+                            tableSessionId = requestedTableSessionId,
+                            venueId = table.venueId,
+                            tableId = table.tableId,
+                        )?.takeIf {
+                            it.status == TableSessionStatus.ACTIVE && it.endedAt == null && it.expiresAt > now
+                        }
+                    }
                 if (activeSession != null) {
                     ResolvedTableSession(activeSession, active = true, inactiveReason = null)
                 } else {
@@ -221,7 +232,7 @@ fun Route.guestTableResolveRoutes(
                         inactiveReason = staleSession?.inactiveReason(now) ?: "TABLE_SESSION_ENDED",
                     )
                 }
-            } else if (allowCreateSession) {
+            } else if (allowCreateSession && availability.available) {
                 ResolvedTableSession(
                     session =
                         tableSessionRepository.resolveActiveSession(
@@ -241,7 +252,7 @@ fun Route.guestTableResolveRoutes(
                 )
             }
 
-        if (sessionState.active) {
+        if (availability.available && sessionState.active) {
             guestTabsRepository.ensurePersonalTab(
                 venueId = table.venueId,
                 tableSessionId = sessionState.tableSessionId,
