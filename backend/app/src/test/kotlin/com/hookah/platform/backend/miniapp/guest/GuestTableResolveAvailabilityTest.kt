@@ -1,9 +1,10 @@
 package com.hookah.platform.backend.miniapp.guest
 
+import com.hookah.platform.backend.ModuleOverrides
 import com.hookah.platform.backend.miniapp.guest.api.TableResolveResponse
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
-import com.hookah.platform.backend.module
+import com.hookah.platform.backend.moduleWithOverrides
 import com.hookah.platform.backend.test.PostgresTestEnv
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
@@ -30,6 +31,17 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 open class GuestTableResolveAvailabilityTest {
+    @ParameterizedTest
+    @ValueSource(strings = ["test", "staging", "prod", "production", "dev", "", "unknown"])
+    fun `cleanup override can only disable cleanup in test environment`(appEnv: String) {
+        assertTrue(ModuleOverrides().isTableSessionCleanupEnabled(appEnv))
+        assertTrue(ModuleOverrides(tableSessionCleanupEnabled = true).isTableSessionCleanupEnabled(appEnv))
+        assertEquals(
+            appEnv != "test",
+            ModuleOverrides(tableSessionCleanupEnabled = false).isTableSessionCleanupEnabled(appEnv),
+        )
+    }
+
     protected open fun database(): Triple<String, String, String> =
         Triple(
             "jdbc:h2:mem:resolve-${UUID.randomUUID()};MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1",
@@ -183,7 +195,7 @@ open class GuestTableResolveAvailabilityTest {
                 "telegram.enabled" to "false",
             )
         environment { this.config = config }
-        application { module() }
+        application { moduleWithOverrides(ModuleOverrides(tableSessionCleanupEnabled = false)) }
         client.get("/health")
         DriverManager.getConnection(url, user, password).use { connection ->
             connection.createStatement().use { statement ->
