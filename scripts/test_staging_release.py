@@ -2,6 +2,7 @@
 
 import copy
 import hashlib
+import itertools
 import json
 import os
 from pathlib import Path
@@ -629,6 +630,97 @@ class CommandRuntimeTests(unittest.TestCase):
 
     def test_raw_adapter_different_images_then_rollback(self):
         self.release_and_rollback()
+
+    def test_independent_mount_permutations_preserve_protected_fingerprint_and_input(self):
+        mounts = [{"Type": "bind", "Source": "/fixture/source-" + str(index),
+                   "Destination": destination, "Mode": "ro", "RW": False,
+                   "Propagation": "rprivate"}
+                  for index, destination in enumerate(("/data", "/database", "/etc/app", "/logs"))]
+        for item in (self.pg, self.prod, self.shared):
+            for mount in item["Mounts"]:
+                mount["Destination"] = "/pgdata"
+            item["Mounts"] += copy.deepcopy(mounts)
+        self.scope["protected"] = self.runtime.observe(timeout=5)["protected"]
+        for order in itertools.permutations(mounts):
+            for item in (self.pg, self.prod, self.shared):
+                item["Mounts"][-4:] = copy.deepcopy(order)
+                raw = copy.deepcopy(item)
+                expected = sorted(raw["Mounts"], key=lambda mount: json.dumps(mount, sort_keys=True))
+                self.assertEqual(release.stable_container(raw)["Mounts"], expected)
+                self.assertEqual(raw, item)
+            before = copy.deepcopy(self.containers)
+            release.validate_snapshot(self.runtime.observe(timeout=5), self.scope, self.current["id"])
+            self.assertEqual(self.containers, before)
+        self.release_and_rollback()
+
+    def test_all_mount_fields_and_multiplicity_remain_protected(self):
+        mount = {"Type": "bind", "Source": "/fixture/data", "Destination": "/data",
+                 "Mode": "ro,z", "RW": False, "Propagation": "rprivate",
+                 "Options": {"nested": ["first", "second"]}}
+        changes = {key: lambda mounts, key=key, value=value: mounts[-1].update({key: value})
+                   for key, value in (("Type", "tmpfs"), ("Source", "/fixture/other"),
+                                      ("Destination", "/other"), ("Mode", "rw,z"), ("RW", True),
+                                      ("Propagation", "rshared"), ("Name", "added-name"),
+                                      ("Driver", "other-driver"), ("Options", {"nested": ["second", "first"]}),
+                                      ("FutureField", {"value": True}))}
+        changes.update(add=lambda mounts: mounts.append(dict(mount, Destination="/extra")),
+                       remove=lambda mounts: mounts.pop(),
+                       duplicate=lambda mounts: mounts.append(copy.deepcopy(mount)),
+                       remove_field=lambda mounts: mounts[-1].pop("RW"))
+        for item in (self.pg, self.prod, self.shared):
+            for existing in item["Mounts"]:
+                existing["Destination"] = "/pgdata"
+            item["Mounts"].append(copy.deepcopy(mount))
+        baseline = self.runtime.observe(timeout=5)["protected"]
+        self.scope["protected"] = baseline
+        for item in (self.pg, self.prod, self.shared):
+            original = copy.deepcopy(item["Mounts"])
+            for field, change in changes.items():
+                with self.subTest(container=item["Id"], field=field):
+                    change(item["Mounts"])
+                    with self.assertRaisesRegex(release.Refused, "^PROTECTED_RESOURCES_CHANGED$"):
+                        release.validate_snapshot(self.runtime.observe(timeout=5), self.scope, self.current["id"])
+                    item["Mounts"] = copy.deepcopy(original)
+            # A baseline containing duplicates must also detect a reduced count.
+            item["Mounts"].append(copy.deepcopy(mount))
+            self.scope["protected"] = self.runtime.observe(timeout=5)["protected"]
+            self.assertEqual(release.stable_container(item)["Mounts"].count(mount), 2)
+            item["Mounts"].pop()
+            with self.assertRaisesRegex(release.Refused, "^PROTECTED_RESOURCES_CHANGED$"):
+                release.validate_snapshot(self.runtime.observe(timeout=5), self.scope, self.current["id"])
+            self.scope["protected"] = baseline
+
+    def test_overlapping_or_uncertain_mount_destinations_preserve_order(self):
+        for left, right in (("/data", "/data/nested"), ("/data/nested", "/data"),
+                            ("/data", "/data"), ("/", "/data"),
+                            ("/data/", "/data/nested"), ("/data/../data", "/data/nested"),
+                            ("/data//nested", "/data"), ("/data/./nested", "/data"),
+                            (None, "/data"), ("relative", "/data"), ("", "/data")):
+            with self.subTest(left=left, right=right):
+                self.shared["Mounts"] = [{"Type": "bind", "Source": "/fixture/one", "Destination": left},
+                                         {"Type": "bind", "Source": "/fixture/two", "Destination": right}]
+                if left is None:
+                    self.shared["Mounts"][0].pop("Destination")
+                self.scope["protected"] = self.runtime.observe(timeout=5)["protected"]
+                self.shared["Mounts"].reverse()
+                with self.assertRaisesRegex(release.Refused, "^PROTECTED_RESOURCES_CHANGED$"):
+                    release.validate_snapshot(self.runtime.observe(timeout=5), self.scope, self.current["id"])
+
+    def test_postgres_structural_drift_remains_blocked(self):
+        changes = {
+            "container_id": lambda: self.pg.update(Id="7" * 64),
+            "image": lambda: self.pg.update(Image=self.candidate["id"]),
+            "environment": lambda: self.pg["Config"]["Env"].append("CHANGED=value"),
+            "host_config": lambda: self.pg["HostConfig"].update(Privileged=True),
+        }
+        original = copy.deepcopy(self.pg)
+        for field, change in changes.items():
+            with self.subTest(field=field):
+                change()
+                with self.assertRaisesRegex(release.Refused, "^PROTECTED_RESOURCES_CHANGED$"):
+                    release.validate_snapshot(self.runtime.observe(timeout=5), self.scope, self.current["id"])
+                self.pg.clear()
+                self.pg.update(copy.deepcopy(original))
 
     def release_and_rollback(self):
         with tempfile.TemporaryDirectory() as temp:

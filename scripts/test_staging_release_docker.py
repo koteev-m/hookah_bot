@@ -141,7 +141,10 @@ class DockerReleaseTests(unittest.TestCase):
                 (stage_dir / 'docker-compose.yml').write_text(json.dumps(compose))
                 (prod_dir / '.env').write_text('POSTGRES_DB=production\nPOSTGRES_USER=production\nPOSTGRES_PASSWORD=fixture-private-secret\n')
                 (prod_dir / '.env').chmod(0o600)
-                (prod_dir / 'docker-compose.yml').write_text(json.dumps({'services': {'postgres': pg_service}, 'volumes': {'pgdata': {}}}))
+                prod_pg_service = copy.deepcopy(pg_service)
+                prod_pg_service['volumes'] += [str(directory / name) + ':/ht-fixture/' + name + ':ro'
+                                               for name in ('cert.pem', 'key.pem')]
+                (prod_dir / 'docker-compose.yml').write_text(json.dumps({'services': {'postgres': prod_pg_service}, 'volumes': {'pgdata': {}}}))
 
                 def compose_argv(project, folder):
                     return ['docker', 'compose', '--project-name', project, '--project-directory', str(folder),
@@ -219,6 +222,26 @@ class DockerReleaseTests(unittest.TestCase):
                 self.assertTrue(release.fingerprint(pinned_before) == release.fingerprint(pinned_after),
                                 'fixture restart changed pinned network fields: ' + ','.join(changed_network_fields[:16]))
                 release.validate_snapshot(runtime.observe(timeout=5), scope, current['id'])
+                # Replay only the presentation order of real inspect mount records.
+                self.assertEqual(len(prod_after['Mounts']), 3)
+                def reordered_mounts(argv, **kwargs):
+                    code, raw = runner(argv, **kwargs)
+                    if code == 0 and argv[:2] == ['docker', 'inspect']:
+                        inspected = json.loads(raw)
+                        for item in inspected:
+                            if item['Id'] == prod_id:
+                                item['Mounts'].reverse()
+                        raw = json.dumps(inspected).encode()
+                    return code, raw
+
+                reordered_runtime = release.CommandRuntime(scope, {r['id']: r for r in images},
+                                                           runner=reordered_mounts, file_reader=files.read,
+                                                           configuration=runtime.configuration)
+                release.validate_snapshot(reordered_runtime.observe(timeout=5), scope, current['id'])
+                changed_mount = copy.deepcopy(prod_after)
+                changed_mount['Mounts'][0]['RW'] = not changed_mount['Mounts'][0]['RW']
+                self.assertNotEqual(release.fingerprint(release.stable_container(prod_after)),
+                                    release.fingerprint(release.stable_container(changed_mount)))
                 # Wrong DB/target fails before persistent configuration or Docker mutation.
                 denied = copy.deepcopy(registered)
                 denied['scope']['protected']['postgres']['system_id'] = 'wrong'
