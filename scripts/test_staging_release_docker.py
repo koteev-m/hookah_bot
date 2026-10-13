@@ -46,6 +46,59 @@ def free_port():
         return sock.getsockname()[1]
 
 
+def assert_restart_configuration(test, before, after):
+    for key in ('Id', 'Image', 'Config', 'HostConfig'):
+        test.assertTrue(before[key] == after[key], 'fixture production ' + key + ' changed')
+    test.assertTrue(release.stable_container(before)['Mounts'] == release.stable_container(after)['Mounts'],
+                    'fixture production Mounts changed')
+
+
+class RestartConfigurationTests(unittest.TestCase):
+    def setUp(self):
+        self.before = {'Id': 'container', 'Image': 'image', 'Config': {}, 'HostConfig': {},
+                       'State': {'Running': True}, 'NetworkSettings': {'Networks': {}},
+                       'Mounts': [{'Type': 'bind', 'Source': '/fixture/' + name,
+                                   'Destination': '/' + name, 'RW': False, 'Mode': 'ro',
+                                   'Propagation': 'rprivate'} for name in ('data', 'config', 'logs')]}
+
+    def test_independent_mount_reordering_preserves_input(self):
+        after = copy.deepcopy(self.before)
+        after['Mounts'].reverse()
+        original = copy.deepcopy(after)
+        assert_restart_configuration(self, self.before, after)
+        self.assertEqual(after, original)
+
+    def test_identity_mount_fields_counts_and_overlap_remain_strict(self):
+        for key in ('Id', 'Image', 'Config', 'HostConfig'):
+            with self.subTest(key=key):
+                after = copy.deepcopy(self.before)
+                after[key] = 'changed'
+                with self.assertRaises(AssertionError):
+                    assert_restart_configuration(self, self.before, after)
+        for key, value in (('Source', '/other'), ('Destination', '/other'), ('RW', True),
+                           ('Mode', 'rw'), ('Propagation', 'rshared'), ('Type', 'volume'),
+                           ('Options', {'added': True})):
+            with self.subTest(mount_field=key):
+                after = copy.deepcopy(self.before)
+                after['Mounts'][0][key] = value
+                with self.assertRaises(AssertionError):
+                    assert_restart_configuration(self, self.before, after)
+        for count in (0, 2, 4):
+            with self.subTest(count=count):
+                after = copy.deepcopy(self.before)
+                after['Mounts'] = (after['Mounts'] * 2)[:count]
+                with self.assertRaises(AssertionError):
+                    assert_restart_configuration(self, self.before, after)
+        for destination in ('/data/nested', '/data', None, 'relative'):
+            with self.subTest(destination=destination):
+                before = copy.deepcopy(self.before)
+                before['Mounts'][1]['Destination'] = destination
+                after = copy.deepcopy(before)
+                after['Mounts'].reverse()
+                with self.assertRaises(AssertionError):
+                    assert_restart_configuration(self, before, after)
+
+
 @unittest.skipUnless(os.environ.get('HT_STAGING_DOCKER_FIXTURE') == '1', 'explicit disposable Docker fixture opt-in required')
 class DockerReleaseTests(unittest.TestCase):
     def test_real_release_persistence_rollback_and_unknown(self):
@@ -205,8 +258,7 @@ class DockerReleaseTests(unittest.TestCase):
                 prod_after = json.loads(command(['docker', 'inspect', prod_id]))[0]
                 self.assertTrue(config_before == command(compose_argv(prod, prod_dir) + ['config', '--format', 'json']),
                                 'fixture production Compose configuration changed')
-                self.assertTrue(all(prod_before[key] == prod_after[key] for key in ('Id', 'Image', 'Config', 'HostConfig', 'Mounts')),
-                                'fixture production identity/configuration changed')
+                assert_restart_configuration(self, prod_before, prod_after)
                 changed_endpoints = sorted({key for network, endpoint in prod_before['NetworkSettings']['Networks'].items()
                                             for key in endpoint if endpoint[key] != prod_after['NetworkSettings']['Networks'].get(network, {}).get(key)})
                 print(json.dumps({'restart_changed_network_settings': sorted(key for key in prod_before['NetworkSettings']
