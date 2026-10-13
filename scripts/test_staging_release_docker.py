@@ -46,6 +46,59 @@ def free_port():
         return sock.getsockname()[1]
 
 
+def assert_restart_configuration(test, before, after):
+    for key in ('Id', 'Image', 'Config', 'HostConfig'):
+        test.assertTrue(before[key] == after[key], 'fixture production ' + key + ' changed')
+    test.assertTrue(release.stable_container(before)['Mounts'] == release.stable_container(after)['Mounts'],
+                    'fixture production Mounts changed')
+
+
+class RestartConfigurationTests(unittest.TestCase):
+    def setUp(self):
+        self.before = {'Id': 'container', 'Image': 'image', 'Config': {}, 'HostConfig': {},
+                       'State': {'Running': True}, 'NetworkSettings': {'Networks': {}},
+                       'Mounts': [{'Type': 'bind', 'Source': '/fixture/' + name,
+                                   'Destination': '/' + name, 'RW': False, 'Mode': 'ro',
+                                   'Propagation': 'rprivate'} for name in ('data', 'config', 'logs')]}
+
+    def test_independent_mount_reordering_preserves_input(self):
+        after = copy.deepcopy(self.before)
+        after['Mounts'].reverse()
+        original = copy.deepcopy(after)
+        assert_restart_configuration(self, self.before, after)
+        self.assertEqual(after, original)
+
+    def test_identity_mount_fields_counts_and_overlap_remain_strict(self):
+        for key in ('Id', 'Image', 'Config', 'HostConfig'):
+            with self.subTest(key=key):
+                after = copy.deepcopy(self.before)
+                after[key] = 'changed'
+                with self.assertRaises(AssertionError):
+                    assert_restart_configuration(self, self.before, after)
+        for key, value in (('Source', '/other'), ('Destination', '/other'), ('RW', True),
+                           ('Mode', 'rw'), ('Propagation', 'rshared'), ('Type', 'volume'),
+                           ('Options', {'added': True})):
+            with self.subTest(mount_field=key):
+                after = copy.deepcopy(self.before)
+                after['Mounts'][0][key] = value
+                with self.assertRaises(AssertionError):
+                    assert_restart_configuration(self, self.before, after)
+        for count in (0, 2, 4):
+            with self.subTest(count=count):
+                after = copy.deepcopy(self.before)
+                after['Mounts'] = (after['Mounts'] * 2)[:count]
+                with self.assertRaises(AssertionError):
+                    assert_restart_configuration(self, self.before, after)
+        for destination in ('/data/nested', '/data', None, 'relative'):
+            with self.subTest(destination=destination):
+                before = copy.deepcopy(self.before)
+                before['Mounts'][1]['Destination'] = destination
+                after = copy.deepcopy(before)
+                after['Mounts'].reverse()
+                with self.assertRaises(AssertionError):
+                    assert_restart_configuration(self, before, after)
+
+
 @unittest.skipUnless(os.environ.get('HT_STAGING_DOCKER_FIXTURE') == '1', 'explicit disposable Docker fixture opt-in required')
 class DockerReleaseTests(unittest.TestCase):
     def test_real_release_persistence_rollback_and_unknown(self):
@@ -141,7 +194,10 @@ class DockerReleaseTests(unittest.TestCase):
                 (stage_dir / 'docker-compose.yml').write_text(json.dumps(compose))
                 (prod_dir / '.env').write_text('POSTGRES_DB=production\nPOSTGRES_USER=production\nPOSTGRES_PASSWORD=fixture-private-secret\n')
                 (prod_dir / '.env').chmod(0o600)
-                (prod_dir / 'docker-compose.yml').write_text(json.dumps({'services': {'postgres': pg_service}, 'volumes': {'pgdata': {}}}))
+                prod_pg_service = copy.deepcopy(pg_service)
+                prod_pg_service['volumes'] += [str(directory / name) + ':/ht-fixture/' + name + ':ro'
+                                               for name in ('cert.pem', 'key.pem')]
+                (prod_dir / 'docker-compose.yml').write_text(json.dumps({'services': {'postgres': prod_pg_service}, 'volumes': {'pgdata': {}}}))
 
                 def compose_argv(project, folder):
                     return ['docker', 'compose', '--project-name', project, '--project-directory', str(folder),
@@ -202,8 +258,7 @@ class DockerReleaseTests(unittest.TestCase):
                 prod_after = json.loads(command(['docker', 'inspect', prod_id]))[0]
                 self.assertTrue(config_before == command(compose_argv(prod, prod_dir) + ['config', '--format', 'json']),
                                 'fixture production Compose configuration changed')
-                self.assertTrue(all(prod_before[key] == prod_after[key] for key in ('Id', 'Image', 'Config', 'HostConfig', 'Mounts')),
-                                'fixture production identity/configuration changed')
+                assert_restart_configuration(self, prod_before, prod_after)
                 changed_endpoints = sorted({key for network, endpoint in prod_before['NetworkSettings']['Networks'].items()
                                             for key in endpoint if endpoint[key] != prod_after['NetworkSettings']['Networks'].get(network, {}).get(key)})
                 print(json.dumps({'restart_changed_network_settings': sorted(key for key in prod_before['NetworkSettings']
@@ -219,6 +274,26 @@ class DockerReleaseTests(unittest.TestCase):
                 self.assertTrue(release.fingerprint(pinned_before) == release.fingerprint(pinned_after),
                                 'fixture restart changed pinned network fields: ' + ','.join(changed_network_fields[:16]))
                 release.validate_snapshot(runtime.observe(timeout=5), scope, current['id'])
+                # Replay only the presentation order of real inspect mount records.
+                self.assertEqual(len(prod_after['Mounts']), 3)
+                def reordered_mounts(argv, **kwargs):
+                    code, raw = runner(argv, **kwargs)
+                    if code == 0 and argv[:2] == ['docker', 'inspect']:
+                        inspected = json.loads(raw)
+                        for item in inspected:
+                            if item['Id'] == prod_id:
+                                item['Mounts'].reverse()
+                        raw = json.dumps(inspected).encode()
+                    return code, raw
+
+                reordered_runtime = release.CommandRuntime(scope, {r['id']: r for r in images},
+                                                           runner=reordered_mounts, file_reader=files.read,
+                                                           configuration=runtime.configuration)
+                release.validate_snapshot(reordered_runtime.observe(timeout=5), scope, current['id'])
+                changed_mount = copy.deepcopy(prod_after)
+                changed_mount['Mounts'][0]['RW'] = not changed_mount['Mounts'][0]['RW']
+                self.assertNotEqual(release.fingerprint(release.stable_container(prod_after)),
+                                    release.fingerprint(release.stable_container(changed_mount)))
                 # Wrong DB/target fails before persistent configuration or Docker mutation.
                 denied = copy.deepcopy(registered)
                 denied['scope']['protected']['postgres']['system_id'] = 'wrong'

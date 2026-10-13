@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import posixpath
 import re
 import selectors
 import shutil
@@ -378,7 +379,17 @@ def stable_container(container):
     networks = container["NetworkSettings"]["Networks"]
     # Legacy Config.MacAddress describes intent only for an unambiguous single network.
     configured_mac = container["Config"].get("MacAddress") if len(networks) == 1 else None
-    return {key: container[key] for key in ("Id", "Image", "Config", "HostConfig", "Mounts")} | {
+    mounts = container["Mounts"]
+    # Only independent destinations have order-insensitive mount semantics.
+    if all(isinstance(mount.get("Destination"), str) and mount["Destination"].startswith("/")
+           for mount in mounts):
+        destinations = ["/" + posixpath.normpath(mount["Destination"]).lstrip("/") for mount in mounts]
+        if not any(left == right or left.startswith(right.rstrip("/") + "/")
+                   or right.startswith(left.rstrip("/") + "/")
+                   for index, left in enumerate(destinations) for right in destinations[index + 1:]):
+            mounts = sorted(mounts, key=lambda mount: json.dumps(mount, sort_keys=True))
+    return {key: container[key] for key in ("Id", "Image", "Config", "HostConfig")} | {
+        "Mounts": mounts,
         "running": container["State"]["Running"] is True
                    and not container["State"].get("Restarting", False)
                    and not container["State"].get("Paused", False),

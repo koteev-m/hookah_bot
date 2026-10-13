@@ -65,7 +65,11 @@ V125, production/PostgreSQL/общие container identities. Drift блокир�
 требует нового baseline: время запуска, счётчик рестартов, runtime endpoint ID и MAC
 без достоверного desired value не входят в fingerprint. Остановка, pause/restarting,
 изменение container/image/config,
-mounts, сетевой привязки или DB binding по-прежнему блокируют операцию. Upgrade/recreate
+mounts, сетевой привязки или DB binding по-прежнему блокируют операцию.
+Порядок `Mounts` с независимыми абсолютными destinations не влияет на fingerprint:
+записи сортируются по полному JSON, сохраняя все поля и повторы. Для совпадающих,
+вложенных или неопределённых destinations порядок сохраняется и его изменение
+остаётся drift. Исходный Docker inspect не изменяется. Upgrade/recreate
 требуют отдельной проверки и решения владельца о новом baseline; автоматического
 rebaseline/reset нет. `status` проверяет свежий snapshot для определённого состояния;
 при UNKNOWN он показывает только intended image, не выдаёт его за фактический.
