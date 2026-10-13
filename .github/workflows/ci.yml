@@ -1254,6 +1254,18 @@ jobs:
           bash scripts/check-staging-image-identity.sh --self-test \
             scripts/deploy-staging.sh \
             scripts/deploy-staging-controlmaster.sh
+      - name: Check staging release shell syntax
+        run: |
+          bash -n scripts/deploy-staging.sh
+          bash -n scripts/deploy-staging-controlmaster.sh
+      - name: Check staging release Python whitespace
+        run: python3 -m tabnanny scripts/staging_release.py scripts/test_staging_release.py scripts/test_staging_release_docker.py
+      - name: Test staging release controller and executor
+        run: python3 -B -m unittest discover -s scripts -p test_staging_release.py -v
+      - name: Test disposable Docker Compose release fixture
+        env:
+          HT_STAGING_DOCKER_FIXTURE: '1'
+        run: python3 -B -m unittest discover -s scripts -p test_staging_release_docker.py -v
       - name: Confirm mandatory group completion
         id: completed
         run: echo 'verified=true' >> "$GITHUB_OUTPUT"

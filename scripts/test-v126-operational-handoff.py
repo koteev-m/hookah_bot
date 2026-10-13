@@ -199,6 +199,35 @@ class HandoffTests(unittest.TestCase):
 
     def test_deploy_source_order_and_actual_refusal_segment(self):
         source = DEPLOY.read_text()
+        if '"${SCRIPT_DIR}/staging_release.py"' in source:
+            result = subprocess.run(['bash', str(REPO / 'scripts/check-staging-image-identity.sh'),
+                                     '--self-test', str(DEPLOY)],
+                                    text=True, capture_output=True, timeout=5)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            tools = self.root / 'closed-wrapper-tools'
+            tools.mkdir()
+            marker = self.root / 'mutation-reached'
+            for name in ('ssh', 'rsync', 'docker'):
+                tool = tools / name
+                tool.write_text('#!/bin/sh\nprintf reached > "$FORBIDDEN_DEPLOY_MARKER"\nexit 91\n')
+                tool.chmod(0o700)
+            environment = dict(os.environ, PATH=str(tools) + os.pathsep + os.environ['PATH'],
+                               FORBIDDEN_DEPLOY_MARKER=str(marker))
+            result = subprocess.run(['bash', str(DEPLOY), 'legacy-refused-target'],
+                                    env=environment, text=True, capture_output=True, timeout=5)
+            self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+            self.assertEqual(result.stdout, '')
+            self.assertEqual(json.loads(result.stderr),
+                             {'status': 'REFUSED', 'reason': 'LEGACY_TRANSITION_REQUIRED',
+                              'live_execution': False})
+            self.assertFalse(marker.exists(), 'legacy alias reached transport or Docker')
+            result = subprocess.run(['bash', str(REPO / 'scripts/check-staging-image-identity.sh'),
+                                     'sha256:' + 'f' * 64, IMAGE_ID],
+                                    text=True, capture_output=True, timeout=5)
+            self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
+            self.assertIn('does not match', result.stderr)
+            self.assertNotIn(SECRET, result.stdout + result.stderr)
+            return
         transport = 'python3 "${SCRIPT_DIR}/v126-ordinary-deploy.py" client'
         self.assertEqual(source.count(transport), 1, 'one supervised lifecycle is required')
         before, after = source.split(transport, 1)

@@ -513,9 +513,13 @@ class OrdinaryTests(unittest.TestCase):
 
     def test_source_bound_single_dispatch_and_actual_image_order_validator(self):
         source = (ROOT / 'scripts/deploy-staging.sh').read_text()
-        self.assertEqual(source.count('"${SCRIPT_DIR}/v126-ordinary-deploy.py" client'), 1)
+        if '"${SCRIPT_DIR}/staging_release.py"' in source:
+            self.assertNotIn('v126-ordinary-deploy.py', source)
+            self.assertNotRegex(source, r'\b(?:BACKEND_IMAGE|APPROVED_DEPLOYMENT_FILE|DEPLOY_STATE_DIR)\b')
+        else:
+            self.assertEqual(source.count('"${SCRIPT_DIR}/v126-ordinary-deploy.py" client'), 1)
+            self.assertNotIn('--env-file .env', source[source.index('## This comparison must stay'):])
         self.assertNotRegex(source, r'(?m)^\s*(ssh|rsync)\s')
-        self.assertNotIn('--env-file .env', source[source.index('## This comparison must stay'):])
         result = subprocess.run(['bash', str(ROOT / 'scripts/check-staging-image-identity.sh'), '--self-test',
                                  str(ROOT / 'scripts/deploy-staging.sh'), str(ROOT / 'scripts/deploy-staging-controlmaster.sh')],
                                 capture_output=True, text=True, timeout=5)
