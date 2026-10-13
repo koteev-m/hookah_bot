@@ -66,7 +66,7 @@ class DockerReleaseTests(unittest.TestCase):
 
             def command(argv, payload=None, timeout=120):
                 code, raw = runner(argv, timeout=timeout, payload=payload)
-                self.assertEqual(code, 0, 'fixture command failed (private output suppressed): ' + argv[0])
+                self.assertEqual(code, 0, 'fixture command failed (private output suppressed): ' + ' '.join(argv[:3]))
                 return raw
 
             def inventory():
@@ -91,8 +91,13 @@ class DockerReleaseTests(unittest.TestCase):
                 code, raw = runner(['docker', 'image', 'inspect', 'python:3.12-alpine'], timeout=10)
                 if code:
                     command(['docker', 'pull', '--platform', 'linux/amd64', 'python:3.12-alpine'], timeout=180)
-                raw = command(['docker', 'image', 'inspect', 'python:3.12-alpine', '--platform', 'linux/amd64'])
+                    raw = command(['docker', 'image', 'inspect', 'python:3.12-alpine'])
+                # Classic stores return a platform image directly. A containerd index
+                # needs explicit selection to verify the requested architecture.
+                if not json.loads(raw)[0].get('Architecture'):
+                    raw = command(['docker', 'image', 'inspect', 'python:3.12-alpine', '--platform', 'linux/amd64'])
                 python_base = json.loads(raw)[0]
+                self.assertEqual(python_base['Os'], 'linux')
                 self.assertEqual(python_base['Architecture'], 'amd64', 'fixture needs amd64 Python base; do not overwrite another platform tag')
                 (directory / 'Dockerfile').write_text(
                     'FROM ' + python_base['RepoDigests'][0] + '\n'

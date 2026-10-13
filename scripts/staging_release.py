@@ -423,7 +423,8 @@ class CommandRuntime:
 
     def image(self, identity, *, timeout):
         record = validate_image(self.images.get(identity), self.scope)
-        inspected = json.loads(self.command(["docker", "image", "inspect", identity, "--platform", record["platform"]],
+        # Inspect the immutable ID; validate the returned platform below (Docker API 1.48 compatible).
+        inspected = json.loads(self.command(["docker", "image", "inspect", identity],
                                             deadline=time.monotonic() + timeout))
         require(len(inspected) == 1, "IMAGE_MISSING")
         image = inspected[0]

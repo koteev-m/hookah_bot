@@ -587,6 +587,7 @@ class CommandRuntimeTests(unittest.TestCase):
         if argv[:2] == ["docker", "inspect"]:
             return 0, json.dumps(self.containers).encode()
         if argv[:3] == ["docker", "image", "inspect"]:
+            self.assertEqual(len(argv), 4, 'Docker 28.0/API 1.48 has no inspect --platform option')
             record = self.images[argv[3]]
             return 0, json.dumps([{"Id": record["id"], "Os": "linux", "Architecture": "amd64",
                                   "Config": {"Labels": {"org.opencontainers.image.revision": record["revision"],
@@ -655,6 +656,17 @@ class CommandRuntimeTests(unittest.TestCase):
         self.label_source = "https://example.invalid/foreign"
         with self.assertRaisesRegex(release.Refused, "^IMAGE_PROVENANCE_MISMATCH$"):
             self.runtime.image(self.candidate["id"], timeout=5)
+
+    def test_inspected_image_id_os_and_architecture_must_match(self):
+        _, raw = self.fake_command(['docker', 'image', 'inspect', self.candidate['id']], timeout=5)
+        original = json.loads(raw)
+        for key, wrong in [('Id', self.current['id']), ('Os', 'windows'), ('Architecture', 'arm64')]:
+            with self.subTest(key=key):
+                inspected = copy.deepcopy(original)
+                inspected[0][key] = wrong
+                with mock.patch.object(self.runtime, 'runner', return_value=(0, json.dumps(inspected).encode())):
+                    with self.assertRaisesRegex(release.Refused, '^IMAGE_PROVENANCE_MISMATCH$'):
+                        self.runtime.image(self.candidate['id'], timeout=5)
 
     def test_postgres_and_production_changes_are_measured(self):
         self.prod["State"]["Running"] = False

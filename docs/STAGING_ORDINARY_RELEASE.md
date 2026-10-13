@@ -45,7 +45,7 @@ image ID/platform/OCI labels и сохраняет record вместе с точ
 `<target>` — явно выбранный SSH alias с проверенным host key и root worker,
 совпадающий с единственной серверной регистрацией. Нет default host, произвольного
 server path или fixture в качестве live authority. Python 3.9+, Docker CLI/Engine 28+
-(`image inspect --platform`), Compose v2, curl и PostgreSQL psql проверяются при переходе.
+(inspect по immutable ID с проверкой OS/architecture), Compose v2, curl и PostgreSQL psql проверяются при переходе.
 Ни одну команду этого раздела сейчас на VPS выполнять нельзя.
 
 ```bash
