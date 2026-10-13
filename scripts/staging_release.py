@@ -374,10 +374,18 @@ class FixtureRuntime:
 
 
 def stable_container(container):
-    """Same stable identity fields used by the existing ordinary deploy checks."""
-    return {key: container[key] for key in ("Id", "Image", "Config", "HostConfig", "Mounts", "RestartCount")} | {
-        "started_at": container["State"]["StartedAt"], "running": container["State"]["Running"],
-        "networks": container["NetworkSettings"]["Networks"],
+    """Pin identity/configuration and availability, excluding restart bookkeeping."""
+    networks = container["NetworkSettings"]["Networks"]
+    # Legacy Config.MacAddress describes intent only for an unambiguous single network.
+    configured_mac = container["Config"].get("MacAddress") if len(networks) == 1 else None
+    return {key: container[key] for key in ("Id", "Image", "Config", "HostConfig", "Mounts")} | {
+        "running": container["State"]["Running"] is True
+                   and not container["State"].get("Restarting", False)
+                   and not container["State"].get("Paused", False),
+        # EndpointID and observed MAC alone describe runtime allocation, not desired configuration.
+        "networks": {name: {key: value for key, value in endpoint.items()
+                            if key != "EndpointID" and (key != "MacAddress" or configured_mac)}
+                     for name, endpoint in networks.items()},
     }
 
 
@@ -504,6 +512,20 @@ class CommandRuntime:
         require(pg_endpoint.get("IPAddress") and pg_endpoint.get("NetworkID")
                 and backend["NetworkSettings"]["Networks"][network].get("NetworkID") == pg_endpoint["NetworkID"],
                 "DATABASE_BINDING_MISMATCH")
+        # The pinned staging Compose configuration can supply desired MACs; inspection alone cannot.
+        for item, service_name in ((backend, "backend"), (postgres, "postgres")):
+            endpoints = item["NetworkSettings"]["Networks"]
+            service = composed["services"][service_name]
+            macs = []
+            if service.get("mac_address") and len(endpoints) == 1:
+                macs.append((next(iter(endpoints.values())), service["mac_address"]))
+            for name, attachment in (service.get("networks") or {}).items():
+                if attachment and attachment.get("mac_address"):
+                    actual_name = composed.get("networks", {}).get(name, {}).get("name")
+                    macs.append((endpoints.get(actual_name, {}), attachment["mac_address"]))
+            require(all(isinstance(desired, str) and isinstance(endpoint.get("MacAddress"), str)
+                        and endpoint["MacAddress"].lower() == desired.lower() for endpoint, desired in macs),
+                    "STAGING_IDENTITY_MISMATCH")
         # Only one endpoint may own the JDBC host on this exact staging network.
         aliases = []
         for item in containers:

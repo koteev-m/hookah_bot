@@ -547,6 +547,8 @@ class CommandRuntimeTests(unittest.TestCase):
                     "RestartCount": 0, "State": {"StartedAt": "fixture-start", "Running": True},
                     "NetworkSettings": {"Networks": {network: {"NetworkID": network + "-id",
                                                                "IPAddress": "fixture-ip-" + cid,
+                                                               "EndpointID": "fixture-endpoint-" + cid,
+                                                               "MacAddress": "02:42:ac:11:00:02",
                                                                "Aliases": [service]}}}}
 
         self.backend = container("f" * 64, self.scope["project"], "backend", env=self.env, network="staging_default")
@@ -626,6 +628,9 @@ class CommandRuntimeTests(unittest.TestCase):
         self.assertTrue(self.runtime.ready(self.current, timeout=5))
 
     def test_raw_adapter_different_images_then_rollback(self):
+        self.release_and_rollback()
+
+    def release_and_rollback(self):
         with tempfile.TemporaryDirectory() as temp:
             store = release.Store(Path(temp) / "state")
             with store.locked():
@@ -638,6 +643,144 @@ class CommandRuntimeTests(unittest.TestCase):
             self.assertEqual(controller.rollback(owner_approved=True), "READY_FOR_SMOKE")
             controller.accept(smoke_passed=True)
             self.assertEqual(store.read()["accepted"], self.current)
+
+    def test_completed_protected_restarts_allow_release_and_rollback(self):
+        for item in (self.prod, self.shared, self.pg):
+            item["State"]["StartedAt"] = "later-start"
+            item["RestartCount"] += 1
+            for endpoint in item["NetworkSettings"]["Networks"].values():
+                endpoint.update(EndpointID="new-runtime-endpoint", MacAddress="02:42:ac:11:00:03")
+        release.validate_snapshot(self.runtime.observe(timeout=5), self.scope, self.current["id"])
+        self.release_and_rollback()
+
+    def test_production_and_shared_structural_drift_remains_blocked(self):
+        changes = {
+            "container_id": lambda item: item.update(Id="7" * 64),
+            "image": lambda item: item.update(Image=self.candidate["id"]),
+            "environment": lambda item: item["Config"].update(Env=["CHANGED=value"]),
+            "labels": lambda item: item["Config"]["Labels"].update(changed="value"),
+            "host_config": lambda item: item["HostConfig"].update(PortBindings={"80/tcp": [{"HostPort": "9999"}]}),
+            "mounts": lambda item: item.update(Mounts=[{"Type": "volume", "Name": "other-volume"}]),
+            "network_membership": lambda item: item["NetworkSettings"]["Networks"].update(other={"NetworkID": "other-id"}),
+            "network_removed": lambda item: item["NetworkSettings"]["Networks"].clear(),
+        }
+        for key, value in (("NetworkID", "other-id"), ("IPAddress", "other-ip"), ("Aliases", ["other"]),
+                           ("DNSNames", ["other"]), ("IPAMConfig", {"IPv4Address": "static-other-ip"}),
+                           ("DriverOpts", {"changed": "value"})):
+            changes[key] = lambda item, key=key, value=value: next(iter(item["NetworkSettings"]["Networks"].values())).update({key: value})
+        for index in (2, 3):
+            original = self.containers[index]
+            for field, change in changes.items():
+                with self.subTest(container=index, field=field):
+                    changed = copy.deepcopy(original)
+                    changed["State"]["StartedAt"] = "later-start"
+                    change(changed)
+                    self.containers[index] = changed
+                    try:
+                        with self.assertRaisesRegex(release.Refused, "^PROTECTED_RESOURCES_CHANGED$"):
+                            release.validate_snapshot(self.runtime.observe(timeout=5), self.scope, self.current["id"])
+                    finally:
+                        self.containers[index] = original
+
+    def test_legacy_explicit_mac_remains_pinned_when_network_is_unambiguous(self):
+        for item in (self.prod, self.shared):
+            item["Config"]["MacAddress"] = "02:42:ac:11:00:02"
+        protected = self.runtime.observe(timeout=5)["protected"]
+        self.scope["protected"] = protected
+        for item in (self.prod, self.shared):
+            endpoint = next(iter(item["NetworkSettings"]["Networks"].values()))
+            with self.subTest(container=item["Id"]):
+                endpoint["MacAddress"] = "02:42:ac:11:00:04"
+                with self.assertRaisesRegex(release.Refused, "^PROTECTED_RESOURCES_CHANGED$"):
+                    release.validate_snapshot(self.runtime.observe(timeout=5), self.scope, self.current["id"])
+                endpoint["MacAddress"] = "02:42:ac:11:00:02"
+
+    def test_explicit_staging_compose_mac_is_checked_against_actual_endpoint(self):
+        for item, service_name in ((self.backend, "backend"), (self.pg, "postgres")):
+            for level in ("service", "network"):
+                with self.subTest(service=service_name, level=level):
+                    original_composed = copy.deepcopy(self.composed)
+                    self.composed["networks"] = {"default": {"name": "staging_default"}}
+                    service = self.composed["services"][service_name]
+                    if level == "service":
+                        service["mac_address"] = "02:42:AC:11:00:02"
+                    else:
+                        service["networks"] = {"default": {"mac_address": "02:42:AC:11:00:02"}}
+                    self.scope["configuration_fingerprint"] = release.fingerprint({
+                        "compose": release.normalized_configuration(self.composed),
+                        "backend_host_config": self.backend["HostConfig"]})
+                    endpoint = item["NetworkSettings"]["Networks"]["staging_default"]
+                    try:
+                        release.validate_snapshot(self.runtime.observe(timeout=5), self.scope, self.current["id"])
+                        endpoint["MacAddress"] = "02:42:ac:11:00:04"
+                        with self.assertRaisesRegex(release.Refused, "^STAGING_IDENTITY_MISMATCH$"):
+                            self.runtime.observe(timeout=5)
+                    finally:
+                        endpoint["MacAddress"] = "02:42:ac:11:00:02"
+                        self.composed = original_composed
+
+    def test_unavailable_or_missing_protected_containers_remain_blocked(self):
+        for index in (1, 2, 3):
+            original = self.containers[index]
+            for state in ({"Running": False}, {"Restarting": True}, {"Paused": True}, None):
+                with self.subTest(container=index, state=state):
+                    if state is None:
+                        self.containers.pop(index)
+                    else:
+                        changed = copy.deepcopy(original)
+                        changed["State"].update(state)
+                        self.containers[index] = changed
+                    try:
+                        with self.assertRaises(release.Refused):
+                            release.validate_snapshot(self.runtime.observe(timeout=5), self.scope, self.current["id"])
+                    finally:
+                        if state is None:
+                            self.containers.insert(index, original)
+                        else:
+                            self.containers[index] = original
+
+    def test_postgres_volume_and_network_identity_drift_remain_blocked(self):
+        original_pg, original_backend = copy.deepcopy(self.pg), copy.deepcopy(self.backend)
+        for field in ("volume", "network"):
+            with self.subTest(field=field):
+                self.pg["State"]["StartedAt"] = "later-start"
+                if field == "volume":
+                    self.pg["Mounts"][0]["Name"] = "other-volume"
+                else:
+                    for item in (self.pg, self.backend):
+                        item["NetworkSettings"]["Networks"]["staging_default"]["NetworkID"] = "replacement-network-id"
+                with self.assertRaisesRegex(release.Refused, "^PROTECTED_RESOURCES_CHANGED$"):
+                    release.validate_snapshot(self.runtime.observe(timeout=5), self.scope, self.current["id"])
+                self.pg.clear()
+                self.pg.update(copy.deepcopy(original_pg))
+                self.backend.clear()
+                self.backend.update(copy.deepcopy(original_backend))
+
+    def test_completed_restart_does_not_bypass_unknown_or_staging_identity(self):
+        self.prod["State"]["StartedAt"] = "later-start"
+        self.prod["RestartCount"] += 1
+        next(iter(self.prod["NetworkSettings"]["Networks"].values())).update(
+            EndpointID="new-runtime-endpoint", MacAddress="02:42:ac:11:00:03")
+        with tempfile.TemporaryDirectory() as temp:
+            store = release.Store(Path(temp) / "state")
+            with store.locked():
+                store.write({"scope": release.fingerprint(self.scope), "status": "UNKNOWN", "accepted": self.current,
+                             "operation": None, "reason": "DOCKER_OUTCOME_UNDEFINED"})
+            controller = release.Controller(self.scope, store, self.runtime)
+            with self.assertRaisesRegex(release.Refused, "^OPERATOR_RECONCILIATION_REQUIRED$"):
+                controller.deploy(self.candidate, expected_current=self.current["id"], owner_approved=True)
+            with self.assertRaisesRegex(release.Refused, "^OPERATOR_RECONCILIATION_REQUIRED$"):
+                controller.rollback(owner_approved=True)
+            self.assertEqual(store.read()["status"], "UNKNOWN")
+            with store.locked():
+                state = store.read()
+                state["status"], state["reason"] = "ACCEPTED", None
+                store.write(state)
+            self.backend["Config"]["Labels"]["com.docker.compose.project.working_dir"] = "/other-target"
+            with self.assertRaisesRegex(release.Refused, "^STAGING_IDENTITY_MISMATCH$"):
+                controller.deploy(self.candidate, expected_current=self.current["id"], owner_approved=True)
+            self.runtime.configuration.select.assert_not_called()
+            self.assertFalse(any(argv[:2] == ["docker", "compose"] and "up" in argv for argv, *_ in self.calls))
 
     def test_db_credentials_and_url_are_compared_without_raw_error(self):
         self.env["DB_PASSWORD"] = "other-secret"

@@ -73,7 +73,10 @@ class DockerReleaseTests(unittest.TestCase):
                 ids = command(['docker', 'ps', '-aq', '--no-trunc']).decode().splitlines()
                 if not ids:
                     return {}
-                return {item['Id']: release.fingerprint(release.stable_container(item))
+                # Foreign containers must remain untouched, including runtime fields.
+                return {item['Id']: release.fingerprint(release.stable_container(item) | {
+                            'RestartCount': item['RestartCount'], 'started_at': item['State']['StartedAt'],
+                            'networks': item['NetworkSettings']['Networks']})
                         for item in json.loads(command(['docker', 'inspect', *ids]))}
 
             before = inventory()
@@ -148,15 +151,16 @@ class DockerReleaseTests(unittest.TestCase):
                 command(compose_argv(stage, stage_dir) + ['up', '-d', '--no-build', '--pull', 'never'])
                 pg_id = command(compose_argv(stage, stage_dir) + ['ps', '-q', 'postgres']).decode().strip()
                 prod_id = command(compose_argv(prod, prod_dir) + ['ps', '-q', 'postgres']).decode().strip()
-                deadline = time.monotonic() + 40
-                while True:
-                    # The temporary init server accepts sockets before final TCP startup.
-                    code, _ = runner(['docker', 'exec', pg_id, 'pg_isready', '-h', '127.0.0.1',
-                                      '-U', 'staging', '-d', 'staging'], timeout=5)
-                    if code == 0:
-                        break
-                    self.assertLess(time.monotonic(), deadline, 'fixture PostgreSQL startup timeout')
-                    time.sleep(0.2)
+                for database_id in (pg_id, prod_id):
+                    deadline = time.monotonic() + 40
+                    while True:
+                        # The temporary init server accepts sockets before final TCP startup.
+                        code, _ = runner(['docker', 'exec', database_id, 'pg_isready', '-h', '127.0.0.1',
+                                          '-U', 'staging', '-d', 'staging'], timeout=5)
+                        if code == 0:
+                            break
+                        self.assertLess(time.monotonic(), deadline, 'fixture PostgreSQL startup timeout')
+                        time.sleep(0.2)
                 command(['docker', 'exec', '-i', pg_id, 'psql', '-XqAtw', '-U', 'staging', '-d', 'staging',
                          '--set=ON_ERROR_STOP=1'], payload=b'CREATE TABLE flyway_schema_history(version text,success boolean); INSERT INTO flyway_schema_history VALUES (\'125\',true);')
                 scope = {'project_id': 'Hookah_Tootah', 'project': stage, 'directory': str(stage_dir),
@@ -190,6 +194,31 @@ class DockerReleaseTests(unittest.TestCase):
                     self.assertLess(time.monotonic(), deadline, 'fixture HTTP/TLS startup timeout')
                     time.sleep(0.2)
                 self.assertEqual(action('initialize', candidate=current, owner_approved=True)['state'], 'ACCEPTED')
+                # Restart only this fixture's protected production container, retaining the pinned scope.
+                prod_before = json.loads(command(['docker', 'inspect', prod_id]))[0]
+                config_before = command(compose_argv(prod, prod_dir) + ['config', '--format', 'json'])
+                self.assertFalse('mac_address' in config_before.decode(), 'fixture must use dynamic MAC')
+                command(compose_argv(prod, prod_dir) + ['restart', 'postgres'])
+                prod_after = json.loads(command(['docker', 'inspect', prod_id]))[0]
+                self.assertTrue(config_before == command(compose_argv(prod, prod_dir) + ['config', '--format', 'json']),
+                                'fixture production Compose configuration changed')
+                self.assertTrue(all(prod_before[key] == prod_after[key] for key in ('Id', 'Image', 'Config', 'HostConfig', 'Mounts')),
+                                'fixture production identity/configuration changed')
+                changed_endpoints = sorted({key for network, endpoint in prod_before['NetworkSettings']['Networks'].items()
+                                            for key in endpoint if endpoint[key] != prod_after['NetworkSettings']['Networks'].get(network, {}).get(key)})
+                print(json.dumps({'restart_changed_network_settings': sorted(key for key in prod_before['NetworkSettings']
+                                  if prod_before['NetworkSettings'][key] != prod_after['NetworkSettings'].get(key)),
+                                  'restart_changed_endpoint_fields': changed_endpoints,
+                                  'compose_identity_image_mounts_unchanged': True, 'static_mac_configured': False}))
+                self.assertEqual(prod_before['Id'], prod_after['Id'])
+                self.assertNotEqual(prod_before['State']['StartedAt'], prod_after['State']['StartedAt'])
+                pinned_before = release.stable_container(prod_before)
+                pinned_after = release.stable_container(prod_after)
+                changed_network_fields = sorted({key for network, endpoint in pinned_before['networks'].items()
+                                                for key in endpoint if endpoint[key] != pinned_after['networks'].get(network, {}).get(key)})
+                self.assertTrue(release.fingerprint(pinned_before) == release.fingerprint(pinned_after),
+                                'fixture restart changed pinned network fields: ' + ','.join(changed_network_fields[:16]))
+                release.validate_snapshot(runtime.observe(timeout=5), scope, current['id'])
                 # Wrong DB/target fails before persistent configuration or Docker mutation.
                 denied = copy.deepcopy(registered)
                 denied['scope']['protected']['postgres']['system_id'] = 'wrong'

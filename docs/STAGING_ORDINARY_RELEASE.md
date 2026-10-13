@@ -61,10 +61,23 @@ bash scripts/deploy-staging.sh accept --target <target> --smoke-passed
 проверяются Compose project/physical directory/file, staging policy, единственный
 backend, credentials и единственный PostgreSQL DNS endpoint, system ID/DB/user,
 V125, production/PostgreSQL/общие container identities. Drift блокирует операцию.
-Законный restart/upgrade защищённых сервисов также остановит этот pinned profile:
-нужны отдельная проверка и решение владельца о новом baseline; автоматического
+Завершённый restart защищённых сервисов при неизменной структурной идентичности не
+требует нового baseline: время запуска, счётчик рестартов, runtime endpoint ID и MAC
+без достоверного desired value не входят в fingerprint. Остановка, pause/restarting,
+изменение container/image/config,
+mounts, сетевой привязки или DB binding по-прежнему блокируют операцию. Upgrade/recreate
+требуют отдельной проверки и решения владельца о новом baseline; автоматического
 rebaseline/reset нет. `status` проверяет свежий snapshot для определённого состояния;
 при UNKNOWN он показывает только intended image, не выдаёт его за фактический.
+Сетевой fingerprint сохраняет состав сетей, NetworkID, адреса, aliases/DNSNames,
+IPAMConfig и driver options. MAC не классифицируется по наблюдаемому адресу: Docker
+может показывать в endpoint как динамический, так и явно заданный MAC. Явный MAC
+проверяется по закреплённой staging Compose configuration для конкретного network
+attachment или service с единственной сетью; legacy Config.MacAddress при единственной
+сети сохраняет MAC в fingerprint. Для production/shared без достоверного desired MAC
+его проверка не обещается; неоднозначный service-level MAC при нескольких сетях также
+не подтверждается. Container/config/network identity и отдельные проверки фактического
+backend → staging PostgreSQL binding остаются обязательными. Статический MAC не требуется.
 
 Controller атомарно сохраняет **только `BACKEND_IMAGE` и `APP_VERSION` в staging `.env`**
 (mode 0600), проверяет неизменность остальной effective Compose configuration и
