@@ -41,8 +41,24 @@ verify_deploy_order() {
   local build_line
   local guard_line
   local supervised_transport_line
+  local expected
 
   [[ -f "${deploy_script}" ]] || fail "deploy script is unavailable"
+  if grep -qF '"${SCRIPT_DIR}/staging_release.py"' "${deploy_script}"; then
+    expected='#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Legacy SSH-alias invocation is closed before any connection or Docker action.
+case "${1:-}" in
+  plan|simulate|initialize|deploy|rollback|accept|status|--help|-h) ;;
+  *) exec python3 -B "${SCRIPT_DIR}/staging_release.py" deploy ;;
+esac
+exec python3 -B "${SCRIPT_DIR}/staging_release.py" "$@"'
+    [[ "$(cat "${deploy_script}")" == "${expected}" ]] ||
+      fail "ordinary release entrypoint must only dispatch to the closed controller"
+    return
+  fi
   required_tag_line="$(first_line "${deploy_script}" 'BACKEND_IMAGE is required')"
   required_id_line="$(first_line "${deploy_script}" 'EXPECTED_BACKEND_IMAGE_ID is required')"
   build_line="$(first_line "${deploy_script}" 'docker buildx build \')"
@@ -62,8 +78,20 @@ verify_controlmaster_order() {
   local controlmaster_script="$1"
   local preflight_line
   local master_line
+  local expected
 
   [[ -f "${controlmaster_script}" ]] || fail "ControlMaster deploy script is unavailable"
+  if grep -qF 'exec bash "${SCRIPT_DIR}/deploy-staging.sh" "$@"' "${controlmaster_script}"; then
+    expected='#!/usr/bin/env bash
+set -euo pipefail
+
+# Compatibility name only. The single entrypoint owns the closed live gate.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec bash "${SCRIPT_DIR}/deploy-staging.sh" "$@"'
+    [[ "$(cat "${controlmaster_script}")" == "${expected}" ]] ||
+      fail "ControlMaster compatibility name must only forward to the closed entrypoint"
+    return
+  fi
   preflight_line="$(first_line "${controlmaster_script}" 'STAGING_ARTIFACT_PREFLIGHT_ONLY=true \')"
   master_line="$(first_line "${controlmaster_script}" 'echo "==> Opening persistent SSH ControlMaster')"
   (( preflight_line < master_line )) || fail "artifact identity preflight must precede ControlMaster SSH"

@@ -1,12 +1,20 @@
 # Staging Deployment
 
+HT-STAGING-SIMPLE-02: the [ordinary V125 release controller](STAGING_ORDINARY_RELEASE.md)
+has a local real command executor; its [one-time protocol transition](STAGING_PROTOCOL_TRANSITION.md)
+has not been authorized or performed. No worker or target registration is installed on the VPS.
+`deploy-staging.sh` requires an explicit enrolled target; the ControlMaster name only forwards to it.
+Commands below describe the older setup and are not permission to bypass the current legacy
+admission block. Legacy SSH-alias invocations now refuse locally. VPS scripts/gates are unchanged;
+no second live ordinary route is installed. Commands below remain legacy references.
+
 Canonical release/deploy policy is `docs/DEPLOYMENT_RUNBOOK.md`. The single PostgreSQL V126
 policy/state-machine contract is `docs/V126_STAGING_CUTOVER_CONTRACT.md`. The only pre-Gate-A
 prerequisite-sync command is `scripts/v126-staging-prerequisite-sync.sh`; the separate cutover
 command is `scripts/v126-cutover.sh`. This file remains the one-VPS staging implementation-detail
 runbook and must not define another prerequisite or V126 command path.
 
-For a protocol-managed target, ordinary deployment requires the separately approved/applied
+For a legacy protocol-managed target, ordinary deployment requires the separately approved/applied
 [V125/V126 operational handoff](V126_OPERATIONAL_HANDOFF.md) and an explicit immutable
 [target-binding transfer](V126_REPAIR_OPERATION_PROTOCOL.md) naming the exact next deployment
 request. `APPROVED_DEPLOYMENT_FILE` is the protected canonical descriptor;

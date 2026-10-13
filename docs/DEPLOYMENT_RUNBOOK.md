@@ -12,7 +12,7 @@ Current practice:
 - Staging is a one-VPS Docker Compose deployment documented in `docs/STAGING_DEPLOYMENT.md`.
 - The Mini App production bundle is built into the backend image for staging.
 - Current staging URL is `https://staging.hookahtootah.club`.
-- The standard staging deploy script exists, and the ControlMaster wrapper is an opt-in reliability workaround for unstable fresh SSH connections.
+- Ordinary V125 releases use [the staging release controller](STAGING_ORDINARY_RELEASE.md) only after the separately approved [protocol transition](STAGING_PROTOCOL_TRANSITION.md); the ControlMaster name forwards to the same entrypoint.
 - Production deploy automation, exact rollback commands and complete log command coverage remain **needs verification** unless a future task confirms them.
 
 Target runbook:
@@ -119,32 +119,14 @@ expected shape and metadata, but approval, provenance and semantic binding remai
 Policy-B R0 operational readiness remains unresolved and is on the V126 critical path. This is an
 observed status, not deployment authority or a change to the procedure below.
 
-Use this only for an ordinary public-pilot deployment after GitHub Actions are green for runtime
-changes, unless explicitly doing a debug deploy. It is never a PostgreSQL V126 cutover, transfer,
-startup or recovery command:
-
-A protocol-managed target additionally requires the separately approved/applied
-[V125/V126 operational handoff](V126_OPERATIONAL_HANDOFF.md), verified immutable history
-and an explicit transfer naming the exact next deployment descriptor. The single shared
-target lock covers remote upload through durable completion. It permits only the already
-accepted fixed-env image; no implicit image selection, `.env` rewrite, registry reset or
-retry of UNKNOWN. The same descriptor/evidence variables pass through ControlMaster.
-This repair phase authorizes feature validation only; it does not authorize this command.
-
-```bash
-STAGING_PATH=/opt/hookah-bot \
-STAGING_DOMAIN=staging.hookahtootah.club \
-DOCKER_PLATFORM=linux/amd64 \
-BACKEND_IMAGE=hookah_bot_ant-backend:<candidate-sha> \
-EXPECTED_BACKEND_IMAGE_ID=sha256:<reviewed-image-id> \
-APPROVED_DEPLOYMENT_FILE='/absolute/path/approved-deployment.json' \
-DEPLOY_STATE_DIR='/absolute/path/fresh-deployment-evidence' \
-./scripts/deploy-staging-controlmaster.sh hookah-staging
-```
+Follow [ordinary staging releases](STAGING_ORDINARY_RELEASE.md) for CI → owner approval →
+backend update → health → manual smoke → acceptance/rollback. The real adapter is local;
+VPS installation/registration and the [one-time transition](STAGING_PROTOCOL_TRANSITION.md)
+are not authorized or performed. Legacy SSH-alias-only calls refuse. Database migrations
+retain the separate strict process below; ordinary releases never enter V126 cutover.
+Docs-only changes do not require staging deployment.
 
 Notes:
-- Standard deploy is still documented in `docs/STAGING_DEPLOYMENT.md`.
-- The ControlMaster command is the current preferred reliability path when fresh SSH connections are unstable.
 - The only V126 pre-Gate-A prerequisite-sync command is
   `scripts/v126-staging-prerequisite-sync.sh`; the separate cutover command authority is
   `scripts/v126-cutover.sh`. Their shared policy/state-machine authority is
