@@ -1,6 +1,6 @@
 # Platform Cockpit Model
 
-Дата актуализации: 2026-08-15.
+Дата актуализации: 2026-10-14.
 
 Статус: **current product reference** for Platform Mode. Platform guest QR and the bounded
 Platform/Venue onboarding and ownership cockpit are **DONE / MVP / STAGING-SMOKE-PASSED** for their
@@ -84,6 +84,32 @@ Future or partial:
 - Distinguishing billing-created suspension from manual `SUSPENDED_BY_PLATFORM` is required before broad auto-reactivation.
 - Venue-facing payment UX is partial: Venue Owner can see subscription/payment state, but real self-serve provider payment depends on the provider rollout.
 - Payment/support issues should be raised as `SUPPORT_TICKET` and handled in Platform Support Center when platform-scoped.
+
+### P1 follow-up — venue availability and billing clarity (`OPEN / NOT IMPLEMENTED`)
+
+The manual billing and renewal MVPs above remain complete. This is a separate product/UX task.
+During the 2026-10-14 staging QR smoke, Mix was `PUBLISHED` with
+`subscription.status=SUSPENDED_BY_PLATFORM` and a `PAST_DUE` invoice: Venue Owner saw
+«Опубликовано», while Guest catalog/QR access was blocked and some Staff/Owner transitions said
+«Заведение не найдено» despite active OWNER/STAFF memberships. The owner later reported recovery;
+repeat manual QR smoke on Mix passed 7/7. The cause of recovery and any billing fix remain unverified.
+
+- Show publication status, actual Guest availability, restriction reason, subscription period/state
+  and invoice state as distinct, plainly labeled facts. Simplify the presentation of trial, paid
+  period, overdue and blocked states without conflating venue lifecycle with subscription state.
+- Platform Owner sees the block reason, relevant dates and available next action. Venue Owner sees
+  an understandable reason and the supported resolution path. Staff receives a safe operational
+  message without financial details; Guest receives only an appropriate availability message.
+- When the venue exists but its subscription blocks access, do not replace that condition with
+  «Заведение не найдено» for an authorized actor. Preserve server-side RBAC, tenant isolation and
+  disclosure limits for unauthorized actors.
+- Define a legitimate test mode for staging/test venues so QR and roles can be exercised without
+  fictitious financial operations. Decide its product policy and implementation in a separate task;
+  it must not become an ordinary payment or RBAC bypass.
+- Future implementation must cover `PUBLISHED + ACTIVE/TRIAL`, `PUBLISHED + PAST_DUE`,
+  `PUBLISHED + SUSPENDED_BY_PLATFORM` and `DRAFT/HIDDEN`, with distinct Guest, Staff, Venue Owner
+  and Platform Owner views. Preserve the current non-blocking `PAST_DUE` Guest rule unless a
+  separately approved policy changes it; verify no payment restriction or RBAC bypass.
 
 ## Support Center
 
