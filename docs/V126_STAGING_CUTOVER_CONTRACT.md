@@ -1,9 +1,14 @@
 # PostgreSQL V126 Staging Cutover Contract
 
-Status: **CURRENT MAIN MERGED AND GREEN / STAGING V125 / V126 ABSENT / CANDIDATE ARTIFACTS AND
-TARGET-OPERATION REGISTRY ABSENT / PROTECTED-INPUT AUTHORITY AND POLICY-B R0 READINESS UNRESOLVED /
-NO CUTOVER AUTHORIZATION**.
-Earlier task sections below retain their historical release evidence.
+Status (2026-10-14 supplied checkpoint): **STAGING V125 / V126 ABSENT / V126 CUTOVER NOT
+ACCEPTED / NO CUTOVER AUTHORIZATION**. PR #210 and #211 are merged and CI #559 succeeded
+15/15. Published main `cb92c66a545b486f255479db4bc4b4904a927cef` contains
+`V126__support_thread_read_message_cursor.sql`. The ordinary V125 controller and accepted
+QR release do not satisfy migration, protected-input, backup/DR or Policy-B R0 gates.
+Current exact V126 candidate image/artifact, target registry, input authority and R0
+readiness are `NOT_PROVEN` from this local documentation check; they require fresh
+source-bound evidence before any separately authorized operation. Historical
+checkpoints and the state machine below retain their original scope.
 
 This document is the single policy and state-machine authority for the PostgreSQL V126 staging
 cutover. Tracked executable authority is divided without overlap:
