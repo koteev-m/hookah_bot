@@ -76,3 +76,14 @@ ktlint {
         include("**/src/test/kotlin/**")
     }
 }
+
+// The OCI packaged version is distinct from Git revision and runtime APP_VERSION.
+tasks.register("verifyImageVersion") {
+    val packagedVersion = project.version.toString()
+    val requestedVersion = providers.gradleProperty("imageVersion")
+    doLast {
+        check(requestedVersion.orNull == packagedVersion) {
+            "Image version must equal the canonical Gradle project version: $packagedVersion"
+        }
+    }
+}

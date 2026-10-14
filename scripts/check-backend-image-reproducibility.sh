@@ -81,6 +81,7 @@ if [[ -n "$(git status --porcelain=v1 --untracked-files=all)" ]]; then
   exit 2
 fi
 
+PACKAGED_VERSION="$(python3 "${COMPARATOR}" project-version "${REPO_ROOT}/build.gradle.kts")"
 HEAD_SHA="$(git rev-parse --verify HEAD^{commit})"
 HEAD_TREE="$(git rev-parse HEAD^{tree})"
 SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
@@ -211,6 +212,7 @@ build_image() {
     --build-arg "VITE_BACKEND_PUBLIC_URL=${PUBLIC_URL}" \
     --build-arg "GRADLE_JVM_ARGS=${GRADLE_JVM_ARGS}" \
     --build-arg "SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}" \
+    --build-arg "PACKAGED_VERSION=${PACKAGED_VERSION}" \
     --label "org.opencontainers.image.revision=${HEAD_SHA}" \
     --label "org.opencontainers.image.source=${EXPECTED_SOURCE}" \
     --file backend/Dockerfile \
