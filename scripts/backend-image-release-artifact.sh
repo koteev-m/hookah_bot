@@ -37,6 +37,9 @@ if labels.get("org.opencontainers.image.revision") != revision:
     problems.append("loaded image revision label is not exact")
 if labels.get("org.opencontainers.image.source") != source:
     problems.append("loaded image source label is not exact")
+for key in ("title", "version"):
+    if not comparison.get(key + "_label") or labels.get("org.opencontainers.image." + key) != comparison[key + "_label"]:
+        problems.append("loaded image " + key + " differs from the verified packaged metadata")
 if (image.get("RootFS") or {}).get("Layers") != comparison.get("rootfs_diff_ids"):
     problems.append("loaded image rootfs DiffIDs/order differ from the proven build")
 if problems:

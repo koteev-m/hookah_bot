@@ -338,6 +338,11 @@ def load_image(path: Path, loaded_image_id: str | None = None) -> dict[str, Any]
         raise ReproducibilityError(
             f"expected one backend application JAR, found {len(app_jars)}"
         )
+    packaged_version = app_jars[0]["path"][len("app/app/lib/app-"):-len(".jar")]
+    if labels.get("org.opencontainers.image.title") != "Hookah_Tootah backend":
+        raise ReproducibilityError("backend image title is missing or inherited")
+    if labels.get("org.opencontainers.image.version") != packaged_version:
+        raise ReproducibilityError("backend image version differs from packaged JAR version")
     launchers = [
         entry for entry in install_dist if entry["path"] in {"app/app/bin/app", "app/app/bin/app.bat"}
     ]
@@ -540,6 +545,8 @@ def report_image(image: dict[str, Any]) -> dict[str, Any]:
         "runtime_user": image["runtime_user"],
         "revision_label": image["labels"].get("org.opencontainers.image.revision"),
         "source_label": image["labels"].get("org.opencontainers.image.source"),
+        "title_label": image["labels"].get("org.opencontainers.image.title"),
+        "version_label": image["labels"].get("org.opencontainers.image.version"),
         "rootfs_diff_ids": image["rootfs_diff_ids"],
         "compressed_layers": [
             {
@@ -730,9 +737,11 @@ def write_fixture_image(
     gzip_mtime: int = 0,
     env_extra: str | None = None,
     history_suffix: str = "",
-    revision: str = "a" * 40,
-    source: str = "https://example.invalid/repo",
+    revision: str | None = "a" * 40,
+    source: str | None = "https://example.invalid/repo",
     manifest_annotation: str | None = None,
+    title: str | None = "Hookah_Tootah backend",
+    version: str | None = "1",
 ) -> str:
     raw_layers = [
         fixture_layer([("app", None, 0o755, 100), ("app/app", None, 0o755, 100), ("app/app/bin", None, 0o755, 100), ("app/app/bin/app", b"launcher", 0o755, app_mtime), ("app/app/bin/app.bat", b"launcher-bat", 0o755, app_mtime), ("app/app/lib", None, 0o755, 100), ("app/app/lib/app-1.jar", app_content, 0o644, app_mtime), ("app/app/lib/dependency.jar", b"dependency", 0o644, app_mtime)]),
@@ -757,6 +766,8 @@ def write_fixture_image(
             "Labels": {
                 "org.opencontainers.image.revision": revision,
                 "org.opencontainers.image.source": source,
+                **({"org.opencontainers.image.title": title} if title is not None else {}),
+                **({"org.opencontainers.image.version": version} if version is not None else {}),
             },
         },
         "rootfs": {"type": "layers", "diff_ids": [sha256_bytes(layer) for layer in raw_layers]},
@@ -815,6 +826,17 @@ def self_test() -> None:
     source = "https://example.invalid/repo"
     with tempfile.TemporaryDirectory(prefix="backend-image-repro-self-test.") as temp:
         root = Path(temp)
+        gradle = root / "build.gradle.kts"
+        gradle.write_text('allprojects {\n    version = "0.1.0"\n}\n')
+        assert project_version(gradle) == "0.1.0"
+        for content in ('', 'version = dynamicVersion', 'version = "1"\nversion = "2"'):
+            gradle.write_text(content)
+            try:
+                project_version(gradle)
+            except ReproducibilityError:
+                pass
+            else:
+                raise AssertionError("ambiguous Gradle version accepted")
         base_path = root / "base.tar"
         equal_path = root / "equal.tar"
         base_id = write_fixture_image(base_path)
@@ -832,6 +854,9 @@ def self_test() -> None:
             ("compressed bytes", {"gzip_mtime": 1}, "compressed-layers"),
             ("config bytes", {"env_extra": "EXTRA=1"}, "config-digest"),
             ("ordered history", {"history_suffix": " changed"}, "ordered-history"),
+            ("missing revision", {"revision": None}, "revision-label"),
+            ("missing source", {"source": None}, "source-label"),
+            ("source label", {"source": "https://wrong.invalid/repo"}, "source-label"),
             ("revision label", {"revision": "b" * 40}, "revision-label"),
             ("manifest bytes", {"manifest_annotation": "changed"}, "manifest-digest"),
         ]
@@ -844,6 +869,18 @@ def self_test() -> None:
                 raise AssertionError(
                     f"{label} fixture false-PASS: expected {expected_finding}, got {comparison}"
                 )
+        for kwargs in (
+            {"title": "ubuntu"}, {"version": "26.04"},
+            {"title": None}, {"version": None}, {"version": "2"},
+        ):
+            candidate_path = root / "bad-metadata.tar"
+            candidate_id = write_fixture_image(candidate_path, **kwargs)
+            try:
+                load_image(candidate_path, candidate_id)
+            except ReproducibilityError:
+                pass
+            else:
+                raise AssertionError(f"invalid final image metadata accepted: {kwargs}")
         wrong_id = dict(equal)
         wrong_id["loaded_image_id"] = "sha256:" + "f" * 64
         comparison = compare_images(base, wrong_id, revision, source)
@@ -908,6 +945,15 @@ def command_compare(args: argparse.Namespace) -> None:
     print(f"runtime_user={concise['runtime_user']}")
 
 
+def project_version(path: Path) -> str:
+    # Read the repository's literal version; Gradle verifies the evaluated value
+    # inside the build, so a future DSL change cannot silently mislabel an image.
+    values = re.findall(r'^\s*version\s*=\s*"([A-Za-z0-9][A-Za-z0-9._+-]*)"\s*$', path.read_text(), re.MULTILINE)
+    if len(values) != 1:
+        raise ReproducibilityError("expected one canonical literal Gradle project version")
+    return values[0]
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -921,6 +967,9 @@ def build_parser() -> argparse.ArgumentParser:
     compare.add_argument("--expected-source", required=True)
     compare.add_argument("--report")
     compare.set_defaults(function=command_compare)
+
+    version = subparsers.add_parser("project-version")
+    version.add_argument("gradle_file")
 
     pins = subparsers.add_parser("base-pins")
     pins.add_argument("dockerfile")
@@ -947,6 +996,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
+    if args.command == "project-version":
+        print(project_version(Path(args.gradle_file)))
+        return
     if args.command == "base-pins":
         for pin in parse_base_pins(Path(args.dockerfile)):
             print("\t".join((pin["stage"], pin["tag"], pin["index"], pin["linux_amd64"])))

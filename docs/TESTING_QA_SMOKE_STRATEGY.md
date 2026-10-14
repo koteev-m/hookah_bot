@@ -133,6 +133,15 @@ bash scripts/check-backend-image-reproducibility.sh --self-test
 bash scripts/check-backend-image-reproducibility.sh
 ```
 
+The release build reads the literal canonical version from `build.gradle.kts` and passes
+`PACKAGED_VERSION`. Inside Docker, Gradle's `verifyImageVersion` checks that value against
+the evaluated project version; the Dockerfile fallback for other build callers is subject
+to the same check. The final OCI image must have title `Hookah_Tootah backend` and a
+version matching the packaged `app-<version>.jar`. Missing, inherited or mismatched
+labels fail the image parser, and the archive load proof rechecks the proven labels.
+This packaged software version is separate from the exact Git revision label and from
+runtime `APP_VERSION`; neither is rewritten to satisfy the packaged version check.
+
 The full-image guard creates two unique Docker-container builders with no shared cache, builds
 `linux/amd64` twice, and fails unless the application JAR, complete `installDist` and Mini App trees,
 generated launchers, dependency JARs, complete ordered history, history-to-DiffID mapping, every
