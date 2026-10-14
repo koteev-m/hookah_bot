@@ -1,10 +1,15 @@
 # Обычный staging-релиз без миграций
 
-HT-STAGING-SIMPLE-02: executor реализован локально. **На VPS не установлен,
-регистрация не создана, первый запуск не разрешён.** Сначала нужен
-[разовый переход](STAGING_PROTOCOL_TRANSITION.md). Старый вызов wrapper с одним
-SSH alias остаётся закрытым; единственный ordinary entrypoint — `scripts/deploy-staging.sh`.
-`deploy-staging-controlmaster.sh` только передаёт ему аргументы.
+**Текущий статус (2026-10-14): ordinary V125 controller установлен и работает.**
+Первоначальные `initialize/status` дали `ACCEPTED`; QR-релиз source
+`1a2011ed27b0ea13d24bc6c88e48a0c7e9dcb5ff` с image
+`sha256:888e4d41e9a713873328aed4f542569a5089ce968c8f29aa481377a7c0b29c23`
+завершился `SUCCESS / ACCEPTED`. Ручной Mix QR smoke — 7/7 PASS; Alpha Hookah и
+прямой доступ к чужому заведению вручную не проверены. Последняя подтверждённая
+staging schema — V125 (`V126=0`, `failed=0`). [Разовый переход](STAGING_PROTOCOL_TRANSITION.md)
+сохранён как история. Единственный ordinary entrypoint — `scripts/deploy-staging.sh`;
+`deploy-staging-controlmaster.sh` только передаёт ему аргументы. Controller не
+является механизмом V126 migration и не разрешает V126 cutover.
 
 ## Подготовка образа и approval
 

@@ -5,7 +5,13 @@ recovery and final automated gates retain `restart=no` and RestartCount=0. A com
 stage20 or restored HTTP availability does not transfer image/configuration authority
 or promise service recovery after reboot.
 
-Current integration status: PR #198 is merged at authoritative `main`
+Current checkpoint (2026-10-14): staging is confirmed at V125 without V126;
+ordinary V125 controller and the QR release are accepted. No V126 cutover or applied
+V126 handoff is confirmed. Fresh V126 candidate, protected-input, Policy-B R0 and DR
+evidence remain `NOT_PROVEN`; the ordinary controller does not transfer migration
+authority. The following PR #198 paragraph is the preserved historical checkpoint.
+
+Historical integration status (2026-09-17): PR #198 is merged at authoritative `main`
 `465ce33c4a9e244ad5f9771beadf35cfa7b8d9d4`; CI #504, CI #505 and post-merge CI #506
 passed, and the remote PR branch was deleted. Read-only staging reconciliation found runtime
 `f577934691a1a7a79ba327c54e2055425142b7be` at Flyway V125, with V126 absent and the

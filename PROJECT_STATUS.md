@@ -1,5 +1,31 @@
 # Project Status
 
+## HT-DOC-SYNC-01B — current staging and next V126 target (2026-10-14)
+
+The ordinary V125 staging release controller is installed; its initial `initialize/status`
+was `ACCEPTED`. The QR release from source `1a2011ed27b0ea13d24bc6c88e48a0c7e9dcb5ff`
+reached `SUCCESS / ACCEPTED` with image
+`sha256:888e4d41e9a713873328aed4f542569a5089ce968c8f29aa481377a7c0b29c23`.
+Manual Mix QR smoke passed 7/7. Alpha Hookah and direct access to another venue were not
+manually checked. PR #210 and #211 are merged; CI #559 completed `SUCCESS` 15/15
+(per the supplied independently verified GitHub checkpoint). The published main is
+`cb92c66a545b486f255479db4bc4b4904a927cef`, tree
+`f8489f282501ecc149237d19512ca1f266a22920`.
+
+The last confirmed staging PostgreSQL head is V125 (`V126=0`, `failed=0`). Main
+contains `backend/app/src/main/resources/db/migration/postgresql/V126__support_thread_read_message_cursor.sql`,
+but V126 cutover has not run or been accepted. Historical run724 remains `UNKNOWN`.
+The ordinary controller does not authorize or execute this migration. After this
+documentation reconciliation, V126 is the next agreed technical target: first prove
+one exact current-main V126 release candidate (SHA/tree, migration manifest, green
+exact-SHA CI, immutable image ID/artifact bytes). Fresh protected-input authority,
+backup/rehearsal, Policy-B R0/DR and target evidence remain `NOT_PROVEN`; any
+staging V126 operation needs a separate owner decision under the existing
+[V126 cutover contract](docs/V126_STAGING_CUTOVER_CONTRACT.md). No old readiness gate
+is upgraded by the QR release. The single current product backlog is
+[roadmap §13](docs/UPDATED_PRODUCT_AI_ROADMAP.md#13-master-remaining-work-inventory):
+115 canonical entries; the 198 historical raw candidates are unchanged.
+
 ## HT-NEW-STAGING-09 — Linux EMPTY collector, local only
 
 **V125_EMPTY_COLLECTOR_LOCAL_READY / UNCOMMITTED** (2026-10-12).
